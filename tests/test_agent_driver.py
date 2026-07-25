@@ -277,6 +277,28 @@ class TestClaudeCodeDriver(_DriverContractMixin, unittest.TestCase):
         self.assertTrue(res.ok)
         self.assertIn("42", res.stdout)
 
+    def test_run_command_timeout(self):
+        """run_command respects timeout and returns non-zero on timeout.
+
+        A command that sleeps longer than the timeout should NOT hang forever,
+        and should return a non-zero exit code (timeout status).
+        """
+        # Use a short timeout for fast test execution
+        d = ClaudeCodeDriver(timeout_s=0.5)
+
+        # Platform-neutral sleep command that will exceed our timeout
+        if sys.platform == "win32":
+            cmd = "timeout /t 5 /nobreak"  # Sleep for 5 seconds on Windows
+        else:
+            cmd = "sleep 5"  # Sleep for 5 seconds on Unix
+
+        # This should timeout and return a non-zero exit code, not hang
+        result = d.run_command(cmd)
+
+        # On timeout, exit_code should be non-zero (indicating failure)
+        self.assertNotEqual(result.exit_code, 0,
+                          "run_command should return non-zero on timeout")
+
     def test_dispatch_is_harness_only(self):
         # The reference adapter must fail loudly rather than fake a Claude agent
         # from plain Python.
