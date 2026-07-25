@@ -28,8 +28,26 @@ from pathlib import Path
 from typing import Dict, Optional
 from urllib.parse import urlparse
 
-from agent_driver import AgentDriver
+from agent_driver import AgentDriver, ROLE_WORKER
 from claude_code_driver import ClaudeCodeDriver
+
+
+def _codex_model_map(config: dict) -> dict:
+    """Build the CodexDriver model_map from a codex config block.
+
+    Honors the schema-required 'model' field by mapping it to the worker role
+    unless model_map explicitly overrides it. Previously 'model' was validated
+    by load_backend_config but silently IGNORED here, so a config declaring
+    e.g. model=gpt-4o still dispatched the default worker model.
+    """
+    model_map = config.get("model_map", {})
+    if not isinstance(model_map, dict):
+        model_map = {}
+    model_map = dict(model_map)
+    model = config.get("model")
+    if isinstance(model, str) and model:
+        model_map.setdefault(ROLE_WORKER, model)
+    return model_map
 
 
 def validate_base_url(base_url: str) -> None:
@@ -234,16 +252,15 @@ def build_driver(config: Optional[dict] = None) -> AgentDriver:
                 "Cannot import CodexDriver. Make sure codex_driver.py is in the driver/ directory."
             ) from exc
 
-        model_map = config.get("model_map", {})
-        if not isinstance(model_map, dict):
-            model_map = {}
-
         return CodexDriver(
-            model_map=model_map,
+            model_map=_codex_model_map(config),
             transport=None,  # Will use default; key read at call time.
             max_owned_bytes=config.get("max_owned_bytes", 200_000),
             max_retries=config.get("max_retries", 2),
             timeout_s=config.get("timeout_s", 120.0),
+            allow_unverified_models=bool(
+                config.get("allow_unverified_models", False)
+            ),
         )
 
     if backend_name == "openai-compatible":
@@ -312,7 +329,17 @@ def describe_backend(config: Optional[dict] = None) -> str:
             from codex_driver import CodexDriver
         except ImportError:
             return "codex (import failed)"
-        driver = CodexDriver(model_map=config.get("model_map", {}))
+        try:
+            driver = CodexDriver(
+                model_map=_codex_model_map(config),
+                allow_unverified_models=bool(
+                    config.get("allow_unverified_models", False)
+                ),
+            )
+        except ValueError as exc:
+            # Describe must not crash on a config the driver would reject;
+            # surface the rejection instead.
+            return f"codex (invalid model config: {exc})"
         return driver.describe()
 
     if backend_name == "openai-compatible":
