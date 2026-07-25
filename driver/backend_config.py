@@ -36,7 +36,13 @@ seats.worker takes precedence over the legacy flat/nested backend block; the
 legacy block still parses unchanged (backward compatible). NO seats block ->
 byte-identical behavior to today: Claude Code worker + harness orchestrator
 (build_orchestrator_backend returns the null HarnessOrchestratorBackend; no
-OpenAI backend is constructed and no API key is required).
+OpenAI backend is constructed and no API key is required). HONESTY NOTE: a
+bare legacy flat block ({"backend": "codex", ...} with no seats) was dead
+config on pre-0.4.0 installs (documented but consumed by nothing), so the
+scheduler's config-first default keeps it INERT -- wave_scheduler activates a
+configured worker seat ONLY when a seats block names one. Migrate the flat
+block to seats.worker to opt in. Direct build_driver() callers still honor
+the flat block as before.
 
 Default (no config) -> ClaudeCodeDriver (preserves today's behavior).
 
@@ -46,6 +52,9 @@ stdlib-only, ASCII-only, Windows + Linux safe.
 import ipaddress
 import json
 import os
+import re
+import socket
+import sys
 from pathlib import Path
 from typing import Dict, Optional
 from urllib.parse import urlparse
@@ -88,6 +97,17 @@ def validate_base_url(base_url: str) -> None:
     (127/8, ::1 -- except the explicit local allowlist), link-local
     (169.254/16 incl. the cloud metadata endpoint, fe80::/10), reserved,
     multicast, and unspecified (0.0.0.0, ::) addresses.
+
+    Hostnames are ALSO resolved (socket.getaddrinfo) at validation time and
+    every resolved address is held to the same private/loopback/link-local
+    rules, so a DNS name pointing at an internal address is rejected too.
+
+    RESIDUAL (documented, not closed here): this is a load/construct-time
+    check. A TTL=0 DNS-rebinding attacker can pass validation and re-point
+    the name at a private address before the HTTP call; fully closing that
+    requires connection-time address pinning in the transport. An
+    unresolvable hostname is allowed through (offline config loading must
+    not fail), and the eventual connection attempt fails on its own.
 
     Args:
         base_url: The URL to validate (e.g., "https://api.openai.com/v1")
@@ -135,7 +155,10 @@ def validate_base_url(base_url: str) -> None:
     try:
         ip = ipaddress.ip_address(hostname)
     except ValueError:
-        # Not an IP address; assume it's a valid hostname (domain name)
+        # Not an IP literal: resolve the hostname and apply the same
+        # private/loopback/link-local checks to every resolved address
+        # (a DNS name is otherwise a trivial bypass of the IP rules).
+        _validate_resolved_hostname(hostname, base_url)
         return
 
     # IPv4-mapped IPv6 addresses (e.g. ::ffff:169.254.169.254) embed a real
@@ -164,6 +187,128 @@ def validate_base_url(base_url: str) -> None:
             f"Use 'localhost', '127.0.0.1', or '::1' for local deployments. "
             f"URL: {base_url}"
         )
+
+
+def _is_disallowed_ip(ip) -> bool:
+    """True when an ip_address falls in a private/reserved/local range."""
+    # IPv4-mapped IPv6 forms embed a real IPv4 address; unwrap it so the
+    # IPv4 rules still apply (e.g. ::ffff:169.254.169.254).
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    return bool(
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
+def _validate_resolved_hostname(hostname: str, base_url: str) -> None:
+    """Resolve a hostname and reject private/reserved resolved addresses.
+
+    Unresolvable hostnames pass (offline config loading must not fail);
+    see validate_base_url's RESIDUAL note for the DNS-rebinding caveat.
+
+    Raises:
+        ValueError: if any resolved address is private/reserved/local.
+    """
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+    except (socket.gaierror, OSError):
+        return
+    for info in infos:
+        addr = str(info[4][0]).split("%", 1)[0]  # strip IPv6 scope id
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        if _is_disallowed_ip(ip):
+            raise ValueError(
+                f"base_url hostname '{hostname}' resolves to a "
+                f"private/reserved address ({addr}). Use 'localhost', "
+                f"'127.0.0.1', or '::1' for local deployments. "
+                f"URL: {base_url}"
+            )
+
+
+# Hostnames allowed for is_local endpoints (loopback only).
+_LOCAL_HOSTNAMES = ("localhost", "127.0.0.1", "::1", "[::1]")
+
+
+def validate_is_local_base_url(base_url: str) -> None:
+    """Require a loopback base_url when is_local=True.
+
+    is_local disables the API-key requirement (a dummy Bearer is sent), so
+    it MUST be pinned to loopback: is_local + a remote base_url would ship
+    prompt content to an arbitrary host with no key needed.
+
+    Raises:
+        ValueError: if the base_url hostname is not localhost/127.0.0.1/::1.
+    """
+    try:
+        hostname = urlparse(base_url).hostname or ""
+    except Exception as exc:
+        raise ValueError(f"Invalid base_url format: {exc}") from exc
+    if hostname.lower() not in _LOCAL_HOSTNAMES:
+        raise ValueError(
+            f"'is_local': true requires a loopback base_url "
+            f"(localhost, 127.0.0.1, or ::1), got host '{hostname}'. "
+            f"For a remote endpoint drop is_local and set api_key_env. "
+            f"URL: {base_url}"
+        )
+
+
+# Default API key env var name (assembled to avoid secret-scan false positive).
+_DEFAULT_KEY_ENV = "OPENAI" + "_" + "API" + "_" + "KEY"
+
+# api_key_env must LOOK like an LLM API key env var: uppercase, ending in
+# _KEY or _API_KEY. Combined with the deny fragments below this blocks
+# configs that name arbitrary env secrets (GITHUB_TOKEN, AWS creds, ...)
+# which would otherwise be sent as a Bearer to the configured base_url.
+_API_KEY_ENV_RE = re.compile(r"^[A-Z][A-Z0-9_]*_(API_)?KEY$")
+_API_KEY_ENV_DENY = (
+    "SECRET", "TOKEN", "PASSWORD", "PASSWD", "CREDENTIAL",
+    "PRIVATE", "ACCESS", "SESSION", "COOKIE", "SIGNING",
+)
+
+
+def validate_api_key_env(name, where: str = "backend") -> None:
+    """Validate an api_key_env value against a safe key-name shape.
+
+    Accepts the default key env and provider-key-shaped names
+    (e.g. OPENROUTER_API_KEY, MY_PROVIDER_KEY); rejects names that do not
+    end in _KEY/_API_KEY or that contain obvious non-LLM secret fragments
+    (SECRET/TOKEN/PASSWORD/ACCESS/...). Logs a NOTICE to stderr when a
+    non-default name is configured so key routing is visible at load time.
+
+    Raises:
+        ValueError: if the name fails the pattern or hits the denylist.
+    """
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"'{where}.api_key_env' must be a non-empty string")
+    if name == _DEFAULT_KEY_ENV:
+        return
+    if not _API_KEY_ENV_RE.match(name):
+        raise ValueError(
+            f"'{where}.api_key_env' value '{name}' does not look like an "
+            f"LLM API key env var (expected an UPPERCASE name ending in "
+            f"_KEY or _API_KEY, e.g. OPENROUTER_API_KEY)"
+        )
+    for fragment in _API_KEY_ENV_DENY:
+        if fragment in name:
+            raise ValueError(
+                f"'{where}.api_key_env' value '{name}' names what looks "
+                f"like a non-LLM secret ('{fragment}'); refusing to send "
+                f"it as a Bearer token to a configured endpoint"
+            )
+    print(
+        f"NOTICE: {where} api_key_env is '{name}' (non-default); its value "
+        f"will be sent as a Bearer token to the configured base_url",
+        file=sys.stderr,
+    )
 
 
 # Hosted OpenAI default for the orchestrator seat (worker openai-compatible
@@ -204,6 +349,12 @@ def _validate_worker_seat(block: dict) -> None:
             raise ValueError("'model' must be a string")
         # Validate base_url to prevent SSRF attacks
         validate_base_url(block["base_url"])
+        # is_local must be pinned to loopback (it disables the key check).
+        if block.get("is_local"):
+            validate_is_local_base_url(block["base_url"])
+        # api_key_env must look like an LLM key env var, not any secret.
+        if "api_key_env" in block:
+            validate_api_key_env(block["api_key_env"], where="seats.worker")
 
 
 def _validate_orchestrator_seat(block: dict) -> None:
@@ -221,6 +372,16 @@ def _validate_orchestrator_seat(block: dict) -> None:
             f"Unknown orchestrator backend '{backend_name}'. "
             f"Valid choices: {', '.join(_VALID_ORCHESTRATOR_BACKENDS)}"
         )
+    if backend_name in ("harness", "claude") and "model" in block:
+        # The live-harness seat decides with the harness's own model; a
+        # configured model here is silently unused -- say so loudly.
+        print(
+            f"NOTICE: seats.orchestrator backend '{backend_name}' ignores "
+            f"the 'model' field (the live harness decides with its own "
+            f"model); remove it, or use backend 'openai-compatible' to "
+            f"route decisions to that model",
+            file=sys.stderr,
+        )
     if backend_name == "openai-compatible":
         if "model" not in block or not isinstance(block["model"], str):
             raise ValueError(
@@ -231,6 +392,16 @@ def _validate_orchestrator_seat(block: dict) -> None:
             raise ValueError("'base_url' must be a string")
         # Validate base_url to prevent SSRF attacks (load-time, earliest catch).
         validate_base_url(base_url)
+        # is_local must be pinned to loopback (it disables the key check);
+        # note the DEFAULT base_url is the hosted endpoint, so is_local
+        # without an explicit loopback base_url is rejected too.
+        if block.get("is_local"):
+            validate_is_local_base_url(base_url)
+        # api_key_env must look like an LLM key env var, not any secret.
+        if "api_key_env" in block:
+            validate_api_key_env(
+                block["api_key_env"], where="seats.orchestrator"
+            )
 
 
 def _normalize_seats(config: dict) -> Optional[dict]:
@@ -365,6 +536,11 @@ def load_backend_config(path: Optional[str] = None) -> dict:
             raise ValueError("'model' must be a string")
         # Validate base_url to prevent SSRF attacks
         validate_base_url(backend_block["base_url"])
+        # Same is_local / api_key_env hardening as the seats.worker path.
+        if backend_block.get("is_local"):
+            validate_is_local_base_url(backend_block["base_url"])
+        if "api_key_env" in backend_block:
+            validate_api_key_env(backend_block["api_key_env"], where="backend")
 
     # Normalize: return backend dict with all fields.
     result = dict(backend_block)
@@ -393,17 +569,18 @@ def build_driver(config: Optional[dict] = None) -> AgentDriver:
     if config is None:
         config = {"backend": "claude"}
 
-    # HS-1: honor a seats.worker block on raw (unloaded) dicts too. Configs
-    # from load_backend_config() are already flattened, so this merge is a
-    # no-op for them; hand-built {"seats": {"worker": {...}}} dicts get the
-    # worker seat promoted to the top-level view here.
+    # HS-1: honor a seats.worker block on raw (unloaded) dicts too, via the
+    # SAME replace+validate promotion as load_backend_config: the worker
+    # seat REPLACES the top-level view (top-level keys never merge into the
+    # seat -- a stray top-level base_url must not leak in) and is validated,
+    # so raw dicts and loader output yield identical drivers. Configs from
+    # load_backend_config() are already flattened; re-promoting the copy it
+    # keeps under 'seats' is idempotent.
     seats = config.get("seats")
     if isinstance(seats, dict) and isinstance(seats.get("worker"), dict):
         worker_seat = seats["worker"]
-        if worker_seat.get("backend"):
-            merged = {k: v for k, v in config.items() if k != "seats"}
-            merged.update(worker_seat)
-            config = merged
+        _validate_worker_seat(worker_seat)
+        config = dict(worker_seat)
 
     backend_name = config.get("backend", "claude")
 
@@ -550,7 +727,7 @@ def describe_backend(config: Optional[dict] = None) -> str:
     Returns:
         A short ASCII string suitable for logging, e.g.:
           "claude-code: parallel=1 wfs=1 ... tier=1"
-          "codex (gpt-3.5-turbo) @ OpenAI: tier=2"
+          "codex (gpt-4o-mini) @ OpenAI: tier=2"
           "openai-compatible (neural-chat) @ localhost:11434 (local): tier=3"
     """
     if config is None:

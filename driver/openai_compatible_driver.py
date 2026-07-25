@@ -29,6 +29,7 @@ from agent_driver import (  # noqa: E402
     ROLE_VERIFY,
     ROLE_WORKER,
 )
+from backend_config import validate_is_local_base_url  # noqa: E402
 from codex_driver import CodexDriver  # noqa: E402
 from openai_transport import _AuthStripRedirectHandler  # noqa: E402
 
@@ -144,7 +145,9 @@ class OpenAICompatibleDriver(CodexDriver):
             api_key_env: Environment variable name for API key (default "OPENAI_API_KEY").
                 For local Ollama, can be unused/dummy.
             is_local: If True, marks this as a local/small model and sets verification tier to 3.
-                Default False (hosted models -> tier 2).
+                Default False (hosted models -> tier 2). Requires a loopback base_url
+                (localhost/127.0.0.1/::1): is_local disables the key requirement, so a
+                remote base_url is rejected at construction (ValueError).
             model_map: Optional role-to-model mapping for setup/verify roles (default=None, uses role-based fallback).
             transport: Optional injectable transport callable for testing (default=None, builds from base_url).
             now: callable returning time.time() for testing (default=time.time).
@@ -152,6 +155,11 @@ class OpenAICompatibleDriver(CodexDriver):
             max_retries: max in-turn retries on malformed JSON (default 2).
             timeout_s: HTTP timeout in seconds (default 120).
         """
+        # is_local disables the API-key requirement, so it must be pinned to
+        # a loopback base_url (parity with the orchestrator seat + config
+        # layer): is_local + remote would ship prompts with a dummy Bearer.
+        if is_local:
+            validate_is_local_base_url(base_url)
         self._base_url = base_url
         self._model = model
         self._api_key_env = api_key_env

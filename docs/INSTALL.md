@@ -236,13 +236,23 @@ To swap the worker to OpenRouter, replace `seats.worker` with
 "model": "openai/gpt-4-turbo", "api_key_env": "OPENROUTER_API_KEY"}` — nothing
 else changes. API keys are read from the env var named by `api_key_env` at
 call time and are never stored in the config; `"is_local": true` endpoints
-need no key at all.
+need no key at all — and for exactly that reason `is_local` is only accepted
+with a loopback `base_url` (`localhost`, `127.0.0.1`, `::1`).
+
+Asymmetry worth knowing: a **worker** `openai-compatible` seat REQUIRES
+`base_url`; the **orchestrator** seat may omit it (defaults to the hosted
+OpenAI endpoint).
 
 **No `seats` block? Nothing changes.** Existing installs keep today's exact
 behavior: Claude Code workers + harness orchestrator, no OpenAI backend
-constructed, no key required. (`cardinal_rules.orchestrator_model` from older
-scaffolds was write-only and is retired; the orchestrator seat's model now
-lives in `seats.orchestrator.model`.)
+constructed, no key required. A pre-0.4.0 **legacy flat** backend block
+(`{"backend": "codex", ...}` at the top level) also changes nothing by
+itself: it still parses and validates, but it stays **inert** in the wave
+scheduler's default path until you migrate it to `seats.worker` — on older
+installs that block was documented but consumed by nothing, so activating it
+silently would change behavior under you. (`cardinal_rules.orchestrator_model`
+from older scaffolds was write-only and is retired; the orchestrator seat's
+model now lives in `seats.orchestrator.model`.)
 
 Consumers: `driver/wave_scheduler.py` builds its worker driver from this
 config (CLI `--driver claude|codex` remains an override), and
@@ -250,10 +260,9 @@ config (CLI `--driver claude|codex` remains an override), and
 their live orchestrator backend from `seats.orchestrator` (CLI `--model`
 remains an override).
 
-### Configure a worker backend (legacy flat block)
+### The legacy flat block (parse-compatible, but migrate it)
 
-Still fully supported — equivalent to a `seats.worker`-only config. Add or
-modify the `backend` section:
+Pre-0.4.0 docs described a flat top-level block:
 
 ```json
 {
@@ -264,6 +273,12 @@ modify the `backend` section:
   "is_local": true
 }
 ```
+
+It still parses and validates (and direct `build_driver()` callers honor
+it), but the wave scheduler's default path treats it as **inert** and keeps
+the Claude Code worker: to actually activate a configured worker there, put
+the same fields under `seats.worker` (`{"seats": {"worker": { ...this
+block... }}}`).
 
 Set `"is_local": true` for local/small models (Ollama etc.) — it raises the
 verification tier honestly (tier 3 instead of hosted tier 2).
@@ -284,14 +299,18 @@ ollama serve
 # 2. In another terminal, pull a model
 ollama pull mistral
 
-# 3. Configure Aesop to use it
+# 3. Configure Aesop to use it (seats.worker is the opt-in surface)
 cat > aesop.config.json <<EOF
 {
-  "backend": "openai-compatible",
-  "model": "mistral",
-  "base_url": "http://localhost:11434/v1",
-  "api_key_env": "OLLAMA_API_KEY",
-  "is_local": true
+  "seats": {
+    "worker": {
+      "backend": "openai-compatible",
+      "model": "mistral",
+      "base_url": "http://localhost:11434/v1",
+      "api_key_env": "OLLAMA_API_KEY",
+      "is_local": true
+    }
+  }
 }
 EOF
 

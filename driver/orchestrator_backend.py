@@ -25,14 +25,16 @@ try:
 except ImportError:
     default_openai_transport = None
 
-# base_url SSRF guard (shared with backend_config). Optional import keeps the
-# module importable standalone; when available, the constructor enforces it so
-# DIRECT construction cannot bypass the config-layer validation (urllib's
-# default opener would otherwise happily open file:// or ftp:// base URLs).
+# base_url SSRF guard (shared with backend_config). The deferred import keeps
+# the module importable standalone, but construction FAILS CLOSED when the
+# guard is unavailable (see OpenAICompatibleOrchestratorBackend.__init__):
+# without it, urllib's default opener would happily open file:// or ftp://
+# base URLs and DIRECT construction would bypass the config-layer validation.
 try:
-    from backend_config import validate_base_url
+    from backend_config import validate_base_url, validate_is_local_base_url
 except ImportError:
     validate_base_url = None
+    validate_is_local_base_url = None
 
 
 class OrchestratorBackend(ABC):
@@ -149,7 +151,9 @@ class OpenAICompatibleOrchestratorBackend(OrchestratorBackend):
         api_key_env: Env var name holding the API key (default OPENAI_API_KEY;
             parity with the worker seat -- no hardcoded key env).
         is_local: True for local endpoints (Ollama etc.): a missing key env is
-            replaced by a dummy 'local-only' key instead of raising.
+            replaced by a dummy 'local-only' key instead of raising. Requires
+            a loopback base_url (localhost/127.0.0.1/::1) -- construction
+            rejects is_local with a remote base_url.
     """
 
     # Maximum allowed response size (100KB) to prevent excessive memory use
@@ -169,9 +173,21 @@ class OpenAICompatibleOrchestratorBackend(OrchestratorBackend):
     ):
         self.model = model
         # SSRF guard at the constructor seam (mirrors backend_config): rejects
-        # non-http(s) schemes and private/link-local hosts on direct construction.
-        if validate_base_url is not None:
-            validate_base_url(base_url)
+        # non-http(s) schemes and private/link-local hosts on direct
+        # construction. FAIL CLOSED: if the guard could not be imported,
+        # refuse to construct rather than silently skipping validation.
+        if validate_base_url is None or validate_is_local_base_url is None:
+            raise RuntimeError(
+                "backend_config's base_url validators could not be imported; "
+                "refusing to construct OpenAICompatibleOrchestratorBackend "
+                "without the SSRF guard (fail closed). Ensure driver/ is on "
+                "sys.path so backend_config.py is importable."
+            )
+        validate_base_url(base_url)
+        # is_local disables the key requirement, so it must be pinned to a
+        # loopback base_url (parity with the worker seat / config layer).
+        if is_local:
+            validate_is_local_base_url(base_url)
         self.base_url = base_url
         self.timeout_s = timeout_s
         self.transport = transport or default_openai_transport

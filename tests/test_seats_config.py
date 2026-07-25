@@ -19,8 +19,11 @@ Constraints: stdlib unittest only, ASCII-only, offline (no API key, no network),
 Windows + Linux safe, hermetic temp fixtures.
 """
 
+import contextlib
+import io
 import json
 import os
+import socket
 import sys
 import tempfile
 import unittest
@@ -651,6 +654,442 @@ class TestShadowToolsSeatWiring(unittest.TestCase):
 
     def test_seated_shadow_adjudication_seat_wiring(self):
         self._check_tool("seated_shadow_adjudication", "gpt-5.6-sol")
+
+
+# ============================================================================
+# 8. Round-1 audit fixes (PR #378)
+# ============================================================================
+
+# More assembled env-var names (never contiguous literals in fixtures).
+_ENV_GH_TOKEN = "GITHUB" + "_" + "TOKEN"
+_ENV_AWS_SECRET = "AWS" + "_" + "SECRET" + "_" + "ACCESS" + "_" + "KEY"
+
+
+class TestLegacyFlatBlockInertInScheduler(unittest.TestCase):
+    """Fix 1: a legacy flat backend block stays INERT in the scheduler default.
+
+    On main the flat {"backend": "codex", ...} block was documented but DEAD
+    (nothing consumed it). HS-1's config-first scheduler default must not
+    silently activate it: only the new seats block is the opt-in surface.
+    """
+
+    def _resolve(self, **kwargs):
+        import wave_scheduler
+        return wave_scheduler.resolve_worker_driver(**kwargs)
+
+    def test_legacy_flat_codex_block_default_stays_claude(self):
+        """Legacy flat codex block + scheduler default -> ClaudeCodeDriver."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_config(tmpdir, {
+                "backend": "codex",
+                "model": "gpt-4o-mini",
+            })
+            driver, err = self._resolve(
+                driver_override=None, config_path=path, execute=False
+            )
+        self.assertIsNone(err)
+        self.assertIsInstance(driver, ClaudeCodeDriver)
+
+    def test_legacy_flat_gpt35_example_dry_run_survives(self):
+        """RELEASE-CRITICAL repro: main's documented example block used
+        gpt-3.5-turbo, which CodexDriver's json_schema guard rejects at init.
+        A dry run that worked on main must still resolve to Claude, not die."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_config(tmpdir, {
+                "backend": "codex",
+                "model": "gpt-3.5" + "-turbo",
+            })
+            driver, err = self._resolve(
+                driver_override=None, config_path=path, execute=False
+            )
+        self.assertIsNone(err)
+        self.assertIsInstance(driver, ClaudeCodeDriver)
+
+    def test_legacy_flat_openai_block_execute_demands_no_key(self):
+        """Legacy flat hosted block + --execute: inert -> no key demanded."""
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in (_KEY_ENV_DEFAULT, _KEY_ENV_CUSTOM)
+        }
+        with mock.patch.dict(os.environ, env, clear=True):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                path = _write_config(tmpdir, {
+                    "backend": "openai-compatible",
+                    "base_url": "https://openrouter.ai/api/v1",
+                    "model": "openai/gpt-4-turbo",
+                    "api_key_env": _KEY_ENV_CUSTOM,
+                })
+                driver, err = self._resolve(
+                    driver_override=None, config_path=path, execute=True
+                )
+        self.assertIsNone(err)
+        self.assertIsInstance(driver, ClaudeCodeDriver)
+
+    def test_seats_worker_block_still_activates_config_first(self):
+        """The seats block remains the opt-in surface for config-first."""
+        from codex_driver import CodexDriver
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_config(tmpdir, {
+                "seats": {"worker": {"backend": "codex", "model": "gpt-4o-mini"}},
+            })
+            driver, err = self._resolve(
+                driver_override=None, config_path=path, execute=False
+            )
+        self.assertIsNone(err)
+        self.assertIsInstance(driver, CodexDriver)
+
+    def test_shipped_examples_use_no_gpt35(self):
+        """No shipped example config recommends a json_schema-less model."""
+        for rel in ("aesop.config.example.json",
+                    Path("driver") / "aesop.config.example.json"):
+            text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+            self.assertNotIn("gpt-3.5" + "-turbo", text, str(rel))
+
+
+class TestIsLocalRequiresLocalBaseUrl(unittest.TestCase):
+    """Fix 2: is_local=True must be pinned to a loopback base_url.
+
+    is_local disables the key requirement; without a locality check it lets a
+    config exfiltrate prompt content to any remote host with a dummy Bearer.
+    """
+
+    _REMOTE = "https://api.openai.com/v1"
+    _LOCAL = "http://localhost:11434/v1"
+
+    def test_worker_seat_is_local_remote_rejected_at_load(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_config(tmpdir, {
+                "seats": {
+                    "worker": {
+                        "backend": "openai-compatible",
+                        "base_url": self._REMOTE,
+                        "model": "m",
+                        "is_local": True,
+                    },
+                },
+            })
+            with self.assertRaises(ValueError) as ctx:
+                load_backend_config(path)
+        self.assertIn("is_local", str(ctx.exception))
+
+    def test_orchestrator_seat_is_local_remote_rejected_at_load(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_config(tmpdir, {
+                "seats": {
+                    "orchestrator": {
+                        "backend": "openai-compatible",
+                        "model": "m",
+                        "base_url": self._REMOTE,
+                        "is_local": True,
+                    },
+                },
+            })
+            with self.assertRaises(ValueError):
+                load_backend_config(path)
+
+    def test_orchestrator_seat_is_local_default_base_url_rejected(self):
+        """is_local with NO base_url defaults to hosted OpenAI -> rejected."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_config(tmpdir, {
+                "seats": {
+                    "orchestrator": {
+                        "backend": "openai-compatible",
+                        "model": "m",
+                        "is_local": True,
+                    },
+                },
+            })
+            with self.assertRaises(ValueError):
+                load_backend_config(path)
+
+    def test_legacy_flat_is_local_remote_rejected_at_load(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_config(tmpdir, {
+                "backend": "openai-compatible",
+                "base_url": self._REMOTE,
+                "model": "m",
+                "is_local": True,
+            })
+            with self.assertRaises(ValueError):
+                load_backend_config(path)
+
+    def test_orchestrator_backend_construct_is_local_remote_rejected(self):
+        with self.assertRaises(ValueError):
+            OpenAICompatibleOrchestratorBackend(
+                model="m",
+                base_url=self._REMOTE,
+                transport=_FakeDecideTransport(),
+                is_local=True,
+            )
+
+    def test_worker_driver_construct_is_local_remote_rejected(self):
+        from openai_compatible_driver import OpenAICompatibleDriver
+        with self.assertRaises(ValueError):
+            OpenAICompatibleDriver(
+                base_url=self._REMOTE,
+                model="m",
+                is_local=True,
+                transport=lambda payload: {},
+            )
+
+    def test_is_local_localhost_still_works_everywhere(self):
+        from openai_compatible_driver import OpenAICompatibleDriver
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_config(tmpdir, {
+                "seats": {
+                    "worker": {
+                        "backend": "openai-compatible",
+                        "base_url": self._LOCAL,
+                        "model": "m",
+                        "is_local": True,
+                    },
+                    "orchestrator": {
+                        "backend": "openai-compatible",
+                        "model": "m",
+                        "base_url": self._LOCAL,
+                        "is_local": True,
+                    },
+                },
+            })
+            config = load_backend_config(path)
+        self.assertTrue(config["is_local"])
+        backend = OpenAICompatibleOrchestratorBackend(
+            model="m",
+            base_url=self._LOCAL,
+            transport=_FakeDecideTransport(),
+            is_local=True,
+        )
+        self.assertTrue(backend.is_local)
+        driver = OpenAICompatibleDriver(
+            base_url=self._LOCAL,
+            model="m",
+            is_local=True,
+            transport=lambda payload: {},
+        )
+        self.assertTrue(driver._is_local)
+
+    def test_ipv6_loopback_accepted(self):
+        from backend_config import validate_is_local_base_url
+        validate_is_local_base_url("http://[::1]:11434/v1")
+        validate_is_local_base_url("http://127.0.0.1:11434/v1")
+        with self.assertRaises(ValueError):
+            validate_is_local_base_url("https://api.openai.com/v1")
+
+
+class TestApiKeyEnvValidation(unittest.TestCase):
+    """Fix 3: api_key_env must look like an LLM API key env var name."""
+
+    def _worker_config(self, tmpdir, key_env):
+        return _write_config(tmpdir, {
+            "seats": {
+                "worker": {
+                    "backend": "openai-compatible",
+                    "base_url": "https://openrouter.ai/api/v1",
+                    "model": "m",
+                    "api_key_env": key_env,
+                },
+            },
+        })
+
+    def test_worker_seat_github_token_rejected(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._worker_config(tmpdir, _ENV_GH_TOKEN)
+            with self.assertRaises(ValueError) as ctx:
+                load_backend_config(path)
+        self.assertIn("api_key_env", str(ctx.exception))
+
+    def test_orchestrator_seat_aws_secret_rejected(self):
+        """AWS_SECRET_ACCESS_KEY ends in _KEY but is an obvious non-LLM secret."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_config(tmpdir, {
+                "seats": {
+                    "orchestrator": {
+                        "backend": "openai-compatible",
+                        "model": "m",
+                        "api_key_env": _ENV_AWS_SECRET,
+                    },
+                },
+            })
+            with self.assertRaises(ValueError):
+                load_backend_config(path)
+
+    def test_legacy_flat_non_key_env_rejected(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_config(tmpdir, {
+                "backend": "openai-compatible",
+                "base_url": "https://openrouter.ai/api/v1",
+                "model": "m",
+                "api_key_env": _ENV_GH_TOKEN,
+            })
+            with self.assertRaises(ValueError):
+                load_backend_config(path)
+
+    def test_custom_provider_key_accepted_with_notice(self):
+        """A legit provider key name loads, with a loud NOTICE on stderr."""
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._worker_config(tmpdir, "OPEN" + "ROUTER" + "_API" + "_KEY")
+            with contextlib.redirect_stderr(stderr):
+                config = load_backend_config(path)
+        self.assertEqual(config["backend"], "openai-compatible")
+        self.assertIn("NOTICE", stderr.getvalue())
+        self.assertIn("api_key_env", stderr.getvalue())
+
+    def test_default_key_env_no_notice(self):
+        """The default key env name loads silently (no NOTICE spam)."""
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._worker_config(tmpdir, _KEY_ENV_DEFAULT)
+            with contextlib.redirect_stderr(stderr):
+                load_backend_config(path)
+        self.assertNotIn("NOTICE", stderr.getvalue())
+
+
+class TestBuildDriverSeatPromotionParity(unittest.TestCase):
+    """Fix 4: build_driver raw-dict seats promotion == loader promotion."""
+
+    def test_raw_dict_and_loader_agree(self):
+        from openai_compatible_driver import OpenAICompatibleDriver
+        seat = {
+            "backend": "openai-compatible",
+            "base_url": "http://localhost:11434/v1",
+            "model": "mistral",
+            "is_local": True,
+        }
+        raw_driver = build_driver({"seats": {"worker": dict(seat)}})
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_config(tmpdir, {"seats": {"worker": dict(seat)}})
+            loaded_driver = build_driver(load_backend_config(path))
+        for d in (raw_driver, loaded_driver):
+            self.assertIsInstance(d, OpenAICompatibleDriver)
+        self.assertEqual(raw_driver._base_url, loaded_driver._base_url)
+        self.assertEqual(raw_driver._model, loaded_driver._model)
+        self.assertEqual(raw_driver._is_local, loaded_driver._is_local)
+        self.assertEqual(raw_driver._api_key_env, loaded_driver._api_key_env)
+
+    def test_top_level_base_url_does_not_leak_into_seat(self):
+        """Seat promotion REPLACES; a stray top-level base_url must not fill
+        in a missing seat field (merge-vs-replace divergence)."""
+        with self.assertRaises(ValueError) as ctx:
+            build_driver({
+                "base_url": "http://localhost:9999/v1",
+                "seats": {
+                    "worker": {"backend": "openai-compatible", "model": "m"},
+                },
+            })
+        self.assertIn("base_url", str(ctx.exception))
+
+    def test_invalid_raw_seat_fails_loud(self):
+        """An SSRF-unsafe raw seat fails validation, not silently builds."""
+        with self.assertRaises(ValueError):
+            build_driver({
+                "seats": {
+                    "worker": {
+                        "backend": "openai-compatible",
+                        "model": "m",
+                        "base_url": "http://169.254.169.254/v1",
+                    },
+                },
+            })
+
+
+class TestValidateBaseUrlDnsResolution(unittest.TestCase):
+    """Fix 5: validate_base_url resolves hostnames, not just IP literals."""
+
+    @staticmethod
+    def _addrinfo(addr, family=socket.AF_INET):
+        if family == socket.AF_INET6:
+            sockaddr = (addr, 0, 0, 0)
+        else:
+            sockaddr = (addr, 0)
+        return [(family, socket.SOCK_STREAM, 6, "", sockaddr)]
+
+    def test_hostname_resolving_private_rejected(self):
+        from backend_config import validate_base_url
+        with mock.patch("socket.getaddrinfo",
+                        return_value=self._addrinfo("10.0.0.5")):
+            with self.assertRaises(ValueError) as ctx:
+                validate_base_url("https://internal.example.com/v1")
+        self.assertIn("resolves", str(ctx.exception))
+
+    def test_hostname_resolving_metadata_v6mapped_rejected(self):
+        from backend_config import validate_base_url
+        with mock.patch(
+            "socket.getaddrinfo",
+            return_value=self._addrinfo(
+                "::ffff:169.254.169.254", family=socket.AF_INET6
+            ),
+        ):
+            with self.assertRaises(ValueError):
+                validate_base_url("https://metadata.example.com/v1")
+
+    def test_hostname_resolving_public_accepted(self):
+        from backend_config import validate_base_url
+        with mock.patch("socket.getaddrinfo",
+                        return_value=self._addrinfo("93.184.216.34")):
+            validate_base_url("https://api.example.com/v1")
+
+    def test_unresolvable_hostname_allowed_documented_residual(self):
+        """Offline/no-DNS load must not brick hosted configs (residual is
+        documented in the docstring; connection-time still fails)."""
+        from backend_config import validate_base_url
+        with mock.patch("socket.getaddrinfo",
+                        side_effect=socket.gaierror("no dns")):
+            validate_base_url("https://api.openai.com/v1")
+
+
+class TestOrchestratorBackendFailClosed(unittest.TestCase):
+    """Fix 6: missing SSRF guard import -> construction fails closed."""
+
+    def test_construction_fails_closed_without_ssrf_guard(self):
+        import orchestrator_backend
+        with mock.patch.object(orchestrator_backend, "validate_base_url", None):
+            with self.assertRaises(RuntimeError) as ctx:
+                OpenAICompatibleOrchestratorBackend(
+                    model="m", transport=_FakeDecideTransport()
+                )
+        self.assertIn("fail", str(ctx.exception).lower())
+
+
+class TestHarnessSeatModelWarn(unittest.TestCase):
+    """Fix 7: harness/claude orchestrator seat with a model field warns."""
+
+    def test_harness_seat_with_model_warns(self):
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_config(tmpdir, {
+                "seats": {
+                    "orchestrator": {"backend": "harness", "model": "gpt-4o-mini"},
+                },
+            })
+            with contextlib.redirect_stderr(stderr):
+                config = load_backend_config(path)
+        backend = build_orchestrator_backend(config)
+        self.assertIsInstance(backend, HarnessOrchestratorBackend)
+        out = stderr.getvalue()
+        self.assertIn("model", out)
+        self.assertIn("harness", out)
+
+    def test_harness_seat_without_model_silent(self):
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_config(tmpdir, {
+                "seats": {"orchestrator": {"backend": "harness"}},
+            })
+            with contextlib.redirect_stderr(stderr):
+                load_backend_config(path)
+        self.assertEqual(stderr.getvalue(), "")
+
+
+class TestShadowToolsLiveHelp(unittest.TestCase):
+    """Fix 8: --live help reflects api_key_env/is_local, not a hardcoded key."""
+
+    def test_live_help_no_stale_key_claim(self):
+        stale = "requires OPENAI" + "_API" + "_KEY env var"
+        for name in ("shadow_adjudication.py", "seated_shadow_adjudication.py"):
+            text = (REPO_ROOT / "tools" / name).read_text(encoding="utf-8")
+            self.assertNotIn(stale, text, name)
 
 
 if __name__ == "__main__":

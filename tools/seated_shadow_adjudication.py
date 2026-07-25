@@ -718,7 +718,10 @@ def main():
     parser.add_argument(
         "--live",
         action="store_true",
-        help="Run live with real OpenAI API (requires OPENAI_API_KEY env var)",
+        help=(
+            "Run live against the configured seat's endpoint (API key read "
+            "from the seat's api_key_env; is_local loopback seats need no key)"
+        ),
     )
     parser.add_argument(
         "--repeat",

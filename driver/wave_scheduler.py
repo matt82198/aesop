@@ -815,13 +815,19 @@ def resolve_worker_driver(
       1. driver_override 'claude'/'codex' -> that driver, exactly as the
          legacy hardcoded CLI path behaved (including the codex+execute
          OPENAI_API_KEY gate).
-      2. Otherwise: load aesop.config.json (seats.worker, falling back to the
-         legacy flat backend block) via load_backend_config + build_driver.
-         No config file -> ClaudeCodeDriver (byte-identical to today).
-         This path can select ANY configured backend, including
-         openai-compatible (previously unreachable from this CLI).
+      2. Otherwise: load aesop.config.json and activate a configured worker
+         ONLY when a seats.worker block is present (build_driver on the
+         validated seat). The seats block is the opt-in surface; it can
+         select ANY backend, including openai-compatible (previously
+         unreachable from this CLI).
+      3. No config file, no seats.worker -> ClaudeCodeDriver, byte-identical
+         to pre-0.4.0. A bare LEGACY FLAT backend block ({"backend": ...}
+         with no seats) stays INERT here: it was dead config before 0.4.0
+         (documented but consumed by nothing), and silently activating it
+         would change behavior on existing installs. Migrate it to
+         seats.worker to opt in. It still fails loud if malformed.
 
-    For hosted backends with execute=True, the seat's api_key_env (default
+    For hosted seats with execute=True, the seat's api_key_env (default
     OPENAI_API_KEY) must be set; is_local seats need no key. Dry runs never
     require a key (building a driver is offline-safe).
 
@@ -863,6 +869,20 @@ def resolve_worker_driver(
         config = load_backend_config(config_path)
     except (TypeError, ValueError) as exc:
         return None, f"invalid aesop.config.json: {exc}"
+
+    seats = config.get("seats")
+    has_worker_seat = isinstance(seats, dict) and isinstance(
+        seats.get("worker"), dict
+    )
+    if not has_worker_seat:
+        # No seats.worker opt-in: byte-identical to pre-0.4.0 (Claude
+        # worker), even when a legacy flat backend block is present -- that
+        # block was dead config before 0.4.0 and stays inert here.
+        try:
+            from claude_code_driver import ClaudeCodeDriver
+        except ImportError:
+            return None, "claude_code_driver.py not found"
+        return ClaudeCodeDriver(), None
 
     backend_name = config.get("backend", "claude")
     if execute and backend_name in ("codex", "openai-compatible"):
@@ -920,8 +940,9 @@ def main():
         default=None,
         help=(
             "OVERRIDE the configured worker seat (claude|codex). "
-            "Default: read aesop.config.json seats.worker / legacy backend "
-            "block (no config -> claude); the config path also supports "
+            "Default: read aesop.config.json seats.worker (no seats block "
+            "-> claude; a legacy flat backend block stays inert -- migrate "
+            "it to seats.worker); the config path also supports "
             "openai-compatible backends"
         ),
     )

@@ -9,8 +9,8 @@
     {
       "name": "OpenAI Codex / Chat Completions",
       "backend": "codex",
-      "model": "gpt-3.5-turbo",
-      "description": "Uses OpenAI's Chat Completions API. Set OPENAI_API_KEY environment variable before running. Tier 2 verification (validate all JSON, spot-check, repair budget).",
+      "model": "gpt-4o-mini",
+      "description": "Uses OpenAI's Chat Completions API. Set OPENAI_API_KEY environment variable before running. Tier 2 verification (validate all JSON, spot-check, repair budget). Model must support json_schema structured output (gpt-4o-mini does; gpt-3.5-class models are rejected at init).",
       "optional_fields": {
         "model": "gpt-4-turbo for stronger verification",
         "max_owned_bytes": 200000,
@@ -83,8 +83,8 @@
   },
   "experimental_codex": {
     "backend": "codex",
-    "model": "gpt-3.5-turbo",
-    "comment": "Experimental Codex backend. Requires OPENAI_API_KEY set. Tier 2 verification."
+    "model": "gpt-4o-mini",
+    "comment": "Experimental Codex backend (json_schema-capable model required). Requires OPENAI_API_KEY set. Tier 2 verification. NOTE: as a bare legacy flat block this is INERT in the wave scheduler's default path -- move it under seats.worker to activate it."
   },
   "experimental_ollama": {
     "backend": "openai-compatible",
