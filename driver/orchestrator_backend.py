@@ -25,6 +25,15 @@ try:
 except ImportError:
     default_openai_transport = None
 
+# base_url SSRF guard (shared with backend_config). Optional import keeps the
+# module importable standalone; when available, the constructor enforces it so
+# DIRECT construction cannot bypass the config-layer validation (urllib's
+# default opener would otherwise happily open file:// or ftp:// base URLs).
+try:
+    from backend_config import validate_base_url
+except ImportError:
+    validate_base_url = None
+
 
 class OrchestratorBackend(ABC):
     """Abstract base class for orchestrator backends.
@@ -119,6 +128,10 @@ class OpenAICompatibleOrchestratorBackend(OrchestratorBackend):
         transport: Optional[Any] = None,
     ):
         self.model = model
+        # SSRF guard at the constructor seam (mirrors backend_config): rejects
+        # non-http(s) schemes and private/link-local hosts on direct construction.
+        if validate_base_url is not None:
+            validate_base_url(base_url)
         self.base_url = base_url
         self.timeout_s = timeout_s
         self.transport = transport or default_openai_transport
