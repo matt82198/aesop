@@ -108,15 +108,29 @@ class AdjudicationGate:
         challenger_result = self.challenger.decide(decision_type, context_pack, schema)
 
         # Extract confidence from challenger (default to 0.0 if absent).
+        # Fail-closed coercions: bool (True == 1 would fake full confidence)
+        # and NaN (every comparison is False, silently bypassing the low-conf
+        # escalation) are NOT valid confidence values.
         challenger_confidence = challenger_result.get("confidence", 0.0)
-        if not isinstance(challenger_confidence, (int, float)):
+        if (
+            isinstance(challenger_confidence, bool)
+            or not isinstance(challenger_confidence, (int, float))
+            or challenger_confidence != challenger_confidence  # NaN
+        ):
             challenger_confidence = 0.0
 
-        # Extract verdict (DECISION_FAILED means failure).
+        # Extract verdict (DECISION_FAILED means failure). Normalize for the
+        # reserved-terminal checks: case variants ("decision_failed",
+        # "UNDETERMINED") and non-string verdicts must not slip past the
+        # escalation rules (fail-closed: non-string == failure).
         challenger_verdict = challenger_result.get("verdict")
+        if isinstance(challenger_verdict, str):
+            _verdict_norm = challenger_verdict.strip().upper()
+        else:
+            _verdict_norm = "DECISION_FAILED"
 
         # Rule 1: Challenger failed.
-        if challenger_verdict == "DECISION_FAILED":
+        if _verdict_norm == "DECISION_FAILED":
             incumbent_result = self.incumbent_fn(decision_type, context_pack, schema)
             result_dict = {
                 "verdict": incumbent_result.get("verdict"),
@@ -132,7 +146,7 @@ class AdjudicationGate:
             return result_dict
 
         # Rule 2: Challenger returned undetermined.
-        if self.escalate_on_undetermined and challenger_verdict == "undetermined":
+        if self.escalate_on_undetermined and _verdict_norm == "UNDETERMINED":
             incumbent_result = self.incumbent_fn(decision_type, context_pack, schema)
             result_dict = {
                 "verdict": incumbent_result.get("verdict"),
@@ -217,7 +231,11 @@ class AdjudicationGate:
             True if verdict is DECISION_FAILED or undetermined, False otherwise.
         """
         verdict = result.get("verdict")
-        return verdict in ("DECISION_FAILED", "undetermined")
+        if not isinstance(verdict, str):
+            # Missing/None/non-string verdict is unresolved (fail-closed);
+            # never present it as a resolved incumbent verdict.
+            return True
+        return verdict.strip().upper() in ("DECISION_FAILED", "UNDETERMINED")
 
     def _should_spot_check(self, decision_type: str, context_pack: Any) -> bool:
         """Deterministically decide if this call should be spot-checked.
@@ -255,7 +273,9 @@ class AdjudicationGate:
         # Hash the canonical key to get a deterministic integer.
         hash_val = int(hashlib.md5(canonical.encode()).hexdigest(), 16)
         # Sample at the configured fraction (0.0-1.0).
-        return (hash_val % 100) < int(self.spot_check_frac * 100)
+        # round() before int(): int(0.29 * 100) == 28 due to float representation,
+        # which would silently under-sample the configured fraction.
+        return (hash_val % 100) < int(round(self.spot_check_frac * 100))
 
     def summarize_run(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Summarize adjudication run statistics.
