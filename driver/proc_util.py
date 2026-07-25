@@ -92,6 +92,8 @@ def run_shell_bounded(command, cwd=None, timeout_s=120.0):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             **popen_kwargs,
         )
     except OSError as exc:
