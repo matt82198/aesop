@@ -23,6 +23,7 @@ CLI: python tools/seated_shadow_adjudication.py --corpus <path> --model <model>
 import argparse
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,6 +42,81 @@ from orchestrator_backend import (  # noqa: E402
     OpenAICompatibleOrchestratorBackend,
 )
 from openai_transport import default_openai_transport  # noqa: E402
+
+
+# ============================================================================
+# Path redaction helper (privacy leak prevention)
+# ============================================================================
+
+
+def redact_paths(text: str) -> str:
+    """Redact absolute machine paths from text.
+
+    Replaces:
+    - C:\\Users\\matt8\\aesop → <REPO> (handles single or double backslashes)
+    - /c/Users/matt8/aesop → <REPO>
+    - C:\\Users\\matt8 → <HOME> (handles single or double backslashes)
+    - /c/Users/matt8 → <HOME>
+    - Users/matt8 → <HOME>
+    - Users\\matt8 → <HOME>
+
+    Non-path occurrences of 'matt8' are preserved.
+    """
+    # First redact repo-specific paths (longer pattern, must be first)
+    # Windows: C:\Users\matt8\aesop or C:\\Users\\matt8\\aesop
+    text = re.sub(
+        r"C:\\\\?Users\\\\?matt8\\\\?aesop",
+        "<REPO>",
+        text,
+        flags=re.IGNORECASE,
+    )
+    # POSIX: /c/Users/matt8/aesop
+    text = re.sub(
+        r"/c/Users/matt8/aesop",
+        "<REPO>",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    # Then redact home paths (shorter pattern)
+    # Windows: C:\Users\matt8 or C:\\Users\\matt8
+    text = re.sub(
+        r"C:\\\\?Users\\\\?matt8",
+        "<HOME>",
+        text,
+        flags=re.IGNORECASE,
+    )
+    # POSIX: /c/Users/matt8
+    text = re.sub(
+        r"/c/Users/matt8",
+        "<HOME>",
+        text,
+        flags=re.IGNORECASE,
+    )
+    # Also handle Users\matt8 or Users\\matt8 or Users/matt8 variants
+    text = re.sub(
+        r"Users[\\\/]matt8",
+        "<HOME>",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    return text
+
+
+def redact_data_structure(obj: Any) -> Any:
+    """Recursively redact paths from all string values in a data structure.
+
+    Handles dicts, lists, and strings. Returns a new object with paths redacted.
+    """
+    if isinstance(obj, str):
+        return redact_paths(obj)
+    elif isinstance(obj, dict):
+        return {k: redact_data_structure(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [redact_data_structure(item) for item in obj]
+    else:
+        return obj
 
 
 # ============================================================================
@@ -307,15 +383,25 @@ def aggregate_seated_results(
         verdicts = item_verdicts.get(corpus_item.id, [])
         reasonings = item_reasonings.get(corpus_item.id, [])
 
-        # Modal verdict.
+        # Modal verdict (excluding DECISION_FAILED).
         verdict_counts = {}
         for v in verdicts:
             verdict_counts[v] = verdict_counts.get(v, 0) + 1
 
-        if verdict_counts:
-            modal_verdict = max(verdict_counts, key=verdict_counts.get)
-            modal_count = verdict_counts[modal_verdict]
+        # Exclude DECISION_FAILED from modal computation.
+        valid_verdicts = {
+            v: count for v, count in verdict_counts.items() if v != "DECISION_FAILED"
+        }
+
+        if valid_verdicts:
+            modal_verdict = max(valid_verdicts, key=valid_verdicts.get)
+            modal_count = valid_verdicts[modal_verdict]
             stability = modal_count / num_runs if num_runs > 0 else 0.0
+        elif verdict_counts:
+            # All verdicts were DECISION_FAILED
+            modal_verdict = "all_runs_failed"
+            modal_count = 0
+            stability = 0.0
         else:
             modal_verdict = "undetermined"
             modal_count = 0
@@ -442,6 +528,9 @@ def write_seated_json(
         "per_item_aggregations": agg_items,
     }
 
+    # Redact paths before writing
+    data = redact_data_structure(data)
+
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=True)
 
@@ -506,6 +595,8 @@ def write_seated_md(
 
     for agg in aggregated["per_item"]:
         correct = "✓" if agg.modal_verdict.lower() == agg.ground_truth.lower() else "✗"
+        # Redact reasoning sample
+        reasoning_sample = redact_paths(item_9['reasoning_sample'])
         lines.append(
             f"| {agg.id} | {agg.ground_truth} | {agg.modal_verdict} | "
             f"{agg.stability:.1%} | {correct} |"
