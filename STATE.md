@@ -22,11 +22,11 @@ audits finding nothing new). Cycle: land wave → five-lens re-audit → dedupe 
 per-item branches → merge green PRs. Never idle while agents run. On session death:
 resume from this file + AUDIT-BACKLOG.md.
 
-## Phase: `0.4.0` (2026-07-25, current)
-**v0.4.0 STAGED ON MAIN**: cf7fdbb, all HS hardening PRs merged (#371–#381), version + CHANGELOG finalized (PR #381 merged).
+## Phase: `0.4.0` (2026-07-25, RELEASED)
+**v0.4.0 RELEASED**: bdc7499 (commit at release time); @matt82198/aesop@0.4.0 live on npm latest as of 2026-07-25 (GitHub release v0.4.0 → publish.yml OIDC).
 v0.4.0 ships two-seat config (HS-1/HS-2), unified orchestrator/worker model swapping, IPv6/DNS hardening,
 driver/ scaffolding completeness, live orchestrator-seat swap + block-gate hardening (HS-2/F4), MICROKERNEL docs (HS-3).
-**Awaiting**: User publish decision (cut v0.4.0 tag + npm release, user-gated).
+**Status**: Published and live.
 Wave-31+ backlog: WS3b failure-recovery unsupervised loop, WriteAPI caller migration, StateAPI burndown, frontier live-run (spend-gated), external-benchmark $10 slice, windows runner-contention timeout hardening (residual per-test + spawn-heavy suite isolation), test-pollution test_frontier_slice, ps1-syntax CI gate, driver/CLAUDE.md restructure decision.
 Prior phase (0.3.1-released, 2026-07-22):
 v0.3.1 shipped after recency-lane automation incident (unauthorized `--admin` merge + empty release at d81ffe4; npm untouched).
@@ -49,7 +49,6 @@ entry; "Autonomous Developer" tagline reframe. Incidents logged: recency agent -
 (guards proposed), PostToolUse hook wave-trigger misfire (FLEET-OPS).
 
 ## NEXT STEPS
-- **0.4.0 Release Gate**: v0.4.0 staged on main@ff4c706 + /refinesystem CLEAN (CI+main-full green). All HS hardening PRs (#371–#381) merged. Awaiting user publish decision (cut v0.4.0 tag + npm release).
 - **Scheduled State-Layer Consolidation** (tracked items c7f4a8b2e3d1, d9e5b1c4f2a3):
   - Claim/coordination multi-instance lifecycle completion (F4-F7): crash-orphan recovery, liveness detection, repo-aware claim key, claims-stream compaction, monotonic expiry.
   - Residuals from RS6: millisecond git-layer ship TOCTOU (needs fencing token at git layer).

@@ -1,4 +1,22 @@
-# aesop 0.3.1 — Multi-core waves
+# aesop 0.4.0 — AI Micro-Kernel: Two Swappable Seats
+
+**Headline**: Unified two-seat configuration enables swapping both worker AND orchestrator models (Claude, Codex, OpenAI-compatible backends) without code changes. Live orchestrator seat-swap gate proven in gate-2 audit. Hardened over two audit passes and a six-round refinement loop before release.
+
+## Shipping
+
+- **Two-seat unified config (HS-1)**: New `seats` block swaps worker + orchestrator models from config alone. No-op default: existing installs unchanged.
+- **Live orchestrator seat-swap (HS-2)**: Final-catch gate enables mid-wave model swap; crash-only degradation on failure (quarantine + incident log).
+- **Microkernel architecture docs (HS-3)**: `docs/MICROKERNEL.md` explains the proof-of-concept seam, multi-model verification bounds, 60-second quickstart for adopters.
+- **Scaffolding completeness** (`npx aesop init`): driver/ directory now scaffolds on first run; --force idempotent re-scaffold; child process timeout protection.
+- **Hardening (two audit passes + six-round refine loop)**: IPv6 SSRF + DNS validation, API key environment allowlist, worker model field validation, wave execution timeouts, Windows CI shard concurrency cap, path redaction completeness, JSON-boundary fail-closed gates.
+
+**Single-instance proven**; multi-instance coordination scheduled.
+
+---
+
+## Prior releases
+
+### aesop 0.3.1 — Multi-core waves
 
 > 0.3.1 ships as the release tag for the 0.3.0 milestone (a defective v0.3.0 tag was burned by an automation error: an agent created an empty release at the wrong commit before the release PR merged; content shipped unchanged as 0.3.1).
 
@@ -7,7 +25,7 @@ supervised wave (single-item pilot) — intake → build → verify → ship —
 same gates**, and the release was preceded by a fresh adversarial hardening loop that
 exited clean.
 
-## Headline: the wave engine is core-agnostic (WS3)
+### Headline: the wave engine is core-agnostic (WS3)
 
 - **wave_scheduler.py (WS3a pilot)**: deterministic single-cycle orchestration — tracker
   intake with fail-closed validation (empty/missing ownership rejected; paths normalized
@@ -27,7 +45,7 @@ exited clean.
 - Survived two adversarial review rounds pre-merge (12 verified defects fixed, including
   a dead-code tracker write and a symlink TOCTOU) — see the hardening section.
 
-## Measured, not asserted
+### Measured, not asserted
 
 - **Live structured-output accuracy**: Single run, N=32 curated tasks — gpt-4o-mini **32/32 (100%)** composite
   (valid-JSON / schema-exact / ownership-respect) under the driver-faithful payload
@@ -45,7 +63,7 @@ exited clean.
   cause, 8.3 containment fixes) the windows job went GREEN on main — the promote-to-
   required streak is counting from run 29955999466.
 
-## State consolidation (WS4)
+### State consolidation (WS4)
 
 - **ReadAPI facade** (state_store/read_api.py): one read seam over tracker / orchestrator
   status / heartbeats / ledger — delegates to existing parsers, never forks logic.
@@ -58,7 +76,7 @@ exited clean.
 - **Agent lifecycle events**: dispatched/working/done/stalled event types + projection
   with transition history, feeding the Activity view live.
 
-## Cost: observed, projected, bounded, unified
+### Cost: observed, projected, bounded, unified
 
 - **cost_projection.py**: burn-rate from a ledger window, end-of-wave projection,
   idempotent 70%/90% ceiling alerts (honest fired_alert semantics under partial failure).
@@ -68,7 +86,7 @@ exited clean.
   counterfactual, burn vs ceiling — with honest DATA-UNAVAILABLE states and a Playwright
   proof (verify_cost_panel.py).
 
-## Operability
+### Operability
 
 - **`aesop reproduce`**: offline verification suite from a clean clone/install; doctor
   failure classification is exact-match (a real missing dependency can no longer be
@@ -83,7 +101,7 @@ exited clean.
 - **Wave preflight**: backlog validation flags (missing ownership, stale refs, overlaps,
   ledger-aggregate retry rate with DATA-UNAVAILABLE honesty).
 
-## Security
+### Security
 
 - **Redaction hardening**: URL-credential patterns are scheme-agnostic, consume
   embedded-@ userinfo to the last @, handle IPv6 hosts, and refuse to over-redact
@@ -96,7 +114,7 @@ exited clean.
 - **Ship-phase hygiene**: git-add failures unstage their residue; per-repo ship errors
   carry stderr detail in the Report.
 
-## Hardening (the release gate)
+### Hardening (the release gate)
 
 - 0.3.0's release condition was a full /refinesystem loop: expert + adversarial lens
   fleets with regression re-verification, every P1 deterministically verified by the
@@ -120,7 +138,7 @@ exited clean.
   fails baseless Test* classes), scaffold-test load-sensitivity (shared fixtures,
   env-tunable child timeouts), local-server timeout starvation, stdin-inheritance hangs.
 
-## Breaking / behavior changes
+### Breaking / behavior changes
 
 - Mixed git-ship manifests (some items with explicit `repo`, some without) are rejected
   at preflight; pure-legacy and fully-explicit manifests are unchanged.
@@ -134,7 +152,7 @@ exited clean.
 - eod_sweep: repo list delimiters are now os.pathsep (';' on Windows); nonexistent or
   non-git explicitly-listed repos are AT-RISK findings (exit 1), never silent skips.
 
-## Honest residuals
+### Honest residuals
 
 - Windows was promoted to a required check on 2026-07-22 after 6 consecutive green main runs.
 - StateAPI baseline: 33 direct-read sites remain; burn-down is the 0.4 track alongside
