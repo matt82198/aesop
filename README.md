@@ -16,11 +16,13 @@
 
 **Aesop** is a **crash-recoverable orchestration harness** for multi-agent workflows on any repository. One-line theme: *stateless agent execution over git-backed durable memory*.
 
-Core idea: **agent behavior is source code.** Every decision lives in durable, human-diffable files—git history, plain-text STATE.md, append-only BUILDLOG.md, Python guardrails. When a machine fails, you re-read from disk. No vector DBs, no distributed consensus, no magic. This repo's own 251 merged PRs across 1088 commits were delivered by Aesop's own `/buildsystem` wave loop—a supervised loop under a human operator who sets goals and owns outward gates (npm publish, releases, history rewrites).
+Core idea: **agent behavior is source code.** Every decision lives in durable, human-diffable files—git history, plain-text STATE.md, append-only BUILDLOG.md, Python guardrails. When a machine fails, you re-read from disk. No vector DBs, no distributed consensus, no magic. This repo's own 386 merged PRs across 1180 commits were delivered by Aesop's own `/buildsystem` wave loop—a supervised loop under a human operator who sets goals and owns outward gates (npm publish, releases, history rewrites).
 
-**Why it matters:** crash recovery is not a special path; it is how the system *always* starts. Stateless workers, persistent filesystem brain, Haiku-first dispatch (4.3× cheaper than hierarchical design, proven by real A/B), fail-closed guardrails (pre-push secret gate, kill-switch, cost ceiling), and observable heartbeats. The result: 251 PRs in 11 days; Haiku at 39/39 on a 39-task benchmark vs Opus 38/39, at ~1/3 the cost.
+**Why it matters:** crash recovery is not a special path; it is how the system *always* starts. Stateless workers, persistent filesystem brain, Haiku-first dispatch (4.3× cheaper than hierarchical design, proven by real A/B), fail-closed guardrails (pre-push secret gate, kill-switch, cost ceiling), and observable heartbeats. The result: 386 PRs across 1180 commits; Haiku at 39/39 on a 39-task benchmark vs Opus 38/39, at ~1/3 the cost.
 
 **Why it's built this way:** [The Aesop Hypothesis](./docs/THE-AESOP-HYPOTHESIS.md) — the design philosophy, the trade-offs, the cancelled architectures with published data.
+
+**New in 0.4.0:** Swap the **worker** and **orchestrator** model (Claude, Codex, or any OpenAI-compatible endpoint) from one `seats` config block without code changes. See [docs/MICROKERNEL.md](./docs/MICROKERNEL.md) for the two-seat architecture and a 60-second quickstart. Single-instance proven; multi-instance coordination is scheduled.
 
 ## Feature Demo
 
@@ -92,8 +94,8 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 | Metric | Value |
 | --- | --- |
-| Merged PRs | 251 <!-- metrics-verified: self_stats.py (git log) --> |
-| Total Commits | 1088 <!-- metrics-verified: self_stats.py (git log) --> |
+| Merged PRs | 386 <!-- metrics-verified: self_stats.py (git log) --> |
+| Total Commits | 1180 <!-- metrics-verified: self_stats.py (git log) --> |
 | Project Age | 11 days <!-- metrics-verified: self_stats.py (git log) --> |
 | Waves | 30 <!-- metrics-verified: self_stats.py (git log) --> |
 | Insertions + Deletions | 186,587 <!-- metrics-verified: self_stats.py (git log) --> |
@@ -126,7 +128,7 @@ The benchmark proves it: across 39 judgment tasks (code review, severity calibra
 - **[docs/DISPATCH-MODEL.md](./docs/DISPATCH-MODEL.md)** — Cost analysis and scaling  
 - **[docs/CARDINAL-RULES.md](./docs/CARDINAL-RULES.md)** — 10 foundational principles  
 - **[docs/autonomous-swe.md](./docs/autonomous-swe.md)** — What "autonomous" means (and doesn't), evidence for all claims, honest limits  
-- **[RELEASE-NOTES.md](./RELEASE-NOTES.md)** — Version 0.3.1 (the 0.3.0 milestone): non-Claude core proof (Codex wave), refinement-loop convergence, Windows-green CI
+- **[RELEASE-NOTES.md](./RELEASE-NOTES.md)** — Version 0.4.0 (the two-seat micro-kernel): swappable worker + orchestrator models from one config, live orchestrator seat-swap gate, IPv6/DNS hardening, scaffolding completeness
 
 ## Contributing
 
