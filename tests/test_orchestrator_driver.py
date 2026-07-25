@@ -323,7 +323,9 @@ class TestOrchestratorDriverBasics(unittest.TestCase):
 
         self.assertEqual(result["verdict"], "DECISION_FAILED")
         self.assertIn("evidence", result)
-        self.assertIn("Malformed JSON", result["evidence"])
+        # F6: DECISION_FAILED evidence honors the array contract.
+        self.assertIsInstance(result["evidence"], list)
+        self.assertIn("Malformed JSON", result["evidence"][0])
         # Never green: verdict is FAILED, not fabricated.
         self.assertNotEqual(result["verdict"], "APPROVED")
 
@@ -1040,7 +1042,9 @@ class TestOrchestratorDriverFailSafeRaisePath(unittest.TestCase):
         self.assertIsInstance(result, dict)
         self.assertEqual(result["verdict"], "DECISION_FAILED")
         self.assertIn("evidence", result)
-        self.assertIn("Backend error after", result["evidence"])
+        # F6: DECISION_FAILED evidence honors the array contract.
+        self.assertIsInstance(result["evidence"], list)
+        self.assertIn("Backend error after", result["evidence"][0])
 
 
 class TestOrchestratorDriverDecisionFailedValidation(unittest.TestCase):
@@ -1073,7 +1077,9 @@ class TestOrchestratorDriverDecisionFailedValidation(unittest.TestCase):
         # Should fail because model cannot return DECISION_FAILED.
         self.assertEqual(result["verdict"], "DECISION_FAILED")
         # And the top-level verdict should be OUR DECISION_FAILED, not the model's.
-        self.assertIn("Invalid decision structure", result["evidence"])
+        # F6: DECISION_FAILED evidence honors the array contract.
+        self.assertIsInstance(result["evidence"], list)
+        self.assertIn("Invalid decision structure", result["evidence"][0])
 
 
 class TestOrchestratorDriverConfidenceRangeValidation(unittest.TestCase):

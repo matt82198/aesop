@@ -574,8 +574,17 @@ class TestSwapTransparencyEndToEnd(unittest.TestCase):
         # The swapped seat REALLY decided (this is not a cosmetic pass-through).
         self.assertEqual(fake_orch.call_count, 1)
 
-        # HUMAN INTERFACE: Report JSON shape is invariant.
-        self.assertEqual(set(report_a.keys()), set(report_b.keys()))
+        # HUMAN INTERFACE: Report JSON shape is invariant MODULO the two
+        # documented seat-observability lanes (block-gate hardening): a live
+        # seat adds EXACTLY "blocked" + "orchestrator_gate", nothing else,
+        # and the default path never carries them.
+        self.assertEqual(
+            set(report_a.keys()) | {"blocked", "orchestrator_gate"},
+            set(report_b.keys()),
+        )
+        self.assertNotIn("blocked", report_a)
+        self.assertNotIn("orchestrator_gate", report_a)
+        self.assertEqual(report_b["blocked"], [])
         self.assertEqual(report_a["phase"], report_b["phase"])
         self.assertEqual(report_a["success"], report_b["success"])
         self.assertEqual(report_a["merged"], report_b["merged"])
@@ -620,13 +629,24 @@ class TestSwapTransparencyEndToEnd(unittest.TestCase):
             FakeOrchestratorBackend([_BLOCK_DECISION])
         )
         # Same top-level contract minus ship-conditional keys (sha only
-        # appears when a repo actually shipped).
+        # appears when a repo actually shipped) and the two documented
+        # seat-observability lanes a live seat adds (block-gate hardening).
         conditional = {"sha", "tracker_update_attempted", "tracker_update_error"}
+        seat_lanes = {"blocked", "orchestrator_gate"}
         self.assertEqual(
             set(report_a.keys()) - conditional,
-            set(report_b.keys()) - conditional,
+            (set(report_b.keys()) - conditional) - seat_lanes,
         )
         self.assertEqual(report_b["items_shipped"], [])
+        # The block is OBSERVABLE: blocked lane carries slug + reason.
+        self.assertEqual(
+            [b["slug"] for b in report_b["blocked"]], ["swap-item"]
+        )
+        self.assertEqual(
+            report_b["orchestrator_gate"]["verdict_counts"]["block"], 1
+        )
+        # And honest: a blocked wave is not a silently-successful one.
+        self.assertFalse(report_b["success"])
 
 
 # ========================================================================

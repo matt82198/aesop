@@ -24,10 +24,17 @@
   `run_wave(orchestrator_backend=...)` Phase 6 routes ONE final_catch decision per
   test-VERIFIED item through a configured orchestrator seat (schema: decisions/
   final_catch.schema.json): merge=approve; block=verified flipped False, not shipped,
-  journal rewritten; escalate/undetermined/DECISION_FAILED=ship with honest record
+  journal rewritten, AND written files QUARANTINED (tracked -> git checkout, untracked
+  -> deleted; outside a git worktree: honest skip, never guess-delete — per-item
+  `quarantine` record); escalate/undetermined/DECISION_FAILED=ship with honest record
   (crash-only degradation — a seat outage never fabricates or blocks). None/null
   harness backend -> "deferred", byte-identical to pre-HS-2 (no key, no backend
-  constructed). Repair stays mechanical on both seats.
+  constructed). Repair stays mechanical on both seats. orchestrator_review carries
+  verdict_counts, blocked_detail {slug,reason}, seat_tokens_spent (backend
+  get_tokens_spent, OpenAI usage-metered) and gate_status (all decisions failed ->
+  "degraded", loud not invisible); after decisions the ceiling is re-checked with
+  driver+seat spend (abort_reason=cost_ceiling_exceeded_after_decisions) — live-seat
+  path only.
 - **wave_bridge.py** — Phase 3: bridges AgentDriver backends to wave manifest items.
   build_manifest_item() enriches with verificationTier + model; dispatch_item() routes
   by capability and decides green ONLY from test exit code (not model's say-so).
@@ -61,7 +68,10 @@
   live), test_wave_bridge (Phase 3 honest-green e2e), test_orchestrator_driver (increment 1:
   allowlist, size cap, decide() retry+fail-safe, schema), test_adjudication_gate (increment 3:
   escalation + safety invariant + spot-check sampling), test_hs2_swap_proof (HS-2: no-op
-  invariant, live-seat verdict effects, Report/state shape invariance — all offline).
+  invariant, live-seat verdict effects, Report/state shape invariance — all offline),
+  test_hs2_block_gate (block-gate hardening: confidence prompt/schema agreement, blocked
+  lane + terminal tracker state + no rebuild loop, degraded-gate flag, quarantine,
+  seat-spend ceiling, DECISION_FAILED evidence array — all offline).
 
 ## The five operations (what the wave loop needs from ANY backend)
 
@@ -138,7 +148,11 @@ Scheduler emits a Report JSON the orchestrator uses for merge eligibility. Field
 (dispatch|intake|halt|ceiling|gate_unavailable|manifest), wave_id, items_selected[],
 items_shipped[] ({slug, backend, tier 1-4|null, verified — test-exit-0-only, false = NOT
 PROVEN, testExit}), merged (pilot: always false, manual merge), success, timestamp,
-branch/sha (set on ship), halt_reason/ceiling_reason/error (optional). Ceiling is checked
+branch/sha (set on ship), halt_reason/ceiling_reason/error (optional). Live seat ONLY
+(HS-2 block gate; default shape unchanged): blocked[] ({slug, reason}; item also gets
+TERMINAL tracker status "blocked" — never re-selected) + orchestrator_gate {seat, model,
+decisions, verdict_counts, blocked, decision_failed, seat_tokens_spent, status
+active|degraded|no_decisions}; any block -> success false. Ceiling is checked
 BEFORE run_wave dispatch (phase=ceiling); mid-wave trips are run_wave's responsibility.
 Tracker sync: LOUD on unmapped slugs (tracker_unmapped_slugs -> success false). Full JSON
 shape lives in wave_scheduler.py's module docstring.

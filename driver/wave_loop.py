@@ -433,11 +433,102 @@ def _is_live_orchestrator_backend(backend: Any) -> bool:
     return not isinstance(backend, HarnessOrchestratorBackend)
 
 
+def _seat_tokens_spent(backend: Any) -> int:
+    """Best-effort token spend of an orchestrator seat backend (0 if the
+    backend does not meter). Never raises; never fabricates."""
+    getter = getattr(backend, "get_tokens_spent", None)
+    if not callable(getter):
+        return 0
+    try:
+        return max(0, int(getter()))
+    except Exception:
+        return 0
+
+
+def _quarantine_blocked_files(
+    driver: Any, item: Dict[str, Any], item_result: Dict[str, Any]
+) -> None:
+    """Restore a BLOCKED item's written files to their pre-build state.
+
+    Without this, Phase 4's writes stay in the working tree after a block and
+    a later `git add -A` (outside this loop) would ship the refused code.
+
+    Semantics (conservative, only the blocked item's own filesWritten):
+      - tracked file  -> `git checkout -- <file>` (restore index version)
+      - untracked file -> did not exist pre-build; deleted
+      - not inside a git worktree -> SKIP with an honest record (we cannot
+        know pre-build state without git; never guess-delete)
+
+    Records the outcome in item_result["quarantine"]:
+      {"attempted", "restored", "deleted", "errors", "skipped_reason"}.
+    Windows + POSIX safe: git args go through _quote_arg; deletion is
+    pathlib. Errors are per-file and never raise out of the gate.
+    """
+    files = list(item_result.get("filesWritten") or [])
+    outcome = {
+        "attempted": bool(files),
+        "restored": [],
+        "deleted": [],
+        "errors": [],
+        "skipped_reason": None,
+    }
+    item_result["quarantine"] = outcome
+    if not files:
+        return
+    if driver is None:
+        outcome["skipped_reason"] = "no_driver"
+        return
+
+    root = item.get("repo") or item.get("workDir") or "."
+    try:
+        probe = driver.run_command(
+            "git rev-parse --is-inside-work-tree", cwd=root
+        )
+        inside = probe.exit_code == 0 and "true" in (probe.stdout or "").lower()
+    except Exception:
+        inside = False
+    if not inside:
+        outcome["skipped_reason"] = "not_a_git_worktree"
+        return
+
+    for f in files:
+        # Only touch paths that stay inside the item's root (never escape).
+        try:
+            _validate_file_path(f, root)
+        except ValueError as exc:
+            outcome["errors"].append({"file": f, "error": f"path validation: {exc}"})
+            continue
+        try:
+            tracked = driver.run_command(
+                "git ls-files --error-unmatch -- " + _quote_arg(f), cwd=root
+            )
+            if tracked.exit_code == 0:
+                restore = driver.run_command(
+                    "git checkout -- " + _quote_arg(f), cwd=root
+                )
+                if restore.exit_code == 0:
+                    outcome["restored"].append(f)
+                else:
+                    outcome["errors"].append(
+                        {"file": f, "error": "git checkout failed: "
+                         + (restore.stderr or "")[:200]}
+                    )
+            else:
+                # Untracked: the file did not exist pre-build; remove it.
+                target = Path(root) / f
+                if target.exists() or target.is_symlink():
+                    target.unlink()
+                outcome["deleted"].append(f)
+        except Exception as exc:
+            outcome["errors"].append({"file": f, "error": str(exc)})
+
+
 def _orchestrator_final_catch(
     backend: Any,
     items: List[Dict[str, Any]],
     result: Dict[str, Any],
     state_dir: Optional[str] = None,
+    driver: Any = None,
 ) -> None:
     """HS-2: route the pre-ship final-catch decision through a configured
     orchestrator seat (Phase 6, replacing 'deferred' ONLY when a seat is
@@ -454,8 +545,11 @@ def _orchestrator_final_catch(
         honest per-item record. A seat outage NEVER fabricates a verdict
         and NEVER blocks a test-proven item (crash-only degradation).
 
-    Mutates result in place: per-item 'final_catch' + 'adversarial_review',
-    plus a wave-level 'orchestrator_review' summary block.
+    Mutates result in place: per-item 'final_catch' + 'adversarial_review'
+    (+ 'quarantine' on block), plus a wave-level 'orchestrator_review'
+    summary block with verdict counts, blocked detail, seat token spend,
+    and a gate_status flag ("active" | "degraded" when every decision
+    failed | "no_decisions" when nothing was verified to review).
     """
     from context_pack import ContextPack
     from orchestrator_driver import OrchestratorDriver
@@ -466,7 +560,15 @@ def _orchestrator_final_catch(
         "model": getattr(backend, "model", None),
         "decisions": 0,
         "blocked": [],
+        "blocked_detail": [],
         "decision_failed": [],
+        "verdict_counts": {
+            "merge": 0,
+            "block": 0,
+            "escalate": 0,
+            "undetermined": 0,
+            "decision_failed": 0,
+        },
     }
     slug_to_item = {
         item.get("slug", f"item-{i}"): item for i, item in enumerate(items)
@@ -491,6 +593,11 @@ def _orchestrator_final_catch(
                 },
                 sort_keys=True,
             ),
+            # NOTE (F6): this final_catch evidence is currently LOW-SIGNAL --
+            # test_passed is hardcoded True (only verified items reach this
+            # point) and no secret-scan/CI/branch-protection results are fed
+            # in yet. Future work should enrich it with the real gate outputs
+            # so the seat has something substantive to judge.
             "verification_results": json.dumps(
                 {
                     "test_passed": True,
@@ -520,10 +627,21 @@ def _orchestrator_final_catch(
         item_result["final_catch"] = verdict
 
         if verdict == "block":
+            review["verdict_counts"]["block"] += 1
             item_result["verified"] = False
             item_result["adversarial_review"] = "blocked_by_orchestrator"
             item_result["error"] = "orchestrator final_catch verdict: block"
             review["blocked"].append(slug)
+            # Persist WHY (hold_reason, else first evidence citation) so the
+            # Report's blocked lane is actionable, not just a slug.
+            reason = decision.get("hold_reason")
+            if not reason:
+                evidence_list = decision.get("evidence")
+                if isinstance(evidence_list, list) and evidence_list:
+                    reason = str(evidence_list[0])
+            review["blocked_detail"].append(
+                {"slug": slug, "reason": reason or "final_catch verdict: block"}
+            )
             if state_dir:
                 _write_journal_entry(
                     state_dir,
@@ -536,13 +654,30 @@ def _orchestrator_final_catch(
                     },
                     repo=item.get("repo"),
                 )
+            # QUARANTINE: refused code must not linger in the working tree.
+            _quarantine_blocked_files(driver, item, item_result)
         elif verdict == "merge":
+            review["verdict_counts"]["merge"] += 1
             item_result["adversarial_review"] = "approved_by_orchestrator"
         elif verdict in ("escalate", "undetermined"):
+            review["verdict_counts"][verdict] += 1
             item_result["adversarial_review"] = verdict
         else:  # DECISION_FAILED (or anything unrecognized -> fail-safe path)
+            review["verdict_counts"]["decision_failed"] += 1
             item_result["adversarial_review"] = "decision_failed_deferred"
             review["decision_failed"].append(slug)
+
+    # Gate visibility: a 100%-failing seat must NOT look like an approving
+    # one. decisions>0 with every one DECISION_FAILED = the gate made zero
+    # successful decisions -> "degraded" (crash-only ship semantics are
+    # unchanged; this only makes the outage VISIBLE).
+    if review["decisions"] == 0:
+        review["gate_status"] = "no_decisions"
+    elif review["verdict_counts"]["decision_failed"] == review["decisions"]:
+        review["gate_status"] = "degraded"
+    else:
+        review["gate_status"] = "active"
+    review["seat_tokens_spent"] = _seat_tokens_spent(backend)
 
     result["orchestrator_review"] = review
 
@@ -1160,8 +1295,25 @@ def run_wave(
         # A configured orchestrator seat is LIVE: route a final_catch
         # decision per verified item through the swapped backend.
         _orchestrator_final_catch(
-            orchestrator_backend, items, result, state_dir=state_dir
+            orchestrator_backend, items, result, state_dir=state_dir,
+            driver=driver,
         )
+        # HS-2 hardening: the seat's own spend (up to 3 calls/item) counts
+        # against the ceiling too. Re-check AFTER decisions, BEFORE ship,
+        # including metered seat tokens. Runs ONLY on the live-seat path
+        # (no-op default keeps the pre-HS-2 check pattern byte-identical).
+        if cost_ceiling is not None and state_dir is not None:
+            ceiling_result = cost_ceiling.check(
+                spent=driver.get_tokens_spent()
+                + _seat_tokens_spent(orchestrator_backend),
+                trip=True,
+                state_dir=state_dir,
+            )
+            result["ceiling"] = ceiling_result
+            if ceiling_result.get("exceeded", False):
+                result["aborted"] = True
+                result["abort_reason"] = "cost_ceiling_exceeded_after_decisions"
+                return result
     else:
         # No configured seat: the live harness IS the orchestrator; review
         # stays deferred to it. Byte-identical to pre-HS-2 behavior.
