@@ -200,6 +200,8 @@ export DEBUG=1
 
 By default, Aesop uses Claude Code (the orchestration harness) as its backend. You can configure it to use other models via the **AgentDriver abstraction**—enabling Ollama, OpenAI-compatible endpoints, OpenRouter, and more.
 
+For the conceptual picture (the two swappable seats, what's proven vs. bounded about swapping them, and a 60-second copy-paste quickstart), see **[MICROKERNEL.md](MICROKERNEL.md)**. The rest of this section is the config-mechanics reference.
+
 ### The unified two-seat config (0.4.0)
 
 One namespaced `seats` block in `aesop.config.json` selects BOTH seats:
@@ -420,6 +422,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 -D
 2. **Read [CONFIGURE.md](CONFIGURE.md)** — Customize repos, ports, and brain root
 3. **Run [FIRST-WAVE.md](FIRST-WAVE.md)** — Test a full `/power` → `/buildsystem` cycle
 4. **Understand [CONCEPTS.md](CONCEPTS.md)** — Learn the dispatch model and state model
-4. **Explore the dashboard** — `python3 ui/serve.py` then open http://localhost:8770
+5. **Read [MICROKERNEL.md](MICROKERNEL.md)** — Swap the worker or orchestrator seat to a non-Claude model
+6. **Explore the dashboard** — `python3 ui/serve.py` then open http://localhost:8770
 
 For troubleshooting, see the [Aesop README](../README.md#troubleshooting) or [GOVERNANCE.md](GOVERNANCE.md) for operational policies.
