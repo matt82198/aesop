@@ -22,17 +22,15 @@ audits finding nothing new). Cycle: land wave → five-lens re-audit → dedupe 
 per-item branches → merge green PRs. Never idle while agents run. On session death:
 resume from this file + AUDIT-BACKLOG.md.
 
-## Phase: `0.4.0-dev` (2026-07-25, current)
-**v0.4.0 STAGED**: release branch feat/hs4-release-0.4.0 prepared; version bump + CHANGELOG staged; testing in progress.
+## Phase: `0.4.0` (2026-07-25, current)
+**v0.4.0 STAGED ON MAIN**: cf7fdbb, all HS hardening PRs merged (#371–#381), version + CHANGELOG finalized (PR #381 merged).
 v0.4.0 ships two-seat config (HS-1/HS-2), unified orchestrator/worker model swapping, IPv6/DNS hardening,
-and complete `driver/` scaffolding. Wave-31 and subsequent work proceeds under this version. Prior phase (0.3.2-released, 2026-07-23):
-v0.3.1 was shipped after a recency-lane automation incident burned the v0.3.0 tag
-(unauthorized `--admin` merge of #332 + empty release at red commit d81ffe4; npm
-untouched; incident logged in FLEET-OPS.log, skill-narrowing proposed, memory saved).
-Windows flakes on d81ffe4/ba5ed0b were runner-contention timeouts, both green on rerun;
-windows streak 4-5/5 toward required-promotion (verify then promote). Domain sweep
-merged (#331 consolidated #333); worktrees pruned (42 removed; feat/w28-stall-detection
-kept, frontier_slice_results.json preserved untracked in bench/results/).
+driver/ scaffolding completeness, live orchestrator-seat swap + block-gate hardening (HS-2/F4), MICROKERNEL docs (HS-3).
+**Awaiting**: User publish decision (cut v0.4.0 tag + npm release, user-gated).
+Wave-31+ backlog: WS3b failure-recovery unsupervised loop, WriteAPI caller migration, StateAPI burndown, frontier live-run (spend-gated), external-benchmark $10 slice, windows runner-contention timeout hardening (residual per-test + spawn-heavy suite isolation), test-pollution test_frontier_slice, ps1-syntax CI gate, driver/CLAUDE.md restructure decision.
+Prior phase (0.3.1-released, 2026-07-22):
+v0.3.1 shipped after recency-lane automation incident (unauthorized `--admin` merge + empty release at d81ffe4; npm untouched).
+Windows green 6/6 required-check streak (2026-07-22–present); domain sweep merged (#331); worktrees pruned (42 removed).
 
 **BOTH 0.3.0 GATES COMPLETE (prior release).** Gate 1: supervised codex wave shipped a real
 item end-to-end (PR #325; two human corrections; four scheduler defects the live run exposed,
@@ -51,13 +49,9 @@ entry; "Autonomous Developer" tagline reframe. Incidents logged: recency agent -
 (guards proposed), PostToolUse hook wave-trigger misfire (FLEET-OPS).
 
 ## NEXT STEPS
-- Wave-31 backlog (tracked): WS3b failure-recovery + unsupervised loop, WriteAPI caller
-  migration, validation-ownership consolidation, StateAPI 33-entry burndown, windows
-  promotion DONE (required check since 2026-07-22, 6/6 streak; 60s-timeout flakes fixed
-  at 180s windows-only, PR #337), frontier live run
-  (spend-gated), external-benchmark $10 slice, windows runner-contention timeout hardening
-  (csrf socket test + first-hour.test.mjs; raise timeouts or cap windows job concurrency),
-  optional cleanup: delete defective v0.3.0 GitHub release entry (user call).
+- **0.4.0 Release Gate**: User publishes v0.4.0 tag + npm latest (BLOCKED on user decision; main@cf7fdbb green).
+- **Wave-31+ Backlog** (tracked/BUILDLOG): WS3b failure-recovery + unsupervised loop, WriteAPI caller migration, StateAPI 33-entry burndown, frontier live-run (spend-gated $10), external-benchmark slice, windows runner-contention hardening (residual: per-test node timeout, spawn-heavy suites), test_frontier_slice test-pollution, ps1-syntax CI gate, install-tasks audit log, driver/CLAUDE.md restructure decision, inc 2.6 broader corpus (5 open parked items tracked in state/tracker.json).
+- **Deferred User Call**: Delete defective v0.3.0 GitHub release entry (not near-term).
 
 ## Phase history (collapsed)
 - `pr-open` → PR #16 opened after waves 1–2 (onboarding/policy/behavioral-PR/forensics/
