@@ -108,6 +108,9 @@ class OpenAICompatibleOrchestratorBackend(OrchestratorBackend):
         transport: Optionally inject a custom transport for testing.
     """
 
+    # Maximum allowed response size (100KB) to prevent excessive memory use
+    MAX_RESPONSE_SIZE = 100 * 1024  # 100KB
+
     def __init__(
         self,
         model: str = "gpt-4o-mini",
@@ -119,7 +122,6 @@ class OpenAICompatibleOrchestratorBackend(OrchestratorBackend):
         self.base_url = base_url
         self.timeout_s = timeout_s
         self.transport = transport or default_openai_transport
-        self.omit_temperature = False  # Track if we've had to drop temperature
 
     def decide_call(
         self, prompt: str, *, schema: Optional[Dict[str, Any]] = None
@@ -141,15 +143,13 @@ class OpenAICompatibleOrchestratorBackend(OrchestratorBackend):
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY environment variable not set")
 
-        # Build the Chat Completions payload.
+        # Build the Chat Completions payload with temperature.
+        # Temperature fallback is per-call (local to this method), not persisted.
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0,
         }
-
-        # Add temperature if not omitted (due to prior unsupported_value error).
-        if not self.omit_temperature:
-            payload["temperature"] = 0
 
         # Add schema if provided and backend supports it.
         if schema:
@@ -162,7 +162,7 @@ class OpenAICompatibleOrchestratorBackend(OrchestratorBackend):
                 },
             }
 
-        # Call the transport with temperature fallback.
+        # Call the transport with temperature fallback (per-call, not persistent).
         try:
             response_data = self.transport(
                 payload, timeout_s=self.timeout_s, base_url=self.base_url
@@ -170,9 +170,9 @@ class OpenAICompatibleOrchestratorBackend(OrchestratorBackend):
         except Exception as e:
             error_str = str(e)
             # TEMPERATURE FALLBACK: gpt-5.x reasoning models reject temperature=0.
+            # This fallback is LOCAL to this call; it does NOT persist to future calls.
             if "temperature" in error_str and "unsupported_value" in error_str.lower():
-                # Retry without temperature.
-                self.omit_temperature = True
+                # Retry without temperature (remove it from payload for this call only).
                 payload.pop("temperature", None)
                 response_data = self.transport(
                     payload, timeout_s=self.timeout_s, base_url=self.base_url
@@ -191,5 +191,12 @@ class OpenAICompatibleOrchestratorBackend(OrchestratorBackend):
         completion_text = choices[0]["message"].get("content", "")
         if not completion_text:
             raise RuntimeError("Empty completion text from API")
+
+        # Enforce response size limit to prevent excessive memory use.
+        if len(completion_text) > self.MAX_RESPONSE_SIZE:
+            raise RuntimeError(
+                f"Response size limit exceeded: {len(completion_text)} bytes > "
+                f"{self.MAX_RESPONSE_SIZE} bytes (100KB). The response is too large."
+            )
 
         return completion_text
