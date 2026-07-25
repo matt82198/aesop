@@ -29,6 +29,11 @@ Run: `npm run test:py` or `python -m unittest discover -s tests`
   - Oversized files: pre-dispatch max_owned_bytes guard fails safe (no truncation).
   - True e2e: RED stub + FakeTransport-supplied fix + run_command → GREEN (offline proof).
   - run_command: real subprocess execution (not mock).
+  - run_command timeout (RS-A F1/F7, mirrored in test_agent_driver for ClaudeCodeDriver):
+    wall-clock truly bounded (real grandchild sleep >> timeout returns exit 124 within a
+    small multiple of timeout_s — never Windows `timeout /t`, which errors instantly
+    without a console), process TREE killed (grandchild pid proven dead), partial
+    stdout/stderr preserved, and command_timeout_s independent of the HTTP timeout_s.
   - worker_status: in-memory registry tracking.
   - verification_policy: tier->policy mapping (tier 1/2/3/4 return correct dicts; codex probe → tier 2 policy).
   - Probe unchanged: codex probe still returns honest Tier-2 (fs=False, shell=False, structured=True).

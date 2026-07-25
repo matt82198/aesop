@@ -16,8 +16,10 @@ stdlib-only (unittest), ASCII-only, Windows + Linux safe.
 """
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -55,6 +57,46 @@ FIVE_OPS = (
     "run_command",
     "resolve_model",
 )
+
+
+def sleep_cmd(seconds):
+    """Shell command that REALLY sleeps (grandchild of the shell).
+
+    NOTE: never use Windows `timeout /t` here -- without a console it errors
+    instantly, which made the old timeout test a tautology (exit != 0 for the
+    wrong reason).
+    """
+    return sys.executable + ' -c "import time; time.sleep(%d)"' % seconds
+
+
+def pid_alive(pid):
+    """Cross-platform liveness check WITHOUT signaling the process.
+
+    (os.kill(pid, 0) on Windows TERMINATES the process -- never use it here.)
+    """
+    if sys.platform == "win32":
+        out = subprocess.run(
+            ["tasklist", "/FI", "PID eq %d" % pid],
+            capture_output=True, text=True, timeout=30,
+        )
+        return str(pid) in out.stdout
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def wait_pid_dead(pid, deadline_s=8.0):
+    """Poll until pid is gone (or a zombie reaped); True if it died in time."""
+    end = time.monotonic() + deadline_s
+    while time.monotonic() < end:
+        if not pid_alive(pid):
+            return True
+        time.sleep(0.25)
+    return not pid_alive(pid)
 
 
 class TestAbstractInterface(unittest.TestCase):
@@ -277,27 +319,69 @@ class TestClaudeCodeDriver(_DriverContractMixin, unittest.TestCase):
         self.assertTrue(res.ok)
         self.assertIn("42", res.stdout)
 
-    def test_run_command_timeout(self):
-        """run_command respects timeout and returns non-zero on timeout.
+    def test_run_command_timeout_bounds_wall_clock(self):
+        """RS-A F1: the timeout truly bounds wall-clock, exit 124.
 
-        A command that sleeps longer than the timeout should NOT hang forever,
-        and should return a non-zero exit code (timeout status).
+        The old subprocess.run(shell=True, timeout=...) implementation killed
+        only the shell on Windows, then re-blocked in communicate() until the
+        orphaned grandchild closed the pipes (live-proven: timeout_s=0.5 vs a
+        6s sleep returned after 6.1s). This test uses a REAL grandchild sleep
+        far longer than the timeout and asserts we return within a small
+        multiple of timeout_s.
         """
-        # Use a short timeout for fast test execution
         d = ClaudeCodeDriver(timeout_s=0.5)
+        start = time.monotonic()
+        result = d.run_command(sleep_cmd(8))
+        elapsed = time.monotonic() - start
+        self.assertEqual(result.exit_code, 124,
+                         "timeout must return the conventional exit 124")
+        self.assertLess(elapsed, 5.0,
+                        "run_command must return promptly on timeout, not "
+                        "block on the orphaned grandchild (took %.1fs)" % elapsed)
+        self.assertIn("timed out", result.stderr)
 
-        # Platform-neutral sleep command that will exceed our timeout
-        if sys.platform == "win32":
-            cmd = "timeout /t 5 /nobreak"  # Sleep for 5 seconds on Windows
-        else:
-            cmd = "sleep 5"  # Sleep for 5 seconds on Unix
+    def test_run_command_timeout_kills_process_tree(self):
+        """RS-A F1: the WHOLE tree dies -- the grandchild does not linger.
 
-        # This should timeout and return a non-zero exit code, not hang
+        The command prints its own pid (the python sleeper is a grandchild of
+        the platform shell) then sleeps; after run_command returns, that pid
+        must be gone.
+        """
+        d = ClaudeCodeDriver(timeout_s=1.0)
+        cmd = (sys.executable +
+               ' -c "import os, time; print(os.getpid(), flush=True); '
+               'time.sleep(30)"')
         result = d.run_command(cmd)
+        self.assertEqual(result.exit_code, 124)
+        pid_text = result.stdout.strip().splitlines()
+        self.assertTrue(pid_text and pid_text[0].strip().isdigit(),
+                        "partial stdout must carry the grandchild pid; got %r"
+                        % result.stdout)
+        pid = int(pid_text[0].strip())
+        self.assertTrue(wait_pid_dead(pid),
+                        "grandchild pid %d survived the timeout kill" % pid)
 
-        # On timeout, exit_code should be non-zero (indicating failure)
-        self.assertNotEqual(result.exit_code, 0,
-                          "run_command should return non-zero on timeout")
+    def test_run_command_timeout_preserves_partial_output(self):
+        """RS-A F7: output printed before the timeout is NOT discarded.
+
+        A 119s suite that printed 100 failures must not yield zero
+        diagnostics (repair-grind blind-rerun class).
+        """
+        d = ClaudeCodeDriver(timeout_s=2.0)
+        cmd = (sys.executable +
+               ' -c "import sys, time; print(\'OUT_MARK_PARTIAL\', flush=True); '
+               "sys.stderr.write('ERR_MARK_PARTIAL'); sys.stderr.flush(); "
+               'time.sleep(12)"')
+        start = time.monotonic()
+        result = d.run_command(cmd)
+        elapsed = time.monotonic() - start
+        self.assertEqual(result.exit_code, 124)
+        self.assertLess(elapsed, 8.0)
+        self.assertIn("OUT_MARK_PARTIAL", result.stdout,
+                      "partial stdout dropped on timeout")
+        self.assertIn("ERR_MARK_PARTIAL", result.stderr,
+                      "partial stderr dropped on timeout")
+        self.assertIn("timed out", result.stderr)
 
     def test_dispatch_is_harness_only(self):
         # The reference adapter must fail loudly rather than fake a Claude agent

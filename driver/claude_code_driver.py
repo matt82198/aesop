@@ -35,7 +35,6 @@ Claude agent from plain Python.
 stdlib-only, ASCII-only, Windows + Linux safe.
 """
 
-import subprocess
 from typing import Optional
 
 from agent_driver import (
@@ -50,6 +49,7 @@ from agent_driver import (
     WorkerStatus,
     WORKER_UNKNOWN,
 )
+from proc_util import run_shell_bounded
 
 
 # Default abstract-role -> Anthropic model mapping. Workers are Haiku by policy
@@ -151,30 +151,12 @@ class ClaudeCodeDriver(AgentDriver):
         advisory -- we always execute through the platform shell so the same
         call works on Windows and Linux.
 
-        Timeouts are enforced: if the command exceeds timeout_s, the process is
-        terminated and a non-zero exit code is returned.
+        Timeouts truly bound wall-clock (RS-A F1): on expiry the WHOLE process
+        tree is killed (taskkill /T on Windows, killpg on POSIX) and we return
+        exit 124 promptly, preserving any partial output captured before the
+        kill (RS-A F7). See proc_util.run_shell_bounded.
         """
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=cwd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=self._timeout_s,
-            )
-            return CommandResult(
-                exit_code=completed.returncode,
-                stdout=completed.stdout or "",
-                stderr=completed.stderr or "",
-            )
-        except subprocess.TimeoutExpired:
-            # Return a clear timeout status: non-zero exit code.
-            # Note: On Windows, the process may not be fully killed due to shell process
-            # tree limitations, but we return immediately with timeout status.
-            return CommandResult(exit_code=124, stdout="", stderr="Command timed out")
-        except OSError as exc:
-            return CommandResult(exit_code=127, stdout="", stderr=str(exc))
+        return run_shell_bounded(command, cwd=cwd, timeout_s=self._timeout_s)
 
     # -- Operation 5: model selection (concrete) ---------------------------
     def resolve_model(self, role: str) -> str:
