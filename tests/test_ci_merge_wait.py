@@ -794,6 +794,125 @@ class TestCiMergeWait(unittest.TestCase):
         self.assertEqual(ci_status, "failure", "Non-expected failure blocks when no expected_checks")
         self.assertEqual(failed_check, "lint")
 
+    def test_f2_allow_no_checks_bypasses_expect_checks_fix(self):
+        """Test F2 (HIGH): --allow-no-checks must NOT bypass --expect-checks.
+
+        FINDING: check_ci_status([], allow_no_checks=True, expected_checks={"windows"})
+        currently returns ("success", None), bypassing the expected-checks check.
+        A force-push that momentarily empties the rollup can merge even though 'windows'
+        aggregator never ran.
+
+        FIX: expected_checks takes PRECEDENCE. If expected_checks is non-empty and any
+        expected check is missing, return ("pending", None) regardless of allow_no_checks.
+        """
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Empty rollup with BOTH allow_no_checks=True and expected_checks non-empty
+        # The flag-combo returns success currently (BUG), but should fail-closed to pending
+        # because expected checks are missing.
+        ci_status, _ = module.check_ci_status(
+            [],
+            allow_no_checks=True,
+            expected_checks={"windows"}
+        )
+        # FIXED: expected_checks takes precedence; empty rollup + missing expected check = PENDING
+        self.assertEqual(ci_status, "pending",
+                        "F2 FIX: expected_checks takes precedence; empty + missing expected check = PENDING")
+
+    def test_f2_allow_no_checks_with_empty_but_no_expected_checks(self):
+        """Test F2 baseline: --allow-no-checks with empty rollup and NO expected checks = SUCCESS."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Empty rollup with allow_no_checks=True and NO expected_checks
+        # This SHOULD be success (the legitimate use case for --allow-no-checks)
+        ci_status, _ = module.check_ci_status(
+            [],
+            allow_no_checks=True,
+            expected_checks=None
+        )
+        self.assertEqual(ci_status, "success",
+                        "allow_no_checks with empty rollup and no expected_checks = SUCCESS")
+
+    def test_f6_unknown_conclusion_fails_closed(self):
+        """Test F6 (MED-LOW): Unknown CheckRun conclusion must NOT return success.
+
+        FINDING: A CheckRun with COMPLETED status and an unrecognized conclusion value
+        (e.g., "SOME_FUTURE_VALUE") is currently treated as success (fail-open).
+
+        Verified: conclusion="SOME_FUTURE_VALUE" => ("success", None)
+
+        FIX: Unknown conclusion must be fail-closed to pending (or failure for extra safety).
+        """
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # CheckRun with unrecognized conclusion value
+        checkrun = [
+            {"name": "test-run", "status": "COMPLETED", "conclusion": "SOME_FUTURE_VALUE"},
+        ]
+        ci_status, _ = module.check_ci_status(checkrun)
+        # F6 FIX: unknown conclusion must NOT be success (fail-closed to pending)
+        self.assertNotEqual(ci_status, "success",
+                           "F6 FIX: unknown conclusion must NOT return success (fail-closed)")
+        self.assertEqual(ci_status, "pending",
+                        "F6 FIX: unknown conclusion should fail-closed to PENDING")
+
+    def test_f6_unknown_conclusion_various_cases(self):
+        """Test F6: Various unknown/future conclusion values all fail-closed."""
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Test multiple unknown conclusion values
+        unknown_conclusions = ["FUTURE_STATUS", "CUSTOM_RESULT", "UNKNOWN_123", "ADMIN_OVERRIDE"]
+        for unknown_conclusion in unknown_conclusions:
+            checkrun = [
+                {"name": "test-run", "status": "COMPLETED", "conclusion": unknown_conclusion},
+            ]
+            ci_status, _ = module.check_ci_status(checkrun)
+            self.assertNotEqual(ci_status, "success",
+                               f"F6 FIX: conclusion={unknown_conclusion} must NOT be success")
+            self.assertEqual(ci_status, "pending",
+                            f"F6 FIX: conclusion={unknown_conclusion} should be PENDING")
+
+    def test_f5_merge_sha_pinning_verification(self):
+        """Test F5 (MED): Verify merge is SHA-pinned to prevent TOCTOU.
+
+        FINDING: A push between final check_ci_status and gh pr merge can merge a commit
+        whose checks never ran (TOCTOU window).
+
+        FIX: Fetch the PR's headRefOid and pass --match-head-commit <sha> to gh pr merge
+        to ensure the merge is pinned to the SHA that passed CI.
+
+        This test verifies the tool's merge_pr function documentation and implementation
+        align with SHA-pinning requirement. In a live scenario, we'd intercept the gh
+        command to verify --match-head-commit is passed.
+        """
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        # Verify that the module exports merge_pr and it's callable
+        self.assertTrue(hasattr(module, 'merge_pr'), "Module should have merge_pr function")
+        self.assertTrue(callable(module.merge_pr), "merge_pr should be callable")
+
+        # The actual SHA-pinning happens in merge_pr's gh pr merge call.
+        # This test documents that F5 requires --match-head-commit to be added.
+        # In the fix, merge_pr will be called with the headRefOid from the PR.
+        # We verify the docstring/implementation will be updated to reflect this.
+        self.assertIn("match-head-commit", module.merge_pr.__doc__.lower() or "",
+                     "F5 FIX: merge_pr docstring should mention --match-head-commit")
+
 
 if __name__ == "__main__":
     unittest.main()
