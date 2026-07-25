@@ -1070,6 +1070,30 @@ class TestRS5ClaimLifecycle(unittest.TestCase):
         self.assertEqual(box["r"].get("shipped"), ["rs5-ship"])
 
     # ---------------------------------------------------------------- F1b
+    # DETERMINISM NOTE (windows-shard incident): these two fence tests
+    # originally simulated the lost-claim window with a REAL-CLOCK race
+    # (ttl=0.01s + sleep). On the slow 2-core GH Windows runner the claim's
+    # own append->read->fold round-trip exceeds 10ms, so the wave's claim
+    # SELF-EXPIRED inside try_claim -> honest fail-closed claim_skipped
+    # BEFORE dispatch -> the fence was never reached (verified=False /
+    # claim_lost=None). _steal_claim produces the same end state -- holder
+    # is another instance -- with zero clock dependence on any machine.
+
+    @staticmethod
+    def _steal_claim(db_path, slug, thief="inst-B"):
+        """Deterministically simulate 'holder's ttl lapsed + another
+        instance reclaimed the slug': retire the current wave holder's
+        claim under its own id, then claim as the thief (must win)."""
+        es = sstore.EventStore(db_path)
+        holder = coordination.current_holder(es, slug)
+        assert holder is not None and holder.startswith("wave-"), (
+            "steal setup: expected a live wave-held claim, got %r" % (holder,)
+        )
+        coordination.release(es, slug, holder)
+        assert coordination.try_claim(
+            es, resource=slug, instance_id=thief, ttl=600
+        ), "steal setup: reclaim must win once the holder's claim is gone"
+
     def test_fence_blocks_ship_when_claim_lost(self):
         """If the claim lapsed mid-build and another instance reclaimed the
         slug, Phase 7 must NOT ship it (double-ship): honest abort record."""
@@ -1078,10 +1102,12 @@ class TestRS5ClaimLifecycle(unittest.TestCase):
         repo_dir.mkdir()
         repo_resolved = str(repo_dir.resolve())
         db_path = str(tmp / "state.db")
+        steal = self._steal_claim
 
         class ClaimStealingDriver(ShipFakeDriver):
-            """During the post-build test run (ttl already lapsed), a second
-            instance reclaims the slug -- the exact lost-claim window."""
+            """During the post-build test run, another instance takes over
+            the slug -- the exact lost-claim window, simulated
+            deterministically (see DETERMINISM NOTE above)."""
 
             def __init__(self, toplevel):
                 super().__init__(toplevel)
@@ -1090,25 +1116,19 @@ class TestRS5ClaimLifecycle(unittest.TestCase):
             def run_command(self, command, cwd=None, shell=None):
                 if command == "run-test" and not self.stole:
                     self.stole = True
-                    time.sleep(0.1)  # let the tiny test ttl lapse
-                    es = sstore.EventStore(db_path)
-                    assert coordination.try_claim(
-                        es, resource="rs5-lost", instance_id="inst-B", ttl=600
-                    ), "test setup: reclaim after ttl lapse must win"
+                    steal(db_path, "rs5-lost")
                 return super().run_command(command, cwd=cwd, shell=shell)
 
         driver = ClaimStealingDriver(repo_resolved)
-        with mock.patch.object(
-            wave_loop, "_claim_ttl_for_driver", return_value=0.01
-        ):
-            result = run_wave(
-                driver,
-                self._manifest(repo_dir, "rs5-lost"),
-                state_dir=str(tmp),
-                git={"expectTopLevel": str(repo_dir)},
-            )
+        result = run_wave(
+            driver,
+            self._manifest(repo_dir, "rs5-lost"),
+            state_dir=str(tmp),
+            git={"expectTopLevel": str(repo_dir)},
+        )
 
         built = result["built"][0]
+        self.assertTrue(driver.stole, "steal hook never ran")
         self.assertTrue(built["verified"])  # the test did pass
         self.assertTrue(built.get("claim_lost"), "lost claim not recorded")
         self.assertIn("claim lost", built.get("ship_error") or "")
@@ -1120,9 +1140,11 @@ class TestRS5ClaimLifecycle(unittest.TestCase):
 
     def test_fence_blocks_repair_redispatch_when_claim_lost(self):
         """A failed item whose claim was reclaimed must NOT be repair-
-        re-dispatched (the reclaimer may be dispatching it right now)."""
+        re-dispatched (the reclaimer may be dispatching it right now).
+        Claim loss is simulated deterministically (see DETERMINISM NOTE)."""
         tmp = Path(tempfile.mkdtemp(dir=_MODULE_TMP, prefix="rs5e-"))
         db_path = str(tmp / "state.db")
+        steal = self._steal_claim
 
         class StealAndFailDriver(DispatchingFakeDriver):
             def __init__(self):
@@ -1132,22 +1154,16 @@ class TestRS5ClaimLifecycle(unittest.TestCase):
             def run_command(self, command, cwd=None, shell=None):
                 if not self.stole:
                     self.stole = True
-                    time.sleep(0.1)
-                    es = sstore.EventStore(db_path)
-                    coordination.try_claim(
-                        es, resource="rs5-rlost", instance_id="inst-B", ttl=600
-                    )
+                    steal(db_path, "rs5-rlost")
                 return CommandResult(exit_code=1, stdout="test failed")
 
         driver = StealAndFailDriver()
-        with mock.patch.object(
-            wave_loop, "_claim_ttl_for_driver", return_value=0.01
-        ):
-            result = run_wave(
-                driver, self._manifest(tmp, "rs5-rlost"), state_dir=str(tmp)
-            )
+        result = run_wave(
+            driver, self._manifest(tmp, "rs5-rlost"), state_dir=str(tmp)
+        )
 
         built = result["built"][0]
+        self.assertTrue(driver.stole, "steal hook never ran")
         self.assertFalse(built["verified"])
         self.assertTrue(built.get("claim_lost"))
         self.assertIn("claim lost", built.get("error") or "")
