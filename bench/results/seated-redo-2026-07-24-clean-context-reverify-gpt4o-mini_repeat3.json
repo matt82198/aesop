@@ -1,0 +1,629 @@
+{
+  "metadata": {
+    "model": "gpt-4o-mini",
+    "num_runs": 3,
+    "timestamp": "2026-07-24",
+    "corpus_size": 16
+  },
+  "item_9_flip": true,
+  "item_9_reasoning": "['Mechanism 1: health check implementation enumerates entries at the repository root (the top level)', 'Mechanism 2: the health check does not recursively scan subdirectories of any kind', 'Mechanism 3: a separate tool, secret_scan.py, is invoked on every push before commit', 'Fact: secret_scan.py reads file contents throughout the entire repository recursively, including daemon/* and jobs/*', \"Fact: the whitelist entry added is the directory name 'daemon' as a top-level entry\", 'Fact: adding a directory name to the health-check whitelist prevents that directory name only from being flagged by the health check']",
+  "held_real_defects": 9,
+  "schema_validity": {
+    "valid": 48,
+    "total": 48,
+    "pct": 100.0
+  },
+  "per_run_verdicts": [
+    {
+      "id": "vbs-waitforexit",
+      "run_num": 1,
+      "classification": "real_defect",
+      "reasoning": "['Code: shell.Run(cmd, 0, False) \u2014 second parameter 0 = hidden window, third False = do not wait', 'Behavior: when shell.Run(cmd, 0, False) executes, the parent script continues without awaiting the spawned process', \"Behavior: the script's final statement (at script exit) is 'exit 0' or equivalent\", \"Fact: TaskScheduler's task engine records the exit code of the launcher script process itself in LastTaskResult\"]",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "dryrun-blocked",
+      "run_num": 1,
+      "classification": "real_defect",
+      "reasoning": "['Code: param validation block contains if ( -not ( Test-Path $bash ) ) { exit 1 } statement', 'Code: the -DryRun branch is reached only after successful completion of param validation', 'Behavior: all script invocations, including those with -DryRun flag, execute param validation before branching', 'Fact: the validation exits the script before any DryRun code path is reached']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "uninstall-exit0",
+      "run_num": 1,
+      "classification": "real_defect",
+      "reasoning": "['Code: catch block contains Write-Error $_ statement', 'Code: execution after the catch block proceeds without calling exit 1', \"Code: the script's final statement is 'exit 0' at end-of-script\", 'Fact: no boolean variable is set during exception handling to track success/failure state']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "quote-validation",
+      "run_num": 1,
+      "classification": "real_defect",
+      "reasoning": "['Code: action = \"cmd.exe /c \" + commandVar concatenates user input directly into a double-quoted string', 'Fact: the PowerShell operation does not call escape-function or replace-function on commandVar', 'Fact: double-quoted strings in PowerShell process escape sequences; internal quotes are unescaped', 'Code: the resulting string is passed to scheduled task action field']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "apostrophe-path",
+      "run_num": 1,
+      "classification": "real_defect",
+      "reasoning": "['Code: cmdDefault = \"bash -c \\'cd $repoPath; ...\\'\" constructs a bash command with $repoPath inside single quotes', 'Fact: single-quoted strings in bash treat all characters literally, including apostrophes', 'Fact: if repoPath contains an apostrophe, the quote context is terminated by that character', 'Code: no call to escape-function or quote-escape on repoPath before interpolation']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "unc-paths",
+      "run_num": 1,
+      "classification": "false_positive",
+      "reasoning": "['Code: UNC path converter transforms \\\\\\\\server\\\\share by a specific algorithm (details in converter function)', 'Behavior: Git Bash accepts paths matching the pattern //server/share', 'Behavior: MSYS2 shell also accepts //server/share as a path format', \"Fact: the converter's output format matches this //server/share pattern\"]",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.85
+    },
+    {
+      "id": "hardcoded-username",
+      "run_num": 1,
+      "classification": "real_defect",
+      "reasoning": "['Code: documentation contains absolute path <REPO>\\\\state\\\\tracker.json in two locations', \"Fact: a user's home directory path and username on their machine is different from <HOME>\", 'Behavior: when users copy this path to their machine, they reference a directory that does not exist', 'Fact: documentation is shipped with the npm package and is accessible to all users']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "audit-log-observability",
+      "run_num": 1,
+      "classification": "real_defect",
+      "reasoning": "[\"Current code: registration events are written to console.log('Registered task...'), which outputs to stdout only\", 'Behavior: stdout from a background process is discarded after the process ends', 'Fact: the npm package does not write a persistent record file or system event log entry', 'Mechanism: console.log messages are not retained by any logging framework']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "whitelist-gate-weakening",
+      "run_num": 1,
+      "classification": "false_positive",
+      "reasoning": "['Mechanism 1: health check implementation enumerates entries at the repository root (the top level)', 'Mechanism 2: the health check does not recursively scan subdirectories of any kind', 'Mechanism 3: a separate tool, secret_scan.py, is invoked on every push before commit', 'Fact: secret_scan.py reads file contents throughout the entire repository recursively, including daemon/* and jobs/*', \"Fact: the whitelist entry added is the directory name 'daemon' as a top-level entry\", 'Fact: adding a directory name to the health-check whitelist prevents that directory name only from being flagged by the health check']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "ps1-syntax-gate",
+      "run_num": 1,
+      "classification": "real_defect",
+      "reasoning": "['PowerShell files in the package are not validated before CI passes', \"JavaScript files are validated using 'node --check' in the CI pipeline\", \"shell scripts are validated using 'bash -n' in the CI pipeline\", \"the 'pwsh -NoProfile -Command' syntax or 'pwsh -File <file>' can parse and validate PowerShell syntax\", 'no CI step currently invokes these PowerShell validators']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "test-hardcoded-path",
+      "run_num": 1,
+      "classification": "real_defect",
+      "reasoning": "[\"Code: setUpClass contains wt_path = '<REPO>-wt-test' (an absolute path)\", \"Fact: the CI runner's filesystem does not have a directory at '<REPO>-wt-test'\", 'Fact: setUpClass runs before any test method executes', 'Code: the code calls Test-Path on wt_path and raises FileNotFoundError if it does not exist', 'Behavior: when setUpClass raises an exception, the entire test suite is skipped by the test runner']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "fixreview-parents1",
+      "run_num": 1,
+      "classification": "false_positive",
+      "reasoning": "['Mechanism: Path(__file__).resolve() converts the test file path to an absolute path', 'Mechanism: resolve() normalizes the path (removes ., .., redundant separators)', 'Fact: from a test file in tests/ subdirectory, parents[0] is the tests/ directory', 'Fact: from a test file in tests/ subdirectory, parents[1] is the parent of tests/', 'Fact: Path.resolve() operates on the kernel filesystem; it is independent of path syntax', 'Fact: spaces in paths are valid on all filesystems (Windows, Linux, macOS) and do not affect Path.resolve()']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "fixreview-backtick-test",
+      "run_num": 1,
+      "classification": "false_positive",
+      "reasoning": "['Evidence fact: the original bug in path derivation produced output containing backticks: <REPO>\\\\`whoami`', 'Evidence fact: in the fixed (corrected) code path, the output does not contain backticks', \"Test code: the regression test contains assert '`' not in result\", \"Mechanism: if the assertion '`' not in result is False (i.e., backtick IS present), the test fails\", 'Mechanism: if the assertion is True (backtick is absent), the test passes']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "regression-ui-suite",
+      "run_num": 1,
+      "classification": "false_positive",
+      "reasoning": "['Mechanism: the .gitignore file lists node_modules', 'Fact: a freshly created worktree contains only files tracked by git', 'Fact: TypeScript is a package listed in package.json but is not tracked in git', \"Mechanism: CI runner, before executing UI tests, runs 'npm install'\", \"Fact: 'npm install' reads package.json and populates node_modules\", 'Fact: a fresh worktree does not have node_modules populated unless npm install is run']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "cimergewait-exit0",
+      "run_num": 1,
+      "classification": "real_defect",
+      "reasoning": "[\"Code: the script contains logic that prints the string 'CI FAILED: <check>' to output\", \"Code: the script returns from its main function without calling 'exit 1'\", \"Behavior: when a PowerShell script returns without calling exit, the exit code defaults to the most recent command's exit code\", \"Code: the script's final statement is 'exit 0' or the script ends without an explicit exit call\", 'Fact: a caller that invokes this script and checks $LASTEXITCODE or $? will see a 0 (success) status']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "vbs-syntax-validity",
+      "run_num": 1,
+      "classification": "false_positive",
+      "reasoning": "['Reference VBScript docs: shell.Run(strCommand, [intWindowStyle], [bWaitOnReturn]) is a valid function signature', 'Code example: rc = shell.Run(cmd, 0, True) follows this signature: three arguments with the third being a boolean', 'Fact: the assignment operator = assigns the return value (an integer exit code) to the variable rc', \"Behavior: in Windows TaskScheduler, when a task launcher script ends, the final exit code is retrieved from the script's environment\", \"Evidence: the TaskScheduler's LastTaskResult field reflects the exit code after running the VBScript\"]",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "vbs-waitforexit",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "['Code: shell.Run(cmd, 0, False) \u2014 second parameter 0 = hidden window, third False = do not wait', 'Behavior: when shell.Run(cmd, 0, False) executes, the parent script continues without awaiting the spawned process', \"Behavior: the script's final statement (at script exit) is 'exit 0' or equivalent\", \"Fact: TaskScheduler's task engine records the exit code of the launcher script process itself in LastTaskResult\"]",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "dryrun-blocked",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "['Code: param validation block contains if ( -not ( Test-Path $bash ) ) { exit 1 } statement', 'Code: the -DryRun branch is reached only after successful completion of param validation', 'Behavior: all script invocations, including those with -DryRun flag, execute param validation before branching', 'Fact: the validation exits the script before any DryRun code path is reached']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "uninstall-exit0",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "['Code: catch block contains Write-Error $_ statement', 'Code: execution after the catch block proceeds without calling exit 1', \"Code: the script's final statement is 'exit 0' at end-of-script\", 'Fact: no boolean variable is set during exception handling to track success/failure state']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "quote-validation",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "['Code: action = \"cmd.exe /c \" + commandVar concatenates user input directly into a double-quoted string', 'Fact: the PowerShell operation does not call escape-function or replace-function on commandVar', 'Fact: double-quoted strings in PowerShell process escape sequences; internal quotes are unescaped', 'Code: the resulting string is passed to scheduled task action field']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "apostrophe-path",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "['Code: cmdDefault = \"bash -c \\'cd $repoPath; ...\\'\" constructs a bash command with $repoPath inside single quotes', 'Fact: single-quoted strings in bash treat all characters literally, including apostrophes', 'Fact: if repoPath contains an apostrophe, the quote context is terminated by that character', 'Code: no call to escape-function or quote-escape on repoPath before interpolation']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "unc-paths",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "['Code: UNC path converter transforms \\\\\\\\server\\\\share by a specific algorithm (details in converter function)', 'Behavior: Git Bash accepts paths matching the pattern //server/share', 'Behavior: MSYS2 shell also accepts //server/share as a path format', \"Fact: the converter's output format matches this //server/share pattern\"]",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "hardcoded-username",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "['Code: documentation contains absolute path <REPO>\\\\state\\\\tracker.json in two locations', \"Fact: a user's home directory path and username on their machine is different from <HOME>\", 'Behavior: when users copy this path to their machine, they reference a directory that does not exist', 'Fact: documentation is shipped with the npm package and is accessible to all users']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "audit-log-observability",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "[\"Current code: registration events are written to console.log('Registered task...'), which outputs to stdout only\", 'Behavior: stdout from a background process is discarded after the process ends', 'Fact: the npm package does not write a persistent record file or system event log entry', 'Mechanism: console.log messages are not retained by any logging framework']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "whitelist-gate-weakening",
+      "run_num": 2,
+      "classification": "false_positive",
+      "reasoning": "['Mechanism 1: health check implementation enumerates entries at the repository root (the top level)', 'Mechanism 2: the health check does not recursively scan subdirectories of any kind', 'Mechanism 3: a separate tool, secret_scan.py, is invoked on every push before commit', 'Fact: secret_scan.py reads file contents throughout the entire repository recursively, including daemon/* and jobs/*', \"Fact: the whitelist entry added is the directory name 'daemon' as a top-level entry\", 'Fact: adding a directory name to the health-check whitelist prevents that directory name only from being flagged by the health check']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "ps1-syntax-gate",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "['PowerShell files in the package are not validated before CI passes', \"JavaScript files are validated using 'node --check' in the CI pipeline\", \"shell scripts are validated using 'bash -n' in the CI pipeline\", \"the 'pwsh -NoProfile -Command' syntax or 'pwsh -File <file>' can parse and validate PowerShell syntax\", 'no CI step currently invokes these PowerShell validators']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "test-hardcoded-path",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "[\"Code: setUpClass contains wt_path = '<REPO>-wt-test' (an absolute path)\", \"Fact: the CI runner's filesystem does not have a directory at '<REPO>-wt-test'\", 'Fact: setUpClass runs before any test method executes', 'Code: the code calls Test-Path on wt_path and raises FileNotFoundError if it does not exist', 'Behavior: when setUpClass raises an exception, the entire test suite is skipped by the test runner']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "fixreview-parents1",
+      "run_num": 2,
+      "classification": "false_positive",
+      "reasoning": "['Mechanism: Path(__file__).resolve() converts the test file path to an absolute path', 'Mechanism: resolve() normalizes the path (removes ., .., redundant separators)', 'Fact: from a test file in tests/ subdirectory, parents[0] is the tests/ directory', 'Fact: from a test file in tests/ subdirectory, parents[1] is the parent of tests/', 'Fact: Path.resolve() operates on the kernel filesystem; it is independent of path syntax', 'Fact: spaces in paths are valid on all filesystems (Windows, Linux, macOS) and do not affect Path.resolve()']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "fixreview-backtick-test",
+      "run_num": 2,
+      "classification": "false_positive",
+      "reasoning": "['Evidence fact: the original bug in path derivation produced output containing backticks: <REPO>\\\\`whoami`', 'Evidence fact: in the fixed (corrected) code path, the output does not contain backticks', \"Test code: the regression test contains assert '`' not in result\", \"Mechanism: if the assertion '`' not in result is False (i.e., backtick IS present), the test fails\", 'Mechanism: if the assertion is True (backtick is absent), the test passes']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "regression-ui-suite",
+      "run_num": 2,
+      "classification": "false_positive",
+      "reasoning": "['Mechanism: the .gitignore file lists node_modules', 'Fact: a freshly created worktree contains only files tracked by git', 'Fact: TypeScript is a package listed in package.json but is not tracked in git', \"Mechanism: CI runner, before executing UI tests, runs 'npm install'\", \"Fact: 'npm install' reads package.json and populates node_modules\", 'Fact: a fresh worktree does not have node_modules populated unless npm install is run']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "cimergewait-exit0",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "[\"Code: the script contains logic that prints the string 'CI FAILED: <check>' to output\", \"Code: the script returns from its main function without calling 'exit 1'\", \"Behavior: when a PowerShell script returns without calling exit, the exit code defaults to the most recent command's exit code\", \"Code: the script's final statement is 'exit 0' or the script ends without an explicit exit call\", 'Fact: a caller that invokes this script and checks $LASTEXITCODE or $? will see a 0 (success) status']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "vbs-syntax-validity",
+      "run_num": 2,
+      "classification": "false_positive",
+      "reasoning": "['Reference VBScript docs: shell.Run(strCommand, [intWindowStyle], [bWaitOnReturn]) is a valid function signature', 'Code example: rc = shell.Run(cmd, 0, True) follows this signature: three arguments with the third being a boolean', 'Fact: the assignment operator = assigns the return value (an integer exit code) to the variable rc', \"Behavior: in Windows TaskScheduler, when a task launcher script ends, the final exit code is retrieved from the script's environment\", \"Evidence: the TaskScheduler's LastTaskResult field reflects the exit code after running the VBScript\"]",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "vbs-waitforexit",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "['Code: shell.Run(cmd, 0, False) \u2014 second parameter 0 = hidden window, third False = do not wait', 'Behavior: when shell.Run(cmd, 0, False) executes, the parent script continues without awaiting the spawned process', \"Behavior: the script's final statement (at script exit) is 'exit 0' or equivalent\", \"Fact: TaskScheduler's task engine records the exit code of the launcher script process itself in LastTaskResult\"]",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "dryrun-blocked",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "['Code: param validation block contains if ( -not ( Test-Path $bash ) ) { exit 1 } statement', 'Code: the -DryRun branch is reached only after successful completion of param validation', 'Behavior: all script invocations, including those with -DryRun flag, execute param validation before branching', 'Fact: the validation exits the script before any DryRun code path is reached']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "uninstall-exit0",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "['Code: catch block contains Write-Error $_ statement', 'Code: execution after the catch block proceeds without calling exit 1', \"Code: the script's final statement is 'exit 0' at end-of-script\", 'Fact: no boolean variable is set during exception handling to track success/failure state']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "quote-validation",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "['Code: action = \"cmd.exe /c \" + commandVar concatenates user input directly into a double-quoted string', 'Fact: the PowerShell operation does not call escape-function or replace-function on commandVar', 'Fact: double-quoted strings in PowerShell process escape sequences; internal quotes are unescaped', 'Code: the resulting string is passed to scheduled task action field']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "apostrophe-path",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "['Code: cmdDefault = \"bash -c \\'cd $repoPath; ...\\'\" constructs a bash command with $repoPath inside single quotes', 'Fact: single-quoted strings in bash treat all characters literally, including apostrophes', 'Fact: if repoPath contains an apostrophe, the quote context is terminated by that character', 'Code: no call to escape-function or quote-escape on repoPath before interpolation']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "unc-paths",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "['Code: UNC path converter transforms \\\\\\\\server\\\\share by a specific algorithm (details in converter function)', 'Behavior: Git Bash accepts paths matching the pattern //server/share', 'Behavior: MSYS2 shell also accepts //server/share as a path format', \"Fact: the converter's output format matches this //server/share pattern\"]",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "hardcoded-username",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "['Code: documentation contains absolute path <REPO>\\\\state\\\\tracker.json in two locations', \"Fact: a user's home directory path and username on their machine is different from <HOME>\", 'Behavior: when users copy this path to their machine, they reference a directory that does not exist', 'Fact: documentation is shipped with the npm package and is accessible to all users']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "audit-log-observability",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "[\"Current code: registration events are written to console.log('Registered task...'), which outputs to stdout only\", 'Behavior: stdout from a background process is discarded after the process ends', 'Fact: the npm package does not write a persistent record file or system event log entry', 'Mechanism: console.log messages are not retained by any logging framework']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "whitelist-gate-weakening",
+      "run_num": 3,
+      "classification": "false_positive",
+      "reasoning": "['Mechanism 1: health check implementation enumerates entries at the repository root (the top level)', 'Mechanism 2: the health check does not recursively scan subdirectories of any kind', 'Mechanism 3: a separate tool, secret_scan.py, is invoked on every push before commit', 'Fact: secret_scan.py reads file contents throughout the entire repository recursively, including daemon/* and jobs/*', \"Fact: the whitelist entry added is the directory name 'daemon' as a top-level entry\", 'Fact: adding a directory name to the health-check whitelist prevents that directory name only from being flagged by the health check']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "ps1-syntax-gate",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "['PowerShell files in the package are not validated before CI passes', \"JavaScript files are validated using 'node --check' in the CI pipeline\", \"shell scripts are validated using 'bash -n' in the CI pipeline\", \"the 'pwsh -NoProfile -Command' syntax or 'pwsh -File <file>' can parse and validate PowerShell syntax\", 'no CI step currently invokes these PowerShell validators']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "test-hardcoded-path",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "[\"Code: setUpClass contains wt_path = '<REPO>-wt-test' (an absolute path)\", \"Fact: the CI runner's filesystem does not have a directory at '<REPO>-wt-test'\", 'Fact: setUpClass runs before any test method executes', 'Code: the code calls Test-Path on wt_path and raises FileNotFoundError if it does not exist', 'Behavior: when setUpClass raises an exception, the entire test suite is skipped by the test runner']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "fixreview-parents1",
+      "run_num": 3,
+      "classification": "false_positive",
+      "reasoning": "['Mechanism: Path(__file__).resolve() converts the test file path to an absolute path', 'Mechanism: resolve() normalizes the path (removes ., .., redundant separators)', 'Fact: from a test file in tests/ subdirectory, parents[0] is the tests/ directory', 'Fact: from a test file in tests/ subdirectory, parents[1] is the parent of tests/', 'Fact: Path.resolve() operates on the kernel filesystem; it is independent of path syntax', 'Fact: spaces in paths are valid on all filesystems (Windows, Linux, macOS) and do not affect Path.resolve()']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "fixreview-backtick-test",
+      "run_num": 3,
+      "classification": "false_positive",
+      "reasoning": "['Evidence fact: the original bug in path derivation produced output containing backticks: <REPO>\\\\`whoami`', 'Evidence fact: in the fixed (corrected) code path, the output does not contain backticks', \"Test code: the regression test contains assert '`' not in result\", \"Mechanism: if the assertion '`' not in result is False (i.e., backtick IS present), the test fails\", 'Mechanism: if the assertion is True (backtick is absent), the test passes']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "regression-ui-suite",
+      "run_num": 3,
+      "classification": "false_positive",
+      "reasoning": "['Mechanism: the .gitignore file lists node_modules', 'Fact: a freshly created worktree contains only files tracked by git', 'Fact: TypeScript is a package listed in package.json but is not tracked in git', \"Mechanism: CI runner, before executing UI tests, runs 'npm install'\", \"Fact: 'npm install' reads package.json and populates node_modules\", 'Fact: a fresh worktree does not have node_modules populated unless npm install is run']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "cimergewait-exit0",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "[\"Code: the script contains logic that prints the string 'CI FAILED: <check>' to output\", \"Code: the script returns from its main function without calling 'exit 1'\", \"Behavior: when a PowerShell script returns without calling exit, the exit code defaults to the most recent command's exit code\", \"Code: the script's final statement is 'exit 0' or the script ends without an explicit exit call\", 'Fact: a caller that invokes this script and checks $LASTEXITCODE or $? will see a 0 (success) status']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    },
+    {
+      "id": "vbs-syntax-validity",
+      "run_num": 3,
+      "classification": "false_positive",
+      "reasoning": "['Reference VBScript docs: shell.Run(strCommand, [intWindowStyle], [bWaitOnReturn]) is a valid function signature', 'Code example: rc = shell.Run(cmd, 0, True) follows this signature: three arguments with the third being a boolean', 'Fact: the assignment operator = assigns the return value (an integer exit code) to the variable rc', \"Behavior: in Windows TaskScheduler, when a task launcher script ends, the final exit code is retrieved from the script's environment\", \"Evidence: the TaskScheduler's LastTaskResult field reflects the exit code after running the VBScript\"]",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.9
+    }
+  ],
+  "per_item_aggregations": [
+    {
+      "id": "vbs-waitforexit",
+      "ground_truth": "real_defect",
+      "modal_verdict": "real_defect",
+      "stability": 1.0,
+      "verdict_counts": {
+        "real_defect": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['Code: shell.Run(cmd, 0, False) \u2014 second parameter 0 = hidden window, third False = do not wait', 'Behavior: when shell.Run(cmd, 0, False) executes, the parent script continues without awaiting the spawned process', \"Behavior: the script's final statement (at script exit) is 'exit 0' or equivalent\", \"Fact: TaskScheduler's task engine records the exit code of the launcher script process itself in LastTaskResult\"]"
+    },
+    {
+      "id": "dryrun-blocked",
+      "ground_truth": "real_defect",
+      "modal_verdict": "real_defect",
+      "stability": 1.0,
+      "verdict_counts": {
+        "real_defect": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['Code: param validation block contains if ( -not ( Test-Path $bash ) ) { exit 1 } statement', 'Code: the -DryRun branch is reached only after successful completion of param validation', 'Behavior: all script invocations, including those with -DryRun flag, execute param validation before branching', 'Fact: the validation exits the script before any DryRun code path is reached']"
+    },
+    {
+      "id": "uninstall-exit0",
+      "ground_truth": "real_defect",
+      "modal_verdict": "real_defect",
+      "stability": 1.0,
+      "verdict_counts": {
+        "real_defect": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['Code: catch block contains Write-Error $_ statement', 'Code: execution after the catch block proceeds without calling exit 1', \"Code: the script's final statement is 'exit 0' at end-of-script\", 'Fact: no boolean variable is set during exception handling to track success/failure state']"
+    },
+    {
+      "id": "quote-validation",
+      "ground_truth": "real_defect",
+      "modal_verdict": "real_defect",
+      "stability": 1.0,
+      "verdict_counts": {
+        "real_defect": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['Code: action = \"cmd.exe /c \" + commandVar concatenates user input directly into a double-quoted string', 'Fact: the PowerShell operation does not call escape-function or replace-function on commandVar', 'Fact: double-quoted strings in PowerShell process escape sequences; internal quotes are unescaped', 'Code: the resulting string is passed to scheduled task action field']"
+    },
+    {
+      "id": "apostrophe-path",
+      "ground_truth": "real_defect",
+      "modal_verdict": "real_defect",
+      "stability": 1.0,
+      "verdict_counts": {
+        "real_defect": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['Code: cmdDefault = \"bash -c \\'cd $repoPath; ...\\'\" constructs a bash command with $repoPath inside single quotes', 'Fact: single-quoted strings in bash treat all characters literally, including apostrophes', 'Fact: if repoPath contains an apostrophe, the quote context is terminated by that character', 'Code: no call to escape-function or quote-escape on repoPath before interpolation']"
+    },
+    {
+      "id": "unc-paths",
+      "ground_truth": "real_defect",
+      "modal_verdict": "real_defect",
+      "stability": 0.667,
+      "verdict_counts": {
+        "false_positive": 1,
+        "real_defect": 2
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['Code: UNC path converter transforms \\\\\\\\server\\\\share by a specific algorithm (details in converter function)', 'Behavior: Git Bash accepts paths matching the pattern //server/share', 'Behavior: MSYS2 shell also accepts //server/share as a path format', \"Fact: the converter's output format matches this //server/share pattern\"]"
+    },
+    {
+      "id": "hardcoded-username",
+      "ground_truth": "real_defect",
+      "modal_verdict": "real_defect",
+      "stability": 1.0,
+      "verdict_counts": {
+        "real_defect": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['Code: documentation contains absolute path <REPO>\\\\state\\\\tracker.json in two locations', \"Fact: a user's home directory path and username on their machine is different from <HOME>\", 'Behavior: when users copy this path to their machine, they reference a directory that does not exist', 'Fact: documentation is shipped with the npm package and is accessible to all users']"
+    },
+    {
+      "id": "audit-log-observability",
+      "ground_truth": "enhancement_opportunity",
+      "modal_verdict": "real_defect",
+      "stability": 1.0,
+      "verdict_counts": {
+        "real_defect": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "[\"Current code: registration events are written to console.log('Registered task...'), which outputs to stdout only\", 'Behavior: stdout from a background process is discarded after the process ends', 'Fact: the npm package does not write a persistent record file or system event log entry', 'Mechanism: console.log messages are not retained by any logging framework']"
+    },
+    {
+      "id": "whitelist-gate-weakening",
+      "ground_truth": "false_positive",
+      "modal_verdict": "false_positive",
+      "stability": 1.0,
+      "verdict_counts": {
+        "false_positive": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['Mechanism 1: health check implementation enumerates entries at the repository root (the top level)', 'Mechanism 2: the health check does not recursively scan subdirectories of any kind', 'Mechanism 3: a separate tool, secret_scan.py, is invoked on every push before commit', 'Fact: secret_scan.py reads file contents throughout the entire repository recursively, including daemon/* and jobs/*', \"Fact: the whitelist entry added is the directory name 'daemon' as a top-level entry\", 'Fact: adding a directory name to the health-check whitelist prevents that directory name only from being flagged by the health check']"
+    },
+    {
+      "id": "ps1-syntax-gate",
+      "ground_truth": "enhancement_opportunity",
+      "modal_verdict": "real_defect",
+      "stability": 1.0,
+      "verdict_counts": {
+        "real_defect": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['PowerShell files in the package are not validated before CI passes', \"JavaScript files are validated using 'node --check' in the CI pipeline\", \"shell scripts are validated using 'bash -n' in the CI pipeline\", \"the 'pwsh -NoProfile -Command' syntax or 'pwsh -File <file>' can parse and validate PowerShell syntax\", 'no CI step currently invokes these PowerShell validators']"
+    },
+    {
+      "id": "test-hardcoded-path",
+      "ground_truth": "real_defect",
+      "modal_verdict": "real_defect",
+      "stability": 1.0,
+      "verdict_counts": {
+        "real_defect": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "[\"Code: setUpClass contains wt_path = '<REPO>-wt-test' (an absolute path)\", \"Fact: the CI runner's filesystem does not have a directory at '<REPO>-wt-test'\", 'Fact: setUpClass runs before any test method executes', 'Code: the code calls Test-Path on wt_path and raises FileNotFoundError if it does not exist', 'Behavior: when setUpClass raises an exception, the entire test suite is skipped by the test runner']"
+    },
+    {
+      "id": "fixreview-parents1",
+      "ground_truth": "false_positive",
+      "modal_verdict": "false_positive",
+      "stability": 1.0,
+      "verdict_counts": {
+        "false_positive": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['Mechanism: Path(__file__).resolve() converts the test file path to an absolute path', 'Mechanism: resolve() normalizes the path (removes ., .., redundant separators)', 'Fact: from a test file in tests/ subdirectory, parents[0] is the tests/ directory', 'Fact: from a test file in tests/ subdirectory, parents[1] is the parent of tests/', 'Fact: Path.resolve() operates on the kernel filesystem; it is independent of path syntax', 'Fact: spaces in paths are valid on all filesystems (Windows, Linux, macOS) and do not affect Path.resolve()']"
+    },
+    {
+      "id": "fixreview-backtick-test",
+      "ground_truth": "false_positive",
+      "modal_verdict": "false_positive",
+      "stability": 1.0,
+      "verdict_counts": {
+        "false_positive": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['Evidence fact: the original bug in path derivation produced output containing backticks: <REPO>\\\\`whoami`', 'Evidence fact: in the fixed (corrected) code path, the output does not contain backticks', \"Test code: the regression test contains assert '`' not in result\", \"Mechanism: if the assertion '`' not in result is False (i.e., backtick IS present), the test fails\", 'Mechanism: if the assertion is True (backtick is absent), the test passes']"
+    },
+    {
+      "id": "regression-ui-suite",
+      "ground_truth": "false_positive",
+      "modal_verdict": "false_positive",
+      "stability": 1.0,
+      "verdict_counts": {
+        "false_positive": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['Mechanism: the .gitignore file lists node_modules', 'Fact: a freshly created worktree contains only files tracked by git', 'Fact: TypeScript is a package listed in package.json but is not tracked in git', \"Mechanism: CI runner, before executing UI tests, runs 'npm install'\", \"Fact: 'npm install' reads package.json and populates node_modules\", 'Fact: a fresh worktree does not have node_modules populated unless npm install is run']"
+    },
+    {
+      "id": "cimergewait-exit0",
+      "ground_truth": "real_defect",
+      "modal_verdict": "real_defect",
+      "stability": 1.0,
+      "verdict_counts": {
+        "real_defect": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "[\"Code: the script contains logic that prints the string 'CI FAILED: <check>' to output\", \"Code: the script returns from its main function without calling 'exit 1'\", \"Behavior: when a PowerShell script returns without calling exit, the exit code defaults to the most recent command's exit code\", \"Code: the script's final statement is 'exit 0' or the script ends without an explicit exit call\", 'Fact: a caller that invokes this script and checks $LASTEXITCODE or $? will see a 0 (success) status']"
+    },
+    {
+      "id": "vbs-syntax-validity",
+      "ground_truth": "false_positive",
+      "modal_verdict": "false_positive",
+      "stability": 1.0,
+      "verdict_counts": {
+        "false_positive": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['Reference VBScript docs: shell.Run(strCommand, [intWindowStyle], [bWaitOnReturn]) is a valid function signature', 'Code example: rc = shell.Run(cmd, 0, True) follows this signature: three arguments with the third being a boolean', 'Fact: the assignment operator = assigns the return value (an integer exit code) to the variable rc', \"Behavior: in Windows TaskScheduler, when a task launcher script ends, the final exit code is retrieved from the script's environment\", \"Evidence: the TaskScheduler's LastTaskResult field reflects the exit code after running the VBScript\"]"
+    }
+  ]
+}
