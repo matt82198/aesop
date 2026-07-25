@@ -209,9 +209,13 @@ Add or modify the `backend` section:
   "backend": "openai-compatible",
   "model": "ollama-mistral",
   "base_url": "http://localhost:11434/v1",
-  "api_key_env": "OLLAMA_API_KEY"
+  "api_key_env": "OLLAMA_API_KEY",
+  "is_local": true
 }
 ```
+
+Set `"is_local": true` for local/small models (Ollama etc.) — it raises the
+verification tier honestly (tier 3 instead of hosted tier 2).
 
 Supported backends:
 - `"claude"` (default) — Claude Code CLI harness
@@ -235,11 +239,12 @@ cat > aesop.config.json <<EOF
   "backend": "openai-compatible",
   "model": "mistral",
   "base_url": "http://localhost:11434/v1",
-  "api_key_env": "OLLAMA_API_KEY"
+  "api_key_env": "OLLAMA_API_KEY",
+  "is_local": true
 }
 EOF
 
-# 4. Start Aesop (it will use Mistral for subagent dispatch)
+# 4. Start Aesop (components that dispatch through the AgentDriver seam will use Mistral)
 npx @matt82198/aesop my-fleet --name "my-api"
 ```
 
@@ -250,16 +255,16 @@ The AgentDriver framework applies **honest verification tiers** — weaker backe
 | Backend | Accuracy | Verification Tier | What it means |
 |---------|----------|-------------------|---------------|
 | Claude Code | ~0.99 | 1 (minimal) | Orchestrator trusts output; spot-check tests |
-| OpenAI (GPT-4) | ~0.95 | 2 | Validate all JSON, run full test suite |
-| Ollama (Mistral) | ~0.70 | 4 (maximum) | Validate all JSON, adversarial review, expensive repair cap |
+| Hosted OpenAI-compatible (codex / OpenRouter) | ~0.92 | 2 | Validate all JSON, ~50% spot-check, adversarial review |
+| Local small model (`"is_local": true`, e.g. Ollama) | ~0.80 | 3 | Validate all JSON, heavy spot-check, adversarial review |
 
-Lower tiers cost less but require more orchestrator work. See [driver/README.md](../driver/README.md) for full verification-policy details.
+Higher tiers mean MORE orchestrator verification work: weaker backends raise, never lower, the orchestrator's burden. See [driver/README.md](../driver/README.md) for full verification-policy details.
 
 ### Troubleshooting
 
 **Backend won't connect**: Check `OLLAMA_API_KEY` (or your backend's API key env var) is set and the `base_url` is reachable.
 
-**Verification tier too strict**: If your backend is over-verified (tier 4 when it should be tier 2), update `probe_capabilities()` in the driver to report higher accuracy scores honestly.
+**Verification tier too strict**: The tier comes from the driver's `probe_capabilities()` honesty contract — never inflate accuracy to lower it. For hosted-quality models, leave `"is_local"` unset (tier 2); reserve `"is_local": true` (tier 3) for genuinely small local models.
 
 For more details, see [driver/README.md](../driver/README.md).
 
