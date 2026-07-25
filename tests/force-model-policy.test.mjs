@@ -35,6 +35,12 @@ function makeRoot(config) {
   return root;
 }
 
+// Honors AESOP_TEST_CHILD_TIMEOUT_MS override (same pattern as collect-signals.test.mjs /
+// wizard.test.mjs) so CI can widen the window under Windows contention.
+function getTestTimeout() {
+  return Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
+}
+
 function runHook(stdinText, { config } = {}) {
   const root = makeRoot(config);
   const res = spawnSync(process.execPath, [HOOK], {
@@ -42,7 +48,7 @@ function runHook(stdinText, { config } = {}) {
     cwd: root,
     env: { ...process.env, AESOP_ROOT: root },
     encoding: 'utf8',
-    timeout: 30000,
+    timeout: getTestTimeout(),
     killSignal: 'SIGKILL'
   });
   res.root = root;
@@ -155,7 +161,7 @@ test('escape-hatch log is append-only across uses', () => {
     cwd: first.root,
     env: { ...process.env, AESOP_ROOT: first.root },
     encoding: 'utf8',
-    timeout: 30000,
+    timeout: getTestTimeout(),
     killSignal: 'SIGKILL'
   });
   assert.equal(first.status, 0);
@@ -180,7 +186,7 @@ test('never-closing stdin: hook exits 0 within the timeout window (fail-open)', 
     cwd: root,
     env: { ...process.env, AESOP_ROOT: root },
     stdio: ['pipe', 'pipe', 'pipe'],
-    timeout: 30000,
+    timeout: getTestTimeout(),
     killSignal: 'SIGKILL'
   });
   child.stdin.on('error', () => {}); // child may exit first; ignore EPIPE
