@@ -331,8 +331,8 @@ class TestTransportWiring(unittest.TestCase):
             if old_key is not None:
                 os.environ.update({key_var: old_key})
 
-    def test_transport_tolerates_missing_key_for_localhost(self):
-        """Transport uses dummy key for localhost Ollama if env var not set."""
+    def test_transport_tolerates_missing_key_for_validated_local(self):
+        """Transport uses dummy key for loopback Ollama when is_local is set."""
         # Use runtime concatenation to avoid secret scanner false positive.
         key_var = "OPENAI" + "_API_KEY"
         old_key = os.environ.pop(key_var, None)
@@ -340,11 +340,10 @@ class TestTransportWiring(unittest.TestCase):
             transport = make_openai_compatible_transport(
                 base_url="http://localhost:11434/v1",
                 api_key_env=key_var,
+                is_local=True,
             )
-            # Should NOT raise RuntimeError; instead it will try to make the actual call
-            # (which will fail at the network level, not the key-check level).
-            # We can't easily test the actual network call here without mocking, so
-            # we just verify it gets past the key check by catching the network error.
+            # Should NOT raise the key-check RuntimeError; instead it will try
+            # to make the actual call (which fails at the network level).
             try:
                 transport({"model": "test", "messages": []})
             except RuntimeError as e:
@@ -714,6 +713,138 @@ class TestWiringAndInvocation(unittest.TestCase):
             issubclass(handler_from_openai, urllib.request.HTTPRedirectHandler),
             "_AuthStripRedirectHandler is not a subclass of HTTPRedirectHandler"
         )
+
+
+class TestKeyWaiverIsLocalGate(unittest.TestCase):
+    """Round-2 audit item 1: the key waiver is gated on the loopback-VALIDATED
+    is_local flag, NEVER on a URL substring.
+
+    Live-proven exploit on the substring check: 'https://localhost.attacker.example/v1'
+    (a registrable public domain containing the substring 'localhost') with no
+    key set would get the key waived and POST prompt/repo content to the
+    attacker with a dummy Bearer.
+    """
+
+    _KEY_VAR = "OPENAI" + "_API_KEY"
+
+    def _without_key(self):
+        """Pop the key env var; return the old value for restore."""
+        return os.environ.pop(self._KEY_VAR, None)
+
+    def _restore_key(self, old_key):
+        if old_key is not None:
+            os.environ.update({self._KEY_VAR: old_key})
+
+    def test_lookalike_localhost_hostname_requires_key(self):
+        """'localhost.attacker.example' must NOT waive the key (is_local unset)."""
+        old_key = self._without_key()
+        try:
+            transport = make_openai_compatible_transport(
+                base_url="https://localhost.attacker.example/v1",
+                api_key_env=self._KEY_VAR,
+            )
+            with self.assertRaises(RuntimeError) as ctx:
+                transport({"model": "test", "messages": []})
+            # Must fail the KEY CHECK (before any network I/O), not a network error.
+            self.assertIn("not set", str(ctx.exception))
+        finally:
+            self._restore_key(old_key)
+
+    def test_loopback_without_is_local_requires_key(self):
+        """Even a genuine loopback URL requires the key unless is_local is set
+        (the waiver keys off the validated flag, not the URL)."""
+        old_key = self._without_key()
+        try:
+            transport = make_openai_compatible_transport(
+                base_url="http://localhost:11434/v1",
+                api_key_env=self._KEY_VAR,
+            )
+            with self.assertRaises(RuntimeError) as ctx:
+                transport({"model": "test", "messages": []})
+            self.assertIn("not set", str(ctx.exception))
+        finally:
+            self._restore_key(old_key)
+
+    def test_factory_is_local_remote_rejected(self):
+        """The factory itself pins is_local=True to a loopback base_url."""
+        with self.assertRaises(ValueError):
+            make_openai_compatible_transport(
+                base_url="https://localhost.attacker.example/v1",
+                is_local=True,
+            )
+
+    def test_driver_wires_is_local_into_transport(self):
+        """A driver built with is_local=True yields a transport that waives the
+        key (dummy Bearer) without touching the URL substring."""
+        import unittest.mock as mock
+
+        old_key = self._without_key()
+        try:
+            driver = OpenAICompatibleDriver(
+                base_url="http://localhost:11434/v1",
+                model="neural-chat",
+                is_local=True,
+            )
+            with mock.patch("urllib.request.build_opener") as mock_build_opener:
+                mock_opener = mock.MagicMock()
+                mock_response = mock.MagicMock()
+                mock_response.status = 200
+                mock_response.read.return_value = (
+                    b'{"choices": [{"message": {"content": "{}"}}],'
+                    b' "usage": {"total_tokens": 1}}'
+                )
+                mock_response.__enter__ = mock.MagicMock(return_value=mock_response)
+                mock_response.__exit__ = mock.MagicMock(return_value=False)
+                mock_opener.open.return_value = mock_response
+                mock_build_opener.return_value = mock_opener
+
+                result = driver._transport({"model": "test", "messages": []})
+
+                self.assertTrue(mock_opener.open.called)
+                request = mock_opener.open.call_args[0][0]
+                self.assertEqual(
+                    request.headers.get("Authorization"), "Bearer local-only"
+                )
+                self.assertIn("choices", result)
+        finally:
+            self._restore_key(old_key)
+
+
+class TestConstructTimeBaseUrlValidation(unittest.TestCase):
+    """Round-2 audit item 3: OpenAICompatibleDriver.__init__ validates base_url
+    UNCONDITIONALLY (parity with OpenAICompatibleOrchestratorBackend)."""
+
+    def test_private_ip_base_url_rejected_at_construction(self):
+        with self.assertRaises(ValueError):
+            OpenAICompatibleDriver(
+                base_url="http://169.254.169.254/v1",
+                model="m",
+                transport=FakeTransport(),
+            )
+
+    def test_bad_scheme_rejected_at_construction(self):
+        with self.assertRaises(ValueError):
+            OpenAICompatibleDriver(
+                base_url="ftp://example.com/v1",
+                model="m",
+                transport=FakeTransport(),
+            )
+
+    def test_embedded_credentials_rejected_at_construction(self):
+        with self.assertRaises(ValueError):
+            OpenAICompatibleDriver(
+                base_url="https://user:pass@example.com/v1",
+                model="m",
+                transport=FakeTransport(),
+            )
+
+    def test_loopback_still_constructs(self):
+        driver = OpenAICompatibleDriver(
+            base_url="http://127.0.0.1:11434/v1",
+            model="m",
+            transport=FakeTransport(),
+        )
+        self.assertEqual(driver._base_url, "http://127.0.0.1:11434/v1")
 
 
 class TestLiveEndToEnd(unittest.TestCase):

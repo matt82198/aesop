@@ -9,8 +9,8 @@
     {
       "name": "OpenAI Codex / Chat Completions",
       "backend": "codex",
-      "model": "gpt-3.5-turbo",
-      "description": "Uses OpenAI's Chat Completions API. Set OPENAI_API_KEY environment variable before running. Tier 2 verification (validate all JSON, spot-check, repair budget).",
+      "model": "gpt-4o-mini",
+      "description": "Uses OpenAI's Chat Completions API. Set OPENAI_API_KEY environment variable before running. Tier 2 verification (validate all JSON, spot-check, repair budget). Model must support json_schema structured output (gpt-4o-mini does; gpt-3.5-class models are rejected at init).",
       "optional_fields": {
         "model": "gpt-4-turbo for stronger verification",
         "max_owned_bytes": 200000,
@@ -65,10 +65,26 @@
     "backend": "claude",
     "comment": "Recommended production configuration: Claude Code with Haiku workers, Tier 1 verification. Drop this into aesop.config.json (removing comments) to use."
   },
+  "unified_seats_config": {
+    "comment": "HS-1 (0.4.0): ONE namespaced block selects BOTH seats. seats.worker takes the same fields as the legacy flat block above (and wins over it when both are present); seats.orchestrator swaps the DECISION seat (backend 'harness' = the live Claude Code session, the default; 'openai-compatible' routes OrchestratorDriver.decide() to an API model). NO seats block = today's behavior exactly: Claude worker + harness orchestrator, no key required. Example: local Ollama worker + hosted gpt-4o-mini orchestrator:",
+    "seats": {
+      "worker": {
+        "backend": "openai-compatible",
+        "base_url": "http://localhost:11434/v1",
+        "model": "mistral",
+        "is_local": true
+      },
+      "orchestrator": {
+        "backend": "openai-compatible",
+        "model": "gpt-4o-mini",
+        "api_key_env": "OPENAI_API_KEY"
+      }
+    }
+  },
   "experimental_codex": {
     "backend": "codex",
-    "model": "gpt-3.5-turbo",
-    "comment": "Experimental Codex backend. Requires OPENAI_API_KEY set. Tier 2 verification."
+    "model": "gpt-4o-mini",
+    "comment": "Experimental Codex backend (json_schema-capable model required). Requires OPENAI_API_KEY set. Tier 2 verification. NOTE: as a bare legacy flat block this is INERT in the wave scheduler's default path -- move it under seats.worker to activate it."
   },
   "experimental_ollama": {
     "backend": "openai-compatible",

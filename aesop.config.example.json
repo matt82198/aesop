@@ -46,6 +46,22 @@
   "cardinal_rules": {
     "subagent_model": "haiku"
   },
+  "seats": {
+    "_comment": "Unified two-seat model selection (0.4.0). ONE block swaps BOTH seats: 'worker' = the coding agents (AgentDriver), 'orchestrator' = the decision seat (OrchestratorBackend). The values below ARE the defaults -- Claude Code worker + live-harness orchestrator -- so this block as shipped changes nothing; deleting it changes nothing either. To swap a seat, replace its block with one of the _worker_examples/_orchestrator_examples. Keys are read from env vars named by api_key_env at CALL time, never stored in this file. 'is_local': true = LOOPBACK endpoint only (localhost/127.0.0.1/::1 -- rejected otherwise): no API key needed, honest verification tier 3. Separate surface: cardinal_rules.subagent_model (above) pins the model for LIVE-HARNESS Claude Code subagents; seats.worker swaps the AgentDriver worker seam itself.",
+    "worker": { "backend": "claude" },
+    "orchestrator": { "backend": "harness" },
+    "_worker_examples": {
+      "_note": "Asymmetry: worker openai-compatible seats REQUIRE base_url; the orchestrator seat may omit base_url (defaults to the hosted OpenAI endpoint).",
+      "codex_hosted_openai": { "backend": "codex", "model": "gpt-4o-mini" },
+      "openai_compatible_openrouter": { "backend": "openai-compatible", "base_url": "https://openrouter.ai/api/v1", "model": "openai/gpt-4-turbo", "api_key_env": "OPENROUTER_API_KEY" },
+      "openai_compatible_local_ollama": { "backend": "openai-compatible", "base_url": "http://localhost:11434/v1", "model": "mistral", "is_local": true }
+    },
+    "_orchestrator_examples": {
+      "harness_default": { "backend": "harness" },
+      "openai_hosted": { "backend": "openai-compatible", "model": "gpt-4o-mini", "api_key_env": "OPENAI_API_KEY" },
+      "local_ollama": { "backend": "openai-compatible", "base_url": "http://localhost:11434/v1", "model": "mistral", "is_local": true }
+    }
+  },
   "limits": {
     "_comment": "Cost ceiling / kill switch (tools/cost_ceiling.py, tools/halt.py). null disables a given ceiling (feature opt-in). When spend meets or exceeds a configured ceiling, cost_ceiling.py trips tools/halt.py's .HALT sentinel, which daemons/run-watchdog.sh checks at the top of every cycle and refuses to do work (no backup, no push, no scan) until cleared via 'python tools/halt.py --clear'.",
     "max_wave_tokens": null,

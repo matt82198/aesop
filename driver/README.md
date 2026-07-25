@@ -225,7 +225,45 @@ switch backends without changing code. The configuration is **offline-safe**:
 building a driver requires no API key; keys are read from environment variables
 at call time during live dispatch.
 
-**Configuration schema** (backend block):
+**Unified two-seat config (0.4.0, HS-1)** — one namespaced block selects BOTH
+seats: `seats.worker` (the coding agents; same fields as the legacy block
+below, wins over it when both are present) and `seats.orchestrator` (the
+decision seat; `"harness"` = the live Claude Code session, the default;
+`"openai-compatible"` routes `OrchestratorDriver.decide()` to an API model
+with `model`/`base_url`/`api_key_env`/`is_local`):
+
+```json
+{
+  "seats": {
+    "worker": { "backend": "claude" },
+    "orchestrator": { "backend": "openai-compatible", "model": "gpt-4o-mini" }
+  }
+}
+```
+
+`build_driver(load_backend_config())` builds the worker seat;
+`build_orchestrator_backend(load_backend_config())` builds the orchestrator
+seat (returning the null `HarnessOrchestratorBackend` -- whose `decide_call`
+raises -- when the seat is absent or `harness`/`claude`). With **no** `seats`
+block, behavior is byte-identical to today: Claude Code worker + harness
+orchestrator, no OpenAI backend constructed, no key required -- and a bare
+legacy flat block (below) stays INERT in `wave_scheduler`'s default path
+(it was dead config before 0.4.0; migrate it to `seats.worker` to opt in).
+Consumers: `wave_scheduler.py` (worker seat from `seats.worker` only;
+`--driver` overrides) and the shadow adjudication tools (orchestrator seat;
+`--model` overrides).
+
+Guardrails: `base_url` is SSRF-checked (scheme, IP literals, AND
+DNS-resolved addresses; TTL-0 rebinding residual documented in
+`validate_base_url`), `is_local: true` requires a loopback `base_url`
+(localhost/127.0.0.1/::1 -- it disables the key requirement), and
+`api_key_env` must be an LLM-key-shaped name (`*_KEY`/`*_API_KEY`, no
+SECRET/TOKEN/... fragments) so a config cannot exfiltrate arbitrary env
+secrets as Bearer tokens.
+
+**Configuration schema** (legacy/flat worker block; parses + validates, honored
+by direct `build_driver()` callers, but inert in the scheduler default -- see
+above):
 ```json
 {
   "backend": "claude" | "codex" | "openai-compatible",
@@ -274,7 +312,7 @@ print(describe_backend(config))
 ```json
 {
   "backend": "codex",
-  "model": "gpt-3.5-turbo"
+  "model": "gpt-4o-mini"
 }
 ```
 - Requires `OPENAI_API_KEY` environment variable set

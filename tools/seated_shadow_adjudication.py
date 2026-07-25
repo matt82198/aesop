@@ -39,9 +39,44 @@ from context_pack import build_context_pack, ContextPack  # noqa: E402
 from orchestrator_driver import OrchestratorDriver  # noqa: E402
 from orchestrator_backend import (  # noqa: E402
     FakeOrchestratorBackend,
+    HarnessOrchestratorBackend,
     OpenAICompatibleOrchestratorBackend,
 )
 from openai_transport import default_openai_transport  # noqa: E402
+
+# Fallback challenger model when neither --model nor seats.orchestrator names
+# one (frontier-first, matching the legacy CLI default).
+DEFAULT_CHALLENGER_MODEL = "gpt-5.6-sol"
+
+
+def build_live_backend(cli_model=None, config_path=None):
+    """Build the live orchestrator backend from the seats config (HS-1).
+
+    Resolution:
+      - seats.orchestrator (openai-compatible) in aesop.config.json supplies
+        model/base_url/api_key_env/is_local for the seat.
+      - CLI --model, when given, OVERRIDES the seat's model (seat knobs stay).
+      - No configured seat (or harness/claude seat) -> legacy hosted-OpenAI
+        default with cli_model or DEFAULT_CHALLENGER_MODEL (behavior
+        unchanged for installs without a seats block).
+
+    Offline-safe: no API key is read here.
+    """
+    from backend_config import (  # noqa: E402 (driver/ on sys.path above)
+        build_orchestrator_backend,
+        load_backend_config,
+    )
+
+    config = load_backend_config(config_path)
+    backend = build_orchestrator_backend(config)
+    if isinstance(backend, HarnessOrchestratorBackend):
+        return OpenAICompatibleOrchestratorBackend(
+            model=cli_model or DEFAULT_CHALLENGER_MODEL,
+            transport=default_openai_transport,
+        )
+    if cli_model:
+        backend.model = cli_model
+    return backend
 
 
 # ============================================================================
@@ -664,8 +699,16 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="gpt-5.6-sol",
-        help="Challenger model id (default: gpt-5.6-sol, frontier-first)",
+        default=None,
+        help=(
+            "Challenger model id; OVERRIDES the configured seats.orchestrator "
+            "model (default: seat model, else gpt-5.6-sol, frontier-first)"
+        ),
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to aesop.config.json for seats.orchestrator (default: ./aesop.config.json)",
     )
     parser.add_argument(
         "--offline",
@@ -675,7 +718,10 @@ def main():
     parser.add_argument(
         "--live",
         action="store_true",
-        help="Run live with real OpenAI API (requires OPENAI_API_KEY env var)",
+        help=(
+            "Run live against the configured seat's endpoint (API key read "
+            "from the seat's api_key_env; is_local loopback seats need no key)"
+        ),
     )
     parser.add_argument(
         "--repeat",
@@ -736,6 +782,8 @@ def main():
     # Setup backend.
     if args.offline:
         print("Running in OFFLINE mode (FakeOrchestratorBackend)")
+        if args.model is None:
+            args.model = DEFAULT_CHALLENGER_MODEL
         # Fake backend with canned responses (verdict/evidence as strings for validation).
         canned = []
         for i in range(len(corpus) * args.repeat):
@@ -750,15 +798,23 @@ def main():
         backend = FakeOrchestratorBackend(canned_responses=canned)
     elif args.live:
         print("Running in LIVE mode (OpenAI API)")
-        if not os.environ.get("OPENAI_API_KEY"):
+        # HS-1: orchestrator seat from config; CLI --model overrides.
+        try:
+            backend = build_live_backend(
+                cli_model=args.model, config_path=args.config
+            )
+        except (TypeError, ValueError) as e:
+            print(f"Error: invalid aesop.config.json: {e}", file=sys.stderr)
+            sys.exit(1)
+        args.model = backend.model
+        # Check for the seat's API key at runtime (local seats need none).
+        key_env = getattr(backend, "api_key_env", "OPENAI_API_KEY")
+        if not getattr(backend, "is_local", False) and not os.environ.get(key_env):
             print(
-                "Error: OPENAI_API_KEY environment variable not set",
+                f"Error: {key_env} environment variable not set",
                 file=sys.stderr,
             )
             sys.exit(1)
-        backend = OpenAICompatibleOrchestratorBackend(
-            model=args.model, transport=default_openai_transport
-        )
     else:
         print("Error: specify --offline or --live", file=sys.stderr)
         sys.exit(1)

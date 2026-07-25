@@ -200,9 +200,81 @@ export DEBUG=1
 
 By default, Aesop uses Claude Code (the orchestration harness) as its backend. You can configure it to use other models via the **AgentDriver abstraction**—enabling Ollama, OpenAI-compatible endpoints, OpenRouter, and more.
 
-### Configure a backend in aesop.config.json
+### The unified two-seat config (0.4.0)
 
-Add or modify the `backend` section:
+One namespaced `seats` block in `aesop.config.json` selects BOTH seats:
+
+- **`seats.worker`** — the coding agents (AgentDriver). Same fields as the
+  legacy flat block below; takes precedence over it when both are present.
+- **`seats.orchestrator`** — the decision seat (`OrchestratorDriver.decide()`).
+  `"harness"` (default) means the live Claude Code session itself makes
+  decisions; `"openai-compatible"` routes decisions to an API model.
+
+**Swap a seat's model** — change just its block:
+
+```json
+{
+  "seats": {
+    "worker": {
+      "backend": "openai-compatible",
+      "base_url": "http://localhost:11434/v1",
+      "model": "mistral",
+      "is_local": true
+    },
+    "orchestrator": {
+      "backend": "openai-compatible",
+      "model": "gpt-4o-mini",
+      "api_key_env": "OPENAI_API_KEY"
+    }
+  }
+}
+```
+
+That is a local-Ollama worker fleet with a hosted `gpt-4o-mini` decision seat.
+To swap the worker to OpenRouter, replace `seats.worker` with
+`{"backend": "openai-compatible", "base_url": "https://openrouter.ai/api/v1",
+"model": "openai/gpt-4-turbo", "api_key_env": "OPENROUTER_API_KEY"}` — nothing
+else changes. API keys are read from the env var named by `api_key_env` at
+call time and are never stored in the config; `"is_local": true` endpoints
+need no key at all — and for exactly that reason `is_local` is only accepted
+with a loopback `base_url` (`localhost`, `127.0.0.1`, `::1`).
+
+`api_key_env` is checked with a **best-effort heuristic**, allowlist-primary:
+known LLM-provider key names (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+`OPENROUTER_API_KEY`, `TOGETHER_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`,
+`DEEPSEEK_API_KEY`, `FIREWORKS_API_KEY`, `OLLAMA_API_KEY`,
+`AZURE_OPENAI_API_KEY`, `GOOGLE_API_KEY`) are accepted silently; names that
+don't look like key env vars or contain obvious non-LLM secret fragments
+(`SECRET`/`TOKEN`/`PASSWORD`/`ACCESS`/...) are rejected; any other
+key-shaped name (custom LLM gateways) is **allowed but prints a loud
+NOTICE** — the env var's value will be sent as a Bearer token to your
+`base_url`, so that NOTICE is the real signal: review it whenever a
+non-provider name shows up at load time.
+
+Asymmetry worth knowing: a **worker** `openai-compatible` seat REQUIRES
+`base_url`; the **orchestrator** seat may omit it (defaults to the hosted
+OpenAI endpoint).
+
+**No `seats` block? Nothing changes.** Existing installs keep today's exact
+behavior: Claude Code workers + harness orchestrator, no OpenAI backend
+constructed, no key required. A pre-0.4.0 **legacy flat** backend block
+(`{"backend": "codex", ...}` at the top level) also changes nothing by
+itself: it still parses and validates, but it stays **inert** in the wave
+scheduler's default path until you migrate it to `seats.worker` — on older
+installs that block was documented but consumed by nothing, so activating it
+silently would change behavior under you. (`cardinal_rules.orchestrator_model`
+from older scaffolds was write-only and is retired; the orchestrator seat's
+model now lives in `seats.orchestrator.model`.)
+
+Consumers: `driver/wave_scheduler.py` builds its worker driver from this
+config (CLI `--driver claude|codex` remains an override), and
+`tools/shadow_adjudication.py` / `tools/seated_shadow_adjudication.py` build
+their live orchestrator backend from `seats.orchestrator` (CLI `--model`
+remains an override).
+
+### The legacy flat block (parse-compatible, but migrate it)
+
+Pre-0.4.0 docs described a flat top-level block:
 
 ```json
 {
@@ -213,6 +285,12 @@ Add or modify the `backend` section:
   "is_local": true
 }
 ```
+
+It still parses and validates (and direct `build_driver()` callers honor
+it), but the wave scheduler's default path treats it as **inert** and keeps
+the Claude Code worker: to actually activate a configured worker there, put
+the same fields under `seats.worker` (`{"seats": {"worker": { ...this
+block... }}}`).
 
 Set `"is_local": true` for local/small models (Ollama etc.) — it raises the
 verification tier honestly (tier 3 instead of hosted tier 2).
@@ -233,14 +311,18 @@ ollama serve
 # 2. In another terminal, pull a model
 ollama pull mistral
 
-# 3. Configure Aesop to use it
+# 3. Configure Aesop to use it (seats.worker is the opt-in surface)
 cat > aesop.config.json <<EOF
 {
-  "backend": "openai-compatible",
-  "model": "mistral",
-  "base_url": "http://localhost:11434/v1",
-  "api_key_env": "OLLAMA_API_KEY",
-  "is_local": true
+  "seats": {
+    "worker": {
+      "backend": "openai-compatible",
+      "model": "mistral",
+      "base_url": "http://localhost:11434/v1",
+      "api_key_env": "OLLAMA_API_KEY",
+      "is_local": true
+    }
+  }
 }
 EOF
 

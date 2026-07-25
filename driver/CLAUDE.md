@@ -10,15 +10,13 @@
   dataclasses. The contract. stdlib-only, no provider SDKs.
 - **claude_code_driver.py** — reference adapter (Claude Code parity). Thin +
   documented: two ops are concrete Python, three are serviced by the harness.
-- **codex_driver.py** — Phase 2 IMPLEMENTATION: OpenAI Chat Completions HTTP
-  backend. Fully wired: dispatch_worker (file injection, JSON validation with
-  retry, full-file replacement), run_command (subprocess), worker_status
-  (in-memory registry), get_tokens_spent (aggregate usage). Transport injectable
-  for offline testing.
-- **openai_transport.py** — stdlib urllib transport for OpenAI Chat Completions
-  endpoint. Injectable seam so tests feed canned responses (FakeTransport) with
-  no API key or network.
-- **openai_compatible_driver.py** — OpenAI-compatible backend (Ollama, OpenRouter, etc.).
+- **codex_driver.py** — Phase 2: OpenAI Chat Completions HTTP backend. Fully wired:
+  dispatch_worker (file injection, JSON validation with retry, full-file replacement),
+  run_command (subprocess), worker_status, get_tokens_spent. Transport injectable.
+- **openai_transport.py** — stdlib urllib transport for the OpenAI endpoint; injectable
+  seam so tests feed canned responses (FakeTransport) with no API key or network.
+- **openai_compatible_driver.py** — OpenAI-compatible backend (Ollama, OpenRouter, etc.);
+  construct-time validate_base_url; key waiver only via loopback-validated is_local.
 - **verification_policy.py** — Maps verification tier -> orchestrator tuning (validate_all_json,
   spot_check_frac, repair_cap, require_adversarial_review).
 - **wave_loop.py** — the wave ENGINE: preflight ownership guard, parallel build,
@@ -26,16 +24,26 @@
 - **wave_bridge.py** — Phase 3: bridges AgentDriver backends to wave manifest items.
   build_manifest_item() enriches with verificationTier + model; dispatch_item() routes
   by capability and decides green ONLY from test exit code (not model's say-so).
-- **backend_config.py** — Per-deployment model resolution (role → model id, API key/base URL).
+- **backend_config.py** — HS-1 unified two-seat config: `seats.worker` + `seats.orchestrator`
+  in aesop.config.json select BOTH seats from ONE block (legacy flat block parses but is INERT
+  in the scheduler default — seats is the opt-in surface; seats.worker wins when both present).
+  `build_driver()` = worker seat (raw-dict paths — seats promotion AND legacy flat — run the
+  loader's validation); `build_orchestrator_backend()` = decision seat (absent/harness/claude →
+  null `HarnessOrchestratorBackend`; openai-compatible → configured backend). Guards: base_url
+  SSRF check incl. time-bounded DNS resolution (TTL-0 rebinding residual documented); `is_local`
+  pinned to loopback (the transport key waiver keys off VALIDATED is_local, never URL text);
+  `api_key_env` allowlist-primary (known provider names silent, SECRET/TOKEN/... fragments
+  hard-reject, other key-shaped names allowed with loud NOTICE — best-effort heuristic).
+  NO seats block = byte-identical to today (no key needed).
 - **context_pack.py** — OrchestratorDriver increment 1: build_context_pack() reads
   ONLY allowlisted control files (STATE.md, BUILDLOG.md, tracker.json, MEMORY.md, explicit
   brief: paths under repo/conductor roots). Enforces cardinal rule 4 ("orchestrator reads
   only the file brain") in code. Size-bounded with deterministic truncation (oldest-first
   for logs) and manifest tracking.
-- **orchestrator_backend.py** — OrchestratorBackend: abstract protocol for orchestrator
-  backends (increment 1.5). decide_call(prompt, schema) → raw text. Real impl:
-  OpenAICompatibleOrchestratorBackend (gpt-5 temperature fallback). Fake for tests.
-  Fixes dropped-prompt defect (prompt now passed end-to-end, not via side-channel).
+- **orchestrator_backend.py** — OrchestratorBackend protocol: decide_call(prompt, schema) → raw
+  text. Real impl: OpenAICompatibleOrchestratorBackend (gpt-5 temperature fallback; seat knobs
+  api_key_env + is_local dummy-key; validate_base_url in __init__). HarnessOrchestratorBackend =
+  null default seat (decide_call raises: the live harness IS the orchestrator). Fake for tests.
 - **orchestrator_driver.py** — OrchestratorDriver: uses OrchestratorBackend.decide_call()
   to make structured verdicts via OrchestratorBackend protocol (no AgentDriver coupling).
 - **adjudication_gate.py** — increment 3 (conservative): two-tier escalation gate — cheaper
@@ -118,7 +126,7 @@ to green via real test exit 0 (no API key, no network).
 
 **wave_scheduler.py** — single-cycle backlog orchestration: intake up to N file-disjoint todo items from tracker.json (empty/missing ownsFiles REJECTED; paths normalized posix+casefold-on-Windows before overlap checks; required fields pre-validated) -> manifest via build_manifest_item (model + verificationTier from driver.probe) -> HALT + cost-ceiling gates (fail-CLOSED: module import failure or check exception = abort with honest Report, phase=gate_unavailable) -> run_wave (recovery journal + git ship) -> STOP before merge; Report JSON with per-item observability (GATE-1). After ship, selected items atomically marked in_progress in tracker (temp+os.replace; dry-run never mutates) so a second run cannot double-dispatch.
 
-**CLI** (GATE-1): `python driver/wave_scheduler.py --tracker <path> --max-items N --dry-run|--execute --driver claude|codex` (default: claude). For codex+execute, requires OPENAI_API_KEY env var; dry-run works without it.
+**CLI** (HS-1): `python driver/wave_scheduler.py --tracker <path> --max-items N --dry-run|--execute [--driver claude|codex] [--config <path>]`. Default: worker seat from aesop.config.json seats.worker ONLY (no seats block → claude; a bare legacy flat block stays inert — migrate to seats.worker) — the seats path also reaches openai-compatible; `--driver` OVERRIDES the config. Hosted seat + --execute requires the seat's api_key_env (is_local: none); dry-run never needs a key.
 
 **Tests** (35+): disjoint/normalization/rejection, gate fail-closed, dry-run, GATE-1 per-item/driver/ceiling/codex tests; module-tmpdir hygiene; all TestCase.
 
@@ -137,8 +145,6 @@ shape lives in wave_scheduler.py's module docstring.
 
 ## Status
 
-- **Phase 1**: shipped. Interface + Claude reference adapter + contract tests.
-- **Phase 2**: shipped. Codex OpenAI Chat Completions implementation. Offline tests GREEN.
-- **Phase 3**: shipped. Wave bridge: driver → manifest, orchestrator-side dispatch.
-  Proves non-Claude backends drive items end-to-end with honest green (test exit 0 only).
-- **Wave Scheduler (WS3a) + GATE-1**: shipped. Single-cycle orchestration: intake → manifest → dispatch → report (manual merge). Per-item observability, driver injection (--driver claude|codex), ceiling semantics documented.
+Phases 1-3 + Wave Scheduler (WS3a/GATE-1) shipped: interface + contract tests, Codex
+implementation (offline tests green), wave bridge (honest green = test exit 0 only), and
+single-cycle scheduler with per-item observability + driver injection (manual merge).

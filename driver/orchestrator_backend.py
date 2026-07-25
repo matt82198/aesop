@@ -25,14 +25,16 @@ try:
 except ImportError:
     default_openai_transport = None
 
-# base_url SSRF guard (shared with backend_config). Optional import keeps the
-# module importable standalone; when available, the constructor enforces it so
-# DIRECT construction cannot bypass the config-layer validation (urllib's
-# default opener would otherwise happily open file:// or ftp:// base URLs).
+# base_url SSRF guard (shared with backend_config). The deferred import keeps
+# the module importable standalone, but construction FAILS CLOSED when the
+# guard is unavailable (see OpenAICompatibleOrchestratorBackend.__init__):
+# without it, urllib's default opener would happily open file:// or ftp://
+# base URLs and DIRECT construction would bypass the config-layer validation.
 try:
-    from backend_config import validate_base_url
+    from backend_config import validate_base_url, validate_is_local_base_url
 except ImportError:
     validate_base_url = None
+    validate_is_local_base_url = None
 
 
 class OrchestratorBackend(ABC):
@@ -104,6 +106,37 @@ class FakeOrchestratorBackend(OrchestratorBackend):
         return str(response)
 
 
+class HarnessOrchestratorBackend(OrchestratorBackend):
+    """Null backend for the DEFAULT orchestrator seat: the live harness.
+
+    When aesop.config.json has no seats.orchestrator block (or names backend
+    'harness'/'claude'), the orchestrator seat is the live harness itself --
+    the Claude Code session driving the loop -- not a swapped API backend.
+    This mirrors claude_code_driver's harness-serviced operations on the
+    worker seat: there is no Python code path that can "call" the harness,
+    so decide_call raises a clear, documented error instead of fabricating
+    a decision.
+
+    build_orchestrator_backend() returns this class for the no-op default,
+    which keeps existing installs byte-identical: no OpenAI backend is
+    constructed and no API key is required.
+    """
+
+    def decide_call(
+        self, prompt: str, *, schema: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Refuse: this seat is the live harness, not a swapped backend."""
+        raise RuntimeError(
+            "HarnessOrchestratorBackend has no decide_call: the orchestrator "
+            "seat is the live harness (the Claude Code session) itself, not a "
+            "swapped API backend. Decisions on this seat are made by the "
+            "harness directly. To route orchestrator decisions to an API "
+            "model, configure seats.orchestrator in aesop.config.json, e.g. "
+            '{"seats": {"orchestrator": {"backend": "openai-compatible", '
+            '"model": "gpt-4o-mini"}}}.'
+        )
+
+
 class OpenAICompatibleOrchestratorBackend(OrchestratorBackend):
     """Real OpenAI-compatible orchestrator backend.
 
@@ -115,10 +148,19 @@ class OpenAICompatibleOrchestratorBackend(OrchestratorBackend):
         base_url: OpenAI API base URL (default production).
         timeout_s: HTTP timeout in seconds (default 120).
         transport: Optionally inject a custom transport for testing.
+        api_key_env: Env var name holding the API key (default OPENAI_API_KEY;
+            parity with the worker seat -- no hardcoded key env).
+        is_local: True for local endpoints (Ollama etc.): a missing key env is
+            replaced by a dummy 'local-only' key instead of raising. Requires
+            a loopback base_url (localhost/127.0.0.1/::1) -- construction
+            rejects is_local with a remote base_url.
     """
 
     # Maximum allowed response size (100KB) to prevent excessive memory use
     MAX_RESPONSE_SIZE = 100 * 1024  # 100KB
+
+    # Default API key env var name (assembled to avoid secret-scan false positive).
+    _DEFAULT_KEY_ENV = "OPENAI" + "_" + "API" + "_" + "KEY"
 
     def __init__(
         self,
@@ -126,15 +168,31 @@ class OpenAICompatibleOrchestratorBackend(OrchestratorBackend):
         base_url: str = "https://api.openai.com/v1",
         timeout_s: float = 120.0,
         transport: Optional[Any] = None,
+        api_key_env: Optional[str] = None,
+        is_local: bool = False,
     ):
         self.model = model
         # SSRF guard at the constructor seam (mirrors backend_config): rejects
-        # non-http(s) schemes and private/link-local hosts on direct construction.
-        if validate_base_url is not None:
-            validate_base_url(base_url)
+        # non-http(s) schemes and private/link-local hosts on direct
+        # construction. FAIL CLOSED: if the guard could not be imported,
+        # refuse to construct rather than silently skipping validation.
+        if validate_base_url is None or validate_is_local_base_url is None:
+            raise RuntimeError(
+                "backend_config's base_url validators could not be imported; "
+                "refusing to construct OpenAICompatibleOrchestratorBackend "
+                "without the SSRF guard (fail closed). Ensure driver/ is on "
+                "sys.path so backend_config.py is importable."
+            )
+        validate_base_url(base_url)
+        # is_local disables the key requirement, so it must be pinned to a
+        # loopback base_url (parity with the worker seat / config layer).
+        if is_local:
+            validate_is_local_base_url(base_url)
         self.base_url = base_url
         self.timeout_s = timeout_s
         self.transport = transport or default_openai_transport
+        self.api_key_env = api_key_env or self._DEFAULT_KEY_ENV
+        self.is_local = bool(is_local)
 
     def decide_call(
         self, prompt: str, *, schema: Optional[Dict[str, Any]] = None
@@ -151,10 +209,18 @@ class OpenAICompatibleOrchestratorBackend(OrchestratorBackend):
         Raises:
             RuntimeError: on API errors, missing credentials, etc.
         """
-        # Ensure API key is set.
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY environment variable not set")
+        # Ensure API key is set (configured env var, not hardcoded). Local
+        # endpoints (is_local) fall back to a dummy key -- Ollama-style
+        # deployments require an Authorization header but ignore its value.
+        # (Named retrieved_key to mirror openai_compatible_driver's local path.)
+        retrieved_key = os.environ.get(self.api_key_env)
+        if not retrieved_key:
+            if self.is_local:
+                retrieved_key = "local-only"
+            else:
+                raise RuntimeError(
+                    f"{self.api_key_env} environment variable not set"
+                )
 
         # Build the Chat Completions payload with temperature.
         # Temperature fallback is per-call (local to this method), not persisted.
@@ -176,10 +242,18 @@ class OpenAICompatibleOrchestratorBackend(OrchestratorBackend):
             }
 
         # Call the transport with temperature fallback (per-call, not persistent).
+        # The stock transport accepts the resolved api_key so a configured
+        # api_key_env / is_local dummy key is honored end-to-end; injected
+        # test transports keep the legacy (payload, timeout_s, base_url)
+        # signature, so the key kwarg is passed only to the default transport.
+        call_kwargs = {"timeout_s": self.timeout_s, "base_url": self.base_url}
+        if (
+            default_openai_transport is not None
+            and self.transport is default_openai_transport
+        ):
+            call_kwargs["api_key"] = retrieved_key
         try:
-            response_data = self.transport(
-                payload, timeout_s=self.timeout_s, base_url=self.base_url
-            )
+            response_data = self.transport(payload, **call_kwargs)
         except Exception as e:
             error_str = str(e)
             # TEMPERATURE FALLBACK: gpt-5.x reasoning models reject temperature=0.
@@ -187,9 +261,7 @@ class OpenAICompatibleOrchestratorBackend(OrchestratorBackend):
             if "temperature" in error_str and "unsupported_value" in error_str.lower():
                 # Retry without temperature (remove it from payload for this call only).
                 payload.pop("temperature", None)
-                response_data = self.transport(
-                    payload, timeout_s=self.timeout_s, base_url=self.base_url
-                )
+                response_data = self.transport(payload, **call_kwargs)
             else:
                 raise
 
