@@ -1954,6 +1954,218 @@ class TestNullEnumAndEnumSanitization(unittest.TestCase):
         self.assertNotIn("\n[System]:", prompt)
         self.assertNotIn("[System]:", prompt)
 
+# ============================================================================
+# RS-C Round-2 Findings: schema-type guard (P3) + non-finite confidence (LOW)
+# ============================================================================
+
+
+class TestSchemaTypeGuardWrongTypeSchema(unittest.TestCase):
+    """RS-C P3: valid-JSON-wrong-type schemas crash decide().
+
+    A schema file containing valid JSON but the WRONG TYPE (e.g. a JSON list
+    [1,2,3], or a dict with "properties" as a list instead of dict) loads
+    without parse error but crashes later at schema.get(...) calls.
+
+    FIX: After json.load(), verify the loaded object is a dict and optionally
+    that "properties" (if present) is also a dict. If type-check fails, raise
+    SchemaLoadError (fail-closed) and do NOT cache the bad schema. decide()
+    returns DECISION_FAILED, never raises.
+    """
+
+    def setUp(self):
+        self.temp_schema_dir = tempfile.TemporaryDirectory()
+        self.schema_dir = self.temp_schema_dir.name
+        self.decisions_dir = Path(self.schema_dir) / "decisions"
+        self.decisions_dir.mkdir(parents=True)
+
+    def tearDown(self):
+        self.temp_schema_dir.cleanup()
+
+    def _pack(self, decision_type):
+        return ContextPack(decision_type=decision_type, content={"state": "# STATE"})
+
+    def test_schema_file_with_json_list_fails_closed(self):
+        """RS-C P3: a schema file containing a JSON list [1,2,3] should fail-closed."""
+        schema_file = self.decisions_dir / "bad_schema.schema.json"
+        schema_file.write_text("[1, 2, 3]", encoding="utf-8")
+
+        backend = FakeOrchestratorBackend(
+            canned_responses=[{"verdict": "ok", "evidence": ["e"]}]
+        )
+        driver = OrchestratorDriver(backend, schema_dir=self.schema_dir, max_retries=0)
+
+        # decide() should return DECISION_FAILED (never raise).
+        result = driver.decide("bad_schema", self._pack("bad_schema"))
+        self.assertEqual(result["verdict"], "DECISION_FAILED")
+        self.assertFalse(result["schema_validated"])
+        self.assertIsInstance(result["evidence"], list)
+        # The backend should NOT be called (fail-closed before dispatch).
+        self.assertEqual(backend.call_count, 0)
+
+    def test_schema_file_with_wrong_type_not_cached(self):
+        """RS-C P3: bad schema type is NOT cached; fixing the file restores validity."""
+        schema_file = self.decisions_dir / "fixable_schema.schema.json"
+        # Start with invalid type (list).
+        schema_file.write_text("[1, 2, 3]", encoding="utf-8")
+
+        backend = FakeOrchestratorBackend(
+            canned_responses=[{"verdict": "ok", "evidence": ["e"]}]
+        )
+        driver = OrchestratorDriver(backend, schema_dir=self.schema_dir, max_retries=0)
+
+        # First call: bad type -> DECISION_FAILED.
+        result1 = driver.decide("fixable_schema", self._pack("fixable_schema"))
+        self.assertEqual(result1["verdict"], "DECISION_FAILED")
+
+        # Fix the file (write valid dict schema).
+        valid_schema = {
+            "required": ["verdict", "evidence"],
+            "properties": {"verdict": {"enum": ["ok"]}},
+        }
+        schema_file.write_text(json.dumps(valid_schema), encoding="utf-8")
+
+        # Second call: bad type is NOT cached, so the load is retried -> valid verdict.
+        result2 = driver.decide("fixable_schema", self._pack("fixable_schema"))
+        self.assertEqual(result2["verdict"], "ok")
+        self.assertTrue(result2["schema_validated"])
+
+    def test_schema_file_with_properties_as_list_fails_closed(self):
+        """RS-C P3: a schema dict with "properties" as a list should fail-closed."""
+        schema_file = self.decisions_dir / "bad_properties.schema.json"
+        bad_schema = {
+            "required": ["verdict", "evidence"],
+            "properties": [1, 2, 3],  # WRONG: should be dict, not list
+        }
+        schema_file.write_text(json.dumps(bad_schema), encoding="utf-8")
+
+        backend = FakeOrchestratorBackend(
+            canned_responses=[{"verdict": "ok", "evidence": ["e"]}]
+        )
+        driver = OrchestratorDriver(backend, schema_dir=self.schema_dir, max_retries=0)
+
+        result = driver.decide("bad_properties", self._pack("bad_properties"))
+        self.assertEqual(result["verdict"], "DECISION_FAILED")
+        self.assertFalse(result["schema_validated"])
+        self.assertEqual(backend.call_count, 0)
+
+    def test_schema_validation_calls_backend_only_for_valid_schema_type(self):
+        """Regression: valid schema type (dict) is loaded and cached normally."""
+        schema_file = self.decisions_dir / "valid_schema.schema.json"
+        valid_schema = {
+            "required": ["verdict", "evidence"],
+            "properties": {"verdict": {"enum": ["ok", "reject"]}},
+        }
+        schema_file.write_text(json.dumps(valid_schema), encoding="utf-8")
+
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                {"verdict": "ok", "evidence": ["e"]},
+                {"verdict": "ok", "evidence": ["e"]},
+            ]
+        )
+        driver = OrchestratorDriver(backend, schema_dir=self.schema_dir, max_retries=0)
+
+        result1 = driver.decide("valid_schema", self._pack("valid_schema"))
+        self.assertEqual(result1["verdict"], "ok")
+        self.assertTrue(result1["schema_validated"])
+
+        # Second call uses cached schema (no error).
+        result2 = driver.decide("valid_schema", self._pack("valid_schema"))
+        self.assertEqual(result2["verdict"], "ok")
+
+        # Backend called twice (once per decide call).
+        self.assertEqual(backend.call_count, 2)
+
+
+class TestNonFiniteConfidenceRejection(unittest.TestCase):
+    """RS-C LOW: confidence: Infinity passes schema-less validation.
+
+    json.loads accepts Infinity (non-strict JSON extension). The type check
+    accepts it (it's a float). But Infinity/-Infinity/NaN should all be rejected
+    as invalid confidence values (not in the valid 0.0-1.0 range).
+
+    FIX: Reject non-finite floats (Infinity/-Infinity/NaN) using math.isfinite().
+    """
+
+    def setUp(self):
+        self.temp_schema_dir = tempfile.TemporaryDirectory()
+        self.schema_dir = self.temp_schema_dir.name
+        self.decisions_dir = Path(self.schema_dir) / "decisions"
+        self.decisions_dir.mkdir(parents=True)
+
+        # Schema with confidence bounds.
+        schema = {
+            "required": ["verdict", "evidence"],
+            "properties": {
+                "verdict": {"enum": ["approve", "reject"]},
+                "evidence": {"type": "array", "minItems": 1},
+                "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+            },
+        }
+        (self.decisions_dir / "test_conf.schema.json").write_text(
+            json.dumps(schema), encoding="utf-8"
+        )
+
+    def tearDown(self):
+        self.temp_schema_dir.cleanup()
+
+    def _pack(self):
+        return ContextPack(decision_type="test_conf", content={"state": "# S"})
+
+    def _decide_with_confidence(self, confidence_value):
+        """Helper to decide with a given confidence value."""
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                {"verdict": "approve", "evidence": ["e"], "confidence": confidence_value}
+            ]
+        )
+        driver = OrchestratorDriver(backend, schema_dir=self.schema_dir, max_retries=0)
+        return driver.decide("test_conf", self._pack())
+
+    def test_infinity_confidence_rejected(self):
+        """RS-C LOW: confidence=Infinity should be rejected."""
+        result = self._decide_with_confidence(float("inf"))
+        self.assertEqual(result["verdict"], "DECISION_FAILED")
+
+    def test_negative_infinity_confidence_rejected(self):
+        """RS-C LOW: confidence=-Infinity should be rejected."""
+        result = self._decide_with_confidence(float("-inf"))
+        self.assertEqual(result["verdict"], "DECISION_FAILED")
+
+    def test_nan_confidence_still_rejected(self):
+        """Regression: NaN confidence (already handled) still fails."""
+        result = self._decide_with_confidence(float("nan"))
+        self.assertEqual(result["verdict"], "DECISION_FAILED")
+
+    def test_valid_confidence_0_0_accepted(self):
+        """Regression: 0.0 is valid."""
+        result = self._decide_with_confidence(0.0)
+        self.assertEqual(result["verdict"], "approve")
+        self.assertEqual(result["confidence"], 0.0)
+
+    def test_valid_confidence_1_0_accepted(self):
+        """Regression: 1.0 is valid."""
+        result = self._decide_with_confidence(1.0)
+        self.assertEqual(result["verdict"], "approve")
+        self.assertEqual(result["confidence"], 1.0)
+
+    def test_valid_confidence_mid_range_accepted(self):
+        """Regression: mid-range confidence is valid."""
+        result = self._decide_with_confidence(0.5)
+        self.assertEqual(result["verdict"], "approve")
+        self.assertEqual(result["confidence"], 0.5)
+
+    def test_infinity_confidence_rejected_without_schema(self):
+        """Type enforcement holds on minimal-validation path too."""
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                {"verdict": "approve", "evidence": ["e"], "confidence": float("inf")}
+            ]
+        )
+        driver = OrchestratorDriver(backend, max_retries=0)
+        result = driver.decide("test_conf", self._pack())
+        self.assertEqual(result["verdict"], "DECISION_FAILED")
+
 
 if __name__ == "__main__":
     unittest.main()
