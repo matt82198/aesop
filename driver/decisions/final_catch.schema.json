@@ -3,7 +3,7 @@
   "title": "Final Catch Decision",
   "description": "Orchestrator S2 decision: pre-merge safeguard. Before shipping (merging to main), perform a last sanity check: does the item pass all gates (tests, secret-scan, branch protection)? Are there any last-minute red flags? Should this item be held or escalated?",
   "type": "object",
-  "required": ["verdict", "evidence"],
+  "required": ["verdict", "evidence", "confidence"],
   "properties": {
     "decision_type": {
       "type": "string",

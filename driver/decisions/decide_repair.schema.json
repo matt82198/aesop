@@ -3,7 +3,7 @@
   "title": "Decide Repair Decision",
   "description": "Orchestrator S2 decision: a wave item failed its test; analyze the failure and test output, then decide: is it worth a repair attempt? What strategy should the repair round use? Should we escalate or mark it for manual review instead?",
   "type": "object",
-  "required": ["verdict", "evidence"],
+  "required": ["verdict", "evidence", "confidence"],
   "properties": {
     "decision_type": {
       "type": "string",

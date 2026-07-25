@@ -3,7 +3,7 @@
   "title": "Adjudicate Finding Decision",
   "description": "Orchestrator S2 decision: given an audit finding (potential defect, false positive, enhancement opportunity), render a verdict: is it real? actionable? severity? backlog priority? Produces classification and a recommendation for wave inclusion.",
   "type": "object",
-  "required": ["verdict", "evidence"],
+  "required": ["verdict", "evidence", "confidence"],
   "properties": {
     "decision_type": {
       "type": "string",
