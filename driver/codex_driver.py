@@ -675,6 +675,9 @@ class CodexDriver(AgentDriver):
 
         Real subprocess execution (not a worker tool). Used for tests, git,
         verification. Mirrors ClaudeCodeDriver.run_command for parity.
+
+        Timeouts are enforced: if the command exceeds timeout_s, the process is
+        terminated and a non-zero exit code is returned.
         """
         try:
             completed = subprocess.run(
@@ -683,12 +686,18 @@ class CodexDriver(AgentDriver):
                 shell=True,
                 capture_output=True,
                 text=True,
+                timeout=self._timeout_s,
             )
             return CommandResult(
                 exit_code=completed.returncode,
                 stdout=completed.stdout or "",
                 stderr=completed.stderr or "",
             )
+        except subprocess.TimeoutExpired:
+            # Return a clear timeout status: non-zero exit code.
+            # Note: On Windows, the process may not be fully killed due to shell process
+            # tree limitations, but we return immediately with timeout status.
+            return CommandResult(exit_code=124, stdout="", stderr="Command timed out")
         except OSError as exc:
             return CommandResult(exit_code=127, stdout="", stderr=str(exc))
 
