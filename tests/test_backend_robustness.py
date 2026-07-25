@@ -210,6 +210,90 @@ class TestBaseURLValidation(unittest.TestCase):
                 load_backend_config(str(config_path))
             self.assertIn("private", str(ctx.exception).lower())
 
+    def test_ipv6_loopback_bracket_form_allowed(self):
+        """IPv6 loopback [::1] is allowed (local Ollama parity with 127.0.0.1)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "aesop.config.json"
+            config_path.write_text(
+                json.dumps({
+                    "backend": "openai-compatible",
+                    "base_url": "http://[::1]:11434/v1",
+                    "model": "test-model",
+                }),
+                encoding="utf-8",
+            )
+            config = load_backend_config(str(config_path))
+            self.assertEqual(config["base_url"], "http://[::1]:11434/v1")
+
+    def test_ipv6_mapped_metadata_rejected(self):
+        """IPv4-mapped IPv6 (::ffff:169.254.169.254) cannot bypass IPv4 checks.
+
+        Round-2 adversarial finding: the original guard checked only IPv4
+        networks, so the mapped form of the cloud metadata endpoint slipped
+        through.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "aesop.config.json"
+            config_path.write_text(
+                json.dumps({
+                    "backend": "openai-compatible",
+                    "base_url": "http://[::ffff:169.254.169.254]/metadata",
+                    "model": "test-model",
+                }),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError) as ctx:
+                load_backend_config(str(config_path))
+            self.assertIn("private", str(ctx.exception).lower())
+
+    def test_ipv6_link_local_and_ula_rejected(self):
+        """IPv6 link-local (fe80::/10) and ULA (fc00::/7) literals are rejected."""
+        for host in ("[fe80::1]", "[fc00::1]", "[fd12:3456::1]"):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                config_path = Path(tmpdir) / "aesop.config.json"
+                config_path.write_text(
+                    json.dumps({
+                        "backend": "openai-compatible",
+                        "base_url": f"http://{host}/v1",
+                        "model": "test-model",
+                    }),
+                    encoding="utf-8",
+                )
+                with self.assertRaises(ValueError, msg=host) as ctx:
+                    load_backend_config(str(config_path))
+                self.assertIn("private", str(ctx.exception).lower())
+
+    def test_unspecified_addresses_rejected(self):
+        """0.0.0.0 and :: are rejected (unspecified addresses)."""
+        for host in ("0.0.0.0", "[::]"):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                config_path = Path(tmpdir) / "aesop.config.json"
+                config_path.write_text(
+                    json.dumps({
+                        "backend": "openai-compatible",
+                        "base_url": f"http://{host}:8080/v1",
+                        "model": "test-model",
+                    }),
+                    encoding="utf-8",
+                )
+                with self.assertRaises(ValueError, msg=host):
+                    load_backend_config(str(config_path))
+
+    def test_public_ipv6_literal_allowed(self):
+        """A public IPv6 literal (with port) is not wrongly rejected."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "aesop.config.json"
+            config_path.write_text(
+                json.dumps({
+                    "backend": "openai-compatible",
+                    "base_url": "https://[2001:4860:4860::8888]:8443/v1",
+                    "model": "test-model",
+                }),
+                encoding="utf-8",
+            )
+            config = load_backend_config(str(config_path))
+            self.assertEqual(config["backend"], "openai-compatible")
+
     def test_validation_catches_ssrf_at_load_time(self):
         """SSRF validation happens at load_backend_config time (earliest catch)."""
         with tempfile.TemporaryDirectory() as tmpdir:

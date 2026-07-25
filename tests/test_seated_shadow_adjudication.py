@@ -513,6 +513,27 @@ class TestPathRedaction(unittest.TestCase):
         self.assertNotIn("matt8", redacted)
         self.assertIn("<REPO>", redacted)
 
+    def test_redaction_multi_escaped_backslash_forms(self):
+        """Repr/JSON re-escaped paths (2x/4x/8x backslashes) are redacted.
+
+        Round-2 adversarial finding: reasoning strings embed repr-of-list text
+        whose paths carry doubled/quadrupled backslash separators; the previous
+        1-2 backslash pattern missed them, leaking machine paths into committed
+        bench/results files.
+        """
+        for depth in (1, 2, 4, 8):
+            sep = "\\" * depth
+            text = "path " + "C:" + sep + "Users" + sep + "matt8" + sep + "aesop" + sep + "state"
+            redacted = seated.redact_paths(text)
+            self.assertNotIn("matt8", redacted, f"escape depth {depth}")
+            self.assertIn("<REPO>", redacted, f"escape depth {depth}")
+
+    def test_redaction_forward_slash_windows_form(self):
+        """Windows paths written with forward slashes are redacted."""
+        text = "found C:/Users/matt8/aesop/tools/x.py and C:/Users/matt8/other"
+        redacted = seated.redact_paths(text)
+        self.assertNotIn("matt8", redacted)
+
 
 class TestModalVerdictExcludesDecisionFailed(unittest.TestCase):
     """Test that DECISION_FAILED is excluded from modal verdict computation."""

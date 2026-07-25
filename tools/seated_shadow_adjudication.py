@@ -61,11 +61,16 @@ def redact_paths(text: str) -> str:
     - Users\\matt8 → <HOME>
 
     Non-path occurrences of 'matt8' are preserved.
+
+    Separators match ANY run of backslashes or forward slashes so single-,
+    double-, and repr/JSON re-escaped forms (\\, \\\\, \\\\\\\\ ...) are all
+    caught. Reasoning strings often embed repr-of-list text whose paths carry
+    2x/4x-escaped separators; a 1-2 backslash pattern misses those.
     """
     # First redact repo-specific paths (longer pattern, must be first)
-    # Windows: C:\Users\matt8\aesop or C:\\Users\\matt8\\aesop
+    # Windows: C:\Users\matt8\aesop at any escape depth, or C:/Users/... form
     text = re.sub(
-        r"C:\\\\?Users\\\\?matt8\\\\?aesop",
+        r"C:[\\/]+Users[\\/]+matt8[\\/]+aesop",
         "<REPO>",
         text,
         flags=re.IGNORECASE,
@@ -79,9 +84,9 @@ def redact_paths(text: str) -> str:
     )
 
     # Then redact home paths (shorter pattern)
-    # Windows: C:\Users\matt8 or C:\\Users\\matt8
+    # Windows: C:\Users\matt8 at any escape depth, or C:/Users/matt8
     text = re.sub(
-        r"C:\\\\?Users\\\\?matt8",
+        r"C:[\\/]+Users[\\/]+matt8",
         "<HOME>",
         text,
         flags=re.IGNORECASE,
@@ -93,9 +98,9 @@ def redact_paths(text: str) -> str:
         text,
         flags=re.IGNORECASE,
     )
-    # Also handle Users\matt8 or Users\\matt8 or Users/matt8 variants
+    # Also handle Users\matt8 / Users\\matt8 / Users/matt8 at any escape depth
     text = re.sub(
-        r"Users[\\\/]matt8",
+        r"Users[\\/]+matt8",
         "<HOME>",
         text,
         flags=re.IGNORECASE,

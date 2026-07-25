@@ -813,6 +813,44 @@ class TestAdjudicationGate(unittest.TestCase):
         self.assertIn(result3["verdict"], ["DECISION_FAILED", "undetermined"])
         self.assertEqual(result3["source"], "escalated-lowconf")
 
+    def test_incumbent_missing_verdict_key_marked_unresolved(self):
+        """A malformed incumbent result WITHOUT a 'verdict' key is unresolved.
+
+        Round-2 adversarial finding: _is_verdict_unresolved() only checked for
+        DECISION_FAILED/undetermined; an incumbent dict missing the 'verdict'
+        key produced final verdict None with NO escalation_unresolved flag —
+        a None verdict presented as confident. Missing/None verdict must be
+        treated as unresolved.
+        """
+        challenger = FakeChallengerDriver(
+            verdicts={
+                "incumbent_malformed": {
+                    "verdict": "DECISION_FAILED",
+                    "evidence": ["Challenger backend error"],
+                    "confidence": 0.0,
+                },
+            }
+        )
+        incumbent = FakeIncumbent(
+            correct_verdicts={
+                # Malformed: no 'verdict' key at all.
+                "incumbent_malformed": {
+                    "evidence": ["Incumbent returned malformed dict"],
+                    "confidence": 0.9,
+                },
+            }
+        )
+
+        gate = AdjudicationGate(challenger=challenger, incumbent_fn=incumbent)
+        result = gate.adjudicate("incumbent_malformed", self.context_pack)
+
+        self.assertIsNone(result["verdict"])
+        self.assertTrue(
+            result.get("escalation_unresolved"),
+            "Missing incumbent verdict key must set escalation_unresolved=True",
+        )
+        self.assertEqual(result["source"], "escalated-failed")
+
     def test_incumbent_succeeds_escalation_not_marked_unresolved(self):
         """When incumbent succeeds (confident verdict), escalation_unresolved is False/absent.
 

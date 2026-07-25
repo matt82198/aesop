@@ -126,9 +126,11 @@ class OrchestratorDriver:
             backend's reasoning).
 
         Raises:
-            DecisionFailed: If all retries exhausted and no valid decision produced.
-                           (This is an internal error; the method itself returns
-                           DECISION_FAILED dict on backend/schema failures.)
+            Nothing. decide() NEVER raises (P1 fail-safe): every failure path
+            (backend error, malformed JSON, invalid structure, unexpected
+            exception) returns a DECISION_FAILED dict after retries exhausted.
+            The DecisionFailed exception class is retained for backward
+            compatibility only; no code path raises it.
         """
         # Load schema if not provided and schema_dir is set.
         if schema is None and self.schema_dir:

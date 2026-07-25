@@ -72,7 +72,7 @@
       "id": "hardcoded-username",
       "run_num": 1,
       "classification": "real_defect",
-      "reasoning": "['Code: documentation contains absolute path C:\\\\\\\\Users\\\\\\\\matt8\\\\\\\\aesop\\\\\\\\state\\\\\\\\tracker.json in two locations', \"Fact: a user's home directory path and username on their machine is different from C:\\\\\\\\Users\\\\\\\\matt8\", 'Behavior: when users copy this path to their machine, they reference a directory that does not exist', 'Fact: documentation is shipped with the npm package and is accessible to all users']",
+      "reasoning": "['Code: documentation contains absolute path <REPO>\\\\\\\\state\\\\\\\\tracker.json in two locations', \"Fact: a user's home directory path and username on their machine is different from <HOME>\", 'Behavior: when users copy this path to their machine, they reference a directory that does not exist', 'Fact: documentation is shipped with the npm package and is accessible to all users']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.96
@@ -216,7 +216,7 @@
       "id": "hardcoded-username",
       "run_num": 2,
       "classification": "real_defect",
-      "reasoning": "['Code: documentation contains absolute path C:\\\\\\\\Users\\\\\\\\matt8\\\\\\\\aesop\\\\\\\\state\\\\\\\\tracker.json in two locations', \"Fact: a user's home directory path and username on their machine is different from C:\\\\\\\\Users\\\\\\\\matt8\", 'Behavior: when users copy this path to their machine, they reference a directory that does not exist', 'Fact: documentation is shipped with the npm package and is accessible to all users']",
+      "reasoning": "['Code: documentation contains absolute path <REPO>\\\\\\\\state\\\\\\\\tracker.json in two locations', \"Fact: a user's home directory path and username on their machine is different from <HOME>\", 'Behavior: when users copy this path to their machine, they reference a directory that does not exist', 'Fact: documentation is shipped with the npm package and is accessible to all users']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.95
@@ -360,7 +360,7 @@
       "id": "hardcoded-username",
       "run_num": 3,
       "classification": "real_defect",
-      "reasoning": "['[evidence_0] Code: documentation contains absolute path C:\\\\\\\\Users\\\\\\\\matt8\\\\\\\\aesop\\\\\\\\state\\\\\\\\tracker.json in two locations', \"[evidence_1] Fact: a user's home directory path and username on their machine is different from C:\\\\\\\\Users\\\\\\\\matt8\", '[evidence_2] Behavior: when users copy this path to their machine, they reference a directory that does not exist', '[evidence_3] Fact: documentation is shipped with the npm package and is accessible to all users']",
+      "reasoning": "['[evidence_0] Code: documentation contains absolute path <REPO>\\\\\\\\state\\\\\\\\tracker.json in two locations', \"[evidence_1] Fact: a user's home directory path and username on their machine is different from <HOME>\", '[evidence_2] Behavior: when users copy this path to their machine, they reference a directory that does not exist', '[evidence_3] Fact: documentation is shipped with the npm package and is accessible to all users']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.96
@@ -523,7 +523,7 @@
         "real_defect": 3
       },
       "num_runs": 3,
-      "reasoning_sample": "['Code: documentation contains absolute path C:\\\\\\\\Users\\\\\\\\matt8\\\\\\\\aesop\\\\\\\\state\\\\\\\\tracker.json in two locations', \"Fact: a user's home directory path and username on their machine is different from C:\\\\\\\\Users\\\\\\\\matt8\", 'Behavior: when users copy this path to their machine, they reference a directory that does not exist', 'Fact: documentation is shipped with the npm package and is accessible to all users']"
+      "reasoning_sample": "['Code: documentation contains absolute path <REPO>\\\\\\\\state\\\\\\\\tracker.json in two locations', \"Fact: a user's home directory path and username on their machine is different from <HOME>\", 'Behavior: when users copy this path to their machine, they reference a directory that does not exist', 'Fact: documentation is shipped with the npm package and is accessible to all users']"
     },
     {
       "id": "audit-log-observability",
