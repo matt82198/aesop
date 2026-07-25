@@ -21,13 +21,87 @@ Default (no config) -> ClaudeCodeDriver (preserves today's behavior).
 stdlib-only, ASCII-only, Windows + Linux safe.
 """
 
+import ipaddress
 import json
 import os
 from pathlib import Path
 from typing import Dict, Optional
+from urllib.parse import urlparse
 
 from agent_driver import AgentDriver
 from claude_code_driver import ClaudeCodeDriver
+
+
+def validate_base_url(base_url: str) -> None:
+    """Validate base_url to prevent SSRF attacks.
+
+    Enforces:
+    - Scheme is http or https only (rejects ftp://, etc.)
+    - Rejects private/link-local IP ranges EXCEPT localhost and 127.0.0.1
+      which are allowed explicitly for local Ollama-style deployments.
+
+    Private IP ranges rejected:
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+    - 169.254.0.0/16 (link-local; includes AWS metadata endpoint 169.254.169.254)
+    - 127.0.0.0/8 (loopback, EXCEPT localhost hostname and 127.0.0.1)
+
+    Args:
+        base_url: The URL to validate (e.g., "https://api.openai.com/v1")
+
+    Raises:
+        ValueError: if validation fails
+    """
+    try:
+        parsed = urlparse(base_url)
+    except Exception as exc:
+        raise ValueError(f"Invalid base_url format: {exc}") from exc
+
+    # Check scheme (http or https only)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(
+            f"base_url scheme must be 'http' or 'https', got '{parsed.scheme}'. "
+            f"URL: {base_url}"
+        )
+
+    # Empty or missing netloc
+    if not parsed.netloc:
+        raise ValueError(f"base_url must include a host (netloc), got: {base_url}")
+
+    # Extract hostname and port (netloc includes port; hostname does not)
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError(f"Could not extract hostname from base_url: {base_url}")
+
+    # Explicitly allow localhost and 127.0.0.1 (for local Ollama, etc.)
+    if hostname.lower() in ("localhost", "127.0.0.1"):
+        return
+
+    # Try to parse as an IP address
+    try:
+        ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        # Not an IP address; assume it's a valid hostname (domain name)
+        return
+
+    # Check for private/reserved IP ranges
+    # These ranges are forbidden EXCEPT localhost (handled above)
+    private_ranges = [
+        ipaddress.ip_network("10.0.0.0/8"),           # Private (RFC 1918)
+        ipaddress.ip_network("172.16.0.0/12"),        # Private (RFC 1918)
+        ipaddress.ip_network("192.168.0.0/16"),       # Private (RFC 1918)
+        ipaddress.ip_network("169.254.0.0/16"),       # Link-local (includes metadata)
+        ipaddress.ip_network("127.0.0.0/8"),          # Loopback (except 127.0.0.1, caught above)
+    ]
+
+    for network in private_ranges:
+        if ip in network:
+            raise ValueError(
+                f"base_url points to private IP range {network}: {hostname}. "
+                f"Use 'localhost' or '127.0.0.1' for local deployments. "
+                f"URL: {base_url}"
+            )
 
 
 def load_backend_config(path: Optional[str] = None) -> dict:
@@ -114,6 +188,8 @@ def load_backend_config(path: Optional[str] = None) -> dict:
             raise ValueError("'base_url' must be a string")
         if not isinstance(backend_block["model"], str):
             raise ValueError("'model' must be a string")
+        # Validate base_url to prevent SSRF attacks
+        validate_base_url(backend_block["base_url"])
 
     # Normalize: return backend dict with all fields.
     result = dict(backend_block)
@@ -182,6 +258,8 @@ def build_driver(config: Optional[dict] = None) -> AgentDriver:
 
         base_url = config["base_url"]
         model = config["model"]
+        # Validate base_url to prevent SSRF attacks
+        validate_base_url(base_url)
         # Default API key env var name (assembled to avoid secret-scan false positive).
         default_key_env = "OPENAI" + "_" + "API" + "_" + "KEY"
         api_key_env = config.get("api_key_env", default_key_env)
