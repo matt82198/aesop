@@ -1,0 +1,628 @@
+{
+  "metadata": {
+    "model": "gpt-5.6-sol",
+    "num_runs": 3,
+    "timestamp": "2026-07-24",
+    "corpus_size": 16
+  },
+  "item_9_flip": true,
+  "item_9_reasoning": "['Evidence 0 states that the health check enumerates only entries at the repository root.', 'Evidence 1 states that the health check does not recursively scan any subdirectories, so it never provided file-level review inside daemon/ or jobs/ before whitelisting.', 'Evidence 5 states that whitelisting a directory prevents only that top-level directory name from being flagged; it does not introduce a new exclusion of recursively inspected files.', 'Evidence 2 states that secret_scan.py is invoked on every push before commit, and Evidence 3 states that it recursively reads file contents throughout the repository, including daemon/* and jobs/*.', \"Evidence 4 confirms that 'daemon' is whitelisted specifically as a top-level entry, consistent with the health check's root-entry scope.\"]",
+  "held_real_defects": 8,
+  "schema_validity": {
+    "valid": 48,
+    "total": 48,
+    "pct": 100.0
+  },
+  "per_run_verdicts": [
+    {
+      "id": "vbs-waitforexit",
+      "run_num": 1,
+      "classification": "real_defect",
+      "reasoning": "['evidence_0: The launcher invokes `shell.Run(cmd, 0, False)`, explicitly configuring it not to wait for the child process.', 'evidence_1: After `shell.Run(..., False)`, the launcher continues and exits without awaiting the spawned daemon, so Task Scheduler no longer owns or observes the daemon for the duration of its run.', 'evidence_2: The launcher ends with `exit 0` or equivalent, masking child-process failures from the launcher exit status.', \"evidence_3: Task Scheduler records the launcher process's exit code in `LastTaskResult`; therefore it reports the launcher's zero rather than the eventual child outcome.\", 'finding: The two production daemons have script-level atomic lockfiles, which mitigates actual overlapping daemon execution but does not restore Task Scheduler timeout enforcement or accurate result reporting.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.98
+    },
+    {
+      "id": "dryrun-blocked",
+      "run_num": 1,
+      "classification": "real_defect",
+      "reasoning": "['evidence_0: The parameter-validation block exits with status 1 when `$bash` does not exist.', 'evidence_1: The `-DryRun` branch is reached only after parameter validation succeeds.', 'evidence_2: Every invocation, including one using `-DryRun`, executes parameter validation before branching.', 'evidence_3: Failed validation exits the script before any DryRun code path can execute.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "uninstall-exit0",
+      "run_num": 1,
+      "classification": "real_defect",
+      "reasoning": "['The unregister exception handler contains `Write-Error $_`, confirming the failure is caught rather than allowed to terminate execution.', 'Execution proceeds after the catch block without calling `exit 1`.', \"The script's final statement is `exit 0`, causing the handled failure path to report success.\", 'No boolean or equivalent state is set during exception handling to preserve and report uninstall failure at script termination.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "quote-validation",
+      "run_num": 1,
+      "classification": "real_defect",
+      "reasoning": "['[evidence_0] states that `action = \"cmd.exe /c \" + commandVar` concatenates user input directly into a double-quoted string.', '[evidence_1] confirms that no escape or replacement function is applied to `commandVar`.', '[evidence_2] establishes that embedded quotes are unescaped while PowerShell processes double-quoted strings.', '[evidence_3] confirms that the resulting potentially malformed string is passed to the scheduled-task action field.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.95
+    },
+    {
+      "id": "apostrophe-path",
+      "run_num": 1,
+      "classification": "real_defect",
+      "reasoning": "['evidence_0: `cmdDefault = \"bash -c \\'cd $repoPath; ...\\'\"` interpolates `repoPath` within a single-quoted shell command.', 'evidence_1 and evidence_2: Bash single quotes cannot contain an apostrophe; an apostrophe in `repoPath` terminates the quoting context and makes the generated command malformed or changes its parsing.', 'evidence_3: No escaping or shell-safe quoting is applied to `repoPath` before interpolation.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "unc-paths",
+      "run_num": 1,
+      "classification": "false_positive",
+      "reasoning": "['evidence_1: Git Bash accepts paths matching //server/share.', 'evidence_2: MSYS2 shell accepts //server/share as a path format.', 'evidence_3: The converter output matches the accepted //server/share pattern.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "hardcoded-username",
+      "run_num": 1,
+      "classification": "real_defect",
+      "reasoning": "['evidence_0: Documentation contains the machine-specific absolute path <REPO>\\\\state\\\\tracker.json in two locations.', \"evidence_1: Other users' home-directory paths and usernames differ from <HOME>.\", \"evidence_2: Copying the documented path on another user's machine references a directory that does not exist.\", 'evidence_3: The affected documentation ships in the npm package and is accessible to all users.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "audit-log-observability",
+      "run_num": 1,
+      "classification": "real_defect",
+      "reasoning": "[\"evidence_0: Registration events currently use console.log('Registered task...') and therefore go only to stdout.\", 'evidence_1: Stdout from the background process is discarded after that process ends.', 'evidence_2: The npm package writes neither a persistent record file nor a system event-log entry for registrations.', 'evidence_3: No logging framework retains the console.log messages.', 'STATE Intent identifies forensic replay as one of the five fixed product pillars, so losing registration history conflicts with an explicit development goal.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.98
+    },
+    {
+      "id": "whitelist-gate-weakening",
+      "run_num": 1,
+      "classification": "false_positive",
+      "reasoning": "['Evidence 0 states that the health check enumerates only entries at the repository root.', 'Evidence 1 states that the health check does not recursively scan any subdirectories, so it never provided file-level review inside daemon/ or jobs/ before whitelisting.', 'Evidence 5 states that whitelisting a directory prevents only that top-level directory name from being flagged; it does not introduce a new exclusion of recursively inspected files.', 'Evidence 2 states that secret_scan.py is invoked on every push before commit, and Evidence 3 states that it recursively reads file contents throughout the repository, including daemon/* and jobs/*.', \"Evidence 4 confirms that 'daemon' is whitelisted specifically as a top-level entry, consistent with the health check's root-entry scope.\"]",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.98
+    },
+    {
+      "id": "ps1-syntax-gate",
+      "run_num": 1,
+      "classification": "real_defect",
+      "reasoning": "['evidence_0: PowerShell files in the package are not validated before CI passes.', 'evidence_1 and evidence_2: CI already performs syntax validation for JavaScript with `node --check` and shell scripts with `bash -n`, demonstrating that syntax gates are an established expectation for shipped script classes.', 'evidence_3: PowerShell provides mechanisms through `pwsh` to parse and validate PowerShell syntax.', 'evidence_4: No current CI step invokes a PowerShell validator.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.96
+    },
+    {
+      "id": "test-hardcoded-path",
+      "run_num": 1,
+      "classification": "real_defect",
+      "reasoning": "[\"evidence_0: setUpClass hardcodes the machine-specific absolute path '<REPO>-wt-test'.\", 'evidence_1: The CI runner does not have a directory at that path.', 'evidence_2 and evidence_3: setUpClass executes before test methods and raises FileNotFoundError when Test-Path reports the directory missing.', 'evidence_4: An exception from setUpClass prevents the entire suite from executing, disrupting a required check.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "fixreview-parents1",
+      "run_num": 1,
+      "classification": "false_positive",
+      "reasoning": "['Evidence 0 states that `Path(__file__).resolve()` converts the test file path to an absolute path.', 'Evidence 2 and Evidence 3 establish that for a file directly under `tests/`, `parents[1]` is the parent of `tests/`, i.e. the repository root under the stated layout.', 'Evidence 4 states that `Path.resolve()` operates on the filesystem independently of path syntax, and Evidence 5 states that spaces in Windows, Linux, and macOS paths do not affect it.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "fixreview-backtick-test",
+      "run_num": 1,
+      "classification": "false_positive",
+      "reasoning": "['Evidence fact [evidence_0]: the original buggy derivation produced output containing backticks: `<REPO>\\\\`whoami\\\\``.', \"Test code [evidence_2] asserts that no backtick occurs in the result: `assert '`' not in result`.\", 'Mechanism [evidence_3]: when a backtick is present, that assertion is false and the test fails; therefore it catches the documented original output.', 'Evidence fact [evidence_1] and mechanism [evidence_4]: corrected output contains no backticks, so the regression test passes on the fixed path.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "regression-ui-suite",
+      "run_num": 1,
+      "classification": "false_positive",
+      "reasoning": "['Evidence 0 and Evidence 1: `.gitignore` lists `node_modules`, while a fresh worktree contains only git-tracked files, so dependencies are not expected to be present initially.', 'Evidence 2 and Evidence 4: TypeScript is declared in `package.json`, and `npm install` reads that manifest and populates `node_modules`.', 'Evidence 3: CI explicitly runs `npm install` before executing UI tests, so the supported test path installs TypeScript.', 'Evidence 5: A fresh worktree lacks populated `node_modules` unless installation is run; therefore the observed failure reflects skipped dependency setup, not a regression in the reviewed change.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "cimergewait-exit0",
+      "run_num": 1,
+      "classification": "real_defect",
+      "reasoning": "['evidence_0: The script prints \"CI FAILED: <check>\", establishing that it detects a failure outcome.', 'evidence_1: The failure path returns from main without calling \"exit 1\".', 'evidence_3: The script either ends without an explicit failure exit or reaches \"exit 0\".', 'evidence_4: Callers checking $LASTEXITCODE or $? consequently observe status 0 and are misled into treating the failed operation as successful.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "vbs-syntax-validity",
+      "run_num": 1,
+      "classification": "false_positive",
+      "reasoning": "['evidence_0: Reference VBScript documentation defines `shell.Run(strCommand, [intWindowStyle], [bWaitOnReturn])` as a valid function signature.', 'evidence_1: `rc = shell.Run(cmd, 0, True)` follows that signature with three arguments, including the boolean wait-on-return argument.', \"evidence_2: The assignment operator stores the function's integer exit-code return value in `rc`.\", \"evidence_4: TaskScheduler's `LastTaskResult` reflects the exit code after running the VBScript.\"]",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "vbs-waitforexit",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "['The launcher uses `shell.Run(cmd, 0, False)`; the third argument `False` explicitly means that it does not wait for the spawned process.', 'The supplied behavior states that after `shell.Run(cmd, 0, False)`, the parent script continues without awaiting the child process.', 'The launcher finishes with `exit 0` or equivalent, so its own result does not represent whether the daemon later succeeds or fails.', \"Task Scheduler records the exit code of the launcher process itself in `LastTaskResult`; therefore the detached child's failure cannot be reflected there.\", 'The finding states that both production daemons have script-level atomic lockfiles, which mitigates overlapping daemon execution and refutes the claimed P0 urgency, but does not restore Task Scheduler execution-limit enforcement or accurate result reporting.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.98
+    },
+    {
+      "id": "dryrun-blocked",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "['evidence_0: The parameter-validation block contains `if ( -not ( Test-Path $bash ) ) { exit 1 }`.', 'evidence_1: The `-DryRun` branch is reached only after successful completion of parameter validation.', 'evidence_2: All script invocations, including those using `-DryRun`, execute parameter validation before branching.', 'evidence_3: The validation exits the script before any DryRun code path is reached.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "uninstall-exit0",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "['evidence_0: The unregister exception handler only executes `Write-Error $_`.', 'evidence_1: Execution continues after the catch block without calling `exit 1`.', 'evidence_2: The script ends with an unconditional `exit 0`.', 'evidence_3: No success/failure variable records an unregister exception for use in the final exit status.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.98
+    },
+    {
+      "id": "quote-validation",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "['[evidence_0] `action = \"cmd.exe /c \" + commandVar` concatenates user input directly into a double-quoted string.', '[evidence_1] The PowerShell operation applies no escaping or replacement to `commandVar`.', '[evidence_2] Internal quotes in PowerShell double-quoted strings are unescaped and affect string parsing.', '[evidence_3] The resulting malformed string is passed to the scheduled-task action field.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.96
+    },
+    {
+      "id": "apostrophe-path",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "['evidence_0: `cmdDefault = \"bash -c \\'cd $repoPath; ...\\'\"` interpolates `repoPath` inside a single-quoted bash command.', \"evidence_1 and evidence_2: An apostrophe in `repoPath` terminates the shell's single-quote context, producing malformed or altered bash syntax.\", 'evidence_3: No escaping or shell-safe quoting function is applied to `repoPath` before interpolation.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "unc-paths",
+      "run_num": 2,
+      "classification": "false_positive",
+      "reasoning": "['evidence_1: Git Bash accepts UNC paths represented as //server/share.', 'evidence_2: MSYS2 also accepts //server/share as a valid path format.', 'evidence_3: The converter produces the accepted //server/share format, so the claim that it creates an invalid Bash path is refuted.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "hardcoded-username",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "['evidence_0: Documentation contains the machine-specific absolute path `<REPO>\\\\state\\\\tracker.json` in two locations.', 'evidence_1: Other users have different home-directory paths and usernames than `<HOME>`.', 'evidence_2: Copying the documented path on another machine references a directory that does not exist.', 'evidence_3: The affected documentation is shipped in the public npm package and is accessible to all users.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "audit-log-observability",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "[\"evidence_0: Registration events currently use console.log('Registered task...'), so they are emitted only to stdout.\", 'evidence_1: Background-process stdout is discarded after the process ends, preventing later operator review.', 'evidence_2: The npm package writes neither a persistent record file nor a system event-log entry for registrations.', 'evidence_3: The console.log messages are not retained by a logging framework.', 'STATE intent identifies forensic replay as a core product pillar; losing registration history directly undermines that stated capability.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.98
+    },
+    {
+      "id": "whitelist-gate-weakening",
+      "run_num": 2,
+      "classification": "false_positive",
+      "reasoning": "['Evidence 0 states that the health check enumerates only repository-root entries.', 'Evidence 1 states that the health check does not recursively scan any subdirectories, so files under daemon/ or jobs/ were never subject to this check.', 'Evidence 5 states that whitelisting daemon suppresses only the top-level directory-name warning; it does not broaden an existing recursive exemption.', 'Evidence 2 and Evidence 3 state that secret_scan.py runs on every push before commit and recursively scans file contents throughout the repository, including daemon/* and jobs/*.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "ps1-syntax-gate",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "['evidence_0 states that packaged PowerShell files are not validated before CI passes.', 'evidence_4 confirms that no CI step currently invokes a PowerShell validator.', 'evidence_1 and evidence_2 show that CI already applies analogous syntax gates to JavaScript with `node --check` and shell scripts with `bash -n`.', 'evidence_3 identifies an available validation mechanism using `pwsh`, so the gap has a concrete in-repository remedy.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.97
+    },
+    {
+      "id": "test-hardcoded-path",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "[\"evidence_0: setUpClass hardcodes the machine-specific absolute path '<REPO>-wt-test'.\", 'evidence_1: The CI runner does not contain that directory.', 'evidence_2 and evidence_3: setUpClass runs before test methods and explicitly raises FileNotFoundError when Test-Path reports the directory missing.', 'evidence_4: An exception from setUpClass prevents the entire suite from running, making this blocking for the required check.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "fixreview-parents1",
+      "run_num": 2,
+      "classification": "false_positive",
+      "reasoning": "['evidence_0: Path(__file__).resolve() converts the test file path to an absolute path.', 'evidence_2 and evidence_3: For a test file in tests/, parents[0] is tests/ and parents[1] is its parent, so the expression correctly identifies the repository root under the stated layout.', 'evidence_4: Path.resolve() operates on the filesystem and is not dependent on CI runner path syntax.', 'evidence_5: Spaces in paths are valid on Windows, Linux, and macOS and do not affect Path.resolve().']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "fixreview-backtick-test",
+      "run_num": 2,
+      "classification": "false_positive",
+      "reasoning": "['Evidence fact [evidence_0] states that the original corrupted path contained a backtick: `<REPO>\\\\`whoami`.', \"The regression assertion is `assert '`' not in result` [evidence_2]. When a backtick is present, that condition is false and the test fails [evidence_3], so it catches the documented original bug.\", 'The corrected output contains no backticks [evidence_1], for which the assertion passes as intended [evidence_4].']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "regression-ui-suite",
+      "run_num": 2,
+      "classification": "false_positive",
+      "reasoning": "['evidence_0 and evidence_1: node_modules is gitignored, while a newly created worktree contains only git-tracked files.', 'evidence_2 and evidence_5: TypeScript is declared in package.json but is not tracked in git, so it is expected to be absent from a fresh worktree until dependencies are installed.', \"evidence_3 and evidence_4: CI runs 'npm install' before UI tests, which reads package.json and populates node_modules, including TypeScript.\"]",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "cimergewait-exit0",
+      "run_num": 2,
+      "classification": "real_defect",
+      "reasoning": "['[evidence_0] The helper reaches a failure path that prints `CI FAILED: <check>`.', '[evidence_1] That failure path returns from the main function without issuing `exit 1`.', '[evidence_3] The script either explicitly executes `exit 0` or ends without an explicit nonzero exit.', '[evidence_4] Consequently, callers checking `$LASTEXITCODE` or `$?` observe success despite the reported CI failure.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.98
+    },
+    {
+      "id": "vbs-syntax-validity",
+      "run_num": 2,
+      "classification": "false_positive",
+      "reasoning": "['evidence_0: Reference VBScript docs state that `shell.Run(strCommand, [intWindowStyle], [bWaitOnReturn])` is a valid function signature.', 'evidence_1: `rc = shell.Run(cmd, 0, True)` follows that signature with three arguments and a Boolean third argument.', 'evidence_2: The assignment stores the integer return value (exit code) in `rc`.', \"evidence_4: TaskScheduler's `LastTaskResult` reflects the exit code after running the VBScript.\"]",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.98
+    },
+    {
+      "id": "vbs-waitforexit",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "['The launcher explicitly uses `shell.Run(cmd, 0, False)`; the third argument means it does not wait for the spawned process.', 'The supplied behavior evidence states that after `shell.Run(cmd, 0, False)`, the parent script continues without awaiting the child, and its final result is `exit 0` or equivalent.', 'Task Scheduler records the exit code of the launcher process itself in `LastTaskResult`, so the immediate successful launcher exit cannot report a later child-process failure.', 'The finding states that both production daemons have script-level atomic lockfiles. This mitigates overlapping daemon execution, so the claimed P0 severity is overstated, but it does not restore Task Scheduler timeout enforcement or accurate result reporting.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.96
+    },
+    {
+      "id": "dryrun-blocked",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "['[evidence_0] The parameter-validation block contains `if ( -not ( Test-Path $bash ) ) { exit 1 }`.', '[evidence_1] The `-DryRun` branch is reached only after successful completion of parameter validation.', '[evidence_2] All invocations, including those using `-DryRun`, execute parameter validation before branching.', '[evidence_3] The validation exits the script before any DryRun code path is reached.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "uninstall-exit0",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "['The unregister exception handler contains `Write-Error $_`, confirming that the failure is caught rather than allowed to terminate the script.', 'Execution proceeds after the catch block without `exit 1`, and no boolean or other state records that exception handling encountered a failure.', \"The script's final statement is `exit 0`, so a caught unregister exception can produce a successful process status despite a partial uninstall.\"]",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "quote-validation",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "['evidence_0: `action = \"cmd.exe /c \" + commandVar` concatenates user input directly into a double-quoted string.', 'evidence_1: The PowerShell operation applies no escaping or replacement to `commandVar`.', 'evidence_2: PowerShell processes double-quoted strings, so unescaped internal quotes can alter or break the resulting string.', 'evidence_3: The malformed result is passed to the scheduled-task action field.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.96
+    },
+    {
+      "id": "apostrophe-path",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "['evidence_0: `cmdDefault = \"bash -c \\'cd $repoPath; ...\\'\"` interpolates `repoPath` within a single-quoted bash command.', 'evidence_1 and evidence_2: An apostrophe in `repoPath` terminates the bash single-quote context, producing malformed or altered shell syntax.', 'evidence_3: No escaping or quote-escape function is applied to `repoPath` before interpolation.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "unc-paths",
+      "run_num": 3,
+      "classification": "false_positive",
+      "reasoning": "['[evidence_1] Git Bash accepts paths matching the pattern //server/share.', '[evidence_2] MSYS2 shell also accepts //server/share as a path format.', \"[evidence_3] The converter's output format matches the accepted //server/share pattern.\"]",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "hardcoded-username",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "['evidence_0: Documentation contains the absolute path `<REPO>\\\\state\\\\tracker.json` in two locations.', \"evidence_1: Other users' home-directory paths and usernames differ from `<HOME>`.\", \"evidence_2: Copying the documented path on another user's machine references a directory that does not exist.\", 'evidence_3: The affected documentation ships in the npm package and is accessible to all users.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "audit-log-observability",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "[\"evidence_0: Registration events are emitted only through console.log('Registered task...') to stdout.\", 'evidence_1: Stdout from the background process is discarded after the process ends, preventing later machine audits.', 'evidence_2: The npm package writes neither a persistent record file nor a system event-log entry for registrations.', 'evidence_3: No logging framework retains the console.log messages.', 'STATE Intent identifies forensic replay as one of the five fixed product pillars, so loss of registration history conflicts with an explicit development goal.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.96
+    },
+    {
+      "id": "whitelist-gate-weakening",
+      "run_num": 3,
+      "classification": "false_positive",
+      "reasoning": "['Evidence 0 states that the health check enumerates only entries at the repository root.', 'Evidence 1 states that the health check does not recursively scan any subdirectories, so whitelisting a directory name does not remove file-level inspection that previously existed.', 'Evidence 3 states that secret_scan.py recursively reads file contents throughout the repository, explicitly including daemon/* and jobs/*.', 'Evidence 5 states that the whitelist prevents only the top-level directory name from being flagged by the health check.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "ps1-syntax-gate",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "['evidence_0: PowerShell files in the package are not validated before CI passes.', 'evidence_1 and evidence_2: CI already performs analogous syntax validation for JavaScript with `node --check` and shell scripts with `bash -n`.', 'evidence_3: PowerShell syntax can be parsed and validated using `pwsh -NoProfile -Command` or `pwsh -File <file>`.', 'evidence_4: No current CI step invokes either PowerShell validation mechanism.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.97
+    },
+    {
+      "id": "test-hardcoded-path",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "[\"evidence_0: setUpClass hardcodes the absolute machine-specific path '<REPO>-wt-test'.\", 'evidence_1: The CI runner does not have a directory at that path.', 'evidence_2 and evidence_3: setUpClass runs before test methods and raises FileNotFoundError when Test-Path reports the path missing.', 'evidence_4: An exception from setUpClass prevents the entire suite from running, impacting a required check.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "fixreview-parents1",
+      "run_num": 3,
+      "classification": "false_positive",
+      "reasoning": "['evidence_0: Path(__file__).resolve() converts the test file path to an absolute path.', 'evidence_2 and evidence_3: For a test file directly in tests/, parents[0] is tests/ and parents[1] is its parent, so this expression identifies the repository root under the stated layout.', 'evidence_4: Path.resolve() operates on the filesystem and is independent of path syntax.', 'evidence_5: Spaces in Windows, Linux, or macOS paths do not affect Path.resolve().']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.98
+    },
+    {
+      "id": "fixreview-backtick-test",
+      "run_num": 3,
+      "classification": "false_positive",
+      "reasoning": "['The original buggy path output contained backticks: `<REPO>\\\\`whoami\\\\`` (evidence_0).', \"The regression test explicitly asserts that no backtick is present: `assert '`' not in result` (evidence_2).\", 'When a backtick is present, that assertion is false and the test fails, so it detects the supplied original corruption (evidence_3).', 'The corrected output contains no backticks and therefore passes the assertion (evidence_1, evidence_4).']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "regression-ui-suite",
+      "run_num": 3,
+      "classification": "false_positive",
+      "reasoning": "['evidence_0: `.gitignore` lists `node_modules`, so installed dependencies are intentionally absent from tracked worktree contents.', 'evidence_2: TypeScript is declared in `package.json` but is not tracked in git.', 'evidence_3: CI runs `npm install` before executing UI tests.', 'evidence_4: `npm install` reads `package.json` and populates `node_modules`.', 'evidence_5: A fresh worktree lacks populated `node_modules` unless dependency installation is run.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "cimergewait-exit0",
+      "run_num": 3,
+      "classification": "real_defect",
+      "reasoning": "[\"evidence_0: The script explicitly prints 'CI FAILED: <check>', establishing that it detects a failed CI outcome.\", \"evidence_1 and evidence_3: The failure path does not call 'exit 1' and either ends without an explicit failure exit or reaches 'exit 0'.\", 'evidence_4: A caller checking $LASTEXITCODE or $? observes status 0, so automation can incorrectly treat the failed CI-and-refused-merge outcome as success.']",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    },
+    {
+      "id": "vbs-syntax-validity",
+      "run_num": 3,
+      "classification": "false_positive",
+      "reasoning": "['evidence_0: Reference VBScript documentation defines shell.Run(strCommand, [intWindowStyle], [bWaitOnReturn]) as a valid function signature.', 'evidence_1: The code `rc = shell.Run(cmd, 0, True)` supplies three arguments matching that documented signature, including a Boolean wait-on-return argument.', \"evidence_2: In this expression, `=` assigns the integer return value from `Run` to `rc`; the parentheses are valid when consuming a function's return value.\", \"evidence_4: Task Scheduler's LastTaskResult was observed to reflect the exit code after the VBScript ran, contradicting the assertion that the syntax silently makes propagation a no-op.\"]",
+      "schema_valid": true,
+      "retries": 0,
+      "confidence": 0.99
+    }
+  ],
+  "per_item_aggregations": [
+    {
+      "id": "vbs-waitforexit",
+      "ground_truth": "real_defect",
+      "modal_verdict": "real_defect",
+      "stability": 1.0,
+      "verdict_counts": {
+        "real_defect": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['evidence_0: The launcher invokes `shell.Run(cmd, 0, False)`, explicitly configuring it not to wait for the child process.', 'evidence_1: After `shell.Run(..., False)`, the launcher continues and exits without awaiting the spawned daemon, so Task Scheduler no longer owns or observes the daemon for the duration of its run.', 'evidence_2: The launcher ends with `exit 0` or equivalent, masking child-process failures from the launcher exit status.', \"evidence_3: Task Scheduler records the launcher process's exit code in `LastTaskResult`; therefore it reports the launcher's zero rather than the eventual child outcome.\", 'finding: The two production daemons have script-level atomic lockfiles, which mitigates actual overlapping daemon execution but does not restore Task Scheduler timeout enforcement or accurate result reporting.']"
+    },
+    {
+      "id": "dryrun-blocked",
+      "ground_truth": "real_defect",
+      "modal_verdict": "real_defect",
+      "stability": 1.0,
+      "verdict_counts": {
+        "real_defect": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['evidence_0: The parameter-validation block exits with status 1 when `$bash` does not exist.', 'evidence_1: The `-DryRun` branch is reached only after parameter validation succeeds.', 'evidence_2: Every invocation, including one using `-DryRun`, executes parameter validation before branching.', 'evidence_3: Failed validation exits the script before any DryRun code path can execute.']"
+    },
+    {
+      "id": "uninstall-exit0",
+      "ground_truth": "real_defect",
+      "modal_verdict": "real_defect",
+      "stability": 1.0,
+      "verdict_counts": {
+        "real_defect": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['The unregister exception handler contains `Write-Error $_`, confirming the failure is caught rather than allowed to terminate execution.', 'Execution proceeds after the catch block without calling `exit 1`.', \"The script's final statement is `exit 0`, causing the handled failure path to report success.\", 'No boolean or equivalent state is set during exception handling to preserve and report uninstall failure at script termination.']"
+    },
+    {
+      "id": "quote-validation",
+      "ground_truth": "real_defect",
+      "modal_verdict": "real_defect",
+      "stability": 1.0,
+      "verdict_counts": {
+        "real_defect": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['[evidence_0] states that `action = \"cmd.exe /c \" + commandVar` concatenates user input directly into a double-quoted string.', '[evidence_1] confirms that no escape or replacement function is applied to `commandVar`.', '[evidence_2] establishes that embedded quotes are unescaped while PowerShell processes double-quoted strings.', '[evidence_3] confirms that the resulting potentially malformed string is passed to the scheduled-task action field.']"
+    },
+    {
+      "id": "apostrophe-path",
+      "ground_truth": "real_defect",
+      "modal_verdict": "real_defect",
+      "stability": 1.0,
+      "verdict_counts": {
+        "real_defect": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['evidence_0: `cmdDefault = \"bash -c \\'cd $repoPath; ...\\'\"` interpolates `repoPath` within a single-quoted shell command.', 'evidence_1 and evidence_2: Bash single quotes cannot contain an apostrophe; an apostrophe in `repoPath` terminates the quoting context and makes the generated command malformed or changes its parsing.', 'evidence_3: No escaping or shell-safe quoting is applied to `repoPath` before interpolation.']"
+    },
+    {
+      "id": "unc-paths",
+      "ground_truth": "real_defect",
+      "modal_verdict": "false_positive",
+      "stability": 1.0,
+      "verdict_counts": {
+        "false_positive": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['evidence_1: Git Bash accepts paths matching //server/share.', 'evidence_2: MSYS2 shell accepts //server/share as a path format.', 'evidence_3: The converter output matches the accepted //server/share pattern.']"
+    },
+    {
+      "id": "hardcoded-username",
+      "ground_truth": "real_defect",
+      "modal_verdict": "real_defect",
+      "stability": 1.0,
+      "verdict_counts": {
+        "real_defect": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['evidence_0: Documentation contains the machine-specific absolute path <REPO>\\\\state\\\\tracker.json in two locations.', \"evidence_1: Other users' home-directory paths and usernames differ from <HOME>.\", \"evidence_2: Copying the documented path on another user's machine references a directory that does not exist.\", 'evidence_3: The affected documentation ships in the npm package and is accessible to all users.']"
+    },
+    {
+      "id": "audit-log-observability",
+      "ground_truth": "enhancement_opportunity",
+      "modal_verdict": "real_defect",
+      "stability": 1.0,
+      "verdict_counts": {
+        "real_defect": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "[\"evidence_0: Registration events currently use console.log('Registered task...') and therefore go only to stdout.\", 'evidence_1: Stdout from the background process is discarded after that process ends.', 'evidence_2: The npm package writes neither a persistent record file nor a system event-log entry for registrations.', 'evidence_3: No logging framework retains the console.log messages.', 'STATE Intent identifies forensic replay as one of the five fixed product pillars, so losing registration history conflicts with an explicit development goal.']"
+    },
+    {
+      "id": "whitelist-gate-weakening",
+      "ground_truth": "false_positive",
+      "modal_verdict": "false_positive",
+      "stability": 1.0,
+      "verdict_counts": {
+        "false_positive": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['Evidence 0 states that the health check enumerates only entries at the repository root.', 'Evidence 1 states that the health check does not recursively scan any subdirectories, so it never provided file-level review inside daemon/ or jobs/ before whitelisting.', 'Evidence 5 states that whitelisting a directory prevents only that top-level directory name from being flagged; it does not introduce a new exclusion of recursively inspected files.', 'Evidence 2 states that secret_scan.py is invoked on every push before commit, and Evidence 3 states that it recursively reads file contents throughout the repository, including daemon/* and jobs/*.', \"Evidence 4 confirms that 'daemon' is whitelisted specifically as a top-level entry, consistent with the health check's root-entry scope.\"]"
+    },
+    {
+      "id": "ps1-syntax-gate",
+      "ground_truth": "enhancement_opportunity",
+      "modal_verdict": "real_defect",
+      "stability": 1.0,
+      "verdict_counts": {
+        "real_defect": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['evidence_0: PowerShell files in the package are not validated before CI passes.', 'evidence_1 and evidence_2: CI already performs syntax validation for JavaScript with `node --check` and shell scripts with `bash -n`, demonstrating that syntax gates are an established expectation for shipped script classes.', 'evidence_3: PowerShell provides mechanisms through `pwsh` to parse and validate PowerShell syntax.', 'evidence_4: No current CI step invokes a PowerShell validator.']"
+    },
+    {
+      "id": "test-hardcoded-path",
+      "ground_truth": "real_defect",
+      "modal_verdict": "real_defect",
+      "stability": 1.0,
+      "verdict_counts": {
+        "real_defect": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "[\"evidence_0: setUpClass hardcodes the machine-specific absolute path '<REPO>-wt-test'.\", 'evidence_1: The CI runner does not have a directory at that path.', 'evidence_2 and evidence_3: setUpClass executes before test methods and raises FileNotFoundError when Test-Path reports the directory missing.', 'evidence_4: An exception from setUpClass prevents the entire suite from executing, disrupting a required check.']"
+    },
+    {
+      "id": "fixreview-parents1",
+      "ground_truth": "false_positive",
+      "modal_verdict": "false_positive",
+      "stability": 1.0,
+      "verdict_counts": {
+        "false_positive": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['Evidence 0 states that `Path(__file__).resolve()` converts the test file path to an absolute path.', 'Evidence 2 and Evidence 3 establish that for a file directly under `tests/`, `parents[1]` is the parent of `tests/`, i.e. the repository root under the stated layout.', 'Evidence 4 states that `Path.resolve()` operates on the filesystem independently of path syntax, and Evidence 5 states that spaces in Windows, Linux, and macOS paths do not affect it.']"
+    },
+    {
+      "id": "fixreview-backtick-test",
+      "ground_truth": "false_positive",
+      "modal_verdict": "false_positive",
+      "stability": 1.0,
+      "verdict_counts": {
+        "false_positive": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['Evidence fact [evidence_0]: the original buggy derivation produced output containing backticks: `<REPO>\\\\`whoami\\\\``.', \"Test code [evidence_2] asserts that no backtick occurs in the result: `assert '`' not in result`.\", 'Mechanism [evidence_3]: when a backtick is present, that assertion is false and the test fails; therefore it catches the documented original output.', 'Evidence fact [evidence_1] and mechanism [evidence_4]: corrected output contains no backticks, so the regression test passes on the fixed path.']"
+    },
+    {
+      "id": "regression-ui-suite",
+      "ground_truth": "false_positive",
+      "modal_verdict": "false_positive",
+      "stability": 1.0,
+      "verdict_counts": {
+        "false_positive": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['Evidence 0 and Evidence 1: `.gitignore` lists `node_modules`, while a fresh worktree contains only git-tracked files, so dependencies are not expected to be present initially.', 'Evidence 2 and Evidence 4: TypeScript is declared in `package.json`, and `npm install` reads that manifest and populates `node_modules`.', 'Evidence 3: CI explicitly runs `npm install` before executing UI tests, so the supported test path installs TypeScript.', 'Evidence 5: A fresh worktree lacks populated `node_modules` unless installation is run; therefore the observed failure reflects skipped dependency setup, not a regression in the reviewed change.']"
+    },
+    {
+      "id": "cimergewait-exit0",
+      "ground_truth": "real_defect",
+      "modal_verdict": "real_defect",
+      "stability": 1.0,
+      "verdict_counts": {
+        "real_defect": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['evidence_0: The script prints \"CI FAILED: <check>\", establishing that it detects a failure outcome.', 'evidence_1: The failure path returns from main without calling \"exit 1\".', 'evidence_3: The script either ends without an explicit failure exit or reaches \"exit 0\".', 'evidence_4: Callers checking $LASTEXITCODE or $? consequently observe status 0 and are misled into treating the failed operation as successful.']"
+    },
+    {
+      "id": "vbs-syntax-validity",
+      "ground_truth": "false_positive",
+      "modal_verdict": "false_positive",
+      "stability": 1.0,
+      "verdict_counts": {
+        "false_positive": 3
+      },
+      "num_runs": 3,
+      "reasoning_sample": "['evidence_0: Reference VBScript documentation defines `shell.Run(strCommand, [intWindowStyle], [bWaitOnReturn])` as a valid function signature.', 'evidence_1: `rc = shell.Run(cmd, 0, True)` follows that signature with three arguments, including the boolean wait-on-return argument.', \"evidence_2: The assignment operator stores the function's integer exit-code return value in `rc`.\", \"evidence_4: TaskScheduler's `LastTaskResult` reflects the exit code after running the VBScript.\"]"
+    }
+  ]
+}
