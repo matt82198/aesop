@@ -471,5 +471,156 @@ class TestSeatedCorpusLoading(unittest.TestCase):
             Path(corpus_file).unlink()
 
 
+class TestPathRedaction(unittest.TestCase):
+    """Test path redaction helper function."""
+
+    def test_redact_home_paths(self):
+        """Verify home paths are redacted to <HOME>."""
+        test_text = (
+            "Code found at C:\\Users\\matt8\\project "
+            "and /c/Users/matt8/other"
+        )
+        redacted = seated.redact_paths(test_text)
+
+        self.assertNotIn("matt8", redacted)
+        self.assertIn("<HOME>", redacted)
+
+    def test_redact_repo_paths(self):
+        """Verify repo paths are redacted to <REPO>."""
+        test_text = "Path: C:\\Users\\matt8\\aesop\\state\\tracker.json"
+        redacted = seated.redact_paths(test_text)
+
+        self.assertNotIn("matt8", redacted)
+        self.assertNotIn("aesop", redacted)
+        self.assertIn("<REPO>", redacted)
+
+    def test_redaction_preserves_non_path_content(self):
+        """Verify non-path content is not redacted."""
+        test_text = "This is normal text about matt8 variables"
+        redacted = seated.redact_paths(test_text)
+
+        # Non-path references to matt8 should remain
+        self.assertIn("matt8", redacted)
+
+    def test_redaction_in_json_reasoning(self):
+        """Verify path redaction works in JSON reasoning strings."""
+        reasoning = (
+            "['Evidence from C:\\\\Users\\\\matt8\\\\aesop\\\\file.py', "
+            "'More text with /c/Users/matt8/test.sh']"
+        )
+        redacted = seated.redact_paths(reasoning)
+
+        self.assertNotIn("matt8", redacted)
+        self.assertIn("<REPO>", redacted)
+
+
+class TestModalVerdictExcludesDecisionFailed(unittest.TestCase):
+    """Test that DECISION_FAILED is excluded from modal verdict computation."""
+
+    def test_modal_excludes_decision_failed(self):
+        """Verify DECISION_FAILED verdicts are excluded from modal."""
+        corpus = [
+            seated.CorpusItem(
+                id="item1",
+                finding_text="Finding 1",
+                source_lens="lens1",
+                incumbent_verdict="real_defect",
+                ground_truth="real_defect",
+                gt_note="",
+                evidence=[],
+            ),
+        ]
+
+        # 2 real_defect, 1 DECISION_FAILED
+        verdicts = [
+            seated.SeatedVerdictItem(
+                id="item1",
+                run_num=1,
+                challenger_classification="real_defect",
+                challenger_reasoning="reason1",
+                schema_valid=True,
+                retries_used=0,
+                confidence=0.9,
+            ),
+            seated.SeatedVerdictItem(
+                id="item1",
+                run_num=2,
+                challenger_classification="real_defect",
+                challenger_reasoning="reason2",
+                schema_valid=True,
+                retries_used=0,
+                confidence=0.85,
+            ),
+            seated.SeatedVerdictItem(
+                id="item1",
+                run_num=3,
+                challenger_classification="DECISION_FAILED",
+                challenger_reasoning="Failed to decide",
+                schema_valid=False,
+                retries_used=2,
+                confidence=0.0,
+            ),
+        ]
+
+        aggregated = seated.aggregate_seated_results(verdicts, corpus, 3)
+        item1_agg = aggregated["per_item"][0]
+
+        # Modal should be real_defect, not DECISION_FAILED
+        self.assertEqual(item1_agg.modal_verdict, "real_defect")
+        self.assertAlmostEqual(item1_agg.stability, 2 / 3)
+
+    def test_modal_all_failed_explicit(self):
+        """Verify all-DECISION_FAILED case reports explicitly."""
+        corpus = [
+            seated.CorpusItem(
+                id="item1",
+                finding_text="Finding 1",
+                source_lens="lens1",
+                incumbent_verdict="real_defect",
+                ground_truth="real_defect",
+                gt_note="",
+                evidence=[],
+            ),
+        ]
+
+        # All verdicts are DECISION_FAILED
+        verdicts = [
+            seated.SeatedVerdictItem(
+                id="item1",
+                run_num=1,
+                challenger_classification="DECISION_FAILED",
+                challenger_reasoning="Failed to decide",
+                schema_valid=False,
+                retries_used=2,
+                confidence=0.0,
+            ),
+            seated.SeatedVerdictItem(
+                id="item1",
+                run_num=2,
+                challenger_classification="DECISION_FAILED",
+                challenger_reasoning="Failed to decide",
+                schema_valid=False,
+                retries_used=2,
+                confidence=0.0,
+            ),
+            seated.SeatedVerdictItem(
+                id="item1",
+                run_num=3,
+                challenger_classification="DECISION_FAILED",
+                challenger_reasoning="Failed to decide",
+                schema_valid=False,
+                retries_used=2,
+                confidence=0.0,
+            ),
+        ]
+
+        aggregated = seated.aggregate_seated_results(verdicts, corpus, 3)
+        item1_agg = aggregated["per_item"][0]
+
+        # Should explicitly report all failed, not DECISION_FAILED as a verdict
+        self.assertEqual(item1_agg.modal_verdict, "all_runs_failed")
+        self.assertEqual(item1_agg.stability, 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
