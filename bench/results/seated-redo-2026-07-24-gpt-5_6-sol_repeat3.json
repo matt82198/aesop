@@ -108,7 +108,7 @@
       "id": "test-hardcoded-path",
       "run_num": 1,
       "classification": "real_defect",
-      "reasoning": "[\"evidence_0: `wt_path = '/c/Users/matt8/aesop-wt-test'` is an absolute, developer-machine-specific path.\", 'evidence_1: On the CI runner, the path does not exist and `setUpClass` raises `FileNotFoundError`.', 'evidence_2: The test suite skips entirely on any machine without the hardcoded path, affecting required-check portability.']",
+      "reasoning": "[\"evidence_0: `wt_path = '<REPO>-wt-test'` is an absolute, developer-machine-specific path.\", 'evidence_1: On the CI runner, the path does not exist and `setUpClass` raises `FileNotFoundError`.', 'evidence_2: The test suite skips entirely on any machine without the hardcoded path, affecting required-check portability.']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.99
@@ -126,7 +126,7 @@
       "id": "fixreview-backtick-test",
       "run_num": 1,
       "classification": "false_positive",
-      "reasoning": "['evidence_0: The original buggy output was `/c/Users/matt8/aesop`whoami`, which contains a backtick.', \"evidence_1: The test logic `assert '`' not in result` would fail if that original corruption symptom regressed.\", 'evidence_2: The supplied semantic analysis states that the assertion distinguishes the buggy output from the fixed output.']",
+      "reasoning": "['evidence_0: The original buggy output was `<REPO>`whoami`, which contains a backtick.', \"evidence_1: The test logic `assert '`' not in result` would fail if that original corruption symptom regressed.\", 'evidence_2: The supplied semantic analysis states that the assertion distinguishes the buggy output from the fixed output.']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.99
@@ -252,7 +252,7 @@
       "id": "test-hardcoded-path",
       "run_num": 2,
       "classification": "real_defect",
-      "reasoning": "[\"evidence_0: `wt_path = '/c/Users/matt8/aesop-wt-test'` is an absolute, developer-machine-specific path.\", 'evidence_1: The CI runner does not have this path, causing `setUpClass` to raise `FileNotFoundError`.', 'evidence_2: The test suite does not execute on machines lacking the hardcoded path, affecting a required check.']",
+      "reasoning": "[\"evidence_0: `wt_path = '<REPO>-wt-test'` is an absolute, developer-machine-specific path.\", 'evidence_1: The CI runner does not have this path, causing `setUpClass` to raise `FileNotFoundError`.', 'evidence_2: The test suite does not execute on machines lacking the hardcoded path, affecting a required check.']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.99
@@ -270,7 +270,7 @@
       "id": "fixreview-backtick-test",
       "run_num": 2,
       "classification": "false_positive",
-      "reasoning": "['evidence_0 states that the original corrupted output was `/c/Users/matt8/aesop\\\\`whoami` and therefore contained a backtick.', \"evidence_1 states that `assert '`' not in result` would fail if the original bug regressed.\", 'evidence_2 states that backtick absence checks the symptom distinguishing the buggy output from the fixed output.']",
+      "reasoning": "['evidence_0 states that the original corrupted output was `<REPO>\\\\`whoami` and therefore contained a backtick.', \"evidence_1 states that `assert '`' not in result` would fail if the original bug regressed.\", 'evidence_2 states that backtick absence checks the symptom distinguishing the buggy output from the fixed output.']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.99
@@ -396,7 +396,7 @@
       "id": "test-hardcoded-path",
       "run_num": 3,
       "classification": "real_defect",
-      "reasoning": "[\"evidence_0: `wt_path = '/c/Users/matt8/aesop-wt-test'` is an absolute developer-machine-specific path.\", 'evidence_1: The CI runner does not have that path, causing `setUpClass` to raise `FileNotFoundError`.', 'evidence_2: The test suite skips entirely on machines without the hardcoded path, and the finding states this errors a required check.']",
+      "reasoning": "[\"evidence_0: `wt_path = '<REPO>-wt-test'` is an absolute developer-machine-specific path.\", 'evidence_1: The CI runner does not have that path, causing `setUpClass` to raise `FileNotFoundError`.', 'evidence_2: The test suite skips entirely on machines without the hardcoded path, and the finding states this errors a required check.']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.99
@@ -414,7 +414,7 @@
       "id": "fixreview-backtick-test",
       "run_num": 3,
       "classification": "false_positive",
-      "reasoning": "['Evidence_0 states that the original corrupted output was `/c/Users/matt8/aesop\\\\`whoami`, which contains a backtick.', \"Evidence_1 states that `assert '`' not in result` would fail if that original bug regressed.\", 'Evidence_2 states that the assertion checks the symptom distinguishing buggy output from fixed output.']",
+      "reasoning": "['Evidence_0 states that the original corrupted output was `<REPO>\\\\`whoami`, which contains a backtick.', \"Evidence_1 states that `assert '`' not in result` would fail if that original bug regressed.\", 'Evidence_2 states that the assertion checks the symptom distinguishing buggy output from fixed output.']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.99
@@ -567,7 +567,7 @@
         "real_defect": 3
       },
       "num_runs": 3,
-      "reasoning_sample": "[\"evidence_0: `wt_path = '/c/Users/matt8/aesop-wt-test'` is an absolute, developer-machine-specific path.\", 'evidence_1: On the CI runner, the path does not exist and `setUpClass` raises `FileNotFoundError`.', 'evidence_2: The test suite skips entirely on any machine without the hardcoded path, affecting required-check portability.']"
+      "reasoning_sample": "[\"evidence_0: `wt_path = '<REPO>-wt-test'` is an absolute, developer-machine-specific path.\", 'evidence_1: On the CI runner, the path does not exist and `setUpClass` raises `FileNotFoundError`.', 'evidence_2: The test suite skips entirely on any machine without the hardcoded path, affecting required-check portability.']"
     },
     {
       "id": "fixreview-parents1",
@@ -589,7 +589,7 @@
         "false_positive": 3
       },
       "num_runs": 3,
-      "reasoning_sample": "['evidence_0: The original buggy output was `/c/Users/matt8/aesop`whoami`, which contains a backtick.', \"evidence_1: The test logic `assert '`' not in result` would fail if that original corruption symptom regressed.\", 'evidence_2: The supplied semantic analysis states that the assertion distinguishes the buggy output from the fixed output.']"
+      "reasoning_sample": "['evidence_0: The original buggy output was `<REPO>`whoami`, which contains a backtick.', \"evidence_1: The test logic `assert '`' not in result` would fail if that original corruption symptom regressed.\", 'evidence_2: The supplied semantic analysis states that the assertion distinguishes the buggy output from the fixed output.']"
     },
     {
       "id": "regression-ui-suite",

@@ -108,7 +108,7 @@
       "id": "test-hardcoded-path",
       "run_num": 1,
       "classification": "real_defect",
-      "reasoning": "[\"evidence_0: setUpClass hardcodes the absolute machine-specific path `wt_path = '/c/Users/matt8/aesop-wt-test'`.\", 'evidence_1: The CI runner does not contain `/c/Users/matt8/aesop-wt-test`.', 'evidence_2 and evidence_3: setUpClass runs before test methods, calls Test-Path on the hardcoded path, and raises FileNotFoundError when it is absent.', 'evidence_4: An exception from setUpClass prevents the entire test suite from executing, affecting a required check.']",
+      "reasoning": "[\"evidence_0: setUpClass hardcodes the absolute machine-specific path `wt_path = '<REPO>-wt-test'`.\", 'evidence_1: The CI runner does not contain `<REPO>-wt-test`.', 'evidence_2 and evidence_3: setUpClass runs before test methods, calls Test-Path on the hardcoded path, and raises FileNotFoundError when it is absent.', 'evidence_4: An exception from setUpClass prevents the entire test suite from executing, affecting a required check.']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.99
@@ -126,7 +126,7 @@
       "id": "fixreview-backtick-test",
       "run_num": 1,
       "classification": "false_positive",
-      "reasoning": "['evidence_0: The original path-corruption bug produced output containing backticks: `/c/Users/matt8/aesop\\\\`whoami\\\\``.', \"evidence_2: The regression test contains `assert '`' not in result`.\", 'evidence_3: When a backtick is present, that assertion is false and the test fails; therefore it catches the documented original failure mode.', 'evidence_1 and evidence_4: The corrected output contains no backticks, so the assertion is true and the test passes.']",
+      "reasoning": "['evidence_0: The original path-corruption bug produced output containing backticks: `<REPO>\\\\`whoami\\\\``.', \"evidence_2: The regression test contains `assert '`' not in result`.\", 'evidence_3: When a backtick is present, that assertion is false and the test fails; therefore it catches the documented original failure mode.', 'evidence_1 and evidence_4: The corrected output contains no backticks, so the assertion is true and the test passes.']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.99
@@ -252,7 +252,7 @@
       "id": "test-hardcoded-path",
       "run_num": 2,
       "classification": "real_defect",
-      "reasoning": "[\"evidence_0: setUpClass assigns the absolute, machine-specific path '/c/Users/matt8/aesop-wt-test'.\", 'evidence_1: The CI runner does not contain that directory.', 'evidence_2 and evidence_3: setUpClass runs before test methods and raises FileNotFoundError when Test-Path reports the path missing.', 'evidence_4: An exception from setUpClass prevents the entire suite from executing, making this blocking rather than a non-blocking portability enhancement.']",
+      "reasoning": "[\"evidence_0: setUpClass assigns the absolute, machine-specific path '<REPO>-wt-test'.\", 'evidence_1: The CI runner does not contain that directory.', 'evidence_2 and evidence_3: setUpClass runs before test methods and raises FileNotFoundError when Test-Path reports the path missing.', 'evidence_4: An exception from setUpClass prevents the entire suite from executing, making this blocking rather than a non-blocking portability enhancement.']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.99
@@ -270,7 +270,7 @@
       "id": "fixreview-backtick-test",
       "run_num": 2,
       "classification": "false_positive",
-      "reasoning": "['evidence_0 states that the original path-corruption output contained a backtick: `/c/Users/matt8/aesop\\\\`whoami``.', \"evidence_2 shows the regression assertion is `assert '`' not in result`.\", 'evidence_3 states that this assertion fails when a backtick is present; therefore, it catches the supplied original corrupted output.', 'evidence_1 and evidence_4 establish that the corrected output lacks a backtick and consequently passes the assertion.']",
+      "reasoning": "['evidence_0 states that the original path-corruption output contained a backtick: `<REPO>\\\\`whoami``.', \"evidence_2 shows the regression assertion is `assert '`' not in result`.\", 'evidence_3 states that this assertion fails when a backtick is present; therefore, it catches the supplied original corrupted output.', 'evidence_1 and evidence_4 establish that the corrected output lacks a backtick and consequently passes the assertion.']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.99
@@ -396,7 +396,7 @@
       "id": "test-hardcoded-path",
       "run_num": 3,
       "classification": "real_defect",
-      "reasoning": "[\"evidence_0: setUpClass assigns the machine-specific absolute path `wt_path = '/c/Users/matt8/aesop-wt-test'`.\", 'evidence_1: The CI runner does not have a directory at `/c/Users/matt8/aesop-wt-test`.', 'evidence_2 and evidence_3: setUpClass runs before test methods and raises FileNotFoundError when Test-Path reports that the path is absent.', 'evidence_4: An exception from setUpClass prevents the entire suite from executing, affecting a required check.']",
+      "reasoning": "[\"evidence_0: setUpClass assigns the machine-specific absolute path `wt_path = '<REPO>-wt-test'`.\", 'evidence_1: The CI runner does not have a directory at `<REPO>-wt-test`.', 'evidence_2 and evidence_3: setUpClass runs before test methods and raises FileNotFoundError when Test-Path reports that the path is absent.', 'evidence_4: An exception from setUpClass prevents the entire suite from executing, affecting a required check.']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.99
@@ -414,7 +414,7 @@
       "id": "fixreview-backtick-test",
       "run_num": 3,
       "classification": "false_positive",
-      "reasoning": "['evidence_0 states that the original path-corruption output contained backticks: `/c/Users/matt8/aesop\\\\`whoami\\\\``.', \"evidence_2 shows the regression assertion is `assert '`' not in result`.\", 'evidence_3 states that when a backtick is present, this assertion is false and the test fails; therefore it catches the documented original failure output.', 'evidence_1 and evidence_4 establish that the corrected output has no backticks and consequently passes the assertion.']",
+      "reasoning": "['evidence_0 states that the original path-corruption output contained backticks: `<REPO>\\\\`whoami\\\\``.', \"evidence_2 shows the regression assertion is `assert '`' not in result`.\", 'evidence_3 states that when a backtick is present, this assertion is false and the test fails; therefore it catches the documented original failure output.', 'evidence_1 and evidence_4 establish that the corrected output has no backticks and consequently passes the assertion.']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.99
@@ -569,7 +569,7 @@
         "real_defect": 3
       },
       "num_runs": 3,
-      "reasoning_sample": "[\"evidence_0: setUpClass hardcodes the absolute machine-specific path `wt_path = '/c/Users/matt8/aesop-wt-test'`.\", 'evidence_1: The CI runner does not contain `/c/Users/matt8/aesop-wt-test`.', 'evidence_2 and evidence_3: setUpClass runs before test methods, calls Test-Path on the hardcoded path, and raises FileNotFoundError when it is absent.', 'evidence_4: An exception from setUpClass prevents the entire test suite from executing, affecting a required check.']"
+      "reasoning_sample": "[\"evidence_0: setUpClass hardcodes the absolute machine-specific path `wt_path = '<REPO>-wt-test'`.\", 'evidence_1: The CI runner does not contain `<REPO>-wt-test`.', 'evidence_2 and evidence_3: setUpClass runs before test methods, calls Test-Path on the hardcoded path, and raises FileNotFoundError when it is absent.', 'evidence_4: An exception from setUpClass prevents the entire test suite from executing, affecting a required check.']"
     },
     {
       "id": "fixreview-parents1",
@@ -591,7 +591,7 @@
         "false_positive": 3
       },
       "num_runs": 3,
-      "reasoning_sample": "['evidence_0: The original path-corruption bug produced output containing backticks: `/c/Users/matt8/aesop\\\\`whoami\\\\``.', \"evidence_2: The regression test contains `assert '`' not in result`.\", 'evidence_3: When a backtick is present, that assertion is false and the test fails; therefore it catches the documented original failure mode.', 'evidence_1 and evidence_4: The corrected output contains no backticks, so the assertion is true and the test passes.']"
+      "reasoning_sample": "['evidence_0: The original path-corruption bug produced output containing backticks: `<REPO>\\\\`whoami\\\\``.', \"evidence_2: The regression test contains `assert '`' not in result`.\", 'evidence_3: When a backtick is present, that assertion is false and the test fails; therefore it catches the documented original failure mode.', 'evidence_1 and evidence_4: The corrected output contains no backticks, so the assertion is true and the test passes.']"
     },
     {
       "id": "regression-ui-suite",
