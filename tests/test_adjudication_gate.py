@@ -851,5 +851,122 @@ class TestAdjudicationGate(unittest.TestCase):
         self.assertEqual(result["confidence"], 0.98)
 
 
+class TestGateConfidenceAndVerdictHardening(unittest.TestCase):
+    """R2 break-it hardening: NaN/bool confidence, case-variant reserved verdicts,
+    and missing incumbent verdicts must all fail CLOSED (escalate / unresolved)."""
+
+    def setUp(self):
+        self.context_pack = type("ContextPack", (), {"content": {}})()
+        self.incumbent = FakeIncumbent(
+            correct_verdicts={
+                "t": {
+                    "verdict": "approved",
+                    "evidence": ["Incumbent ground truth"],
+                    "confidence": 0.95,
+                }
+            }
+        )
+
+    def _gate_for(self, challenger_verdict_dict):
+        challenger = FakeChallengerDriver(verdicts={"t": challenger_verdict_dict})
+        return AdjudicationGate(
+            challenger=challenger,
+            incumbent_fn=self.incumbent,
+            spot_check_frac=0.0,
+        )
+
+    def test_nan_confidence_escalates_not_accepted(self):
+        """confidence=NaN makes every threshold comparison False; must escalate."""
+        gate = self._gate_for(
+            {
+                "verdict": "approved",
+                "evidence": ["e"],
+                "confidence": float("nan"),
+            }
+        )
+        result = gate.adjudicate("t", self.context_pack)
+        self.assertEqual(result["source"], "escalated-lowconf")
+        self.assertEqual(result["verdict"], "approved")  # incumbent's
+
+    def test_bool_true_confidence_escalates_not_accepted(self):
+        """confidence=true (bool) is not 1.0 confidence; must escalate."""
+        gate = self._gate_for(
+            {"verdict": "approved", "evidence": ["e"], "confidence": True}
+        )
+        result = gate.adjudicate("t", self.context_pack)
+        self.assertEqual(result["source"], "escalated-lowconf")
+
+    def test_uppercase_undetermined_escalates(self):
+        """Case variants of 'undetermined' must not pass as a confident verdict."""
+        gate = self._gate_for(
+            {"verdict": "UNDETERMINED", "evidence": ["e"], "confidence": 0.99}
+        )
+        result = gate.adjudicate("t", self.context_pack)
+        self.assertEqual(result["source"], "escalated-undetermined")
+        self.assertEqual(result["verdict"], "approved")
+
+    def test_lowercase_decision_failed_escalates(self):
+        """Case variants of DECISION_FAILED must be treated as failure."""
+        gate = self._gate_for(
+            {"verdict": "decision_failed", "evidence": ["e"], "confidence": 0.99}
+        )
+        result = gate.adjudicate("t", self.context_pack)
+        self.assertEqual(result["source"], "escalated-failed")
+        self.assertEqual(result["verdict"], "approved")
+
+    def test_non_string_challenger_verdict_escalates_as_failed(self):
+        """A None/non-string challenger verdict is a failure, never final."""
+        gate = self._gate_for({"evidence": ["e"], "confidence": 0.99})
+        result = gate.adjudicate("t", self.context_pack)
+        self.assertEqual(result["source"], "escalated-failed")
+        self.assertEqual(result["verdict"], "approved")
+
+    def test_incumbent_missing_verdict_marked_unresolved(self):
+        """Incumbent dict without a 'verdict' key must be flagged unresolved,
+        not presented as a resolved final verdict of None."""
+        challenger = FakeChallengerDriver(
+            verdicts={
+                "t": {
+                    "verdict": "undetermined",
+                    "evidence": ["e"],
+                    "confidence": 0.0,
+                }
+            }
+        )
+        gate = AdjudicationGate(
+            challenger=challenger,
+            incumbent_fn=lambda dt, cp, schema=None: {"evidence": ["no verdict key"]},
+            spot_check_frac=0.0,
+        )
+        result = gate.adjudicate("t", self.context_pack)
+        self.assertTrue(result.get("escalation_unresolved"))
+
+    def test_spot_check_frac_rounding_not_truncated(self):
+        """int(0.29 * 100) == 28; the sampler must round, not truncate."""
+        gate = AdjudicationGate(
+            challenger=FakeChallengerDriver(),
+            incumbent_fn=self.incumbent,
+            spot_check_frac=0.29,
+        )
+        # Count sampled fraction over many distinct items; threshold inside
+        # _should_spot_check must be 29, not 28. We assert the computed
+        # threshold directly via the modulus behavior: find an item whose
+        # hash % 100 == 28 -> must be sampled under frac=0.29.
+        import hashlib as _h
+        import json as _j
+
+        found = False
+        for i in range(2000):
+            pack = type("ContextPack", (), {"content": {"i": str(i)}})()
+            canonical = "dt|" + _j.dumps(
+                sorted(pack.content.items()), separators=(",", ":")
+            )
+            if int(_h.md5(canonical.encode()).hexdigest(), 16) % 100 == 28:
+                self.assertTrue(gate._should_spot_check("dt", pack))
+                found = True
+                break
+        self.assertTrue(found, "no item with hash%100==28 found in range")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -300,13 +300,16 @@ def _read_source(
                 f"brief: source has no path: {source_name}"
             )
 
-        if not _is_allowed_path(path_spec, repo_root, conductor_root):
+        # Resolve ONCE, validate the RESOLVED path, then read that exact path.
+        # (Resolving separately for the check and the read is a TOCTOU window:
+        # a symlink swap between the two resolves could redirect the read
+        # outside the allowlist.)
+        brief_file = Path(path_spec).resolve()
+        if not _is_allowed_path(str(brief_file), repo_root, conductor_root):
             raise ContextPackViolation(
                 f"brief:{path_spec} is not under allowlisted roots "
                 f"({repo_root}, {conductor_root})"
             )
-
-        brief_file = Path(path_spec).resolve()
         if brief_file.exists():
             try:
                 text = brief_file.read_text(encoding="utf-8")
@@ -376,8 +379,10 @@ def _truncate_pack(pack: ContextPack, size_cap: int) -> None:
 
             pack.content[source_name] = best_text
             pack.total_size_bytes -= current_size - best_size
-            manifest_entry["truncated"] = True
-            manifest_entry["truncation_reason"] = "size_cap_exceeded"
+            # Manifest honesty: only claim truncation if content actually shrank.
+            if best_size < current_size:
+                manifest_entry["truncated"] = True
+                manifest_entry["truncation_reason"] = "size_cap_exceeded"
             manifest_entry["size_bytes"] = best_size
 
         # For other sources, truncate end of text.
@@ -397,8 +402,10 @@ def _truncate_pack(pack: ContextPack, size_cap: int) -> None:
 
             pack.content[source_name] = best_text
             pack.total_size_bytes -= current_size - best_size
-            manifest_entry["truncated"] = True
-            manifest_entry["truncation_reason"] = "size_cap_exceeded"
+            # Manifest honesty: only claim truncation if content actually shrank.
+            if best_size < current_size:
+                manifest_entry["truncated"] = True
+                manifest_entry["truncation_reason"] = "size_cap_exceeded"
             manifest_entry["size_bytes"] = best_size
 
 
@@ -440,6 +447,8 @@ def _truncate_evidence(pack: ContextPack, size_cap: int) -> None:
 
         pack.evidence[evidence_name] = best_text
         pack.evidence_size_bytes -= current_size - best_size
-        manifest_entry["truncated"] = True
-        manifest_entry["truncation_reason"] = "evidence_size_cap_exceeded"
+        # Manifest honesty: only claim truncation if content actually shrank.
+        if best_size < current_size:
+            manifest_entry["truncated"] = True
+            manifest_entry["truncation_reason"] = "evidence_size_cap_exceeded"
         manifest_entry["size_bytes"] = best_size
