@@ -116,8 +116,8 @@ class OrchestratorDriver:
         Returns:
             A dict with at least:
               {
-                "verdict": "APPROVED" | "REJECTED" | "NEEDS_CHANGES" | "DECISION_FAILED",
-                "evidence": "Reasoning (citations to context pack sources).",
+                "verdict": "<enum value from the decision type's schema>" | "DECISION_FAILED",
+                "evidence": ["citation 1", ...],  # array of >=1 non-empty strings
                 "decision_type": str,
                 "retry_count": int,
                 "schema_validated": bool,  # True if validated against schema
@@ -298,12 +298,15 @@ class OrchestratorDriver:
                 if field not in result:
                     return False
 
-            # Validate verdict enum if schema defines it.
+            # Validate verdict enum. NOTE (fail-closed by design): a schema whose
+            # verdict property has NO enum, or an EMPTY enum, rejects every verdict
+            # (.get("enum", []) makes missing == empty). All shipped schemas define
+            # a non-empty verdict enum; custom schemas MUST too, or every decision
+            # returns DECISION_FAILED.
             verdict_schema = schema.get("properties", {}).get("verdict", {})
             allowed_verdicts = verdict_schema.get("enum", [])
             # P3 FIX: Fail-closed on empty enum (no verdict is valid).
             if allowed_verdicts is not None:
-                # If enum exists (even if empty), verdict must be in it.
                 if result.get("verdict") not in allowed_verdicts:
                     return False
 
