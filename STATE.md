@@ -49,8 +49,17 @@ entry; "Autonomous Developer" tagline reframe. Incidents logged: recency agent -
 (guards proposed), PostToolUse hook wave-trigger misfire (FLEET-OPS).
 
 ## NEXT STEPS
-- **0.4.0 Release Gate**: User publishes v0.4.0 tag + npm latest (BLOCKED on user decision; main@cf7fdbb green).
-- **Wave-31+ Backlog** (tracked/BUILDLOG): WS3b failure-recovery + unsupervised loop, WriteAPI caller migration, StateAPI 33-entry burndown, frontier live-run (spend-gated $10), external-benchmark slice, windows runner-contention hardening (residual: per-test node timeout, spawn-heavy suites), test_frontier_slice test-pollution, ps1-syntax CI gate, install-tasks audit log, driver/CLAUDE.md restructure decision, inc 2.6 broader corpus (5 open parked items tracked in state/tracker.json).
+- **0.4.0 Release Gate**: v0.4.0 staged on main@ff4c706 + /refinesystem CLEAN (CI+main-full green). All HS hardening PRs (#371–#381) merged. Awaiting user publish decision (cut v0.4.0 tag + npm release).
+- **Scheduled State-Layer Consolidation** (tracked items c7f4a8b2e3d1, d9e5b1c4f2a3):
+  - Claim/coordination multi-instance lifecycle completion (F4-F7): crash-orphan recovery, liveness detection, repo-aware claim key, claims-stream compaction, monotonic expiry.
+  - Residuals from RS6: millisecond git-layer ship TOCTOU (needs fencing token at git layer).
+- **Process Improvements** (tracked items e7c2d3f8a9b1, f1a4e6b9c2d7):
+  - Add `workflow_dispatch:` trigger to main-full.yml (enable manual re-run for wedged post-merge CI without waiting for next push).
+  - Auto-updating or remove python-count drift gate in tests/CLAUDE.md (collided 4x this session; either auto-bump on test run or remove if not serving enforcement).
+- **Wave-31+ Backlog** (tracked in state/tracker.json, see BUILDLOG.md):
+  - PS1 syntax CI gate (a16eac67f7de), install-tasks audit log (fb142031d1dc), test_frontier_slice test-pollution (3f7c9a2e8b14).
+  - WS3b failure-recovery + unsupervised loop, WriteAPI caller migration, StateAPI burndown, frontier live-run, external-benchmark, windows runner-contention (per-test timeout + spawn-heavy suite isolation).
+  - Driver/CLAUDE.md restructure decision (f84f587573fc), inc 2.6 broader corpus (d1c69aed37f9), Windows SSE socket-race stderr noise (c2dceefcec8c, optional deeper fix).
 - **Deferred User Call**: Delete defective v0.3.0 GitHub release entry (not near-term).
 
 ## Phase history (collapsed)
