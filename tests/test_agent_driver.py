@@ -383,6 +383,37 @@ class TestClaudeCodeDriver(_DriverContractMixin, unittest.TestCase):
                       "partial stderr dropped on timeout")
         self.assertIn("timed out", result.stderr)
 
+    def test_run_command_handles_non_utf8_bytes(self):
+        """RS3-P: non-UTF-8 bytes do not crash the reader thread.
+
+        A child process emitting non-cp1252 bytes (e.g. UTF-8 multi-byte
+        sequences like the ❌ emoji = U+274C = bytes 0xE2 0x9D 0x8C) must not
+        cause UnicodeDecodeError in the reader thread. Instead, the bytes should
+        be replaced with replacement characters and the output preserved (not lost).
+        """
+        d = ClaudeCodeDriver()
+        # Python script that outputs the ❌ emoji (UTF-8 encoded) to both stdout
+        # and stderr. This is valid UTF-8 but would fail hard in cp1252 mode.
+        cmd = (sys.executable +
+               ' -c "import sys; '
+               'sys.stdout.write(\'BEFORE_EMOJI\'); '
+               'sys.stdout.buffer.write(b\'\\xe2\\x9d\\x8c\'); '  # UTF-8 for ❌
+               'sys.stdout.write(\'AFTER_EMOJI\\n\'); '
+               'sys.stderr.buffer.write(b\'\\xe2\\x9d\\x8c\\n\'); '  # Same to stderr
+               'sys.exit(0)"')
+        result = d.run_command(cmd)
+        # Exit code must be preserved even if bytes are non-cp1252
+        self.assertEqual(result.exit_code, 0, "exit code must be preserved")
+        # Output must NOT be empty (the bug: reader thread crashes -> empty output)
+        self.assertTrue(result.stdout, "stdout must not be empty")
+        self.assertTrue(result.stderr, "stderr must not be empty")
+        # Output should contain the before/after marks (the emoji is replaced)
+        self.assertIn("BEFORE_EMOJI", result.stdout)
+        self.assertIn("AFTER_EMOJI", result.stdout)
+        # Stderr should have the replacement marker or the bytes decoded as utf-8
+        # with errors="replace"; we just check it's not empty and has no exception
+        self.assertTrue(len(result.stderr) > 0)
+
     def test_dispatch_is_harness_only(self):
         # The reference adapter must fail loudly rather than fake a Claude agent
         # from plain Python.
