@@ -1114,5 +1114,138 @@ class TestSpotCheckPerItemIndependence(unittest.TestCase):
         )
 
 
+class TestSpotCheckFallbackNonRaise(unittest.TestCase):
+    """F10: Verify fallback in _should_spot_check does NOT re-raise on unsortable keys.
+
+    Verified finding F10 (P3): when sorted(evidence.items()) raises TypeError due to
+    unsortable keys (e.g., mixing int and str), the except clause must handle it
+    gracefully WITHOUT re-running the operation that can raise. The old code called
+    sorted() AGAIN in the fallback, causing a re-raise and crash.
+
+    The fix: use a robust fallback (repr of a defensive list, or similar) that
+    CANNOT raise, ensuring the fallback itself is safe.
+    """
+
+    def setUp(self):
+        self.challenger = FakeChallengerDriver()
+        self.incumbent = FakeIncumbent()
+
+    def test_unsortable_keys_does_not_crash_fallback(self):
+        """Evidence with unsortable keys (int + str) must not raise in fallback.
+
+        Create an evidence dict with mixed-type keys (int and str).
+        sorted() will raise TypeError. The fallback must handle it gracefully.
+        """
+        # Create evidence with unsortable keys (int + str).
+        # This will cause sorted(evidence.items()) to raise TypeError.
+        unsortable_evidence = {
+            "string_key": "value",
+            123: "numeric_key_value",
+        }
+
+        context_pack = type("ContextPack", (), {
+            "content": {"state": "test"},
+            "evidence": unsortable_evidence
+        })()
+
+        gate = AdjudicationGate(
+            challenger=self.challenger,
+            incumbent_fn=self.incumbent,
+            spot_check_frac=0.0,
+        )
+
+        # This must NOT raise an exception (F10 fix).
+        # It should return a deterministic boolean (True or False),
+        # and if called again with the same content + evidence, return the same result.
+        try:
+            result1 = gate._should_spot_check("test_type", context_pack)
+            # Call again to verify determinism.
+            result2 = gate._should_spot_check("test_type", context_pack)
+            # Both calls should succeed and return the same result (deterministic).
+            self.assertEqual(result1, result2,
+                           "Spot-check must be deterministic for identical context")
+        except TypeError as e:
+            # If we get here, F10 is not fixed: the fallback re-raised.
+            self.fail(f"Fallback re-raised TypeError (F10 not fixed): {e}")
+
+    def test_unsortable_evidence_yields_safe_digest(self):
+        """Evidence with unsortable keys must produce a safe, deterministic digest.
+
+        The digest should be stable (same evidence -> same hash -> same spot-check decision)
+        even when the evidence cannot be sorted.
+        """
+        unsortable_evidence = {
+            "x": [1, 2, 3],
+            100: "numeric",
+        }
+
+        context_pack = type("ContextPack", (), {
+            "content": {},
+            "evidence": unsortable_evidence
+        })()
+
+        gate = AdjudicationGate(
+            challenger=self.challenger,
+            incumbent_fn=self.incumbent,
+            spot_check_frac=0.5,
+        )
+
+        # Call multiple times; should never raise.
+        results = []
+        for _ in range(5):
+            try:
+                result = gate._should_spot_check("some_type", context_pack)
+                results.append(result)
+            except TypeError:
+                self.fail("_should_spot_check raised TypeError with unsortable evidence")
+
+        # All results should be identical (deterministic).
+        self.assertEqual(len(set(results)), 1,
+                       "Unsortable evidence must produce deterministic spot-check decision")
+
+    def test_adjudicate_with_unsortable_evidence_completes_safely(self):
+        """Full adjudication flow with unsortable evidence must not crash.
+
+        This is an end-to-end test: adjudicate() calls _should_spot_check() internally.
+        If the evidence is unsortable, the fallback must still handle it safely.
+        """
+        self.challenger.verdicts["unsort_type"] = {
+            "verdict": "approved",
+            "evidence": ["Test"],
+            "confidence": 0.85,
+        }
+        self.incumbent.correct_verdicts["unsort_type"] = {
+            "verdict": "approved",
+            "evidence": ["OK"],
+            "confidence": 0.95,
+        }
+
+        unsortable_evidence = {
+            "finding_1": "description",
+            999: "mixed_key",
+        }
+
+        context_pack = type("ContextPack", (), {
+            "content": {},
+            "evidence": unsortable_evidence
+        })()
+
+        gate = AdjudicationGate(
+            challenger=self.challenger,
+            incumbent_fn=self.incumbent,
+            spot_check_frac=0.5,
+        )
+
+        # adjudicate() must complete without raising, even with unsortable evidence.
+        try:
+            result = gate.adjudicate("unsort_type", context_pack)
+            # Verify the result is well-formed.
+            self.assertIn("verdict", result)
+            self.assertIn("source", result)
+            self.assertIn("confidence", result)
+        except TypeError:
+            self.fail("adjudicate() raised TypeError (fallback in _should_spot_check not safe)")
+
+
 if __name__ == "__main__":
     unittest.main()

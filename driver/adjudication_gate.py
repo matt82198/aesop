@@ -293,8 +293,9 @@ class AdjudicationGate:
                     )
                     canonical += evidence_text
                 except (TypeError, ValueError):
-                    # If JSON encoding fails, fall back to stable repr.
-                    canonical += repr(sorted(evidence.items()) if isinstance(evidence, dict) else evidence)
+                    # F10 FIX: If sorting fails (unsortable keys), use repr on the dict itself
+                    # (not sorted items). This fallback CANNOT raise from sorted() again.
+                    canonical += repr(evidence)
             else:
                 # Non-dict evidence: convert to stable string.
                 canonical += repr(evidence)
