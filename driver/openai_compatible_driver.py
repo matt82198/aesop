@@ -34,7 +34,7 @@ from backend_config import (  # noqa: E402
     validate_is_local_base_url,
 )
 from codex_driver import CodexDriver  # noqa: E402
-from openai_transport import _AuthStripRedirectHandler  # noqa: E402
+from openai_transport import _AuthStripRedirectHandler, MAX_RESPONSE_SIZE  # noqa: E402
 
 
 def make_openai_compatible_transport(
@@ -109,7 +109,16 @@ def make_openai_compatible_transport(
             opener = urllib.request.build_opener(_AuthStripRedirectHandler())
             with opener.open(request, timeout=timeout_s) as response:
                 status = response.status
-                body = response.read().decode("utf-8")
+                # Cap response read at MAX_RESPONSE_SIZE bytes before parsing.
+                # Read MAX_RESPONSE_SIZE+1 bytes to detect if response exceeds limit.
+                body_bytes = response.read(MAX_RESPONSE_SIZE + 1)
+                if len(body_bytes) > MAX_RESPONSE_SIZE:
+                    raise RuntimeError(
+                        f"Response size limit exceeded: {len(body_bytes)} bytes > "
+                        f"{MAX_RESPONSE_SIZE} bytes ({MAX_RESPONSE_SIZE // 1024}KB). "
+                        f"The response is too large."
+                    )
+                body = body_bytes.decode("utf-8")
 
             # Classify non-2xx as an error.
             if not (200 <= status < 300):
