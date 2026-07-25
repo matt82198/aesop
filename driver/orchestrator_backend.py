@@ -321,9 +321,11 @@ class OpenAICompatibleOrchestratorBackend(OrchestratorBackend):
             raise RuntimeError("Empty completion text from API")
 
         # Enforce response size limit to prevent excessive memory use.
-        if len(completion_text) > self.MAX_RESPONSE_SIZE:
+        # Measure BYTES not CHARS (multi-byte UTF-8 chars count as multiple bytes).
+        completion_bytes = completion_text.encode("utf-8")
+        if len(completion_bytes) > self.MAX_RESPONSE_SIZE:
             raise RuntimeError(
-                f"Response size limit exceeded: {len(completion_text)} bytes > "
+                f"Response size limit exceeded: {len(completion_bytes)} bytes > "
                 f"{self.MAX_RESPONSE_SIZE} bytes (100KB). The response is too large."
             )
 
