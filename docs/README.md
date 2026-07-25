@@ -89,6 +89,7 @@ Once you've completed the adopter journey, use these for operational reference:
 
 ### Wave Cycle & Orchestration
 - **[HOW-THE-LOOP-WORKS.md](HOW-THE-LOOP-WORKS.md)** — Concrete walkthrough of one complete `/buildsystem` wave cycle (rank → fan-out → verify → merge → close)
+- **[MICROKERNEL.md](MICROKERNEL.md)** — The two swappable seats (worker + orchestrator): what's invariant across a model swap, what's proven vs. bounded, and a 60-second quickstart
 
 ### Dispatch & Cost
 - **[DISPATCH-MODEL.md](DISPATCH-MODEL.md)** — Haiku-first subagent dispatch, cost analysis, patterns (fan-out, sequential, hierarchical)
@@ -143,6 +144,9 @@ Once you've completed the adopter journey, use these for operational reference:
 
 **I want to understand multi-instance coordination**
 → [TEAM-STATE.md](TEAM-STATE.md)
+
+**I want to swap the worker or orchestrator model (Ollama, OpenRouter, OpenAI...)**
+→ [MICROKERNEL.md](MICROKERNEL.md)
 
 **I'm reviewing a PR that changes orchestration behavior**
 → [BEHAVIORAL-PR-REVIEW.md](BEHAVIORAL-PR-REVIEW.md)
