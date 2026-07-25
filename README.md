@@ -16,9 +16,9 @@
 
 **Aesop** is a **crash-recoverable orchestration harness** for multi-agent workflows on any repository. One-line theme: *stateless agent execution over git-backed durable memory*.
 
-Core idea: **agent behavior is source code.** Every decision lives in durable, human-diffable files—git history, plain-text STATE.md, append-only BUILDLOG.md, Python guardrails. When a machine fails, you re-read from disk. No vector DBs, no distributed consensus, no magic. This repo's own 386 merged PRs across 1180 commits were delivered by Aesop's own `/buildsystem` wave loop—a supervised loop under a human operator who sets goals and owns outward gates (npm publish, releases, history rewrites).
+Core idea: **agent behavior is source code.** Every decision lives in durable, human-diffable files—git history, plain-text STATE.md, append-only BUILDLOG.md, Python guardrails. When a machine fails, you re-read from disk. No vector DBs, no distributed consensus, no magic. This repo's own 268 merged PRs across 1181 commits were delivered by Aesop's own `/buildsystem` wave loop—a supervised loop under a human operator who sets goals and owns outward gates (npm publish, releases, history rewrites).
 
-**Why it matters:** crash recovery is not a special path; it is how the system *always* starts. Stateless workers, persistent filesystem brain, Haiku-first dispatch (4.3× cheaper than hierarchical design, proven by real A/B), fail-closed guardrails (pre-push secret gate, kill-switch, cost ceiling), and observable heartbeats. The result: 386 PRs across 1180 commits; Haiku at 39/39 on a 39-task benchmark vs Opus 38/39, at ~1/3 the cost.
+**Why it matters:** crash recovery is not a special path; it is how the system *always* starts. Stateless workers, persistent filesystem brain, Haiku-first dispatch (4.3× cheaper than hierarchical design, proven by real A/B), fail-closed guardrails (pre-push secret gate, kill-switch, cost ceiling), and observable heartbeats. The result: 268 PRs across 1181 commits; Haiku at 39/39 on a 39-task benchmark vs Opus 38/39, at ~1/3 the cost.
 
 **Why it's built this way:** [The Aesop Hypothesis](./docs/THE-AESOP-HYPOTHESIS.md) — the design philosophy, the trade-offs, the cancelled architectures with published data.
 
@@ -94,15 +94,16 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 | Metric | Value |
 | --- | --- |
-| Merged PRs | 386 <!-- metrics-verified: self_stats.py (git log) --> |
-| Total Commits | 1180 <!-- metrics-verified: self_stats.py (git log) --> |
-| Project Age | 11 days <!-- metrics-verified: self_stats.py (git log) --> |
+| Merged PRs | 268 <!-- metrics-verified: self_stats.py (git log) --> |
+| Total Commits | 1181 <!-- metrics-verified: self_stats.py (git log) --> |
+| Project Age | 13 days <!-- metrics-verified: self_stats.py (git log) --> |
 | Waves | 30 <!-- metrics-verified: self_stats.py (git log) --> |
-| Insertions + Deletions | 186,587 <!-- metrics-verified: self_stats.py (git log) --> |
-| Files Tracked | 546 <!-- metrics-verified: self_stats.py (git log) --> |
+| Insertions + Deletions | 222,263 <!-- metrics-verified: self_stats.py (git log) --> |
+| Files Tracked | 642 <!-- metrics-verified: self_stats.py (git log) --> |
 | Distinct Co-authors | 11 <!-- metrics-verified: self_stats.py (git log) --> |
 
 <!-- STATS:END -->
+
 
 
 *Wave: one complete build cycle (intake → dispatch → verify → ship) run by the orchestration engine.*
