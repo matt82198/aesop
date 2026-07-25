@@ -55,9 +55,14 @@ def redact_paths(text: str) -> str:
     Non-path occurrences of 'matt8' are preserved.
     """
     # First redact repo-specific paths (longer pattern, must be first)
-    # Windows: C:\Users\matt8\aesop or C:\\Users\\matt8\\aesop
+    # Windows: C:\Users\matt8\aesop with ANY number of repeated backslashes
+    # (1+). Reasoning/evidence strings are sometimes repr()'d or JSON-escaped
+    # more than once (nested list-of-strings serialization), which doubles
+    # backslashes each time -- a bounded "1 or 2" quantifier here previously
+    # let 3+ backslash runs slip through unredacted (verified residue in
+    # bench/results/*.json).
     text = re.sub(
-        r"C:\\\\?Users\\\\?matt8\\\\?aesop",
+        r"C:\\+Users\\+matt8\\+aesop",
         "<REPO>",
         text,
         flags=re.IGNORECASE,
@@ -71,9 +76,9 @@ def redact_paths(text: str) -> str:
     )
 
     # Then redact home paths (shorter pattern)
-    # Windows: C:\Users\matt8 or C:\\Users\\matt8
+    # Windows: C:\Users\matt8 with ANY number of repeated backslashes (1+).
     text = re.sub(
-        r"C:\\\\?Users\\\\?matt8",
+        r"C:\\+Users\\+matt8",
         "<HOME>",
         text,
         flags=re.IGNORECASE,

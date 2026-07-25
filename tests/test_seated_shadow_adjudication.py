@@ -513,6 +513,20 @@ class TestPathRedaction(unittest.TestCase):
         self.assertNotIn("matt8", redacted)
         self.assertIn("<REPO>", redacted)
 
+    def test_redaction_with_repeated_backslash_escaping(self):
+        """Round-2 finding: reasoning strings that are repr()'d/JSON-escaped
+        more than once (nested list-of-strings serialization) accumulate 3+
+        literal backslashes per separator. The old pattern only tolerated 1
+        or 2 backslashes and silently left 3+ unredacted (verified residue
+        in committed bench/results/*.json).
+        """
+        for backslash_count in (1, 2, 3, 4):
+            bs = "\\" * backslash_count
+            test_text = f"path C:{bs}Users{bs}matt8{bs}aesop{bs}state\\tracker.json"
+            redacted = seated.redact_paths(test_text)
+            self.assertNotIn("matt8", redacted, f"leaked at backslash_count={backslash_count}")
+            self.assertIn("<REPO>", redacted, f"not redacted at backslash_count={backslash_count}")
+
 
 class TestModalVerdictExcludesDecisionFailed(unittest.TestCase):
     """Test that DECISION_FAILED is excluded from modal verdict computation."""
@@ -620,6 +634,70 @@ class TestModalVerdictExcludesDecisionFailed(unittest.TestCase):
         # Should explicitly report all failed, not DECISION_FAILED as a verdict
         self.assertEqual(item1_agg.modal_verdict, "all_runs_failed")
         self.assertEqual(item1_agg.stability, 0.0)
+
+
+class TestWriteSeatedMdRedaction(unittest.TestCase):
+    """Round-2 security finding: write_seated_md() embedded item 9's raw
+    reasoning_sample directly (f"{item_9['reasoning_sample'][:500]}...")
+    without ever calling redact_paths() on it -- a dead `redact_paths(...)`
+    call existed a few lines below but its result was discarded. Real
+    context-pack reasoning cites real repo code and can echo absolute
+    machine paths, so this was a live path-disclosure gap in the .md
+    output, independent of the (separately fixed) JSON writer.
+    """
+
+    def test_item9_reasoning_sample_redacted_in_md_output(self):
+        corpus = [
+            seated.CorpusItem(
+                id="whitelist-gate-weakening",
+                finding_text="finding",
+                source_lens="security",
+                incumbent_verdict="real_defect",
+                ground_truth="false_positive",
+                gt_note="",
+            ),
+        ]
+
+        aggregated = {
+            "item_9_analysis": {
+                "modal_verdict": "false_positive",
+                "modal_count": 3,
+                "stability": 1.0,
+                "flips_to_false_positive": True,
+                "reasoning_sample": (
+                    "Evidence cites C:\\Users\\matt8\\aesop\\state\\tracker.json "
+                    "as the machine-specific path."
+                ),
+            },
+            "held_real_defects": 0,
+            "total_real_defects": 0,
+            "schema_validity": {"valid": 1, "total": 1, "pct": 100.0},
+            "per_item": [
+                seated.AggregatedItem(
+                    id="whitelist-gate-weakening",
+                    ground_truth="false_positive",
+                    verdict_counts={"false_positive": 3},
+                    modal_verdict="false_positive",
+                    stability=1.0,
+                    num_runs=3,
+                    reasonings=["reasoning"],
+                ),
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_path = Path(tmpdir) / "out.md"
+            seated.write_seated_md(aggregated, corpus, "test-model", str(out_path))
+            text = out_path.read_text(encoding="utf-8")
+
+        # Isolate the "Reasoning (first run)" code block -- the only place
+        # that embeds the (attacker/model-influenced) reasoning_sample text.
+        # (The doc's static "Item 7: hardcoded-username" boilerplate prose
+        # intentionally mentions 'Users/matt8' as an illustrative citation
+        # of a historical, already-fixed finding; that is not this gap.)
+        reasoning_block = text.split("**Reasoning** (first run):")[1].split("```")[1]
+        self.assertNotIn("matt8", reasoning_block)
+        self.assertIn("<REPO>", reasoning_block)
 
 
 if __name__ == "__main__":

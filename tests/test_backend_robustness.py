@@ -229,6 +229,79 @@ class TestBaseURLValidation(unittest.TestCase):
 
 
 # ============================================================================
+# Round-2 security re-audit: IPv6 SSRF bypass + credentials-in-URL
+# ============================================================================
+#
+# GAP (verified 2026-07-24): validate_base_url()'s private_ranges list was
+# IPv4-only. ipaddress.ip_address() happily parses IPv6 literals (::1,
+# fe80::1, fc00::1, IPv4-mapped ::ffff:169.254.169.254) but `ip in
+# ipv4_network` never matches across address families -- so every IPv6
+# literal silently passed validation, including IPv4-mapped forms that
+# encode a metadata/private address. Fix: add IPv6 loopback/link-local/ULA
+# ranges, unwrap IPv4-mapped addresses before the range check, and reject
+# embedded URL credentials (user:pass@host) that could leak into error
+# messages/logs.
+
+
+class TestIPv6SSRFBypass(unittest.TestCase):
+    """Round-2 finding: IPv6 forms bypassed the (IPv4-only) SSRF guard."""
+
+    def test_ipv6_loopback_explicitly_allowed(self):
+        """::1 is the IPv6 equivalent of 127.0.0.1; must be allowed like it."""
+        from backend_config import validate_base_url
+        validate_base_url("http://[::1]:11434/v1")  # must not raise
+
+    def test_ipv6_link_local_rejected(self):
+        """fe80::/10 (link-local) must be rejected like 169.254.0.0/16."""
+        from backend_config import validate_base_url
+        with self.assertRaises(ValueError) as ctx:
+            validate_base_url("http://[fe80::1]/v1")
+        self.assertIn("private", str(ctx.exception).lower())
+
+    def test_ipv6_unique_local_rejected(self):
+        """fc00::/7 (unique local / internal networks) must be rejected."""
+        from backend_config import validate_base_url
+        with self.assertRaises(ValueError) as ctx:
+            validate_base_url("http://[fc00::1]/v1")
+        self.assertIn("private", str(ctx.exception).lower())
+
+    def test_ipv4_mapped_metadata_address_rejected(self):
+        """::ffff:169.254.169.254 must be unwrapped and rejected as metadata IP."""
+        from backend_config import validate_base_url
+        with self.assertRaises(ValueError) as ctx:
+            validate_base_url("http://[::ffff:169.254.169.254]/v1")
+        self.assertIn("private", str(ctx.exception).lower())
+
+    def test_ipv4_mapped_private_range_rejected(self):
+        """::ffff:10.0.0.5 must be unwrapped and rejected as a 10/8 address."""
+        from backend_config import validate_base_url
+        with self.assertRaises(ValueError) as ctx:
+            validate_base_url("http://[::ffff:10.0.0.5]/v1")
+        self.assertIn("private", str(ctx.exception).lower())
+
+    def test_public_ipv6_still_allowed(self):
+        """A public IPv6 literal (not loopback/link-local/ULA) is unaffected."""
+        from backend_config import validate_base_url
+        validate_base_url("http://[2001:4860:4860::8888]/v1")  # must not raise
+
+
+class TestCredentialsInURLRejected(unittest.TestCase):
+    """Round-2 finding: base_url with embedded user:pass@host was unvalidated."""
+
+    def test_userinfo_in_url_rejected(self):
+        from backend_config import validate_base_url
+        with self.assertRaises(ValueError) as ctx:
+            validate_base_url("http://user:pass@evil.example.com/v1")
+        self.assertIn("credentials", str(ctx.exception).lower())
+
+    def test_username_only_rejected(self):
+        from backend_config import validate_base_url
+        with self.assertRaises(ValueError) as ctx:
+            validate_base_url("http://apikey@evil.example.com/v1")
+        self.assertIn("credentials", str(ctx.exception).lower())
+
+
+# ============================================================================
 # Issue 2: Temperature Fallback Doesn't Persist Across Calls
 # ============================================================================
 

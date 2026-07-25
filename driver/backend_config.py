@@ -69,13 +69,22 @@ def validate_base_url(base_url: str) -> None:
     if not parsed.netloc:
         raise ValueError(f"base_url must include a host (netloc), got: {base_url}")
 
+    # Reject embedded credentials (user:pass@host) -- these get sent to whatever
+    # host the URL names and can leak into logs/error messages via str(base_url).
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(
+            f"base_url must not contain embedded credentials (user:pass@host). "
+            f"URL: {base_url}"
+        )
+
     # Extract hostname and port (netloc includes port; hostname does not)
     hostname = parsed.hostname
     if not hostname:
         raise ValueError(f"Could not extract hostname from base_url: {base_url}")
 
-    # Explicitly allow localhost and 127.0.0.1 (for local Ollama, etc.)
-    if hostname.lower() in ("localhost", "127.0.0.1"):
+    # Explicitly allow localhost, 127.0.0.1, and the IPv6 loopback (for local
+    # Ollama-style deployments that may bind to either address family).
+    if hostname.lower() in ("localhost", "127.0.0.1", "::1", "[::1]"):
         return
 
     # Try to parse as an IP address
@@ -85,6 +94,13 @@ def validate_base_url(base_url: str) -> None:
         # Not an IP address; assume it's a valid hostname (domain name)
         return
 
+    # IPv4-mapped IPv6 addresses (e.g. ::ffff:127.0.0.1) embed a real IPv4
+    # address; unwrap it so the IPv4 private-range check below still applies.
+    # Without this, an attacker can bypass every IPv4 rule below by writing
+    # the target as its IPv4-mapped IPv6 form.
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+
     # Check for private/reserved IP ranges
     # These ranges are forbidden EXCEPT localhost (handled above)
     private_ranges = [
@@ -93,9 +109,14 @@ def validate_base_url(base_url: str) -> None:
         ipaddress.ip_network("192.168.0.0/16"),       # Private (RFC 1918)
         ipaddress.ip_network("169.254.0.0/16"),       # Link-local (includes metadata)
         ipaddress.ip_network("127.0.0.0/8"),          # Loopback (except 127.0.0.1, caught above)
+        ipaddress.ip_network("::1/128"),              # IPv6 loopback (except ::1, caught above)
+        ipaddress.ip_network("fe80::/10"),            # IPv6 link-local
+        ipaddress.ip_network("fc00::/7"),             # IPv6 unique local (RFC 4193)
     ]
 
     for network in private_ranges:
+        if ip.version != network.version:
+            continue
         if ip in network:
             raise ValueError(
                 f"base_url points to private IP range {network}: {hostname}. "

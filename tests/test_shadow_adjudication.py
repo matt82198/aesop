@@ -800,6 +800,22 @@ class TestPathRedaction(unittest.TestCase):
         self.assertNotIn("aesop", redacted)
         self.assertIn("<REPO>", redacted)
 
+    def test_redact_repo_paths_with_repeated_backslash_escaping(self):
+        """Round-2 finding: reasoning strings that are repr()'d/JSON-escaped
+        more than once accumulate 3+ literal backslashes per separator
+        (e.g. 'C:\\\\\\\\Users\\\\\\\\matt8\\\\\\\\aesop'). The old pattern
+        only tolerated 1 or 2 backslashes and silently left 3+ unredacted
+        (verified residue in committed bench/results/*.json).
+        """
+        from shadow_adjudication import redact_paths
+
+        for backslash_count in (1, 2, 3, 4):
+            bs = "\\" * backslash_count
+            test_text = f"path C:{bs}Users{bs}matt8{bs}aesop{bs}state\\tracker.json"
+            redacted = redact_paths(test_text)
+            self.assertNotIn("matt8", redacted, f"leaked at backslash_count={backslash_count}")
+            self.assertIn("<REPO>", redacted, f"not redacted at backslash_count={backslash_count}")
+
 
 class TestModalVerdictExcludesDecisionFailed(unittest.TestCase):
     """Test that DECISION_FAILED is excluded from modal verdict computation."""
