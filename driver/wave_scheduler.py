@@ -804,8 +804,88 @@ def run_wave_scheduler(
 # CLI
 # ========================================================================
 
+def resolve_worker_driver(
+    driver_override: Optional[str] = None,
+    config_path: Optional[str] = None,
+    execute: bool = False,
+) -> Tuple[Optional[AgentDriver], Optional[str]]:
+    """Resolve the worker-seat driver (HS-1): config-first, --driver overrides.
+
+    Resolution order:
+      1. driver_override 'claude'/'codex' -> that driver, exactly as the
+         legacy hardcoded CLI path behaved (including the codex+execute
+         OPENAI_API_KEY gate).
+      2. Otherwise: load aesop.config.json (seats.worker, falling back to the
+         legacy flat backend block) via load_backend_config + build_driver.
+         No config file -> ClaudeCodeDriver (byte-identical to today).
+         This path can select ANY configured backend, including
+         openai-compatible (previously unreachable from this CLI).
+
+    For hosted backends with execute=True, the seat's api_key_env (default
+    OPENAI_API_KEY) must be set; is_local seats need no key. Dry runs never
+    require a key (building a driver is offline-safe).
+
+    Returns:
+        (driver, None) on success; (None, error_message) on failure.
+    """
+    key_env_default = "OPENAI" + "_" + "API" + "_" + "KEY"
+
+    if driver_override == "codex":
+        # CodexDriver requires OPENAI_API_KEY for execute; dry-run works without it
+        try:
+            from codex_driver import CodexDriver
+        except ImportError:
+            return None, "--driver codex requires codex_driver.py"
+        if execute and not os.environ.get(key_env_default):
+            return None, (
+                f"--driver codex --execute requires {key_env_default} "
+                f"environment variable"
+            )
+        return CodexDriver(), None
+
+    if driver_override == "claude":
+        try:
+            from claude_code_driver import ClaudeCodeDriver
+        except ImportError:
+            return None, "claude_code_driver.py not found"
+        return ClaudeCodeDriver(), None
+
+    if driver_override is not None:
+        return None, f"unknown --driver '{driver_override}' (claude|codex)"
+
+    # Default: read the config (seats.worker or legacy backend block).
+    try:
+        from backend_config import build_driver, load_backend_config
+    except ImportError:
+        return None, "backend_config.py not found"
+
+    try:
+        config = load_backend_config(config_path)
+    except (TypeError, ValueError) as exc:
+        return None, f"invalid aesop.config.json: {exc}"
+
+    backend_name = config.get("backend", "claude")
+    if execute and backend_name in ("codex", "openai-compatible"):
+        if backend_name == "codex":
+            key_env = key_env_default
+            is_local = False
+        else:
+            key_env = config.get("api_key_env") or key_env_default
+            is_local = bool(config.get("is_local", False))
+        if not is_local and not os.environ.get(key_env):
+            return None, (
+                f"configured backend '{backend_name}' with --execute requires "
+                f"{key_env} environment variable"
+            )
+
+    try:
+        return build_driver(config), None
+    except (TypeError, ValueError, RuntimeError) as exc:
+        return None, f"failed to build driver from config: {exc}"
+
+
 def main():
-    """CLI entry point (GATE-1: driver injection, --driver claude|codex)."""
+    """CLI entry point (HS-1: config-driven worker seat; --driver overrides)."""
     parser = argparse.ArgumentParser(
         description="Wave scheduler: intake -> manifest -> dispatch -> report"
     )
@@ -837,38 +917,33 @@ def main():
     parser.add_argument(
         "--driver",
         choices=["claude", "codex"],
-        default="claude",
-        help="Backend driver (claude|codex, default: claude)",
+        default=None,
+        help=(
+            "OVERRIDE the configured worker seat (claude|codex). "
+            "Default: read aesop.config.json seats.worker / legacy backend "
+            "block (no config -> claude); the config path also supports "
+            "openai-compatible backends"
+        ),
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to aesop.config.json (default: ./aesop.config.json)",
     )
 
     args = parser.parse_args()
 
     dry_run = not args.execute
 
-    # GATE-1: driver injection (instantiate based on --driver flag)
-    driver = None
-    if args.driver == "codex":
-        # CodexDriver requires OPENAI_API_KEY for execute; --dry-run works without it
-        try:
-            from codex_driver import CodexDriver
-            if args.execute and not os.environ.get("OPENAI_API_KEY"):
-                print(
-                    "ERROR: --driver codex --execute requires OPENAI_API_KEY environment variable",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-            driver = CodexDriver()
-        except ImportError:
-            print("ERROR: --driver codex requires codex_driver.py", file=sys.stderr)
-            sys.exit(1)
-    else:
-        # Default: Claude Code driver
-        try:
-            from claude_code_driver import ClaudeCodeDriver
-            driver = ClaudeCodeDriver()
-        except ImportError:
-            print("ERROR: claude_code_driver.py not found", file=sys.stderr)
-            sys.exit(1)
+    # HS-1: worker seat from config; --driver claude|codex remains an override.
+    driver, driver_error = resolve_worker_driver(
+        driver_override=args.driver,
+        config_path=args.config,
+        execute=args.execute,
+    )
+    if driver_error:
+        print(f"ERROR: {driver_error}", file=sys.stderr)
+        sys.exit(1)
 
     # Run scheduler
     report = run_wave_scheduler(

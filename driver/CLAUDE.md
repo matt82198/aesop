@@ -26,16 +26,20 @@
 - **wave_bridge.py** — Phase 3: bridges AgentDriver backends to wave manifest items.
   build_manifest_item() enriches with verificationTier + model; dispatch_item() routes
   by capability and decides green ONLY from test exit code (not model's say-so).
-- **backend_config.py** — Per-deployment model resolution (role → model id, API key/base URL).
+- **backend_config.py** — HS-1 unified two-seat config: `seats.worker` + `seats.orchestrator`
+  in aesop.config.json select BOTH seats from ONE block (legacy flat backend block still parses;
+  seats.worker wins when both present). `build_driver()` = worker seat; `build_orchestrator_backend()`
+  = decision seat (absent/harness/claude → null `HarnessOrchestratorBackend`; openai-compatible →
+  configured backend, SSRF-validated). NO seats block = byte-identical to today (no key needed).
 - **context_pack.py** — OrchestratorDriver increment 1: build_context_pack() reads
   ONLY allowlisted control files (STATE.md, BUILDLOG.md, tracker.json, MEMORY.md, explicit
   brief: paths under repo/conductor roots). Enforces cardinal rule 4 ("orchestrator reads
   only the file brain") in code. Size-bounded with deterministic truncation (oldest-first
   for logs) and manifest tracking.
-- **orchestrator_backend.py** — OrchestratorBackend: abstract protocol for orchestrator
-  backends (increment 1.5). decide_call(prompt, schema) → raw text. Real impl:
-  OpenAICompatibleOrchestratorBackend (gpt-5 temperature fallback). Fake for tests.
-  Fixes dropped-prompt defect (prompt now passed end-to-end, not via side-channel).
+- **orchestrator_backend.py** — OrchestratorBackend protocol: decide_call(prompt, schema) → raw
+  text. Real impl: OpenAICompatibleOrchestratorBackend (gpt-5 temperature fallback; seat knobs
+  api_key_env + is_local dummy-key; validate_base_url in __init__). HarnessOrchestratorBackend =
+  null default seat (decide_call raises: the live harness IS the orchestrator). Fake for tests.
 - **orchestrator_driver.py** — OrchestratorDriver: uses OrchestratorBackend.decide_call()
   to make structured verdicts via OrchestratorBackend protocol (no AgentDriver coupling).
 - **adjudication_gate.py** — increment 3 (conservative): two-tier escalation gate — cheaper
@@ -118,7 +122,7 @@ to green via real test exit 0 (no API key, no network).
 
 **wave_scheduler.py** — single-cycle backlog orchestration: intake up to N file-disjoint todo items from tracker.json (empty/missing ownsFiles REJECTED; paths normalized posix+casefold-on-Windows before overlap checks; required fields pre-validated) -> manifest via build_manifest_item (model + verificationTier from driver.probe) -> HALT + cost-ceiling gates (fail-CLOSED: module import failure or check exception = abort with honest Report, phase=gate_unavailable) -> run_wave (recovery journal + git ship) -> STOP before merge; Report JSON with per-item observability (GATE-1). After ship, selected items atomically marked in_progress in tracker (temp+os.replace; dry-run never mutates) so a second run cannot double-dispatch.
 
-**CLI** (GATE-1): `python driver/wave_scheduler.py --tracker <path> --max-items N --dry-run|--execute --driver claude|codex` (default: claude). For codex+execute, requires OPENAI_API_KEY env var; dry-run works without it.
+**CLI** (HS-1): `python driver/wave_scheduler.py --tracker <path> --max-items N --dry-run|--execute [--driver claude|codex] [--config <path>]`. Default: worker seat from aesop.config.json (seats.worker/legacy block; no config → claude) — this path also reaches openai-compatible; `--driver` OVERRIDES the config. Hosted backend + --execute requires the seat's api_key_env (is_local: none); dry-run never needs a key.
 
 **Tests** (35+): disjoint/normalization/rejection, gate fail-closed, dry-run, GATE-1 per-item/driver/ceiling/codex tests; module-tmpdir hygiene; all TestCase.
 

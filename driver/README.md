@@ -225,7 +225,32 @@ switch backends without changing code. The configuration is **offline-safe**:
 building a driver requires no API key; keys are read from environment variables
 at call time during live dispatch.
 
-**Configuration schema** (backend block):
+**Unified two-seat config (0.4.0, HS-1)** — one namespaced block selects BOTH
+seats: `seats.worker` (the coding agents; same fields as the legacy block
+below, wins over it when both are present) and `seats.orchestrator` (the
+decision seat; `"harness"` = the live Claude Code session, the default;
+`"openai-compatible"` routes `OrchestratorDriver.decide()` to an API model
+with `model`/`base_url`/`api_key_env`/`is_local`):
+
+```json
+{
+  "seats": {
+    "worker": { "backend": "claude" },
+    "orchestrator": { "backend": "openai-compatible", "model": "gpt-4o-mini" }
+  }
+}
+```
+
+`build_driver(load_backend_config())` builds the worker seat;
+`build_orchestrator_backend(load_backend_config())` builds the orchestrator
+seat (returning the null `HarnessOrchestratorBackend` -- whose `decide_call`
+raises -- when the seat is absent or `harness`/`claude`). With **no** `seats`
+block, behavior is byte-identical to today: Claude Code worker + harness
+orchestrator, no OpenAI backend constructed, no key required. Consumers:
+`wave_scheduler.py` (worker seat; `--driver` overrides) and the shadow
+adjudication tools (orchestrator seat; `--model` overrides).
+
+**Configuration schema** (legacy/flat worker block, still fully supported):
 ```json
 {
   "backend": "claude" | "codex" | "openai-compatible",

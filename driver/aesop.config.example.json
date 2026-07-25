@@ -65,6 +65,22 @@
     "backend": "claude",
     "comment": "Recommended production configuration: Claude Code with Haiku workers, Tier 1 verification. Drop this into aesop.config.json (removing comments) to use."
   },
+  "unified_seats_config": {
+    "comment": "HS-1 (0.4.0): ONE namespaced block selects BOTH seats. seats.worker takes the same fields as the legacy flat block above (and wins over it when both are present); seats.orchestrator swaps the DECISION seat (backend 'harness' = the live Claude Code session, the default; 'openai-compatible' routes OrchestratorDriver.decide() to an API model). NO seats block = today's behavior exactly: Claude worker + harness orchestrator, no key required. Example: local Ollama worker + hosted gpt-4o-mini orchestrator:",
+    "seats": {
+      "worker": {
+        "backend": "openai-compatible",
+        "base_url": "http://localhost:11434/v1",
+        "model": "mistral",
+        "is_local": true
+      },
+      "orchestrator": {
+        "backend": "openai-compatible",
+        "model": "gpt-4o-mini",
+        "api_key_env": "OPENAI_API_KEY"
+      }
+    }
+  },
   "experimental_codex": {
     "backend": "codex",
     "model": "gpt-3.5-turbo",

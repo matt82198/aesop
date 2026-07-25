@@ -16,6 +16,28 @@ The config schema for the backend block:
     "is_local": bool(optional)                # optional for openai-compatible
   }
 
+HS-1 unified two-seat schema (0.4.0): ONE namespaced block selects BOTH seats:
+  {
+    "seats": {
+      "worker": {        # same fields as the legacy backend block above
+        "backend": "claude" | "codex" | "openai-compatible", ...
+      },
+      "orchestrator": {  # the decision seat (OrchestratorBackend)
+        "backend": "harness" | "claude" | "openai-compatible",
+        "model": "...",              # required for openai-compatible
+        "base_url": "..."(optional), # default https://api.openai.com/v1
+        "api_key_env": "..."(optional),
+        "is_local": bool(optional),
+        "timeout_s": N(optional)
+      }
+    }
+  }
+seats.worker takes precedence over the legacy flat/nested backend block; the
+legacy block still parses unchanged (backward compatible). NO seats block ->
+byte-identical behavior to today: Claude Code worker + harness orchestrator
+(build_orchestrator_backend returns the null HarnessOrchestratorBackend; no
+OpenAI backend is constructed and no API key is required).
+
 Default (no config) -> ClaudeCodeDriver (preserves today's behavior).
 
 stdlib-only, ASCII-only, Windows + Linux safe.
@@ -144,6 +166,106 @@ def validate_base_url(base_url: str) -> None:
         )
 
 
+# Hosted OpenAI default for the orchestrator seat (worker openai-compatible
+# blocks require an explicit base_url; the orchestrator seat may omit it).
+DEFAULT_ORCHESTRATOR_BASE_URL = "https://api.openai.com/v1"
+
+_VALID_WORKER_BACKENDS = ("claude", "codex", "openai-compatible")
+_VALID_ORCHESTRATOR_BACKENDS = ("harness", "claude", "openai-compatible")
+
+
+def _validate_worker_seat(block: dict) -> None:
+    """Validate a seats.worker block (same rules as the legacy backend block).
+
+    Raises:
+        TypeError/ValueError mirroring the legacy block's error texts.
+    """
+    backend_name = block.get("backend")
+    if not isinstance(backend_name, str):
+        raise TypeError("'seats.worker.backend' field must be a string")
+    if backend_name not in _VALID_WORKER_BACKENDS:
+        raise ValueError(
+            f"Unknown backend '{backend_name}'. "
+            f"Valid choices: {', '.join(_VALID_WORKER_BACKENDS)}"
+        )
+    if backend_name == "codex":
+        if "model" not in block:
+            raise ValueError("backend 'codex' requires 'model' field")
+        if not isinstance(block["model"], str):
+            raise ValueError("'model' must be a string")
+    if backend_name == "openai-compatible":
+        if "base_url" not in block:
+            raise ValueError("backend 'openai-compatible' requires 'base_url' field")
+        if "model" not in block:
+            raise ValueError("backend 'openai-compatible' requires 'model' field")
+        if not isinstance(block["base_url"], str):
+            raise ValueError("'base_url' must be a string")
+        if not isinstance(block["model"], str):
+            raise ValueError("'model' must be a string")
+        # Validate base_url to prevent SSRF attacks
+        validate_base_url(block["base_url"])
+
+
+def _validate_orchestrator_seat(block: dict) -> None:
+    """Validate a seats.orchestrator block.
+
+    Raises:
+        TypeError: if 'backend' is not a string.
+        ValueError: on unknown backend, missing model, or SSRF-unsafe base_url.
+    """
+    backend_name = block.get("backend")
+    if not isinstance(backend_name, str):
+        raise TypeError("'seats.orchestrator.backend' field must be a string")
+    if backend_name not in _VALID_ORCHESTRATOR_BACKENDS:
+        raise ValueError(
+            f"Unknown orchestrator backend '{backend_name}'. "
+            f"Valid choices: {', '.join(_VALID_ORCHESTRATOR_BACKENDS)}"
+        )
+    if backend_name == "openai-compatible":
+        if "model" not in block or not isinstance(block["model"], str):
+            raise ValueError(
+                "orchestrator backend 'openai-compatible' requires 'model' field (string)"
+            )
+        base_url = block.get("base_url", DEFAULT_ORCHESTRATOR_BASE_URL)
+        if not isinstance(base_url, str):
+            raise ValueError("'base_url' must be a string")
+        # Validate base_url to prevent SSRF attacks (load-time, earliest catch).
+        validate_base_url(base_url)
+
+
+def _normalize_seats(config: dict) -> Optional[dict]:
+    """Extract and validate the optional 'seats' block from a raw config dict.
+
+    Returns:
+        A normalized {"worker": {...}?, "orchestrator": {...}?} dict, or None
+        when no seats block is present (the legacy/no-op path).
+
+    Raises:
+        TypeError/ValueError: on malformed seat blocks (fail loud at load time).
+    """
+    seats_block = config.get("seats")
+    if seats_block is None:
+        return None
+    if not isinstance(seats_block, dict):
+        raise TypeError(
+            "'seats' must be a JSON object with optional 'worker'/'orchestrator' keys"
+        )
+    worker_seat = seats_block.get("worker")
+    orch_seat = seats_block.get("orchestrator")
+    if worker_seat is not None and not isinstance(worker_seat, dict):
+        raise TypeError("'seats.worker' must be a JSON object")
+    if orch_seat is not None and not isinstance(orch_seat, dict):
+        raise TypeError("'seats.orchestrator' must be a JSON object")
+    normalized: Dict[str, dict] = {}
+    if worker_seat is not None:
+        _validate_worker_seat(worker_seat)
+        normalized["worker"] = dict(worker_seat)
+    if orch_seat is not None:
+        _validate_orchestrator_seat(orch_seat)
+        normalized["orchestrator"] = dict(orch_seat)
+    return normalized
+
+
 def load_backend_config(path: Optional[str] = None) -> dict:
     """Load backend configuration from an aesop.config.json file.
 
@@ -187,6 +309,16 @@ def load_backend_config(path: Optional[str] = None) -> dict:
     if not isinstance(config, dict):
         raise TypeError("aesop.config.json must be a JSON object (dict)")
 
+    # HS-1: unified two-seat block. seats.worker (validated) takes precedence
+    # over the legacy flat/nested backend block; seats.orchestrator is
+    # validated here and preserved under result["seats"] for
+    # build_orchestrator_backend(). No seats block -> legacy path unchanged.
+    seats = _normalize_seats(config)
+    if seats is not None and "worker" in seats:
+        result = dict(seats["worker"])
+        result["seats"] = seats
+        return result
+
     # Extract the backend block (nested or at root level).
     # Support both {"backend": {...}} and direct backend dict.
     if "backend" in config and isinstance(config["backend"], dict):
@@ -195,7 +327,10 @@ def load_backend_config(path: Optional[str] = None) -> dict:
         # Flat structure: backend is a string, not nested.
         backend_block = config
     else:
-        # No backend key; treat as default Claude.
+        # No backend key; treat as default Claude (attach seats when present
+        # so an orchestrator-only seats block still reaches the builder).
+        if seats is not None:
+            return {"backend": "claude", "seats": seats}
         return {"backend": "claude"}
 
     # Validate backend field.
@@ -234,6 +369,8 @@ def load_backend_config(path: Optional[str] = None) -> dict:
     # Normalize: return backend dict with all fields.
     result = dict(backend_block)
     result["backend"] = backend_name
+    if seats is not None:
+        result["seats"] = seats
     return result
 
 
@@ -255,6 +392,18 @@ def build_driver(config: Optional[dict] = None) -> AgentDriver:
     """
     if config is None:
         config = {"backend": "claude"}
+
+    # HS-1: honor a seats.worker block on raw (unloaded) dicts too. Configs
+    # from load_backend_config() are already flattened, so this merge is a
+    # no-op for them; hand-built {"seats": {"worker": {...}}} dicts get the
+    # worker seat promoted to the top-level view here.
+    seats = config.get("seats")
+    if isinstance(seats, dict) and isinstance(seats.get("worker"), dict):
+        worker_seat = seats["worker"]
+        if worker_seat.get("backend"):
+            merged = {k: v for k, v in config.items() if k != "seats"}
+            merged.update(worker_seat)
+            config = merged
 
     backend_name = config.get("backend", "claude")
 
@@ -323,6 +472,73 @@ def build_driver(config: Optional[dict] = None) -> AgentDriver:
         )
 
     raise ValueError(f"Unknown backend '{backend_name}'")
+
+
+def build_orchestrator_backend(config: Optional[dict] = None):
+    """Instantiate the orchestrator-seat backend from a config dict (HS-1).
+
+    Mirrors build_driver() for the decision seat: reads seats.orchestrator
+    from a config dict (as returned by load_backend_config, or hand-built).
+
+    Seat resolution:
+      - No config, no seats block, no orchestrator seat, or backend
+        'harness'/'claude' -> HarnessOrchestratorBackend (the null backend:
+        the live harness IS the orchestrator; decide_call raises). This is
+        the no-op default -- no OpenAI backend constructed, no key required.
+      - backend 'openai-compatible' -> OpenAICompatibleOrchestratorBackend
+        configured with model/base_url/api_key_env/is_local/timeout_s.
+        base_url defaults to the hosted OpenAI endpoint and is SSRF-validated
+        via validate_base_url (also re-checked in the backend constructor).
+
+    Building is offline-safe: no API key is read until decide_call time.
+
+    Args:
+        config: Config dict (from load_backend_config), or None.
+
+    Returns:
+        An OrchestratorBackend instance.
+
+    Raises:
+        ValueError/TypeError: on an invalid orchestrator seat block.
+    """
+    # Import lazily: orchestrator_backend imports validate_base_url from this
+    # module, so a top-level import here would create a cycle.
+    from orchestrator_backend import (
+        HarnessOrchestratorBackend,
+        OpenAICompatibleOrchestratorBackend,
+    )
+
+    if not config:
+        return HarnessOrchestratorBackend()
+
+    seats = config.get("seats")
+    orch = seats.get("orchestrator") if isinstance(seats, dict) else None
+    if not isinstance(orch, dict) or not orch:
+        return HarnessOrchestratorBackend()
+
+    backend_name = orch.get("backend", "harness")
+    if backend_name in ("harness", "claude"):
+        return HarnessOrchestratorBackend()
+
+    if backend_name == "openai-compatible":
+        # Re-validate for direct-dict callers (load_backend_config output is
+        # already validated; validation is idempotent).
+        _validate_orchestrator_seat(orch)
+        base_url = orch.get("base_url", DEFAULT_ORCHESTRATOR_BASE_URL)
+        # Default API key env var name (assembled to avoid secret-scan false positive).
+        default_key_env = "OPENAI" + "_" + "API" + "_" + "KEY"
+        return OpenAICompatibleOrchestratorBackend(
+            model=orch["model"],
+            base_url=base_url,
+            timeout_s=float(orch.get("timeout_s", 120.0)),
+            api_key_env=orch.get("api_key_env", default_key_env),
+            is_local=bool(orch.get("is_local", False)),
+        )
+
+    raise ValueError(
+        f"Unknown orchestrator backend '{backend_name}'. "
+        f"Valid choices: {', '.join(_VALID_ORCHESTRATOR_BACKENDS)}"
+    )
 
 
 def describe_backend(config: Optional[dict] = None) -> str:

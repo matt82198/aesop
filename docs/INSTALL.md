@@ -200,9 +200,60 @@ export DEBUG=1
 
 By default, Aesop uses Claude Code (the orchestration harness) as its backend. You can configure it to use other models via the **AgentDriver abstraction**—enabling Ollama, OpenAI-compatible endpoints, OpenRouter, and more.
 
-### Configure a backend in aesop.config.json
+### The unified two-seat config (0.4.0)
 
-Add or modify the `backend` section:
+One namespaced `seats` block in `aesop.config.json` selects BOTH seats:
+
+- **`seats.worker`** — the coding agents (AgentDriver). Same fields as the
+  legacy flat block below; takes precedence over it when both are present.
+- **`seats.orchestrator`** — the decision seat (`OrchestratorDriver.decide()`).
+  `"harness"` (default) means the live Claude Code session itself makes
+  decisions; `"openai-compatible"` routes decisions to an API model.
+
+**Swap a seat's model** — change just its block:
+
+```json
+{
+  "seats": {
+    "worker": {
+      "backend": "openai-compatible",
+      "base_url": "http://localhost:11434/v1",
+      "model": "mistral",
+      "is_local": true
+    },
+    "orchestrator": {
+      "backend": "openai-compatible",
+      "model": "gpt-4o-mini",
+      "api_key_env": "OPENAI_API_KEY"
+    }
+  }
+}
+```
+
+That is a local-Ollama worker fleet with a hosted `gpt-4o-mini` decision seat.
+To swap the worker to OpenRouter, replace `seats.worker` with
+`{"backend": "openai-compatible", "base_url": "https://openrouter.ai/api/v1",
+"model": "openai/gpt-4-turbo", "api_key_env": "OPENROUTER_API_KEY"}` — nothing
+else changes. API keys are read from the env var named by `api_key_env` at
+call time and are never stored in the config; `"is_local": true` endpoints
+need no key at all.
+
+**No `seats` block? Nothing changes.** Existing installs keep today's exact
+behavior: Claude Code workers + harness orchestrator, no OpenAI backend
+constructed, no key required. (`cardinal_rules.orchestrator_model` from older
+scaffolds was write-only and is retired; the orchestrator seat's model now
+lives in `seats.orchestrator.model`.)
+
+Consumers: `driver/wave_scheduler.py` builds its worker driver from this
+config (CLI `--driver claude|codex` remains an override), and
+`tools/shadow_adjudication.py` / `tools/seated_shadow_adjudication.py` build
+their live orchestrator backend from `seats.orchestrator` (CLI `--model`
+remains an override).
+
+### Configure a worker backend (legacy flat block)
+
+Still fully supported — equivalent to a `seats.worker`-only config. Add or
+modify the `backend` section:
 
 ```json
 {

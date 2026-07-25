@@ -1277,9 +1277,12 @@ test('main_ci signal: handles gh command unavailable gracefully', async (t) => {
     assert.ok(fs.existsSync(signalsPath), 'SIGNALS.json should exist even if gh is unavailable');
 
     const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
-    // When gh is unavailable, state should be 'unknown' (never throw)
+    // When gh is unavailable, state should be 'unknown' (never throw).
+    // 'running' is also valid: on a box WITH gh, a live in-progress main CI
+    // run maps to 'running' (collector contract); the test must not flake
+    // whenever main CI happens to be executing.
     assert.ok(
-      signals.main_ci.state === 'unknown' || signals.main_ci.state === 'pass' || signals.main_ci.state === 'fail',
+      ['unknown', 'pass', 'fail', 'running'].includes(signals.main_ci.state),
       'main_ci.state should have a valid value even if gh is unavailable'
     );
   } finally {

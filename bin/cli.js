@@ -422,8 +422,10 @@ function generateConfigJson(targetDir, templateRoot, projectName, reposStr, repo
         port: 8770
       },
       cardinal_rules: {
+        // NOTE: orchestrator_model was RETIRED in 0.4.0 (HS-1): it was written
+        // here but read by nothing. The orchestrator seat's model now lives in
+        // seats.orchestrator.model (see aesop.config.example.json).
         subagent_model: 'haiku',
-        orchestrator_model: 'opus',
         tdd_first: true,
         never_push_main: true,
         secret_scan_gates_push: true

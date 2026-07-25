@@ -31,9 +31,43 @@ from context_pack import build_context_pack, ContextPack  # noqa: E402
 from orchestrator_driver import OrchestratorDriver  # noqa: E402
 from orchestrator_backend import (  # noqa: E402
     FakeOrchestratorBackend,
+    HarnessOrchestratorBackend,
     OpenAICompatibleOrchestratorBackend,
 )
 from openai_transport import default_openai_transport  # noqa: E402
+
+# Fallback challenger model when neither --model nor seats.orchestrator names one.
+DEFAULT_CHALLENGER_MODEL = "gpt-4o-mini"
+
+
+def build_live_backend(cli_model=None, config_path=None):
+    """Build the live orchestrator backend from the seats config (HS-1).
+
+    Resolution:
+      - seats.orchestrator (openai-compatible) in aesop.config.json supplies
+        model/base_url/api_key_env/is_local for the seat.
+      - CLI --model, when given, OVERRIDES the seat's model (seat knobs stay).
+      - No configured seat (or harness/claude seat) -> legacy hosted-OpenAI
+        default with cli_model or DEFAULT_CHALLENGER_MODEL (behavior
+        unchanged for installs without a seats block).
+
+    Offline-safe: no API key is read here.
+    """
+    from backend_config import (  # noqa: E402 (driver/ on sys.path above)
+        build_orchestrator_backend,
+        load_backend_config,
+    )
+
+    config = load_backend_config(config_path)
+    backend = build_orchestrator_backend(config)
+    if isinstance(backend, HarnessOrchestratorBackend):
+        return OpenAICompatibleOrchestratorBackend(
+            model=cli_model or DEFAULT_CHALLENGER_MODEL,
+            transport=default_openai_transport,
+        )
+    if cli_model:
+        backend.model = cli_model
+    return backend
 
 
 # ============================================================================
@@ -752,8 +786,16 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="gpt-4o-mini",
-        help="Challenger model id for the ladder (default: gpt-4o-mini)",
+        default=None,
+        help=(
+            "Challenger model id for the ladder; OVERRIDES the configured "
+            "seats.orchestrator model (default: seat model, else gpt-4o-mini)"
+        ),
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Path to aesop.config.json for seats.orchestrator (default: ./aesop.config.json)",
     )
     parser.add_argument(
         "--enriched",
@@ -816,6 +858,8 @@ def main():
 
     if args.offline:
         print("Running in OFFLINE mode (FakeOrchestratorBackend)")
+        if args.model is None:
+            args.model = DEFAULT_CHALLENGER_MODEL
         # Offline mode: use canned responses for testing.
         backend = FakeOrchestratorBackend(
             canned_responses=[
@@ -829,16 +873,23 @@ def main():
         )
     elif args.live:
         print("Running in LIVE mode (OpenAI API)")
-        # Check for API key at runtime.
-        if not os.environ.get("OPENAI_API_KEY"):
+        # HS-1: orchestrator seat from config; CLI --model overrides.
+        try:
+            real_backend = build_live_backend(
+                cli_model=args.model, config_path=args.config
+            )
+        except (TypeError, ValueError) as e:
+            print(f"Error: invalid aesop.config.json: {e}", file=sys.stderr)
+            sys.exit(1)
+        args.model = real_backend.model
+        # Check for the seat's API key at runtime (local seats need none).
+        key_env = getattr(real_backend, "api_key_env", "OPENAI_API_KEY")
+        if not getattr(real_backend, "is_local", False) and not os.environ.get(key_env):
             print(
-                "Error: OPENAI_API_KEY environment variable not set",
+                f"Error: {key_env} environment variable not set",
                 file=sys.stderr,
             )
             sys.exit(1)
-        real_backend = OpenAICompatibleOrchestratorBackend(
-            model=args.model, transport=default_openai_transport
-        )
         backend = ShadowAdjudicationBackend(real_backend, model=args.model)
     else:
         print("Error: specify --offline or --live", file=sys.stderr)

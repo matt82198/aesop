@@ -84,7 +84,10 @@ class _AuthStripRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 
 def default_openai_transport(
-    payload: dict, timeout_s: float = 120.0, base_url: str = "https://api.openai.com/v1"
+    payload: dict,
+    timeout_s: float = 120.0,
+    base_url: str = "https://api.openai.com/v1",
+    api_key: str = None,
 ) -> dict:
     """Default transport: POST to OpenAI Chat Completions via urllib.
 
@@ -92,19 +95,24 @@ def default_openai_transport(
         payload: OpenAI Chat Completions request body (messages, model, etc.).
         timeout_s: HTTP timeout in seconds (default 120).
         base_url: OpenAI API base URL (default production).
+        api_key: Optional pre-resolved API key (HS-1 seats: callers that honor
+            a configured api_key_env or an is_local dummy key pass it here).
+            When None, falls back to reading OPENAI_API_KEY from the
+            environment (the legacy behavior, unchanged).
 
     Returns:
         Parsed JSON response (choices, usage, etc.).
 
     Raises:
-        RuntimeError: if OPENAI_API_KEY env var is not set, or if the HTTP
-            status is not 200-299.
+        RuntimeError: if no api_key was given and OPENAI_API_KEY env var is
+            not set, or if the HTTP status is not 200-299.
         urllib.error.URLError: if the HTTP request fails.
     """
-    # Read API key at call time from environment; NEVER hardcoded.
-    # The pattern os.environ.get("OPENAI_API_KEY") does not trigger secret_scan
-    # because the RHS contains dots/parens.
-    api_key = os.environ.get("OPENAI_API_KEY")
+    # Read API key at call time from environment (unless pre-resolved by the
+    # caller); NEVER hardcoded. The pattern os.environ.get("OPENAI_API_KEY")
+    # does not trigger secret_scan because the RHS contains dots/parens.
+    if not api_key:
+        api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError(
             "OPENAI_API_KEY environment variable is not set. "
