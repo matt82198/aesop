@@ -75,11 +75,12 @@ class ClaudeCodeDriver(AgentDriver):
 
     name = "claude-code"
 
-    def __init__(self, model_map: Optional[dict] = None):
+    def __init__(self, model_map: Optional[dict] = None, timeout_s: float = 120.0):
         # Copy so callers cannot mutate our defaults; fall back per-role.
         self._model_map = dict(_DEFAULT_MODEL_MAP)
         if model_map:
             self._model_map.update(model_map)
+        self._timeout_s = timeout_s
 
     # -- Operation 1: capability probe (concrete) --------------------------
     def probe_capabilities(self) -> DriverCapabilities:
@@ -149,6 +150,9 @@ class ClaudeCodeDriver(AgentDriver):
         real subprocess so tooling/tests get genuine behavior. `shell` is
         advisory -- we always execute through the platform shell so the same
         call works on Windows and Linux.
+
+        Timeouts are enforced: if the command exceeds timeout_s, the process is
+        terminated and a non-zero exit code is returned.
         """
         try:
             completed = subprocess.run(
@@ -157,12 +161,18 @@ class ClaudeCodeDriver(AgentDriver):
                 shell=True,
                 capture_output=True,
                 text=True,
+                timeout=self._timeout_s,
             )
             return CommandResult(
                 exit_code=completed.returncode,
                 stdout=completed.stdout or "",
                 stderr=completed.stderr or "",
             )
+        except subprocess.TimeoutExpired:
+            # Return a clear timeout status: non-zero exit code.
+            # Note: On Windows, the process may not be fully killed due to shell process
+            # tree limitations, but we return immediately with timeout status.
+            return CommandResult(exit_code=124, stdout="", stderr="Command timed out")
         except OSError as exc:
             return CommandResult(exit_code=127, stdout="", stderr=str(exc))
 
