@@ -259,7 +259,7 @@ const repoUrlsStr = getFlag('--repo-urls');
 if (fs.existsSync(targetDir)) {
   const contents = fs.readdirSync(targetDir);
   // Allow .git and aesop scaffolded files to already exist (for idempotency)
-  const aesopDirs = ['daemons', 'dash', 'monitor', 'tools', 'ui', 'docs', 'state_store', 'skills', 'mcp', 'scan', 'hooks', '.git', 'state'];
+  const aesopDirs = ['daemons', 'dash', 'monitor', 'tools', 'ui', 'docs', 'state_store', 'skills', 'mcp', 'scan', 'hooks', 'driver', '.git', 'state'];
   const aesopFiles = [
     'aesop.config.example.json',
     'aesop.config.json',
