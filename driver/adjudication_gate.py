@@ -3,12 +3,10 @@
 
 CONSERVATIVE design: a cheaper challenger model handles adjudication decisions,
 but escalates every doubtful call to the incumbent (frontier model) for safety.
-This preserves the incumbent's safety by construction: the final verdict is EITHER
-a confident challenger verdict OR the incumbent's verdict. Never undetermined/failed.
 
 Flow:
   1. Call challenger.decide()
-  2. If verdict=='DECISION_FAILED', escalate (source: escalated-lowconf, reason: failed)
+  2. If verdict=='DECISION_FAILED', escalate (source: escalated-failed)
   3. If verdict=='undetermined', escalate (source: escalated-undetermined)
   4. If confidence < threshold, escalate (source: escalated-lowconf)
   5. If decision_type not in allowed_decision_types, escalate (source: escalated-disallowed-type)
@@ -17,10 +15,17 @@ Flow:
 
 SAFETY INVARIANT:
   The gate's output verdict on any given item is EITHER the challenger's confident
-  non-undetermined verdict OR the incumbent's verdict. It NEVER emits an undetermined/
-  DECISION_FAILED/low-confidence challenger verdict as final. The gate is therefore
-  >= incumbent-safe on every escalated item and only trusts the challenger where
-  the challenger was confident and allowed.
+  non-undetermined verdict OR the incumbent's resolvable verdict (not DECISION_FAILED/undetermined).
+  It NEVER emits an undetermined/DECISION_FAILED/low-confidence challenger verdict as final.
+
+DEFENSIVE CORRECTNESS (incumbent validation):
+  When escalating to the incumbent, the gate validates the incumbent's returned verdict.
+  If the incumbent ALSO returned DECISION_FAILED or undetermined (both failed to decide),
+  the gate marks this as explicitly unresolved (escalation_unresolved=True) rather than
+  silently presenting the incumbent's failure as a confident verdict. The gate passes
+  through the incumbent's verdict (it is the ground truth) but flags it as unresolved.
+  The gate is only as safe as its incumbent — if both fail, the gate surfaces an
+  explicit unresolved terminal, never a fabricated verdict.
 
 DETERMINISM:
   Spot-check decisions are deterministic (seeded) so tests are reproducible.
@@ -113,7 +118,7 @@ class AdjudicationGate:
         # Rule 1: Challenger failed.
         if challenger_verdict == "DECISION_FAILED":
             incumbent_result = self.incumbent_fn(decision_type, context_pack, schema)
-            return {
+            result_dict = {
                 "verdict": incumbent_result.get("verdict"),
                 "evidence": incumbent_result.get("evidence", []),
                 "confidence": incumbent_result.get("confidence", 0.0),
@@ -121,11 +126,15 @@ class AdjudicationGate:
                 "challenger_verdict": challenger_result,
                 "incumbent_verdict": incumbent_result,
             }
+            # Defensive correctness: mark as unresolved if incumbent also failed.
+            if self._is_verdict_unresolved(incumbent_result):
+                result_dict["escalation_unresolved"] = True
+            return result_dict
 
         # Rule 2: Challenger returned undetermined.
         if self.escalate_on_undetermined and challenger_verdict == "undetermined":
             incumbent_result = self.incumbent_fn(decision_type, context_pack, schema)
-            return {
+            result_dict = {
                 "verdict": incumbent_result.get("verdict"),
                 "evidence": incumbent_result.get("evidence", []),
                 "confidence": incumbent_result.get("confidence", 0.0),
@@ -133,11 +142,15 @@ class AdjudicationGate:
                 "challenger_verdict": challenger_result,
                 "incumbent_verdict": incumbent_result,
             }
+            # Defensive correctness: mark as unresolved if incumbent also failed.
+            if self._is_verdict_unresolved(incumbent_result):
+                result_dict["escalation_unresolved"] = True
+            return result_dict
 
         # Rule 3: Challenger confidence below threshold.
         if challenger_confidence < self.escalate_confidence_below:
             incumbent_result = self.incumbent_fn(decision_type, context_pack, schema)
-            return {
+            result_dict = {
                 "verdict": incumbent_result.get("verdict"),
                 "evidence": incumbent_result.get("evidence", []),
                 "confidence": incumbent_result.get("confidence", 0.0),
@@ -145,6 +158,10 @@ class AdjudicationGate:
                 "challenger_verdict": challenger_result,
                 "incumbent_verdict": incumbent_result,
             }
+            # Defensive correctness: mark as unresolved if incumbent also failed.
+            if self._is_verdict_unresolved(incumbent_result):
+                result_dict["escalation_unresolved"] = True
+            return result_dict
 
         # Rule 4: Decision type not allowed (if allowed list is non-empty).
         if (
@@ -152,7 +169,7 @@ class AdjudicationGate:
             and decision_type not in self.allowed_decision_types
         ):
             incumbent_result = self.incumbent_fn(decision_type, context_pack, schema)
-            return {
+            result_dict = {
                 "verdict": incumbent_result.get("verdict"),
                 "evidence": incumbent_result.get("evidence", []),
                 "confidence": incumbent_result.get("confidence", 0.0),
@@ -160,11 +177,15 @@ class AdjudicationGate:
                 "challenger_verdict": challenger_result,
                 "incumbent_verdict": incumbent_result,
             }
+            # Defensive correctness: mark as unresolved if incumbent also failed.
+            if self._is_verdict_unresolved(incumbent_result):
+                result_dict["escalation_unresolved"] = True
+            return result_dict
 
         # Rule 5: Spot-check sample (deterministic, not random).
         if self._should_spot_check(decision_type, context_pack):
             incumbent_result = self.incumbent_fn(decision_type, context_pack, schema)
-            return {
+            result_dict = {
                 "verdict": incumbent_result.get("verdict"),
                 "evidence": incumbent_result.get("evidence", []),
                 "confidence": incumbent_result.get("confidence", 0.0),
@@ -172,6 +193,10 @@ class AdjudicationGate:
                 "challenger_verdict": challenger_result,
                 "incumbent_verdict": incumbent_result,
             }
+            # Defensive correctness: mark as unresolved if incumbent also failed.
+            if self._is_verdict_unresolved(incumbent_result):
+                result_dict["escalation_unresolved"] = True
+            return result_dict
 
         # Accept challenger verdict.
         return {
@@ -181,6 +206,18 @@ class AdjudicationGate:
             "source": "challenger",
             "challenger_verdict": challenger_result,
         }
+
+    def _is_verdict_unresolved(self, result: Dict[str, Any]) -> bool:
+        """Check if a verdict result is unresolved (DECISION_FAILED or undetermined).
+
+        Args:
+            result: A verdict dict with a 'verdict' key.
+
+        Returns:
+            True if verdict is DECISION_FAILED or undetermined, False otherwise.
+        """
+        verdict = result.get("verdict")
+        return verdict in ("DECISION_FAILED", "undetermined")
 
     def _should_spot_check(self, decision_type: str, context_pack: Any) -> bool:
         """Deterministically decide if this call should be spot-checked.

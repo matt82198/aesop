@@ -61,7 +61,7 @@ class FakeChallengerDriver:
         # Default: return undetermined (safe fallback).
         return {
             "verdict": "undetermined",
-            "evidence": "No canned response",
+            "evidence": ["No canned response"],
             "confidence": 0.0,
         }
 
@@ -117,12 +117,12 @@ class TestAdjudicationGate(unittest.TestCase):
         """
         self.challenger.verdicts["defect_type_mismatch"] = {
             "verdict": "defect_found",
-            "evidence": "Type X does not match expected Y",
+            "evidence": ["Type X does not match expected Y"],
             "confidence": 0.95,  # Confident.
         }
         self.incumbent.correct_verdicts["defect_type_mismatch"] = {
             "verdict": "defect_found",
-            "evidence": "Confirmed: type mismatch",
+            "evidence": ["Confirmed: type mismatch"],
             "confidence": 0.99,
         }
 
@@ -148,12 +148,12 @@ class TestAdjudicationGate(unittest.TestCase):
         """
         self.challenger.verdicts["narrative_config_cleanup"] = {
             "verdict": "undetermined",
-            "evidence": "Cannot determine without full code review",
+            "evidence": ["Cannot determine without full code review"],
             "confidence": 0.0,
         }
         self.incumbent.correct_verdicts["narrative_config_cleanup"] = {
             "verdict": "false_positive",
-            "evidence": "Config cleanup is recommended practice, not a defect",
+            "evidence": ["Config cleanup is recommended practice, not a defect"],
             "confidence": 0.98,
         }
 
@@ -182,12 +182,12 @@ class TestAdjudicationGate(unittest.TestCase):
         """
         self.challenger.verdicts["repair_decision"] = {
             "verdict": "DECISION_FAILED",
-            "evidence": "Malformed JSON after retries",
+            "evidence": ["Malformed JSON after retries"],
             "confidence": 0.0,
         }
         self.incumbent.correct_verdicts["repair_decision"] = {
             "verdict": "approved",
-            "evidence": "Repair logic is sound",
+            "evidence": ["Repair logic is sound"],
             "confidence": 0.97,
         }
 
@@ -211,12 +211,12 @@ class TestAdjudicationGate(unittest.TestCase):
         """
         self.challenger.verdicts["merge_eligibility"] = {
             "verdict": "approved",
-            "evidence": "Tests passed, but some uncertainty",
+            "evidence": ["Tests passed, but some uncertainty"],
             "confidence": 0.65,  # Below default 0.70 threshold.
         }
         self.incumbent.correct_verdicts["merge_eligibility"] = {
             "verdict": "needs_changes",
-            "evidence": "Test coverage incomplete",
+            "evidence": ["Test coverage incomplete"],
             "confidence": 0.94,
         }
 
@@ -242,12 +242,12 @@ class TestAdjudicationGate(unittest.TestCase):
         """
         self.challenger.verdicts["narrative_refutation"] = {
             "verdict": "false_positive",
-            "evidence": "This is a style choice, not a defect",
+            "evidence": ["This is a style choice, not a defect"],
             "confidence": 0.88,  # High confidence, but type disallowed.
         }
         self.incumbent.correct_verdicts["narrative_refutation"] = {
             "verdict": "false_positive",
-            "evidence": "Confirmed: style, not defect",
+            "evidence": ["Confirmed: style, not defect"],
             "confidence": 0.99,
         }
 
@@ -284,12 +284,12 @@ class TestAdjudicationGate(unittest.TestCase):
 
         self.challenger.verdicts[decision_type] = {
             "verdict": "approved",
-            "evidence": "Test",
+            "evidence": ["Test"],
             "confidence": 0.88,
         }
         self.incumbent.correct_verdicts[decision_type] = {
             "verdict": "approved",
-            "evidence": "Incumbent agrees",
+            "evidence": ["Incumbent agrees"],
             "confidence": 0.95,
         }
 
@@ -330,7 +330,7 @@ class TestAdjudicationGate(unittest.TestCase):
         """
         self.challenger.verdicts["det_type"] = {
             "verdict": "approved",
-            "evidence": "Test",
+            "evidence": ["Test"],
             "confidence": 0.85,
         }
 
@@ -375,12 +375,12 @@ class TestAdjudicationGate(unittest.TestCase):
             verdicts={
                 "case_1": {
                     "verdict": "undetermined",
-                    "evidence": "Unknown",
+                    "evidence": ["Unknown"],
                     "confidence": 0.0,
                 },
                 "case_2": {
                     "verdict": "DECISION_FAILED",
-                    "evidence": "Error",
+                    "evidence": ["Error"],
                     "confidence": 0.0,
                 },
             }
@@ -389,12 +389,12 @@ class TestAdjudicationGate(unittest.TestCase):
             correct_verdicts={
                 "case_1": {
                     "verdict": "approved",
-                    "evidence": "Incumbent says yes",
+                    "evidence": ["Incumbent says yes"],
                     "confidence": 0.99,
                 },
                 "case_2": {
                     "verdict": "rejected",
-                    "evidence": "Incumbent says no",
+                    "evidence": ["Incumbent says no"],
                     "confidence": 0.99,
                 },
             }
@@ -475,7 +475,7 @@ class TestAdjudicationGate(unittest.TestCase):
             verdicts={
                 "any_type": {
                     "verdict": "DECISION_FAILED",
-                    "evidence": "Backend error",
+                    "evidence": ["Backend error"],
                     "confidence": 0.0,
                 }
             }
@@ -484,7 +484,7 @@ class TestAdjudicationGate(unittest.TestCase):
             correct_verdicts={
                 "any_type": {
                     "verdict": "approved",
-                    "evidence": "Incumbent overrides",
+                    "evidence": ["Incumbent overrides"],
                     "confidence": 0.9,
                 }
             }
@@ -509,12 +509,12 @@ class TestAdjudicationGate(unittest.TestCase):
         """
         self.challenger.verdicts["permit_test_type"] = {
             "verdict": "approved",
-            "evidence": "Type is allowed",
+            "evidence": ["Type is allowed"],
             "confidence": 0.88,
         }
         self.incumbent.correct_verdicts["permit_test_type"] = {
             "verdict": "approved",
-            "evidence": "Incumbent agrees",
+            "evidence": ["Incumbent agrees"],
             "confidence": 0.95,
         }
 
@@ -550,37 +550,37 @@ class TestAdjudicationGate(unittest.TestCase):
                 # 1. Mechanism-real: confident, correct.
                 "mechanism_1": {
                     "verdict": "defect",
-                    "evidence": "Logic error",
+                    "evidence": ["Logic error"],
                     "confidence": 0.96,
                 },
                 # 2. Narrative-FP: undetermined.
                 "narrative_1": {
                     "verdict": "undetermined",
-                    "evidence": "Cannot determine",
+                    "evidence": ["Cannot determine"],
                     "confidence": 0.0,
                 },
                 # 3. Confident-but-wrong: will be in spot-check.
                 "spotcheck_1": {
                     "verdict": "approved",
-                    "evidence": "Looks good",
+                    "evidence": ["Looks good"],
                     "confidence": 0.88,
                 },
                 # 4. DECISION_FAILED.
                 "failed_1": {
                     "verdict": "DECISION_FAILED",
-                    "evidence": "Backend error",
+                    "evidence": ["Backend error"],
                     "confidence": 0.0,
                 },
                 # 5. Low confidence.
                 "lowconf_1": {
                     "verdict": "approved",
-                    "evidence": "Some doubt",
+                    "evidence": ["Some doubt"],
                     "confidence": 0.65,
                 },
                 # 6. Disallowed type (will escalate).
                 "narrative_2": {
                     "verdict": "false_positive",
-                    "evidence": "Not a real issue",
+                    "evidence": ["Not a real issue"],
                     "confidence": 0.90,
                 },
             }
@@ -589,32 +589,32 @@ class TestAdjudicationGate(unittest.TestCase):
             correct_verdicts={
                 "mechanism_1": {
                     "verdict": "defect",
-                    "evidence": "Confirmed",
+                    "evidence": ["Confirmed"],
                     "confidence": 0.99,
                 },
                 "narrative_1": {
                     "verdict": "false_positive",
-                    "evidence": "Not a defect",
+                    "evidence": ["Not a defect"],
                     "confidence": 0.98,
                 },
                 "spotcheck_1": {
                     "verdict": "rejected",
-                    "evidence": "Needs work",
+                    "evidence": ["Needs work"],
                     "confidence": 0.97,
                 },
                 "failed_1": {
                     "verdict": "approved",
-                    "evidence": "Override",
+                    "evidence": ["Override"],
                     "confidence": 0.95,
                 },
                 "lowconf_1": {
                     "verdict": "rejected",
-                    "evidence": "More review needed",
+                    "evidence": ["More review needed"],
                     "confidence": 0.96,
                 },
                 "narrative_2": {
                     "verdict": "false_positive",
-                    "evidence": "Confirmed: style, not defect",
+                    "evidence": ["Confirmed: style, not defect"],
                     "confidence": 0.99,
                 },
             }
@@ -677,7 +677,7 @@ class TestAdjudicationGate(unittest.TestCase):
         """
         self.challenger.verdicts["never_sample"] = {
             "verdict": "approved",
-            "evidence": "Confident",
+            "evidence": ["Confident"],
             "confidence": 0.90,
         }
 
@@ -704,12 +704,12 @@ class TestAdjudicationGate(unittest.TestCase):
         """
         self.challenger.verdicts["always_sample"] = {
             "verdict": "rejected",
-            "evidence": "Confident",
+            "evidence": ["Confident"],
             "confidence": 0.92,
         }
         self.incumbent.correct_verdicts["always_sample"] = {
             "verdict": "rejected",
-            "evidence": "Incumbent agrees",
+            "evidence": ["Incumbent agrees"],
             "confidence": 0.95,
         }
 
@@ -728,6 +728,127 @@ class TestAdjudicationGate(unittest.TestCase):
                 "escalated-spotcheck",
                 f"Item {i} should always be spot-checked with frac=1.0",
             )
+
+    def test_both_challenger_and_incumbent_fail_explicit_unresolved(self):
+        """Defensive correctness: both challenger and incumbent fail -> explicit unresolved.
+
+        VERIFIED finding: when challenger returns DECISION_FAILED/undetermined and
+        escalates to incumbent, if incumbent ALSO returns DECISION_FAILED/undetermined,
+        the gate must mark this as an explicit unresolved terminal (escalation_unresolved=True)
+        rather than silently treating the incumbent's failure as a confident verdict.
+
+        This test verifies the fix: the gate validates the incumbent's verdict before
+        returning it, and surfaces unresolved cases explicitly.
+        """
+        challenger = FakeChallengerDriver(
+            verdicts={
+                "both_fail_decision_failed": {
+                    "verdict": "DECISION_FAILED",
+                    "evidence": ["Challenger backend error"],
+                    "confidence": 0.0,
+                },
+                "both_fail_undetermined": {
+                    "verdict": "undetermined",
+                    "evidence": ["Challenger cannot determine"],
+                    "confidence": 0.0,
+                },
+                "challenger_low_conf_incumbent_fails": {
+                    "verdict": "approved",
+                    "evidence": ["Some doubt"],
+                    "confidence": 0.50,
+                },
+            }
+        )
+        incumbent = FakeIncumbent(
+            correct_verdicts={
+                "both_fail_decision_failed": {
+                    "verdict": "DECISION_FAILED",
+                    "evidence": ["Incumbent also failed"],
+                    "confidence": 0.0,
+                },
+                "both_fail_undetermined": {
+                    "verdict": "undetermined",
+                    "evidence": ["Incumbent also undetermined"],
+                    "confidence": 0.0,
+                },
+                "challenger_low_conf_incumbent_fails": {
+                    "verdict": "DECISION_FAILED",
+                    "evidence": ["Incumbent could not override"],
+                    "confidence": 0.0,
+                },
+            }
+        )
+
+        gate = AdjudicationGate(
+            challenger=challenger,
+            incumbent_fn=incumbent,
+        )
+
+        # Case 1: Challenger DECISION_FAILED, incumbent DECISION_FAILED.
+        result1 = gate.adjudicate("both_fail_decision_failed", self.context_pack)
+        # Must be marked as explicitly unresolved, NOT a confident verdict.
+        self.assertTrue(
+            result1.get("escalation_unresolved"),
+            "Both failing should set escalation_unresolved=True",
+        )
+        # The verdict is passed through BUT clearly marked as unresolved.
+        self.assertIn(result1["verdict"], ["DECISION_FAILED", "undetermined"])
+        self.assertEqual(result1["source"], "escalated-failed")
+
+        # Case 2: Challenger undetermined, incumbent undetermined.
+        result2 = gate.adjudicate("both_fail_undetermined", self.context_pack)
+        self.assertTrue(
+            result2.get("escalation_unresolved"),
+            "Both undetermined should set escalation_unresolved=True",
+        )
+        self.assertIn(result2["verdict"], ["undetermined", "DECISION_FAILED"])
+        self.assertEqual(result2["source"], "escalated-undetermined")
+
+        # Case 3: Challenger low-conf, incumbent DECISION_FAILED.
+        result3 = gate.adjudicate("challenger_low_conf_incumbent_fails", self.context_pack)
+        self.assertTrue(
+            result3.get("escalation_unresolved"),
+            "Incumbent failure on low-conf escalation should set escalation_unresolved=True",
+        )
+        self.assertIn(result3["verdict"], ["DECISION_FAILED", "undetermined"])
+        self.assertEqual(result3["source"], "escalated-lowconf")
+
+    def test_incumbent_succeeds_escalation_not_marked_unresolved(self):
+        """When incumbent succeeds (confident verdict), escalation_unresolved is False/absent.
+
+        Verifies the flip side: normal escalations where incumbent provides a confident
+        verdict should NOT have escalation_unresolved set (or it should be False).
+        """
+        challenger = FakeChallengerDriver(
+            verdicts={
+                "escalate_normally": {
+                    "verdict": "undetermined",
+                    "evidence": ["Cannot decide"],
+                    "confidence": 0.0,
+                }
+            }
+        )
+        incumbent = FakeIncumbent(
+            correct_verdicts={
+                "escalate_normally": {
+                    "verdict": "approved",
+                    "evidence": ["Incumbent decides yes"],
+                    "confidence": 0.98,
+                }
+            }
+        )
+
+        gate = AdjudicationGate(
+            challenger=challenger,
+            incumbent_fn=incumbent,
+        )
+
+        result = gate.adjudicate("escalate_normally", self.context_pack)
+        # escalation_unresolved should be False or absent (normal escalation).
+        self.assertNotEqual(result.get("escalation_unresolved"), True)
+        # Verdict should be the incumbent's confident verdict.
+        self.assertEqual(result["verdict"], "approved")
+        self.assertEqual(result["confidence"], 0.98)
 
 
 if __name__ == "__main__":
