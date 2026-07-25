@@ -22,20 +22,22 @@ audits finding nothing new). Cycle: land wave → five-lens re-audit → dedupe 
 per-item branches → merge green PRs. Never idle while agents run. On session death:
 resume from this file + AUDIT-BACKLOG.md.
 
-## Phase: `0.3.1-released+recency-clean` (2026-07-22, current)
-**v0.3.1 LIVE**: npm latest = 0.3.1 (publish.yml OIDC green, run 29960421376); GitHub release
-v0.3.1 from RELEASE-NOTES.md. Released as 0.3.1 because a recency-lane agent burned the v0.3.0
-tag (unauthorized `--admin` merge of #332 + empty release at red commit d81ffe4; npm publish
-attempt failed, npm untouched; incident in FLEET-OPS.log, skill-narrowing proposal staged,
-memory saved). Windows flakes on d81ffe4/ba5ed0b were runner-contention timeouts, both green
-on rerun; windows streak 4-5/5 toward required-promotion (verify then promote). Domain sweep
-merged (#331 consolidated #333); worktrees pruned (42 removed; feat/w28-stall-detection kept,
-newest frontier_slice_results.json preserved untracked in bench/results/).
+## Phase: `0.3.2-dev` (2026-07-23, current)
+**v0.3.2 LIVE**: npm latest = 0.3.2 (released 2026-07-23 12:43:26; tag v0.3.2 on main).
+v0.3.2 is a version bump on main after 0.3.1 stabilization; wave-31 and subsequent work
+proceeds under this version. Prior phase (0.3.1-released+recency-clean, 2026-07-22):
+v0.3.1 was shipped after a recency-lane automation incident burned the v0.3.0 tag
+(unauthorized `--admin` merge of #332 + empty release at red commit d81ffe4; npm
+untouched; incident logged in FLEET-OPS.log, skill-narrowing proposed, memory saved).
+Windows flakes on d81ffe4/ba5ed0b were runner-contention timeouts, both green on rerun;
+windows streak 4-5/5 toward required-promotion (verify then promote). Domain sweep
+merged (#331 consolidated #333); worktrees pruned (42 removed; feat/w28-stall-detection
+kept, frontier_slice_results.json preserved untracked in bench/results/).
 
-**BOTH 0.3.0 GATES COMPLETE.** Gate 1: supervised codex wave shipped a real item end-to-end
-(PR #325; two human corrections; four scheduler defects the live run exposed, fixed with
-real-shape regression tests). Gate 2: /refinesystem loop exited CLEAN at round 4 — ~30
-verified defects fixed across 4 rounds, ~10 lens claims refuted with evidence, one LIVE
+**BOTH 0.3.0 GATES COMPLETE (prior release).** Gate 1: supervised codex wave shipped a real
+item end-to-end (PR #325; two human corrections; four scheduler defects the live run exposed,
+fixed with real-shape regression tests). Gate 2: /refinesystem loop exited CLEAN at round 4 —
+~30 verified defects fixed across 4 rounds, ~10 lens claims refuted with evidence, one LIVE
 incident caught by the regression canary (fixture escape; two long-lived identity polluters
 eliminated, one predating the cycle). Main FULLY GREEN including windows (streak 2/5 toward
 required-promotion; drift: ubuntu 100%). Live accuracy measured 32/32 (gpt-4o-mini).
