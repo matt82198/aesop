@@ -26,6 +26,7 @@ import os
 import socket
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -925,11 +926,23 @@ class TestApiKeyEnvValidation(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_backend_config(path)
 
-    def test_custom_provider_key_accepted_with_notice(self):
-        """A legit provider key name loads, with a loud NOTICE on stderr."""
+    def test_known_provider_key_accepted_silently(self):
+        """A known LLM-provider key name loads with NO notice (allowlist-primary)."""
         stderr = io.StringIO()
         with tempfile.TemporaryDirectory() as tmpdir:
             path = self._worker_config(tmpdir, "OPEN" + "ROUTER" + "_API" + "_KEY")
+            with contextlib.redirect_stderr(stderr):
+                config = load_backend_config(path)
+        self.assertEqual(config["backend"], "openai-compatible")
+        self.assertNotIn("NOTICE", stderr.getvalue())
+
+    def test_custom_gateway_key_accepted_with_notice(self):
+        """An unknown-but-key-shaped name loads, with a loud NOTICE on stderr."""
+        stderr = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = self._worker_config(
+                tmpdir, "MY_LLM" + "_GATEWAY" + "_API" + "_KEY"
+            )
             with contextlib.redirect_stderr(stderr):
                 config = load_backend_config(path)
         self.assertEqual(config["backend"], "openai-compatible")
@@ -1080,6 +1093,133 @@ class TestHarnessSeatModelWarn(unittest.TestCase):
             with contextlib.redirect_stderr(stderr):
                 load_backend_config(path)
         self.assertEqual(stderr.getvalue(), "")
+
+
+# ============================================================================
+# 9. Round-2 audit fixes
+# ============================================================================
+
+
+class TestApiKeyEnvAllowlistPrimary(unittest.TestCase):
+    """Round-2 item 2: validate_api_key_env is ALLOWLIST-PRIMARY.
+
+    Known LLM-provider key names pass SILENTLY; the shape regex + denylist
+    still hard-reject obvious secrets; any other key-shaped name is allowed
+    but emits a LOUD NOTICE naming the risk (custom gateways keep working).
+    """
+
+    # Assembled at runtime (never contiguous literals in fixtures).
+    _PROVIDERS = tuple(
+        p + "_" + "API" + "_" + "KEY"
+        for p in (
+            "OPENAI", "ANTHROPIC", "OPENROUTER", "TOGETHER", "GROQ",
+            "MISTRAL", "DEEPSEEK", "FIREWORKS", "OLLAMA",
+            "AZURE_OPENAI", "GOOGLE",
+        )
+    )
+    _RISKY_SHAPED = tuple(
+        p + "_" + "KEY"
+        for p in ("MASTER", "ENCRYPTION", "HMAC", "JWT", "LICENSE", "DEPLOY")
+    ) + ("VAULT" + "_" + "API" + "_" + "KEY", "STRIPE" + "_" + "API" + "_" + "KEY")
+
+    def test_known_providers_silent(self):
+        from backend_config import validate_api_key_env
+        for name in self._PROVIDERS:
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                validate_api_key_env(name, where="backend")
+            self.assertEqual(stderr.getvalue(), "", name)
+
+    def test_unknown_shaped_names_allowed_with_loud_notice(self):
+        from backend_config import validate_api_key_env
+        for name in self._RISKY_SHAPED:
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                validate_api_key_env(name, where="backend")
+            out = stderr.getvalue()
+            self.assertIn("NOTICE", out, name)
+            self.assertIn(name, out)
+            # The notice must name the risk: not a known LLM-provider key.
+            self.assertIn("not a known LLM", out, name)
+
+    def test_denylist_still_hard_rejects(self):
+        from backend_config import validate_api_key_env
+        for name in (_ENV_GH_TOKEN, _ENV_AWS_SECRET):
+            with self.assertRaises(ValueError):
+                validate_api_key_env(name, where="backend")
+
+    def test_default_still_silent(self):
+        from backend_config import validate_api_key_env
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            validate_api_key_env(_KEY_ENV_DEFAULT, where="backend")
+        self.assertEqual(stderr.getvalue(), "")
+
+
+class TestBuildDriverFlatPathValidation(unittest.TestCase):
+    """Round-2 item 4: build_driver's legacy-flat raw-dict path runs the SAME
+    validation as the loader (api_key_env check + clean ValueError on missing
+    required fields, not KeyError)."""
+
+    def test_flat_missing_base_url_is_value_error(self):
+        with self.assertRaises(ValueError) as ctx:
+            build_driver({"backend": "openai-compatible", "model": "m"})
+        self.assertIn("base_url", str(ctx.exception))
+
+    def test_flat_missing_model_is_value_error(self):
+        with self.assertRaises(ValueError) as ctx:
+            build_driver({
+                "backend": "openai-compatible",
+                "base_url": "http://localhost:11434/v1",
+            })
+        self.assertIn("model", str(ctx.exception))
+
+    def test_flat_bad_api_key_env_rejected_like_loader(self):
+        with self.assertRaises(ValueError) as ctx:
+            build_driver({
+                "backend": "openai-compatible",
+                "base_url": "https://openrouter.ai/api/v1",
+                "model": "m",
+                "api_key_env": _ENV_GH_TOKEN,
+            })
+        self.assertIn("api_key_env", str(ctx.exception))
+
+    def test_flat_aws_secret_rejected_like_loader(self):
+        with self.assertRaises(ValueError):
+            build_driver({
+                "backend": "openai-compatible",
+                "base_url": "https://openrouter.ai/api/v1",
+                "model": "m",
+                "api_key_env": _ENV_AWS_SECRET,
+            })
+
+
+class TestGetaddrinfoBounded(unittest.TestCase):
+    """Round-2 item 5: hostname resolution during validate_base_url is
+    time-bounded so a hanging DNS name cannot stall config load."""
+
+    def test_slow_resolver_does_not_hang(self):
+        import backend_config
+
+        def slow_getaddrinfo(hostname, port):
+            time.sleep(5)
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 0))]
+
+        with mock.patch.object(backend_config, "_GETADDRINFO_TIMEOUT_S", 0.3):
+            with mock.patch("socket.getaddrinfo", side_effect=slow_getaddrinfo):
+                start = time.monotonic()
+                # Timed-out resolution is treated like an unresolvable name:
+                # allowed through (offline load must not fail); no hang.
+                backend_config.validate_base_url("https://slow.example.com/v1")
+                elapsed = time.monotonic() - start
+        self.assertLess(elapsed, 3.0, "config load stalled on slow DNS")
+
+    def test_fast_private_resolution_still_rejected(self):
+        import backend_config
+        addrinfo = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.5", 0))]
+        with mock.patch("socket.getaddrinfo", return_value=addrinfo):
+            with self.assertRaises(ValueError):
+                backend_config.validate_base_url("https://internal.example.com/v1")
 
 
 class TestShadowToolsLiveHelp(unittest.TestCase):

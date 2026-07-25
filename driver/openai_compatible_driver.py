@@ -29,13 +29,19 @@ from agent_driver import (  # noqa: E402
     ROLE_VERIFY,
     ROLE_WORKER,
 )
-from backend_config import validate_is_local_base_url  # noqa: E402
+from backend_config import (  # noqa: E402
+    validate_base_url,
+    validate_is_local_base_url,
+)
 from codex_driver import CodexDriver  # noqa: E402
 from openai_transport import _AuthStripRedirectHandler  # noqa: E402
 
 
 def make_openai_compatible_transport(
-    base_url: str, api_key_env: str = "OPENAI_API_KEY", timeout_s: float = 120.0
+    base_url: str,
+    api_key_env: str = "OPENAI_API_KEY",
+    timeout_s: float = 120.0,
+    is_local: bool = False,
 ):
     """Factory function: return a transport callable for an OpenAI-compatible endpoint.
 
@@ -43,27 +49,40 @@ def make_openai_compatible_transport(
         base_url: e.g. "https://openrouter.ai/api/v1", "http://localhost:11434/v1"
         api_key_env: environment variable name for the API key (default "OPENAI_API_KEY")
         timeout_s: HTTP timeout in seconds
+        is_local: if True, a missing API key is replaced by a dummy Bearer
+            instead of raising. Requires a loopback base_url (validated here):
+            the key waiver keys off this VALIDATED flag, never off the URL
+            text (a substring check is spoofable, e.g. "localhost.attacker.example").
 
     Returns:
         A transport callable (payload dict) -> dict matching the CodexDriver contract.
 
     Raises:
-        RuntimeError: if the API key env var is not set (unless base_url suggests local Ollama).
+        ValueError: if is_local=True with a non-loopback base_url.
+        RuntimeError: at call time, if the API key env var is not set and
+            is_local is False (no URL-based waiver).
     """
     import urllib.error
     import urllib.request
 
+    # is_local waives the key requirement, so pin it to loopback at the
+    # factory too (defense in depth for direct factory callers).
+    if is_local:
+        validate_is_local_base_url(base_url)
+
     def transport(payload: dict) -> dict:
         """POST to the OpenAI-compatible endpoint via urllib."""
-        # For local Ollama, the API key may be unused/dummy; for hosted services, get it.
-        # The pattern os.environ.get("OPENAI_API_KEY") does not trigger secret_scan
-        # because the RHS contains dots/parens; we use a variable for flexibility.
+        # For validated-local endpoints the API key may be unused/dummy; for
+        # everything else it is required. The waiver is gated on the
+        # loopback-validated is_local flag ONLY -- never on the URL text.
         retrieved_key = os.environ.get(api_key_env)
-        if not retrieved_key and "localhost" not in base_url.lower():
+        if not retrieved_key and not is_local:
             raise RuntimeError(
                 f"{api_key_env} environment variable is not set, and "
-                f"base_url '{base_url}' does not look like localhost. "
-                f"Set {api_key_env} before running, or use a FakeTransport in tests."
+                f"base_url '{base_url}' is not a validated local endpoint "
+                f"(is_local). Set {api_key_env} before running, set "
+                f"is_local=True for a loopback endpoint, or use a "
+                f"FakeTransport in tests."
             )
 
         # Use dummy key for local Ollama if not set.
@@ -155,6 +174,11 @@ class OpenAICompatibleDriver(CodexDriver):
             max_retries: max in-turn retries on malformed JSON (default 2).
             timeout_s: HTTP timeout in seconds (default 120).
         """
+        # SSRF guard: validate base_url UNCONDITIONALLY at construction
+        # (parity with OpenAICompatibleOrchestratorBackend.__init__), so a
+        # direct construction with a private/link-local address fails even
+        # when the config-layer checks were bypassed.
+        validate_base_url(base_url)
         # is_local disables the API-key requirement, so it must be pinned to
         # a loopback base_url (parity with the orchestrator seat + config
         # layer): is_local + remote would ship prompts with a dummy Bearer.
@@ -171,6 +195,7 @@ class OpenAICompatibleDriver(CodexDriver):
                 base_url=base_url,
                 api_key_env=api_key_env,
                 timeout_s=timeout_s,
+                is_local=is_local,
             )
 
         # If no model_map provided, use a simple single-model fallback.

@@ -10,15 +10,13 @@
   dataclasses. The contract. stdlib-only, no provider SDKs.
 - **claude_code_driver.py** — reference adapter (Claude Code parity). Thin +
   documented: two ops are concrete Python, three are serviced by the harness.
-- **codex_driver.py** — Phase 2 IMPLEMENTATION: OpenAI Chat Completions HTTP
-  backend. Fully wired: dispatch_worker (file injection, JSON validation with
-  retry, full-file replacement), run_command (subprocess), worker_status
-  (in-memory registry), get_tokens_spent (aggregate usage). Transport injectable
-  for offline testing.
-- **openai_transport.py** — stdlib urllib transport for OpenAI Chat Completions
-  endpoint. Injectable seam so tests feed canned responses (FakeTransport) with
-  no API key or network.
-- **openai_compatible_driver.py** — OpenAI-compatible backend (Ollama, OpenRouter, etc.).
+- **codex_driver.py** — Phase 2: OpenAI Chat Completions HTTP backend. Fully wired:
+  dispatch_worker (file injection, JSON validation with retry, full-file replacement),
+  run_command (subprocess), worker_status, get_tokens_spent. Transport injectable.
+- **openai_transport.py** — stdlib urllib transport for the OpenAI endpoint; injectable
+  seam so tests feed canned responses (FakeTransport) with no API key or network.
+- **openai_compatible_driver.py** — OpenAI-compatible backend (Ollama, OpenRouter, etc.);
+  construct-time validate_base_url; key waiver only via loopback-validated is_local.
 - **verification_policy.py** — Maps verification tier -> orchestrator tuning (validate_all_json,
   spot_check_frac, repair_cap, require_adversarial_review).
 - **wave_loop.py** — the wave ENGINE: preflight ownership guard, parallel build,
@@ -27,13 +25,15 @@
   build_manifest_item() enriches with verificationTier + model; dispatch_item() routes
   by capability and decides green ONLY from test exit code (not model's say-so).
 - **backend_config.py** — HS-1 unified two-seat config: `seats.worker` + `seats.orchestrator`
-  in aesop.config.json select BOTH seats from ONE block (legacy flat backend block still parses
-  but is INERT in the scheduler default — seats is the opt-in surface; seats.worker wins when both
-  present). `build_driver()` = worker seat (raw-dict seats promotion uses the same replace+validate
-  path as the loader); `build_orchestrator_backend()` = decision seat (absent/harness/claude → null
-  `HarnessOrchestratorBackend`; openai-compatible → configured backend). Guards: base_url SSRF check
-  incl. DNS-resolved addrs (TTL-0 rebinding residual documented), `is_local` pinned to loopback
-  base_url, `api_key_env` restricted to LLM-key-shaped names (deny SECRET/TOKEN/... fragments).
+  in aesop.config.json select BOTH seats from ONE block (legacy flat block parses but is INERT
+  in the scheduler default — seats is the opt-in surface; seats.worker wins when both present).
+  `build_driver()` = worker seat (raw-dict paths — seats promotion AND legacy flat — run the
+  loader's validation); `build_orchestrator_backend()` = decision seat (absent/harness/claude →
+  null `HarnessOrchestratorBackend`; openai-compatible → configured backend). Guards: base_url
+  SSRF check incl. time-bounded DNS resolution (TTL-0 rebinding residual documented); `is_local`
+  pinned to loopback (the transport key waiver keys off VALIDATED is_local, never URL text);
+  `api_key_env` allowlist-primary (known provider names silent, SECRET/TOKEN/... fragments
+  hard-reject, other key-shaped names allowed with loud NOTICE — best-effort heuristic).
   NO seats block = byte-identical to today (no key needed).
 - **context_pack.py** — OrchestratorDriver increment 1: build_context_pack() reads
   ONLY allowlisted control files (STATE.md, BUILDLOG.md, tracker.json, MEMORY.md, explicit
@@ -145,8 +145,6 @@ shape lives in wave_scheduler.py's module docstring.
 
 ## Status
 
-- **Phase 1**: shipped. Interface + Claude reference adapter + contract tests.
-- **Phase 2**: shipped. Codex OpenAI Chat Completions implementation. Offline tests GREEN.
-- **Phase 3**: shipped. Wave bridge: driver → manifest, orchestrator-side dispatch.
-  Proves non-Claude backends drive items end-to-end with honest green (test exit 0 only).
-- **Wave Scheduler (WS3a) + GATE-1**: shipped. Single-cycle orchestration: intake → manifest → dispatch → report (manual merge). Per-item observability, driver injection (--driver claude|codex), ceiling semantics documented.
+Phases 1-3 + Wave Scheduler (WS3a/GATE-1) shipped: interface + contract tests, Codex
+implementation (offline tests green), wave bridge (honest green = test exit 0 only), and
+single-cycle scheduler with per-item observability + driver injection (manual merge).

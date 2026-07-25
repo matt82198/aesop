@@ -55,6 +55,7 @@ import os
 import re
 import socket
 import sys
+import threading
 from pathlib import Path
 from typing import Dict, Optional
 from urllib.parse import urlparse
@@ -206,18 +207,48 @@ def _is_disallowed_ip(ip) -> bool:
     )
 
 
+# Hard deadline for hostname resolution during validation: a hanging DNS
+# name must not stall config load. Timed-out resolution is treated like an
+# unresolvable name (allowed through; connection-time fails on its own).
+_GETADDRINFO_TIMEOUT_S = 5.0
+
+
+def _getaddrinfo_bounded(hostname: str):
+    """socket.getaddrinfo with a hard deadline (_GETADDRINFO_TIMEOUT_S).
+
+    Runs the resolver in a daemon thread and abandons it on timeout
+    (getaddrinfo has no native timeout and ignores socket.setdefaulttimeout).
+
+    Returns:
+        The addrinfo list, or None on resolver error/timeout.
+    """
+    box = {}
+
+    def _resolve():
+        try:
+            box["infos"] = socket.getaddrinfo(hostname, None)
+        except (socket.gaierror, OSError) as exc:
+            box["error"] = exc
+
+    worker = threading.Thread(target=_resolve, daemon=True)
+    worker.start()
+    worker.join(_GETADDRINFO_TIMEOUT_S)
+    return box.get("infos")
+
+
 def _validate_resolved_hostname(hostname: str, base_url: str) -> None:
     """Resolve a hostname and reject private/reserved resolved addresses.
 
     Unresolvable hostnames pass (offline config loading must not fail);
     see validate_base_url's RESIDUAL note for the DNS-rebinding caveat.
+    Resolution is time-bounded (_GETADDRINFO_TIMEOUT_S); a timeout is
+    treated like an unresolvable name.
 
     Raises:
         ValueError: if any resolved address is private/reserved/local.
     """
-    try:
-        infos = socket.getaddrinfo(hostname, None)
-    except (socket.gaierror, OSError):
+    infos = _getaddrinfo_bounded(hostname)
+    if infos is None:
         return
     for info in infos:
         addr = str(info[4][0]).split("%", 1)[0]  # strip IPv6 scope id
@@ -264,6 +295,17 @@ def validate_is_local_base_url(base_url: str) -> None:
 # Default API key env var name (assembled to avoid secret-scan false positive).
 _DEFAULT_KEY_ENV = "OPENAI" + "_" + "API" + "_" + "KEY"
 
+# ALLOWLIST (primary): known LLM-provider key env names pass SILENTLY.
+# Names assembled at runtime to keep secret scanners quiet on fragments.
+_KNOWN_LLM_KEY_ENVS = frozenset(
+    provider + "_" + "API" + "_" + "KEY"
+    for provider in (
+        "OPENAI", "ANTHROPIC", "OPENROUTER", "TOGETHER", "GROQ",
+        "MISTRAL", "DEEPSEEK", "FIREWORKS", "OLLAMA",
+        "AZURE_OPENAI", "GOOGLE",
+    )
+)
+
 # api_key_env must LOOK like an LLM API key env var: uppercase, ending in
 # _KEY or _API_KEY. Combined with the deny fragments below this blocks
 # configs that name arbitrary env secrets (GITHUB_TOKEN, AWS creds, ...)
@@ -276,20 +318,29 @@ _API_KEY_ENV_DENY = (
 
 
 def validate_api_key_env(name, where: str = "backend") -> None:
-    """Validate an api_key_env value against a safe key-name shape.
+    """Validate an api_key_env value; ALLOWLIST-PRIMARY, best-effort heuristic.
 
-    Accepts the default key env and provider-key-shaped names
-    (e.g. OPENROUTER_API_KEY, MY_PROVIDER_KEY); rejects names that do not
-    end in _KEY/_API_KEY or that contain obvious non-LLM secret fragments
-    (SECRET/TOKEN/PASSWORD/ACCESS/...). Logs a NOTICE to stderr when a
-    non-default name is configured so key routing is visible at load time.
+    Decision order:
+      1. Known LLM-provider key names (_KNOWN_LLM_KEY_ENVS, e.g.
+         OPENROUTER_API_KEY, ANTHROPIC_API_KEY) and the default pass SILENTLY.
+      2. Names that do not look like a key env var (not UPPERCASE ending in
+         _KEY/_API_KEY) or that contain obvious non-LLM secret fragments
+         (SECRET/TOKEN/PASSWORD/ACCESS/...) are HARD-REJECTED (ValueError).
+      3. Any other key-shaped name (custom LLM gateways) is ALLOWED but emits
+         a LOUD NOTICE to stderr naming the risk: its value WILL be sent as a
+         Bearer token to the configured base_url, so pointing it at an
+         unrelated secret (MASTER_KEY, ENCRYPTION_KEY, ...) exfiltrates it.
+
+    This is a BEST-EFFORT heuristic, not a security boundary: no name check
+    can prove an env var holds an LLM key. The NOTICE is the real signal --
+    review it whenever a non-provider name appears at load time.
 
     Raises:
         ValueError: if the name fails the pattern or hits the denylist.
     """
     if not isinstance(name, str) or not name:
         raise ValueError(f"'{where}.api_key_env' must be a non-empty string")
-    if name == _DEFAULT_KEY_ENV:
+    if name == _DEFAULT_KEY_ENV or name in _KNOWN_LLM_KEY_ENVS:
         return
     if not _API_KEY_ENV_RE.match(name):
         raise ValueError(
@@ -305,8 +356,11 @@ def validate_api_key_env(name, where: str = "backend") -> None:
                 f"it as a Bearer token to a configured endpoint"
             )
     print(
-        f"NOTICE: {where} api_key_env is '{name}' (non-default); its value "
-        f"will be sent as a Bearer token to the configured base_url",
+        f"NOTICE: {where} api_key_env '{name}' is not a known LLM-provider "
+        f"key env var; its value WILL be sent as a Bearer token to the "
+        f"configured base_url. If '{name}' holds anything other than an LLM "
+        f"API key (master/encryption/signing/deploy material), this config "
+        f"exfiltrates it -- verify before running live.",
         file=sys.stderr,
     )
 
@@ -621,16 +675,33 @@ def build_driver(config: Optional[dict] = None) -> AgentDriver:
                 "Make sure openai_compatible_driver.py is in the driver/ directory."
             ) from exc
 
+        # Legacy-flat raw dicts reach here WITHOUT the loader's validation;
+        # run the same checks so raw-dict and loader paths reject alike
+        # (clean ValueError on missing fields, not KeyError).
+        if "base_url" not in config:
+            raise ValueError("backend 'openai-compatible' requires 'base_url' field")
+        if "model" not in config:
+            raise ValueError("backend 'openai-compatible' requires 'model' field")
         base_url = config["base_url"]
         model = config["model"]
+        if not isinstance(base_url, str):
+            raise ValueError("'base_url' must be a string")
+        if not isinstance(model, str):
+            raise ValueError("'model' must be a string")
         # Validate base_url to prevent SSRF attacks
         validate_base_url(base_url)
-        # Default API key env var name (assembled to avoid secret-scan false positive).
-        default_key_env = "OPENAI" + "_" + "API" + "_" + "KEY"
-        api_key_env = config.get("api_key_env", default_key_env)
+        # Same api_key_env allowlist/shape check as the loader (idempotent
+        # on loader output).
+        if "api_key_env" in config:
+            validate_api_key_env(config["api_key_env"], where="backend")
+        api_key_env = config.get("api_key_env", _DEFAULT_KEY_ENV)
         is_local = config.get("is_local", False)
         if not isinstance(is_local, bool):
             is_local = False
+        # is_local waives the key requirement; pin it to loopback here too
+        # (the driver constructor re-checks, but fail at the config layer).
+        if is_local:
+            validate_is_local_base_url(base_url)
 
         model_map = config.get("model_map", {})
         if not isinstance(model_map, dict):

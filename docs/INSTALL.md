@@ -239,6 +239,18 @@ call time and are never stored in the config; `"is_local": true` endpoints
 need no key at all — and for exactly that reason `is_local` is only accepted
 with a loopback `base_url` (`localhost`, `127.0.0.1`, `::1`).
 
+`api_key_env` is checked with a **best-effort heuristic**, allowlist-primary:
+known LLM-provider key names (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
+`OPENROUTER_API_KEY`, `TOGETHER_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`,
+`DEEPSEEK_API_KEY`, `FIREWORKS_API_KEY`, `OLLAMA_API_KEY`,
+`AZURE_OPENAI_API_KEY`, `GOOGLE_API_KEY`) are accepted silently; names that
+don't look like key env vars or contain obvious non-LLM secret fragments
+(`SECRET`/`TOKEN`/`PASSWORD`/`ACCESS`/...) are rejected; any other
+key-shaped name (custom LLM gateways) is **allowed but prints a loud
+NOTICE** — the env var's value will be sent as a Bearer token to your
+`base_url`, so that NOTICE is the real signal: review it whenever a
+non-provider name shows up at load time.
+
 Asymmetry worth knowing: a **worker** `openai-compatible` seat REQUIRES
 `base_url`; the **orchestrator** seat may omit it (defaults to the hosted
 OpenAI endpoint).
