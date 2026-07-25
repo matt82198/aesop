@@ -356,7 +356,7 @@ def aggregate_seated_results(
     Args:
         all_verdicts: All SeatedVerdictItem from all runs.
         corpus: The corpus items.
-        num_runs: Number of runs.
+        num_runs: Number of runs (global maximum; some items may have fewer).
 
     Returns:
         Dict with:
@@ -393,10 +393,13 @@ def aggregate_seated_results(
             v: count for v, count in verdict_counts.items() if v != "DECISION_FAILED"
         }
 
+        # Use actual number of verdicts for this item (handles incomplete runs)
+        actual_runs_for_item = len(verdicts)
+
         if valid_verdicts:
             modal_verdict = max(valid_verdicts, key=valid_verdicts.get)
             modal_count = valid_verdicts[modal_verdict]
-            stability = modal_count / num_runs if num_runs > 0 else 0.0
+            stability = modal_count / actual_runs_for_item if actual_runs_for_item > 0 else 0.0
         elif verdict_counts:
             # All verdicts were DECISION_FAILED
             modal_verdict = "all_runs_failed"

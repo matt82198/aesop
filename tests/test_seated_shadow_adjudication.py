@@ -622,5 +622,50 @@ class TestModalVerdictExcludesDecisionFailed(unittest.TestCase):
         self.assertEqual(item1_agg.stability, 0.0)
 
 
+class TestSeatedIncompleteRunAggregation(unittest.TestCase):
+    """Test that stability is computed correctly when seated runs are incomplete (rate-limited)."""
+
+    def test_incomplete_run_stability_correct(self):
+        """Verify stability uses actual verdict count, not global num_runs."""
+        corpus = [
+            seated.CorpusItem("id1", "text1", "lens1", "real_defect", "real_defect", "", []),
+            seated.CorpusItem("id2", "text2", "lens2", "false_positive", "false_positive", "", []),
+            seated.CorpusItem("id3", "text3", "lens3", "real_defect", "real_defect", "", []),
+        ]
+
+        # Run 1: complete (all 3 items)
+        run1_verdicts = [
+            seated.SeatedVerdictItem("id1", 1, "real_defect", "Reasoning 1", True, 0, 0.9),
+            seated.SeatedVerdictItem("id2", 1, "false_positive", "Reasoning 2", True, 0, 0.9),
+            seated.SeatedVerdictItem("id3", 1, "real_defect", "Reasoning 3", True, 0, 0.9),
+        ]
+
+        # Run 2: incomplete (only 2 items due to rate limit)
+        run2_verdicts = [
+            seated.SeatedVerdictItem("id1", 2, "real_defect", "Reasoning 1b", True, 0, 0.9),
+            seated.SeatedVerdictItem("id2", 2, "false_positive", "Reasoning 2b", True, 0, 0.9),
+        ]
+
+        all_verdicts = run1_verdicts + run2_verdicts
+        aggregated = seated.aggregate_seated_results(all_verdicts, corpus, 2)
+        agg_items = aggregated["per_item"]
+
+        # id1 and id2: 2 runs each, same verdict => stability = 2/2 = 1.0
+        id1_agg = next(a for a in agg_items if a.id == "id1")
+        self.assertEqual(id1_agg.modal_verdict, "real_defect")
+        self.assertAlmostEqual(id1_agg.stability, 1.0, places=2)
+
+        id2_agg = next(a for a in agg_items if a.id == "id2")
+        self.assertEqual(id2_agg.modal_verdict, "false_positive")
+        self.assertAlmostEqual(id2_agg.stability, 1.0, places=2)
+
+        # id3: only 1 run (missing from run2) => stability = 1/1 = 1.0 (not 1/2!)
+        id3_agg = next(a for a in agg_items if a.id == "id3")
+        self.assertEqual(id3_agg.modal_verdict, "real_defect")
+        # BUG FIX: stability should be 1.0 (1 verdict out of 1 run), NOT 0.5 (1 verdict out of global 2 runs)
+        self.assertAlmostEqual(id3_agg.stability, 1.0, places=2,
+                              msg="Stability must use actual verdict count (1), not global num_runs (2)")
+
+
 if __name__ == "__main__":
     unittest.main()

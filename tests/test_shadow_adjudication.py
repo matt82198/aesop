@@ -854,5 +854,109 @@ class TestModalVerdictExcludesDecisionFailed(unittest.TestCase):
         self.assertEqual(item1.correct_count, 0)
 
 
+class TestIncompleteRunAggregation(unittest.TestCase):
+    """Test that stability is computed correctly when runs are incomplete (rate-limited).
+
+    When a rate limit hits mid-run, some items may have fewer verdicts than num_runs.
+    Stability should be computed based on actual number of verdicts per item, not global num_runs.
+    """
+
+    def test_incomplete_run_stability_correct(self):
+        """Verify stability uses actual verdict count, not global num_runs."""
+        corpus = [
+            CorpusItem("id1", "text1", "lens1", "real_defect", "real_defect", ""),
+            CorpusItem("id2", "text2", "lens2", "false_positive", "false_positive", ""),
+            CorpusItem("id3", "text3", "lens3", "real_defect", "real_defect", ""),
+        ]
+
+        # Run 1: complete (all 3 items)
+        run1 = [
+            ScorecardItem("id1", "real_defect", False, 0, True, 0, True, True),
+            ScorecardItem("id2", "false_positive", False, 0, True, 0, True, True),
+            ScorecardItem("id3", "real_defect", False, 0, True, 0, True, True),
+        ]
+
+        # Run 2: incomplete (only 2 items due to rate limit)
+        run2 = [
+            ScorecardItem("id1", "real_defect", False, 0, True, 0, True, True),
+            ScorecardItem("id2", "false_positive", False, 0, True, 0, True, True),
+        ]
+
+        result = aggregate_runs([run1, run2], corpus, 2)
+        agg_items = result["per_item"]
+
+        # id1 and id2: 2 runs, both same verdict => stability = 2/2 = 1.0
+        id1_agg = next(a for a in agg_items if a.id == "id1")
+        self.assertEqual(id1_agg.modal_verdict, "real_defect")
+        self.assertAlmostEqual(id1_agg.stability, 1.0, places=2)
+
+        id2_agg = next(a for a in agg_items if a.id == "id2")
+        self.assertEqual(id2_agg.modal_verdict, "false_positive")
+        self.assertAlmostEqual(id2_agg.stability, 1.0, places=2)
+
+        # id3: only 1 run (run 2 didn't include it) => stability = 1/1 = 1.0 (not 1/2!)
+        id3_agg = next(a for a in agg_items if a.id == "id3")
+        self.assertEqual(id3_agg.modal_verdict, "real_defect")
+        # BUG FIX: stability should be 1.0 (1 verdict out of 1 run), NOT 0.5 (1 verdict out of global 2 runs)
+        self.assertAlmostEqual(id3_agg.stability, 1.0, places=2,
+                              msg="Stability must use actual verdict count (1), not global num_runs (2)")
+
+    def test_mixed_completion_levels(self):
+        """Test 3 runs with varying completion levels."""
+        corpus = [
+            CorpusItem("id1", "text1", "lens1", "real_defect", "real_defect", ""),
+            CorpusItem("id2", "text2", "lens2", "false_positive", "false_positive", ""),
+            CorpusItem("id3", "text3", "lens3", "real_defect", "real_defect", ""),
+            CorpusItem("id4", "text4", "lens4", "enhancement_opportunity", "enhancement_opportunity", ""),
+        ]
+
+        # Run 1: complete (all 4)
+        run1 = [
+            ScorecardItem(f"id{i}", "real_defect", False, 0, True, 0, True, i < 2)
+            for i in range(1, 5)
+        ]
+
+        # Run 2: 3 items (rate limit after 3)
+        run2 = [
+            ScorecardItem(f"id{i}", "false_positive", False, 0, True, 0, False, False)
+            for i in range(1, 4)
+        ]
+
+        # Run 3: only 2 items (rate limit after 2)
+        run3 = [
+            ScorecardItem(f"id{i}", "real_defect", False, 0, True, 0, True, True)
+            for i in range(1, 3)
+        ]
+
+        result = aggregate_runs([run1, run2, run3], corpus, 3)
+        agg_items = result["per_item"]
+
+        # id1: 3 runs, mixed verdicts
+        id1 = next(a for a in agg_items if a.id == "id1")
+        self.assertEqual(len(id1.verdict_counts), 2)  # real_defect and false_positive
+        # Stability = max_count / actual_runs = 2/3
+        expected_stability_1 = 2.0 / 3
+        self.assertAlmostEqual(id1.stability, expected_stability_1, places=2)
+
+        # id2: 3 runs, mixed verdicts
+        id2 = next(a for a in agg_items if a.id == "id2")
+        expected_stability_2 = 2.0 / 3
+        self.assertAlmostEqual(id2.stability, expected_stability_2, places=2)
+
+        # id3: 2 runs (missing from run3)
+        id3 = next(a for a in agg_items if a.id == "id3")
+        self.assertEqual(len(id3.verdict_counts), 2)  # real_defect and false_positive
+        # Stability should use 2 (actual runs), not 3 (global num_runs)
+        expected_stability_3 = 1.0 / 2
+        self.assertAlmostEqual(id3.stability, expected_stability_3, places=2,
+                              msg="id3 has only 2 verdicts; stability must be 1/2, not 1/3")
+
+        # id4: 1 run (only in run1)
+        id4 = next(a for a in agg_items if a.id == "id4")
+        # Stability = 1/1 = 1.0 (only 1 run contributed data)
+        self.assertAlmostEqual(id4.stability, 1.0, places=2,
+                              msg="id4 has only 1 verdict; stability must be 1/1, not 1/3")
+
+
 if __name__ == "__main__":
     unittest.main()
