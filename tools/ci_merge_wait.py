@@ -69,12 +69,13 @@ def run_gh_command(args):
 def get_pr_status(pr_number):
     """
     Fetch PR status via gh pr view.
-    Returns dict with 'mergeable' and 'statusCheckRollup' keys.
+    Returns dict with 'mergeable', 'statusCheckRollup', and 'headRefOid' keys.
     Returns None if gh is missing.
+    F5 FIX: headRefOid is fetched to enable SHA-pinned merge via --match-head-commit.
     """
     data = run_gh_command([
         "gh", "pr", "view", str(pr_number),
-        "--json", "mergeable,statusCheckRollup"
+        "--json", "mergeable,statusCheckRollup,headRefOid"
     ])
     return data
 
@@ -119,8 +120,13 @@ def check_ci_status(status_rollup, allow_no_checks=False, expected_checks=None):
     Returns: ("pending", None), ("success", None), or ("failure", check_name)
     """
     # Fail-closed: empty rollup defaults to PENDING unless explicitly allowed
+    # F2 FIX: expected_checks takes PRECEDENCE over allow_no_checks
+    # If expected_checks is non-empty and rollup is empty, return pending (missing required checks)
     if not status_rollup:
-        if allow_no_checks:
+        if expected_checks:
+            # Expected checks are required but rollup is empty (they're missing)
+            return ("pending", None)
+        elif allow_no_checks:
             return ("success", None)
         else:
             # Empty rollup: fail-closed to PENDING (window where checks vanished/haven't registered yet)
@@ -148,12 +154,13 @@ def check_ci_status(status_rollup, allow_no_checks=False, expected_checks=None):
                 elif not conclusion or conclusion == "":
                     # COMPLETED with null/empty conclusion = fail-closed to PENDING (API anomaly)
                     check_status = "pending"
-                elif conclusion.upper() in ("NEUTRAL", "SKIPPED"):
-                    # Non-blocking advisory or skipped checks
+                elif conclusion.upper() in ("SUCCESS", "NEUTRAL", "SKIPPED"):
+                    # SUCCESS, NEUTRAL, SKIPPED are all passing/non-blocking
                     check_status = "success"
                 else:
-                    # Other conclusion values (unknown) = success (GitHub default)
-                    check_status = "success"
+                    # F6 FIX: Unknown conclusion values must fail-closed to PENDING (not success)
+                    # Future GitHub API conclusion values should not auto-succeed
+                    check_status = "pending"
             elif status in ("QUEUED", "IN_PROGRESS"):
                 check_status = "pending"
             else:
@@ -222,19 +229,30 @@ def check_ci_status(status_rollup, allow_no_checks=False, expected_checks=None):
         return ("success", None)
 
 
-def merge_pr(pr_number, merge_method, dry_run=False):
+def merge_pr(pr_number, merge_method, dry_run=False, head_ref_oid=None):
     """
-    Merge the PR using gh pr merge.
+    Merge the PR using gh pr merge with SHA-pinned commit.
     This call is STRUCTURALLY UNREACHABLE unless CI is SUCCESS.
+    F5 FIX: Uses --match-head-commit <sha> to ensure merge targets the exact commit
+    whose CI checks passed, preventing TOCTOU race where a push between CI check and
+    merge could sneak in an untested commit.
     If dry_run is True, report what would be done without actually merging.
     Returns True on success, False on error.
     """
     if dry_run:
-        print(f"[DRY-RUN] Would merge PR #{pr_number} with --{merge_method}")
+        if head_ref_oid:
+            print(f"[DRY-RUN] Would merge PR #{pr_number} with --{merge_method} --match-head-commit {head_ref_oid}")
+        else:
+            print(f"[DRY-RUN] Would merge PR #{pr_number} with --{merge_method}")
         return True
 
+    merge_cmd = ["gh", "pr", "merge", str(pr_number), f"--{merge_method}"]
+    # F5 FIX: Add --match-head-commit to pin merge to the SHA that passed CI
+    if head_ref_oid:
+        merge_cmd.extend(["--match-head-commit", head_ref_oid])
+
     result = subprocess.run(
-        ["gh", "pr", "merge", str(pr_number), f"--{merge_method}"],
+        merge_cmd,
         capture_output=True,
         text=True,
         timeout=30,
@@ -691,12 +709,14 @@ def main():
 
             # SUCCESS: CI is still green, proceed to merge
             # This merge call is STRUCTURALLY UNREACHABLE unless ci_status == "success"
+            # F5 FIX: Capture headRefOid for SHA-pinned merge (prevents TOCTOU)
+            head_ref_oid = final_check.get("headRefOid")
             if args.dry_run:
                 print(f"[DRY-RUN] PR #{args.pr_number} CI is green, would merge...")
             else:
                 print(f"CI CONFIRMED GREEN. Merging PR #{args.pr_number}...")
 
-            if merge_pr(args.pr_number, args.merge_method, dry_run=args.dry_run):
+            if merge_pr(args.pr_number, args.merge_method, dry_run=args.dry_run, head_ref_oid=head_ref_oid):
                 if args.dry_run:
                     print(f"[DRY-RUN] PR #{args.pr_number} merge command would succeed")
                 else:
