@@ -482,5 +482,78 @@ class MultiProcessConcurrencyTest(unittest.TestCase):
             self.assertEqual(holder, instance_d)
 
 
+class RetractOnErrorTest(unittest.TestCase):
+    """RS5 F2: a failed claim attempt must never strand a phantom holder.
+
+    try_claim's outer except previously returned False WITHOUT retracting the
+    claim_requested it had already appended (the retract only ran on the
+    fold-says-we-lost path). The stranded claim became the winner as soon as
+    the true holder released, blocking the resource for a full TTL while the
+    'holder' believed it had failed."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.tmp_dir, "test_retract.db")
+        EventStore(self.db_path)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_read_failure_does_not_strand_phantom_holder(self):
+        """try_claim whose post-append read raises (SQLite lock retries
+        exhausted) must retract its own claim before returning False: after
+        the true holder releases, the resource is immediately claimable."""
+        store = EventStore(self.db_path)
+        self.assertTrue(try_claim(store, "item-y", "inst-A", ttl=300))
+
+        class ReadFailsStore:
+            """Append succeeds; the re-read raises -> outer except path."""
+
+            def __init__(self, inner):
+                self.inner = inner
+
+            def append(self, *args, **kwargs):
+                return self.inner.append(*args, **kwargs)
+
+            def read(self, stream):
+                raise RuntimeError("database is locked (retries exhausted)")
+
+        self.assertFalse(
+            try_claim(ReadFailsStore(store), "item-y", "inst-B", ttl=300),
+            "claim attempt with a failing read must fail closed",
+        )
+
+        # A finishes cleanly; B's claim must NOT be left as the next holder.
+        release(store, "item-y", "inst-A")
+        self.assertIsNone(
+            current_holder(store, "item-y"),
+            "phantom holder stranded: B's un-retracted claim won after A "
+            "released (resource dead until B's TTL expires)",
+        )
+        self.assertTrue(
+            try_claim(store, "item-y", "inst-C", ttl=60),
+            "resource not claimable after the true holder released",
+        )
+
+    def test_append_failure_still_fail_closed_and_holder_unchanged(self):
+        """If the initial append itself raises there is nothing to retract:
+        fail closed, and the true holder is untouched."""
+        store = EventStore(self.db_path)
+        self.assertTrue(try_claim(store, "item-z", "inst-A", ttl=300))
+
+        class AppendFailsStore:
+            def append(self, *args, **kwargs):
+                raise RuntimeError("disk full")
+
+            def read(self, stream):
+                return store.read(stream)
+
+        self.assertFalse(
+            try_claim(AppendFailsStore(), "item-z", "inst-B", ttl=300)
+        )
+        self.assertEqual(current_holder(store, "item-z"), "inst-A")
+
+
 if __name__ == "__main__":
     unittest.main()

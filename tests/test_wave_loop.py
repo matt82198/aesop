@@ -1397,8 +1397,9 @@ class TestInstanceIdUniqueness(unittest.TestCase):
         captured_instance_ids = []
         original_try_claim = coordination.try_claim
 
-        def mock_try_claim(event_store, resource=None, instance_id=None):
-            # Capture the instance_id and call original.
+        def mock_try_claim(event_store, resource=None, instance_id=None, ttl=None):
+            # Capture the instance_id and call original (ttl accepted since
+            # RS5: run_wave passes a work-sized ttl on every claim).
             if instance_id is not None:
                 captured_instance_ids.append(instance_id)
             return True  # Always succeed so build continues
