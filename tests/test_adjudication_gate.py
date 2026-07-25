@@ -996,14 +996,122 @@ class TestGateConfidenceAndVerdictHardening(unittest.TestCase):
         found = False
         for i in range(2000):
             pack = type("ContextPack", (), {"content": {"i": str(i)}})()
+            # FIX (BL2): canonical now includes "|" + evidence (empty if not present).
             canonical = "dt|" + _j.dumps(
                 sorted(pack.content.items()), separators=(",", ":")
-            )
+            ) + "|"
             if int(_h.md5(canonical.encode()).hexdigest(), 16) % 100 == 28:
                 self.assertTrue(gate._should_spot_check("dt", pack))
                 found = True
                 break
         self.assertTrue(found, "no item with hash%100==28 found in range")
+
+
+class TestSpotCheckPerItemIndependence(unittest.TestCase):
+    """BL2 Finding 1: spot-check must be per-item (evidence-aware), not per-wave.
+
+    With the old canonical hash using only context_pack.content (SHARED file-brain),
+    two items differing only in evidence got the SAME spot-check decision (0% or 100%
+    of the wave). With the fix (folding evidence into the hash), they get INDEPENDENT
+    draws, so approximately spot_check_frac of ITEMS are sampled, not spot_check_frac
+    of the WAVE.
+    """
+
+    def setUp(self):
+        """Set up challenger and incumbent for each test."""
+        self.challenger = FakeChallengerDriver()
+        self.incumbent = FakeIncumbent()
+
+    def test_two_items_same_content_different_evidence_get_independent_draws(self):
+        """Two items with identical content but different evidence must have
+        independent spot-check decisions.
+
+        This is the core BL2 finding: the old implementation hashed only content,
+        so all items in a wave got the same spot-check decision. The fix must fold
+        evidence into the digest so each item's spot-check decision is independent.
+        """
+        # Setup: both items have identical content (shared file-brain)
+        shared_content = {"state": "ready", "batch_id": "wave_123"}
+
+        # Item A has evidence X
+        context_pack_a = type("ContextPack", (), {
+            "content": shared_content,
+            "evidence": {"A": "finding_alpha"}
+        })()
+
+        # Item B has evidence Y (different from A)
+        context_pack_b = type("ContextPack", (), {
+            "content": shared_content,
+            "evidence": {"B": "finding_beta"}
+        })()
+
+        # Both return confident verdicts (so they're only differing in spot-check)
+        self.challenger.verdicts["independent_test_type"] = {
+            "verdict": "approved",
+            "evidence": ["Confident verdict"],
+            "confidence": 0.88,
+        }
+        self.incumbent.correct_verdicts["independent_test_type"] = {
+            "verdict": "approved",
+            "evidence": ["Incumbent agrees"],
+            "confidence": 0.95,
+        }
+
+        gate = AdjudicationGate(
+            challenger=self.challenger,
+            incumbent_fn=self.incumbent,
+            spot_check_frac=0.50,  # 50% to ensure both outcomes possible
+        )
+
+        # Run 20 times with identical (content, evidence) pairs to ensure
+        # reproducibility within a pair, then check independence between pairs.
+        results_a = []
+        results_b = []
+
+        for i in range(20):
+            # Item A (same evidence X, same content)
+            pack_a = type("ContextPack", (), {
+                "content": shared_content,
+                "evidence": {"A": "finding_alpha"}
+            })()
+            result_a = gate.adjudicate("independent_test_type", pack_a)
+            results_a.append(result_a["source"])
+
+            # Item B (same evidence Y, same content)
+            pack_b = type("ContextPack", (), {
+                "content": shared_content,
+                "evidence": {"B": "finding_beta"}
+            })()
+            result_b = gate.adjudicate("independent_test_type", pack_b)
+            results_b.append(result_b["source"])
+
+        # Within a pair, the source should be DETERMINISTIC (same evidence = same hash).
+        # After the fix, items A and B should have independent draws.
+        # Without the fix, they'd both be all-challenger or all-spotcheck.
+
+        # Count spot-checks
+        spotcheck_a_count = sum(1 for s in results_a if s == "escalated-spotcheck")
+        spotcheck_b_count = sum(1 for s in results_b if s == "escalated-spotcheck")
+
+        # With the fix, we expect roughly 50% spot-check rate for each item,
+        # but they may differ (e.g., 9/20 vs 11/20). The key is they're NOT identical
+        # (or if they happen to be, it's due to chance, not the hash being content-only).
+        # This test primarily checks that evidence affects the hash, not content alone.
+
+        # Relaxed assertion: they should NOT both be 0 or both be 20 (all or nothing).
+        # With frac=0.50, the probability that both A and B are all-0 or all-20 due to
+        # chance is negligible. If they are, the fix is not applied.
+        total_spotcheck = spotcheck_a_count + spotcheck_b_count
+        self.assertGreater(
+            total_spotcheck, 0,
+            "With frac=0.50 over 40 items, expect some spot-checks. "
+            "If 0, the hash is content-only (BL2 finding still present)."
+        )
+        self.assertLess(
+            total_spotcheck, 40,
+            "With frac=0.50 over 40 items, expect some challengers accepted. "
+            "If 40, the hash is content-only."
+        )
 
 
 if __name__ == "__main__":
