@@ -390,27 +390,67 @@ class TestCodexDriverRunCommand(unittest.TestCase):
             result = driver.run_command(cmd, cwd=tmpdir)
             self.assertEqual(result.exit_code, 0)
 
-    def test_run_command_timeout(self):
-        """run_command respects timeout and returns non-zero on timeout.
+    def test_run_command_timeout_bounds_wall_clock(self):
+        """RS-A F1: timeout truly bounds wall-clock (tree-kill), exit 124.
 
-        A command that sleeps longer than the timeout should NOT hang forever,
-        and should return a non-zero exit code (timeout status).
+        Uses a REAL grandchild sleep (never Windows `timeout /t`, which errors
+        instantly without a console and made the old test a tautology) and
+        asserts run_command returns within a small multiple of timeout_s.
         """
-        # Use a short timeout for fast test execution
         driver = CodexDriver(transport=lambda p: {}, timeout_s=0.5)
-
-        # Platform-neutral sleep command that will exceed our timeout
-        if sys.platform == "win32":
-            cmd = "timeout /t 5 /nobreak"  # Sleep for 5 seconds on Windows
-        else:
-            cmd = "sleep 5"  # Sleep for 5 seconds on Unix
-
-        # This should timeout and return a non-zero exit code, not hang
+        cmd = sys.executable + ' -c "import time; time.sleep(8)"'
+        start = time.monotonic()
         result = driver.run_command(cmd)
+        elapsed = time.monotonic() - start
+        self.assertEqual(result.exit_code, 124,
+                         "timeout must return the conventional exit 124")
+        self.assertLess(elapsed, 5.0,
+                        "run_command must return promptly on timeout, not "
+                        "block on the orphaned grandchild (took %.1fs)" % elapsed)
+        self.assertIn("timed out", result.stderr)
 
-        # On timeout, exit_code should be non-zero (indicating failure)
-        self.assertNotEqual(result.exit_code, 0,
-                          "run_command should return non-zero on timeout")
+    def test_run_command_timeout_preserves_partial_output(self):
+        """RS-A F7: stdout/stderr printed before the timeout is preserved."""
+        driver = CodexDriver(transport=lambda p: {}, timeout_s=2.0)
+        cmd = (sys.executable +
+               ' -c "import sys, time; print(\'OUT_MARK_PARTIAL\', flush=True); '
+               "sys.stderr.write('ERR_MARK_PARTIAL'); sys.stderr.flush(); "
+               'time.sleep(12)"')
+        result = driver.run_command(cmd)
+        self.assertEqual(result.exit_code, 124)
+        self.assertIn("OUT_MARK_PARTIAL", result.stdout,
+                      "partial stdout dropped on timeout")
+        self.assertIn("ERR_MARK_PARTIAL", result.stderr,
+                      "partial stderr dropped on timeout")
+
+    def test_command_timeout_separate_from_http_timeout(self):
+        """RS-A F7: run_command has its OWN timeout knob.
+
+        Raising the HTTP transport timeout (timeout_s) must not silently
+        raise the command timeout when command_timeout_s is set.
+        """
+        driver = CodexDriver(
+            transport=lambda p: {}, timeout_s=600.0, command_timeout_s=0.5
+        )
+        cmd = sys.executable + ' -c "import time; time.sleep(8)"'
+        start = time.monotonic()
+        result = driver.run_command(cmd)
+        elapsed = time.monotonic() - start
+        self.assertEqual(result.exit_code, 124)
+        self.assertLess(elapsed, 5.0,
+                        "command_timeout_s=0.5 must bound the command even "
+                        "when timeout_s (HTTP) is 600 (took %.1fs)" % elapsed)
+
+    def test_command_timeout_defaults_to_timeout_s(self):
+        """Unset command_timeout_s falls back to timeout_s (back-compat)."""
+        driver = CodexDriver(transport=lambda p: {}, timeout_s=77.0)
+        self.assertEqual(driver._command_timeout_s, 77.0)
+        explicit = CodexDriver(
+            transport=lambda p: {}, timeout_s=77.0, command_timeout_s=3.0
+        )
+        self.assertEqual(explicit._command_timeout_s, 3.0)
+        # The HTTP/stall knob is untouched by the command knob.
+        self.assertEqual(explicit._timeout_s, 77.0)
 
 
 class TestCodexDriverWorkerStatus(unittest.TestCase):

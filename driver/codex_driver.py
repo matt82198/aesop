@@ -34,10 +34,11 @@ stdlib-only, ASCII-only, Windows + Linux safe.
 import hashlib
 import json
 import os
-import subprocess
 import time
 from pathlib import Path
 from typing import Dict, Optional
+
+from proc_util import run_shell_bounded
 
 from agent_driver import (
     AgentDriver,
@@ -176,6 +177,7 @@ class CodexDriver(AgentDriver):
         max_retries: int = 2,
         timeout_s: float = 120.0,
         allow_unverified_models: bool = False,
+        command_timeout_s: Optional[float] = None,
     ):
         """Initialize the CodexDriver with optional overrides.
 
@@ -185,9 +187,12 @@ class CodexDriver(AgentDriver):
             now: callable returning time.time() for testing (default=time.time).
             max_owned_bytes: max total bytes of owned files before pre-dispatch fail (default 200KB).
             max_retries: max in-turn retries on malformed JSON (default 2).
-            timeout_s: HTTP timeout in seconds (default 120).
+            timeout_s: HTTP transport timeout + worker_status stall threshold, seconds (default 120).
             allow_unverified_models: if True, allow models not known to support json_schema
                 (default False). Set to True only for experimental backends.
+            command_timeout_s: run_command wall-clock bound, seconds. Defaults to
+                timeout_s when unset, but is separately settable so raising the
+                HTTP timeout never silently raises the command timeout (RS-A F7).
 
         Raises:
             ValueError: if any mapped model is not in JSON_SCHEMA_CAPABLE and
@@ -211,6 +216,11 @@ class CodexDriver(AgentDriver):
         self._max_owned_bytes = max_owned_bytes
         self._max_retries = max_retries
         self._timeout_s = timeout_s
+        # run_command gets its OWN knob (falls back to timeout_s) so the HTTP
+        # timeout and the command wall-clock bound are independently tunable.
+        self._command_timeout_s = (
+            command_timeout_s if command_timeout_s is not None else timeout_s
+        )
 
         # Transport wiring. When falling back to the default transport, BIND the
         # configured timeout: default_openai_transport has its own timeout_s=120
@@ -676,30 +686,15 @@ class CodexDriver(AgentDriver):
         Real subprocess execution (not a worker tool). Used for tests, git,
         verification. Mirrors ClaudeCodeDriver.run_command for parity.
 
-        Timeouts are enforced: if the command exceeds timeout_s, the process is
-        terminated and a non-zero exit code is returned.
+        Timeouts truly bound wall-clock (RS-A F1): on expiry the WHOLE process
+        tree is killed (taskkill /T on Windows, killpg on POSIX) and we return
+        exit 124 promptly, preserving any partial output captured before the
+        kill (RS-A F7). Bounded by command_timeout_s (NOT the HTTP timeout).
+        See proc_util.run_shell_bounded.
         """
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=cwd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=self._timeout_s,
-            )
-            return CommandResult(
-                exit_code=completed.returncode,
-                stdout=completed.stdout or "",
-                stderr=completed.stderr or "",
-            )
-        except subprocess.TimeoutExpired:
-            # Return a clear timeout status: non-zero exit code.
-            # Note: On Windows, the process may not be fully killed due to shell process
-            # tree limitations, but we return immediately with timeout status.
-            return CommandResult(exit_code=124, stdout="", stderr="Command timed out")
-        except OSError as exc:
-            return CommandResult(exit_code=127, stdout="", stderr=str(exc))
+        return run_shell_bounded(
+            command, cwd=cwd, timeout_s=self._command_timeout_s
+        )
 
     # -- Operation 5: model selection (concrete) -------------------------
     def resolve_model(self, role: str) -> str:

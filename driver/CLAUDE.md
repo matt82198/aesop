@@ -10,7 +10,14 @@ the loop dispatches only through the `AgentDriver` interface. **Phases 1-3 shipp
 - **claude_code_driver.py** — reference adapter (Claude Code parity): two ops are
   concrete Python, three are serviced by the harness.
 - **codex_driver.py** — Phase 2: OpenAI Chat Completions HTTP backend: dispatch_worker
-  (file injection, JSON retry), run_command, worker_status, get_tokens_spent. Transport injectable.
+  (file injection, JSON retry), run_command (own `command_timeout_s` knob, defaults to
+  timeout_s — the HTTP timeout never silently raises the command bound), worker_status,
+  get_tokens_spent. Transport injectable.
+- **proc_util.py** — `run_shell_bounded()`: shared run_command backing (RS-A F1/F7). Timeout
+  truly bounds wall-clock: child in own group/session; on expiry the WHOLE tree is killed
+  (taskkill /T /F on Windows, killpg SIGKILL on POSIX), exit 124 promptly, partial
+  stdout/stderr preserved. Never use subprocess.run(shell=True, timeout=) for commands — on
+  Windows it kills only cmd.exe then re-blocks on the orphaned grandchild (wave-hang class).
 - **openai_transport.py** — stdlib urllib transport for the OpenAI endpoint; injectable
   seam (FakeTransport in tests: no API key or network).
 - **openai_compatible_driver.py** — OpenAI-compatible backend (Ollama, OpenRouter, etc.);
@@ -74,9 +81,7 @@ the loop dispatches only through the `AgentDriver` interface. **Phases 1-3 shipp
 2. `dispatch_worker(request) -> WorkerResult` — spawn ONE isolated worker (prompt + owned_files + workdir); may read/write/run + return a **structured** result (extent per probe).
 3. `worker_status(worker_id) -> WorkerStatus` — liveness / stall detection for the watchdog.
 4. `run_command(command, cwd, shell) -> CommandResult` — ORCHESTRATOR-side exec (tests, git, verify). Distinct from a worker shell.
-5. `resolve_model(role) -> str` — map `worker`/`setup`/`verify` to a concrete backend model id.
-
-Optional (non-abstract): `get_tokens_spent()`.
+5. `resolve_model(role) -> str` — map `worker`/`setup`/`verify` to a concrete backend model id. Optional (non-abstract): `get_tokens_spent()`.
 
 ## Invariants
 
@@ -86,19 +91,14 @@ Optional (non-abstract): `get_tokens_spent()`.
   APIs or harness methods. Context packs are allowlist-only (STATE.md, BUILDLOG.md,
   tracker.json, MEMORY.md, explicit brief: under repo/conductor roots); arbitrary reads
   raise `ContextPackViolation` — **enforces cardinal rule 4 in code**.
-- `probe_capabilities()` must be **honest**. Defaults are conservative (no
-  native abilities, accuracy 0.0, tier 4) — optimism is opt-in, never default.
-- **Weaker workers → higher verification tier.** Lower `tool_use_accuracy` raises
-  `recommended_verification_tier`: cheaper backends RAISE the orchestrator's burden.
-- Unknown roles in `resolve_model()` fall back to the worker model — a mis-typed
-  role can never silently escalate cost.
-- **Fail-safe verdicts**: `OrchestratorDriver.decide()` returns DECISION_FAILED after
-  retries exhausted; never fabricates a passing verdict (never-green principle).
+- `probe_capabilities()` must be **honest**. Defaults conservative (no native abilities, accuracy 0.0, tier 4) — optimism is opt-in, never default.
+- **Weaker workers → higher verification tier.** Lower `tool_use_accuracy` raises `recommended_verification_tier`: cheaper backends RAISE the orchestrator's burden.
+- Unknown roles in `resolve_model()` fall back to the worker model — a mis-typed role can never silently escalate cost.
+- **Fail-safe verdicts**: `OrchestratorDriver.decide()` returns DECISION_FAILED after retries exhausted; never fabricates a passing verdict (never-green principle).
 - **AdjudicationGate safety invariant** (increment 3): the final verdict is EITHER a
   confident challenger verdict OR the incumbent's; an undetermined/DECISION_FAILED/
   low-confidence challenger verdict is NEVER final (incumbent-safe by construction).
-- stdlib-only, ASCII-only, Windows + Linux safe. Concrete adapters own any
-  provider SDK, not this layer.
+- stdlib-only, ASCII-only, Windows + Linux safe. Concrete adapters own any provider SDK, not this layer.
 
 ## Phase 2 (Codex) + Phase 3 (Bridge) Implementation Details
 
