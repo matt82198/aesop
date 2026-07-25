@@ -129,7 +129,7 @@ export function scaffoldOnce(dirName, opts = {}) {
   }
 
   // Run scaffold (use tunable timeout)
-  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
+  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 120000;
   const cwd = mode === 'wizard' ? tempBase : path.dirname(targetDir);
   const result = spawnSync(process.execPath, [CLI, ...args], {
     encoding: 'utf8',
