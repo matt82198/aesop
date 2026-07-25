@@ -475,6 +475,130 @@ def _release_stale_leases(state_dir: str, journal_state: Dict[str, Dict[str, Any
         pass
 
 
+# ========================================================================
+# RS5: claim-gate lifecycle (ttl sized to the work, fence before repair/
+# ship, hold across the full lifecycle, exactly-once release)
+# ========================================================================
+
+# F1a: the claim TTL must comfortably cover the WORK it protects (build +
+# bounded repair + ship), not coordination's 300s default -- a single real
+# build outlives 300s, letting a second instance reclaim a LIVE slug
+# mid-build (double-dispatch). Sized from the driver's command timeout with
+# a generous multiple and a sane floor; the fence (F1b) closes the window
+# even when a build outruns this ttl.
+_CLAIM_TTL_FLOOR_S = 3600.0          # never below 1h, even for fast drivers
+_CLAIM_TTL_TIMEOUT_MULTIPLE = 10.0   # covers build + repair rounds + ship
+
+
+def _claim_ttl_for_driver(driver: Any) -> float:
+    """Derive the per-item claim TTL from the driver's command timeout.
+
+    Checks the public and private timeout knobs used by the concrete
+    drivers (CodexDriver: command_timeout_s/_command_timeout_s;
+    ClaudeCodeDriver: _timeout_s). Unusable values fall back to the floor.
+    """
+    best = 0.0
+    for attr in (
+        "command_timeout_s", "_command_timeout_s", "timeout_s", "_timeout_s"
+    ):
+        try:
+            value = getattr(driver, attr, None)
+            if value is None:
+                continue
+            value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if value > best:
+            best = value
+    return max(_CLAIM_TTL_FLOOR_S, best * _CLAIM_TTL_TIMEOUT_MULTIPLE)
+
+
+class _ClaimContext:
+    """Per-wave claim registry: acquire in build, fence before repair/ship,
+    release exactly once at the true end of the lifecycle (RS5 F1/F3).
+
+    - acquire(slug): coordination.try_claim with the wave-level instance id
+      and the work-sized ttl. Exceptions propagate so build_item keeps its
+      fail-closed SKIP (RS3-W N5).
+    - fence_ok(slug): True unless WE claimed the slug and can no longer
+      prove we hold it (ttl lapsed / reclaimed / read error). Items this
+      wave never claimed (journal-resumed, no state_dir, no coordination
+      module) always pass: single-instance behavior is unchanged.
+    - release_all(): pops each held slug exactly once and best-effort
+      releases it; called from run_wave's finally on EVERY exit path
+      (success, abort, exception) -- never from build_item, so the claim
+      survives Phase 5 repair and Phase 7 ship.
+    """
+
+    def __init__(self, state_dir: Optional[str], instance_id: str, ttl: float):
+        self.state_dir = state_dir
+        self.instance_id = instance_id
+        self.ttl = ttl
+        self._held: Dict[str, bool] = {}
+        self._lock = threading.Lock()
+
+    def _enabled(self) -> bool:
+        return coordination is not None and self.state_dir is not None
+
+    def _event_store(self):
+        from state_store import store
+        return store.EventStore(str(Path(self.state_dir) / "state.db"))
+
+    def acquire(self, slug: str) -> bool:
+        """Claim slug for this wave; True only if the claim is held."""
+        if not self._enabled():
+            return False
+        won = coordination.try_claim(
+            self._event_store(),
+            resource=slug,
+            instance_id=self.instance_id,
+            ttl=self.ttl,
+        )
+        if won:
+            with self._lock:
+                self._held[slug] = True
+        return bool(won)
+
+    def holds(self, slug: str) -> bool:
+        with self._lock:
+            return slug in self._held
+
+    def fence_ok(self, slug: str) -> bool:
+        """FENCE (F1b): may this wave still ship/re-dispatch slug?
+
+        Fail-closed: if we claimed the slug but cannot prove we still hold
+        it, the answer is False -- never double-ship on a lapsed claim.
+        """
+        if not self._enabled() or not self.holds(slug):
+            return True
+        try:
+            return (
+                coordination.current_holder(self._event_store(), slug)
+                == self.instance_id
+            )
+        except Exception:
+            return False
+
+    def release_all(self) -> None:
+        """Release every held claim exactly once (idempotent by pop)."""
+        with self._lock:
+            slugs = list(self._held)
+            self._held.clear()
+        if coordination is None or self.state_dir is None:
+            return
+        for slug in slugs:
+            try:
+                coordination.release(
+                    self._event_store(),
+                    resource=slug,
+                    instance_id=self.instance_id,
+                )
+            except Exception:
+                # Best-effort: TTL expiry is the backstop for a failed
+                # release (never raise out of run_wave's finally).
+                pass
+
+
 def _is_live_orchestrator_backend(backend: Any) -> bool:
     """True when a passed orchestrator backend is a REAL swapped seat.
 
@@ -801,6 +925,48 @@ def run_wave(
     git: Optional[Dict[str, str]] = None,
     resume_journal: bool = False,
     orchestrator_backend: Any = None,
+) -> Dict[str, Any]:
+    """Run a full multi-item wave through an AgentDriver backend.
+
+    Public entry point: owns the wave's claim lifecycle (RS5). A single
+    wave-level instance id claims each dispatched item with a ttl sized to
+    the driver's command timeout (_claim_ttl_for_driver), HOLDS the claim
+    across build -> repair -> ship, fences repair/ship against lost claims,
+    and releases every claim exactly once here -- on every exit path,
+    including exceptions. All other semantics are documented on
+    _run_wave_inner (same signature plus claim_ctx).
+    """
+    claim_ctx = _ClaimContext(
+        state_dir=state_dir,
+        instance_id="wave-%s" % uuid.uuid4(),
+        ttl=_claim_ttl_for_driver(driver),
+    )
+    try:
+        return _run_wave_inner(
+            driver,
+            manifest,
+            state_dir=state_dir,
+            git=git,
+            resume_journal=resume_journal,
+            orchestrator_backend=orchestrator_backend,
+            claim_ctx=claim_ctx,
+        )
+    finally:
+        # RS5 F3: exactly-once release at the TRUE end of the lifecycle
+        # (build -> repair -> ship), success or terminal failure -- never
+        # in build_item's finally, which left Phase 5/7 claim-less.
+        claim_ctx.release_all()
+
+
+def _run_wave_inner(
+    driver: AgentDriver,
+    manifest: Dict[str, Any],
+    *,
+    state_dir: Optional[str] = None,
+    git: Optional[Dict[str, str]] = None,
+    resume_journal: bool = False,
+    orchestrator_backend: Any = None,
+    claim_ctx: "_ClaimContext",
 ) -> Dict[str, Any]:
     """Run a full multi-item wave through an AgentDriver backend.
 
@@ -1219,19 +1385,14 @@ def run_wave(
             resume_stats["rebuilt"] += 1
 
         # Try to claim the item if state_dir is given (fail-closed on claim failure).
-        instance_id = f"wave-{uuid.uuid4()}"
-        claim_held = False
+        # RS5 F1/F3: the claim uses the WAVE-level instance id and a ttl
+        # sized to the driver's command timeout (not the 300s default), and
+        # is HELD across the item's full lifecycle (build -> repair -> ship).
+        # Release happens exactly once in run_wave's finally, never here.
+        instance_id = claim_ctx.instance_id
         if coordination is not None and state_dir is not None:
             try:
-                from state_store import store
-                db_path = Path(state_dir) / "state.db"
-                event_store = store.EventStore(str(db_path))
-                claim_held = coordination.try_claim(
-                    event_store,
-                    resource=slug,
-                    instance_id=instance_id,
-                )
-                if not claim_held:
+                if not claim_ctx.acquire(slug):
                     # Item is claimed by another instance; skip it.
                     return (
                         item_index,
@@ -1321,16 +1482,9 @@ def run_wave(
                     "filesWritten": [],
                 },
             )
-        finally:
-            # Release the claim if held.
-            if claim_held and coordination is not None and state_dir is not None:
-                try:
-                    from state_store import store
-                    db_path = Path(state_dir) / "state.db"
-                    event_store = store.EventStore(str(db_path))
-                    coordination.release(event_store, resource=slug, instance_id=instance_id)
-                except Exception:
-                    pass
+        # NOTE (RS5 F3): no finally-release here. The claim protects the
+        # WHOLE lifecycle -- Phase 5 repair and Phase 7 ship run under it --
+        # and run_wave's finally releases it exactly once at the true end.
 
     # Run build in parallel.
     max_workers = min(8, len(items)) if items else 1
@@ -1395,6 +1549,25 @@ def run_wave(
             slug = item.get("slug", f"item-{item_index}")
             workdir = item.get("workDir", ".")
             test_cmd = item.get("testCmd", "")
+
+            # RS5 F1b FENCE: never repair-dispatch an item whose claim we no
+            # longer hold (ttl lapsed and another instance may have reclaimed
+            # it and be dispatching the same files right now). Terminal
+            # honest abort -- recorded, never silently retried.
+            if not claim_ctx.fence_ok(slug):
+                item_result["error"] = (
+                    "claim lost before repair (fenced): not re-dispatched"
+                )
+                item_result["claim_lost"] = True
+                if state_dir:
+                    _write_journal_entry(state_dir, slug, "claim_lost", {
+                        "verified": False,
+                        "testExit": item_result.get("testExit"),
+                        "repairs": item_result.get("repairs", 0),
+                        "instance_id": claim_ctx.instance_id,
+                        "error": "claim lost before repair",
+                    }, repo=item.get("repo"))
+                continue
 
             # Build repair prompt: append test output to original prompt.
             original_prompt = item.get("prompt", "")
@@ -1559,6 +1732,17 @@ def run_wave(
             if item_result.get("verified", False):
                 slug = item_result.get("slug")
                 if slug in slug_to_item:
+                    # RS5 F1b FENCE: an item whose claim lapsed and was
+                    # reclaimed must NOT ship -- the reclaiming instance may
+                    # ship its own build of the same slug (double-ship).
+                    # Items this wave never claimed (journal-resumed,
+                    # claim-gate disabled) always pass the fence.
+                    if not claim_ctx.fence_ok(slug):
+                        item_result["ship_error"] = (
+                            "claim lost before ship (fenced): not shipped"
+                        )
+                        item_result["claim_lost"] = True
+                        continue
                     item_index, original_item = slug_to_item[slug]
                     verified_items.append((item_index, original_item, item_result))
 

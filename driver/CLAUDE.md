@@ -8,14 +8,12 @@
   The contract. stdlib-only, no provider SDKs.
 - **claude_code_driver.py** — reference adapter (Claude Code parity): two ops concrete
   Python, three serviced by the harness.
-- **codex_driver.py** — Phase 2: OpenAI Chat Completions HTTP backend: dispatch_worker
-  (file injection, JSON retry), run_command (own `command_timeout_s` knob, defaults to
-  timeout_s), worker_status, get_tokens_spent. Transport injectable.
-- **proc_util.py** — `run_shell_bounded()`: shared run_command backing (RS-A F1/F7).
-  Timeout truly bounds wall-clock: child in own group/session; on expiry the WHOLE tree
-  is killed (taskkill /T /F Windows, killpg POSIX), exit 124 promptly, partial output
-  preserved. Never subprocess.run(shell=True, timeout=) — Windows kills only cmd.exe
-  then re-blocks on the orphaned grandchild (wave-hang class).
+- **codex_driver.py** — Phase 2: OpenAI Chat Completions HTTP backend: dispatch_worker (file
+  injection, JSON retry), run_command (own `command_timeout_s` knob, defaults to timeout_s), worker_status, get_tokens_spent. Transport injectable.
+- **proc_util.py** — `run_shell_bounded()`: shared run_command backing (RS-A F1/F7). Timeout
+  truly bounds wall-clock: child in own group/session; on expiry the WHOLE tree is killed
+  (taskkill /T /F Windows, killpg POSIX), exit 124 promptly, partial output preserved. Never
+  subprocess.run(shell=True, timeout=) — Windows kills only cmd.exe then re-blocks on the orphaned grandchild.
 - **openai_transport.py** — stdlib urllib transport for the OpenAI endpoint; injectable
   seam (FakeTransport in tests: no API key or network).
 - **openai_compatible_driver.py** — OpenAI-compatible backend (Ollama, OpenRouter, etc.);
@@ -45,7 +43,12 @@
   writes can't corrupt resume); resumed-verified items restore filesWritten and always
   reach a terminal shipped record (honest no_changes no-op ship — no recovery livelock);
   dup slugs rejected at preflight; executor failures recorded, green never vacuous;
-  Windows quoting doubles only quote-preceding backslashes. Tests: test_wave_loop_rs3.
+  Windows quoting doubles only quote-preceding backslashes. RS5 claim lifecycle:
+  wave-level instance id, ttl sized to the driver command timeout (10x, 1h floor — never
+  the 300s default a real build outlives); claim HELD across build -> repair -> ship,
+  released exactly once in run_wave's finally (every exit path); repair re-dispatch and
+  ship FENCED via current_holder (lost claim = honest claim_lost abort, never
+  double-ship; try_claim retracts on error, no phantom holder). Tests: test_wave_loop_rs3.
 - **wave_bridge.py** — Phase 3: bridges AgentDriver backends to wave manifest items
   (build_manifest_item / dispatch_item; green ONLY from test exit code, see below).
 - **backend_config.py** — HS-1 unified two-seat config: `seats.worker` + `seats.orchestrator`
@@ -88,25 +91,22 @@
 
 - The wave loop calls **only** `AgentDriver` methods — never `agent()`, `parallel()`,
   Read/Write/Bash tools, or `budget.spent()` directly. That is the seam.
-- The orchestrator calls **only** `OrchestratorDriver.decide()` — never raw tool APIs or
-  harness methods. Context packs are allowlist-only (STATE.md, BUILDLOG.md, tracker.json,
-  MEMORY.md, explicit brief); arbitrary reads raise `ContextPackViolation` — **cardinal
-  rule 4 in code**.
+- The orchestrator calls **only** `OrchestratorDriver.decide()`. Context packs are allowlist-only
+  (STATE.md, BUILDLOG.md, tracker.json, MEMORY.md, explicit brief); arbitrary reads raise
+  `ContextPackViolation` — **cardinal rule 4 in code**.
 - `probe_capabilities()` must be **honest**. Defaults conservative (no native abilities, accuracy 0.0, tier 4) — optimism is opt-in, never default.
 - **Weaker workers → higher verification tier.** Lower `tool_use_accuracy` raises `recommended_verification_tier`: cheaper backends RAISE the orchestrator's burden.
 - Unknown roles in `resolve_model()` fall back to the worker model — a mis-typed role can never silently escalate cost.
 - **Fail-safe verdicts**: `OrchestratorDriver.decide()` returns DECISION_FAILED after retries exhausted; never fabricates a passing verdict (never-green principle).
-- **AdjudicationGate safety invariant** (increment 3): the final verdict is EITHER a
-  confident challenger verdict OR the incumbent's; an undetermined/DECISION_FAILED/
-  low-confidence challenger verdict is NEVER final (incumbent-safe).
+- **AdjudicationGate safety invariant** (increment 3): the final verdict is EITHER a confident
+  challenger verdict OR the incumbent's; undetermined/DECISION_FAILED/low-confidence is NEVER final.
 - stdlib-only, ASCII-only, Windows + Linux safe. Concrete adapters own any provider SDK, not this layer.
 
 ## Phase 2 (Codex) + Phase 3 (Bridge) Implementation Details
 
-Capability matrix (as encoded): claude-code = parallel, worker fs/shell, worktree
-isolation, native cost, accuracy ~0.99, tier 1; codex = none of those natively
-(orchestrator injects/runs; temp-dir; usage-metadata cost), accuracy ~0.92, tier 2. NOTE:
-ClaudeCodeDriver.get_tokens_spent() is None BY CONTRACT (cost_ceiling ledger fallback).
+Capability matrix (as encoded): claude-code = parallel, worker fs/shell, worktree isolation,
+native cost, accuracy ~0.99, tier 1; codex = none natively (orchestrator injects/runs; temp-dir;
+usage-metadata cost), accuracy ~0.92, tier 2. NOTE: ClaudeCodeDriver.get_tokens_spent() is None BY CONTRACT (cost_ceiling ledger fallback).
 
 Codex driver (Tier 2): injects file contents into prompt, calls OpenAI Chat Completions via injectable transport, validates JSON with bounded retry, enforces ownership. CRITICAL: Green = exit 0 only. Verification policy: tier 2 -> {validate_all_json:True, spot_check_frac:0.50, repair_cap:2, require_adversarial_review:True}. **P1 Security**: Default model map uses gpt-4o-mini (worker, supports json_schema); init-time guard rejects models lacking json_schema support unless `allow_unverified_models=True` (P1 gate: prevent gpt-3.5-turbo silent failures).
 
@@ -147,4 +147,4 @@ shape lives in wave_scheduler.py's module docstring.
 
 Phases 1-3 + Wave Scheduler (WS3a/GATE-1) + HS-1 + HS-2 seat swap shipped (proof:
 bench/results/hs2-swap-proof-2026-07-25.md; merge manual in pilot) + RS3-W round-2
-wave-engine robustness (see wave_loop.py bullet).
+robustness + RS5 claim lifecycle (see wave_loop.py bullet).

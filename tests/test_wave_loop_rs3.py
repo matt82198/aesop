@@ -32,6 +32,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -871,6 +872,349 @@ class TestN10JournalScoping(unittest.TestCase):
         self.assertEqual(
             list((tmp / "journal").glob("*.tmp")), []  # no residue
         )
+
+
+# ========================================================================
+# RS5: claim-gate lifecycle -- ttl sized to the work (F1a), fencing before
+# repair/ship (F1b), claim held across build -> repair -> ship with
+# exactly-once release at the true end (F3).
+# ========================================================================
+
+class BlockingRepairDriver(DispatchingFakeDriver):
+    """Test always fails -> repair rounds run; the repair dispatch BLOCKS
+    until the test releases it (parks the wave inside Phase 5)."""
+
+    def __init__(self):
+        super().__init__()
+        self.in_repair = threading.Event()
+        self.resume = threading.Event()
+
+    def dispatch_worker(self, request):
+        if self.dispatch_count >= 1:  # second dispatch = repair round
+            self.in_repair.set()
+            self.resume.wait(timeout=30)
+        return super().dispatch_worker(request)
+
+    def run_command(self, command, cwd=None, shell=None):
+        return CommandResult(exit_code=1, stdout="test failed")
+
+
+class TestRS5ClaimLifecycle(unittest.TestCase):
+
+    def _manifest(self, workdir, slug):
+        return {
+            "items": [
+                {
+                    "slug": slug,
+                    "ownsFiles": ["a.py"],
+                    "prompt": "p",
+                    "testCmd": "run-test",
+                    "workDir": str(workdir),
+                }
+            ]
+        }
+
+    # ---------------------------------------------------------------- F1a
+    def test_claim_ttl_sized_to_driver_command_timeout(self):
+        """The ttl passed to try_claim derives from the driver's command
+        timeout (generous multiple, sane floor) -- never the 300s default
+        that a single real build outlives."""
+        captured = []
+        original = coordination.try_claim
+
+        def capturing(store, resource=None, instance_id=None, ttl=300.0):
+            captured.append(ttl)
+            return original(
+                store, resource=resource, instance_id=instance_id, ttl=ttl
+            )
+
+        driver = DispatchingFakeDriver()
+        driver.command_timeout_s = 900.0
+        tmp = Path(tempfile.mkdtemp(dir=_MODULE_TMP, prefix="rs5a-"))
+        with mock.patch.object(coordination, "try_claim", capturing):
+            run_wave(driver, self._manifest(tmp, "rs5-ttl"), state_dir=str(tmp))
+
+        self.assertEqual(len(captured), 1)
+        self.assertGreaterEqual(
+            captured[0], 900.0 * wave_loop._CLAIM_TTL_TIMEOUT_MULTIPLE,
+            "claim ttl not sized to the driver's command timeout",
+        )
+
+    def test_claim_ttl_floor_and_scaling(self):
+        """No timeout knob -> floor; a big timeout scales past the floor."""
+        self.assertGreaterEqual(
+            wave_loop._claim_ttl_for_driver(object()),
+            wave_loop._CLAIM_TTL_FLOOR_S,
+        )
+
+        class BigTimeout:
+            command_timeout_s = 3600.0
+
+        self.assertGreaterEqual(
+            wave_loop._claim_ttl_for_driver(BigTimeout()),
+            3600.0 * wave_loop._CLAIM_TTL_TIMEOUT_MULTIPLE,
+        )
+
+        class BogusTimeout:
+            command_timeout_s = "not-a-number"
+
+        self.assertEqual(
+            wave_loop._claim_ttl_for_driver(BogusTimeout()),
+            wave_loop._CLAIM_TTL_FLOOR_S,
+        )
+
+    # ---------------------------------------------------------------- F3
+    def test_claim_held_across_repair_released_exactly_once(self):
+        """While instance A is mid-REPAIR for a slug, a second instance
+        cannot claim it (the old code released in build_item's finally,
+        leaving Phase 5 claim-less). At wave end the claim is released
+        exactly once and the slug is claimable again."""
+        driver = BlockingRepairDriver()
+        tmp = Path(tempfile.mkdtemp(dir=_MODULE_TMP, prefix="rs5b-"))
+        manifest = self._manifest(tmp, "rs5-held")
+        box = {}
+
+        t = threading.Thread(
+            target=lambda: box.update(
+                r=run_wave(driver, manifest, state_dir=str(tmp))
+            )
+        )
+        t.start()
+        try:
+            self.assertTrue(
+                driver.in_repair.wait(timeout=30), "wave never reached repair"
+            )
+            es = sstore.EventStore(str(tmp / "state.db"))
+            self.assertFalse(
+                coordination.try_claim(
+                    es, resource="rs5-held", instance_id="inst-B", ttl=60
+                ),
+                "second instance claimed a slug whose holder is mid-repair "
+                "(concurrent double-dispatch on the same files)",
+            )
+        finally:
+            driver.resume.set()
+            t.join(timeout=60)
+        self.assertFalse(t.is_alive(), "wave thread did not finish")
+
+        es = sstore.EventStore(str(tmp / "state.db"))
+        wave_releases = [
+            e
+            for e in es.read("claims")
+            if e.get("type") == "claim_released"
+            and (e.get("payload") or {}).get("resource") == "rs5-held"
+            and str(
+                (e.get("payload") or {}).get("instance_id", "")
+            ).startswith("wave-")
+        ]
+        self.assertEqual(
+            len(wave_releases), 1,
+            "claim must be released EXACTLY once at lifecycle end",
+        )
+        self.assertTrue(
+            coordination.try_claim(
+                es, resource="rs5-held", instance_id="inst-B", ttl=60
+            ),
+            "slug not claimable after the wave ended",
+        )
+
+    def test_claim_held_through_ship_phase(self):
+        """While instance A is inside Phase 7 (ship), a second instance
+        cannot claim the slug."""
+        tmp = Path(tempfile.mkdtemp(dir=_MODULE_TMP, prefix="rs5c-"))
+        repo_dir = tmp / "repo"
+        repo_dir.mkdir()
+        repo_resolved = str(repo_dir.resolve())
+
+        class ShipPausingDriver(ShipFakeDriver):
+            def __init__(self, toplevel):
+                super().__init__(toplevel)
+                self.in_ship = threading.Event()
+                self.resume = threading.Event()
+
+            def run_command(self, command, cwd=None, shell=None):
+                if command.strip() == "git rev-parse --show-toplevel":
+                    self.in_ship.set()
+                    self.resume.wait(timeout=30)
+                return super().run_command(command, cwd=cwd, shell=shell)
+
+        driver = ShipPausingDriver(repo_resolved)
+        manifest = self._manifest(repo_dir, "rs5-ship")
+        box = {}
+        t = threading.Thread(
+            target=lambda: box.update(
+                r=run_wave(
+                    driver,
+                    manifest,
+                    state_dir=str(tmp),
+                    git={"expectTopLevel": str(repo_dir)},
+                )
+            )
+        )
+        t.start()
+        try:
+            self.assertTrue(
+                driver.in_ship.wait(timeout=30), "wave never reached ship"
+            )
+            es = sstore.EventStore(str(tmp / "state.db"))
+            self.assertFalse(
+                coordination.try_claim(
+                    es, resource="rs5-ship", instance_id="inst-B", ttl=60
+                ),
+                "second instance claimed a slug whose holder is mid-ship",
+            )
+        finally:
+            driver.resume.set()
+            t.join(timeout=60)
+        self.assertFalse(t.is_alive())
+        self.assertEqual(box["r"].get("shipped"), ["rs5-ship"])
+
+    # ---------------------------------------------------------------- F1b
+    # DETERMINISM NOTE (windows-shard incident): these two fence tests
+    # originally simulated the lost-claim window with a REAL-CLOCK race
+    # (ttl=0.01s + sleep). On the slow 2-core GH Windows runner the claim's
+    # own append->read->fold round-trip exceeds 10ms, so the wave's claim
+    # SELF-EXPIRED inside try_claim -> honest fail-closed claim_skipped
+    # BEFORE dispatch -> the fence was never reached (verified=False /
+    # claim_lost=None). _steal_claim produces the same end state -- holder
+    # is another instance -- with zero clock dependence on any machine.
+
+    @staticmethod
+    def _steal_claim(db_path, slug, thief="inst-B"):
+        """Deterministically simulate 'holder's ttl lapsed + another
+        instance reclaimed the slug': retire the current wave holder's
+        claim under its own id, then claim as the thief (must win)."""
+        es = sstore.EventStore(db_path)
+        holder = coordination.current_holder(es, slug)
+        assert holder is not None and holder.startswith("wave-"), (
+            "steal setup: expected a live wave-held claim, got %r" % (holder,)
+        )
+        coordination.release(es, slug, holder)
+        assert coordination.try_claim(
+            es, resource=slug, instance_id=thief, ttl=600
+        ), "steal setup: reclaim must win once the holder's claim is gone"
+
+    def test_fence_blocks_ship_when_claim_lost(self):
+        """If the claim lapsed mid-build and another instance reclaimed the
+        slug, Phase 7 must NOT ship it (double-ship): honest abort record."""
+        tmp = Path(tempfile.mkdtemp(dir=_MODULE_TMP, prefix="rs5d-"))
+        repo_dir = tmp / "repo"
+        repo_dir.mkdir()
+        repo_resolved = str(repo_dir.resolve())
+        db_path = str(tmp / "state.db")
+        steal = self._steal_claim
+
+        class ClaimStealingDriver(ShipFakeDriver):
+            """During the post-build test run, another instance takes over
+            the slug -- the exact lost-claim window, simulated
+            deterministically (see DETERMINISM NOTE above)."""
+
+            def __init__(self, toplevel):
+                super().__init__(toplevel)
+                self.stole = False
+
+            def run_command(self, command, cwd=None, shell=None):
+                if command == "run-test" and not self.stole:
+                    self.stole = True
+                    steal(db_path, "rs5-lost")
+                return super().run_command(command, cwd=cwd, shell=shell)
+
+        driver = ClaimStealingDriver(repo_resolved)
+        result = run_wave(
+            driver,
+            self._manifest(repo_dir, "rs5-lost"),
+            state_dir=str(tmp),
+            git={"expectTopLevel": str(repo_dir)},
+        )
+
+        built = result["built"][0]
+        self.assertTrue(driver.stole, "steal hook never ran")
+        self.assertTrue(built["verified"])  # the test did pass
+        self.assertTrue(built.get("claim_lost"), "lost claim not recorded")
+        self.assertIn("claim lost", built.get("ship_error") or "")
+        self.assertIsNone(result.get("shipped"))
+        self.assertFalse(
+            any(c.startswith("git add") for c in driver.commands),
+            "fenced item still reached git add (double-ship path)",
+        )
+
+    def test_fence_blocks_repair_redispatch_when_claim_lost(self):
+        """A failed item whose claim was reclaimed must NOT be repair-
+        re-dispatched (the reclaimer may be dispatching it right now).
+        Claim loss is simulated deterministically (see DETERMINISM NOTE)."""
+        tmp = Path(tempfile.mkdtemp(dir=_MODULE_TMP, prefix="rs5e-"))
+        db_path = str(tmp / "state.db")
+        steal = self._steal_claim
+
+        class StealAndFailDriver(DispatchingFakeDriver):
+            def __init__(self):
+                super().__init__()
+                self.stole = False
+
+            def run_command(self, command, cwd=None, shell=None):
+                if not self.stole:
+                    self.stole = True
+                    steal(db_path, "rs5-rlost")
+                return CommandResult(exit_code=1, stdout="test failed")
+
+        driver = StealAndFailDriver()
+        result = run_wave(
+            driver, self._manifest(tmp, "rs5-rlost"), state_dir=str(tmp)
+        )
+
+        built = result["built"][0]
+        self.assertTrue(driver.stole, "steal hook never ran")
+        self.assertFalse(built["verified"])
+        self.assertTrue(built.get("claim_lost"))
+        self.assertIn("claim lost", built.get("error") or "")
+        self.assertEqual(built.get("repairs", 0), 0)
+        self.assertEqual(
+            driver.dispatch_count, 1,
+            "repair re-dispatched an item whose claim was lost",
+        )
+
+    # ---------------------------------------------------------------- misc
+    def test_release_exactly_once_normal_path(self):
+        """A normal verified wave: one claim_requested + one claim_released
+        by the wave instance; nothing held afterwards."""
+        driver = DispatchingFakeDriver()
+        tmp = Path(tempfile.mkdtemp(dir=_MODULE_TMP, prefix="rs5f-"))
+        result = run_wave(
+            driver, self._manifest(tmp, "rs5-once"), state_dir=str(tmp)
+        )
+        self.assertTrue(result["built"][0]["verified"])
+
+        es = sstore.EventStore(str(tmp / "state.db"))
+        events = es.read("claims")
+        reqs = [e for e in events if e.get("type") == "claim_requested"]
+        rels = [e for e in events if e.get("type") == "claim_released"]
+        self.assertEqual(len(reqs), 1)
+        self.assertEqual(len(rels), 1)
+        self.assertIsNone(coordination.current_holder(es, "rs5-once"))
+
+    def test_no_state_dir_means_no_claims(self):
+        """Single-instance no-op invariant: without a state_dir the claim
+        machinery is never touched (a raising coordination module proves it)."""
+
+        class BoomCoordination:
+            @staticmethod
+            def try_claim(*args, **kwargs):
+                raise AssertionError("claims must not run without state_dir")
+
+            @staticmethod
+            def current_holder(*args, **kwargs):
+                raise AssertionError("claims must not run without state_dir")
+
+            @staticmethod
+            def release(*args, **kwargs):
+                raise AssertionError("claims must not run without state_dir")
+
+        driver = DispatchingFakeDriver()
+        tmp = Path(tempfile.mkdtemp(dir=_MODULE_TMP, prefix="rs5g-"))
+        with mock.patch.object(wave_loop, "coordination", BoomCoordination):
+            result = run_wave(driver, self._manifest(tmp, "rs5-noop"))
+        self.assertTrue(result["built"][0]["verified"])
+        self.assertEqual(driver.dispatch_count, 1)
 
 
 if __name__ == "__main__":

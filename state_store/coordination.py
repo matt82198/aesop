@@ -206,7 +206,23 @@ def try_claim(store, resource: str, instance_id: str, ttl: float = 300.0) -> boo
 
         return False
     except Exception:
-        # Fail-closed: any exception means we don't hold the claim
+        # Fail-closed: any exception means we don't hold the claim.
+        # RS5 F2: our claim_requested may already be in the stream (append
+        # succeeded, then the re-read/fold raised -- e.g. SQLite lock retries
+        # exhausted). Left un-retracted it becomes a PHANTOM holder: it wins
+        # as soon as the true holder releases, blocking the resource for a
+        # full TTL while we believe we failed. Best-effort retract our own
+        # request before returning False; if the retract itself fails there
+        # is nothing more we can do (TTL expiry remains the backstop).
+        try:
+            store.append(
+                "claims",
+                "claim_released",
+                {"resource": resource, "instance_id": instance_id},
+                actor=instance_id,
+            )
+        except Exception:
+            pass
         return False
 
 
