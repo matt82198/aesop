@@ -72,7 +72,7 @@
       "id": "hardcoded-username",
       "run_num": 1,
       "classification": "real_defect",
-      "reasoning": "['evidence_0: Documentation contains the machine-specific absolute path `C:\\\\Users\\\\matt8\\\\aesop\\\\state\\\\tracker.json` in two locations.', \"evidence_1: Other users' home-directory paths and usernames differ from `C:\\\\Users\\\\matt8`.\", \"evidence_2: Copying the documented path references a directory that does not exist on users' machines.\", 'evidence_3: The affected documentation ships in the public npm package and is accessible to all users.']",
+      "reasoning": "['evidence_0: Documentation contains the machine-specific absolute path `<REPO>\\\\state\\\\tracker.json` in two locations.', \"evidence_1: Other users' home-directory paths and usernames differ from `<HOME>`.\", \"evidence_2: Copying the documented path references a directory that does not exist on users' machines.\", 'evidence_3: The affected documentation ships in the public npm package and is accessible to all users.']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.99
@@ -216,7 +216,7 @@
       "id": "hardcoded-username",
       "run_num": 2,
       "classification": "real_defect",
-      "reasoning": "['evidence_0: Documentation contains the absolute path C:\\\\Users\\\\matt8\\\\aesop\\\\state\\\\tracker.json in two locations.', \"evidence_1: A user's home-directory path and username will differ from C:\\\\Users\\\\matt8.\", 'evidence_2: Copying the documented path on another machine references a directory that does not exist.', 'evidence_3: The affected documentation ships in the npm package and is accessible to all users.']",
+      "reasoning": "['evidence_0: Documentation contains the absolute path <REPO>\\\\state\\\\tracker.json in two locations.', \"evidence_1: A user's home-directory path and username will differ from <HOME>.\", 'evidence_2: Copying the documented path on another machine references a directory that does not exist.', 'evidence_3: The affected documentation ships in the npm package and is accessible to all users.']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.99
@@ -360,7 +360,7 @@
       "id": "hardcoded-username",
       "run_num": 3,
       "classification": "real_defect",
-      "reasoning": "['evidence_0: Documentation contains the absolute path C:\\\\Users\\\\matt8\\\\aesop\\\\state\\\\tracker.json in two locations.', \"evidence_1: A user's home-directory path and username will differ from C:\\\\Users\\\\matt8.\", \"evidence_2: Copying this path on another user's machine references a directory that does not exist.\", 'evidence_3: The affected documentation is shipped in the npm package and accessible to all users.']",
+      "reasoning": "['evidence_0: Documentation contains the absolute path <REPO>\\\\state\\\\tracker.json in two locations.', \"evidence_1: A user's home-directory path and username will differ from <HOME>.\", \"evidence_2: Copying this path on another user's machine references a directory that does not exist.\", 'evidence_3: The affected documentation is shipped in the npm package and accessible to all users.']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.99
@@ -525,7 +525,7 @@
         "real_defect": 3
       },
       "num_runs": 3,
-      "reasoning_sample": "['evidence_0: Documentation contains the machine-specific absolute path `C:\\\\Users\\\\matt8\\\\aesop\\\\state\\\\tracker.json` in two locations.', \"evidence_1: Other users' home-directory paths and usernames differ from `C:\\\\Users\\\\matt8`.\", \"evidence_2: Copying the documented path references a directory that does not exist on users' machines.\", 'evidence_3: The affected documentation ships in the public npm package and is accessible to all users.']"
+      "reasoning_sample": "['evidence_0: Documentation contains the machine-specific absolute path `<REPO>\\\\state\\\\tracker.json` in two locations.', \"evidence_1: Other users' home-directory paths and usernames differ from `<HOME>`.\", \"evidence_2: Copying the documented path references a directory that does not exist on users' machines.\", 'evidence_3: The affected documentation ships in the public npm package and is accessible to all users.']"
     },
     {
       "id": "audit-log-observability",

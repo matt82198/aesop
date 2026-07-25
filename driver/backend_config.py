@@ -28,8 +28,26 @@ from pathlib import Path
 from typing import Dict, Optional
 from urllib.parse import urlparse
 
-from agent_driver import AgentDriver
+from agent_driver import AgentDriver, ROLE_WORKER
 from claude_code_driver import ClaudeCodeDriver
+
+
+def _codex_model_map(config: dict) -> dict:
+    """Build the CodexDriver model_map from a codex config block.
+
+    Honors the schema-required 'model' field by mapping it to the worker role
+    unless model_map explicitly overrides it. Previously 'model' was validated
+    by load_backend_config but silently IGNORED here, so a config declaring
+    e.g. model=gpt-4o still dispatched the default worker model.
+    """
+    model_map = config.get("model_map", {})
+    if not isinstance(model_map, dict):
+        model_map = {}
+    model_map = dict(model_map)
+    model = config.get("model")
+    if isinstance(model, str) and model:
+        model_map.setdefault(ROLE_WORKER, model)
+    return model_map
 
 
 def validate_base_url(base_url: str) -> None:
@@ -37,15 +55,17 @@ def validate_base_url(base_url: str) -> None:
 
     Enforces:
     - Scheme is http or https only (rejects ftp://, etc.)
-    - Rejects private/link-local IP ranges EXCEPT localhost and 127.0.0.1
+    - Rejects embedded credentials (user:pass@host) which can leak into
+      logs/error messages and get sent to whatever host the URL names.
+    - Rejects private/link-local IP ranges EXCEPT localhost, 127.0.0.1 and ::1
       which are allowed explicitly for local Ollama-style deployments.
 
-    Private IP ranges rejected:
-    - 10.0.0.0/8
-    - 172.16.0.0/12
-    - 192.168.0.0/16
-    - 169.254.0.0/16 (link-local; includes AWS metadata endpoint 169.254.169.254)
-    - 127.0.0.0/8 (loopback, EXCEPT localhost hostname and 127.0.0.1)
+    IP literals rejected (both IPv4 AND IPv6, including IPv4-mapped IPv6
+    forms like ::ffff:169.254.169.254 which would otherwise bypass IPv4
+    checks): private (10/8, 172.16/12, 192.168/16, fc00::/7), loopback
+    (127/8, ::1 -- except the explicit local allowlist), link-local
+    (169.254/16 incl. the cloud metadata endpoint, fe80::/10), reserved,
+    multicast, and unspecified (0.0.0.0, ::) addresses.
 
     Args:
         base_url: The URL to validate (e.g., "https://api.openai.com/v1")
@@ -69,39 +89,59 @@ def validate_base_url(base_url: str) -> None:
     if not parsed.netloc:
         raise ValueError(f"base_url must include a host (netloc), got: {base_url}")
 
+    # Reject embedded credentials (user:pass@host) -- these get sent to whatever
+    # host the URL names and can leak into logs/error messages via str(base_url).
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(
+            f"base_url must not contain embedded credentials (user:pass@host). "
+            f"URL: {base_url}"
+        )
+
     # Extract hostname and port (netloc includes port; hostname does not)
     hostname = parsed.hostname
     if not hostname:
         raise ValueError(f"Could not extract hostname from base_url: {base_url}")
 
-    # Explicitly allow localhost and 127.0.0.1 (for local Ollama, etc.)
-    if hostname.lower() in ("localhost", "127.0.0.1"):
+    # Explicitly allow localhost, 127.0.0.1, and the IPv6 loopback (for local
+    # Ollama-style deployments that may bind to either address family).
+    # urlparse strips the brackets from an IPv6 literal, but accept the
+    # bracketed form too in case a caller passes a raw hostname.
+    if hostname.lower() in ("localhost", "127.0.0.1", "::1", "[::1]"):
         return
 
-    # Try to parse as an IP address
+    # Try to parse as an IP address (IPv4 or IPv6)
     try:
         ip = ipaddress.ip_address(hostname)
     except ValueError:
         # Not an IP address; assume it's a valid hostname (domain name)
         return
 
-    # Check for private/reserved IP ranges
-    # These ranges are forbidden EXCEPT localhost (handled above)
-    private_ranges = [
-        ipaddress.ip_network("10.0.0.0/8"),           # Private (RFC 1918)
-        ipaddress.ip_network("172.16.0.0/12"),        # Private (RFC 1918)
-        ipaddress.ip_network("192.168.0.0/16"),       # Private (RFC 1918)
-        ipaddress.ip_network("169.254.0.0/16"),       # Link-local (includes metadata)
-        ipaddress.ip_network("127.0.0.0/8"),          # Loopback (except 127.0.0.1, caught above)
-    ]
+    # IPv4-mapped IPv6 addresses (e.g. ::ffff:169.254.169.254) embed a real
+    # IPv4 address; unwrap it so the IPv4 checks below still apply. Without
+    # this, an attacker can bypass every IPv4 rule below by writing the
+    # target as its IPv4-mapped IPv6 form.
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
 
-    for network in private_ranges:
-        if ip in network:
-            raise ValueError(
-                f"base_url points to private IP range {network}: {hostname}. "
-                f"Use 'localhost' or '127.0.0.1' for local deployments. "
-                f"URL: {base_url}"
-            )
+    # Reject private/loopback/link-local/reserved/multicast/unspecified
+    # literals for BOTH IPv4 and IPv6. Covers RFC 1918 (10/8, 172.16/12,
+    # 192.168/16), link-local 169.254/16 (cloud metadata) and fe80::/10,
+    # loopback 127/8 and ::1, IPv6 ULA fc00::/7, and 0.0.0.0 / ::.
+    # The explicit local allowlist (localhost, 127.0.0.1, ::1) is handled above.
+    if (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    ):
+        raise ValueError(
+            f"base_url points to a private/reserved IP range: {hostname}. "
+            f"Use 'localhost', '127.0.0.1', or '::1' for local deployments. "
+            f"URL: {base_url}"
+        )
 
 
 def load_backend_config(path: Optional[str] = None) -> dict:
@@ -234,16 +274,15 @@ def build_driver(config: Optional[dict] = None) -> AgentDriver:
                 "Cannot import CodexDriver. Make sure codex_driver.py is in the driver/ directory."
             ) from exc
 
-        model_map = config.get("model_map", {})
-        if not isinstance(model_map, dict):
-            model_map = {}
-
         return CodexDriver(
-            model_map=model_map,
+            model_map=_codex_model_map(config),
             transport=None,  # Will use default; key read at call time.
             max_owned_bytes=config.get("max_owned_bytes", 200_000),
             max_retries=config.get("max_retries", 2),
             timeout_s=config.get("timeout_s", 120.0),
+            allow_unverified_models=bool(
+                config.get("allow_unverified_models", False)
+            ),
         )
 
     if backend_name == "openai-compatible":
@@ -312,7 +351,17 @@ def describe_backend(config: Optional[dict] = None) -> str:
             from codex_driver import CodexDriver
         except ImportError:
             return "codex (import failed)"
-        driver = CodexDriver(model_map=config.get("model_map", {}))
+        try:
+            driver = CodexDriver(
+                model_map=_codex_model_map(config),
+                allow_unverified_models=bool(
+                    config.get("allow_unverified_models", False)
+                ),
+            )
+        except ValueError as exc:
+            # Describe must not crash on a config the driver would reject;
+            # surface the rejection instead.
+            return f"codex (invalid model config: {exc})"
         return driver.describe()
 
     if backend_name == "openai-compatible":

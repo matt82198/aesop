@@ -207,11 +207,23 @@ class CodexDriver(AgentDriver):
                         f"Pass allow_unverified_models=True to override (for experimental backends)."
                     )
 
-        self._transport = transport or default_openai_transport
         self._now = now or time.time
         self._max_owned_bytes = max_owned_bytes
         self._max_retries = max_retries
         self._timeout_s = timeout_s
+
+        # Transport wiring. When falling back to the default transport, BIND the
+        # configured timeout: default_openai_transport has its own timeout_s=120
+        # default, so without this wrapper a configured timeout_s was silently
+        # ignored for the HTTP call (it only fed worker_status stall math).
+        if transport is not None:
+            self._transport = transport
+        elif default_openai_transport is not None:
+            self._transport = lambda payload: default_openai_transport(
+                payload, timeout_s=self._timeout_s
+            )
+        else:
+            self._transport = None
 
         # In-memory registry of worker status (worker_id -> {start_time, last_output_time, result}).
         self._worker_registry: Dict[str, dict] = {}
@@ -419,12 +431,21 @@ class CodexDriver(AgentDriver):
             structured = None
             last_error = None
             last_content = ""
+            last_failure_was_transport = False
 
             for attempt in range(self._max_retries + 1):
+                # Transport call. Network/auth/HTTP failures are NOT JSON
+                # validation errors: the model never produced output, so a
+                # schema nudge is meaningless. Retry (covers transients) but
+                # without appending nudge messages, and label honestly.
                 try:
-                    # Call transport.
                     response = self._transport(payload)
+                except Exception as exc:
+                    last_error = f"transport error: {exc}"
+                    last_failure_was_transport = True
+                    continue
 
+                try:
                     # Extract and parse JSON.
                     if "choices" not in response or not response["choices"]:
                         raise ValueError("no choices in response")
@@ -437,8 +458,9 @@ class CodexDriver(AgentDriver):
                     # Success: break out of retry loop.
                     break
 
-                except (json.JSONDecodeError, ValueError, KeyError, Exception) as exc:
+                except (json.JSONDecodeError, ValueError, KeyError) as exc:
                     last_error = str(exc)
+                    last_failure_was_transport = False
                     # If we have retries left, append error feedback and retry.
                     if attempt < self._max_retries:
                         # Before appending retry messages, check if total payload would exceed budget.
@@ -479,21 +501,41 @@ class CodexDriver(AgentDriver):
                         )
                     continue
 
-            # If validation still failed after all retries.
+            # If transport or validation still failed after all retries.
             if structured is None:
+                if last_failure_was_transport:
+                    error_msg = (
+                        f"transport failed after {self._max_retries + 1} "
+                        f"attempts: {last_error}"
+                    )
+                else:
+                    error_msg = (
+                        f"structured output validation failed after "
+                        f"{self._max_retries + 1} attempts: {last_error}"
+                    )
                 return WorkerResult(
                     worker_id=worker_id,
                     status=WORKER_FAILED,
                     ok=False,
-                    error=f"structured output validation failed after {self._max_retries + 1} attempts: {last_error}",
+                    error=error_msg,
                     text=last_content,
                 )
 
             # 8. Ownership enforcement: all returned paths must be in owned_files.
+            # Match under the SAME cross-platform policy as the read side
+            # (backslashes are separators on every OS): a Windows-authored
+            # manifest owning "src\\util.py" must accept a model returning
+            # "src/util.py" instead of failing spuriously as out-of-scope.
+            # SECURITY: the write always uses the canonical owned entry (which
+            # passed containment above), never the model's raw string.
+            owned_lookup = {
+                p.replace("\\", "/"): p for p in request.owned_files
+            }
             files_to_write = []
             for file_entry in structured.get("files", []):
                 path_str = file_entry.get("path", "")
-                if path_str not in request.owned_files:
+                canonical = owned_lookup.get(path_str.replace("\\", "/"))
+                if canonical is None:
                     # Distinguish: path not in the owned set (security/isolation violation).
                     return WorkerResult(
                         worker_id=worker_id,
@@ -501,7 +543,7 @@ class CodexDriver(AgentDriver):
                         ok=False,
                         error=f"out-of-scope: worker attempted to write {path_str} (not in owned set)",
                     )
-                files_to_write.append((path_str, file_entry["contents"]))
+                files_to_write.append((canonical, file_entry["contents"]))
 
             # 9. Apply (validate ALL before writing ANY).
             written_paths = []
@@ -512,10 +554,15 @@ class CodexDriver(AgentDriver):
                     written_paths.append(path_str)
                 except OSError as exc:
                     # Distinguish: owned path exists but write failed (OS error).
+                    # HONESTY: report the files ALREADY written before the
+                    # failure -- a mid-loop failure leaves the tree partially
+                    # modified with no rollback, and the orchestrator must know
+                    # which files are dirty rather than believing none changed.
                     return WorkerResult(
                         worker_id=worker_id,
                         status=WORKER_FAILED,
                         ok=False,
+                        files_written=tuple(written_paths),
                         error=f"write_failed: {path_str}: {exc}",
                     )
 

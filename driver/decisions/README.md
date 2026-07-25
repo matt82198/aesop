@@ -17,9 +17,9 @@ The orchestrator's "seat 2" (S2) responsibility is to perform recurring judgment
 - Wave constraints (cost ceiling, max items)
 
 **Output**:
-- Ranked list of items selected for this wave (locked scope)
-- Deferred items and reasons
-- Per-item priority, estimated cost, dependencies
+- Verdict (ranked, completed, undetermined)
+- Ranked list of items selected for this wave (per-item rank, priority, reason, estimated cost)
+- Total estimated cost
 
 **Schema**: [`rank_backlog.schema.json`](rank_backlog.schema.json)
 
@@ -59,42 +59,28 @@ The orchestrator's "seat 2" (S2) responsibility is to perform recurring judgment
 *Output*:
 ```json
 {
-  "verdict": {
-    "scope_locked": true,
-    "wave_items": [
-      {
-        "rank": 1,
-        "item_id": "fix/symlink-dispatch",
-        "priority": "p0",
-        "reason": "Correctness defect blocking worker dispatch",
-        "estimated_cost": 8.50,
-        "dependencies": []
-      },
-      {
-        "rank": 2,
-        "item_id": "feat/x",
-        "priority": "p1",
-        "reason": "High-value feature enabling multi-model routing",
-        "estimated_cost": 12.00,
-        "dependencies": []
-      },
-      {
-        "rank": 3,
-        "item_id": "feat/cost-attribution",
-        "priority": "p2",
-        "reason": "Deferred: enhancement, lower urgency",
-        "estimated_cost": 0
-      }
-    ]
-  },
+  "verdict": "ranked",
   "confidence": 0.92,
   "evidence": [
+    "conductor3/AUDIT-PRIMER.md lines 120-135: correctness lens flagged symlink defect as P0"
+  ],
+  "ranked_items": [
     {
-      "file": "conductor3/AUDIT-PRIMER.md",
-      "lines": "120-135",
-      "description": "Correctness lens flagged symlink defect as P0"
+      "rank": 1,
+      "item_id": "fix/symlink-dispatch",
+      "priority": "p0",
+      "reason": "Correctness defect blocking worker dispatch",
+      "estimated_cost": 8.50
+    },
+    {
+      "rank": 2,
+      "item_id": "feat/x",
+      "priority": "p1",
+      "reason": "High-value feature enabling multi-model routing",
+      "estimated_cost": 12.00
     }
-  ]
+  ],
+  "total_estimated_cost": 20.50
 }
 ```
 
@@ -114,10 +100,9 @@ The orchestrator's "seat 2" (S2) responsibility is to perform recurring judgment
 - Prior verdicts on similar findings (for consistency)
 
 **Output**:
-- Classification (real_defect, false_positive, minor_quality, etc.)
+- Verdict (real_defect, false_positive, enhancement_opportunity, undetermined)
 - Actionable? (yes/no)
 - Recommended priority if actionable
-- Severity adjustment (if different from claimed)
 - Suggested fix approach
 
 **Schema**: [`adjudicate_finding.schema.json`](adjudicate_finding.schema.json)
@@ -152,23 +137,14 @@ The orchestrator's "seat 2" (S2) responsibility is to perform recurring judgment
 *Output*:
 ```json
 {
-  "verdict": {
-    "classification": "real_defect",
-    "actionable": true,
-    "recommended_priority": "p1",
-    "severity_adjusted": "p1",
-    "suggested_fix_approach": "Mark the dummy secret with runtime-concat (concat at runtime to defeat push-gate scanning)"
-  },
+  "verdict": "real_defect",
   "confidence": 0.98,
   "evidence": [
-    {
-      "type": "code_location",
-      "file": "tests/test_xyz.py",
-      "lines": "40-45",
-      "excerpt": "DEMO_KEY = 'abc' # should be concat-assembled",
-      "description": "Literal secret string blocks push gate; prior wave had same pattern"
-    }
-  ]
+    "tests/test_xyz.py lines 40-45: literal secret string ('DEMO_KEY = ...') blocks push gate; prior wave had the same pattern"
+  ],
+  "actionable": true,
+  "priority": "p1",
+  "suggested_fix_approach": "Mark the dummy secret with runtime-concat (concat at runtime to defeat push-gate scanning)"
 }
 ```
 
@@ -188,11 +164,10 @@ The orchestrator's "seat 2" (S2) responsibility is to perform recurring judgment
 - Worker model and owned files
 
 **Output**:
-- Approval status (approved, approved_with_minor_nits, request_changes, undetermined)
+- Verdict (approve, reject, needs_changes, undetermined)
 - Implements intent? (yes/no)
-- Issues found (defects, style, test gaps, ownership violations)
-- Out-of-scope detections
-- Requires revision? (yes/no)
+- Defects found (count)
+- Revision notes (if revision required)
 
 **Schema**: [`review_diff.schema.json`](review_diff.schema.json)
 
@@ -225,20 +200,13 @@ The orchestrator's "seat 2" (S2) responsibility is to perform recurring judgment
 *Output*:
 ```json
 {
-  "verdict": {
-    "approval_status": "approved",
-    "implements_intent": true,
-    "issues_found": [],
-    "test_coverage_adequate": true,
-    "requires_revision": false
-  },
+  "verdict": "approve",
   "confidence": 0.95,
   "evidence": [
-    {
-      "type": "test_output",
-      "description": "Schema validation passes; example I/O pairs parse correctly against schema"
-    }
-  ]
+    "Test output: schema validation passes; example I/O pairs parse correctly against schema"
+  ],
+  "implements_intent": true,
+  "defects_found": 0
 }
 ```
 
@@ -257,11 +225,8 @@ The orchestrator's "seat 2" (S2) responsibility is to perform recurring judgment
 - Known duplicates list
 
 **Output**:
-- Consolidated findings (deduplicated, organized by priority)
-- Duplicate map (old ID → consolidated ID)
-- Intra-finding relationships (blocks, caused_by, suggests, contradicts)
-- Summary by theme (high-level patterns)
-- Changes from prior synthesis (if re-synthesized)
+- Verdict (synthesized, completed, undetermined)
+- Consolidated findings (deduplicated; per-finding source lenses, category, priority)
 
 **Schema**: [`synthesize_briefs.schema.json`](synthesize_briefs.schema.json)
 
@@ -298,34 +263,18 @@ The orchestrator's "seat 2" (S2) responsibility is to perform recurring judgment
 *Output*:
 ```json
 {
-  "verdict": {
-    "consolidated_findings": [
-      {
-        "id": "consolidated-001",
-        "description": "Verification policy struct missing cost-per-tier data",
-        "source_lenses": ["correctness"],
-        "category": "defect",
-        "priority": "p2",
-        "suggested_backlog_item": true
-      }
-    ],
-    "duplicate_map": {},
-    "summary_by_theme": {
-      "key_themes": [
-        {
-          "theme": "Policy/verification gaps",
-          "finding_count": 1,
-          "findings": ["consolidated-001"]
-        }
-      ]
-    }
-  },
+  "verdict": "synthesized",
   "confidence": 0.88,
   "evidence": [
+    "Brief 'correctness' finding corr-001: verification policy struct missing cost-per-tier data"
+  ],
+  "consolidated_findings": [
     {
-      "source_brief": "correctness",
-      "finding_id": "corr-001",
-      "description": "Verification policy struct missing cost-per-tier data"
+      "id": "consolidated-001",
+      "description": "Verification policy struct missing cost-per-tier data",
+      "source_lenses": ["correctness"],
+      "category": "defect",
+      "priority": "p2"
     }
   ]
 }
@@ -347,12 +296,10 @@ The orchestrator's "seat 2" (S2) responsibility is to perform recurring judgment
 - Verification policy (repair_cap, spot_check_frac)
 
 **Output**:
-- Should attempt repair? (yes/no)
-- Repair strategy (root_cause_analysis, incremental_fix, escalate_to_human, skip_item, etc.)
+- Verdict (repair, escalate, abandon, undetermined)
+- Repair strategy (root_cause_analysis, incremental_fix, full_rewrite, skip_item)
 - Root cause hypothesis
-- Is failure transient? (flaky test vs. genuine defect)
 - Escalation reason (if not repairing)
-- Suggested prompt addendum for repair agent
 
 **Schema**: [`decide_repair.schema.json`](decide_repair.schema.json)
 
@@ -384,21 +331,13 @@ The orchestrator's "seat 2" (S2) responsibility is to perform recurring judgment
 *Output*:
 ```json
 {
-  "verdict": {
-    "should_attempt_repair": true,
-    "repair_strategy": "root_cause_analysis",
-    "root_cause_hypothesis": "Response format missing 'status' key; likely worker misread contract",
-    "failure_is_transient": false,
-    "suggested_repair_prompt_addendum": "Test failed: expected response['status'], but response = {...}. The backend_xy contract requires all responses to include a 'status' field. Review the contract and fix."
-  },
+  "verdict": "repair",
   "confidence": 0.87,
   "evidence": [
-    {
-      "type": "test_output",
-      "excerpt": "expected key 'status' in response",
-      "description": "Clear assertion error; testable with a quick fix"
-    }
-  ]
+    "Test output: \"expected key 'status' in response\" — clear assertion error; testable with a quick fix"
+  ],
+  "repair_strategy": "root_cause_analysis",
+  "root_cause_hypothesis": "Response format missing 'status' key; likely worker misread contract"
 }
 ```
 
@@ -418,12 +357,9 @@ The orchestrator's "seat 2" (S2) responsibility is to perform recurring judgment
 - Gate history (prior attempts)
 
 **Output**:
-- Safe to merge? (yes/no)
-- Gates passed/failed
-- Blocker defects (if any)
+- Verdict (merge, block, escalate, undetermined)
 - Hold reason (if not safe)
 - Escalation needed? (yes/no)
-- Escalation reason (if yes)
 
 **Schema**: [`final_catch.schema.json`](final_catch.schema.json)
 
@@ -461,21 +397,13 @@ The orchestrator's "seat 2" (S2) responsibility is to perform recurring judgment
 *Output*:
 ```json
 {
-  "verdict": {
-    "safe_to_merge": true,
-    "gates_passed": ["test_pass", "secret_scan", "ci_green", "branch_protection", "adversarial_review_clean"],
-    "gates_failed": [],
-    "blocker_defects": [],
-    "escalation_needed": false
-  },
+  "verdict": "merge",
   "confidence": 1.0,
   "evidence": [
-    {
-      "gate": "test_output",
-      "status": "passed",
-      "description": "All tests pass; no timeouts or flakes"
-    }
-  ]
+    "Gate test_output: passed — all tests pass; no timeouts or flakes",
+    "Gates secret_scan, ci_green, branch_protection, adversarial_review: all passed (0 defects)"
+  ],
+  "escalation_needed": false
 }
 ```
 
@@ -486,23 +414,26 @@ The orchestrator's "seat 2" (S2) responsibility is to perform recurring judgment
 Each schema file enforces a contract:
 
 ### Required Fields (all decision types)
-- **`decision_type`** (const): e.g., "rank_backlog"
-- **`input`** (object): context fields from control files
-- **`verdict`** (object): the decision/judgment output
-- **`confidence`** (number 0.0-1.0): how sure is this decision?
-- **`evidence`** (array, REQUIRED): citations to source files/findings supporting this decision
+Schema-REQUIRED (a response missing either fails validation → retry → DECISION_FAILED):
+- **`verdict`** (string): one value from the decision type's verdict enum
+- **`evidence`** (array of >=1 non-empty strings): citations supporting this decision
+
+Documented but optional in responses:
+- **`decision_type`** (const): e.g., "rank_backlog" (set by the driver if absent)
+- **`input`** (object): documents the context fields this decision consumes (contract documentation, not an output field)
+- **`confidence`** (number 0.0-1.0): how sure is this decision? Optional in schema, but the AdjudicationGate treats a missing confidence as 0.0 and escalates — challengers should always emit it
 
 ### Input Fields (varies by type)
 Each decision type documents which control files or findings it consumes (e.g., `rank_backlog` reads STATE.md, AUDIT-PRIMER.md, tracker.json; `adjudicate_finding` reads a finding text + source).
 
 ### Output/Verdict Fields (varies by type)
-Each decision renders a different output structure. For instance:
-- `rank_backlog`: ranked item list + deferred items
-- `adjudicate_finding`: classification + priority + actionable?
-- `review_diff`: approval status + issues found
-- `synthesize_briefs`: consolidated findings + duplicate map
-- `decide_repair`: repair strategy + root cause hypothesis
-- `final_catch`: safe_to_merge + blocker defects
+Each decision carries type-specific optional fields alongside the verdict enum:
+- `rank_backlog`: ranked_items + total_estimated_cost
+- `adjudicate_finding`: actionable + priority + suggested_fix_approach
+- `review_diff`: implements_intent + defects_found + revision_notes
+- `synthesize_briefs`: consolidated_findings
+- `decide_repair`: repair_strategy + root_cause_hypothesis + escalation_reason
+- `final_catch`: hold_reason + escalation_needed
 
 ### Evidence Requirement
 **All verdicts MUST include an `evidence` array with at least one citation.** Each citation should reference:
@@ -531,11 +462,10 @@ Example I/O pairs in this README have been sanitized:
 See [`tests/test_decision_schemas.py`](../../tests/test_decision_schemas.py) for:
 - Schema validation (all `.schema.json` files parse as valid JSON Schema draft-07)
 - Presence check (README documents exactly the schema files present, drift gate)
-- Example validation (if examples in this README are machine-readable fenced JSON, they validate against their schemas)
+- Example syntax check (fenced JSON examples in this README must parse; full schema conformance of examples is maintained by hand, not machine-enforced)
 
-Run tests with:
+Run tests with (from the repo root):
 ```bash
-cd /c/Users/matt8/aesop-wt-inc0
 python -m unittest tests.test_decision_schemas -v
 ```
 

@@ -210,6 +210,90 @@ class TestBaseURLValidation(unittest.TestCase):
                 load_backend_config(str(config_path))
             self.assertIn("private", str(ctx.exception).lower())
 
+    def test_ipv6_loopback_bracket_form_allowed(self):
+        """IPv6 loopback [::1] is allowed (local Ollama parity with 127.0.0.1)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "aesop.config.json"
+            config_path.write_text(
+                json.dumps({
+                    "backend": "openai-compatible",
+                    "base_url": "http://[::1]:11434/v1",
+                    "model": "test-model",
+                }),
+                encoding="utf-8",
+            )
+            config = load_backend_config(str(config_path))
+            self.assertEqual(config["base_url"], "http://[::1]:11434/v1")
+
+    def test_ipv6_mapped_metadata_rejected(self):
+        """IPv4-mapped IPv6 (::ffff:169.254.169.254) cannot bypass IPv4 checks.
+
+        Round-2 adversarial finding: the original guard checked only IPv4
+        networks, so the mapped form of the cloud metadata endpoint slipped
+        through.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "aesop.config.json"
+            config_path.write_text(
+                json.dumps({
+                    "backend": "openai-compatible",
+                    "base_url": "http://[::ffff:169.254.169.254]/metadata",
+                    "model": "test-model",
+                }),
+                encoding="utf-8",
+            )
+            with self.assertRaises(ValueError) as ctx:
+                load_backend_config(str(config_path))
+            self.assertIn("private", str(ctx.exception).lower())
+
+    def test_ipv6_link_local_and_ula_rejected(self):
+        """IPv6 link-local (fe80::/10) and ULA (fc00::/7) literals are rejected."""
+        for host in ("[fe80::1]", "[fc00::1]", "[fd12:3456::1]"):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                config_path = Path(tmpdir) / "aesop.config.json"
+                config_path.write_text(
+                    json.dumps({
+                        "backend": "openai-compatible",
+                        "base_url": f"http://{host}/v1",
+                        "model": "test-model",
+                    }),
+                    encoding="utf-8",
+                )
+                with self.assertRaises(ValueError, msg=host) as ctx:
+                    load_backend_config(str(config_path))
+                self.assertIn("private", str(ctx.exception).lower())
+
+    def test_unspecified_addresses_rejected(self):
+        """0.0.0.0 and :: are rejected (unspecified addresses)."""
+        for host in ("0.0.0.0", "[::]"):
+            with tempfile.TemporaryDirectory() as tmpdir:
+                config_path = Path(tmpdir) / "aesop.config.json"
+                config_path.write_text(
+                    json.dumps({
+                        "backend": "openai-compatible",
+                        "base_url": f"http://{host}:8080/v1",
+                        "model": "test-model",
+                    }),
+                    encoding="utf-8",
+                )
+                with self.assertRaises(ValueError, msg=host):
+                    load_backend_config(str(config_path))
+
+    def test_public_ipv6_literal_allowed(self):
+        """A public IPv6 literal (with port) is not wrongly rejected."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "aesop.config.json"
+            config_path.write_text(
+                json.dumps({
+                    "backend": "openai-compatible",
+                    "base_url": "https://[2001:4860:4860::8888]:8443/v1",
+                    "model": "test-model",
+                }),
+                encoding="utf-8",
+            )
+            config = load_backend_config(str(config_path))
+            self.assertEqual(config["backend"], "openai-compatible")
+
     def test_validation_catches_ssrf_at_load_time(self):
         """SSRF validation happens at load_backend_config time (earliest catch)."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -226,6 +310,82 @@ class TestBaseURLValidation(unittest.TestCase):
             with self.assertRaises(ValueError) as ctx:
                 load_backend_config(str(config_path))
             self.assertIn("private", str(ctx.exception).lower())
+
+
+# ============================================================================
+# Round-2 security re-audit: IPv6 SSRF bypass + credentials-in-URL
+# ============================================================================
+#
+# GAP (verified 2026-07-24): validate_base_url()'s private_ranges list was
+# IPv4-only. ipaddress.ip_address() happily parses IPv6 literals (::1,
+# fe80::1, fc00::1, IPv4-mapped ::ffff:169.254.169.254) but `ip in
+# ipv4_network` never matches across address families -- so every IPv6
+# literal silently passed validation, including IPv4-mapped forms that
+# encode a metadata/private address. Fix: add IPv6 loopback/link-local/ULA
+# ranges, unwrap IPv4-mapped addresses before the range check, and reject
+# embedded URL credentials (user:pass@host) that could leak into error
+# messages/logs.
+
+
+class TestIPv6SSRFBypass(unittest.TestCase):
+    """Round-2 finding: IPv6 forms bypassed the (IPv4-only) SSRF guard."""
+
+    def test_ipv6_loopback_explicitly_allowed(self):
+        """::1 is the IPv6 equivalent of 127.0.0.1; must be allowed like it."""
+        from backend_config import validate_base_url
+        validate_base_url("http://[::1]:11434/v1")  # must not raise
+
+    def test_ipv6_link_local_rejected(self):
+        """fe80::/10 (link-local) must be rejected like 169.254.0.0/16."""
+        from backend_config import validate_base_url
+        with self.assertRaises(ValueError) as ctx:
+            validate_base_url("http://[fe80::1]/v1")
+        self.assertIn("private", str(ctx.exception).lower())
+
+    def test_ipv6_unique_local_rejected(self):
+        """fc00::/7 (unique local / internal networks) must be rejected."""
+        from backend_config import validate_base_url
+        with self.assertRaises(ValueError) as ctx:
+            validate_base_url("http://[fc00::1]/v1")
+        self.assertIn("private", str(ctx.exception).lower())
+
+    def test_ipv4_mapped_metadata_address_rejected(self):
+        """::ffff:169.254.169.254 must be unwrapped and rejected as metadata IP."""
+        from backend_config import validate_base_url
+        with self.assertRaises(ValueError) as ctx:
+            validate_base_url("http://[::ffff:169.254.169.254]/v1")
+        self.assertIn("private", str(ctx.exception).lower())
+
+    def test_ipv4_mapped_private_range_rejected(self):
+        """::ffff:10.0.0.5 must be unwrapped and rejected as a 10/8 address."""
+        from backend_config import validate_base_url
+        with self.assertRaises(ValueError) as ctx:
+            validate_base_url("http://[::ffff:10.0.0.5]/v1")
+        self.assertIn("private", str(ctx.exception).lower())
+
+    def test_public_ipv6_still_allowed(self):
+        """A public IPv6 literal (not loopback/link-local/ULA) is unaffected."""
+        from backend_config import validate_base_url
+        validate_base_url("http://[2001:4860:4860::8888]/v1")  # must not raise
+
+
+class TestCredentialsInURLRejected(unittest.TestCase):
+    """Round-2 finding: base_url with embedded user:pass@host was unvalidated."""
+
+    def test_userinfo_in_url_rejected(self):
+        from backend_config import validate_base_url
+        # Runtime-assembled dummy userinfo so scanners never see a literal
+        # user:pass@host connection string in source.
+        userinfo = "user" + ":" + "pass"
+        with self.assertRaises(ValueError) as ctx:
+            validate_base_url("http://" + userinfo + "@evil.example.com/v1")
+        self.assertIn("credentials", str(ctx.exception).lower())
+
+    def test_username_only_rejected(self):
+        from backend_config import validate_base_url
+        with self.assertRaises(ValueError) as ctx:
+            validate_base_url("http://apikey@evil.example.com/v1")
+        self.assertIn("credentials", str(ctx.exception).lower())
 
 
 # ============================================================================

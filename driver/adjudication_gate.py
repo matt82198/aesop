@@ -222,13 +222,17 @@ class AdjudicationGate:
         }
 
     def _is_verdict_unresolved(self, result: Dict[str, Any]) -> bool:
-        """Check if a verdict result is unresolved (DECISION_FAILED or undetermined).
+        """Check if a verdict result is unresolved.
+
+        Unresolved = DECISION_FAILED, undetermined (any case variant), or a
+        missing/None/non-string verdict (a malformed incumbent result without
+        a 'verdict' key must never be presented as a confident final verdict).
 
         Args:
             result: A verdict dict with a 'verdict' key.
 
         Returns:
-            True if verdict is DECISION_FAILED or undetermined, False otherwise.
+            True if the verdict is DECISION_FAILED, undetermined, or absent.
         """
         verdict = result.get("verdict")
         if not isinstance(verdict, str):
