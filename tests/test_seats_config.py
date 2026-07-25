@@ -662,8 +662,8 @@ class TestShadowToolsSeatWiring(unittest.TestCase):
 # ============================================================================
 
 # More assembled env-var names (never contiguous literals in fixtures).
-_ENV_GH_TOKEN = "GITHUB" + "_" + "TOKEN"
-_ENV_AWS_SECRET = "AWS" + "_" + "SECRET" + "_" + "ACCESS" + "_" + "KEY"
+_ENV_DENIED_GH = "GITHUB" + "_" + "TOKEN"
+_ENV_DENIED_AWS = "AWS" + "_" + "SECRET" + "_" + "ACCESS" + "_" + "KEY"
 
 
 class TestLegacyFlatBlockInertInScheduler(unittest.TestCase):
@@ -895,7 +895,7 @@ class TestApiKeyEnvValidation(unittest.TestCase):
 
     def test_worker_seat_github_token_rejected(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            path = self._worker_config(tmpdir, _ENV_GH_TOKEN)
+            path = self._worker_config(tmpdir, _ENV_DENIED_GH)
             with self.assertRaises(ValueError) as ctx:
                 load_backend_config(path)
         self.assertIn("api_key_env", str(ctx.exception))
@@ -908,7 +908,7 @@ class TestApiKeyEnvValidation(unittest.TestCase):
                     "orchestrator": {
                         "backend": "openai-compatible",
                         "model": "m",
-                        "api_key_env": _ENV_AWS_SECRET,
+                        "api_key_env": _ENV_DENIED_AWS,
                     },
                 },
             })
@@ -921,7 +921,7 @@ class TestApiKeyEnvValidation(unittest.TestCase):
                 "backend": "openai-compatible",
                 "base_url": "https://openrouter.ai/api/v1",
                 "model": "m",
-                "api_key_env": _ENV_GH_TOKEN,
+                "api_key_env": _ENV_DENIED_GH,
             })
             with self.assertRaises(ValueError):
                 load_backend_config(path)
@@ -1144,7 +1144,7 @@ class TestApiKeyEnvAllowlistPrimary(unittest.TestCase):
 
     def test_denylist_still_hard_rejects(self):
         from backend_config import validate_api_key_env
-        for name in (_ENV_GH_TOKEN, _ENV_AWS_SECRET):
+        for name in (_ENV_DENIED_GH, _ENV_DENIED_AWS):
             with self.assertRaises(ValueError):
                 validate_api_key_env(name, where="backend")
 
@@ -1180,7 +1180,7 @@ class TestBuildDriverFlatPathValidation(unittest.TestCase):
                 "backend": "openai-compatible",
                 "base_url": "https://openrouter.ai/api/v1",
                 "model": "m",
-                "api_key_env": _ENV_GH_TOKEN,
+                "api_key_env": _ENV_DENIED_GH,
             })
         self.assertIn("api_key_env", str(ctx.exception))
 
@@ -1190,7 +1190,7 @@ class TestBuildDriverFlatPathValidation(unittest.TestCase):
                 "backend": "openai-compatible",
                 "base_url": "https://openrouter.ai/api/v1",
                 "model": "m",
-                "api_key_env": _ENV_AWS_SECRET,
+                "api_key_env": _ENV_DENIED_AWS,
             })
 
 
