@@ -191,11 +191,16 @@ class OrchestratorDriver:
 
             except Exception as e:
                 # Unexpected exception (should not happen if logic above is correct).
+                # P1 FIX: Return fail-safe dict, never raise.
                 if attempt < self.max_retries:
                     continue
-                raise DecisionFailed(
-                    f"Decision failed after {attempt + 1} attempts: {e}"
-                ) from e
+                return {
+                    "verdict": "DECISION_FAILED",
+                    "evidence": f"Unexpected error after {attempt + 1} attempts: {e}",
+                    "decision_type": decision_type,
+                    "retry_count": attempt,
+                    "schema_validated": False,
+                }
 
         # Exhausted all retries without success.
         return {
@@ -252,7 +257,7 @@ class OrchestratorDriver:
 
         Minimal validation (always enforced):
           - result must be a dict.
-          - must have 'verdict' key (string).
+          - must have 'verdict' key (string, not "DECISION_FAILED").
           - must have 'evidence' key (array of >=1 non-empty strings).
 
         With schema: also validates verdict enum and required fields.
@@ -269,6 +274,11 @@ class OrchestratorDriver:
 
         # Verdict must be a string.
         if not isinstance(result.get("verdict"), str):
+            return False
+
+        # P2 FIX: Reject "DECISION_FAILED" as a model-provided verdict
+        # (reserved for orchestrator's own fail-safe).
+        if result.get("verdict") == "DECISION_FAILED":
             return False
 
         # Evidence must be an array of non-empty strings with minItems >= 1.
@@ -291,10 +301,46 @@ class OrchestratorDriver:
             # Validate verdict enum if schema defines it.
             verdict_schema = schema.get("properties", {}).get("verdict", {})
             allowed_verdicts = verdict_schema.get("enum", [])
-            if allowed_verdicts and result.get("verdict") not in allowed_verdicts:
-                return False
+            # P3 FIX: Fail-closed on empty enum (no verdict is valid).
+            if allowed_verdicts is not None:
+                # If enum exists (even if empty), verdict must be in it.
+                if result.get("verdict") not in allowed_verdicts:
+                    return False
+
+            # P2 FIX: Validate confidence against schema bounds if defined.
+            if "confidence" in result:
+                confidence = result.get("confidence")
+                if isinstance(confidence, (int, float)):
+                    confidence_schema = schema.get("properties", {}).get("confidence", {})
+                    minimum = confidence_schema.get("minimum")
+                    maximum = confidence_schema.get("maximum")
+                    if minimum is not None and confidence < minimum:
+                        return False
+                    if maximum is not None and confidence > maximum:
+                        return False
 
         return True
+
+
+def _sanitize_label_name(name: str) -> str:
+    """Sanitize label names to prevent prompt injection via newlines/control chars.
+
+    Strips newlines, carriage returns, and control characters that could break
+    the label syntax and inject fake instructions. The label channel is
+    non-authoritative (seam for future localization); legitimate content values
+    are unchanged.
+
+    Args:
+        name: The label/source name from context pack.
+
+    Returns:
+        Sanitized name with control chars and newlines removed.
+    """
+    # Strip newlines and control chars; keep legitimate alphanumerics, spaces, hyphens, underscores.
+    return "".join(
+        c for c in name
+        if c.isprintable() and c not in ("\n", "\r", "\t", "[", "]")
+    )
 
 
 def _build_decision_prompt(decision_type: str, context_pack: ContextPack) -> str:
@@ -329,8 +375,9 @@ Required structure:
     # User context: the file brain snapshot. Do NOT re-truncate here — the pack was
     # already size-bounded at build time; clipping to 500 again would silently
     # starve the model of context it was given.
+    # P2/P3 FIX: Sanitize source names to prevent prompt injection.
     context_text = "\n\n".join(
-        f"[{source}]:\n{text}"
+        f"[{_sanitize_label_name(source)}]:\n{text}"
         for source, text in context_pack.content.items()
     )
 
@@ -340,8 +387,9 @@ Required structure:
     # producing spurious 'undetermined' verdicts.
     evidence = getattr(context_pack, "evidence", None) or {}
     if evidence:
+        # P2/P3 FIX: Sanitize evidence label names too.
         evidence_text = "\n\n".join(
-            f"[{name}]:\n{text}" for name, text in evidence.items()
+            f"[{_sanitize_label_name(name)}]:\n{text}" for name, text in evidence.items()
         )
         evidence_block = (
             "Evidence (the finding to adjudicate + supporting citations):\n"

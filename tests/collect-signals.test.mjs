@@ -13,6 +13,12 @@ import { fileURLToPath } from 'node:url';
 // Resolve collector path relative to this test file
 const collectorPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'monitor', 'collect-signals.mjs');
 
+// === Helper: Compute test timeout (honors AESOP_TEST_CHILD_TIMEOUT_MS env override) ===
+function getTestTimeout() {
+  const defaultTimeout = process.platform === 'win32' ? 60000 : 30000;
+  return Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || defaultTimeout;
+}
+
 // === Helper: Create isolated fixture directory ===
 function createFixture() {
   const tempDir = path.join(os.tmpdir(), 'aesop-test-' + Math.random().toString(36).slice(2, 9));
@@ -48,9 +54,8 @@ function runCollector(aesopRoot, envOverrides = {}) {
     ...envOverrides,
   };
 
-  // Determine timeout: use AESOP_TEST_CHILD_TIMEOUT_MS if set, else Windows-specific default or 30000ms
-  const defaultTimeout = process.platform === 'win32' ? 60000 : 30000;
-  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || defaultTimeout;
+  // Determine timeout: use shared helper that honors AESOP_TEST_CHILD_TIMEOUT_MS env override
+  const timeout = getTestTimeout();
 
   // Try to spawn with timeout, retry once on ETIMEDOUT (transient contention)
   let lastError;
@@ -248,7 +253,7 @@ test('config precedence: TEMP_ROOT from config file honored when env var unset',
     const result = spawnSync('node', [collectorPath], {
       env,
       encoding: 'utf8',
-      timeout: 30000,
+      timeout: getTestTimeout(),
       killSignal: 'SIGKILL',
     });
 
@@ -311,7 +316,7 @@ test('extended signals OFF (default): checks 5/6/8/10 emit skipped and dirs not 
     const result = spawnSync('node', [collectorPath], {
       env,
       encoding: 'utf8',
-      timeout: 30000,
+      timeout: getTestTimeout(),
       killSignal: 'SIGKILL',
     });
 
@@ -370,7 +375,7 @@ test('extended signals ON: checks 5/6/8/10 run normally and detect issues', asyn
     const result = spawnSync('node', [collectorPath], {
       env,
       encoding: 'utf8',
-      timeout: 30000,
+      timeout: getTestTimeout(),
       killSignal: 'SIGKILL',
     });
 
@@ -422,7 +427,7 @@ test('extended signals: config file honor AESOP_EXTENDED_SIGNALS from aesop.conf
     const result = spawnSync('node', [collectorPath], {
       env,
       encoding: 'utf8',
-      timeout: 30000,
+      timeout: getTestTimeout(),
       killSignal: 'SIGKILL',
     });
 
@@ -913,7 +918,7 @@ test('Finding 1: env-var expansion handles $VAR_1 and ${myVar} patterns', async 
     const result = spawnSync('node', [collectorPath], {
       env,
       encoding: 'utf8',
-      timeout: 30000,
+      timeout: getTestTimeout(),
     });
 
     // Should complete without error (no undefined path expansion)

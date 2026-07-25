@@ -773,5 +773,86 @@ class TestRepeatAggregation(unittest.TestCase):
         self.assertEqual(stats["num_runs"], 2)
 
 
+class TestPathRedaction(unittest.TestCase):
+    """Test path redaction in shadow adjudication."""
+
+    def test_redact_home_paths(self):
+        """Verify home paths are redacted to <HOME>."""
+        from shadow_adjudication import redact_paths
+
+        test_text = (
+            "Code found at C:\\Users\\matt8\\project "
+            "and /c/Users/matt8/other"
+        )
+        redacted = redact_paths(test_text)
+
+        self.assertNotIn("matt8", redacted)
+        self.assertIn("<HOME>", redacted)
+
+    def test_redact_repo_paths(self):
+        """Verify repo paths are redacted to <REPO>."""
+        from shadow_adjudication import redact_paths
+
+        test_text = "Path: C:\\Users\\matt8\\aesop\\state\\tracker.json"
+        redacted = redact_paths(test_text)
+
+        self.assertNotIn("matt8", redacted)
+        self.assertNotIn("aesop", redacted)
+        self.assertIn("<REPO>", redacted)
+
+
+class TestModalVerdictExcludesDecisionFailed(unittest.TestCase):
+    """Test that DECISION_FAILED is excluded from modal verdict computation."""
+
+    def test_aggregate_excludes_decision_failed_from_modal(self):
+        """Verify DECISION_FAILED is excluded from modal verdict."""
+        corpus = [
+            CorpusItem("id1", "text1", "lens1", "real_defect", "real_defect", ""),
+        ]
+
+        # 2 real_defect, 1 DECISION_FAILED
+        run1 = [
+            ScorecardItem("id1", "real_defect", False, 0, True, 0, True, True),
+        ]
+        run2 = [
+            ScorecardItem("id1", "real_defect", False, 0, True, 0, True, True),
+        ]
+        run3 = [
+            ScorecardItem("id1", "DECISION_FAILED", False, 0, False, 0, False, False),
+        ]
+
+        result = aggregate_runs([run1, run2, run3], corpus, 3)
+        agg_items = result["per_item"]
+        item1 = agg_items[0]
+
+        # Modal should be real_defect, not DECISION_FAILED
+        self.assertEqual(item1.modal_verdict, "real_defect")
+
+    def test_aggregate_all_failed_explicit(self):
+        """Verify all-DECISION_FAILED case reports explicitly."""
+        corpus = [
+            CorpusItem("id1", "text1", "lens1", "real_defect", "real_defect", ""),
+        ]
+
+        # All verdicts are DECISION_FAILED
+        run1 = [
+            ScorecardItem("id1", "DECISION_FAILED", False, 0, False, 0, False, False),
+        ]
+        run2 = [
+            ScorecardItem("id1", "DECISION_FAILED", False, 0, False, 0, False, False),
+        ]
+        run3 = [
+            ScorecardItem("id1", "DECISION_FAILED", False, 0, False, 0, False, False),
+        ]
+
+        result = aggregate_runs([run1, run2, run3], corpus, 3)
+        agg_items = result["per_item"]
+        item1 = agg_items[0]
+
+        # Should explicitly report all failed, not DECISION_FAILED as a verdict
+        self.assertEqual(item1.modal_verdict, "all_runs_failed")
+        self.assertEqual(item1.correct_count, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
