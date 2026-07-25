@@ -37,7 +37,7 @@ require(commandMap[args[0]]); // Load + run; returns immediately after
 ## Scaffold files (filesToCopy array in cli.js lines 243–260)
 
 **Directories copied** (recursive):
-`daemons/`, `dash/`, `monitor/`, `tools/`, `ui/`, `docs/`, `state_store/`, `skills/`, `mcp/`, `scan/`, `hooks/`
+`daemons/`, `dash/`, `monitor/`, `tools/`, `ui/`, `docs/`, `state_store/`, `skills/`, `mcp/`, `scan/`, `hooks/`, `driver/`
 
 **Files copied**:
 `aesop.config.example.json`, `README.md`, `LICENSE`, `CHANGELOG.md`, `CLAUDE-TEMPLATE.md`

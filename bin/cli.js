@@ -317,6 +317,7 @@ const filesToCopy = [
   'mcp',
   'scan',
   'hooks',
+  'driver',
   'aesop.config.example.json',
   'README.md',
   'LICENSE',
