@@ -66,6 +66,16 @@ class OrchestratorBackend(ABC):
         """
         pass
 
+    def get_tokens_spent(self) -> int:
+        """Total tokens this backend has spent on decisions (best effort).
+
+        HS-2 block-gate hardening: the orchestrator SEAT's spend must count
+        against the cost ceiling like the worker seat's. Backends that can
+        meter usage override this; the default 0 means "no metering
+        available" (never a fabricated figure).
+        """
+        return 0
+
 
 class FakeOrchestratorBackend(OrchestratorBackend):
     """Testing backend with canned responses.
@@ -73,16 +83,27 @@ class FakeOrchestratorBackend(OrchestratorBackend):
     Useful for offline regression tests and controlling behavior deterministically.
     """
 
-    def __init__(self, canned_responses: Optional[list] = None):
+    def __init__(
+        self,
+        canned_responses: Optional[list] = None,
+        tokens_per_call: int = 0,
+    ):
         """Initialize with a list of canned JSON responses.
 
         Args:
             canned_responses: List of response dicts (or JSON strings) to return
                              in order. Each call to decide_call consumes one.
+            tokens_per_call: Simulated token spend accrued per successful
+                             decide_call (for seat-spend metering tests).
         """
         self.canned_responses = canned_responses or []
         self.call_count = 0
         self.received_prompts = []  # Capture prompts for regression tests
+        self.tokens_per_call = tokens_per_call
+        self.total_tokens_spent = 0
+
+    def get_tokens_spent(self) -> int:
+        return self.total_tokens_spent
 
     def decide_call(
         self, prompt: str, *, schema: Optional[Dict[str, Any]] = None
@@ -99,6 +120,7 @@ class FakeOrchestratorBackend(OrchestratorBackend):
 
         response = self.canned_responses[self.call_count]
         self.call_count += 1
+        self.total_tokens_spent += self.tokens_per_call
 
         # Return as JSON string if it's a dict.
         if isinstance(response, dict):
@@ -193,6 +215,12 @@ class OpenAICompatibleOrchestratorBackend(OrchestratorBackend):
         self.transport = transport or default_openai_transport
         self.api_key_env = api_key_env or self._DEFAULT_KEY_ENV
         self.is_local = bool(is_local)
+        # HS-2 block-gate hardening: accumulate usage tokens so the seat's
+        # spend can be counted against the cost ceiling (get_tokens_spent).
+        self.total_tokens_spent = 0
+
+    def get_tokens_spent(self) -> int:
+        return self.total_tokens_spent
 
     def decide_call(
         self, prompt: str, *, schema: Optional[Dict[str, Any]] = None
@@ -264,6 +292,21 @@ class OpenAICompatibleOrchestratorBackend(OrchestratorBackend):
                 response_data = self.transport(payload, **call_kwargs)
             else:
                 raise
+
+        # Meter usage tokens (best effort) BEFORE response-shape validation:
+        # the provider charged for the call even if the payload is unusable.
+        if isinstance(response_data, dict):
+            usage = response_data.get("usage")
+            if isinstance(usage, dict):
+                try:
+                    total = usage.get("total_tokens")
+                    if total is None:
+                        total = int(usage.get("prompt_tokens") or 0) + int(
+                            usage.get("completion_tokens") or 0
+                        )
+                    self.total_tokens_spent += max(0, int(total))
+                except (TypeError, ValueError):
+                    pass  # Unparseable usage: never fabricate spend.
 
         # Extract the completion text from the response.
         if not isinstance(response_data, dict) or "choices" not in response_data:

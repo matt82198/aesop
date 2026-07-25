@@ -1,0 +1,132 @@
+{
+  "tag": "hs2-swap-proof",
+  "date": "2026-07-25",
+  "what": "Bounded LIVE end-to-end orchestrator-seat swap proof: one real task (fix multiply) through run_wave twice -- default harness orchestrator seat vs configured gpt-4o-mini orchestrator seat, both with a non-Claude codex (gpt-4o-mini) worker seat. git=None (live proof never ships).",
+  "spend_note": "gpt-4o-mini only; <=3 API calls total (2 worker dispatches + 1 final_catch decision); well under the US$2 cap.",
+  "invariance": {
+    "top_level_shape_invariant_minus_opt_in_key": true,
+    "opt_in_keys_added_by_swap": [
+      "orchestrator_review"
+    ],
+    "item_shape_invariant_minus_opt_in_key": true,
+    "item_opt_in_keys_added_by_swap": [
+      "final_catch"
+    ]
+  },
+  "arms": [
+    {
+      "arm": "default-harness-orchestrator",
+      "elapsed_s": 2.2,
+      "tokens_spent": 538,
+      "result": {
+        "preflight_ok": true,
+        "aborted": false,
+        "abort_reason": null,
+        "built": [
+          {
+            "slug": "hs2-live-fix-multiply",
+            "dispatched": true,
+            "verified": true,
+            "testExit": 0,
+            "repairs": 0,
+            "error": null,
+            "filesWritten": [
+              "math_helper.py"
+            ],
+            "workerId": "w-866852",
+            "adversarial_review": "deferred"
+          }
+        ],
+        "shipped": null,
+        "ceiling": {
+          "period": "wave",
+          "ceiling": null,
+          "spent": 0,
+          "exceeded": false,
+          "tripped": false,
+          "reason": null
+        },
+        "policy": {
+          "validate_all_json": true,
+          "spot_check_frac": 0.5,
+          "repair_cap": 2,
+          "require_adversarial_review": true
+        },
+        "resume_stats": null,
+        "adversarial_review": "deferred"
+      },
+      "journal": {
+        "hs2-live-fix-multiply.json": {
+          "slug": "hs2-live-fix-multiply",
+          "repo": null,
+          "phase": "dispatched",
+          "timestamp": 1784963868.9021733,
+          "verified": true,
+          "testExit": 0,
+          "instance_id": "wave-662ba4b4-38e1-4fb8-a65e-b272192c49af"
+        }
+      }
+    },
+    {
+      "arm": "swapped-gpt-4o-mini-orchestrator",
+      "elapsed_s": 2.8,
+      "tokens_spent": 538,
+      "result": {
+        "preflight_ok": true,
+        "aborted": false,
+        "abort_reason": null,
+        "built": [
+          {
+            "slug": "hs2-live-fix-multiply",
+            "dispatched": true,
+            "verified": true,
+            "testExit": 0,
+            "repairs": 0,
+            "error": null,
+            "filesWritten": [
+              "math_helper.py"
+            ],
+            "workerId": "w-869019",
+            "final_catch": "merge",
+            "adversarial_review": "approved_by_orchestrator"
+          }
+        ],
+        "shipped": null,
+        "ceiling": {
+          "period": "wave",
+          "ceiling": null,
+          "spent": 0,
+          "exceeded": false,
+          "tripped": false,
+          "reason": null
+        },
+        "policy": {
+          "validate_all_json": true,
+          "spot_check_frac": 0.5,
+          "repair_cap": 2,
+          "require_adversarial_review": true
+        },
+        "resume_stats": null,
+        "adversarial_review": "orchestrator_final_catch",
+        "orchestrator_review": {
+          "seat": "OpenAICompatibleOrchestratorBackend",
+          "model": "gpt-4o-mini",
+          "decisions": 1,
+          "blocked": [],
+          "decision_failed": []
+        }
+      },
+      "journal": {
+        "hs2-live-fix-multiply.json": {
+          "slug": "hs2-live-fix-multiply",
+          "repo": null,
+          "phase": "dispatched",
+          "timestamp": 1784963870.1620672,
+          "verified": true,
+          "testExit": 0,
+          "instance_id": "wave-58436734-6d94-4437-9640-b07967ebaea9"
+        }
+      }
+    }
+  ]
+}

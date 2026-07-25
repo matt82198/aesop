@@ -10,6 +10,22 @@ WS3a pilot: deterministic one-cycle loop with CRITICAL GUARDRAILS:
   6. Double-dispatch prevention: write "in_progress" status to tracker.json (atomic, conflict-detecting)
   7. Bounded by: HALT file check (final gate before dispatch) + cost ceiling check
 
+HS-2 BLOCK GATE (live orchestrator seat only; default Report shape unchanged):
+  - Items the seat BLOCKS get the TERMINAL tracker status "blocked" in the same
+    atomic write as shipped items' "in_progress" -> never re-selected/rebuilt
+    (the tracker state is the durable block record, not the journal entry).
+  - Report gains "blocked": [{slug, reason, quarantine}] (empty list when the
+    seat ran and blocked nothing). quarantine is "clean" | "errors" (+
+    quarantine_errors: the per-file error records -- refused code may still
+    be in the tree) | "skipped" (+ quarantine_skipped_reason) | "unknown"
+    (no build record). Also "orchestrator_gate": {seat, model, decisions,
+    verdict_counts{merge,block,escalate,undetermined,decision_failed},
+    blocked[], decision_failed[], seat_tokens_spent, status}. status is
+    "degraded" when the gate made zero successful decisions (all
+    DECISION_FAILED -> items still ship crash-only, but the outage is LOUD),
+    "no_decisions" when nothing was verified to review, else "active".
+  - success is False whenever any item was blocked (never silently True).
+
 SINGLE-WRITER ASSUMPTION: This pilot assumes tracker.json is NOT edited concurrently by other
 processes. Concurrent-writer safety checks detect conflicts and abort; full lock/StateAPI
 integration is filed for next wave. Do NOT run multiple schedulers against the same tracker.
@@ -363,6 +379,7 @@ def build_wave_manifest(
 def _write_tracker_status_atomic(
     tracker_path: str, items_to_update: List[str], new_status: str, wave_id: str,
     expected_hash: Optional[str] = None,
+    status_by_id: Optional[Dict[str, str]] = None,
 ) -> Tuple[bool, Optional[str]]:
     """Write item status updates to tracker.json atomically (P1-5, P6, HIGH).
 
@@ -375,6 +392,10 @@ def _write_tracker_status_atomic(
         new_status: new status (should be "in_progress" for pilot)
         wave_id: wave ID to record in notes
         expected_hash: content hash from intake; if current content differs, abort with conflict
+        status_by_id: optional ADDITIONAL per-id statuses written in the same
+            atomic replace (HS-2 block gate: blocked items get the TERMINAL
+            "blocked" status alongside shipped items' "in_progress"). Entries
+            here override items_to_update on collision (terminal state wins).
 
     Returns:
         (success: bool, error_reason: str|None)
@@ -408,11 +429,14 @@ def _write_tracker_status_atomic(
         else:
             return False, "invalid_tracker_format"
 
-        # Update items
-        items_to_update_set = set(items_to_update)
+        # Update items: base list gets new_status; status_by_id entries
+        # override (terminal states like "blocked" win over "in_progress").
+        status_map = {item_id: new_status for item_id in items_to_update}
+        if status_by_id:
+            status_map.update(status_by_id)
         for item in items:
-            if item.get("id") in items_to_update_set:
-                item["status"] = new_status
+            if item.get("id") in status_map:
+                item["status"] = status_map[item.get("id")]
                 notes = item.get("notes", "")
                 item["notes"] = f"{notes} [wave {wave_id[:8]}]".strip()
 
@@ -471,10 +495,27 @@ def emit_report(
     tracker_unmapped_slugs: Optional[List[str]] = None,
     success: bool = False,
     merged: bool = False,
+    blocked: Optional[List[Dict[str, Any]]] = None,
+    orchestrator_gate: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Emit a Report JSON structure (GATE-1 HANDOFF KIT).
 
     Per-item observability: items_shipped includes full details {slug, backend, tier, verified, testExit}.
+
+    HS-2 block-gate fields (present ONLY when a live orchestrator seat ran;
+    the default no-seat Report shape is unchanged):
+      blocked: list of {slug, reason, quarantine} for items the seat refused
+               to ship (empty list when the seat ran and blocked nothing).
+               quarantine: "clean" | "errors" (+ quarantine_errors per-file
+               records: refused code may still be in the tree) | "skipped"
+               (+ quarantine_skipped_reason) | "unknown" (no build record).
+      orchestrator_gate: seat activity summary {seat, model, decisions,
+               verdict_counts {merge, block, escalate, undetermined,
+               decision_failed}, blocked [slugs], decision_failed [slugs],
+               seat_tokens_spent, status "active"|"degraded"|"no_decisions"}.
+               status "degraded" = the gate made ZERO successful decisions
+               (every one DECISION_FAILED): items still ship (crash-only),
+               but the outage is loud instead of invisible.
 
     Returns:
         report dict (ready to serialize)
@@ -509,6 +550,13 @@ def emit_report(
         report["tracker_update_attempted"] = True
     if tracker_unmapped_slugs:
         report["tracker_unmapped_slugs"] = tracker_unmapped_slugs
+    # HS-2 block gate: include the seat-observability lanes whenever a live
+    # seat ran (blocked may be an EMPTY list -- deterministic live-seat
+    # shape); both stay absent on the default no-seat path (no-op invariant).
+    if blocked is not None:
+        report["blocked"] = blocked
+    if orchestrator_gate is not None:
+        report["orchestrator_gate"] = orchestrator_gate
 
     return report
 
@@ -523,6 +571,7 @@ def run_wave_scheduler(
     dry_run: bool = False,
     driver: Optional[AgentDriver] = None,
     state_dir: Optional[Path] = None,
+    orchestrator_backend: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Run one complete wave cycle (intake -> manifest -> dispatch -> report).
 
@@ -532,6 +581,13 @@ def run_wave_scheduler(
         dry_run: if True, print manifest without dispatch
         driver: AgentDriver instance (defaults to FakeDriver for testing)
         state_dir: state directory (defaults to ./state)
+        orchestrator_backend: optional OrchestratorBackend for the decision
+            seat (HS-2). None (default) keeps the live harness as the
+            orchestrator -- byte-identical to pre-HS-2, no key required.
+            A live backend (see resolve_orchestrator_backend) routes the
+            final_catch decision per verified item through run_wave's
+            Phase 6; verdict 'block' stops that item from shipping. The
+            Report JSON shape is IDENTICAL either way (swap transparency).
 
     Returns:
         Report dict (phase, wave_id, items_selected, items_shipped, etc.)
@@ -697,6 +753,7 @@ def run_wave_scheduler(
             state_dir=state_dir,
             git={"expectTopLevel": str(REPO)},
             resume_journal=True,
+            orchestrator_backend=orchestrator_backend,
         )
 
         # P2c: verify no merged=True, record merged=false
@@ -725,14 +782,56 @@ def run_wave_scheduler(
                 "buildRecord": bool(b),
             })
 
+        # HS-2 BLOCK GATE: extract the orchestrator seat's review (present
+        # ONLY when a live seat ran). Blocked items need a TERMINAL tracker
+        # state ("blocked", never left todo -> no rebuild loop) and a durable,
+        # observable lane in the Report.
+        review = wave_result.get("orchestrator_review")
+        blocked_slugs = []
+        blocked_lane = []
+        if isinstance(review, dict):
+            blocked_slugs = [s for s in (review.get("blocked") or [])]
+            reason_by_slug = {}
+            for d in review.get("blocked_detail") or []:
+                if isinstance(d, dict) and d.get("slug"):
+                    reason_by_slug[d["slug"]] = d.get("reason")
+            built_by_slug = {
+                b_.get("slug"): b_
+                for b_ in (wave_result.get("built") or [])
+                if isinstance(b_, dict) and b_.get("slug")
+            }
+            for s in blocked_slugs:
+                entry = {
+                    "slug": s,
+                    "reason": reason_by_slug.get(s)
+                    or "orchestrator final_catch verdict: block",
+                }
+                # QUARANTINE VISIBILITY: a failed quarantine (refused code
+                # still in the tree) must never look like a clean block.
+                q = (built_by_slug.get(s) or {}).get("quarantine")
+                if isinstance(q, dict):
+                    if q.get("errors"):
+                        entry["quarantine"] = "errors"
+                        entry["quarantine_errors"] = q["errors"]
+                    elif q.get("skipped_reason"):
+                        entry["quarantine"] = "skipped"
+                        entry["quarantine_skipped_reason"] = q["skipped_reason"]
+                    else:
+                        entry["quarantine"] = "clean"
+                else:
+                    entry["quarantine"] = "unknown"
+                blocked_lane.append(entry)
+
         # TRACKER UPDATE FIRST (live-pilot lesson: a crash in Report assembly
         # must never leave shipped-but-unmarked items). Attempted as soon as
         # shipped_slugs is known; outcome fields survive into ANY report,
-        # including the exception envelope below.
+        # including the exception envelope below. Blocked items are marked in
+        # the SAME atomic write: the tracker terminal state is the durable
+        # block record (the journal entry can be overwritten on resume).
         tracker_update_attempted = False
         tracker_update_error = None
         tracker_unmapped = []
-        if shipped_slugs:
+        if shipped_slugs or blocked_slugs:
             tracker_update_attempted = True
             try:
                 slug_to_id = {it.get("slug"): it.get("id") for it in selected_items}
@@ -745,18 +844,28 @@ def run_wave_scheduler(
                         # LOUD, never silent: an unmapped shipped slug means the
                         # tracker cannot be marked -> double-dispatch risk.
                         tracker_unmapped.append(s_)
-                if shipped_item_ids:
+                blocked_status_by_id = {}
+                for s_ in blocked_slugs:
+                    id_ = slug_to_id.get(s_)
+                    if id_:
+                        blocked_status_by_id[id_] = "blocked"
+                    else:
+                        # Unmapped blocked slug = tracker stays todo = the
+                        # rebuild-and-block loop this fix exists to stop.
+                        tracker_unmapped.append(s_)
+                if shipped_item_ids or blocked_status_by_id:
                     success_update, update_error = _write_tracker_status_atomic(
                         tracker_path,
                         shipped_item_ids,
                         "in_progress",
                         wave_id,
                         expected_hash=intake_hash,  # P6: conflict detection
+                        status_by_id=blocked_status_by_id,
                     )
                     if not success_update:
                         tracker_update_error = update_error
                 if tracker_unmapped and tracker_update_error is None:
-                    tracker_update_error = "unmapped_shipped_slugs"
+                    tracker_update_error = "unmapped_slugs"
             except Exception as te:
                 tracker_update_error = f"tracker_update_exception: {te}"
 
@@ -765,9 +874,36 @@ def run_wave_scheduler(
         sha = next((r.get("sha") for r in repo_results if isinstance(r, dict) and r.get("sha")), None)
         branch = None  # run_wave ships on the current branch; scheduler does not switch branches
 
+        # Orchestrator-gate summary for the Report (live seat only): the
+        # operator must be able to SEE the gate's real activity -- including
+        # a silently-neutered seat (every decision DECISION_FAILED).
+        orchestrator_gate = None
+        if isinstance(review, dict):
+            decisions = int(review.get("decisions") or 0)
+            failed_slugs = list(review.get("decision_failed") or [])
+            gate_status = review.get("gate_status")
+            if not gate_status:
+                if decisions == 0:
+                    gate_status = "no_decisions"
+                elif len(failed_slugs) == decisions:
+                    gate_status = "degraded"
+                else:
+                    gate_status = "active"
+            orchestrator_gate = {
+                "seat": review.get("seat"),
+                "model": review.get("model"),
+                "decisions": decisions,
+                "verdict_counts": review.get("verdict_counts") or {},
+                "blocked": blocked_slugs,
+                "decision_failed": failed_slugs,
+                "seat_tokens_spent": review.get("seat_tokens_spent", 0),
+                "status": gate_status,
+            }
+
         # run_wave has NO top-level "success" key: derive honestly. success
         # additionally requires EVERY shipped item verified (contract: a
-        # shipped-but-unproven item is not a successful wave).
+        # shipped-but-unproven item is not a successful wave) and NO blocked
+        # items (a block is a refused ship, never a silent True).
         wave_ok = bool(wave_result.get("preflight_ok")) and not wave_result.get("aborted")
         all_verified = all(i.get("verified") for i in items_shipped) if items_shipped else True
         return emit_report(
@@ -781,8 +917,15 @@ def run_wave_scheduler(
             tracker_update_attempted=tracker_update_attempted,
             tracker_update_error=tracker_update_error,
             tracker_unmapped_slugs=tracker_unmapped if tracker_unmapped else None,
-            success=wave_ok and all_verified and tracker_update_error is None,
+            success=(
+                wave_ok
+                and all_verified
+                and tracker_update_error is None
+                and not blocked_slugs
+            ),
             merged=False,  # P2c: pilot stops before merge
+            blocked=blocked_lane if isinstance(review, dict) else None,
+            orchestrator_gate=orchestrator_gate,
         )
 
     except Exception as e:
@@ -904,6 +1047,73 @@ def resolve_worker_driver(
         return None, f"failed to build driver from config: {exc}"
 
 
+def resolve_orchestrator_backend(
+    config_path: Optional[str] = None,
+    execute: bool = False,
+) -> Tuple[Optional[Any], Optional[str]]:
+    """Resolve the orchestrator-seat backend (HS-2): config-first, opt-in.
+
+    Resolution:
+      - No config file, no seats block, no seats.orchestrator, or backend
+        'harness'/'claude' -> (None, None): the live harness stays the
+        orchestrator. run_wave's Phase 6 is byte-identical to pre-HS-2 --
+        no OpenAI backend constructed, no key required.
+      - seats.orchestrator backend 'openai-compatible' -> a live
+        OpenAICompatibleOrchestratorBackend built via
+        build_orchestrator_backend(load_backend_config()). Construction is
+        offline-safe (no key read until decide_call time); with execute=True
+        a hosted (non-is_local) seat requires its api_key_env to be set,
+        mirroring the worker-seat gate. Dry runs never require a key.
+      - Malformed config -> (None, error_message): fail loud, never a
+        silent fallback to the harness.
+
+    Returns:
+        (backend_or_None, error_message_or_None).
+    """
+    key_env_default = "OPENAI" + "_" + "API" + "_" + "KEY"
+
+    try:
+        from backend_config import build_orchestrator_backend, load_backend_config
+    except ImportError:
+        return None, "backend_config.py not found"
+
+    try:
+        config = load_backend_config(config_path)
+    except (TypeError, ValueError) as exc:
+        return None, f"invalid aesop.config.json: {exc}"
+
+    seats = config.get("seats")
+    orch_seat = seats.get("orchestrator") if isinstance(seats, dict) else None
+    if not isinstance(orch_seat, dict) or not orch_seat:
+        return None, None
+    if orch_seat.get("backend", "harness") in ("harness", "claude"):
+        return None, None
+
+    try:
+        backend = build_orchestrator_backend(config)
+    except (TypeError, ValueError, RuntimeError) as exc:
+        return None, f"failed to build orchestrator backend from config: {exc}"
+
+    # Defensive: the builder returns the null harness backend for any
+    # residual default path -> that is the no-op seat, pass None through.
+    try:
+        from orchestrator_backend import HarnessOrchestratorBackend
+        if isinstance(backend, HarnessOrchestratorBackend):
+            return None, None
+    except ImportError:
+        pass
+
+    if execute and not bool(orch_seat.get("is_local", False)):
+        key_env = orch_seat.get("api_key_env") or key_env_default
+        if not os.environ.get(key_env):
+            return None, (
+                f"configured seats.orchestrator with --execute requires "
+                f"{key_env} environment variable"
+            )
+
+    return backend, None
+
+
 def main():
     """CLI entry point (HS-1: config-driven worker seat; --driver overrides)."""
     parser = argparse.ArgumentParser(
@@ -966,6 +1176,23 @@ def main():
         print(f"ERROR: {driver_error}", file=sys.stderr)
         sys.exit(1)
 
+    # HS-2: orchestrator seat from config (seats.orchestrator). None = the
+    # live harness stays the orchestrator (byte-identical default).
+    orchestrator_backend, orch_error = resolve_orchestrator_backend(
+        config_path=args.config,
+        execute=args.execute,
+    )
+    if orch_error:
+        print(f"ERROR: {orch_error}", file=sys.stderr)
+        sys.exit(1)
+    if orchestrator_backend is not None:
+        print(
+            "[wave_scheduler] orchestrator seat: "
+            f"{type(orchestrator_backend).__name__} "
+            f"(model={getattr(orchestrator_backend, 'model', None)})",
+            file=sys.stderr,
+        )
+
     # Run scheduler
     report = run_wave_scheduler(
         tracker_path=args.tracker,
@@ -973,6 +1200,7 @@ def main():
         dry_run=dry_run,
         driver=driver,
         state_dir=Path(args.state_dir) if args.state_dir else None,
+        orchestrator_backend=orchestrator_backend,
     )
 
     # Output report as JSON

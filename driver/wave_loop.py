@@ -415,6 +415,324 @@ def _release_stale_leases(state_dir: str, journal_state: Dict[str, Dict[str, Any
         pass
 
 
+def _is_live_orchestrator_backend(backend: Any) -> bool:
+    """True when a passed orchestrator backend is a REAL swapped seat.
+
+    None and the null HarnessOrchestratorBackend both mean "the live harness
+    is the orchestrator" (the no-op default): the wave engine must behave
+    byte-identically to pre-HS-2 in that case.
+    """
+    if backend is None:
+        return False
+    try:
+        from orchestrator_backend import HarnessOrchestratorBackend
+    except ImportError:
+        # Cannot classify; an explicitly passed backend is treated as live
+        # (fail loud downstream rather than silently ignoring the config).
+        return True
+    return not isinstance(backend, HarnessOrchestratorBackend)
+
+
+def _seat_tokens_spent(backend: Any) -> int:
+    """Best-effort token spend of an orchestrator seat backend (0 if the
+    backend does not meter). Never raises; never fabricates."""
+    getter = getattr(backend, "get_tokens_spent", None)
+    if not callable(getter):
+        return 0
+    try:
+        return max(0, int(getter()))
+    except Exception:
+        return 0
+
+
+def _quarantine_blocked_files(
+    driver: Any, item: Dict[str, Any], item_result: Dict[str, Any]
+) -> None:
+    """Restore a BLOCKED item's written files to their pre-build state.
+
+    Without this, Phase 4's writes stay in the working tree after a block and
+    a later `git add -A` (outside this loop) would ship the refused code.
+
+    Semantics (conservative, only the blocked item's own filesWritten):
+      - tracked file  -> `git checkout -- <file>` (restore index version)
+      - untracked file -> did not exist pre-build; deleted (ONLY on a clean
+        exit-1 "untracked" determination; any other ls-files failure is
+        AMBIGUOUS -> error record, never delete: fail-safe, not fail-delete)
+      - not inside a git worktree -> SKIP with an honest record (we cannot
+        know pre-build state without git; never guess-delete)
+
+    PATHSPEC GUARD (re-attack-proven destructive defect): quarantine acts on
+    actual FILE paths ONLY. Empty strings, "."/"..", and directory entries
+    are REJECTED with an error record -- `git checkout -- subdir` (or ".")
+    would revert OTHER items' uncommitted verified work under that tree, not
+    just the blocked item's files. On Windows, backslash separators are
+    normalized to "/" first so a tracked file is never misclassified
+    untracked (and deleted) because git could not match the pathspec.
+
+    Records the outcome in item_result["quarantine"]:
+      {"attempted", "restored", "deleted", "errors", "skipped_reason"}.
+    Windows + POSIX safe: git args go through _quote_arg; deletion is
+    pathlib. Errors are per-file and never raise out of the gate.
+    """
+    files = list(item_result.get("filesWritten") or [])
+    outcome = {
+        "attempted": bool(files),
+        "restored": [],
+        "deleted": [],
+        "errors": [],
+        "skipped_reason": None,
+    }
+    item_result["quarantine"] = outcome
+    if not files:
+        return
+    if driver is None:
+        outcome["skipped_reason"] = "no_driver"
+        return
+
+    root = item.get("repo") or item.get("workDir") or "."
+    try:
+        probe = driver.run_command(
+            "git rev-parse --is-inside-work-tree", cwd=root
+        )
+        inside = probe.exit_code == 0 and "true" in (probe.stdout or "").lower()
+    except Exception:
+        inside = False
+    if not inside:
+        outcome["skipped_reason"] = "not_a_git_worktree"
+        return
+
+    for f in files:
+        raw = f if isinstance(f, str) else str(f)
+        # Windows: normalize separators so the git pathspec matches the
+        # index entry (backslash pathspecs silently match nothing -> a
+        # tracked file would be misclassified untracked and DELETED).
+        # POSIX: backslash is a legal filename character; leave it alone.
+        norm = raw.replace("\\", "/") if os.name == "nt" else raw
+        # PATHSPEC GUARD: reject empty/dot specs outright -- "." or ""
+        # as a checkout pathspec reverts the WHOLE repo, destroying other
+        # items' uncommitted verified work. Record, never act.
+        stripped = norm.strip().rstrip("/")
+        if stripped in ("", ".", ".."):
+            outcome["errors"].append(
+                {"file": raw, "error": "rejected pathspec: empty or dot "
+                 "entry (would revert beyond the blocked item's own files)"}
+            )
+            continue
+        # Only touch paths that stay inside the item's root (never escape).
+        try:
+            _validate_file_path(norm, root)
+        except ValueError as exc:
+            outcome["errors"].append({"file": raw, "error": f"path validation: {exc}"})
+            continue
+        try:
+            target = Path(root) / norm
+            # PATHSPEC GUARD: directories are never quarantined -- a
+            # directory checkout reverts EVERY file under it, including
+            # other items' uncommitted verified work. Files only.
+            if target.is_dir():
+                outcome["errors"].append(
+                    {"file": raw, "error": "rejected pathspec: resolves to "
+                     "a directory (quarantine operates on file paths only; "
+                     "a directory spec would revert other items' files "
+                     "under it)"}
+                )
+                continue
+            # :(literal) pathspec magic: glob characters (*, ?, [) in an
+            # entry must never expand -- "*" would match (and checkout
+            # would revert) EVERY tracked file, not the blocked item's.
+            spec = _quote_arg(":(literal)" + norm)
+            tracked = driver.run_command(
+                "git ls-files --error-unmatch -- " + spec, cwd=root
+            )
+            if tracked.exit_code == 0:
+                restore = driver.run_command(
+                    "git checkout -- " + spec, cwd=root
+                )
+                if restore.exit_code == 0:
+                    outcome["restored"].append(f)
+                else:
+                    outcome["errors"].append(
+                        {"file": raw, "error": "git checkout failed: "
+                         + (restore.stderr or "")[:200]}
+                    )
+            elif tracked.exit_code == 1:
+                # Clean "untracked" determination (--error-unmatch exits 1
+                # on no-match): the file did not exist pre-build; remove it.
+                if target.exists() or target.is_symlink():
+                    target.unlink()
+                outcome["deleted"].append(f)
+            else:
+                # AMBIGUOUS classification (exit 128, index lock, ...):
+                # fail-SAFE, never fail-delete. Tracked content is index-
+                # recoverable; an uncertain file must not be destroyed.
+                outcome["errors"].append(
+                    {"file": raw, "error": "untracked classification "
+                     "ambiguous (git ls-files exit "
+                     f"{tracked.exit_code}): refusing to delete"}
+                )
+        except Exception as exc:
+            outcome["errors"].append({"file": raw, "error": str(exc)})
+
+
+def _orchestrator_final_catch(
+    backend: Any,
+    items: List[Dict[str, Any]],
+    result: Dict[str, Any],
+    state_dir: Optional[str] = None,
+    driver: Any = None,
+) -> None:
+    """HS-2: route the pre-ship final-catch decision through a configured
+    orchestrator seat (Phase 6, replacing 'deferred' ONLY when a seat is
+    configured).
+
+    Semantics (conservative, incumbent-safe):
+      - Only test-VERIFIED items are reviewed (failed items already do not
+        ship; they consume no seat decisions).
+      - verdict 'merge'  -> approved; item ships as today.
+      - verdict 'block'  -> verified flipped False; item does NOT ship;
+        journal updated so a resume cannot skip-and-ship it.
+      - 'escalate' / 'undetermined' / DECISION_FAILED -> degrade to today's
+        behavior (ship to branch; merge stays manual downstream) with an
+        honest per-item record. A seat outage NEVER fabricates a verdict
+        and NEVER blocks a test-proven item (crash-only degradation).
+
+    Mutates result in place: per-item 'final_catch' + 'adversarial_review'
+    (+ 'quarantine' on block), plus a wave-level 'orchestrator_review'
+    summary block with verdict counts, blocked detail, seat token spend,
+    and a gate_status flag ("active" | "degraded" when every decision
+    failed | "no_decisions" when nothing was verified to review).
+    """
+    from context_pack import ContextPack
+    from orchestrator_driver import OrchestratorDriver
+
+    orch = OrchestratorDriver(backend, schema_dir=str(DRIVER_DIR))
+    review = {
+        "seat": type(backend).__name__,
+        "model": getattr(backend, "model", None),
+        "decisions": 0,
+        "blocked": [],
+        "blocked_detail": [],
+        "decision_failed": [],
+        "verdict_counts": {
+            "merge": 0,
+            "block": 0,
+            "escalate": 0,
+            "undetermined": 0,
+            "decision_failed": 0,
+        },
+    }
+    slug_to_item = {
+        item.get("slug", f"item-{i}"): item for i, item in enumerate(items)
+    }
+    result["adversarial_review"] = "orchestrator_final_catch"
+
+    for item_result in result["built"]:
+        if not item_result.get("verified", False):
+            item_result["adversarial_review"] = "skipped_not_verified"
+            continue
+
+        slug = item_result.get("slug", "unknown")
+        item = slug_to_item.get(slug, {})
+        evidence = {
+            "item": json.dumps(
+                {
+                    "slug": slug,
+                    "prompt_excerpt": str(item.get("prompt", ""))[:1000],
+                    "ownsFiles": list(item.get("ownsFiles", [])),
+                    "filesWritten": item_result.get("filesWritten", []),
+                    "repairs": item_result.get("repairs", 0),
+                },
+                sort_keys=True,
+            ),
+            # NOTE (F6): this final_catch evidence is currently LOW-SIGNAL --
+            # test_passed is hardcoded True (only verified items reach this
+            # point) and no secret-scan/CI/branch-protection results are fed
+            # in yet. Future work should enrich it with the real gate outputs
+            # so the seat has something substantive to judge.
+            "verification_results": json.dumps(
+                {
+                    "test_passed": True,
+                    "test_exit_code": item_result.get("testExit"),
+                    "spot_check_failed": bool(
+                        item_result.get("spot_check_failed", False)
+                    ),
+                },
+                sort_keys=True,
+            ),
+        }
+        pack = ContextPack(
+            decision_type="final_catch",
+            sources_requested=(),
+            evidence=evidence,
+        )
+        try:
+            decision = orch.decide("final_catch", pack)
+        except Exception as exc:
+            # decide() never raises by contract; belt and braces anyway.
+            decision = {
+                "verdict": "DECISION_FAILED",
+                "evidence": [f"decide() raised: {exc}"],
+            }
+        review["decisions"] += 1
+        verdict = str(decision.get("verdict", "DECISION_FAILED"))
+        item_result["final_catch"] = verdict
+
+        if verdict == "block":
+            review["verdict_counts"]["block"] += 1
+            item_result["verified"] = False
+            item_result["adversarial_review"] = "blocked_by_orchestrator"
+            item_result["error"] = "orchestrator final_catch verdict: block"
+            review["blocked"].append(slug)
+            # Persist WHY (hold_reason, else first evidence citation) so the
+            # Report's blocked lane is actionable, not just a slug.
+            reason = decision.get("hold_reason")
+            if not reason:
+                evidence_list = decision.get("evidence")
+                if isinstance(evidence_list, list) and evidence_list:
+                    reason = str(evidence_list[0])
+            review["blocked_detail"].append(
+                {"slug": slug, "reason": reason or "final_catch verdict: block"}
+            )
+            if state_dir:
+                _write_journal_entry(
+                    state_dir,
+                    slug,
+                    "final_catch_blocked",
+                    {
+                        "verified": False,
+                        "testExit": item_result.get("testExit"),
+                        "final_catch": "block",
+                    },
+                    repo=item.get("repo"),
+                )
+            # QUARANTINE: refused code must not linger in the working tree.
+            _quarantine_blocked_files(driver, item, item_result)
+        elif verdict == "merge":
+            review["verdict_counts"]["merge"] += 1
+            item_result["adversarial_review"] = "approved_by_orchestrator"
+        elif verdict in ("escalate", "undetermined"):
+            review["verdict_counts"][verdict] += 1
+            item_result["adversarial_review"] = verdict
+        else:  # DECISION_FAILED (or anything unrecognized -> fail-safe path)
+            review["verdict_counts"]["decision_failed"] += 1
+            item_result["adversarial_review"] = "decision_failed_deferred"
+            review["decision_failed"].append(slug)
+
+    # Gate visibility: a 100%-failing seat must NOT look like an approving
+    # one. decisions>0 with every one DECISION_FAILED = the gate made zero
+    # successful decisions -> "degraded" (crash-only ship semantics are
+    # unchanged; this only makes the outage VISIBLE).
+    if review["decisions"] == 0:
+        review["gate_status"] = "no_decisions"
+    elif review["verdict_counts"]["decision_failed"] == review["decisions"]:
+        review["gate_status"] = "degraded"
+    else:
+        review["gate_status"] = "active"
+    review["seat_tokens_spent"] = _seat_tokens_spent(backend)
+
+    result["orchestrator_review"] = review
+
+
 def run_wave(
     driver: AgentDriver,
     manifest: Dict[str, Any],
@@ -422,6 +740,7 @@ def run_wave(
     state_dir: Optional[str] = None,
     git: Optional[Dict[str, str]] = None,
     resume_journal: bool = False,
+    orchestrator_backend: Any = None,
 ) -> Dict[str, Any]:
     """Run a full multi-item wave through an AgentDriver backend.
 
@@ -443,6 +762,15 @@ def run_wave(
              ship phase is skipped.
         resume_journal: if True and state_dir exists, load journal and skip items
                        marked as verified (but re-run their tests for trust-but-verify).
+        orchestrator_backend: optional OrchestratorBackend for the DECISION seat
+                       (HS-2). None or the null HarnessOrchestratorBackend means
+                       the live harness stays the orchestrator: Phase 6 remains
+                       'deferred', byte-identical to pre-HS-2 (no key required,
+                       no backend called). A live backend (e.g. from
+                       build_orchestrator_backend(load_backend_config()) with a
+                       seats.orchestrator block) routes a final_catch decision
+                       per verified item through OrchestratorDriver.decide();
+                       verdict 'block' stops that item from shipping.
 
     Returns:
         dict with structure:
@@ -1012,13 +1340,37 @@ def run_wave(
                     item_result["spot_check_failed"] = True
 
     # ========================================================================
-    # PHASE 6: Adversarial review (deferred, not yet enforced)
+    # PHASE 6: Adversarial review / orchestrator final catch (HS-2)
     # ========================================================================
-    # Adversarial review is not yet implemented; mark all as deferred.
-    # (TODO in a later increment: real adversarial review dispatch via driver)
-    result["adversarial_review"] = "deferred"
-    for item_result in result["built"]:
-        item_result["adversarial_review"] = "deferred"
+    if _is_live_orchestrator_backend(orchestrator_backend):
+        # A configured orchestrator seat is LIVE: route a final_catch
+        # decision per verified item through the swapped backend.
+        _orchestrator_final_catch(
+            orchestrator_backend, items, result, state_dir=state_dir,
+            driver=driver,
+        )
+        # HS-2 hardening: the seat's own spend (up to 3 calls/item) counts
+        # against the ceiling too. Re-check AFTER decisions, BEFORE ship,
+        # including metered seat tokens. Runs ONLY on the live-seat path
+        # (no-op default keeps the pre-HS-2 check pattern byte-identical).
+        if cost_ceiling is not None and state_dir is not None:
+            ceiling_result = cost_ceiling.check(
+                spent=driver.get_tokens_spent()
+                + _seat_tokens_spent(orchestrator_backend),
+                trip=True,
+                state_dir=state_dir,
+            )
+            result["ceiling"] = ceiling_result
+            if ceiling_result.get("exceeded", False):
+                result["aborted"] = True
+                result["abort_reason"] = "cost_ceiling_exceeded_after_decisions"
+                return result
+    else:
+        # No configured seat: the live harness IS the orchestrator; review
+        # stays deferred to it. Byte-identical to pre-HS-2 behavior.
+        result["adversarial_review"] = "deferred"
+        for item_result in result["built"]:
+            item_result["adversarial_review"] = "deferred"
 
     # ========================================================================
     # PHASE 7: Per-repo ship (git operations, if configured)
