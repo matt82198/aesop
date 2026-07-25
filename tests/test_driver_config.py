@@ -211,7 +211,7 @@ class TestBuildDriver(unittest.TestCase):
 
     def test_codex_backend(self):
         """Codex config -> CodexDriver (no network/key needed at build time)."""
-        config = {"backend": "codex", "model": "gpt-3.5-turbo"}
+        config = {"backend": "codex", "model": "gpt-4o-mini"}
         driver = build_driver(config)
         # Should be a CodexDriver; import to verify.
         try:
@@ -247,7 +247,7 @@ class TestBuildDriver(unittest.TestCase):
         """
         config = {
             "backend": "codex",
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-4o-mini",
         }
         # This should not raise or require a key, even if no key is available.
         # The driver stores the key env var name but does not access it until dispatch.
@@ -305,7 +305,7 @@ class TestDescribeBackend(unittest.TestCase):
 
     def test_describe_codex(self):
         """Describe Codex backend."""
-        config = {"backend": "codex", "model": "gpt-3.5-turbo"}
+        config = {"backend": "codex", "model": "gpt-4o-mini"}
         desc = describe_backend(config)
         # Should contain backend name or model info.
         self.assertTrue(len(desc) > 0)
@@ -331,7 +331,7 @@ class TestDescribeBackend(unittest.TestCase):
         for backend in ["claude", "codex", "openai-compatible"]:
             config = {"backend": backend}
             if backend == "codex":
-                config["model"] = "gpt-3.5-turbo"
+                config["model"] = "gpt-4o-mini"
             elif backend == "openai-compatible":
                 config["base_url"] = "http://localhost:11434/v1"
                 config["model"] = "neural-chat"
@@ -356,7 +356,7 @@ class TestProbeCapabilities(unittest.TestCase):
 
     def test_codex_probe(self):
         """Codex reports tier 2."""
-        config = {"backend": "codex", "model": "gpt-3.5-turbo"}
+        config = {"backend": "codex", "model": "gpt-4o-mini"}
         driver = build_driver(config)
         caps = driver.probe_capabilities()
         self.assertEqual(caps.recommended_verification_tier, 2)

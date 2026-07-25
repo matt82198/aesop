@@ -513,6 +513,41 @@ class TestPathRedaction(unittest.TestCase):
         self.assertNotIn("matt8", redacted)
         self.assertIn("<REPO>", redacted)
 
+    def test_redaction_with_repeated_backslash_escaping(self):
+        """Round-2 finding: reasoning strings that are repr()'d/JSON-escaped
+        more than once (nested list-of-strings serialization) accumulate 3+
+        literal backslashes per separator. The old pattern only tolerated 1
+        or 2 backslashes and silently left 3+ unredacted (verified residue
+        in committed bench/results/*.json).
+        """
+        for backslash_count in (1, 2, 3, 4):
+            bs = "\\" * backslash_count
+            test_text = f"path C:{bs}Users{bs}matt8{bs}aesop{bs}state\\tracker.json"
+            redacted = seated.redact_paths(test_text)
+            self.assertNotIn("matt8", redacted, f"leaked at backslash_count={backslash_count}")
+            self.assertIn("<REPO>", redacted, f"not redacted at backslash_count={backslash_count}")
+
+    def test_redaction_multi_escaped_backslash_forms(self):
+        """Repr/JSON re-escaped paths (2x/4x/8x backslashes) are redacted.
+
+        Round-2 adversarial finding: reasoning strings embed repr-of-list text
+        whose paths carry doubled/quadrupled backslash separators; the previous
+        1-2 backslash pattern missed them, leaking machine paths into committed
+        bench/results files.
+        """
+        for depth in (1, 2, 4, 8):
+            sep = "\\" * depth
+            text = "path " + "C:" + sep + "Users" + sep + "matt8" + sep + "aesop" + sep + "state"
+            redacted = seated.redact_paths(text)
+            self.assertNotIn("matt8", redacted, f"escape depth {depth}")
+            self.assertIn("<REPO>", redacted, f"escape depth {depth}")
+
+    def test_redaction_forward_slash_windows_form(self):
+        """Windows paths written with forward slashes are redacted."""
+        text = "found C:/Users/matt8/aesop/tools/x.py and C:/Users/matt8/other"
+        redacted = seated.redact_paths(text)
+        self.assertNotIn("matt8", redacted)
+
 
 class TestModalVerdictExcludesDecisionFailed(unittest.TestCase):
     """Test that DECISION_FAILED is excluded from modal verdict computation."""
@@ -620,6 +655,115 @@ class TestModalVerdictExcludesDecisionFailed(unittest.TestCase):
         # Should explicitly report all failed, not DECISION_FAILED as a verdict
         self.assertEqual(item1_agg.modal_verdict, "all_runs_failed")
         self.assertEqual(item1_agg.stability, 0.0)
+
+
+class TestSeatedIncompleteRunAggregation(unittest.TestCase):
+    """Test that stability is computed correctly when seated runs are incomplete (rate-limited)."""
+
+    def test_incomplete_run_stability_correct(self):
+        """Verify stability uses actual verdict count, not global num_runs."""
+        corpus = [
+            seated.CorpusItem("id1", "text1", "lens1", "real_defect", "real_defect", "", []),
+            seated.CorpusItem("id2", "text2", "lens2", "false_positive", "false_positive", "", []),
+            seated.CorpusItem("id3", "text3", "lens3", "real_defect", "real_defect", "", []),
+        ]
+
+        # Run 1: complete (all 3 items)
+        run1_verdicts = [
+            seated.SeatedVerdictItem("id1", 1, "real_defect", "Reasoning 1", True, 0, 0.9),
+            seated.SeatedVerdictItem("id2", 1, "false_positive", "Reasoning 2", True, 0, 0.9),
+            seated.SeatedVerdictItem("id3", 1, "real_defect", "Reasoning 3", True, 0, 0.9),
+        ]
+
+        # Run 2: incomplete (only 2 items due to rate limit)
+        run2_verdicts = [
+            seated.SeatedVerdictItem("id1", 2, "real_defect", "Reasoning 1b", True, 0, 0.9),
+            seated.SeatedVerdictItem("id2", 2, "false_positive", "Reasoning 2b", True, 0, 0.9),
+        ]
+
+        all_verdicts = run1_verdicts + run2_verdicts
+        aggregated = seated.aggregate_seated_results(all_verdicts, corpus, 2)
+        agg_items = aggregated["per_item"]
+
+        # id1 and id2: 2 runs each, same verdict => stability = 2/2 = 1.0
+        id1_agg = next(a for a in agg_items if a.id == "id1")
+        self.assertEqual(id1_agg.modal_verdict, "real_defect")
+        self.assertAlmostEqual(id1_agg.stability, 1.0, places=2)
+
+        id2_agg = next(a for a in agg_items if a.id == "id2")
+        self.assertEqual(id2_agg.modal_verdict, "false_positive")
+        self.assertAlmostEqual(id2_agg.stability, 1.0, places=2)
+
+        # id3: only 1 run (missing from run2) => stability = 1/1 = 1.0 (not 1/2!)
+        id3_agg = next(a for a in agg_items if a.id == "id3")
+        self.assertEqual(id3_agg.modal_verdict, "real_defect")
+        # BUG FIX: stability should be 1.0 (1 verdict out of 1 run), NOT 0.5 (1 verdict out of global 2 runs)
+        self.assertAlmostEqual(id3_agg.stability, 1.0, places=2,
+                              msg="Stability must use actual verdict count (1), not global num_runs (2)")
+
+
+class TestWriteSeatedMdRedaction(unittest.TestCase):
+    """Round-2 security finding: write_seated_md() embedded item 9's raw
+    reasoning_sample directly (f"{item_9['reasoning_sample'][:500]}...")
+    without ever calling redact_paths() on it -- a dead `redact_paths(...)`
+    call existed a few lines below but its result was discarded. Real
+    context-pack reasoning cites real repo code and can echo absolute
+    machine paths, so this was a live path-disclosure gap in the .md
+    output, independent of the (separately fixed) JSON writer.
+    """
+
+    def test_item9_reasoning_sample_redacted_in_md_output(self):
+        corpus = [
+            seated.CorpusItem(
+                id="whitelist-gate-weakening",
+                finding_text="finding",
+                source_lens="security",
+                incumbent_verdict="real_defect",
+                ground_truth="false_positive",
+                gt_note="",
+            ),
+        ]
+
+        aggregated = {
+            "item_9_analysis": {
+                "modal_verdict": "false_positive",
+                "modal_count": 3,
+                "stability": 1.0,
+                "flips_to_false_positive": True,
+                "reasoning_sample": (
+                    "Evidence cites C:\\Users\\matt8\\aesop\\state\\tracker.json "
+                    "as the machine-specific path."
+                ),
+            },
+            "held_real_defects": 0,
+            "total_real_defects": 0,
+            "schema_validity": {"valid": 1, "total": 1, "pct": 100.0},
+            "per_item": [
+                seated.AggregatedItem(
+                    id="whitelist-gate-weakening",
+                    ground_truth="false_positive",
+                    verdict_counts={"false_positive": 3},
+                    modal_verdict="false_positive",
+                    stability=1.0,
+                    num_runs=3,
+                    reasonings=["reasoning"],
+                ),
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_path = Path(tmpdir) / "out.md"
+            seated.write_seated_md(aggregated, corpus, "test-model", str(out_path))
+            text = out_path.read_text(encoding="utf-8")
+
+        # Isolate the "Reasoning (first run)" code block -- the only place
+        # that embeds the (attacker/model-influenced) reasoning_sample text.
+        # (The doc's static "Item 7: hardcoded-username" boilerplate prose
+        # intentionally mentions 'Users/matt8' as an illustrative citation
+        # of a historical, already-fixed finding; that is not this gap.)
+        reasoning_block = text.split("**Reasoning** (first run):")[1].split("```")[1]
+        self.assertNotIn("matt8", reasoning_block)
+        self.assertIn("<REPO>", reasoning_block)
 
 
 if __name__ == "__main__":

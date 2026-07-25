@@ -61,11 +61,16 @@ def redact_paths(text: str) -> str:
     - Users\\matt8 → <HOME>
 
     Non-path occurrences of 'matt8' are preserved.
+
+    Separators match ANY run of backslashes or forward slashes so single-,
+    double-, and repr/JSON re-escaped forms (\\, \\\\, \\\\\\\\ ...) are all
+    caught. Reasoning strings often embed repr-of-list text whose paths carry
+    2x/4x-escaped separators; a 1-2 backslash pattern misses those.
     """
     # First redact repo-specific paths (longer pattern, must be first)
-    # Windows: C:\Users\matt8\aesop or C:\\Users\\matt8\\aesop
+    # Windows: C:\Users\matt8\aesop at any escape depth, or C:/Users/... form
     text = re.sub(
-        r"C:\\\\?Users\\\\?matt8\\\\?aesop",
+        r"C:[\\/]+Users[\\/]+matt8[\\/]+aesop",
         "<REPO>",
         text,
         flags=re.IGNORECASE,
@@ -79,9 +84,9 @@ def redact_paths(text: str) -> str:
     )
 
     # Then redact home paths (shorter pattern)
-    # Windows: C:\Users\matt8 or C:\\Users\\matt8
+    # Windows: C:\Users\matt8 at any escape depth, or C:/Users/matt8
     text = re.sub(
-        r"C:\\\\?Users\\\\?matt8",
+        r"C:[\\/]+Users[\\/]+matt8",
         "<HOME>",
         text,
         flags=re.IGNORECASE,
@@ -93,9 +98,9 @@ def redact_paths(text: str) -> str:
         text,
         flags=re.IGNORECASE,
     )
-    # Also handle Users\matt8 or Users\\matt8 or Users/matt8 variants
+    # Also handle Users\matt8 / Users\\matt8 / Users/matt8 at any escape depth
     text = re.sub(
-        r"Users[\\\/]matt8",
+        r"Users[\\/]+matt8",
         "<HOME>",
         text,
         flags=re.IGNORECASE,
@@ -356,7 +361,7 @@ def aggregate_seated_results(
     Args:
         all_verdicts: All SeatedVerdictItem from all runs.
         corpus: The corpus items.
-        num_runs: Number of runs.
+        num_runs: Number of runs (global maximum; some items may have fewer).
 
     Returns:
         Dict with:
@@ -393,10 +398,13 @@ def aggregate_seated_results(
             v: count for v, count in verdict_counts.items() if v != "DECISION_FAILED"
         }
 
+        # Use actual number of verdicts for this item (handles incomplete runs)
+        actual_runs_for_item = len(verdicts)
+
         if valid_verdicts:
             modal_verdict = max(valid_verdicts, key=valid_verdicts.get)
             modal_count = valid_verdicts[modal_verdict]
-            stability = modal_count / num_runs if num_runs > 0 else 0.0
+            stability = modal_count / actual_runs_for_item if actual_runs_for_item > 0 else 0.0
         elif verdict_counts:
             # All verdicts were DECISION_FAILED
             modal_verdict = "all_runs_failed"
@@ -575,7 +583,11 @@ def write_seated_md(
         "",
         f"**Reasoning** (first run):",
         f"```",
-        f"{item_9['reasoning_sample'][:500]}...",
+        # Redact before embedding: this is real model reasoning over real
+        # cited repo evidence and can echo absolute machine paths (verified
+        # gap -- this call was previously computed and discarded, leaving
+        # the raw unredacted text below to be persisted instead).
+        f"{redact_paths(item_9['reasoning_sample'])[:500]}...",
         f"```",
         "",
         "### Real Defect Retention",
@@ -595,8 +607,6 @@ def write_seated_md(
 
     for agg in aggregated["per_item"]:
         correct = "✓" if agg.modal_verdict.lower() == agg.ground_truth.lower() else "✗"
-        # Redact reasoning sample
-        reasoning_sample = redact_paths(item_9['reasoning_sample'])
         lines.append(
             f"| {agg.id} | {agg.ground_truth} | {agg.modal_verdict} | "
             f"{agg.stability:.1%} | {correct} |"
