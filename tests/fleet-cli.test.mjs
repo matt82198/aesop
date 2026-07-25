@@ -29,9 +29,11 @@ const FLEET_CLI = join(__dirname, '..', 'tools', 'fleet.js');
  * Spawn the fleet CLI in a given AESOP_ROOT directory
  * and collect stdout, stderr, exit code
  *
- * Timeout: 10 seconds (prevents hang if process doesn't close)
+ * Timeout: 10 seconds by default (prevents hang if process doesn't close);
+ * honors AESOP_TEST_CHILD_TIMEOUT_MS override (same pattern as
+ * collect-signals.test.mjs) so CI can widen the window under contention.
  */
-function spawnFleetCli(aesopRoot, timeoutMs = 10000) {
+function spawnFleetCli(aesopRoot, timeoutMs = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 10000) {
   return new Promise((resolve) => {
     let resolved = false;
 

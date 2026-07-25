@@ -26,10 +26,13 @@ const EXAMPLE_CONFIG = path.join(
 );
 
 function runCli(targetDir, args = []) {
+  // Honors AESOP_TEST_CHILD_TIMEOUT_MS override (same pattern as wizard.test.mjs /
+  // scaffold-*.test.mjs) so CI can widen the window under Windows contention.
+  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
   const res = spawnSync(process.execPath, [CLI, targetDir, ...args], {
     encoding: 'utf8',
     cwd: path.dirname(targetDir),
-    timeout: 30000,
+    timeout,
     killSignal: 'SIGKILL'
   });
   return res;
@@ -51,8 +54,9 @@ function cleanupTestDir(dir) {
 }
 
 function gitCmd(cwd, cmd) {
+  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
   const bashCmd = `bash -c "cd '${cwd.replace(/'/g, "'\\''")}' && ${cmd}"`;
-  return spawnSync('bash', ['-c', bashCmd], { stdio: 'ignore', encoding: 'utf8', timeout: 30000, killSignal: 'SIGKILL' });
+  return spawnSync('bash', ['-c', bashCmd], { stdio: 'ignore', encoding: 'utf8', timeout, killSignal: 'SIGKILL' });
 }
 
 test('aesop.config.example.json has _fleet_root_note key explaining security boundary', () => {
