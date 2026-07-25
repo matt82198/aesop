@@ -22,10 +22,10 @@ audits finding nothing new). Cycle: land wave → five-lens re-audit → dedupe 
 per-item branches → merge green PRs. Never idle while agents run. On session death:
 resume from this file + AUDIT-BACKLOG.md.
 
-## Phase: `0.3.2-dev` (2026-07-23, current)
-**v0.3.2 LIVE**: npm latest = 0.3.2 (released 2026-07-23 12:43:26; tag v0.3.2 on main).
-v0.3.2 is a version bump on main after 0.3.1 stabilization; wave-31 and subsequent work
-proceeds under this version. Prior phase (0.3.1-released+recency-clean, 2026-07-22):
+## Phase: `0.4.0-dev` (2026-07-25, current)
+**v0.4.0 STAGED**: release branch feat/hs4-release-0.4.0 prepared; version bump + CHANGELOG staged; testing in progress.
+v0.4.0 ships two-seat config (HS-1/HS-2), unified orchestrator/worker model swapping, IPv6/DNS hardening,
+and complete `driver/` scaffolding. Wave-31 and subsequent work proceeds under this version. Prior phase (0.3.2-released, 2026-07-23):
 v0.3.1 was shipped after a recency-lane automation incident burned the v0.3.0 tag
 (unauthorized `--admin` merge of #332 + empty release at red commit d81ffe4; npm
 untouched; incident logged in FLEET-OPS.log, skill-narrowing proposed, memory saved).

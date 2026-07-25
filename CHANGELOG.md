@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Version scheme**: Stable releases are `0.x.y`; `0.x.0-beta.N` / `-rc.N` are pre-releases; `0.1.0-wave.N` were internal wave-milestone previews.
 
+## [0.4.0] - 2026-07-25
+
+### Added
+- **Two-seat unified config** (HS-1): New `seats` configuration block allows swapping both worker AND orchestrator models from a single config block — eliminates split configuration and enables model experimentation without code changes. No-op default: existing installations remain unchanged (install-time safety).
+- **Live orchestrator-seat swap** (HS-2): Added `final_catch` gate in the wave loop with block/quarantine + crash-only degradation — orchestrator model can be swapped mid-flight without restarting the entire fleet. Failure path quarantines the wave and logs the incident.
+- **Microkernel architecture guide** (HS-3): New `docs/MICROKERNEL.md` explains the proof-of-concept model-swap seam, multi-model verification bounds, and a 60-second "swap a seat's model" quickstart for adopters.
+- **Scaffold completeness** (`npx aesop init`): driver/ directory now scaffolds on first run (was omitted, breaking adopter first-run experience). Added --force idempotent re-scaffold and child process timeout protection.
+
+### Security / Hardening
+- **IPv6 SSRF + DNS-resolution validation**: Requests to orchestrator's `base_url` now validate against IPv6 loopback and route-local semantics; DNS resolution blocked for external hostnames; `is_local` pinned to loopback only.
+- **API key environment variable allowlist** (primary enforcement): `api_key_env` rejects obvious secret patterns (AWS_SECRET, AZURE_KEY, etc.) and logs a loud NOTICE for non-standard names; fail-closed on read errors.
+- **Worker model field validation**: `worker.model` config field no longer silently ignored if orchestrator uses a non-Claude driver; now validated at load time.
+- **Wave execution timeouts**: Added `run_command` timeouts to prevent indefinite wave hangs on subprocess failures; child processes now respect explicit timeout boundaries (no more wave-level hard stops).
+- **CI merge-wait fail-closed**: `ci_merge_wait` gate now exits with explicit failure codes (not silent pass) on timeout or missing CI status, preventing accidental merges of untested code.
+- **Windows CI shard concurrency cap**: Reduced `max-parallel` for Windows runner to cut container contention flakes; Windows shard now stable on standard GitHub Actions.
+- **Path redaction completeness** (bench tooling): Bench results and logs redact full paths before reporting; `is_local` validation prevents accidental leakage of internal network topology.
+- **JSON-boundary fail-open holes patched**: Orchestrator/driver seam now validates JSON boundaries at worker<->orchestrator message crossings; malformed messages fail-closed (not skipped).
+
+### Fixed
+- **`npx aesop init` driver scaffolding**: Adopters running init on a fresh repo now get a complete driver/ directory tree; was silently omitting driver/, causing "module not found" on first wave.
+- **Scaffold idempotency + child timeouts**: Re-running init --force no longer corrupts existing templates; child scaffold processes timeout cleanly instead of hanging.
+- **Gate incumbent-validation**: Pre-gate validation of model incumbent (before swap attempt) catches incompatibilities early and logs them for forensics.
+
 ## [0.3.2] - 2026-07-23
 
 ### Fixed
