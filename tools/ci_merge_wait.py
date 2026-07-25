@@ -44,6 +44,7 @@ def run_gh_command(args):
     """
     Run gh CLI command; return parsed JSON or None if gh missing/error.
     Raises subprocess.CalledProcessError on non-zero exit.
+    N9 FIX: Raises TimeoutExpired on timeout (caller handles transient errors).
     """
     try:
         result = subprocess.run(
@@ -59,8 +60,8 @@ def run_gh_command(args):
             result.check_returncode()
         return json.loads(result.stdout) if result.stdout.strip() else None
     except subprocess.TimeoutExpired:
-        print("ERROR: gh command timed out")
-        sys.exit(1)
+        # N9 FIX: Re-raise timeout so caller (poll loop) can retry
+        raise
     except FileNotFoundError:
         print("ERROR: gh CLI not found on PATH")
         sys.exit(1)
@@ -236,20 +237,22 @@ def merge_pr(pr_number, merge_method, dry_run=False, head_ref_oid=None):
     F5 FIX: Uses --match-head-commit <sha> to ensure merge targets the exact commit
     whose CI checks passed, preventing TOCTOU race where a push between CI check and
     merge could sneak in an untested commit.
+    RS-B FIX: Requires headRefOid to be present (fail-closed). Does NOT merge unpinned.
     If dry_run is True, report what would be done without actually merging.
     Returns True on success, False on error.
     """
+    # RS-B FIX: Fail-closed if headRefOid is missing - require the SHA pin or abort
+    if not head_ref_oid:
+        print("ERROR: Cannot merge without SHA pin (headRefOid missing). Aborting merge to prevent TOCTOU race.")
+        return False
+
     if dry_run:
-        if head_ref_oid:
-            print(f"[DRY-RUN] Would merge PR #{pr_number} with --{merge_method} --match-head-commit {head_ref_oid}")
-        else:
-            print(f"[DRY-RUN] Would merge PR #{pr_number} with --{merge_method}")
+        print(f"[DRY-RUN] Would merge PR #{pr_number} with --{merge_method} --match-head-commit {head_ref_oid}")
         return True
 
     merge_cmd = ["gh", "pr", "merge", str(pr_number), f"--{merge_method}"]
     # F5 FIX: Add --match-head-commit to pin merge to the SHA that passed CI
-    if head_ref_oid:
-        merge_cmd.extend(["--match-head-commit", head_ref_oid])
+    merge_cmd.extend(["--match-head-commit", head_ref_oid])
 
     result = subprocess.run(
         merge_cmd,
@@ -673,7 +676,16 @@ def main():
             print(f"TIMEOUT: CI did not conclude within {args.timeout}s")
             sys.exit(3)
 
-        status = get_pr_status(args.pr_number)
+        # N9 FIX: Catch transient gh errors (CalledProcessError, TimeoutExpired) and retry
+        try:
+            status = get_pr_status(args.pr_number)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+            print(f"TRANSIENT ERROR: gh command failed ({type(e).__name__}), retrying...")
+            # Treat as "status unknown this tick", continue polling
+            print(f"CI PENDING ({elapsed:.0f}s elapsed)... waiting {args.poll}s")
+            time.sleep(args.poll)
+            continue
+
         if status is None:
             print("ERROR: gh CLI check failed")
             sys.exit(1)
@@ -691,7 +703,16 @@ def main():
         elif ci_status == "success":
             # SUCCESS: CI is green, re-check immediately before proceeding
             print(f"CI GREEN: All checks passed. Re-checking status before merge...")
-            final_check = get_pr_status(args.pr_number)
+            # N9 FIX: Also catch transient errors on final check
+            try:
+                final_check = get_pr_status(args.pr_number)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                print(f"TRANSIENT ERROR: final gh check failed ({type(e).__name__}), retrying...")
+                # Treat as status change, go back to polling
+                print(f"CI PENDING ({elapsed:.0f}s elapsed)... waiting {args.poll}s")
+                time.sleep(args.poll)
+                continue
+
             if final_check is None:
                 print("ERROR: final status check failed")
                 sys.exit(1)
@@ -716,14 +737,23 @@ def main():
             else:
                 print(f"CI CONFIRMED GREEN. Merging PR #{args.pr_number}...")
 
-            if merge_pr(args.pr_number, args.merge_method, dry_run=args.dry_run, head_ref_oid=head_ref_oid):
+            # N9 FIX: Catch TimeoutExpired from merge subprocess and treat as transient error
+            try:
+                merge_result = merge_pr(args.pr_number, args.merge_method, dry_run=args.dry_run, head_ref_oid=head_ref_oid)
+            except subprocess.TimeoutExpired:
+                print(f"TRANSIENT ERROR: merge command timed out, retrying...")
+                print(f"CI PENDING ({elapsed:.0f}s elapsed)... waiting {args.poll}s")
+                time.sleep(args.poll)
+                continue
+
+            if merge_result:
                 if args.dry_run:
                     print(f"[DRY-RUN] PR #{args.pr_number} merge command would succeed")
                 else:
                     print(f"MERGED: PR #{args.pr_number} merged successfully")
                 sys.exit(0)
             else:
-                print("ERROR: merge failed (PR state changed?)")
+                print("ERROR: merge failed (PR state changed? or missing SHA pin?)")
                 sys.exit(1)
 
         # Still pending: wait and retry

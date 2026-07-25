@@ -884,6 +884,166 @@ class TestCiMergeWait(unittest.TestCase):
             self.assertEqual(ci_status, "pending",
                             f"F6 FIX: conclusion={unknown_conclusion} should be PENDING")
 
+    def test_n9_transient_gh_error_raises_called_process_error(self):
+        """Test N9 (P3): Transient gh error can be caught by caller.
+
+        FINDING: run_gh_command raises CalledProcessError on non-zero exit with comment
+        'will be caught by caller' but no caller catches it. One transient gh/network/
+        rate-limit error mid-poll → unhandled traceback, exit 1 (tool abandons job).
+
+        FIX: The poll loop must catch CalledProcessError inside the loop and treat as
+        'status unknown this tick', keep polling rather than crashing.
+
+        This test verifies that run_gh_command raises CalledProcessError (can be caught).
+        """
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with patch("subprocess.run") as mock_run:
+            mock_result = MagicMock()
+            mock_result.returncode = 1
+            mock_result.stderr = "transient error"
+            mock_result.stdout = ""
+            mock_result.check_returncode.side_effect = subprocess.CalledProcessError(1, ["gh"])
+            mock_run.return_value = mock_result
+
+            # run_gh_command should raise CalledProcessError on non-zero exit
+            with self.assertRaises(subprocess.CalledProcessError):
+                module.run_gh_command(["gh", "pr", "view", "123", "--json", "mergeable"])
+
+    def test_n9_timeout_expired_can_be_raised(self):
+        """Test N9 (P3): TimeoutExpired can be raised by subprocess.run.
+
+        FINDING: merge_pr's subprocess.run(timeout=30) can raise uncaught TimeoutExpired,
+        causing unhandled exception and tool exit.
+
+        FIX: The poll loop must catch TimeoutExpired inside and retry.
+
+        This test documents that TimeoutExpired can occur from subprocess.run.
+        """
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with patch("subprocess.run") as mock_run:
+            # Simulate timeout
+            mock_run.side_effect = subprocess.TimeoutExpired(["gh"], 30)
+
+            # merge_pr should handle this (after fix, the main loop catches it)
+            # For now, this documents that TimeoutExpired can occur
+            with self.assertRaises(subprocess.TimeoutExpired):
+                module.merge_pr(123, "merge", head_ref_oid="abc123")
+
+    def test_rs_b_merge_requires_head_ref_oid_documentation(self):
+        """Test RS-B round-2: merge_pr MUST NOT proceed when headRefOid is missing.
+
+        FINDING: If headRefOid is None/absent, merge_pr should NOT proceed (the old bug
+        was that it would proceed WITHOUT --match-head-commit, regressing to TOCTOU).
+
+        FIX: If headRefOid is unavailable, fail-CLOSED. Return False and do not merge unpinned.
+
+        This test verifies the fix: merge without headRefOid returns False (fails).
+        """
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with patch("subprocess.run") as mock_run:
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            mock_result.stdout = ""
+            mock_run.return_value = mock_result
+
+            # Call merge_pr with headRefOid=None
+            result = module.merge_pr(123, "merge", head_ref_oid=None)
+
+            # RS-B FIX: merge_pr should return False (fail-closed)
+            self.assertFalse(result,
+                "RS-B FIX: merge without headRefOid must return False (fail-closed)")
+
+            # Verify subprocess.run was NOT called (merge was rejected before attempting it)
+            self.assertFalse(mock_run.called,
+                "RS-B FIX: merge without headRefOid must not call subprocess.run")
+
+    def test_f5_merge_with_valid_head_ref_oid_includes_sha_pin(self):
+        """Test F5: Verify merge_pr WITH headRefOid correctly includes --match-head-commit flag.
+
+        This test verifies the command includes the SHA-pin flag when headRefOid is provided.
+        """
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with patch("subprocess.run") as mock_run:
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            mock_result.stdout = ""
+            mock_run.return_value = mock_result
+
+            # Call merge_pr with a valid headRefOid
+            result = module.merge_pr(123, "merge", head_ref_oid="abc123def456")
+
+            self.assertTrue(result, "merge_pr with valid headRefOid should succeed")
+
+            # Verify --match-head-commit was included
+            call_args = mock_run.call_args
+            gh_command = call_args[0][0] if call_args[0] else []
+
+            self.assertIn("--match-head-commit", gh_command,
+                "F5 FIX: gh pr merge should include --match-head-commit")
+            self.assertIn("abc123def456", gh_command,
+                "F5 FIX: gh pr merge should include the SHA value")
+
+    def test_f5_sha_pin_command_structure(self):
+        """Test F5 SHA-pin test enhancement: Verify actual gh command structure.
+
+        FINDING: The existing SHA-pin test only asserts merge_pr exists + docstring mentions
+        match-head-commit. Deleting the flag fails 0 tests (tautological test).
+
+        FIX: Assert the actual `gh pr merge` command includes `--match-head-commit <sha>`.
+        """
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ci_merge_wait", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with patch("subprocess.run") as mock_run:
+            mock_result = MagicMock()
+            mock_result.returncode = 0
+            mock_result.stdout = ""
+            mock_run.return_value = mock_result
+
+            sha = "f1a2b3c4d5e6"
+            module.merge_pr(456, "squash", head_ref_oid=sha)
+
+            self.assertTrue(mock_run.called, "subprocess.run should be called")
+            call_args = mock_run.call_args
+            cmd = call_args[0][0] if call_args[0] else []
+
+            # Verify command structure
+            self.assertEqual(cmd[0], "gh")
+            self.assertEqual(cmd[1], "pr")
+            self.assertEqual(cmd[2], "merge")
+            self.assertIn("456", cmd)
+            self.assertIn("--squash", cmd)
+
+            # REAL TEST: Verify --match-head-commit and SHA
+            self.assertIn("--match-head-commit", cmd,
+                "F5 FIX: Command must include --match-head-commit flag")
+
+            # Verify SHA follows the flag
+            try:
+                sha_index = cmd.index("--match-head-commit")
+                self.assertEqual(cmd[sha_index + 1], sha,
+                    "F5 FIX: SHA value should immediately follow --match-head-commit")
+            except (ValueError, IndexError):
+                self.fail("F5 FIX: --match-head-commit flag and SHA must be in correct positions")
+
     def test_f5_merge_sha_pinning_verification(self):
         """Test F5 (MED): Verify merge is SHA-pinned to prevent TOCTOU.
 
