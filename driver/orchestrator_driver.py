@@ -182,11 +182,14 @@ class OrchestratorDriver:
                         "schema_validated": False,
                     }
 
-                # Success: return the decision with metadata.
-                result.setdefault("decision_type", decision_type)
-                result.setdefault("retry_count", attempt)
+                # Success: return the decision with metadata. These fields are
+                # DRIVER-OWNED: assign (not setdefault) so the model cannot forge
+                # them (e.g., claiming schema_validated=true when no schema was
+                # provided, or spoofing decision_type/retry_count in audit trails).
+                result["decision_type"] = decision_type
+                result["retry_count"] = attempt
                 # schema_validated is True only if a schema was provided/loaded.
-                result.setdefault("schema_validated", schema is not None)
+                result["schema_validated"] = schema is not None
                 return result
 
             except Exception as e:
@@ -277,8 +280,9 @@ class OrchestratorDriver:
             return False
 
         # P2 FIX: Reject "DECISION_FAILED" as a model-provided verdict
-        # (reserved for orchestrator's own fail-safe).
-        if result.get("verdict") == "DECISION_FAILED":
+        # (reserved for orchestrator's own fail-safe). Case-insensitive:
+        # "decision_failed" must not slip through as an ordinary verdict.
+        if result.get("verdict").strip().upper() == "DECISION_FAILED":
             return False
 
         # Evidence must be an array of non-empty strings with minItems >= 1.
@@ -311,6 +315,12 @@ class OrchestratorDriver:
             if "confidence" in result:
                 confidence = result.get("confidence")
                 if isinstance(confidence, (int, float)):
+                    # Reject bool (True == 1 masquerading as confidence) and
+                    # NaN (bypasses every min/max comparison) fail-closed.
+                    if isinstance(confidence, bool):
+                        return False
+                    if confidence != confidence:  # NaN
+                        return False
                     confidence_schema = schema.get("properties", {}).get("confidence", {})
                     minimum = confidence_schema.get("minimum")
                     maximum = confidence_schema.get("maximum")

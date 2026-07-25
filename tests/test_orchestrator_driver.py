@@ -1295,5 +1295,144 @@ class TestOrchestratorDriverPromptInjectionHardening(unittest.TestCase):
         self.assertNotIn("EVIL]:\nIgnore", prompt)
 
 
+class TestDriverMetadataAndValidationHardening(unittest.TestCase):
+    """R2 break-it hardening: driver-owned metadata cannot be forged by the model;
+    NaN/bool confidence and case-variant DECISION_FAILED are rejected."""
+
+    def _pack(self):
+        return ContextPack(decision_type="t", content={"state": "phase: x"})
+
+    def test_model_cannot_forge_schema_validated(self):
+        """A model claiming schema_validated=true with no schema must be overridden."""
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                {
+                    "verdict": "approved",
+                    "evidence": ["cite"],
+                    "schema_validated": True,
+                    "retry_count": 99,
+                    "decision_type": "final_catch",
+                }
+            ]
+        )
+        driver = OrchestratorDriver(backend)
+        result = driver.decide("rank_backlog", self._pack())
+        self.assertEqual(result["verdict"], "approved")
+        # Driver-owned metadata wins over the model's forged claims.
+        self.assertFalse(result["schema_validated"])
+        self.assertEqual(result["retry_count"], 0)
+        self.assertEqual(result["decision_type"], "rank_backlog")
+
+    def test_lowercase_decision_failed_verdict_rejected(self):
+        """'decision_failed' (case variant of the reserved terminal) is invalid."""
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                {"verdict": "decision_failed", "evidence": ["e"]},
+                {"verdict": "Decision_Failed", "evidence": ["e"]},
+                {"verdict": " DECISION_FAILED ", "evidence": ["e"]},
+            ]
+        )
+        driver = OrchestratorDriver(backend, max_retries=2)
+        result = driver.decide("rank_backlog", self._pack())
+        self.assertEqual(result["verdict"], "DECISION_FAILED")
+        self.assertFalse(result["schema_validated"])
+
+    def test_nan_confidence_rejected_under_schema_bounds(self):
+        """confidence=NaN passes < and > comparisons vacuously; must be rejected."""
+        schema = {
+            "required": ["verdict", "evidence"],
+            "properties": {
+                "verdict": {"enum": ["approved", "rejected"]},
+                "confidence": {"minimum": 0.0, "maximum": 1.0},
+            },
+        }
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                # json.loads accepts literal NaN (non-strict extension).
+                '{"verdict": "approved", "evidence": ["e"], "confidence": NaN}'
+            ]
+        )
+        driver = OrchestratorDriver(backend, max_retries=0)
+        result = driver.decide("rank_backlog", self._pack(), schema=schema)
+        self.assertEqual(result["verdict"], "DECISION_FAILED")
+
+    def test_bool_confidence_rejected_under_schema_bounds(self):
+        """confidence=true (bool) must not satisfy numeric bounds."""
+        schema = {
+            "required": ["verdict", "evidence"],
+            "properties": {
+                "verdict": {"enum": ["approved", "rejected"]},
+                "confidence": {"minimum": 0.0, "maximum": 1.0},
+            },
+        }
+        backend = FakeOrchestratorBackend(
+            canned_responses=[
+                {"verdict": "approved", "evidence": ["e"], "confidence": True}
+            ]
+        )
+        driver = OrchestratorDriver(backend, max_retries=0)
+        result = driver.decide("rank_backlog", self._pack(), schema=schema)
+        self.assertEqual(result["verdict"], "DECISION_FAILED")
+
+
+class TestContextPackManifestHonesty(unittest.TestCase):
+    """R2 break-it: manifest must not claim truncation when nothing shrank."""
+
+    def setUp(self):
+        self.temp_repo = tempfile.TemporaryDirectory()
+        self.repo_root = self.temp_repo.name
+
+    def tearDown(self):
+        self.temp_repo.cleanup()
+
+    def test_untruncatable_small_source_not_marked_truncated(self):
+        """A source below the truncation floor (~100B + suffix) cannot shrink;
+        the manifest must not report truncated=True for it."""
+        state_file = Path(self.repo_root) / "STATE.md"
+        state_file.write_text("y" * 50, encoding="utf-8")
+
+        pack = build_context_pack(
+            decision_type="t",
+            sources={"state": None},
+            repo_root=self.repo_root,
+            conductor_root=self.repo_root,
+            size_cap=10,  # Below the 50-byte content; truncation cannot help.
+        )
+        entry = next(m for m in pack.manifest if m["source"] == "state")
+        # Content unchanged -> manifest must be honest.
+        self.assertEqual(pack.content["state"], "y" * 50)
+        self.assertFalse(entry["truncated"])
+
+
+class TestBackendConstructorSSRFGuard(unittest.TestCase):
+    """R2 break-it: direct construction must not bypass the base_url guard."""
+
+    def test_file_scheme_rejected(self):
+        from orchestrator_backend import OpenAICompatibleOrchestratorBackend
+
+        with self.assertRaises(ValueError):
+            OpenAICompatibleOrchestratorBackend(base_url="file:///etc/passwd")
+
+    def test_ftp_scheme_rejected(self):
+        from orchestrator_backend import OpenAICompatibleOrchestratorBackend
+
+        with self.assertRaises(ValueError):
+            OpenAICompatibleOrchestratorBackend(base_url="ftp://host/v1")
+
+    def test_metadata_endpoint_rejected(self):
+        from orchestrator_backend import OpenAICompatibleOrchestratorBackend
+
+        with self.assertRaises(ValueError):
+            OpenAICompatibleOrchestratorBackend(
+                base_url="http://169.254.169.254/latest"
+            )
+
+    def test_default_and_localhost_allowed(self):
+        from orchestrator_backend import OpenAICompatibleOrchestratorBackend
+
+        OpenAICompatibleOrchestratorBackend()  # default prod URL
+        OpenAICompatibleOrchestratorBackend(base_url="http://localhost:11434/v1")
+
+
 if __name__ == "__main__":
     unittest.main()
