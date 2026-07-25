@@ -26,6 +26,10 @@ import urllib.request
 # Type alias documenting the transport callable contract.
 Transport = callable  # (payload: dict) -> dict
 
+# Maximum response size (100 KB) to prevent OOM from hostile/broken endpoints.
+# Enforced at the read() level BEFORE parsing to fail-safe on excessive responses.
+MAX_RESPONSE_SIZE = 100 * 1024  # 100KB in bytes
+
 
 class _AuthStripRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Custom redirect handler that strips Authorization on cross-origin redirects.
@@ -138,7 +142,16 @@ def default_openai_transport(
         opener = urllib.request.build_opener(_AuthStripRedirectHandler())
         with opener.open(request, timeout=timeout_s) as response:
             status = response.status
-            body = response.read().decode("utf-8")
+            # Cap response read at MAX_RESPONSE_SIZE bytes before parsing.
+            # Read MAX_RESPONSE_SIZE+1 bytes to detect if response exceeds limit.
+            body_bytes = response.read(MAX_RESPONSE_SIZE + 1)
+            if len(body_bytes) > MAX_RESPONSE_SIZE:
+                raise RuntimeError(
+                    f"Response size limit exceeded: {len(body_bytes)} bytes > "
+                    f"{MAX_RESPONSE_SIZE} bytes ({MAX_RESPONSE_SIZE // 1024}KB). "
+                    f"The response is too large."
+                )
+            body = body_bytes.decode("utf-8")
 
         # Classify non-2xx as an error.
         if not (200 <= status < 300):
@@ -156,8 +169,8 @@ def default_openai_transport(
         error_message = None
         if exc.fp:
             try:
-                # Read bounded response body (~500 bytes) to avoid memory issues.
-                error_body = exc.fp.read(500).decode("utf-8", errors="replace")
+                # Read bounded response body (cap at MAX_RESPONSE_SIZE).
+                error_body = exc.fp.read(MAX_RESPONSE_SIZE + 1).decode("utf-8", errors="replace")
                 error_data = json.loads(error_body)
                 if isinstance(error_data, dict) and "error" in error_data:
                     error_obj = error_data["error"]
