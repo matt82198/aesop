@@ -60,7 +60,7 @@
 ### Item 13 is Mechanistic/Shallow (Single-Hop)
 
 **Evidence provided (neutral facts only)**:
-- Original bug produced: /c/Users/matt8/aesop`whoami` (backtick present)
+- Original bug produced: <REPO>`whoami` (backtick present)
 - Fixed code: no backticks
 - Regression test: assert '`' not in result
 - Test assertion False → test fails; True → test passes
@@ -127,7 +127,7 @@ Fact: adding a directory name to the health-check whitelist prevents that direct
 
 ### Item 13 (fixreview-backtick-test)
 ```
-Evidence fact: the original bug in path derivation produced output containing backticks: /c/Users/matt8/aesop\`whoami`
+Evidence fact: the original bug in path derivation produced output containing backticks: <REPO>\`whoami`
 Evidence fact: in the fixed (corrected) code path, the output does not contain backticks
 Test code: the regression test contains assert '`' not in result
 Mechanism: if the assertion '`' not in result is False (i.e., backtick IS present), the test fails

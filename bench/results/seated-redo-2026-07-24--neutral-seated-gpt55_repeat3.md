@@ -53,7 +53,7 @@ Valid verdicts: 48/48 (100.0%)
 ## Stale-Label Analysis
 
 ### Item 7: hardcoded-username
-**Finding-time label**: real_defect (docs shipped with path 'Users/matt8')
+**Finding-time label**: real_defect (docs shipped with path '<HOME>')
 **Current state**: FIXED (docs/INSTALL.md has no hardcoded paths; matt8 hits are npm handle)
 **Seated modal verdict**: [see table above]
 
