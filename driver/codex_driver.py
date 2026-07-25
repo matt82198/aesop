@@ -548,7 +548,11 @@ class CodexDriver(AgentDriver):
             # 9. Apply (validate ALL before writing ANY).
             written_paths = []
             for path_str, new_contents in files_to_write:
-                full_path = Path(request.workdir) / path_str
+                # Normalize separators for the write target: on POSIX a backslash
+                # is a literal filename char, so an owned path declared "src\c.py"
+                # must become "src/c.py" before Path() (mirrors the read path above).
+                # written_paths keeps the canonical path_str for record-keeping.
+                full_path = Path(request.workdir) / path_str.replace("\\", "/")
                 try:
                     full_path.write_text(new_contents, encoding="utf-8")
                     written_paths.append(path_str)
