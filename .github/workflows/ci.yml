@@ -165,6 +165,9 @@ jobs:
     timeout-minutes: 15
     strategy:
       fail-fast: false
+      max-parallel: 2
+      # Serializing shard execution reduces socket/spawn TimeoutError contention on Windows CI runners.
+      # All shards still run (no skips) and the windows aggregator still requires all to pass.
       matrix:
         python-shard: [0, 1, 2, 3]
     steps:
