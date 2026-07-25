@@ -245,19 +245,26 @@ class AdjudicationGate:
         """Deterministically decide if this call should be spot-checked.
 
         Spot-check is seeded per ITEM (not per decision_type). Each distinct item
-        (context_pack with different content) gets an independent draw at the
-        configured fraction. The same item content always produces the same decision
-        (deterministic, reproducible across runs). Different items produce independent
-        decisions, so approximately spot_check_frac of all items get sampled.
+        (context_pack with different content AND different evidence) gets an independent
+        draw at the configured fraction. The same item (same content + same evidence)
+        always produces the same decision (deterministic, reproducible across runs).
+        Different items produce independent decisions, so approximately spot_check_frac
+        of all items get sampled.
+
+        FIX (BL2 Finding 1): Fold evidence into the canonical digest. In production,
+        content is the SHARED file-brain (identical across all findings in a wave);
+        the per-item distinguisher is pack.evidence. Without folding evidence, every
+        item in a wave hashes identically → spot-check is 0% or 100% of the WAVE.
+        With evidence, spot-check is ~spot_check_frac per ITEM (independent draws).
 
         Args:
             decision_type: The decision type string.
-            context_pack: The context pack, used to build a stable content digest.
+            context_pack: The context pack, used to build a stable content+evidence digest.
 
         Returns:
             True if this call should be escalated for audit, False otherwise.
         """
-        # Build a stable per-item key from (decision_type + context_pack content).
+        # Build a stable per-item key from (decision_type + context_pack content + evidence).
         # Extract content digest from the pack (try .content attr, fall back to str).
         canonical = decision_type + "|"
         if hasattr(context_pack, "content") and isinstance(context_pack.content, dict):
@@ -273,6 +280,25 @@ class AdjudicationGate:
         else:
             # No .content attr; use string representation.
             canonical += str(context_pack)
+
+        # FIX (BL2): Fold evidence into the canonical digest so spot-check is per-item.
+        canonical += "|"
+        if hasattr(context_pack, "evidence"):
+            evidence = context_pack.evidence
+            if isinstance(evidence, dict):
+                # Sorted JSON of evidence for stable serialization.
+                try:
+                    evidence_text = json.dumps(
+                        sorted(evidence.items()), separators=(",", ":")
+                    )
+                    canonical += evidence_text
+                except (TypeError, ValueError):
+                    # If JSON encoding fails, fall back to stable repr.
+                    canonical += repr(sorted(evidence.items()) if isinstance(evidence, dict) else evidence)
+            else:
+                # Non-dict evidence: convert to stable string.
+                canonical += repr(evidence)
+        # If no evidence attr, leave it blank (canonical += "")
 
         # Hash the canonical key to get a deterministic integer.
         hash_val = int(hashlib.md5(canonical.encode()).hexdigest(), 16)

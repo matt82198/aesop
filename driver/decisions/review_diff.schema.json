@@ -3,7 +3,7 @@
   "title": "Review Diff Decision",
   "description": "Orchestrator S2 decision: given a code diff from a worker agent, determine: does it correctly implement the requested change? Are there defects, style issues, or oversights? Should it be merged or sent back for revision?",
   "type": "object",
-  "required": ["verdict", "evidence"],
+  "required": ["verdict", "evidence", "confidence"],
   "properties": {
     "decision_type": {
       "type": "string",

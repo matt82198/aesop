@@ -3,7 +3,7 @@
   "title": "Synthesize Briefs Decision",
   "description": "Orchestrator S2 decision: consume multiple audit briefs (from independent lenses: security, correctness, UX, ideation, etc.) and produce a consolidated context pack: unified findings list, intra-lens relationships, priority ordering for the PM/orchestrator, and next-steps clarifications.",
   "type": "object",
-  "required": ["verdict", "evidence"],
+  "required": ["verdict", "evidence", "confidence"],
   "properties": {
     "decision_type": {
       "type": "string",

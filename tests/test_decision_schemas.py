@@ -325,6 +325,28 @@ class TestDecisionSchemas(unittest.TestCase):
                 self.assertGreater(len(title), 5, f"{schema_file}: title too short")
                 self.assertGreater(len(description), 10, f"{schema_file}: description too short")
 
+    def test_each_schema_requires_confidence_field(self):
+        """BL2 Finding 2: Each schema must REQUIRE 'confidence' field.
+
+        Confidence is load-bearing in the adjudication gate: a missing confidence
+        defaults to 0.0, which always escalates. Gate economics collapse when a
+        schema-compliant response can omit confidence.
+
+        FIX: Add 'confidence' to the required array in all 6 decision schemas.
+        This makes schema-invalid responses (missing confidence) escalate to DECISION_FAILED,
+        rather than silently defaulting to 0.0 and escalating via the gate's low-conf rule.
+        """
+        for schema_file in self.schema_files:
+            with self.subTest(schema=schema_file.name):
+                schema = json.loads(schema_file.read_text(encoding='utf-8'))
+                required = schema.get("required", [])
+                self.assertIn(
+                    "confidence",
+                    required,
+                    f"{schema_file}: 'confidence' not in required array. "
+                    "BL2: gate economics collapse when a schema-compliant response can omit it."
+                )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
