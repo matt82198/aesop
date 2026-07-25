@@ -523,6 +523,7 @@ def run_wave_scheduler(
     dry_run: bool = False,
     driver: Optional[AgentDriver] = None,
     state_dir: Optional[Path] = None,
+    orchestrator_backend: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Run one complete wave cycle (intake -> manifest -> dispatch -> report).
 
@@ -532,6 +533,13 @@ def run_wave_scheduler(
         dry_run: if True, print manifest without dispatch
         driver: AgentDriver instance (defaults to FakeDriver for testing)
         state_dir: state directory (defaults to ./state)
+        orchestrator_backend: optional OrchestratorBackend for the decision
+            seat (HS-2). None (default) keeps the live harness as the
+            orchestrator -- byte-identical to pre-HS-2, no key required.
+            A live backend (see resolve_orchestrator_backend) routes the
+            final_catch decision per verified item through run_wave's
+            Phase 6; verdict 'block' stops that item from shipping. The
+            Report JSON shape is IDENTICAL either way (swap transparency).
 
     Returns:
         Report dict (phase, wave_id, items_selected, items_shipped, etc.)
@@ -697,6 +705,7 @@ def run_wave_scheduler(
             state_dir=state_dir,
             git={"expectTopLevel": str(REPO)},
             resume_journal=True,
+            orchestrator_backend=orchestrator_backend,
         )
 
         # P2c: verify no merged=True, record merged=false
@@ -904,6 +913,73 @@ def resolve_worker_driver(
         return None, f"failed to build driver from config: {exc}"
 
 
+def resolve_orchestrator_backend(
+    config_path: Optional[str] = None,
+    execute: bool = False,
+) -> Tuple[Optional[Any], Optional[str]]:
+    """Resolve the orchestrator-seat backend (HS-2): config-first, opt-in.
+
+    Resolution:
+      - No config file, no seats block, no seats.orchestrator, or backend
+        'harness'/'claude' -> (None, None): the live harness stays the
+        orchestrator. run_wave's Phase 6 is byte-identical to pre-HS-2 --
+        no OpenAI backend constructed, no key required.
+      - seats.orchestrator backend 'openai-compatible' -> a live
+        OpenAICompatibleOrchestratorBackend built via
+        build_orchestrator_backend(load_backend_config()). Construction is
+        offline-safe (no key read until decide_call time); with execute=True
+        a hosted (non-is_local) seat requires its api_key_env to be set,
+        mirroring the worker-seat gate. Dry runs never require a key.
+      - Malformed config -> (None, error_message): fail loud, never a
+        silent fallback to the harness.
+
+    Returns:
+        (backend_or_None, error_message_or_None).
+    """
+    key_env_default = "OPENAI" + "_" + "API" + "_" + "KEY"
+
+    try:
+        from backend_config import build_orchestrator_backend, load_backend_config
+    except ImportError:
+        return None, "backend_config.py not found"
+
+    try:
+        config = load_backend_config(config_path)
+    except (TypeError, ValueError) as exc:
+        return None, f"invalid aesop.config.json: {exc}"
+
+    seats = config.get("seats")
+    orch_seat = seats.get("orchestrator") if isinstance(seats, dict) else None
+    if not isinstance(orch_seat, dict) or not orch_seat:
+        return None, None
+    if orch_seat.get("backend", "harness") in ("harness", "claude"):
+        return None, None
+
+    try:
+        backend = build_orchestrator_backend(config)
+    except (TypeError, ValueError, RuntimeError) as exc:
+        return None, f"failed to build orchestrator backend from config: {exc}"
+
+    # Defensive: the builder returns the null harness backend for any
+    # residual default path -> that is the no-op seat, pass None through.
+    try:
+        from orchestrator_backend import HarnessOrchestratorBackend
+        if isinstance(backend, HarnessOrchestratorBackend):
+            return None, None
+    except ImportError:
+        pass
+
+    if execute and not bool(orch_seat.get("is_local", False)):
+        key_env = orch_seat.get("api_key_env") or key_env_default
+        if not os.environ.get(key_env):
+            return None, (
+                f"configured seats.orchestrator with --execute requires "
+                f"{key_env} environment variable"
+            )
+
+    return backend, None
+
+
 def main():
     """CLI entry point (HS-1: config-driven worker seat; --driver overrides)."""
     parser = argparse.ArgumentParser(
@@ -966,6 +1042,23 @@ def main():
         print(f"ERROR: {driver_error}", file=sys.stderr)
         sys.exit(1)
 
+    # HS-2: orchestrator seat from config (seats.orchestrator). None = the
+    # live harness stays the orchestrator (byte-identical default).
+    orchestrator_backend, orch_error = resolve_orchestrator_backend(
+        config_path=args.config,
+        execute=args.execute,
+    )
+    if orch_error:
+        print(f"ERROR: {orch_error}", file=sys.stderr)
+        sys.exit(1)
+    if orchestrator_backend is not None:
+        print(
+            "[wave_scheduler] orchestrator seat: "
+            f"{type(orchestrator_backend).__name__} "
+            f"(model={getattr(orchestrator_backend, 'model', None)})",
+            file=sys.stderr,
+        )
+
     # Run scheduler
     report = run_wave_scheduler(
         tracker_path=args.tracker,
@@ -973,6 +1066,7 @@ def main():
         dry_run=dry_run,
         driver=driver,
         state_dir=Path(args.state_dir) if args.state_dir else None,
+        orchestrator_backend=orchestrator_backend,
     )
 
     # Output report as JSON

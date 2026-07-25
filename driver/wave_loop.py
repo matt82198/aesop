@@ -415,6 +415,138 @@ def _release_stale_leases(state_dir: str, journal_state: Dict[str, Dict[str, Any
         pass
 
 
+def _is_live_orchestrator_backend(backend: Any) -> bool:
+    """True when a passed orchestrator backend is a REAL swapped seat.
+
+    None and the null HarnessOrchestratorBackend both mean "the live harness
+    is the orchestrator" (the no-op default): the wave engine must behave
+    byte-identically to pre-HS-2 in that case.
+    """
+    if backend is None:
+        return False
+    try:
+        from orchestrator_backend import HarnessOrchestratorBackend
+    except ImportError:
+        # Cannot classify; an explicitly passed backend is treated as live
+        # (fail loud downstream rather than silently ignoring the config).
+        return True
+    return not isinstance(backend, HarnessOrchestratorBackend)
+
+
+def _orchestrator_final_catch(
+    backend: Any,
+    items: List[Dict[str, Any]],
+    result: Dict[str, Any],
+    state_dir: Optional[str] = None,
+) -> None:
+    """HS-2: route the pre-ship final-catch decision through a configured
+    orchestrator seat (Phase 6, replacing 'deferred' ONLY when a seat is
+    configured).
+
+    Semantics (conservative, incumbent-safe):
+      - Only test-VERIFIED items are reviewed (failed items already do not
+        ship; they consume no seat decisions).
+      - verdict 'merge'  -> approved; item ships as today.
+      - verdict 'block'  -> verified flipped False; item does NOT ship;
+        journal updated so a resume cannot skip-and-ship it.
+      - 'escalate' / 'undetermined' / DECISION_FAILED -> degrade to today's
+        behavior (ship to branch; merge stays manual downstream) with an
+        honest per-item record. A seat outage NEVER fabricates a verdict
+        and NEVER blocks a test-proven item (crash-only degradation).
+
+    Mutates result in place: per-item 'final_catch' + 'adversarial_review',
+    plus a wave-level 'orchestrator_review' summary block.
+    """
+    from context_pack import ContextPack
+    from orchestrator_driver import OrchestratorDriver
+
+    orch = OrchestratorDriver(backend, schema_dir=str(DRIVER_DIR))
+    review = {
+        "seat": type(backend).__name__,
+        "model": getattr(backend, "model", None),
+        "decisions": 0,
+        "blocked": [],
+        "decision_failed": [],
+    }
+    slug_to_item = {
+        item.get("slug", f"item-{i}"): item for i, item in enumerate(items)
+    }
+    result["adversarial_review"] = "orchestrator_final_catch"
+
+    for item_result in result["built"]:
+        if not item_result.get("verified", False):
+            item_result["adversarial_review"] = "skipped_not_verified"
+            continue
+
+        slug = item_result.get("slug", "unknown")
+        item = slug_to_item.get(slug, {})
+        evidence = {
+            "item": json.dumps(
+                {
+                    "slug": slug,
+                    "prompt_excerpt": str(item.get("prompt", ""))[:1000],
+                    "ownsFiles": list(item.get("ownsFiles", [])),
+                    "filesWritten": item_result.get("filesWritten", []),
+                    "repairs": item_result.get("repairs", 0),
+                },
+                sort_keys=True,
+            ),
+            "verification_results": json.dumps(
+                {
+                    "test_passed": True,
+                    "test_exit_code": item_result.get("testExit"),
+                    "spot_check_failed": bool(
+                        item_result.get("spot_check_failed", False)
+                    ),
+                },
+                sort_keys=True,
+            ),
+        }
+        pack = ContextPack(
+            decision_type="final_catch",
+            sources_requested=(),
+            evidence=evidence,
+        )
+        try:
+            decision = orch.decide("final_catch", pack)
+        except Exception as exc:
+            # decide() never raises by contract; belt and braces anyway.
+            decision = {
+                "verdict": "DECISION_FAILED",
+                "evidence": [f"decide() raised: {exc}"],
+            }
+        review["decisions"] += 1
+        verdict = str(decision.get("verdict", "DECISION_FAILED"))
+        item_result["final_catch"] = verdict
+
+        if verdict == "block":
+            item_result["verified"] = False
+            item_result["adversarial_review"] = "blocked_by_orchestrator"
+            item_result["error"] = "orchestrator final_catch verdict: block"
+            review["blocked"].append(slug)
+            if state_dir:
+                _write_journal_entry(
+                    state_dir,
+                    slug,
+                    "final_catch_blocked",
+                    {
+                        "verified": False,
+                        "testExit": item_result.get("testExit"),
+                        "final_catch": "block",
+                    },
+                    repo=item.get("repo"),
+                )
+        elif verdict == "merge":
+            item_result["adversarial_review"] = "approved_by_orchestrator"
+        elif verdict in ("escalate", "undetermined"):
+            item_result["adversarial_review"] = verdict
+        else:  # DECISION_FAILED (or anything unrecognized -> fail-safe path)
+            item_result["adversarial_review"] = "decision_failed_deferred"
+            review["decision_failed"].append(slug)
+
+    result["orchestrator_review"] = review
+
+
 def run_wave(
     driver: AgentDriver,
     manifest: Dict[str, Any],
@@ -422,6 +554,7 @@ def run_wave(
     state_dir: Optional[str] = None,
     git: Optional[Dict[str, str]] = None,
     resume_journal: bool = False,
+    orchestrator_backend: Any = None,
 ) -> Dict[str, Any]:
     """Run a full multi-item wave through an AgentDriver backend.
 
@@ -443,6 +576,15 @@ def run_wave(
              ship phase is skipped.
         resume_journal: if True and state_dir exists, load journal and skip items
                        marked as verified (but re-run their tests for trust-but-verify).
+        orchestrator_backend: optional OrchestratorBackend for the DECISION seat
+                       (HS-2). None or the null HarnessOrchestratorBackend means
+                       the live harness stays the orchestrator: Phase 6 remains
+                       'deferred', byte-identical to pre-HS-2 (no key required,
+                       no backend called). A live backend (e.g. from
+                       build_orchestrator_backend(load_backend_config()) with a
+                       seats.orchestrator block) routes a final_catch decision
+                       per verified item through OrchestratorDriver.decide();
+                       verdict 'block' stops that item from shipping.
 
     Returns:
         dict with structure:
@@ -1012,13 +1154,20 @@ def run_wave(
                     item_result["spot_check_failed"] = True
 
     # ========================================================================
-    # PHASE 6: Adversarial review (deferred, not yet enforced)
+    # PHASE 6: Adversarial review / orchestrator final catch (HS-2)
     # ========================================================================
-    # Adversarial review is not yet implemented; mark all as deferred.
-    # (TODO in a later increment: real adversarial review dispatch via driver)
-    result["adversarial_review"] = "deferred"
-    for item_result in result["built"]:
-        item_result["adversarial_review"] = "deferred"
+    if _is_live_orchestrator_backend(orchestrator_backend):
+        # A configured orchestrator seat is LIVE: route a final_catch
+        # decision per verified item through the swapped backend.
+        _orchestrator_final_catch(
+            orchestrator_backend, items, result, state_dir=state_dir
+        )
+    else:
+        # No configured seat: the live harness IS the orchestrator; review
+        # stays deferred to it. Byte-identical to pre-HS-2 behavior.
+        result["adversarial_review"] = "deferred"
+        for item_result in result["built"]:
+            item_result["adversarial_review"] = "deferred"
 
     # ========================================================================
     # PHASE 7: Per-repo ship (git operations, if configured)

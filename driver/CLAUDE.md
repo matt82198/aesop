@@ -20,7 +20,14 @@
 - **verification_policy.py** — Maps verification tier -> orchestrator tuning (validate_all_json,
   spot_check_frac, repair_cap, require_adversarial_review).
 - **wave_loop.py** — the wave ENGINE: preflight ownership guard, parallel build,
-  bounded repair, adversarial review, per-repo batched git ship, recovery journal.
+  bounded repair, per-repo batched git ship, recovery journal. HS-2 (live seat swap):
+  `run_wave(orchestrator_backend=...)` Phase 6 routes ONE final_catch decision per
+  test-VERIFIED item through a configured orchestrator seat (schema: decisions/
+  final_catch.schema.json): merge=approve; block=verified flipped False, not shipped,
+  journal rewritten; escalate/undetermined/DECISION_FAILED=ship with honest record
+  (crash-only degradation — a seat outage never fabricates or blocks). None/null
+  harness backend -> "deferred", byte-identical to pre-HS-2 (no key, no backend
+  constructed). Repair stays mechanical on both seats.
 - **wave_bridge.py** — Phase 3: bridges AgentDriver backends to wave manifest items.
   build_manifest_item() enriches with verificationTier + model; dispatch_item() routes
   by capability and decides green ONLY from test exit code (not model's say-so).
@@ -52,8 +59,9 @@
 - **decisions/** — Decision type schema registry (sibling lane owns schemas; absent = optional).
 - **../tests/** — test_agent_driver (contract), test_codex_driver_e2e (Phase 2 offline + gated
   live), test_wave_bridge (Phase 3 honest-green e2e), test_orchestrator_driver (increment 1:
-  allowlist/ContextPackViolation, size cap, decide() retry+fail-safe, schema — all offline),
-  test_adjudication_gate (increment 3: escalation + safety invariant + spot-check sampling).
+  allowlist, size cap, decide() retry+fail-safe, schema), test_adjudication_gate (increment 3:
+  escalation + safety invariant + spot-check sampling), test_hs2_swap_proof (HS-2: no-op
+  invariant, live-seat verdict effects, Report/state shape invariance — all offline).
 
 ## The five operations (what the wave loop needs from ANY backend)
 
@@ -94,22 +102,15 @@ Optional (non-abstract): `get_tokens_spent()`.
 
 ## Per-backend capability matrix (as encoded)
 
-| Capability            | claude-code  | codex (Phase 2)       |
-|-----------------------|:------------:|:---------------------:|
-| parallel_dispatch     | yes          | no (ext loop)         |
-| worker filesystem     | yes          | no (orch injects)      |
-| worker shell          | yes          | no (orch runs)         |
-| structured_output     | yes (~perfect)| yes (JSON schema)      |
-| worktree_isolation    | yes          | no (temp-dir)         |
-| native_cost_tracking  | yes          | yes (usage metadata)   |
-| tool_use_accuracy     | ~0.99        | ~0.92                 |
-| verification_tier     | 1            | 2                     |
+claude-code: parallel=yes, worker fs/shell=yes, structured=~perfect, worktree
+isolation=yes, cost tracking=native, accuracy ~0.99, tier 1.
+codex (Phase 2): parallel=no (ext loop), worker fs/shell=no (orchestrator
+injects/runs), structured=yes (JSON schema), worktree=no (temp-dir), cost=usage
+metadata, accuracy ~0.92, tier 2.
 
-## Phase 2 Codex Implementation Details
+## Phase 2 (Codex) + Phase 3 (Bridge) Implementation Details
 
 Codex driver (Tier 2): injects file contents into prompt, calls OpenAI Chat Completions via injectable transport, validates JSON with bounded retry, enforces ownership. CRITICAL: Green = exit 0 only. Verification policy: tier 2 -> {validate_all_json:True, spot_check_frac:0.50, repair_cap:2, require_adversarial_review:True}. **P1 Security**: Default model map uses gpt-4o-mini (worker, supports json_schema); init-time guard rejects models lacking json_schema support unless `allow_unverified_models=True` (P1 gate: prevent gpt-3.5-turbo silent failures).
-
-## Phase 3 Bridge Implementation Details
 
 **build_manifest_item(driver, item)**: enriches a backlog item with model (resolve_model),
 verificationTier (probe), and the four verification_policy knobs — resolved ONCE as literal
@@ -117,16 +118,15 @@ manifest fields so the template cannot recompute/drift; Claude tier-1 path stays
 (repairCap=1, requireAdversarialReview=false, spotCheckFrac=0.10, validateAllJson=false).
 **dispatch_item(driver, item)**: routes by worker_filesystem_access (True -> harness route;
 False -> orchestrator-managed dispatch_worker + run_command test). HONESTY: ok=True ONLY on
-test exit 0, never from the model's done:true; no testCmd -> ok=False, verified=False,
-reason='no_test_command' ("no test" != "verified"); exception -> fail-safe False. Ownership
-enforced at driver level. Offline tests prove Codex+FakeTransport takes a RED unittest stub
-to green via real test exit 0 (no API key, no network).
+test exit 0, never from the model's done:true; no testCmd -> ok/verified=False with
+reason='no_test_command'; exception -> fail-safe False. Ownership enforced at driver level.
+Offline tests prove Codex+FakeTransport takes a RED stub to green via real test exit 0.
 
 ## Wave Scheduler (WS3a Pilot) + GATE-1 Handoff Kit
 
 **wave_scheduler.py** — single-cycle backlog orchestration: intake up to N file-disjoint todo items from tracker.json (empty/missing ownsFiles REJECTED; paths normalized posix+casefold-on-Windows before overlap checks; required fields pre-validated) -> manifest via build_manifest_item (model + verificationTier from driver.probe) -> HALT + cost-ceiling gates (fail-CLOSED: module import failure or check exception = abort with honest Report, phase=gate_unavailable) -> run_wave (recovery journal + git ship) -> STOP before merge; Report JSON with per-item observability (GATE-1). After ship, selected items atomically marked in_progress in tracker (temp+os.replace; dry-run never mutates) so a second run cannot double-dispatch.
 
-**CLI** (HS-1): `python driver/wave_scheduler.py --tracker <path> --max-items N --dry-run|--execute [--driver claude|codex] [--config <path>]`. Default: worker seat from aesop.config.json seats.worker ONLY (no seats block → claude; a bare legacy flat block stays inert — migrate to seats.worker) — the seats path also reaches openai-compatible; `--driver` OVERRIDES the config. Hosted seat + --execute requires the seat's api_key_env (is_local: none); dry-run never needs a key.
+**CLI** (HS-1): `python driver/wave_scheduler.py --tracker <path> --max-items N --dry-run|--execute [--driver claude|codex] [--config <path>]`. Default: worker seat from aesop.config.json seats.worker ONLY (no seats block → claude; a bare legacy flat block stays inert — migrate to seats.worker) — the seats path also reaches openai-compatible; `--driver` OVERRIDES the config. Hosted seat + --execute requires the seat's api_key_env (is_local: none); dry-run never needs a key. HS-2: seats.orchestrator resolved by `resolve_orchestrator_backend()` (absent/harness/claude → None = live harness stays orchestrator; openai-compatible → live backend, same --execute key gate) and passed into run_wave; Report JSON shape is IDENTICAL either way (swap transparency — seat activity lives in run_wave's result: orchestrator_review + per-item final_catch, plus a stderr notice).
 
 **Tests** (35+): disjoint/normalization/rejection, gate fail-closed, dry-run, GATE-1 per-item/driver/ceiling/codex tests; module-tmpdir hygiene; all TestCase.
 
@@ -145,6 +145,6 @@ shape lives in wave_scheduler.py's module docstring.
 
 ## Status
 
-Phases 1-3 + Wave Scheduler (WS3a/GATE-1) shipped: interface + contract tests, Codex
-implementation (offline tests green), wave bridge (honest green = test exit 0 only), and
-single-cycle scheduler with per-item observability + driver injection (manual merge).
+Phases 1-3 + Wave Scheduler (WS3a/GATE-1) + HS-1 two-seat config + HS-2 live
+orchestrator-seat swap shipped (proof: bench/results/hs2-swap-proof-2026-07-25.md;
+merge stays manual in the pilot).
