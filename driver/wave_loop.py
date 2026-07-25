@@ -109,15 +109,32 @@ def _quote_arg(s: str) -> str:
         str: properly quoted argument safe for shell execution on this OS
     """
     if os.name == 'nt':
-        # Windows (cmd.exe): use subprocess.list2cmdline semantics.
-        # Double quotes are the safe quoting mechanism; embed quotes are escaped
-        # with backslash, and backslashes before quotes are escaped.
-        # For safety, we wrap in double quotes and escape embedded quotes/backslashes.
+        # Windows: forced-quote variant of the MS C runtime argv rules
+        # (subprocess.list2cmdline semantics). RS3-W N6: only backslashes
+        # that precede a double quote (or the closing quote) are doubled --
+        # doubling EVERY backslash turned `src\util.py` into `src\\util.py`
+        # and broke `git add` pathspecs for Windows-separator paths.
         if not s:
             return '""'
-        # Escape backslashes before quotes, then escape quotes
-        escaped = s.replace('\\', '\\\\').replace('"', '\\"')
-        return f'"{escaped}"'
+        out = ['"']
+        pending_backslashes = 0
+        for ch in s:
+            if ch == '\\':
+                pending_backslashes += 1
+            elif ch == '"':
+                # Backslashes before a quote are doubled, then the quote
+                # itself is escaped.
+                out.append('\\' * (pending_backslashes * 2 + 1))
+                out.append('"')
+                pending_backslashes = 0
+            else:
+                out.append('\\' * pending_backslashes)
+                out.append(ch)
+                pending_backslashes = 0
+        # Backslashes before the CLOSING quote must be doubled.
+        out.append('\\' * (pending_backslashes * 2))
+        out.append('"')
+        return ''.join(out)
     else:
         # POSIX: shlex.quote handles all cases safely
         return shlex.quote(s)
@@ -277,6 +294,32 @@ def _journal_key_for_item(item: Dict[str, Any]) -> str:
 # Wave Recovery: Journal and Resume Support
 # ========================================================================
 
+def _item_fingerprint(item: Dict[str, Any]) -> str:
+    """Stable identity fingerprint of a manifest item (RS3-W N10).
+
+    Journal entries persist across waves in state_dir. Without an identity
+    check, a NEW tracker item that reuses a prior wave's slug would inherit
+    that stale entry's verified=True and be silently skipped from build.
+    The fingerprint binds a journal entry to the item CONTENT (slug, prompt,
+    ownsFiles, testCmd), so resume-skip only applies to the same work.
+
+    Args:
+        item: manifest item dict.
+
+    Returns:
+        str: hex sha1 over the canonical identity fields.
+    """
+    basis = {
+        "slug": item.get("slug"),
+        "prompt": item.get("prompt"),
+        "ownsFiles": sorted(str(f) for f in (item.get("ownsFiles") or [])),
+        "testCmd": item.get("testCmd"),
+    }
+    return hashlib.sha1(
+        json.dumps(basis, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+
+
 def _write_journal_entry(state_dir: str, slug: str, phase: str, data: Dict[str, Any], repo: str = None) -> None:
     """Write a journal entry for an item's progress.
 
@@ -313,11 +356,22 @@ def _write_journal_entry(state_dir: str, slug: str, phase: str, data: Dict[str, 
         **data,
     }
 
+    tmp_file = journal_file.with_name(journal_file.name + ".tmp")
     try:
-        journal_file.write_text(json.dumps(entry, default=str) + "\n")
+        # ATOMIC write (RS3-W N10): serialize first, write to a sibling temp
+        # file, then os.replace into place. A crash mid-write can no longer
+        # leave a torn/malformed entry at the journal path (a torn entry is
+        # silently skipped on load, losing the item's recovery state).
+        payload = json.dumps(entry, default=str) + "\n"
+        tmp_file.write_text(payload)
+        os.replace(str(tmp_file), str(journal_file))
     except Exception:
         # Fail-closed: if journal write fails, continue without journaling.
-        pass
+        try:
+            if tmp_file.exists():
+                tmp_file.unlink()
+        except Exception:
+            pass
 
 
 def _load_journal_state(state_dir: str) -> Dict[str, Dict[str, Any]]:
@@ -402,11 +456,17 @@ def _release_stale_leases(state_dir: str, journal_state: Dict[str, Dict[str, Any
 
         event_store = store.EventStore(str(db_path))
 
-        for slug, entry in journal_state.items():
+        # RS3-W N4: journal_state KEYS are (repo, slug) tuples, but claims
+        # are made with resource=<slug string> (see build_item's try_claim).
+        # Releasing with the tuple never matched a claim, so a crashed
+        # instance's lease persisted forever. Release with the SAME key
+        # shape claims use: the entry's slug string.
+        for entry in journal_state.values():
             old_instance_id = entry.get("instance_id")
-            if old_instance_id:
+            resource = entry.get("slug")
+            if old_instance_id and resource:
                 try:
-                    coordination.release(event_store, resource=slug, instance_id=old_instance_id)
+                    coordination.release(event_store, resource=resource, instance_id=old_instance_id)
                 except Exception:
                     # Ignore release errors; fail-closed.
                     pass
@@ -831,8 +891,45 @@ def run_wave(
         "resume_stats": None,
     }
 
+    # Ensure the state directory exists up-front: claims (EventStore) and
+    # the journal both live under it. Without this, a fresh state_dir made
+    # EventStore construction raise inside the claim block -- which is a
+    # fail-closed SKIP (RS3-W N5), not a license to dispatch claim-less.
+    if state_dir:
+        try:
+            Path(state_dir).mkdir(parents=True, exist_ok=True)
+        except Exception:
+            # Downstream consumers (claims, journal, ceiling) each fail
+            # closed on their own if the directory is truly unusable.
+            pass
+
     # Extract items from manifest.
     items = manifest.get("items", [])
+
+    # SLUG-UNIQUENESS PREFLIGHT (RS3-W N7): slugs are the identity key for
+    # journal entries, coordination claims, and slug->item lookups. Duplicate
+    # slugs silently collide in all three (last-writer-wins journal, claim
+    # starvation, wrong item shipped). Reject loudly, before any dispatch.
+    seen_slugs = {}
+    duplicate_slugs = []
+    for item in items:
+        slug = item.get("slug")
+        if slug is None:
+            continue
+        if slug in seen_slugs:
+            duplicate_slugs.append(slug)
+        else:
+            seen_slugs[slug] = True
+    if duplicate_slugs:
+        result["aborted"] = True
+        result["abort_reason"] = "duplicate_slugs"
+        result["duplicate_slugs"] = sorted(set(duplicate_slugs))
+        result["error"] = (
+            "duplicate item slugs in manifest (slugs key the journal, "
+            "coordination claims, and ship lookups): "
+            + ", ".join(sorted(set(duplicate_slugs)))
+        )
+        return result
 
     # ========================================================================
     # PHASE 0 (optional): Resume - Load journal state and release stale leases
@@ -1020,10 +1117,26 @@ def run_wave(
         journal_key = (repo, slug)
         journal_entry = journal_state.get(journal_key)
         skipped_from_journal = False
-        if journal_entry and _should_skip_from_journal(journal_entry):
+        # RS3-W N10: resume-skip requires the journal entry to MATCH the
+        # current item's content fingerprint. Entries without a fingerprint
+        # (older format) or with a different one (a NEW item reusing a prior
+        # wave's slug) are rebuilt -- never silently inherited (fail-closed).
+        if journal_entry and _should_skip_from_journal(journal_entry) and (
+            journal_entry.get("fingerprint") == _item_fingerprint(item)
+        ):
             skipped_from_journal = True
             with resume_stats_lock:
                 resume_stats["skipped_from_journal"] += 1
+
+            # RS3-W N3: restore the journaled filesWritten so a resumed
+            # verified item can still SHIP (Phase 7) or be quarantined on a
+            # block. Without this the resumed item verified green but never
+            # produced a shipped record -> tracker stayed todo -> the item
+            # was re-selected and re-verified every wave, forever.
+            journal_files_written = [
+                str(f) for f in (journal_entry.get("filesWritten") or [])
+                if isinstance(f, str) and f
+            ]
 
             # Trust-but-verify: re-run the test for the journaled item
             test_cmd = item.get("testCmd", "")
@@ -1041,7 +1154,7 @@ def run_wave(
                                 "testExit": 0,
                                 "repairs": 0,
                                 "error": None,
-                                "filesWritten": [],
+                                "filesWritten": journal_files_written,
                                 "skipped_from_journal": True,
                                 "trust_verified": True,
                             },
@@ -1130,11 +1243,28 @@ def run_wave(
                             "repairs": 0,
                             "error": "resource claimed by another instance",
                             "filesWritten": [],
+                            "claim_skipped": True,
                         },
                     )
-            except Exception:
-                # On exception, fail-closed: skip the item.
-                claim_held = False
+            except Exception as claim_exc:
+                # RS3-W N5: fail-CLOSED means SKIP, not dispatch. Falling
+                # through here dispatched the item WITHOUT holding a claim
+                # (two racing instances both hit the SQLite lock exception
+                # and both dispatched -> double-dispatch). Skip the item and
+                # record why; another instance (or the next wave) retries.
+                return (
+                    item_index,
+                    {
+                        "slug": slug,
+                        "dispatched": False,
+                        "verified": False,
+                        "testExit": None,
+                        "repairs": 0,
+                        "error": f"claim check failed (fail-closed skip): {claim_exc}",
+                        "filesWritten": [],
+                        "claim_skipped": True,
+                    },
+                )
 
         try:
             # Build the manifest item with policy.
@@ -1154,12 +1284,17 @@ def run_wave(
                 "workerId": dispatch_result.get("workerId"),
             }
 
-            # Write journal entry for this item's outcome.
+            # Write journal entry for this item's outcome. filesWritten is
+            # persisted so a journal-resumed item can still ship/quarantine
+            # (RS3-W N3); fingerprint binds the entry to this item's content
+            # so a new item reusing the slug is never skipped (RS3-W N10).
             if state_dir:
                 _write_journal_entry(state_dir, slug, "dispatched", {
                     "verified": item_result["verified"],
                     "testExit": item_result["testExit"],
                     "instance_id": instance_id,
+                    "filesWritten": item_result["filesWritten"],
+                    "fingerprint": _item_fingerprint(item),
                 }, repo=repo)
 
             return (item_index, item_result)
@@ -1200,21 +1335,36 @@ def run_wave(
     # Run build in parallel.
     max_workers = min(8, len(items)) if items else 1
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [
-            executor.submit(build_item, i, item)
+        future_to_item = {
+            executor.submit(build_item, i, item): (i, item)
             for i, item in enumerate(items)
-        ]
-        for future in concurrent.futures.as_completed(futures):
+        }
+        for future in concurrent.futures.as_completed(future_to_item):
+            submitted_index, submitted_item = future_to_item[future]
             try:
                 item_index, item_result = future.result()
-                built_items.append((item_index, items[item_index], item_result))
+            except Exception as exc:
+                # RS3-W N7: build_item catches internally, but if the future
+                # STILL raises the item must NEVER silently vanish from both
+                # built and failed_items (it made green vacuously true).
+                # Record an honest failed result for the submitted item.
+                item_index = submitted_index
+                item_result = {
+                    "slug": submitted_item.get("slug", f"item-{submitted_index}"),
+                    "dispatched": False,
+                    "verified": False,
+                    "testExit": None,
+                    "repairs": 0,
+                    "error": f"executor exception: {exc}",
+                    "filesWritten": [],
+                }
+            built_items.append((item_index, items[item_index], item_result))
 
-                # Track failed items for repair.
-                if not item_result["verified"]:
-                    failed_items.append((item_index, items[item_index], item_result))
-            except Exception:
-                # Should not happen (build_item catches internally), but just in case.
-                pass
+            # Track failed items for repair. Claim-skipped items are NOT
+            # repair candidates: repair would dispatch them WITHOUT a claim
+            # (the double-dispatch the skip exists to prevent).
+            if not item_result["verified"] and not item_result.get("claim_skipped"):
+                failed_items.append((item_index, items[item_index], item_result))
 
     # Sort built_items by index to preserve order.
     built_items.sort(key=lambda x: x[0])
@@ -1271,13 +1421,16 @@ def run_wave(
                 item_result["filesWritten"] = dispatch_result.get("filesWritten", [])
                 item_result["repairs"] += 1
 
-                # Write journal entry for repair outcome.
+                # Write journal entry for repair outcome (filesWritten +
+                # fingerprint: same resume contract as the dispatch entry).
                 if state_dir:
                     repo = item.get("repo")
                     _write_journal_entry(state_dir, slug, "repaired", {
                         "verified": item_result["verified"],
                         "testExit": item_result["testExit"],
                         "repairs": item_result["repairs"],
+                        "filesWritten": item_result["filesWritten"],
+                        "fingerprint": _item_fingerprint(item),
                     }, repo=repo)
 
                 # If still failed, mark for next round.
@@ -1354,9 +1507,22 @@ def run_wave(
         # including metered seat tokens. Runs ONLY on the live-seat path
         # (no-op default keeps the pre-HS-2 check pattern byte-identical).
         if cost_ceiling is not None and state_dir is not None:
+            # RS3-W N1: driver.get_tokens_spent() may be None BY CONTRACT
+            # (ClaudeCodeDriver always; CodexDriver at zero spend). Adding
+            # None + int crashed the flagship "Claude worker + swapped
+            # orchestrator seat" wave AFTER seat decisions, BEFORE ship --
+            # verified work never shipped and the item looped. With an
+            # unmetered driver: count the metered seat spend when there is
+            # any; otherwise pass None so cost_ceiling keeps its windowed
+            # ledger fallback (same contract as the Phase 3 check).
+            driver_spent = driver.get_tokens_spent()
+            seat_spent = _seat_tokens_spent(orchestrator_backend)
+            if driver_spent is None:
+                spent_arg = seat_spent if seat_spent > 0 else None
+            else:
+                spent_arg = driver_spent + seat_spent
             ceiling_result = cost_ceiling.check(
-                spent=driver.get_tokens_spent()
-                + _seat_tokens_spent(orchestrator_backend),
+                spent=spent_arg,
                 trip=True,
                 state_dir=state_dir,
             )
@@ -1518,6 +1684,25 @@ def run_wave(
                     commit_msg = f"Wave: {len(repo_items)} items verified"
                     commit_cmd = f"git commit -m {_quote_arg(commit_msg)}"
                     commit_result = driver.run_command(commit_cmd, cwd=repo_path)
+                    if commit_result.exit_code != 0 and (
+                        "nothing to commit"
+                        in ((commit_result.stdout or "") + (commit_result.stderr or "")).lower()
+                    ):
+                        # RS3-W N3: the staged content is ALREADY in HEAD
+                        # (e.g. a prior run committed then crashed before the
+                        # tracker was marked). The item is verified and its
+                        # work is committed: emit a terminal shipped record
+                        # instead of failing forever on re-commit.
+                        repo_ship_results.append({
+                            "repo": repo_path,
+                            "committed": False,
+                            "no_changes": True,
+                            "files_count": len(repo_items),
+                        })
+                        for _, _, item_result in repo_items:
+                            item_result["ship_no_changes"] = True
+                            shipped_items.append(item_result["slug"])
+                        continue
                     if commit_result.exit_code != 0:
                         # UNSTAGE P3: Commit failed; run git reset to unstage the files.
                         # This prevents staged-files residue on partial failure.
@@ -1572,6 +1757,22 @@ def run_wave(
                     # Mark items from this repo as shipped.
                     for _, _, item_result in repo_items:
                         shipped_items.append(item_result["slug"])
+                else:
+                    # RS3-W N3: a VERIFIED item with no files to add must
+                    # still reach a TERMINAL shipped record -- otherwise the
+                    # scheduler never marks the tracker and the item is
+                    # re-selected, re-verified, and "succeeds" every wave,
+                    # forever (recovery livelock). Nothing to commit is an
+                    # honest no-op ship, not a silent drop.
+                    repo_ship_results.append({
+                        "repo": repo_path,
+                        "committed": False,
+                        "no_changes": True,
+                        "files_count": len(repo_items),
+                    })
+                    for _, _, item_result in repo_items:
+                        item_result["ship_no_changes"] = True
+                        shipped_items.append(item_result["slug"])
 
             # Record shipped items and per-repo results.
             if shipped_items:
@@ -1603,8 +1804,13 @@ def result_to_report(wave_result: Dict[str, Any]) -> Dict[str, Any]:
     repairs_used = sum(item.get("repairs", 0) for item in built_items)
 
     # Determine if wave was fully green (all items verified and not aborted).
-    green = not wave_result.get("aborted", False) and all(
-        item.get("verified", False) for item in built_items
+    # RS3-W N7: green must be False when ZERO items ran -- all() over an
+    # empty list is vacuously True, which turned a wave where every item
+    # silently vanished into a green report.
+    green = (
+        not wave_result.get("aborted", False)
+        and len(built_items) > 0
+        and all(item.get("verified", False) for item in built_items)
     )
 
     report = {

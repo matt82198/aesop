@@ -18,7 +18,38 @@ from __future__ import annotations
 import time
 
 
-def fold_claims(events: list) -> dict[str, str]:
+def _read_claim_events(store) -> list:
+    """Read the claims stream from a StateAPI (.get) OR an EventStore (.read).
+
+    RS3-W: wave_loop passes a raw EventStore, which exposes read() but not
+    get(). try_claim called store.get() unconditionally, so EVERY claim
+    attempt raised AttributeError and fail-closed to False -- the claim gate
+    was dead code and items fell through to claim-less dispatch paths.
+    """
+    getter = getattr(store, "get", None)
+    if callable(getter):
+        return getter("claims")
+    return store.read("claims")
+
+
+def _claim_expired(ev: dict, payload: dict, now: float) -> bool:
+    """True when a claim_requested event is past its TTL (RS3-W N4).
+
+    A claim whose event timestamp plus payload ttl is in the past is treated
+    as released: a crashed holder's claim must not persist forever. Events
+    without a ttl or timestamp (legacy) never expire (backward compatible).
+    """
+    ttl = payload.get("ttl")
+    ts = ev.get("ts")
+    if ttl is None or ts is None:
+        return False
+    try:
+        return float(now) > float(ts) + float(ttl)
+    except (TypeError, ValueError):
+        return False
+
+
+def fold_claims(events: list, now: float | None = None) -> dict[str, str]:
     """Fold a claims stream into the current state of who holds each resource.
 
     Processes claim_requested and claim_released events to determine the winner
@@ -28,14 +59,23 @@ def fold_claims(events: list) -> dict[str, str]:
     subsequent claim_released event. If an instance releases and then re-claims,
     the re-claim is the new active claim for that instance.
 
+    TTL enforcement (RS3-W N4): a claim_requested event whose ts + payload
+    ttl is earlier than ``now`` is EXPIRED and ignored -- a crashed instance's
+    claim becomes claimable again after its TTL instead of persisting forever.
+    Legacy events without ts/ttl never expire.
+
     Args:
         events: list of event dicts from the claims stream
                 (as returned by EventStore.read('claims'))
+        now: reference time for TTL expiry (default: time.time())
 
     Returns:
         dict mapping resource_id -> holding_instance_id for all currently
         held resources. Empty dict if no claims exist or all have been released.
     """
+    if now is None:
+        now = time.time()
+
     # Track all claims by resource and instance (as list, to preserve order)
     claims_by_resource = {}  # resource -> {instance_id: [versions...]}
     # Track all releases by resource and instance (as sorted list)
@@ -48,6 +88,9 @@ def fold_claims(events: list) -> dict[str, str]:
         version = ev.get("version", 0)
 
         if etype == "claim_requested":
+            if _claim_expired(ev, payload, now):
+                # Expired claim: releasable/ignored (never a live holder).
+                continue
             resource = payload.get("resource")
             instance_id = payload.get("instance_id")
             if resource is not None and instance_id is not None:
@@ -119,7 +162,8 @@ def try_claim(store, resource: str, instance_id: str, ttl: float = 300.0) -> boo
     in the stream could later become the winner if the true holder releases.
 
     Args:
-        store: StateAPI or EventStore instance (must have append() and get() methods)
+        store: StateAPI or EventStore instance (must have append() plus
+               get() or read())
         resource: the resource identifier to claim (e.g., "wave_123", "lane_0", ...)
         instance_id: the instance identifier requesting the claim
         ttl: time-to-live in seconds (default 300s = 5min); embedded in the payload
@@ -140,7 +184,7 @@ def try_claim(store, resource: str, instance_id: str, ttl: float = 300.0) -> boo
         )
 
         # Re-read claims stream and fold to see current state
-        events = store.get("claims")
+        events = _read_claim_events(store)
         claims = fold_claims(events)
 
         # Check if we won
@@ -201,7 +245,7 @@ def current_holder(store, resource: str) -> str | None:
         The instance_id of the current holder, or None if unclaimed.
     """
     try:
-        events = store.get("claims")
+        events = _read_claim_events(store)
         claims = fold_claims(events)
         return claims.get(resource)
     except Exception:
