@@ -202,20 +202,16 @@ def check_ci_status(status_rollup, allow_no_checks=False, expected_checks=None):
                 # Expected check still pending
                 return ("pending", None)
 
-        # All expected checks passed - warn about any non-expected check failures but don't block
-        # Non-expected checks are informational/flaky third-party checks; they should not gate merge
-        non_expected_failures = []
-        for check_name, check_status in found_checks.items():
-            if check_name not in expected_checks and check_status == "failure":
-                non_expected_failures.append(check_name)
-
-        if non_expected_failures:
-            # Log the failures loudly but don't block merge
-            print(f"WARNING: Non-expected check(s) failed (informational, does not block merge): {', '.join(non_expected_failures)}")
-
-        # All expected checks passed - merge is allowed even if non-expected checks are failing
-        # (pending non-expected checks are also acceptable)
-        return ("success", None)
+        # All expected checks passed. Now check if ANY check failed (expected or not).
+        # CRITICAL (BL4 P2 fix): Any check failure blocks merge, not just expected checks.
+        # The expected_checks parameter only REQUIRES certain checks to be present and pass,
+        # but doesn't exempt other checks from the failure rule (fail-closed semantics).
+        if failed_checks:
+            return ("failure", failed_checks[0])
+        elif pending_checks:
+            return ("pending", None)
+        else:
+            return ("success", None)
 
     # Determine overall status (when expected_checks is not specified)
     if failed_checks:
@@ -467,10 +463,10 @@ def run_self_test():
         return False
     print("[OK] Expected check failed: returns FAILURE")
 
-    # Test 20b: Expected checks all pass, but non-expected check FAILED (P2 audit bug fix)
-    # FIXED: When --expect-checks is given, non-expected failures should NOT block merge.
-    # Non-expected checks are informational/flaky third-party checks; only expected checks gate merge.
-    # The failure is logged loudly as a warning, but merge is allowed.
+    # Test 20b: Expected checks all pass, but non-expected check FAILED (P2 audit bug fix - BL4)
+    # FIXED: When --expect-checks is given, ANY check failure (expected or not) must block merge.
+    # The --expect-checks parameter only REQUIRES certain checks to be present and pass,
+    # but doesn't exempt other checks from the failure rule (fail-closed semantics).
     rollup_expected_pass_noncxpected_fail = [
         {"name": "unit-tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
         {"name": "integration-tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
@@ -480,12 +476,12 @@ def run_self_test():
         rollup_expected_pass_noncxpected_fail,
         expected_checks={"unit-tests", "integration-tests"}
     )
-    if ci_status != "success":
-        print(f"FAIL: Expected 'success' with non-expected check failed (audit P2 fix), got '{ci_status}'")
+    if ci_status != "failure" or failed_check != "lint":
+        print(f"FAIL: Expected 'failure' with non-expected check failed (BL4 P2 fix), got '{ci_status}' / '{failed_check}'")
         return False
-    print("[OK] Non-expected check failed while expected pass: returns SUCCESS with warning (P2 audit fix)")
+    print("[OK] Non-expected check failed while expected pass: returns FAILURE (BL4 P2 audit fix)")
 
-    # Test 20c: Expected checks all pass, non-expected pending is OK (does not block)
+    # Test 20c: Expected checks all pass, but non-expected pending (must wait for completion)
     rollup_expected_pass_noncexpected_pending = [
         {"name": "unit-tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
         {"name": "integration-tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
@@ -495,10 +491,10 @@ def run_self_test():
         rollup_expected_pass_noncexpected_pending,
         expected_checks={"unit-tests", "integration-tests"}
     )
-    if ci_status != "success":
-        print(f"FAIL: Expected 'success' when all expected pass + non-expected pending, got '{ci_status}'")
+    if ci_status != "pending":
+        print(f"FAIL: Expected 'pending' when all expected pass + non-expected pending, got '{ci_status}'")
         return False
-    print("[OK] Expected all pass, non-expected pending: returns SUCCESS (pending non-expected is OK)")
+    print("[OK] Expected all pass, non-expected pending: returns PENDING (wait for all checks)")
 
     # Test 22: CheckRun STALE conclusion (invalidated check, counts as failure)
     stale_check = [
