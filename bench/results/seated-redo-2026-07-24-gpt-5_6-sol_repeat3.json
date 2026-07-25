@@ -72,7 +72,7 @@
       "id": "hardcoded-username",
       "run_num": 1,
       "classification": "real_defect",
-      "reasoning": "['evidence_0: Documentation contains the machine-specific absolute path `<REPO>\\\\state\\\\tracker.json`.', \"evidence_1: Users copying this path receive a non-functional path containing the developer's local username.\", 'evidence_2: The examples are not portable, preventing users from following the documented instructions on their own machines.']",
+      "reasoning": "['evidence_0: Documentation contains the machine-specific absolute path `C:\\\\Users\\\\matt8\\\\aesop\\\\state\\\\tracker.json`.', \"evidence_1: Users copying this path receive a non-functional path containing the developer's local username.\", 'evidence_2: The examples are not portable, preventing users from following the documented instructions on their own machines.']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.99
@@ -216,7 +216,7 @@
       "id": "hardcoded-username",
       "run_num": 2,
       "classification": "real_defect",
-      "reasoning": "['evidence_0 identifies the literal machine-specific path `<REPO>\\\\state\\\\tracker.json` in the documentation.', \"evidence_1 states that users copying this developer-specific path receive a non-functional path containing the developer's username.\", 'evidence_2 states the resulting impact: the examples are not portable and users cannot follow the instructions on their own machines.']",
+      "reasoning": "['evidence_0 identifies the literal machine-specific path `C:\\\\Users\\\\matt8\\\\aesop\\\\state\\\\tracker.json` in the documentation.', \"evidence_1 states that users copying this developer-specific path receive a non-functional path containing the developer's username.\", 'evidence_2 states the resulting impact: the examples are not portable and users cannot follow the instructions on their own machines.']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.99
@@ -360,7 +360,7 @@
       "id": "hardcoded-username",
       "run_num": 3,
       "classification": "real_defect",
-      "reasoning": "['evidence_0 identifies the machine-specific path embedded in documentation: `<REPO>\\\\state\\\\tracker.json`.', \"evidence_1 states that users copying this path receive a non-functional path containing the developer's username.\", 'evidence_2 states the resulting impact: the examples are not portable and users cannot follow the instructions on their own machines.', 'The project intent explicitly prioritizes `onboarding-by-clone` and `cross-machine continuity`, both of which are undermined by machine-specific documentation paths.']",
+      "reasoning": "['evidence_0 identifies the machine-specific path embedded in documentation: `C:\\\\Users\\\\matt8\\\\aesop\\\\state\\\\tracker.json`.', \"evidence_1 states that users copying this path receive a non-functional path containing the developer's username.\", 'evidence_2 states the resulting impact: the examples are not portable and users cannot follow the instructions on their own machines.', 'The project intent explicitly prioritizes `onboarding-by-clone` and `cross-machine continuity`, both of which are undermined by machine-specific documentation paths.']",
       "schema_valid": true,
       "retries": 0,
       "confidence": 0.98
@@ -523,7 +523,7 @@
         "real_defect": 3
       },
       "num_runs": 3,
-      "reasoning_sample": "['evidence_0: Documentation contains the machine-specific absolute path `<REPO>\\\\state\\\\tracker.json`.', \"evidence_1: Users copying this path receive a non-functional path containing the developer's local username.\", 'evidence_2: The examples are not portable, preventing users from following the documented instructions on their own machines.']"
+      "reasoning_sample": "['evidence_0: Documentation contains the machine-specific absolute path `C:\\\\Users\\\\matt8\\\\aesop\\\\state\\\\tracker.json`.', \"evidence_1: Users copying this path receive a non-functional path containing the developer's local username.\", 'evidence_2: The examples are not portable, preventing users from following the documented instructions on their own machines.']"
     },
     {
       "id": "audit-log-observability",
