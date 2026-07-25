@@ -840,7 +840,9 @@ class TestReportRound2Fixes(unittest.TestCase):
                  "shipped": ["ghost"], "shipped_repos": []}
         with tempfile.TemporaryDirectory() as td:
             r = self._run(td, shape)
-        self.assertEqual(r.get("tracker_update_error"), "unmapped_shipped_slugs")
+        # "unmapped_slugs" (generalized from "unmapped_shipped_slugs":
+        # blocked slugs route here too, not just shipped ones).
+        self.assertEqual(r.get("tracker_update_error"), "unmapped_slugs")
         self.assertIn("ghost", r.get("tracker_unmapped_slugs") or [])
         self.assertFalse(r["success"])
 

@@ -455,9 +455,19 @@ def _quarantine_blocked_files(
 
     Semantics (conservative, only the blocked item's own filesWritten):
       - tracked file  -> `git checkout -- <file>` (restore index version)
-      - untracked file -> did not exist pre-build; deleted
+      - untracked file -> did not exist pre-build; deleted (ONLY on a clean
+        exit-1 "untracked" determination; any other ls-files failure is
+        AMBIGUOUS -> error record, never delete: fail-safe, not fail-delete)
       - not inside a git worktree -> SKIP with an honest record (we cannot
         know pre-build state without git; never guess-delete)
+
+    PATHSPEC GUARD (re-attack-proven destructive defect): quarantine acts on
+    actual FILE paths ONLY. Empty strings, "."/"..", and directory entries
+    are REJECTED with an error record -- `git checkout -- subdir` (or ".")
+    would revert OTHER items' uncommitted verified work under that tree, not
+    just the blocked item's files. On Windows, backslash separators are
+    normalized to "/" first so a tracked file is never misclassified
+    untracked (and deleted) because git could not match the pathspec.
 
     Records the outcome in item_result["quarantine"]:
       {"attempted", "restored", "deleted", "errors", "skipped_reason"}.
@@ -492,35 +502,76 @@ def _quarantine_blocked_files(
         return
 
     for f in files:
+        raw = f if isinstance(f, str) else str(f)
+        # Windows: normalize separators so the git pathspec matches the
+        # index entry (backslash pathspecs silently match nothing -> a
+        # tracked file would be misclassified untracked and DELETED).
+        # POSIX: backslash is a legal filename character; leave it alone.
+        norm = raw.replace("\\", "/") if os.name == "nt" else raw
+        # PATHSPEC GUARD: reject empty/dot specs outright -- "." or ""
+        # as a checkout pathspec reverts the WHOLE repo, destroying other
+        # items' uncommitted verified work. Record, never act.
+        stripped = norm.strip().rstrip("/")
+        if stripped in ("", ".", ".."):
+            outcome["errors"].append(
+                {"file": raw, "error": "rejected pathspec: empty or dot "
+                 "entry (would revert beyond the blocked item's own files)"}
+            )
+            continue
         # Only touch paths that stay inside the item's root (never escape).
         try:
-            _validate_file_path(f, root)
+            _validate_file_path(norm, root)
         except ValueError as exc:
-            outcome["errors"].append({"file": f, "error": f"path validation: {exc}"})
+            outcome["errors"].append({"file": raw, "error": f"path validation: {exc}"})
             continue
         try:
+            target = Path(root) / norm
+            # PATHSPEC GUARD: directories are never quarantined -- a
+            # directory checkout reverts EVERY file under it, including
+            # other items' uncommitted verified work. Files only.
+            if target.is_dir():
+                outcome["errors"].append(
+                    {"file": raw, "error": "rejected pathspec: resolves to "
+                     "a directory (quarantine operates on file paths only; "
+                     "a directory spec would revert other items' files "
+                     "under it)"}
+                )
+                continue
+            # :(literal) pathspec magic: glob characters (*, ?, [) in an
+            # entry must never expand -- "*" would match (and checkout
+            # would revert) EVERY tracked file, not the blocked item's.
+            spec = _quote_arg(":(literal)" + norm)
             tracked = driver.run_command(
-                "git ls-files --error-unmatch -- " + _quote_arg(f), cwd=root
+                "git ls-files --error-unmatch -- " + spec, cwd=root
             )
             if tracked.exit_code == 0:
                 restore = driver.run_command(
-                    "git checkout -- " + _quote_arg(f), cwd=root
+                    "git checkout -- " + spec, cwd=root
                 )
                 if restore.exit_code == 0:
                     outcome["restored"].append(f)
                 else:
                     outcome["errors"].append(
-                        {"file": f, "error": "git checkout failed: "
+                        {"file": raw, "error": "git checkout failed: "
                          + (restore.stderr or "")[:200]}
                     )
-            else:
-                # Untracked: the file did not exist pre-build; remove it.
-                target = Path(root) / f
+            elif tracked.exit_code == 1:
+                # Clean "untracked" determination (--error-unmatch exits 1
+                # on no-match): the file did not exist pre-build; remove it.
                 if target.exists() or target.is_symlink():
                     target.unlink()
                 outcome["deleted"].append(f)
+            else:
+                # AMBIGUOUS classification (exit 128, index lock, ...):
+                # fail-SAFE, never fail-delete. Tracked content is index-
+                # recoverable; an uncertain file must not be destroyed.
+                outcome["errors"].append(
+                    {"file": raw, "error": "untracked classification "
+                     "ambiguous (git ls-files exit "
+                     f"{tracked.exit_code}): refusing to delete"}
+                )
         except Exception as exc:
-            outcome["errors"].append({"file": f, "error": str(exc)})
+            outcome["errors"].append({"file": raw, "error": str(exc)})
 
 
 def _orchestrator_final_catch(

@@ -530,5 +530,260 @@ class TestDecisionFailedEvidenceArray(unittest.TestCase):
         self._assert_evidence_array(orch.decide("final_catch", _fresh_pack()))
 
 
+# ========================================================================
+# 7. Quarantine pathspec guard: FILE paths only, never tree-wide reverts
+#    (re-attack proven: a blocked item with filesWritten ["subdir"] ran
+#    `git checkout -- subdir` and reverted ANOTHER item's uncommitted
+#    verified work under it; "." reverted the whole repo)
+# ========================================================================
+
+def _git(cmd, cwd):
+    subprocess.run(cmd, cwd=cwd, shell=True, check=True, timeout=60)
+
+
+def _commit_all(td):
+    _git("git add -A", td)
+    _git(
+        "git -c user.name=aesop-test -c user.email=t@example.invalid "
+        "commit -q -m baseline",
+        td,
+    )
+
+
+class TestQuarantinePathspecGuard(unittest.TestCase):
+    def _two_item_repo(self, td):
+        """Temp repo: subdir holds item A's file AND item B's file, both
+        committed then rewritten (A = refused build, B = verified work
+        awaiting ship). Quarantining A must never touch B."""
+        _git("git init -q", td)
+        d = Path(td) / "subdir"
+        d.mkdir()
+        (d / "item_a_owned.py").write_text("A ORIGINAL\n", encoding="utf-8")
+        (d / "item_b_owned.py").write_text("B ORIGINAL\n", encoding="utf-8")
+        _commit_all(td)
+        (d / "item_a_owned.py").write_text("A REFUSED CODE\n", encoding="utf-8")
+        (d / "item_b_owned.py").write_text(
+            "B VERIFIED NEW WORK\n", encoding="utf-8"
+        )
+        return d
+
+    def test_directory_entry_rejected_no_cross_item_destruction(self):
+        """filesWritten ["subdir"] must NOT run a directory checkout: item
+        B's uncommitted verified work under subdir survives; the directory
+        entry is recorded as an error, not acted on."""
+        with tempfile.TemporaryDirectory() as td:
+            d = self._two_item_repo(td)
+            item_result = {"filesWritten": ["subdir"]}
+            wave_loop._quarantine_blocked_files(
+                RealGitBlockDriver(), {"repo": td, "slug": "a"}, item_result
+            )
+            q = item_result["quarantine"]
+            self.assertEqual(
+                (d / "item_b_owned.py").read_text(encoding="utf-8"),
+                "B VERIFIED NEW WORK\n",
+            )
+            # Not silently acted on either: A's file is untouched too (the
+            # dir entry is rejected wholesale, surfaced as an error).
+            self.assertEqual(
+                (d / "item_a_owned.py").read_text(encoding="utf-8"),
+                "A REFUSED CODE\n",
+            )
+            self.assertEqual(q["restored"], [])
+            self.assertEqual(q["deleted"], [])
+            self.assertEqual(len(q["errors"]), 1)
+            self.assertEqual(q["errors"][0]["file"], "subdir")
+            self.assertIn("directory", q["errors"][0]["error"])
+
+    def test_dot_empty_and_dotdot_rejected(self):
+        """"." (whole-repo checkout), "" and ".." are rejected with error
+        records; no file in the repo is modified or deleted."""
+        with tempfile.TemporaryDirectory() as td:
+            _git("git init -q", td)
+            f = Path(td) / "other_item.py"
+            f.write_text("ORIGINAL\n", encoding="utf-8")
+            _commit_all(td)
+            f.write_text("OTHER ITEM NEW VERIFIED WORK\n", encoding="utf-8")
+            item_result = {"filesWritten": [".", "", ".."]}
+            wave_loop._quarantine_blocked_files(
+                RealGitBlockDriver(), {"repo": td, "slug": "x"}, item_result
+            )
+            q = item_result["quarantine"]
+            self.assertEqual(
+                f.read_text(encoding="utf-8"), "OTHER ITEM NEW VERIFIED WORK\n"
+            )
+            self.assertEqual(q["restored"], [])
+            self.assertEqual(q["deleted"], [])
+            self.assertEqual(len(q["errors"]), 3)
+            self.assertEqual(
+                sorted(e["file"] for e in q["errors"]), ["", ".", ".."]
+            )
+
+    def test_single_owned_file_still_quarantines(self):
+        """The guard must not over-reject: a genuine FILE path owned by the
+        blocked item is still restored, and the sibling file is untouched."""
+        with tempfile.TemporaryDirectory() as td:
+            d = self._two_item_repo(td)
+            item_result = {"filesWritten": ["subdir/item_a_owned.py"]}
+            wave_loop._quarantine_blocked_files(
+                RealGitBlockDriver(), {"repo": td, "slug": "a"}, item_result
+            )
+            q = item_result["quarantine"]
+            self.assertEqual(
+                (d / "item_a_owned.py").read_text(encoding="utf-8"),
+                "A ORIGINAL\n",
+            )
+            self.assertEqual(
+                (d / "item_b_owned.py").read_text(encoding="utf-8"),
+                "B VERIFIED NEW WORK\n",
+            )
+            self.assertEqual(q["restored"], ["subdir/item_a_owned.py"])
+            self.assertEqual(q["errors"], [])
+
+    def test_glob_entry_does_not_revert_other_files(self):
+        """A glob entry ("*") must never expand: with :(literal) pathspec
+        magic it matches nothing tracked, so no other file is reverted."""
+        with tempfile.TemporaryDirectory() as td:
+            _git("git init -q", td)
+            f = Path(td) / "other_item.py"
+            f.write_text("ORIGINAL\n", encoding="utf-8")
+            _commit_all(td)
+            f.write_text("OTHER ITEM NEW VERIFIED WORK\n", encoding="utf-8")
+            item_result = {"filesWritten": ["*"]}
+            wave_loop._quarantine_blocked_files(
+                RealGitBlockDriver(), {"repo": td, "slug": "x"}, item_result
+            )
+            q = item_result["quarantine"]
+            self.assertEqual(
+                f.read_text(encoding="utf-8"), "OTHER ITEM NEW VERIFIED WORK\n"
+            )
+            self.assertEqual(q["restored"], [])
+
+    @unittest.skipUnless(os.name == "nt", "Windows path separator behavior")
+    def test_windows_backslash_tracked_path_restored_not_deleted(self):
+        """A tracked file reported with a backslash separator must be
+        recognized as tracked (pathspec normalized) and RESTORED -- the old
+        code misclassified it untracked and DELETED tracked content."""
+        with tempfile.TemporaryDirectory() as td:
+            _git("git init -q", td)
+            d = Path(td) / "sub"
+            d.mkdir()
+            (d / "tracked.py").write_text("ORIGINAL\n", encoding="utf-8")
+            _commit_all(td)
+            (d / "tracked.py").write_text("REFUSED\n", encoding="utf-8")
+            item_result = {"filesWritten": ["sub\\tracked.py"]}
+            wave_loop._quarantine_blocked_files(
+                RealGitBlockDriver(), {"repo": td, "slug": "x"}, item_result
+            )
+            q = item_result["quarantine"]
+            self.assertTrue((d / "tracked.py").exists())
+            self.assertEqual(
+                (d / "tracked.py").read_text(encoding="utf-8"), "ORIGINAL\n"
+            )
+            self.assertEqual(q["deleted"], [])
+            self.assertEqual(q["restored"], ["sub\\tracked.py"])
+
+
+class _AmbiguousLsFilesDriver:
+    """Claims to be inside a git worktree, but tracked-vs-untracked
+    classification errors out (exit 128, e.g. index lock)."""
+
+    def run_command(self, command, cwd=None, shell=None):
+        c = command.strip()
+        if c == "git rev-parse --is-inside-work-tree":
+            return CommandResult(exit_code=0, stdout="true")
+        if c.startswith("git ls-files"):
+            return CommandResult(
+                exit_code=128, stdout="", stderr="fatal: index file locked"
+            )
+        return CommandResult(exit_code=0, stdout="")
+
+
+class TestUntrackedClassificationFailSafe(unittest.TestCase):
+    def test_ambiguous_ls_files_failure_does_not_delete(self):
+        """ls-files exit 128 is NOT a clean 'untracked' determination: the
+        file must survive (fail-SAFE, never fail-DELETE) with an error
+        record; only a clean exit 1 may route to the delete branch."""
+        with tempfile.TemporaryDirectory() as td:
+            f = Path(td) / "uncertain.py"
+            f.write_text("MAYBE TRACKED\n", encoding="utf-8")
+            item_result = {"filesWritten": ["uncertain.py"]}
+            wave_loop._quarantine_blocked_files(
+                _AmbiguousLsFilesDriver(), {"repo": td, "slug": "x"},
+                item_result,
+            )
+            q = item_result["quarantine"]
+            self.assertTrue(f.exists())
+            self.assertEqual(
+                f.read_text(encoding="utf-8"), "MAYBE TRACKED\n"
+            )
+            self.assertEqual(q["deleted"], [])
+            self.assertEqual(q["restored"], [])
+            self.assertEqual(len(q["errors"]), 1)
+            self.assertIn("128", q["errors"][0]["error"])
+
+
+# ========================================================================
+# 8. Report visibility: a failed quarantine must NOT look like a clean
+#    block (per-item quarantine outcome surfaces in Report.blocked)
+# ========================================================================
+
+class _QuarantineErrorSchedDriver(ShipCapableFakeDriver):
+    """Fake worker whose quarantine path errors: claims a git worktree but
+    every ls-files classification fails (exit 128)."""
+
+    def run_command(self, command, cwd=None, shell=None):
+        c = command.strip()
+        if c == "git rev-parse --is-inside-work-tree":
+            return CommandResult(exit_code=0, stdout="true")
+        if c.startswith("git ls-files"):
+            return CommandResult(
+                exit_code=128, stdout="", stderr="fatal: index file locked"
+            )
+        return super().run_command(command, cwd=cwd, shell=shell)
+
+
+class TestBlockedLaneQuarantineVisibility(unittest.TestCase):
+    def _run_sched(self, td, driver):
+        tracker_path = _write_tracker(td)
+        return ws.run_wave_scheduler(
+            tracker_path=tracker_path,
+            max_items=1,
+            dry_run=False,
+            driver=driver,
+            state_dir=Path(td) / "state",
+            orchestrator_backend=FakeOrchestratorBackend([_BLOCK_DECISION]),
+        )
+
+    def test_quarantine_errors_surface_in_report_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            report = self._run_sched(td, _QuarantineErrorSchedDriver())
+        blocked = report["blocked"]
+        self.assertEqual(len(blocked), 1)
+        self.assertEqual(blocked[0]["quarantine"], "errors")
+        self.assertTrue(blocked[0]["quarantine_errors"])
+        self.assertIn("128", blocked[0]["quarantine_errors"][0]["error"])
+
+    def test_quarantine_skip_surfaces_as_skipped(self):
+        """Outside a git worktree the quarantine honestly skips -- the
+        Report must show 'skipped' + reason, never 'clean'."""
+        with tempfile.TemporaryDirectory() as td:
+            report = self._run_sched(td, ShipCapableFakeDriver())
+        blocked = report["blocked"]
+        self.assertEqual(len(blocked), 1)
+        self.assertEqual(blocked[0]["quarantine"], "skipped")
+        self.assertEqual(
+            blocked[0]["quarantine_skipped_reason"], "not_a_git_worktree"
+        )
+
+    def test_clean_quarantine_reported_clean(self):
+        with tempfile.TemporaryDirectory() as td:
+            _init_temp_git_repo(td)
+            report = self._run_sched(td, RealGitBlockDriver())
+        blocked = report["blocked"]
+        self.assertEqual(len(blocked), 1)
+        self.assertEqual(blocked[0]["quarantine"], "clean")
+        self.assertNotIn("quarantine_errors", blocked[0])
+
+
 if __name__ == "__main__":
     unittest.main()

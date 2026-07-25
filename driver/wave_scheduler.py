@@ -14,8 +14,11 @@ HS-2 BLOCK GATE (live orchestrator seat only; default Report shape unchanged):
   - Items the seat BLOCKS get the TERMINAL tracker status "blocked" in the same
     atomic write as shipped items' "in_progress" -> never re-selected/rebuilt
     (the tracker state is the durable block record, not the journal entry).
-  - Report gains "blocked": [{slug, reason}] (empty list when the seat ran and
-    blocked nothing) and "orchestrator_gate": {seat, model, decisions,
+  - Report gains "blocked": [{slug, reason, quarantine}] (empty list when the
+    seat ran and blocked nothing). quarantine is "clean" | "errors" (+
+    quarantine_errors: the per-file error records -- refused code may still
+    be in the tree) | "skipped" (+ quarantine_skipped_reason) | "unknown"
+    (no build record). Also "orchestrator_gate": {seat, model, decisions,
     verdict_counts{merge,block,escalate,undetermined,decision_failed},
     blocked[], decision_failed[], seat_tokens_spent, status}. status is
     "degraded" when the gate made zero successful decisions (all
@@ -501,8 +504,11 @@ def emit_report(
 
     HS-2 block-gate fields (present ONLY when a live orchestrator seat ran;
     the default no-seat Report shape is unchanged):
-      blocked: list of {slug, reason} for items the seat refused to ship
-               (empty list when the seat ran and blocked nothing).
+      blocked: list of {slug, reason, quarantine} for items the seat refused
+               to ship (empty list when the seat ran and blocked nothing).
+               quarantine: "clean" | "errors" (+ quarantine_errors per-file
+               records: refused code may still be in the tree) | "skipped"
+               (+ quarantine_skipped_reason) | "unknown" (no build record).
       orchestrator_gate: seat activity summary {seat, model, decisions,
                verdict_counts {merge, block, escalate, undetermined,
                decision_failed}, blocked [slugs], decision_failed [slugs],
@@ -789,12 +795,32 @@ def run_wave_scheduler(
             for d in review.get("blocked_detail") or []:
                 if isinstance(d, dict) and d.get("slug"):
                     reason_by_slug[d["slug"]] = d.get("reason")
+            built_by_slug = {
+                b_.get("slug"): b_
+                for b_ in (wave_result.get("built") or [])
+                if isinstance(b_, dict) and b_.get("slug")
+            }
             for s in blocked_slugs:
-                blocked_lane.append({
+                entry = {
                     "slug": s,
                     "reason": reason_by_slug.get(s)
                     or "orchestrator final_catch verdict: block",
-                })
+                }
+                # QUARANTINE VISIBILITY: a failed quarantine (refused code
+                # still in the tree) must never look like a clean block.
+                q = (built_by_slug.get(s) or {}).get("quarantine")
+                if isinstance(q, dict):
+                    if q.get("errors"):
+                        entry["quarantine"] = "errors"
+                        entry["quarantine_errors"] = q["errors"]
+                    elif q.get("skipped_reason"):
+                        entry["quarantine"] = "skipped"
+                        entry["quarantine_skipped_reason"] = q["skipped_reason"]
+                    else:
+                        entry["quarantine"] = "clean"
+                else:
+                    entry["quarantine"] = "unknown"
+                blocked_lane.append(entry)
 
         # TRACKER UPDATE FIRST (live-pilot lesson: a crash in Report assembly
         # must never leave shipped-but-unmarked items). Attempted as soon as
@@ -839,7 +865,7 @@ def run_wave_scheduler(
                     if not success_update:
                         tracker_update_error = update_error
                 if tracker_unmapped and tracker_update_error is None:
-                    tracker_update_error = "unmapped_shipped_slugs"
+                    tracker_update_error = "unmapped_slugs"
             except Exception as te:
                 tracker_update_error = f"tracker_update_exception: {te}"
 
