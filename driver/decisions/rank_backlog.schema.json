@@ -3,7 +3,7 @@
   "title": "Rank Backlog Decision",
   "description": "Orchestrator S2 decision: intake audit findings, feature ideation, fleet-ops recommendations, and prior backlog; rank them by precedence for the current wave. Produces an ordered list of items with priority scores and justifications.",
   "type": "object",
-  "required": ["verdict", "evidence"],
+  "required": ["verdict", "evidence", "confidence"],
   "properties": {
     "decision_type": {
       "type": "string",
