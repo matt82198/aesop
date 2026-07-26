@@ -44,3 +44,23 @@ This amendment pre-commits 40 additional frontier discrimination tasks (ft21–f
 - All 60 task definitions (bench/tasks_frontier.jsonl) and ground truth (bench/ground_truth_frontier.jsonl) committed before any v2 results.
 - Test suite run gate enforced in CI (tests/test_frontier_slice_n60.py must pass).
 - Post-v2: audit report will include per-tier breakdown, per-task score distributions, and equivalence decision per the margin protocol.
+
+## Amendment 2 — N=100 extension (committed 2026-07-26, after v2 results, before any v3 results)
+
+This amendment pre-commits 40 additional tasks (ft61–ft100), expanding the slice from N=60 to N=100 (n=300 runs/tier at 3 repeats).
+
+**Why, stated honestly (sequential, data-dependent extension):**
+- The v2 (N=60) result left ONE pair undecided: claude-opus-5 vs gpt-4o-mini at +3.89pp, 90% CI [-3.21, +10.99] — 0.99pp of overhang past the +10pp bound. All other 9 pairs were EQUIVALENT.
+- This extension was decided AFTER observing that result, specifically to make that pair decidable. Extending after peeking inflates type-I error relative to a fixed-N design; we disclose it rather than pretend otherwise. The v3 report must carry this disclosure verbatim, and the pooled-N verdicts are reported alongside (not instead of) the frozen v2 verdicts.
+- Power math at planning values (p=0.806 vs 0.767): at n=300/tier the 90% CI half-width is ~5.5pp, so the pair resolves EQUIVALENT iff the pooled diff is <= ~4.5pp; if the true gap is larger, remaining indeterminate (or leaning gap) is the correct published outcome, not a failure.
+
+**Scope and authorship:**
+- 40 new tasks (ft61–ft100) authored after v2 results were known, without per-model tuning; category mix mirrors ft01–ft60 (SQL/migrations, concurrency/distributed/caching, regex/unicode/coercion/config, long-context/instruction-conflict/ambiguity/contracts/refactoring).
+- All 100 tasks have machine-checkable ground-truth patterns with exemplar and counter-example validation; the CI pattern gate is extended to cover ft61–ft100 and must pass CLEAN before any v3 runs.
+
+**Protocol for the v3 run (pooled N=100):**
+- Same tiers, same 3-repeats structure, same margin protocol (equivalence iff |diff| <= 10pp AND TOST 90% CI within +/-10pp), same 85% ceiling rule, machine grading only.
+- Only the 600 new (tier, ft61–ft100, repeat) tuples run; ft01–ft60 results are frozen as committed in frontier-v2-2026-07-26.json.
+- **Transport change (disclosed):** new Claude-tier runs use direct api.anthropic.com HTTP (`BENCH_API_KEY`, per-run label `anthropic-http`, exact usage token counts, pay-per-use billing); ft01–ft60 Claude runs used the claude CLI (`anthropic`). Per-run transport is recorded in the checkpoint; the v3 report must break accuracy out by transport for the Claude tiers as a sanity check.
+- Pricing at billed rates (verified 2026-07-26): fable-5 10/50, opus-5 5/25, sonnet-5 2/10 (introductory), haiku-4.5 1/5 $/MTok. Spend cap for the extension: US$20.
+- ft04/ft09/ft37 scored 0/3 across all five tiers in v2; they are flagged for a pattern audit but remain UNCHANGED in the pooled set (changing scored tasks post hoc would break comparability).

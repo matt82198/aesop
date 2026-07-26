@@ -113,25 +113,78 @@ class CheckpointManager:
 # ============================================================================
 
 
+# Billed $/MTok (input, output) — verified against platform.claude.com 2026-07-26.
+# sonnet-5 uses introductory pricing (through 2026-08-31). The v2 ft01-ft60 run's
+# embedded table understated fable-5 ~40x; disclosed in frontier-v2-2026-07-26.md.
+PRICING_MTOK = {
+    "claude-opus-5": (5.0, 25.0),
+    "claude-fable-5": (10.0, 50.0),
+    "claude-sonnet-5": (2.0, 10.0),
+    "claude-haiku-4-5-20251001": (1.0, 5.0),
+}
+
+
 def invoke_claude_model(
     model: str,
     prompt: str,
-    max_tokens: int = 2048,
-    timeout_s: float = 120.0,
+    max_tokens: int = 8192,
+    timeout_s: float = 180.0,
 ):
-    """Invoke a Claude model via the claude CLI — the SAME transport v1 used.
+    """Invoke a Claude model.
 
-    No raw API key exists or is needed on this box; the CLI carries auth.
-    A missing/failed CLI call is an honest error result, never a credential hunt.
-    Returns (response_text, tokens_in, tokens_out, cost_usd).
+    Transport selection (per-run label recorded in the checkpoint):
+    - BENCH_API_KEY set -> direct api.anthropic.com HTTP ("anthropic-http"):
+      pay-per-use x-api-key billing, exact usage token counts.
+      The key is read ONLY from this named env var; a missing key means the
+      CLI fallback, never a credential hunt.
+    - otherwise -> claude CLI ("anthropic"), the transport ft01-ft60 ran on.
+    Returns (response_text, tokens_in, tokens_out, cost_usd, transport_label).
     """
+    api_key = os.environ.get("BENCH_API_KEY")
+    if api_key:
+        return _invoke_claude_http(model, prompt, api_key, max_tokens, timeout_s)
+    return _invoke_claude_cli(model, prompt, timeout_s)
+
+
+def _invoke_claude_http(model, prompt, api_key, max_tokens, timeout_s):
+    import urllib.request, json as _json
+    body = _json.dumps({
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=body,
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            out = _json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        raise RuntimeError(f"anthropic HTTP transport failed: {e}")
+    # A safety-classifier decline is an unscored error run (retryable + disclosed),
+    # never a scored-wrong answer.
+    if out.get("stop_reason") == "refusal":
+        raise RuntimeError("anthropic HTTP: stop_reason=refusal")
+    text = "".join(
+        b.get("text", "") for b in out.get("content", []) if b.get("type") == "text"
+    )
+    usage = out.get("usage", {})
+    ti = usage.get("input_tokens", 0)
+    to = usage.get("output_tokens", 0)
+    inr, outr = PRICING_MTOK.get(model, (10.0, 50.0))
+    cost = ti / 1_000_000 * inr + to / 1_000_000 * outr
+    return text, ti, to, cost, "anthropic-http"
+
+
+def _invoke_claude_cli(model, prompt, timeout_s):
     import subprocess, json as _json
-    pricing = {
-        "claude-opus-5": (5.0, 25.0),
-        "claude-fable-5": (0.30, 1.20),
-        "claude-sonnet-5": (3.0, 15.0),
-        "claude-haiku-4-5-20251001": (0.80, 4.0),
-    }
     try:
         result = subprocess.run(
             ["claude", "-p", prompt, "--model", model, "--output-format", "json"],
@@ -148,9 +201,9 @@ def invoke_claude_model(
             for md in out.get("modelUsage", {}).values():
                 ti = max(ti, md.get("inputTokens", 0))
                 to = max(to, md.get("outputTokens", 0))
-        inr, outr = pricing.get(model, (10.0, 30.0))
+        inr, outr = PRICING_MTOK.get(model, (10.0, 50.0))
         cost = ti/1_000_000*inr + to/1_000_000*outr
-        return text, ti, to, cost
+        return text, ti, to, cost, "anthropic"
     except Exception as e:
         raise RuntimeError(f"claude CLI transport failed: {e}")
 
@@ -220,8 +273,7 @@ def run_single_task(
 
     try:
         if tier.startswith("claude-"):
-            response_text, tokens_in, tokens_out, cost = invoke_claude_model(tier, task.prompt)
-            transport = "anthropic"
+            response_text, tokens_in, tokens_out, cost, transport = invoke_claude_model(tier, task.prompt)
         elif tier == "gpt-4o-mini":
             response_text, tokens_in, tokens_out, cost = invoke_openai_model(tier, task.prompt)
             transport = "openai"

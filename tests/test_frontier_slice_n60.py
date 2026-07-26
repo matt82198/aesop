@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test frontier slice N=60: validate all 60 tasks' ground-truth patterns.
+"""Test frontier slice: validate all tasks' ground-truth patterns.
 
 This test suite verifies:
 1. Each task's ground_truth pattern is well-formed (valid regex or exact string)
@@ -37,37 +37,48 @@ def load_ground_truth(path: str = "bench/ground_truth_frontier.jsonl") -> dict:
     return gt
 
 class TestFrontierSliceN60(unittest.TestCase):
-    def test_all_tasks_loaded(self):
-        """Verify we loaded exactly 60 tasks."""
-        tasks = load_tasks()
-        assert len(tasks) == 60, f"Expected 60 tasks, got {len(tasks)}"
+    @classmethod
+    def setUpClass(cls):
+        """Load tasks and ground truth once for the entire test class."""
+        cls.tasks = load_tasks()
+        cls.gt = load_ground_truth()
+        cls.n_tasks = len(cls.tasks)
 
-        gt = load_ground_truth()
-        assert len(gt) == 60, f"Expected 60 ground truths, got {len(gt)}"
+    def test_all_tasks_loaded(self):
+        """Verify we loaded all tasks with matching ground truth."""
+        assert self.n_tasks > 0, f"No tasks loaded"
+        assert len(self.gt) == self.n_tasks, f"Expected {self.n_tasks} ground truths, got {len(self.gt)}"
 
         # Verify all task IDs match
-        assert set(tasks.keys()) == set(gt.keys()), "Task IDs don't match ground truth IDs"
+        assert set(self.tasks.keys()) == set(self.gt.keys()), "Task IDs don't match ground truth IDs"
 
-        print(f"✓ Loaded all 60 tasks and ground truth")
+        print(f"✓ Loaded all {self.n_tasks} tasks and ground truth")
 
     def test_task_ids_sequential(self):
-        """Verify task IDs follow the pattern ft01-ft60."""
-        tasks = load_tasks()
-        task_ids = sorted(tasks.keys())
+        """Verify task IDs follow the pattern ft01-ftNN (numeric sort)."""
+        # Sort task IDs numerically by extracting the number
+        def extract_ft_number(task_id):
+            """Extract numeric part from ftNN_* format."""
+            parts = task_id.split('_', 1)
+            if parts[0].startswith('ft'):
+                try:
+                    return int(parts[0][2:])
+                except ValueError:
+                    return float('inf')
+            return float('inf')
+
+        task_ids = sorted(self.tasks.keys(), key=extract_ft_number)
 
         for i, task_id in enumerate(task_ids, 1):
             expected_id = f"ft{i:02d}_"
-            assert task_id.startswith(expected_id), f"Expected {expected_id}*, got {task_id}"
+            assert task_id.startswith(expected_id), f"Position {i}: Expected {expected_id}*, got {task_id}"
 
-        print(f"✓ All 60 task IDs are sequential (ft01 through ft60)")
+        print(f"✓ All {self.n_tasks} task IDs are sequential (ft01 through ft{self.n_tasks:02d})")
 
     def test_patterns_are_valid(self):
         """Verify each task's ground truth pattern is well-formed."""
-        tasks = load_tasks()
-        gt = load_ground_truth()
-
-        for task_id, gt_obj in gt.items():
-            task = tasks[task_id]
+        for task_id, gt_obj in self.gt.items():
+            task = self.tasks[task_id]
             match_type = task["match"]
 
             if match_type == "regex":
@@ -87,17 +98,14 @@ class TestFrontierSliceN60(unittest.TestCase):
             else:
                 raise AssertionError(f"{task_id}: unknown match type: {match_type}")
 
-        print(f"✓ All 60 patterns are well-formed")
+        print(f"✓ All {self.n_tasks} patterns are well-formed")
 
     def test_exemplar_matches(self):
         """Verify exemplar answer MATCHES its pattern."""
-        tasks = load_tasks()
-        gt = load_ground_truth()
-
         failures = []
 
-        for task_id, gt_obj in gt.items():
-            task = tasks[task_id]
+        for task_id, gt_obj in self.gt.items():
+            task = self.tasks[task_id]
             match_type = task["match"]
             exemplar = gt_obj.get("exemplar")
 
@@ -117,17 +125,14 @@ class TestFrontierSliceN60(unittest.TestCase):
             print("\n".join(failures))
             raise AssertionError(f"Found {len(failures)} exemplar matching failures")
 
-        print(f"✓ All 60 exemplars match their patterns")
+        print(f"✓ All {self.n_tasks} exemplars match their patterns")
 
     def test_counter_example_rejects(self):
         """Verify counter_example answer DOES NOT match the pattern."""
-        tasks = load_tasks()
-        gt = load_ground_truth()
-
         failures = []
 
-        for task_id, gt_obj in gt.items():
-            task = tasks[task_id]
+        for task_id, gt_obj in self.gt.items():
+            task = self.tasks[task_id]
             match_type = task["match"]
             counter = gt_obj.get("counter_example")
 
@@ -147,30 +152,26 @@ class TestFrontierSliceN60(unittest.TestCase):
             print("\n".join(failures))
             raise AssertionError(f"Found {len(failures)} counter_example rejection failures")
 
-        print(f"✓ All 60 counter_examples are correctly rejected by their patterns")
+        print(f"✓ All {self.n_tasks} counter_examples are correctly rejected by their patterns")
 
     def test_no_duplicate_categories(self):
         """Verify category distribution (optional: just report)."""
-        tasks = load_tasks()
-
         categories = {}
-        for task in tasks.values():
+        for task in self.tasks.values():
             cat = task["category"]
             categories[cat] = categories.get(cat, 0) + 1
 
-        print(f"\n  Category distribution (N={len(tasks)}):")
+        print(f"\n  Category distribution (N={self.n_tasks}):")
         for cat, count in sorted(categories.items()):
             print(f"    {cat}: {count} tasks")
 
     def test_discrimination_rationale_present(self):
         """Verify each task has a discrimination_rationale."""
-        tasks = load_tasks()
-
-        for task_id, task in tasks.items():
+        for task_id, task in self.tasks.items():
             assert "discrimination_rationale" in task, f"{task_id}: missing discrimination_rationale"
             assert len(task["discrimination_rationale"]) > 20, f"{task_id}: rationale too short"
 
-        print(f"✓ All 60 tasks have discrimination rationales")
+        print(f"✓ All {self.n_tasks} tasks have discrimination rationales")
 
 if __name__ == "__main__":
     unittest.main()
