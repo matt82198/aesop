@@ -122,6 +122,7 @@ export const TESTIDS = {
   verdictCostMetrics: 'verdict-cost-metrics',
   modelMixChart: 'model-mix-chart',
   costAnalyticsPanel: 'cost-analytics-panel',
+  waveAgentBreakdown: 'wave-agent-breakdown',
 
   // PR Board view
   viewPRBoard: 'view-prboard',
@@ -470,6 +471,50 @@ export const fixtureCost: CostSummary = {
     cost_per_empty: 1365.8,
     cost_per_hung: 2731.6,
   },
+  per_wave_costs: {
+    'wave-14': {
+      tokens_in: 2030170,
+      tokens_out: 442640,
+      model_tokens: {
+        'claude-haiku-4-5-20251001': 2268810,
+        'claude-sonnet-4-5-20250929': 203000,
+      },
+      cost: 0,
+    },
+    'wave-13': {
+      tokens_in: 1000000,
+      tokens_out: 280100,
+      model_tokens: {
+        'claude-haiku-4-5-20251001': 1484100,
+        'claude-sonnet-4-5-20250929': 796000,
+      },
+      cost: 0,
+    },
+  },
+  per_agent_costs: {
+    'Agent': {
+      tokens_in: 2140050,
+      tokens_out: 512300,
+      model_tokens: {
+        'claude-haiku-4-5-20251001': 2652350,
+        'claude-sonnet-4-5-20250929': 0,
+      },
+      runs: 128,
+      verdicts: { OK: 119, FAILED: 6, EMPTY: 2, HUNG: 1 },
+      cost: 0,
+    },
+    'main thread': {
+      tokens_in: 890120,
+      tokens_out: 210440,
+      model_tokens: {
+        'claude-haiku-4-5-20251001': 0,
+        'claude-sonnet-4-5-20250929': 1100560,
+      },
+      runs: 14,
+      verdicts: { OK: 13, FAILED: 1, EMPTY: 0, HUNG: 0 },
+      cost: 0,
+    },
+  },
   model_mix_trend: {
     '2026-07-11': {
       'claude-haiku-4-5-20251001': 81.2,
@@ -519,6 +564,50 @@ export const fixtureCostWithPricing: CostSummary = {
         'claude-sonnet-4-5-20250929': 999560,
       },
       cost: 15.21,
+    },
+  },
+  per_wave_costs: {
+    'wave-14': {
+      tokens_in: 2030170,
+      tokens_out: 442640,
+      model_tokens: {
+        'claude-haiku-4-5-20251001': 2268810,
+        'claude-sonnet-4-5-20250929': 203000,
+      },
+      cost: 11.02,
+    },
+    'wave-13': {
+      tokens_in: 1000000,
+      tokens_out: 280100,
+      model_tokens: {
+        'claude-haiku-4-5-20251001': 1484100,
+        'claude-sonnet-4-5-20250929': 796000,
+      },
+      cost: 8.78,
+    },
+  },
+  per_agent_costs: {
+    'Agent': {
+      tokens_in: 2140050,
+      tokens_out: 512300,
+      model_tokens: {
+        'claude-haiku-4-5-20251001': 2652350,
+        'claude-sonnet-4-5-20250929': 0,
+      },
+      runs: 128,
+      verdicts: { OK: 119, FAILED: 6, EMPTY: 2, HUNG: 1 },
+      cost: 8.91,
+    },
+    'main thread': {
+      tokens_in: 890120,
+      tokens_out: 210440,
+      model_tokens: {
+        'claude-haiku-4-5-20251001': 0,
+        'claude-sonnet-4-5-20250929': 1100560,
+      },
+      runs: 14,
+      verdicts: { OK: 13, FAILED: 1, EMPTY: 0, HUNG: 0 },
+      cost: 3.91,
     },
   },
   verdict_weighted_cost: {
