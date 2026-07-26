@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gitCmd, assertConfigNotPoisoned } from './helpers/git-helpers.mjs';
 
 const CLI = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -53,11 +54,6 @@ function cleanupTestDir(dir) {
   }
 }
 
-function gitCmd(cwd, cmd) {
-  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
-  const bashCmd = `bash -c "cd '${cwd.replace(/'/g, "'\\''")}' && ${cmd}"`;
-  return spawnSync('bash', ['-c', bashCmd], { stdio: 'ignore', encoding: 'utf8', timeout, killSignal: 'SIGKILL' });
-}
 
 test('aesop.config.example.json has _fleet_root_note key explaining security boundary', () => {
   const exampleConfig = JSON.parse(fs.readFileSync(EXAMPLE_CONFIG, 'utf8'));
@@ -84,9 +80,9 @@ test('scaffold with --name populates fleet_root with os.homedir() not placeholde
 
   try {
     fs.mkdirSync(targetDir, { recursive: true });
-    gitCmd(targetDir, 'git init');
-    gitCmd(targetDir, 'git config user.email "test@example.com"');
-    gitCmd(targetDir, 'git config user.name "Test User"');
+    gitCmd(targetDir, ['init']);
+    gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+    gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
     const res = runCli(targetDir, ['--name', 'test-service']);
     assert.equal(res.status, 0, `Scaffold should succeed. stderr: ${res.stderr}`);
@@ -123,9 +119,9 @@ test('scaffold with --repos generates placeholder URLs but adds _repos_note when
 
   try {
     fs.mkdirSync(targetDir, { recursive: true });
-    gitCmd(targetDir, 'git init');
-    gitCmd(targetDir, 'git config user.email "test@example.com"');
-    gitCmd(targetDir, 'git config user.name "Test User"');
+    gitCmd(targetDir, ['init']);
+    gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+    gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
     const res = runCli(targetDir, [
       '--name', 'my-service',
@@ -170,9 +166,9 @@ test('scaffold with --repo-urls uses provided URLs in generated config', () => {
 
   try {
     fs.mkdirSync(targetDir, { recursive: true });
-    gitCmd(targetDir, 'git init');
-    gitCmd(targetDir, 'git config user.email "test@example.com"');
-    gitCmd(targetDir, 'git config user.name "Test User"');
+    gitCmd(targetDir, ['init']);
+    gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+    gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
     const res = runCli(targetDir, [
       '--name', 'my-service',
@@ -207,9 +203,9 @@ test('scaffold respects --repo-urls count matches --repos count', () => {
 
   try {
     fs.mkdirSync(targetDir, { recursive: true });
-    gitCmd(targetDir, 'git init');
-    gitCmd(targetDir, 'git config user.email "test@example.com"');
-    gitCmd(targetDir, 'git config user.name "Test User"');
+    gitCmd(targetDir, ['init']);
+    gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+    gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
     // 3 repos but only 2 URLs - should still work but fill remaining with placeholders
     const res = runCli(targetDir, [
@@ -238,9 +234,9 @@ test('scaffold with --domains and --repo-urls works together', () => {
 
   try {
     fs.mkdirSync(targetDir, { recursive: true });
-    gitCmd(targetDir, 'git init');
-    gitCmd(targetDir, 'git config user.email "test@example.com"');
-    gitCmd(targetDir, 'git config user.name "Test User"');
+    gitCmd(targetDir, ['init']);
+    gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+    gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
     const res = runCli(targetDir, [
       '--name', 'production-api',
@@ -270,9 +266,9 @@ test('scaffold initializes both fleet_root and fallback config path with homedir
 
   try {
     fs.mkdirSync(targetDir, { recursive: true });
-    gitCmd(targetDir, 'git init');
-    gitCmd(targetDir, 'git config user.email "test@example.com"');
-    gitCmd(targetDir, 'git config user.name "Test User"');
+    gitCmd(targetDir, ['init']);
+    gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+    gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
     // Test with just --name to trigger config generation
     const res = runCli(targetDir, ['--name', 'fallback-test']);

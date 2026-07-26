@@ -19,6 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { scaffoldOnce, cleanupFixtures, assertFixturePristine } from './helpers/scaffold-fixture.mjs';
+import { gitCmd, assertConfigNotPoisoned } from './helpers/git-helpers.mjs';
 
 const CLI = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -59,11 +60,6 @@ function createTestDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-wizard-test-'));
 }
 
-function gitCmd(cwd, cmd) {
-  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
-  const bashCmd = `bash -c "cd '${cwd.replace(/'/g, "'\\''")}' && ${cmd}"`;
-  return spawnSync('bash', ['-c', bashCmd], { stdio: 'ignore', encoding: 'utf8', timeout, killSignal: 'SIGKILL' });
-}
 
 test('wizard --yes scaffolds with defaults (non-interactive, CI-safe)', () => {
   assert.equal(wizardFixture.result.status, 0, `Wizard --yes should succeed. stderr: ${wizardFixture.result.stderr}`);
@@ -114,9 +110,9 @@ test('wizard subcommand works with explicit target dir', () => {
   const tempDir = createTestDir();
 
   // Initialize git in tempDir
-  gitCmd(tempDir, 'git init');
-  gitCmd(tempDir, 'git config user.email "test@example.com"');
-  gitCmd(tempDir, 'git config user.name "Test User"');
+  gitCmd(tempDir, ['init']);
+  gitCmd(tempDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(tempDir, ['config', 'user.name', 'Test User']);
 
   // Run: aesop my-wizard-fleet wizard --yes
   const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
@@ -136,9 +132,9 @@ test('wizard --yes config has portable ~ paths', () => {
   const targetDir = path.join(tempDir, 'aesop-fleet');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   const res = runCli(targetDir, ['wizard', '--yes']);
   assert.equal(res.status, 0);
@@ -156,9 +152,9 @@ test('wizard --yes with --repos flag includes repos in config', () => {
   const targetDir = path.join(tempDir, 'aesop-fleet');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   // Note: wizard --yes doesn't accept --repos directly; this tests pure scaffolding
   // The wizard mode itself doesn't accept additional flags beyond --yes
@@ -192,9 +188,9 @@ test('wizard --yes handles missing repos gracefully (defaults to empty)', () => 
   const targetDir = path.join(tempDir, 'aesop-fleet');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   const res = runCli(targetDir, ['wizard', '--yes']);
   assert.equal(res.status, 0);
@@ -210,9 +206,9 @@ test('non-TTY input (stdin not a TTY) uses defaults without prompts', () => {
   const targetDir = path.join(tempDir, 'aesop-fleet');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   // Run with empty stdin (simulates non-TTY/pipe input)
   // This tests the non-interactive path
@@ -227,9 +223,9 @@ test('wizard subcommand can be first positional arg after target', () => {
   const fleetDir = path.join(tempDir, 'my-fleet');
 
   fs.mkdirSync(fleetDir, { recursive: true });
-  gitCmd(fleetDir, 'git init');
-  gitCmd(fleetDir, 'git config user.email "test@example.com"');
-  gitCmd(fleetDir, 'git config user.name "Test User"');
+  gitCmd(fleetDir, ['init']);
+  gitCmd(fleetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(fleetDir, ['config', 'user.name', 'Test User']);
 
   // Invoke as: aesop wizard --yes (wizard is first arg, treated as command)
   const res = runCli(fleetDir, ['wizard', '--yes']);
