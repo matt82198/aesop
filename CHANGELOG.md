@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.1] - 2026-07-26
 
+### Added (late-merging items — canonical in the v0.4.1 release notes)
+- Dashboard cost view: per-wave / per-agent / per-model spend breakdown with expandable model mix (#402)
+- `tools/wave_scorecard.py` — wave quality scorecards from ledger telemetry, StateAPI-conformant (#408)
+- `tools/wave_manifest_lint.py` — manifest preflight (file-ownership disjointness, prompt sanity); the pre-existing `wave_preflight.py` repo-readiness tool restored intact after a name-collision clobber was caught by its regression tests (#409)
+- Honesty reconciliations: judgment-v3 ceiling addendum (39/39 is a sufficiency floor, not tier equivalence — our own pre-declared ceiling rule trips on it), the wave-24 selection-vs-scoring boundary, and the MIT-until-2026-07-17 license-history disclosure (#414)
+
 ### Onboarding overhaul
 - **Config home-directory expansion** (PR #413): User-set `aesop_root: "~/myfleet"` now expands correctly via `.expanduser()` instead of treating tilde as a literal path.
 - **Reproduce graceful degradation** (PR #413): Fresh scaffolds (`.git` present, no `package-lock.json`) detect scaffold mode and run installed-mode verification instead of failing on `npm ci`; clear one-line message on graceful degrade.
