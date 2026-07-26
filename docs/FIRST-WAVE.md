@@ -47,19 +47,39 @@ This tells you the orchestrator is ready.
 
 Before running a wave, you need ranked work. The orchestrator needs to know what to build.
 
-### Create an initial backlog
+### Where your backlog lives
 
-In your orchestrator (Claude Code) or in a scratch file, write down 2–5 small tasks:
+Create a `state/BACKLOG.md` file (or update the backlog section in `state/STATE.md`). Use this markdown format:
 
-**Example backlog**:
+```markdown
+# Wave 15 Backlog
+
+## P1: Critical
+
+- [ ] Fix secret-scan gate hang (blocking CI) — backend-dev — 5min
+- [ ] Update MEMORY.md with wave-15 learnings — docs-agent — 3min
+
+## P2: Features
+
+- [ ] Add cost-ceiling dashboard widget — frontend-dev — 8min
+- [ ] Implement fleet-ops monitoring — backend-dev — 10min
+
+## P3: Tech Debt
+
+- [ ] Refactor monitor/collect-signals.mjs (duplicate checks) — backend-dev — 15min
+- [ ] Add type hints to Python tools — test-bot — 10min
 ```
-P1: Add README docs for orchestration
-P2: Fix typo in dashboard title
-P2: Add unit test coverage for config loader
-P3: Document the watchdog daemon
-```
 
-**Backlog principles**:
+**Backlog format**:
+- **Sections**: Group by priority (P1/P2/P3)
+- **Items**: Checkbox (`[ ]`) + title + agent type + time estimate
+- **Sizing guide**:
+  - **3–5 min**: Typo fix, simple config change, one-line refactor
+  - **5–10 min**: New function, small feature, unit test
+  - **10–15 min**: Module refactor, feature with 2–3 functions
+  - **15+ min**: Split into smaller items (waves work best in 30–90 min total)
+
+### Backlog principles
 
 - **Sized for Haiku**: Each task should take 1 Haiku agent 3–10 minutes (not 30 minutes)
 - **Scoped**: "Fix auth timeout" is better than "Refactor auth system"
