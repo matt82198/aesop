@@ -155,13 +155,16 @@ def get_cost_summary():
 
     Extended fields (additively):
       - per_week_costs: dict of "YYYY-Www" -> week cost/token totals and model mix
+      - per_wave_costs: dict of "wave-N" -> wave cost/token totals and model mix
+      - per_agent_costs: dict of agent_type -> agent cost/token totals and model mix
       - verdict_weighted_cost: cost-per-outcome metrics (cost per OK, weighted by verdict distribution)
       - model_mix_trend: per-day model usage distribution (%)
 
     Returns:
         dict: CostSummary with models, daily_totals, overall_scorecard,
               skipped_lines, has_pricing, estimates_by_model, per_week_costs,
-              verdict_weighted_cost, model_mix_trend (or error field if invalid).
+              per_wave_costs, per_agent_costs, verdict_weighted_cost, model_mix_trend
+              (or error field if invalid).
     """
     import sys
     from datetime import datetime, timedelta
@@ -188,6 +191,8 @@ def get_cost_summary():
         "has_pricing": False,
         "estimates_by_model": {},
         "per_week_costs": {},
+        "per_wave_costs": {},
+        "per_agent_costs": {},
         "verdict_weighted_cost": {
             "cost_per_ok": 0.0,
             "cost_per_failed": 0.0,
@@ -294,14 +299,28 @@ def get_cost_summary():
             result["skipped_lines"] += 1
             continue
 
-        # Store ledger entry for per-week calculation
+        # Extract optional wave and phase fields (if present)
+        wave = None
+        phase = None
+        try:
+            if len(parts) > 8:
+                phase = parts[8].strip() if len(parts) > 8 else None
+            if len(parts) > 9:
+                wave = parts[9].strip() if len(parts) > 9 else None
+        except (IndexError, ValueError):
+            pass
+
+        # Store ledger entry for per-week/per-wave/per-agent calculation
         ledger_entries.append({
             "timestamp": timestamp,
             "date_str": date_str,
             "model": model,
+            "agent_type": agent_type,
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
-            "verdict": verdict
+            "verdict": verdict,
+            "wave": wave,
+            "phase": phase
         })
 
         # Aggregate by model
@@ -367,6 +386,8 @@ def get_cost_summary():
 
     # Calculate per-week costs and model mix trend
     _calculate_weekly_costs(result, pricing_map, ledger_entries)
+    _calculate_per_wave_costs(result, pricing_map, ledger_entries)
+    _calculate_per_agent_costs(result, pricing_map, ledger_entries)
     _calculate_verdict_weighted_cost(result, pricing_map)
     _calculate_model_mix_trend(result)
 
@@ -549,6 +570,158 @@ def _calculate_model_mix_trend(result):
         model_mix_trend[date_str] = daily_dist
 
     result["model_mix_trend"] = model_mix_trend
+
+
+def _calculate_per_wave_costs(result, pricing_map, ledger_entries):
+    """Calculate per-wave cost rollup from ledger entries.
+
+    Groups ledger entries by wave number and aggregates per-model tokens for each wave.
+    If pricing is available, includes cost estimates.
+
+    Modifies result["per_wave_costs"] in-place with structure:
+    {
+        "wave-N": {
+            "tokens_in": int,
+            "tokens_out": int,
+            "model_tokens": {"model": int, ...},
+            "cost": float (if pricing available)
+        }
+    }
+    """
+    if not ledger_entries:
+        return
+
+    # Group ledger entries by wave and aggregate per-model within each wave
+    waves = {}
+    for entry in ledger_entries:
+        if not entry.get("wave"):
+            # Skip entries without wave info
+            continue
+
+        wave_key = f"wave-{entry['wave']}"
+
+        if wave_key not in waves:
+            waves[wave_key] = {
+                "tokens_in": 0,
+                "tokens_out": 0,
+                "model_tokens": {},
+                "cost": 0.0
+            }
+
+        # Aggregate this entry's tokens into the wave
+        waves[wave_key]["tokens_in"] += entry["tokens_in"]
+        waves[wave_key]["tokens_out"] += entry["tokens_out"]
+
+        # Track per-model tokens within this wave
+        model = entry["model"]
+        if model not in waves[wave_key]["model_tokens"]:
+            waves[wave_key]["model_tokens"][model] = 0
+        waves[wave_key]["model_tokens"][model] += entry["tokens_in"] + entry["tokens_out"]
+
+    # If pricing available, calculate cost per wave based on that wave's model mix
+    if pricing_map:
+        for wave_key, wave_data in waves.items():
+            total_cost = 0.0
+            for model, total_tokens in wave_data["model_tokens"].items():
+                if model in pricing_map:
+                    pricing = pricing_map[model]
+                    input_price = pricing.get("input_per_mtok", 0.0)
+                    output_price = pricing.get("output_per_mtok", 0.0)
+                    # Find entries for this model in this wave
+                    model_entries_in_wave = [
+                        e for e in ledger_entries
+                        if e.get("wave") == wave_key.replace("wave-", "") and e["model"] == model
+                    ]
+                    if model_entries_in_wave:
+                        wave_model_tokens_in = sum(e["tokens_in"] for e in model_entries_in_wave)
+                        wave_model_tokens_out = sum(e["tokens_out"] for e in model_entries_in_wave)
+                        model_cost = (wave_model_tokens_in * input_price + wave_model_tokens_out * output_price) / 1_000_000
+                    else:
+                        # Fallback: if we can't find the entries, use 1:2 ratio estimate
+                        tokens_in_estimate = total_tokens * 0.333
+                        tokens_out_estimate = total_tokens * 0.667
+                        model_cost = (tokens_in_estimate * input_price + tokens_out_estimate * output_price) / 1_000_000
+                    total_cost += model_cost
+            wave_data["cost"] = total_cost
+
+    result["per_wave_costs"] = waves
+
+
+def _calculate_per_agent_costs(result, pricing_map, ledger_entries):
+    """Calculate per-agent-type cost rollup from ledger entries.
+
+    Groups ledger entries by agent_type and aggregates per-model tokens for each agent type.
+    If pricing is available, includes cost estimates.
+
+    Modifies result["per_agent_costs"] in-place with structure:
+    {
+        "agent_type": {
+            "tokens_in": int,
+            "tokens_out": int,
+            "model_tokens": {"model": int, ...},
+            "runs": int,
+            "verdicts": {"OK": int, "FAILED": int, ...},
+            "cost": float (if pricing available)
+        }
+    }
+    """
+    if not ledger_entries:
+        return
+
+    # Group ledger entries by agent_type and aggregate per-model within each agent type
+    agents = {}
+    for entry in ledger_entries:
+        agent_type = entry.get("agent_type", "unknown")
+
+        if agent_type not in agents:
+            agents[agent_type] = {
+                "tokens_in": 0,
+                "tokens_out": 0,
+                "model_tokens": {},
+                "runs": 0,
+                "verdicts": {"OK": 0, "FAILED": 0, "EMPTY": 0, "HUNG": 0},
+                "cost": 0.0
+            }
+
+        # Aggregate this entry's tokens into the agent type
+        agents[agent_type]["tokens_in"] += entry["tokens_in"]
+        agents[agent_type]["tokens_out"] += entry["tokens_out"]
+        agents[agent_type]["runs"] += 1
+        agents[agent_type]["verdicts"][entry["verdict"]] += 1
+
+        # Track per-model tokens within this agent type
+        model = entry["model"]
+        if model not in agents[agent_type]["model_tokens"]:
+            agents[agent_type]["model_tokens"][model] = 0
+        agents[agent_type]["model_tokens"][model] += entry["tokens_in"] + entry["tokens_out"]
+
+    # If pricing available, calculate cost per agent type based on that type's model mix
+    if pricing_map:
+        for agent_type, agent_data in agents.items():
+            total_cost = 0.0
+            for model, total_tokens in agent_data["model_tokens"].items():
+                if model in pricing_map:
+                    pricing = pricing_map[model]
+                    input_price = pricing.get("input_per_mtok", 0.0)
+                    output_price = pricing.get("output_per_mtok", 0.0)
+                    # Find entries for this model from this agent type
+                    model_entries_for_agent = [
+                        e for e in ledger_entries
+                        if e.get("agent_type") == agent_type and e["model"] == model
+                    ]
+                    if model_entries_for_agent:
+                        agent_model_tokens_in = sum(e["tokens_in"] for e in model_entries_for_agent)
+                        agent_model_tokens_out = sum(e["tokens_out"] for e in model_entries_for_agent)
+                        model_cost = (agent_model_tokens_in * input_price + agent_model_tokens_out * output_price) / 1_000_000
+                    else:
+                        # Fallback: if we can't find the entries, use 1:2 ratio estimate
+                        tokens_in_estimate = total_tokens * 0.333
+                        tokens_out_estimate = total_tokens * 0.667
+                        model_cost = (tokens_in_estimate * input_price + tokens_out_estimate * output_price) / 1_000_000
+                    total_cost += model_cost
+            agent_data["cost"] = total_cost
+
+    result["per_agent_costs"] = agents
 
 
 def _load_pricing_config():
