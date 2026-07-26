@@ -41,7 +41,7 @@
 2. **CRLF-safe, no line continuations**: Use POSIX-safe heredocs (no backslash wrapping); scripts must work on Windows/CRLF systems.
 3. **Append-only logs**: FLEET-BACKUP.log, SELFHEAL.log only grow; rotate via tools/rotate_logs.py if >20KB.
 4. **Secret-scan gate**: `scan_tracked_files()` and `scan_unpushed_commits()` call tools/secret_scan.py; non-0 exit blocks push, marks repo BLOCKED.
-5. **Exit always 0**: run-watchdog and selfheal exit 0 always (trap cleans up); backup-fleet exits 0 even on secret-scan block.
+5. **Exit codes**: run-watchdog exits 0 on healthy cycle (--once) or clean startup (daemon); exits non-zero on cycle failure (backup step failed). selfheal exits 0 always (trap cleans up); backup-fleet exits 0 even on secret-scan block.
 6. **Path dedup via realpath**: Avoids processing symlinked repos twice.
 7. **Alert Bridge integration**: After backup-fleet.sh cycles, run-watchdog calls `python tools/alert_bridge.py --scan || true` to post HIGH/CRITICAL alerts and heartbeat staleness. No-op if webhook_url missing in aesop.config.json (opt-in feature). Cursor file ensures idempotent dispatch.
 8. **Cycle cadence**: 150s for watchdog backup cycles; 60s for selfheal healing cycles.
