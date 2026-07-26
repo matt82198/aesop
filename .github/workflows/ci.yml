@@ -217,6 +217,20 @@ jobs:
             exit 1
           fi
 
+  ps1-syntax-check:
+    # PowerShell syntax validation: ensures all *.ps1 files are parseable.
+    # Runs on Windows to use native PowerShell Parser.
+    # Does not block PR (not a required check); branch protection config unchanged.
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check PowerShell syntax
+        shell: powershell
+        run: |
+          & ".\tools\check-ps1-syntax.ps1" -RepoRoot "."
+
   browser-proofs:
     needs: docs-only-gate
     runs-on: ubuntu-latest
