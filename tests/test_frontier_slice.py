@@ -388,31 +388,33 @@ class TestOfflineMode(unittest.TestCase):
 
     def test_offline_mode_produces_json(self):
         """Offline mode should produce JSON output file."""
-        output_path = bench_dir / "results" / "frontier_slice_results.json"
+        import tempfile
+        import os as os_module
 
-        # Clean up any existing file
-        if output_path.exists():
-            output_path.unlink()
+        # Use temp directory for test output isolation
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "frontier_slice_results.json"
 
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(bench_dir / "frontier_slice.py"),
-                "--mode", "offline",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        self.assertEqual(result.returncode, 0)
-        self.assertTrue(output_path.exists(), f"Output file not created: {output_path}")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(bench_dir / "frontier_slice.py"),
+                    "--mode", "offline",
+                    "--output", str(output_path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertTrue(output_path.exists(), f"Output file not created: {output_path}")
 
-        # Validate JSON
-        with open(output_path) as f:
-            data = json.load(f)
-            self.assertIn("accuracy_percent", data)
-            self.assertIn("tasks", data)
-            self.assertGreater(len(data["tasks"]), 0)
+            # Validate JSON
+            with open(output_path) as f:
+                data = json.load(f)
+                self.assertIn("accuracy_percent", data)
+                self.assertIn("tasks", data)
+                self.assertGreater(len(data["tasks"]), 0)
 
 
 # ============================================================================
