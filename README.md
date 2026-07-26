@@ -107,6 +107,7 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 
 
+
 *Wave: one complete build cycle (intake → dispatch → verify → ship) run by the orchestration engine.*
 
 
@@ -119,7 +120,7 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 ## Why Haiku-First Works
 
-The benchmark proves it: across 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence, security spots), Haiku scored **39/39** vs Opus **38/39** at ~1/3 the per-token cost. See [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](./bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md). **Curated set, N=39** — Haiku 39/39 vs Opus 38/39; proves sufficiency for this workload, not frontier parity.
+The benchmark proves it: across 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence, security spots), Haiku scored **39/39** vs Opus **38/39** at ~1/3 the per-token cost. See [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](./bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md). **Scoped to extraction and judgment tasks with context at the seam** — does NOT cover open-ended synthesis, frontier reasoning, or long-horizon planning. Detailed equivalence analysis: [`bench/EQUIVALENCE-MARGIN.md`](./bench/EQUIVALENCE-MARGIN.md). **Curated set, N=39** — Haiku 39/39 vs Opus 38/39; proves sufficiency for this workload, not frontier parity.
 
 ## Learn More
 
