@@ -422,7 +422,9 @@ def main():
 
     print(f"Results saved to: {output_path}")
 
-    return 0 if accuracy >= 50.0 else 1
+    # Exit 0 = run completed and every task was scored; accuracy is DATA, not
+    # process health (a low FakeTransport score must not read as a crash).
+    return 0 if len(scores) == len(tasks) else 1
 
 
 if __name__ == "__main__":
