@@ -244,6 +244,27 @@ export interface CostVerdictWeightedCost {
   cost_per_hung: number;
 }
 
+export interface CostWaveData {
+  tokens_in: number;
+  tokens_out: number;
+  model_tokens: Record<string, number>; // total tokens per model for the wave
+  cost: number; // dollars if pricing available, 0 otherwise
+}
+
+export interface CostAgentData {
+  tokens_in: number;
+  tokens_out: number;
+  model_tokens: Record<string, number>; // total tokens per model for this agent type
+  runs: number;
+  verdicts: {
+    OK: number;
+    FAILED: number;
+    EMPTY: number;
+    HUNG: number;
+  };
+  cost: number; // dollars if pricing available, 0 otherwise
+}
+
 export interface CostSummary {
   models: Record<string, CostModelStats>; // keyed by model id
   daily_totals: Record<string, CostDailyTotal>; // keyed by "YYYY-MM-DD"
@@ -252,6 +273,8 @@ export interface CostSummary {
   has_pricing: boolean;
   estimates_by_model: Record<string, CostEstimate>; // empty when has_pricing is false
   per_week_costs: Record<string, CostWeeklyData>; // keyed by "YYYY-Www" (ISO week)
+  per_wave_costs: Record<string, CostWaveData>; // keyed by "wave-N" (from ledger wave column)
+  per_agent_costs: Record<string, CostAgentData>; // keyed by agent_type
   verdict_weighted_cost: CostVerdictWeightedCost;
   model_mix_trend: Record<string, Record<string, number>>; // keyed by "YYYY-MM-DD", values are model -> percentage
 }

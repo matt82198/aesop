@@ -1,0 +1,250 @@
+/* Wave & Agent Cost Breakdown — detailed per-wave/per-agent/per-model table */
+
+.wave-agent-breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: var(--space-3);
+}
+
+.breakdown-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.breakdown-section h4 {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+/* Empty state */
+.breakdown-empty {
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-border);
+  text-align: center;
+}
+
+.breakdown-empty p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+/* Main table */
+.breakdown-table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+}
+
+.breakdown-table thead {
+  background: var(--color-bg-inset);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.breakdown-table th {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  font-weight: 600;
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+.breakdown-table tbody tr {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.breakdown-table tbody tr:last-child {
+  border-bottom: none;
+}
+
+.breakdown-row {
+  cursor: pointer;
+  background: var(--color-surface);
+  transition: background-color 0.15s ease;
+}
+
+.breakdown-row:hover {
+  background: var(--color-bg-subtle);
+}
+
+.breakdown-table td {
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-text);
+}
+
+/* Column sizing */
+.col-wave {
+  width: 20%;
+  font-weight: 500;
+}
+
+.col-agent {
+  width: 30%;
+  font-weight: 500;
+}
+
+.col-tokens {
+  width: 15%;
+  text-align: right;
+  font-family: var(--font-mono);
+}
+
+.col-runs {
+  width: 12%;
+  text-align: center;
+}
+
+.col-cost {
+  width: 15%;
+  text-align: right;
+  font-weight: 500;
+}
+
+.col-action {
+  width: 8%;
+  text-align: center;
+}
+
+.col-percent {
+  text-align: right;
+}
+
+/* Expand/collapse button */
+.expand-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  transition: color 0.15s ease;
+}
+
+.expand-toggle:hover {
+  color: var(--color-text);
+}
+
+/* Detail rows */
+.breakdown-detail td {
+  padding: 0;
+  border-bottom: none;
+  background: var(--color-bg-inset);
+}
+
+.detail-content {
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.detail-content h5 {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.detail-stats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.stat {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: var(--font-size-sm);
+}
+
+.stat-label {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+
+.stat-value {
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+/* Detail table */
+.detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-xs);
+}
+
+.detail-table thead {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.detail-table th {
+  padding: var(--space-2) var(--space-2);
+  text-align: left;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: none;
+  font-size: var(--font-size-xs);
+}
+
+.detail-table tbody tr {
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.detail-table tbody tr:last-child {
+  border-bottom: none;
+}
+
+.detail-table td {
+  padding: var(--space-2);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+}
+
+.detail-table td:first-child {
+  font-family: var(--font-base);
+  color: var(--color-text);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .wave-agent-breakdown {
+    gap: var(--space-4);
+  }
+
+  .col-wave,
+  .col-agent,
+  .col-tokens,
+  .col-runs,
+  .col-cost,
+  .col-action {
+    width: auto;
+  }
+
+  .breakdown-table th,
+  .breakdown-table td {
+    padding: var(--space-2);
+    font-size: var(--font-size-xs);
+  }
+
+  .detail-content {
+    padding: var(--space-3);
+  }
+}
