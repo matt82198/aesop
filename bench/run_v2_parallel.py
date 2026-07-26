@@ -96,7 +96,9 @@ class CheckpointManager:
                 for line in f:
                     if line.strip():
                         obj = json.loads(line)
-                        completed.add((obj["tier"], obj["task_id"], obj["repeat"]))
+                        # error runs are retryable — only successful runs count as completed
+                        if obj.get("transport") != "error" and obj.get("correct") is not None:
+                            completed.add((obj["tier"], obj["task_id"], obj["repeat"]))
         return completed
 
     def append(self, run: FrontierV2Run) -> None:
@@ -114,124 +116,43 @@ class CheckpointManager:
 def invoke_claude_model(
     model: str,
     prompt: str,
-    max_tokens: int = 512,
-    timeout_s: float = 60.0,
-) -> Tuple[str, int, int, float]:
-    """Invoke Claude model via anthropic client.
+    max_tokens: int = 2048,
+    timeout_s: float = 120.0,
+):
+    """Invoke a Claude model via the claude CLI — the SAME transport v1 used.
 
-    Returns:
-        (response_text, tokens_in, tokens_out, cost_usd)
+    No raw API key exists or is needed on this box; the CLI carries auth.
+    A missing/failed CLI call is an honest error result, never a credential hunt.
+    Returns (response_text, tokens_in, tokens_out, cost_usd).
     """
-    import subprocess
-    import base64
-
-    # Pricing (2026-07-26 rates)
+    import subprocess, json as _json
     pricing = {
-        "claude-opus-5": {"input": 15.0, "output": 75.0},
-        "claude-fable-5": {"input": 3.0, "output": 15.0},
-        "claude-sonnet-5": {"input": 3.0, "output": 15.0},
-        "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.0},
+        "claude-opus-5": (5.0, 25.0),
+        "claude-fable-5": (0.30, 1.20),
+        "claude-sonnet-5": (3.0, 15.0),
+        "claude-haiku-4-5-20251001": (0.80, 4.0),
     }
-
-    rates = pricing.get(model, {"input": 10.0, "output": 30.0})
-
-    # Try subprocess approach to access anthropic client in a subprocess context
-    # where credentials might be more accessible
     try:
-        # Use base64 to safely pass the prompt through the command line
-        prompt_b64 = base64.b64encode(prompt.encode()).decode()
-
-        python_code = f"""
-import json, sys, base64
-sys.path.insert(0, 'bench')
-try:
-    import anthropic
-    import os
-
-    # Try to get API key from multiple sources
-    api_key = os.environ.get('ANTHROPIC_API_KEY')
-    if not api_key:
-        # Try alternate env var names
-        api_key = os.environ.get('ANTHROPIC_KEY') or os.environ.get('CLAUDE_API_KEY')
-
-    if not api_key:
-        print(json.dumps({{"error": "no_api_key"}}) , file=sys.stderr)
-        sys.exit(1)
-
-    client = anthropic.Anthropic(api_key=api_key)
-    prompt = base64.b64decode("{prompt_b64}").decode()
-
-    response = client.messages.create(
-        model="{model}",
-        max_tokens={max_tokens},
-        messages=[{{"role": "user", "content": prompt}}]
-    )
-
-    data = {{
-        "text": response.content[0].text if response.content else "",
-        "input": response.usage.input_tokens,
-        "output": response.usage.output_tokens
-    }}
-    print(json.dumps(data))
-except Exception as e:
-    print(json.dumps({{"error": str(e)}}), file=sys.stderr)
-    sys.exit(1)
-"""
-
         result = subprocess.run(
-            [sys.executable, "-c", python_code],
-            capture_output=True,
-            text=True,
-            timeout=timeout_s + 10,
-            cwd=str(Path(__file__).parent.parent),
+            ["claude", "-p", prompt, "--model", model, "--output-format", "json"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout_s,
         )
-
-        if result.returncode == 0:
-            try:
-                output = json.loads(result.stdout)
-                if "error" not in output:
-                    response_text = output.get("text", "")
-                    tokens_in = output.get("input", 0)
-                    tokens_out = output.get("output", 0)
-                    if response_text:  # Only return if we got actual content
-                        cost = (tokens_in / 1_000_000) * rates["input"] + (tokens_out / 1_000_000) * rates["output"]
-                        return response_text, tokens_in, tokens_out, cost
-            except json.JSONDecodeError:
-                pass
-    except (subprocess.TimeoutExpired, Exception):
-        pass
-
-    # Final fallback: direct anthropic client (will fail if key not available)
-    try:
-        import anthropic
-    except ImportError:
-        raise RuntimeError("anthropic not installed: pip install anthropic")
-
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        api_key = os.environ.get("ANTHROPIC_KEY") or os.environ.get("CLAUDE_API_KEY")
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY env var not set")
-
-    client = anthropic.Anthropic(api_key=api_key)
-
-    response = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        messages=[
-            {"role": "user", "content": prompt}
-        ],
-    )
-
-    response_text = response.content[0].text if response.content else ""
-    tokens_in = response.usage.input_tokens
-    tokens_out = response.usage.output_tokens
-
-    # Cost in USD (rates are per million tokens)
-    cost = (tokens_in / 1_000_000) * rates["input"] + (tokens_out / 1_000_000) * rates["output"]
-
-    return response_text, tokens_in, tokens_out, cost
-
+        if result.returncode != 0:
+            raise RuntimeError(f"claude CLI rc={result.returncode}: {(result.stderr or '')[:200]}")
+        out = _json.loads(result.stdout)
+        text = out.get("result", "")
+        ti = out.get("usage", {}).get("input_tokens", 0)
+        to = out.get("usage", {}).get("output_tokens", 0)
+        if ti == 0 or to == 0:
+            for md in out.get("modelUsage", {}).values():
+                ti = max(ti, md.get("inputTokens", 0))
+                to = max(to, md.get("outputTokens", 0))
+        inr, outr = pricing.get(model, (10.0, 30.0))
+        cost = ti/1_000_000*inr + to/1_000_000*outr
+        return text, ti, to, cost
+    except Exception as e:
+        raise RuntimeError(f"claude CLI transport failed: {e}")
 
 def invoke_openai_model(
     model: str,
@@ -307,28 +228,29 @@ def run_single_task(
         else:
             raise ValueError(f"Unknown tier: {tier}")
     except Exception as e:
-        # For Claude models, the error is likely auth-related
-        # Record a placeholder but continue
+        # Transport failure = an ERROR RUN, never a scored (wrong) answer.
+        # Error runs carry error=<msg>, are excluded from accuracy, and are
+        # retried on the next invocation (checkpoint skip is keyed on success).
         transport = "error"
-        if tier.startswith("claude-"):
-            # Claude auth error - this is expected if ANTHROPIC_API_KEY not set
-            response_text = "[ANTHROPIC_API_KEY not configured]"
-        else:
-            response_text = f"[ERROR: {e}]"
+        response_text = f"[TRANSPORT-ERROR: {e}]"
         tokens_in = tokens_out = 0
         cost = 0.0
 
     # If we got no response, mark as error
     if not response_text:
         response_text = "[No response]"
+        transport = "error"
 
-    # Score response
-    gt = ground_truth.get(task.id)
-    if gt:
-        score = score_response(task, response_text, gt)
-        correct = score.correct
+    # Score response — error runs are NEVER scored (excluded from accuracy, retryable)
+    if transport == "error":
+        correct = None
     else:
-        correct = False
+        gt = ground_truth.get(task.id)
+        if gt:
+            score = score_response(task, response_text, gt)
+            correct = score.correct
+        else:
+            correct = False
 
     # Compute response hash
     response_hash = "sha256:" + hashlib.sha256(response_text.encode()).hexdigest()[:16]
