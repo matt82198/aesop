@@ -8,7 +8,7 @@
 
 ## Test Suite Map & Run Commands
 
-**Shell (11 suites)**:
+**Shell (12 suites)**:
 backup-fleet.test.sh, dash-watchdog-gui.test.sh, test_agent_forensics.sh, test_pre_push_policy.sh, test-run-watchdog.sh, test-run-watchdog-halt.sh, test-run-watchdog-lockguard.sh, test_reconstitute.sh, test_reconstitute_fixes.sh, test-selfheal.sh, test_waveguard.sh.
 Run: `bash tests/test_pre_push_policy.sh && bash tests/backup-fleet.test.sh && bash tests/test_reconstitute.sh && bash tests/test_reconstitute_fixes.sh && bash tests/test_agent_forensics.sh && bash tests/test-selfheal.sh && bash hooks/pre-push-policy.sh --test && bash tools/reconstitute.sh --test`
 
