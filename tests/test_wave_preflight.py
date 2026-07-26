@@ -1,4 +1,4 @@
-﻿"""
+"""
 Test suite for wave_preflight.py — wave manifest validator.
 
 Tests validate: (1) file-ownership disjointness, (2) path existence,
