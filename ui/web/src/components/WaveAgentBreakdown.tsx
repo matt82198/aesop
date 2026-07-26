@@ -9,7 +9,7 @@
  * Renders as an info-dense table with expandable rows showing model breakdown.
  */
 
-import type { CostSummary, CostWaveData, CostAgentData } from '../lib/types';
+import type { CostSummary } from '../lib/types';
 import { useState } from 'react';
 import { TESTIDS } from '../test/fixtures';
 import './WaveAgentBreakdown.css';
