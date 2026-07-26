@@ -1,0 +1,665 @@
+{
+ "run": "frontier-discrimination-slice-v2-n60",
+ "date": "2026-07-26",
+ "protocol": "bench/EQUIVALENCE-MARGIN.md Amendment 1 (N=60, 3 repeats, TOST +/-10pp at 90% CI, ceiling 85%)",
+ "preregistration_commit": "44357a7",
+ "n_tasks": 60,
+ "repeats": 3,
+ "tiers": [
+  "claude-fable-5",
+  "claude-haiku-4-5-20251001",
+  "claude-opus-5",
+  "claude-sonnet-5",
+  "gpt-4o-mini"
+ ],
+ "good_tuples": 900,
+ "error_runs_discarded": 8,
+ "grading": "machine-checked ground-truth patterns only (tests/test_frontier_slice_n60.py gate); zero model-graded items",
+ "per_tier": {
+  "claude-fable-5": {
+   "n_runs": 180,
+   "correct_runs": 141,
+   "acc": 0.7833,
+   "majority_correct": 46,
+   "n_tasks": 60,
+   "majority_acc": 0.7667,
+   "per_task_score_dist_0_to_3": [
+    9,
+    5,
+    2,
+    44
+   ],
+   "cost_usd_recomputed": 9.05,
+   "cost_usd_as_logged": 0.22,
+   "tokens_in": 723,
+   "tokens_out": 180903
+  },
+  "claude-haiku-4-5-20251001": {
+   "n_runs": 180,
+   "correct_runs": 140,
+   "acc": 0.7778,
+   "majority_correct": 49,
+   "n_tasks": 60,
+   "majority_acc": 0.8167,
+   "per_task_score_dist_0_to_3": [
+    8,
+    3,
+    10,
+    39
+   ],
+   "cost_usd_recomputed": 1.01,
+   "cost_usd_as_logged": 0.81,
+   "tokens_in": 1800,
+   "tokens_out": 201425
+  },
+  "claude-opus-5": {
+   "n_runs": 180,
+   "correct_runs": 145,
+   "acc": 0.8056,
+   "majority_correct": 49,
+   "n_tasks": 60,
+   "majority_acc": 0.8167,
+   "per_task_score_dist_0_to_3": [
+    6,
+    5,
+    7,
+    42
+   ],
+   "cost_usd_recomputed": 7.82,
+   "cost_usd_as_logged": 7.82,
+   "tokens_in": 370,
+   "tokens_out": 312753
+  },
+  "claude-sonnet-5": {
+   "n_runs": 180,
+   "correct_runs": 142,
+   "acc": 0.7889,
+   "majority_correct": 48,
+   "n_tasks": 60,
+   "majority_acc": 0.8,
+   "per_task_score_dist_0_to_3": [
+    9,
+    3,
+    5,
+    43
+   ],
+   "cost_usd_recomputed": 2.18,
+   "cost_usd_as_logged": 3.26,
+   "tokens_in": 360,
+   "tokens_out": 217497
+  },
+  "gpt-4o-mini": {
+   "n_runs": 180,
+   "correct_runs": 138,
+   "acc": 0.7667,
+   "majority_correct": 47,
+   "n_tasks": 60,
+   "majority_acc": 0.7833,
+   "per_task_score_dist_0_to_3": [
+    7,
+    6,
+    9,
+    38
+   ],
+   "cost_usd_recomputed": 0.04,
+   "cost_usd_as_logged": 0.04,
+   "tokens_in": 18792,
+   "tokens_out": 65964
+  }
+ },
+ "pairwise_tost": [
+  {
+   "pair": [
+    "claude-fable-5",
+    "claude-haiku-4-5-20251001"
+   ],
+   "diff_pp": 0.55,
+   "ci90_pp": [
+    -6.63,
+    7.73
+   ],
+   "verdict": "EQUIVALENT"
+  },
+  {
+   "pair": [
+    "claude-fable-5",
+    "claude-opus-5"
+   ],
+   "diff_pp": -2.23,
+   "ci90_pp": [
+    -9.23,
+    4.77
+   ],
+   "verdict": "EQUIVALENT"
+  },
+  {
+   "pair": [
+    "claude-fable-5",
+    "claude-sonnet-5"
+   ],
+   "diff_pp": -0.56,
+   "ci90_pp": [
+    -7.67,
+    6.55
+   ],
+   "verdict": "EQUIVALENT"
+  },
+  {
+   "pair": [
+    "claude-fable-5",
+    "gpt-4o-mini"
+   ],
+   "diff_pp": 1.66,
+   "ci90_pp": [
+    -5.58,
+    8.9
+   ],
+   "verdict": "EQUIVALENT"
+  },
+  {
+   "pair": [
+    "claude-haiku-4-5-20251001",
+    "claude-opus-5"
+   ],
+   "diff_pp": -2.78,
+   "ci90_pp": [
+    -9.82,
+    4.26
+   ],
+   "verdict": "EQUIVALENT"
+  },
+  {
+   "pair": [
+    "claude-haiku-4-5-20251001",
+    "claude-sonnet-5"
+   ],
+   "diff_pp": -1.11,
+   "ci90_pp": [
+    -8.25,
+    6.03
+   ],
+   "verdict": "EQUIVALENT"
+  },
+  {
+   "pair": [
+    "claude-haiku-4-5-20251001",
+    "gpt-4o-mini"
+   ],
+   "diff_pp": 1.11,
+   "ci90_pp": [
+    -6.16,
+    8.38
+   ],
+   "verdict": "EQUIVALENT"
+  },
+  {
+   "pair": [
+    "claude-opus-5",
+    "claude-sonnet-5"
+   ],
+   "diff_pp": 1.67,
+   "ci90_pp": [
+    -5.3,
+    8.64
+   ],
+   "verdict": "EQUIVALENT"
+  },
+  {
+   "pair": [
+    "claude-opus-5",
+    "gpt-4o-mini"
+   ],
+   "diff_pp": 3.89,
+   "ci90_pp": [
+    -3.21,
+    10.99
+   ],
+   "verdict": "INDETERMINATE"
+  },
+  {
+   "pair": [
+    "claude-sonnet-5",
+    "gpt-4o-mini"
+   ],
+   "diff_pp": 2.22,
+   "ci90_pp": [
+    -4.99,
+    9.43
+   ],
+   "verdict": "EQUIVALENT"
+  }
+ ],
+ "ceiling_rule": {
+  "threshold": 0.85,
+  "tiers_at_or_above": [],
+  "triggered": false
+ },
+ "zero_score_all_tiers_tasks": [
+  "ft09_refactoring_correctness_semantic",
+  "ft37_refactoring_dict_comprehension"
+ ],
+ "per_task_correct_of_3": {
+  "ft01_multi_step_sql_refactor": {
+   "claude-fable-5": 1,
+   "claude-haiku-4-5-20251001": 2,
+   "claude-opus-5": 0,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 1
+  },
+  "ft02_code_defect_detection_concurrent": {
+   "claude-fable-5": 2,
+   "claude-haiku-4-5-20251001": 1,
+   "claude-opus-5": 2,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 2
+  },
+  "ft03_instruction_conflict_precedence": {
+   "claude-fable-5": 0,
+   "claude-haiku-4-5-20251001": 0,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 1,
+   "gpt-4o-mini": 0
+  },
+  "ft04_long_context_needle_judgment": {
+   "claude-fable-5": 0,
+   "claude-haiku-4-5-20251001": 0,
+   "claude-opus-5": 1,
+   "claude-sonnet-5": 0,
+   "gpt-4o-mini": 0
+  },
+  "ft05_json_schema_validation_edge_case": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft06_git_history_blame_analysis": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft07_ambiguous_english_resolution": {
+   "claude-fable-5": 0,
+   "claude-haiku-4-5-20251001": 1,
+   "claude-opus-5": 0,
+   "claude-sonnet-5": 0,
+   "gpt-4o-mini": 0
+  },
+  "ft08_nested_boolean_logic_simplification": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 2,
+   "gpt-4o-mini": 2
+  },
+  "ft09_refactoring_correctness_semantic": {
+   "claude-fable-5": 0,
+   "claude-haiku-4-5-20251001": 0,
+   "claude-opus-5": 0,
+   "claude-sonnet-5": 0,
+   "gpt-4o-mini": 0
+  },
+  "ft10_config_validation_corner_case": {
+   "claude-fable-5": 0,
+   "claude-haiku-4-5-20251001": 0,
+   "claude-opus-5": 2,
+   "claude-sonnet-5": 0,
+   "gpt-4o-mini": 3
+  },
+  "ft11_regex_pattern_equivalence": {
+   "claude-fable-5": 0,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 1,
+   "claude-sonnet-5": 0,
+   "gpt-4o-mini": 2
+  },
+  "ft12_api_contract_violation_detection": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft13_database_migration_safety": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 2
+  },
+  "ft14_performance_bottleneck_identification": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft15_state_machine_correctness": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 2,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft16_unicode_normalization_gotcha": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft17_caching_invalidation_consistency": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft18_type_coercion_subtle_bug": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft19_format_string_vulnerability": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft20_distributed_lock_correctness": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 0
+  },
+  "ft21_sql_join_optimization_complex": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 2,
+   "claude-opus-5": 1,
+   "claude-sonnet-5": 2,
+   "gpt-4o-mini": 1
+  },
+  "ft22_sql_transaction_isolation_deadlock": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft23_memory_ordering_volatile_bug": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft24_nested_lock_deadlock_reentrant": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 2,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft25_instruction_priority_cascade": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 2
+  },
+  "ft26_instruction_compatibility_constraint": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 1
+  },
+  "ft27_long_context_buried_assumption": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft28_long_context_timing_inconsistency": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 2,
+   "gpt-4o-mini": 3
+  },
+  "ft29_json_schema_recursive_reference": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 2,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 2
+  },
+  "ft30_json_schema_enum_default_interaction": {
+   "claude-fable-5": 1,
+   "claude-haiku-4-5-20251001": 2,
+   "claude-opus-5": 2,
+   "claude-sonnet-5": 2,
+   "gpt-4o-mini": 1
+  },
+  "ft31_git_blame_security_regression": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 2,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft32_git_bisect_performance_regression": {
+   "claude-fable-5": 0,
+   "claude-haiku-4-5-20251001": 2,
+   "claude-opus-5": 1,
+   "claude-sonnet-5": 1,
+   "gpt-4o-mini": 3
+  },
+  "ft33_ambiguous_scope_resolution": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 2
+  },
+  "ft34_ambiguous_negation_scope": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 2,
+   "gpt-4o-mini": 3
+  },
+  "ft35_boolean_de_morgans_law": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 0,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 0,
+   "gpt-4o-mini": 0
+  },
+  "ft36_boolean_xor_equivalence": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft37_refactoring_dict_comprehension": {
+   "claude-fable-5": 0,
+   "claude-haiku-4-5-20251001": 0,
+   "claude-opus-5": 0,
+   "claude-sonnet-5": 0,
+   "gpt-4o-mini": 0
+  },
+  "ft38_refactoring_generator_to_list": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 2,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft39_config_environment_variable_override": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft40_config_schema_validation_strict": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft41_regex_backref_vs_alternation": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 2,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 1
+  },
+  "ft42_regex_lookahead_negative": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft43_api_response_enum_violation": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 2
+  },
+  "ft44_api_request_body_size_constraint": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft45_migration_index_creation_impact": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft46_migration_foreign_key_constraint": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft47_performance_memory_vs_cpu": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft48_performance_caching_hit_rate": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft49_state_machine_idempotency": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 2
+  },
+  "ft50_state_machine_partial_recovery": {
+   "claude-fable-5": 1,
+   "claude-haiku-4-5-20251001": 2,
+   "claude-opus-5": 1,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft51_unicode_emoji_byte_length": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft52_unicode_combining_character": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft53_cache_stampede_concurrent": {
+   "claude-fable-5": 1,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 2,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft54_cache_double_invalidation": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft55_type_coercion_array_comparison": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 3,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft56_type_coercion_numeric_string": {
+   "claude-fable-5": 0,
+   "claude-haiku-4-5-20251001": 0,
+   "claude-opus-5": 0,
+   "claude-sonnet-5": 0,
+   "gpt-4o-mini": 1
+  },
+  "ft57_sql_injection_parameterized": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 2,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft58_xpath_injection_xml_parse": {
+   "claude-fable-5": 1,
+   "claude-haiku-4-5-20251001": 0,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 1,
+   "gpt-4o-mini": 3
+  },
+  "ft59_distributed_consensus_split_brain": {
+   "claude-fable-5": 3,
+   "claude-haiku-4-5-20251001": 2,
+   "claude-opus-5": 3,
+   "claude-sonnet-5": 3,
+   "gpt-4o-mini": 3
+  },
+  "ft60_distributed_lock_timeout_safety": {
+   "claude-fable-5": 2,
+   "claude-haiku-4-5-20251001": 1,
+   "claude-opus-5": 0,
+   "claude-sonnet-5": 0,
+   "gpt-4o-mini": 3
+  }
+ },
+ "total_cost_usd": 20.1,
+ "cost_note": "cost_usd_recomputed uses billed $/MTok rates verified 2026-07-26 (fable-5 10/50, opus-5 5/25, sonnet-5 2/10 introductory, haiku-4.5 1/5); the runner's embedded table understated fable-5 ~40x, so checkpoint cost_usd fields (cost_usd_as_logged) are not authoritative for Claude tiers. gpt-4o-mini cost is transport-reported."
+}
