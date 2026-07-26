@@ -1,10 +1,10 @@
 {
   "git": {
-    "merged_prs": 268,
+    "merged_prs": 387,
     "total_commits": 1181,
-    "project_age_days": 13,
+    "project_age_days": 14,
     "wave_count": 30,
-    "insertions_deletions": 222263,
+    "insertions_deletions": 222290,
     "files_tracked": 642,
     "distinct_coauthors": 11
   },
@@ -17,11 +17,11 @@
     "cumulative_tokens": null,
     "total_coding_hours": null
   },
-  "generated_at": "2026-07-25T15:29:37.866785+00:00",
-  "loc": 172761,
+  "generated_at": "2026-07-26T00:06:01.178217+00:00",
+  "loc": 173035,
   "economics": {
     "cost_per_loc": {
-      "lines_of_code": 172761,
+      "lines_of_code": 173035,
       "total_tokens": 0,
       "tokens_per_loc": 0.0
     },
