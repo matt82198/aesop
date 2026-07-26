@@ -228,6 +228,7 @@ main() {
   if [ "$MODE" = "--once" ]; then
     if check_halt "$AESOP_ROOT/state/FLEET-BACKUP.log"; then
       release_lock "$LOCK_DIR"
+      printf 'WATCHDOG SMOKE: PASSED\n'
       exit 0
     fi
     full_out=$("${CYCLE_CMD_ARRAY[@]}" 2>&1)
@@ -236,13 +237,16 @@ main() {
     if [ $cmd_exit -ne 0 ]; then
       err_msg="[$(date '+%F %T')] ERROR: cycle #1 failed with exit code $cmd_exit"
       echo "$err_msg" >> "$AESOP_ROOT/state/FLEET-BACKUP.log"
-      echo "[ERROR: exit $cmd_exit]" >&2
+      printf 'WATCHDOG SMOKE: FAILED — [ERROR: exit %d]\n' "$cmd_exit" >&2
+      release_lock "$LOCK_DIR"
+      exit $cmd_exit
     fi
     if [ -n "$PYTHON_EXE" ]; then
       "$PYTHON_EXE" "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
     fi
     release_lock "$LOCK_DIR"
-    exit $cmd_exit
+    printf 'WATCHDOG SMOKE: PASSED\n'
+    exit 0
   fi
 
   n=0
