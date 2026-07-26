@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gitCmd, assertConfigNotPoisoned } from './helpers/git-helpers.mjs';
 
 const CLI = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -53,11 +54,6 @@ function createTestDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-doctor-defects-'));
 }
 
-function gitCmd(cwd, cmd) {
-  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
-  const bashCmd = `bash -c "cd '${cwd.replace(/'/g, "'\\''")}' && ${cmd}"`;
-  return spawnSync('bash', ['-c', bashCmd], { stdio: 'ignore', encoding: 'utf8', timeout, killSignal: 'SIGKILL' });
-}
 
 // DEFECT 1: aesop_root must be absolute, not relative
 test('DEFECT 1: aesop_root in generated config is absolute path', () => {
@@ -65,9 +61,9 @@ test('DEFECT 1: aesop_root in generated config is absolute path', () => {
   const targetDir = path.join(tempDir, 'fleet-1');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   const res = runCli(targetDir, ['--name', 'test-fleet']);
   assert.equal(res.status, 0, `Scaffold should succeed. stderr: ${res.stderr}`);
@@ -85,9 +81,9 @@ test('DEFECT 2: doctor validates aesop.config.json structure (repos array)', () 
   const tempDir = createTestDir();
 
   fs.mkdirSync(tempDir, { recursive: true });
-  gitCmd(tempDir, 'git init');
-  gitCmd(tempDir, 'git config user.email "test@example.com"');
-  gitCmd(tempDir, 'git config user.name "Test User"');
+  gitCmd(tempDir, ['init']);
+  gitCmd(tempDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(tempDir, ['config', 'user.name', 'Test User']);
 
   // Create config without repos array
   const badConfig = {
@@ -112,9 +108,9 @@ test('DEFECT 2: doctor warns when aesop_root does not exist on disk', () => {
   const tempDir = createTestDir();
 
   fs.mkdirSync(tempDir, { recursive: true });
-  gitCmd(tempDir, 'git init');
-  gitCmd(tempDir, 'git config user.email "test@example.com"');
-  gitCmd(tempDir, 'git config user.name "Test User"');
+  gitCmd(tempDir, ['init']);
+  gitCmd(tempDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(tempDir, ['config', 'user.name', 'Test User']);
 
   // Create config with non-existent aesop_root
   const badConfig = {
@@ -139,9 +135,9 @@ test('DEFECT 2: doctor warns when repo.path does not exist on disk', () => {
   const tempDir = createTestDir();
 
   fs.mkdirSync(tempDir, { recursive: true });
-  gitCmd(tempDir, 'git init');
-  gitCmd(tempDir, 'git config user.email "test@example.com"');
-  gitCmd(tempDir, 'git config user.name "Test User"');
+  gitCmd(tempDir, ['init']);
+  gitCmd(tempDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(tempDir, ['config', 'user.name', 'Test User']);
 
   // Create config with non-existent repo.path
   const badConfig = {
@@ -168,9 +164,9 @@ test('DEFECT 3: doctor warns on placeholder repo URLs (github.com/user/<name>.gi
   const tempDir = createTestDir();
 
   fs.mkdirSync(tempDir, { recursive: true });
-  gitCmd(tempDir, 'git init');
-  gitCmd(tempDir, 'git config user.email "test@example.com"');
-  gitCmd(tempDir, 'git config user.name "Test User"');
+  gitCmd(tempDir, ['init']);
+  gitCmd(tempDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(tempDir, ['config', 'user.name', 'Test User']);
 
   // Create a real repo directory
   const repoDir = path.join(tempDir, 'test-repo');
@@ -201,9 +197,9 @@ test('DEFECT 5: doctor checks Python version >= 3.10', () => {
   const tempDir = createTestDir();
 
   fs.mkdirSync(tempDir, { recursive: true });
-  gitCmd(tempDir, 'git init');
-  gitCmd(tempDir, 'git config user.email "test@example.com"');
-  gitCmd(tempDir, 'git config user.name "Test User"');
+  gitCmd(tempDir, ['init']);
+  gitCmd(tempDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(tempDir, ['config', 'user.name', 'Test User']);
 
   // Create minimal valid config
   const config = {
@@ -229,9 +225,9 @@ test('DEFECT 5: doctor checks Node.js version >= 18', () => {
   const tempDir = createTestDir();
 
   fs.mkdirSync(tempDir, { recursive: true });
-  gitCmd(tempDir, 'git init');
-  gitCmd(tempDir, 'git config user.email "test@example.com"');
-  gitCmd(tempDir, 'git config user.name "Test User"');
+  gitCmd(tempDir, ['init']);
+  gitCmd(tempDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(tempDir, ['config', 'user.name', 'Test User']);
 
   // Create minimal valid config
   const config = {
@@ -258,9 +254,9 @@ test('DEFECT 6: scaffold prints actual dashboard port in NEXT STEPS', () => {
   const targetDir = path.join(tempDir, 'fleet-6');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   const res = runCli(targetDir, ['--name', 'test-fleet', '--yes']);
   assert.equal(res.status, 0, `Scaffold should succeed. stderr: ${res.stderr}`);
@@ -281,9 +277,9 @@ test('DEFECT 6: scaffold NEXT STEPS should guide customization (domains, URLs, s
   const targetDir = path.join(tempDir, 'fleet-6b');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   const res = runCli(targetDir, ['--name', 'test-fleet', '--yes']);
   assert.equal(res.status, 0, `Scaffold should succeed. stderr: ${res.stderr}`);

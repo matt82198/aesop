@@ -259,7 +259,11 @@ class GitStats:
 
     @property
     def distinct_coauthors(self) -> int:
-        """Count of distinct authors including co-authors."""
+        """Count of distinct authors including co-authors.
+
+        Filters out fixture identities (Test User <test@example.com>) that leaked
+        into commits due to test config pollution (fix/git-identity-guard).
+        """
         if self._distinct_coauthors is not None:
             return self._distinct_coauthors
 
@@ -278,6 +282,9 @@ class GitStats:
                 for match in re.finditer(r"Co-Authored-By:\s*(.+?)(?:\n|$)", commit_msg):
                     coauthor = match.group(1).strip()
                     if coauthor:
+                        # Exclude fixture identities (test pollution)
+                        if coauthor == "Test User <test@example.com>":
+                            continue
                         authors.add(coauthor)
 
             count = len(authors)
