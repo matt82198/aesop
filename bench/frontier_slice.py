@@ -374,11 +374,18 @@ def main():
     )
     parser.add_argument(
         "--output",
-        default="bench/results/frontier_slice_results.json",
-        help="Output JSON file",
+        default=None,
+        help="Output JSON file (env: FRONTIER_SLICE_OUTPUT; default: state/bench/frontier_slice_results.json)",
     )
 
     args = parser.parse_args()
+
+    # Resolve output path: env var > CLI arg > default (gitignored state dir)
+    if args.output is None:
+        args.output = os.environ.get(
+            "FRONTIER_SLICE_OUTPUT",
+            "state/bench/frontier_slice_results.json"
+        )
 
     # Load tasks and ground truth
     tasks = load_frontier_tasks(args.tasks)
