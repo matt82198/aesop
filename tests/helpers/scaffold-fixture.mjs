@@ -32,6 +32,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
+import { gitCmd } from './git-helpers.mjs';
 
 const CLI = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -97,19 +98,19 @@ export function scaffoldOnce(dirName, opts = {}) {
   const gitRepoDir = mode === 'wizard' ? tempBase : targetDir;
   fs.mkdirSync(gitRepoDir, { recursive: true });
 
-  spawnSync('bash', ['-c', `cd '${gitRepoDir.replace(/'/g, "'\\''")}' && git init`], {
-    stdio: 'ignore',
+  // Initialize git repo in the fixture directory
+  // Use explicit cwd instead of shell cd to prevent accidental config leakage
+  spawnSync('git', ['init'], {
+    cwd: gitRepoDir,
     encoding: 'utf8',
     timeout: 30000,
     killSignal: 'SIGKILL'
   });
 
-  spawnSync('bash', ['-c', `cd '${gitRepoDir.replace(/'/g, "'\\''")}' && git config user.email "test@example.com" && git config user.name "Test User"`], {
-    stdio: 'ignore',
-    encoding: 'utf8',
-    timeout: 30000,
-    killSignal: 'SIGKILL'
-  });
+  // Configure test identity in the fixture repo (NOT global or in parent repos)
+  // Using gitCmd which enforces cwd isolation and error checking
+  gitCmd(gitRepoDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(gitRepoDir, ['config', 'user.name', 'Test User']);
 
   // Build args based on mode
   const args = [];

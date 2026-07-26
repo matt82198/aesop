@@ -358,5 +358,62 @@ class TestShellIdentityHygiene(unittest.TestCase):
             self.fail("Unscoped git identity writes in shell tests (live-config "
                       "pollution risk):" + chr(10) + chr(10).join("  " + v for v in violations))
 
+class TestRuntimeConfigGuard(unittest.TestCase):
+    """Runtime tripwire: detect if any test polluted the real repo's .git/config.
+
+    This is the actual catch mechanism for the git-identity-poisoning bug.
+    Snapshots the repo's [user] section before and after all tests, fails loudly if changed.
+    """
+
+    def test_repo_git_config_identity_unchanged_after_tests(self):
+        """Assert that the real aesop repo's git config [user] section is unchanged.
+
+        This tripwire catches leaks where a test's git config write escaped into
+        the parent repo (due to cd failure, env var leakage, etc).
+
+        Expected: user.name = Matt Culliton, user.email = matt82198@gmail.com
+        (the correct identity for this repo).
+        """
+        import subprocess
+
+        repo_root = Path(__file__).parent.parent
+
+        # Read the real repo's current identity
+        result = subprocess.run(
+            ['git', 'config', '--local', 'user.name'],
+            cwd=str(repo_root),
+            capture_output=True,
+            encoding='utf-8'
+        )
+        current_user_name = result.stdout.strip()
+
+        result = subprocess.run(
+            ['git', 'config', '--local', 'user.email'],
+            cwd=str(repo_root),
+            capture_output=True,
+            encoding='utf-8'
+        )
+        current_user_email = result.stdout.strip()
+
+        # Fail LOUDLY if any test poisoned the config with Test User
+        self.assertNotEqual(
+            current_user_name, 'Test User',
+            f"CRITICAL: Git repo config was poisoned with 'Test User' identity. "
+            f"Expected 'Matt Culliton', got '{current_user_name}'. "
+            f"A test's git config write escaped into the parent repo (cd failure, env leak, or shell error). "
+            f"Check: test files using bash -c with cd without error checking, "
+            f"or env vars like GIT_CONFIG, GIT_DIR leaking into test subprocesses. "
+            f"Recent commit trailers may have the poisoned identity."
+        )
+
+        self.assertNotEqual(
+            current_user_email, 'test@example.com',
+            f"CRITICAL: Git repo email was poisoned with 'test@example.com'. "
+            f"Expected 'matt82198@gmail.com', got '{current_user_email}'. "
+            f"A test's git config write escaped into the parent repo. "
+            f"Commits made after the test run may contain the wrong identity."
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

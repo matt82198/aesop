@@ -44,9 +44,10 @@ function colorSkip() {
 
 // Detect context: repo checkout vs installed package
 function detectContext() {
-  // Repo checkout has .git/config and package.json with npm scripts
+  // Repo checkout has .git/config, package.json with npm scripts, AND package-lock.json
   const hasGitConfig = fs.existsSync(path.join(PACKAGE_ROOT, '.git', 'config'));
   const hasPackageJson = fs.existsSync(path.join(PACKAGE_ROOT, 'package.json'));
+  const hasPackageLock = fs.existsSync(path.join(PACKAGE_ROOT, 'package-lock.json'));
   const hasTestScripts = hasPackageJson && (() => {
     try {
       const pkg = JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8'));
@@ -57,7 +58,8 @@ function detectContext() {
   })();
 
   // Installed package is in node_modules with limited structure
-  const isInstalled = !hasGitConfig && !hasTestScripts;
+  // OR repo-mode detected but package-lock.json is missing (fresh scaffold — degrade gracefully)
+  const isInstalled = (!hasGitConfig && !hasTestScripts) || (hasGitConfig && !hasPackageLock);
 
   return isInstalled ? 'installed' : 'repo';
 }
@@ -368,7 +370,14 @@ function runInstalledMode() {
 (async function main() {
   try {
     const context = detectContext();
+    const hasGitConfig = fs.existsSync(path.join(PACKAGE_ROOT, '.git', 'config'));
+    const hasPackageLock = fs.existsSync(path.join(PACKAGE_ROOT, 'package-lock.json'));
+    const isDegradedFromRepo = hasGitConfig && !hasPackageLock;
+
     console.log(`${COLORS.DIM}Context: ${context}${COLORS.RESET}`);
+    if (isDegradedFromRepo) {
+      console.log(`${COLORS.YELLOW}Scaffolded project detected — running installed-mode verification; full reproduce is for the aesop repo itself${COLORS.RESET}`);
+    }
 
     let results;
     if (context === 'repo') {

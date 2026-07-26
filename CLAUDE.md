@@ -22,6 +22,11 @@
 - **docs/** — Architecture guides, tutorials, setup — read docs/
 - **assets/** — Logo, branding, media
 - **state/** — Runtime durable checkpoints (git-ignored)
+- **scripts/** — Repo maintenance wrappers (stats verification) — see § scripts/ below
+
+## scripts/
+
+Thin CRLF-safe shell wrappers for repo maintenance. Currently: `verify-stats.sh` — the single-source stats gate (delegates to `tools/self_stats.py --check` / `--regenerate`; stats.json is the only stats source consumed by README and the portfolio). Invariants: wrappers delegate to tools/, never own logic; ASCII, no line continuations; exit codes propagate (fail-closed).
 
 ## Dispatch rule
 
