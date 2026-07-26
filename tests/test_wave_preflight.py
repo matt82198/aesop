@@ -12,6 +12,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+from pathlib import Path
 from unittest import mock
 
 
@@ -54,7 +57,7 @@ class TestWavePreflight(unittest.TestCase):
         cmd = [sys.executable, "tools/wave_preflight.py", manifest_file] + args
         result = subprocess.run(
             cmd,
-            cwd="C:/Users/matt8/aesop-wt-preflight",
+            cwd=REPO_ROOT,
             capture_output=True,
             timeout=10,
             text=True,
