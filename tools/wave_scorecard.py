@@ -34,75 +34,29 @@ import os
 from pathlib import Path
 from collections import defaultdict
 
+# Ensure tools and state_store are importable (sys.path fix for bootstrapping)
+repo_root = Path(__file__).parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
+
 try:
     from common import get_state_dir
 except ImportError:
     from tools.common import get_state_dir
 
+from state_store.read_api import ReadAPI
+
 
 def parse_ledger_rows():
-    """Parse OUTCOMES-LEDGER.md and return structured rows.
+    """Parse OUTCOMES-LEDGER.md and return structured rows via StateAPI.
 
     Returns:
         list of dicts with keys: iso_ts, agent_type, model, duration_sec,
         tokens_in, tokens_out, verdict, phase, wave
     """
     state_dir = get_state_dir()
-    ledger_file = state_dir / "ledger" / "OUTCOMES-LEDGER.md"
-
-    if not ledger_file.exists():
-        return []
-
-    try:
-        lines = ledger_file.read_text(encoding='utf-8').split('\n')
-    except (IOError, OSError):
-        return []
-
-    rows = []
-    for line in lines:
-        # Skip empty, header, separator lines
-        if not line.strip() or '---|' in line or not line.startswith('|'):
-            continue
-
-        # Parse markdown table row
-        cells = [c.strip() for c in line.split('|')[1:-1]]  # split by |, skip first/last
-        if len(cells) < 7:
-            continue
-
-        try:
-            iso_ts = cells[0]
-            agent_type = cells[1]
-            model = cells[2]
-            duration_sec = int(cells[3]) if cells[3] else 0
-            tokens_in = int(cells[4]) if cells[4] else 0
-            tokens_out = int(cells[5]) if cells[5] else 0
-            verdict = cells[6] if len(cells) > 6 else 'OK'
-            phase = cells[7].strip() if len(cells) > 7 and cells[7].strip() else None
-            wave = cells[8].strip() if len(cells) > 8 and cells[8].strip() else None
-
-            # Parse wave as int
-            wave_num = None
-            if wave:
-                try:
-                    wave_num = int(wave)
-                except ValueError:
-                    pass
-
-            rows.append({
-                'iso_ts': iso_ts,
-                'agent_type': agent_type,
-                'model': model,
-                'duration_sec': duration_sec,
-                'tokens_in': tokens_in,
-                'tokens_out': tokens_out,
-                'verdict': verdict,
-                'phase': phase,
-                'wave': wave_num,
-            })
-        except (ValueError, IndexError):
-            continue
-
-    return rows
+    api = ReadAPI(state_dir)
+    return api.read_ledger_rows()
 
 
 def compute_wave_metrics(rows):
