@@ -110,6 +110,8 @@ Expected output:
 
 If you see errors, check the logs in `state/FLEET-BACKUP.log`.
 
+**Note**: The `reproduce` command runs full test suites if you're working in the aesop repo itself. For scaffolded fleets, verification uses `aesop doctor` + `watchdog --once` to check preflight requirements and basic health.
+
 ---
 
 ## Manual Setup: Git Clone (For Development)

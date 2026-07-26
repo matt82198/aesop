@@ -52,7 +52,7 @@ def reload():
                 with open(derived_config_file) as f:
                     derived_config = json.load(f)
                     if "aesop_root" in derived_config:
-                        AESOP_ROOT = Path(derived_config["aesop_root"])
+                        AESOP_ROOT = Path(derived_config["aesop_root"]).expanduser()
             except Exception:
                 # Silently ignore config errors here; will attempt full load below
                 pass
