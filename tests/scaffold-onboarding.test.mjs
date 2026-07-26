@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gitCmd, assertConfigNotPoisoned } from './helpers/git-helpers.mjs';
 
 const CLI = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -58,11 +59,6 @@ function createTestDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-onboard-test-'));
 }
 
-function gitCmd(cwd, cmd) {
-  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
-  const bashCmd = `bash -c "cd '${cwd.replace(/'/g, "'\\''")}' && ${cmd}"`;
-  return spawnSync('bash', ['-c', bashCmd], { stdio: 'ignore', encoding: 'utf8', timeout, killSignal: 'SIGKILL' });
-}
 
 test('CLAUDE-TEMPLATE.md has no "[Your " style bare placeholders', () => {
   const template = fs.readFileSync(CLAUDE_TEMPLATE, 'utf8');
@@ -90,9 +86,9 @@ test('--name flag scaffolds without errors', () => {
   const targetDir = path.join(tempDir, 'fleet-onboard-1');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   const res = runCli(targetDir, ['--name', 'test-service']);
   assert.equal(res.status, 0, `Scaffold with --name should succeed. stderr: ${res.stderr}`);
@@ -103,9 +99,9 @@ test('--name --domains --repos scaffolds without errors', () => {
   const targetDir = path.join(tempDir, 'fleet-onboard-2');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   const res = runCli(targetDir, [
     '--name', 'my-service',
@@ -120,9 +116,9 @@ test('scaffold creates state/ directory', () => {
   const targetDir = path.join(tempDir, 'fleet-onboard-3');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   const res = runCli(targetDir, ['--name', 'test-service']);
   assert.equal(res.status, 0);
@@ -137,9 +133,9 @@ test('scaffold generates CLAUDE.md with no {{UNSUBSTITUTED}} placeholders', () =
   const targetDir = path.join(tempDir, 'fleet-onboard-4');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   const res = runCli(targetDir, ['--name', 'test-service']);
   assert.equal(res.status, 0);
@@ -160,9 +156,9 @@ test('scaffold generates valid aesop.config.json', () => {
   const targetDir = path.join(tempDir, 'fleet-onboard-5');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   const res = runCli(targetDir, [
     '--name', 'my-api',
@@ -193,9 +189,9 @@ test('scaffold copies MEMORY-TEMPLATE.md as memory seed', () => {
   const targetDir = path.join(tempDir, 'fleet-onboard-6');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   const res = runCli(targetDir, ['--name', 'test-service']);
   assert.equal(res.status, 0);
@@ -214,9 +210,9 @@ test('full headless scaffold is complete and valid', () => {
   const targetDir = path.join(tempDir, 'fleet-onboard-full');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   // Headless scaffold with all flags
   const res = runCli(targetDir, [
@@ -251,9 +247,9 @@ test('targetDir defaults to aesop-fleet when --name provided without positional'
   const targetDir = path.join(tempDir, 'aesop-fleet');
 
   // Initialize git in tempDir so scaffolded aesop-fleet can have hooks
-  gitCmd(tempDir, 'git init');
-  gitCmd(tempDir, 'git config user.email "test@example.com"');
-  gitCmd(tempDir, 'git config user.name "Test User"');
+  gitCmd(tempDir, ['init']);
+  gitCmd(tempDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(tempDir, ['config', 'user.name', 'Test User']);
 
   // NO explicit target dir, only --name flag
   // Should create ./aesop-fleet (default), not interpret "my-service" as targetDir
@@ -270,9 +266,9 @@ test('targetDir defaults to aesop-fleet when --repos provided without positional
   const targetDir = path.join(tempDir, 'aesop-fleet');
 
   // Initialize git in tempDir
-  gitCmd(tempDir, 'git init');
-  gitCmd(tempDir, 'git config user.email "test@example.com"');
-  gitCmd(tempDir, 'git config user.name "Test User"');
+  gitCmd(tempDir, ['init']);
+  gitCmd(tempDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(tempDir, ['config', 'user.name', 'Test User']);
 
   // NO explicit target dir, only --repos flag
   // Should NOT scaffold into /tmp/x; should create ./aesop-fleet (default)
@@ -289,9 +285,9 @@ test('explicit positional targetDir works with flags in any order', () => {
   const customDir = path.join(tempDir, 'my-custom-fleet');
 
   // Initialize git first
-  gitCmd(tempDir, 'git init');
-  gitCmd(tempDir, 'git config user.email "test@example.com"');
-  gitCmd(tempDir, 'git config user.name "Test User"');
+  gitCmd(tempDir, ['init']);
+  gitCmd(tempDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(tempDir, ['config', 'user.name', 'Test User']);
 
   // Positional target dir BEFORE flags
   const res = runCli(customDir, [
@@ -312,9 +308,9 @@ test('positional targetDir works AFTER flags', () => {
   const customDir = path.join(tempDir, 'another-fleet');
 
   // Initialize git first
-  gitCmd(tempDir, 'git init');
-  gitCmd(tempDir, 'git config user.email "test@example.com"');
-  gitCmd(tempDir, 'git config user.name "Test User"');
+  gitCmd(tempDir, ['init']);
+  gitCmd(tempDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(tempDir, ['config', 'user.name', 'Test User']);
 
   // Positional target dir AFTER flags
   const res = runCli(customDir, [
