@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-07-26T13:26:51.023063",
+  "timestamp": "2026-07-26T13:27:56.200678",
   "protocol": "frontier-slice-2026-07-26",
   "config": {
     "tiers": [
@@ -12,7 +12,7 @@
     "tasks": 20,
     "repeats": 3,
     "spend_cap": 20.0,
-    "total_spent": 2.83
+    "total_spent": 3.09
   },
   "runs": [
     {
@@ -2403,103 +2403,37 @@
       "response_hash": "3e3999fbbb69"
     },
     {
-      "tier": "gpt-4o-mini",
-      "task_id": "ft01_multi_step_sql_refactor",
+      "tier": "opus",
+      "task_id": "ft14_performance_bottleneck_identification",
       "repeat_num": 1,
       "correct": true,
       "reason": "Regex",
-      "tokens_in": 3,
-      "tokens_out": 846,
-      "cost_usd": 0.00050805,
-      "response_hash": "638f3bbb9c21"
+      "tokens_in": 2,
+      "tokens_out": 3397,
+      "cost_usd": 0.084935,
+      "response_hash": "cf6aee7eb978"
     },
     {
-      "tier": "gpt-4o-mini",
-      "task_id": "ft01_multi_step_sql_refactor",
-      "repeat_num": 2,
-      "correct": false,
-      "reason": "NoRegex",
-      "tokens_in": 3,
-      "tokens_out": 855,
-      "cost_usd": 0.00051345,
-      "response_hash": "8082e1b2fc14"
-    },
-    {
-      "tier": "gpt-4o-mini",
-      "task_id": "ft01_multi_step_sql_refactor",
-      "repeat_num": 3,
-      "correct": false,
-      "reason": "NoRegex",
-      "tokens_in": 3,
-      "tokens_out": 843,
-      "cost_usd": 0.00050625,
-      "response_hash": "0387a25a1780"
-    },
-    {
-      "tier": "gpt-4o-mini",
-      "task_id": "ft02_code_defect_detection_concurrent",
-      "repeat_num": 1,
-      "correct": true,
-      "reason": "Regex",
-      "tokens_in": 3,
-      "tokens_out": 430,
-      "cost_usd": 0.00025844999999999997,
-      "response_hash": "74c70546ca9e"
-    },
-    {
-      "tier": "gpt-4o-mini",
-      "task_id": "ft02_code_defect_detection_concurrent",
+      "tier": "opus",
+      "task_id": "ft14_performance_bottleneck_identification",
       "repeat_num": 2,
       "correct": true,
       "reason": "Regex",
-      "tokens_in": 3,
-      "tokens_out": 455,
-      "cost_usd": 0.00027344999999999995,
-      "response_hash": "6b6a1633502f"
+      "tokens_in": 2,
+      "tokens_out": 3250,
+      "cost_usd": 0.08126,
+      "response_hash": "db5a5fe2fa4b"
     },
     {
-      "tier": "gpt-4o-mini",
-      "task_id": "ft02_code_defect_detection_concurrent",
+      "tier": "opus",
+      "task_id": "ft14_performance_bottleneck_identification",
       "repeat_num": 3,
       "correct": true,
       "reason": "Regex",
-      "tokens_in": 3,
-      "tokens_out": 592,
-      "cost_usd": 0.00035564999999999994,
-      "response_hash": "db2f7b56c2a1"
-    },
-    {
-      "tier": "gpt-4o-mini",
-      "task_id": "ft03_instruction_conflict_precedence",
-      "repeat_num": 1,
-      "correct": false,
-      "reason": "NoRegex",
-      "tokens_in": 3,
-      "tokens_out": 719,
-      "cost_usd": 0.00043185,
-      "response_hash": "021ff9373beb"
-    },
-    {
-      "tier": "gpt-4o-mini",
-      "task_id": "ft03_instruction_conflict_precedence",
-      "repeat_num": 2,
-      "correct": false,
-      "reason": "NoRegex",
-      "tokens_in": 3,
-      "tokens_out": 922,
-      "cost_usd": 0.00055365,
-      "response_hash": "afdf26913b66"
-    },
-    {
-      "tier": "gpt-4o-mini",
-      "task_id": "ft03_instruction_conflict_precedence",
-      "repeat_num": 3,
-      "correct": false,
-      "reason": "NoRegex",
-      "tokens_in": 3,
-      "tokens_out": 850,
-      "cost_usd": 0.00051045,
-      "response_hash": "d53acc173fec"
+      "tokens_in": 2,
+      "tokens_out": 3756,
+      "cost_usd": 0.09391,
+      "response_hash": "c5033efedd3e"
     }
   ]
 }
