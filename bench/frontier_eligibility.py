@@ -12,6 +12,12 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+try:
+    from frontier_slice import load_ground_truth
+except ImportError:
+    # Fallback for tests that may not have frontier_slice available
+    load_ground_truth = None
+
 
 TOKEN_LINE = re.compile(
     r"(?:First line(?: of your response)?:\s*exactly\s+(.+)"
@@ -125,12 +131,17 @@ def audit_tasks(
                 obj = json.loads(line)
                 tasks[obj["id"]] = obj
 
-    gt = {}
-    with open(ground_truth_path, encoding="utf-8") as f:
-        for line in f:
-            if line.strip():
-                obj = json.loads(line)
-                gt[obj["id"]] = obj
+    # Load ground truth using real loader to get GroundTruth dataclass instances
+    if load_ground_truth is not None:
+        gt = load_ground_truth(ground_truth_path)
+    else:
+        # Fallback for tests: load as plain dicts
+        gt = {}
+        with open(ground_truth_path, encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    obj = json.loads(line)
+                    gt[obj["id"]] = obj
 
     tool_mode = {}
     regex_fallback = []
@@ -148,7 +159,12 @@ def audit_tasks(
             regex_fallback.append(task_id)
             continue
 
-        expected_regex = ground_truth_entry.get("expected_regex")
+        # ground_truth_entry could be GroundTruth dataclass or dict (in tests)
+        # Support both attribute access and dict access
+        if hasattr(ground_truth_entry, 'expected_regex'):
+            expected_regex = ground_truth_entry.expected_regex
+        else:
+            expected_regex = ground_truth_entry.get("expected_regex")
         if not expected_regex:
             regex_fallback.append(task_id)
             continue
