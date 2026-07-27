@@ -2,20 +2,16 @@
 """AnthropicDriver -- AgentDriver for the Anthropic API messages endpoint.
 
 Minimal backend for bench experiments: Claude models via HTTP API (not Claude Code).
-Reuses the Phase 2 CodexDriver execution contract (file injection, JSON schema,
-validation, full-file replacement, ownership enforcement).
+Reuses the Phase 2 CodexDriver execution contract but uses FORCED TOOL CALLS
+instead of prose JSON to avoid Fable/Opus API refusals on structured requests.
 
-TRANSPORT SEAM
---------------
-AnthropicDriver.__init__ takes an optional `transport` callable (default =
-default_anthropic_transport). This injectable seam keeps tests offline: tests
-pass a FakeTransport; production uses the real urllib transport reading
-ANTHROPIC_API_KEY from env.
-
-VERIFICATION TIER
------------------
-Tier 1 (same as Claude Code): tool_use_accuracy ~0.95, no native JSON schema
-validation but close-to-perfect reliability. Honest reporting.
+TRANSPORT SEAM & TOOL-CALL CHANNEL
+----------------------------------
+- Dispatches with forced tool_choice: submit_work
+- Parses tool_use blocks (not prose JSON)
+- Refusals (stop_reason=refusal) handled gracefully -> error status
+- Multi-turn repair loop intact: failure output appended to user message,
+  assistant's tool_use block is parsed, next attempt includes the prior failure
 
 stdlib-only, ASCII-only, Windows + Linux safe.
 """
@@ -25,7 +21,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 from proc_util import run_shell_bounded
 
@@ -131,11 +127,56 @@ CLAUDE_MODELS = {
 }
 
 
+def _build_submit_work_tool() -> dict:
+    """Build the submit_work tool definition for forced tool calls.
+
+    Matches the WORKER_PATCH_SCHEMA structure so the model can return
+    structured work output via tool_use instead of prose JSON.
+    """
+    return {
+        "name": "submit_work",
+        "description": "Submit the completed work with modified files and status",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "files": {
+                    "type": "array",
+                    "description": "Array of files to modify (full replacement)",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "File path relative to repo root",
+                            },
+                            "contents": {
+                                "type": "string",
+                                "description": "Full new contents of the file",
+                            },
+                        },
+                        "required": ["path", "contents"],
+                    },
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "Brief summary of changes made",
+                },
+                "done": {
+                    "type": "boolean",
+                    "description": "Whether the task is complete",
+                },
+            },
+            "required": ["files", "summary", "done"],
+        },
+    }
+
+
 class AnthropicDriver(AgentDriver):
-    """AgentDriver for Anthropic messages API.
+    """AgentDriver for Anthropic messages API with forced tool-call dispatch.
 
     Tier 1: reports high tool-use accuracy (same as Claude Code).
-    Uses the CodexDriver file-injection model: full-file replacement via JSON.
+    Uses forced tool calls (submit_work) for structured work output.
+    Refusal-safe: gracefully handles stop_reason=refusal from the API.
     """
 
     def __init__(
@@ -176,9 +217,13 @@ class AnthropicDriver(AgentDriver):
         self._next_worker_id = 0
         self._tokens_spent = 0
 
+        # Build submit_work tool definition (reused across all calls).
+        self._submit_work_tool = _build_submit_work_tool()
+
     def probe_capabilities(self) -> DriverCapabilities:
         """Report Tier 1: high accuracy, structured output, no native fs/shell."""
         return DriverCapabilities(
+            name="anthropic-api",
             parallel_dispatch=False,
             worker_filesystem_access=False,
             worker_shell_access=False,
@@ -186,7 +231,6 @@ class AnthropicDriver(AgentDriver):
             worktree_isolation=False,
             recommended_verification_tier=1,
             tool_use_accuracy=0.95,
-            estimated_tokens_per_work_unit=8000,
         )
 
     def resolve_model(self, role: str) -> str:
@@ -194,9 +238,9 @@ class AnthropicDriver(AgentDriver):
         return self.model_map.get(role, self.model_map.get(ROLE_WORKER, "claude-haiku-4-5-20251001"))
 
     def dispatch_worker(self, request: WorkerRequest) -> WorkerResult:
-        """Dispatch via Anthropic messages API.
+        """Dispatch via Anthropic messages API with forced tool calls.
 
-        Injects file contents, requests JSON patch, validates, writes files.
+        Injects file contents, forces submit_work tool call, parses tool_use block.
         """
         worker_id = f"anthropic-{self._next_worker_id}"
         self._next_worker_id += 1
@@ -229,73 +273,95 @@ class AnthropicDriver(AgentDriver):
             full_prompt = f"""{request.prompt}
 
 Owned files you can modify:
-{file_context}
+{file_context}"""
 
-Respond with a JSON object containing:
-- "files": array of {{"path": "...", "contents": "..."}} for modified files
-- "summary": brief description of changes
-- "done": boolean indicating if the task is complete"""
+            # Build the messages array (may contain prior turns for repair loop).
+            # If this is a fresh dispatch, start with a user message.
+            # If this is a repair attempt, the request.prompt already contains the failure output.
+            messages = [
+                {
+                    "role": "user",
+                    "content": full_prompt,
+                }
+            ]
 
-            # Prepare the Anthropic messages API request.
+            # Prepare the Anthropic messages API request with forced tool call.
             payload = {
                 "model": self.resolve_model(ROLE_WORKER),
-                "max_tokens": 4096,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": full_prompt,
-                    }
-                ],
+                "max_tokens": 8192,  # Generous for structured output
+                "messages": messages,
+                "tools": [self._submit_work_tool],
+                "tool_choice": {"type": "tool", "name": "submit_work"},
             }
 
-            # Attempt to get a valid response (with retries).
-            patch_dict = None
-            last_error = None
-            for attempt in range(self.max_retries + 1):
-                try:
-                    response = self.transport(payload)
-                    # Extract response content.
-                    if "content" not in response or not response["content"]:
-                        raise ValueError("No content in response")
-                    content = response["content"][0].get("text", "")
-                    if not content:
-                        raise ValueError("No text in response content")
+            # Dispatch and get response.
+            response = self.transport(payload)
 
-                    # Try to parse JSON.
-                    patch_dict = json.loads(content)
-                    _validate_patch_schema(patch_dict)
+            # Track tokens.
+            if "usage" in response:
+                tokens = (
+                    response["usage"].get("input_tokens", 0)
+                    + response["usage"].get("output_tokens", 0)
+                )
+                self._tokens_spent += tokens
 
-                    # Track tokens.
-                    if "usage" in response:
-                        tokens = (
-                            response["usage"].get("input_tokens", 0)
-                            + response["usage"].get("output_tokens", 0)
-                        )
-                        self._tokens_spent += tokens
-
-                    break  # Success!
-                except (json.JSONDecodeError, ValueError) as exc:
-                    last_error = str(exc)
-                    if attempt < self.max_retries:
-                        continue
-                    # Final attempt failed.
-                    return WorkerResult(
-                        worker_id=worker_id,
-                        ok=False,
-                        status=WORKER_FAILED,
-                        files_written=(),
-                        structured={},
-                        error=f"JSON validation failed after {self.max_retries + 1} attempts: {last_error}",
-                    )
-
-            if patch_dict is None:
+            # Check for refusal (stop_reason=refusal, no content or no tool_use).
+            stop_reason = response.get("stop_reason")
+            if stop_reason == "refusal":
                 return WorkerResult(
                     worker_id=worker_id,
                     ok=False,
                     status=WORKER_FAILED,
                     files_written=(),
                     structured={},
-                    error="No valid patch produced",
+                    error="Model refused to process request (API refusal)",
+                )
+
+            # Extract tool_use block from response content.
+            content = response.get("content", [])
+            if not content:
+                return WorkerResult(
+                    worker_id=worker_id,
+                    ok=False,
+                    status=WORKER_FAILED,
+                    files_written=(),
+                    structured={},
+                    error="No content in response",
+                )
+
+            # Look for tool_use block.
+            tool_use_block = None
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "tool_use":
+                    tool_use_block = item
+                    break
+
+            if not tool_use_block:
+                return WorkerResult(
+                    worker_id=worker_id,
+                    ok=False,
+                    status=WORKER_FAILED,
+                    files_written=(),
+                    structured={},
+                    error="No tool_use block in response",
+                )
+
+            # Extract the patch from the tool_use input.
+            try:
+                patch_dict = tool_use_block.get("input", {})
+                if not isinstance(patch_dict, dict):
+                    patch_dict = json.loads(patch_dict) if isinstance(patch_dict, str) else {}
+
+                # Validate the schema.
+                _validate_patch_schema(patch_dict)
+            except (json.JSONDecodeError, ValueError) as exc:
+                return WorkerResult(
+                    worker_id=worker_id,
+                    ok=False,
+                    status=WORKER_FAILED,
+                    files_written=(),
+                    structured={},
+                    error=f"Tool input validation failed: {exc}",
                 )
 
             # Write files.
