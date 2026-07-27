@@ -26,33 +26,23 @@ class HTTPClient:
         raise NotImplementedError("Subclass must implement _make_request")
 
     def get(self, path):
-        """
-        Get a resource with caching and retry.
-        The bug: if _make_request() raises an error, we cache the exception.
-        Then on retry, we hit the cache and get the same error without retrying.
-        """
+        """Get a resource with caching and retry."""
         cache_key = f"GET:{path}"
 
-        # Check cache first - THIS IS THE PROBLEM AREA
         cached_response = self.cache.get(cache_key)
         if cached_response is not None:
-            # Return cached response (even if it's an error)
             if isinstance(cached_response, Exception):
                 raise cached_response
             return cached_response
 
-        # Not in cache, make the request with retry
         def request_func():
             response = self._make_request(path)
-            # Cache successful responses
             self.cache.set(cache_key, response)
             return response
 
         success, result = self.retry_policy.execute_with_retry(request_func)
 
         if not success:
-            # Bug: We cache the error exception
-            # Then on next call, we hit the cache and get the same error
             self.cache.set(cache_key, result)
             raise result
 

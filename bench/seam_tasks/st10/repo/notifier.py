@@ -11,18 +11,14 @@ class Notifier:
 
     def notify(self, task_id, state):
         """Send a notification for a state change."""
-        # Bug: NOTIFY_STATES was defined to NOT include REQUEUED
-        # So when a task transitions to REQUEUED, this check fails
         if state not in NOTIFY_STATES:
             raise ValueError(f"Cannot notify for state: {state}")
 
-        # This handler mapping is incomplete - missing REQUEUED
         handlers = {
             READY: self._handle_ready,
             EXECUTING: self._handle_executing,
             DONE: self._handle_done,
             FAILED: self._handle_failed,
-            # REQUEUED handler is missing!
         }
 
         if state not in handlers:

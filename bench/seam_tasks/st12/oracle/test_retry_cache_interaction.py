@@ -58,37 +58,39 @@ def test_retry_on_transient_failure():
 def test_cache_poisoning_bug():
     """
     Test that demonstrates the cache-retry interaction bug:
-    When a request fails permanently (exhausts retries), the error gets cached.
+    When a request fails, the error gets cached.
     Subsequent calls hit the cache and get the cached error without retrying.
+
+    On fixed code, errors are NOT cached, so recovery is possible.
+    On defective code, errors ARE cached, so recovery is blocked.
     """
     client = MockHTTPClient()
     client.retry_policy.max_retries = 0  # No retries - fail immediately
     client.fail_until = 1  # First request fails
 
-    # First call fails and error is cached
+    # First call fails
     try:
         response = client.get("/api/data")
-        assert False, "Should have raised TimeoutError"
+        assert False, "First call should have raised TimeoutError"
     except TimeoutError:
-        pass  # Expected: request failed
+        pass  # Expected: request failed and error was cached
 
     # Now fix the server so requests succeed
     client.fail_until = 0
 
-    # But the bug: the error exception is cached
-    # So the second call hits the cache and gets the cached error
-    # without trying the network again
+    # Second call: the defective code has cached the error, so it will fail
+    # even though the server is now healthy.
+    # The fixed code does NOT cache errors, so the second call should succeed.
     try:
         response = client.get("/api/data")
-        # If we get here, the bug is NOT present (cache was cleared or error not cached)
+        # Success: the error was not cached, allowing recovery
         assert response == "Success: /api/data"
-        pytest.fail(
-            "Bug is fixed: error not cached, allowing retry after recovery"
-        )
+        # If we get here without exception, the fix is working
     except TimeoutError:
-        # The bug is present: cached error is raised without retrying the network
+        # The defective code cached the error and raised it without retrying
+        # This means the bug is present and the test fails
         pytest.fail(
-            "Bug detected: error response cached, blocking retry on recovery"
+            "Defect detected: error response was cached, preventing recovery after server becomes healthy"
         )
 
 

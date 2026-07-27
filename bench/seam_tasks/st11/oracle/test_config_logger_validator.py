@@ -40,10 +40,11 @@ def test_logger_level_production():
 
 def test_process_invalid_records_with_production_env():
     """
-    Test that demonstrates the bug: invalid records logged at WARNING level
-    are suppressed in production mode.
+    Test that demonstrates the bug: validation errors are suppressed in production
+    when logged at WARNING level (which is suppressed in production mode).
 
     This test runs in a subprocess to ensure clean environment isolation.
+    The fix: change validator to log at ERROR level so errors appear in production.
     """
     # Create a test script that runs in production mode
     test_script = """
@@ -75,7 +76,7 @@ output = stream.getvalue()
 print(f"Valid: {valid_count}")
 print(f"Invalid: {len(bad_records)}")
 print(f"Output: {repr(output)}")
-print(f"Has WARNING: {'WARNING' in output}")
+print(f"Has validation error: {'required field' in output}")
 """
 
     test_file = os.path.join(
@@ -95,10 +96,13 @@ print(f"Has WARNING: {'WARNING' in output}")
         output = result.stdout
         print(output)
 
-        # The bug: WARNING messages are suppressed in production
-        # This assertion should fail on the defective code
-        assert "Has WARNING: True" in output, (
-            f"Validation warnings should appear in logs. Got: {output}"
+        # The bug: validation error messages are suppressed in production
+        # because they're logged at WARNING level which is filtered out in production
+        # The fix: log validation errors at ERROR level so they appear in all environments
+        # This assertion should fail on the defective code (no error output)
+        # and pass on the fixed code (error output present)
+        assert "Has validation error: True" in output, (
+            f"Validation errors should appear in production logs. Got: {output}"
         )
 
     finally:
@@ -106,8 +110,8 @@ print(f"Has WARNING: {'WARNING' in output}")
             os.remove(test_file)
 
 
-def test_validation_warns_on_invalid_data():
-    """Test that validator logs warnings for invalid data."""
+def test_validation_errors_in_development():
+    """Test that validator logs validation errors in development mode."""
     os.environ["APP_ENV"] = "development"
 
     # Fresh imports with development environment
@@ -130,6 +134,6 @@ def test_validation_warns_on_invalid_data():
     val_mod.validate_record({"id": 1})  # missing value
 
     output = stream.getvalue()
-    # In development, the warning should appear
-    assert "WARNING" in output, f"Expected WARNING in development. Got: {output}"
-    assert "value" in output, f"Expected 'value' in warning. Got: {output}"
+    # In development, validation errors should appear
+    assert "required field" in output, f"Expected validation error in development. Got: {output}"
+    assert "value" in output, f"Expected 'value' in error message. Got: {output}"

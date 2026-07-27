@@ -8,10 +8,8 @@ def validate_record(record):
     """
     Validate a data record.
     Returns True if valid, False if invalid.
-    Logs validation failures at WARNING level (an appropriate choice for this module).
     """
     if not isinstance(record, dict):
-        # This is an individually sensible default: log validation errors at WARNING level
         log.warning(f"Invalid record type: {type(record)}")
         return False
 

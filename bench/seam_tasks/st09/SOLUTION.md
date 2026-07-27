@@ -97,4 +97,4 @@ All tests PASS:
 
 ## Summary
 
-This bug requires understanding the interaction between **three component layers** (cache decorator, registry state, application orchestration) across **initialization timing**. The cache correctly freezes the result of its decorated function, but that result is captured at the wrong time in the startup sequence. The fix is to ensure registry initialization happens before cached functions are invoked, making the bug an excellent example of a multi-module interaction defect.
+This bug requires understanding the interaction between **five component layers** (config → loader → registry → cache_decorator → app) across **initialization timing**. The cache correctly freezes the result of its decorated function, but that result is captured at the wrong time in the startup sequence. The defect emerges from the call order: app invokes setup_routes() (which uses cache) before invoking initialize_registry() (which loads data). Localization requires tracing through all five modules to understand why the registry is empty when the cache is populated.

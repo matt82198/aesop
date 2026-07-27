@@ -6,6 +6,8 @@
     "app.py",
     "registry.py",
     "cache_decorator.py",
+    "loader.py",
+    "config.py",
     "requirements.txt"
   ],
   "oracle_cmd": "python -m pytest oracle -q"
