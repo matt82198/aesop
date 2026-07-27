@@ -67,12 +67,18 @@ def build_u_arm_prompt(task_json: Dict[str, Any], task_dir: Path) -> str:
     Build U-arm (unseated) prompt: statement + all context_files.
     Excludes oracle/ and SOLUTION.md.
 
+    Context files are resolved under task_dir/repo/ as bare repo-relative paths.
+    Fails loud (FileNotFoundError) if a context file is missing.
+
     Args:
         task_json: Parsed task.json
         task_dir: Path to the task directory
 
     Returns:
         Complete prompt for the model
+
+    Raises:
+        FileNotFoundError: If any context_file is not found under task_dir/repo/
     """
     parts = []
 
@@ -81,18 +87,18 @@ def build_u_arm_prompt(task_json: Dict[str, Any], task_dir: Path) -> str:
     if statement:
         parts.append(statement)
 
-    # Context files (fenced, with paths). Paths are relative to the task's
-    # repo/ dir; a missing file is a task/instrument defect and must abort the
-    # run rather than silently shrink the model's visible context.
+    # Context files (fenced, with paths) — resolved under repo/
     context_files = task_json.get("context_files", [])
+    repo_dir = task_dir / "repo"
     for context_path in context_files:
-        file_path = task_dir / "repo" / context_path
+        file_path = repo_dir / context_path
         if not file_path.exists():
             raise FileNotFoundError(
-                f"context file missing for task "
-                f"{task_json.get('task_id', '?')}: repo/{context_path}"
+                f"Context file not found: {context_path} "
+                f"(resolved to {file_path})"
             )
         content = file_path.read_text(encoding="utf-8", errors="replace")
+        # Fence the content with the relative path
         parts.append(f"\n# File: {context_path}\n```\n{content}\n```")
 
     # Fixed instruction
@@ -169,6 +175,7 @@ def apply_diff_to_sandbox(
     """
     # Copy repo to sandbox
     try:
+        sandbox.mkdir(parents=True, exist_ok=True)
         for item in repo_dir.iterdir():
             if item.is_dir():
                 shutil.copytree(item, sandbox / item.name)
