@@ -158,66 +158,80 @@ def extract_diff(response: str) -> str:
 
 def apply_diff_to_sandbox(
     repo_dir: Path, diff: str, sandbox: Path
-) -> bool:
+) -> str:
     """
-    Copy repo_dir to sandbox and apply diff.
+    Copy repo_dir to sandbox/repo/ and apply diff.
+
+    Sandbox structure (for oracle):
+      sandbox/repo/      <- copy of task repo with diff applied
+      sandbox/oracle/    <- copied at grading time (not shown to model)
 
     Tries multiple methods: git apply, patch, then fallback Python parser.
 
     Args:
         repo_dir: Source repo directory
         diff: Unified diff text
-        sandbox: Destination sandbox directory
+        sandbox: Destination sandbox directory (parent of repo/ and oracle/)
 
     Returns:
-        True if successful, False otherwise
+        "applied" if diff was successfully applied
+        "failed" if patch failed to apply
+        "noop" if diff had no effect
+        None on error
     """
-    # Copy repo to sandbox
+    # Create sandbox and sandbox/repo
     try:
         sandbox.mkdir(parents=True, exist_ok=True)
-        for item in repo_dir.iterdir():
-            if item.is_dir():
-                shutil.copytree(item, sandbox / item.name)
-            else:
-                shutil.copy2(item, sandbox / item.name)
-    except Exception as e:
-        print(f"Error copying repo to sandbox: {e}", file=sys.stderr)
-        return False
+        repo_sandbox = sandbox / "repo"
+        repo_sandbox.mkdir(exist_ok=True)
 
-    # Initialize git repo in sandbox (required for git apply)
+        # Copy repo contents into sandbox/repo
+        for item in repo_dir.iterdir():
+            dest = repo_sandbox / item.name
+            if item.is_dir():
+                if dest.exists():
+                    shutil.rmtree(dest)
+                shutil.copytree(item, dest)
+            else:
+                shutil.copy2(item, dest)
+    except Exception as e:
+        print(f"Error copying repo to sandbox/repo: {e}", file=sys.stderr)
+        return None
+
+    # Initialize git repo in sandbox/repo (required for git apply)
     git_ok = False
     try:
         subprocess.run(
             ["git", "init"],
-            cwd=sandbox,
+            cwd=repo_sandbox,
             capture_output=True,
             timeout=10,
             text=True,
         )
         subprocess.run(
             ["git", "config", "user.email", "test@example.com"],
-            cwd=sandbox,
+            cwd=repo_sandbox,
             capture_output=True,
             timeout=10,
             text=True,
         )
         subprocess.run(
             ["git", "config", "user.name", "Test User"],
-            cwd=sandbox,
+            cwd=repo_sandbox,
             capture_output=True,
             timeout=10,
             text=True,
         )
         subprocess.run(
             ["git", "add", "-A"],
-            cwd=sandbox,
+            cwd=repo_sandbox,
             capture_output=True,
             timeout=10,
             text=True,
         )
         result = subprocess.run(
             ["git", "commit", "-m", "initial"],
-            cwd=sandbox,
+            cwd=repo_sandbox,
             capture_output=True,
             timeout=10,
             text=True,
@@ -226,19 +240,30 @@ def apply_diff_to_sandbox(
     except Exception:
         pass
 
-    # Try git apply if git is ready
+    # Try git apply if git is ready (with tolerance for a/ b/ prefixes)
     if git_ok:
         try:
             result = subprocess.run(
-                ["git", "apply"],
+                ["git", "apply", "-p1"],
                 input=diff,
-                cwd=sandbox,
+                cwd=repo_sandbox,
                 capture_output=True,
                 timeout=10,
                 text=True,
             )
             if result.returncode == 0:
-                return True
+                # Verify something actually changed
+                result_check = subprocess.run(
+                    ["git", "status", "--porcelain"],
+                    cwd=repo_sandbox,
+                    capture_output=True,
+                    timeout=10,
+                    text=True,
+                )
+                if result_check.stdout.strip():
+                    return "applied"
+                else:
+                    return "noop"
         except Exception:
             pass
 
@@ -247,95 +272,33 @@ def apply_diff_to_sandbox(
         result = subprocess.run(
             ["patch", "-p1"],
             input=diff,
-            cwd=sandbox,
+            cwd=repo_sandbox,
             capture_output=True,
             timeout=10,
             text=True,
         )
         if result.returncode == 0:
-            return True
+            return "applied"
     except Exception:
         pass
 
-    # Last resort: Python-based patch using difflib concepts
-    try:
-        # Parse the diff to find file changes
-        lines = diff.split("\n")
-        file_map = {}  # file -> list of changes
-        current_file = None
-        current_changes = []
-        changes_made = False
-
-        for i, line in enumerate(lines):
-            if line.startswith("--- "):
-                current_file = line[4:].split("\t")[0]
-                if current_file.startswith("a/"):
-                    current_file = current_file[2:]
-            elif line.startswith("+++ "):
-                pass  # Skip +++ lines
-            elif line.startswith("@@") and current_file:
-                if current_changes:
-                    if current_file not in file_map:
-                        file_map[current_file] = []
-                    file_map[current_file].extend(current_changes)
-                current_changes = []
-            elif current_file and (line.startswith("-") or line.startswith("+")):
-                if not line.startswith("---") and not line.startswith("+++"):
-                    current_changes.append(line)
-
-        if current_changes and current_file:
-            if current_file not in file_map:
-                file_map[current_file] = []
-            file_map[current_file].extend(current_changes)
-
-        # If no file map was built, the diff is invalid
-        if not file_map:
-            return False
-
-        # Apply changes
-        for filepath, changes in file_map.items():
-            file_path = sandbox / filepath
-            if not file_path.exists():
-                continue
-
-            original_content = file_path.read_text(encoding="utf-8")
-            content = original_content
-
-            # Process changes - look for - and + pairs
-            i = 0
-            while i < len(changes):
-                if changes[i].startswith("-") and not changes[i].startswith("---"):
-                    old_line = changes[i][1:]
-                    if i + 1 < len(changes) and changes[i + 1].startswith("+") and not changes[i + 1].startswith("+++"):
-                        new_line = changes[i + 1][1:]
-                        # Try to replace the line
-                        if old_line + "\n" in content:
-                            content = content.replace(old_line + "\n", new_line + "\n", 1)
-                            changes_made = True
-                            i += 2
-                            continue
-                i += 1
-
-            # Only write if changes were actually made
-            if changes_made and content != original_content:
-                file_path.write_text(content, encoding="utf-8")
-
-        return changes_made
-    except Exception as e:
-        print(f"Python patch fallback failed: {e}", file=sys.stderr)
-
-    return False
+    return "failed"
 
 
 def run_oracle(
-    task_json: Dict[str, Any], sandbox: Path, timeout: int = 120
+    task_json: Dict[str, Any], task_dir: Path, sandbox: Path, timeout: int = 120
 ) -> bool:
     """
     Run oracle tests in sandbox.
 
+    Expects sandbox layout:
+      sandbox/repo/      <- patched code
+      sandbox/oracle/    <- test suite
+
     Args:
         task_json: Task configuration
-        sandbox: Sandbox directory with patched repo
+        task_dir: Original task directory (to copy oracle from)
+        sandbox: Sandbox directory with repo/ and oracle/
         timeout: Timeout in seconds
 
     Returns:
@@ -346,8 +309,21 @@ def run_oracle(
         print("No oracle_cmd in task", file=sys.stderr)
         return False
 
+    # Copy oracle/ from task to sandbox/oracle at grading time
     try:
-        # Use sys.executable for parity
+        oracle_src = task_dir / "oracle"
+        oracle_dst = sandbox / "oracle"
+        if oracle_src.exists():
+            if oracle_dst.exists():
+                shutil.rmtree(oracle_dst)
+            shutil.copytree(oracle_src, oracle_dst)
+    except Exception as e:
+        print(f"Error copying oracle to sandbox: {e}", file=sys.stderr)
+        return False
+
+    try:
+        # Run oracle_cmd with cwd=sandbox so "pytest oracle" finds oracle/
+        # oracle/conftest.py does: sys.path.insert(../repo) to find the code
         result = subprocess.run(
             oracle_cmd,
             shell=True,
@@ -1030,12 +1006,26 @@ def run_single_task(
 
         with tempfile.TemporaryDirectory() as tmpdir:
             sandbox = Path(tmpdir)
-            if not apply_diff_to_sandbox(task_dir / "repo", diff, sandbox):
+            apply_status = apply_diff_to_sandbox(task_dir / "repo", diff, sandbox)
+            result["patch_apply_status"] = apply_status
+
+            if apply_status is None:
+                result["passed"] = False
+                result["status"] = "apply_error"
+                return record_result(result)
+
+            if apply_status == "noop":
+                result["passed"] = False
+                result["status"] = "apply_noop"
+                return record_result(result)
+
+            if apply_status == "failed":
                 result["passed"] = False
                 result["status"] = "apply_failed"
                 return record_result(result)
 
-            if run_oracle(task_json, sandbox, timeout=120):
+            # apply_status == "applied"
+            if run_oracle(task_json, task_dir, sandbox, timeout=120):
                 result["passed"] = True
                 result["status"] = "pass"
             else:
