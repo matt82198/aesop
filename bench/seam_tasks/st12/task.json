@@ -1,0 +1,12 @@
+{
+  "task_id": "st12",
+  "band": "long",
+  "statement": "A web service client retries failed requests with exponential backoff. The client caches responses to reduce API calls. When a request fails transiently (e.g., network timeout), the cached error response is stored. Subsequent requests within the retry window hit the cache and immediately return the cached error without hitting the network. Even after the server recovers and becomes healthy, clients continue to fail until the cache expires. Fresh client instances or clearing the cache temporarily fixes the issue. How do you fix this permanently?",
+  "context_files": [
+    "retry_policy.py",
+    "cache.py",
+    "http_client.py",
+    "requirements.txt"
+  ],
+  "oracle_cmd": "python -m pytest oracle -q"
+}

@@ -1,0 +1,10 @@
+{
+  "task_id": "st01",
+  "band": "short",
+  "statement": "A rate limiter allows exactly N requests per time window (in seconds). When you call allow() within the window, it works. However, calling it right at the boundary (when window_duration seconds have passed since the first request) incorrectly rejects the request \u2014 it should allow it. Fix the boundary condition so requests at exactly the window boundary are handled correctly.",
+  "context_files": [
+    "__init__.py",
+    "rate_limiter.py"
+  ],
+  "oracle_cmd": "python -m pytest oracle -q"
+}
