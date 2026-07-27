@@ -280,9 +280,12 @@ class TestSandboxApply(SeamURunnerTestCase):
         sandbox = Path(self.tmpdir) / "sandbox"
         result = apply_diff_to_sandbox(fixture_repo, diff, sandbox)
 
-        self.assertTrue(result, "apply_diff_to_sandbox should return True on success")
-        self.assertTrue((sandbox / "main.py").exists())
-        content = (sandbox / "main.py").read_text()
+        self.assertEqual(result, "applied",
+                         "apply_diff_to_sandbox should report 'applied' on success")
+        # Patched code lives under sandbox/repo/ (mirrors the task layout so the
+        # oracle's conftest resolves ../repo).
+        self.assertTrue((sandbox / "repo" / "main.py").exists())
+        content = (sandbox / "repo" / "main.py").read_text()
         self.assertIn("FIXED", content)
         self.assertIn("return len(items)", content)
 
@@ -299,7 +302,10 @@ class TestSandboxApply(SeamURunnerTestCase):
         sandbox = Path(self.tmpdir) / "sandbox"
         result = apply_diff_to_sandbox(fixture_repo, bad_diff, sandbox)
 
-        self.assertFalse(result, "apply_diff_to_sandbox should return False on invalid diff")
+        # New contract returns a status string; an unappliable diff is "failed"
+        # (or "noop" if it changed nothing) - never "applied".
+        self.assertIn(result, ("failed", "noop", None),
+                      "apply_diff_to_sandbox must not report 'applied' for an invalid diff")
 
 
 # ============================================================================
