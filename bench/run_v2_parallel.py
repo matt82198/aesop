@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
-"""Parallel frontier v2 benchmark runner — N=60 tasks x 3 repeats x 5 tiers = 900 runs.
+"""Parallel frontier v2/v5 benchmark runner.
 
-Pre-registered protocol: bench/EQUIVALENCE-MARGIN.md (Amendment 1, committed 2026-07-26).
-Grading: machine-checked ground-truth patterns only.
-Transport: anthropic client for Claude tiers; OpenAI seam for gpt-4o-mini.
-Cost cap: $30 USD. Spend tracking per tier.
+Supports two answer modes:
+- regex (default, v2/v3/v4): prose format + regex grading
+- tool (v5): structured tool calls + enum grading
+
+Pre-registered protocols:
+- v4 (regex mode): bench/EQUIVALENCE-MARGIN.md Amendment 3 (committed 2026-07-27)
+- v5 (tool mode): bench/EQUIVALENCE-MARGIN.md Amendment 4 (committed 2026-07-27)
+
+Transports: anthropic-http (Claude tiers via BENCH_API_KEY) + openai (gpt-4o-mini).
 
 USAGE
 -----
+  # Regex mode (v2-v4): prose + regex grading (default)
   python bench/run_v2_parallel.py --max-runs 180
-  python bench/run_v2_parallel.py --max-runs 180 --checkpoint bench/results/frontier-v2-checkpoint.jsonl
-  (repeat until 900/900 or a tier is skipped)
+  python bench/run_v2_parallel.py --max-runs 180 --checkpoint bench/results/frontier-v4-checkpoint.jsonl
 
-Checkpoint format (frontier-v2-checkpoint.jsonl):
-  One JSON line per completed run:
+  # Tool mode (v5): tool calls + enum grading
+  python bench/run_v2_parallel.py --answer-mode tool --max-runs 180
+  python bench/run_v2_parallel.py --answer-mode tool --max-runs 180 --checkpoint bench/results/frontier-v5-checkpoint.jsonl
+
+Checkpoint format (one JSON line per completed run):
   {
     "tier": "claude-opus-5",
     "task_id": "ft01_...",
@@ -23,8 +31,9 @@ Checkpoint format (frontier-v2-checkpoint.jsonl):
     "tokens_in": 1234,
     "tokens_out": 567,
     "cost_usd": 0.0234,
-    "transport": "anthropic",
-    "wall_s": 2.34
+    "transport": "anthropic-http",
+    "wall_s": 2.34,
+    "answer_mode": "tool"  # NEW in v5: "tool" or "regex"
   }
 """
 
@@ -49,6 +58,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # Import frontier infrastructure
 sys.path.insert(0, str(Path(__file__).parent))
 from frontier_slice import FrontierTask, GroundTruth, load_frontier_tasks, load_ground_truth, score_response
+from token_sets import audit_tasks, parse_token_set, extract_correct_token
 
 # Import OpenAI transport
 sys.path.insert(0, str(Path(__file__).parent.parent / "driver"))
@@ -62,7 +72,7 @@ from openai_transport import default_openai_transport
 
 @dataclass
 class FrontierV2Run:
-    """One frontier v2 run result."""
+    """One frontier v2/v5 run result."""
     tier: str
     task_id: str
     repeat: int
@@ -73,6 +83,7 @@ class FrontierV2Run:
     cost_usd: float
     transport: str
     wall_s: float
+    answer_mode: str = "regex"  # NEW in v5: "regex" (v2-v4) or "tool" (v5)
 
 
 # ============================================================================
@@ -124,11 +135,76 @@ PRICING_MTOK = {
 }
 
 
+# ============================================================================
+# Tool-Mode Support (v5)
+# ============================================================================
+
+
+def transform_prompt_for_tool_mode(prompt: str) -> str:
+    """Remove the prose answer-format instruction and add tool instruction.
+
+    Strips "First line of your response: exactly <TOKEN>" or similar format
+    instructions, then appends a tool-call instruction.
+
+    Args:
+        prompt: Original task prompt
+
+    Returns:
+        Transformed prompt ready for tool-based answer submission
+    """
+    # Remove the format instruction (one uniform regex transform)
+    instruction_pattern = re.compile(
+        r"(?:First line(?:\s+of\s+your\s+response)?:\s*exactly\s+.+?(?:\n|$))\s*"
+        r"|(?:Answer with\s+.+?\s+on\s+the\s+first\s+line\s*(?:\n|$))",
+        re.IGNORECASE,
+    )
+    transformed = instruction_pattern.sub("", prompt).strip()
+
+    # Append tool-call instruction
+    transformed += "\n\nSubmit your final answer by calling the submit_answer tool."
+    return transformed
+
+
+def grade_tool_mode_response(
+    response_text: str,
+    correct_token: str,
+) -> bool:
+    """Grade a tool-mode response via exact enum equality.
+
+    Parses the tool call from the response and checks if the submitted
+    answer matches the correct token exactly.
+
+    Args:
+        response_text: Model's response (may contain tool calls)
+        correct_token: The single correct token for this task
+
+    Returns:
+        True if the submitted answer matches the correct token, False otherwise
+    """
+    # Parse the tool call to extract the answer parameter
+    # The API response may contain structured tool calls.
+    # Look for "answer" field in the response.
+    try:
+        # Try to extract answer from tool call JSON in the response text
+        # Pattern: look for "answer" field followed by the submitted value
+        answer_match = re.search(r'"answer"\s*:\s*"([^"]+)"', response_text)
+        if answer_match:
+            submitted_answer = answer_match.group(1)
+            # Exact equality check
+            return submitted_answer == correct_token
+    except Exception:
+        pass
+
+    return False
+
+
 def invoke_claude_model(
     model: str,
     prompt: str,
     max_tokens: int = 8192,
     timeout_s: float = 180.0,
+    tools: Optional[List[Dict]] = None,
+    tool_choice: Optional[Dict] = None,
 ):
     """Invoke a Claude model via direct api.anthropic.com HTTP ("anthropic-http").
 
@@ -136,23 +212,38 @@ def invoke_claude_model(
     CLI bills subscription usage and must never be used for benchmark runs.
     The key is read ONLY from BENCH_API_KEY; a missing key is a hard error
     (caught at startup by main()), never a CLI fallback or a credential hunt.
-    Returns (response_text, tokens_in, tokens_out, cost_usd, transport_label).
+
+    Args:
+        model: Claude model ID
+        prompt: User prompt
+        max_tokens: Maximum tokens to generate (>= 256 for tool mode)
+        timeout_s: Request timeout
+        tools: Optional list of tool definitions (v5 tool mode)
+        tool_choice: Optional tool choice constraint (v5 tool mode)
+
+    Returns:
+        (response_text, tokens_in, tokens_out, cost_usd, transport_label)
     """
     api_key = os.environ.get("BENCH_API_KEY")
     if not api_key:
         raise RuntimeError(
             "BENCH_API_KEY not set - bench runs are API-only (no CLI fallback)"
         )
-    return _invoke_claude_http(model, prompt, api_key, max_tokens, timeout_s)
+    return _invoke_claude_http(model, prompt, api_key, max_tokens, timeout_s, tools, tool_choice)
 
 
-def _invoke_claude_http(model, prompt, api_key, max_tokens, timeout_s):
+def _invoke_claude_http(model, prompt, api_key, max_tokens, timeout_s, tools=None, tool_choice=None):
     import urllib.request, json as _json
-    body = _json.dumps({
+    body_dict = {
         "model": model,
         "max_tokens": max_tokens,
         "messages": [{"role": "user", "content": prompt}],
-    }).encode("utf-8")
+    }
+    if tools:
+        body_dict["tools"] = tools
+    if tool_choice:
+        body_dict["tool_choice"] = tool_choice
+    body = _json.dumps(body_dict).encode("utf-8")
     req = urllib.request.Request(
         "https://api.anthropic.com/v1/messages",
         data=body,
@@ -172,9 +263,23 @@ def _invoke_claude_http(model, prompt, api_key, max_tokens, timeout_s):
     # never a scored-wrong answer.
     if out.get("stop_reason") == "refusal":
         raise RuntimeError("anthropic HTTP: stop_reason=refusal")
-    text = "".join(
-        b.get("text", "") for b in out.get("content", []) if b.get("type") == "text"
-    )
+
+    # Extract text and tool calls from response content
+    text_parts = []
+    tool_call_parts = []
+    for b in out.get("content", []):
+        if b.get("type") == "text":
+            text_parts.append(b.get("text", ""))
+        elif b.get("type") == "tool_use":
+            # Serialize tool use for grading (includes the answer parameter)
+            tool_use = b.get("input", {})
+            tool_call_parts.append(_json.dumps(tool_use))
+
+    # Combine text and tool calls for grading
+    text = "".join(text_parts)
+    if tool_call_parts:
+        text += "\n" + "\n".join(tool_call_parts)
+
     usage = out.get("usage", {})
     ti = usage.get("input_tokens", 0)
     to = usage.get("output_tokens", 0)
@@ -233,13 +338,61 @@ def run_single_task(
     task: FrontierTask,
     repeat: int,
     ground_truth: Dict[str, GroundTruth],
+    answer_mode: str = "regex",
+    tool_tasks_info: Optional[Dict] = None,
 ) -> FrontierV2Run:
     """Run a single task on a single tier.
+
+    Args:
+        tier: Model tier name
+        task: FrontierTask to run
+        repeat: Repeat index (1-3)
+        ground_truth: Ground truth dictionary
+        answer_mode: "regex" (default) or "tool" (v5)
+        tool_tasks_info: Dict of {task_id: (token_set, correct_token)} for tool mode
 
     Returns:
         FrontierV2Run with complete metadata and result.
     """
     wall_start = time.time()
+
+    # Determine if this task can use tool mode
+    tool_mode_for_task = (
+        answer_mode == "tool" and
+        tool_tasks_info and
+        task.id in tool_tasks_info
+    )
+    actual_answer_mode = "tool" if tool_mode_for_task else "regex"
+
+    # Prepare prompt and request parameters
+    request_prompt = task.prompt
+    tools = None
+    tool_choice = None
+
+    if tool_mode_for_task:
+        # Tool mode: transform prompt and add tool definition
+        request_prompt = transform_prompt_for_tool_mode(task.prompt)
+        token_set, correct_token = tool_tasks_info[task.id]
+
+        # Build tool definition
+        tools = [
+            {
+                "name": "submit_answer",
+                "description": "Submit the final answer",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "answer": {
+                            "type": "string",
+                            "enum": token_set,
+                            "description": "The final answer token"
+                        }
+                    },
+                    "required": ["answer"]
+                }
+            }
+        ]
+        tool_choice = {"type": "tool", "name": "submit_answer"}
 
     # Invoke model
     response_text = None
@@ -249,10 +402,17 @@ def run_single_task(
 
     try:
         if tier.startswith("claude-"):
-            response_text, tokens_in, tokens_out, cost, transport = invoke_claude_model(tier, task.prompt)
+            response_text, tokens_in, tokens_out, cost, transport = invoke_claude_model(
+                tier, request_prompt,
+                max_tokens=256 if tool_mode_for_task else 8192,
+                tools=tools,
+                tool_choice=tool_choice
+            )
         elif tier == "gpt-4o-mini":
+            # OpenAI seam does not support tool mode yet; always use regex
             response_text, tokens_in, tokens_out, cost = invoke_openai_model(tier, task.prompt)
             transport = "openai"
+            actual_answer_mode = "regex"
         else:
             raise ValueError(f"Unknown tier: {tier}")
     except Exception as e:
@@ -274,7 +434,12 @@ def run_single_task(
         correct = None
     else:
         gt = ground_truth.get(task.id)
-        if gt:
+        if gt and actual_answer_mode == "tool" and tool_mode_for_task:
+            # Tool mode grading
+            _, correct_token = tool_tasks_info[task.id]
+            correct = grade_tool_mode_response(response_text, correct_token)
+        elif gt:
+            # Regex mode grading (fallback)
             score = score_response(task, response_text, gt)
             correct = score.correct
         else:
@@ -297,6 +462,7 @@ def run_single_task(
         cost_usd=cost,
         transport=transport,
         wall_s=wall_s,
+        answer_mode=actual_answer_mode,
     )
 
 
@@ -307,7 +473,13 @@ def run_single_task(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Parallel frontier v2 benchmark runner (N=60 tasks x 3 repeats x 5 tiers = 900 runs)"
+        description="Parallel frontier v2/v5 benchmark runner (N=130 tasks x 3 repeats x 5 tiers = 1950 runs)"
+    )
+    parser.add_argument(
+        "--answer-mode",
+        default="regex",
+        choices=["regex", "tool"],
+        help="Answer collection mode: 'regex' (v2-v4, default) or 'tool' (v5 tool calls)",
     )
     parser.add_argument(
         "--max-runs",
@@ -317,9 +489,9 @@ def main():
     )
     parser.add_argument(
         "--checkpoint",
-        default="bench/results/frontier-v4-checkpoint.jsonl",
-        help="Path to checkpoint file (default bench/results/frontier-v4-checkpoint.jsonl; "
-        "v4 MUST use a fresh checkpoint - task fixes make old tuples non-comparable)",
+        default=None,  # Will be set based on answer_mode
+        help="Path to checkpoint file (default: frontier-v4-checkpoint.jsonl for regex, "
+        "frontier-v5-checkpoint.jsonl for tool mode)",
     )
     parser.add_argument(
         "--workers",
@@ -335,10 +507,25 @@ def main():
 
     args = parser.parse_args()
 
+    # Set default checkpoint path based on answer_mode
+    if args.checkpoint is None:
+        args.checkpoint = (
+            "bench/results/frontier-v5-checkpoint.jsonl" if args.answer_mode == "tool"
+            else "bench/results/frontier-v4-checkpoint.jsonl"
+        )
+
     # Load frontier data
     tasks = load_frontier_tasks("bench/tasks_frontier.jsonl")
     ground_truth = load_ground_truth("bench/ground_truth_frontier.jsonl")
     tiers = args.tiers.split(",")
+
+    # Load tool-mode task info if needed
+    tool_tasks_info = None
+    if args.answer_mode == "tool":
+        tool_tasks_info, regex_fallback = audit_tasks(
+            "bench/tasks_frontier.jsonl",
+            "bench/ground_truth_frontier.jsonl"
+        )
 
     # Fail fast: Claude tiers are API-only (bench-no-cli-fallback directive).
     # Better one clear startup error than hundreds of error-run lines.
@@ -351,13 +538,17 @@ def main():
         )
         sys.exit(2)
 
-    print(f"Frontier v2 Parallel Runner")
+    print(f"Frontier v2/v5 Parallel Runner")
+    print(f"  Answer mode: {args.answer_mode}")
     print(f"  Tasks: {len(tasks)}")
     print(f"  Repeats: 3")
     print(f"  Tiers: {len(tiers)}")
     print(f"  Total runs: {len(tasks) * 3 * len(tiers)}")
     print(f"  Workers: {args.workers}")
     print(f"  Max runs this call: {args.max_runs}")
+    if tool_tasks_info:
+        print(f"  Tool-mode eligible: {len(tool_tasks_info)}")
+        print(f"  Regex fallback: {len(tasks) - len(tool_tasks_info)}")
     print()
 
     # Initialize checkpoint
@@ -393,7 +584,11 @@ def main():
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
-            executor.submit(run_single_task, tier, task, repeat, ground_truth): (tier, task.id, repeat)
+            executor.submit(
+                run_single_task, tier, task, repeat, ground_truth,
+                answer_mode=args.answer_mode,
+                tool_tasks_info=tool_tasks_info
+            ): (tier, task.id, repeat)
             for tier, task, repeat in work_items
         }
 
