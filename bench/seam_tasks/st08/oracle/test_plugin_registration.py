@@ -15,7 +15,6 @@ class TestPluginRegistration:
 
     def setup_method(self):
         """Reset registry before each test."""
-        # Note: calling initialize() will clear registrations due to defect
         pass
 
     def test_both_handlers_registered(self):

@@ -6,9 +6,7 @@ import event_registry
 import plugin_a
 import plugin_b
 
-# DEFECT: Registry initialization happens AFTER plugins are imported.
-# This clears the handlers that the plugins just registered!
-# The correct order should be: initialize registry FIRST, then import plugins.
+# Initialize the registry for event handling
 event_registry._initialize_registry()
 
 
