@@ -263,20 +263,24 @@ def execute_task_run(
         policy = verification_policy(caps)
         policy_repair_cap = policy.get("repair_cap", 1)
 
-        # Create isolated sandbox.
+        # Create isolated sandbox with proper layout.
         with tempfile.TemporaryDirectory() as tmpdir:
             sandbox_dir = Path(tmpdir)
+            sandbox_repo_dir = sandbox_dir / "repo"
+            sandbox_repo_dir.mkdir()
 
-            # Copy repo into sandbox.
+            # Copy repo into sandbox/repo/ (not flat!).
+            # Oracle expects to find code at ../repo relative to oracle/ dir.
             for item in task.repo_path.iterdir():
                 if item.is_file():
-                    shutil.copy2(item, sandbox_dir / item.name)
+                    shutil.copy2(item, sandbox_repo_dir / item.name)
                 elif item.is_dir() and not item.name.startswith("."):
-                    shutil.copytree(item, sandbox_dir / item.name)
+                    shutil.copytree(item, sandbox_repo_dir / item.name)
 
             # Run bounded repair loop with APPLIED cap (uniform across tiers).
+            # Worker edits go into sandbox/repo/, visible tests run from there.
             worker_ok, worker_verdict, retries, tokens = run_bounded_repair(
-                driver, task, sandbox_dir, applied_repair_cap
+                driver, task, sandbox_repo_dir, applied_repair_cap
             )
 
             # Run oracle if worker succeeded.
