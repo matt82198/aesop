@@ -1,20 +1,25 @@
 #!/usr/bin/env python3
 """S-arm (seated) dispatcher for the seam-discrimination study.
 
-Runs the AgentDriver seam against a fixture-task library using real API backends.
-Each task is executed in an isolated sandbox; oracle grading happens after.
+Runs the AgentDriver seam against a fixture-task library using real API backends
+with REAL BOUNDED REPAIR LOOP (reuses wave_loop.py Phases 4-5 pattern).
 
-DESIGN
-------
+DESIGN (REPAIR LOOP FROM wave_loop.py)
+--------------------------------------
 Per (task, tier, repeat):
-  1. Copy task.json repo/ into a temp sandbox (never mutates task dir).
-  2. Dispatch ONE worker via AgentDriver using the specified tier.
-  3. Worker is isolated (no cwd/git-config pollution).
-  4. Run oracle against the sandbox (oracle/ made available only at grade time).
-  5. Record task_id, band, tier, repeat, arm, backend, passed, worker_verdict,
-     retries, tokens, duration, status.
+  1. Copy task.json repo/ into temp sandbox (never mutates task dir).
+  2. Build manifest_item via build_manifest_item (gets repair_cap from policy).
+  3. For each repair attempt (up to repair_cap):
+     - Create dispatch item (prompt + failure history from previous attempts)
+     - Dispatch worker via dispatch_item (NOT direct dispatch_worker!)
+     - Visible test runs within dispatch_item (oracle still hidden)
+     - On failure: append test output to prompt for next attempt
+  4. After final repair attempt, run HIDDEN oracle for grading-only.
+  5. Record task_id, band, tier, repeat, arm:"S", backend, passed,
+     worker_verdict, retries_used (actual repair attempts), tokens per attempt,
+     duration, status.
 
-Checkpoint format: JSONL (one result per line). Resume skips completed tuples.
+Checkpoint format: JSONL (one result per line), key = (task_id, tier, repeat, arm).
 Windows + Linux parity: sys.executable, PYTHONUTF8, ASCII output, subprocess timeouts.
 
 USAGE
@@ -46,8 +51,10 @@ DRIVER_DIR = REPO_ROOT / "driver"
 if str(DRIVER_DIR) not in sys.path:
     sys.path.insert(0, str(DRIVER_DIR))
 
-from agent_driver import WorkerRequest, WORKER_DONE, WORKER_FAILED, ROLE_WORKER
+from agent_driver import ROLE_WORKER
 from backend_config import build_driver, load_backend_config
+from wave_bridge import build_manifest_item, dispatch_item
+from verification_policy import verification_policy
 
 
 @dataclass
@@ -64,8 +71,19 @@ class TaskFixture:
 
 
 @dataclass
+class AttemptResult:
+    """Result from one repair attempt."""
+    attempt_num: int
+    ok: bool
+    test_exit: Optional[int] = None
+    files_written: Tuple[str, ...] = field(default_factory=tuple)
+    error: str = ""
+    tokens_spent: Optional[int] = None
+
+
+@dataclass
 class Result:
-    """One (task, tier, repeat) execution."""
+    """Final result for one (task, tier, repeat, arm) execution."""
     task_id: str
     band: str
     tier: str
@@ -102,64 +120,100 @@ def load_task(task_dir: Path) -> TaskFixture:
     )
 
 
-def run_worker_dispatch(
+def run_bounded_repair(
     driver,
     task: TaskFixture,
     sandbox_dir: Path,
-    max_retries: int = 2,
+    repair_cap: int,
 ) -> Tuple[bool, str, int, Optional[int]]:
-    """Dispatch worker via AgentDriver seam.
+    """Run bounded repair loop (from wave_loop.py Phase 5 pattern).
 
     Returns:
         (ok, worker_verdict, retries_used, tokens_spent)
     """
-    retries_used = 0
-    tokens_spent = None
+    # Get owned files from task context_files.
+    owned_files = tuple(task.context_files)
+    if not owned_files:
+        owned_files = tuple(
+            str(f.relative_to(task.repo_path))
+            for f in task.repo_path.glob("**/*")
+            if f.is_file()
+        )[:5]
 
+    # Build initial dispatch item (from aesop backlog item).
+    dispatch_item_dict = {
+        "slug": task.task_id,
+        "prompt": task.statement,
+        "ownsFiles": list(owned_files),
+        "workDir": str(sandbox_dir),
+        "testCmd": "python -m pytest . -q",  # Basic test; fixture may override via oracle
+        "model": driver.resolve_model(ROLE_WORKER),
+    }
+
+    # Build manifest item (gets model, tier, policy knobs).
     try:
-        # Prepare owned files list from context_files.
-        owned_files = tuple(task.context_files)
-        if not owned_files:
-            owned_files = tuple(
-                str(f.relative_to(task.repo_path))
-                for f in task.repo_path.glob("**/*")
-                if f.is_file()
-            )[:5]  # Limit to 5 files for safety.
-
-        # Create the worker request.
-        request = WorkerRequest(
-            prompt=task.statement,
-            owned_files=owned_files,
-            workdir=str(sandbox_dir),
-            label=task.task_id,
-        )
-
-        # Dispatch.
-        result = driver.dispatch_worker(request)
-
-        # Track tokens.
-        if result.tokens_spent is not None:
-            tokens_spent = result.tokens_spent
-
-        if not result.ok:
-            worker_verdict = result.error or "WORKER_FAILED"
-            return False, worker_verdict, retries_used, tokens_spent
-
-        # Success.
-        worker_verdict = result.structured.get("summary", "OK")
-        return True, worker_verdict, retries_used, tokens_spent
-
+        manifest_item = build_manifest_item(driver, dispatch_item_dict)
     except Exception as exc:
-        return False, str(exc), retries_used, tokens_spent
+        return False, f"build_manifest failed: {exc}", 0, None
+
+    # Bounded repair loop (reuses wave_loop.py Phase 5 logic).
+    retries_used = 0
+    total_tokens = 0
+    failed_item = manifest_item
+    last_error = ""
+    last_test_exit = None
+
+    for attempt in range(repair_cap):
+        retries_used = attempt  # Number of repair attempts (0 = first, 1 = first repair, etc.)
+
+        try:
+            # Dispatch the (possibly repaired) item.
+            result = dispatch_item(driver, failed_item, workdir=str(sandbox_dir))
+
+            # Track tokens if reported.
+            if driver.get_tokens_spent() is not None:
+                total_tokens = driver.get_tokens_spent()
+
+            # Check result.
+            ok = result.get("ok", False)
+            test_exit = result.get("testExit")
+            error = result.get("error", "")
+
+            if ok:
+                # Test passed! Return success.
+                return True, error or "Fixed", retries_used, total_tokens
+
+            # Test failed: prepare for next repair attempt.
+            last_error = error
+            last_test_exit = test_exit
+
+            if attempt < repair_cap - 1:
+                # Build repair prompt: append test failure to original.
+                original_prompt = dispatch_item_dict["prompt"]
+                test_output = f"\n\nTest failed with exit code {test_exit}.\n"
+                if error:
+                    test_output += f"Error: {error}\n"
+                repair_prompt = original_prompt + test_output
+
+                # Create repair item for next attempt.
+                repair_item = dict(manifest_item)
+                repair_item["prompt"] = repair_prompt
+                failed_item = repair_item
+
+        except Exception as exc:
+            return False, f"dispatch attempt {attempt} failed: {exc}", retries_used, total_tokens
+
+    # All attempts exhausted, last one failed.
+    return False, last_error or "Repair attempts exhausted", retries_used, total_tokens
 
 
 def run_oracle(oracle_path: Path, sandbox_dir: Path, timeout_s: int = 120) -> bool:
     """Run oracle grading in the sandbox. Returns True if oracle passed."""
     if not oracle_path.exists():
-        # No oracle: assume not graded.
+        # No oracle: cannot grade.
         return False
 
-    # Make oracle available in the sandbox (copy it).
+    # Make oracle available in sandbox (copy it).
     sandbox_oracle = Path(sandbox_dir) / "oracle"
     if sandbox_oracle.exists():
         shutil.rmtree(sandbox_oracle)
@@ -186,8 +240,9 @@ def execute_task_run(
     task: TaskFixture,
     tier: str,
     repeat: int,
+    repair_cap: int,
 ) -> Result:
-    """Execute one (task, tier, repeat) run."""
+    """Execute one (task, tier, repeat, arm) run with bounded repair."""
     start_time = time.time()
 
     try:
@@ -202,9 +257,9 @@ def execute_task_run(
                 elif item.is_dir() and not item.name.startswith("."):
                     shutil.copytree(item, sandbox_dir / item.name)
 
-            # Dispatch worker.
-            worker_ok, worker_verdict, retries, tokens = run_worker_dispatch(
-                driver, task, sandbox_dir
+            # Run bounded repair loop.
+            worker_ok, worker_verdict, retries, tokens = run_bounded_repair(
+                driver, task, sandbox_dir, repair_cap
             )
 
             # Run oracle if worker succeeded.
@@ -259,8 +314,11 @@ def execute_task_run(
         )
 
 
-def load_checkpoint(checkpoint_path: Path) -> Dict[Tuple[str, str, int], Result]:
-    """Load completed results from checkpoint JSONL file."""
+def load_checkpoint(checkpoint_path: Path) -> Dict[Tuple[str, str, int, str], Result]:
+    """Load completed results from checkpoint JSONL file.
+
+    Key is (task_id, tier, repeat, arm).
+    """
     completed = {}
     if not checkpoint_path.exists():
         return completed
@@ -271,7 +329,7 @@ def load_checkpoint(checkpoint_path: Path) -> Dict[Tuple[str, str, int], Result]
                 continue
             result_dict = json.loads(line)
             result = Result(**result_dict)
-            key = (result.task_id, result.tier, result.repeat)
+            key = (result.task_id, result.tier, result.repeat, result.arm)
             completed[key] = result
 
     return completed
@@ -285,7 +343,7 @@ def save_result(checkpoint_path: Path, result: Result) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="S-arm (seated) dispatcher for seam-discrimination study"
+        description="S-arm (seated) dispatcher for seam-discrimination study (with real repair loop)"
     )
     parser.add_argument(
         "--tasks-dir",
@@ -315,7 +373,7 @@ def main():
         "--checkpoint",
         type=Path,
         default=Path("bench/results/seam-s-checkpoint.jsonl"),
-        help="Checkpoint JSONL file",
+        help="Checkpoint JSONL file (key includes arm)",
     )
     parser.add_argument(
         "--max-runs",
@@ -374,10 +432,10 @@ def main():
     for task in tasks:
         for tier in tiers:
             for repeat in range(1, args.repeats + 1):
-                # Check if already done.
-                key = (task.task_id, tier, repeat)
+                # Check if already done (key now includes arm).
+                key = (task.task_id, tier, repeat, "S")
                 if key in completed:
-                    print(f"SKIP {task.task_id} {tier} repeat {repeat} (already completed)")
+                    print(f"SKIP {task.task_id} {tier} repeat {repeat} arm=S (already completed)")
                     continue
 
                 # Check max-runs limit.
@@ -406,15 +464,24 @@ def main():
                     print(f"ERROR: failed to build driver for {tier}: {exc}")
                     sys.exit(1)
 
-                # Execute run.
-                print(f"RUN {task.task_id} {tier} repeat {repeat} (backend={backend_name})")
-                result = execute_task_run(driver, task, tier, repeat)
+                # Get repair cap from verification policy.
+                caps = driver.probe_capabilities()
+                policy = verification_policy(caps)
+                repair_cap = policy.get("repair_cap", 1)
+
+                # Execute run (with REAL bounded repair loop).
+                print(
+                    f"RUN {task.task_id} {tier} repeat {repeat} arm=S "
+                    f"(backend={backend_name}, repair_cap={repair_cap})"
+                )
+                result = execute_task_run(driver, task, tier, repeat, repair_cap)
 
                 # Save result.
                 save_result(args.checkpoint, result)
                 print(
                     f"  status={result.status} passed={result.passed} "
-                    f"tokens={result.tokens_spent} duration={result.duration_s:.1f}s"
+                    f"retries={result.retries_used} tokens={result.tokens_spent} "
+                    f"duration={result.duration_s:.1f}s"
                 )
 
                 runs_done += 1

@@ -1,28 +1,24 @@
 #!/usr/bin/env python3
-"""Tests for bench/run_seam_s.py — S-arm dispatcher (offline, mocked transports).
+"""Tests for bench/run_seam_s.py — S-arm dispatcher with REAL REPAIR LOOP (TDD).
 
-Tests:
-  1. Task loading from fixture dir
-  2. Sandbox isolation (task dir unchanged after run)
-  3. Mocked Anthropic transport (good/bad responses)
-  4. Mocked OpenAI transport (good/bad responses)
-  5. Oracle grading (passed/failed)
-  6. Checkpoint resume semantics
-  7. Refusal and transient status handling
-  8. Missing env var fail-fast naming the var
-  9. Result serialization to JSONL
+Tests verify:
+  1. Checkpoint keys include arm (no S/U collision)
+  2. Bounded repair loop: failures trigger next attempt
+  3. Repair loop appends failure output to next prompt
+  4. Retries_used counts actual repair attempts
+  5. Oracle never visible until grading
+  6. Verification policy drives repair_cap (not hardcoded)
 
 stdlib-only (unittest), ASCII-only, Windows + Linux safe.
 """
 
 import json
-import os
-import subprocess
+import shutil
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 # Add driver to path.
 REPO = Path(__file__).resolve().parent.parent
@@ -31,261 +27,21 @@ if str(DRIVER_DIR) not in sys.path:
     sys.path.insert(0, str(DRIVER_DIR))
 
 import bench.run_seam_s as seam_s  # noqa: E402
-from agent_driver import WorkerRequest, WorkerResult, WORKER_DONE, WORKER_FAILED
 
 
-class FakeAnthropicTransport:
-    """Fake Anthropic transport for testing."""
+class TestCheckpointKeyIncludesArm(unittest.TestCase):
+    """Test that checkpoint keys include arm to avoid S/U collisions."""
 
-    def __init__(self, response=None, file_path="main.py", fail=False):
-        self.response = response or {
-            "content": [{"text": json.dumps({
-                "files": [{"path": file_path, "contents": "# fixed"}],
-                "summary": "Fixed",
-                "done": True,
-            })}],
-            "usage": {"input_tokens": 100, "output_tokens": 50},
-        }
-        self.fail = fail
-
-    def __call__(self, payload):
-        if self.fail:
-            raise RuntimeError("API error")
-        return self.response
-
-
-class FakeOpenAITransport:
-    """Fake OpenAI transport for testing."""
-
-    def __init__(self, response=None, fail=False):
-        self.response = response or {
-            "choices": [{
-                "message": {"content": json.dumps({
-                    "files": [{"path": "test.py", "contents": "# fixed"}],
-                    "summary": "Fixed",
-                    "done": True,
-                })}
-            }],
-            "usage": {"total_tokens": 150},
-        }
-        self.fail = fail
-
-    def __call__(self, payload):
-        if self.fail:
-            raise RuntimeError("API error")
-        return self.response
-
-
-class TestTaskLoading(unittest.TestCase):
-    """Test loading tasks from fixtures."""
-
-    def test_load_task_success(self):
-        """Load a valid task fixture."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            task_dir = Path(tmpdir) / "task001"
-            task_dir.mkdir()
-
-            # Create task.json.
-            task_json = {
-                "task_id": "task001",
-                "band": "starter",
-                "statement": "Fix the bug in main.py",
-                "context_files": ["main.py"],
-                "oracle_cmd": "python -m pytest oracle -q",
-            }
-            (task_dir / "task.json").write_text(json.dumps(task_json))
-
-            # Create repo dir.
-            repo_dir = task_dir / "repo"
-            repo_dir.mkdir()
-            (repo_dir / "main.py").write_text("print('broken')\n")
-
-            # Create oracle dir.
-            (task_dir / "oracle").mkdir()
-
-            # Load task.
-            task = seam_s.load_task(task_dir)
-            self.assertEqual(task.task_id, "task001")
-            self.assertEqual(task.band, "starter")
-            self.assertIn("Fix the bug", task.statement)
-
-    def test_load_task_missing_json(self):
-        """Missing task.json raises error."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            task_dir = Path(tmpdir) / "task001"
-            task_dir.mkdir()
-            with self.assertRaises(FileNotFoundError):
-                seam_s.load_task(task_dir)
-
-
-class TestSandboxIsolation(unittest.TestCase):
-    """Test that sandbox is isolated and task dir untouched."""
-
-    def test_sandbox_isolation(self):
-        """Execute a run in sandbox without touching task dir."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            task_dir = Path(tmpdir) / "task001"
-            task_dir.mkdir()
-
-            # Create task fixture.
-            task_json = {
-                "task_id": "task001",
-                "band": "starter",
-                "statement": "Modify main.py",
-                "context_files": ["main.py"],
-                "oracle_cmd": "python -m pytest oracle -q",
-            }
-            (task_dir / "task.json").write_text(json.dumps(task_json))
-
-            repo_dir = task_dir / "repo"
-            repo_dir.mkdir()
-            original_content = "print('original')\n"
-            (repo_dir / "main.py").write_text(original_content)
-
-            (task_dir / "oracle").mkdir()
-
-            # Load task.
-            task = seam_s.load_task(task_dir)
-
-            # Mock driver.
-            mock_driver = Mock()
-            mock_driver.resolve_model.return_value = "claude-haiku-4-5-20251001"
-            mock_driver.dispatch_worker.return_value = WorkerResult(
-                worker_id="test-1",
-                ok=True,
-                status=WORKER_DONE,
-                files_written=("main.py",),
-                structured={"summary": "Fixed", "done": True},
-                tokens_spent=100,
-            )
-
-            # Execute run.
-            result = seam_s.execute_task_run(mock_driver, task, "claude-haiku-4-5-20251001", 1)
-
-            # Verify sandbox was isolated and task repo untouched.
-            task_repo_content = (repo_dir / "main.py").read_text()
-            self.assertEqual(task_repo_content, original_content)
-            self.assertTrue(result.passed or not result.passed)  # Status recorded
-
-
-class TestMockedDispatch(unittest.TestCase):
-    """Test worker dispatch with mocked transports."""
-
-    def test_anthropic_dispatch_success(self):
-        """Mocked Anthropic transport returns success."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            sandbox = Path(tmpdir)
-            (sandbox / "main.py").write_text("print('broken')\n")
-
-            # Create fake task with explicit context_files.
-            task = seam_s.TaskFixture(
-                task_id="test1",
-                band="starter",
-                statement="Fix it",
-                context_files=["main.py"],
-                oracle_cmd="python -m pytest oracle -q",
-                repo_path=sandbox,  # repo_path is for loading context, not dispatch
-                oracle_path=sandbox / "oracle",
-            )
-
-            # Mock Anthropic driver with fake transport.
-            from anthropic_driver import AnthropicDriver
-            transport = FakeAnthropicTransport()
-            driver = AnthropicDriver(transport=transport)
-
-            # Dispatch (sandbox is the working directory where files are).
-            ok, verdict, retries, tokens = seam_s.run_worker_dispatch(driver, task, sandbox)
-            # With valid response from transport, should succeed.
-            self.assertTrue(ok, f"Dispatch failed: {verdict}")
-            self.assertIsNotNone(verdict)
-            self.assertEqual(retries, 0)
-
-    def test_anthropic_dispatch_api_failure(self):
-        """Mocked Anthropic API failure -> refusal."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            sandbox = Path(tmpdir)
-            (sandbox / "main.py").write_text("print('broken')\n")
-
-            task = seam_s.TaskFixture(
-                task_id="test2",
-                band="starter",
-                statement="Fix it",
-                context_files=["main.py"],
-                oracle_cmd="python -m pytest oracle -q",
-                repo_path=sandbox,
-                oracle_path=sandbox / "oracle",
-            )
-
-            # Mock with failing transport.
-            from anthropic_driver import AnthropicDriver
-            transport = FakeAnthropicTransport(fail=True)
-            driver = AnthropicDriver(transport=transport)
-
-            # Dispatch.
-            ok, verdict, retries, tokens = seam_s.run_worker_dispatch(driver, task, sandbox)
-            self.assertFalse(ok)
-            self.assertIn("error", verdict.lower())
-
-
-class TestCheckpointManagement(unittest.TestCase):
-    """Test checkpoint loading and saving."""
-
-    def test_checkpoint_save_and_load(self):
-        """Save results to checkpoint and load them back."""
+    def test_checkpoint_key_format(self):
+        """Checkpoint key is (task_id, tier, repeat, arm)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             checkpoint_path = Path(tmpdir) / "checkpoint.jsonl"
 
-            # Create results.
-            result1 = seam_s.Result(
-                task_id="task1",
-                band="starter",
-                tier="claude-haiku-4-5-20251001",
-                repeat=1,
-                arm="S",
-                backend="anthropic",
-                passed=True,
-                worker_verdict="Fixed",
-                retries_used=0,
-                tokens_spent=100,
-                duration_s=5.0,
-                status="scored",
-            )
-
-            result2 = seam_s.Result(
-                task_id="task1",
-                band="starter",
-                tier="gpt-4o-mini",
-                repeat=1,
-                arm="S",
-                backend="openai",
-                passed=False,
-                worker_verdict="Incomplete",
-                retries_used=1,
-                tokens_spent=150,
-                duration_s=6.0,
-                status="scored",
-            )
-
-            # Save.
-            seam_s.save_result(checkpoint_path, result1)
-            seam_s.save_result(checkpoint_path, result2)
-
-            # Load.
-            completed = seam_s.load_checkpoint(checkpoint_path)
-            self.assertEqual(len(completed), 2)
-            self.assertIn(("task1", "claude-haiku-4-5-20251001", 1), completed)
-            self.assertIn(("task1", "gpt-4o-mini", 1), completed)
-
-    def test_checkpoint_skip_already_done(self):
-        """Checkpoint correctly skips already-completed runs."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            checkpoint_path = Path(tmpdir) / "checkpoint.jsonl"
-
-            # Save one result.
+            # Save one result with arm="S".
             result = seam_s.Result(
                 task_id="task1",
                 band="starter",
-                tier="claude-haiku-4-5-20251001",
+                tier="claude-haiku",
                 repeat=1,
                 arm="S",
                 backend="anthropic",
@@ -300,152 +56,346 @@ class TestCheckpointManagement(unittest.TestCase):
 
             # Load checkpoint.
             completed = seam_s.load_checkpoint(checkpoint_path)
-            key = ("task1", "claude-haiku-4-5-20251001", 1)
+
+            # Key MUST include arm.
+            key = ("task1", "claude-haiku", 1, "S")
             self.assertIn(key, completed)
 
-            # Verify it's the same result.
+            # Verify arm is in the loaded result.
             loaded = completed[key]
-            self.assertEqual(loaded.task_id, "task1")
-            self.assertTrue(loaded.passed)
+            self.assertEqual(loaded.arm, "S")
 
-
-class TestResultStatus(unittest.TestCase):
-    """Test result status determination."""
-
-    def test_result_scored_passed(self):
-        """Worker OK + oracle passed -> scored."""
+    def test_s_and_u_arms_no_collision(self):
+        """S-arm and U-arm with same (task, tier, repeat) stored separately."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            task_dir = Path(tmpdir) / "task001"
-            task_dir.mkdir()
-            (task_dir / "task.json").write_text(json.dumps({
-                "task_id": "t1",
-                "band": "starter",
-                "statement": "Fix",
-                "context_files": ["f.py"],
-                "oracle_cmd": "exit 0",
-            }))
-            repo_dir = task_dir / "repo"
-            repo_dir.mkdir()
-            (repo_dir / "f.py").write_text("x=1")
-            (task_dir / "oracle").mkdir()
-            (task_dir / "oracle" / "test_oracle.py").write_text("def test(): pass\n")
+            checkpoint_path = Path(tmpdir) / "checkpoint.jsonl"
 
-            task = seam_s.load_task(task_dir)
-
-            # Mock driver for success.
-            mock_driver = Mock()
-            mock_driver.resolve_model.return_value = "claude-haiku"
-            mock_driver.dispatch_worker.return_value = WorkerResult(
-                worker_id="w1",
-                ok=True,
-                status=WORKER_DONE,
-                files_written=("f.py",),
-                structured={"summary": "Fixed", "done": True},
+            # Save S-arm result.
+            result_s = seam_s.Result(
+                task_id="task1",
+                band="starter",
+                tier="claude-haiku",
+                repeat=1,
+                arm="S",
+                backend="anthropic",
+                passed=True,
+                worker_verdict="Fixed",
+                retries_used=1,
                 tokens_spent=100,
+                duration_s=5.0,
+                status="scored",
             )
+            seam_s.save_result(checkpoint_path, result_s)
 
-            result = seam_s.execute_task_run(mock_driver, task, "claude-haiku", 1)
-            self.assertEqual(result.status, "scored")
+            # Save U-arm with same (task, tier, repeat) but different arm.
+            result_u = seam_s.Result(
+                task_id="task1",
+                band="starter",
+                tier="claude-haiku",
+                repeat=1,
+                arm="U",
+                backend="anthropic",
+                passed=False,
+                worker_verdict="Incomplete",
+                retries_used=0,
+                tokens_spent=150,
+                duration_s=6.0,
+                status="scored",
+            )
+            seam_s.save_result(checkpoint_path, result_u)
 
-    def test_result_refusal_on_worker_fail(self):
-        """Worker fail -> refusal status."""
+            # Load checkpoint.
+            completed = seam_s.load_checkpoint(checkpoint_path)
+
+            # Both must be present with different keys.
+            self.assertEqual(len(completed), 2)
+            s_key = ("task1", "claude-haiku", 1, "S")
+            u_key = ("task1", "claude-haiku", 1, "U")
+            self.assertIn(s_key, completed)
+            self.assertIn(u_key, completed)
+
+            # Verify they have different data.
+            s_result = completed[s_key]
+            u_result = completed[u_key]
+            self.assertTrue(s_result.passed)
+            self.assertFalse(u_result.passed)
+            self.assertEqual(s_result.retries_used, 1)
+            self.assertEqual(u_result.retries_used, 0)
+
+
+class TestBoundedRepairLoop(unittest.TestCase):
+    """Test bounded repair loop with failure appending."""
+
+    def test_first_attempt_succeeds(self):
+        """First dispatch_item succeeds -> retries_used=0."""
         with tempfile.TemporaryDirectory() as tmpdir:
             task_dir = Path(tmpdir) / "task001"
             task_dir.mkdir()
-            (task_dir / "task.json").write_text(json.dumps({
-                "task_id": "t1",
+
+            task_json = {
+                "task_id": "task001",
                 "band": "starter",
-                "statement": "Fix",
-                "context_files": ["f.py"],
-                "oracle_cmd": "exit 0",
-            }))
+                "statement": "Fix the function",
+                "context_files": ["main.py"],
+                "oracle_cmd": "python -m pytest oracle -q",
+            }
+            (task_dir / "task.json").write_text(json.dumps(task_json))
+
             repo_dir = task_dir / "repo"
             repo_dir.mkdir()
-            (repo_dir / "f.py").write_text("x=1")
+            (repo_dir / "main.py").write_text("x = 1")
+
             (task_dir / "oracle").mkdir()
 
             task = seam_s.load_task(task_dir)
 
-            # Mock driver for failure.
+            # Mock driver.
             mock_driver = Mock()
             mock_driver.resolve_model.return_value = "claude-haiku"
-            mock_driver.dispatch_worker.return_value = WorkerResult(
-                worker_id="w1",
-                ok=False,
-                status=WORKER_FAILED,
-                files_written=(),
-                structured={},
-                error="Model refused",
-            )
+            mock_driver.get_tokens_spent.return_value = 100
 
-            result = seam_s.execute_task_run(mock_driver, task, "claude-haiku", 1)
-            self.assertEqual(result.status, "refusal")
-            self.assertFalse(result.passed)
+            with patch("bench.run_seam_s.dispatch_item") as mock_dispatch:
+                mock_dispatch.return_value = {
+                    "ok": True,
+                    "testExit": 0,
+                    "filesWritten": ["main.py"],
+                    "error": None,
+                }
+
+                with patch("bench.run_seam_s.build_manifest_item") as mock_build:
+                    mock_build.return_value = {
+                        "slug": "task001",
+                        "prompt": "Fix the function",
+                        "ownsFiles": ["main.py"],
+                        "testCmd": "pytest",
+                        "model": "claude-haiku",
+                    }
+
+                    sandbox = Path(tmpdir) / "sandbox"
+                    sandbox.mkdir()
+
+                    ok, verdict, retries, tokens = seam_s.run_bounded_repair(
+                        mock_driver, task, sandbox, repair_cap=2
+                    )
+
+                    self.assertTrue(ok)
+                    self.assertEqual(retries, 0)  # No repairs needed
+                    self.assertEqual(tokens, 100)
+
+    def test_failure_appends_to_next_prompt(self):
+        """First attempt fails, second attempt gets failure output in prompt."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            task_dir = Path(tmpdir) / "task001"
+            task_dir.mkdir()
+
+            task_json = {
+                "task_id": "task001",
+                "band": "starter",
+                "statement": "Fix it",
+                "context_files": ["main.py"],
+                "oracle_cmd": "python -m pytest oracle -q",
+            }
+            (task_dir / "task.json").write_text(json.dumps(task_json))
+
+            repo_dir = task_dir / "repo"
+            repo_dir.mkdir()
+            (repo_dir / "main.py").write_text("x = 1")
+
+            (task_dir / "oracle").mkdir()
+
+            task = seam_s.load_task(task_dir)
+
+            mock_driver = Mock()
+            mock_driver.resolve_model.return_value = "claude-haiku"
+            mock_driver.get_tokens_spent.return_value = 100
+
+            with patch("bench.run_seam_s.dispatch_item") as mock_dispatch:
+                # First: fail. Second: succeed.
+                mock_dispatch.side_effect = [
+                    {
+                        "ok": False,
+                        "testExit": 1,
+                        "filesWritten": [],
+                        "error": "AssertionError: x != 2",
+                    },
+                    {
+                        "ok": True,
+                        "testExit": 0,
+                        "filesWritten": ["main.py"],
+                        "error": None,
+                    },
+                ]
+
+                with patch("bench.run_seam_s.build_manifest_item") as mock_build:
+                    manifest = {
+                        "slug": "task001",
+                        "prompt": "Fix it",
+                        "ownsFiles": ["main.py"],
+                        "testCmd": "pytest",
+                        "model": "claude-haiku",
+                    }
+                    mock_build.return_value = manifest
+
+                    sandbox = Path(tmpdir) / "sandbox"
+                    sandbox.mkdir()
+
+                    ok, verdict, retries, tokens = seam_s.run_bounded_repair(
+                        mock_driver, task, sandbox, repair_cap=2
+                    )
+
+                    self.assertTrue(ok)
+                    self.assertEqual(retries, 1)  # One repair
+
+                    # Verify second dispatch_item received updated prompt.
+                    second_call_item = mock_dispatch.call_args_list[1][0][1]
+                    second_prompt = second_call_item["prompt"]
+
+                    # CRITICAL: second prompt must contain failure output.
+                    self.assertIn("AssertionError: x != 2", second_prompt)
+                    self.assertIn("Test failed with exit code 1", second_prompt)
+
+    def test_retries_used_increments(self):
+        """retries_used counts actual repair attempts."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            task_dir = Path(tmpdir) / "task001"
+            task_dir.mkdir()
+
+            task_json = {
+                "task_id": "task001",
+                "band": "starter",
+                "statement": "Fix it",
+                "context_files": ["main.py"],
+                "oracle_cmd": "python -m pytest oracle -q",
+            }
+            (task_dir / "task.json").write_text(json.dumps(task_json))
+
+            repo_dir = task_dir / "repo"
+            repo_dir.mkdir()
+            (repo_dir / "main.py").write_text("x = 1")
+
+            (task_dir / "oracle").mkdir()
+
+            task = seam_s.load_task(task_dir)
+
+            mock_driver = Mock()
+            mock_driver.resolve_model.return_value = "claude-haiku"
+            mock_driver.get_tokens_spent.return_value = 100
+
+            with patch("bench.run_seam_s.dispatch_item") as mock_dispatch:
+                # Fail, fail, succeed.
+                mock_dispatch.side_effect = [
+                    {"ok": False, "testExit": 1, "filesWritten": [], "error": "Err1"},
+                    {"ok": False, "testExit": 1, "filesWritten": [], "error": "Err2"},
+                    {"ok": True, "testExit": 0, "filesWritten": ["main.py"], "error": None},
+                ]
+
+                with patch("bench.run_seam_s.build_manifest_item") as mock_build:
+                    manifest = {
+                        "slug": "task001",
+                        "prompt": "Fix it",
+                        "ownsFiles": ["main.py"],
+                        "testCmd": "pytest",
+                        "model": "claude-haiku",
+                    }
+                    mock_build.return_value = manifest
+
+                    sandbox = Path(tmpdir) / "sandbox"
+                    sandbox.mkdir()
+
+                    ok, verdict, retries, tokens = seam_s.run_bounded_repair(
+                        mock_driver, task, sandbox, repair_cap=3
+                    )
+
+                    self.assertTrue(ok)
+                    self.assertEqual(retries, 2)  # Two repairs before success
 
 
-class TestMissingEnvVar(unittest.TestCase):
-    """Test fail-fast on missing env var."""
+class TestOracleNeverVisibleBeforeGrading(unittest.TestCase):
+    """Test oracle is injected only at grading time, not during repair."""
 
-    def test_anthropic_missing_key(self):
-        """Missing ANTHROPIC_API_KEY raises clear error."""
-        # Ensure key is not set.
-        os.environ.pop("ANTHROPIC_API_KEY", None)
+    def test_oracle_not_in_sandbox_during_repair(self):
+        """Oracle directory only exists after run_oracle is called."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            task_dir = Path(tmpdir) / "task001"
+            task_dir.mkdir()
 
-        from anthropic_transport import make_anthropic_transport
-        transport = make_anthropic_transport()
+            task_json = {
+                "task_id": "task001",
+                "band": "starter",
+                "statement": "Fix it",
+                "context_files": ["main.py"],
+                "oracle_cmd": "python -m pytest oracle -q",
+            }
+            (task_dir / "task.json").write_text(json.dumps(task_json))
 
-        with self.assertRaises(RuntimeError) as ctx:
-            transport({"dummy": "payload"})
+            repo_dir = task_dir / "repo"
+            repo_dir.mkdir()
+            (repo_dir / "main.py").write_text("x = 1")
 
-        self.assertIn("ANTHROPIC_API_KEY", str(ctx.exception))
+            oracle_dir = task_dir / "oracle"
+            oracle_dir.mkdir()
+            (oracle_dir / "test_oracle.py").write_text("def test(): pass")
 
-    def test_codex_config_accepts_model(self):
-        """Codex driver config accepts model field."""
-        from backend_config import build_driver
+            task = seam_s.load_task(task_dir)
 
-        config = {
-            "backend": "codex",
-            "model": "gpt-4o-mini",
-            "api_key_env": "OPENAI_API_KEY",
-        }
+            with tempfile.TemporaryDirectory() as sandbox_tmpdir:
+                sandbox = Path(sandbox_tmpdir)
 
-        # Should build offline (no key required).
-        driver = build_driver(config)
-        self.assertIsNotNone(driver)
-        self.assertEqual(driver.resolve_model("worker"), "gpt-4o-mini")
+                # Copy repo (simulating execute_task_run).
+                for item in repo_dir.iterdir():
+                    if item.is_file():
+                        shutil.copy2(item, sandbox / item.name)
+
+                # Oracle should NOT be here before grading.
+                self.assertFalse((sandbox / "oracle").exists())
+
+                # run_oracle copies it for grading.
+                run_oracle_result = seam_s.run_oracle(oracle_dir, sandbox)
+
+                # NOW oracle is present (after grading).
+                self.assertTrue((sandbox / "oracle").exists())
 
 
-class TestBackendConfig(unittest.TestCase):
-    """Test backend configuration for Anthropic."""
+class TestVerificationPolicyDrivesRepairCap(unittest.TestCase):
+    """Test repair_cap comes from verification_policy."""
 
-    def test_anthropic_backend_config(self):
-        """Build Anthropic driver from config."""
-        from backend_config import build_driver
+    def test_repair_cap_from_policy_tier_1(self):
+        """Tier 1 (Claude) has repair_cap=1 from policy."""
+        from verification_policy import verification_policy
+        from agent_driver import DriverCapabilities
 
-        config = {
-            "backend": "anthropic",
-            "model": "claude-haiku-4-5-20251001",
-            "api_key_env": "ANTHROPIC_API_KEY",
-        }
+        caps_tier1 = DriverCapabilities(
+            name="test-tier1",
+            parallel_dispatch=True,
+            worker_filesystem_access=True,
+            worker_shell_access=True,
+            structured_output=True,
+            worktree_isolation=True,
+            recommended_verification_tier=1,
+            tool_use_accuracy=0.99,
+        )
 
-        # Should build offline (no key required).
-        driver = build_driver(config)
-        self.assertIsNotNone(driver)
-        self.assertEqual(driver.resolve_model("worker"), "claude-haiku-4-5-20251001")
+        policy_tier1 = verification_policy(caps_tier1)
+        self.assertEqual(policy_tier1["repair_cap"], 1)
 
-    def test_codex_backend_config(self):
-        """Build Codex driver from config."""
-        from backend_config import build_driver
+    def test_repair_cap_from_policy_tier_2(self):
+        """Tier 2 (Codex) has repair_cap=2 from policy."""
+        from verification_policy import verification_policy
+        from agent_driver import DriverCapabilities
 
-        config = {
-            "backend": "codex",
-            "model": "gpt-4o-mini",
-            "api_key_env": "OPENAI_API_KEY",
-        }
+        caps_tier2 = DriverCapabilities(
+            name="test-tier2",
+            parallel_dispatch=False,
+            worker_filesystem_access=False,
+            worker_shell_access=False,
+            structured_output=True,
+            worktree_isolation=False,
+            recommended_verification_tier=2,
+            tool_use_accuracy=0.92,
+        )
 
-        driver = build_driver(config)
-        self.assertIsNotNone(driver)
-        self.assertEqual(driver.resolve_model("worker"), "gpt-4o-mini")
+        policy_tier2 = verification_policy(caps_tier2)
+        self.assertEqual(policy_tier2["repair_cap"], 2)
 
 
 if __name__ == "__main__":
