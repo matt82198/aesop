@@ -23,10 +23,10 @@ import urllib.request
 
 API_URL = "https://api.anthropic.com/v1/messages"
 
-# Import token_sets for tool mode
+# Import frontier_eligibility for tool mode
 sys.path.insert(0, ".")
 try:
-    from bench.token_sets import parse_token_set, extract_correct_token, audit_tasks
+    from bench.frontier_eligibility import parse_token_set, extract_correct_token, audit_tasks
 except ImportError:
     parse_token_set = extract_correct_token = audit_tasks = None
 

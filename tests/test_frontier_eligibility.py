@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for bench/token_sets.py helper (TDD for v5 tool-use mode)."""
+"""Tests for bench/frontier_eligibility.py helper (TDD for v5 tool-use mode)."""
 
 import json
 import re
@@ -10,7 +10,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from bench.token_sets import parse_token_set, extract_correct_token, audit_tasks
+from bench.frontier_eligibility import parse_token_set, extract_correct_token, audit_tasks
 
 
 class TestParseTokenSet(unittest.TestCase):

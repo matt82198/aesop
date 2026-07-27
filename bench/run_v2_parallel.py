@@ -58,7 +58,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # Import frontier infrastructure
 sys.path.insert(0, str(Path(__file__).parent))
 from frontier_slice import FrontierTask, GroundTruth, load_frontier_tasks, load_ground_truth, score_response
-from token_sets import audit_tasks, parse_token_set, extract_correct_token
+from frontier_eligibility import audit_tasks, parse_token_set, extract_correct_token
 
 # Import OpenAI transport
 sys.path.insert(0, str(Path(__file__).parent.parent / "driver"))
