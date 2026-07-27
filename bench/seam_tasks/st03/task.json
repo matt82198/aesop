@@ -1,0 +1,7 @@
+{
+  "task_id": "st03",
+  "band": "short",
+  "statement": "An interval merger function takes a list of (start, end) tuples representing time intervals and merges any overlapping or adjacent intervals into single continuous spans. The function should treat touching intervals (where one ends at exactly where another starts) as adjacent and merge them. However, there is a boundary comparison bug that incorrectly rejects some valid merges. Fix the comparison so intervals that touch or overlap are correctly merged.",
+  "context_files": ["repo/__init__.py", "repo/interval_merger.py"],
+  "oracle_cmd": "python -m pytest oracle -q"
+}
