@@ -122,3 +122,75 @@ published as-is on the old instrument; v4 numbers are not pooled with them and d
   at v3-observed per-run costs, plus probes and error-retry margin).
 - Runs launch only after this amendment, the task fixes, the new tasks, and the upgraded gate are
   merged to main with CI green, and the operator confirms API credit availability.
+
+## Amendment 4 — v5: tool-call answer channel to eliminate ALL API classifier refusal holes (committed 2026-07-27, after v4 results, before any v5 runs)
+
+v4 completed 1742/1950 tuples; 208 tuples (fable-5 104, opus-5 104) were deterministic API
+safety-classifier refusals of the prose answer-format instruction ("First line of your response:
+exactly <TOKEN>" and variants), disclosed as unscored holes. The user directed a bench that completes
+zero holes. v5 changes the answer channel for ALL 130 TASKS, not just closed-set tasks:
+
+- Same 130 tasks, same ground truth, same tiers (all 5 including gpt-4o-mini), same 3 repeats, same
+  transports (anthropic-http / openai; CLI remains banned).
+- ALL 130 tasks use tool-call answer channel (no tier has prose format instructions anymore):
+  * **39 closed-set tasks** (ft09, ft37, ft88, ft95, ft99, ft100, ft101–ft130): enum schema,
+    format instruction stripped, tool called with constrained enum, graded by exact string equality
+  * **91 free-string tasks** (ft01–ft08, ft10–ft36, ft38–ft87, ft89–ft98): string schema, format
+    instruction stripped, tool called with free-text answer, graded by running the task's
+    ground-truth regex against the submitted answer string
+- Uniform prompt transform (one identical regex per format-instruction variant, applied to all tasks):
+  strips "First line of your response: exactly ...", "First line: exactly ...", and "Answer with ...
+  on the first line ..." sentences. Appended instruction: "Call the submit_answer tool with answer
+  set to ONLY your final answer value - no explanation."
+- Grading regexes UNCHANGED from v4 (exemption: exact equality for enum tasks replaces regex; both
+  achieve zero scoring ambiguity and verify the exemplar/counter-example audit in CI).
+- Refusal policy unchanged: any refusal remains an unscored error run, disclosed as a hole. v5 is a
+  clean redesign of the answer channel; if the classifier still refuses tool-shaped requests, that
+  result is published as-is.
+- Probe-first: probe_refusals.py --answer-mode tool runs all 130 tasks x fable-5/opus-5 before the
+  full run; the probe outcome is reported either way.
+- v5 is a fresh run and revised instrument: fresh checkpoint (bench/results/frontier-v5-checkpoint.jsonl),
+  NOT pooled with v2/v3/v4, which stand as published. Same +/-10pp TOST margin, same 85% ceiling rule
+  (v4 tripped it at 90.6%; if v5 trips it too that is published as-is). Spend cap: US$40.
+
+**Schema summary:** Every task and every tier uses the tool channel. 39 tasks have enum-constrained
+schemas (graded by exact string match against correct token). 91 tasks have free-string schemas
+(graded by running the pre-existing ground-truth regex against the submitted answer). All existing
+ground-truth patterns remain in place; no pattern changes.
+
+**Format instruction variants stripped by uniform transform:** "First line of your response: exactly
+...", "First line: exactly ...", "Answer with <tokens> on the first line, then explain..." (and
+similar trailing-clause variants with "/" separators). The transform removes the sentence containing
+the format instruction and nothing else.
+
+**Tool schema shapes:**
+- Enum (39 tasks): `{type:"object", properties:{answer:{type:"string", enum:[TOKEN1,TOKEN2,...]}}, required:["answer"]}`
+- String (91 tasks): `{type:"object", properties:{answer:{type:"string"}}, required:["answer"]}`
+- Both: tool_choice forces submit_answer; Anthropic: {type:"tool", name:"submit_answer"}; OpenAI:
+  {type:"function", function:{name:"submit_answer"}}
+
+**Compatibility:** All tiers including gpt-4o-mini use tool mode (OpenAI function calling). Runner
+and probe updated to support both schemas. Default checkpoint: frontier-v5-checkpoint.jsonl.
+
+## Amendment 5 — v5 frozen 93-task subset (committed 2026-07-27, after tool-mode probes, before any v5 runs)
+
+Two identical tool-mode probe passes over all 130 tasks x {fable-5, opus-5} found a deterministic
+refusal core: 48 (task, tier) pairs refused in BOTH passes (37 distinct tasks); 4 further pass-2-only
+refusals were stochastic. Per Amendment 4's no-iteration rule those prompts are not reworded again.
+
+- v5 instrument = the 93 tasks every tier's API deterministically serves. The exclusion rule is
+  probe-derived and applied identically to all tiers (no per-model tuning). Excluded task ids:
+  ft02_code_defect_detection_concurrent,ft04_long_context_needle_judgment,ft06_git_history_blame_analysis,ft113_regex_split_capturing_group,ft116_generator_exhaustion_refactor,ft126_yaml_merge_key_precedence,ft127_retry_backoff_attempt_count,ft16_unicode_normalization_gotcha,ft18_type_coercion_subtle_bug,ft19_format_string_vulnerability,ft21_sql_join_optimization_complex,ft23_memory_ordering_volatile_bug,ft26_instruction_compatibility_constraint,ft28_long_context_timing_inconsistency,ft31_git_blame_security_regression,ft41_regex_backref_vs_alternation,ft42_regex_lookahead_negative,ft43_api_response_enum_violation,ft44_api_request_body_size_constraint,ft49_state_machine_idempotency,ft51_unicode_emoji_byte_length,ft55_type_coercion_array_comparison,ft57_sql_injection_parameterized,ft58_xpath_injection_xml_parse,ft64_connection_pool_saturation_symptom,ft68_full_text_search_index_strategy,ft71_atomic_vs_compound_race,ft77_distributed_lock_clock_skew,ft78_memory_ordering_acquire_release,ft79_cas_retry_loop_correctness,ft82_unicode_byte_vs_char_emoji_with_combining,ft83_type_coercion_python_vs_js_string_concat,ft84_regex_alternation_grouping_precedence,ft86_json_schema_allof_required_merge,ft90_unicode_emoji_skin_tone_modifier,ft94_api_contract_content_type_violation,ft96_long_context_config_priority_contradiction
+- Selection-effect disclosure: exclusion is conditioned on fable-5/opus-5 classifier behavior; the
+  surviving set under-represents content those classifiers refuse (observed clusters: injection
+  vocabulary, concurrency/memory-ordering, unicode/emoji, git-blame, api-contract). Cross-tier
+  comparisons remain valid (identical 93 tasks per tier); absolute accuracies describe this 93-task
+  set only and are not comparable to v2/v3/v4 absolutes.
+- Run: 93 x 5 x 3 = 1395 tuples; completion criterion 1395/1395 good tuples (zero holes).
+  Transients and stochastic refusals retry from checkpoint as identical requests, bounded at 3
+  rounds; any pair refusing 3 consecutive times HALTS the run and reopens the freeze — holes are
+  never published as results.
+- All other protocol per Amendments 3-4 (margins, 85% ceiling published-as-is, billed pricing,
+  US$40 cap inclusive of ~$1 probe spend).
+- Replacing the 37 excluded tasks with newly authored same-family content remains a possible
+  pre-registered v6 extension; it is not part of v5.
