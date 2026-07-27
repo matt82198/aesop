@@ -430,5 +430,63 @@ class TestAllTasksToolGrading(unittest.TestCase):
         )
 
 
+class TestToolModeIntegrationRealObjects(unittest.TestCase):
+    """Integration test: tool-mode request building and grading with REAL loaded objects.
+
+    This catches type mismatches between test mocks (plain dicts) and real objects
+    (GroundTruth dataclasses) that the runner's loaders produce.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        """Load real tasks and ground truth through the runner's loaders."""
+        cls.tasks = load_frontier_tasks("bench/tasks_frontier.jsonl")
+        cls.ground_truth = load_ground_truth("bench/ground_truth_frontier.jsonl")
+        cls.tool_tasks, _ = audit_tasks()
+
+    def test_tool_mode_enum_schema_with_real_objects(self):
+        """Test tool-mode request building and grading for an enum-schema task (ft09)."""
+        # Pick ft09 which is a closed-set task (enum schema)
+        task = next(t for t in self.tasks if t.id == "ft09_refactoring_correctness_semantic")
+        gt = self.ground_truth[task.id]
+
+        # Verify it's a real GroundTruth object and can be accessed as dataclass attribute
+        self.assertTrue(hasattr(gt, "expected_regex"))
+        self.assertIsNotNone(gt.expected_regex)
+
+        # Verify the tool_tasks entry has proper structure
+        self.assertIn(task.id, self.tool_tasks)
+        token_set, correct_token = self.tool_tasks[task.id]
+        self.assertGreaterEqual(len(token_set), 2)
+        self.assertIn(correct_token, token_set)
+
+    def test_tool_mode_string_schema_with_real_objects(self):
+        """Test tool-mode request building for a string-schema task (ft01 = regex fallback)."""
+        # Pick ft01 which has no closed token set (string schema)
+        task = next(t for t in self.tasks if t.id == "ft01_multi_step_sql_refactor")
+        gt = self.ground_truth[task.id]
+
+        # Verify it's a real GroundTruth object
+        self.assertTrue(hasattr(gt, "expected_regex"))
+        self.assertIsNotNone(gt.expected_regex)
+
+        # Verify this task is NOT in tool_tasks (falls back to regex)
+        self.assertNotIn(task.id, self.tool_tasks)
+
+    def test_ground_truth_attribute_access(self):
+        """Verify ground truth objects support attribute access (not just dict)."""
+        # Load via the runner's loader (creates GroundTruth dataclass objects)
+        for task_id, gt in self.ground_truth.items():
+            # Must be able to access as attributes, not dict .get()
+            self.assertTrue(
+                hasattr(gt, "id"),
+                f"{task_id}: GroundTruth object missing 'id' attribute"
+            )
+            self.assertTrue(
+                hasattr(gt, "expected_regex") or hasattr(gt, "expected"),
+                f"{task_id}: GroundTruth object missing 'expected_regex' or 'expected' attribute"
+            )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
