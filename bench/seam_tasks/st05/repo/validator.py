@@ -17,8 +17,6 @@ def validate_and_filter(items, max_items):
     if not items:
         return []
 
-    # DEFECT: Uses DEFAULT_MAX_ITEMS instead of the max_items parameter
-    # when max_items is not None. This ignores the caller's explicit limit.
     if max_items is None:
         return items
 
