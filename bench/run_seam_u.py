@@ -156,6 +156,44 @@ def extract_diff(response: str) -> str:
 # ============================================================================
 
 
+def _normalize_diff(diff: str) -> str:
+    """
+    Normalize diff by removing git diff headers and metadata lines.
+
+    Handles both:
+    - Unified diff format (--- a/file, +++ b/file)
+    - Full git diff format (diff --git, index, ---/+++ lines)
+
+    Args:
+        diff: Raw diff text from model
+
+    Returns:
+        Normalized diff ready for git apply or patch
+    """
+    lines = diff.split('\n')
+    normalized = []
+    found_start = False
+
+    for line in lines:
+        # Skip git diff metadata headers before the first --- line
+        if not found_start:
+            if line.startswith('diff --git '):
+                continue
+            if line.startswith('index '):
+                continue
+            if line.startswith('GIT binary'):
+                continue
+            # When we see ---, we've found the start of the unified diff
+            if line.startswith('---'):
+                found_start = True
+
+        # Keep all lines once we've found the start, plus any before if they're diff content
+        if found_start or line.startswith('---') or line.startswith('+++') or line.startswith('@@') or (line and line[0] in ' +-'):
+            normalized.append(line)
+
+    return '\n'.join(normalized).strip()
+
+
 def apply_diff_to_sandbox(
     repo_dir: Path, diff: str, sandbox: Path
 ) -> str:
@@ -170,7 +208,7 @@ def apply_diff_to_sandbox(
 
     Args:
         repo_dir: Source repo directory
-        diff: Unified diff text
+        diff: Unified diff text (can include git diff headers)
         sandbox: Destination sandbox directory (parent of repo/ and oracle/)
 
     Returns:
@@ -179,6 +217,10 @@ def apply_diff_to_sandbox(
         "noop" if diff had no effect
         None on error
     """
+    # Normalize diff: remove git diff headers and index lines if present
+    # (models may produce full git diffs, not just unified diffs)
+    normalized_diff = _normalize_diff(diff)
+
     # Create sandbox and sandbox/repo
     try:
         sandbox.mkdir(parents=True, exist_ok=True)
@@ -237,22 +279,67 @@ def apply_diff_to_sandbox(
             text=True,
         )
         git_ok = result.returncode == 0
-    except Exception:
+        if not git_ok:
+            print(f"Warning: git commit failed: {result.stderr[:100]}", file=sys.stderr)
+    except Exception as e:
+        print(f"Warning: git initialization failed: {str(e)[:100]}", file=sys.stderr)
         pass
 
-    # Try git apply if git is ready (with tolerance for a/ b/ prefixes)
+    # Try git apply with various -p levels and options (models emit different path formats)
     if git_ok:
+        # Try different -p levels (0, 1, 2) and options
+        last_error = None
+        for p_level in [1, 0, 2]:
+            for extra_args in [[], ["--3way"], ["--recount"], ["--ignore-whitespace"]]:
+                try:
+                    cmd = ["git", "apply", f"-p{p_level}"] + extra_args
+                    result = subprocess.run(
+                        cmd,
+                        input=normalized_diff,
+                        cwd=repo_sandbox,
+                        capture_output=True,
+                        timeout=10,
+                        text=True,
+                    )
+                    if result.returncode == 0:
+                        # Verify something actually changed
+                        result_check = subprocess.run(
+                            ["git", "status", "--porcelain"],
+                            cwd=repo_sandbox,
+                            capture_output=True,
+                            timeout=10,
+                            text=True,
+                        )
+                        if result_check.stdout.strip():
+                            return "applied"
+                        else:
+                            return "noop"
+                    else:
+                        # Capture error for debugging
+                        last_error = f"git apply -p{p_level} {' '.join(extra_args)}: {result.stderr[:100]}"
+                        # Log first failure only to avoid spam
+                        if p_level == 1 and not extra_args:
+                            import os
+                            debug_mode = os.environ.get('DEBUG_PATCH')
+                            if debug_mode:
+                                print(f"Debug: {last_error}", file=sys.stderr)
+                except Exception as e:
+                    last_error = str(e)
+                    pass  # Try next option
+
+    # Fall back to patch command (try multiple -p levels)
+    for p_level in [1, 0, 2]:
         try:
             result = subprocess.run(
-                ["git", "apply", "-p1"],
-                input=diff,
+                ["patch", f"-p{p_level}"],
+                input=normalized_diff,
                 cwd=repo_sandbox,
                 capture_output=True,
                 timeout=10,
                 text=True,
             )
             if result.returncode == 0:
-                # Verify something actually changed
+                # Verify something changed
                 result_check = subprocess.run(
                     ["git", "status", "--porcelain"],
                     cwd=repo_sandbox,
@@ -262,26 +349,13 @@ def apply_diff_to_sandbox(
                 )
                 if result_check.stdout.strip():
                     return "applied"
-                else:
-                    return "noop"
-        except Exception:
+        except Exception as e:
+            last_error = f"patch -p{p_level}: {str(e)[:100]}"
             pass
 
-    # Fall back to patch command
-    try:
-        result = subprocess.run(
-            ["patch", "-p1"],
-            input=diff,
-            cwd=repo_sandbox,
-            capture_output=True,
-            timeout=10,
-            text=True,
-        )
-        if result.returncode == 0:
-            return "applied"
-    except Exception:
-        pass
-
+    # All attempts failed; return with diagnostic info
+    diagnostic = f" (last: {last_error})" if last_error else ""
+    print(f"Warning: Patch failed to apply{diagnostic}", file=sys.stderr)
     return "failed"
 
 
