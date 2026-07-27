@@ -65,6 +65,36 @@ def extract_correct_token(
     return accepted[0] if len(accepted) == 1 else None
 
 
+def remove_format_instruction(prompt: str) -> str:
+    """Remove format instruction sentence from prompt, preserving task content.
+
+    Removes these patterns (and ONLY these):
+    - "First line of your response: exactly ..."
+    - "First line: exactly ..."
+    - "Answer with ... on the first line" (including trailing clauses like ", then explain")
+
+    All variants found in ft01-ft130 are covered. The regex is conservative to
+    avoid accidentally removing task content.
+
+    Args:
+        prompt: Original prompt with format instruction
+
+    Returns:
+        Prompt with instruction sentence removed, stripped of leading/trailing space
+    """
+    # Pattern matches all observed format instruction variants:
+    # 1. "First line of your response: exactly ..." (and "First line: exactly ...")
+    # 2. "Answer with ... on the first line ..." (handles tokens, "/" separators, trailing clauses)
+    #    Stops at the first sentence-ending punctuation (period, newline, or "then")
+    instruction_pattern = re.compile(
+        r"(?:First line(?:\s+of\s+your\s+response)?:\s*exactly\s+.+?(?:\.|$))"
+        r"|(?:Answer\s+with\s+.+?\s+on\s+the\s+first\s+line[^.]*(?:\.|$))",
+        re.IGNORECASE | re.DOTALL,
+    )
+    transformed = instruction_pattern.sub("", prompt).strip()
+    return transformed
+
+
 def audit_tasks(
     tasks_path: str = "bench/tasks_frontier.jsonl",
     ground_truth_path: str = "bench/ground_truth_frontier.jsonl",
