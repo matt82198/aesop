@@ -101,10 +101,9 @@ def build_u_arm_prompt(task_json: Dict[str, Any], task_dir: Path) -> str:
         # Fence the content with the relative path
         parts.append(f"\n# File: {context_path}\n```\n{content}\n```")
 
-    # Fixed instruction
+    # Tool-call instruction (fixes API safety classifier refusal on prose diff request)
     instruction = (
-        "\n\nReply with a single unified diff that fixes the defect. "
-        "No prose outside the diff."
+        "\n\nSubmit your fix by calling the submit_patch tool with the complete unified diff."
     )
     parts.append(instruction)
 
@@ -612,7 +611,9 @@ def create_anthropic_http_runner(
     api_key: str, model: str, probe: bool = False
 ) -> Callable[[str], Tuple[str, Dict[str, Any]]]:
     """
-    Create a runner that calls Anthropic API via HTTP.
+    Create a runner that calls Anthropic API via HTTP with forced tool call.
+
+    Uses tool_choice to force submit_patch tool call (refusal-safe answer channel).
 
     Args:
         api_key: BENCH_API_KEY
@@ -621,10 +622,13 @@ def create_anthropic_http_runner(
 
     Returns:
         Callable that takes prompt and returns (response, usage)
+
+    Raises:
+        RuntimeError: on refusal, transient error, or empty/blocked response
     """
     import json as json_lib
 
-    max_tokens = 64 if probe else 1024
+    max_tokens = 64 if probe else 1500  # Generous for full diff
 
     def runner(prompt: str) -> Tuple[str, Dict[str, Any]]:
         import urllib.request
@@ -636,10 +640,31 @@ def create_anthropic_http_runner(
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         }
+
+        # Define submit_patch tool
+        tools = [
+            {
+                "name": "submit_patch",
+                "description": "Submit a unified diff patch that fixes the defect",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "patch": {
+                            "type": "string",
+                            "description": "The complete unified diff patch",
+                        }
+                    },
+                    "required": ["patch"],
+                },
+            }
+        ]
+
         payload = {
             "model": model,
             "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": prompt}],
+            "tools": tools,
+            "tool_choice": {"type": "tool", "name": "submit_patch"},
         }
 
         try:
@@ -654,19 +679,36 @@ def create_anthropic_http_runner(
                 elapsed_ms = (time.time() - start) * 1000
                 data = json_lib.loads(response.read().decode("utf-8"))
 
-            # Check for refusal
+            # Check for refusal or blocked response
             if data.get("stop_reason") == "end_turn":
-                content = data.get("content", [{}])[0].get("text", "")
-                if "i can't" in content.lower() or "i cannot" in content.lower():
-                    raise RuntimeError("Model refused")
+                # Empty or blocked (no tool_use block returned)
+                raise RuntimeError("Model refused or blocked")
 
-            text = data.get("content", [{}])[0].get("text", "")
+            # Extract tool_use block
+            content = data.get("content", [])
+            if not content:
+                raise RuntimeError("Empty response")
+
+            tool_use = None
+            for block in content:
+                if block.get("type") == "tool_use":
+                    tool_use = block
+                    break
+
+            if not tool_use:
+                raise RuntimeError("No tool_use block in response")
+
+            # Extract patch from tool input
+            patch = tool_use.get("input", {}).get("patch", "")
+            if not patch:
+                raise RuntimeError("Empty patch in tool input")
+
             usage = {
                 "input_tokens": data.get("usage", {}).get("input_tokens", 0),
                 "output_tokens": data.get("usage", {}).get("output_tokens", 0),
                 "latency_ms": elapsed_ms,
             }
-            return (text, usage)
+            return (patch, usage)
         except urllib.error.HTTPError as e:
             if 400 <= e.code < 500:
                 # Client error (e.g., 403 Forbidden)
@@ -674,8 +716,10 @@ def create_anthropic_http_runner(
             else:
                 # Server error (5xx)
                 raise RuntimeError(f"HTTP {e.code}: transient error")
+        except RuntimeError:
+            raise  # Re-raise our custom messages
         except Exception as e:
-            if "refused" in str(e).lower():
+            if "refused" in str(e).lower() or "blocked" in str(e).lower():
                 raise RuntimeError("Model refused")
             raise RuntimeError(f"HTTP error: {e}")
 
@@ -691,7 +735,9 @@ def create_openai_runner(
     api_key: str, model: str, probe: bool = False
 ) -> Callable[[str], Tuple[str, Dict[str, Any]]]:
     """
-    Create a runner that calls OpenAI API via HTTP.
+    Create a runner that calls OpenAI API via HTTP with forced function call.
+
+    Uses tool_choice to force submit_patch function call (refusal-safe answer channel).
 
     Args:
         api_key: OPENAI_API_KEY
@@ -700,10 +746,13 @@ def create_openai_runner(
 
     Returns:
         Callable that takes prompt and returns (response, usage)
+
+    Raises:
+        RuntimeError: on refusal, transient error, or empty/blocked response
     """
     import json as json_lib
 
-    max_tokens = 64 if probe else 1024
+    max_tokens = 64 if probe else 1500  # Generous for full diff
 
     def runner(prompt: str) -> Tuple[str, Dict[str, Any]]:
         import urllib.request
@@ -714,10 +763,34 @@ def create_openai_runner(
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
+
+        # Define submit_patch function
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "submit_patch",
+                    "description": "Submit a unified diff patch that fixes the defect",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "patch": {
+                                "type": "string",
+                                "description": "The complete unified diff patch",
+                            }
+                        },
+                        "required": ["patch"],
+                    },
+                },
+            }
+        ]
+
         payload = {
             "model": model,
             "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": prompt}],
+            "tools": tools,
+            "tool_choice": {"type": "function", "function": {"name": "submit_patch"}},
         }
 
         try:
@@ -732,24 +805,54 @@ def create_openai_runner(
                 elapsed_ms = (time.time() - start) * 1000
                 data = json_lib.loads(response.read().decode("utf-8"))
 
-            # Check for refusal
-            finish_reason = data.get("choices", [{}])[0].get("finish_reason")
+            # Check for refusal or blocked response
+            choices = data.get("choices", [])
+            if not choices:
+                raise RuntimeError("Empty choices")
+
+            choice = choices[0]
+            finish_reason = choice.get("finish_reason")
+
             if finish_reason == "content_filter":
                 raise RuntimeError("Model refused (content_filter)")
 
-            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            message = choice.get("message", {})
+            tool_calls = message.get("tool_calls", [])
+
+            if not tool_calls:
+                # No tool call returned (empty or blocked)
+                raise RuntimeError("No tool_calls in response")
+
+            # Extract patch from function arguments
+            tool_call = tool_calls[0]
+            if tool_call.get("type") != "function":
+                raise RuntimeError("Expected function tool_call")
+
+            try:
+                arguments = json_lib.loads(tool_call.get("function", {}).get("arguments", "{}"))
+            except json_lib.JSONDecodeError as e:
+                raise RuntimeError(f"Failed to parse function arguments: {e}")
+
+            patch = arguments.get("patch", "")
+            if not patch:
+                raise RuntimeError("Empty patch in function arguments")
+
             usage = {
                 "input_tokens": data.get("usage", {}).get("prompt_tokens", 0),
                 "output_tokens": data.get("usage", {}).get("completion_tokens", 0),
                 "latency_ms": elapsed_ms,
             }
-            return (text, usage)
+            return (patch, usage)
         except urllib.error.HTTPError as e:
             if 400 <= e.code < 500:
                 raise RuntimeError(f"HTTP {e.code}: refusal or auth error")
             else:
                 raise RuntimeError(f"HTTP {e.code}: transient error")
+        except RuntimeError:
+            raise  # Re-raise our custom messages
         except Exception as e:
+            if "refused" in str(e).lower() or "blocked" in str(e).lower():
+                raise RuntimeError("Model refused")
             raise RuntimeError(f"HTTP error: {e}")
 
     return runner
@@ -922,8 +1025,8 @@ def run_single_task(
             result["refusal"] = "refused" in response.lower() or "cannot" in response.lower()
             return record_result(result)
 
-        # Extract diff and score
-        diff = extract_diff(response)
+        # Response is already the diff (extracted from tool call)
+        diff = response
 
         with tempfile.TemporaryDirectory() as tmpdir:
             sandbox = Path(tmpdir)
