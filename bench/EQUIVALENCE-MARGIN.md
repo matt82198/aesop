@@ -122,3 +122,41 @@ published as-is on the old instrument; v4 numbers are not pooled with them and d
   at v3-observed per-run costs, plus probes and error-retry margin).
 - Runs launch only after this amendment, the task fixes, the new tasks, and the upgraded gate are
   merged to main with CI green, and the operator confirms API credit availability.
+
+## Amendment 4 — v5: tool-call answer channel to eliminate API classifier refusal holes (committed 2026-07-27, after v4 results, before any v5 runs)
+
+v4 completed 1742/1950 tuples; 208 tuples (fable-5 104, opus-5 104) were deterministic API
+safety-classifier refusals of the prose answer-format instruction ("First line of your response:
+exactly <TOKEN>"), disclosed as unscored holes. The user directed a bench that completes without
+the CLI transport. v5 changes ONLY the answer channel, not the tasks:
+
+- Same 130 tasks, same ground truth, same tiers, same 3 repeats, same transports (anthropic-http /
+  openai; CLI remains banned).
+- Answer collection moves to the API's structured tool-call mechanism: a forced `submit_answer`
+  tool whose schema is the task's pre-existing closed token set as an enum. The obsolete prose
+  format sentence is removed at request time by one uniform transform (tasks file untouched,
+  identical across tasks and tiers; no per-model or per-task tuning). Tasks without a closed token
+  set keep prose+regex grading and are marked answer_mode:"regex" in the checkpoint.
+- Grading for tool-mode tasks is exact enum equality — this also retires the regex-fragility
+  defect class the v3 pattern audit found.
+- Refusal policy unchanged: any refusal remains an unscored error run, disclosed as a hole. This
+  amendment is one clean redesign of the answer channel; if the classifier still refuses
+  tool-shaped requests, that result is published as-is. No iterative rewording.
+- Probe-first: probe_refusals.py --answer-mode tool runs over all tasks x fable-5/opus-5 before
+  the full run; the probe outcome is reported either way.
+- v5 is a fresh run and a revised instrument: fresh checkpoint
+  (bench/results/frontier-v5-checkpoint.jsonl), NOT pooled with v2/v3/v4, which stand as
+  published. Same +/-10pp TOST margin, same 85% ceiling rule (v4 tripped it at 90.6%; if v5 trips
+  it too that is published as-is and the next instrument revision adds harder tasks rather than
+  reinterpreting the rule). Spend cap for the full v5 run: US$40.
+
+**Token-set audit result (before any v5 runs):** 39/130 tasks have closed token sets (ft09, ft37,
+ft88, ft95, ft99, ft100, ft101–ft130). These 39 tasks run in tool mode (request has tool def +
+tool_choice, response graded by exact enum match, checkpoint recorded answer_mode:"tool"). The
+remaining 91 tasks (ft01–ft08, ft10–ft36, ft38–ft87, ft89–ft98) lack extractable token sets and
+fall back to prose+regex mode (checkpoint recorded answer_mode:"regex"); no change from v4.
+
+**Prompt transform:** Tasks with token sets have the prose "First line of your response: exactly
+..." instruction stripped at request time (regex: `(?:First line\s*(?:of your response)?:\s*exactly\s+.+?(?:\n|$))`; identical transform across all 39 tasks). Replaced with "Submit your final answer by calling the submit_answer tool." Tool schema: {type:"object", properties:{answer:{type:"string", enum:[...tokens...]}}, required:["answer"]}. Anthropic tool_choice: {type:"tool", name:"submit_answer"}. OpenAI tool_choice: {"type":"function","function":{"name":"submit_answer"}}. Tool response parsing: exact string equality check of the "answer" field against the task's correct token (derived from ground-truth regex matching one token).
+
+**Compatibility:** v5 runner (`run_v2_parallel.py --answer-mode tool`) and probe (`probe_refusals.py --answer-mode tool`) are shipped; default checkpoint is `bench/results/frontier-v5-checkpoint.jsonl`; OpenAI seam remains regex-only (gpt-4o-mini lacks structured enum-constrained outputs; falls back to prose+regex). Refusal handling unchanged; probe-first before main run.
