@@ -66,7 +66,7 @@ class TestOracleLayout(unittest.TestCase):
             # Create a dummy module in repo.
             (sandbox_repo / "dummy_module.py").write_text("def hello(): return 'world'")
 
-            # Create a conftest that adds ../repo to path.
+            # Create a conftest that adds ../repo to path (fallback for robustness).
             (sandbox_oracle / "conftest.py").write_text(
                 """
 import sys
@@ -86,16 +86,20 @@ def test_can_import():
 """
             )
 
-            # Run pytest from sandbox/ (oracle should find ../repo).
+            # Run pytest from sandbox/ with PYTHONPATH set to repo.
+            # PYTHONPATH ensures cross-platform (Windows + Linux) compatibility.
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(sandbox_repo)
             result = subprocess.run(
                 [sys.executable, "-m", "pytest", "oracle/test_import.py", "-q"],
                 cwd=str(sandbox_dir),
                 capture_output=True,
                 text=True,
                 timeout=10,
+                env=env,
             )
 
-            # Should succeed because conftest adds ../repo to path.
+            # Should succeed because PYTHONPATH + conftest add ../repo to path.
             self.assertEqual(result.returncode, 0, f"Oracle import test failed:\n{result.stdout}\n{result.stderr}")
 
 
@@ -137,13 +141,16 @@ class TestRealFixtureE2E(unittest.TestCase):
             # Copy oracle.
             shutil.copytree(self.fixture_task.oracle_path, sandbox_oracle)
 
-            # Run oracle with correct cwd (sandbox/).
+            # Run oracle with PYTHONPATH set to repo for cross-platform compatibility.
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(sandbox_repo)
             result = subprocess.run(
                 [sys.executable, "-m", "pytest", "oracle", "-q"],
                 cwd=str(sandbox_dir),
                 capture_output=True,
                 text=True,
                 timeout=10,
+                env=env,
             )
 
             # Oracle should pass because we applied the fix.
@@ -172,13 +179,16 @@ class TestRealFixtureE2E(unittest.TestCase):
             # Copy oracle.
             shutil.copytree(self.fixture_task.oracle_path, sandbox_oracle)
 
-            # Run oracle with correct cwd (sandbox/).
+            # Run oracle with PYTHONPATH set to repo for cross-platform compatibility.
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(sandbox_repo)
             result = subprocess.run(
                 [sys.executable, "-m", "pytest", "oracle", "-q"],
                 cwd=str(sandbox_dir),
                 capture_output=True,
                 text=True,
                 timeout=10,
+                env=env,
             )
 
             # Oracle should fail because we didn't apply the fix.

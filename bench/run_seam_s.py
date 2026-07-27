@@ -228,6 +228,13 @@ def run_oracle(oracle_path: Path, sandbox_dir: Path, timeout_s: int = 120) -> bo
     shutil.copytree(oracle_path, sandbox_oracle)
 
     # Run oracle_cmd in the sandbox.
+    # Use PYTHONPATH to ensure sandbox/repo is on Python's path for oracle imports.
+    # This is critical for cross-platform compatibility (Windows + Linux pytest discovery).
+    sandbox_repo = sandbox_dir / "repo"
+    env = os.environ.copy()
+    if str(sandbox_repo) not in env.get("PYTHONPATH", ""):
+        env["PYTHONPATH"] = str(sandbox_repo)
+
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pytest", "oracle", "-q"],
@@ -235,6 +242,7 @@ def run_oracle(oracle_path: Path, sandbox_dir: Path, timeout_s: int = 120) -> bo
             capture_output=True,
             text=True,
             timeout=timeout_s,
+            env=env,
         )
         return result.returncode == 0
     except subprocess.TimeoutExpired:
