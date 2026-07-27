@@ -10,7 +10,8 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from bench.frontier_eligibility import parse_token_set, extract_correct_token, audit_tasks
+from bench.frontier_eligibility import parse_token_set, extract_correct_token, audit_tasks, remove_format_instruction
+from bench.frontier_slice import load_frontier_tasks, load_ground_truth, score_response
 
 
 class TestParseTokenSet(unittest.TestCase):
@@ -313,6 +314,120 @@ if x > 5:
         self.assertIn("Find the bug", transformed)
         self.assertIn("if x > 5", transformed)
         self.assertNotIn("First line", transformed)
+
+
+class TestAllTasksToolGrading(unittest.TestCase):
+    """Validate all 130 tasks grade correctly in tool mode (v5).
+
+    Tool mode grades all tasks by running ground-truth regex against submitted answer.
+    This test verifies that exemplars (correct answers) grade as correct and
+    counter-examples (incorrect answers) grade as incorrect.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        """Load all tasks and ground truth."""
+        cls.tasks = {t.id: t for t in load_frontier_tasks("bench/tasks_frontier.jsonl")}
+        cls.gt = load_ground_truth("bench/ground_truth_frontier.jsonl")
+
+    def test_all_130_exemplars_grade_correct(self):
+        """Every task's exemplar must grade as correct when submitted as tool answer."""
+        failures = []
+        for task_id, gt_entry in self.gt.items():
+            exemplar = gt_entry.exemplar
+            if not exemplar:
+                failures.append(f"{task_id}: missing exemplar")
+                continue
+
+            # Grade exemplar using the task's ground-truth regex
+            expected_regex = gt_entry.expected_regex
+            if not expected_regex:
+                failures.append(f"{task_id}: missing expected_regex")
+                continue
+
+            try:
+                if not re.search(expected_regex, exemplar, re.IGNORECASE | re.DOTALL):
+                    failures.append(
+                        f"{task_id}: exemplar does NOT match expected_regex\n"
+                        f"  Exemplar: {exemplar[:60]}...\n"
+                        f"  Regex: {expected_regex[:60]}..."
+                    )
+            except re.error as e:
+                failures.append(f"{task_id}: regex error in expected_regex: {e}")
+
+        self.assertEqual(
+            failures, [],
+            f"Exemplars that do NOT grade correct:\n" + "\n".join(failures),
+        )
+
+    def test_all_130_counter_examples_grade_incorrect(self):
+        """Every task's counter-example must grade as incorrect when submitted as tool answer."""
+        failures = []
+        for task_id, gt_entry in self.gt.items():
+            counter_example = gt_entry.counter_example
+            if not counter_example:
+                failures.append(f"{task_id}: missing counter_example")
+                continue
+
+            # Grade counter-example using the task's ground-truth regex
+            expected_regex = gt_entry.expected_regex
+            if not expected_regex:
+                failures.append(f"{task_id}: missing expected_regex")
+                continue
+
+            try:
+                if re.search(expected_regex, counter_example, re.IGNORECASE | re.DOTALL):
+                    failures.append(
+                        f"{task_id}: counter_example INCORRECTLY matches expected_regex\n"
+                        f"  Counter: {counter_example[:60]}...\n"
+                        f"  Regex: {expected_regex[:60]}..."
+                    )
+            except re.error as e:
+                failures.append(f"{task_id}: regex error in expected_regex: {e}")
+
+        self.assertEqual(
+            failures, [],
+            f"Counter-examples that INCORRECTLY grade correct:\n" + "\n".join(failures),
+        )
+
+    def test_format_instruction_removal_on_all_tasks(self):
+        """Verify format instruction removal works on all 130 tasks."""
+        failures = []
+        for task_id, task in self.tasks.items():
+            prompt = task.prompt
+            transformed = remove_format_instruction(prompt)
+
+            # Check: format instruction removed
+            # Look for the actual patterns, not just substrings (to avoid false positives on "first" or "answer")
+            has_first_line_format = re.search(
+                r"First line(?:\s+of\s+your\s+response)?:\s*exactly",
+                transformed,
+                re.IGNORECASE
+            )
+            has_answer_with_format = re.search(
+                r"Answer\s+with\s+.+?\s+on\s+the\s+first\s+line",
+                transformed,
+                re.IGNORECASE
+            )
+
+            if has_first_line_format or has_answer_with_format:
+                failures.append(
+                    f"{task_id}: format instruction NOT removed\n"
+                    f"  Transformed still contains format instruction pattern"
+                )
+
+            # Ensure transformed is non-empty (important: short tasks may have format instruction
+            # that dominates, but we still need SOME prompt content for context)
+            if not transformed.strip():
+                failures.append(
+                    f"{task_id}: transformed prompt is empty\n"
+                    f"  Original: {len(prompt)} chars"
+                )
+
+        self.assertEqual(
+            failures, [],
+            f"Tasks with format-instruction removal issues:\n" + "\n".join(failures),
+        )
 
 
 if __name__ == "__main__":
