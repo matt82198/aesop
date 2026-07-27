@@ -97,6 +97,8 @@ class Result:
     duration_s: float = 0.0
     status: str = ""  # scored|refusal|transient|error
     error_message: str = ""
+    policy_repair_cap: Optional[int] = None  # Driver's recommended cap from verification_policy
+    applied_repair_cap: Optional[int] = None  # Explicit cap applied (CLI override)
 
 
 def load_task(task_dir: Path) -> TaskFixture:
@@ -157,15 +159,17 @@ def run_bounded_repair(
         return False, f"build_manifest failed: {exc}", 0, None
 
     # Bounded repair loop (reuses wave_loop.py Phase 5 logic).
+    # repair_cap = number of REPAIRS allowed (not total attempts).
+    # Total attempts = 1 (initial) + repair_cap (repairs) = 1 + repair_cap.
+    # retries_used = number of actual repairs that happened (0 = first attempt succeeded).
     retries_used = 0
     total_tokens = 0
     failed_item = manifest_item
     last_error = ""
     last_test_exit = None
+    total_attempts = 1 + repair_cap
 
-    for attempt in range(repair_cap):
-        retries_used = attempt  # Number of repair attempts (0 = first, 1 = first repair, etc.)
-
+    for attempt in range(total_attempts):
         try:
             # Dispatch the (possibly repaired) item.
             result = dispatch_item(driver, failed_item, workdir=str(sandbox_dir))
@@ -181,13 +185,17 @@ def run_bounded_repair(
 
             if ok:
                 # Test passed! Return success.
+                # retries_used = number of repairs that happened before this success.
                 return True, error or "Fixed", retries_used, total_tokens
 
             # Test failed: prepare for next repair attempt.
             last_error = error
             last_test_exit = test_exit
 
-            if attempt < repair_cap - 1:
+            if attempt < total_attempts - 1:
+                # Will do another repair attempt.
+                retries_used = attempt + 1  # Increment: we're about to do the (attempt+1)-th repair.
+
                 # Build repair prompt: append test failure to original.
                 original_prompt = dispatch_item_dict["prompt"]
                 test_output = f"\n\nTest failed with exit code {test_exit}.\n"
@@ -240,12 +248,21 @@ def execute_task_run(
     task: TaskFixture,
     tier: str,
     repeat: int,
-    repair_cap: int,
+    applied_repair_cap: int,
 ) -> Result:
-    """Execute one (task, tier, repeat, arm) run with bounded repair."""
+    """Execute one (task, tier, repeat, arm) run with bounded repair.
+
+    Args:
+        applied_repair_cap: explicit repair cap to apply (overrides policy).
+    """
     start_time = time.time()
 
     try:
+        # Get policy-recommended cap for recording (but don't use it).
+        caps = driver.probe_capabilities()
+        policy = verification_policy(caps)
+        policy_repair_cap = policy.get("repair_cap", 1)
+
         # Create isolated sandbox.
         with tempfile.TemporaryDirectory() as tmpdir:
             sandbox_dir = Path(tmpdir)
@@ -257,9 +274,9 @@ def execute_task_run(
                 elif item.is_dir() and not item.name.startswith("."):
                     shutil.copytree(item, sandbox_dir / item.name)
 
-            # Run bounded repair loop.
+            # Run bounded repair loop with APPLIED cap (uniform across tiers).
             worker_ok, worker_verdict, retries, tokens = run_bounded_repair(
-                driver, task, sandbox_dir, repair_cap
+                driver, task, sandbox_dir, applied_repair_cap
             )
 
             # Run oracle if worker succeeded.
@@ -293,10 +310,21 @@ def execute_task_run(
                 tokens_spent=tokens,
                 duration_s=duration,
                 status=status,
+                policy_repair_cap=policy_repair_cap,
+                applied_repair_cap=applied_repair_cap,
             )
 
     except Exception as exc:
         duration = time.time() - start_time
+        # Try to get policy cap even on error.
+        policy_repair_cap = None
+        try:
+            caps = driver.probe_capabilities()
+            policy = verification_policy(caps)
+            policy_repair_cap = policy.get("repair_cap", 1)
+        except Exception:
+            pass
+
         return Result(
             task_id=task.task_id,
             band=task.band,
@@ -311,6 +339,8 @@ def execute_task_run(
             duration_s=duration,
             status="error",
             error_message=str(exc),
+            policy_repair_cap=policy_repair_cap,
+            applied_repair_cap=applied_repair_cap,
         )
 
 
@@ -380,6 +410,13 @@ def main():
         type=int,
         default=None,
         help="Max total runs (stop after this many)",
+    )
+    parser.add_argument(
+        "--repair-cap",
+        type=int,
+        default=2,
+        help="Repair budget (number of repairs, not total attempts). "
+             "Total attempts = 1 (initial) + repair_cap. Default: 2 (3 total attempts max).",
     )
 
     args = parser.parse_args()
@@ -464,23 +501,23 @@ def main():
                     print(f"ERROR: failed to build driver for {tier}: {exc}")
                     sys.exit(1)
 
-                # Get repair cap from verification policy.
-                caps = driver.probe_capabilities()
-                policy = verification_policy(caps)
-                repair_cap = policy.get("repair_cap", 1)
+                # Use UNIFORM repair cap from CLI args (overrides per-tier policy).
+                # This ensures fair comparison across tiers: same treatment except for backend.
+                applied_repair_cap = args.repair_cap
 
-                # Execute run (with REAL bounded repair loop).
+                # Execute run (with REAL bounded repair loop, uniform cap).
                 print(
                     f"RUN {task.task_id} {tier} repeat {repeat} arm=S "
-                    f"(backend={backend_name}, repair_cap={repair_cap})"
+                    f"(backend={backend_name}, applied_repair_cap={applied_repair_cap})"
                 )
-                result = execute_task_run(driver, task, tier, repeat, repair_cap)
+                result = execute_task_run(driver, task, tier, repeat, applied_repair_cap)
 
                 # Save result.
                 save_result(args.checkpoint, result)
                 print(
                     f"  status={result.status} passed={result.passed} "
                     f"retries={result.retries_used} tokens={result.tokens_spent} "
+                    f"policy_cap={result.policy_repair_cap} applied_cap={result.applied_repair_cap} "
                     f"duration={result.duration_s:.1f}s"
                 )
 

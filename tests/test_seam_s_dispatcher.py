@@ -123,6 +123,91 @@ class TestCheckpointKeyIncludesArm(unittest.TestCase):
             self.assertEqual(u_result.retries_used, 0)
 
 
+class TestUniformRepairCap(unittest.TestCase):
+    """Test that uniform --repair-cap overrides per-tier policy (study design)."""
+
+    def test_uniform_cap_applied_to_tier1_driver(self):
+        """Tier-1 driver (policy: cap=1) gets uniform cap=2 from CLI."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            task_dir = Path(tmpdir) / "task001"
+            task_dir.mkdir()
+
+            task_json = {
+                "task_id": "task001",
+                "band": "starter",
+                "statement": "Fix it",
+                "context_files": ["main.py"],
+                "oracle_cmd": "python -m pytest oracle -q",
+            }
+            (task_dir / "task.json").write_text(json.dumps(task_json))
+
+            repo_dir = task_dir / "repo"
+            repo_dir.mkdir()
+            (repo_dir / "main.py").write_text("x = 1")
+
+            (task_dir / "oracle").mkdir()
+
+            task = seam_s.load_task(task_dir)
+
+            # Tier-1 mock driver (policy would give cap=1).
+            mock_driver = Mock()
+            mock_driver.resolve_model.return_value = "claude-haiku"
+            mock_driver.get_tokens_spent.return_value = 100
+
+            with patch("bench.run_seam_s.dispatch_item") as mock_dispatch:
+                # Fail twice, succeed on third (showing uniform cap=2 allowed 3 attempts).
+                mock_dispatch.side_effect = [
+                    {"ok": False, "testExit": 1, "filesWritten": [], "error": "E1"},
+                    {"ok": False, "testExit": 1, "filesWritten": [], "error": "E2"},
+                    {"ok": True, "testExit": 0, "filesWritten": ["main.py"], "error": None},
+                ]
+
+                with patch("bench.run_seam_s.build_manifest_item") as mock_build:
+                    manifest = {
+                        "slug": "task001",
+                        "prompt": "Fix it",
+                        "ownsFiles": ["main.py"],
+                        "testCmd": "pytest",
+                        "model": "claude-haiku",
+                    }
+                    mock_build.return_value = manifest
+
+                    sandbox = Path(tmpdir) / "sandbox"
+                    sandbox.mkdir()
+
+                    # Apply uniform cap=2 (total_attempts = 1 + 2 = 3) to Tier-1 driver.
+                    ok, verdict, retries, tokens = seam_s.run_bounded_repair(
+                        mock_driver, task, sandbox, repair_cap=2
+                    )
+
+                    self.assertTrue(ok)
+                    self.assertEqual(retries, 2)  # 2 repairs before success
+                    self.assertEqual(mock_dispatch.call_count, 3)  # 3 total attempts
+
+    def test_checkpoint_records_both_caps(self):
+        """Result record carries both policy_repair_cap and applied_repair_cap."""
+        result = seam_s.Result(
+            task_id="task1",
+            band="starter",
+            tier="claude-haiku",
+            repeat=1,
+            arm="S",
+            backend="anthropic",
+            passed=True,
+            worker_verdict="Fixed",
+            retries_used=1,
+            tokens_spent=100,
+            duration_s=5.0,
+            status="scored",
+            policy_repair_cap=1,  # Tier-1 policy
+            applied_repair_cap=2,  # CLI override (uniform)
+        )
+
+        # Verify both caps are present.
+        self.assertEqual(result.policy_repair_cap, 1)
+        self.assertEqual(result.applied_repair_cap, 2)
+
+
 class TestBoundedRepairLoop(unittest.TestCase):
     """Test bounded repair loop with failure appending."""
 
