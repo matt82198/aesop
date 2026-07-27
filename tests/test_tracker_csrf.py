@@ -63,11 +63,19 @@ class TrackerCSRFTestCase(unittest.TestCase):
         import handler
 
         # Use QuietThreadingHTTPServer to suppress socket disconnect exceptions
+        # Bind to port 0 (ephemeral) to avoid collisions under CI load
         self.httpd = handler.QuietThreadingHTTPServer(("127.0.0.1", 0), self.serve.DashboardHandler)
         self.httpd.daemon_threads = True
         self.port = self.httpd.server_address[1]
         self.server_thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.server_thread.start()
+
+        # TDD fix: Wait deterministically for server to be ready before tests run.
+        # Root cause: Under CI load on Windows, the server thread may not have
+        # completed binding and calling accept() when tests attempt to connect,
+        # causing TimeoutError. Poll the server endpoint with a bounded retry
+        # loop until it responds (~10s timeout).
+        self._wait_for_server_ready(timeout=10)
 
     def tearDown(self):
         try:
@@ -83,8 +91,31 @@ class TrackerCSRFTestCase(unittest.TestCase):
                     os.environ[k] = v
             shutil.rmtree(self.fixture_root, ignore_errors=True)
 
+    def _wait_for_server_ready(self, timeout=10):
+        """Poll server endpoint until it accepts connections.
+
+        Raises TimeoutError if server does not respond within timeout.
+        This deterministic readiness check prevents TimeoutError flakes
+        where the server thread hasn't yet called accept() when tests try
+        to connect.
+        """
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                con = http.client.HTTPConnection("127.0.0.1", self.port, timeout=1)
+                con.request("GET", "/api/tracker")
+                resp = con.getresponse()
+                resp.read()  # Ensure response is fully consumed
+                con.close()
+                return  # Server is ready
+            except (OSError, http.client.HTTPException, TimeoutError):
+                time.sleep(0.05)  # Short backoff before next attempt
+        raise TimeoutError(f"Server did not become ready within {timeout}s")
+
     def _conn(self):
-        return http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        # TDD fix: Use generous socket timeout (>=15s) to handle
+        # Windows CI slowness and network delays during handshake
+        return http.client.HTTPConnection("127.0.0.1", self.port, timeout=15)
 
     def _request(self, method, path, body=None, headers=None):
         # Retry transient Windows socket aborts (WSAECONNABORTED / reset) that can

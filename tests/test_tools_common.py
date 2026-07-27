@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from unittest import mock
 
 # Add tools to path for import
 sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
@@ -124,40 +125,70 @@ class TestCheckHeartbeatStaleness(unittest.TestCase):
         self.assertIsNotNone(info)
 
     def test_heartbeat_exactly_at_threshold(self):
-        """Test boundary condition: heartbeat exactly at threshold."""
+        """Test boundary condition: heartbeat exactly at threshold.
+
+        TDD fix: Use logical time (mocked) instead of wall-clock to avoid
+        CI flakes where execution time can cross the boundary."""
         hb_file = self.state_dir / "test-hb"
-        old_time = int(time.time()) - 300  # Exactly 300 seconds old
-        hb_file.write_text(str(old_time))
 
-        is_stale, age_s, info = check_heartbeat_staleness(hb_file, threshold_s=300)
+        with mock.patch("time.time") as mock_time:
+            # Write heartbeat at logical time 1000.0
+            mock_time.return_value = 1000.0
+            old_time = 1000 - 300  # Exactly 300 seconds old
+            hb_file.write_text(str(old_time))
 
-        # At threshold should be stale (>= comparison)
-        self.assertTrue(is_stale)
+            # Check staleness at same logical time
+            mock_time.return_value = 1000.0
+            is_stale, age_s, info = check_heartbeat_staleness(hb_file, threshold_s=300)
+
+            # At threshold should be stale (>= comparison)
+            self.assertTrue(is_stale)
 
     def test_heartbeat_just_under_threshold(self):
-        """Test boundary condition: heartbeat just under threshold."""
+        """Test boundary condition: heartbeat just under threshold.
+
+        TDD fix: Use logical time (mocked) instead of wall-clock to ensure
+        the age stays just under threshold regardless of CI execution speed.
+        Root cause: On slow runners, wall-clock time between write and check
+        can exceed the 1-second margin (299 sec old becomes 300+ sec old),
+        causing the assertion to fail."""
         hb_file = self.state_dir / "test-hb"
-        old_time = int(time.time()) - 299  # 299 seconds old
-        hb_file.write_text(str(old_time))
 
-        is_stale, age_s, info = check_heartbeat_staleness(hb_file, threshold_s=300)
+        with mock.patch("time.time") as mock_time:
+            # Write heartbeat at logical time 1000.0
+            mock_time.return_value = 1000.0
+            old_time = 1000 - 299  # 299 seconds old (just under threshold)
+            hb_file.write_text(str(old_time))
 
-        # Under threshold should not be stale
-        self.assertFalse(is_stale)
-        self.assertIsNone(info)
+            # Check staleness at same logical time (no time passage)
+            # so age remains 299 (< 300 threshold)
+            mock_time.return_value = 1000.0
+            is_stale, age_s, info = check_heartbeat_staleness(hb_file, threshold_s=300)
+
+            # Under threshold should not be stale
+            self.assertFalse(is_stale)
+            self.assertIsNone(info)
 
     def test_age_calculation_accuracy(self):
-        """Test that age is calculated accurately."""
+        """Test that age is calculated accurately.
+
+        TDD fix: Use logical time (mocked) to eliminate wall-clock variability
+        and verify exact age calculation."""
         hb_file = self.state_dir / "test-hb"
         age_expected = 123
-        old_time = int(time.time()) - age_expected
-        hb_file.write_text(str(old_time))
 
-        is_stale, age_s, info = check_heartbeat_staleness(hb_file, threshold_s=300)
+        with mock.patch("time.time") as mock_time:
+            # Write heartbeat at logical time 1000.0
+            mock_time.return_value = 1000.0
+            old_time = 1000 - age_expected
+            hb_file.write_text(str(old_time))
 
-        # Age should be within 1-2 seconds due to execution time
-        self.assertGreaterEqual(age_s, age_expected - 2)
-        self.assertLessEqual(age_s, age_expected + 2)
+            # Check staleness at same logical time
+            mock_time.return_value = 1000.0
+            is_stale, age_s, info = check_heartbeat_staleness(hb_file, threshold_s=300)
+
+            # Age should be exactly 123 seconds (no wall-clock variation)
+            self.assertEqual(age_s, age_expected)
 
 
 if __name__ == "__main__":
