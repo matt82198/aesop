@@ -596,6 +596,11 @@ def main():
         default="claude-opus-5,claude-fable-5,claude-sonnet-5,claude-haiku-4-5-20251001,gpt-4o-mini",
         help="Comma-separated list of tiers to run",
     )
+    parser.add_argument(
+        "--exclude-tasks",
+        default=None,
+        help="Path to file containing task IDs to exclude (one per line or comma-separated)",
+    )
 
     args = parser.parse_args()
 
@@ -610,6 +615,23 @@ def main():
     tasks = load_frontier_tasks("bench/tasks_frontier.jsonl")
     ground_truth = load_ground_truth("bench/ground_truth_frontier.jsonl")
     tiers = args.tiers.split(",")
+
+    # Load excluded tasks if specified
+    excluded_task_ids = set()
+    if args.exclude_tasks:
+        try:
+            with open(args.exclude_tasks, encoding="utf-8") as f:
+                content = f.read()
+                # Support both newline-separated and comma-separated formats
+                if ',' in content:
+                    excluded_task_ids = set(t.strip() for t in content.split(',') if t.strip())
+                else:
+                    excluded_task_ids = set(t.strip() for t in content.split('\n') if t.strip())
+        except FileNotFoundError:
+            print(f"ERROR: Exclusion file not found: {args.exclude_tasks}", file=sys.stderr)
+            sys.exit(1)
+        # Filter tasks
+        tasks = [t for t in tasks if t.id not in excluded_task_ids]
 
     # Load tool-mode task info if needed
     tool_tasks_info = None
@@ -632,6 +654,8 @@ def main():
 
     print(f"Frontier v2/v5 Parallel Runner")
     print(f"  Answer mode: {args.answer_mode}")
+    if excluded_task_ids:
+        print(f"  Excluded by Amendment 5: {len(excluded_task_ids)}")
     print(f"  Tasks: {len(tasks)}")
     print(f"  Repeats: 3")
     print(f"  Tiers: {len(tiers)}")
