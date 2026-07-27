@@ -431,15 +431,16 @@ def run_single_task(
     correct_value = None
 
     if use_tool_mode:
-        # Transform prompt: remove format instruction and add tool instruction
+        # Transform prompt: remove format instruction
         request_prompt = remove_format_instruction(task.prompt)
-        request_prompt += "\n\nCall the submit_answer tool with answer set to ONLY your final answer value - no explanation."
 
         # Determine schema type based on whether task has closed token set
         if tool_tasks_info and task.id in tool_tasks_info:
-            # Closed-set task: enum schema
+            # Closed-set task: enum schema - expects bare token value
             schema_type = "enum"
             token_set, correct_value = tool_tasks_info[task.id]
+            # Instruction for enum tasks: bare token only
+            request_prompt += "\n\nCall the submit_answer tool with answer set to exactly one of the allowed values."
             tools = [
                 {
                     "name": "submit_answer",
@@ -458,8 +459,10 @@ def run_single_task(
                 }
             ]
         else:
-            # Free-string task: string schema
+            # Free-string task: string schema - regex-graded, needs verbose answer
             schema_type = "string"
+            # Instruction for string tasks: full answer with reasoning/explanation
+            request_prompt += "\n\nCall the submit_answer tool with your COMPLETE answer, including your full reasoning/explanation, in the answer field."
             tools = [
                 {
                     "name": "submit_answer",
@@ -487,17 +490,33 @@ def run_single_task(
 
     try:
         if tier.startswith("claude-"):
+            # max_tokens: enum tool mode needs less (bare token), string mode needs >=1024 for verbose regex-graded answers
+            if use_tool_mode and schema_type == "string":
+                max_tokens = 2048  # Generous for full explanation + reasoning
+            elif use_tool_mode and schema_type == "enum":
+                max_tokens = 256  # Bare token only
+            else:
+                max_tokens = 8192  # Regex mode (prose)
+
             response_text, tokens_in, tokens_out, cost, transport = invoke_claude_model(
                 tier, request_prompt,
-                max_tokens=256 if use_tool_mode else 8192,
+                max_tokens=max_tokens,
                 tools=tools,
                 tool_choice=tool_choice
             )
         elif tier == "gpt-4o-mini":
             # v5: OpenAI now uses tool mode too (function calling)
+            # max_tokens: enum tool mode needs less (bare token), string mode needs >=1024 for verbose regex-graded answers
+            if use_tool_mode and schema_type == "string":
+                openai_max_tokens = 2048  # Generous for full explanation + reasoning
+            elif use_tool_mode and schema_type == "enum":
+                openai_max_tokens = 256  # Bare token only
+            else:
+                openai_max_tokens = 512  # Regex mode (prose)
+
             response_text, tokens_in, tokens_out, cost = invoke_openai_model(
                 tier, request_prompt,
-                max_tokens=256 if use_tool_mode else 512,
+                max_tokens=openai_max_tokens,
                 tools=tools,
                 tool_choice=tool_choice
             )
@@ -525,7 +544,8 @@ def run_single_task(
             correct = False
         elif use_tool_mode and schema_type:
             # Tool mode grading: use appropriate schema grading
-            expected_regex = gt.get("expected_regex")
+            # gt is a GroundTruth dataclass, access as attribute not dict
+            expected_regex = gt.expected_regex
             correct = grade_tool_mode_response(
                 response_text,
                 schema_type=schema_type,
@@ -697,6 +717,7 @@ def main():
     # Run in parallel
     cost_per_tier = {}
     runs_per_tier = {}
+    error_runs = []  # Track in-process errors for early abort
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
@@ -722,8 +743,20 @@ def main():
                 status = "OK" if run.correct else "FAIL"
                 print(f"[{completed_count:3d}/{len(work_items)}] {tier:30s} {task_id:40s} rep{run.repeat} {status} ({run.cost_usd:.4f} USD)")
             except Exception as e:
+                error_runs.append((tier, task_id, str(e)))
                 print(f"[ERROR] {tier:30s} {task_id:40s} rep{repeat}: {e}")
                 completed_count += 1
+
+                # Early abort: if first 5 runs all error, stop immediately
+                if completed_count <= 5 and len(error_runs) == completed_count:
+                    print()
+                    print(f"ABORT: First {completed_count} runs all errored in-process (no transport calls).")
+                    print("This usually indicates a bug in the request-building or grading logic.")
+                    print("Errors:")
+                    for et, eid, ee in error_runs:
+                        print(f"  {et} {eid}: {ee}")
+                    executor.shutdown(wait=False)
+                    sys.exit(1)
 
     print()
     print("Cost summary (this batch):")

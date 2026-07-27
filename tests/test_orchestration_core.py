@@ -37,6 +37,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TOOLS_DIR = REPO_ROOT / "tools"
@@ -155,26 +156,49 @@ class TestWatchdogVsMonitorAsymmetry(HealthcheckCoreTestCase):
 
 
 class TestWatchdogRedBoundary(HealthcheckCoreTestCase):
-    """RED requires BOTH age >= 2*threshold (600s) AND the explicit >=600s floor."""
+    """RED requires BOTH age >= 2*threshold (600s) AND the explicit >=600s floor.
+
+    TDD fix: Use logical time (mocked time.time) to eliminate Windows CI timing
+    races where wall-clock delays between writing heartbeat and checking health
+    can exceed the 1-second boundary margin."""
 
     def test_watchdog_just_below_600s_is_yellow_not_red(self):
-        self._write_heartbeat("watchdog", age_seconds=599)
-        self._write_heartbeat("monitor", age_seconds=10)
-        (self.state_dir / "SECURITY-ALERTS.log").write_text("", encoding="utf-8")
-        self._write_orchestrator_status()
+        """Watchdog at 599s (just under the 600s floor) must be YELLOW, not RED.
 
-        result = self.healthcheck.check_health()
-        self.assertIn("🟡", result, f"watchdog at 599s (just under the 600s dead floor) must be YELLOW, got: {result}")
-        self.assertNotIn("🔴", result, f"watchdog at 599s must NOT be RED yet, got: {result}")
+        Root cause: test writes heartbeat aged 599s, then check_health() is called.
+        Under Windows CI load, time.time() may advance enough during this window
+        to push the calculated age to 600+, flipping the verdict from YELLOW to RED.
+        Fix: Mock time.time() with logical time so the age stays deterministic."""
+        with mock.patch("time.time") as mock_time:
+            # Write heartbeat at logical time 1000.0
+            mock_time.return_value = 1000.0
+            self._write_heartbeat("watchdog", age_seconds=599)
+            self._write_heartbeat("monitor", age_seconds=10)
+            (self.state_dir / "SECURITY-ALERTS.log").write_text("", encoding="utf-8")
+            self._write_orchestrator_status()
+
+            # Check health at same logical time (no time passage)
+            # Age = 1000.0 - (1000.0 - 599) = 599 (just under floor)
+            result = self.healthcheck.check_health()
+            self.assertIn("🟡", result, f"watchdog at 599s (just under the 600s dead floor) must be YELLOW, got: {result}")
+            self.assertNotIn("🔴", result, f"watchdog at 599s must NOT be RED yet, got: {result}")
 
     def test_watchdog_at_exactly_600s_is_red(self):
-        self._write_heartbeat("watchdog", age_seconds=600)
-        self._write_heartbeat("monitor", age_seconds=10)
-        (self.state_dir / "SECURITY-ALERTS.log").write_text("", encoding="utf-8")
-        self._write_orchestrator_status()
+        """Watchdog at exactly 600s (the floor) must be RED.
 
-        result = self.healthcheck.check_health()
-        self.assertIn("🔴", result, f"watchdog at exactly 600s (inclusive floor) must be RED, got: {result}")
+        TDD fix: Use logical time to ensure age equals exactly 600, not > 600."""
+        with mock.patch("time.time") as mock_time:
+            # Write heartbeat at logical time 1000.0
+            mock_time.return_value = 1000.0
+            self._write_heartbeat("watchdog", age_seconds=600)
+            self._write_heartbeat("monitor", age_seconds=10)
+            (self.state_dir / "SECURITY-ALERTS.log").write_text("", encoding="utf-8")
+            self._write_orchestrator_status()
+
+            # Check health at same logical time (no time passage)
+            # Age = 1000.0 - (1000.0 - 600) = 600 (at floor, inclusive)
+            result = self.healthcheck.check_health()
+            self.assertIn("🔴", result, f"watchdog at exactly 600s (inclusive floor) must be RED, got: {result}")
 
 
 class TestMissingVsDeadWatchdog(HealthcheckCoreTestCase):

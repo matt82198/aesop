@@ -163,6 +163,111 @@ class TestGraderAudit(unittest.TestCase):
             f"tasks missing a parseable pinned token set: {missing}",
         )
 
+    def test_string_schema_exemplars_grade_correct_when_submitted_as_tool_answer(self):
+        """For v5 tool mode: string-schema tasks (91 regex-graded) must have exemplars
+        that grade CORRECT when submitted as tool answer.
+
+        ROOT CAUSE OF v5 BUG: Tool instruction said "answer set to ONLY your final
+        answer value" for all tasks, but regex-graded tasks (like ft01) have exemplars
+        with full multi-part explanations ("Problem 1...YEAR...Problem 2...GROUP BY...").
+        The instruction suppressed the explanation, causing the answer to NOT match the
+        regex that expects verbose reasoning. This test catches that by verifying the
+        exemplar (the reference verbose answer) actually grades correct.
+        """
+        failures = []
+        # String-schema tasks are those NOT in the pinned (closed-token) set
+        string_schema_tasks = {
+            tid: t for tid, t in self.tasks.items() if tid not in self.pinned
+        }
+
+        for tid, task in string_schema_tasks.items():
+            gt_entry = self.gt.get(tid)
+            if not gt_entry:
+                continue
+
+            # Get the regex pattern and exemplar
+            pattern = gt_entry.get("expected_regex")
+            exemplar = gt_entry.get("exemplar")
+
+            if not pattern or not exemplar:
+                continue
+
+            # Test: exemplar must grade CORRECT against the regex
+            if not re.search(pattern, exemplar, SCORE_FLAGS):
+                failures.append(
+                    f"{tid}: exemplar does NOT grade correct against expected_regex. "
+                    f"This means the tool instruction requesting 'full reasoning' will "
+                    f"fail. Exemplar (first 100 chars): {exemplar[:100]!r}"
+                )
+
+        self.assertEqual(
+            failures, [],
+            f"String-schema exemplars must grade correct (v5 tool instruction depends on "
+            f"verbose reasoning):\n" + "\n".join(failures),
+        )
+
+    def test_string_schema_terse_versions_grade_appropriately(self):
+        """For v5 tool mode: verify that bare/terse versions of string-schema exemplars
+        grade appropriately (either match or fail predictably).
+
+        This catches cases where the instruction might implicitly encourage terse
+        answers, and we need to verify the regex still works with verbose forms.
+        Also test that a terse (first line / first sentence) version is handled correctly.
+        """
+        failures = []
+        # String-schema tasks are those NOT in the pinned (closed-token) set
+        string_schema_tasks = {
+            tid: t for tid, t in self.tasks.items() if tid not in self.pinned
+        }
+
+        for tid, task in string_schema_tasks.items():
+            gt_entry = self.gt.get(tid)
+            if not gt_entry:
+                continue
+
+            # Get the regex pattern and exemplar
+            pattern = gt_entry.get("expected_regex")
+            exemplar = gt_entry.get("exemplar")
+            counter = gt_entry.get("counter_example")
+
+            if not pattern or not exemplar:
+                continue
+
+            # Test 1: Full exemplar (verbose) must match
+            exemplar_matches = re.search(pattern, exemplar, SCORE_FLAGS)
+            if not exemplar_matches:
+                failures.append(
+                    f"{tid}: full exemplar does not match regex (should always match). "
+                    f"First 100 chars: {exemplar[:100]!r}"
+                )
+
+            # Test 2: Counter-example (if present) must NOT match
+            if counter:
+                counter_matches = re.search(pattern, counter, SCORE_FLAGS)
+                if counter_matches:
+                    failures.append(
+                        f"{tid}: counter_example matches regex (should NOT match). "
+                        f"Counter (first 100 chars): {counter[:100]!r}"
+                    )
+
+            # Test 3: Extract first line/sentence and verify it doesn't break grading
+            # (The regex should handle partial/incomplete answers gracefully)
+            first_line = exemplar.split("\n")[0] if "\n" in exemplar else exemplar
+            # If exemplar has >100 chars (verbose), a terse first line might not match
+            # That's OK — it means the instruction correctly suppresses terse responses
+            # and requires full reasoning. Just verify it doesn't crash.
+            try:
+                _ = re.search(pattern, first_line, SCORE_FLAGS)
+            except Exception as e:
+                failures.append(
+                    f"{tid}: regex processing first line raised error: {e}"
+                )
+
+        self.assertEqual(
+            failures, [],
+            f"String-schema answer shape handling must be robust:\n" + "\n".join(failures),
+        )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
