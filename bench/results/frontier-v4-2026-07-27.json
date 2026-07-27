@@ -1,0 +1,3518 @@
+{
+  "date": "2026-07-27",
+  "design": "v4 revised instrument, FULL FRESH RUN: N=130 tasks x 5 tiers x 3 repeats = 1950 tuples, single-transport direct HTTP API (anthropic-http / openai). Not pooled with v2/v3 (six-task repair makes old tuples non-comparable).",
+  "preregistration": "bench/EQUIVALENCE-MARGIN.md Amendment 3 (merged before any v4 runs, PR #423)",
+  "tiers": {
+    "opus-5": {
+      "run_correct": 251,
+      "run_n": 286,
+      "run_acc": 0.8776223776223776,
+      "target_n": 390,
+      "hole_tuples": 104,
+      "hole_tasks": [
+        "ft02_code_defect_detection_concurrent",
+        "ft06_git_history_blame_analysis",
+        "ft16_unicode_normalization_gotcha",
+        "ft19_format_string_vulnerability",
+        "ft23_memory_ordering_volatile_bug",
+        "ft31_git_blame_security_regression",
+        "ft41_regex_backref_vs_alternation",
+        "ft42_regex_lookahead_negative",
+        "ft43_api_response_enum_violation",
+        "ft44_api_request_body_size_constraint",
+        "ft51_unicode_emoji_byte_length",
+        "ft55_type_coercion_array_comparison",
+        "ft57_sql_injection_parameterized",
+        "ft58_xpath_injection_xml_parse",
+        "ft68_full_text_search_index_strategy",
+        "ft79_cas_retry_loop_correctness",
+        "ft82_unicode_byte_vs_char_emoji_with_combining",
+        "ft83_type_coercion_python_vs_js_string_concat",
+        "ft84_regex_alternation_grouping_precedence",
+        "ft85_unicode_case_folding_with_normalization",
+        "ft87_regex_backref_with_alternation",
+        "ft90_unicode_emoji_skin_tone_modifier",
+        "ft101_write_skew_snapshot_isolation",
+        "ft102_deferred_constraint_timing",
+        "ft104_trigger_recursion_and_row_count",
+        "ft105_concurrent_ddl_lock_ordering_deadlock",
+        "ft106_x86_tso_store_buffering",
+        "ft107_c11_relaxed_atomics_data_race",
+        "ft109_exactly_once_idempotency_counter",
+        "ft113_regex_split_capturing_group",
+        "ft114_sort_stability_index",
+        "ft116_generator_exhaustion_refactor",
+        "ft120_http_cache_control_freshness_boundary",
+        "ft124_shell_nullglob_expansion",
+        "ft126_yaml_merge_key_precedence"
+      ],
+      "transient_errors_retried_ok": 3,
+      "majority_correct": 82,
+      "majority_n": 95,
+      "family_breakout": {
+        "core-v2 (ft01-60, 6 repaired)": {
+          "correct": 117,
+          "n": 138,
+          "acc": 0.8478260869565217
+        },
+        "ext-v3 (ft61-100)": {
+          "correct": 85,
+          "n": 96,
+          "acc": 0.8854166666666666
+        },
+        "sql-transactions (ft101-105)": {
+          "correct": 2,
+          "n": 3,
+          "acc": 0.6666666666666666
+        },
+        "concurrency-distributed (ft106-110)": {
+          "correct": 6,
+          "n": 6,
+          "acc": 1.0
+        },
+        "float-unicode-regex (ft111-115)": {
+          "correct": 10,
+          "n": 10,
+          "acc": 1.0
+        },
+        "contracts-config (ft116-120)": {
+          "correct": 9,
+          "n": 9,
+          "acc": 1.0
+        },
+        "ops-ci (ft121-130)": {
+          "correct": 22,
+          "n": 24,
+          "acc": 0.9166666666666666
+        }
+      },
+      "cost_billed_usd": 14.76
+    },
+    "sonnet-5": {
+      "run_correct": 352,
+      "run_n": 390,
+      "run_acc": 0.9025641025641026,
+      "target_n": 390,
+      "hole_tuples": 0,
+      "hole_tasks": [],
+      "transient_errors_retried_ok": 1,
+      "majority_correct": 117,
+      "majority_n": 130,
+      "family_breakout": {
+        "core-v2 (ft01-60, 6 repaired)": {
+          "correct": 158,
+          "n": 180,
+          "acc": 0.8777777777777778
+        },
+        "ext-v3 (ft61-100)": {
+          "correct": 107,
+          "n": 120,
+          "acc": 0.8916666666666667
+        },
+        "sql-transactions (ft101-105)": {
+          "correct": 15,
+          "n": 15,
+          "acc": 1.0
+        },
+        "concurrency-distributed (ft106-110)": {
+          "correct": 15,
+          "n": 15,
+          "acc": 1.0
+        },
+        "float-unicode-regex (ft111-115)": {
+          "correct": 15,
+          "n": 15,
+          "acc": 1.0
+        },
+        "contracts-config (ft116-120)": {
+          "correct": 15,
+          "n": 15,
+          "acc": 1.0
+        },
+        "ops-ci (ft121-130)": {
+          "correct": 27,
+          "n": 30,
+          "acc": 0.9
+        }
+      },
+      "cost_billed_usd": 4.46
+    },
+    "fable-5": {
+      "run_correct": 259,
+      "run_n": 286,
+      "run_acc": 0.9055944055944056,
+      "target_n": 390,
+      "hole_tuples": 104,
+      "hole_tasks": [
+        "ft02_code_defect_detection_concurrent",
+        "ft04_long_context_needle_judgment",
+        "ft06_git_history_blame_analysis",
+        "ft16_unicode_normalization_gotcha",
+        "ft18_type_coercion_subtle_bug",
+        "ft19_format_string_vulnerability",
+        "ft21_sql_join_optimization_complex",
+        "ft26_instruction_compatibility_constraint",
+        "ft28_long_context_timing_inconsistency",
+        "ft31_git_blame_security_regression",
+        "ft41_regex_backref_vs_alternation",
+        "ft44_api_request_body_size_constraint",
+        "ft49_state_machine_idempotency",
+        "ft57_sql_injection_parameterized",
+        "ft58_xpath_injection_xml_parse",
+        "ft64_connection_pool_saturation_symptom",
+        "ft71_atomic_vs_compound_race",
+        "ft77_distributed_lock_clock_skew",
+        "ft78_memory_ordering_acquire_release",
+        "ft79_cas_retry_loop_correctness",
+        "ft80_lazy_init_double_check_lock",
+        "ft82_unicode_byte_vs_char_emoji_with_combining",
+        "ft85_unicode_case_folding_with_normalization",
+        "ft86_json_schema_allof_required_merge",
+        "ft87_regex_backref_with_alternation",
+        "ft90_unicode_emoji_skin_tone_modifier",
+        "ft94_api_contract_content_type_violation",
+        "ft96_long_context_config_priority_contradiction",
+        "ft104_trigger_recursion_and_row_count",
+        "ft105_concurrent_ddl_lock_ordering_deadlock",
+        "ft107_c11_relaxed_atomics_data_race",
+        "ft109_exactly_once_idempotency_counter",
+        "ft113_regex_split_capturing_group",
+        "ft114_sort_stability_index",
+        "ft116_generator_exhaustion_refactor",
+        "ft120_http_cache_control_freshness_boundary",
+        "ft126_yaml_merge_key_precedence",
+        "ft127_retry_backoff_attempt_count"
+      ],
+      "transient_errors_retried_ok": 13,
+      "majority_correct": 86,
+      "majority_n": 95,
+      "family_breakout": {
+        "core-v2 (ft01-60, 6 repaired)": {
+          "correct": 117,
+          "n": 135,
+          "acc": 0.8666666666666667
+        },
+        "ext-v3 (ft61-100)": {
+          "correct": 76,
+          "n": 85,
+          "acc": 0.8941176470588236
+        },
+        "sql-transactions (ft101-105)": {
+          "correct": 10,
+          "n": 10,
+          "acc": 1.0
+        },
+        "concurrency-distributed (ft106-110)": {
+          "correct": 10,
+          "n": 10,
+          "acc": 1.0
+        },
+        "float-unicode-regex (ft111-115)": {
+          "correct": 10,
+          "n": 10,
+          "acc": 1.0
+        },
+        "contracts-config (ft116-120)": {
+          "correct": 12,
+          "n": 12,
+          "acc": 1.0
+        },
+        "ops-ci (ft121-130)": {
+          "correct": 24,
+          "n": 24,
+          "acc": 1.0
+        }
+      },
+      "cost_billed_usd": 13.78
+    },
+    "haiku-4.5": {
+      "run_correct": 322,
+      "run_n": 390,
+      "run_acc": 0.8256410256410256,
+      "target_n": 390,
+      "hole_tuples": 0,
+      "hole_tasks": [],
+      "transient_errors_retried_ok": 0,
+      "majority_correct": 108,
+      "majority_n": 130,
+      "family_breakout": {
+        "core-v2 (ft01-60, 6 repaired)": {
+          "correct": 153,
+          "n": 180,
+          "acc": 0.85
+        },
+        "ext-v3 (ft61-100)": {
+          "correct": 101,
+          "n": 120,
+          "acc": 0.8416666666666667
+        },
+        "sql-transactions (ft101-105)": {
+          "correct": 15,
+          "n": 15,
+          "acc": 1.0
+        },
+        "concurrency-distributed (ft106-110)": {
+          "correct": 14,
+          "n": 15,
+          "acc": 0.9333333333333333
+        },
+        "float-unicode-regex (ft111-115)": {
+          "correct": 9,
+          "n": 15,
+          "acc": 0.6
+        },
+        "contracts-config (ft116-120)": {
+          "correct": 10,
+          "n": 15,
+          "acc": 0.6666666666666666
+        },
+        "ops-ci (ft121-130)": {
+          "correct": 20,
+          "n": 30,
+          "acc": 0.6666666666666666
+        }
+      },
+      "cost_billed_usd": 1.16
+    },
+    "gpt-4o-mini": {
+      "run_correct": 298,
+      "run_n": 390,
+      "run_acc": 0.764102564102564,
+      "target_n": 390,
+      "hole_tuples": 0,
+      "hole_tasks": [],
+      "transient_errors_retried_ok": 0,
+      "majority_correct": 101,
+      "majority_n": 130,
+      "family_breakout": {
+        "core-v2 (ft01-60, 6 repaired)": {
+          "correct": 150,
+          "n": 180,
+          "acc": 0.8333333333333334
+        },
+        "ext-v3 (ft61-100)": {
+          "correct": 88,
+          "n": 120,
+          "acc": 0.7333333333333333
+        },
+        "sql-transactions (ft101-105)": {
+          "correct": 13,
+          "n": 15,
+          "acc": 0.8666666666666667
+        },
+        "concurrency-distributed (ft106-110)": {
+          "correct": 9,
+          "n": 15,
+          "acc": 0.6
+        },
+        "float-unicode-regex (ft111-115)": {
+          "correct": 12,
+          "n": 15,
+          "acc": 0.8
+        },
+        "contracts-config (ft116-120)": {
+          "correct": 6,
+          "n": 15,
+          "acc": 0.4
+        },
+        "ops-ci (ft121-130)": {
+          "correct": 20,
+          "n": 30,
+          "acc": 0.6666666666666666
+        }
+      },
+      "cost_billed_usd": 0.08
+    }
+  },
+  "pairwise_tost": [
+    {
+      "pair": "fable-5 vs haiku-4.5",
+      "diff_pp": 8.0,
+      "ci90_pp": [
+        3.74,
+        12.25
+      ],
+      "verdict": "INDETERMINATE",
+      "n": [
+        286,
+        390
+      ],
+      "common_subset": {
+        "tasks": 92,
+        "diff_pp": 8.33,
+        "ci90_pp": [
+          3.52,
+          13.15
+        ],
+        "verdict": "INDETERMINATE"
+      }
+    },
+    {
+      "pair": "fable-5 vs opus-5",
+      "diff_pp": 2.8,
+      "ci90_pp": [
+        -1.47,
+        7.07
+      ],
+      "verdict": "EQUIVALENT",
+      "n": [
+        286,
+        286
+      ],
+      "common_subset": {
+        "tasks": 80,
+        "diff_pp": 1.25,
+        "ci90_pp": [
+          -3.61,
+          6.11
+        ],
+        "verdict": "EQUIVALENT"
+      }
+    },
+    {
+      "pair": "fable-5 vs sonnet-5",
+      "diff_pp": 0.3,
+      "ci90_pp": [
+        -3.46,
+        4.07
+      ],
+      "verdict": "EQUIVALENT",
+      "n": [
+        286,
+        390
+      ],
+      "common_subset": {
+        "tasks": 92,
+        "diff_pp": 0.72,
+        "ci90_pp": [
+          -3.5,
+          4.95
+        ],
+        "verdict": "EQUIVALENT"
+      }
+    },
+    {
+      "pair": "fable-5 vs gpt-4o-mini",
+      "diff_pp": 14.15,
+      "ci90_pp": [
+        9.61,
+        18.69
+      ],
+      "verdict": "INDETERMINATE",
+      "n": [
+        286,
+        390
+      ],
+      "common_subset": {
+        "tasks": 92,
+        "diff_pp": 13.04,
+        "ci90_pp": [
+          7.95,
+          18.13
+        ],
+        "verdict": "INDETERMINATE"
+      }
+    },
+    {
+      "pair": "haiku-4.5 vs opus-5",
+      "diff_pp": -5.2,
+      "ci90_pp": [
+        -9.69,
+        -0.71
+      ],
+      "verdict": "EQUIVALENT",
+      "n": [
+        390,
+        286
+      ],
+      "common_subset": {
+        "tasks": 95,
+        "diff_pp": -7.37,
+        "ci90_pp": [
+          -12.39,
+          -2.35
+        ],
+        "verdict": "INDETERMINATE"
+      }
+    },
+    {
+      "pair": "haiku-4.5 vs sonnet-5",
+      "diff_pp": -7.69,
+      "ci90_pp": [
+        -11.7,
+        -3.68
+      ],
+      "verdict": "INDETERMINATE",
+      "n": [
+        390,
+        390
+      ],
+      "common_subset": {
+        "tasks": 130,
+        "diff_pp": -7.69,
+        "ci90_pp": [
+          -11.7,
+          -3.68
+        ],
+        "verdict": "INDETERMINATE"
+      }
+    },
+    {
+      "pair": "haiku-4.5 vs gpt-4o-mini",
+      "diff_pp": 6.15,
+      "ci90_pp": [
+        1.41,
+        10.9
+      ],
+      "verdict": "INDETERMINATE",
+      "n": [
+        390,
+        390
+      ],
+      "common_subset": {
+        "tasks": 130,
+        "diff_pp": 6.15,
+        "ci90_pp": [
+          1.41,
+          10.9
+        ],
+        "verdict": "INDETERMINATE"
+      }
+    },
+    {
+      "pair": "opus-5 vs sonnet-5",
+      "diff_pp": -2.49,
+      "ci90_pp": [
+        -6.53,
+        1.54
+      ],
+      "verdict": "EQUIVALENT",
+      "n": [
+        286,
+        390
+      ],
+      "common_subset": {
+        "tasks": 95,
+        "diff_pp": -0.7,
+        "ci90_pp": [
+          -5.17,
+          3.76
+        ],
+        "verdict": "EQUIVALENT"
+      }
+    },
+    {
+      "pair": "opus-5 vs gpt-4o-mini",
+      "diff_pp": 11.35,
+      "ci90_pp": [
+        6.59,
+        16.11
+      ],
+      "verdict": "INDETERMINATE",
+      "n": [
+        286,
+        390
+      ],
+      "common_subset": {
+        "tasks": 95,
+        "diff_pp": 11.58,
+        "ci90_pp": [
+          6.34,
+          16.82
+        ],
+        "verdict": "INDETERMINATE"
+      }
+    },
+    {
+      "pair": "sonnet-5 vs gpt-4o-mini",
+      "diff_pp": 13.85,
+      "ci90_pp": [
+        9.53,
+        18.16
+      ],
+      "verdict": "INDETERMINATE",
+      "n": [
+        390,
+        390
+      ],
+      "common_subset": {
+        "tasks": 130,
+        "diff_pp": 13.85,
+        "ci90_pp": [
+          9.53,
+          18.16
+        ],
+        "verdict": "INDETERMINATE"
+      }
+    }
+  ],
+  "ceiling_rule": {
+    "highest_tier_acc": 0.9056,
+    "threshold": 0.85,
+    "triggered": true
+  },
+  "refusal_holes": {
+    "opus-5": {
+      "tuples": 104,
+      "tasks": [
+        "ft02_code_defect_detection_concurrent",
+        "ft06_git_history_blame_analysis",
+        "ft16_unicode_normalization_gotcha",
+        "ft19_format_string_vulnerability",
+        "ft23_memory_ordering_volatile_bug",
+        "ft31_git_blame_security_regression",
+        "ft41_regex_backref_vs_alternation",
+        "ft42_regex_lookahead_negative",
+        "ft43_api_response_enum_violation",
+        "ft44_api_request_body_size_constraint",
+        "ft51_unicode_emoji_byte_length",
+        "ft55_type_coercion_array_comparison",
+        "ft57_sql_injection_parameterized",
+        "ft58_xpath_injection_xml_parse",
+        "ft68_full_text_search_index_strategy",
+        "ft79_cas_retry_loop_correctness",
+        "ft82_unicode_byte_vs_char_emoji_with_combining",
+        "ft83_type_coercion_python_vs_js_string_concat",
+        "ft84_regex_alternation_grouping_precedence",
+        "ft85_unicode_case_folding_with_normalization",
+        "ft87_regex_backref_with_alternation",
+        "ft90_unicode_emoji_skin_tone_modifier",
+        "ft101_write_skew_snapshot_isolation",
+        "ft102_deferred_constraint_timing",
+        "ft104_trigger_recursion_and_row_count",
+        "ft105_concurrent_ddl_lock_ordering_deadlock",
+        "ft106_x86_tso_store_buffering",
+        "ft107_c11_relaxed_atomics_data_race",
+        "ft109_exactly_once_idempotency_counter",
+        "ft113_regex_split_capturing_group",
+        "ft114_sort_stability_index",
+        "ft116_generator_exhaustion_refactor",
+        "ft120_http_cache_control_freshness_boundary",
+        "ft124_shell_nullglob_expansion",
+        "ft126_yaml_merge_key_precedence"
+      ]
+    },
+    "sonnet-5": {
+      "tuples": 0,
+      "tasks": []
+    },
+    "fable-5": {
+      "tuples": 104,
+      "tasks": [
+        "ft02_code_defect_detection_concurrent",
+        "ft04_long_context_needle_judgment",
+        "ft06_git_history_blame_analysis",
+        "ft16_unicode_normalization_gotcha",
+        "ft18_type_coercion_subtle_bug",
+        "ft19_format_string_vulnerability",
+        "ft21_sql_join_optimization_complex",
+        "ft26_instruction_compatibility_constraint",
+        "ft28_long_context_timing_inconsistency",
+        "ft31_git_blame_security_regression",
+        "ft41_regex_backref_vs_alternation",
+        "ft44_api_request_body_size_constraint",
+        "ft49_state_machine_idempotency",
+        "ft57_sql_injection_parameterized",
+        "ft58_xpath_injection_xml_parse",
+        "ft64_connection_pool_saturation_symptom",
+        "ft71_atomic_vs_compound_race",
+        "ft77_distributed_lock_clock_skew",
+        "ft78_memory_ordering_acquire_release",
+        "ft79_cas_retry_loop_correctness",
+        "ft80_lazy_init_double_check_lock",
+        "ft82_unicode_byte_vs_char_emoji_with_combining",
+        "ft85_unicode_case_folding_with_normalization",
+        "ft86_json_schema_allof_required_merge",
+        "ft87_regex_backref_with_alternation",
+        "ft90_unicode_emoji_skin_tone_modifier",
+        "ft94_api_contract_content_type_violation",
+        "ft96_long_context_config_priority_contradiction",
+        "ft104_trigger_recursion_and_row_count",
+        "ft105_concurrent_ddl_lock_ordering_deadlock",
+        "ft107_c11_relaxed_atomics_data_race",
+        "ft109_exactly_once_idempotency_counter",
+        "ft113_regex_split_capturing_group",
+        "ft114_sort_stability_index",
+        "ft116_generator_exhaustion_refactor",
+        "ft120_http_cache_control_freshness_boundary",
+        "ft126_yaml_merge_key_precedence",
+        "ft127_retry_backoff_attempt_count"
+      ]
+    },
+    "haiku-4.5": {
+      "tuples": 0,
+      "tasks": []
+    },
+    "gpt-4o-mini": {
+      "tuples": 0,
+      "tasks": []
+    }
+  },
+  "costs": {
+    "total_billed_usd": 34.24,
+    "cap_usd": 40.0
+  },
+  "tasks_zero_across_all_tiers": [],
+  "per_task_correct_n": {
+    "ft01_multi_step_sql_refactor": {
+      "opus-5": [
+        0,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        1,
+        3
+      ],
+      "gpt-4o-mini": [
+        0,
+        3
+      ]
+    },
+    "ft02_code_defect_detection_concurrent": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        2,
+        3
+      ],
+      "gpt-4o-mini": [
+        1,
+        3
+      ]
+    },
+    "ft03_instruction_conflict_precedence": {
+      "opus-5": [
+        1,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        1,
+        3
+      ],
+      "haiku-4.5": [
+        1,
+        3
+      ],
+      "gpt-4o-mini": [
+        0,
+        3
+      ]
+    },
+    "ft04_long_context_needle_judgment": {
+      "opus-5": [
+        1,
+        3
+      ],
+      "sonnet-5": [
+        0,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        0,
+        3
+      ],
+      "gpt-4o-mini": [
+        0,
+        3
+      ]
+    },
+    "ft05_json_schema_validation_edge_case": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft06_git_history_blame_analysis": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        1,
+        3
+      ]
+    },
+    "ft07_ambiguous_english_resolution": {
+      "opus-5": [
+        0,
+        3
+      ],
+      "sonnet-5": [
+        1,
+        3
+      ],
+      "fable-5": [
+        0,
+        3
+      ],
+      "haiku-4.5": [
+        0,
+        3
+      ],
+      "gpt-4o-mini": [
+        0,
+        3
+      ]
+    },
+    "ft08_nested_boolean_logic_simplification": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft09_refactoring_correctness_semantic": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft10_config_validation_corner_case": {
+      "opus-5": [
+        1,
+        3
+      ],
+      "sonnet-5": [
+        0,
+        3
+      ],
+      "fable-5": [
+        1,
+        3
+      ],
+      "haiku-4.5": [
+        0,
+        3
+      ],
+      "gpt-4o-mini": [
+        2,
+        3
+      ]
+    },
+    "ft11_regex_pattern_equivalence": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft12_api_contract_violation_detection": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        2,
+        3
+      ]
+    },
+    "ft13_database_migration_safety": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft14_performance_bottleneck_identification": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft15_state_machine_correctness": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft16_unicode_normalization_gotcha": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft17_caching_invalidation_consistency": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft18_type_coercion_subtle_bug": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft19_format_string_vulnerability": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft20_distributed_lock_correctness": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        2,
+        3
+      ]
+    },
+    "ft21_sql_join_optimization_complex": {
+      "opus-5": [
+        2,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        2,
+        3
+      ],
+      "gpt-4o-mini": [
+        1,
+        3
+      ]
+    },
+    "ft22_sql_transaction_isolation_deadlock": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft23_memory_ordering_volatile_bug": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft24_nested_lock_deadlock_reentrant": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft25_instruction_priority_cascade": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft26_instruction_compatibility_constraint": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft27_long_context_buried_assumption": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft28_long_context_timing_inconsistency": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft29_json_schema_recursive_reference": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        2,
+        3
+      ]
+    },
+    "ft30_json_schema_enum_default_interaction": {
+      "opus-5": [
+        1,
+        3
+      ],
+      "sonnet-5": [
+        1,
+        3
+      ],
+      "fable-5": [
+        0,
+        3
+      ],
+      "haiku-4.5": [
+        2,
+        3
+      ],
+      "gpt-4o-mini": [
+        1,
+        3
+      ]
+    },
+    "ft31_git_blame_security_regression": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        2,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft32_git_bisect_performance_regression": {
+      "opus-5": [
+        0,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft33_ambiguous_scope_resolution": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        1,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft34_ambiguous_negation_scope": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft35_boolean_de_morgans_law": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        0,
+        3
+      ],
+      "fable-5": [
+        2,
+        3
+      ],
+      "haiku-4.5": [
+        0,
+        3
+      ],
+      "gpt-4o-mini": [
+        1,
+        3
+      ]
+    },
+    "ft36_boolean_xor_equivalence": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft37_refactoring_dict_comprehension": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft38_refactoring_generator_to_list": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft39_config_environment_variable_override": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft40_config_schema_validation_strict": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft41_regex_backref_vs_alternation": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        1,
+        3
+      ]
+    },
+    "ft42_regex_lookahead_negative": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft43_api_response_enum_violation": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft44_api_request_body_size_constraint": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft45_migration_index_creation_impact": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft46_migration_foreign_key_constraint": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft47_performance_memory_vs_cpu": {
+      "opus-5": [
+        2,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft48_performance_caching_hit_rate": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft49_state_machine_idempotency": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        2,
+        3
+      ]
+    },
+    "ft50_state_machine_partial_recovery": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        1,
+        3
+      ],
+      "fable-5": [
+        2,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft51_unicode_emoji_byte_length": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft52_unicode_combining_character": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft53_cache_stampede_concurrent": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft54_cache_double_invalidation": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft55_type_coercion_array_comparison": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft56_type_coercion_numeric_string": {
+      "opus-5": [
+        1,
+        3
+      ],
+      "sonnet-5": [
+        0,
+        3
+      ],
+      "fable-5": [
+        0,
+        3
+      ],
+      "haiku-4.5": [
+        0,
+        3
+      ],
+      "gpt-4o-mini": [
+        2,
+        3
+      ]
+    },
+    "ft57_sql_injection_parameterized": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft58_xpath_injection_xml_parse": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        2,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        0,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft59_distributed_consensus_split_brain": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft60_distributed_lock_timeout_safety": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        1,
+        3
+      ],
+      "fable-5": [
+        0,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft61_query_execution_plan_analysis": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        1,
+        3
+      ],
+      "fable-5": [
+        1,
+        3
+      ],
+      "haiku-4.5": [
+        1,
+        3
+      ],
+      "gpt-4o-mini": [
+        0,
+        3
+      ]
+    },
+    "ft62_composite_index_design_selection": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft63_lock_escalation_deadlock_risk": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft64_connection_pool_saturation_symptom": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        2,
+        2
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft65_result_cache_invalidation_strategy": {
+      "opus-5": [
+        1,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        2,
+        3
+      ]
+    },
+    "ft66_isolation_level_dirty_read_scenario": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        2,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft67_subquery_vs_join_performance": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft68_full_text_search_index_strategy": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft69_table_partitioning_strategy": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft70_replication_lag_consistency_model": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        0,
+        3
+      ]
+    },
+    "ft71_atomic_vs_compound_race": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        2,
+        3
+      ]
+    },
+    "ft72_semaphore_vs_mutex_semantics": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        0,
+        3
+      ]
+    },
+    "ft73_rwlock_write_starvation": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        2,
+        3
+      ],
+      "gpt-4o-mini": [
+        1,
+        3
+      ]
+    },
+    "ft74_quorum_consensus_arithmetic": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft75_2pc_coordinator_failure_recovery": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft76_cache_stampede_multi_level": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        1,
+        3
+      ]
+    },
+    "ft77_distributed_lock_clock_skew": {
+      "opus-5": [
+        1,
+        3
+      ],
+      "sonnet-5": [
+        2,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        1,
+        3
+      ],
+      "gpt-4o-mini": [
+        2,
+        3
+      ]
+    },
+    "ft78_memory_ordering_acquire_release": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft79_cas_retry_loop_correctness": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft80_lazy_init_double_check_lock": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        2,
+        3
+      ]
+    },
+    "ft81_regex_lookahead_nesting": {
+      "opus-5": [
+        0,
+        3
+      ],
+      "sonnet-5": [
+        0,
+        3
+      ],
+      "fable-5": [
+        0,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft82_unicode_byte_vs_char_emoji_with_combining": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        0,
+        3
+      ]
+    },
+    "ft83_type_coercion_python_vs_js_string_concat": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft84_regex_alternation_grouping_precedence": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        2,
+        3
+      ],
+      "gpt-4o-mini": [
+        0,
+        3
+      ]
+    },
+    "ft85_unicode_case_folding_with_normalization": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        0,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        2,
+        3
+      ]
+    },
+    "ft86_json_schema_allof_required_merge": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        2,
+        3
+      ]
+    },
+    "ft87_regex_backref_with_alternation": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft88_type_coercion_chained_comparison_languages": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        0,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft89_config_nested_additionalproperties": {
+      "opus-5": [
+        0,
+        3
+      ],
+      "sonnet-5": [
+        0,
+        3
+      ],
+      "fable-5": [
+        1,
+        3
+      ],
+      "haiku-4.5": [
+        0,
+        3
+      ],
+      "gpt-4o-mini": [
+        1,
+        3
+      ]
+    },
+    "ft90_unicode_emoji_skin_tone_modifier": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        2,
+        2
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft91_long_context_performance_contradiction": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft92_instruction_conflict_security_usability": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        2,
+        3
+      ],
+      "gpt-4o-mini": [
+        2,
+        3
+      ]
+    },
+    "ft93_ambiguous_scope_modifier": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft94_api_contract_content_type_violation": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft95_refactoring_null_handling_equivalence": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        0,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft96_long_context_config_priority_contradiction": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft97_instruction_conflict_privacy_retention": {
+      "opus-5": [
+        2,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        2,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        2,
+        3
+      ]
+    },
+    "ft98_ambiguous_temporal_scope": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        2,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft99_api_contract_rate_limit_header": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft100_refactoring_list_mutation_equivalence": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        0,
+        3
+      ],
+      "gpt-4o-mini": [
+        0,
+        3
+      ]
+    },
+    "ft101_write_skew_snapshot_isolation": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft102_deferred_constraint_timing": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft103_serialization_isolation_multiversion": {
+      "opus-5": [
+        2,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft104_trigger_recursion_and_row_count": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        1,
+        3
+      ]
+    },
+    "ft105_concurrent_ddl_lock_ordering_deadlock": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        1,
+        1
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft106_x86_tso_store_buffering": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        0,
+        3
+      ]
+    },
+    "ft107_c11_relaxed_atomics_data_race": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft108_quorum_stale_read_partition": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft109_exactly_once_idempotency_counter": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        1,
+        1
+      ],
+      "haiku-4.5": [
+        2,
+        3
+      ],
+      "gpt-4o-mini": [
+        1,
+        3
+      ]
+    },
+    "ft110_cache_stampede_origin_hits": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        2,
+        3
+      ]
+    },
+    "ft111_float_repr_division": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft112_emoji_zwj_length": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        0,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft113_regex_split_capturing_group": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft114_sort_stability_index": {
+      "opus-5": [
+        1,
+        1
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        1,
+        1
+      ],
+      "haiku-4.5": [
+        0,
+        3
+      ],
+      "gpt-4o-mini": [
+        1,
+        3
+      ]
+    },
+    "ft115_divmod_negative": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        2,
+        3
+      ]
+    },
+    "ft116_generator_exhaustion_refactor": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        1,
+        1
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft117_semver_compatibility_parameter_vs_return": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        0,
+        3
+      ]
+    },
+    "ft118_config_precedence_four_layers": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        2,
+        3
+      ]
+    },
+    "ft119_json_schema_allof_additional_properties_trap": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        0,
+        3
+      ],
+      "gpt-4o-mini": [
+        0,
+        3
+      ]
+    },
+    "ft120_http_cache_control_freshness_boundary": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        2,
+        2
+      ],
+      "haiku-4.5": [
+        1,
+        3
+      ],
+      "gpt-4o-mini": [
+        1,
+        3
+      ]
+    },
+    "ft121_gha_needs_if_semantics": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft122_git_rebase_onto_conflict": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        0,
+        3
+      ]
+    },
+    "ft123_semver_range_resolution": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        2,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft124_shell_nullglob_expansion": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        2,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft125_docker_layer_cache_invalidation": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        0,
+        3
+      ]
+    },
+    "ft126_yaml_merge_key_precedence": {
+      "opus-5": [
+        0,
+        0
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft127_retry_backoff_attempt_count": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        0,
+        0
+      ],
+      "haiku-4.5": [
+        1,
+        3
+      ],
+      "gpt-4o-mini": [
+        2,
+        3
+      ]
+    },
+    "ft128_log_root_cause_causality": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        3,
+        3
+      ],
+      "gpt-4o-mini": [
+        3,
+        3
+      ]
+    },
+    "ft129_makefile_clean_rebuild": {
+      "opus-5": [
+        1,
+        3
+      ],
+      "sonnet-5": [
+        0,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        0,
+        3
+      ],
+      "gpt-4o-mini": [
+        2,
+        3
+      ]
+    },
+    "ft130_cron_dom_dow_or": {
+      "opus-5": [
+        3,
+        3
+      ],
+      "sonnet-5": [
+        3,
+        3
+      ],
+      "fable-5": [
+        3,
+        3
+      ],
+      "haiku-4.5": [
+        0,
+        3
+      ],
+      "gpt-4o-mini": [
+        1,
+        3
+      ]
+    }
+  }
+}
