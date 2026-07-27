@@ -1,0 +1,12 @@
+{
+  "task_id": "st09",
+  "band": "long",
+  "statement": "A web application serves data from a central registry. During startup, an initial route is accessed before the registry is fully loaded. The application returns correct data on first access to any route, but subsequent requests for the same route return stale data even after the registry is populated. New routes show correct data. Requests that bypass the routing layer work correctly. What is the problem and how do you fix it?",
+  "context_files": [
+    "app.py",
+    "registry.py",
+    "cache_decorator.py",
+    "requirements.txt"
+  ],
+  "oracle_cmd": "python -m pytest oracle -q"
+}
