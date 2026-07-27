@@ -2,6 +2,9 @@
   "task_id": "st04",
   "band": "short",
   "statement": "A pagination helper function takes user-provided pagination parameters (page, page_size) and merges them with defaults. However, due to incorrect merge precedence, user-provided values are being overwritten by defaults. When a user specifies page_size=50, it should use 50, but instead the function returns the default page_size=10. Fix the merge order so user parameters take precedence over defaults.",
-  "context_files": ["repo/__init__.py", "repo/paginator.py"],
+  "context_files": [
+    "__init__.py",
+    "paginator.py"
+  ],
   "oracle_cmd": "python -m pytest oracle -q"
 }

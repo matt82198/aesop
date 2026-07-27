@@ -81,14 +81,19 @@ def build_u_arm_prompt(task_json: Dict[str, Any], task_dir: Path) -> str:
     if statement:
         parts.append(statement)
 
-    # Context files (fenced, with paths)
+    # Context files (fenced, with paths). Paths are relative to the task's
+    # repo/ dir; a missing file is a task/instrument defect and must abort the
+    # run rather than silently shrink the model's visible context.
     context_files = task_json.get("context_files", [])
     for context_path in context_files:
-        file_path = task_dir / context_path
-        if file_path.exists():
-            content = file_path.read_text(encoding="utf-8", errors="replace")
-            # Fence the content with the relative path
-            parts.append(f"\n# File: {context_path}\n```\n{content}\n```")
+        file_path = task_dir / "repo" / context_path
+        if not file_path.exists():
+            raise FileNotFoundError(
+                f"context file missing for task "
+                f"{task_json.get('task_id', '?')}: repo/{context_path}"
+            )
+        content = file_path.read_text(encoding="utf-8", errors="replace")
+        parts.append(f"\n# File: {context_path}\n```\n{content}\n```")
 
     # Fixed instruction
     instruction = (

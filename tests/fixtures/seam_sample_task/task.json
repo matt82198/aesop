@@ -3,8 +3,8 @@
   "band": "short",
   "statement": "Fix the off-by-one error in the count function.",
   "context_files": [
-    "src/main.py",
-    "src/utils.py"
+    "main.py",
+    "utils.py"
   ],
   "oracle_cmd": "python -m pytest oracle/ -q"
 }

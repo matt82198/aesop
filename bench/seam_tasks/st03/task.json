@@ -1,7 +1,10 @@
 {
   "task_id": "st03",
   "band": "short",
-  "statement": "A JSON parser utility safely decodes JSON strings and returns a fallback dict when parsing fails. However, when you try to parse invalid JSON like 'not json', the function crashes instead of gracefully returning the fallback. When you pass valid JSON, it works fine. The problem is in the exception handler — it's catching the wrong exception type. Fix the exception type so invalid JSON is caught and the fallback is returned.",
-  "context_files": ["repo/__init__.py", "repo/json_parser.py"],
+  "statement": "A JSON parser utility safely decodes JSON strings and returns a fallback dict when parsing fails. However, when you try to parse invalid JSON like 'not json', the function crashes instead of gracefully returning the fallback. When you pass valid JSON, it works fine. The problem is in the exception handler \u2014 it's catching the wrong exception type. Fix the exception type so invalid JSON is caught and the fallback is returned.",
+  "context_files": [
+    "__init__.py",
+    "json_parser.py"
+  ],
   "oracle_cmd": "python -m pytest oracle -q"
 }

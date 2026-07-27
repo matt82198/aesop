@@ -48,27 +48,13 @@ def sample_task_dir(scratchpad_dir):
         "task_id": "sample_u1",
         "band": "short",
         "statement": "Fix the off-by-one error in the count function.",
-        "context_files": ["src/main.py", "src/utils.py"],
+        "context_files": ["main.py", "utils.py"],
         "oracle_cmd": "python -m pytest oracle -q",
     }
     (task_dir / "task.json").write_text(json.dumps(task_json, indent=2))
 
-    # Create context files
-    src_dir = task_dir / "src"
-    src_dir.mkdir(exist_ok=True)
-
-    (src_dir / "main.py").write_text(
-        "def count(items):\n"
-        "    return len(items) + 1  # BUG: off-by-one\n"
-    )
-
-    (src_dir / "utils.py").write_text(
-        "def validate(n):\n"
-        '    if n < 0:\n'
-        '        raise ValueError("n must be >= 0")\n'
-    )
-
-    # Create repo/ subdirectory (fixture project with defect)
+    # Create repo/ subdirectory (fixture project with defect); context_files
+    # are repo-relative per the seam task contract
     repo_dir = task_dir / "repo"
     repo_dir.mkdir(exist_ok=True)
     (repo_dir / "main.py").write_text(
