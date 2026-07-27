@@ -585,3 +585,32 @@ class TestProbeMode(SeamURunnerTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCLITaskLoading(unittest.TestCase):
+    """Regression: the argparse->loader seam once passed a str where Path was
+    assumed (precedence bug: '"task.json".read_text()'), so every task failed
+    to load at the CLI boundary while unit tests (which pass Path objects
+    directly) stayed green. Exercise the real CLI entrypoint as a subprocess
+    against the real task set."""
+
+    def test_cli_loads_all_real_tasks_without_loader_errors(self):
+        repo_root = Path(__file__).parent.parent
+        tasks_dir = repo_root / "bench" / "seam_tasks"
+        if not tasks_dir.exists():
+            self.skipTest("bench/seam_tasks not present")
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("BENCH_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY")}
+        env["PYTHONUTF8"] = "1"
+        proc = subprocess.run(
+            [sys.executable, str(repo_root / "bench" / "run_seam_u.py"),
+             "--tasks-dir", str(tasks_dir),
+             "--tiers", "claude-fable-5",
+             "--repeats", "1", "--probe",
+             "--checkpoint", str(Path(tempfile.mkdtemp()) / "probe.jsonl")],
+            capture_output=True, text=True, timeout=60, env=env,
+            cwd=str(repo_root),
+        )
+        combined = proc.stdout + proc.stderr
+        self.assertNotIn("Error loading task", combined)
+        self.assertIn("Loaded 12 tasks", combined)
