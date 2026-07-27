@@ -513,7 +513,10 @@ def parse_args(args: Optional[list] = None) -> argparse.Namespace:
         "--tiers",
         nargs="+",
         default=DEFAULT_TIERS,
-        help=f"Model tiers to test (default: {' '.join(DEFAULT_TIERS)})",
+        help=(
+            "Model tiers to test, space- or comma-separated "
+            f"(default: {' '.join(DEFAULT_TIERS)})"
+        ),
     )
     parser.add_argument(
         "--repeats",
@@ -546,6 +549,20 @@ def parse_args(args: Optional[list] = None) -> argparse.Namespace:
     )
 
     parsed = parser.parse_args(args)
+
+    # Normalize tiers: accept space- AND comma-separated forms, then validate
+    # every name so a typo aborts before any API call instead of erroring one
+    # run at a time with an invalid model id.
+    tiers = []
+    for item in parsed.tiers:
+        tiers.extend(t.strip() for t in item.split(",") if t.strip())
+    unknown = [t for t in tiers if t not in DEFAULT_TIERS]
+    if unknown:
+        parser.error(
+            f"unknown tier(s): {', '.join(unknown)} "
+            f"(known: {', '.join(DEFAULT_TIERS)})"
+        )
+    parsed.tiers = tiers
 
     # Default workers to CPU count
     if parsed.workers is None:
@@ -747,7 +764,29 @@ def main():
     """Main entry point."""
     args = parse_args()
 
-    # Validate API keys for all tiers
+    # Load tasks first (offline, harmless) so loader defects surface even
+    # without credentials; API keys are validated below, before any transport
+    # call can happen.
+    tasks_dir = Path(args.tasks_dir)
+    if not tasks_dir.exists():
+        print(f"Error: Tasks directory not found: {tasks_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    tasks = []
+    for task_json_path in sorted(tasks_dir.glob("*/task.json")):
+        try:
+            task_json = json.loads(task_json_path.read_text(encoding="utf-8"))
+            tasks.append((task_json, task_json_path.parent))
+        except Exception as e:
+            print(f"Error loading task {task_json_path}: {e}", file=sys.stderr)
+
+    if not tasks:
+        print(f"No tasks found in {tasks_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Loaded {len(tasks)} tasks")
+
+    # Validate API keys for all tiers (before any transport call)
     transports_needed = set()
     for tier in args.tiers:
         if "gpt" in tier.lower() or "openai" in tier.lower():
@@ -756,26 +795,6 @@ def main():
             transports_needed.add("anthropic-http")
 
     validate_api_keys(list(transports_needed))
-
-    # Load tasks
-    tasks_dir = Path(args.tasks_dir)
-    if not tasks_dir.exists():
-        print(f"Error: Tasks directory not found: {tasks_dir}", file=sys.stderr)
-        sys.exit(1)
-
-    tasks = []
-    for task_dir in sorted(tasks_dir.glob("*/task.json")):
-        try:
-            task_json = json.loads(task_dir.parent / "task.json".read_text())
-            tasks.append((task_json, task_dir.parent))
-        except Exception as e:
-            print(f"Error loading task {task_dir}: {e}", file=sys.stderr)
-
-    if not tasks:
-        print(f"No tasks found in {tasks_dir}", file=sys.stderr)
-        sys.exit(1)
-
-    print(f"Loaded {len(tasks)} tasks")
 
     # Load checkpoint
     checkpoint_file = Path(args.checkpoint)
