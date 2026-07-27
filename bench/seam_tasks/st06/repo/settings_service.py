@@ -16,11 +16,6 @@ def get_settings(user_id):
     Returns:
         dict with user settings, or None if not found
     """
-    # DEFECT: When checking cache, uses user_id directly (int),
-    # but cache stores with string key f"{user_id}".
-    # This means the cache key format doesn't match between store and retrieve operations.
-
-    # Check cache with wrong key format (int instead of string)
     cached = _cache.get(user_id)
     if cached is not None:
         return cached
