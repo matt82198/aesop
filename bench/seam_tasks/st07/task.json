@@ -1,0 +1,12 @@
+{
+  "task_id": "st07",
+  "band": "medium",
+  "statement": "A geometry calculator computes plot areas and converts them to metric units. When given a rectangular plot of 10 miles by 10 miles, the calculator returns 100 square miles. When this is converted to square meters, the result is 259,000,000 sq m. Instead, it returns 38,581,081 sq m. The conversion factor is consistently wrong—approximately using 1.609 instead of the correct 2.589 conversion factor for square miles to square meters.",
+  "context_files": [
+    "area_calculator.py",
+    "converter.py",
+    "plot_processor.py",
+    "main.py"
+  ],
+  "oracle_cmd": "python -m pytest oracle -q"
+}
