@@ -171,3 +171,26 @@ the format instruction and nothing else.
 
 **Compatibility:** All tiers including gpt-4o-mini use tool mode (OpenAI function calling). Runner
 and probe updated to support both schemas. Default checkpoint: frontier-v5-checkpoint.jsonl.
+
+## Amendment 5 — v5 frozen 93-task subset (committed 2026-07-27, after tool-mode probes, before any v5 runs)
+
+Two identical tool-mode probe passes over all 130 tasks x {fable-5, opus-5} found a deterministic
+refusal core: 48 (task, tier) pairs refused in BOTH passes (37 distinct tasks); 4 further pass-2-only
+refusals were stochastic. Per Amendment 4's no-iteration rule those prompts are not reworded again.
+
+- v5 instrument = the 93 tasks every tier's API deterministically serves. The exclusion rule is
+  probe-derived and applied identically to all tiers (no per-model tuning). Excluded task ids:
+  ft02_code_defect_detection_concurrent,ft04_long_context_needle_judgment,ft06_git_history_blame_analysis,ft113_regex_split_capturing_group,ft116_generator_exhaustion_refactor,ft126_yaml_merge_key_precedence,ft127_retry_backoff_attempt_count,ft16_unicode_normalization_gotcha,ft18_type_coercion_subtle_bug,ft19_format_string_vulnerability,ft21_sql_join_optimization_complex,ft23_memory_ordering_volatile_bug,ft26_instruction_compatibility_constraint,ft28_long_context_timing_inconsistency,ft31_git_blame_security_regression,ft41_regex_backref_vs_alternation,ft42_regex_lookahead_negative,ft43_api_response_enum_violation,ft44_api_request_body_size_constraint,ft49_state_machine_idempotency,ft51_unicode_emoji_byte_length,ft55_type_coercion_array_comparison,ft57_sql_injection_parameterized,ft58_xpath_injection_xml_parse,ft64_connection_pool_saturation_symptom,ft68_full_text_search_index_strategy,ft71_atomic_vs_compound_race,ft77_distributed_lock_clock_skew,ft78_memory_ordering_acquire_release,ft79_cas_retry_loop_correctness,ft82_unicode_byte_vs_char_emoji_with_combining,ft83_type_coercion_python_vs_js_string_concat,ft84_regex_alternation_grouping_precedence,ft86_json_schema_allof_required_merge,ft90_unicode_emoji_skin_tone_modifier,ft94_api_contract_content_type_violation,ft96_long_context_config_priority_contradiction
+- Selection-effect disclosure: exclusion is conditioned on fable-5/opus-5 classifier behavior; the
+  surviving set under-represents content those classifiers refuse (observed clusters: injection
+  vocabulary, concurrency/memory-ordering, unicode/emoji, git-blame, api-contract). Cross-tier
+  comparisons remain valid (identical 93 tasks per tier); absolute accuracies describe this 93-task
+  set only and are not comparable to v2/v3/v4 absolutes.
+- Run: 93 x 5 x 3 = 1395 tuples; completion criterion 1395/1395 good tuples (zero holes).
+  Transients and stochastic refusals retry from checkpoint as identical requests, bounded at 3
+  rounds; any pair refusing 3 consecutive times HALTS the run and reopens the freeze — holes are
+  never published as results.
+- All other protocol per Amendments 3-4 (margins, 85% ceiling published-as-is, billed pricing,
+  US$40 cap inclusive of ~$1 probe spend).
+- Replacing the 37 excluded tasks with newly authored same-family content remains a possible
+  pre-registered v6 extension; it is not part of v5.
