@@ -130,20 +130,20 @@ def invoke_claude_model(
     max_tokens: int = 8192,
     timeout_s: float = 180.0,
 ):
-    """Invoke a Claude model.
+    """Invoke a Claude model via direct api.anthropic.com HTTP ("anthropic-http").
 
-    Transport selection (per-run label recorded in the checkpoint):
-    - BENCH_API_KEY set -> direct api.anthropic.com HTTP ("anthropic-http"):
-      pay-per-use x-api-key billing, exact usage token counts.
-      The key is read ONLY from this named env var; a missing key means the
-      CLI fallback, never a credential hunt.
-    - otherwise -> claude CLI ("anthropic"), the transport ft01-ft60 ran on.
+    API-only per the bench-no-cli-fallback directive (2026-07-26): the claude
+    CLI bills subscription usage and must never be used for benchmark runs.
+    The key is read ONLY from BENCH_API_KEY; a missing key is a hard error
+    (caught at startup by main()), never a CLI fallback or a credential hunt.
     Returns (response_text, tokens_in, tokens_out, cost_usd, transport_label).
     """
     api_key = os.environ.get("BENCH_API_KEY")
-    if api_key:
-        return _invoke_claude_http(model, prompt, api_key, max_tokens, timeout_s)
-    return _invoke_claude_cli(model, prompt, timeout_s)
+    if not api_key:
+        raise RuntimeError(
+            "BENCH_API_KEY not set - bench runs are API-only (no CLI fallback)"
+        )
+    return _invoke_claude_http(model, prompt, api_key, max_tokens, timeout_s)
 
 
 def _invoke_claude_http(model, prompt, api_key, max_tokens, timeout_s):
@@ -182,30 +182,6 @@ def _invoke_claude_http(model, prompt, api_key, max_tokens, timeout_s):
     cost = ti / 1_000_000 * inr + to / 1_000_000 * outr
     return text, ti, to, cost, "anthropic-http"
 
-
-def _invoke_claude_cli(model, prompt, timeout_s):
-    import subprocess, json as _json
-    try:
-        result = subprocess.run(
-            ["claude", "-p", prompt, "--model", model, "--output-format", "json"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=timeout_s,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"claude CLI rc={result.returncode}: {(result.stderr or '')[:200]}")
-        out = _json.loads(result.stdout)
-        text = out.get("result", "")
-        ti = out.get("usage", {}).get("input_tokens", 0)
-        to = out.get("usage", {}).get("output_tokens", 0)
-        if ti == 0 or to == 0:
-            for md in out.get("modelUsage", {}).values():
-                ti = max(ti, md.get("inputTokens", 0))
-                to = max(to, md.get("outputTokens", 0))
-        inr, outr = PRICING_MTOK.get(model, (10.0, 50.0))
-        cost = ti/1_000_000*inr + to/1_000_000*outr
-        return text, ti, to, cost, "anthropic"
-    except Exception as e:
-        raise RuntimeError(f"claude CLI transport failed: {e}")
 
 def invoke_openai_model(
     model: str,
@@ -341,8 +317,9 @@ def main():
     )
     parser.add_argument(
         "--checkpoint",
-        default="bench/results/frontier-v2-checkpoint.jsonl",
-        help="Path to checkpoint file (default bench/results/frontier-v2-checkpoint.jsonl)",
+        default="bench/results/frontier-v4-checkpoint.jsonl",
+        help="Path to checkpoint file (default bench/results/frontier-v4-checkpoint.jsonl; "
+        "v4 MUST use a fresh checkpoint - task fixes make old tuples non-comparable)",
     )
     parser.add_argument(
         "--workers",
@@ -363,11 +340,22 @@ def main():
     ground_truth = load_ground_truth("bench/ground_truth_frontier.jsonl")
     tiers = args.tiers.split(",")
 
+    # Fail fast: Claude tiers are API-only (bench-no-cli-fallback directive).
+    # Better one clear startup error than hundreds of error-run lines.
+    if any(t.startswith("claude-") for t in tiers) and not os.environ.get("BENCH_API_KEY"):
+        print(
+            "ERROR: BENCH_API_KEY is not set. Bench runs are API-only (no CLI "
+            "fallback). Set it from the Machine env scope and re-invoke; "
+            "missing key = skip, never a credential hunt.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
     print(f"Frontier v2 Parallel Runner")
     print(f"  Tasks: {len(tasks)}")
     print(f"  Repeats: 3")
     print(f"  Tiers: {len(tiers)}")
-    print(f"  Total runs: {len(tasks) * 3 * len(tiers)} (900)")
+    print(f"  Total runs: {len(tasks) * 3 * len(tiers)}")
     print(f"  Workers: {args.workers}")
     print(f"  Max runs this call: {args.max_runs}")
     print()

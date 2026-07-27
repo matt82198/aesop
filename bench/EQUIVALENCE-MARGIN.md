@@ -64,3 +64,61 @@ This amendment pre-commits 40 additional tasks (ft61–ft100), expanding the sli
 - **Transport change (disclosed):** new Claude-tier runs use direct api.anthropic.com HTTP (`BENCH_API_KEY`, per-run label `anthropic-http`, exact usage token counts, pay-per-use billing); ft01–ft60 Claude runs used the claude CLI (`anthropic`). Per-run transport is recorded in the checkpoint; the v3 report must break accuracy out by transport for the Claude tiers as a sanity check.
 - Pricing at billed rates (verified 2026-07-26): fable-5 10/50, opus-5 5/25, sonnet-5 2/10 (introductory), haiku-4.5 1/5 $/MTok. Spend cap for the extension: US$20.
 - ft04/ft09/ft37 scored 0/3 across all five tiers in v2; they are flagged for a pattern audit but remain UNCHANGED in the pooled set (changing scored tasks post hoc would break comparability).
+
+## Amendment 3 — v4: instrument revision + single-transport API rerun at N=130 (committed 2026-07-27, after v3 results, before any v4 runs)
+
+v4 is a REVISED INSTRUMENT and a FULL FRESH RUN. v2 (N=60) and v3 (pooled N=100) verdicts remain
+published as-is on the old instrument; v4 numbers are not pooled with them and do not replace them.
+
+**Why (stated honestly):**
+- The v3 pattern audit found all six 0/3-across-all-tiers tasks were instrument defects, not model
+  failures: ft09/ft37/ft95/ft100 used exact-match grading against a one-word expected answer while
+  their prompts demanded an explanation (structurally impossible to pass); ft95's label was also
+  inverted (the refactor IS equivalent — hasattr(None,'value') is False); ft88's ground truth was
+  factually wrong (JS `1<'2'<3` evaluates to true: `1<'2'` coerces to true, then `true<3` -> `1<3`);
+  ft99's regex was anchored `^valid`, failing any preamble or markdown bold.
+- Fixing those six raises expected top-tier accuracy to ~86%, which would trip the 85% ceiling rule.
+  Per user direction, v4 adds HARDER tasks to restore headroom rather than accepting a saturated
+  instrument.
+- The v3 extension ran a mixed transport (49+24 tuples completed via the claude CLI after
+  deterministic HTTP safety-classifier refusals). Per user directive (bench-no-cli-fallback,
+  2026-07-26), benchmarks never use the CLI transport again; v4 reruns EVERYTHING single-transport.
+
+**Instrument changes (all committed before any v4 runs):**
+1. Six-task repair: ft09/ft37/ft95/ft100/ft88/ft99 converted to line-anchored answer-token regex
+   grading (`(?im)^\s*(?:answer:\s*)?\*{0,2}TOKEN\b`), prompts pin "First line of your response:
+   exactly <TOKEN>", ft95 label corrected to EQUIVALENT, ft88 corrected to PYTHON_ERROR_JS_TRUE,
+   ft99 unanchored. Exemplars replaced with realistic verbose multi-line responses.
+2. Thirty new hard tasks ft101–ft130 (target ~30–50% frontier solve): SQL/transaction semantics
+   (ft101–105), concurrency/memory-model/distributed (ft106–110), floating-point/unicode/regex/
+   language semantics (ft111–115), contracts/refactoring/config (ft116–120), and a user-requested
+   diversified ops family (ft121–130: CI workflow semantics, git, dependency resolution, shell
+   expansion, Docker layer caching, YAML merge keys, retry arithmetic, log root-cause, Makefile,
+   cron). Authoring rules: regex-only grading, closed prefix-free token sets pinned in the prompt,
+   no derivation leakage in prompts, refusal-safe vocabulary, executable verification of ground
+   truth wherever possible. Authored after v3 results were known, without per-model tuning.
+3. Grader-error audit is now a permanent CI gate: for every task whose prompt pins a token set, the
+   gate synthesizes realistic response shapes (bare token, **token**, "Answer: token", lowercase,
+   token + multi-line explanation) and asserts the correct token's shapes all MATCH while every
+   wrong token's shapes all REJECT. Exemplars must be realistic verbose multi-line responses
+   (the old gate accepted bare-word exemplars, which is how the six defects passed).
+4. Refusal handling: bench/probe_refusals.py probes all tasks x refusal-prone tiers cheaply
+   (max_tokens=16) before the run; any prompt the API classifier deterministically refuses gets a
+   pre-committed semantic-preserving surface rewording and a re-probe, BEFORE the run starts.
+   Refusals during the run remain unscored error runs; with the CLI banned, any tuple that still
+   refuses after rewording is reported as a disclosed hole, never a scored answer.
+
+**Protocol for the v4 run:**
+- N=130 tasks x 5 tiers x 3 repeats = 1950 tuples, all via direct HTTP API transports
+  (`anthropic-http` for Claude tiers via BENCH_API_KEY, `openai` for gpt-4o-mini). No CLI, ever.
+- FRESH checkpoint (bench/results/frontier-v4-checkpoint.jsonl); v2/v3 tuples are not reused
+  (task fixes make them non-comparable).
+- Same margin protocol: equivalence iff |diff| <= 10pp AND TOST (Wald two-proportion) 90% CI
+  entirely within +/-10pp. Same 85% ceiling rule. Machine grading only.
+- Expected-accuracy note (pre-declared): with the six repairs pushing old-task accuracy up and 30
+  hard tasks pulling it down, projected top-tier accuracy is roughly 75–80%; if the ceiling rule
+  trips anyway, that outcome is published as-is.
+- Pricing at billed rates as in Amendment 2. Spend cap for the full v4 run: US$40 (projected ~$32
+  at v3-observed per-run costs, plus probes and error-retry margin).
+- Runs launch only after this amendment, the task fixes, the new tasks, and the upgraded gate are
+  merged to main with CI green, and the operator confirms API credit availability.
