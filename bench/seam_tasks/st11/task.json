@@ -1,0 +1,13 @@
+{
+  "task_id": "st11",
+  "band": "long",
+  "statement": "A data processing system has two modules: a data validator that logs validation errors at WARNING level, and a logger that suppresses WARNING and below messages in production mode. Individual unit tests pass for both modules. But in production, when invalid data is submitted, no error logs appear and the system silently skips the data without alerting operators. Development mode works correctly. How do you fix this?",
+  "context_files": [
+    "config.py",
+    "validator.py",
+    "logger.py",
+    "processor.py",
+    "requirements.txt"
+  ],
+  "oracle_cmd": "python -m pytest oracle -q"
+}

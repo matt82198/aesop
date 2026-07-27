@@ -1,0 +1,10 @@
+{
+  "task_id": "seam_sample_u1",
+  "band": "short",
+  "statement": "Fix the off-by-one error in the count function.",
+  "context_files": [
+    "main.py",
+    "utils.py"
+  ],
+  "oracle_cmd": "python -m pytest oracle/ -q"
+}
