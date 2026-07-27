@@ -27,7 +27,7 @@ import json
 import re
 import unittest
 
-TOKEN_LINE = re.compile(r"First line of your response:\s*exactly\s+(.+)", re.IGNORECASE)
+TOKEN_LINE = re.compile(r"First line(?: of your response)?:\s*exactly\s+(.+)", re.IGNORECASE)
 SCORE_FLAGS = re.IGNORECASE | re.DOTALL  # keep identical to score_response
 
 
@@ -47,8 +47,9 @@ def parse_token_set(prompt):
     if not m:
         return None
     spec = m.group(1).split("\n")[0].strip().rstrip(".")
-    # Accept "A or B", "A, B, or C", "A or B or C"
-    parts = re.split(r"\s*,\s*|\s+or\s+", spec)
+    # Accept "A or B", "A, B, or C", "A or B or C", "A / B / C"
+    parts = re.split(r"\s*,\s*|\s+or\s+|\s*/\s*", spec)
+    parts = [re.sub(r"^or\s+", "", p.strip()) for p in parts]
     tokens = [p.strip().strip("`'\"") for p in parts if p.strip()]
     # Tokens are uppercase-with-underscores by authoring rule; drop empties/stragglers
     tokens = [t for t in tokens if re.fullmatch(r"[A-Z0-9_]+", t)]
