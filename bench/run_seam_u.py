@@ -513,7 +513,10 @@ def parse_args(args: Optional[list] = None) -> argparse.Namespace:
         "--tiers",
         nargs="+",
         default=DEFAULT_TIERS,
-        help=f"Model tiers to test (default: {' '.join(DEFAULT_TIERS)})",
+        help=(
+            "Model tiers to test, space- or comma-separated "
+            f"(default: {' '.join(DEFAULT_TIERS)})"
+        ),
     )
     parser.add_argument(
         "--repeats",
@@ -546,6 +549,20 @@ def parse_args(args: Optional[list] = None) -> argparse.Namespace:
     )
 
     parsed = parser.parse_args(args)
+
+    # Normalize tiers: accept space- AND comma-separated forms, then validate
+    # every name so a typo aborts before any API call instead of erroring one
+    # run at a time with an invalid model id.
+    tiers = []
+    for item in parsed.tiers:
+        tiers.extend(t.strip() for t in item.split(",") if t.strip())
+    unknown = [t for t in tiers if t not in DEFAULT_TIERS]
+    if unknown:
+        parser.error(
+            f"unknown tier(s): {', '.join(unknown)} "
+            f"(known: {', '.join(DEFAULT_TIERS)})"
+        )
+    parsed.tiers = tiers
 
     # Default workers to CPU count
     if parsed.workers is None:
