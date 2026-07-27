@@ -1,0 +1,12 @@
+{
+  "task_id": "st05",
+  "band": "medium",
+  "statement": "A processor service accepts an item_limit parameter and returns a filtered list of items. When called with item_limit=100, it returns 10 items. When called with item_limit=5, it still returns 10 items. When called with item_limit=None (no limit), it returns all 25 items. The item_limit parameter has no effect on output size for non-None values; results always cap at 10.",
+  "context_files": [
+    "config.py",
+    "validator.py",
+    "processor.py",
+    "main.py"
+  ],
+  "oracle_cmd": "python -m pytest oracle -q"
+}
