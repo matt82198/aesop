@@ -43,6 +43,9 @@ Mutable default argument
 ## Rationale
 This is a classic Python gotcha: using a mutable default argument (a dict or list) causes the same object to be reused across function calls. When the function modifies this object, the changes persist and affect all future calls. The fix uses None as the default sentinel and creates a fresh dict on each call. When a user provides their own dict, we create a shallow copy to avoid modifying the caller's dictionary.
 
+## Notes on Fixture Code
+The fixture code in `repo/config_loader.py` contains no comments explaining the defect — it reads like honest production code with a subtle bug that would be discovered through testing.
+
 ## Verification Transcript
 
 ### Before Fix (Buggy Code): Oracle FAILS

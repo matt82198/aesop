@@ -27,6 +27,9 @@ Off-by-one boundary error in comparison operator
 ## Rationale
 The rate limiter must allow N requests per window_duration. When checking if a request is still within the window, the comparison `now - req_time <= self.window_duration` incorrectly keeps requests that are exactly at the window boundary. This prevents new requests from being accepted at exactly window_duration seconds after the first request. The fix changes the comparison to `<` so requests at exactly the boundary are considered expired and can be replaced by new ones. This is a classic off-by-one error where the boundary condition was inclusive when it should be exclusive.
 
+## Notes on Fixture Code
+The fixture code in `repo/rate_limiter.py` contains no comments explaining the defect — it reads like honest production code with subtle boundary logic that would be discovered through testing.
+
 ## Verification Transcript
 
 ### Before Fix (Buggy Code): Oracle FAILS

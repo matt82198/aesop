@@ -1,4 +1,4 @@
-"""Pagination helper with dict merge precedence bug."""
+"""Pagination helper module."""
 
 
 def get_pagination_params(user_params):
@@ -10,13 +10,9 @@ def get_pagination_params(user_params):
                     (e.g., {"page": 2, "page_size": 50}).
 
     Returns:
-        Dictionary with merged pagination parameters where user values
-        take precedence over defaults.
+        Dictionary with merged pagination parameters.
     """
     defaults = {"page": 1, "page_size": 10, "sort_by": "created"}
-
-    # BUG: The merge order is backwards - user_params is updated with defaults
-    # This overwrites any user-provided values with the defaults
     user_params.update(defaults)
     return user_params
 
@@ -32,7 +28,5 @@ def apply_pagination_defaults(request_params):
         Dictionary with pagination defaults applied.
     """
     defaults = {"limit": 20, "offset": 0}
-
-    # BUG: Wrong merge order - updating request_params with defaults overwrites user input
     request_params.update(defaults)
     return request_params

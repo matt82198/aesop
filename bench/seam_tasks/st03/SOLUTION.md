@@ -1,32 +1,34 @@
-# st03 Solution: Interval Merger Boundary Operator Fix
+# st03 Solution: JSON Parser Exception Type Fix
 
 ## Defect Class
-Wrong comparison operator in boundary check (off-by-one logic error)
+Incorrect exception type in except clause
 
 ## Files
-- `repo/interval_merger.py` (single file, line 28)
+- `repo/json_parser.py` (single file, two functions with same bug)
 
 ## The Fix
-**File:** `repo/interval_merger.py`
-**Line:** 28
-**Change:** `<` to `<=`
+**File:** `repo/json_parser.py`
+**Functions:** `parse_json_safely` and `decode_json_with_default`
+**Change:** Catch `json.JSONDecodeError` instead of `AttributeError`
 
 ```diff
-@@ -25,7 +25,7 @@ def merge_intervals(intervals):
-         last_start, last_end = merged[-1]
+def parse_json_safely(data, fallback=None):
+    try:
+        return json.loads(data)
+-   except AttributeError:
++   except json.JSONDecodeError:
+        return fallback
 
-         # BUG: Using < instead of <= causes touching intervals not to merge
-         # When one interval ends exactly where another starts (e.g., [1, 3] and [3, 5]),
--        # the condition "current_start < last_end" is False (3 < 3), so they aren't merged
--        if current_start < last_end:
-+        # the condition "current_start <= last_end" is True (3 <= 3), so they are merged
-+        if current_start <= last_end:
-             # Merge intervals by extending the end time
-             merged[-1] = (last_start, max(last_end, current_end))
+def decode_json_with_default(json_string, default_value=None):
+    try:
+        return json.loads(json_string)
+-   except AttributeError:
++   except json.JSONDecodeError:
+        return default_value
 ```
 
 ## Rationale
-The interval merger must merge intervals that either overlap or are adjacent (touch). Two intervals are adjacent when one ends exactly where another starts, e.g., [1, 3] and [3, 5]. The condition `current_start < last_end` fails to detect this case because when `current_start == last_end` (both 3), the comparison is False. Changing to `current_start <= last_end` correctly identifies both overlapping and adjacent intervals for merging. This is a boundary condition bug where an exclusive comparison (`<`) should be inclusive (`<=`).
+The functions attempt to parse JSON and gracefully return a fallback value when parsing fails. However, they catch `AttributeError` which is never raised by `json.loads()`. The actual exception raised on invalid JSON is `json.JSONDecodeError`. By catching the wrong exception type, real JSON parsing errors propagate and crash the program instead of being handled gracefully. The fix catches the correct exception that `json.loads()` raises when given malformed JSON.
 
 ## Verification Transcript
 
@@ -34,61 +36,79 @@ The interval merger must merge intervals that either overlap or are adjacent (to
 ```
 cd bench/seam_tasks/st03 && python -m pytest oracle -q
 
-FF.....F                                                                 [100%]
+.FFFF.FF..                                                               [100%]
 ================================== FAILURES ===================================
-______________ TestIntervalMerger.test_adjacent_intervals_merged ______________
+______________ TestJsonParser.test_invalid_json_returns_fallback ______________
 
-    def test_adjacent_intervals_merged(self):
-        """Intervals that touch (one ends where another starts) should be merged."""
-        # [1, 3] and [3, 5] are adjacent and should become [1, 5]
-        intervals = [(1, 3), (3, 5)]
-        result = merge_intervals(intervals)
->       assert result == [(1, 5)]
-E       assert [(1, 3), (3, 5)] == [(1, 5)]
+    def test_invalid_json_returns_fallback(self):
+        """Invalid JSON should return fallback value, not crash."""
+>       result = parse_json_safely("not valid json")
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-oracle\test_interval_merger.py:15: AssertionError
-_____________ TestIntervalMerger.test_multiple_adjacent_intervals _____________
+oracle\test_json_parser.py:17:
 
-    def test_multiple_adjacent_intervals(self):
-        """Multiple adjacent intervals should all merge into one."""
-        intervals = [(1, 2), (2, 3), (3, 4), (4, 5)]
-        result = merge_intervals(intervals)
->       assert result == [(1, 5)]
-E       assert [(1, 2), (2, 3), (3, 4), (4, 5)] == [(1, 5)]
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
 
-oracle\test_interval_merger.py:21: AssertionError
-__________ TestIntervalMerger.test_complex_mix_of_overlaps_and_gaps ___________
+____________ TestJsonParser.test_invalid_json_with_custom_fallback ____________
 
-    def test_complex_mix_of_overlaps_and_gaps(self):
-        """Complex mix of overlapping and non-overlapping intervals."""
-        intervals = [(1, 3), (2, 5), (5, 8), (10, 12)]
-        result = merge_intervals(intervals)
->       assert result == [(1, 8), (10, 12)]
-E       assert [(1, 5), (5, 8), (10, 12)] == [(1, 8), (10, 12)]
+    def test_invalid_json_with_custom_fallback(self):
+        """Invalid JSON should return custom fallback value."""
+>       result = parse_json_safely("invalid json", fallback=fallback)
 
-oracle\test_interval_merger.py:56: AssertionError
-=========================== short test summary info ===========================
-FAILED oracle/test_interval_merger.py::TestIntervalMerger::test_adjacent_intervals_merged
-FAILED oracle/test_interval_merger.py::TestIntervalMerger::test_multiple_adjacent_intervals
-FAILED oracle/test_interval_merger.py::TestIntervalMerger::test_complex_mix_of_overlaps_and_gaps
-3 failed, 5 passed in 0.05s
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+
+_____________ TestJsonParser.test_empty_string_returns_fallback _____________
+
+    def test_empty_string_returns_fallback(self):
+        """Empty string is invalid JSON, should return fallback."""
+>       result = parse_json_safely("")
+
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+
+_____________ TestJsonParser.test_malformed_json_returns_fallback _____________
+
+    def test_malformed_json_returns_fallback(self):
+        """Malformed JSON (missing quotes, syntax errors) returns fallback."""
+>       result = parse_json_safely('{"key": value}')
+
+json.decoder.JSONDecodeError: Expecting value: line 1 column 8 (char 7)
+
+______________ TestJsonParser.test_decode_invalid_json_returns_default ____________
+
+    def test_decode_invalid_json_returns_default(self):
+        """decode_json_with_default should return default on parse error."""
+>       result = decode_json_with_default("not json")
+
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+
+_____________ TestJsonParser.test_decode_custom_default _______________
+
+    def test_decode_custom_default(self):
+        """decode_json_with_default should use provided default on error."""
+>       result = decode_json_with_default("invalid", default_value=default)
+
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+
+4 failed, 6 passed in 0.05s
 ```
 
 ### After Fix: Oracle PASSES
 ```
 cd bench/seam_tasks/st03 && python -m pytest oracle -q
 
-........                                                                 [100%]
-8 passed in 0.01s
+..........                                                               [100%]
+10 passed in 0.01s
 ```
 
 ## Oracle Tests
-- Total count: 8 focused tests
-- `test_adjacent_intervals_merged`: Catches the boundary operator bug
-- `test_multiple_adjacent_intervals`: Verifies chain of adjacent intervals
-- `test_overlapping_intervals_merged`: Verifies overlapping case still works
-- `test_non_overlapping_intervals_separate`: Verifies gaps are preserved (happy path)
-- `test_empty_list`: Edge case handling (happy path)
-- `test_single_interval`: Edge case handling (happy path)
-- `test_unsorted_input_sorted_in_output`: Input ordering handled correctly (happy path)
-- `test_complex_mix_of_overlaps_and_gaps`: Complex scenario with both types (happy path)
+- Total count: 10 focused tests
+- `test_invalid_json_returns_fallback`: Catches the wrong exception type bug
+- `test_invalid_json_with_custom_fallback`: Catches the exception type bug with custom fallback
+- `test_empty_string_returns_fallback`: Catches the exception type bug (empty string is invalid)
+- `test_malformed_json_returns_fallback`: Catches the exception type bug (malformed JSON)
+- `test_decode_invalid_json_returns_default`: Catches the exception type bug in second function
+- `test_decode_custom_default`: Catches the exception type bug with custom default
+- `test_valid_json_returns_parsed_object`: Happy path for parse_json_safely
+- `test_decode_valid_json`: Happy path for decode_json_with_default
+- `test_json_with_numbers`: Happy path with numeric values
+- `test_json_with_nested_objects`: Happy path with nested objects

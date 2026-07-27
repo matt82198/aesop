@@ -34,6 +34,9 @@ def apply_pagination_defaults(request_params):
 ## Rationale
 When merging dictionaries, the merge order determines precedence. In Python, `dict.update()` applies the argument to the caller, so the pattern should be to start with defaults and update them with user values to give user values precedence. The buggy code reverses this: it updates the user-provided dict with defaults, causing all default values to overwrite user-provided ones. The fix is to update the defaults dict with user values instead, so user-provided parameters take precedence over sensible defaults.
 
+## Notes on Fixture Code
+The fixture code in `repo/paginator.py` contains no comments explaining the defect — it reads like honest production code with a subtle logic error in the merge sequence that would be discovered through testing.
+
 ## Verification Transcript
 
 ### Before Fix (Buggy Code): Oracle FAILS

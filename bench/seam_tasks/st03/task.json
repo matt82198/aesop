@@ -1,7 +1,7 @@
 {
   "task_id": "st03",
   "band": "short",
-  "statement": "An interval merger function takes a list of (start, end) tuples representing time intervals and merges any overlapping or adjacent intervals into single continuous spans. The function should treat touching intervals (where one ends at exactly where another starts) as adjacent and merge them. However, there is a boundary comparison bug that incorrectly rejects some valid merges. Fix the comparison so intervals that touch or overlap are correctly merged.",
-  "context_files": ["repo/__init__.py", "repo/interval_merger.py"],
+  "statement": "A JSON parser utility safely decodes JSON strings and returns a fallback dict when parsing fails. However, when you try to parse invalid JSON like 'not json', the function crashes instead of gracefully returning the fallback. When you pass valid JSON, it works fine. The problem is in the exception handler — it's catching the wrong exception type. Fix the exception type so invalid JSON is caught and the fallback is returned.",
+  "context_files": ["repo/__init__.py", "repo/json_parser.py"],
   "oracle_cmd": "python -m pytest oracle -q"
 }
