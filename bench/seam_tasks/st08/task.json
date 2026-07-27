@@ -1,0 +1,13 @@
+{
+  "task_id": "st08",
+  "band": "medium",
+  "statement": "A plugin system initializes and registers event handlers. The system is supposed to load plugin modules and have them register themselves with an event registry. After initialization, the system sends a 'data_event' signal. Expected: 2 handlers respond, each adding an entry to a results log. Actual: only 1 handler responds (missing entries in log). When plugins are moved to load after registry setup, both handlers respond correctly. The handler registration is missing—one plugin's handler never gets registered.",
+  "context_files": [
+    "event_registry.py",
+    "plugin_a.py",
+    "plugin_b.py",
+    "initializer.py",
+    "main.py"
+  ],
+  "oracle_cmd": "python -m pytest oracle -q"
+}
