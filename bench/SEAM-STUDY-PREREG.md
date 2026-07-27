@@ -84,3 +84,17 @@ transport-reported). Running total checked at each phase boundary; the cap is a 
 3. PROBE GATE over frozen task set. 100% pass required.
 4. Full runs (fresh checkpoints), retry-to-completion for transients, zero holes.
 5. Main-thread analysis -> results doc + JSON -> PR -> artifact -> report.
+
+## Addendum 1 — uniform repair budget (2026-07-27, committed before any runs)
+
+The S arm applies a **uniform repair budget** to every tier: 1 initial attempt + up to 2
+visible-test-driven repair attempts (3 model calls max per run), overriding per-tier driver
+policy caps, which are recorded but not applied.
+
+**Rationale**: treatment must be uniform within an arm to isolate the seat effect. Arms differ
+only by seat (raw one-shot API call vs the aesop worker seam over the same API transports);
+tiers differ only by model. Per-tier policy caps would confound the comparison.
+
+**Implementation**: CLI `--repair-cap N` (default 2; total_attempts = 1 + N); checkpoint records
+both `policy_repair_cap` (driver recommendation, not applied) and `applied_repair_cap`;
+`retries_used` counts actual repairs (0 = clean first attempt).
