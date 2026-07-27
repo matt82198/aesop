@@ -614,3 +614,30 @@ class TestCLITaskLoading(unittest.TestCase):
         combined = proc.stdout + proc.stderr
         self.assertNotIn("Error loading task", combined)
         self.assertIn("Loaded 12 tasks", combined)
+
+
+class TestTiersParsing(unittest.TestCase):
+    """Regression: '--tiers a,b' was consumed as ONE tier string ('nargs=+'
+    only splits on spaces), so a comma-form invocation sent the literal
+    'claude-fable-5,claude-opus-5' as a model id and errored every run."""
+
+    def test_comma_separated_tiers_are_split(self):
+        from bench.run_seam_u import parse_args
+        args = parse_args([
+            "--tasks-dir", "x",
+            "--tiers", "claude-fable-5,claude-opus-5",
+        ])
+        self.assertEqual(args.tiers, ["claude-fable-5", "claude-opus-5"])
+
+    def test_space_separated_tiers_still_work(self):
+        from bench.run_seam_u import parse_args
+        args = parse_args([
+            "--tasks-dir", "x",
+            "--tiers", "claude-fable-5", "gpt-4o-mini",
+        ])
+        self.assertEqual(args.tiers, ["claude-fable-5", "gpt-4o-mini"])
+
+    def test_unknown_tier_aborts_before_any_run(self):
+        from bench.run_seam_u import parse_args
+        with self.assertRaises(SystemExit):
+            parse_args(["--tasks-dir", "x", "--tiers", "claude-fable-5,typo-tier"])
