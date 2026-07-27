@@ -67,7 +67,7 @@ def load_frontier_tasks(path: str = "bench/tasks_frontier.jsonl") -> List[Fronti
     """Load frontier tasks from JSONL file."""
     tasks = []
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 if line.strip():
                     obj = json.loads(line)
@@ -82,7 +82,7 @@ def load_ground_truth(path: str = "bench/ground_truth_frontier.jsonl") -> Dict[s
     """Load ground truth from JSONL file."""
     gt = {}
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 if line.strip():
                     obj = json.loads(line)
