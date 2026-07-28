@@ -510,3 +510,53 @@ export interface SSEConnectionStatus {
   status: 'live' | 'reconnecting' | 'error';
   lastError?: string;
 }
+
+/**
+ * Spec sharpness score: Quality indicators for a dispatch prompt (C1).
+ * GET /api/quality/spec-sharpness?agent=<id>
+ */
+export interface SpecSharpnessSignals {
+  directive_count: number;
+  has_acceptance_criteria: boolean;
+  file_specificity: number; // 0-1
+  structured_content_ratio: number; // 0-1
+  emphasis_markers: number;
+}
+
+export interface SpecSharpnessScore {
+  level: 'Low' | 'Med' | 'High' | 'Excellent';
+  score: number; // 0-100
+  signals: SpecSharpnessSignals;
+}
+
+/**
+ * File scope visualization: Intended vs actual files touched (C2).
+ * GET /api/context/files?agent=<id>
+ */
+export interface FileScopeDrift {
+  only_intended: string[];
+  only_actual: string[];
+}
+
+export interface FileScopeData {
+  intended_files: string[];
+  actual_files: string[];
+  coverage: number; // 0-1
+  drift: FileScopeDrift;
+}
+
+/**
+ * First-try success board: % of dispatches needing no repair (C3).
+ * GET /api/quality/first-try-rate
+ */
+export interface FirstTryStats {
+  first_try: number;
+  needed_repair: number;
+  rate: number; // 0-1
+}
+
+export interface FirstTryRateBoard {
+  domains: Record<string, FirstTryStats>;
+  lanes: Record<string, FirstTryStats>;
+  overall: FirstTryStats;
+}

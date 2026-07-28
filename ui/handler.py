@@ -21,6 +21,7 @@ import wave_dispatch
 import wave_gantt
 import wave_audit_tail
 import wave_reasoning_tail
+import wave_context
 import api
 import api.tracker
 import api.submit
@@ -250,6 +251,12 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.serve_agents()
         elif self.path.startswith("/api/agent?"):
             self.serve_api_agent()
+        elif self.path.startswith("/api/quality/spec-sharpness"):
+            self.serve_api_spec_sharpness()
+        elif self.path.startswith("/api/context/files"):
+            self.serve_api_file_scope()
+        elif self.path.startswith("/api/quality/first-try-rate"):
+            self.serve_api_first_try_rate()
         elif self.path.startswith("/api/tracker"):
             self.serve_tracker()
         elif self.path.startswith("/assets/"):
@@ -967,6 +974,119 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             if not _is_client_disconnect_error(e):
                 print(f"[serve_api_agent] Uncaught exception: {e}", file=sys.stderr)
             self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
+
+    def serve_api_spec_sharpness(self):
+        """GET /api/quality/spec-sharpness?agent=<id> — spec sharpness indicator (C1).
+
+        Read-only. Returns a spec sharpness score badge (Low/Med/High/Excellent)
+        based on dispatch prompt signals (directive count, acceptance criteria,
+        file specificity, structured content, emphasis markers).
+        """
+        try:
+            query = urllib.parse.urlparse(self.path).query
+            params = urllib.parse.parse_qs(query)
+            agent_id = params.get('agent', [None])[0]
+
+            if not agent_id:
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "missing agent parameter"}).encode('utf-8'))
+                return
+
+            data = wave_context.get_spec_sharpness(agent_id)
+            if data is None:
+                self.send_response(404)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": f"agent {agent_id} not found"}).encode('utf-8'))
+                return
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
+        except Exception as e:
+            if _is_client_disconnect_error(e):
+                return
+            print(f"[serve_api_spec_sharpness] Uncaught exception: {e}", file=sys.stderr)
+            try:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
+            except Exception:
+                pass
+
+    def serve_api_file_scope(self):
+        """GET /api/context/files?agent=<id> — file-scope visualizer (C2).
+
+        Read-only. Returns intended vs actual files for a dispatch, showing
+        scope coverage and drift (files only in intended, files only in actual).
+        """
+        try:
+            query = urllib.parse.urlparse(self.path).query
+            params = urllib.parse.parse_qs(query)
+            agent_id = params.get('agent', [None])[0]
+
+            if not agent_id:
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "missing agent parameter"}).encode('utf-8'))
+                return
+
+            data = wave_context.get_file_scope(agent_id)
+            if data is None:
+                self.send_response(404)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": f"agent {agent_id} not found"}).encode('utf-8'))
+                return
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
+        except Exception as e:
+            if _is_client_disconnect_error(e):
+                return
+            print(f"[serve_api_file_scope] Uncaught exception: {e}", file=sys.stderr)
+            try:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
+            except Exception:
+                pass
+
+    def serve_api_first_try_rate(self):
+        """GET /api/quality/first-try-rate — first-try success board (C3).
+
+        Read-only. Returns % of dispatches that needed no repair, broken down
+        by domain and lane. Computed from analysis of all agent transcripts.
+        """
+        try:
+            data = wave_context.get_first_try_rate()
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(data, default=str).encode('utf-8'))
+        except Exception as e:
+            if _is_client_disconnect_error(e):
+                return
+            print(f"[serve_api_first_try_rate] Uncaught exception: {e}", file=sys.stderr)
+            try:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
+            except Exception:
+                pass
 
     def _write_sse_event(self, event_name, payload):
         """Write one SSE frame with timeout. Caller handles disconnect exceptions."""
