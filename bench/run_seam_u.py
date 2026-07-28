@@ -152,6 +152,164 @@ def extract_diff(response: str) -> str:
 
 
 # ============================================================================
+# CORE FUNCTIONS: Fuzzy Diff Application (Content-Based)
+# ============================================================================
+
+
+def _parse_hunks(diff_text: str) -> list:
+    """
+    Parse unified diff into hunks.
+
+    Args:
+        diff_text: Unified diff text
+
+    Returns:
+        List of hunks, each as {'old_start', 'old_count', 'new_start', 'new_count', 'lines'}
+        where lines is a list of (type, content) tuples: type in ['context', 'removed', 'added']
+    """
+    hunks = []
+    lines = diff_text.split('\n')
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
+        # Look for hunk header: @@ -old_start,old_count +new_start,new_count @@
+        if line.startswith('@@'):
+            match = re.match(r'@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@', line)
+            if match:
+                old_start = int(match.group(1))
+                old_count = int(match.group(2) or 1)
+                new_start = int(match.group(3))
+                new_count = int(match.group(4) or 1)
+
+                hunk = {
+                    'old_start': old_start,
+                    'old_count': old_count,
+                    'new_start': new_start,
+                    'new_count': new_count,
+                    'lines': []
+                }
+
+                # Read hunk lines (context, removed, added)
+                i += 1
+                while i < len(lines):
+                    hunk_line = lines[i]
+                    if hunk_line.startswith('@@'):
+                        break
+                    if hunk_line.startswith(' '):
+                        hunk['lines'].append(('context', hunk_line[1:]))
+                    elif hunk_line.startswith('-'):
+                        hunk['lines'].append(('removed', hunk_line[1:]))
+                    elif hunk_line.startswith('+'):
+                        hunk['lines'].append(('added', hunk_line[1:]))
+                    elif hunk_line == '':
+                        # Empty line might be part of hunk or end; if at end of input, might be part
+                        if i + 1 < len(lines) and lines[i + 1].startswith(('@@', '---', 'diff')):
+                            break
+                        # Otherwise include it as context line
+                        hunk['lines'].append(('context', ''))
+                    i += 1
+
+                hunks.append(hunk)
+                continue
+
+        i += 1
+
+    return hunks
+
+
+def _fuzzy_apply_hunk(file_lines: list, hunk: dict) -> Optional[int]:
+    """
+    Try to apply a single hunk using content-based matching.
+
+    Searches for the removed+context block in file_lines at any offset,
+    allowing the @@ line number to be wrong.
+
+    Args:
+        file_lines: List of file content lines
+        hunk: Hunk dict with 'lines'
+
+    Returns:
+        Offset where hunk was applied (and lines were modified), or None if not found
+    """
+    # Extract context and removed lines from hunk
+    context_removed = []  # Lines that must match (context + removed)
+    for line_type, content in hunk['lines']:
+        if line_type in ('context', 'removed'):
+            context_removed.append(content)
+        elif line_type == 'added':
+            # Stop collecting once we hit additions
+            break
+
+    if not context_removed:
+        return None
+
+    # Search for this block in the file at any offset
+    block_len = len(context_removed)
+    match_count = 0
+    match_offset = -1
+
+    for offset in range(len(file_lines) - block_len + 1):
+        file_block = file_lines[offset:offset + block_len]
+        # Try exact match first
+        if file_block == context_removed:
+            match_count += 1
+            match_offset = offset
+            continue
+
+        # Try whitespace-normalized match (strip and compare)
+        normalized_block = [line.rstrip() for line in file_block]
+        normalized_hunk = [line.rstrip() for line in context_removed]
+        if normalized_block == normalized_hunk:
+            match_count += 1
+            match_offset = offset
+
+    # Only apply if matched exactly once
+    if match_count == 1:
+        # Replace the matched block with (context + added) lines
+        new_lines = []
+        for line_type, content in hunk['lines']:
+            if line_type in ('context', 'added'):
+                new_lines.append(content)
+
+        # Replace at match_offset
+        file_lines[match_offset:match_offset + block_len] = new_lines
+        return match_offset
+
+    return None
+
+
+def _fuzzy_apply(file_text: str, diff_text: str) -> Optional[str]:
+    """
+    Apply diff using content-based fuzzy matching.
+
+    This handles cases where @@ line numbers are incorrect but the content is right.
+    Returns modified file text, or None if application failed.
+
+    Args:
+        file_text: Original file content
+        diff_text: Unified diff
+
+    Returns:
+        Modified file text, or None if failed
+    """
+    # Normalize line endings
+    file_lines = file_text.replace('\r\n', '\n').split('\n')
+    hunks = _parse_hunks(diff_text)
+
+    if not hunks:
+        return None
+
+    # Apply each hunk in order
+    for hunk in hunks:
+        if _fuzzy_apply_hunk(file_lines, hunk) is None:
+            # Hunk failed to apply
+            return None
+
+    return '\n'.join(file_lines)
+
+
+# ============================================================================
 # CORE FUNCTIONS: Sandbox Apply & Oracle
 # ============================================================================
 
@@ -204,7 +362,10 @@ def apply_diff_to_sandbox(
       sandbox/repo/      <- copy of task repo with diff applied
       sandbox/oracle/    <- copied at grading time (not shown to model)
 
-    Tries multiple methods: git apply, patch, then fallback Python parser.
+    Strategy:
+    1. Try git apply with -p levels (fast path for correct diffs)
+    2. Try git apply --recount (recomputes @@ line numbers)
+    3. Fall back to fuzzy content-based Python applier (Windows-safe, handles wrong line numbers)
 
     Args:
         repo_dir: Source repo directory
@@ -218,7 +379,6 @@ def apply_diff_to_sandbox(
         None on error
     """
     # Normalize diff: remove git diff headers and index lines if present
-    # (models may produce full git diffs, not just unified diffs)
     normalized_diff = _normalize_diff(diff)
 
     # Create sandbox and sandbox/repo
@@ -288,7 +448,6 @@ def apply_diff_to_sandbox(
     # Try git apply with various -p levels and options (models emit different path formats)
     if git_ok:
         # Try different -p levels (0, 1, 2) and options
-        last_error = None
         for p_level in [1, 0, 2]:
             for extra_args in [[], ["--3way"], ["--recount"], ["--ignore-whitespace"]]:
                 try:
@@ -314,48 +473,39 @@ def apply_diff_to_sandbox(
                             return "applied"
                         else:
                             return "noop"
-                    else:
-                        # Capture error for debugging
-                        last_error = f"git apply -p{p_level} {' '.join(extra_args)}: {result.stderr[:100]}"
-                        # Log first failure only to avoid spam
-                        if p_level == 1 and not extra_args:
-                            import os
-                            debug_mode = os.environ.get('DEBUG_PATCH')
-                            if debug_mode:
-                                print(f"Debug: {last_error}", file=sys.stderr)
-                except Exception as e:
-                    last_error = str(e)
+                except Exception:
                     pass  # Try next option
 
-    # Fall back to patch command (try multiple -p levels)
-    for p_level in [1, 0, 2]:
-        try:
-            result = subprocess.run(
-                ["patch", f"-p{p_level}"],
-                input=normalized_diff,
-                cwd=repo_sandbox,
-                capture_output=True,
-                timeout=10,
-                text=True,
-            )
-            if result.returncode == 0:
-                # Verify something changed
-                result_check = subprocess.run(
-                    ["git", "status", "--porcelain"],
-                    cwd=repo_sandbox,
-                    capture_output=True,
-                    timeout=10,
-                    text=True,
-                )
-                if result_check.stdout.strip():
-                    return "applied"
-        except Exception as e:
-            last_error = f"patch -p{p_level}: {str(e)[:100]}"
-            pass
+    # Fallback: Fuzzy content-based applier (Windows-safe, handles wrong @@ line numbers)
+    try:
+        # Get file paths mentioned in diff
+        file_paths = set()
+        for line in normalized_diff.split('\n'):
+            if line.startswith('--- '):
+                path = line[4:].split('\t')[0]
+                # Remove leading a/ or b/ if present
+                if path.startswith(('a/', 'b/')):
+                    path = path[2:]
+                file_paths.add(path)
 
-    # All attempts failed; return with diagnostic info
-    diagnostic = f" (last: {last_error})" if last_error else ""
-    print(f"Warning: Patch failed to apply{diagnostic}", file=sys.stderr)
+        if file_paths:
+            # Apply diff to first file found (single-file diffs only for now)
+            target_file = repo_sandbox / list(file_paths)[0]
+            if target_file.exists():
+                file_text = target_file.read_text(encoding='utf-8', errors='replace')
+                modified_text = _fuzzy_apply(file_text, normalized_diff)
+
+                if modified_text is not None:
+                    # Verify something actually changed
+                    if modified_text != file_text:
+                        target_file.write_text(modified_text, encoding='utf-8')
+                        return "applied"
+                    else:
+                        return "noop"
+    except Exception as e:
+        print(f"Warning: Fuzzy apply failed: {str(e)[:100]}", file=sys.stderr)
+        pass
+
     return "failed"
 
 
