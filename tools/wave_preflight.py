@@ -662,6 +662,7 @@ def main(argv=None):
     tracker_path = None
     ledger_path = None
     output_format = "text"
+    from_stdin = False
 
     # Parse arguments
     i = 0
@@ -702,9 +703,55 @@ def main(argv=None):
         elif arg == "--json":
             output_format = "json"
             i += 1
+        elif arg == "--from-stdin":
+            from_stdin = True
+            i += 1
         else:
             print(f"Unknown argument: {arg}", file=sys.stderr)
             return 2
+
+    # If --from-stdin, read repository root directories from stdin and check each
+    if from_stdin:
+        roots_from_stdin = []
+        for line in sys.stdin:
+            line = line.rstrip('\n\r')
+            if line:
+                roots_from_stdin.append(line)
+
+        if not roots_from_stdin:
+            print("ERROR: --from-stdin requires at least one root path on stdin", file=sys.stderr)
+            return 2
+
+        # Check each root and collect results
+        all_results = []
+        for root_path in roots_from_stdin:
+            root = Path(root_path)
+            cfg = load_config(root)
+            st_dir = resolve_state_dir(root, cfg)
+            result = run_checks(root, st_dir, cfg)
+            all_results.append({"root": str(root), "result": result})
+
+        # Output consolidated results
+        if output_format == "json":
+            print(json.dumps(all_results, indent=2))
+        else:
+            for entry in all_results:
+                print(f"Root: {entry['root']}")
+                result = entry['result']
+                for i, check in enumerate(result["checks"], 1):
+                    status = "PASS" if check["ok"] else "FAIL"
+                    print(f"{i}. {check['name']}: {status}")
+                    if check["detail"]:
+                        print(f"   {check['detail']}")
+                if result["ready"]:
+                    print("PASS: Ready for wave")
+                else:
+                    print("FAIL: Not ready for wave (see failures above)")
+                print()
+
+        # Exit 0 if all roots are ready, 1 if any failed
+        all_ready = all(entry['result']['ready'] for entry in all_results)
+        return 0 if all_ready else 1
 
     if root_dir is None:
         root_dir = Path.cwd()

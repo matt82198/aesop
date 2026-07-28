@@ -34,6 +34,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from playwright_common import free_port, copy_dist, start_server, stop_server
+
 REPO = Path(__file__).resolve().parent.parent
 SERVE = REPO / "ui" / "serve.py"
 
@@ -43,18 +45,6 @@ SERVER_BOOT_SLEEP = 0.2
 SEL_TIMEOUT_MS = int(os.environ.get("AESOP_VERIFY_SEL_TIMEOUT_MS", "30000"))
 
 
-def free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-def copy_dist(root: Path):
-    real_dist = REPO / "ui" / "web" / "dist"
-    if real_dist.is_dir():
-        shutil.copytree(real_dist, root / "ui" / "web" / "dist")
 
 
 def build_root_with_agents(num_agents=3):
@@ -97,49 +87,17 @@ def build_root_with_agents(num_agents=3):
     (root / "dash" / "dash-extra.mjs").write_text(
         "console.log(JSON.stringify([]));\n", encoding="utf-8")
 
-    copy_dist(root)
+    copy_dist(root, REPO)
     return root
 
 
-def start_server(root: Path, port: int):
-    state_root = root / "state"
-    real_state = Path.home() / "aesop" / "state"
-    if state_root.resolve() == real_state.resolve():
-        raise RuntimeError("state dir resolved to real repo state (~aesop/state)")
-
-    env = dict(os.environ,
-               AESOP_ROOT=str(root),
-               AESOP_STATE_ROOT=str(state_root),
-               AESOP_TRANSCRIPTS_ROOT=str(root / "transcripts"),
-               AESOP_WEB_DIST=str(REPO / "ui" / "web" / "dist"),
-               AESOP_PROOF_FIXTURES="1",
-               AESOP_UI_COLLECT_INTERVAL="0.5",
-               PORT=str(port))
-    server = subprocess.Popen([sys.executable, str(SERVE)], env=env,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    for _ in range(SERVER_BOOT_TRIES):
-        try:
-            socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
-            return server
-        except OSError:
-            time.sleep(SERVER_BOOT_SLEEP)
-    server.kill()
-    raise RuntimeError("server never came up")
-
-
-def stop_server(server):
-    server.terminate()
-    try:
-        server.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        server.kill()
 
 
 def run_available(pw, failures):
     """Test DispatchPanel with active agents."""
     root = build_root_with_agents(3)
     port = free_port()
-    server = start_server(root, port)
+    server = start_server(root, port, REPO, SERVE, SERVER_BOOT_TRIES, SERVER_BOOT_SLEEP, "0.5")
     try:
         browser = pw.chromium.launch(headless=True)
         page = browser.new_page()
@@ -225,7 +183,7 @@ def run_unavailable(pw, failures):
     """Test DispatchPanel with no active agents."""
     root = build_root_with_agents(0)  # No agents
     port = free_port()
-    server = start_server(root, port)
+    server = start_server(root, port, REPO, SERVE, SERVER_BOOT_TRIES, SERVER_BOOT_SLEEP, "0.5")
     try:
         browser = pw.chromium.launch(headless=True)
         page = browser.new_page()
