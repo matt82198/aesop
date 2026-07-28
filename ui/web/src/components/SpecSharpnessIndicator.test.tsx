@@ -26,7 +26,7 @@ describe('SpecSharpnessIndicator', () => {
   });
 
   it('renders error state on fetch failure', async () => {
-    (fetchApi as any).mockResolvedValue({ error: 'Agent not found' });
+    (fetchApi as any).mockRejectedValue(new Error('Agent not found'));
 
     render(<SpecSharpnessIndicator agentId="test-agent" />);
 

@@ -38,12 +38,8 @@ export function SpecSharpnessIndicator({ agentId, expanded = false }: SpecSharpn
       setLoading(true);
       setError(null);
       try {
-        const result = await fetchApi(`/api/quality/spec-sharpness?agent=${encodeURIComponent(agentId)}`);
-        if (result.error) {
-          setError(result.error);
-        } else {
-          setData(result as SpecSharpnessScore);
-        }
+        const result = await fetchApi<SpecSharpnessScore>(`/api/quality/spec-sharpness?agent=${encodeURIComponent(agentId)}`);
+        setData(result);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to fetch spec sharpness');
       } finally {

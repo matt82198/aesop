@@ -26,7 +26,7 @@ describe('FileScopeVisualizer', () => {
   });
 
   it('renders error state on fetch failure', async () => {
-    (fetchApi as any).mockResolvedValue({ error: 'Failed to fetch' });
+    (fetchApi as any).mockRejectedValue(new Error('Failed to fetch'));
 
     render(<FileScopeVisualizer agentId="test-agent" />);
 
