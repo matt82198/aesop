@@ -40,12 +40,12 @@ case "$MODE" in
     ;;
   --regenerate|regenerate)
     # Regenerate stats.json from live git state
-    echo "[verify-stats] Regenerating stats.json from git..."
+    echo "[verify-stats] Regenerating stats.json from git..." >&2
     python "${REPO_ROOT}/tools/self_stats.py" \
       --regenerate \
       --repo "${REPO_ROOT}" \
       --stats-file "${STATS_FILE}"
-    echo "[verify-stats] Stats regenerated. Run 'git diff stats.json' to review."
+    echo "[verify-stats] Stats regenerated. Run 'git diff stats.json' to review." >&2
     ;;
   *)
     echo "Usage: bash scripts/verify-stats.sh [--check|--regenerate]"

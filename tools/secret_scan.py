@@ -721,6 +721,11 @@ def main():
         help="Scan all blobs in git history (requires --repo or uses cwd)",
     )
     parser.add_argument(
+        "--from-stdin",
+        action="store_true",
+        help="Read newline-delimited file paths from stdin (scan directly)",
+    )
+    parser.add_argument(
         "--repo",
         default=os.getcwd(),
         help="Git repo path (default: current directory)",
@@ -731,10 +736,10 @@ def main():
 
     args = parser.parse_args()
 
-    # Validate usage: exactly one of --staged, --range, --history, or paths
-    mode_count = sum([args.staged, bool(args.range), args.history, bool(args.paths)])
+    # Validate usage: exactly one of --staged, --range, --history, --from-stdin, or paths
+    mode_count = sum([args.staged, bool(args.range), args.history, args.from_stdin, bool(args.paths)])
     if mode_count != 1:
-        print("ERROR: Use exactly one of --staged, --range, --history, or path arguments", file=sys.stderr)
+        print("ERROR: Use exactly one of --staged, --range, --history, --from-stdin, or path arguments", file=sys.stderr)
         sys.exit(2)
 
     all_findings = []
@@ -824,6 +829,33 @@ def main():
                 all_findings.append((filepath, line_num, rule, match_str, is_fatal))
                 if is_fatal:
                     fatal_findings.append((filepath, line_num, rule, match_str))
+
+    elif args.from_stdin:
+        # Read newline-delimited file paths from stdin and scan directly
+        paths_from_stdin = []
+        for line in sys.stdin:
+            line = line.rstrip('\n\r')
+            if line:
+                paths_from_stdin.append(line)
+
+        files = scan_paths(paths_from_stdin)
+        file_count = len(files)
+        for filepath in files:
+            try:
+                findings = scan_file(filepath)
+            except ScanError as e:
+                print(f"FATAL: cannot scan file {filepath}: {e}", file=sys.stderr)
+                print("Failing CLOSED: refusing to report CLEAN when a file cannot be read.", file=sys.stderr)
+                sys.exit(2)
+            for line_num, rule, match_str, is_fatal in findings:
+                all_findings.append((filepath, line_num, rule, match_str, is_fatal))
+                if is_fatal:
+                    fatal_findings.append((filepath, line_num, rule, match_str))
+                else:
+                    if rule == "connection_string":
+                        allowed_redaction_count += 1
+                    else:
+                        allowed_doc_count += 1
 
     else:
         files = scan_paths(args.paths)

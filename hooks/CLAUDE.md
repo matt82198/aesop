@@ -74,7 +74,7 @@ Claude Code **PreToolUse** hook enforcing "subagents are always Haiku" cardinal 
 **Test Command**: `node --test tests/force-model-policy.test.mjs` (the .mjs itself has no --test mode). Validates Haiku allowed on subagents, non-Haiku (e.g., Opus) blocked, orchestrator not subject to policy, JSON logging format valid. Exit 0 = pass; exit 1 = fail.
 
 ## Key Invariants
-- POSIX sh compatible, CRLF-safe (no line continuations)
+- Bash required (explicit shebang), CRLF-safe
 - Tolerate git pre-push stdin (ref list: `<local-ref> <local-oid> <remote-ref> <remote-oid>` per line) + optional args without crashing
 - Fail-open for missing optional tooling (secret_scan.py absent → allow); fail-closed for policy checks (branch, marker, model)
 - `AESOP_ROOT` env var or `$HOME/aesop` fallback; no hardcoded machine paths/usernames
