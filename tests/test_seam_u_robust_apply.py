@@ -179,8 +179,11 @@ class LiveGPTDiffTest(unittest.TestCase):
         A single failure doesn't indicate a systematic problem. Run multiple times
         to assess overall reliability.
         """
-        if not self.api_key:
-            self.skipTest("OPENAI_API_KEY not set; skipping live gpt test")
+        # Gate behind an explicit flag (like AESOP_CODEX_LIVE): this test makes
+        # a real, probabilistic gpt-4o-mini call, so it must never run — and
+        # never flake — merely because a key happens to be in the environment.
+        if not self.api_key or os.environ.get("AESOP_SEAM_LIVE") != "1":
+            self.skipTest("live gpt test gated on OPENAI_API_KEY + AESOP_SEAM_LIVE=1")
 
         from bench.run_seam_u import (
             build_u_arm_prompt,

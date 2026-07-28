@@ -275,6 +275,39 @@ def _fuzzy_apply_hunk(file_lines: list, hunk: dict) -> Optional[int]:
     return None
 
 
+def _split_diff_by_file(diff_text: str) -> list:
+    """
+    Split a (possibly multi-file) unified diff into per-file segments.
+
+    A file section begins at a `--- ` line that is immediately followed by a
+    `+++ ` line (this guard distinguishes a real file header from a removed
+    line whose content happens to start with dashes). Returns a list of
+    (repo_relative_path, segment_text). The path is taken from the `+++ b/…`
+    side (the post-image), with a leading a/ or b/ stripped.
+    """
+    segments = []
+    lines = diff_text.split('\n')
+    n = len(lines)
+    i = 0
+    while i < n:
+        if lines[i].startswith('--- ') and i + 1 < n and lines[i + 1].startswith('+++ '):
+            plus_path = lines[i + 1][4:].split('\t')[0].strip()
+            path = plus_path
+            if path.startswith(('a/', 'b/')):
+                path = path[2:]
+            start = i
+            j = i + 2
+            while j < n and not (
+                lines[j].startswith('--- ') and j + 1 < n and lines[j + 1].startswith('+++ ')
+            ):
+                j += 1
+            segments.append((path, '\n'.join(lines[start:j])))
+            i = j
+        else:
+            i += 1
+    return segments
+
+
 def _fuzzy_apply(file_text: str, diff_text: str) -> Optional[str]:
     """
     Apply diff using content-based fuzzy matching.
@@ -472,32 +505,39 @@ def apply_diff_to_sandbox(
                 except Exception:
                     pass  # Try next option
 
-    # Fallback: Fuzzy content-based applier (Windows-safe, handles wrong @@ line numbers)
+    # Fallback: fuzzy content-based applier, PER FILE (Windows-safe, handles
+    # wrong @@ line numbers AND multi-file diffs, which git apply rejects when
+    # any file's line numbers are off). All files must apply, or the whole
+    # patch fails — a partially-applied multi-file fix is never scored.
     try:
-        # Get file paths mentioned in diff
-        file_paths = set()
-        for line in normalized_diff.split('\n'):
-            if line.startswith('--- '):
-                path = line[4:].split('\t')[0]
-                # Remove leading a/ or b/ if present
-                if path.startswith(('a/', 'b/')):
-                    path = path[2:]
-                file_paths.add(path)
-
-        if file_paths:
-            # Apply diff to first file found (single-file diffs only for now)
-            target_file = repo_sandbox / list(file_paths)[0]
-            if target_file.exists():
-                file_text = target_file.read_text(encoding='utf-8', errors='replace')
-                modified_text = _fuzzy_apply(file_text, normalized_diff)
-
-                if modified_text is not None:
-                    # Verify something actually changed
-                    if modified_text != file_text:
-                        target_file.write_text(modified_text, encoding='utf-8')
-                        return "applied"
-                    else:
-                        return "noop"
+        segments = _split_diff_by_file(normalized_diff)
+        if segments:
+            pending = []  # (target_file, new_text)
+            any_change = False
+            all_ok = True
+            for path, segment in segments:
+                target_file = repo_sandbox / path
+                # Read the PRISTINE source from the original repo, not the
+                # sandbox copy: a prior `git apply --3way` attempt can leave
+                # conflict markers in the sandbox file even when it returns
+                # non-zero, which would make the fuzzy match fail. The original
+                # task repo is the clean base.
+                source_file = repo_dir / path
+                if not source_file.exists() or not target_file.exists():
+                    all_ok = False
+                    break
+                file_text = source_file.read_text(encoding='utf-8', errors='replace')
+                modified_text = _fuzzy_apply(file_text, segment)
+                if modified_text is None:
+                    all_ok = False
+                    break
+                if modified_text != file_text:
+                    any_change = True
+                pending.append((target_file, modified_text))
+            if all_ok:
+                for target_file, new_text in pending:
+                    target_file.write_text(new_text, encoding='utf-8')
+                return "applied" if any_change else "noop"
     except Exception as e:
         print(f"Warning: Fuzzy apply failed: {str(e)[:100]}", file=sys.stderr)
         pass
