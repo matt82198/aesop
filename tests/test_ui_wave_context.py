@@ -1,7 +1,8 @@
 """
-Unit tests for ui/wave_context.py — context quality analysis helpers (C1, C2, C3).
+Unit tests for ui/wave_context.py — context quality analysis helpers (C1, C2).
 
-Tests spec sharpness scoring, file scope extraction, and first-try rate computation.
+Tests spec sharpness scoring and file scope extraction.
+C3 (first-try rate) deferred to future work with validated repair signal from fleet ledger.
 
 Run: python -m unittest tests.test_ui_wave_context
 """
@@ -249,75 +250,6 @@ class TestFileScopeAnalyzer(unittest.TestCase):
         self.assertGreater(len(result["intended_files"]), 0)
         # Since we're using a placeholder for actual files, drift should show
         self.assertGreaterEqual(len(result["drift"]["only_intended"]), 0)
-
-
-class TestFirstTryRate(unittest.TestCase):
-    """Test first-try success rate computation."""
-
-    def test_get_first_try_rate_structure(self):
-        """Should return correctly structured data."""
-        result = wave_context.get_first_try_rate()
-
-        # Check top-level structure
-        self.assertIn("domains", result)
-        self.assertIn("lanes", result)
-        self.assertIn("overall", result)
-
-        # Check overall structure
-        self.assertIn("first_try", result["overall"])
-        self.assertIn("needed_repair", result["overall"])
-        self.assertIn("rate", result["overall"])
-
-    def test_first_try_rate_is_between_0_and_1(self):
-        """Rate should be between 0 and 1."""
-        result = wave_context.get_first_try_rate()
-
-        self.assertGreaterEqual(result["overall"]["rate"], 0.0)
-        self.assertLessEqual(result["overall"]["rate"], 1.0)
-
-        for domain_stats in result["domains"].values():
-            self.assertGreaterEqual(domain_stats["rate"], 0.0)
-            self.assertLessEqual(domain_stats["rate"], 1.0)
-
-        for lane_stats in result["lanes"].values():
-            self.assertGreaterEqual(lane_stats["rate"], 0.0)
-            self.assertLessEqual(lane_stats["rate"], 1.0)
-
-    def test_first_try_rate_counts_are_non_negative(self):
-        """Counts should never be negative."""
-        result = wave_context.get_first_try_rate()
-
-        self.assertGreaterEqual(result["overall"]["first_try"], 0)
-        self.assertGreaterEqual(result["overall"]["needed_repair"], 0)
-
-    def test_false_positive_avoidance_error_in_content_not_repair(self):
-        """BLOCKER FIX: Transcript mentioning 'error' in content is NOT a repair.
-
-        Only MULTIPLE dispatch prompts (2+ top-level user messages) = repair.
-        A transcript that mentions 'error' in file names, logs, or prompt text
-        but has only 1 dispatch should be counted as first_try, NOT needed_repair.
-        This proves the fix avoids false positives from prose parsing.
-        """
-        result = wave_context.get_first_try_rate()
-
-        # Should return structured signal result (not prose-based)
-        self.assertIsNotNone(result.get("available"))
-
-        # If available=False, should indicate why (honest empty state)
-        if not result.get("available"):
-            # Honest empty state: no transcripts found
-            self.assertEqual(result["overall"]["first_try"], 0)
-            self.assertEqual(result["overall"]["needed_repair"], 0)
-            self.assertEqual(result["overall"]["rate"], 0.0)
-        else:
-            # If available=True, counts should be based on dispatch count,
-            # not prose parsing. So a transcript with "error" in content but only
-            # 1 dispatch would NOT be counted as needed_repair.
-            total = result["overall"]["first_try"] + result["overall"]["needed_repair"]
-            self.assertGreater(total, 0, "Should have real dispatch data")
-            # Rate computation should reflect structured signal (dispatch count)
-            expected_rate = result["overall"]["first_try"] / total
-            self.assertAlmostEqual(result["overall"]["rate"], expected_rate)
 
 
 class TestGetSpecSharpness(unittest.TestCase):

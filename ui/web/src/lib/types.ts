@@ -545,20 +545,3 @@ export interface FileScopeData {
   drift: FileScopeDrift;
 }
 
-/**
- * First-try success board: % of dispatches needing no repair (C3).
- * GET /api/quality/first-try-rate
- */
-export interface FirstTryStats {
-  first_try: number;
-  needed_repair: number;
-  rate: number; // 0-1
-}
-
-export interface FirstTryRateBoard {
-  available: boolean; // false = no transcripts found, show honest empty state
-  reason?: string; // explanation when available=false
-  domains: Record<string, FirstTryStats>;
-  lanes: Record<string, FirstTryStats>;
-  overall: FirstTryStats;
-}
