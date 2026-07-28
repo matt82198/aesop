@@ -1,0 +1,147 @@
+.spec-sharpness-container {
+  position: relative;
+  display: inline-block;
+}
+
+.spec-sharpness-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.375rem;
+  border: none;
+  color: white;
+  font-weight: 600;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.spec-sharpness-indicator:hover {
+  opacity: 0.9;
+  transform: scale(1.05);
+}
+
+.spec-sharpness-indicator.error {
+  background-color: #dc2626;
+}
+
+.spec-sharpness-indicator.loading {
+  background-color: #9ca3af;
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.spec-sharpness-indicator.unknown {
+  background-color: #6b7280;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.spec-sharpness-detail {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 0.5rem;
+  padding: 1rem;
+  background-color: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  z-index: 10;
+  min-width: 250px;
+  max-width: 400px;
+}
+
+.detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 0.5rem;
+}
+
+.detail-header h4 {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.detail-header .score {
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.signals {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.signal {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.signal label {
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.signal span {
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+
+.meter {
+  width: 100px;
+  height: 6px;
+  border: none;
+  border-radius: 3px;
+}
+
+/* Light mode */
+:root[data-theme="light"] .spec-sharpness-detail {
+  background-color: #f9fafb;
+  border-color: #e5e7eb;
+}
+
+:root[data-theme="light"] .detail-header {
+  border-color: #e5e7eb;
+}
+
+:root[data-theme="light"] .signal label {
+  color: #1f2937;
+}
+
+:root[data-theme="light"] .signal span {
+  color: #6b7280;
+}
+
+/* Dark mode */
+:root[data-theme="dark"] .spec-sharpness-detail {
+  background-color: #1f2937;
+  border-color: #374151;
+}
+
+:root[data-theme="dark"] .detail-header {
+  border-color: #374151;
+}
+
+:root[data-theme="dark"] .signal label {
+  color: #f3f4f6;
+}
+
+:root[data-theme="dark"] .signal span {
+  color: #9ca3af;
+}
