@@ -423,3 +423,50 @@ class LiveOpusTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FuzzyApplyTrailingContextRegression(unittest.TestCase):
+    """Regression for the opus/sonnet bug: a hunk with context lines AFTER the
+    change must replace the old block in place, NOT duplicate the trailing
+    context (which produced 'SyntaxError: unmatched ]' and a false 'applied')."""
+
+    def test_trailing_context_not_duplicated(self):
+        from bench.run_seam_u import _fuzzy_apply
+        original = (
+            "        self.request_times = [\n"
+            "            req_time\n"
+            "            for req_time in self.request_times\n"
+            "            if now - req_time <= self.window_duration\n"
+            "        ]\n"
+            "\n"
+            "        # Check if we can allow this request\n"
+            "        return True\n"
+        )
+        # Wrong @@ start line + trailing context after the changed line.
+        # Context/added/removed lines carry the real unified-diff prefix
+        # (leading space for context, - / + for changes).
+        diff = (
+            "--- a/rate_limiter.py\n"
+            "+++ b/rate_limiter.py\n"
+            "@@ -99,7 +99,7 @@\n"
+            "         self.request_times = [\n"
+            "             req_time\n"
+            "             for req_time in self.request_times\n"
+            "-            if now - req_time <= self.window_duration\n"
+            "+            if now - req_time < self.window_duration\n"
+            "         ]\n"
+            " \n"
+            "         # Check if we can allow this request\n"
+        )
+        result = _fuzzy_apply(original, diff)
+        self.assertIsNotNone(result)
+        # The fix landed...
+        self.assertIn("req_time < self.window_duration", result)
+        self.assertNotIn("<= self.window_duration", result)
+        # ...and the trailing context was NOT duplicated.
+        self.assertEqual(result.count("        ]"), 1)
+        self.assertEqual(result.count("# Check if we can allow this request"), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

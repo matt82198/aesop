@@ -203,10 +203,15 @@ def _parse_hunks(diff_text: str) -> list:
                     elif hunk_line.startswith('+'):
                         hunk['lines'].append(('added', hunk_line[1:]))
                     elif hunk_line == '':
-                        # Empty line might be part of hunk or end; if at end of input, might be part
-                        if i + 1 < len(lines) and lines[i + 1].startswith(('@@', '---', 'diff')):
+                        # A terminal empty line (end of input) is the diff's
+                        # trailing-newline artifact, NOT a real context line —
+                        # emitting it would put a phantom '' at the end of the
+                        # old/new block that matches nothing. Stop instead.
+                        if i + 1 >= len(lines):
                             break
-                        # Otherwise include it as context line
+                        if lines[i + 1].startswith(('@@', '---', 'diff')):
+                            break
+                        # A genuine blank line inside the hunk is context.
                         hunk['lines'].append(('context', ''))
                     i += 1
 
@@ -232,48 +237,39 @@ def _fuzzy_apply_hunk(file_lines: list, hunk: dict) -> Optional[int]:
     Returns:
         Offset where hunk was applied (and lines were modified), or None if not found
     """
-    # Extract context and removed lines from hunk
-    context_removed = []  # Lines that must match (context + removed)
-    for line_type, content in hunk['lines']:
-        if line_type in ('context', 'removed'):
-            context_removed.append(content)
-        elif line_type == 'added':
-            # Stop collecting once we hit additions
-            break
+    # The OLD block (what must exist in the file) is every context + removed
+    # line, IN ORDER, across the whole hunk — including trailing context after
+    # the change. The NEW block is every context + added line, in order.
+    # Replacing the full old block with the full new block in place is what
+    # keeps trailing context from being duplicated.
+    old_block = [content for line_type, content in hunk['lines']
+                 if line_type in ('context', 'removed')]
+    new_block = [content for line_type, content in hunk['lines']
+                 if line_type in ('context', 'added')]
 
-    if not context_removed:
+    if not old_block:
         return None
 
-    # Search for this block in the file at any offset
-    block_len = len(context_removed)
+    # Search for the old block in the file at any offset (the @@ line number is
+    # untrusted). Exact match preferred; fall back to a right-strip-normalized
+    # match to tolerate trailing-whitespace differences in the model's context.
+    block_len = len(old_block)
     match_count = 0
     match_offset = -1
 
     for offset in range(len(file_lines) - block_len + 1):
         file_block = file_lines[offset:offset + block_len]
-        # Try exact match first
-        if file_block == context_removed:
+        if file_block == old_block:
             match_count += 1
             match_offset = offset
             continue
-
-        # Try whitespace-normalized match (strip and compare)
-        normalized_block = [line.rstrip() for line in file_block]
-        normalized_hunk = [line.rstrip() for line in context_removed]
-        if normalized_block == normalized_hunk:
+        if [line.rstrip() for line in file_block] == [line.rstrip() for line in old_block]:
             match_count += 1
             match_offset = offset
 
-    # Only apply if matched exactly once
+    # Only apply if the block is located exactly once (0 or >1 is ambiguous).
     if match_count == 1:
-        # Replace the matched block with (context + added) lines
-        new_lines = []
-        for line_type, content in hunk['lines']:
-            if line_type in ('context', 'added'):
-                new_lines.append(content)
-
-        # Replace at match_offset
-        file_lines[match_offset:match_offset + block_len] = new_lines
+        file_lines[match_offset:match_offset + block_len] = new_block
         return match_offset
 
     return None
