@@ -11,10 +11,10 @@ class TestWorkflowRepro:
         """A new task starts as QUEUED and transitions to READY when processed."""
         task = Task("sample_task")
 
-        # Initial state should be QUEUED
+        # Initial state is QUEUED
         assert task.status == "QUEUED"
 
-        # After processing, status should change
+        # After processing, status changes
         task.process()
         assert task.status != "QUEUED"
         assert task.status in ["READY", "PROCESSING", "COMPLETED"]

@@ -9,13 +9,13 @@ class TestValidationRepro:
 
     def test_validation_logs_appropriate_level(self):
         """Validation errors are logged at the correct level."""
-        # Valid data should not raise
+        # Valid data does not raise
         try:
             result = validate_data({"name": "test", "value": 42})
             assert result is not None
         except ValueError:
             pass
 
-        # Invalid data should trigger logging
+        # Invalid data triggers logging
         with pytest.raises((ValueError, KeyError, TypeError)):
             validate_data({"invalid": "structure"})

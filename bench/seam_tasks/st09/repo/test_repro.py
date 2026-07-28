@@ -10,7 +10,7 @@ class TestStartupRepro:
     def test_initial_route_access(self):
         """Accessing a route before explicit initialization fails gracefully."""
         try:
-            # Should handle the case where registry is not yet initialized
+            # Handles the case where registry is not yet initialized
             registry = get_registry()
             # If we get here, the registry exists
             assert registry is not None

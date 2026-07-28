@@ -25,5 +25,5 @@ class TestProcessorRepro:
         result = process_items(100)
         all_items = process_items(None)
 
-        # Result should be all available items, capped by actual pool size
+        # Result is all available items, capped by actual pool size
         assert len(result) <= len(all_items)

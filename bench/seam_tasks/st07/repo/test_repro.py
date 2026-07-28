@@ -8,7 +8,7 @@ class TestAreaConversionRepro:
     """Visible test: square mile to square meter conversion is accurate."""
 
     def test_unit_conversion_accuracy(self):
-        """1 square mile should convert to approximately 2,589,988 square meters."""
+        """1 square mile converts to approximately 2,589,988 square meters."""
         result = process_plot(1, 1)
         area_sq_meters = result["area_sq_meters"]
 
