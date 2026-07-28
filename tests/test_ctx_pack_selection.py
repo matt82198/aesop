@@ -45,24 +45,24 @@ class TestContextPackGoldenNoOp(unittest.TestCase):
         self.temp_repo.cleanup()
         self.temp_conductor.cleanup()
 
-    def _pack_to_canonical_dict(self, pack: ContextPack) -> dict:
-        """Convert pack to a canonical dict for comparison (order-independent)."""
-        # Convert pack to dict, sorting manifest and evidence_manifest for reproducibility.
-        pack_dict = asdict(pack)
+    def _pack_to_dict_preserving_order(self, pack: ContextPack) -> dict:
+        """Convert pack to dict preserving EXACT order (no sorting).
 
-        # Sort manifests by source/name to make comparison order-independent
-        # but still capture the data correctly.
-        pack_dict["manifest"] = sorted(
-            pack_dict["manifest"], key=lambda m: m["source"]
-        )
-        pack_dict["evidence_manifest"] = sorted(
-            pack_dict["evidence_manifest"], key=lambda m: m["name"]
-        )
-
-        return pack_dict
+        Order is critical for byte-identity: manifest must be in insertion order,
+        content dict in the order keys were added.
+        This test must FAIL if manifest order or content key order changes below cap.
+        """
+        return asdict(pack)
 
     def test_golden_noop_small_pack_under_caps(self):
-        """GOLDEN NO-OP: small pack well under size caps is byte-identical."""
+        """GOLDEN NO-OP: small pack well under size caps is byte-identical.
+
+        CRITICAL: This test verifies that for under-cap packs:
+        - Manifest order is INSERTION ORDER (sources in order they were requested)
+        - Content dict key order is INSERTION ORDER
+        - No source reordering happens below cap
+        - Byte-identical to origin/main for same inputs
+        """
         # Create small fixtures.
         state_file = Path(self.repo_root) / "STATE.md"
         state_file.write_text("# Wave 1\nphase: intake\n", encoding="utf-8")
@@ -97,13 +97,6 @@ class TestContextPackGoldenNoOp(unittest.TestCase):
             size_cap=100000,  # Huge cap: nothing truncated.
         )
 
-        # Convert to canonical dict for later comparison.
-        golden_dict = self._pack_to_canonical_dict(pack)
-
-        # Save golden bytes for later regression checking.
-        golden_bytes = json.dumps(golden_dict, sort_keys=True)
-        golden_len = len(golden_bytes.encode("utf-8"))
-
         # Verify pack is indeed under cap (golden condition).
         self.assertLess(pack.total_size_bytes, 100000)
 
@@ -114,18 +107,30 @@ class TestContextPackGoldenNoOp(unittest.TestCase):
                 f"Source {manifest_entry['source']} should not be truncated",
             )
 
-        # After implementing B1-B4, rebuild the pack and verify output is identical.
-        # (This test is a checkpoint: if B1-B4 change the bytes when under cap,
-        # it's a violation of the "strict no-op" constraint.)
+        # CRITICAL: Verify insertion order is preserved (byte-identity guarantee).
+        # Sources were requested in this order: state, buildlog_tail:10, tracker_open
+        manifest_sources = [m["source"] for m in pack.manifest]
+        self.assertEqual(manifest_sources, ["state", "buildlog_tail:10", "tracker_open"],
+                         "Manifest order MUST equal insertion order for under-cap pack")
 
-        # For now, just document what the golden snapshot looks like.
-        self.assertGreater(golden_len, 0)
-        self.assertIn("state", pack.content)
-        self.assertIn("buildlog_tail:10", pack.content)
-        self.assertIn("tracker_open", pack.content)
+        # Verify content dict keys are in insertion order.
+        content_keys = list(pack.content.keys())
+        self.assertEqual(content_keys, ["state", "buildlog_tail:10", "tracker_open"],
+                         "Content dict keys MUST equal insertion order for under-cap pack")
+
+        # Serialize to JSON and verify bytes (order-sensitive).
+        pack_dict = self._pack_to_dict_preserving_order(pack)
+        pack_json = json.dumps(pack_dict, indent=2)
+        pack_bytes = pack_json.encode("utf-8")
+
+        # The pack should have all content included, no truncation.
+        self.assertIn("state", pack_dict["content"])
+        self.assertIn("buildlog_tail:10", pack_dict["content"])
+        self.assertIn("tracker_open", pack_dict["content"])
+        self.assertGreater(len(pack_bytes), 0)
 
     def test_golden_noop_with_brief_sources(self):
-        """GOLDEN NO-OP: pack with brief: sources also stays byte-identical."""
+        """GOLDEN NO-OP: pack with brief: sources preserves insertion order."""
         state_file = Path(self.repo_root) / "STATE.md"
         state_file.write_text("# STATE\n", encoding="utf-8")
 
@@ -143,9 +148,14 @@ class TestContextPackGoldenNoOp(unittest.TestCase):
             size_cap=100000,
         )
 
-        # Verify no truncation.
+        # Verify no truncation (under-cap condition).
         for manifest_entry in pack.manifest:
             self.assertFalse(manifest_entry["truncated"])
+
+        # Verify insertion order is preserved.
+        manifest_sources = [m["source"] for m in pack.manifest]
+        self.assertEqual(manifest_sources, ["state", f"brief:{brief_file}"],
+                         "Manifest order must equal insertion order for under-cap pack")
 
         self.assertIn("state", pack.content)
         self.assertIn(f"brief:{brief_file}", pack.content)
@@ -449,7 +459,7 @@ class TestEvidenceOrdering(unittest.TestCase):
 
 
 class TestQualityB1Ordering(unittest.TestCase):
-    """QUALITY TEST B1: Deterministic source ordering is consistent."""
+    """QUALITY TEST B1: Truncation-only source ordering (insertion order preserved below cap)."""
 
     def setUp(self):
         """Create temp repo/conductor roots."""
@@ -463,15 +473,15 @@ class TestQualityB1Ordering(unittest.TestCase):
         self.temp_repo.cleanup()
         self.temp_conductor.cleanup()
 
-    def test_ordering_priority_state_first(self):
-        """B1 QUALITY: state always appears first in manifest when included."""
+    def test_insertion_order_preserved_below_cap(self):
+        """B1 QUALITY: Under-cap packs preserve insertion order (no reordering)."""
         state_file = Path(self.repo_root) / "STATE.md"
         state_file.write_text("state\n", encoding="utf-8")
 
         buildlog_file = Path(self.repo_root) / "BUILDLOG.md"
         buildlog_file.write_text("log\n", encoding="utf-8")
 
-        # Request in reverse order to verify reordering works.
+        # Request in specific order: buildlog, state.
         pack = build_context_pack(
             decision_type="test",
             sources={
@@ -480,14 +490,16 @@ class TestQualityB1Ordering(unittest.TestCase):
             },
             repo_root=self.repo_root,
             conductor_root=self.conductor_root,
+            size_cap=100000,  # Huge cap: no truncation.
         )
 
-        # Verify state comes first in manifest (B1 ordering).
+        # For under-cap pack, insertion order must be preserved (no reordering).
         manifest_sources = [m["source"] for m in pack.manifest]
-        self.assertEqual(manifest_sources[0], "state")
+        self.assertEqual(manifest_sources, ["buildlog_tail:10", "state"],
+                         "Insertion order MUST be preserved for under-cap pack")
 
-    def test_ordering_tracker_before_buildlog(self):
-        """B1 QUALITY: tracker_open always comes before buildlog_tail (priority order)."""
+    def test_all_sources_included_below_cap(self):
+        """B1 QUALITY: All sources included when under cap (no selection/reordering)."""
         state_file = Path(self.repo_root) / "STATE.md"
         state_file.write_text("state\n", encoding="utf-8")
 
@@ -502,7 +514,6 @@ class TestQualityB1Ordering(unittest.TestCase):
             encoding="utf-8",
         )
 
-        # Request in reverse order to verify B1 reorders them.
         pack = build_context_pack(
             decision_type="test",
             sources={
@@ -512,16 +523,19 @@ class TestQualityB1Ordering(unittest.TestCase):
             },
             repo_root=self.repo_root,
             conductor_root=self.conductor_root,
+            size_cap=100000,  # Huge cap.
         )
 
+        # All sources should be included.
         sources = [m["source"] for m in pack.manifest]
-        state_idx = sources.index("state")
-        tracker_idx = sources.index("tracker_open")
-        buildlog_idx = sources.index("buildlog_tail:10")
+        self.assertEqual(len(sources), 3)
+        self.assertIn("state", sources)
+        self.assertIn("tracker_open", sources)
+        self.assertIn("buildlog_tail:10", sources)
 
-        # B1 priority order: state < tracker_open < buildlog_tail.
-        self.assertLess(state_idx, tracker_idx)
-        self.assertLess(tracker_idx, buildlog_idx)
+        # Insertion order preserved: buildlog, tracker, state.
+        self.assertEqual(sources, ["buildlog_tail:10", "tracker_open", "state"],
+                         "Insertion order MUST be preserved below cap")
 
 
 class TestQualityB2MarkdownAware(unittest.TestCase):

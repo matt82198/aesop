@@ -206,10 +206,24 @@ def build_context_pack(
         evidence_size_cap=evidence_cap,
     )
 
-    # B1: Deterministic source ordering.
-    ordered_sources = _order_sources_by_priority(sources)
+    # Read sources in INSERTION ORDER to preserve byte-identity for under-cap packs.
+    # B1 priority ordering is used ONLY for truncation decisions (see _truncate_pack).
+    # Validate all sources first to raise ContextPackViolation for unknown types.
+    for source_name in sources.keys():
+        if not source_name:
+            continue
+        # Validate source type (reuse the validation from _order_sources_by_priority logic).
+        if not (source_name == "state" or
+                source_name == "tracker_open" or
+                source_name.startswith("buildlog_tail") or
+                source_name.startswith("brief:")):
+            raise ContextPackViolation(
+                f"Unknown context source '{source_name}'; "
+                f"allowed: 'state', 'buildlog_tail:N', 'tracker_open', 'brief:<path>'"
+            )
 
-    for source_name, source_spec in ordered_sources:
+    # Read in insertion order.
+    for source_name, source_spec in sources.items():
         if not source_name:
             continue
 
