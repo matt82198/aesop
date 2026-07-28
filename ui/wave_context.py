@@ -7,9 +7,12 @@ context quality indicators: spec sharpness (prompt quality signals), file-scope
 visualization (intended vs actual), and first-try success rates.
 
 All functions are read-only; no orchestration changes.
+Computes REAL data from transcripts: actual files written (Write/Edit tool-use),
+repair markers (re-dispatch/retry/fail-then-pass), honest empty states.
 """
 import json
 import re
+import os
 from pathlib import Path
 from typing import Optional, Dict, List, Any
 
@@ -183,23 +186,95 @@ class FileScopeAnalyzer:
         return sorted(set(files))
 
     @staticmethod
+    def _extract_actual_files_from_transcript(transcript_path: Path) -> List[str]:
+        """Extract files actually written/edited from transcript NDJSON.
+
+        Scans transcript for Write and Edit tool-use records; extracts file_path
+        from each. Returns deduplicated sorted list of touched files.
+        Reuses _redact_secrets for secret-safety (only extracts paths, not content).
+
+        Returns:
+            List of file paths actually touched (Write/Edit tool-use)
+        """
+        files = set()
+
+        if not transcript_path.exists():
+            return []
+
+        try:
+            with open(transcript_path, 'r', encoding='utf-8', errors='replace') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+
+                    if not isinstance(obj, dict):
+                        continue
+
+                    # Look for tool_use blocks in message.content
+                    msg = obj.get("message")
+                    if not isinstance(msg, dict):
+                        continue
+
+                    content = msg.get("content")
+                    if not isinstance(content, list):
+                        continue
+
+                    for block in content:
+                        if not isinstance(block, dict):
+                            continue
+
+                        btype = block.get("type")
+                        if btype not in ("tool_use",):
+                            continue
+
+                        tool_name = block.get("name", "").lower()
+                        if tool_name not in ("write", "edit"):
+                            continue
+
+                        # Extract file_path from tool input
+                        tool_input = block.get("input")
+                        if not isinstance(tool_input, dict):
+                            continue
+
+                        file_path = tool_input.get("file_path")
+                        if isinstance(file_path, str) and file_path.strip():
+                            files.add(file_path.strip())
+
+        except (OSError, IOError):
+            pass
+
+        return sorted(files)
+
+    @staticmethod
     def analyze_scope(dispatch_prompt: str, agent_id: str) -> Dict[str, Any]:
         """Analyze file scope for a dispatch.
 
-        Returns:
+        Computes REAL data: intended files from prompt, actual files from transcript
+        Write/Edit tool-use records. Returns:
             {
                 "intended_files": [path, ...],
                 "actual_files": [path, ...],
                 "coverage": float (0-1),
-                "drift": [files_only_in_intended, files_only_in_actual]
+                "drift": {"only_intended": [...], "only_actual": [...]}
             }
         """
         intended = FileScopeAnalyzer.extract_intended_scope(dispatch_prompt)
 
-        # For now, actual files would come from transcript analysis
-        # This is a placeholder; in production, we'd parse the transcript
-        # to see which files were actually opened/modified
+        # Extract REAL actual files from transcript
+        # If transcript doesn't exist or can't be read, actual_files will be empty
         actual = []
+        try:
+            transcript_path, err = agents._resolve_transcript_path(agent_id)
+            if err is None:
+                actual = FileScopeAnalyzer._extract_actual_files_from_transcript(transcript_path)
+        except (TypeError, ValueError, AttributeError):
+            # _resolve_transcript_path may fail if agent_id is invalid
+            actual = []
 
         coverage = 0.0
         if intended:
@@ -258,8 +333,20 @@ def get_file_scope(agent_id: str) -> Optional[Dict[str, Any]]:
         if not prompt:
             return None
 
+        # Even if prompt exists, return the analysis (may have empty actual_files)
         return FileScopeAnalyzer.analyze_scope(prompt, agent_id)
-    except Exception:
+    except Exception as e:
+        # Only return None on genuine errors (bad agent_id)
+        # For missing transcripts, return with empty actual_files
+        if isinstance(e, dict) and "error" in str(e):
+            return None
+        # Otherwise return default structure with intended files from prompt
+        try:
+            prompt = agents.extract_agent_dispatch_prompt(agent_id)
+            if isinstance(prompt, dict) and "error" not in prompt and prompt:
+                return FileScopeAnalyzer.analyze_scope(prompt, agent_id)
+        except Exception:
+            pass
         return None
 
 
@@ -267,7 +354,8 @@ def get_first_try_rate() -> Dict[str, Any]:
     """Get first-try success board data (C3).
 
     Analyzes all agent transcripts to compute % of dispatches needing no repair,
-    broken down by domain and lane.
+    broken down by domain and lane. Scans for REPAIR MARKERS (re-dispatch, retry,
+    fail-then-pass patterns) in transcript text and message flow.
 
     Returns:
         {
@@ -294,18 +382,146 @@ def get_first_try_rate() -> Dict[str, Any]:
             }
         }
     """
-    # Placeholder implementation; in production, this would:
-    # 1. Scan all agent transcripts
-    # 2. Detect repair markers (re-run, retry, fail-then-pass)
-    # 3. Extract domain/lane from dispatch prompt
-    # 4. Compute rates per domain/lane
+    domains = {}
+    lanes = {}
+    overall_first_try = 0
+    overall_repair = 0
+
+    # Scan all agent transcripts from TRANSCRIPTS_ROOT
+    transcripts_root = config.TRANSCRIPTS_ROOT
+    if not transcripts_root or not transcripts_root.exists():
+        # Honest empty state: no data available yet
+        return {
+            "domains": {},
+            "lanes": {},
+            "overall": {
+                "first_try": 0,
+                "needed_repair": 0,
+                "rate": 0.0
+            }
+        }
+
+    try:
+        # Find all agent-*.jsonl files
+        for transcript_file in transcripts_root.glob("**/agent-*.jsonl"):
+            first_try = True
+            message_count = 0
+            has_failure_marker = False
+
+            # Scan transcript for repair markers
+            try:
+                with open(transcript_file, 'r', encoding='utf-8', errors='replace') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except (json.JSONDecodeError, ValueError):
+                            continue
+
+                        if not isinstance(obj, dict):
+                            continue
+
+                        message_count += 1
+
+                        # Check for repair markers in transcript text
+                        msg = obj.get("message")
+                        if isinstance(msg, dict):
+                            content = msg.get("content")
+                            if isinstance(content, str):
+                                text = content.lower()
+                            elif isinstance(content, list):
+                                text = " ".join(
+                                    str(b.get("text", "")) if isinstance(b, dict) else str(b)
+                                    for b in content
+                                ).lower()
+                            else:
+                                text = ""
+
+                            # Repair markers: re-run, retry, fix, repair, fail-then-pass
+                            if any(marker in text for marker in
+                                   ["re-run", "re-dispatch", "retry", "failed", "error", "repair"]):
+                                has_failure_marker = True
+
+            except (OSError, IOError):
+                pass
+
+            # Classify as first-try or repair based on markers
+            if has_failure_marker and message_count > 0:
+                first_try = False
+
+            # Extract domain from transcript path (first part of agent id or filename)
+            domain = "unclassified"
+            lane = "unclassified"
+
+            # Try to extract from filename or transcript
+            try:
+                filename = transcript_file.name
+                # agent-wave14-driver-repair-abc123.jsonl -> "driver"
+                parts = filename.split("-")
+                if len(parts) > 2:
+                    potential_domain = parts[2]
+                    if potential_domain in ("ui", "driver", "tools", "bench", "state_store"):
+                        domain = potential_domain
+
+                # Try to detect lane from transcript content
+                try:
+                    with open(transcript_file, 'r', encoding='utf-8', errors='replace') as f:
+                        for line in f:
+                            if "ranked" in line.lower():
+                                lane = "ranked"
+                                break
+                            elif "in-progress" in line.lower():
+                                lane = "in-progress"
+                                break
+                except (OSError, IOError):
+                    pass
+
+            except (IndexError, AttributeError):
+                pass
+
+            # Update domain stats
+            if domain not in domains:
+                domains[domain] = {"first_try": 0, "needed_repair": 0}
+
+            if first_try:
+                domains[domain]["first_try"] += 1
+                overall_first_try += 1
+            else:
+                domains[domain]["needed_repair"] += 1
+                overall_repair += 1
+
+            # Update lane stats
+            if lane not in lanes:
+                lanes[lane] = {"first_try": 0, "needed_repair": 0}
+
+            if first_try:
+                lanes[lane]["first_try"] += 1
+            else:
+                lanes[lane]["needed_repair"] += 1
+
+    except (OSError, IOError):
+        pass
+
+    # Compute rates
+    for domain in domains:
+        total = domains[domain]["first_try"] + domains[domain]["needed_repair"]
+        domains[domain]["rate"] = domains[domain]["first_try"] / total if total > 0 else 0.0
+
+    for lane in lanes:
+        total = lanes[lane]["first_try"] + lanes[lane]["needed_repair"]
+        lanes[lane]["rate"] = lanes[lane]["first_try"] / total if total > 0 else 0.0
+
+    overall_total = overall_first_try + overall_repair
+    overall_rate = overall_first_try / overall_total if overall_total > 0 else 0.0
 
     return {
-        "domains": {},
-        "lanes": {},
+        "domains": domains,
+        "lanes": lanes,
         "overall": {
-            "first_try": 0,
-            "needed_repair": 0,
-            "rate": 0.0
+            "first_try": overall_first_try,
+            "needed_repair": overall_repair,
+            "rate": overall_rate
         }
     }

@@ -76,16 +76,21 @@ export function FileScopeVisualizer({ agentId }: FileScopeVisualizerProps) {
   const driftOnlyActual = data.drift.only_actual.length;
 
   return (
-    <div className="file-scope-visualizer" data-testid="file-scope-visualizer">
+    <div
+      className="file-scope-visualizer"
+      data-testid="file-scope-visualizer"
+      role="region"
+      aria-label="File scope analysis"
+    >
       <div className="scope-header">
         <h3>File Scope Analysis</h3>
-        <div className="coverage-badge">
+        <div className="coverage-badge" aria-label={`Coverage: ${coveragePercent}%`}>
           <span className="label">Coverage:</span>
           <span className="percent">{coveragePercent}%</span>
         </div>
       </div>
 
-      <div className="coverage-bar">
+      <div className="coverage-bar" role="progressbar" aria-valuenow={coveragePercent} aria-valuemin={0} aria-valuemax={100}>
         <div
           className="coverage-fill"
           style={{ width: `${coveragePercent}%` }}
@@ -95,12 +100,16 @@ export function FileScopeVisualizer({ agentId }: FileScopeVisualizerProps) {
 
       <div className="file-counts">
         <div className="count-item">
-          <label>Intended Files:</label>
-          <span className="count">{intentedCount}</span>
+          <label htmlFor="intended-count">Intended Files:</label>
+          <span className="count" id="intended-count">
+            {intentedCount}
+          </span>
         </div>
         <div className="count-item">
-          <label>Actual Files:</label>
-          <span className="count">{actualCount}</span>
+          <label htmlFor="actual-count">Actual Files:</label>
+          <span className="count" id="actual-count">
+            {actualCount}
+          </span>
         </div>
       </div>
 

@@ -92,29 +92,41 @@ export function SpecSharpnessIndicator({ agentId, expanded = false }: SpecSharpn
         onClick={() => setShowDetails(!showDetails)}
         title={`Spec Sharpness: ${data.level} (${data.score}/100)`}
         data-testid="spec-sharpness-badge"
+        aria-pressed={showDetails}
+        aria-label={`Spec Sharpness: ${data.level} (${data.score}/100)`}
       >
         {data.level[0]}
       </button>
 
       {showDetails && (
-        <div className="spec-sharpness-detail" data-testid="spec-sharpness-detail">
+        <div
+          className="spec-sharpness-detail"
+          data-testid="spec-sharpness-detail"
+          role="region"
+          aria-label="Spec sharpness details"
+        >
           <div className="detail-header">
             <h4>Spec Sharpness: {data.level}</h4>
-            <span className="score">{data.score}/100</span>
+            <span className="score" aria-label={`Score: ${data.score} out of 100`}>
+              {data.score}/100
+            </span>
           </div>
 
           <div className="signals">
             <div className="signal">
-              <label>Directives:</label>
-              <span>{data.signals.directive_count}</span>
+              <label htmlFor={`directive-count-${agentId}`}>Directives:</label>
+              <span id={`directive-count-${agentId}`}>{data.signals.directive_count}</span>
             </div>
             <div className="signal">
-              <label>Acceptance Criteria:</label>
-              <span>{data.signals.has_acceptance_criteria ? 'Yes' : 'No'}</span>
+              <label htmlFor={`acceptance-criteria-${agentId}`}>Acceptance Criteria:</label>
+              <span id={`acceptance-criteria-${agentId}`}>
+                {data.signals.has_acceptance_criteria ? 'Yes' : 'No'}
+              </span>
             </div>
             <div className="signal">
-              <label>File Specificity:</label>
+              <label htmlFor={`file-specificity-${agentId}`}>File Specificity:</label>
               <meter
+                id={`file-specificity-${agentId}`}
                 value={data.signals.file_specificity}
                 min="0"
                 max="1"
@@ -124,8 +136,9 @@ export function SpecSharpnessIndicator({ agentId, expanded = false }: SpecSharpn
               />
             </div>
             <div className="signal">
-              <label>Structured Content:</label>
+              <label htmlFor={`structured-content-${agentId}`}>Structured Content:</label>
               <meter
+                id={`structured-content-${agentId}`}
                 value={data.signals.structured_content_ratio}
                 min="0"
                 max="1"
@@ -135,8 +148,8 @@ export function SpecSharpnessIndicator({ agentId, expanded = false }: SpecSharpn
               />
             </div>
             <div className="signal">
-              <label>Emphasis Markers:</label>
-              <span>{data.signals.emphasis_markers}</span>
+              <label htmlFor={`emphasis-markers-${agentId}`}>Emphasis Markers:</label>
+              <span id={`emphasis-markers-${agentId}`}>{data.signals.emphasis_markers}</span>
             </div>
           </div>
         </div>
