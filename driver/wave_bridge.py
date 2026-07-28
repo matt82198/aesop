@@ -207,6 +207,8 @@ def dispatch_item(
                 "error": f"dispatch_worker failed: {result.error}",
                 "workerId": result.worker_id,
                 "verified": False,  # Not verified (dispatch failed)
+                "testStdout": "",
+                "testStderr": "",
             }
 
         # Worker succeeded; now run the test command.
@@ -224,6 +226,8 @@ def dispatch_item(
                 "workerId": result.worker_id,
                 "verified": False,  # Not verified (no test to run)
                 "reason": "no_test_command",
+                "testStdout": "",
+                "testStderr": "",
             }
 
         test_result = driver.run_command(test_cmd, cwd=exec_workdir)
@@ -239,6 +243,8 @@ def dispatch_item(
             "error": None if ok else f"test failed with exit {test_result.exit_code}",
             "workerId": result.worker_id,
             "verified": ok,  # Verified if and only if test passed (exit 0)
+            "testStdout": test_result.stdout,
+            "testStderr": test_result.stderr,
         }
 
     except Exception as exc:
@@ -251,4 +257,6 @@ def dispatch_item(
             "error": f"dispatch_item internal error: {exc}",
             "workerId": None,
             "verified": False,  # Not verified (exception during execution)
+            "testStdout": "",
+            "testStderr": "",
         }
