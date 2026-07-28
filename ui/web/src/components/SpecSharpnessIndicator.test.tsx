@@ -5,12 +5,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { SpecSharpnessIndicator } from './SpecSharpnessIndicator';
 
-// Mock the fetchAPI function
+// Mock the fetchApi function
 vi.mock('../lib/api', () => ({
-  fetchAPI: vi.fn(),
+  fetchApi: vi.fn(),
 }));
 
-import { fetchAPI } from '../lib/api';
+import { fetchApi } from '../lib/api';
 
 describe('SpecSharpnessIndicator', () => {
   beforeEach(() => {
@@ -18,7 +18,7 @@ describe('SpecSharpnessIndicator', () => {
   });
 
   it('renders loading state initially', async () => {
-    (fetchAPI as any).mockImplementation(() => new Promise(() => {})); // never resolves
+    (fetchApi as any).mockImplementation(() => new Promise(() => {})); // never resolves
 
     render(<SpecSharpnessIndicator agentId="test-agent" />);
     const loading = screen.getByTestId('spec-sharpness-loading');
@@ -26,7 +26,7 @@ describe('SpecSharpnessIndicator', () => {
   });
 
   it('renders error state on fetch failure', async () => {
-    (fetchAPI as any).mockResolvedValue({ error: 'Agent not found' });
+    (fetchApi as any).mockResolvedValue({ error: 'Agent not found' });
 
     render(<SpecSharpnessIndicator agentId="test-agent" />);
 
@@ -48,7 +48,7 @@ describe('SpecSharpnessIndicator', () => {
       },
     };
 
-    (fetchAPI as any).mockResolvedValue(mockData);
+    (fetchApi as any).mockResolvedValue(mockData);
 
     render(<SpecSharpnessIndicator agentId="test-agent" />);
 
@@ -70,7 +70,7 @@ describe('SpecSharpnessIndicator', () => {
       },
     };
 
-    (fetchAPI as any).mockResolvedValue(mockData);
+    (fetchApi as any).mockResolvedValue(mockData);
 
     const { rerender } = render(<SpecSharpnessIndicator agentId="test-agent" />);
 
@@ -97,7 +97,7 @@ describe('SpecSharpnessIndicator', () => {
       },
     };
 
-    (fetchAPI as any).mockResolvedValue(mockData);
+    (fetchApi as any).mockResolvedValue(mockData);
 
     render(<SpecSharpnessIndicator agentId="test-agent" expanded={true} />);
 
@@ -106,7 +106,7 @@ describe('SpecSharpnessIndicator', () => {
   });
 
   it('fetches with correct agent ID', async () => {
-    (fetchAPI as any).mockResolvedValue({
+    (fetchApi as any).mockResolvedValue({
       level: 'Low',
       score: 20,
       signals: {

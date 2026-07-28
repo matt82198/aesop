@@ -5,12 +5,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { FileScopeVisualizer } from './FileScopeVisualizer';
 
-// Mock the fetchAPI function
+// Mock the fetchApi function
 vi.mock('../lib/api', () => ({
-  fetchAPI: vi.fn(),
+  fetchApi: vi.fn(),
 }));
 
-import { fetchAPI } from '../lib/api';
+import { fetchApi } from '../lib/api';
 
 describe('FileScopeVisualizer', () => {
   beforeEach(() => {
@@ -18,7 +18,7 @@ describe('FileScopeVisualizer', () => {
   });
 
   it('renders loading state initially', () => {
-    (fetchAPI as any).mockImplementation(() => new Promise(() => {})); // never resolves
+    (fetchApi as any).mockImplementation(() => new Promise(() => {})); // never resolves
 
     render(<FileScopeVisualizer agentId="test-agent" />);
     const loading = screen.getByTestId('file-scope-loading');
@@ -26,7 +26,7 @@ describe('FileScopeVisualizer', () => {
   });
 
   it('renders error state on fetch failure', async () => {
-    (fetchAPI as any).mockResolvedValue({ error: 'Failed to fetch' });
+    (fetchApi as any).mockResolvedValue({ error: 'Failed to fetch' });
 
     render(<FileScopeVisualizer agentId="test-agent" />);
 
@@ -46,7 +46,7 @@ describe('FileScopeVisualizer', () => {
       },
     };
 
-    (fetchAPI as any).mockResolvedValue(mockData);
+    (fetchApi as any).mockResolvedValue(mockData);
 
     render(<FileScopeVisualizer agentId="test-agent" />);
 
@@ -65,7 +65,7 @@ describe('FileScopeVisualizer', () => {
       },
     };
 
-    (fetchAPI as any).mockResolvedValue(mockData);
+    (fetchApi as any).mockResolvedValue(mockData);
 
     render(<FileScopeVisualizer agentId="test-agent" />);
 
@@ -85,7 +85,7 @@ describe('FileScopeVisualizer', () => {
       },
     };
 
-    (fetchAPI as any).mockResolvedValue(mockData);
+    (fetchApi as any).mockResolvedValue(mockData);
 
     render(<FileScopeVisualizer agentId="test-agent" />);
 
@@ -106,7 +106,7 @@ describe('FileScopeVisualizer', () => {
       },
     };
 
-    (fetchAPI as any).mockResolvedValue(mockData);
+    (fetchApi as any).mockResolvedValue(mockData);
 
     render(<FileScopeVisualizer agentId="test-agent" />);
 
@@ -130,7 +130,7 @@ describe('FileScopeVisualizer', () => {
       },
     };
 
-    (fetchAPI as any).mockResolvedValue(mockData);
+    (fetchApi as any).mockResolvedValue(mockData);
 
     render(<FileScopeVisualizer agentId="test-agent" />);
 
@@ -149,7 +149,7 @@ describe('FileScopeVisualizer', () => {
       },
     };
 
-    (fetchAPI as any).mockResolvedValue(mockData);
+    (fetchApi as any).mockResolvedValue(mockData);
 
     render(<FileScopeVisualizer agentId="test-agent" />);
 

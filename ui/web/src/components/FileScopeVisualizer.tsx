@@ -10,7 +10,7 @@
 
 import { useEffect, useState } from 'react';
 import type { FileScopeData } from '../lib/types';
-import { fetchAPI } from '../lib/api';
+import { fetchApi } from '../lib/api';
 import './FileScopeVisualizer.css';
 
 interface FileScopeVisualizerProps {
@@ -29,7 +29,7 @@ export function FileScopeVisualizer({ agentId }: FileScopeVisualizerProps) {
       setLoading(true);
       setError(null);
       try {
-        const result = await fetchAPI(`/api/context/files?agent=${encodeURIComponent(agentId)}`);
+        const result = await fetchApi(`/api/context/files?agent=${encodeURIComponent(agentId)}`);
         if (result.error) {
           setError(result.error);
         } else {

@@ -10,7 +10,7 @@
 
 import { useEffect, useState } from 'react';
 import type { SpecSharpnessScore } from '../lib/types';
-import { fetchAPI } from '../lib/api';
+import { fetchApi } from '../lib/api';
 import './SpecSharpnessIndicator.css';
 
 interface SpecSharpnessIndicatorProps {
@@ -38,7 +38,7 @@ export function SpecSharpnessIndicator({ agentId, expanded = false }: SpecSharpn
       setLoading(true);
       setError(null);
       try {
-        const result = await fetchAPI(`/api/quality/spec-sharpness?agent=${encodeURIComponent(agentId)}`);
+        const result = await fetchApi(`/api/quality/spec-sharpness?agent=${encodeURIComponent(agentId)}`);
         if (result.error) {
           setError(result.error);
         } else {
@@ -128,10 +128,10 @@ export function SpecSharpnessIndicator({ agentId, expanded = false }: SpecSharpn
               <meter
                 id={`file-specificity-${agentId}`}
                 value={data.signals.file_specificity}
-                min="0"
-                max="1"
-                low="0.33"
-                high="0.66"
+                min={0}
+                max={1}
+                low={0.33}
+                high={0.66}
                 className="meter"
               />
             </div>
@@ -140,10 +140,10 @@ export function SpecSharpnessIndicator({ agentId, expanded = false }: SpecSharpn
               <meter
                 id={`structured-content-${agentId}`}
                 value={data.signals.structured_content_ratio}
-                min="0"
-                max="1"
-                low="0.33"
-                high="0.66"
+                min={0}
+                max={1}
+                low={0.33}
+                high={0.66}
                 className="meter"
               />
             </div>
