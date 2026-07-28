@@ -113,3 +113,43 @@ cd bench/seam_tasks/st02 && python -m pytest oracle -q
 - `test_user_provided_defaults_not_modified`: Ensures caller's dict isn't mutated
 - `test_custom_defaults_returned`: Happy path with custom defaults
 - `test_happy_path_returns_dict_with_retries`: Happy path with function defaults
+
+## Visible Repro Test
+
+### Test Assertions
+The visible test `repo/test_repro.py` contains one focused assertion:
+- When a user provides a dict to get_app_config, that original dict is not modified
+
+### Fail Output (Defective Code)
+```
+cd bench/seam_tasks/st02/repo && python -m pytest test_repro.py -q
+
+F                                                                        [100%]
+================================== FAILURES ===================================
+_____________ TestConfigLoaderRepro.test_user_config_not_modified _____________
+
+    def test_user_config_not_modified(self):
+        user_config = {"setting": "value"}
+        original_keys = set(user_config.keys())
+        result = get_app_config(user_config)
+        assert "retries" in result
+>       assert set(user_config.keys()) == original_keys
+E       AssertionError: assert {'retries', 'setting'} == {'setting'}
+
+test_repro.py:22: AssertionError
+1 failed in 0.04s
+```
+
+### Pass Output (Fixed Code)
+```
+cd bench/seam_tasks/st02/repo && python -m pytest test_repro.py -q
+
+.                                                                        [100%]
+1 passed in 0.00s
+```
+
+### Distinction from Oracle
+The visible test is simpler and more focused than the oracle suite:
+- Visible: Single test with one scenario (user-provided dict not modified)
+- Oracle: 5 comprehensive tests covering mutable defaults, consecutive calls, and various user inputs
+- Visible test encodes only the observable symptom; oracle is thorough verification
