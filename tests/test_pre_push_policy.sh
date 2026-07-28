@@ -1029,6 +1029,158 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+printf '\n=== Fix 1: get_next_seq/verify_audit_log stay python3||python (seq does not stick at 1 when python3 is shadowed) ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_py3shim"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+
+  real_py3=$(command -v python3 2>/dev/null)
+  if [ -z "$real_py3" ]; then
+    printf 'SKIP: no python3 found on this host to build the shim test from\n'
+    exit 0
+  fi
+
+  # Build a PATH where bare `python3` does NOT resolve but bare `python`
+  # DOES -- and `python` execs a REAL python3 interpreter. This reproduces
+  # a host that only ships `python` as Python 3 (some Linux distros), the
+  # exact case compute_sha256's sha256sum||shasum fallback already handles
+  # for hashing but get_next_seq/verify_audit_log did not for parsing JSON.
+  shim_dir="$TEST_ROOT/py3shim_bin"
+  mkdir -p "$shim_dir"
+  cat > "$shim_dir/python" <<SHIM
+#!/usr/bin/env bash
+exec "$real_py3" "\$@"
+SHIM
+  chmod +x "$shim_dir/python"
+
+  filtered_path=""
+  saved_ifs="$IFS"
+  IFS=':'
+  for d in $PATH; do
+    if [ -e "$d/python3" ] || [ -e "$d/python3.exe" ]; then
+      continue
+    fi
+    if [ -z "$filtered_path" ]; then
+      filtered_path="$d"
+    else
+      filtered_path="$filtered_path:$d"
+    fi
+  done
+  IFS="$saved_ifs"
+
+  test_path="$shim_dir:$filtered_path"
+
+  # Sanity: confirm the constructed PATH really hides python3 and exposes python
+  if PATH="$test_path" command -v python3 >/dev/null 2>&1; then
+    printf 'SKIP: could not hide python3 from PATH on this host (test environment unsuitable)\n'
+    exit 0
+  fi
+  if ! PATH="$test_path" command -v python >/dev/null 2>&1; then
+    printf 'SKIP: shim python did not resolve on constructed PATH\n'
+    exit 0
+  fi
+
+  (
+    export PATH="$test_path"
+    log_block "shim_entry_1" >/dev/null 2>&1
+    log_block "shim_entry_2" >/dev/null 2>&1
+    log_block "shim_entry_3" >/dev/null 2>&1
+  )
+
+  audit_log="$AESOP_ROOT/state/SECURITY-AUDIT.log"
+  if [ ! -f "$audit_log" ]; then
+    printf 'FAIL: audit log not created under python3-absent PATH\n'
+    exit 1
+  fi
+
+  line_count=$(wc -l < "$audit_log")
+  first_seq=$(head -n 1 "$audit_log" | grep -oE '"seq":[0-9]+' | cut -d: -f2)
+  last_seq=$(tail -n 1 "$audit_log" | grep -oE '"seq":[0-9]+' | cut -d: -f2)
+
+  if [ "$line_count" -ne 3 ]; then
+    printf 'FAIL: expected 3 audit entries, got %s\n' "$line_count"
+    exit 1
+  fi
+
+  if [ "$first_seq" != "1" ] || [ "$last_seq" != "3" ]; then
+    printf 'FAIL: seq did not stay monotonic under python3-absent/python-present PATH (first=%s last=%s) -- the seq-based truncation/tamper invariant is silently defeated when python3 is shadowed\n' "$first_seq" "$last_seq"
+    exit 1
+  fi
+
+  # verify_audit_log itself also hardcoded python3 at two more sites
+  # (actual_prev_hash, current_seq); prove it also still works under this PATH.
+  (
+    export PATH="$test_path"
+    verify_audit_log "$audit_log"
+  ) >/dev/null 2>&1
+  vrc=$?
+  if [ $vrc -ne 0 ]; then
+    printf 'FAIL: verify_audit_log failed under python3-absent/python-present PATH (rc=%d)\n' "$vrc"
+    exit 1
+  fi
+
+  printf 'PASS: seq stayed monotonic (1..3) and verify_audit_log passed with only "python" (real python3) on PATH\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Fix 2: check_secret_scan prefers python3 over python (broken/legacy python does not crash the scan) ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_py2shim"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+
+  real_py3=$(command -v python3 2>/dev/null)
+  if [ -z "$real_py3" ]; then
+    printf 'SKIP: no python3 found on this host\n'
+    exit 0
+  fi
+
+  # A clean-scanning scanner script (Python-3-only in spirit): exits 0
+  # unconditionally, standing in for "no secrets found". This is only
+  # meaningful if a WORKING interpreter actually runs it -- if the broken
+  # `python` shim below gets invoked instead, it exits 1 regardless,
+  # simulating a Python-2 crash on a Python-3-only script.
+  cat > "$AESOP_ROOT/tools/secret_scan.py" <<'SCANNER'
+#!/usr/bin/env python3
+import sys
+sys.exit(0)
+SCANNER
+  chmod +x "$AESOP_ROOT/tools/secret_scan.py"
+
+  shim_dir="$TEST_ROOT/py2shim_bin"
+  mkdir -p "$shim_dir"
+  # Broken `python`: simulates a Python-2-only interpreter hitting the
+  # Python-3-only scanner -- always exits nonzero, regardless of args.
+  cat > "$shim_dir/python" <<'SHIM'
+#!/usr/bin/env bash
+printf 'SyntaxError: simulated python2 incompatibility\n' >&2
+exit 1
+SHIM
+  chmod +x "$shim_dir/python"
+
+  test_path="$shim_dir:$PATH"
+
+  local_sha="abc123def456"
+  stdin_input="refs/heads/feature/test $local_sha refs/heads/feature/test 0000000000000000000000000000000000000000"
+
+  out=$( printf '%s\n' "$stdin_input" | PATH="$test_path" check_secret_scan 2>&1 )
+  rc=$?
+
+  if [ $rc -ne 0 ]; then
+    printf 'FAIL: check_secret_scan picked the broken "python" over a working "python3" on PATH (interpreter order not python3-first). Output: %s\n' "$out"
+    exit 1
+  fi
+  printf 'PASS: check_secret_scan prefers python3, so a broken/legacy "python" earlier on PATH does not crash the scan\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Test Summary ===\n'
 printf 'Tests PASSED: %d\n' "$test_passed"
 printf 'Tests FAILED: %d\n' "$test_failed"
