@@ -24,13 +24,15 @@ show_error() {
   exit 1
 }
 
+# Prints usage text only (no exit); callers decide the stream/exit code so
+# that `--help`/`-h` (least-surprise: exit 0, stdout) and genuine usage
+# errors (exit 1, stderr) can share one message without sharing behavior.
 show_usage() {
   cat <<'EOF'
 Usage:
   bash tools/agent-forensics.sh <commit>              Forensics at <commit>
   bash tools/agent-forensics.sh --diff <commitA> <commitB>   Behavior diff
 EOF
-  exit 1
 }
 
 # --- Commit header (hash, date, subject) ---
@@ -169,10 +171,14 @@ case "${1:-}" in
     diff_behavior "$2" "$3"
     ;;
   --help|-h)
+    # Requested help is not an error: usage to stdout, exit 0.
     show_usage
+    exit 0
     ;;
   '')
-    show_usage
+    # Missing args is a genuine usage error: usage to stderr, exit 1.
+    show_usage >&2
+    exit 1
     ;;
   *)
     print_commit_header "$1"
