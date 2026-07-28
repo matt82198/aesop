@@ -19,8 +19,8 @@ def setup_routes():
 
 def load_application():
     """Initialize the application in the correct order."""
-    setup_routes()
     initialize_registry()
+    setup_routes()
 
 
 def get_route_uncached():
