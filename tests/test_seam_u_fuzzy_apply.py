@@ -470,3 +470,32 @@ class FuzzyApplyTrailingContextRegression(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FuzzyApplyMultiFileRegression(unittest.TestCase):
+    """Regression: a multi-file diff with wrong @@ line numbers must apply to
+    each file (previously the fuzzy fallback handled only the first file, and
+    git apply rejects the whole diff when any file's line numbers are off)."""
+
+    def test_multifile_split(self):
+        from bench.run_seam_u import _split_diff_by_file
+        diff = (
+            "--- a/one.py\n+++ b/one.py\n@@ -1,1 +1,1 @@\n-a\n+A\n"
+            "--- a/two.py\n+++ b/two.py\n@@ -1,1 +1,1 @@\n-b\n+B\n"
+        )
+        segs = _split_diff_by_file(diff)
+        self.assertEqual([p for p, _ in segs], ["one.py", "two.py"])
+        # a removed line beginning with dashes must NOT be treated as a header
+        self.assertEqual(len(segs), 2)
+
+    def test_removed_line_starting_with_dashes_not_a_header(self):
+        from bench.run_seam_u import _split_diff_by_file
+        diff = ("--- a/f.py\n+++ b/f.py\n@@ -1,2 +1,2 @@\n"
+                "---- decorative comment\n+# real comment\n z\n")
+        segs = _split_diff_by_file(diff)
+        self.assertEqual(len(segs), 1)
+        self.assertEqual(segs[0][0], "f.py")
+
+
+if __name__ == "__main__":
+    unittest.main()
