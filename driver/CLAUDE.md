@@ -112,7 +112,11 @@ Codex driver (Tier 2): injects file contents into prompt, calls OpenAI Chat Comp
 
 **build_manifest_item(driver, item)**: enriches a backlog item with model, verificationTier,
 and the four verification_policy knobs — resolved ONCE as literal manifest fields (no
-recompute drift); Claude tier-1 path stays byte-identical. **dispatch_item(driver, item)**:
+recompute drift); Claude tier-1 path stays byte-identical. Also derives a BASELINE
+`acceptanceCriteria` from `testCmd` when the item has none of its own (authored criteria
+always win, untouched; no testCmd + no authored criteria = no key set at all, true no-op —
+byte-identical build prompt). Shape matches wave-flat-dispatch.template.mjs's
+`acceptanceCriteriaSection`: `[{statement, verifiable_by}]`. **dispatch_item(driver, item)**:
 routes by worker_filesystem_access. HONESTY: ok=True ONLY on test exit 0, never from the
 model's done:true; no testCmd -> ok/verified=False (reason='no_test_command'); exception ->
 fail-safe False. Ownership enforced at driver level. Offline tests prove Codex+FakeTransport

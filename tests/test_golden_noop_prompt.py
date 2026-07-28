@@ -16,6 +16,9 @@ DRIVER_DIR = REPO / "driver"
 if str(DRIVER_DIR) not in sys.path:
     sys.path.insert(0, str(DRIVER_DIR))
 
+from claude_code_driver import ClaudeCodeDriver  # noqa: E402
+from wave_bridge import build_manifest_item  # noqa: E402
+
 
 class TestGoldenNoOpPrompts(unittest.TestCase):
     """Verify that the template produces byte-identical prompts when optional fields absent."""
@@ -98,27 +101,30 @@ class TestGoldenNoOpPrompts(unittest.TestCase):
                          "Concatenating empty sections should not change the base string")
 
     def test_manifest_item_without_optional_fields_yields_noop(self):
-        """Manifest item without A1-A4 fields should be functionally equivalent to pre-change."""
-        # This is the contract: if the input item lacks the new fields,
-        # the output should be identical to what it would have been before.
+        """Manifest item without ANY A1-A4 field AND no testCmd is the TRUE no-op:
+        build_manifest_item's actual output carries none of the optional prompt
+        sections, so the rendered build prompt stays byte-identical.
+        """
         item_old_style = {
             "slug": "fix-example",
             "ownsFiles": ["src/example.py"],
             "prompt": "Fix the example",
-            "testCmd": "python test.py",
+            # Deliberately NO testCmd: this is what keeps this case a true no-op.
+            # (Domain-specific baseline-derivation test below covers testCmd.)
         }
 
-        # The build_manifest_item already passes through all input fields (dict(item))
-        # so the A1-A4 fields would simply not be in the result if not in input
-        result = dict(item_old_style)
-        result["model"] = "haiku"
-        result["verificationTier"] = 1
-        result["repairCap"] = 1
-        result["requireAdversarialReview"] = False
-        result["spotCheckFrac"] = 0.10
-        result["validateAllJson"] = False
+        # Call the REAL function, not a hand-simulated replica -- this is the
+        # actual contract the template consumes.
+        result = build_manifest_item(ClaudeCodeDriver(), item_old_style)
 
-        # Verify no A1-A4 fields are added
+        self.assertEqual(result["model"], "haiku")
+        self.assertEqual(result["verificationTier"], 1)
+        self.assertEqual(result["repairCap"], 1)
+        self.assertFalse(result["requireAdversarialReview"])
+        self.assertEqual(result["spotCheckFrac"], 0.10)
+        self.assertFalse(result["validateAllJson"])
+
+        # Verify no A1-A4 fields are added: true no-op.
         self.assertNotIn("acceptanceCriteria", result)
         self.assertNotIn("lastTestOutput", result)
         self.assertNotIn("domainSynopsis", result)
@@ -126,6 +132,37 @@ class TestGoldenNoOpPrompts(unittest.TestCase):
 
         # The prompt sections generated from the result should be empty
         # (verified by template helper functions)
+
+    def test_manifest_item_with_testcmd_derives_baseline_acceptance_criteria(self):
+        """DELIBERATE behavior change (not a regression): an item WITH a testCmd
+        and no authored acceptanceCriteria now gets a derived baseline via
+        build_manifest_item, so its build prompt WILL render an ACCEPTANCE
+        CRITERIA section. This is context-engineering sharpening, gated by
+        testCmd presence -- items without a testCmd remain untouched (see
+        test_manifest_item_without_optional_fields_yields_noop, the true no-op).
+        """
+        item_with_testcmd = {
+            "slug": "fix-example",
+            "ownsFiles": ["src/example.py"],
+            "prompt": "Fix the example",
+            "testCmd": "python test.py",
+        }
+
+        result = build_manifest_item(ClaudeCodeDriver(), item_with_testcmd)
+
+        self.assertEqual(
+            result["acceptanceCriteria"],
+            [
+                {
+                    "statement": "The item's tests pass with no regressions.",
+                    "verifiable_by": "python test.py",
+                }
+            ],
+        )
+        # No other A1-A4 field is derived; only acceptanceCriteria.
+        self.assertNotIn("lastTestOutput", result)
+        self.assertNotIn("domainSynopsis", result)
+        self.assertNotIn("ownsFilesDiff", result)
 
 
 if __name__ == "__main__":
