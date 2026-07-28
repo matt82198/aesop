@@ -76,6 +76,22 @@ export function FirstTryRateBoard({ autoRefresh = 0 }: FirstTryRateBoardProps) {
     );
   }
 
+  // Honest empty state: available=false means insufficient data
+  if (!data.available) {
+    return (
+      <div className="first-try-board empty" data-testid="first-try-board-unavailable">
+        <h2>First-Try Success Rate</h2>
+        <p>{data.reason || "Insufficient data to compute first-try rate"}</p>
+        <p style={{ fontSize: '0.875rem', color: 'var(--color-text-muted)', marginTop: '1rem' }}>
+          Data will appear once transcript history is available.
+        </p>
+        <button onClick={fetchData} className="refresh-btn" title="Refresh">
+          ⟳ Refresh
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="first-try-board" data-testid="first-try-board">
       <div className="board-header">

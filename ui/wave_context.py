@@ -354,44 +354,38 @@ def get_first_try_rate() -> Dict[str, Any]:
     """Get first-try success board data (C3).
 
     Analyzes all agent transcripts to compute % of dispatches needing no repair,
-    broken down by domain and lane. Scans for REPAIR MARKERS (re-dispatch, retry,
-    fail-then-pass patterns) in transcript text and message flow.
+    broken down by domain and lane.
+
+    SOUND STRUCTURED SIGNAL: A dispatch "needed repair" only if the TRANSCRIPT
+    contains MULTIPLE DISTINCT DISPATCH PROMPTS (indicated by 2+ top-level user
+    messages). This is a direct structural signal reflecting actual re-dispatch,
+    not prose parsing (avoids false positives on "error" in file names, log lines,
+    or prompt text like "never retry").
+
+    Returns honest empty state if no transcripts found — never fabricated counts
+    that would mislead about success rates.
 
     Returns:
         {
-            "domains": {
-                "domain_name": {
-                    "first_try": int,
-                    "needed_repair": int,
-                    "rate": float (0-1)
-                },
-                ...
-            },
-            "lanes": {
-                "lane_name": {
-                    "first_try": int,
-                    "needed_repair": int,
-                    "rate": float (0-1)
-                },
-                ...
-            },
-            "overall": {
-                "first_try": int,
-                "needed_repair": int,
-                "rate": float (0-1)
-            }
+            "available": bool,
+            "domains": {...},
+            "lanes": {...},
+            "overall": {"first_try": int, "needed_repair": int, "rate": float (0-1)}
         }
     """
     domains = {}
     lanes = {}
     overall_first_try = 0
     overall_repair = 0
+    total_dispatches = 0
 
     # Scan all agent transcripts from TRANSCRIPTS_ROOT
     transcripts_root = config.TRANSCRIPTS_ROOT
     if not transcripts_root or not transcripts_root.exists():
-        # Honest empty state: no data available yet
+        # Honest empty state: no transcripts found
         return {
+            "available": False,
+            "reason": "no transcripts found",
             "domains": {},
             "lanes": {},
             "overall": {
@@ -403,12 +397,26 @@ def get_first_try_rate() -> Dict[str, Any]:
 
     try:
         # Find all agent-*.jsonl files
-        for transcript_file in transcripts_root.glob("**/agent-*.jsonl"):
-            first_try = True
-            message_count = 0
-            has_failure_marker = False
+        transcript_files = list(transcripts_root.glob("**/agent-*.jsonl"))
+        if not transcript_files:
+            # Honest empty state: no transcripts found
+            return {
+                "available": False,
+                "reason": "no transcripts found",
+                "domains": {},
+                "lanes": {},
+                "overall": {
+                    "first_try": 0,
+                    "needed_repair": 0,
+                    "rate": 0.0
+                }
+            }
 
-            # Scan transcript for repair markers
+        for transcript_file in transcript_files:
+            # SOUND STRUCTURED SIGNAL: Count dispatch prompts in transcript
+            # Multiple dispatches (2+ top-level user messages) = repair occurred
+            dispatch_count = 0
+
             try:
                 with open(transcript_file, 'r', encoding='utf-8', errors='replace') as f:
                     for line in f:
@@ -423,39 +431,28 @@ def get_first_try_rate() -> Dict[str, Any]:
                         if not isinstance(obj, dict):
                             continue
 
-                        message_count += 1
-
-                        # Check for repair markers in transcript text
+                        # Count top-level dispatch prompts: user messages at root level
+                        # Each new top-level user message indicates a new dispatch
                         msg = obj.get("message")
-                        if isinstance(msg, dict):
+                        if isinstance(msg, dict) and msg.get("role") == "user":
+                            # Check if this looks like a dispatch prompt (contains task description)
                             content = msg.get("content")
-                            if isinstance(content, str):
-                                text = content.lower()
-                            elif isinstance(content, list):
-                                text = " ".join(
-                                    str(b.get("text", "")) if isinstance(b, dict) else str(b)
-                                    for b in content
-                                ).lower()
-                            else:
-                                text = ""
-
-                            # Repair markers: re-run, retry, fix, repair, fail-then-pass
-                            if any(marker in text for marker in
-                                   ["re-run", "re-dispatch", "retry", "failed", "error", "repair"]):
-                                has_failure_marker = True
+                            if isinstance(content, str) and len(content) > 50:  # Dispatch prompts are typically long
+                                dispatch_count += 1
 
             except (OSError, IOError):
                 pass
 
-            # Classify as first-try or repair based on markers
-            if has_failure_marker and message_count > 0:
-                first_try = False
+            # SOUND CLASSIFICATION:
+            # - 1 dispatch = first_try (no repair needed)
+            # - 2+ dispatches = needed_repair (orchestration re-dispatched the agent)
+            needed_repair = dispatch_count >= 2
+            total_dispatches += 1
 
-            # Extract domain from transcript path (first part of agent id or filename)
+            # Extract domain from transcript path
             domain = "unclassified"
             lane = "unclassified"
 
-            # Try to extract from filename or transcript
             try:
                 filename = transcript_file.name
                 # agent-wave14-driver-repair-abc123.jsonl -> "driver"
@@ -485,21 +482,21 @@ def get_first_try_rate() -> Dict[str, Any]:
             if domain not in domains:
                 domains[domain] = {"first_try": 0, "needed_repair": 0}
 
-            if first_try:
-                domains[domain]["first_try"] += 1
-                overall_first_try += 1
-            else:
+            if needed_repair:
                 domains[domain]["needed_repair"] += 1
                 overall_repair += 1
+            else:
+                domains[domain]["first_try"] += 1
+                overall_first_try += 1
 
             # Update lane stats
             if lane not in lanes:
                 lanes[lane] = {"first_try": 0, "needed_repair": 0}
 
-            if first_try:
-                lanes[lane]["first_try"] += 1
-            else:
+            if needed_repair:
                 lanes[lane]["needed_repair"] += 1
+            else:
+                lanes[lane]["first_try"] += 1
 
     except (OSError, IOError):
         pass
@@ -517,6 +514,7 @@ def get_first_try_rate() -> Dict[str, Any]:
     overall_rate = overall_first_try / overall_total if overall_total > 0 else 0.0
 
     return {
+        "available": total_dispatches > 0,
         "domains": domains,
         "lanes": lanes,
         "overall": {

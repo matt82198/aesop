@@ -556,6 +556,8 @@ export interface FirstTryStats {
 }
 
 export interface FirstTryRateBoard {
+  available: boolean; // false = no transcripts found, show honest empty state
+  reason?: string; // explanation when available=false
   domains: Record<string, FirstTryStats>;
   lanes: Record<string, FirstTryStats>;
   overall: FirstTryStats;
