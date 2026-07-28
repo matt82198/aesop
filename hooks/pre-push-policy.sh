@@ -59,6 +59,24 @@ compute_sha256() {
   $hash_bin | awk '{print $1}'
 }
 
+resolve_py_bin() {
+  # Single python-interpreter resolution point (mirrors compute_sha256's
+  # hash_bin fallback style: prefer the modern/explicit name, fall back to
+  # the generic one). Used by get_next_seq/verify_audit_log so a host that
+  # only has `python` on PATH -- but it IS Python 3 -- does not silently
+  # defeat the audit hash-chain's monotonic-seq tamper detection. Prints
+  # nothing and returns 1 if neither resolves; callers must not mask that
+  # into a silent default (Finding: get_next_seq's old `|| echo 0` did).
+  if command -v python3 >/dev/null 2>&1; then
+    printf 'python3'
+    return 0
+  fi
+  if command -v python >/dev/null 2>&1; then
+    printf 'python'
+    return 0
+  fi
+  return 1
+}
 
 acquire_audit_lock() {
   # Finding 1: Mkdir-based atomic lock for audit log write safety
@@ -138,8 +156,20 @@ get_next_seq() {
     return 0
   fi
 
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    # Genuinely missing interpreter: loud failure on stderr, not a silent
+    # slide into the same `|| echo 0` masking used for JSON-parse errors
+    # below. (This still degrades to seq=1 so log_block/log_event can keep
+    # writing an audit trail even in this near-impossible edge case, but
+    # the degradation is now visible instead of invisible.)
+    printf 'ERROR: no python3 or python interpreter found in PATH; cannot compute next audit seq (monotonic-seq tamper detection DEGRADED)\n' >&2
+    echo 1
+    return 0
+  fi
+
   local last_seq
-  last_seq=$(tail -n 1 "$audit_log" | python3 -c "import sys, json; data = json.load(sys.stdin); print(data.get('seq', 0))" 2>/dev/null || echo 0)
+  last_seq=$(tail -n 1 "$audit_log" | "$py_bin" -c "import sys, json; data = json.load(sys.stdin); print(data.get('seq', 0))" 2>/dev/null || echo 0)
   echo $((last_seq + 1))
 }
 
@@ -171,6 +201,13 @@ verify_audit_log() {
 ' >&2
   fi
 
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    release_audit_lock "$lock_dir"
+    printf 'ERROR: no python3 or python interpreter found in PATH; cannot verify audit log (hash-chain/seq verification unavailable)\n' >&2
+    return 1
+  fi
+
   local line_num=0
   local prev_line=""
   local expected_hash=""
@@ -186,7 +223,7 @@ verify_audit_log() {
       expected_hash=$(printf '%s' "$prev_line" | compute_sha256)
     fi
 
-    actual_prev_hash=$(printf '%s' "$line" | python3 -c "import sys, json; data = json.load(sys.stdin); print(data.get('prev_hash', 'MISSING'))" 2>/dev/null)
+    actual_prev_hash=$(printf '%s' "$line" | "$py_bin" -c "import sys, json; data = json.load(sys.stdin); print(data.get('prev_hash', 'MISSING'))" 2>/dev/null)
 
     if [ "$actual_prev_hash" = "MISSING" ]; then
       release_audit_lock "$lock_dir"
@@ -208,7 +245,7 @@ verify_audit_log() {
 
     # Check seq monotonicity
     local current_seq
-    current_seq=$(printf '%s' "$line" | python3 -c "import sys, json; data = json.load(sys.stdin); print(data.get('seq', 0))" 2>/dev/null || echo 0)
+    current_seq=$(printf '%s' "$line" | "$py_bin" -c "import sys, json; data = json.load(sys.stdin); print(data.get('seq', 0))" 2>/dev/null || echo 0)
     if [ "$current_seq" -le "$prev_seq" ] && [ $line_num -gt 1 ]; then
       release_audit_lock "$lock_dir"
       printf 'Error: Sequence number not monotonic at line %d (prev: %d, current: %d)
@@ -388,12 +425,11 @@ get_commit_range() {
 }
 
 check_secret_scan() {
+  # tools/secret_scan.py is Python-3-only: resolve python3 BEFORE python
+  # (mirrors daemons/*.sh and resolve_py_bin's own order) so a host where
+  # `python` == Python 2 doesn't crash the scanner instead of running it.
   local scan_bin
-  if command -v python >/dev/null 2>&1; then
-    scan_bin="python"
-  elif command -v python3 >/dev/null 2>&1; then
-    scan_bin="python3"
-  else
+  if ! scan_bin=$(resolve_py_bin); then
     scan_bin="python"
   fi
 
