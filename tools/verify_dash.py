@@ -38,6 +38,10 @@ import tempfile
 import time
 from pathlib import Path
 
+# Ensure this tool's own directory (tools/) is importable so the shared
+# playwright harness resolves regardless of cwd or how the file is loaded
+# (the import-gate loads tools by path, without tools/ on sys.path).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from playwright_common import free_port, copy_dist, start_server, stop_server
 
 REPO = Path(__file__).resolve().parent.parent
