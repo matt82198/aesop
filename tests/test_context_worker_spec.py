@@ -41,7 +41,10 @@ class TestContextWorkerSpecNoOp(unittest.TestCase):
     """GOLDEN NO-OP: Manifest without new fields produces byte-identical prompt."""
 
     def test_build_manifest_item_without_new_fields_unchanged(self):
-        """Build manifest item WITHOUT A1-A4 fields should add model/tier/policy only."""
+        """Build manifest item WITHOUT authored A1-A4 fields adds model/tier/policy;
+        acceptanceCriteria is additionally derived from testCmd (baseline), while
+        A2-A4 stay absent. True byte-identical no-op only when there is no testCmd
+        either (covered in test_golden_noop_prompt)."""
         driver = ClaudeCodeDriver()
         item = {
             "slug": "example-fix",
@@ -70,8 +73,15 @@ class TestContextWorkerSpecNoOp(unittest.TestCase):
         self.assertEqual(result["spotCheckFrac"], 0.10)
         self.assertFalse(result["validateAllJson"])
 
-        # NEW: Should NOT add A1-A4 fields when not present in input.
-        self.assertNotIn("acceptanceCriteria", result)
+        # acceptanceCriteria is now DERIVED from testCmd when not authored
+        # (deliberate context-eng change): this fixture HAS a testCmd, so a
+        # baseline criterion is present. The other A2-A4 fields are NOT derived
+        # here -- they stay absent unless the item carries them.
+        self.assertEqual(
+            result["acceptanceCriteria"],
+            [{"statement": "The item's tests pass with no regressions.",
+              "verifiable_by": "python -m unittest test_example"}],
+        )
         self.assertNotIn("lastTestOutput", result)
         self.assertNotIn("domainSynopsis", result)
         self.assertNotIn("ownsFilesDiff", result)
