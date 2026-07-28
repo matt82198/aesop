@@ -1,5 +1,5 @@
 """Notification system for task state changes."""
-from constants import NOTIFY_STATES, READY, EXECUTING, DONE, FAILED
+from constants import NOTIFY_STATES, READY, EXECUTING, DONE, FAILED, REQUEUED
 
 
 class Notifier:
@@ -19,6 +19,7 @@ class Notifier:
             EXECUTING: self._handle_executing,
             DONE: self._handle_done,
             FAILED: self._handle_failed,
+            REQUEUED: self._handle_requeued,
         }
 
         if state not in handlers:
@@ -39,6 +40,9 @@ class Notifier:
 
     def _handle_failed(self, task_id):
         return f"Task {task_id} failed"
+
+    def _handle_requeued(self, task_id):
+        return f"Task {task_id} requeued"
 
     def get_messages(self):
         """Get all notification messages."""

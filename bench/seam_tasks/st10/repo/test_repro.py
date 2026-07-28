@@ -1,20 +1,32 @@
-"""Visible reproduction test for task workflow transitions."""
+"""Visible reproduction test for task retry and notification bug."""
 import pytest
+import sys
+import os
 
-from workflow import Task
+sys.path.insert(0, os.path.dirname(__file__))
+
+from task_manager import TaskManager
+from constants import QUEUED, READY, EXECUTING, REQUEUED
 
 
-class TestWorkflowRepro:
-    """Visible test: tasks transition through workflow states correctly."""
+def test_retry_task_notifies_successfully():
+    """Test that retrying a task sends notifications without crashing."""
+    manager = TaskManager()
+    manager.create_task("task1")
 
-    def test_task_transitions_states(self):
-        """A new task starts as QUEUED and transitions to READY when processed."""
-        task = Task("sample_task")
+    task = manager.tasks["task1"]
 
-        # Initial state is QUEUED
-        assert task.status == "QUEUED"
+    task.transition(READY)
+    manager.notifier.notify("task1", READY)
 
-        # After processing, status changes
-        task.process()
-        assert task.status != "QUEUED"
-        assert task.status in ["READY", "PROCESSING", "COMPLETED"]
+    task.transition(EXECUTING)
+    manager.notifier.notify("task1", EXECUTING)
+
+    task.transition(REQUEUED)
+    try:
+        manager.notifier.notify("task1", REQUEUED)
+    except ValueError as e:
+        pytest.fail(f"Notifier should handle REQUEUED state, but raised: {e}")
+
+    messages = manager.get_notifications()
+    assert len(messages) >= 3, f"Should have at least 3 notification messages, got {len(messages)}"
