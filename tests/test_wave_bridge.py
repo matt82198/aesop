@@ -194,6 +194,67 @@ class TestBuildManifestItem(unittest.TestCase):
         self.assertEqual(result["verificationTier"], 2)
 
 
+class TestDeriveAcceptanceCriteria(unittest.TestCase):
+    """Option (b) of the context-engineering work: build_manifest_item derives a
+    BASELINE acceptanceCriteria from an item's testCmd when the item has none of
+    its own. Authored criteria always win; the field stays optional (true no-op
+    when neither testCmd nor authored criteria are present).
+    """
+
+    def test_authored_acceptance_criteria_wins_unchanged(self):
+        """Authored acceptanceCriteria is preserved verbatim, never overridden/appended."""
+        driver = ClaudeCodeDriver()
+        authored = [
+            {"statement": "Handles the empty list.", "verifiable_by": "test_empty"},
+        ]
+        item = {
+            "slug": "authored-item",
+            "ownsFiles": ["a.py"],
+            "prompt": "Do it",
+            "testCmd": "python -m unittest a",
+            "acceptanceCriteria": authored,
+        }
+
+        result = build_manifest_item(driver, item)
+
+        self.assertEqual(result["acceptanceCriteria"], authored)
+
+    def test_no_authored_but_testcmd_present_derives_baseline(self):
+        """No authored criteria + testCmd present -> derived [{statement, verifiable_by}]."""
+        driver = ClaudeCodeDriver()
+        item = {
+            "slug": "derive-item",
+            "ownsFiles": ["b.py"],
+            "prompt": "Do it",
+            "testCmd": "python -m unittest b",
+        }
+
+        result = build_manifest_item(driver, item)
+
+        self.assertEqual(
+            result["acceptanceCriteria"],
+            [
+                {
+                    "statement": "The item's tests pass with no regressions.",
+                    "verifiable_by": "python -m unittest b",
+                }
+            ],
+        )
+
+    def test_no_authored_no_testcmd_no_key_true_noop(self):
+        """No authored criteria AND no testCmd -> no acceptanceCriteria key at all."""
+        driver = ClaudeCodeDriver()
+        item = {
+            "slug": "noop-item",
+            "ownsFiles": ["c.py"],
+            "prompt": "Do it",
+        }
+
+        result = build_manifest_item(driver, item)
+
+        self.assertNotIn("acceptanceCriteria", result)
+
+
 class TestDispatchItemRouting(unittest.TestCase):
     """Test dispatch_item routing by driver capabilities."""
 
