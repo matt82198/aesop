@@ -141,6 +141,10 @@ def main(argv=None):
         print('Usage: halt.py set "<reason>" | --status | --clear', file=sys.stderr)
         return 2
 
+    if argv[0] in ("-h", "--help"):
+        print('Usage: halt.py set "<reason>" | --status | --clear')
+        return 0
+
     if argv[0] == "set":
         if len(argv) < 2 or not argv[1].strip():
             print('Usage: halt.py set "<reason>"', file=sys.stderr)
