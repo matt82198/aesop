@@ -43,7 +43,6 @@ class HTTPClient:
         success, result = self.retry_policy.execute_with_retry(request_func)
 
         if not success:
-            self.cache.set(cache_key, result)
             raise result
 
         return result
