@@ -15,11 +15,19 @@ from pathlib import Path
 # Add ui/ to path so we can import wave_context
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'ui'))
 
+# Save originals before stubbing (leak prevention)
+_orig_config = sys.modules.get('config')
+_orig_agents = sys.modules.get('agents')
+
 # Mock config before importing wave_context
 class MockConfig:
     AESOP_ROOT = Path(tempfile.gettempdir()) / "aesop-test"
     STATE_DIR = AESOP_ROOT / "state"
     TRANSCRIPTS_ROOT = AESOP_ROOT / ".claude" / "projects"
+
+    def reload(self):
+        """No-op reload method (defensive against leaked stubs)."""
+        pass
 
 sys.modules['config'] = MockConfig()
 sys.modules['agents'] = type('module', (), {
@@ -27,6 +35,17 @@ sys.modules['agents'] = type('module', (), {
 })()
 
 import wave_context
+
+# Restore originals immediately after import (prevents leaking into siblings)
+if _orig_config is not None:
+    sys.modules['config'] = _orig_config
+else:
+    sys.modules.pop('config', None)
+
+if _orig_agents is not None:
+    sys.modules['agents'] = _orig_agents
+else:
+    sys.modules.pop('agents', None)
 
 
 class TestSpecSharpnessScore(unittest.TestCase):
