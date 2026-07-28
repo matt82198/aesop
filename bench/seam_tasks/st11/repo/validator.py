@@ -10,24 +10,24 @@ def validate_record(record):
     Returns True if valid, False if invalid.
     """
     if not isinstance(record, dict):
-        log.warning(f"Invalid record type: {type(record)}")
+        log.error(f"Invalid record type: {type(record)}")
         return False
 
     if "id" not in record:
-        log.warning("Record missing required field: id")
+        log.error("Record missing required field: id")
         return False
 
     if "value" not in record:
-        log.warning("Record missing required field: value")
+        log.error("Record missing required field: value")
         return False
 
     # Additional checks
     if not isinstance(record.get("id"), (str, int)):
-        log.warning(f"Invalid id type: {type(record.get('id'))}")
+        log.error(f"Invalid id type: {type(record.get('id'))}")
         return False
 
     if not isinstance(record.get("value"), (str, int, float)):
-        log.warning(f"Invalid value type: {type(record.get('value'))}")
+        log.error(f"Invalid value type: {type(record.get('value'))}")
         return False
 
     return True

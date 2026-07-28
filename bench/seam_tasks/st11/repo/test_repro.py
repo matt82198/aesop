@@ -1,21 +1,35 @@
-"""Visible reproduction test for data validation logging."""
+"""Visible reproduction test for config-logger-validator interaction bug."""
 import pytest
+import sys
+import os
+import logging
+from io import StringIO
 
-from validator import validate_data
+sys.path.insert(0, os.path.dirname(__file__))
 
 
-class TestValidationRepro:
-    """Visible test: validation errors produce appropriate log levels."""
+def test_validation_errors_visible_in_production():
+    """Test that validation errors are logged visibly in production mode."""
+    os.environ["APP_ENV"] = "production"
 
-    def test_validation_logs_appropriate_level(self):
-        """Validation errors are logged at the correct level."""
-        # Valid data does not raise
-        try:
-            result = validate_data({"name": "test", "value": 42})
-            assert result is not None
-        except ValueError:
-            pass
+    from config import get_log_level
+    from validator import validate_record
+    from logger import get_logger
 
-        # Invalid data triggers logging
-        with pytest.raises((ValueError, KeyError, TypeError)):
-            validate_data({"invalid": "structure"})
+    assert get_log_level() == "ERROR", "Production should set log level to ERROR"
+
+    log = get_logger("validator")
+
+    stream = StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+    log.handlers = [handler]
+
+    result = validate_record({"id": 1})
+    assert result is False, "Validation should fail for missing 'value' field"
+
+    output = stream.getvalue()
+    assert "value" in output.lower(), \
+        f"Validation error should mention 'value' field in production logs, got: {repr(output)}"
+    assert "ERROR" in output or "error" in output.lower(), \
+        f"Validation error should appear at ERROR level in production, got: {repr(output)}"
