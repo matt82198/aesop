@@ -389,6 +389,122 @@ test_item4_e2e_reconstitute() {
   fi
 }
 
+# ===== ITEM 5: python3 || python interpreter fallback (FIX #6) + shebang (FIX #7) =====
+test_item5_python_fallback_when_python3_shadowed() {
+  echo ""
+  echo "=== ITEM 5: python3||python interpreter fallback (FIX #6) ==="
+
+  local tmpdir
+  tmpdir=$(mktemp -d) || { echo "mktemp failed"; return 1; }
+  trap "rm -rf $tmpdir" RETURN
+
+  git init --bare "$tmpdir/origin.bare" > /dev/null 2>&1
+
+  cat > "$tmpdir/aesop.config.json" << EOF
+{
+  "fleet_root": "$tmpdir",
+  "repos": [
+    {"path": "$tmpdir/target1", "url": "file://$tmpdir/origin.bare"}
+  ]
+}
+EOF
+
+  # Test 5.1 (TDD-discriminating unit test): resolve_python() itself falls
+  # back to `python` when `command -v python3` is shadowed out. This is the
+  # assertion that actually distinguishes unpatched vs patched code -- an
+  # end-to-end run can NOT discriminate them here, because the unpatched
+  # script calls the literal `python3 -c ...` directly (never consulting
+  # `command -v` first), so shadowing only `command -v python3` has zero
+  # effect on it as long as the real python3 stays reachable on PATH. Do NOT
+  # filter python3's whole PATH dir to force a "true" absence -- that strips
+  # coreutils and hangs (tests/CLAUDE.md hygiene notes); shadow only
+  # `command -v python3`, exactly as the resolver itself queries it.
+  echo "Test 5.1: resolve_python() falls back to 'python' when 'command -v python3' is shadowed"
+  local resolver_result
+  resolver_result=$(
+    command() {
+      if [ "$1" = "-v" ] && [ "$2" = "python3" ]; then
+        return 1
+      fi
+      builtin command "$@"
+    }
+    # Extract resolve_python()'s definition straight out of the real script
+    # (same idiom tests/backup-fleet.test.sh uses for json_escape() etc.) so
+    # this test fails loudly -- "NO_RESOLVER" -- against the unpatched
+    # script, which has no such function at all.
+    eval "$(sed -n '/^resolve_python() {/,/^}/p' "$RECONSTITUTE")"
+    if declare -f resolve_python > /dev/null 2>&1; then
+      PYTHON_EXE=""
+      if resolve_python; then
+        printf 'RESOLVED:%s\n' "$PYTHON_EXE"
+      else
+        printf 'RESOLVE_FAILED\n'
+      fi
+    else
+      printf 'NO_RESOLVER\n'
+    fi
+  )
+  echo "  resolver_result: $resolver_result"
+  if [ "$resolver_result" = "RESOLVED:python" ]; then
+    assert_pass "resolve_python() falls back to 'python' when python3 is shadowed out"
+  else
+    assert_fail "resolve_python() did not fall back correctly (got: '$resolver_result')"
+  fi
+
+  # Test 5.2: end-to-end sanity -- with the same command-v-python3 shadow in
+  # place, the whole script still produces correct output driving through
+  # get_fleet_root() and load_repos_from_config() (the two call sites that
+  # use the resolver). Bounded with `timeout` + stdin pinned to /dev/null so
+  # a shadow mistake can never hang headless CI.
+  echo "Test 5.2: python3 shadowed out (command -v python3 fails) -- script still works end-to-end"
+  local output
+  output=$(
+    cd "$tmpdir" || exit 1
+    unset AESOP_FLEET_ROOT
+    command() {
+      if [ "$1" = "-v" ] && [ "$2" = "python3" ]; then
+        return 1
+      fi
+      builtin command "$@"
+    }
+    export -f command
+    TEST_MODE=1 timeout 5 bash "$RECONSTITUTE" --dry-run </dev/null 2>&1
+  )
+  echo "$output"
+  if echo "$output" | grep -q "Would clone"; then
+    assert_pass "reconstitute.sh works with python3 shadowed out (falls back to python)"
+  else
+    assert_fail "reconstitute.sh did not work with python3 shadowed out"
+  fi
+
+  # Test 5.3: sanity control -- python3 present (no shadow): identical
+  # baseline behavior, proving FIX #6 makes no behavior change when python3
+  # is present.
+  echo "Test 5.3: python3 present (no shadow) -- baseline unchanged"
+  local output2
+  output2=$(
+    cd "$tmpdir" || exit 1
+    unset AESOP_FLEET_ROOT
+    TEST_MODE=1 timeout 5 bash "$RECONSTITUTE" --dry-run </dev/null 2>&1
+  )
+  if echo "$output2" | grep -q "Would clone"; then
+    assert_pass "baseline (python3 present) still works unchanged"
+  else
+    assert_fail "baseline (python3 present) regressed"
+  fi
+
+  # Test 5.4: FIX #7 -- shebang is #!/usr/bin/env bash (matches every sibling
+  # daemon/hook script), not the hardcoded #!/bin/bash.
+  echo "Test 5.4: shebang is #!/usr/bin/env bash"
+  local first_line
+  first_line=$(head -n 1 "$RECONSTITUTE")
+  if [ "$first_line" = "#!/usr/bin/env bash" ]; then
+    assert_pass "reconstitute.sh shebang is #!/usr/bin/env bash"
+  else
+    assert_fail "reconstitute.sh shebang is '$first_line', expected '#!/usr/bin/env bash'"
+  fi
+}
+
 # ===== Main test runner =====
 main() {
   echo "======================================"
@@ -400,6 +516,7 @@ main() {
   test_item3_test_calls_real_fleet
   test_bonus_space_parse
   test_item4_e2e_reconstitute
+  test_item5_python_fallback_when_python3_shadowed
 
   echo ""
   echo "======================================"

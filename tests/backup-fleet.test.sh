@@ -862,6 +862,84 @@ test_portable_path_derivation() {
   fi
 }
 
+# ===== FIX #5: blocked-cycle exit code contract (3 == blocked, 0 == clean) =====
+
+test_fix5_blocked_cycle_exit_code() {
+  log "TEST FIX #5: a cycle with a BLOCKED repo (secret-scan gate failure) exits 3"
+
+  setup_fixture
+
+  # Mock scanner that ALWAYS fails -> forces the BLOCKED branch in
+  # process_repo() for any touched repo (see daemons/CLAUDE.md scan_tracked_files).
+  cat > "$TOOLS_DIR/secret_scan.py" << 'SCANNER'
+#!/usr/bin/env python3
+import sys
+sys.exit(1)
+SCANNER
+  chmod +x "$TOOLS_DIR/secret_scan.py"
+
+  # Explicit config so the discovery loop scans ONLY our fixture repo (never
+  # autodiscovery over the real $HOME -- test-isolation hygiene).
+  cat > "$AESOP_FIXTURE/aesop.config.json" << EOFCONFIG
+{
+  "repos": [
+    {"path": "$REPO_DIR", "name": "repo1"}
+  ]
+}
+EOFCONFIG
+
+  # Uncommitted change makes the repo "touched" and routes it through
+  # scan_tracked_files() -> the always-failing mock scanner -> BLOCKED.
+  echo "modified content" >> "$REPO_DIR/README.md"
+
+  AESOP_ROOT="$AESOP_FIXTURE" bash "$BACKUP_FLEET_SCRIPT" > "$TEST_DIR/blocked-cycle.log" 2>&1
+  local ec=$?
+
+  if [ "$ec" -eq 3 ]; then
+    pass "FIX #5: a cycle with a blocked repo exits 3"
+  else
+    fail "FIX #5: a cycle with a blocked repo should exit 3, got $ec"
+    cat "$TEST_DIR/blocked-cycle.log"
+  fi
+
+  # process_repo() derives the logged name from basename("$repo"), not the
+  # config "name" field -- REPO_DIR's basename is "fixture-repo".
+  if grep -q "BLOCKED: fixture-repo" "$TEST_DIR/blocked-cycle.log"; then
+    pass "FIX #5: BLOCKED state logged for the repo"
+  else
+    fail "FIX #5: expected 'BLOCKED: fixture-repo' log line not found"
+    cat "$TEST_DIR/blocked-cycle.log"
+  fi
+}
+
+test_fix5_clean_cycle_exit_code() {
+  log "TEST FIX #5: a fully-clean cycle (no blocked repos) still exits 0"
+
+  setup_fixture
+  create_mock_scanner
+
+  # Explicit config, same isolation rationale as above; repo is left
+  # untouched (no uncommitted/unpushed work), so the cycle should be
+  # entirely clean -- any_blocked must stay 0.
+  cat > "$AESOP_FIXTURE/aesop.config.json" << EOFCONFIG
+{
+  "repos": [
+    {"path": "$REPO_DIR", "name": "repo1"}
+  ]
+}
+EOFCONFIG
+
+  AESOP_ROOT="$AESOP_FIXTURE" bash "$BACKUP_FLEET_SCRIPT" > "$TEST_DIR/clean-cycle.log" 2>&1
+  local ec=$?
+
+  if [ "$ec" -eq 0 ]; then
+    pass "FIX #5: a fully-clean cycle still exits 0"
+  else
+    fail "FIX #5: a fully-clean cycle should exit 0, got $ec"
+    cat "$TEST_DIR/clean-cycle.log"
+  fi
+}
+
 # ===== Run all tests =====
 
 echo "=================================================="
@@ -923,6 +1001,11 @@ echo ""
 
 log "Running PORTABILITY TASK (B) test (portable path derivation)..."
 test_portable_path_derivation
+echo ""
+
+log "Running FIX #5 tests (blocked-cycle exit code contract)..."
+test_fix5_blocked_cycle_exit_code
+test_fix5_clean_cycle_exit_code
 echo ""
 
 echo "=================================================="
