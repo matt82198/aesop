@@ -208,6 +208,19 @@
   color: var(--color-status-error);
 }
 
+/* Zero-warnings: render green/success instead of the error color (nothing to warn about) */
+.health-header__status-badge[data-status='issues'][data-empty='true'] {
+  border-color: var(--color-status-ok);
+}
+
+.health-header__status-badge[data-status='issues'][data-empty='true'] .health-header__status-badge-dot {
+  background: var(--color-status-ok);
+}
+
+.health-header__status-badge[data-status='issues'][data-empty='true'] .health-header__status-badge-count {
+  color: var(--color-status-ok);
+}
+
 @media (max-width: 768px) {
   .health-header {
     padding: var(--space-2) var(--space-3);
