@@ -5,7 +5,6 @@
  */
 
 import React, { ReactNode } from 'react';
-import { TESTIDS } from '../test/fixtures';
 import './ErrorBoundary.css';
 
 interface ErrorBoundaryProps {
