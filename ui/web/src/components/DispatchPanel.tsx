@@ -195,10 +195,6 @@ export default function DispatchPanel({ containerRef, fetcher = defaultFetcher }
               {agent.warnings && agent.warnings.length > 0 && (
                 <div className={styles.warnings}>{agent.warnings.join(', ')}</div>
               )}
-              <div data-testid={`dispatch-agent-lifecycle-${agent.id}`} className={styles.lifecycle}>
-                <span className={styles.lifecycleLabel}>lifecycle:</span>
-                <span className={styles.lifecycleBadge}>{agent.phase}</span>
-              </div>
             </div>
           ))
         )}
