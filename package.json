@@ -56,7 +56,7 @@
     "resilience",
     "template"
   ],
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "MIT",
   "author": "Matt Culliton",
   "repository": {
     "type": "git",
