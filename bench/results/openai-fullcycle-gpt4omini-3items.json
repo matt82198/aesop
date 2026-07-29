@@ -1,0 +1,63 @@
+{
+  "preflight_ok": true,
+  "aborted": false,
+  "abort_reason": null,
+  "built": [
+    {
+      "slug": "item-1-simple-file",
+      "dispatched": true,
+      "verified": true,
+      "testExit": 0,
+      "repairs": 0,
+      "error": null,
+      "filesWritten": [
+        "hello.py"
+      ],
+      "workerId": "w-180217",
+      "testStdout": "",
+      "testStderr": "",
+      "adversarial_review": "deferred"
+    },
+    {
+      "slug": "item-2-config",
+      "dispatched": true,
+      "verified": true,
+      "testExit": 0,
+      "repairs": 0,
+      "error": null,
+      "filesWritten": [
+        "config.json"
+      ],
+      "workerId": "w-180249",
+      "testStdout": "",
+      "testStderr": "",
+      "adversarial_review": "deferred"
+    },
+    {
+      "slug": "item-3-script",
+      "dispatched": true,
+      "verified": true,
+      "testExit": 0,
+      "repairs": 0,
+      "error": null,
+      "filesWritten": [
+        "script.sh"
+      ],
+      "workerId": "w-180215",
+      "testStdout": "success\n",
+      "testStderr": "",
+      "adversarial_review": "deferred"
+    }
+  ],
+  "shipped": null,
+  "ceiling": null,
+  "policy": {
+    "validate_all_json": true,
+    "spot_check_frac": 0.5,
+    "repair_cap": 2,
+    "require_adversarial_review": true,
+    "adversarial_review_sample_frac": 0.1
+  },
+  "resume_stats": null,
+  "adversarial_review": "deferred"
+}
