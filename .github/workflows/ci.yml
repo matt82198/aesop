@@ -265,6 +265,9 @@ jobs:
       - name: Install Playwright and Chromium
         run: pip install playwright && playwright install --with-deps chromium
 
+      - name: Run Playwright specs (npx playwright test)
+        run: npx playwright test
+
       - name: Run dashboard browser proof (verify_dash)
         run: python tools/verify_dash.py
 
