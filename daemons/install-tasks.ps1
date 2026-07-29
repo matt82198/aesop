@@ -6,7 +6,8 @@ param(
     [int]$MonitorIntervalMinutes = 20,
     [string]$TaskPrefix = 'Aesop',
     [switch]$Uninstall,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$EnableAuditLog
 )
 
 # Enable strict error handling
@@ -34,13 +35,53 @@ function Get-WorktreeRoot {
     return $aesopRoot
 }
 
+function Append-AuditLog {
+    param(
+        [string]$AesopRoot,
+        [string]$Action,
+        [string]$TaskName,
+        [string]$Outcome
+    )
+
+    # Only write if audit logging is enabled
+    if (-not $EnableAuditLog) {
+        return
+    }
+
+    # Build audit log path: $aesopRoot/state/install-tasks-audit.log
+    $auditLogDir = Join-Path $AesopRoot 'state'
+    $auditLogPath = Join-Path $auditLogDir 'install-tasks-audit.log'
+
+    # Generate ISO-8601 timestamp
+    $timestamp = (Get-Date).ToUniversalTime().ToString('o')
+
+    # Build audit line: timestamp|action|taskname|outcome
+    $auditLine = "$timestamp|$Action|$TaskName|$Outcome"
+
+    # Attempt to write the log entry; swallow errors (never block the caller)
+    try {
+        # Create state directory if it doesn't exist
+        if (-not (Test-Path $auditLogDir -PathType Container)) {
+            New-Item -ItemType Directory -Path $auditLogDir -Force | Out-Null
+        }
+
+        # Append the audit line (create or append)
+        Add-Content -Path $auditLogPath -Value $auditLine -ErrorAction Stop
+    }
+    catch {
+        # Log-write failures are swallowed; never block installation
+        # (silent failure is intentional per requirements)
+    }
+}
+
 function Register-DaemonTask {
     param(
         [string]$TaskName,
         [string]$Command,
         [int]$IntervalMinutes,
         [string]$RunHiddenVbs,
-        [string]$BashExe
+        [string]$BashExe,
+        [string]$AesopRoot
     )
 
     # Build the action: wscript.exe //B //Nologo "path\to\run-hidden.vbs" "<bash>" -lc "<command>"
@@ -66,6 +107,8 @@ function Register-DaemonTask {
     if ($DryRun) {
         # Print DryRun output
         Write-Host "DRYRUN: $TaskName -> wscript.exe //B //Nologo ""$RunHiddenVbs"" ""$BashExe"" -lc ""$Command"" (interval=$IntervalMinutes`m, Hidden=True)"
+        # Still log dry-run registrations if enabled
+        Append-AuditLog -AesopRoot $AesopRoot -Action 'register' -TaskName $TaskName -Outcome 'dryrun'
     }
     else {
         # Register the task (force overwrite if exists)
@@ -78,31 +121,44 @@ function Register-DaemonTask {
                 -Force `
                 -ErrorAction Stop | Out-Null
             Write-Host "Registered task: $TaskName (interval=$IntervalMinutes minutes)"
+            # Log the successful registration
+            Append-AuditLog -AesopRoot $AesopRoot -Action 'register' -TaskName $TaskName -Outcome 'success'
         }
         catch {
             Write-Error "Failed to register task $TaskName : $_"
+            # Log the failed registration
+            Append-AuditLog -AesopRoot $AesopRoot -Action 'register' -TaskName $TaskName -Outcome "error: $_"
             exit 1
         }
     }
 }
 
 function Unregister-DaemonTask {
-    param([string]$TaskName)
+    param(
+        [string]$TaskName,
+        [string]$AesopRoot
+    )
 
     try {
         $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
         if ($task) {
             Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Stop
             Write-Host "Unregistered task: $TaskName"
+            # Log the successful unregistration
+            Append-AuditLog -AesopRoot $AesopRoot -Action 'unregister' -TaskName $TaskName -Outcome 'success'
             return $true
         }
         else {
             Write-Host "Task not found: $TaskName (already unregistered or never existed)"
+            # Log the not-found case
+            Append-AuditLog -AesopRoot $AesopRoot -Action 'unregister' -TaskName $TaskName -Outcome 'not-found'
             return $true
         }
     }
     catch {
         Write-Error "Failed to unregister $TaskName : $_"
+        # Log the failed unregistration
+        Append-AuditLog -AesopRoot $AesopRoot -Action 'unregister' -TaskName $TaskName -Outcome "error: $_"
         return $false
     }
 }
@@ -146,8 +202,8 @@ function Main {
 
     # Handle Uninstall mode
     if ($Uninstall) {
-        $watchdog_ok = Unregister-DaemonTask -TaskName "${TaskPrefix}WatchdogDaemon"
-        $monitor_ok = Unregister-DaemonTask -TaskName "${TaskPrefix}RefinementMonitor"
+        $watchdog_ok = Unregister-DaemonTask -TaskName "${TaskPrefix}WatchdogDaemon" -AesopRoot $aesopRoot
+        $monitor_ok = Unregister-DaemonTask -TaskName "${TaskPrefix}RefinementMonitor" -AesopRoot $aesopRoot
         if (-not $watchdog_ok -or -not $monitor_ok) {
             exit 1
         }
@@ -174,7 +230,8 @@ function Main {
         -Command $WatchdogCommand `
         -IntervalMinutes $WatchdogIntervalMinutes `
         -RunHiddenVbs $runHiddenVbs `
-        -BashExe $BashExe
+        -BashExe $BashExe `
+        -AesopRoot $aesopRoot
 
     # Register monitor task if command provided
     if ($MonitorCommand) {
@@ -184,7 +241,8 @@ function Main {
             -Command $MonitorCommand `
             -IntervalMinutes $MonitorIntervalMinutes `
             -RunHiddenVbs $runHiddenVbs `
-            -BashExe $BashExe
+            -BashExe $BashExe `
+            -AesopRoot $aesopRoot
     }
 
     exit 0
