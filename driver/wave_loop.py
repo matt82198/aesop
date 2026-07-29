@@ -70,6 +70,28 @@ from agent_driver import AgentDriver
 from wave_bridge import build_manifest_item, dispatch_item
 from verification_policy import verification_policy
 
+# ========================================================================
+# Interrupt Seam (Handoff Proof Testing Only)
+# ========================================================================
+# Minimal, no-op mechanism for testing crash-only resume:
+# If _INTERRUPT_AFTER_PHASE env var is set and matches current phase,
+# wave returns early with current state. No side effects in normal runs.
+
+
+def _should_interrupt_at_phase(phase: str) -> bool:
+    """Check if wave should interrupt after this phase (no-op for normal runs).
+
+    Args:
+        phase: current phase name (e.g., 'build', 'verify', 'repair', 'ship')
+
+    Returns:
+        bool: True if AESOP_WAVE_INTERRUPT_AFTER_PHASE matches phase, False otherwise
+    """
+    interrupt_phase = os.environ.get('AESOP_WAVE_INTERRUPT_AFTER_PHASE')
+    if interrupt_phase and interrupt_phase == phase:
+        return True
+    return False
+
 # Try to import cost_ceiling and coordination (optional, for safety gates).
 try:
     import sys
@@ -1703,6 +1725,14 @@ def _run_wave_inner(
     # Sort built_items by index to preserve order.
     built_items.sort(key=lambda x: x[0])
     result["built"] = [item_result for _, _, item_result in built_items]
+
+    # ====================================================================
+    # INTERRUPT SEAM (for handoff-proof testing only): no-op for normal runs
+    # ====================================================================
+    if _should_interrupt_at_phase("build"):
+        result["interrupted"] = True
+        result["interrupt_phase"] = "build"
+        return result
 
     # ========================================================================
     # PHASE 5: Bounded repair
