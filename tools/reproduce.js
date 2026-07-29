@@ -224,19 +224,23 @@ function classifyDoctorFailure(output) {
 
   // Check if all failures match expected pre-init patterns
   const allExpected = failures.every(failure => {
-    // Pattern 1: Missing config file
+    // Pattern 1: Not in a git repository (expected if not yet initialized)
+    if (failure.includes('Not inside a git repository')) {
+      return true;
+    }
+    // Pattern 2: Missing config file
     if (failure.includes('aesop.config.json not found')) {
       return true;
     }
-    // Pattern 2: Pre-push hook not installed
+    // Pattern 3: Pre-push hook not installed
     if (failure.includes('Pre-push hook not installed')) {
       return true;
     }
-    // Pattern 3: Port in use (expected if another fleet is running; skip initialization)
+    // Pattern 4: Port in use (expected if another fleet is running; skip initialization)
     if (failure.includes('Port') && failure.includes('in use')) {
       return true;
     }
-    // Pattern 4: Missing directories — verify line contains only expected directory names
+    // Pattern 5: Missing directories — verify line contains only expected directory names
     if (failure.includes('Missing:')) {
       // Extract the part after "Missing:"
       const afterMissing = failure.substring(failure.indexOf('Missing:') + 8);
