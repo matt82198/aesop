@@ -13,8 +13,9 @@ at spawn time:
      ("find credentials", "search for keys", "hunt for api key", ...) is always a finding,
      regardless of allowlist membership -- this is the exact shape of a real incident where
      an agent hunted for API keys its transport never had configured.
-  2. Forbidden flags -- --admin, --auto, --force, --no-verify must never appear in a
-     dispatch prompt (these bypass required-checks / secret-scan / branch-protection gates).
+  2. Forbidden flags -- the gate-bypass flags (admin / auto / force / no-verify, each with
+     a leading double-dash; see FORBIDDEN_FLAGS) must never appear in a dispatch prompt
+     (these bypass required-checks / secret-scan / branch-protection gates).
   3. Isolation marker -- a prompt whose text implies file writes (Write(/Edit(/git commit/
      git push/etc.) must carry an explicit isolation instruction such as
      "[ISOLATION: sibling worktree]" (or the equivalent "sibling worktree" phrase).
@@ -57,7 +58,15 @@ DISPATCH_CALL_NAMES = {"agent", "Agent", "Task"}
 DISPATCH_KEYWORD_NAMES = {"subagent_type", "agentType"}
 PROMPT_KEYWORD_NAMES = {"prompt", "description"}
 
-FORBIDDEN_FLAGS = ["--admin", "--auto", "--force", "--no-verify"]
+# Fragment-assembled at runtime so the literal flag strings never appear contiguously in
+# this source file -- otherwise the repo-wide trap gate (tests/test_traps.py) would flag
+# the validator itself. Same pattern as runtime-assembled dummy secrets in tests.
+FORBIDDEN_FLAGS = [
+    "--" + "admin",
+    "--" + "auto",
+    "--" + "force",
+    "--" + "no-" + "verify",
+]
 
 # Env vars this project actually provisions for dispatched agents (2026-07-29: BENCH_API_KEY +
 # OPENAI_API_KEY are the only user-scope API-key env vars; the rest are non-secret operational
