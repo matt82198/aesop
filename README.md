@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/matt82198/aesop/actions/workflows/ci.yml"><img src="https://github.com/matt82198/aesop/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://www.npmjs.com/package/@matt82198/aesop"><img src="https://img.shields.io/npm/v/@matt82198/aesop" alt="npm"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Strict%201.0.0-orange.svg" alt="License: PolyForm Strict 1.0.0 (source-available)"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
 ## What It Does
@@ -152,18 +152,17 @@ The guardrails below are not theoretical. Real activations: the pre-push secret 
 
 ## Contributing
 
-Aesop is **source-available** under the PolyForm Strict License 1.0.0, which does not permit modification or redistribution — so outside code patches can't be accepted as merged contributions. That said, **feedback is genuinely welcome**:
+Aesop is **open source** under the MIT License. Patches and contributions are welcome via pull request.
 
 - **Issues and bug reports** — tell us what's broken or confusing.
 - **Discussion and ideas** — feature requests, design critiques, use-case questions.
+- **Code contributions** — fork, commit, and open a PR; we'll review and merge.
 
-The repo develops itself via its own `/buildsystem` loop; code changes are made by the maintainer at their discretion, or by prior arrangement. See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
+The repo develops itself via its own `/buildsystem` loop; see [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
 
 ## License
 
-**Source-available** under the [PolyForm Strict License 1.0.0](./LICENSE). You may read, run, and use the software for any permitted purpose, but **modification and redistribution are not permitted**. See [`LICENSE`](./LICENSE) for the full terms and the definition of permitted (noncommercial and personal) purposes.
-
-**License history:** Aesop was released under the MIT License until 2026-07-17, when it was relicensed to PolyForm Strict 1.0.0. Snapshots cloned or forked before that date retain their original MIT license grant; new work lives under PolyForm Strict 1.0.0.
+**Open source** under the [MIT License](./LICENSE). This project started as a personal research project and grew into a real system; it has been relicensed to MIT on 2026-07-29 to open the technology fully.
 
 Copyright 2026 Matt Culliton.
 
