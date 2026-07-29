@@ -75,5 +75,8 @@
     "test:sh": "bash tests/test_pre_push_policy.sh && bash tests/test-run-watchdog.sh && bash tests/test-run-watchdog-halt.sh && bash tests/test-run-watchdog-lockguard.sh && bash tests/backup-fleet.test.sh && bash tests/test_reconstitute.sh && bash tests/test_reconstitute_fixes.sh && bash tests/test_agent_forensics.sh && bash tests/test-selfheal.sh && bash hooks/pre-push-policy.sh --test",
     "test:py": "python -m unittest discover -s tests",
     "test:all": "npm run test:node && npm run test:sh && npm run test:py"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.0"
   }
 }

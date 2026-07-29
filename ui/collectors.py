@@ -550,7 +550,11 @@ def _render_tracker(api):
 
 
 def create_tracker_item(data):
-    """Create a new tracker item (event-sourced; tracker.json re-rendered)."""
+    """Create a new tracker item (event-sourced; tracker.json re-rendered).
+
+    Accepts optional acceptanceCriteria: list of {statement, verifiable_by} dicts.
+    Authored AC always stored as-is; no derivation happens here (orchestrator handles derivation).
+    """
     api = _tracker_api()
     _ensure_tracker_migrated(api)
 
@@ -568,12 +572,21 @@ def create_tracker_item(data):
         "completed_at": None
     }
 
+    # Add acceptanceCriteria if provided (authored AC, never derived here)
+    ac = data.get("acceptanceCriteria")
+    if ac is not None and isinstance(ac, list) and len(ac) > 0:
+        item["acceptanceCriteria"] = ac
+
     api.append("tracker", "item_created", item, item["source"])
     _render_tracker(api)
     return item
 
 def update_tracker_item(item_id, update_data):
-    """Update a tracker item by id (event-sourced)."""
+    """Update a tracker item by id (event-sourced).
+
+    Accepts optional acceptanceCriteria: list of {statement, verifiable_by} dicts.
+    Authored AC always replaces derived (authored wins, no merge).
+    """
     api = _tracker_api()
     _ensure_tracker_migrated(api)
 
@@ -582,7 +595,7 @@ def update_tracker_item(item_id, update_data):
         raise Exception(f"404 Item not found: {item_id}")
 
     patch = {"id": item_id}
-    for key in ["status", "lane", "priority", "notes", "pr_link", "tags"]:
+    for key in ["status", "lane", "priority", "notes", "pr_link", "tags", "acceptanceCriteria"]:
         if key in update_data:
             patch[key] = update_data[key]
 
