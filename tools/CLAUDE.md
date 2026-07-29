@@ -42,6 +42,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `healthcheck.py` — Fleet health aggregator (heartbeat/alert/orchestrator status)
 - `heartbeat.py` — Single-instance loop liveness registry
 - `inbox_drain.py` — Drain UI inbox submissions
+- `incident_report.py` — Incident log generator: mines git history for operational failures (fake-green, ci-drift, test-pollution, flake, conflict, stall, gate-activation, doc-invented); generates docs/INCIDENTS.md table; CLI: `[--repo PATH]` (print) | `--regenerate [--output FILE]` | `--check` (drift exit 1); all output deterministic, idempotent
 - `launch_tui.py` — Spawn bash TUI script in detached terminal
 - `lock.mjs` — Fail-closed atomic lock (exponential backoff + stale-lock detection)
 - `metrics_gate.py` — PR gate for hard numeric claims in markdown
