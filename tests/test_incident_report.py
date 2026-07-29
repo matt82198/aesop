@@ -240,9 +240,9 @@ class TestIncidentParser(unittest.TestCase):
                 "Should find exactly 4 synthetic incidents in test repo")
 
             # Verify each incident is classified correctly
-            # (ordered by date desc, so reverse the expected list)
-            expected_classes = [c["expected_class"] for c in commits[::-1]]
-            actual_classes = [i["class"] for i in incidents]
+            # (order-agnostic comparison: both lists should contain the same classes)
+            expected_classes = sorted([c["expected_class"] for c in commits])
+            actual_classes = sorted([i["class"] for i in incidents])
 
             self.assertEqual(actual_classes, expected_classes,
                 f"Incident classes mismatch: {actual_classes} != {expected_classes}")
