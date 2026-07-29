@@ -518,14 +518,16 @@ def _run_and_capture_test_output(
     Returns:
         Tuple[str, bool]: (capped_output_if_failed, test_passed)
             - If test passes (exit 0): returns ("", True)
-            - If test fails (non-zero exit): returns (capped_output, False)
+            - If test fails (non-zero exit, except 5): returns (capped_output, False)
+            - If exit 5 (pytest no tests collected): returns ("", False) -- no-op
             - If times out or exception: returns ("", False) -- no-op, silent fail
             - If test_cmd is empty: returns ("", False) -- no-op, no test
 
     NOTE: This returns the FAILURE tail only (strict no-op when test passes).
     Timeout and exceptions are silent (no-op): we never enrich with speculative
-    output or error noise. The prompt stays byte-identical to today if the test
-    passes pre-dispatch, times out, or is absent.
+    output or error noise. Exit 5 is pytest's "no tests collected" — also no-op.
+    The prompt stays byte-identical to today if the test passes pre-dispatch,
+    times out, is absent, or exits with code 5.
     """
     if not test_cmd:
         return "", False
@@ -544,7 +546,11 @@ def _run_and_capture_test_output(
         if result.returncode == 0:
             return "", True
 
-        # Test failed: cap and return the failure output
+        # Exit 5 (pytest no tests collected): no-op, silent fail
+        if result.returncode == 5:
+            return "", False
+
+        # Test failed (other non-zero exit): cap and return the failure output
         failure_output = _cap_test_output(result.stdout, result.stderr)
         return failure_output, False
 
@@ -1389,6 +1395,11 @@ def _run_wave_inner(
     spot_check_frac = policy.get("spot_check_frac", 0.0)
     require_adversarial_review = policy.get("require_adversarial_review", False)
 
+    # Extract pre-dispatch repro config knobs (latency gate FIX 1).
+    # Default: enabled=True (backward-compatible), timeout=120s.
+    pre_dispatch_repro_enabled = manifest.get("pre_dispatch_repro_enabled", True)
+    pre_dispatch_repro_timeout = manifest.get("pre_dispatch_repro_timeout", 120)
+
     # ========================================================================
     # PHASE 3: Cost-ceiling gate (before build)
     # ========================================================================
@@ -1577,8 +1588,22 @@ def _run_wave_inner(
             # If it FAILS, capture the failure output and enrich the initial prompt.
             # Strict no-op when test passes, times out, or is absent (prompt byte-identical).
             test_cmd = item.get("testCmd", "")
-            if test_cmd:
-                pre_dispatch_output, test_passed = _run_and_capture_test_output(workdir, test_cmd)
+            if test_cmd and pre_dispatch_repro_enabled:
+                import time as time_module
+                elapsed_start = time_module.time()
+                pre_dispatch_output, test_passed = _run_and_capture_test_output(
+                    workdir, test_cmd, timeout_sec=pre_dispatch_repro_timeout
+                )
+                elapsed_sec = time_module.time() - elapsed_start
+                # Log elapsed time per enriched item (metadata only, no test output).
+                if state_dir:
+                    try:
+                        journal_path = Path(state_dir) / "pre_dispatch_enrichment.log"
+                        with open(journal_path, "a", encoding="utf-8") as f:
+                            f.write(f"{slug}: {elapsed_sec:.2f}s\n")
+                    except Exception:
+                        # Fail-closed: if logging fails, continue without it
+                        pass
                 # Only enrich if test FAILED and output captured (not empty).
                 if not test_passed and pre_dispatch_output:
                     # Add initialFailedTestOutput to manifest for template enrichment.
@@ -1815,10 +1840,11 @@ def _run_wave_inner(
         if i < len(result["built"]) and result["built"][i].get("verified", False)
     ]
 
-    if verified_items_list:
+    if verified_items_list and spot_check_frac > 0:
         # Deterministic sampling: sort by slug, then take first N.
+        # Only sample if spot_check_frac > 0; when frac <= 0, skip gate re-runs entirely.
         verified_items_list.sort(key=lambda x: x[0].get("slug", ""))
-        num_to_verify = max(1, ceil(len(verified_items_list) * max(spot_check_frac, 0.01)))
+        num_to_verify = max(1, ceil(len(verified_items_list) * spot_check_frac))
         items_to_verify = verified_items_list[:num_to_verify]
 
         # Re-run test command for each sampled verified item.
