@@ -563,12 +563,14 @@ class TestCodexProbeUnchanged(unittest.TestCase):
         caps = driver.probe_capabilities()
         self.assertFalse(caps.worker_shell_access)
 
-    def test_probe_accuracy_below_claude(self):
+    def test_probe_accuracy_meets_or_exceeds_claude(self):
+        # Measured 1.0 on gpt-4o-mini (32-task structured-output harness,
+        # 2026-07-29); tier stays 2 because workers lack fs/shell access.
         from claude_code_driver import ClaudeCodeDriver  # noqa: E402
         codex = CodexDriver(transport=lambda p: {})
         claude = ClaudeCodeDriver()
-        self.assertLess(codex.probe_capabilities().tool_use_accuracy,
-                        claude.probe_capabilities().tool_use_accuracy)
+        self.assertGreaterEqual(codex.probe_capabilities().tool_use_accuracy,
+                                claude.probe_capabilities().tool_use_accuracy)
 
 
 @unittest.skipUnless(
