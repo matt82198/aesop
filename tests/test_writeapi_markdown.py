@@ -15,8 +15,11 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -214,6 +217,141 @@ class WriteAPIMarkdownTest(unittest.TestCase):
         # File should have the new content
         read_back = state_file.read_text(encoding="utf-8")
         self.assertEqual(read_back, content2)
+
+    # ====== F1: rebuild_state_md() must append event to event store ======
+    def test_rebuild_state_md_appends_event(self):
+        """F1: rebuild_state_md() should append event to state_markdown stream.
+
+        Previously, rebuild_state_md() only wrote the file without appending
+        to the event store. This leaves the event stream unaware of the rebuild,
+        causing drift between markdown and store.
+        """
+        content = "## Rebuilt STATE.md content"
+
+        # Call rebuild_state_md
+        self.api.rebuild_state_md(content, force=True)
+
+        # Verify the event was appended to the event store
+        store = EventStore(str(self.state_dir / "tracker_events.db"))
+        events = store.read("state_markdown")
+
+        # Should have at least one event (the rebuild event)
+        self.assertGreater(len(events), 0, "rebuild_state_md() should append an event")
+
+        # Find the rebuild event (should be of type "state_md_rebuilt")
+        rebuild_events = [e for e in events if e["type"] == "state_md_rebuilt"]
+        self.assertEqual(len(rebuild_events), 1, "Should have exactly one state_md_rebuilt event")
+        self.assertEqual(rebuild_events[0]["payload"]["content"], content)
+
+    # ====== F2: Event must be appended AFTER file write, not before ======
+    def test_write_state_md_event_only_on_success(self):
+        """F2: write_state_md() should only append event if file write succeeds.
+
+        Previously, event was appended BEFORE file write. If the file write
+        failed (WriteConflict or crash), the event was orphaned in the store,
+        claiming content that never reached disk. Now events should be appended
+        only AFTER successful file write.
+        """
+        content = "## Phase: wave-42"
+
+        # First write should succeed
+        self.api.write_state_md(content, actor="test")
+
+        # Verify event was appended
+        store = EventStore(str(self.state_dir / "tracker_events.db"))
+        events_before = len(store.read("state_markdown"))
+        self.assertEqual(events_before, 1, "First write should create one event")
+
+        # Now simulate a failure: manually corrupt the event store to force
+        # a failure, OR patch the file write to fail after event append
+        # We'll use a patch approach: make os.replace fail on the second write
+
+        state_file = self.state_dir / "STATE.md"
+        content2 = "## Phase: wave-43 (should fail)"
+
+        # Patch os.replace to raise an exception (simulating atomic write failure)
+        with patch("os.replace", side_effect=OSError("Simulated atomic write failure")):
+            with self.assertRaises(WriteConflict):
+                self.api.write_state_md(content2, actor="test")
+
+        # Verify NO new event was appended (because the file write failed)
+        events_after = len(store.read("state_markdown"))
+        self.assertEqual(events_after, 1, "Failed write should NOT append event")
+
+        # Verify file still has original content
+        disk_content = state_file.read_text(encoding="utf-8")
+        self.assertEqual(disk_content, content, "File should still have original content after failed write")
+
+    # ====== F3: TOCTOU race detection via file lock ======
+    def test_concurrent_write_race_prevention(self):
+        """F3: Concurrent writers should not silently overwrite each other.
+
+        Tests that _write_markdown_atomic uses a file lock to prevent TOCTOU
+        race between OCC check and os.replace. Two threads racing to write
+        should result in one succeeding and one detecting the conflict.
+        """
+        state_file = self.state_dir / "STATE.md"
+
+        # Initial state
+        initial_content = "## Initial"
+        self.api.write_state_md(initial_content, actor="writer1")
+
+        # Track results from both threads
+        results = {"writer1": None, "writer2": None}
+        exceptions = []
+
+        def writer_thread(thread_id, content):
+            """Simulate a concurrent writer."""
+            try:
+                api = WriteAPI(str(self.state_dir))
+                # Capture the hash from the current state
+                if state_file.exists():
+                    current = state_file.read_text(encoding="utf-8")
+                    start_hash = api._compute_content_hash({"content": current})
+                else:
+                    start_hash = None
+
+                # Small delay to increase chance of race
+                time.sleep(0.01)
+
+                # Call the atomic write directly with the captured hash
+                api._write_markdown_atomic(state_file, content, start_disk_hash=start_hash)
+                results[thread_id] = "success"
+            except WriteConflict as e:
+                results[thread_id] = "conflict"
+                exceptions.append((thread_id, e))
+            except Exception as e:
+                results[thread_id] = f"error: {e}"
+                exceptions.append((thread_id, e))
+
+        # Start two concurrent writers
+        t1 = threading.Thread(
+            target=writer_thread,
+            args=("writer1", "## Content from writer 1")
+        )
+        t2 = threading.Thread(
+            target=writer_thread,
+            args=("writer2", "## Content from writer 2")
+        )
+
+        t1.start()
+        t2.start()
+
+        t1.join()
+        t2.join()
+
+        # Verify: exactly one should succeed, one should conflict
+        # (or both could succeed if they both write the same content, but that's unlikely)
+        # The key is that neither should silently overwrite the other without detection
+
+        # At minimum, we should not have two successful writes with different content
+        success_count = sum(1 for r in results.values() if r == "success")
+        conflict_count = sum(1 for r in results.values() if r == "conflict")
+
+        # If lock is working, conflicts should occur
+        # If lock is broken, both might succeed (bad) or one might overwrite the other silently (worse)
+        self.assertGreaterEqual(conflict_count, 1,
+            f"At least one writer should detect a conflict with proper locking. Results: {results}")
 
 
 if __name__ == "__main__":
