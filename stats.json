@@ -1,12 +1,12 @@
 {
   "git": {
-    "merged_prs": 387,
-    "total_commits": 1181,
-    "project_age_days": 14,
+    "merged_prs": 450,
+    "total_commits": 1244,
+    "project_age_days": 17,
     "wave_count": 30,
-    "insertions_deletions": 222290,
-    "files_tracked": 642,
-    "distinct_coauthors": 11
+    "insertions_deletions": 259517,
+    "files_tracked": 833,
+    "distinct_coauthors": 13
   },
   "telemetry": {
     "total_sessions": null,
@@ -17,16 +17,16 @@
     "cumulative_tokens": null,
     "total_coding_hours": null
   },
-  "generated_at": "2026-07-26T00:06:01.178217+00:00",
-  "loc": 173035,
+  "generated_at": "2026-07-29T04:01:25.766840+00:00",
+  "loc": 206173,
   "economics": {
     "cost_per_loc": {
-      "lines_of_code": 173035,
+      "lines_of_code": 206173,
       "total_tokens": 0,
       "tokens_per_loc": 0.0
     },
     "cost_per_merged_pr": {
-      "merged_prs": 268,
+      "merged_prs": 269,
       "total_tokens": 0,
       "tokens_per_pr": 0.0
     },
@@ -39,7 +39,7 @@
       "cost_per_backlog_item": 0.0,
       "cost_per_wave_item": 0.0,
       "backlog_item_proxy": "merged_prs",
-      "items_count": 268
+      "items_count": 269
     }
   },
   "economics_caveats": {
