@@ -433,7 +433,10 @@ def main(argv=None):
     i = 0
     while i < len(argv):
         arg = argv[i]
-        if arg == "--root":
+        if arg in ("-h", "--help"):
+            print("Usage: wave_backlog_analyzer.py [--root PATH] [--state-root PATH] [--json]")
+            return 0
+        elif arg == "--root":
             i += 1
             if i < len(argv):
                 root_dir = argv[i]
@@ -454,7 +457,7 @@ def main(argv=None):
             i += 1
         else:
             print(f"Unknown argument: {arg}", file=sys.stderr)
-            return 0  # Warn-level: don't fail
+            return 2  # Unrecognized flag: fail closed (not the item-level warn path)
 
     if root_dir is None:
         root_dir = Path.cwd()

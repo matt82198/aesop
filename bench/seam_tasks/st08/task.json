@@ -1,0 +1,13 @@
+{
+  "task_id": "st08",
+  "band": "medium",
+  "statement": "A plugin system initializes and registers event handlers from two plugin modules. After initialization, the system dispatches a 'data_event' signal. Expected: both plugin handlers respond to the event with 2 handler results. Actual: the system dispatches the event but no handlers execute—the result list is empty despite both plugins being present in the codebase. The event dispatch finds no registered handlers to call.",
+  "context_files": [
+    "event_registry.py",
+    "plugin_a.py",
+    "plugin_b.py",
+    "initializer.py",
+    "main.py"
+  ],
+  "oracle_cmd": "python -m pytest oracle -q"
+}

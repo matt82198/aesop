@@ -1,0 +1,1022 @@
+{
+  "date": "2026-07-26",
+  "design": "pooled N=100 (ft01-ft60 frozen v2 + ft61-ft100 extension), 3 repeats, 5 tiers, n=300/tier",
+  "preregistration": "bench/EQUIVALENCE-MARGIN.md Amendment 2 (merged before any v3 runs, PR #421)",
+  "sequential_extension_disclosure": "This extension was decided AFTER observing that result, specifically to make that pair decidable. Extending after peeking inflates type-I error relative to a fixed-N design; we disclose it rather than pretend otherwise. The v3 report must carry this disclosure verbatim, and the pooled-N verdicts are reported alongside (not instead of) the frozen v2 verdicts.",
+  "tiers": {
+    "opus-5": {
+      "run_correct": 240,
+      "run_n": 300,
+      "run_acc": 0.8,
+      "majority_correct": 80,
+      "majority_n": 100,
+      "score_dist_0123": [
+        12,
+        8,
+        8,
+        72
+      ],
+      "cost_billed_usd": 13.91,
+      "ext40_cost_billed_usd": 6.08,
+      "transport_breakout": {
+        "anthropic": {
+          "correct": 166,
+          "n": 204,
+          "acc": 0.8137254901960784
+        },
+        "anthropic-http": {
+          "correct": 74,
+          "n": 96,
+          "acc": 0.7708333333333334
+        }
+      },
+      "refused_http_completed_via_cli_tuples": 24,
+      "transient_errors_retried_ok_tuples": 7
+    },
+    "sonnet-5": {
+      "run_correct": 238,
+      "run_n": 300,
+      "run_acc": 0.7933333333333333,
+      "majority_correct": 81,
+      "majority_n": 100,
+      "score_dist_0123": [
+        15,
+        4,
+        9,
+        72
+      ],
+      "cost_billed_usd": 3.51,
+      "ext40_cost_billed_usd": 1.33,
+      "transport_breakout": {
+        "anthropic": {
+          "correct": 142,
+          "n": 180,
+          "acc": 0.7888888888888889
+        },
+        "anthropic-http": {
+          "correct": 96,
+          "n": 120,
+          "acc": 0.8
+        }
+      },
+      "refused_http_completed_via_cli_tuples": 0,
+      "transient_errors_retried_ok_tuples": 0
+    },
+    "fable-5": {
+      "run_correct": 232,
+      "run_n": 300,
+      "run_acc": 0.7733333333333333,
+      "majority_correct": 77,
+      "majority_n": 100,
+      "score_dist_0123": [
+        16,
+        7,
+        6,
+        71
+      ],
+      "cost_billed_usd": 14.92,
+      "ext40_cost_billed_usd": 5.87,
+      "transport_breakout": {
+        "anthropic": {
+          "correct": 179,
+          "n": 229,
+          "acc": 0.7816593886462883
+        },
+        "anthropic-http": {
+          "correct": 53,
+          "n": 71,
+          "acc": 0.7464788732394366
+        }
+      },
+      "refused_http_completed_via_cli_tuples": 49,
+      "transient_errors_retried_ok_tuples": 6
+    },
+    "haiku-4.5": {
+      "run_correct": 236,
+      "run_n": 300,
+      "run_acc": 0.7866666666666666,
+      "majority_correct": 82,
+      "majority_n": 100,
+      "score_dist_0123": [
+        14,
+        4,
+        14,
+        68
+      ],
+      "cost_billed_usd": 1.37,
+      "ext40_cost_billed_usd": 0.36,
+      "transport_breakout": {
+        "anthropic": {
+          "correct": 140,
+          "n": 180,
+          "acc": 0.7777777777777778
+        },
+        "anthropic-http": {
+          "correct": 96,
+          "n": 120,
+          "acc": 0.8
+        }
+      },
+      "refused_http_completed_via_cli_tuples": 0,
+      "transient_errors_retried_ok_tuples": 0
+    },
+    "gpt-4o-mini": {
+      "run_correct": 210,
+      "run_n": 300,
+      "run_acc": 0.7,
+      "majority_correct": 71,
+      "majority_n": 100,
+      "score_dist_0123": [
+        17,
+        12,
+        15,
+        56
+      ],
+      "cost_billed_usd": 0.06,
+      "ext40_cost_billed_usd": 0.02,
+      "transport_breakout": {
+        "openai": {
+          "correct": 210,
+          "n": 300,
+          "acc": 0.7
+        }
+      },
+      "refused_http_completed_via_cli_tuples": 0,
+      "transient_errors_retried_ok_tuples": 0
+    }
+  },
+  "pairwise_tost": [
+    {
+      "pair": "fable-5 vs haiku-4.5",
+      "diff_pp": -1.33,
+      "ci90_pp": [
+        -6.9,
+        4.23
+      ],
+      "verdict": "EQUIVALENT"
+    },
+    {
+      "pair": "fable-5 vs opus-5",
+      "diff_pp": -2.67,
+      "ci90_pp": [
+        -8.17,
+        2.83
+      ],
+      "verdict": "EQUIVALENT"
+    },
+    {
+      "pair": "fable-5 vs sonnet-5",
+      "diff_pp": -2.0,
+      "ci90_pp": [
+        -7.53,
+        3.53
+      ],
+      "verdict": "EQUIVALENT"
+    },
+    {
+      "pair": "fable-5 vs gpt-4o-mini",
+      "diff_pp": 7.33,
+      "ci90_pp": [
+        1.44,
+        13.23
+      ],
+      "verdict": "INDETERMINATE"
+    },
+    {
+      "pair": "haiku-4.5 vs opus-5",
+      "diff_pp": -1.33,
+      "ci90_pp": [
+        -6.77,
+        4.1
+      ],
+      "verdict": "EQUIVALENT"
+    },
+    {
+      "pair": "haiku-4.5 vs sonnet-5",
+      "diff_pp": -0.67,
+      "ci90_pp": [
+        -6.14,
+        4.8
+      ],
+      "verdict": "EQUIVALENT"
+    },
+    {
+      "pair": "haiku-4.5 vs gpt-4o-mini",
+      "diff_pp": 8.67,
+      "ci90_pp": [
+        2.83,
+        14.5
+      ],
+      "verdict": "INDETERMINATE"
+    },
+    {
+      "pair": "opus-5 vs sonnet-5",
+      "diff_pp": 0.67,
+      "ci90_pp": [
+        -4.74,
+        6.07
+      ],
+      "verdict": "EQUIVALENT"
+    },
+    {
+      "pair": "opus-5 vs gpt-4o-mini",
+      "diff_pp": 10.0,
+      "ci90_pp": [
+        4.22,
+        15.78
+      ],
+      "verdict": "INDETERMINATE"
+    },
+    {
+      "pair": "sonnet-5 vs gpt-4o-mini",
+      "diff_pp": 9.33,
+      "ci90_pp": [
+        3.53,
+        15.14
+      ],
+      "verdict": "INDETERMINATE"
+    }
+  ],
+  "v2_frozen_verdicts": [
+    {
+      "pair": "fable-5 vs haiku-4.5",
+      "diff_pp": "+0.55",
+      "ci90_pp": "[-6.63, 7.73]",
+      "verdict": "EQUIVALENT"
+    },
+    {
+      "pair": "fable-5 vs opus-5",
+      "diff_pp": "-2.23",
+      "ci90_pp": "[-9.23, 4.77]",
+      "verdict": "EQUIVALENT"
+    },
+    {
+      "pair": "fable-5 vs sonnet-5",
+      "diff_pp": "-0.56",
+      "ci90_pp": "[-7.67, 6.55]",
+      "verdict": "EQUIVALENT"
+    },
+    {
+      "pair": "fable-5 vs gpt-4o-mini",
+      "diff_pp": "+1.66",
+      "ci90_pp": "[-5.58, 8.90]",
+      "verdict": "EQUIVALENT"
+    },
+    {
+      "pair": "haiku-4.5 vs opus-5",
+      "diff_pp": "-2.78",
+      "ci90_pp": "[-9.82, 4.26]",
+      "verdict": "EQUIVALENT"
+    },
+    {
+      "pair": "haiku-4.5 vs sonnet-5",
+      "diff_pp": "-1.11",
+      "ci90_pp": "[-8.25, 6.03]",
+      "verdict": "EQUIVALENT"
+    },
+    {
+      "pair": "haiku-4.5 vs gpt-4o-mini",
+      "diff_pp": "+1.11",
+      "ci90_pp": "[-6.16, 8.38]",
+      "verdict": "EQUIVALENT"
+    },
+    {
+      "pair": "opus-5 vs sonnet-5",
+      "diff_pp": "+1.67",
+      "ci90_pp": "[-5.30, 8.64]",
+      "verdict": "EQUIVALENT"
+    },
+    {
+      "pair": "opus-5 vs gpt-4o-mini",
+      "diff_pp": "+3.89",
+      "ci90_pp": "[-3.21, 10.99]",
+      "verdict": "INDETERMINATE"
+    },
+    {
+      "pair": "sonnet-5 vs gpt-4o-mini",
+      "diff_pp": "+2.22",
+      "ci90_pp": "[-4.99, 9.43]",
+      "verdict": "EQUIVALENT"
+    }
+  ],
+  "ceiling_rule": {
+    "highest_tier_acc": 0.8,
+    "threshold": 0.85,
+    "triggered": false
+  },
+  "costs": {
+    "total_billed_usd": 33.77,
+    "extension_ft61_100_billed_usd": 13.66,
+    "extension_cap_usd": 20.0
+  },
+  "tasks_zero_across_all_tiers": [
+    "ft09_refactoring_correctness_semantic",
+    "ft37_refactoring_dict_comprehension",
+    "ft88_type_coercion_chained_comparison_languages",
+    "ft95_refactoring_null_handling_equivalence",
+    "ft99_api_contract_rate_limit_header",
+    "ft100_refactoring_list_mutation_equivalence"
+  ],
+  "per_task_correct_of_3": {
+    "ft01_multi_step_sql_refactor": {
+      "opus-5": 0,
+      "sonnet-5": 3,
+      "fable-5": 1,
+      "haiku-4.5": 2,
+      "gpt-4o-mini": 1
+    },
+    "ft02_code_defect_detection_concurrent": {
+      "opus-5": 2,
+      "sonnet-5": 3,
+      "fable-5": 2,
+      "haiku-4.5": 1,
+      "gpt-4o-mini": 2
+    },
+    "ft03_instruction_conflict_precedence": {
+      "opus-5": 3,
+      "sonnet-5": 1,
+      "fable-5": 0,
+      "haiku-4.5": 0,
+      "gpt-4o-mini": 0
+    },
+    "ft04_long_context_needle_judgment": {
+      "opus-5": 1,
+      "sonnet-5": 0,
+      "fable-5": 0,
+      "haiku-4.5": 0,
+      "gpt-4o-mini": 0
+    },
+    "ft05_json_schema_validation_edge_case": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft06_git_history_blame_analysis": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft07_ambiguous_english_resolution": {
+      "opus-5": 0,
+      "sonnet-5": 0,
+      "fable-5": 0,
+      "haiku-4.5": 1,
+      "gpt-4o-mini": 0
+    },
+    "ft08_nested_boolean_logic_simplification": {
+      "opus-5": 3,
+      "sonnet-5": 2,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 2
+    },
+    "ft09_refactoring_correctness_semantic": {
+      "opus-5": 0,
+      "sonnet-5": 0,
+      "fable-5": 0,
+      "haiku-4.5": 0,
+      "gpt-4o-mini": 0
+    },
+    "ft10_config_validation_corner_case": {
+      "opus-5": 2,
+      "sonnet-5": 0,
+      "fable-5": 0,
+      "haiku-4.5": 0,
+      "gpt-4o-mini": 3
+    },
+    "ft11_regex_pattern_equivalence": {
+      "opus-5": 1,
+      "sonnet-5": 0,
+      "fable-5": 0,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 2
+    },
+    "ft12_api_contract_violation_detection": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft13_database_migration_safety": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 2
+    },
+    "ft14_performance_bottleneck_identification": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft15_state_machine_correctness": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 2,
+      "gpt-4o-mini": 3
+    },
+    "ft16_unicode_normalization_gotcha": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft17_caching_invalidation_consistency": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft18_type_coercion_subtle_bug": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft19_format_string_vulnerability": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft20_distributed_lock_correctness": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 0
+    },
+    "ft21_sql_join_optimization_complex": {
+      "opus-5": 1,
+      "sonnet-5": 2,
+      "fable-5": 3,
+      "haiku-4.5": 2,
+      "gpt-4o-mini": 1
+    },
+    "ft22_sql_transaction_isolation_deadlock": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft23_memory_ordering_volatile_bug": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft24_nested_lock_deadlock_reentrant": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 2,
+      "gpt-4o-mini": 3
+    },
+    "ft25_instruction_priority_cascade": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 2
+    },
+    "ft26_instruction_compatibility_constraint": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 1
+    },
+    "ft27_long_context_buried_assumption": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft28_long_context_timing_inconsistency": {
+      "opus-5": 3,
+      "sonnet-5": 2,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft29_json_schema_recursive_reference": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 2,
+      "gpt-4o-mini": 2
+    },
+    "ft30_json_schema_enum_default_interaction": {
+      "opus-5": 2,
+      "sonnet-5": 2,
+      "fable-5": 1,
+      "haiku-4.5": 2,
+      "gpt-4o-mini": 1
+    },
+    "ft31_git_blame_security_regression": {
+      "opus-5": 2,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft32_git_bisect_performance_regression": {
+      "opus-5": 1,
+      "sonnet-5": 1,
+      "fable-5": 0,
+      "haiku-4.5": 2,
+      "gpt-4o-mini": 3
+    },
+    "ft33_ambiguous_scope_resolution": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 2
+    },
+    "ft34_ambiguous_negation_scope": {
+      "opus-5": 3,
+      "sonnet-5": 2,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft35_boolean_de_morgans_law": {
+      "opus-5": 3,
+      "sonnet-5": 0,
+      "fable-5": 3,
+      "haiku-4.5": 0,
+      "gpt-4o-mini": 0
+    },
+    "ft36_boolean_xor_equivalence": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft37_refactoring_dict_comprehension": {
+      "opus-5": 0,
+      "sonnet-5": 0,
+      "fable-5": 0,
+      "haiku-4.5": 0,
+      "gpt-4o-mini": 0
+    },
+    "ft38_refactoring_generator_to_list": {
+      "opus-5": 2,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft39_config_environment_variable_override": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft40_config_schema_validation_strict": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft41_regex_backref_vs_alternation": {
+      "opus-5": 2,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 1
+    },
+    "ft42_regex_lookahead_negative": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft43_api_response_enum_violation": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 2
+    },
+    "ft44_api_request_body_size_constraint": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft45_migration_index_creation_impact": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft46_migration_foreign_key_constraint": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft47_performance_memory_vs_cpu": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft48_performance_caching_hit_rate": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft49_state_machine_idempotency": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 2
+    },
+    "ft50_state_machine_partial_recovery": {
+      "opus-5": 1,
+      "sonnet-5": 3,
+      "fable-5": 1,
+      "haiku-4.5": 2,
+      "gpt-4o-mini": 3
+    },
+    "ft51_unicode_emoji_byte_length": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft52_unicode_combining_character": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft53_cache_stampede_concurrent": {
+      "opus-5": 2,
+      "sonnet-5": 3,
+      "fable-5": 1,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft54_cache_double_invalidation": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft55_type_coercion_array_comparison": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft56_type_coercion_numeric_string": {
+      "opus-5": 0,
+      "sonnet-5": 0,
+      "fable-5": 0,
+      "haiku-4.5": 0,
+      "gpt-4o-mini": 1
+    },
+    "ft57_sql_injection_parameterized": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 2,
+      "gpt-4o-mini": 3
+    },
+    "ft58_xpath_injection_xml_parse": {
+      "opus-5": 3,
+      "sonnet-5": 1,
+      "fable-5": 1,
+      "haiku-4.5": 0,
+      "gpt-4o-mini": 3
+    },
+    "ft59_distributed_consensus_split_brain": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 2,
+      "gpt-4o-mini": 3
+    },
+    "ft60_distributed_lock_timeout_safety": {
+      "opus-5": 0,
+      "sonnet-5": 0,
+      "fable-5": 2,
+      "haiku-4.5": 1,
+      "gpt-4o-mini": 3
+    },
+    "ft61_query_execution_plan_analysis": {
+      "opus-5": 3,
+      "sonnet-5": 1,
+      "fable-5": 3,
+      "haiku-4.5": 0,
+      "gpt-4o-mini": 0
+    },
+    "ft62_composite_index_design_selection": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 2
+    },
+    "ft63_lock_escalation_deadlock_risk": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft64_connection_pool_saturation_symptom": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft65_result_cache_invalidation_strategy": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 1,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 1
+    },
+    "ft66_isolation_level_dirty_read_scenario": {
+      "opus-5": 3,
+      "sonnet-5": 2,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 0
+    },
+    "ft67_subquery_vs_join_performance": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 2
+    },
+    "ft68_full_text_search_index_strategy": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft69_table_partitioning_strategy": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft70_replication_lag_consistency_model": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 0
+    },
+    "ft71_atomic_vs_compound_race": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 2,
+      "haiku-4.5": 2,
+      "gpt-4o-mini": 3
+    },
+    "ft72_semaphore_vs_mutex_semantics": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 2
+    },
+    "ft73_rwlock_write_starvation": {
+      "opus-5": 3,
+      "sonnet-5": 2,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 1
+    },
+    "ft74_quorum_consensus_arithmetic": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft75_2pc_coordinator_failure_recovery": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 0
+    },
+    "ft76_cache_stampede_multi_level": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 1
+    },
+    "ft77_distributed_lock_clock_skew": {
+      "opus-5": 1,
+      "sonnet-5": 2,
+      "fable-5": 2,
+      "haiku-4.5": 2,
+      "gpt-4o-mini": 0
+    },
+    "ft78_memory_ordering_acquire_release": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft79_cas_retry_loop_correctness": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft80_lazy_init_double_check_lock": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft81_regex_lookahead_nesting": {
+      "opus-5": 0,
+      "sonnet-5": 0,
+      "fable-5": 0,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft82_unicode_byte_vs_char_emoji_with_combining": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 1
+    },
+    "ft83_type_coercion_python_vs_js_string_concat": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft84_regex_alternation_grouping_precedence": {
+      "opus-5": 2,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 1,
+      "gpt-4o-mini": 0
+    },
+    "ft85_unicode_case_folding_with_normalization": {
+      "opus-5": 1,
+      "sonnet-5": 0,
+      "fable-5": 1,
+      "haiku-4.5": 2,
+      "gpt-4o-mini": 2
+    },
+    "ft86_json_schema_allof_required_merge": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 0,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 2
+    },
+    "ft87_regex_backref_with_alternation": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft88_type_coercion_chained_comparison_languages": {
+      "opus-5": 0,
+      "sonnet-5": 0,
+      "fable-5": 0,
+      "haiku-4.5": 0,
+      "gpt-4o-mini": 0
+    },
+    "ft89_config_nested_additionalproperties": {
+      "opus-5": 0,
+      "sonnet-5": 2,
+      "fable-5": 0,
+      "haiku-4.5": 0,
+      "gpt-4o-mini": 1
+    },
+    "ft90_unicode_emoji_skin_tone_modifier": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 2
+    },
+    "ft91_long_context_performance_contradiction": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft92_instruction_conflict_security_usability": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 2,
+      "haiku-4.5": 2,
+      "gpt-4o-mini": 3
+    },
+    "ft93_ambiguous_scope_modifier": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft94_api_contract_content_type_violation": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft95_refactoring_null_handling_equivalence": {
+      "opus-5": 0,
+      "sonnet-5": 0,
+      "fable-5": 0,
+      "haiku-4.5": 0,
+      "gpt-4o-mini": 0
+    },
+    "ft96_long_context_config_priority_contradiction": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft97_instruction_conflict_privacy_retention": {
+      "opus-5": 1,
+      "sonnet-5": 3,
+      "fable-5": 2,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 1
+    },
+    "ft98_ambiguous_temporal_scope": {
+      "opus-5": 3,
+      "sonnet-5": 3,
+      "fable-5": 3,
+      "haiku-4.5": 3,
+      "gpt-4o-mini": 3
+    },
+    "ft99_api_contract_rate_limit_header": {
+      "opus-5": 0,
+      "sonnet-5": 0,
+      "fable-5": 0,
+      "haiku-4.5": 0,
+      "gpt-4o-mini": 0
+    },
+    "ft100_refactoring_list_mutation_equivalence": {
+      "opus-5": 0,
+      "sonnet-5": 0,
+      "fable-5": 0,
+      "haiku-4.5": 0,
+      "gpt-4o-mini": 0
+    }
+  }
+}

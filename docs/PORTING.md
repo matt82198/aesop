@@ -2,6 +2,10 @@
 
 Guide for adopters porting the orchestration harness to a foreign repo. Step-by-step with prerequisites, scaffold, config, and the 10 likeliest failure modes from real deployments.
 
+**Quick decision**:
+- **New harness directory?** See [INSTALL.md](INSTALL.md) for the quick 5-minute scaffold.
+- **Existing codebase?** You're in the right place. This guide covers integrating Aesop into your project with common pitfalls.
+
 ---
 
 ## Prerequisites

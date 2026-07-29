@@ -251,6 +251,35 @@ class TestAesopRootResolution(unittest.TestCase):
             f"WEB_DIST {config.WEB_DIST} does not start with {self.fixture_root}"
         )
 
+    def test_config_aesop_root_expanduser(self):
+        """Test that aesop_root with ~/ expands to user home directory."""
+        # Create a sub-directory relative to home
+        home = os.path.expanduser("~")
+        test_suffix = "aesop-test-" + str(os.getpid())
+        expected_root = os.path.join(home, test_suffix)
+        os.makedirs(expected_root, exist_ok=True)
+
+        try:
+            # Create aesop.config.json with ~ path
+            config_file = os.path.join(self.fixture_root, "aesop.config.json")
+            config_data = {"aesop_root": f"~/{test_suffix}"}
+            with open(config_file, "w") as f:
+                json.dump(config_data, f)
+
+            # Ensure env var is not set
+            if "AESOP_ROOT" in os.environ:
+                del os.environ["AESOP_ROOT"]
+
+            # Load config from fixture location
+            config = self._load_config_module(fixture_root=self.fixture_root)
+
+            # Should expand ~ to user home and resolve to expected_root
+            self.assertEqual(config.AESOP_ROOT, Path(expected_root))
+        finally:
+            # Clean up
+            if os.path.exists(expected_root):
+                shutil.rmtree(expected_root)
+
 
 if __name__ == "__main__":
     unittest.main()

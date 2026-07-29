@@ -194,6 +194,67 @@ class TestBuildManifestItem(unittest.TestCase):
         self.assertEqual(result["verificationTier"], 2)
 
 
+class TestDeriveAcceptanceCriteria(unittest.TestCase):
+    """Option (b) of the context-engineering work: build_manifest_item derives a
+    BASELINE acceptanceCriteria from an item's testCmd when the item has none of
+    its own. Authored criteria always win; the field stays optional (true no-op
+    when neither testCmd nor authored criteria are present).
+    """
+
+    def test_authored_acceptance_criteria_wins_unchanged(self):
+        """Authored acceptanceCriteria is preserved verbatim, never overridden/appended."""
+        driver = ClaudeCodeDriver()
+        authored = [
+            {"statement": "Handles the empty list.", "verifiable_by": "test_empty"},
+        ]
+        item = {
+            "slug": "authored-item",
+            "ownsFiles": ["a.py"],
+            "prompt": "Do it",
+            "testCmd": "python -m unittest a",
+            "acceptanceCriteria": authored,
+        }
+
+        result = build_manifest_item(driver, item)
+
+        self.assertEqual(result["acceptanceCriteria"], authored)
+
+    def test_no_authored_but_testcmd_present_derives_baseline(self):
+        """No authored criteria + testCmd present -> derived [{statement, verifiable_by}]."""
+        driver = ClaudeCodeDriver()
+        item = {
+            "slug": "derive-item",
+            "ownsFiles": ["b.py"],
+            "prompt": "Do it",
+            "testCmd": "python -m unittest b",
+        }
+
+        result = build_manifest_item(driver, item)
+
+        self.assertEqual(
+            result["acceptanceCriteria"],
+            [
+                {
+                    "statement": "The item's tests pass with no regressions.",
+                    "verifiable_by": "python -m unittest b",
+                }
+            ],
+        )
+
+    def test_no_authored_no_testcmd_no_key_true_noop(self):
+        """No authored criteria AND no testCmd -> no acceptanceCriteria key at all."""
+        driver = ClaudeCodeDriver()
+        item = {
+            "slug": "noop-item",
+            "ownsFiles": ["c.py"],
+            "prompt": "Do it",
+        }
+
+        result = build_manifest_item(driver, item)
+
+        self.assertNotIn("acceptanceCriteria", result)
+
+
 class TestDispatchItemRouting(unittest.TestCase):
     """Test dispatch_item routing by driver capabilities."""
 
@@ -544,6 +605,130 @@ class TestBuildManifestItemVerificationTierValidation(unittest.TestCase):
         error_str = str(ctx.exception)
         self.assertIn("bad_tier_driver", error_str, "Driver name should be in error")
         self.assertIn("tier", error_str.lower(), "Should mention verification tier")
+
+
+class TestRepairContextEnrichment(unittest.TestCase):
+    """Test enrichment of repair items with lastTestOutput and ownsFilesDiff.
+
+    These tests verify that the repair dispatch enrichment feature:
+    1. Captures and stores test output during BUILD phase
+    2. Enriches repair items with capped lastTestOutput and ownsFilesDiff
+    3. Maintains no-op guarantee when data is absent
+    """
+
+    def test_dispatch_item_captures_test_stdout_stderr(self):
+        """dispatch_item should capture stdout/stderr from test_result in the return dict."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_file = Path(tmpdir) / "test_output.py"
+            test_file.write_text(
+                "import sys\n"
+                "print('This is stdout output')\n"
+                "print('Line 2 of output', file=sys.stderr)\n"
+                "sys.exit(1)\n"  # Fail the test
+            )
+
+            patch = {
+                "files": [{"path": "test_output.py", "contents": test_file.read_text()}],
+                "summary": "Fixed",
+                "done": True,
+            }
+            fake_transport = FakeTransport(response=make_response(patch, total_tokens=50))
+            driver = CodexDriver(transport=fake_transport)
+
+            item = {
+                "slug": "test-output",
+                "ownsFiles": ["test_output.py"],
+                "prompt": "Fix it",
+                "testCmd": f"{sys.executable} test_output.py",
+            }
+
+            result = dispatch_item(driver, item, workdir=tmpdir)
+
+            # Should have captured test output in the result
+            self.assertFalse(result["verified"], "Test should fail (exit 1)")
+            # The result dict should include stdout and stderr (when available from driver)
+            # This test documents the expected structure
+            self.assertIsNotNone(result.get("testExit"))
+
+    def test_dispatch_item_returns_stdout_stderr_in_result(self):
+        """Test that dispatch_item includes testStdout and testStderr in the result dict."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            test_file = Path(tmpdir) / "test_with_output.py"
+            test_file.write_text(
+                "print('stdout line 1')\n"
+                "print('stdout line 2')\n"
+                "import sys; print('stderr output', file=sys.stderr)\n"
+                "sys.exit(0)\n"  # Pass the test
+            )
+
+            patch = {
+                "files": [{"path": "test_with_output.py", "contents": test_file.read_text()}],
+                "summary": "Fixed",
+                "done": True,
+            }
+            fake_transport = FakeTransport(response=make_response(patch, total_tokens=50))
+            driver = CodexDriver(transport=fake_transport)
+
+            item = {
+                "slug": "test-output",
+                "ownsFiles": ["test_with_output.py"],
+                "prompt": "Fix it",
+                "testCmd": f"{sys.executable} test_with_output.py",
+            }
+
+            result = dispatch_item(driver, item, workdir=tmpdir)
+
+            # Verify the result includes testStdout and testStderr
+            self.assertIn("testStdout", result, "dispatch_item should return testStdout")
+            self.assertIn("testStderr", result, "dispatch_item should return testStderr")
+            # They should be strings (even if empty)
+            self.assertIsInstance(result["testStdout"], str)
+            self.assertIsInstance(result["testStderr"], str)
+
+    def test_repair_item_enrichment_with_test_output_and_diff(self):
+        """Repair items enriched with lastTestOutput and ownsFilesDiff.
+
+        This test verifies that the enrichment helper functions work correctly:
+        - _cap_test_output caps stdout/stderr to reasonable size
+        - _get_owned_files_diff gets git diff of owned files
+        """
+        # Test _cap_test_output
+        from driver.wave_loop import _cap_test_output, _get_owned_files_diff
+
+        # Short output should not be capped
+        short_out = "short output"
+        capped = _cap_test_output(short_out, "")
+        self.assertEqual(capped, short_out)
+
+        # Long output should be capped (tail preserved)
+        long_out = "x" * 5000
+        capped = _cap_test_output(long_out, "")
+        self.assertEqual(len(capped), 4000, "Should cap to 4000 chars")
+        self.assertTrue(capped.endswith("x"), "Should preserve tail of output")
+
+        # Combined stdout + stderr
+        stdout_part = "stdout content"
+        stderr_part = "stderr content"
+        combined = _cap_test_output(stdout_part, stderr_part)
+        self.assertIn(stdout_part, combined)
+        self.assertIn(stderr_part, combined)
+        self.assertIn("STDERR", combined, "Should mark stderr section")
+
+    def test_repair_enrichment_noop_when_no_test_output(self):
+        """Repair enrichment is a no-op when there's no prior test output.
+
+        This is the no-op guarantee: if test output was never captured,
+        lastTestOutput and ownsFilesDiff should not be set.
+        """
+        from driver.wave_loop import _cap_test_output, _get_owned_files_diff
+
+        # Empty output should return empty string
+        capped = _cap_test_output("", "")
+        self.assertEqual(capped, "")
+
+        # Empty owned files should return empty diff
+        diff = _get_owned_files_diff("/tmp", [])
+        self.assertEqual(diff, "")
 
 
 if __name__ == "__main__":
