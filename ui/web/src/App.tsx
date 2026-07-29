@@ -149,8 +149,7 @@ export default function App() {
           <Work tracker={sseState.tracker ?? null} backlog={sseState.backlog ?? null} />
         )}
         {route === '#/activity' && <Activity state={sseState} />}
-        {route === '#/cost' &&
-          (sseState.cost ? <Cost cost={sseState.cost} /> : <Placeholder name="Cost" testid={TESTIDS.viewCost} />)}
+        {route === '#/cost' && <Cost cost={sseState.cost} onRetry={handleRefresh} />}
         {route === '#/prs' && <WavePRBoard />}
       </main>
     </>
