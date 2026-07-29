@@ -91,6 +91,9 @@ Once you've completed the adopter journey, use these for operational reference:
 - **[HOW-THE-LOOP-WORKS.md](HOW-THE-LOOP-WORKS.md)** — Concrete walkthrough of one complete `/buildsystem` wave cycle (rank → fan-out → verify → merge → close)
 - **[MICROKERNEL.md](MICROKERNEL.md)** — The two swappable seats (worker + orchestrator): what's invariant across a model swap, what's proven vs. bounded, and a 60-second quickstart
 
+### Design Philosophy
+- **[WHY-CRASH-ONLY.md](WHY-CRASH-ONLY.md)** — Crash-only vs. distributed consensus for agent fleets: why crash-only fits LLM workers, measured recovery lift (67.8% → 77.2%), MTTR 0.0s–0.5s across fault classes, when it works and when it breaks
+
 ### Dispatch & Cost
 - **[DISPATCH-MODEL.md](DISPATCH-MODEL.md)** — Haiku-first subagent dispatch, cost analysis, patterns (fan-out, sequential, hierarchical)
 
