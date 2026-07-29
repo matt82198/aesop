@@ -273,7 +273,7 @@ jobs:
         run: npx playwright test
 
       - name: Install Python Playwright (for Python browser proofs)
-        run: pip install playwright
+        run: pip install playwright && playwright install chromium
 
       - name: Run dashboard browser proof (verify_dash)
         run: python tools/verify_dash.py
