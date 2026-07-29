@@ -617,6 +617,96 @@ Outdated text here.
         self.assertEqual(result.returncode, 0, "should exit 0 when no markers (graceful no-op)")
 
 
+class StatsCheckFailClosedTest(SelfStatsFixtureCase):
+    """Test --check mode fail-closed semantics (no tree mutation on missing/unreadable stats)."""
+
+    def setUp(self):
+        super().setUp()
+        os.chdir(str(self.repo_root))
+        self.make_commit("initial")
+        self.make_merge_commit(1)
+        self.stats_file = self.repo_root / "stats.json"
+        self.readme_file = self.repo_root / "README.md"
+
+    def test_check_with_stats_json_missing_exits_1_no_mutation(self):
+        """--check should NOT create stats.json when missing; exit 1 with MISSING error."""
+        # Create a README with markers (so we're actually checking)
+        readme_content = """# Project
+
+<!-- STATS:START -->
+placeholder
+<!-- STATS:END -->
+
+Footer.
+"""
+        self.readme_file.write_text(readme_content)
+
+        # Verify stats.json doesn't exist
+        self.assertFalse(self.stats_file.exists(), "test precondition: stats.json should not exist yet")
+
+        # Run --check on missing stats.json
+        result = subprocess.run(
+            [sys.executable, str(TOOLS_DIR / "self_stats.py"), "--check",
+             "--stats-file", str(self.stats_file), "--readme", str(self.readme_file)],
+            cwd=str(self.repo_root),
+            capture_output=True,
+            text=True
+        )
+
+        # Should exit 1
+        self.assertNotEqual(result.returncode, 0, "should exit non-zero for missing stats.json")
+
+        # Should have MISSING in stderr or stdout
+        combined_output = result.stdout + result.stderr
+        self.assertIn("MISSING", combined_output, "error message should include MISSING for missing file")
+
+        # CRITICAL: stats.json must NOT be created (fail-closed, no tree mutation)
+        self.assertFalse(self.stats_file.exists(), "stats.json must NOT be created by --check")
+
+    def test_check_with_corrupted_stats_json_exits_1_no_mutation(self):
+        """--check should NOT modify stats.json when corrupted; exit 1 with UNREADABLE error."""
+        # Create corrupted stats.json
+        corrupted_content = "{ invalid json }"
+        self.stats_file.write_text(corrupted_content)
+
+        # Create a README with markers
+        readme_content = """# Project
+
+<!-- STATS:START -->
+placeholder
+<!-- STATS:END -->
+
+Footer.
+"""
+        self.readme_file.write_text(readme_content)
+
+        # Record original file state
+        original_bytes = self.stats_file.read_bytes()
+
+        # Run --check on corrupted stats.json
+        result = subprocess.run(
+            [sys.executable, str(TOOLS_DIR / "self_stats.py"), "--check",
+             "--stats-file", str(self.stats_file), "--readme", str(self.readme_file)],
+            cwd=str(self.repo_root),
+            capture_output=True,
+            text=True
+        )
+
+        # Should exit 1
+        self.assertNotEqual(result.returncode, 0, "should exit non-zero for unreadable stats.json")
+
+        # Should have UNREADABLE in stderr or stdout
+        combined_output = result.stdout + result.stderr
+        self.assertIn("UNREADABLE", combined_output, "error message should include UNREADABLE for corrupted file")
+
+        # CRITICAL: stats.json must NOT be modified (fail-closed, no tree mutation)
+        self.assertEqual(
+            self.stats_file.read_bytes(),
+            original_bytes,
+            "stats.json must NOT be modified by --check"
+        )
+
+
 class MergedPRsGhAndGitFallbackTest(SelfStatsFixtureCase):
     """Test merged_prs with gh API (preferred) and git fallback."""
 
