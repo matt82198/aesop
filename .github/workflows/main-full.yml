@@ -34,7 +34,10 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python test dependencies
-        run: pip install pyyaml
+        # PyYAML is required by tools/ci_workflow_lint.py (fail-closed without it)
+        # and its test suite tests/test_ci_workflow_lint.py.
+        # pytest is required by tests/test_seam_s_e2e_oracle.py subprocess tests.
+        run: pip install pyyaml pytest
 
       - name: Run Node.js tests
         env:
