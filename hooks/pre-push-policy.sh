@@ -295,6 +295,7 @@ check_branch_policy() {
     # Not a tty; read stdin normally
     local saw_tuple=0
     local saw_nondelete=0
+    local all_tags_or_delete_only=1
     while IFS=' ' read -r local_ref local_sha remote_ref remote_sha || [ -n "$local_ref" ]; do
       # Skip empty lines
       if [ -z "$remote_ref" ]; then
@@ -317,7 +318,21 @@ check_branch_policy() {
       if [ "$remote_ref" = "refs/heads/main" ] || [ "$remote_ref" = "refs/heads/master" ]; then
         return 1
       fi
+
+      # Track whether all non-delete tuples are tag refs (fully-qualified literal prefix match)
+      if [ "$all_tags_or_delete_only" = "1" ]; then
+        if [[ "$remote_ref" != refs/tags/* ]]; then
+          all_tags_or_delete_only=0
+        fi
+      fi
     done
+
+    # Tag-only push (tuples seen, all non-delete tuples are refs/tags/*): allowed
+    # regardless of the currently checked-out branch -- tag pushes are administrative
+    # and do not constitute a push to main.
+    if [ "$saw_tuple" = "1" ] && [ "$all_tags_or_delete_only" = "1" ]; then
+      return 0
+    fi
 
     # Delete-only push (tuples seen, none pushing content): allowed regardless
     # of the currently checked-out branch -- branch deletion from a main
@@ -328,7 +343,10 @@ check_branch_policy() {
   fi
 
   # If no protected branch in stdin, also check current branch as fallback
-  # (for safety, in case stdin is empty or hook runs without git pre-push)
+  # (for safety, in case stdin is empty or hook runs without git pre-push).
+  # Note: this fallback is narrowed to apply only when stdin did not contain
+  # a pure tag push or delete-only push, since those are administrative operations
+  # independent of the currently checked-out branch.
   local current_branch
   current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 
@@ -523,6 +541,7 @@ log_event() {
   # Acquire write lock
   if ! acquire_audit_lock "$lock_dir"; then
     # Log write blocked by lock; fail-open (don't block push)
+    printf 'Warning: audit log write skipped, lock contention\n' >&2
     return 0
   fi
 
@@ -560,6 +579,7 @@ log_block() {
   # Acquire write lock
   if ! acquire_audit_lock "$lock_dir"; then
     # Log write blocked by lock; fail-open (don't block push)
+    printf 'Warning: audit log write skipped, lock contention\n' >&2
     return 0
   fi
 
@@ -1058,12 +1078,68 @@ SCANNER
     test_failed=$((test_failed + 1))
   fi
 
+  printf '\n=== Test 15: Tag-only push from main checkout (allowed) ===\n'
+  (
+    cd "$tmpdir" || exit 1
+    git checkout -q main 2>/dev/null
+
+    # Simulate git pre-push stdin for: git push origin v1.0.0
+    # Tag-only push from main checkout should be allowed (administrative operation)
+    local_sha=$(git rev-parse HEAD 2>/dev/null || echo "0000000")
+    tag_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+    # Stdin format: <local-ref> <local-sha> <remote-ref> <remote-sha>
+    # For "git push origin v1.0.0": refs/tags/v1.0.0 <sha> refs/tags/v1.0.0 0000...
+    printf '%s\n' "refs/tags/v1.0.0 $tag_sha refs/tags/v1.0.0 0000000000000000000000000000000000000000" | {
+      if check_branch_policy >/dev/null 2>&1; then
+        printf 'PASS: Tag-only push from main checkout allowed\n'
+      else
+        printf 'FAIL: Tag-only push should be allowed from main checkout\n'
+        exit 1
+      fi
+    }
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
+  printf '\n=== Test 16: Mixed push (tags + main ref) blocked ===\n'
+  (
+    cd "$tmpdir" || exit 1
+    git checkout -q feature/test 2>/dev/null || git checkout -q -b feature/mixed 2>/dev/null
+
+    # Simulate git pre-push stdin for: git push origin v1.0.0 HEAD:main
+    # Mixed push with tag + main ref should be blocked (contains non-tag, non-delete push)
+    local_sha=$(git rev-parse HEAD 2>/dev/null || echo "0000000")
+    tag_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+    # Two tuples: one tag, one branch to main
+    stdin_input="refs/tags/v1.0.0 $tag_sha refs/tags/v1.0.0 0000000000000000000000000000000000000000
+refs/heads/feature/test $local_sha refs/heads/main 0000000000000000000000000000000000000000"
+
+    printf '%s\n' "$stdin_input" | {
+      if check_branch_policy >/dev/null 2>&1; then
+        printf 'FAIL: Mixed push should be blocked when containing push to main\n'
+        exit 1
+      else
+        printf 'PASS: Mixed push correctly blocked\n'
+      fi
+    }
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
   printf '\n=== Test Results ===\n'
   printf 'PASSED: %d\n' "$test_passed"
   printf 'FAILED: %d\n' "$test_failed"
 
   if [ "$test_failed" -eq 0 ]; then
-    printf '\nAll 14 tests passed.\n'
+    printf '\nAll 16 tests passed.\n'
     return 0
   else
     printf '\nSome tests failed.\n'
