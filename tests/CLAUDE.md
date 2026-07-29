@@ -12,7 +12,7 @@
 backup-fleet.test.sh, dash-watchdog-gui.test.sh, test_agent_forensics.sh, test_pre_push_policy.sh, test-run-watchdog.sh, test-run-watchdog-halt.sh, test-run-watchdog-lockguard.sh, test_reconstitute.sh, test_reconstitute_fixes.sh, test-selfheal.sh, test_waveguard.sh.
 Run: `bash tests/test_pre_push_policy.sh && bash tests/backup-fleet.test.sh && bash tests/test_reconstitute.sh && bash tests/test_reconstitute_fixes.sh && bash tests/test_agent_forensics.sh && bash tests/test-selfheal.sh && bash hooks/pre-push-policy.sh --test && bash tools/reconstitute.sh --test`
 
-**Node (22 suites)**:
+**Node (23 suites)**:
 buildsystem-template.test.mjs, cli-config.test.mjs, collect-signals.test.mjs, config-doc-drift.test.mjs, dash-agents-panel.test.mjs, dash-extra.test.mjs, demo-e2e.test.mjs, domain-map-drift.test.mjs, first-hour.test.mjs, fleet-cli.test.mjs, force-model-policy.test.mjs, lock.test.mjs, mcp-fleet.test.mjs, packaging-portability.test.mjs, proposals.test.mjs, reproduce-classifier.test.mjs, scaffold-hook-install.test.mjs, scaffold-onboarding.test.mjs, test_orchestration_core.test.mjs, wizard.test.mjs.
 Run: `npm run test:node` or `node --test --test-force-exit --test-timeout=60000 tests/*.test.mjs`
 
