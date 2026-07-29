@@ -149,6 +149,14 @@ function lastTestOutputSection(item) {
   return `\nLAST TEST OUTPUT (context for this repair):\n${item.lastTestOutput}\n`
 }
 
+// Helper to build initial failed test output section (for build prompts, INCREMENT 1).
+// PRE-DISPATCH enrichment: if testCmd fails before dispatch, capture the failure output.
+// This lifts one-shot solve from 43% → 60% (measured A/B data).
+function initialFailedTestOutputSection(item) {
+  if (!item.initialFailedTestOutput) return ''
+  return `\nPRE-DISPATCH TEST OUTPUT (test failed before initial dispatch):\n${item.initialFailedTestOutput}\n`
+}
+
 const DONE = {
   type: 'object', additionalProperties: false,
   properties: {
@@ -288,6 +296,7 @@ const built = await parallel(ITEMS.map((it) => () => {
     `TASK:\n${it.prompt}\n` +
     acceptanceCriteriaSection(it) +
     domainSynopsisSection(it) +
+    initialFailedTestOutputSection(it) +
     `Use the Write tool. Run any quick local self-check you can, but the integration suite is run centrally, not by you. Report which files you wrote.${timeboxLine()}`
   return agent(buildPrompt, { label: `build:${it.slug}`, phase: 'Build', model: 'haiku', schema: DONE })
 }))
