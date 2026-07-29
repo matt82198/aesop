@@ -262,6 +262,9 @@ jobs:
           restore-keys: |
             playwright-${{ runner.os }}-
 
+      - name: Install npm dependencies (for Playwright TypeScript specs)
+        run: npm ci
+
       - name: Install Playwright and Chromium
         run: pip install playwright && playwright install --with-deps chromium
 
