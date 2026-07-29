@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gitCmd, assertConfigNotPoisoned } from './helpers/git-helpers.mjs';
 
 const CLI = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -41,12 +42,6 @@ function createTestDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-scaffold-test-'));
 }
 
-function gitCmd(cwd, cmd) {
-  // Use bash on all platforms for consistent git behavior
-  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
-  const bashCmd = `bash -c "cd '${cwd.replace(/'/g, "'\\''")}' && ${cmd}"`;
-  return spawnSync('bash', ['-c', bashCmd], { stdio: 'ignore', encoding: 'utf8', timeout, killSignal: 'SIGKILL' });
-}
 
 test('scaffold into empty dir installs pre-push hook', () => {
   const tempDir = createTestDir();
@@ -54,9 +49,9 @@ test('scaffold into empty dir installs pre-push hook', () => {
 
   // Initialize git repo first
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   const res = runCli(targetDir);
 
@@ -77,9 +72,9 @@ test('installed hook is executable', () => {
   const targetDir = path.join(tempDir, 'fleet-2');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   const res = runCli(targetDir);
   assert.equal(res.status, 0);
@@ -103,9 +98,9 @@ test('re-scaffold same repo is idempotent', () => {
   const targetDir = path.join(tempDir, 'fleet-3');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   // First scaffold
   const res1 = runCli(targetDir);
@@ -116,7 +111,11 @@ test('re-scaffold same repo is idempotent', () => {
   const stat1 = fs.statSync(hookPath);
 
   // Wait a tiny bit to ensure mtime would differ if file were rewritten
-  gitCmd(targetDir, 'sleep 0.1');
+  // (Use a simple sleep, not git command)
+  const sleepStart = Date.now();
+  while (Date.now() - sleepStart < 100) {
+    // busy wait
+  }
 
   // Second scaffold (should be idempotent)
   const res2 = runCli(targetDir);
@@ -135,9 +134,9 @@ test('re-scaffold with different pre-push hook warns and preserves it', () => {
   const targetDir = path.join(tempDir, 'fleet-4');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   // First scaffold
   const res1 = runCli(targetDir);
@@ -172,9 +171,9 @@ test('--force flag replaces existing different pre-push hook', () => {
   const targetDir = path.join(tempDir, 'fleet-5');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   // First scaffold
   const res1 = runCli(targetDir);
@@ -204,9 +203,9 @@ test('scaffold output mentions hook installation', () => {
   const targetDir = path.join(tempDir, 'fleet-6');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   const res = runCli(targetDir);
   assert.equal(res.status, 0);
@@ -237,9 +236,9 @@ test('scaffold refuses to install hook when .git/hooks is a symlink', () => {
   const targetDir = path.join(tempDir, 'fleet-symlink-hooks');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   // Create an unrelated temp dir to symlink to
   const evilDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-evil-'));
@@ -287,9 +286,9 @@ test('scaffold refuses to install hook when hook dest file is a symlink', () => 
   const targetDir = path.join(tempDir, 'fleet-symlink-hook-file');
 
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   const gitHooksDir = path.join(targetDir, '.git', 'hooks');
   const hookPath = path.join(gitHooksDir, 'pre-push');
@@ -384,9 +383,9 @@ test('scaffold into a clean pre-existing target dir still works (happy path pres
 
   // Pre-create an empty target dir (no .git, nothing) — must still scaffold fine
   fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, 'git init');
-  gitCmd(targetDir, 'git config user.email "test@example.com"');
-  gitCmd(targetDir, 'git config user.name "Test User"');
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
   const res = runCli(targetDir);
   assert.equal(res.status, 0, `Scaffold should succeed on a clean real dir. stderr: ${res.stderr}`);

@@ -369,7 +369,7 @@ def validate_api_key_env(name, where: str = "backend") -> None:
 # blocks require an explicit base_url; the orchestrator seat may omit it).
 DEFAULT_ORCHESTRATOR_BASE_URL = "https://api.openai.com/v1"
 
-_VALID_WORKER_BACKENDS = ("claude", "codex", "openai-compatible")
+_VALID_WORKER_BACKENDS = ("claude", "codex", "openai-compatible", "anthropic")
 _VALID_ORCHESTRATOR_BACKENDS = ("harness", "claude", "openai-compatible")
 
 
@@ -407,6 +407,12 @@ def _validate_worker_seat(block: dict) -> None:
         if block.get("is_local"):
             validate_is_local_base_url(block["base_url"])
         # api_key_env must look like an LLM key env var, not any secret.
+        if "api_key_env" in block:
+            validate_api_key_env(block["api_key_env"], where="seats.worker")
+    if backend_name == "anthropic":
+        # Anthropic backend: optional model and api_key_env (defaults apply).
+        if "model" in block and not isinstance(block["model"], str):
+            raise ValueError("'model' must be a string")
         if "api_key_env" in block:
             validate_api_key_env(block["api_key_env"], where="seats.worker")
 
@@ -713,6 +719,37 @@ def build_driver(config: Optional[dict] = None) -> AgentDriver:
             api_key_env=api_key_env,
             is_local=is_local,
             model_map=model_map,
+            transport=None,  # Will use default; key read at call time.
+            max_owned_bytes=config.get("max_owned_bytes", 200_000),
+            max_retries=config.get("max_retries", 2),
+            timeout_s=config.get("timeout_s", 120.0),
+        )
+
+    if backend_name == "anthropic":
+        # Import here to avoid circular dependency.
+        try:
+            from anthropic_driver import AnthropicDriver
+        except ImportError as exc:
+            raise RuntimeError(
+                "Cannot import AnthropicDriver. Make sure anthropic_driver.py is in the driver/ directory."
+            ) from exc
+
+        # Validate api_key_env if present (same as codex).
+        if "api_key_env" in config:
+            validate_api_key_env(config["api_key_env"], where="backend")
+
+        api_key_env = config.get("api_key_env", "ANTHROPIC_API_KEY")
+
+        # Build model_map for Anthropic tiers.
+        model_map = config.get("model_map", {})
+        if not isinstance(model_map, dict):
+            model_map = {}
+        # Honor the top-level 'model' field if present (common pattern).
+        if "model" in config and isinstance(config["model"], str):
+            model_map.setdefault(ROLE_WORKER, config["model"])
+
+        return AnthropicDriver(
+            model_map=model_map or None,
             transport=None,  # Will use default; key read at call time.
             max_owned_bytes=config.get("max_owned_bytes", 200_000),
             max_retries=config.get("max_retries", 2),

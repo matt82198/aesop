@@ -38,6 +38,12 @@ import tempfile
 import time
 from pathlib import Path
 
+# Ensure this tool's own directory (tools/) is importable so the shared
+# playwright harness resolves regardless of cwd or how the file is loaded
+# (the import-gate loads tools by path, without tools/ on sys.path).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from playwright_common import free_port, copy_dist, start_server, stop_server
+
 REPO = Path(__file__).resolve().parent.parent
 SERVE = REPO / "ui" / "serve.py"
 
@@ -111,13 +117,6 @@ XSS_ITEM = {
 }
 
 
-def free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
 
 def _rel_luminance(rgb):
     def chan(c):
@@ -140,18 +139,13 @@ def parse_rgb(css_color):
     return tuple(int(float(p)) for p in parts[:3])
 
 
-def copy_dist(root: Path):
-    real_dist = REPO / "ui" / "web" / "dist"
-    if real_dist.is_dir():
-        shutil.copytree(real_dist, root / "ui" / "web" / "dist")
-
 
 def build_fixture(root: Path, hint: str):
     """Populated fixture: agent + tracker (with XSS probe) + alerts + ledger + backlog."""
     (root / "state").mkdir(exist_ok=True)
     (root / "transcripts").mkdir(exist_ok=True)
     (root / "dash").mkdir(exist_ok=True)
-    copy_dist(root)
+    copy_dist(root, REPO)
 
     (root / "AUDIT-BACKLOG.md").write_text(FIXTURE_BACKLOG, encoding="utf-8")
 
@@ -191,42 +185,11 @@ def build_empty_fixture(root: Path):
     (root / "state").mkdir(exist_ok=True)
     (root / "transcripts").mkdir(exist_ok=True)
     (root / "dash").mkdir(exist_ok=True)
-    copy_dist(root)
+    copy_dist(root, REPO)
     (root / "dash" / "dash-extra.mjs").write_text(
         "console.log(JSON.stringify([]));\n", encoding="utf-8")
 
 
-def start_server(root: Path, port: int):
-    state_root = root / "state"
-    real_state = Path.home() / "aesop" / "state"
-    if state_root.resolve() == real_state.resolve():
-        raise RuntimeError("state dir resolved to real repo state (~aesop/state)")
-    env = dict(os.environ,
-               AESOP_ROOT=str(root),
-               AESOP_STATE_ROOT=str(state_root),
-               AESOP_TRANSCRIPTS_ROOT=str(root / "transcripts"),
-               AESOP_WEB_DIST=str(REPO / "ui" / "web" / "dist"),
-               AESOP_PROOF_FIXTURES="1",
-               AESOP_UI_COLLECT_INTERVAL="0.3",
-               PORT=str(port))
-    server = subprocess.Popen([sys.executable, str(SERVE)], env=env,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    for _ in range(50):
-        try:
-            socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
-            return server
-        except OSError:
-            time.sleep(0.2)
-    server.kill()
-    raise RuntimeError("server never came up")
-
-
-def stop_server(server):
-    server.terminate()
-    try:
-        server.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        server.kill()
 
 
 def run_empty_phase(pw, failures):
@@ -237,7 +200,7 @@ def run_empty_phase(pw, failures):
     failed_urls = []
     build_empty_fixture(root)
     try:
-        server = start_server(root, port)
+        server = start_server(root, port, REPO, SERVE, 50, 0.2, "0.3")
     except RuntimeError as e:
         failures.append(f"(i) empty-state server failed: {e}")
         shutil.rmtree(root, ignore_errors=True)
@@ -293,7 +256,7 @@ def main():
     failures = []
     build_fixture(root, hint="fixture hint alpha")
     try:
-        server = start_server(root, port)
+        server = start_server(root, port, REPO, SERVE, 50, 0.2, "0.3")
     except RuntimeError as e:
         print(f"FAIL: {e}")
         shutil.rmtree(root, ignore_errors=True)

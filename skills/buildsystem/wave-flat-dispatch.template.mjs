@@ -117,6 +117,38 @@ function timeboxLine() {
   return `\nTIMEBOX: if your remaining work exceeds ~${TIMEBOX_MINUTES} minutes of effort, STOP and report exactly what is done + what remains in your note — an incomplete honest report beats grinding.`
 }
 
+// Helper to build acceptance criteria section (A1) for prompts.
+function acceptanceCriteriaSection(item) {
+  if (!item.acceptanceCriteria || !Array.isArray(item.acceptanceCriteria) || item.acceptanceCriteria.length === 0) {
+    return ''
+  }
+  let section = '\nACCEPTANCE CRITERIA:\n'
+  item.acceptanceCriteria.forEach((criterion, idx) => {
+    const stmt = criterion.statement || ''
+    const verifiable = criterion.verifiable_by || 'unknown'
+    section += `(${idx + 1}) ${stmt} [verifiable_by: ${verifiable}]\n`
+  })
+  return section
+}
+
+// Helper to build domain synopsis section (A3) for prompts.
+function domainSynopsisSection(item) {
+  if (!item.domainSynopsis) return ''
+  return `\nYOUR DOMAIN INVARIANTS (synopsis — still read your domain CLAUDE.md):\n${item.domainSynopsis}\n`
+}
+
+// Helper to build owns files diff section (A4) for repair prompts.
+function ownsFilesDiffSection(item) {
+  if (!item.ownsFilesDiff) return ''
+  return `\nYOUR FILES' CURRENT DIFF:\n${item.ownsFilesDiff}\n`
+}
+
+// Helper to build last test output section (A2) for repair prompts.
+function lastTestOutputSection(item) {
+  if (!item.lastTestOutput) return ''
+  return `\nLAST TEST OUTPUT (context for this repair):\n${item.lastTestOutput}\n`
+}
+
 const DONE = {
   type: 'object', additionalProperties: false,
   properties: {
@@ -254,6 +286,8 @@ const built = await parallel(ITEMS.map((it) => () => {
     `You OWN and may write ONLY these files: ${(it.ownsFiles || []).join(', ')}. Do NOT create or edit any other file (strict ownership — another worker owns the rest, in parallel).\n` +
     `IMPORTANT: All file writes MUST use absolute paths under ${WORK}.\n` +
     `TASK:\n${it.prompt}\n` +
+    acceptanceCriteriaSection(it) +
+    domainSynopsisSection(it) +
     `Use the Write tool. Run any quick local self-check you can, but the integration suite is run centrally, not by you. Report which files you wrote.${timeboxLine()}`
   return agent(buildPrompt, { label: `build:${it.slug}`, phase: 'Build', model: 'haiku', schema: DONE })
 }))
@@ -488,9 +522,11 @@ while (v && !v.green && round < CAP) {
     // run commands ONCE to a file, never re-run to grep, and never run full union suites.
     const itemFiles = (it.ownsFiles || []).map(f => `  ${f}`).join('\n')
     const repairPrompt = `ONE-TURN-WAVE repair for item "${it.slug}". Working dir: ${WORK}. The integration suite failed: ${v.detail}\n` +
+      lastTestOutputSection(it) +
       `\n** SCOPED REPAIR CONTEXT (token discipline — repair cache-read tax fix, measured #1 sink): **\n` +
       `You are given ONLY (a) the failing-suite verdict above and (b) the diff of YOUR OWN files. Do NOT re-read the whole prior build context — re-reading the full build is the measured top token sink.\n` +
       `To see exactly what you changed, run ONCE: \`git -C ${WORK} diff -- ${(it.ownsFiles || []).join(' ')}\` (your owned files only).\n` +
+      ownsFilesDiffSection(it) +
       `You MAY read your OWNED files and the named contract (${HINT}); do NOT read sibling workers' files or dump the whole build.\n` +
       `\n** TARGETED TEST DISCIPLINE (latency fix #1): **\n` +
       `You own these files (run tests ONLY for these, never the full union suite):\n${itemFiles}\n` +
@@ -537,6 +573,8 @@ if (ADVERSARIAL_REVIEW && ADVERSARIAL_REVIEW_MODE === 'blocking' && v && v.green
 
       const reviewPrompt = `CONTRACT REFUTATION review for item "${b.slug}". Working dir: ${WORK}.\n` +
         `\nITEM CONTRACT (stated purpose):\n${item.prompt}\n` +
+        acceptanceCriteriaSection(item) +
+        domainSynopsisSection(item) +
         `\n${ownedFilesStr}` +
         `Your job: READ the actual code the implementer wrote (in the ownsFiles above). ` +
         `Try to construct a concrete input, scenario, or edge case where the implementation VIOLATES its stated contract — ` +

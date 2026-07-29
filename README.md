@@ -107,6 +107,7 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 
 
+
 *Wave: one complete build cycle (intake → dispatch → verify → ship) run by the orchestration engine.*
 
 
@@ -119,10 +120,11 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 ## Why Haiku-First Works
 
-The benchmark proves it: across 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence, security spots), Haiku scored **39/39** vs Opus **38/39** at ~1/3 the per-token cost. See [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](./bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md). **Curated set, N=39** — Haiku 39/39 vs Opus 38/39; proves sufficiency for this workload, not frontier parity.
+The benchmark proves sufficiency: across 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence, security spots), Haiku scored **39/39** vs Opus **38/39** at ~1/3 the per-token cost. See [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](./bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md). The pre-declared ceiling rule (when ≥2 tiers score ≥92%, the instrument failed to discriminate) trips on this result — both Haiku and Sonnet achieved 39/39, meaning the benchmark maps a *sufficiency floor*, not tier equivalence. **Curated set, N=39; scoped to extraction and judgment tasks with context at the seam** — does NOT reach frontier reasoning, long-horizon planning, or open-ended synthesis. Full analysis: [`bench/results/2026-07-26-judgment-v3-ceiling-addendum.md`](./bench/results/2026-07-26-judgment-v3-ceiling-addendum.md) and [`bench/EQUIVALENCE-MARGIN.md`](./bench/EQUIVALENCE-MARGIN.md).
 
 ## Learn More
 
+- **[AesopServer](https://github.com/matt82198/AesopServer)** — the JVM lens: a Spring Boot 3.5 microservice + server-rendered AesopDashboard observing this same brain read-only (typed record contracts, SQLite projections, SSE on virtual threads). Same hub, different process — the architecture is the point.
 - **[docs/INSTALL.md](./docs/INSTALL.md)** — Setup and first wave  
 - **[docs/MICROKERNEL.md](./docs/MICROKERNEL.md)** — The two swappable seats (worker + orchestrator), the invariant Report/state boundary, and a 60-second quickstart for swapping either seat's model  
 - **[docs/PORTING.md](./docs/PORTING.md)** — Adopter's guide: port Aesop to your repo (prerequisites, scaffold, 10 failure modes)  
@@ -144,6 +146,8 @@ The repo develops itself via its own `/buildsystem` loop; code changes are made 
 ## License
 
 **Source-available** under the [PolyForm Strict License 1.0.0](./LICENSE). You may read, run, and use the software for any permitted purpose, but **modification and redistribution are not permitted**. See [`LICENSE`](./LICENSE) for the full terms and the definition of permitted (noncommercial and personal) purposes.
+
+**License history:** Aesop was released under the MIT License until 2026-07-17, when it was relicensed to PolyForm Strict 1.0.0. Snapshots cloned or forked before that date retain their original MIT license grant; new work lives under PolyForm Strict 1.0.0.
 
 Copyright 2026 Matt Culliton.
 

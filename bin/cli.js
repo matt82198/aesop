@@ -434,7 +434,7 @@ function generateConfigJson(targetDir, templateRoot, projectName, reposStr, repo
   }
 
   // Update with provided values
-  exampleConfig.aesop_root = targetDir;
+  exampleConfig.aesop_root = path.resolve(targetDir);
   exampleConfig.brain_root = '~/.claude';
   exampleConfig.scripts_root = '~/scripts';
   exampleConfig.temp_root = '~/.aesop-temp';
@@ -467,14 +467,31 @@ function generateConfigJson(targetDir, templateRoot, projectName, reposStr, repo
 
 // Print next steps and optionally run watchdog (returns a Promise)
 async function printNextStepsAndWatchdog(rl, targetDir, configPath, port) {
-  console.log('\n🎯 Next 2 commands to get started:\n');
-  console.log(`  1. cd ${targetDir}`);
-  console.log('  2. bash daemons/run-watchdog.sh --once  (one-time watchdog smoke test)');
-  console.log(`  3. python3 ui/serve.py  (or python as fallback; launch dashboard on localhost:${port})`);
-  console.log('\n📖 Optional: Set up your brain (Claude Code orchestration memory):\n');
+  const resolvedTargetDir = path.resolve(targetDir);
+  console.log('\n🎯 NEXT STEPS — Customize, validate, and launch:\n');
+  console.log('1. Customize CLAUDE.md domains and team info:');
+  console.log(`     cd ${resolvedTargetDir}`);
+  console.log('     Edit CLAUDE.md — update domains, team, and project details');
+  console.log('');
+  console.log('2. Set real repository URLs in aesop.config.json:');
+  console.log('     Edit aesop.config.json — replace placeholder URLs (https://github.com/user/...) with actual repo URLs');
+  console.log('');
+  console.log('3. Copy the skills (required for orchestration):');
+  console.log('     cp ~/.claude/skills/power/SKILL.md . (verify it exists first)');
+  console.log('     cp ~/.claude/skills/buildsystem/SKILL.md . (verify it exists first)');
+  console.log('');
+  console.log('4. Run preflight checks:');
+  console.log('     aesop doctor  (or: npx @matt82198/aesop doctor)');
+  console.log('');
+  console.log('5. Launch watchdog (one-time smoke test):');
+  console.log('     bash daemons/run-watchdog.sh --once');
+  console.log('');
+  console.log(`6. Launch dashboard (on localhost:${port}):`);
+  console.log('     python3 ui/serve.py  (or python as fallback)\n');
+  console.log('📖 Optional: Set up your brain (Claude Code orchestration memory):\n');
   console.log('  mkdir -p ~/.claude/memory');
-  console.log(`  cp ${targetDir}/CLAUDE.md ~/.claude/CLAUDE.md  (review and customize)`);
-  console.log(`  cp ${targetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)\n`);
+  console.log(`  cp ${resolvedTargetDir}/CLAUDE.md ~/.claude/CLAUDE.md  (review and customize)`);
+  console.log(`  cp ${resolvedTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)\n`);
 
   return new Promise((resolve) => {
     rl.question('Run watchdog --once now? (y/N): ', (answer) => {
@@ -927,38 +944,91 @@ if (!isRuntimeCommand) {
       process.exit(0);
     } else if (wizardMode) {
       // Wizard mode with --yes flag (non-interactive)
-      console.log('\n🎯 Next 3 commands to get started:\n');
-      console.log(`  1. cd ${finalTargetDir}`);
-      console.log('  2. bash daemons/run-watchdog.sh --once  (one-time watchdog smoke test)');
-      console.log(`  3. python3 ui/serve.py  (or python as fallback; launch dashboard on localhost:${dashboardPort})`);
-      console.log('\n📖 Optional: Set up your brain (Claude Code orchestration memory):\n');
+      const resolvedFinalTargetDir = path.resolve(finalTargetDir);
+      console.log('\n🎯 NEXT STEPS — Customize, validate, and launch:\n');
+      console.log('1. Customize CLAUDE.md domains and team info:');
+      console.log(`     cd ${resolvedFinalTargetDir}`);
+      console.log('     Edit CLAUDE.md — update domains, team, and project details');
+      console.log('');
+      console.log('2. Set real repository URLs in aesop.config.json:');
+      console.log('     Edit aesop.config.json — replace placeholder URLs (https://github.com/user/...) with actual repo URLs');
+      console.log('');
+      console.log('3. Copy the skills (required for orchestration):');
+      console.log('     cp ~/.claude/skills/power/SKILL.md . (verify it exists first)');
+      console.log('     cp ~/.claude/skills/buildsystem/SKILL.md . (verify it exists first)');
+      console.log('');
+      console.log('4. Run preflight checks:');
+      console.log('     aesop doctor  (or: npx @matt82198/aesop doctor)');
+      console.log('');
+      console.log('5. Launch watchdog (one-time smoke test):');
+      console.log('     bash daemons/run-watchdog.sh --once');
+      console.log('');
+      console.log(`6. Launch dashboard (on localhost:${dashboardPort}):`);
+      console.log('     python3 ui/serve.py  (or python as fallback)');
+      console.log('');
+      console.log('📖 Optional: Set up your brain (Claude Code orchestration memory):\n');
       console.log('  mkdir -p ~/.claude/memory');
-      console.log(`  cp ${finalTargetDir}/CLAUDE.md ~/.claude/CLAUDE.md  (review and customize)`);
-      console.log(`  cp ${finalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
+      console.log(`  cp ${resolvedFinalTargetDir}/CLAUDE.md ~/.claude/CLAUDE.md  (review and customize)`);
+      console.log(`  cp ${resolvedFinalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
       process.exit(0);
     } else if (finalProjectName) {
+      const resolvedFinalTargetDir = path.resolve(finalTargetDir);
       console.log('\n✅ Headless scaffolding complete!\n');
-      console.log('🎯 Next 3 commands to get started:\n');
-      console.log(`  1. cd ${finalTargetDir}`);
-      console.log('  2. bash daemons/run-watchdog.sh --once  (one-time watchdog smoke test)');
-      console.log(`  3. python3 ui/serve.py  (or python as fallback; launch dashboard on localhost:${dashboardPort})`);
-      console.log('\n📖 Optional: Set up your brain (Claude Code orchestration memory):\n');
+      console.log('🎯 NEXT STEPS — Customize, validate, and launch:\n');
+      console.log('1. Customize CLAUDE.md domains and team info:');
+      console.log(`     cd ${resolvedFinalTargetDir}`);
+      console.log('     Edit CLAUDE.md — update domains, team, and project details');
+      console.log('');
+      console.log('2. Set real repository URLs in aesop.config.json:');
+      console.log('     Edit aesop.config.json — replace placeholder URLs (https://github.com/user/...) with actual repo URLs');
+      console.log('');
+      console.log('3. Copy the skills (required for orchestration):');
+      console.log('     cp ~/.claude/skills/power/SKILL.md . (verify it exists first)');
+      console.log('     cp ~/.claude/skills/buildsystem/SKILL.md . (verify it exists first)');
+      console.log('');
+      console.log('4. Run preflight checks:');
+      console.log('     aesop doctor  (or: npx @matt82198/aesop doctor)');
+      console.log('');
+      console.log('5. Launch watchdog (one-time smoke test):');
+      console.log('     bash daemons/run-watchdog.sh --once');
+      console.log('');
+      console.log(`6. Launch dashboard (on localhost:${dashboardPort}):`);
+      console.log('     python3 ui/serve.py  (or python as fallback)');
+      console.log('');
+      console.log('📖 Optional: Set up your brain (Claude Code orchestration memory):\n');
       console.log('  mkdir -p ~/.claude/memory');
-      console.log(`  cp ${finalTargetDir}/CLAUDE.md ~/.claude/CLAUDE.md  (review and customize)`);
-      console.log(`  cp ${finalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
+      console.log(`  cp ${resolvedFinalTargetDir}/CLAUDE.md ~/.claude/CLAUDE.md  (review and customize)`);
+      console.log(`  cp ${resolvedFinalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
     } else {
+      const resolvedFinalTargetDir = path.resolve(finalTargetDir);
       console.log('\n✅ Scaffold complete!\n');
-      console.log('🎯 Next 3 commands to get started:\n');
-      console.log(`  1. cd ${finalTargetDir}`);
-      console.log('  2. bash daemons/run-watchdog.sh --once  (one-time watchdog smoke test)');
-      console.log(`  3. python3 ui/serve.py  (or python as fallback; launch dashboard on localhost:${dashboardPort})`);
-      console.log('\n📖 Configuration steps (optional):\n');
-      console.log('  cp aesop.config.example.json aesop.config.json  (if not generated)');
-      console.log('  Edit aesop.config.json with your configuration');
-      console.log('\n📖 Optional: Set up your brain (Claude Code orchestration memory):\n');
+      console.log('🎯 NEXT STEPS — Customize, validate, and launch:\n');
+      console.log('1. Create aesop.config.json from example:');
+      console.log('     cp aesop.config.example.json aesop.config.json');
+      console.log(`     cd ${resolvedFinalTargetDir}`);
+      console.log('     Edit aesop.config.json with your configuration and actual repository URLs');
+      console.log('');
+      console.log('2. Customize CLAUDE.md domains and team info:');
+      console.log('     Edit CLAUDE-TEMPLATE.md and save as CLAUDE.md');
+      console.log('     Update domains, team, and project details');
+      console.log('');
+      console.log('3. Copy the skills (required for orchestration):');
+      console.log('     cp ~/.claude/skills/power/SKILL.md . (verify it exists first)');
+      console.log('     cp ~/.claude/skills/buildsystem/SKILL.md . (verify it exists first)');
+      console.log('');
+      console.log('4. Run preflight checks:');
+      console.log('     aesop doctor  (or: npx @matt82198/aesop doctor)');
+      console.log('');
+      console.log('5. Launch watchdog (one-time smoke test):');
+      console.log('     bash daemons/run-watchdog.sh --once');
+      console.log('');
+      console.log(`6. Launch dashboard (on localhost:${dashboardPort}):`);
+      console.log('     python3 ui/serve.py  (or python as fallback)');
+      console.log('');
+      console.log('📖 Optional: Set up your brain (Claude Code orchestration memory):\n');
       console.log('  mkdir -p ~/.claude/memory');
-      console.log(`  cp ${finalTargetDir}/CLAUDE-TEMPLATE.md ~/.claude/CLAUDE.md  (then edit domains/team info)`);
-      console.log(`  cp ${finalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
+      console.log(`  cp ${resolvedFinalTargetDir}/CLAUDE-TEMPLATE.md ~/.claude/CLAUDE.md  (then edit domains/team info)`);
+      console.log(`  cp ${resolvedFinalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
     }
     console.log('\nFor full documentation, see the README.md in the scaffolded directory.');
     process.exit(0);

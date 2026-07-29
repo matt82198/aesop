@@ -14,6 +14,7 @@ import { WeeklyCostSummary } from '../components/WeeklyCostSummary';
 import { VerdictCostMetrics } from '../components/VerdictCostMetrics';
 import { ModelMixTrendChart } from '../components/ModelMixTrendChart';
 import { CostAnalyticsPanel } from '../components/CostAnalyticsPanel';
+import { WaveAgentBreakdown } from '../components/WaveAgentBreakdown';
 import { TESTIDS } from '../test/fixtures';
 import './Cost.css';
 
@@ -41,6 +42,11 @@ export function Cost({ cost }: CostProps) {
       <div className="cost-layout">
         <div className="cost-section cost-section--full">
           <CostAnalyticsPanel cost={cost} ceilingTokens={1_000_000_000} />
+        </div>
+
+        <div className="cost-section cost-section--full">
+          <h3>Per Wave & Agent Breakdown</h3>
+          <WaveAgentBreakdown cost={cost} />
         </div>
 
         <div className="cost-section">

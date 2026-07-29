@@ -395,21 +395,36 @@ class TestN4StaleLeaseRelease(unittest.TestCase):
 
     def test_expired_claim_is_reclaimable(self):
         """A claim past its TTL is ignored: a crashed holder's claim does
-        not persist forever."""
+        not persist forever. TDD fix: use logical time (mocked) instead of
+        wall-clock sleep to avoid Windows CI timing flakes (time.sleep
+        precision is unreliable under heavy CI load)."""
         tmp = Path(tempfile.mkdtemp(dir=_MODULE_TMP, prefix="n4b-"))
         es = sstore.EventStore(str(tmp / "state.db"))
-        self.assertTrue(
-            coordination.try_claim(
-                es, resource="r1", instance_id="inst-a", ttl=0.05
+
+        # Patch time.time() to advance logically instead of relying on
+        # wall-clock precision under CI load. Both store.append() and
+        # coordination.fold_claims() use time.time(), so the patch
+        # applies to both.
+        with mock.patch("time.time") as mock_time:
+            # Claim with inst-a at logical time 1000.0
+            mock_time.return_value = 1000.0
+            self.assertTrue(
+                coordination.try_claim(
+                    es, resource="r1", instance_id="inst-a", ttl=0.05
+                )
             )
-        )
-        time.sleep(0.2)
-        self.assertTrue(
-            coordination.try_claim(
-                es, resource="r1", instance_id="inst-b", ttl=60
-            ),
-            "claim past its TTL was still enforced",
-        )
+
+            # Advance logical time past the TTL: 1000.0 + 0.05 + margin
+            mock_time.return_value = 1000.1
+
+            # inst-b should now be able to claim because inst-a's claim
+            # (recorded at 1000.0 with ttl=0.05) has expired by now.
+            self.assertTrue(
+                coordination.try_claim(
+                    es, resource="r1", instance_id="inst-b", ttl=60
+                ),
+                "claim past its TTL was still enforced",
+            )
 
     def test_fold_claims_ttl_expiry_with_now(self):
         """fold_claims honors ts + ttl against the reference time."""

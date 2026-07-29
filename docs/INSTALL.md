@@ -2,6 +2,9 @@
 
 **TL;DR**: Install Aesop in ~5 minutes using `npx`, set your repos, then verify with a single watchdog test run.
 
+**New repo?** Follow the scaffolding guide below.
+**Existing repo?** See [PORTING.md](PORTING.md) for adopting Aesop on a foreign codebase (with 10 common pitfalls covered).
+
 ---
 
 ## Prerequisites
@@ -15,7 +18,26 @@ Before you start, make sure you have:
 - **Python** (v3.10+) — for secret-scan and log rotation
 - **jq** (optional) — for TUI dashboard parsing
 
-Check your versions:
+### Install Claude Code CLI
+
+Claude Code is required to run `/power` and `/buildsystem` skills.
+
+**Download and install**:
+- Visit https://claude.com/claude-code to download and install Claude Code for your operating system
+
+**Verify installation**:
+```bash
+claude --version
+```
+
+Expected output: `Claude Code vX.Y.Z` (v0.1 or higher)
+
+**If not on PATH**: On macOS/Linux, add the install directory to your `$PATH`. On Windows, the installer registers Claude Code in your PATH automatically. If `claude` is not found:
+- Reinstall Claude Code and ensure the installer adds it to PATH
+- Or add the installation directory to PATH manually (usually `~/.claude/bin` or `C:\Program Files\Claude Code\bin`)
+
+### Check your versions
+
 ```bash
 claude --version
 git --version
@@ -61,6 +83,15 @@ cp -r skills/power/ ~/.claude/skills/power/
 cp -r skills/buildsystem/ ~/.claude/skills/buildsystem/
 ```
 
+**Verify the skills were copied**:
+```bash
+# Check both skills exist
+ls -la ~/.claude/skills/power/SKILL.md
+ls -la ~/.claude/skills/buildsystem/SKILL.md
+```
+
+Expected output: Two SKILL.md files should exist.
+
 ### Step 3: Verify the installation
 
 Run the watchdog once to test everything:
@@ -78,6 +109,8 @@ Expected output:
 ```
 
 If you see errors, check the logs in `state/FLEET-BACKUP.log`.
+
+**Note**: The `reproduce` command runs full test suites if you're working in the aesop repo itself. For scaffolded fleets, verification uses `aesop doctor` + `watchdog --once` to check preflight requirements and basic health.
 
 ---
 
@@ -101,8 +134,8 @@ Open `aesop.config.json` and customize for your repos (see [CONFIGURE.md](CONFIG
 
 ```json
 {
-  "aesopRoot": "/home/user/my-aesop",
-  "braindRoot": "/home/user/.claude",
+  "aesop_root": "/home/user/my-aesop",
+  "brain_root": "/home/user/.claude",
   "repos": [
     {
       "path": "/home/user/my-repo1",
@@ -113,7 +146,9 @@ Open `aesop.config.json` and customize for your repos (see [CONFIGURE.md](CONFIG
       "name": "my-frontend"
     }
   ],
-  "dashboardPort": 8770,
+  "dashboard": {
+    "port": 8770
+  },
   "dashboardOrigin": "http://localhost:8770"
 }
 ```
@@ -169,10 +204,10 @@ After setup, you'll have:
 ### Configuration files
 
 - **aesop.config.json** — Main configuration (git-ignored, never commit credentials)
-  - `aesopRoot` — path to this harness directory
-  - `braindRoot` — path to Claude Code home (`~/.claude`)
+  - `aesop_root` — path to this harness directory
+  - `brain_root` — path to Claude Code home (`~/.claude`)
   - `repos` — list of monitored repositories
-  - `dashboardPort` — web dashboard port (default: 8770)
+  - `dashboard.port` — web dashboard port (default: 8770)
   - `dashboardOrigin` — CORS origin validation
 
 - **aesop.config.example.json** — Template with defaults (commit this, use as reference)
@@ -184,15 +219,45 @@ After setup, you'll have:
 Optional environment variables you can set in your shell:
 
 ```bash
-# Point to the Aesop harness root (used by daemons)
+# Point to the Aesop harness root (used by daemons and tools)
 export AESOP_ROOT=/home/user/my-aesop
 
-# Optional: custom location for Claude Code home
-export CLAUDE_CODE_HOME=/home/user/.claude
+# Optional: custom location for Aesop state directory (default: ./state)
+export AESOP_STATE_ROOT=/home/user/my-aesop/state
 
-# Optional: enable debug output in daemons
-export DEBUG=1
+# Optional: custom location for Claude Code home (used by /power skill)
+export BRAIN_ROOT=/home/user/.claude
+
+# Optional: custom location for reusable scripts directory
+export SCRIPTS_ROOT=/home/user/scripts
 ```
+
+---
+
+## Already Have Aesop? Quick Setup
+
+If you've already scaffolded Aesop and just need to get running:
+
+1. **Verify your config**:
+   ```bash
+   node -e "console.log(JSON.parse(require('fs').readFileSync('aesop.config.json')))"
+   ```
+
+2. **Verify the setup**:
+   ```bash
+   bash daemons/run-watchdog.sh --once
+   ```
+
+3. **Copy skills** (if not done yet):
+   ```bash
+   cp -r skills/power/ ~/.claude/skills/power/
+   cp -r skills/buildsystem/ ~/.claude/skills/buildsystem/
+   ```
+
+4. **Run your first wave**:
+   - Open Claude Code
+   - Type `/power` to prime your brain
+   - Type `/buildsystem` to start a wave (see [FIRST-WAVE.md](FIRST-WAVE.md))
 
 ---
 

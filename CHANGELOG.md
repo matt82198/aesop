@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Version scheme**: Stable releases are `0.x.y`; `0.x.0-beta.N` / `-rc.N` are pre-releases; `0.1.0-wave.N` were internal wave-milestone previews.
 
+## [0.4.1] - 2026-07-26
+
+### Added (late-merging items — canonical in the v0.4.1 release notes)
+- Dashboard cost view: per-wave / per-agent / per-model spend breakdown with expandable model mix (#402)
+- `tools/wave_scorecard.py` — wave quality scorecards from ledger telemetry, StateAPI-conformant (#408)
+- `tools/wave_manifest_lint.py` — manifest preflight (file-ownership disjointness, prompt sanity); the pre-existing `wave_preflight.py` repo-readiness tool restored intact after a name-collision clobber was caught by its regression tests (#409)
+- Honesty reconciliations: judgment-v3 ceiling addendum (39/39 is a sufficiency floor, not tier equivalence — our own pre-declared ceiling rule trips on it), the wave-24 selection-vs-scoring boundary, and the MIT-until-2026-07-17 license-history disclosure (#414)
+
+### Onboarding overhaul
+- **Config home-directory expansion** (PR #413): User-set `aesop_root: "~/myfleet"` now expands correctly via `.expanduser()` instead of treating tilde as a literal path.
+- **Reproduce graceful degradation** (PR #413): Fresh scaffolds (`.git` present, no `package-lock.json`) detect scaffold mode and run installed-mode verification instead of failing on `npm ci`; clear one-line message on graceful degrade.
+- **Scaffolder absolute paths** (PR #413): All NEXT STEPS `cd` commands in CLI output now print absolute resolved paths matching config's stored resolved paths (no relative dirs).
+- **Scaffold and doctor fixes** (PR #407): Corrected path handling in scaffolder and doctor, improved validation logic, clearer guidance on remediation.
+- **Setup docs field-name sync** (PR #405): Fixed CONFIGURE block field names and added missing Claude Code install steps; docs now match actual config structure.
+- **Watchdog smoke-test verdict** (PR #406): New `watchdog --once` exits with explicit PASS/FAIL verdict for CI/doctor integration; clear signal for fleet health checks.
+
+### CI/test hardening
+- **PowerShell syntax gate** (PR #401): Pre-commit CI gate validates all `*.ps1` files for correct syntax; prevents shell-script drift on Windows daemon scripts.
+- **Workflow_dispatch on main-full** (PR #399): Main CI now accepts manual dispatch trigger for on-demand full-suite runs without waiting for a commit.
+- **Self-updating test suite count gate** (PR #403): New `tools/verify_test_suite_count.py` auto-reconciles test counts in `tests/CLAUDE.md`; `--check` mode for CI (fail-closed on drift), `--fix` mode for lanes. Eliminates merge blocks from concurrent test additions.
+- **Frontier-slice test depollution** (PR #400): Frontier-slice benchmark output now writes to gitignored temp location instead of polluting repo; clean CI artifacts.
+- **Git-identity isolation + runtime tripwire** (PR #412): Fixed root cause of Test User ghost commits — 6 test files used shell fallthrough causing silent git config writes to shared `.git/config`. Now using direct `spawn('git', …, {cwd})` with no shell; runtime tripwire in `test_test_hygiene.py` fails suite if repo identity mutates during test run.
+
+### Honesty / stats
+- **Stats truth-sync + verify tool** (PR #411): Fixed stale v0.1.0 stats in stats.json; new `scripts/verify-stats.sh` documents single-stats-source wrapper (`self_stats --check/--regenerate`); ancestor principles named (Temporal, Candea & Fox crash-only, Erlang/OTP, K8s reconciliation).
+- **Self_stats squash-merge fix** (PR #398): Merged PR count now authoritative from GitHub API (387, up from undercounted 268). Git fallback for offline use handles both merge-commit and squash-merge styles; deduplicates on PR number.
+
+### Bench
+- **gpt-4o-mini worker seat dogfood** (PR #404): Benchmark expands with gpt-4o-mini seated as worker model; includes real context-tip item-9 discrimination and co-model A/B measurement.
+
 ## [0.4.0] - 2026-07-25
 
 ### Added

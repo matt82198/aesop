@@ -1,0 +1,13 @@
+{
+  "task_id": "st10",
+  "band": "long",
+  "statement": "A task processing system moves tasks through a workflow: new tasks should transition from QUEUED to READY to EXECUTING to DONE. When a task is retried after a failure, it transitions to a REQUEUED state. However, the notification system that listens to state changes crashes when processing notifications for the REQUEUED state, causing all subsequent tasks to fail to notify completion. New tasks without retries work fine. How do you fix this?",
+  "context_files": [
+    "task_manager.py",
+    "state_machine.py",
+    "notifier.py",
+    "constants.py",
+    "requirements.txt"
+  ],
+  "oracle_cmd": "python -m pytest oracle -q"
+}

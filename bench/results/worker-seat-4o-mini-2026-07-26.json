@@ -1,0 +1,74 @@
+{
+  "experiment": "gpt-4o-mini as worker seat dogfood",
+  "date": "2026-07-26",
+  "status": "complete",
+  "worker_model": "gpt-4o-mini",
+  "orchestrator_model": "claude-3-5-sonnet (harness)",
+  "total_spend_usd": 0.000656,
+  "spend_cap_usd": 3.0,
+  "spend_vs_cap_percent": 0.022,
+  "tasks": [
+    {
+      "id": 1,
+      "slug": "hello-function",
+      "prompt": "Write hello.py with a function hello() that returns 'hello world'",
+      "passed": true,
+      "latency_sec": 2.49,
+      "tokens": 489,
+      "estimated_cost_usd": 0.000129,
+      "quality": "Correct implementation, passed test"
+    },
+    {
+      "id": 2,
+      "slug": "double-function",
+      "prompt": "Write math_ops.py with a function double(n) that returns 2*n",
+      "passed": true,
+      "latency_sec": 1.33,
+      "tokens": 494,
+      "estimated_cost_usd": 0.000130,
+      "quality": "Correct implementation, passed test"
+    },
+    {
+      "id": 3,
+      "slug": "version-constant",
+      "prompt": "Write config.py with VERSION = '1.0.0'",
+      "passed": true,
+      "latency_sec": 0.94,
+      "tokens": 483,
+      "estimated_cost_usd": 0.000127,
+      "quality": "Correct implementation, passed test"
+    },
+    {
+      "id": 4,
+      "slug": "utility-function",
+      "prompt": "Write utils.py with a function is_even(n) that returns True if n is even",
+      "passed": true,
+      "latency_sec": 1.19,
+      "tokens": 516,
+      "estimated_cost_usd": 0.000135,
+      "quality": "Correct implementation, passed test"
+    },
+    {
+      "id": 5,
+      "slug": "test-helper",
+      "prompt": "Write test_helpers.py with a function assert_equal(a, b) that raises AssertionError if a != b",
+      "passed": true,
+      "latency_sec": 1.62,
+      "tokens": 516,
+      "estimated_cost_usd": 0.000135,
+      "quality": "Correct implementation, passed test"
+    }
+  ],
+  "summary": {
+    "tasks_completed": 5,
+    "tasks_passed": 5,
+    "pass_rate_percent": 100.0,
+    "total_tokens": 2498,
+    "total_latency_sec": 7.57,
+    "avg_latency_per_task_sec": 1.514,
+    "total_estimated_cost_usd": 0.000656,
+    "avg_cost_per_task_usd": 0.000131,
+    "pricing_assumptions": "Input: $0.00015 per 1K tokens, Output: $0.0006 per 1K tokens; estimated 3:1 input/output ratio for code generation"
+  },
+  "notes": "Five small, self-contained code generation tasks. All tasks generated correct, working code on first attempt. No repairs or retries needed. Very cost-effective (0.02% of $3.00 cap). Suitable for tier-2 verification tier (validate all JSON, spot-check, adversarial review). Network latency dominates per-task time (1-2.5s)."
+}

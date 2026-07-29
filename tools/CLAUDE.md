@@ -47,6 +47,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `metrics_gate.py` — PR gate for hard numeric claims in markdown
 - `mutation_test.py` — Test quality harness via mutation testing (apply code mutations, run tests, report survived mutations as test gaps); CLI: `--target <module.py> --test <test_module.py> [--json]`; exit 0 on valid results (advisory), exit 1 when the sandbox baseline fails (results invalid, fail-closed)
 - `orchestrator_status.py` — Atomic orchestrator status updates
+- `playwright_common.py` — Shared Playwright harness boilerplate: `free_port()`, `copy_dist()`, `start_server()`, `stop_server()` extracted from verify_*.py to reduce duplication (module for import, not CLI)
 - `portability_check.py` — Shipped-surface gate: scan for hardcoded personal/environment paths (Windows user paths, POSIX home paths, private-machine tokens 'conductor3'/'matt8'); exit 0 clean / 1 with findings; --json output, --root flag for base directory; stdlib only
 - `power_selftest.py` — Health check harness for /power bootstrap
 - `prepublish_scan.py` — Pre-publish full history + staged-changes scan gate
@@ -74,6 +75,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `dash.js` — Launch the web dashboard (spawns python ui/serve.py with configured port from PORT env var, aesop.config.json, or default 8770)
 - `wave_backlog_analyzer.py` — Pre-wave backlog risk analyzer (per-item risk_level/estimated_retries from git fix-forward history + tracker lanes); warn-level only, --json
 - `wave_templates.py` — Wave-manifest preset generator: instantiate/validate templates/wave-presets/*.json into ready manifests; CLI: `validate [--template saas|data|library|all]` (exits 0=clean / 1=defects per item), `instantiate <preset> --project-name --base-dir [--output FILE]`
+- `wave_scorecard.py` — Wave quality scorecard generator (deterministic metrics from on-disk telemetry); computes items dispatched/succeeded, repair rounds, first-try-green rate, tokens + cost by phase/model, agent success by type, retry frequency; CLI: `[--json|--md] [--waves N] [--state-root PATH]` (default ASCII); emits n/a for missing sources; hermetic, stdlib-only
 - `verify_scorecards.py` — Browser proof for the wave quality scorecards panel (self-hosted test port + fixtures; AESOP_PROOF_FIXTURES gated)
 - `transcript_replay.py` — Replay post-commit edits from transcripts to recover work
 - `transcript_timeline.py` — Extract Write/Edit/Read timeline from transcripts
@@ -88,20 +90,24 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `verify_dispatch_panel.py` — Browser proof for DispatchPanel component (ui/web/dist/ + /api/wave/dispatch; Playwright/Chromium; exit 0=proven, 1=failed, --allow-skip for CI)
 - `verify_ui_trio.py` — Browser proof for UI trio panels (Gantt Timeline, Audit Tail Stream, Live Reasoning Transparency; AESOP_PROOF_FIXTURES)
 - `verify_ui_trio_redaction_proof.py` — Offline falsifiability proof: verify that transcript redaction detects leaks (POSIX paths, Windows paths, sk- tokens) when unredacted; exit 0=proof passes / 1=proof failed
+- `verify_test_suite_count.py` — Test suite count drift gate (auto-verifiable + auto-fixable); CLI: `--check` (fail if counts drift; CI gate) | `--fix [--dry-run]` (auto-rewrite tests/CLAUDE.md counts to match disk; lanes use this); --repo/--claudemd overrides; idempotent; exit 0=clean/fixed, 1=drift/error
 - `wave_ledger_hook.py` — Orchestrator-tail CLI wrapper to append per-wave telemetry to OUTCOMES-LEDGER.md (idempotent phase appends; validates timestamp for markdown table safety)
-- `wave_preflight.py` — Wave-open readiness validator: (1) repo-readiness checks (branch/clean-tree/HALT/heartbeats/tracker JSON parse); (2) backlog validation via --tracker (flags: missing ownsFiles, stale file refs, ownership overlaps, ledger aggregate retry rate); --json mode + --state-root/AESOP_STATE_ROOT split from --root; warn-level checks never flip exit 1; advisory tool exit 0 for --tracker mode
+- `wave_preflight.py` — Wave-open readiness validator: (1) repo-readiness checks (branch/clean-tree/HALT/heartbeats/tracker JSON parse); (2) backlog validation via --tracker (flags: missing ownsFiles, stale file refs, ownership overlaps, ledger aggregate retry rate); (3) --from-stdin mode reads repo roots from stdin to check multiple repos in one run; --json mode + --state-root/AESOP_STATE_ROOT split from --root; warn-level checks never flip exit 1; advisory tool exit 0 for --tracker mode
+- `wave_manifest_lint.py` — Wave manifest preflight validator: (1) file-ownership disjointness (no overlaps via fnmatch glob matching); (2) ownsFiles path existence (new files flagged as INFO); (3) prompt sanity (non-empty + [ISOLATION: sibling worktree] required + [[ALLOW-NON-HAIKU]] warns unless [[ALLOW-SONNET]]/[[ALLOW-OPUS]]); (4) git history churn (14-day commits >3 = WARN); (5) testCmd validation (on PATH or repo-relative script). CLI: `wave_manifest_lint.py <manifest.json> [--json] [--strict] [--root DIR]`. Exit 0=PASS (warnings OK) / 1=FAIL or (--strict) WARN. ASCII+JSON output
 - `wave_resume.py` — Mid-wave recovery: parse workflow journal.jsonl + worktree to classify items as completed (files written + tests green) vs remaining, enabling resume from last good phase instead of re-run
 - `watch.js` — Launch the watchdog daemon (spawns bash daemons/run-watchdog.sh with inherited stdio in foreground mode)
 - `agent-forensics.sh` — Incident forensics; behavior reconstruction (read-only git plumbing)
 
 ## secret_scan.py — Pre-push gate
 
-CLI: `secret_scan.py --staged [--repo PATH]` | `--history [--repo PATH]` | `PATH [PATH...]`
+CLI: `secret_scan.py --staged [--repo PATH]` | `--history [--repo PATH]` | `--from-stdin [--repo PATH]` | `PATH [PATH...]`
 
 Exit: 0=clean, 1=findings, 2=error. Pragma escape (pattern findings only; filenames always fatal):
 ```
 # secretscan: allow-pattern-docs
 ```
+
+`--from-stdin`: Read newline-delimited file paths from stdin for direct scanning (e.g., `git diff --name-only | secret_scan.py --from-stdin`).
 
 ## agent-forensics.sh — Behavior forensics
 

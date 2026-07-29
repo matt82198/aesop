@@ -222,7 +222,13 @@ def main(argv=None):
     i = 0
     while i < len(argv):
         arg = argv[i]
-        if arg == "--root":
+        if arg in ("-h", "--help"):
+            print(
+                "Usage: stateapi_lint.py [--root PATH] [--json] "
+                "[--baseline FILE] [--update-baseline]"
+            )
+            return 0
+        elif arg == "--root":
             i += 1
             if i < len(argv):
                 repo_root = argv[i]
