@@ -128,13 +128,6 @@ npm test  # runs: node --test --test-force-exit --test-timeout=60000 tests/*.tes
 
 **Test file**: `tests/mcp-fleet.test.mjs` — Spawns server over stdio, drives JSON-RPC initialize + tools/list + tools/call round-trips, validates read-only behavior, verifies fixture isolation (temp state root).
 
-## Files in Domain
-
-- `mcp/server.mjs` — Main MCP server (stdio, JSON-RPC 2.0, all tools).
-- `mcp/package.json` — Metadata only; no external dependencies.
-- `mcp/CLAUDE.md` — This file (inlined, self-contained).
-- `tests/mcp-fleet.test.mjs` — E2E tests (spawns server, drives round-trips).
-
 ## MCP Integration (Claude Code Example)
 
 ```json
@@ -148,10 +141,5 @@ npm test  # runs: node --test --test-force-exit --test-timeout=60000 tests/*.tes
   }
 }
 ```
-
-## Dropped (reason)
-- Detailed tool JSON examples (inlined inline as compact output shape).
-- Setup/installation instructions (delegated to project README.md and initial aesop.config.example.json).
-- Long CLI setup examples (condensed into single --root flag example + env-var list).
 
 Map of all domains: `/CLAUDE.md`
