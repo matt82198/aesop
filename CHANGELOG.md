@@ -434,7 +434,7 @@ package ships slim and reproducible from a clean clone.
 
 ## Initial Release
 
-This is the first public release of Aesop, a clean-room source-available implementation of the fable-fleet orchestration harness. The codebase includes:
+This is the first public release of Aesop, a clean-room source-available implementation of the multi-agent orchestration harness. The codebase includes:
 
 - The complete orchestration engine with watchdog and monitor
 - Web dashboard for fleet observability
