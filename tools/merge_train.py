@@ -66,10 +66,12 @@ def update_branch(n: int) -> bool:
 
 
 def merge_pr(n: int) -> bool:
-    result = gh("pr", "merge", str(n), "--squash", "--delete-branch")
+    result = gh("pr", "merge", str(n), "--squash")
     if isinstance(result, dict) and "error" in result:
-        print(f"  [FAIL] merge #{n} failed: {result['error'][:120]}")
-        return False
+        err = result["error"][:120]
+        if "already merged" not in err.lower():
+            print(f"  [FAIL] merge #{n} failed: {err}")
+            return False
     verify = gh("pr", "view", str(n), "--json", "state", "--jq", ".state")
     if verify == "MERGED":
         print(f"  [ok] #{n} MERGED (verified)")
