@@ -458,8 +458,11 @@ class TestCodexDriver(_DriverContractMixin, unittest.TestCase):
         self.assertFalse(caps.worktree_isolation)         # temp-dir fallback
         self.assertTrue(caps.structured_output)           # function-calling JSON
         self.assertTrue(caps.native_cost_tracking)        # usage metadata
-        # Below Claude accuracy -> heavier verification tier.
-        self.assertLess(caps.tool_use_accuracy, 0.99)
+        # Measured 1.0 on gpt-4o-mini (32-task structured-output harness,
+        # 2026-07-29; see bench/results/openai-tooluse-gpt4omini-32tasks.json).
+        # Tier stays 2 regardless: codex workers cannot self-verify (no
+        # fs/shell access), so the orchestrator must verify more heavily.
+        self.assertEqual(caps.tool_use_accuracy, 1.0)
         self.assertEqual(caps.recommended_verification_tier, 2)
 
     def test_model_map_is_openai(self):
@@ -487,12 +490,18 @@ class TestCodexDriver(_DriverContractMixin, unittest.TestCase):
 
 class TestVerificationThesisEncoded(unittest.TestCase):
     """The spike's load-bearing claim, asserted as a property of the drivers:
-    weaker workers (lower accuracy) => higher verification tier."""
+    less-capable workers => higher verification tier. Accuracy alone does not
+    lower the tier: measured tool_use_accuracy for codex is 1.0 (2026-07-29,
+    32-task harness), yet its workers cannot touch the filesystem or shell,
+    so the orchestrator must still verify more heavily than for Claude Code."""
 
     def test_lower_accuracy_implies_higher_or_equal_tier(self):
         claude = ClaudeCodeDriver().probe_capabilities()
         codex = CodexDriver().probe_capabilities()
-        self.assertLess(codex.tool_use_accuracy, claude.tool_use_accuracy)
+        # Measured: codex (gpt-4o-mini) meets/exceeds Claude's accuracy.
+        self.assertGreaterEqual(codex.tool_use_accuracy, claude.tool_use_accuracy)
+        # But the tier is capability-driven, not accuracy alone: codex
+        # workers lack fs/shell access, so verification burden stays higher.
         self.assertGreater(
             codex.recommended_verification_tier,
             claude.recommended_verification_tier,

@@ -251,7 +251,8 @@ class CodexDriver(AgentDriver):
 
         Tier-2 backend: orchestrator provides parallelism, file I/O, and command
         execution. Structured output via JSON schema. No filesystem/shell/worktree
-        access. Below-Claude accuracy (0.92) -> heavier verification required.
+        access. Accuracy measured 1.0 (32-task harness, 2026-07-29), but workers
+        cannot self-verify (no fs/shell) -> heavier verification still required.
         """
         return DriverCapabilities(
             name=self.name,
