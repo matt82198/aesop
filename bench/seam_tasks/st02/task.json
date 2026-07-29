@@ -4,7 +4,9 @@
   "statement": "A config loader function merges user-provided config into a base config dictionary. When you call the function multiple times with different user configs, the function unexpectedly retains values from previous calls \u2014 the base config should be fresh each time. Fix the config loader so each call starts with a clean base configuration.",
   "context_files": [
     "__init__.py",
-    "config_loader.py"
+    "config_loader.py",
+    "test_repro.py"
   ],
-  "oracle_cmd": "python -m pytest oracle -q"
+  "oracle_cmd": "python -m pytest oracle -q",
+  "visible_test_cmd": "python -m pytest test_repro.py -q"
 }

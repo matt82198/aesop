@@ -68,6 +68,9 @@ class TaskFixture:
     repo_path: Path
     oracle_path: Path
     solution_path: Optional[Path] = None
+    # Visible reproduction test the worker may run for repair-loop feedback
+    # (distinct from the hidden grading oracle). None -> repair loop is inert.
+    visible_test_cmd: Optional[str] = None
 
 
 @dataclass
@@ -119,6 +122,7 @@ def load_task(task_dir: Path) -> TaskFixture:
         repo_path=task_dir / "repo",
         oracle_path=task_dir / "oracle",
         solution_path=(task_dir / "SOLUTION.md") if (task_dir / "SOLUTION.md").exists() else None,
+        visible_test_cmd=task_data.get("visible_test_cmd"),
     )
 
 
@@ -148,7 +152,11 @@ def run_bounded_repair(
         "prompt": task.statement,
         "ownsFiles": list(owned_files),
         "workDir": str(sandbox_dir),
-        "testCmd": "python -m pytest . -q",  # Basic test; fixture may override via oracle
+        # Visible repair-loop signal: prefer the task's own reproduction test if
+        # it ships one (engages the iterative loop); otherwise fall back to
+        # collecting whatever tests are in the repo (exit 5 / no-tests keeps the
+        # arm single-pass, per the seated-single-pass note).
+        "testCmd": task.visible_test_cmd or "python -m pytest . -q",
         "model": driver.resolve_model(ROLE_WORKER),
     }
 
@@ -181,16 +189,31 @@ def run_bounded_repair(
             # Check result.
             ok = result.get("ok", False)
             test_exit = result.get("testExit")
+            files_written = result.get("filesWritten") or []
             error = result.get("error", "")
 
-            if ok:
-                # Test passed! Return success.
-                # retries_used = number of repairs that happened before this success.
-                return True, error or "Fixed", retries_used, total_tokens
+            # These seam tasks deliberately ship NO visible tests (the grading
+            # oracle is hidden from the worker), so the visible test returns
+            # "no tests collected" (exit 5) rather than pass, and dispatch_item's
+            # ok is never True. Treat a worker that SUBMITTED files as done and
+            # let the hidden oracle be the grader. Only iterate the repair loop
+            # when a visible test actually RAN and FAILED (exit not in {0,5,None})
+            # — i.e. a task that provides its own visible tests. With no such
+            # signal here, the S arm is a seated SINGLE-PASS through the seam
+            # (scoped context + dispatch template + driver), oracle-graded.
+            visible_test_ran_and_failed = test_exit not in (0, 5, None)
+            if ok or (files_written and not visible_test_ran_and_failed):
+                return True, error or "submitted", retries_used, total_tokens
 
-            # Test failed: prepare for next repair attempt.
-            last_error = error
-            last_test_exit = test_exit
+            if not files_written:
+                # Worker produced no submission at all (genuine failure/refusal).
+                last_error = error or "no files written"
+                last_test_exit = test_exit
+                # fall through to repair/exhaust
+            else:
+                # A real visible-test failure -> feed it back and repair.
+                last_error = error
+                last_test_exit = test_exit
 
             if attempt < total_attempts - 1:
                 # Will do another repair attempt.

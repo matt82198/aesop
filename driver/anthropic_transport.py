@@ -57,22 +57,30 @@ def make_anthropic_transport(
 
     def transport(payload: dict) -> dict:
         """POST to Anthropic messages API via urllib."""
-        api_key = os.environ.get(api_key_env)
+        # Look up the key from the configured env var, then the bench key, then
+        # the conventional ANTHROPIC_API_KEY — the seam study supplies the key
+        # as BENCH_API_KEY (pay-per-use), not ANTHROPIC_API_KEY.
+        api_key = (
+            os.environ.get(api_key_env)
+            or os.environ.get("BENCH_API_KEY")
+            or os.environ.get("ANTHROPIC_API_KEY")
+        )
         if not api_key:
             raise RuntimeError(
-                f"{api_key_env} environment variable is not set. "
-                f"Set {api_key_env} before running, or use a FakeTransport in tests."
+                f"No API key found ({api_key_env} / BENCH_API_KEY / ANTHROPIC_API_KEY "
+                f"all unset). Set one before running, or use a FakeTransport in tests."
             )
 
         endpoint = "https://api.anthropic.com/v1/messages"
 
-        # Build the HTTP request.
+        # Build the HTTP request. Anthropic authenticates with the x-api-key
+        # header (NOT Authorization: Bearer, which is the OpenAI convention).
         payload_json = json.dumps(payload)
         request = urllib.request.Request(
             endpoint,
             data=payload_json.encode("utf-8"),
             headers={
-                "Authorization": f"Bearer {api_key}",
+                "x-api-key": api_key,
                 "Content-Type": "application/json",
                 "anthropic-version": "2023-06-01",
             },

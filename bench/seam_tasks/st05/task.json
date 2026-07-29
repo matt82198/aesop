@@ -6,7 +6,9 @@
     "config.py",
     "validator.py",
     "processor.py",
-    "main.py"
+    "main.py",
+    "test_repro.py"
   ],
-  "oracle_cmd": "python -m pytest oracle -q"
+  "oracle_cmd": "python -m pytest oracle -q",
+  "visible_test_cmd": "python -m pytest test_repro.py -q"
 }
