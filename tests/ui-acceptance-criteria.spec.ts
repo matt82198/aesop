@@ -70,8 +70,9 @@ test.describe('Acceptance Criteria Authoring', () => {
     // Wait for success message
     await expect(page.locator('text=Item created successfully!')).toBeVisible({ timeout: 5000 });
 
-    // Verify item appears in board
+    // Verify item appears in board (check for card with our item, handle multiple matches)
     await page.waitForTimeout(500);
-    await expect(page.locator('text=Simple Item')).toBeVisible();
+    const simpleItemCard = page.locator('[data-testid="tracker-card"]:has-text("Simple Item")').first();
+    await expect(simpleItemCard).toBeVisible();
   });
 });
