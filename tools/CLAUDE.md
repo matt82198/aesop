@@ -21,6 +21,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `alert_bridge.py` — Slack/Discord webhook bridge for SECURITY-ALERTS
 - `bench_runner.py` — Held-out benchmark runner + scorer (Haiku/Sonnet/Opus pluggable)
 - `buildlog.py` — Uniform BUILDLOG.md appender
+- `chaos_harness.py` — Fault injection harness: tests reliability under F1-F5 faults (worker termination, checkpoint corruption, planted secrets, heartbeat stalls, red tests); CLI: `--fault [F1..F5] [--seed N] [--json]`; generates docs/RELIABILITY-REPORT.md
 - `ci_merge_wait.py` — CI-gated merge helper (polls gh pr view until SUCCESS; fail-closed: empty rollup=PENDING, --expect-checks requires ALL named checks present AND concluded, --allow-no-checks escape hatch)
 - `ci_shard_runner.py` — Shard-aware Python test runner (distributes tracked test files across N shards round-robin; spawn-safe with __main__ guard; used by ci and windows-shard jobs)
 - `ci_workflow_lint.py` — CI workflow linter (YAML parsing, npm ci lockfile checks, test coverage)
@@ -44,6 +45,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `inbox_drain.py` — Drain UI inbox submissions
 - `incident_report.py` — Incident log generator: mines git history for operational failures (fake-green, ci-drift, test-pollution, flake, conflict, stall, gate-activation, doc-invented); generates docs/INCIDENTS.md table; CLI: `[--repo PATH]` (print) | `--regenerate [--output FILE]` | `--check` (drift exit 1); all output deterministic, idempotent
 - `launch_tui.py` — Spawn bash TUI script in detached terminal
+- `latency_report.py` — Wave latency analyzer: computes orchestrator overhead, per-phase percentiles, breakdown by agent type; CLI: `[--bench-results PATH] [--json]`; generates docs/LATENCY.md
 - `lock.mjs` — Fail-closed atomic lock (exponential backoff + stale-lock detection)
 - `metrics_gate.py` — PR gate for hard numeric claims in markdown
 - `mutation_test.py` — Test quality harness via mutation testing (apply code mutations, run tests, report survived mutations as test gaps); CLI: `--target <module.py> --test <test_module.py> [--json]`; exit 0 on valid results (advisory), exit 1 when the sandbox baseline fails (results invalid, fail-closed)
