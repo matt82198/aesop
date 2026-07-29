@@ -222,6 +222,7 @@ export function HealthHeader({
             <span
               className="health-header__status-badge"
               data-status="issues"
+              data-empty={agentCounts.issues === 0 ? 'true' : 'false'}
               data-testid={TESTIDS.healthAgentsIssues}
             >
               <span className="health-header__status-badge-dot" aria-hidden="true" />
