@@ -173,10 +173,12 @@ def test_valid_with_alternative_section_names():
 ## Core invariants
 
 - Invariant 1
+- Invariant 2
 
 ## Contracts
 
 - Contract 1
+- Contract 2
 """
         (domain_dir / "CLAUDE.md").write_text(content)
 
@@ -184,6 +186,51 @@ def test_valid_with_alternative_section_names():
 
         assert exit_code == 0, f"Alternative section names should pass; got exit {exit_code}\nstderr: {stderr}"
         print("[PASS] test_valid_with_alternative_section_names passed")
+
+
+def test_header_only_empty_body_fails():
+    """File with proper headers but empty bodies should FAIL validation.
+    This is the key test for the fix: headers alone should not pass."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        domain_dir = Path(tmpdir) / "fakedomain"
+        domain_dir.mkdir()
+
+        # This is the problematic case: header with no body
+        content = """# fakedomain/ - Placeholder text to pad length past fifty chars easily
+
+## Files
+"""
+        (domain_dir / "CLAUDE.md").write_text(content)
+
+        exit_code, stdout, stderr = run_validator(tmpdir)
+
+        assert exit_code == 1, f"Header-only file should FAIL; got exit {exit_code}\nstderr: {stderr}"
+        assert "FAIL" in stderr or "failed" in stderr.lower()
+        print("[PASS] test_header_only_empty_body_fails passed")
+
+
+def test_minimal_body_content_passes():
+    """File with headers + minimal body content (2+ lines) should PASS."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        domain_dir = Path(tmpdir) / "test_domain"
+        domain_dir.mkdir()
+
+        content = """# test_domain/ - Test domain
+
+**What**: A test domain for validation.
+
+## Files
+
+- file1.py
+- file2.py
+"""
+        (domain_dir / "CLAUDE.md").write_text(content)
+
+        exit_code, stdout, stderr = run_validator(tmpdir)
+
+        assert exit_code == 0, f"File with minimal body should pass; got exit {exit_code}\nstderr: {stderr}"
+        assert "passed" in stdout.lower() or "OK" in stdout
+        print("[PASS] test_minimal_body_content_passes passed")
 
 
 def main():
@@ -197,6 +244,8 @@ def main():
         test_no_domain_files_fails,
         test_help_flag,
         test_valid_with_alternative_section_names,
+        test_header_only_empty_body_fails,
+        test_minimal_body_content_passes,
     ]
 
     passed = 0

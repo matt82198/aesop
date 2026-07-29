@@ -41,7 +41,11 @@ def has_purpose_statement(content):
 
 
 def has_key_sections(content):
-    """Check if file has key sections describing domain (rules, files, invariants)."""
+    """Check if file has key sections describing domain (rules, files, invariants).
+
+    A key section is a header matching one of the keywords, followed by at least
+    2 non-empty body lines before the next header or EOF.
+    """
     # Look for headers describing domain structure: rules, files, invariants, ownership, contracts
     keywords = [
         "universal rules",
@@ -57,19 +61,61 @@ def has_key_sections(content):
         "definitions",
     ]
 
-    content_lower = content.lower()
-    # Count how many keyword sections are present
-    found_count = sum(1 for kw in keywords if re.search(r"^## .*" + kw, content_lower, re.MULTILINE))
+    lines = content.split("\n")
+    found_valid_sections = 0
 
-    # At least one key section should exist
-    return found_count > 0
+    for i, line in enumerate(lines):
+        # Check if this line is a header matching one of our keywords
+        line_lower = line.lower()
+        if not line_lower.startswith("##"):
+            continue
+
+        # Check if this header contains one of our keywords
+        has_keyword = any(kw in line_lower for kw in keywords)
+        if not has_keyword:
+            continue
+
+        # Count non-empty, non-header lines after this header until the next header or EOF
+        body_lines = []
+        for j in range(i + 1, len(lines)):
+            next_line = lines[j]
+            # Stop at next header
+            if next_line.startswith("#"):
+                break
+            # Count non-empty lines
+            if next_line.strip():
+                body_lines.append(next_line)
+
+        # Section is valid only if it has at least 2 non-empty body lines
+        if len(body_lines) >= 2:
+            found_valid_sections += 1
+
+    # At least one valid key section should exist
+    return found_valid_sections > 0
 
 
 def is_not_empty(content):
-    """Check if file has meaningful content (more than just whitespace/heading)."""
-    meaningful = content.strip()
-    # Must have at least 50 characters of meaningful content
-    return len(meaningful) > 50
+    """Check if file has meaningful content (more than just headers/whitespace).
+
+    Counts non-header, non-blank lines. Must have at least 3 such lines to ensure
+    the file is not just a heading + purpose statement.
+    """
+    lines = content.split("\n")
+    meaningful_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+        # Skip blank lines
+        if not stripped:
+            continue
+        # Skip header lines (starting with #)
+        if stripped.startswith("#"):
+            continue
+        # This is a meaningful line
+        meaningful_lines.append(stripped)
+
+    # Require at least 3 meaningful lines (excluding headers and blanks)
+    return len(meaningful_lines) >= 3
 
 
 def validate_file(filepath):
