@@ -16,6 +16,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync, spawnSync } = require('child_process');
+const { detectContext } = require('./detect-context');
 
 const CURRENT_DIR = process.cwd();
 const PACKAGE_ROOT = path.join(__dirname, '..');
@@ -40,39 +41,6 @@ function colorFail() {
 
 function colorSkip() {
   return `${COLORS.YELLOW}SKIP${COLORS.RESET}`;
-}
-
-// Detect context: repo checkout vs installed package
-function detectContext() {
-  // Repo checkout must be positively identified as the aesop repo itself:
-  // - package.json with name === "@matt82198/aesop"
-  // - .git (directory or gitlink file) for development checkouts or worktrees
-  // - tests/ directory with test files
-  // - package.json scripts include both test:node and test:py
-  //
-  // This guards against false positives: a parent directory with git + package.json
-  // will not be mistaken for repo mode.
-
-  const gitPath = path.join(PACKAGE_ROOT, '.git');
-  const hasGit = fs.existsSync(gitPath);  // Works for both .git dir and .git gitlink file
-  const hasTestsDir = fs.existsSync(path.join(PACKAGE_ROOT, 'tests'));
-  const hasPackageJson = fs.existsSync(path.join(PACKAGE_ROOT, 'package.json'));
-
-  let isAesopRepo = false;
-  if (hasPackageJson) {
-    try {
-      const pkg = JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8'));
-      const isCorrectPackage = pkg.name === '@matt82198/aesop';
-      const hasTestScripts = pkg.scripts && pkg.scripts['test:node'] && pkg.scripts['test:py'];
-      isAesopRepo = isCorrectPackage && hasGit && hasTestsDir && hasTestScripts;
-    } catch {
-      isAesopRepo = false;
-    }
-  }
-
-  // Repo mode requires positive identification of the aesop repo itself
-  // Anything else is treated as installed (safer than guessing)
-  return isAesopRepo ? 'repo' : 'installed';
 }
 
 // Format timing for display
@@ -401,7 +369,7 @@ function runInstalledMode() {
 // Main execution
 (async function main() {
   try {
-    const context = detectContext();
+    const context = detectContext(PACKAGE_ROOT);
     const hasGitConfig = fs.existsSync(path.join(PACKAGE_ROOT, '.git', 'config'));
     const hasPackageLock = fs.existsSync(path.join(PACKAGE_ROOT, 'package-lock.json'));
     const isDegradedFromRepo = hasGitConfig && !hasPackageLock;
