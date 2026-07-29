@@ -47,3 +47,5 @@ ui/web/node_modules/
 monitor/.monitor-heartbeat
 monitor/.signal-state.json
 monitor/.ledger-cursor.json
+!bench/transcript_tasks/tasks_transcript.jsonl
+!bench/transcript_tasks/ground_truth_transcript.jsonl
