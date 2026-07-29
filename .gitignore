@@ -25,6 +25,11 @@ bench/results/frontier_slice_results.json
 !bench/ground_truth_sampled.jsonl
 !bench/tasks_frontier.jsonl
 !bench/ground_truth_frontier.jsonl
+# Seam study results (committed evidence)
+!bench/results/seam-u-orig-2026-07-27.jsonl
+!bench/results/seam-u-repro.jsonl
+!bench/results/seam-s-loop.jsonl
+!bench/results/seam-s-checkpoint.jsonl
 
 # System artifacts
 .git/

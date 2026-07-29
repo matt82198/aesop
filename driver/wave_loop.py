@@ -33,7 +33,7 @@ HONESTY GUARANTEE:
   - Verified = True ONLY if the item's test passed (exit code 0 from run_command).
   - Any exception -> item.verified = False, never a false green.
   - Ownership is enforced at the driver level (dispatch_worker rejects out-of-scope).
-  - Adversarial review is NOT yet enforced; marked as 'deferred' (TODO in a later increment).
+  - Verification happens via orchestrator-level exact-gate re-runs and adversarial verify lanes; in-loop enforcement deferred to a later increment.
 
 FAIL-SAFE:
   - Cost-ceiling check: if exceeded, ABORT the wave immediately (return early).

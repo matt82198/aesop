@@ -14,11 +14,17 @@
 
 ## What It Does
 
-**Aesop** is a **crash-recoverable orchestration harness** for multi-agent workflows on any repository. One-line theme: *stateless agent execution over git-backed durable memory*.
+**Aesop** is an **orchestration harness that runs fleets of LLM coding agents**, verifies their output, and ships merge-ready code to CI. Each agent reads your repository state, fixes a ranked backlog item, runs tests locally, and auto-pushes. If a machine crashes mid-task, the next run re-reads from disk and continues — no external state server, no vector DB, no consensus machinery. The entire system and all decisions live in source-controlled, human-diffable files: git history, STATE.md, BUILDLOG.md, guardrail scripts. Aesop is battle-tested: this repository's own ~450 merged PRs across ~1230 commits were shipped by its own `/buildsystem` loop.
 
-Core idea: **agent behavior is source code.** Every decision lives in durable, human-diffable files—git history, plain-text STATE.md, append-only BUILDLOG.md, Python guardrails. When a machine fails, you re-read from disk. No vector DBs, no distributed consensus, no magic. This repo's own 387 merged PRs across 1181 commits were delivered by Aesop's own `/buildsystem` wave loop—a supervised loop under a human operator who sets goals and owns outward gates (npm publish, releases, history rewrites).
+## How It Works
 
-**Why it matters:** crash recovery is not a special path; it is how the system *always* starts. Stateless workers, persistent filesystem brain, Haiku-first dispatch (4.3× cheaper than hierarchical design, proven by real A/B), fail-closed guardrails (pre-push secret gate, kill-switch, cost ceiling), and observable heartbeats. The result: 387 PRs across 1181 commits; Haiku at 39/39 on a 39-task benchmark vs Opus 38/39, at ~1/3 the cost.
+**Agent behavior is source code.** Every orchestration rule lives in durable files (STATE.md, BUILDLOG.md, Python guardrails, git history). When a machine fails, you re-read from disk—no special recovery path. The architecture is: stateless workers (parallel Haiku agents, ~1/3 Opus cost each), persistent filesystem brain (git-backed), fail-closed guardrails (pre-push secret-scan, cost ceiling, verification re-runs), and observable heartbeats (to detect and auto-restart stalls).
+
+**Proof:** This repo is built entirely by Aesop. On a 39-task judgment benchmark, Haiku scored 39/39 vs Opus 38/39 at ~1/3 the per-token cost. Flat Haiku-first dispatch measured ~4× cheaper than the cancelled hierarchical design at identical graded quality (A/B). The loop study (seam-level tasks: local orchestration, code review, severity calibration) shows that stateless checkpointing + repair loops recover 20pp on hard tasks, lifting overall 67.8% → 77.2%.
+
+## Why It Matters
+
+Crash recovery is not a special path; it is how the system *always* starts. This design choice eliminates distributed consensus, external state servers, and recovery machinery. The trade-off: you own the git repo as your state layer, and you provide the human-in-the-loop to set goals and vet outbound gates (publishing, releases, history rewrites). The result: crash-only is simpler, faster to debug, and easier to audit than systems that pretend to be stateless but hide state in a database.
 
 **Why it's built this way:** [The Aesop Hypothesis](./docs/THE-AESOP-HYPOTHESIS.md) — the design philosophy, the trade-offs, the cancelled architectures with published data.
 
@@ -94,13 +100,13 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 | Metric | Value |
 | --- | --- |
-| Merged PRs | 387 <!-- metrics-verified: self_stats.py (git log) --> |
-| Total Commits | 1181 <!-- metrics-verified: self_stats.py (git log) --> |
-| Project Age | 14 days <!-- metrics-verified: self_stats.py (git log) --> |
+| Merged PRs | 450 <!-- metrics-verified: self_stats.py (git log) --> |
+| Total Commits | 1244 <!-- metrics-verified: self_stats.py (git log) --> |
+| Project Age | 17 days <!-- metrics-verified: self_stats.py (git log) --> |
 | Waves | 30 <!-- metrics-verified: self_stats.py (git log) --> |
-| Insertions + Deletions | 222,290 <!-- metrics-verified: self_stats.py (git log) --> |
-| Files Tracked | 642 <!-- metrics-verified: self_stats.py (git log) --> |
-| Distinct Co-authors | 11 <!-- metrics-verified: self_stats.py (git log) --> |
+| Insertions + Deletions | 259,517 <!-- metrics-verified: self_stats.py (git log) --> |
+| Files Tracked | 833 <!-- metrics-verified: self_stats.py (git log) --> |
+| Distinct Co-authors | 13 <!-- metrics-verified: self_stats.py (git log) --> |
 
 <!-- STATS:END -->
 
@@ -121,6 +127,27 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 ## Why Haiku-First Works
 
 The benchmark proves sufficiency: across 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence, security spots), Haiku scored **39/39** vs Opus **38/39** at ~1/3 the per-token cost. See [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](./bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md). The pre-declared ceiling rule (when ≥2 tiers score ≥92%, the instrument failed to discriminate) trips on this result — both Haiku and Sonnet achieved 39/39, meaning the benchmark maps a *sufficiency floor*, not tier equivalence. **Curated set, N=39; scoped to extraction and judgment tasks with context at the seam** — does NOT reach frontier reasoning, long-horizon planning, or open-ended synthesis. Full analysis: [`bench/results/2026-07-26-judgment-v3-ceiling-addendum.md`](./bench/results/2026-07-26-judgment-v3-ceiling-addendum.md) and [`bench/EQUIVALENCE-MARGIN.md`](./bench/EQUIVALENCE-MARGIN.md).
+
+## Known Limitations
+
+- **Benchmark is curated, not sampled:** The 39-task judgment set trips the pre-declared ceiling rule; it measures a sufficiency floor (Haiku is good enough for this domain), not equivalence or tier ranking. See [`bench/EQUIVALENCE-MARGIN.md`](./bench/EQUIVALENCE-MARGIN.md) for boundary conditions.
+- **Adversarial review enforcement is deferred:** Verification runs via orchestrator-level exact-gate re-runs and adversarial verify lanes; in-loop enforcement deferred to a later increment. See [`driver/wave_loop.py` line ~36](./driver/wave_loop.py#L36).
+- **MCP server is read-only by design:** The state-store projections are accurate only as of the last successful run state. Real-time multi-agent coordination is not yet implemented.
+- **Seam-level only:** This repo's agents operate within the seam (local orchestration, code review, severity assessment, test bifurcation). Frontier reasoning tasks (architecture redesign, novel algorithms) are out of scope and will underperform.
+
+## Evidence & Receipts
+
+All evidence is committed to the repo and can be regenerated or verified by cloning:
+
+- **Metrics gate:** [`bash scripts/verify-stats.sh --check`](./scripts/verify-stats.sh) — verifies stats.json matches git; README refreshed on every commit.
+- **Test suite count:** [`python tools/verify_test_suite_count.py --check`](./tools/verify_test_suite_count.py) — confirms test count hasn't drifted.
+- **Benchmark pre-registration:** [`bench/SEAM-STUDY-PREREG.md`](./bench/SEAM-STUDY-PREREG.md) — pre-declared design, success criteria, ceiling rule.
+- **Equivalence margin amendments:** [`bench/EQUIVALENCE-MARGIN.md`](./bench/EQUIVALENCE-MARGIN.md) — pre-reg record and all amendments after each run.
+- **Dated results:** [`bench/results/`](./bench/results/) — all judgment and frontier runs with timestamps.
+  - **Loop study (2026-07-28):** [`bench/results/seam-loop-study-2026-07-28.md`](./bench/results/seam-loop-study-2026-07-28.md) — checkpoint recovery + repair loop data: 122/180 (checkpoint) → 139/180 (loop), +20pp on hard tasks.
+- **Kill switch & ceilings:** [`tools/halt.py`](./tools/halt.py), [`tools/cost_ceiling.py`](./tools/cost_ceiling.py) — enforced at dispatch time.
+- **Secret gate:** [`tools/secret_scan.py`](./tools/secret_scan.py) — pre-push enforcement; non-zero exit on leak.
+- **Green-never-ran detection:** [`tools/ci_workflow_lint.py`](./tools/ci_workflow_lint.py) — ensures every CI suite actually runs before merge.
 
 ## Learn More
 
