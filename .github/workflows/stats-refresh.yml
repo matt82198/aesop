@@ -1,0 +1,97 @@
+name: Stats Refresh
+
+on:
+  schedule:
+    # Run daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh-stats:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Regenerate stats
+        run: bash scripts/verify-stats.sh --regenerate
+
+      - name: Check for changes
+        id: check
+        run: |
+          if git diff --quiet README.md stats.json; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "No changes detected in stats files."
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "Changes detected in stats files:"
+            git diff --stat README.md stats.json
+          fi
+
+      - name: Create or update branch
+        if: steps.check.outputs.changed == 'true'
+        id: branch
+        run: |
+          BRANCH_NAME="chore/stats-refresh-$(date +%Y-%m-%d)"
+          git fetch origin main:temp-main
+          git reset --hard temp-main
+          bash scripts/verify-stats.sh --regenerate
+
+          # Check if branch exists and update or create
+          if git rev-parse --verify "origin/$BRANCH_NAME" 2>/dev/null; then
+            git checkout "$BRANCH_NAME"
+            git reset --hard temp-main
+            bash scripts/verify-stats.sh --regenerate
+          else
+            git checkout -b "$BRANCH_NAME"
+          fi
+          echo "branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
+
+      - name: Commit changes
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add README.md stats.json
+          git commit -m "chore(stats): scheduled refresh" -m "Co-Authored-By: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+
+      - name: Push branch
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          git push -u origin "${{ steps.branch.outputs.branch }}" --force-with-lease
+
+      - name: Create or update pull request
+        if: steps.check.outputs.changed == 'true'
+        run: |
+          BRANCH="${{ steps.branch.outputs.branch }}"
+
+          # Check if PR exists for this branch
+          PR_URL=$(gh pr list --state open --head "$BRANCH" --json url -q '.[0].url' 2>/dev/null || echo "")
+
+          if [ -n "$PR_URL" ]; then
+            # Update existing PR
+            gh pr edit "$PR_URL" --body "Automated stats refresh from scheduled workflow."
+            echo "Updated existing PR: $PR_URL"
+          else
+            # Create new PR
+            gh pr create \
+              --title "chore(stats): scheduled refresh" \
+              --body "Automated stats refresh from scheduled workflow. README and stats.json have been regenerated from current git state." \
+              --head "$BRANCH" \
+              --base main \
+              --label "chore"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
