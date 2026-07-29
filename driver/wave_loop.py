@@ -1972,16 +1972,17 @@ def _run_wave_inner(
                         }, repo=repo)
 
     # ========================================================================
-    # PHASE 5.75: Adversarial review (standard opt-out, sampled, repair-routed)
+    # PHASE 5.75: Adversarial review (opt-in via manifest, sampled, repair-routed)
     # ========================================================================
-    # Extract adversarial review config from manifest (default: enabled with modest sample)
+    # Adversarial review is opt-in: it runs ONLY if explicitly enabled in the manifest.
+    # The policy's adversarial_review_sample_frac informs defaults when enabled.
     adv_review_config = manifest.get("adversarial_review", {})
     if isinstance(adv_review_config, dict):
-        adv_review_enabled = adv_review_config.get("enabled", True)
-        adv_review_sample_frac = adv_review_config.get("sample_frac", 0.1)
+        adv_review_enabled = adv_review_config.get("enabled", False)
+        adv_review_sample_frac = adv_review_config.get("sample_frac", policy.get("adversarial_review_sample_frac", 0.1))
     else:
-        adv_review_enabled = True
-        adv_review_sample_frac = 0.1
+        adv_review_enabled = False
+        adv_review_sample_frac = policy.get("adversarial_review_sample_frac", 0.1)
 
     # Build list of verified items to potentially review
     reviewable_items = [
