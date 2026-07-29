@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Serial merge train — update-branch, wait for CI, merge, verify MERGED.
+"""Serial merge train -- update-branch, wait for CI, merge, verify MERGED.
 
 Handles the strict-up-to-date treadmill: each merge invalidates all others,
 so we loop until all PRs are merged or permanently stuck.
@@ -77,7 +77,7 @@ def merge_pr(n: int) -> bool:
         print(f"  [ok] #{n} MERGED (verified)")
         return True
     else:
-        print(f"  [FAIL] #{n} merge exit 0 but state={verify} — NOT MERGED")
+        print(f"  [FAIL] #{n} merge exit 0 but state={verify} -- NOT MERGED")
         return False
 
 
@@ -89,7 +89,7 @@ def run_train(prs: list[int], max_rounds: int = 50, poll_interval: int = 45):
     while prs and round_num < max_rounds:
         round_num += 1
         print(f"\n{'='*60}")
-        print(f"Round {round_num} — {len(prs)} PRs remaining, {len(merged)} merged")
+        print(f"Round {round_num} -- {len(prs)} PRs remaining, {len(merged)} merged")
         print(f"{'='*60}")
 
         progress_this_round = False
@@ -104,13 +104,13 @@ def run_train(prs: list[int], max_rounds: int = 50, poll_interval: int = 45):
                     print(f"  [ok] {tag} already MERGED")
                     merged.append(n)
                 else:
-                    print(f"  [-] {tag} state={info['state']} — skipping")
+                    print(f"  [-] {tag} state={info['state']} -- skipping")
                     skipped.append(n)
                 progress_this_round = True
                 continue
 
             if info["merge"] == "DIRTY":
-                print(f"  [FAIL] {tag} has merge conflicts — skipping")
+                print(f"  [FAIL] {tag} has merge conflicts -- skipping")
                 skipped.append(n)
                 continue
 
@@ -124,7 +124,7 @@ def run_train(prs: list[int], max_rounds: int = 50, poll_interval: int = 45):
                 continue
 
             if info["checks"] == "FAIL":
-                print(f"  [FAIL] {tag} CI FAILING — skipping")
+                print(f"  [FAIL] {tag} CI FAILING -- skipping")
                 skipped.append(n)
                 continue
 
@@ -132,7 +132,7 @@ def run_train(prs: list[int], max_rounds: int = 50, poll_interval: int = 45):
                 if merge_pr(n):
                     merged.append(n)
                     progress_this_round = True
-                    # After a merge, all others go BEHIND — restart the loop
+                    # After a merge, all others go BEHIND -- restart the loop
                     still_open.extend(prs[prs.index(n)+1:])
                     # Remove already-processed items
                     still_open = [p for p in still_open
@@ -155,11 +155,11 @@ def run_train(prs: list[int], max_rounds: int = 50, poll_interval: int = 45):
             break
 
         if not progress_this_round:
-            print(f"\n[waiting] No PR ready yet — waiting {poll_interval}s for CI...")
+            print(f"\n[waiting] No PR ready yet -- waiting {poll_interval}s for CI...")
             time.sleep(poll_interval)
 
     print(f"\n{'='*60}")
-    print(f"DONE — {len(merged)} merged, {len(skipped)} skipped, {len(prs)} remaining")
+    print(f"DONE -- {len(merged)} merged, {len(skipped)} skipped, {len(prs)} remaining")
     print(f"{'='*60}")
     if merged:
         print(f"Merged: {', '.join(f'#{n}' for n in merged)}")
