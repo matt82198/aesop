@@ -281,6 +281,18 @@ main() {
   echo "[" > "$temp_json"
   first=1
   processed_paths=""
+  # FIX #5: track whether ANY repo was BLOCKED (secret-scan gate failure)
+  # this cycle, across BOTH discovery loops below (config-repos + autodiscovery).
+  # Exit code contract (mirrored in daemons/run-watchdog.sh, which consumes
+  # this script's exit code):
+  #   0 = clean cycle, no repo blocked
+  #   3 = "blocked cycle" -- at least one repo was BLOCKED by the secret-scan
+  #       gate; distinct from other non-zero (crash) exit codes so a
+  #       supervisor keying on $? can WARN + keep the daemon alive instead
+  #       of treating it as a hard failure. Does NOT change what "blocked"
+  #       means or the block-decision logic -- BLOCKED still just means
+  #       process_repo's scan_tracked_files/scan_unpushed_commits gate failed.
+  any_blocked=0
 
   # AUDIT FIX 1: Check if aesop.config.json exists and has repos array
   repos_to_scan=""
@@ -339,6 +351,7 @@ $real_dir"
         name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$temp_result" | tr -d '\n')
         rm -f "$temp_result"
         [ -z "$state" ] && continue
+        [ "$state" = "BLOCKED" ] && any_blocked=1
         if [ "$first" = 1 ]; then
           first=0
         else
@@ -378,6 +391,7 @@ $real_dir"
         name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$temp_result" | tr -d '\n')
         rm -f "$temp_result"
         [ -z "$state" ] && continue
+        [ "$state" = "BLOCKED" ] && any_blocked=1
         if [ "$first" = 1 ]; then
           first=0
         else
@@ -394,7 +408,17 @@ $real_dir"
   echo "" >> "$temp_json"
   echo "]" >> "$temp_json"
   mv "$temp_json" "$REPOS_STATUS"
+
+  # FIX #5: exit 3 (not 0) when >=1 repo was BLOCKED this cycle, so a
+  # supervisor keying on $? can distinguish "blocked cycle" from a fully
+  # clean one. See the any_blocked contract comment at the top of main().
+  if [ "$any_blocked" -eq 1 ]; then
+    log "=== cycle end (BLOCKED: >=1 repo blocked by secret-scan gate; exit 3) ==="
+    exit 3
+  fi
+
   log "=== cycle end ==="
+  exit 0
 }
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then

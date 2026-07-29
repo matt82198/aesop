@@ -1029,6 +1029,173 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+printf '\n=== Fix 1: get_next_seq/verify_audit_log stay python3||python (seq does not stick at 1 when python3 is shadowed) ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_py3shim"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+
+  if ! command -v python >/dev/null 2>&1; then
+    printf 'SKIP: no "python" binary on this host to exercise the python3-shadowed fallback\n'
+    exit 0
+  fi
+
+  # CI-hang postmortem: an earlier version of this test hid python3 by
+  # filtering it OUT of PATH directory-by-directory. On Linux, python3
+  # typically lives in the SAME directory as bash/coreutils/git (/usr/bin),
+  # so that filtering silently stripped mkdir/date/sleep/tail/sha256sum too
+  # -- and acquire_audit_lock's retry loop (called by log_block) then spun
+  # forever: mkdir (missing) never acquires the lock, its own 10s give-up
+  # check depends on `date` (also missing) so it never fires, and `sleep`
+  # (also missing) never throttles the loop. That is an unbounded busy-spin,
+  # not an interactive-stdin block, but it hangs a CI job identically. This
+  # version instead shadows ONLY the `command -v python3` lookup (the exact
+  # pattern the "P1 Bug2" compute_sha256 test above already uses for
+  # sha256sum) so every other lookup -- coreutils, git, the real python --
+  # keeps resolving completely normally; PATH itself is never touched.
+  #
+  # Defense in depth per the CI incident: run in a SEPARATE process under a
+  # hard `timeout`, with stdin explicitly pinned to /dev/null, so nothing
+  # here can ever exceed a bounded wall-clock cap or inherit a real tty --
+  # even if some other, still-undiscovered hang mechanism existed.
+  run_out=$(
+    HOOK_SCRIPT="$HOOK_SCRIPT" AESOP_ROOT="$AESOP_ROOT" \
+      timeout 30 bash -c '
+        source "$HOOK_SCRIPT"
+        command() {
+          if [ "${1:-}" = "-v" ] && [ "${2:-}" = "python3" ]; then return 1; fi
+          builtin command "$@"
+        }
+        log_block "shim_entry_1"
+        log_block "shim_entry_2"
+        log_block "shim_entry_3"
+      ' </dev/null 2>&1
+  )
+  run_rc=$?
+
+  if [ $run_rc -eq 124 ]; then
+    printf 'FAIL: log_block under python3-shadowed environment TIMED OUT after 30s (hung) instead of completing. Output: %s\n' "$run_out"
+    exit 1
+  fi
+
+  audit_log="$AESOP_ROOT/state/SECURITY-AUDIT.log"
+  if [ ! -f "$audit_log" ]; then
+    printf 'FAIL: audit log not created under python3-shadowed environment. Output: %s\n' "$run_out"
+    exit 1
+  fi
+
+  line_count=$(wc -l < "$audit_log")
+  first_seq=$(head -n 1 "$audit_log" | grep -oE '"seq":[0-9]+' | cut -d: -f2)
+  last_seq=$(tail -n 1 "$audit_log" | grep -oE '"seq":[0-9]+' | cut -d: -f2)
+
+  if [ "$line_count" -ne 3 ]; then
+    printf 'FAIL: expected 3 audit entries, got %s\n' "$line_count"
+    exit 1
+  fi
+
+  if [ "$first_seq" != "1" ] || [ "$last_seq" != "3" ]; then
+    printf 'FAIL: seq did not stay monotonic under python3-shadowed environment (first=%s last=%s) -- the seq-based truncation/tamper invariant is silently defeated when python3 is shadowed\n' "$first_seq" "$last_seq"
+    exit 1
+  fi
+
+  # verify_audit_log itself also hardcoded python3 at two more sites
+  # (actual_prev_hash, current_seq); prove it also still works, same bounding.
+  verify_out=$(
+    HOOK_SCRIPT="$HOOK_SCRIPT" AUDIT_LOG="$audit_log" \
+      timeout 30 bash -c '
+        source "$HOOK_SCRIPT"
+        command() {
+          if [ "${1:-}" = "-v" ] && [ "${2:-}" = "python3" ]; then return 1; fi
+          builtin command "$@"
+        }
+        verify_audit_log "$AUDIT_LOG"
+      ' </dev/null 2>&1
+  )
+  vrc=$?
+  if [ $vrc -eq 124 ]; then
+    printf 'FAIL: verify_audit_log under python3-shadowed environment TIMED OUT after 30s (hung)\n'
+    exit 1
+  fi
+  if [ $vrc -ne 0 ]; then
+    printf 'FAIL: verify_audit_log failed under python3-shadowed environment (rc=%d). Output: %s\n' "$vrc" "$verify_out"
+    exit 1
+  fi
+
+  printf 'PASS: seq stayed monotonic (1..3) and verify_audit_log passed with python3 shadowed (only python resolves)\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Fix 2: check_secret_scan prefers python3 over python (broken/legacy python does not crash the scan) ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_py2shim"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf 'SKIP: no python3 found on this host\n'
+    exit 0
+  fi
+
+  # A clean-scanning scanner script (Python-3-only in spirit): exits 0
+  # unconditionally, standing in for "no secrets found". This is only
+  # meaningful if a WORKING interpreter actually runs it -- if the broken
+  # `python` shim below gets invoked instead, it exits 1 regardless,
+  # simulating a Python-2 crash on a Python-3-only script.
+  cat > "$AESOP_ROOT/tools/secret_scan.py" <<'SCANNER'
+#!/usr/bin/env python3
+import sys
+sys.exit(0)
+SCANNER
+  chmod +x "$AESOP_ROOT/tools/secret_scan.py"
+
+  shim_dir="$TEST_ROOT/py2shim_bin"
+  mkdir -p "$shim_dir"
+  # Broken `python`: simulates a Python-2-only interpreter hitting the
+  # Python-3-only scanner. Always exits nonzero immediately -- never reads
+  # stdin, never execs/recurses into anything else -- so it cannot itself
+  # become a second hang vector.
+  cat > "$shim_dir/python" <<'SHIM'
+#!/usr/bin/env bash
+printf 'SyntaxError: simulated python2 incompatibility\n' >&2
+exit 1
+SHIM
+  chmod +x "$shim_dir/python"
+
+  local_sha="abc123def456"
+  stdin_input="refs/heads/feature/test $local_sha refs/heads/feature/test 0000000000000000000000000000000000000000"
+
+  # Bounded, non-interactive: separate process under `timeout`. PATH only
+  # gains shim_dir PREPENDED -- nothing removed, so coreutils/git/the real
+  # python3 all keep resolving normally. stdin is explicitly the controlled
+  # ref tuple (never an inherited real tty).
+  out=$(
+    HOOK_SCRIPT="$HOOK_SCRIPT" AESOP_ROOT="$AESOP_ROOT" SHIM_DIR="$shim_dir" \
+      timeout 30 bash -c '
+        source "$HOOK_SCRIPT"
+        export PATH="$SHIM_DIR:$PATH"
+        check_secret_scan
+      ' <<< "$stdin_input" 2>&1
+  )
+  rc=$?
+
+  if [ $rc -eq 124 ]; then
+    printf 'FAIL: check_secret_scan TIMED OUT after 30s (hung) instead of completing. Output: %s\n' "$out"
+    exit 1
+  fi
+  if [ $rc -ne 0 ]; then
+    printf 'FAIL: check_secret_scan picked the broken "python" over a working "python3" on PATH (interpreter order not python3-first). Output: %s\n' "$out"
+    exit 1
+  fi
+  printf 'PASS: check_secret_scan prefers python3, so a broken/legacy "python" earlier on PATH does not crash the scan\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Test Summary ===\n'
 printf 'Tests PASSED: %d\n' "$test_passed"
 printf 'Tests FAILED: %d\n' "$test_failed"

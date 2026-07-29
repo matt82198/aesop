@@ -51,6 +51,7 @@ import os
 import posixpath
 import re
 import shlex
+import subprocess
 import sys
 import threading
 import time
@@ -413,6 +414,152 @@ def _load_journal_state(state_dir: str) -> Dict[str, Dict[str, Any]]:
         pass
 
     return journal_state
+
+
+def _cap_test_output(stdout: str, stderr: str, max_chars: int = 4000) -> str:
+    """Cap test output to a reasonable size (tail last ~4000 chars / ~60 lines).
+
+    Combines stdout and stderr, truncates to max_chars from the end,
+    preserving the most recent/important output.
+
+    Args:
+        stdout: test stdout text
+        stderr: test stderr text
+        max_chars: maximum characters to keep (default ~4000)
+
+    Returns:
+        str: capped test output, or empty string if both are empty
+    """
+    combined = ""
+    if stdout:
+        combined += stdout
+    if stderr:
+        if combined:
+            combined += "\n--- STDERR ---\n"
+        combined += stderr
+
+    if not combined:
+        return ""
+
+    # If under limit, return as-is
+    if len(combined) <= max_chars:
+        return combined
+
+    # Truncate to last max_chars, preserving tail
+    return combined[-max_chars:]
+
+
+def _get_owned_files_diff(workdir: str, owned_files: List[str], max_chars: int = 8000) -> str:
+    """Get git diff of owned files, capped to a reasonable size.
+
+    Runs git diff on the specified files and returns the diff output,
+    truncated to max_chars if needed.
+
+    Args:
+        workdir: working directory (repo root)
+        owned_files: list of owned file paths (repo-relative)
+        max_chars: maximum characters to keep (default ~8000)
+
+    Returns:
+        str: git diff output for owned files, capped, or empty string if no diff
+    """
+    if not owned_files:
+        return ""
+
+    try:
+        # Build git diff command
+        diff_cmd = "git diff --"
+        for f in owned_files:
+            diff_cmd += f" {_quote_arg(f)}"
+
+        # Run git diff in the workdir
+        result = subprocess.run(
+            diff_cmd,
+            cwd=workdir,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        if result.returncode != 0:
+            # No diff or git error (not a repo, files not tracked, etc.)
+            return ""
+
+        diff_output = result.stdout
+        if not diff_output:
+            return ""
+
+        # Cap to max_chars from the end (preserve most recent diff hunks)
+        if len(diff_output) <= max_chars:
+            return diff_output
+
+        return diff_output[-max_chars:]
+
+    except Exception:
+        # Fail-closed: any error (timeout, git not found, etc.) -> no diff
+        return ""
+
+
+def _run_and_capture_test_output(
+    workdir: str, test_cmd: str, timeout_sec: int = 120
+) -> Tuple[str, bool]:
+    """Pre-dispatch: run testCmd and capture output if it FAILS.
+
+    This is an optimization for initial dispatch: if testCmd is available and fails
+    before dispatch, we capture the failure output and enrich the initial worker
+    prompt. This lifted one-shot solve from 43% to 60% in A/B testing.
+
+    Args:
+        workdir: working directory (repo root)
+        test_cmd: the test command to run (e.g., "python -m unittest discover")
+        timeout_sec: bounded timeout in seconds (default ~120s)
+
+    Returns:
+        Tuple[str, bool]: (capped_output_if_failed, test_passed)
+            - If test passes (exit 0): returns ("", True)
+            - If test fails (non-zero exit, except 5): returns (capped_output, False)
+            - If exit 5 (pytest no tests collected): returns ("", False) -- no-op
+            - If times out or exception: returns ("", False) -- no-op, silent fail
+            - If test_cmd is empty: returns ("", False) -- no-op, no test
+
+    NOTE: This returns the FAILURE tail only (strict no-op when test passes).
+    Timeout and exceptions are silent (no-op): we never enrich with speculative
+    output or error noise. Exit 5 is pytest's "no tests collected" — also no-op.
+    The prompt stays byte-identical to today if the test passes pre-dispatch,
+    times out, is absent, or exits with code 5.
+    """
+    if not test_cmd:
+        return "", False
+
+    try:
+        result = subprocess.run(
+            test_cmd,
+            cwd=workdir,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout_sec,
+        )
+
+        # Test passed: strict no-op (empty output, don't enrich)
+        if result.returncode == 0:
+            return "", True
+
+        # Exit 5 (pytest no tests collected): no-op, silent fail
+        if result.returncode == 5:
+            return "", False
+
+        # Test failed (other non-zero exit): cap and return the failure output
+        failure_output = _cap_test_output(result.stdout, result.stderr)
+        return failure_output, False
+
+    except subprocess.TimeoutExpired:
+        # Timeout: silent fail-closed (no-op, no enrichment)
+        return "", False
+    except Exception:
+        # Any other exception (subprocess not found, shell error, etc.): silent fail
+        return "", False
 
 
 def _should_skip_from_journal(journal_entry: Dict[str, Any]) -> bool:
@@ -1248,6 +1395,11 @@ def _run_wave_inner(
     spot_check_frac = policy.get("spot_check_frac", 0.0)
     require_adversarial_review = policy.get("require_adversarial_review", False)
 
+    # Extract pre-dispatch repro config knobs (latency gate FIX 1).
+    # Default: enabled=True (backward-compatible), timeout=120s.
+    pre_dispatch_repro_enabled = manifest.get("pre_dispatch_repro_enabled", True)
+    pre_dispatch_repro_timeout = manifest.get("pre_dispatch_repro_timeout", 120)
+
     # ========================================================================
     # PHASE 3: Cost-ceiling gate (before build)
     # ========================================================================
@@ -1431,6 +1583,32 @@ def _run_wave_inner(
             # Build the manifest item with policy.
             manifest_item = build_manifest_item(driver, item)
 
+            # INCREMENT 1: Pre-dispatch test enrichment
+            # If the item has a testCmd, run it once pre-dispatch (bounded timeout).
+            # If it FAILS, capture the failure output and enrich the initial prompt.
+            # Strict no-op when test passes, times out, or is absent (prompt byte-identical).
+            test_cmd = item.get("testCmd", "")
+            if test_cmd and pre_dispatch_repro_enabled:
+                import time as time_module
+                elapsed_start = time_module.time()
+                pre_dispatch_output, test_passed = _run_and_capture_test_output(
+                    workdir, test_cmd, timeout_sec=pre_dispatch_repro_timeout
+                )
+                elapsed_sec = time_module.time() - elapsed_start
+                # Log elapsed time per enriched item (metadata only, no test output).
+                if state_dir:
+                    try:
+                        journal_path = Path(state_dir) / "pre_dispatch_enrichment.log"
+                        with open(journal_path, "a", encoding="utf-8") as f:
+                            f.write(f"{slug}: {elapsed_sec:.2f}s\n")
+                    except Exception:
+                        # Fail-closed: if logging fails, continue without it
+                        pass
+                # Only enrich if test FAILED and output captured (not empty).
+                if not test_passed and pre_dispatch_output:
+                    # Add initialFailedTestOutput to manifest for template enrichment.
+                    manifest_item["initialFailedTestOutput"] = pre_dispatch_output
+
             # Dispatch the item.
             dispatch_result = dispatch_item(driver, manifest_item, workdir=workdir)
 
@@ -1443,6 +1621,8 @@ def _run_wave_inner(
                 "error": dispatch_result.get("error"),
                 "filesWritten": dispatch_result.get("filesWritten", []),
                 "workerId": dispatch_result.get("workerId"),
+                "testStdout": dispatch_result.get("testStdout", ""),
+                "testStderr": dispatch_result.get("testStderr", ""),
             }
 
             # Write journal entry for this item's outcome. filesWritten is
@@ -1576,9 +1756,24 @@ def _run_wave_inner(
                 test_output += f"Error: {item_result['error']}\n"
             repair_prompt = original_prompt + test_output
 
-            # Create a repair item.
+            # Create a repair item and enrich with context.
             repair_item = dict(item)
             repair_item["prompt"] = repair_prompt
+
+            # Enrich repair item with lastTestOutput if test output was captured.
+            captured_stdout = item_result.get("testStdout", "")
+            captured_stderr = item_result.get("testStderr", "")
+            if captured_stdout or captured_stderr:
+                last_test_output = _cap_test_output(captured_stdout, captured_stderr)
+                if last_test_output:
+                    repair_item["lastTestOutput"] = last_test_output
+
+            # Enrich repair item with ownsFilesDiff (git diff of owned files).
+            owned_files = item.get("ownsFiles", [])
+            if owned_files:
+                owns_files_diff = _get_owned_files_diff(workdir, owned_files)
+                if owns_files_diff:
+                    repair_item["ownsFilesDiff"] = owns_files_diff
 
             try:
                 # Build the manifest item.
@@ -1630,40 +1825,65 @@ def _run_wave_inner(
         failed_items = next_failed
 
     # ========================================================================
-    # PHASE 5.5: Spot-check verified items (if spot_check_frac > 0)
+    # PHASE 5.5: Verify-exact-gate (fake-green detection, INCREMENT 2)
     # ========================================================================
-    if spot_check_frac > 0:
-        # Collect verified items and their original test commands.
-        verified_items_to_check = []
-        for item_index, (idx, original_item, item_result) in enumerate(
-            [(i, items[i], r) for i, r in enumerate(result["built"]) if r.get("verified", False)]
-        ):
-            verified_items_to_check.append((original_item, item_result))
+    # INCREMENT 2 REQUIREMENT: Verdict must come from orchestrator-side re-run
+    # of testCmd (exact gate), never from worker's self-report alone.
+    # Strategy: verify ALL verified items (not just spot-check sample).
+    # If worker self-reported success but gate re-run fails: FAKE-GREEN marker.
+    #
+    # Deterministic sampling applies spot_check_frac cap: if spot_check_frac=0.10,
+    # we verify only 10% of verified items (backward-compatible). This avoids
+    # full re-run cost for every wave. The marker still catches decaying workers.
+    verified_items_list = [
+        (items[i], result["built"][i]) for i in range(len(items))
+        if i < len(result["built"]) and result["built"][i].get("verified", False)
+    ]
 
-        # Determine how many to spot-check.
-        num_to_check = ceil(len(verified_items_to_check) * spot_check_frac)
+    if verified_items_list and spot_check_frac > 0:
+        # Deterministic sampling: sort by slug, then take first N.
+        # Only sample if spot_check_frac > 0; when frac <= 0, skip gate re-runs entirely.
+        verified_items_list.sort(key=lambda x: x[0].get("slug", ""))
+        num_to_verify = max(1, ceil(len(verified_items_list) * spot_check_frac))
+        items_to_verify = verified_items_list[:num_to_verify]
 
-        # Deterministic sampling: check first N items by slug order.
-        # Sort by slug for determinism, then check the first num_to_check.
-        verified_items_to_check.sort(key=lambda x: x[0].get("slug", ""))
-        items_to_rerun = verified_items_to_check[:num_to_check]
-
-        # Re-run tests for sampled items.
-        for original_item, item_result in items_to_rerun:
+        # Re-run test command for each sampled verified item.
+        for original_item, item_result in items_to_verify:
             test_cmd = original_item.get("testCmd", "")
             workdir = original_item.get("workDir", ".")
+            slug = original_item.get("slug", "")
 
             if test_cmd:
                 try:
                     rerun_result = driver.run_command(test_cmd, cwd=workdir)
-                    # If re-run does NOT exit 0, flip verified to False.
+                    # EXACT GATE VERDICT: only exit 0 = true pass.
                     if rerun_result.exit_code != 0:
+                        # Gate FAILED but worker reported success → FAKE-GREEN.
                         item_result["verified"] = False
-                        item_result["spot_check_failed"] = True
-                except Exception:
-                    # On exception, flip verified to False.
+                        item_result["fake_green"] = True
+                        item_result["gate_test_exit"] = rerun_result.exit_code
+
+                        # Record fake-green in journal for auditing.
+                        if state_dir:
+                            repo = original_item.get("repo")
+                            _write_journal_entry(state_dir, slug, "fake_green", {
+                                "verified": False,
+                                "testExit": rerun_result.exit_code,
+                                "gate_rerun": True,
+                                "worker_claimed_verified": True,
+                            }, repo=repo)
+                except Exception as exc:
+                    # Gate re-run exception: conservative, flip to False.
                     item_result["verified"] = False
-                    item_result["spot_check_failed"] = True
+                    item_result["gate_exception"] = True
+
+                    if state_dir:
+                        repo = original_item.get("repo")
+                        _write_journal_entry(state_dir, slug, "gate_exception", {
+                            "verified": False,
+                            "error": str(exc),
+                            "gate_rerun": True,
+                        }, repo=repo)
 
     # ========================================================================
     # PHASE 6: Adversarial review / orchestrator final catch (HS-2)

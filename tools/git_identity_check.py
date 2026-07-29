@@ -253,9 +253,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     expect_name = None
     expect_email = None
 
+    usage = (
+        "Usage: git_identity_check.py --repo PATH [--config PATH] "
+        "[--mode warn|fail] [--expect-name NAME] [--expect-email EMAIL]"
+    )
+
     i = 0
     while i < len(argv):
-        if argv[i] == "--repo" and i + 1 < len(argv):
+        if argv[i] in ("-h", "--help"):
+            print(usage)
+            return 0
+        elif argv[i] == "--repo" and i + 1 < len(argv):
             repo_path = argv[i + 1]
             i += 2
         elif argv[i] == "--config" and i + 1 < len(argv):
@@ -271,7 +279,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             expect_email = argv[i + 1]
             i += 2
         else:
-            i += 1
+            print(f"Unknown argument: {argv[i]}", file=sys.stderr)
+            return 2
 
     # Validate required arguments
     if not repo_path:

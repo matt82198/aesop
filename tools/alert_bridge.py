@@ -430,6 +430,9 @@ def mode_dry_run(config):
 # ==============================================================================
 
 
+USAGE = "Usage: alert_bridge.py [--scan | --test-message | --dry-run | --help]"
+
+
 def main(args=None):
     """Main entry point."""
     if args is None:
@@ -439,14 +442,22 @@ def main(args=None):
     if args:
         mode = args[0]
 
+    if mode in ("-h", "--help"):
+        print(USAGE)
+        return 0
+
     config = load_config()
 
     if mode == "--test-message":
         return mode_test_message(config)
     elif mode == "--dry-run":
         return mode_dry_run(config)
-    else:  # --scan or default
+    elif mode == "--scan":
         return mode_scan(config)
+    else:
+        print(f"Unknown mode: {mode}", file=sys.stderr)
+        print(USAGE, file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

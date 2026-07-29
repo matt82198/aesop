@@ -16,7 +16,7 @@ Args:
     --repo-path: Path to git repo for HEAD extraction (default: current working directory).
 
 Output:
-    Prints the exact line appended to stderr; exit 0 always.
+    Prints the exact line appended to stderr; exit 0 on success; non-zero (fail-closed) on write failure.
 
 Behavior:
     - Appends ONE line formatted: ### [YYYY-MM-DD HH:MM] <message>

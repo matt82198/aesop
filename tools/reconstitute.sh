@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
 # Reconstitute.sh: Clone or fetch repos from config/file
@@ -21,6 +21,27 @@ REPOS_FILE=""
 REPOS_CONFIG=""
 AESOP_CONFIG="aesop.config.json"
 AESOP_FLEET_ROOT="${AESOP_FLEET_ROOT:-}"
+
+# FIX #6: Resolve Python interpreter (portable: prefer python3, fallback to
+# python; mirrors the idiom in daemons/backup-fleet.sh / daemons/run-watchdog.sh).
+# Sets the global PYTHON_EXE once (memoized) and reuses it across all call
+# sites. Fails LOUD (stderr) + returns non-zero if neither interpreter is on
+# PATH -- callers must never silently continue without one.
+PYTHON_EXE=""
+resolve_python() {
+  if [ -n "$PYTHON_EXE" ]; then
+    return 0
+  fi
+  if command -v python3 > /dev/null 2>&1; then
+    PYTHON_EXE="python3"
+  elif command -v python > /dev/null 2>&1; then
+    PYTHON_EXE="python"
+  else
+    echo "Error: no python3 or python interpreter found on PATH" >&2
+    return 1
+  fi
+  return 0
+}
 
 parse_args() {
   while [ $# -gt 0 ]; do
@@ -70,8 +91,9 @@ get_fleet_root() {
   fi
 
   if [ -f "$AESOP_CONFIG" ]; then
+    resolve_python || exit 1
     local config_fleet_root
-    config_fleet_root=$(python3 -c "
+    config_fleet_root=$("$PYTHON_EXE" -c "
 import json
 try:
   with open('$AESOP_CONFIG') as f:
@@ -217,9 +239,11 @@ validate_target() {
 
 load_repos_from_config() {
   if [ -f "$AESOP_CONFIG" ]; then
+    resolve_python || exit 1
+
     # Also load fleet_root from config if not already set
     if [ -z "$AESOP_FLEET_ROOT" ]; then
-      AESOP_FLEET_ROOT=$(python3 -c "
+      AESOP_FLEET_ROOT=$("$PYTHON_EXE" -c "
 import json
 try:
   with open('$AESOP_CONFIG') as f:
@@ -232,7 +256,7 @@ except:
 " 2>/dev/null || true)
     fi
 
-    REPOS_CONFIG=$(python3 -c "
+    REPOS_CONFIG=$("$PYTHON_EXE" -c "
 import json
 try:
   with open('$AESOP_CONFIG') as f:

@@ -262,6 +262,32 @@ echo "[TEST] TEST 10: Forensics --diff with same commit shows no changes"
     || fail "Should report no changes for identical commits"
 )
 
+# --- Test 11: --help exits 0 with usage on stdout; genuine usage errors still exit non-zero ---
+echo "[TEST] TEST 11: --help exits 0 with usage on stdout; bad usage still exits non-zero (FIX #4)"
+(
+  cd "$SANDBOX" && mkdir -p t11 && cd t11 || exit 1
+
+  help_out=$(bash "$FORENSICS_SCRIPT" --help 2>/dev/null)
+  help_ec=$?
+  [ "$help_ec" -eq 0 ] && pass "--help exits 0" || fail "--help should exit 0, got $help_ec"
+  echo "$help_out" | grep -q "^Usage:" && pass "--help prints usage to stdout" || fail "--help usage text missing from stdout"
+
+  help_err=$(bash "$FORENSICS_SCRIPT" --help 2>&1 1>/dev/null)
+  [ -z "$help_err" ] && pass "--help writes nothing to stderr" || fail "--help unexpectedly wrote to stderr: $help_err"
+
+  short_out=$(bash "$FORENSICS_SCRIPT" -h 2>/dev/null)
+  short_ec=$?
+  [ "$short_ec" -eq 0 ] && pass "-h exits 0" || fail "-h should exit 0, got $short_ec"
+
+  bad_out=$(bash "$FORENSICS_SCRIPT" 2>/dev/null)
+  bad_ec=$?
+  [ "$bad_ec" -ne 0 ] && pass "no-args usage error still exits non-zero" || fail "no-args usage error should exit non-zero, got $bad_ec"
+  [ -z "$bad_out" ] && pass "no-args usage error prints nothing to stdout" || fail "no-args usage error unexpectedly wrote to stdout: $bad_out"
+
+  bad_err=$(bash "$FORENSICS_SCRIPT" 2>&1 1>/dev/null)
+  echo "$bad_err" | grep -q "^Usage:" && pass "no-args usage error prints usage to stderr" || fail "no-args usage error missing usage text on stderr"
+)
+
 # --- Tally results ---
 PASSED=$(tr -cd 'P' < "$RESULTS" | wc -c)
 FAILED=$(tr -cd 'F' < "$RESULTS" | wc -c)

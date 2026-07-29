@@ -44,10 +44,12 @@ function colorSkip() {
 
 // Detect context: repo checkout vs installed package
 function detectContext() {
-  // Repo checkout has .git/config, package.json with npm scripts, AND package-lock.json
-  const hasGitConfig = fs.existsSync(path.join(PACKAGE_ROOT, '.git', 'config'));
+  // Repo checkout has .git (directory or gitlink file) AND tests/ directory AND package.json with test scripts
+  // This distinguishes development checkouts (including git worktrees) from installed packages
+  const gitPath = path.join(PACKAGE_ROOT, '.git');
+  const hasGit = fs.existsSync(gitPath);  // Works for both .git dir and .git gitlink file
+  const hasTestsDir = fs.existsSync(path.join(PACKAGE_ROOT, 'tests'));
   const hasPackageJson = fs.existsSync(path.join(PACKAGE_ROOT, 'package.json'));
-  const hasPackageLock = fs.existsSync(path.join(PACKAGE_ROOT, 'package-lock.json'));
   const hasTestScripts = hasPackageJson && (() => {
     try {
       const pkg = JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8'));
@@ -57,11 +59,11 @@ function detectContext() {
     }
   })();
 
-  // Installed package is in node_modules with limited structure
-  // OR repo-mode detected but package-lock.json is missing (fresh scaffold — degrade gracefully)
-  const isInstalled = (!hasGitConfig && !hasTestScripts) || (hasGitConfig && !hasPackageLock);
+  // Repo mode requires: .git (development checkout or worktree) AND tests/ directory AND test scripts
+  // Installed package is in node_modules or scaffolded without full git history
+  const isRepo = hasGit && hasTestsDir && hasTestScripts;
 
-  return isInstalled ? 'installed' : 'repo';
+  return isRepo ? 'repo' : 'installed';
 }
 
 // Format timing for display
@@ -222,15 +224,23 @@ function classifyDoctorFailure(output) {
 
   // Check if all failures match expected pre-init patterns
   const allExpected = failures.every(failure => {
-    // Pattern 1: Missing config file
+    // Pattern 1: Not in a git repository (expected if not yet initialized)
+    if (failure.includes('Not inside a git repository')) {
+      return true;
+    }
+    // Pattern 2: Missing config file
     if (failure.includes('aesop.config.json not found')) {
       return true;
     }
-    // Pattern 2: Pre-push hook not installed
+    // Pattern 3: Pre-push hook not installed
     if (failure.includes('Pre-push hook not installed')) {
       return true;
     }
-    // Pattern 3: Missing directories — verify line contains only expected directory names
+    // Pattern 4: Port in use (expected if another fleet is running; skip initialization)
+    if (failure.includes('Port') && failure.includes('in use')) {
+      return true;
+    }
+    // Pattern 5: Missing directories — verify line contains only expected directory names
     if (failure.includes('Missing:')) {
       // Extract the part after "Missing:"
       const afterMissing = failure.substring(failure.indexOf('Missing:') + 8);
