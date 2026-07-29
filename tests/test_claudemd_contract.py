@@ -6,9 +6,9 @@ TDD: write failing tests first, then implement.
 """
 
 import sys
-import os
 import tempfile
 import subprocess
+import unittest
 from pathlib import Path
 
 
@@ -23,28 +23,29 @@ def run_validator(root_dir):
     return result.returncode, result.stdout, result.stderr
 
 
-def test_empty_file_fails():
-    """Empty CLAUDE.md should fail validation."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Create domain directory with empty CLAUDE.md
-        domain_dir = Path(tmpdir) / "test_domain"
-        domain_dir.mkdir()
-        (domain_dir / "CLAUDE.md").write_text("")
+class TestClaudeMdContract(unittest.TestCase):
+    """Validation-gate behavior for tools/claudemd_contract.py."""
 
-        exit_code, stdout, stderr = run_validator(tmpdir)
+    def test_empty_file_fails(self):
+        """Empty CLAUDE.md should fail validation."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create domain directory with empty CLAUDE.md
+            domain_dir = Path(tmpdir) / "test_domain"
+            domain_dir.mkdir()
+            (domain_dir / "CLAUDE.md").write_text("")
 
-        assert exit_code == 1, f"Empty file should fail; got exit {exit_code}"
-        assert "FAIL" in stderr or "failed" in stderr.lower()
-        print("[PASS] test_empty_file_fails")
+            exit_code, stdout, stderr = run_validator(tmpdir)
 
+            self.assertEqual(exit_code, 1, f"Empty file should fail; got exit {exit_code}")
+            self.assertTrue("FAIL" in stderr or "failed" in stderr.lower())
 
-def test_valid_minimal_file_passes():
-    """Minimal valid CLAUDE.md with purpose + section should pass."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        domain_dir = Path(tmpdir) / "test_domain"
-        domain_dir.mkdir()
+    def test_valid_minimal_file_passes(self):
+        """Minimal valid CLAUDE.md with purpose + section should pass."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            domain_dir = Path(tmpdir) / "test_domain"
+            domain_dir.mkdir()
 
-        content = """# test_domain/ - Test domain
+            content = """# test_domain/ - Test domain
 
 **What**: A test domain for validation.
 
@@ -53,67 +54,64 @@ def test_valid_minimal_file_passes():
 - Always test
 - Keep it simple
 """
-        (domain_dir / "CLAUDE.md").write_text(content)
+            (domain_dir / "CLAUDE.md").write_text(content)
 
-        exit_code, stdout, stderr = run_validator(tmpdir)
+            exit_code, stdout, stderr = run_validator(tmpdir)
 
-        assert exit_code == 0, f"Valid file should pass; got exit {exit_code}\nstderr: {stderr}"
-        assert "passed" in stdout.lower() or "OK" in stdout
-        print("[PASS] test_valid_minimal_file_passes")
+            self.assertEqual(
+                exit_code, 0,
+                f"Valid file should pass; got exit {exit_code}\nstderr: {stderr}",
+            )
+            self.assertTrue("passed" in stdout.lower() or "OK" in stdout)
 
+    def test_missing_purpose_statement_fails(self):
+        """File without purpose statement should fail."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            domain_dir = Path(tmpdir) / "test_domain"
+            domain_dir.mkdir()
 
-def test_missing_purpose_statement_fails():
-    """File without purpose statement should fail."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        domain_dir = Path(tmpdir) / "test_domain"
-        domain_dir.mkdir()
-
-        # Deliberately omit any heading or purpose marker, but provide enough text
-        content = """## Universal rules
+            # Deliberately omit any heading or purpose marker, but provide enough text
+            content = """## Universal rules
 
 - Always test
 - Keep things simple and clear
 - Write good documentation
 - Test all edge cases carefully
 """
-        (domain_dir / "CLAUDE.md").write_text(content)
+            (domain_dir / "CLAUDE.md").write_text(content)
 
-        exit_code, stdout, stderr = run_validator(tmpdir)
+            exit_code, stdout, stderr = run_validator(tmpdir)
 
-        assert exit_code == 1, f"Missing purpose should fail; got exit {exit_code}"
-        assert "purpose" in stderr.lower()
-        print("[PASS] test_missing_purpose_statement_fails")
+            self.assertEqual(exit_code, 1, f"Missing purpose should fail; got exit {exit_code}")
+            self.assertIn("purpose", stderr.lower())
 
+    def test_missing_key_sections_fails(self):
+        """File without key sections should fail."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            domain_dir = Path(tmpdir) / "test_domain"
+            domain_dir.mkdir()
 
-def test_missing_key_sections_fails():
-    """File without key sections should fail."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        domain_dir = Path(tmpdir) / "test_domain"
-        domain_dir.mkdir()
-
-        content = """# test_domain/ - Test domain
+            content = """# test_domain/ - Test domain
 
 **What**: A test domain.
 
 Some description here with lots of text to make it not empty but no sections.
 """
-        (domain_dir / "CLAUDE.md").write_text(content)
+            (domain_dir / "CLAUDE.md").write_text(content)
 
-        exit_code, stdout, stderr = run_validator(tmpdir)
+            exit_code, stdout, stderr = run_validator(tmpdir)
 
-        assert exit_code == 1, f"Missing sections should fail; got exit {exit_code}"
-        assert "key sections" in stderr.lower() or "invariants" in stderr.lower()
-        print("[PASS] test_missing_key_sections_fails")
+            self.assertEqual(exit_code, 1, f"Missing sections should fail; got exit {exit_code}")
+            self.assertTrue("key sections" in stderr.lower() or "invariants" in stderr.lower())
 
+    def test_multiple_domains_all_pass(self):
+        """Multiple valid domain CLAUDE.md files should all pass."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for domain in ["domain_a", "domain_b"]:
+                domain_dir = Path(tmpdir) / domain
+                domain_dir.mkdir()
 
-def test_multiple_domains_all_pass():
-    """Multiple valid domain CLAUDE.md files should all pass."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        for domain in ["domain_a", "domain_b"]:
-            domain_dir = Path(tmpdir) / domain
-            domain_dir.mkdir()
-
-            content = f"""# {domain}/ - {domain.upper()}
+                content = f"""# {domain}/ - {domain.upper()}
 
 **What**: Domain {domain} specification.
 
@@ -126,47 +124,47 @@ def test_multiple_domains_all_pass():
 
 - Invariant 1
 """
-            (domain_dir / "CLAUDE.md").write_text(content)
+                (domain_dir / "CLAUDE.md").write_text(content)
 
-        exit_code, stdout, stderr = run_validator(tmpdir)
+            exit_code, stdout, stderr = run_validator(tmpdir)
 
-        assert exit_code == 0, f"All valid files should pass; got exit {exit_code}\nstderr: {stderr}"
-        assert "2" in stdout  # Should report 2 files
-        print("[PASS] test_multiple_domains_all_pass passed")
+            self.assertEqual(
+                exit_code, 0,
+                f"All valid files should pass; got exit {exit_code}\nstderr: {stderr}",
+            )
+            self.assertIn("2", stdout)  # Should report 2 files
 
+    def test_no_domain_files_fails(self):
+        """Directory with no domain CLAUDE.md files should fail."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create empty directory with no CLAUDE.md files
+            exit_code, stdout, stderr = run_validator(tmpdir)
 
-def test_no_domain_files_fails():
-    """Directory with no domain CLAUDE.md files should fail."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Create empty directory with no CLAUDE.md files
-        exit_code, stdout, stderr = run_validator(tmpdir)
+            self.assertEqual(exit_code, 1, f"No domain files should fail; got exit {exit_code}")
+            self.assertTrue("No domain" in stderr or "no domain" in stderr.lower())
 
-        assert exit_code == 1, f"No domain files should fail; got exit {exit_code}"
-        assert "No domain" in stderr or "no domain" in stderr.lower()
-        print("[PASS] test_no_domain_files_fails passed")
+    def test_help_flag(self):
+        """--help flag should print help and exit 0."""
+        result = subprocess.run(
+            [sys.executable, "tools/claudemd_contract.py", "--help"],
+            capture_output=True,
+            text=True,
+            cwd=Path(__file__).parent.parent,
+        )
 
+        self.assertEqual(
+            result.returncode, 0,
+            f"--help should exit 0; got {result.returncode}",
+        )
+        self.assertTrue("Usage" in result.stdout or "usage" in result.stdout.lower())
 
-def test_help_flag():
-    """--help flag should print help and exit 0."""
-    result = subprocess.run(
-        [sys.executable, "tools/claudemd_contract.py", "--help"],
-        capture_output=True,
-        text=True,
-        cwd=Path(__file__).parent.parent,
-    )
+    def test_valid_with_alternative_section_names(self):
+        """Valid file with alternative section names (Contracts, Core invariants, etc.) should pass."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            domain_dir = Path(tmpdir) / "test_domain"
+            domain_dir.mkdir()
 
-    assert result.returncode == 0, f"--help should exit 0; got {result.returncode}"
-    assert "Usage" in result.stdout or "usage" in result.stdout.lower()
-    print("[PASS] test_help_flag passed")
-
-
-def test_valid_with_alternative_section_names():
-    """Valid file with alternative section names (Contracts, Core invariants, etc.) should pass."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        domain_dir = Path(tmpdir) / "test_domain"
-        domain_dir.mkdir()
-
-        content = """# test_domain/ - Test domain
+            content = """# test_domain/ - Test domain
 
 **What**: A test domain for validation.
 
@@ -180,42 +178,44 @@ def test_valid_with_alternative_section_names():
 - Contract 1
 - Contract 2
 """
-        (domain_dir / "CLAUDE.md").write_text(content)
+            (domain_dir / "CLAUDE.md").write_text(content)
 
-        exit_code, stdout, stderr = run_validator(tmpdir)
+            exit_code, stdout, stderr = run_validator(tmpdir)
 
-        assert exit_code == 0, f"Alternative section names should pass; got exit {exit_code}\nstderr: {stderr}"
-        print("[PASS] test_valid_with_alternative_section_names passed")
+            self.assertEqual(
+                exit_code, 0,
+                f"Alternative section names should pass; got exit {exit_code}\nstderr: {stderr}",
+            )
 
+    def test_header_only_empty_body_fails(self):
+        """File with proper headers but empty bodies should FAIL validation.
+        This is the key test for the fix: headers alone should not pass."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            domain_dir = Path(tmpdir) / "fakedomain"
+            domain_dir.mkdir()
 
-def test_header_only_empty_body_fails():
-    """File with proper headers but empty bodies should FAIL validation.
-    This is the key test for the fix: headers alone should not pass."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        domain_dir = Path(tmpdir) / "fakedomain"
-        domain_dir.mkdir()
-
-        # This is the problematic case: header with no body
-        content = """# fakedomain/ - Placeholder text to pad length past fifty chars easily
+            # This is the problematic case: header with no body
+            content = """# fakedomain/ - Placeholder text to pad length past fifty chars easily
 
 ## Files
 """
-        (domain_dir / "CLAUDE.md").write_text(content)
+            (domain_dir / "CLAUDE.md").write_text(content)
 
-        exit_code, stdout, stderr = run_validator(tmpdir)
+            exit_code, stdout, stderr = run_validator(tmpdir)
 
-        assert exit_code == 1, f"Header-only file should FAIL; got exit {exit_code}\nstderr: {stderr}"
-        assert "FAIL" in stderr or "failed" in stderr.lower()
-        print("[PASS] test_header_only_empty_body_fails passed")
+            self.assertEqual(
+                exit_code, 1,
+                f"Header-only file should FAIL; got exit {exit_code}\nstderr: {stderr}",
+            )
+            self.assertTrue("FAIL" in stderr or "failed" in stderr.lower())
 
+    def test_minimal_body_content_passes(self):
+        """File with headers + minimal body content (2+ lines) should PASS."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            domain_dir = Path(tmpdir) / "test_domain"
+            domain_dir.mkdir()
 
-def test_minimal_body_content_passes():
-    """File with headers + minimal body content (2+ lines) should PASS."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        domain_dir = Path(tmpdir) / "test_domain"
-        domain_dir.mkdir()
-
-        content = """# test_domain/ - Test domain
+            content = """# test_domain/ - Test domain
 
 **What**: A test domain for validation.
 
@@ -224,47 +224,16 @@ def test_minimal_body_content_passes():
 - file1.py
 - file2.py
 """
-        (domain_dir / "CLAUDE.md").write_text(content)
+            (domain_dir / "CLAUDE.md").write_text(content)
 
-        exit_code, stdout, stderr = run_validator(tmpdir)
+            exit_code, stdout, stderr = run_validator(tmpdir)
 
-        assert exit_code == 0, f"File with minimal body should pass; got exit {exit_code}\nstderr: {stderr}"
-        assert "passed" in stdout.lower() or "OK" in stdout
-        print("[PASS] test_minimal_body_content_passes passed")
-
-
-def main():
-    """Run all tests."""
-    tests = [
-        test_empty_file_fails,
-        test_valid_minimal_file_passes,
-        test_missing_purpose_statement_fails,
-        test_missing_key_sections_fails,
-        test_multiple_domains_all_pass,
-        test_no_domain_files_fails,
-        test_help_flag,
-        test_valid_with_alternative_section_names,
-        test_header_only_empty_body_fails,
-        test_minimal_body_content_passes,
-    ]
-
-    passed = 0
-    failed = 0
-
-    for test in tests:
-        try:
-            test()
-            passed += 1
-        except AssertionError as e:
-            print(f"[FAIL] {test.__name__} failed: {e}")
-            failed += 1
-        except Exception as e:
-            print(f"[FAIL] {test.__name__} error: {e}")
-            failed += 1
-
-    print(f"\n{passed} passed, {failed} failed")
-    sys.exit(0 if failed == 0 else 1)
+            self.assertEqual(
+                exit_code, 0,
+                f"File with minimal body should pass; got exit {exit_code}\nstderr: {stderr}",
+            )
+            self.assertTrue("passed" in stdout.lower() or "OK" in stdout)
 
 
 if __name__ == "__main__":
-    main()
+    unittest.main()
