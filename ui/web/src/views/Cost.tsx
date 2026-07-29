@@ -4,6 +4,9 @@
  * weekly rollups, cost-per-outcome weighting, and model-mix trends.
  * When has_pricing=false, shows a "configure pricing" empty-state callout.
  * When has_pricing=true, displays dollar estimates alongside tokens.
+ *
+ * Error handling: displays a graceful error state if cost data is not available
+ * or if the SSE stream fails to deliver cost metrics.
  */
 
 import type { CostSummary } from '../lib/types';
@@ -19,10 +22,28 @@ import { TESTIDS } from '../test/fixtures';
 import './Cost.css';
 
 interface CostProps {
-  cost: CostSummary;
+  cost: CostSummary | null;
+  onRetry?: () => void;
 }
 
-export function Cost({ cost }: CostProps) {
+export function Cost({ cost, onRetry }: CostProps) {
+  if (!cost) {
+    return (
+      <section className="view-cost" data-testid={TESTIDS.viewCost} aria-label="Cost analytics">
+        <h2>Cost Analytics</h2>
+        <div className="cost-error" role="alert" data-testid="cost-error">
+          <h3>Could not load cost data</h3>
+          <p>The cost metrics failed to load. This may be a temporary issue with the backend.</p>
+          {onRetry && (
+            <button type="button" className="cost-error__retry" onClick={onRetry}>
+              Retry
+            </button>
+          )}
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="view-cost" data-testid={TESTIDS.viewCost} aria-label="Cost analytics">
       <h2>Cost Analytics</h2>

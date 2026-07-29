@@ -145,16 +145,27 @@ def parse_audit_backlog():
 def get_heartbeat_status():
     """Read daemon heartbeat age and status.
 
+    Returns heartbeat status with honest staleness reporting:
+    - "not configured" if heartbeat path is not available
+    - "ALIVE" if heartbeat is fresh (< 300s)
+    - "STALE" if heartbeat exists but is old (>= 300s)
+
     Buckets age to prevent every-tick hash change: age is reported in 3-second buckets
     (e.g., 0-2s → 0, 3-5s → 3, 6-8s → 6, ...) so the heartbeat snapshot only changes
     every ~3 seconds, not every 1 second. This preserves the change-hash gate effectiveness.
     """
     try:
+        # Check if watchdog heartbeat is configured
+        if config.WATCHDOG_HEARTBEAT_AVAILABILITY != "configured":
+            return {"alive": "not configured", "age": -1, "threshold": 300}
+
         if not config.WATCHDOG_HEARTBEAT.exists():
-            return {"alive": "UNKNOWN", "age": -1, "threshold": 300}
+            return {"alive": "not configured", "age": -1, "threshold": 300}
+
         content = config.WATCHDOG_HEARTBEAT.read_text(encoding='utf-8').strip()
         if not content:
-            return {"alive": "UNKNOWN", "age": -1, "threshold": 300}
+            return {"alive": "not configured", "age": -1, "threshold": 300}
+
         # Parse epoch value robustly; assume seconds (standard epoch format)
         try:
             timestamp = int(content)
@@ -165,7 +176,8 @@ def get_heartbeat_status():
                 timestamp = int(content)
             except Exception as e:
                 print(f"[collectors] Failed to parse watchdog heartbeat: {e}", file=sys.stderr)
-                return {"alive": "unknown", "age": -1, "threshold": 300}
+                return {"alive": "not configured", "age": -1, "threshold": 300}
+
         # Age in seconds: now_seconds - heartbeat_seconds
         age_seconds = int(time()) - timestamp
         # Bucket age to 3-second intervals to prevent hash churn
@@ -174,39 +186,44 @@ def get_heartbeat_status():
         return {"alive": alive, "age": age_bucketed, "threshold": 300}
     except Exception as e:
         print(f"[collectors] Failed to get watchdog heartbeat: {e}", file=sys.stderr)
-        return {"alive": "unknown", "age": -1, "threshold": 300}
+        return {"alive": "not configured", "age": -1, "threshold": 300}
 
 def get_monitor_heartbeat_status():
     """Read orchestration monitor heartbeat age and status.
+
+    Returns heartbeat status with honest staleness reporting:
+    - "not configured" if monitor heartbeat path is not available
+    - "ALIVE" if heartbeat is fresh (< 3600s)
+    - "STALE" if heartbeat exists but is old (>= 3600s)
 
     Buckets age to prevent every-tick hash change: age is reported in 3-second buckets
     (e.g., 0-2s → 0, 3-5s → 3, 6-8s → 6, ...) so the monitor snapshot only changes
     every ~3 seconds, not every 1 second. This preserves the change-hash gate effectiveness.
     """
     try:
-        # Check both possible paths: state/.monitor-heartbeat and monitor/.monitor-heartbeat
-        monitor_hb = config.MONITOR_HEARTBEAT
-        if not monitor_hb.exists():
-            # Try alternate path
-            alt_path = config.AESOP_ROOT / "monitor" / ".monitor-heartbeat"
-            if not alt_path.exists():
-                return {"alive": "not running", "age": -1, "threshold": 3600}
-            monitor_hb = alt_path
+        # Check if monitor heartbeat is configured (resolved via config.py fallback chain)
+        if config.MONITOR_HEARTBEAT_AVAILABILITY != "configured":
+            return {"alive": "not configured", "age": -1, "threshold": 3600}
 
-        content = monitor_hb.read_text(encoding='utf-8').strip()
+        if not config.MONITOR_HEARTBEAT.exists():
+            return {"alive": "not configured", "age": -1, "threshold": 3600}
+
+        content = config.MONITOR_HEARTBEAT.read_text(encoding='utf-8').strip()
         if not content:
-            return {"alive": "not running", "age": -1, "threshold": 3600}
+            return {"alive": "not configured", "age": -1, "threshold": 3600}
+
         # Parse epoch value robustly; assume seconds (standard epoch format)
         try:
             timestamp = int(content)
         except ValueError:
             # Retry once in case of race during monitor write
             try:
-                content = monitor_hb.read_text().strip()
+                content = config.MONITOR_HEARTBEAT.read_text().strip()
                 timestamp = int(content)
             except Exception as e:
                 print(f"[collectors] Failed to parse monitor heartbeat: {e}", file=sys.stderr)
-                return {"alive": "unknown", "age": -1, "threshold": 3600}
+                return {"alive": "not configured", "age": -1, "threshold": 3600}
+
         # Age in seconds: now_seconds - heartbeat_seconds
         age_seconds = int(time()) - timestamp
         # Bucket age to 3-second intervals to prevent hash churn
@@ -215,7 +232,7 @@ def get_monitor_heartbeat_status():
         return {"alive": alive, "age": age_bucketed, "threshold": 3600}
     except Exception as e:
         print(f"[collectors] Failed to get monitor heartbeat: {e}", file=sys.stderr)
-        return {"alive": "unknown", "age": -1, "threshold": 3600}
+        return {"alive": "not configured", "age": -1, "threshold": 3600}
 
 def get_main_thread_messages():
     """Read last ~12 messages from newest session JSONL."""
@@ -550,7 +567,11 @@ def _render_tracker(api):
 
 
 def create_tracker_item(data):
-    """Create a new tracker item (event-sourced; tracker.json re-rendered)."""
+    """Create a new tracker item (event-sourced; tracker.json re-rendered).
+
+    Accepts optional acceptanceCriteria: list of {statement, verifiable_by} dicts.
+    Authored AC always stored as-is; no derivation happens here (orchestrator handles derivation).
+    """
     api = _tracker_api()
     _ensure_tracker_migrated(api)
 
@@ -568,12 +589,21 @@ def create_tracker_item(data):
         "completed_at": None
     }
 
+    # Add acceptanceCriteria if provided (authored AC, never derived here)
+    ac = data.get("acceptanceCriteria")
+    if ac is not None and isinstance(ac, list) and len(ac) > 0:
+        item["acceptanceCriteria"] = ac
+
     api.append("tracker", "item_created", item, item["source"])
     _render_tracker(api)
     return item
 
 def update_tracker_item(item_id, update_data):
-    """Update a tracker item by id (event-sourced)."""
+    """Update a tracker item by id (event-sourced).
+
+    Accepts optional acceptanceCriteria: list of {statement, verifiable_by} dicts.
+    Authored AC always replaces derived (authored wins, no merge).
+    """
     api = _tracker_api()
     _ensure_tracker_migrated(api)
 
@@ -582,7 +612,7 @@ def update_tracker_item(item_id, update_data):
         raise Exception(f"404 Item not found: {item_id}")
 
     patch = {"id": item_id}
-    for key in ["status", "lane", "priority", "notes", "pr_link", "tags"]:
+    for key in ["status", "lane", "priority", "notes", "pr_link", "tags", "acceptanceCriteria"]:
         if key in update_data:
             patch[key] = update_data[key]
 
