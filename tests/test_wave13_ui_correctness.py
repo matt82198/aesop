@@ -79,6 +79,7 @@ class TestUtf8FileReads(W13FixtureCase):
         """collectors.get_heartbeat_status() must read with utf-8 encoding."""
         import collectors
         heartbeat_file = self.config.WATCHDOG_HEARTBEAT
+        heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
         heartbeat_file.write_text("1234567890", encoding="utf-8")
 
         result = collectors.get_heartbeat_status()
@@ -88,6 +89,7 @@ class TestUtf8FileReads(W13FixtureCase):
         """collectors.get_monitor_heartbeat_status() must read with utf-8 encoding."""
         import collectors
         heartbeat_file = self.config.MONITOR_HEARTBEAT
+        heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
         heartbeat_file.write_text("1234567890", encoding="utf-8")
 
         result = collectors.get_monitor_heartbeat_status()

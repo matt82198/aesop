@@ -18,6 +18,38 @@ from pathlib import Path
 # Path Resolution Functions
 # ==============================================================================
 
+def _resolve_heartbeat_path(env_var, conductor3_path, fallback_path):
+    """Resolve heartbeat path with fallback chain to conductor3 location.
+
+    Precedence:
+    1. Environment variable (e.g., AESOP_WATCHDOG_HEARTBEAT)
+    2. conductor3 location (shared orchestration state)
+    3. Local fallback (aesop/state location)
+
+    Returns:
+        Tuple of (resolved_path, availability_status) where status is:
+        - "configured" if the file exists at the resolved path
+        - "not configured" if none of the paths exist
+    """
+    # Environment variable takes highest priority
+    env_value = os.getenv(env_var)
+    if env_value:
+        env_path = Path(env_value).expanduser()
+        if env_path.exists():
+            return env_path, "configured"
+
+    # Try conductor3 location (preferred for multi-instance state)
+    if conductor3_path and conductor3_path.exists():
+        return conductor3_path, "configured"
+
+    # Try fallback location (local aesop state)
+    if fallback_path and fallback_path.exists():
+        return fallback_path, "configured"
+
+    # None of the paths exist; return preferred location but mark as not configured
+    return conductor3_path if conductor3_path else fallback_path, "not configured"
+
+
 def reload():
     """Recompute all configuration from current environment.
 
@@ -30,6 +62,7 @@ def reload():
     global UI_SESSION_TOKEN_FILE, TRACKER_FILE, ORCH_STATUS_FILE
     global WEB_DIST, LEDGER_FILE
     global COLLECTOR_INTERVAL, SSE_KEEPALIVE_SECONDS, SSE_MAX_CLIENTS, SSE_QUEUE_MAXSIZE, SSE_WRITE_TIMEOUT
+    global WATCHDOG_HEARTBEAT_AVAILABILITY, MONITOR_HEARTBEAT_AVAILABILITY
 
     # PORT: env PORT > default 8770
     PORT = int(os.getenv("PORT", "8770"))
@@ -85,8 +118,21 @@ def reload():
     ).expanduser()
 
     # Data file paths (all derived from STATE_DIR and AESOP_ROOT)
-    WATCHDOG_HEARTBEAT = STATE_DIR / ".watchdog-heartbeat"
-    MONITOR_HEARTBEAT = STATE_DIR / ".monitor-heartbeat"
+    # Heartbeat paths: prefer conductor3 orchestration state over local aesop state
+    # AESOP_CONDUCTOR3_ROOT env var (optional) allows overriding conductor3 location for testing
+    conductor3_root = Path(
+        os.getenv("AESOP_CONDUCTOR3_ROOT", str(Path.home() / "conductor3"))
+    ).expanduser()
+    WATCHDOG_HEARTBEAT, WATCHDOG_HEARTBEAT_AVAILABILITY = _resolve_heartbeat_path(
+        "AESOP_WATCHDOG_HEARTBEAT",
+        conductor3_root / "state" / ".watchdog-heartbeat",
+        STATE_DIR / ".watchdog-heartbeat"
+    )
+    MONITOR_HEARTBEAT, MONITOR_HEARTBEAT_AVAILABILITY = _resolve_heartbeat_path(
+        "AESOP_MONITOR_HEARTBEAT",
+        conductor3_root / "monitor" / ".monitor-heartbeat",
+        STATE_DIR / ".monitor-heartbeat"
+    )
     REPOS_JSON = STATE_DIR / ".watchdog-repos.json"
     BACKUP_LOG = STATE_DIR / "FLEET-BACKUP.log"
     ALERTS_LOG = STATE_DIR / "SECURITY-ALERTS.log"
@@ -127,7 +173,9 @@ CONFIG_FILE = AESOP_ROOT / "aesop.config.json"
 STATE_DIR = AESOP_ROOT / "state"
 TRANSCRIPTS_ROOT = Path("~/.claude/projects").expanduser()
 WATCHDOG_HEARTBEAT = STATE_DIR / ".watchdog-heartbeat"
+WATCHDOG_HEARTBEAT_AVAILABILITY = "not configured"
 MONITOR_HEARTBEAT = STATE_DIR / ".monitor-heartbeat"
+MONITOR_HEARTBEAT_AVAILABILITY = "not configured"
 REPOS_JSON = STATE_DIR / ".watchdog-repos.json"
 BACKUP_LOG = STATE_DIR / "FLEET-BACKUP.log"
 ALERTS_LOG = STATE_DIR / "SECURITY-ALERTS.log"
