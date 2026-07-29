@@ -412,8 +412,6 @@ class StatsCounter:
             lines.append(f"  Total Commits:        {self.git.total_commits}")
         if self.git.project_age_days is not None and self.git.project_age_days >= 0:
             lines.append(f"  Project Age (days):   {self.git.project_age_days}")
-        if self.git.wave_count > 0:
-            lines.append(f"  Wave Count:           {self.git.wave_count}")
         if self.git.insertions_deletions > 0:
             lines.append(f"  Insertions+Deletions: {self.git.insertions_deletions}")
         if self.git.files_tracked > 0:
@@ -480,10 +478,6 @@ class StatsCounter:
         if self.git.project_age_days is not None and self.git.project_age_days >= 0:
             rows.append(
                 f"| Project Age | {self.git.project_age_days} days <!-- metrics-verified: self_stats.py (git log) --> |"
-            )
-        if self.git.wave_count > 0:
-            rows.append(
-                f"| Waves | {self.git.wave_count} <!-- metrics-verified: self_stats.py (git log) --> |"
             )
         if self.git.insertions_deletions > 0:
             rows.append(
@@ -628,10 +622,6 @@ class StatsCounter:
         if git_stats.get("project_age_days") is not None and git_stats.get("project_age_days", 0) >= 0:
             rows.append(
                 f"| Project Age | {git_stats['project_age_days']} days <!-- metrics-verified: self_stats.py (git log) --> |"
-            )
-        if git_stats.get("wave_count", 0) > 0:
-            rows.append(
-                f"| Waves | {git_stats['wave_count']} <!-- metrics-verified: self_stats.py (git log) --> |"
             )
         if git_stats.get("insertions_deletions", 0) > 0:
             rows.append(

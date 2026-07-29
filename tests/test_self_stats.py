@@ -1,7 +1,7 @@
 """TDD tests for tools/self_stats.py — self-building stats counter for README.
 
 Tests cover:
-- Git-derived metrics: merged PRs, total commits, project age, wave count, insertions+deletions, files tracked, co-authors
+- Git-derived metrics: merged PRs, total commits, project age, insertions+deletions, files tracked, co-authors (wave_count retained in JSON for backward compatibility but not displayed in README table)
 - Session telemetry from docs/self-stats-data.json (omitted when missing/null)
 - Output modes: default table, --markdown (with START/END markers), --json
 - Markdown block must have verification markers for hard numbers
@@ -137,7 +137,6 @@ class GitDerivedStatsTest(SelfStatsFixtureCase):
             self.assertEqual(stats.merged_prs, 0, "empty repo should have 0 merged PRs")
             self.assertEqual(stats.total_commits, 0, "empty repo should have 0 commits")
             self.assertIsNone(stats.project_age_days, "empty repo should have None project age")
-            self.assertEqual(stats.wave_count, 0, "empty repo should have 0 waves")
 
     def test_git_stats_basic(self):
         """Repo with commits and PR merge."""
