@@ -46,6 +46,11 @@ class TestGoldenNoOpPrompts(unittest.TestCase):
         item = {"slug": "test"}
         self.assertNotIn("lastTestOutput", item)
 
+    def test_initial_failed_test_output_section_empty_when_absent(self):
+        """initialFailedTestOutput section should be empty string when field absent."""
+        item = {"slug": "test"}
+        self.assertNotIn("initialFailedTestOutput", item)
+
     def test_template_renders_empty_sections_as_empty_strings(self):
         """Verify template helpers return empty strings when fields absent."""
         template_path = REPO / "skills" / "buildsystem" / "wave-flat-dispatch.template.mjs"
@@ -66,6 +71,9 @@ class TestGoldenNoOpPrompts(unittest.TestCase):
         self.assertIn("if (!item.lastTestOutput", template_src,
                       "lastTestOutput helper should check for field presence")
 
+        self.assertIn("if (!item.initialFailedTestOutput", template_src,
+                      "initialFailedTestOutput helper should check for field presence")
+
     def test_template_build_prompt_construction_with_empty_sections(self):
         """Build prompt concatenation should produce identical result when sections empty."""
         template_path = REPO / "skills" / "buildsystem" / "wave-flat-dispatch.template.mjs"
@@ -77,6 +85,8 @@ class TestGoldenNoOpPrompts(unittest.TestCase):
                       "build prompt should call acceptanceCriteriaSection helper")
         self.assertIn("domainSynopsisSection(it)", template_src,
                       "build prompt should call domainSynopsisSection helper")
+        self.assertIn("initialFailedTestOutputSection(it)", template_src,
+                      "build prompt should call initialFailedTestOutputSection helper")
 
     def test_template_repair_prompt_construction_with_empty_sections(self):
         """Repair prompt concatenation should produce identical result when sections empty."""
