@@ -3,24 +3,24 @@ import assert from 'node:assert/strict';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
-
-// For testing the classifyDoctorFailure function from reproduce.js
-// We need to extract it or load it
+import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// We'll extract the function from reproduce.js content for testing
-// Since reproduce.js is a CommonJS file with an IIFE, we need a different approach
+// Use createRequire to import CommonJS modules
+const require = createRequire(import.meta.url);
+
+// Import detectContext from detect-context.js (exported via require)
+const { detectContext } = require(path.join(__dirname, '..', 'tools', 'detect-context.js'));
 
 // Read and parse the reproduce.js file to extract classifyDoctorFailure function
-import fs from 'fs';
 const reproduceFilePath = path.join(__dirname, '..', 'tools', 'reproduce.js');
 const reproduceContent = fs.readFileSync(reproduceFilePath, 'utf8');
 
-// Extract the classifyDoctorFailure and detectContext functions
-// They're defined as: function name(args) { ... }
-// We'll use a regex to find and extract them, then eval them (safe in test context)
+// Extract the classifyDoctorFailure function
+// It's defined as: function name(args) { ... }
+// We'll use a regex to find and extract it, then eval it (safe in test context)
 const classifyFunctionMatch = reproduceContent.match(
   /function classifyDoctorFailure\(output\)\s*\{[\s\S]*?\n\}/
 );
@@ -31,19 +31,6 @@ if (classifyFunctionMatch) {
   eval(`classifyDoctorFailure = ${classifyFunctionMatch[0]}`);
 } else {
   throw new Error('Could not extract classifyDoctorFailure function from reproduce.js');
-}
-
-// Extract detectContext function for testing context detection logic
-const detectFunctionMatch = reproduceContent.match(
-  /function detectContext\(\)\s*\{[\s\S]*?\n  return isAesopRepo \? 'repo' : 'installed';\n\}/
-);
-
-let detectContext;
-if (detectFunctionMatch) {
-  // Create a wrapper to inject test context
-  eval(`detectContext = ${detectFunctionMatch[0]}`);
-} else {
-  throw new Error('Could not extract detectContext function from reproduce.js');
 }
 
 test('classifyDoctorFailure - genuine pre-init findings should be classified as expected', (t) => {
