@@ -18,6 +18,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 
 ## Tool index (one-liners)
 
+- `agent_prompt_hygiene.py` — Gate detecting forbidden patterns in agent/dispatch prompt templates
 - `alert_bridge.py` — Slack/Discord webhook bridge for SECURITY-ALERTS
 - `bench_runner.py` — Held-out benchmark runner + scorer (Haiku/Sonnet/Opus pluggable)
 - `buildlog.py` — Uniform BUILDLOG.md appender
@@ -48,6 +49,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `latency_report.py` — Wave latency report generator: parses wave journals/bench results/BUILDLOG timestamps into per-wave, per-phase, and percentile timing breakdowns with explicit estimated-vs-measured caveats; CLI: `[--out docs/LATENCY.md]`
 - `launch_tui.py` — Spawn bash TUI script in detached terminal
 - `lock.mjs` — Fail-closed atomic lock (exponential backoff + stale-lock detection)
+- `merge_train.py` — Serial merge train: update-branch, wait for CI, merge, verify MERGED state (handles strict-up-to-date treadmill)
 - `metrics_gate.py` — PR gate for hard numeric claims in markdown
 - `mutation_test.py` — Test quality harness via mutation testing (apply code mutations, run tests, report survived mutations as test gaps); CLI: `--target <module.py> --test <test_module.py> [--json]`; exit 0 on valid results (advisory), exit 1 when the sandbox baseline fails (results invalid, fail-closed)
 - `orchestrator_status.py` — Atomic orchestrator status updates
