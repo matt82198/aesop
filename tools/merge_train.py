@@ -9,10 +9,13 @@ Usage:
     python tools/merge_train.py --file pr-list.txt   # one number per line
 """
 import argparse
+import functools
 import json
 import subprocess
 import sys
 import time
+
+print = functools.partial(print, flush=True)
 
 
 def gh(*args: str) -> dict | str:
