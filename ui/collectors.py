@@ -618,26 +618,26 @@ def _snapshot_data():
     }
 
 def _snapshot_tracker():
-    """Read tracker.json, return {items: [...]}."""
-    tracker_file = config.STATE_DIR / "tracker.json"
-    if not tracker_file.exists():
-        return {"items": []}
+    """Read tracker.json via ReadAPI, return {items: [...]}."""
     try:
-        data = json.loads(tracker_file.read_text(encoding='utf-8'))
+        from state_store.read_api import ReadAPI
+        api = ReadAPI(str(config.STATE_DIR))
+        data = api.read_tracker_snapshot()
         if isinstance(data, dict) and "items" in data:
             return {"items": data.get("items", [])}
         return {"items": []}
     except Exception as e:
-        print(f"[tracker] Snapshot error: {e}", file=sys.stderr)
+        print(f"[tracker] Snapshot error (via ReadAPI): {e}", file=sys.stderr)
         return {"items": []}
 
 def _snapshot_orchestrator_status():
-    """Read and normalize orchestrator-status.json."""
-    status_file = config.STATE_DIR / "orchestrator-status.json"
-    if not status_file.exists():
-        return {"orchestrators": []}
+    """Read and normalize orchestrator-status.json via ReadAPI."""
     try:
-        data = json.loads(status_file.read_text(encoding='utf-8'))
+        from state_store.read_api import ReadAPI
+        api = ReadAPI(str(config.STATE_DIR))
+        data = api.read_orchestrator_status()
+        if data is None:
+            return {"orchestrators": []}
         if not isinstance(data, dict):
             return {"orchestrators": []}
         # Already normalized list shape
@@ -662,7 +662,7 @@ def _snapshot_orchestrator_status():
             return {"orchestrators": [entry]}
         return {"orchestrators": []}
     except Exception as e:
-        print(f"[status] Snapshot error: {e}", file=sys.stderr)
+        print(f"[status] Snapshot error (via ReadAPI): {e}", file=sys.stderr)
         return {"orchestrators": []}
 
 def _recover_stranded_inbox_files():
