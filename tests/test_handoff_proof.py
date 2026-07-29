@@ -43,6 +43,32 @@ class TestHandoffProofBasics(unittest.TestCase):
         if Path(self.test_dir).exists():
             shutil.rmtree(self.test_dir)
 
+    def _configure_git_identity(self, workdir: Path, name: str, email: str):
+        """Configure git user for a specific workdir (local only)."""
+        subprocess.run(
+            ["git", "config", "--local", "user.name", name],
+            cwd=str(workdir),
+            capture_output=True,
+            timeout=5,
+        )
+        subprocess.run(
+            ["git", "config", "--local", "user.email", email],
+            cwd=str(workdir),
+            capture_output=True,
+            timeout=5,
+        )
+
+    def _read_identity_value(self, workdir: Path, key: str) -> str:
+        """Read a git identity value for a specific workdir."""
+        result = subprocess.run(
+            ["git", "config", "--local", key],
+            cwd=str(workdir),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.stdout.strip()
+
     def test_workdir_isolation(self):
         """Test that workdir_a and workdir_b are isolated."""
         # Verify both exist
@@ -77,10 +103,10 @@ class TestHandoffProofBasics(unittest.TestCase):
         )
 
         # Verify each workdir has its own git config
-        name_a = self._get_git_config(self.workdir_a, "user.name")
-        email_a = self._get_git_config(self.workdir_a, "user.email")
-        name_b = self._get_git_config(self.workdir_b, "user.name")
-        email_b = self._get_git_config(self.workdir_b, "user.email")
+        name_a = self._read_identity_value(self.workdir_a, "user.name")
+        email_a = self._read_identity_value(self.workdir_a, "user.email")
+        name_b = self._read_identity_value(self.workdir_b, "user.name")
+        email_b = self._read_identity_value(self.workdir_b, "user.email")
 
         self.assertEqual(name_a, "Operator A")
         self.assertEqual(email_a, "operator-a@test.local")
@@ -99,32 +125,6 @@ class TestHandoffProofBasics(unittest.TestCase):
         journal_dir.mkdir(parents=True, exist_ok=True)
 
         self.assertTrue(journal_dir.exists())
-
-    def _configure_git_identity(self, workdir: Path, name: str, email: str):
-        """Configure git user for a specific workdir (local only)."""
-        subprocess.run(
-            ["git", "config", "--local", "user.name", name],
-            cwd=str(workdir),
-            capture_output=True,
-            timeout=5,
-        )
-        subprocess.run(
-            ["git", "config", "--local", "user.email", email],
-            cwd=str(workdir),
-            capture_output=True,
-            timeout=5,
-        )
-
-    def _get_git_config(self, workdir: Path, key: str) -> str:
-        """Get a git config value for a specific workdir."""
-        result = subprocess.run(
-            ["git", "config", "--local", key],
-            cwd=str(workdir),
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        return result.stdout.strip()
 
 
 class TestWaveInterruption(unittest.TestCase):
