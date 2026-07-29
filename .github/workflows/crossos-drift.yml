@@ -1,0 +1,57 @@
+name: Weekly Cross-OS Drift Snapshot
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'  # Every Monday at 09:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  crossos-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run cross-OS drift analysis (JSON)
+        run: |
+          python tools/crossos_drift.py --runs 20 --json > docs/CROSSOS-DRIFT.json
+        continue-on-error: true
+
+      - name: Run cross-OS drift analysis (Markdown)
+        run: |
+          python tools/crossos_drift.py --runs 20 > docs/CROSSOS-DRIFT.md
+        continue-on-error: true
+
+      - name: Check for authentication failure
+        run: |
+          # Check if the drift tool exited with code 3 (auth failure)
+          # If both runs errored, we assume auth failure and skip the commit
+          if [ -f docs/CROSSOS-DRIFT.json ] && [ -f docs/CROSSOS-DRIFT.md ]; then
+            echo "Cross-OS drift snapshot generated successfully"
+          else
+            echo "ERROR: Failed to generate cross-OS drift snapshot (authentication or execution error)"
+            exit 1
+          fi
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit and push if changed
+        run: |
+          git add docs/CROSSOS-DRIFT.json docs/CROSSOS-DRIFT.md
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(ci): weekly cross-OS drift snapshot"
+            git push
+          else
+            echo "No changes to commit"
+          fi

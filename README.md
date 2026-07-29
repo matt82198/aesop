@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <em>Crash-only multi-agent orchestration for any repository</em>
+  <em>Crash-only multi-agent orchestration — restart IS recovery. Stateless workers, durable filesystem state, no central server to lose.</em>
 </p>
 
 <p align="center">
@@ -14,13 +14,13 @@
 
 ## What It Does
 
-**Aesop** is an **orchestration harness that runs fleets of LLM coding agents**, verifies their output, and ships merge-ready code to CI. Each agent reads your repository state, fixes a ranked backlog item, runs tests locally, and auto-pushes. If a machine crashes mid-task, the next run re-reads from disk and continues — no external state server, no vector DB, no consensus machinery. The entire system and all decisions live in source-controlled, human-diffable files: git history, STATE.md, BUILDLOG.md, guardrail scripts. Aesop is battle-tested: this repository's own ~450 merged PRs across ~1230 commits were shipped by its own `/buildsystem` loop.
+**Aesop** is an **orchestration harness that runs fleets of LLM coding agents**, verifies their output, and ships merge-ready code to CI. Each agent reads your repository state, fixes a ranked backlog item, runs tests locally, and auto-pushes. If a machine crashes mid-task, the next run re-reads from disk and continues — no external state server, no vector DB, no consensus machinery. The entire system and all decisions live in source-controlled, human-diffable files: git history, STATE.md, BUILDLOG.md, guardrail scripts. Aesop is battle-tested: 191 test suites across 3 harnesses (shell, Node, Python), 13 core domains built in parallel, 5-round audit convergence to zero verified defects, 4x measured cost reduction—all shipped by its own `/buildsystem` loop.
 
 ## How It Works
 
 **Agent behavior is source code.** Every orchestration rule lives in durable files (STATE.md, BUILDLOG.md, Python guardrails, git history). When a machine fails, you re-read from disk—no special recovery path. The architecture is: crash-only workers (request-scoped Haiku agents over persistent filesystem state, ~1/3 Opus cost each), persistent filesystem brain (git-backed), fail-closed guardrails (pre-push secret-scan, cost ceiling, verification re-runs), and observable heartbeats (to detect and auto-restart stalls).
 
-**Proof:** This repo is built entirely by Aesop. On a 39-task judgment benchmark, Haiku and Sonnet both scored 39/39 vs Opus 38/39 — the pre-declared ceiling rule trips, mapping a sufficiency floor for seam-level tasks (code review, severity calibration, local orchestration), not tier equivalence. Frontier reasoning and long-horizon planning are out of scope. Removing the hierarchical supervisor layer cut dispatch cost ~4× at identical graded quality (A/B; topology cancelled, data kept). The loop study shows that crash-only checkpointing + repair loops recover 20pp on hard tasks, lifting overall 67.8% → 77.2%.
+**Proof:** This repo is built entirely by Aesop. Haiku proved sufficient for seam-level judgment tasks (39/39; pre-declared ceiling rule flags limited discrimination — sufficiency floor, not tier equivalence). Frontier reasoning and long-horizon planning are out of scope. Removing the hierarchical supervisor layer cut dispatch cost ~4× at identical graded quality (A/B; topology cancelled, data kept). The loop study shows that crash-only checkpointing + repair loops recover 20pp on hard tasks, lifting overall 67.8% → 77.2%.
 
 ## Why It Matters
 
@@ -112,14 +112,22 @@ npx @matt82198/aesop my-fleet --name "api" --repos "/path/to/repo"
 
 ## Why Haiku-First Works
 
-The benchmark proves sufficiency for seam-level engineering tasks: across 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence, security spots), Haiku scored **39/39** vs Opus **38/39** at ~1/3 the per-token cost. **Measured on seam-level engineering tasks (code review, severity calibration, local orchestration) — not frontier reasoning or long-horizon planning.** See [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](./bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md). The pre-declared ceiling rule (when ≥2 tiers score ≥92%, the instrument failed to discriminate) trips on this result — both Haiku and Sonnet achieved 39/39, meaning the benchmark maps a *sufficiency floor*, not tier equivalence. Full analysis: [`bench/results/2026-07-26-judgment-v3-ceiling-addendum.md`](./bench/results/2026-07-26-judgment-v3-ceiling-addendum.md) and [`bench/EQUIVALENCE-MARGIN.md`](./bench/EQUIVALENCE-MARGIN.md).
+The benchmark proves sufficiency for seam-level engineering tasks: across 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence, security spots), Haiku scored **39/39** vs Opus **38/39** at ~1/3 the per-token cost. **Measured on seam-level engineering tasks (code review, severity calibration, local orchestration) — not frontier reasoning or long-horizon planning.** See [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](./bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md). The pre-declared ceiling rule (when ≥2 tiers score ≥92%, the instrument failed to discriminate) trips on this result — both Haiku and Sonnet achieved 39/39, meaning the benchmark maps a *sufficiency floor*, not tier equivalence. Full analysis: [`bench/results/2026-07-26-judgment-v3-ceiling-addendum.md`](./bench/results/2026-07-26-judgment-v3-ceiling-addendum.md) and [`bench/METHODOLOGY.md`](./bench/METHODOLOGY.md).
 
 ## Known Limitations
 
-- **Benchmark is curated, not sampled:** The 39-task judgment set trips the pre-declared ceiling rule; it measures a sufficiency floor (Haiku is good enough for this domain), not equivalence or tier ranking. See [`bench/EQUIVALENCE-MARGIN.md`](./bench/EQUIVALENCE-MARGIN.md) for boundary conditions.
-- **Adversarial review enforcement is deferred:** Verification runs via orchestrator-level exact-gate re-runs and adversarial verify lanes; in-loop enforcement deferred to a later increment. See [`driver/wave_loop.py` line ~36](./driver/wave_loop.py#L36).
+- **Benchmark is curated, not sampled:** The 39-task judgment set trips the pre-declared ceiling rule; it measures a sufficiency floor (Haiku is good enough for this domain), not equivalence or tier ranking. See [`bench/METHODOLOGY.md`](./bench/METHODOLOGY.md) for boundary conditions.
 - **MCP server is read-only by design:** The state-store projections are accurate only as of the last successful run state. Real-time multi-agent coordination is not yet implemented.
 - **Seam-level only:** This repo's agents operate within the seam (local orchestration, code review, severity assessment, test bifurcation). Frontier reasoning tasks (architecture redesign, novel algorithms) are out of scope and will underperform.
+
+## Operational Receipts
+
+For transparency on production incidents, latency profiles, and handoff fidelity:
+
+- **[docs/INCIDENTS.md](./docs/INCIDENTS.md)** — Classified incident log (crashes, stalls, false-greens, refusals)
+- **[docs/LATENCY.md](./docs/LATENCY.md)** — Wave cycle turnaround, agent wall-clock profiling, repair-loop latency data
+- **[docs/HANDOFF-CERTIFICATE.md](./docs/HANDOFF-CERTIFICATE.md)** — Durable state transfer fidelity and recovery proof
+- **[docs/CROSSOS-DRIFT.md](./docs/CROSSOS-DRIFT.md)** — Windows/Linux parity testing and reconciliation
 
 ## Evidence & Receipts
 
@@ -131,7 +139,7 @@ The guardrails below are not theoretical. Real activations: the pre-push secret 
 - **Metrics gate:** [`bash scripts/verify-stats.sh --check`](./scripts/verify-stats.sh) — verifies stats.json matches git; README refreshed on every commit.
 - **Test suite count:** [`python tools/verify_test_suite_count.py --check`](./tools/verify_test_suite_count.py) — confirms test count hasn't drifted.
 - **Benchmark pre-registration:** [`bench/SEAM-STUDY-PREREG.md`](./bench/SEAM-STUDY-PREREG.md) — pre-declared design, success criteria, ceiling rule.
-- **Equivalence margin amendments:** [`bench/EQUIVALENCE-MARGIN.md`](./bench/EQUIVALENCE-MARGIN.md) — pre-reg record and all amendments after each run.
+- **Equivalence margin amendments:** [`bench/METHODOLOGY.md`](./bench/METHODOLOGY.md) — pre-reg record and all amendments after each run.
 - **Dated results:** [`bench/results/`](./bench/results/) — all judgment and frontier runs with timestamps.
   - **Loop study (2026-07-28):** [`bench/results/seam-loop-study-2026-07-28.md`](./bench/results/seam-loop-study-2026-07-28.md) — checkpoint recovery + repair loop data: 122/180 (checkpoint) → 139/180 (loop), +20pp on hard tasks.
 - **Kill switch & ceilings:** [`tools/halt.py`](./tools/halt.py), [`tools/cost_ceiling.py`](./tools/cost_ceiling.py) — enforced at dispatch time.
@@ -140,7 +148,7 @@ The guardrails below are not theoretical. Real activations: the pre-push secret 
 
 ## Learn More
 
-- **[AesopServer](https://github.com/matt82198/AesopServer)** — the JVM lens: a Spring Boot 3.5 microservice + server-rendered AesopDashboard observing this same brain read-only (typed record contracts, SQLite projections, SSE on virtual threads). Same hub, different process — the architecture is the point.
+- **[AesopServer](https://github.com/matt82198/AesopServer)** — Also ported to a JVM/Spring Boot read-only observer (separate repo).
 - **[docs/INSTALL.md](./docs/INSTALL.md)** — Setup and first wave  
 - **[docs/MICROKERNEL.md](./docs/MICROKERNEL.md)** — The two swappable seats (worker + orchestrator), the invariant Report/state boundary, and a 60-second quickstart for swapping either seat's model  
 - **[docs/PORTING.md](./docs/PORTING.md)** — Adopter's guide: port Aesop to your repo (prerequisites, scaffold, 10 failure modes)  

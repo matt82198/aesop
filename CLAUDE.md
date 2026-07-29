@@ -1,6 +1,6 @@
 # Aesop — Project CLAUDE.md
 
-**What**: Source-available fable-fleet orchestration harness for autonomous Claude Code development.
+**What**: Source-available multi-agent orchestration harness for autonomous software development.
 
 ## Domain map
 
