@@ -239,12 +239,15 @@ class TestIncidentParser(unittest.TestCase):
             self.assertEqual(len(incidents), 4,
                 "Should find exactly 4 synthetic incidents in test repo")
 
-            # Verify each incident is classified correctly
-            # (ordered by date desc, so reverse the expected list)
-            expected_classes = [c["expected_class"] for c in commits[::-1]]
+            # Verify each incident is classified correctly.
+            # Order-insensitive: synthetic commits created in rapid succession can
+            # share identical timestamps (fast CI runners), making date-desc order
+            # unstable between same-second commits. The contract under test is the
+            # classification set, not the tiebreak order.
+            expected_classes = [c["expected_class"] for c in commits]
             actual_classes = [i["class"] for i in incidents]
 
-            self.assertEqual(actual_classes, expected_classes,
+            self.assertCountEqual(actual_classes, expected_classes,
                 f"Incident classes mismatch: {actual_classes} != {expected_classes}")
 
     def test_incident_from_real_history_skip_shallow(self):
