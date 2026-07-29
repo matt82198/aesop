@@ -1,6 +1,6 @@
 # Frontier Discrimination Slice Results — 2026-07-26 (FINAL, 299/300 runs)
 
-Pre-registered protocol: bench/EQUIVALENCE-MARGIN.md (committed 540560e, BEFORE any results). Grading: machine-checked ground-truth patterns only; zero model-graded items. Transport: claude CLI for all Claude tiers; OpenAI seam for gpt-4o-mini. One opus run (ft13 rep1) unrecoverable after 4 retries — 59/60.
+Pre-registered protocol: bench/METHODOLOGY.md (committed 540560e, BEFORE any results). Grading: machine-checked ground-truth patterns only; zero model-graded items. Transport: claude CLI for all Claude tiers; OpenAI seam for gpt-4o-mini. One opus run (ft13 rep1) unrecoverable after 4 retries — 59/60.
 
 ## Headline
 
