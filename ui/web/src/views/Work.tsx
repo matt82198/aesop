@@ -47,7 +47,10 @@ export function Work({ tracker, backlog: backlogProp }: WorkProps) {
   };
 
   const handleFormSuccess = () => {
-    setShowForm(false);
+    // Delay form close to allow success message to be visible
+    setTimeout(() => {
+      setShowForm(false);
+    }, 2000);
     // Tracker board will update via SSE
   };
 

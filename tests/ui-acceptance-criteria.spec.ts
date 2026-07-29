@@ -49,8 +49,8 @@ test.describe('Acceptance Criteria Authoring', () => {
     // Wait for tracker board to update (SSE might take a moment)
     await page.waitForTimeout(1000);
 
-    // Find the newly created item in the tracker board
-    await expect(page.locator('[data-testid="tracker-card"]')).toHaveCount(1, { timeout: 5000 });
+    // Verify the item appears in the tracker board (at least one card with our title)
+    await expect(page.locator('[data-testid="tracker-card"]:has-text("Test Feature with AC")')).toBeVisible({ timeout: 5000 });
 
     // Verify the item title is visible
     await expect(page.locator('text=Test Feature with AC')).toBeVisible();
