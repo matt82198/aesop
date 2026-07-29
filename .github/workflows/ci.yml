@@ -71,7 +71,8 @@ jobs:
       - name: Install Python test dependencies
         # PyYAML is required by tools/ci_workflow_lint.py (fail-closed without it)
         # and its test suite tests/test_ci_workflow_lint.py.
-        run: pip install pyyaml
+        # pytest is required by tests/test_seam_s_e2e_oracle.py subprocess tests.
+        run: pip install pyyaml pytest
 
       - name: Set shard-specific temporary directory
         run: |
@@ -184,7 +185,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python test dependencies
-        run: pip install pyyaml
+        run: pip install pyyaml pytest
 
       - name: Set shard-specific temporary directory
         run: |
