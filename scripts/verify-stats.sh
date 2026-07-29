@@ -26,6 +26,10 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STATS_FILE="${REPO_ROOT}/stats.json"
 README_FILE="${REPO_ROOT}/README.md"
 
+# Ensure UTF-8 output encoding on Windows cp1252 systems
+# Fixes: arrow chars (U+2192) failing on Windows cp1252 locale
+export PYTHONIOENCODING=utf-8
+
 # Determine mode
 MODE="${1:-check}"
 
