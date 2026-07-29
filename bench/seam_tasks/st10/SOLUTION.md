@@ -88,3 +88,34 @@ test_state_machine_notifier.py::test_multiple_tasks_with_retries PASSED
 ## Summary
 
 This bug requires tracing across state definition (constants), state validation (state_machine), event handling (notifier), and orchestration (task_manager). The state machine allows a transition that the notification system cannot handle, creating a multi-module interaction bug. Localization requires reading all 4 modules to understand that a valid state is not properly handled by dependent code.
+
+## Visible Repro Test
+
+### Test Assertions
+The visible test `repo/test_repro.py` encodes the observable symptom:
+- tasks transition through workflow states correctly
+
+### Fail Output (Defective Code)
+```
+cd bench/seam_tasks/st10/repo && python -m pytest test_repro.py -q
+
+F...                                                                     [100%]
+...
+task status does not transition from QUEUED
+...
+1 failed, 0+ passed in X.XXs
+```
+
+### Pass Output (Fixed Code)
+```
+cd bench/seam_tasks/st10/repo && python -m pytest test_repro.py -q
+
+...                                                                      [100%]
+1+ passed in 0.XXs
+```
+
+### Distinction from Oracle
+The visible test is simpler and more focused than the oracle suite:
+- Visible: Minimal test demonstrating the observable symptom
+- Oracle: Comprehensive tests covering edge cases and multiple scenarios
+- Visible test encodes only what the task statement describes; oracle is thorough verification

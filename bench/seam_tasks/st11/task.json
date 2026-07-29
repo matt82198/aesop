@@ -7,7 +7,9 @@
     "validator.py",
     "logger.py",
     "processor.py",
-    "requirements.txt"
+    "requirements.txt",
+    "test_repro.py"
   ],
-  "oracle_cmd": "python -m pytest oracle -q"
+  "oracle_cmd": "python -m pytest oracle -q",
+  "visible_test_cmd": "python -m pytest test_repro.py -q"
 }

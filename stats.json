@@ -1,12 +1,20 @@
 {
   "git": {
-    "merged_prs": 387,
-    "total_commits": 1181,
-    "project_age_days": 14,
+    "merged_prs": 455,
+    "total_commits": 1249,
+    "project_age_days": 17,
     "wave_count": 30,
-    "insertions_deletions": 222290,
-    "files_tracked": 642,
-    "distinct_coauthors": 11
+    "insertions_deletions": 260978,
+    "files_tracked": 843,
+    "distinct_coauthors": 13,
+    "authors_human": 1,
+    "model_tiers": 4,
+    "model_tier_names": [
+      "Fable 5",
+      "Haiku 4.5",
+      "Opus 4.8",
+      "Opus 5.0"
+    ]
   },
   "telemetry": {
     "total_sessions": null,
@@ -17,16 +25,16 @@
     "cumulative_tokens": null,
     "total_coding_hours": null
   },
-  "generated_at": "2026-07-26T00:06:01.178217+00:00",
-  "loc": 173035,
+  "generated_at": "2026-07-29T06:46:14.068563+00:00",
+  "loc": 207714,
   "economics": {
     "cost_per_loc": {
-      "lines_of_code": 173035,
+      "lines_of_code": 207714,
       "total_tokens": 0,
       "tokens_per_loc": 0.0
     },
     "cost_per_merged_pr": {
-      "merged_prs": 268,
+      "merged_prs": 269,
       "total_tokens": 0,
       "tokens_per_pr": 0.0
     },
@@ -39,7 +47,7 @@
       "cost_per_backlog_item": 0.0,
       "cost_per_wave_item": 0.0,
       "backlog_item_proxy": "merged_prs",
-      "items_count": 268
+      "items_count": 269
     }
   },
   "economics_caveats": {

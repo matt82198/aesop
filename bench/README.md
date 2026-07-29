@@ -189,10 +189,12 @@ accuracy tables side by side.
   than that, so this benchmark likely *overstates* how well a cheap
   extraction-shaped heuristic (or a cheap model) would do on the full mix of
   real fleet work.
-- **No real model has been run against this yet.** Every accuracy number this
-  README shows or that `bench_runner.py` prints today comes from the offline
-  mock runner. "Haiku == Opus quality" remains an open, unmeasured question
-  after this wave — this PR only makes it *measurable*.
+- **Real model runs are available (v1, 2026-07-16; extended v2/v3 judgment runs).** The 12-task
+  extraction set (v1) was run blind on 2026-07-16 across all three models; results in
+  `bench/results/2026-07-16-haiku-sonnet-opus.md`: Haiku 12/12, Sonnet 12/12, Opus 12/12
+  (100% all models). The offline mock runner is now used for **offline development and CI
+  isolation**, where real model API calls are not feasible. Link to the full interpretation
+  and extended judgment runs (v2+v3, 39 tasks) in `bench/INTERPRETATION.md`.
 - **Exact/regex match is a narrow rubric.** It can't credit a correct answer
   phrased differently (e.g., "Yes, it's real" vs. "yes"), and it can't detect
   a right-answer-for-the-wrong-reason. It is deliberately narrow because the
@@ -343,9 +345,11 @@ Do not interpret a single run's latency as a model property.
 **Goal:** Test whether the benchmark can *discriminate* between model tiers
 (Haiku vs Opus) or whether it's ceiling-bound (both models score ~40/40).
 
-The existing 12-task set scored Haiku 39/39 vs Opus 38/39 — essentially no
-separation. The frontier slice builds a harder task set (~20 tasks) designed to
-expose tier differences:
+The extraction-only benchmark (v1, 12 tasks) showed no separation — all models
+scored 12/12 (100%). Extended with judgment-shaped tasks (v2+v3 combined, 39 tasks):
+Haiku/Sonnet 39/39 vs Opus 38/39 (one divergence, Opus on v2 j11). Even the harder
+judgment set converged. The frontier slice builds an even harder task set (~20 tasks)
+designed to expose tier differences:
 
 - **Multi-step reasoning** (SQL refactoring, boolean logic, configuration merging)
 - **Subtle defect detection** (race conditions, type coercion, format-string vulns)

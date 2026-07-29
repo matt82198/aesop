@@ -112,3 +112,44 @@ cd bench/seam_tasks/st03 && python -m pytest oracle -q
 - `test_decode_valid_json`: Happy path for decode_json_with_default
 - `test_json_with_numbers`: Happy path with numeric values
 - `test_json_with_nested_objects`: Happy path with nested objects
+
+## Visible Repro Test
+
+### Test Assertions
+The visible test `repo/test_repro.py` contains two focused assertions:
+- Invalid JSON returns the fallback dict without raising an exception
+- Valid JSON is parsed correctly
+
+### Fail Output (Defective Code)
+```
+cd bench/seam_tasks/st03/repo && python -m pytest test_repro.py -q
+
+F.                                                                       [100%]
+================================== FAILURES ===================================
+___________ TestJsonParserRepro.test_invalid_json_returns_fallback ____________
+
+    def test_invalid_json_returns_fallback(self):
+        result = parse_json_safely("not valid json")
+        assert result == {}
+
+test_repro.py:12: in test_invalid_json_returns_fallback
+    result = parse_json_safely("not valid json")
+json_parser.py:23: in parse_json_safely
+    return json.loads(data)
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+1 failed in 0.06s
+```
+
+### Pass Output (Fixed Code)
+```
+cd bench/seam_tasks/st03/repo && python -m pytest test_repro.py -q
+
+..                                                                       [100%]
+2 passed in 0.01s
+```
+
+### Distinction from Oracle
+The visible test is simpler and more focused than the oracle suite:
+- Visible: Two scenarios (invalid JSON returns fallback, valid JSON is parsed)
+- Oracle: 10 comprehensive tests covering many error cases, edge cases, and both functions
+- Visible test encodes only the observable symptom; oracle is thorough verification

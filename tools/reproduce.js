@@ -44,24 +44,35 @@ function colorSkip() {
 
 // Detect context: repo checkout vs installed package
 function detectContext() {
-  // Repo checkout has .git/config, package.json with npm scripts, AND package-lock.json
-  const hasGitConfig = fs.existsSync(path.join(PACKAGE_ROOT, '.git', 'config'));
+  // Repo checkout must be positively identified as the aesop repo itself:
+  // - package.json with name === "@matt82198/aesop"
+  // - .git (directory or gitlink file) for development checkouts or worktrees
+  // - tests/ directory with test files
+  // - package.json scripts include both test:node and test:py
+  //
+  // This guards against false positives: a parent directory with git + package.json
+  // will not be mistaken for repo mode.
+
+  const gitPath = path.join(PACKAGE_ROOT, '.git');
+  const hasGit = fs.existsSync(gitPath);  // Works for both .git dir and .git gitlink file
+  const hasTestsDir = fs.existsSync(path.join(PACKAGE_ROOT, 'tests'));
   const hasPackageJson = fs.existsSync(path.join(PACKAGE_ROOT, 'package.json'));
-  const hasPackageLock = fs.existsSync(path.join(PACKAGE_ROOT, 'package-lock.json'));
-  const hasTestScripts = hasPackageJson && (() => {
+
+  let isAesopRepo = false;
+  if (hasPackageJson) {
     try {
       const pkg = JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8'));
-      return pkg.scripts && pkg.scripts['test:node'] && pkg.scripts['test:py'];
+      const isCorrectPackage = pkg.name === '@matt82198/aesop';
+      const hasTestScripts = pkg.scripts && pkg.scripts['test:node'] && pkg.scripts['test:py'];
+      isAesopRepo = isCorrectPackage && hasGit && hasTestsDir && hasTestScripts;
     } catch {
-      return false;
+      isAesopRepo = false;
     }
-  })();
+  }
 
-  // Installed package is in node_modules with limited structure
-  // OR repo-mode detected but package-lock.json is missing (fresh scaffold — degrade gracefully)
-  const isInstalled = (!hasGitConfig && !hasTestScripts) || (hasGitConfig && !hasPackageLock);
-
-  return isInstalled ? 'installed' : 'repo';
+  // Repo mode requires positive identification of the aesop repo itself
+  // Anything else is treated as installed (safer than guessing)
+  return isAesopRepo ? 'repo' : 'installed';
 }
 
 // Format timing for display
@@ -158,12 +169,25 @@ function runRepoMode() {
 
   // Step 5: React component tests (vitest)
   const uiWebDir = path.join(PACKAGE_ROOT, 'ui', 'web');
+  const packageLockPath = path.join(PACKAGE_ROOT, 'package-lock.json');
+  const hasPackageLock = fs.existsSync(packageLockPath);
+
   if (fs.existsSync(uiWebDir)) {
-    results.push(runSubprocess(
-      'React component tests (vitest)',
-      ['bash', '-c', `cd ${JSON.stringify(uiWebDir)} && npm ci && npx vitest run`],
-      { stdio: 'inherit' }
-    ));
+    if (hasPackageLock) {
+      results.push(runSubprocess(
+        'React component tests (vitest)',
+        ['bash', '-c', `cd ${JSON.stringify(uiWebDir)} && npm ci && npx vitest run`],
+        { stdio: 'inherit' }
+      ));
+    } else {
+      results.push({
+        label: 'React component tests (vitest)',
+        status: 'SKIP',
+        timing: 0,
+        passed: true,
+        hint: 'package-lock.json not found (skipping npm ci requirement)'
+      });
+    }
   } else {
     results.push({
       label: 'React component tests (vitest)',
@@ -222,15 +246,23 @@ function classifyDoctorFailure(output) {
 
   // Check if all failures match expected pre-init patterns
   const allExpected = failures.every(failure => {
-    // Pattern 1: Missing config file
+    // Pattern 1: Not in a git repository (expected if not yet initialized)
+    if (failure.includes('Not inside a git repository')) {
+      return true;
+    }
+    // Pattern 2: Missing config file
     if (failure.includes('aesop.config.json not found')) {
       return true;
     }
-    // Pattern 2: Pre-push hook not installed
+    // Pattern 3: Pre-push hook not installed
     if (failure.includes('Pre-push hook not installed')) {
       return true;
     }
-    // Pattern 3: Missing directories — verify line contains only expected directory names
+    // Pattern 4: Port in use (expected if another fleet is running; skip initialization)
+    if (failure.includes('Port') && failure.includes('in use')) {
+      return true;
+    }
+    // Pattern 5: Missing directories — verify line contains only expected directory names
     if (failure.includes('Missing:')) {
       // Extract the part after "Missing:"
       const afterMissing = failure.substring(failure.indexOf('Missing:') + 8);

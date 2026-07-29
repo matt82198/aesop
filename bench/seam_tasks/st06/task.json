@@ -1,12 +1,14 @@
 {
   "task_id": "st06",
   "band": "medium",
-  "statement": "A settings service retrieves and caches user preferences. When retrieving user settings by ID, the first call takes 50ms. A second call for the same user_id should hit the cache and return instantly (same cached object). Instead, the second call also takes 50ms and executes the full fetch routine. The cache is not working—identical user_id lookups do not reuse cached results.",
+  "statement": "A settings service retrieves and caches user preferences. When retrieving user settings by ID, the first call takes 50ms. A second call for the same user_id should hit the cache and return instantly (same cached object). Instead, the second call also takes 50ms and executes the full fetch routine. The cache is not working\u00e2\u20ac\u201didentical user_id lookups do not reuse cached results.",
   "context_files": [
     "cache.py",
     "storage.py",
     "settings_service.py",
-    "main.py"
+    "main.py",
+    "test_repro.py"
   ],
-  "oracle_cmd": "python -m pytest oracle -q"
+  "oracle_cmd": "python -m pytest oracle -q",
+  "visible_test_cmd": "python -m pytest test_repro.py -q"
 }

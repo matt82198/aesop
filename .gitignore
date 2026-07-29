@@ -18,12 +18,18 @@ aesop.config.json
 ledger/
 *-BACKUP.log
 *.jsonl
+bench/results/frontier_slice_results.json
 
 # Exceptions: committed benchmark ground truth and sampled task sets
 !bench/tasks_sampled_judgment.jsonl
 !bench/ground_truth_sampled.jsonl
 !bench/tasks_frontier.jsonl
 !bench/ground_truth_frontier.jsonl
+# Seam study results (committed evidence)
+!bench/results/seam-u-orig-2026-07-27.jsonl
+!bench/results/seam-u-repro.jsonl
+!bench/results/seam-s-loop.jsonl
+!bench/results/seam-s-checkpoint.jsonl
 
 # System artifacts
 .git/
@@ -33,6 +39,10 @@ ledger/
 node_modules/
 __pycache__/
 *.pyc
+
+# Playwright test artifacts
+playwright-report/
+test-results/
 
 # Test output artifacts
 node_test_output.txt
@@ -46,3 +56,5 @@ ui/web/node_modules/
 monitor/.monitor-heartbeat
 monitor/.signal-state.json
 monitor/.ledger-cursor.json
+!bench/transcript_tasks/tasks_transcript.jsonl
+!bench/transcript_tasks/ground_truth_transcript.jsonl

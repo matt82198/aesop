@@ -428,16 +428,19 @@ Owned files you can modify:
         shell: bool = False,
     ) -> CommandResult:
         """Run a command (orchestrator-side only)."""
-        stdout, stderr, exit_code = run_shell_bounded(
+        # proc_util.run_shell_bounded(command, cwd, timeout_s) has no `shell`
+        # parameter (it always runs via a shell) and returns a CommandResult
+        # object, not a tuple. The `shell` arg here is kept for interface parity
+        # with the other drivers but is not forwarded.
+        result = run_shell_bounded(
             command,
             cwd=cwd,
             timeout_s=self.timeout_s,
-            shell=shell,
         )
         return CommandResult(
-            exit_code=exit_code,
-            stdout=stdout,
-            stderr=stderr,
+            exit_code=result.exit_code,
+            stdout=result.stdout,
+            stderr=result.stderr,
         )
 
     def get_tokens_spent(self) -> Optional[int]:

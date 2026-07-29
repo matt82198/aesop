@@ -1,12 +1,14 @@
 {
   "task_id": "st07",
   "band": "medium",
-  "statement": "A geometry calculator computes rectangular plot areas and converts them to square meters. For a plot of 10 miles by 10 miles, the calculator computes 100 square miles correctly, but the conversion to square meters is wrong: the system returns approximately 160.9 million square meters. The expected result is approximately 259 million square meters—a significant discrepancy in the output regardless of input size.",
+  "statement": "A geometry calculator computes rectangular plot areas and converts them to square meters. For a plot of 10 miles by 10 miles, the calculator computes 100 square miles correctly, but the conversion to square meters is wrong: the system returns approximately 160.9 million square meters. The expected result is approximately 259 million square meters\u00e2\u20ac\u201da significant discrepancy in the output regardless of input size.",
   "context_files": [
     "area_calculator.py",
     "converter.py",
     "plot_processor.py",
-    "main.py"
+    "main.py",
+    "test_repro.py"
   ],
-  "oracle_cmd": "python -m pytest oracle -q"
+  "oracle_cmd": "python -m pytest oracle -q",
+  "visible_test_cmd": "python -m pytest test_repro.py -q"
 }
