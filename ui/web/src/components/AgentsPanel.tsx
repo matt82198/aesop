@@ -53,17 +53,11 @@ export function AgentsPanel({ agents }: AgentsPanelProps) {
     warnings: true,
   });
 
-  if (!agents || agents.length === 0) {
-    return (
-      <section className="agents-panel" data-testid={TESTIDS.agentsPanel}>
-        <h2>Fleet Agents</h2>
-        <p className="empty-state">No agents running.</p>
-      </section>
-    );
-  }
-
-  const groups = groupAgents(agents);
-  const inspectedAgent = agents.find((a) => a.id === inspectedId) ?? null;
+  // No early return on an empty fleet: the three status summary cards always
+  // render (with honest zero counts) so the panel reads as "0 running" rather
+  // than disappearing — observability over blankness.
+  const groups = groupAgents(agents ?? []);
+  const inspectedAgent = (agents ?? []).find((a) => a.id === inspectedId) ?? null;
 
   const toggleGroup = (group: StatusGroup) => {
     setExpanded((prev) => ({ ...prev, [group]: !prev[group] }));
@@ -71,7 +65,7 @@ export function AgentsPanel({ agents }: AgentsPanelProps) {
 
   return (
     <section className="agents-panel" data-testid={TESTIDS.agentsPanel}>
-      <h2>Fleet Agents ({agents.length})</h2>
+      <h2>Fleet Agents ({(agents ?? []).length})</h2>
 
       <div className="agents-panel__summary" role="list" aria-label="Agent status groups">
         {GROUP_ORDER.map((group) => (

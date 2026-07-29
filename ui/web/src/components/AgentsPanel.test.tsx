@@ -22,16 +22,23 @@ describe('AgentsPanel', () => {
     expect(rows).toHaveLength(fixtureAgents.length);
   });
 
-  it('renders empty state when no agents', () => {
+  it('renders all three summary cards with zero counts when no agents', () => {
     render(<AgentsPanel agents={[]} />);
 
-    expect(screen.getByText('No agents running.')).toBeInTheDocument();
+    // Honest empty state: the cards stay visible reading 0, never blank.
+    for (const status of ['running', 'idle', 'warnings']) {
+      const card = screen.getByTestId(`agents-summary-card-${status}`);
+      expect(card).toBeInTheDocument();
+      expect(card.textContent).toContain('0');
+    }
   });
 
-  it('renders empty state when agents is null', () => {
+  it('renders summary cards with zero counts when agents is null', () => {
     render(<AgentsPanel agents={null} />);
 
-    expect(screen.getByText('No agents running.')).toBeInTheDocument();
+    for (const status of ['running', 'idle', 'warnings']) {
+      expect(screen.getByTestId(`agents-summary-card-${status}`)).toBeInTheDocument();
+    }
   });
 
   it('has correct data-testid', () => {
