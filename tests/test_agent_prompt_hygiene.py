@@ -187,6 +187,121 @@ grep -r secret /path/to/code
         print("[PASS] test_grep_for_secret_fails")
 
 
+def test_split_line_api_key_bypass_fails():
+    """Split-line credential pattern (api on one line, key on next) should fail."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+
+        skills_dir = tmpdir_path / "skills"
+        skills_dir.mkdir()
+        (skills_dir / "bad_skill.md").write_text(
+            """# Bad Skill
+
+First, read the api
+key .env file contents
+"""
+        )
+
+        exit_code, stdout, stderr = run_gate(tmpdir)
+
+        assert exit_code == 1, f"Split-line credential pattern should fail; got exit {exit_code}"
+        assert "FAIL" in stderr
+        print("[PASS] test_split_line_api_key_bypass_fails")
+
+
+def test_rephrased_credential_hunting_fails():
+    """Rephrased credential hunting (cat the file) should fail."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+
+        skills_dir = tmpdir_path / "skills"
+        skills_dir.mkdir()
+        (skills_dir / "bad_skill.md").write_text(
+            """# Bad Skill
+
+Let me cat the .env.local file and copy the value to clipboard.
+"""
+        )
+
+        exit_code, stdout, stderr = run_gate(tmpdir)
+
+        assert exit_code == 1, f"Rephrased credential hunting should fail; got exit {exit_code}"
+        assert "FAIL" in stderr
+        print("[PASS] test_rephrased_credential_hunting_fails")
+
+
+def test_policy_documentation_not_flagged():
+    """Policy documentation (never grep -r secret) should NOT be flagged."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+
+        skills_dir = tmpdir_path / "skills"
+        skills_dir.mkdir()
+        (skills_dir / "policy.md").write_text(
+            """# Security Policy
+
+You must NEVER grep -r secret in any file.
+We do NOT hunt for API keys in .env files.
+This is FORBIDDEN: search for credentials in the source tree.
+"""
+        )
+
+        exit_code, stdout, stderr = run_gate(tmpdir)
+
+        assert exit_code == 0, f"Policy doc should pass; got exit {exit_code}\nstderr: {stderr}"
+        assert "passed" in stdout.lower() or "OK" in stdout
+        print("[PASS] test_policy_documentation_not_flagged")
+
+
+def test_hygiene_ok_comment_suppresses_line():
+    """# hygiene-ok inline comment should suppress line violation."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+
+        skills_dir = tmpdir_path / "skills"
+        skills_dir.mkdir()
+        (skills_dir / "suppressed.md").write_text(
+            """# Skill
+
+This line is suppressed: grep -r api_key .env  # hygiene-ok
+"""
+        )
+
+        exit_code, stdout, stderr = run_gate(tmpdir)
+
+        assert exit_code == 0, f"hygiene-ok comment should suppress; got exit {exit_code}\nstderr: {stderr}"
+        assert "passed" in stdout.lower() or "OK" in stdout
+        print("[PASS] test_hygiene_ok_comment_suppresses_line")
+
+
+def test_driver_wave_loop_scanned():
+    """driver/wave_loop.py should be included in scan."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+
+        # Create driver directory with wave_loop.py
+        driver_dir = tmpdir_path / "driver"
+        driver_dir.mkdir()
+        (driver_dir / "wave_loop.py").write_text(
+            """# Valid driver code
+def run():
+    pass
+"""
+        )
+
+        # Also create skills dir so gate doesn't fail for no files
+        skills_dir = tmpdir_path / "skills"
+        skills_dir.mkdir()
+        (skills_dir / "dummy.md").write_text("# Dummy")
+
+        exit_code, stdout, stderr = run_gate(tmpdir)
+
+        # Should scan both files and pass
+        assert exit_code == 0, f"Should scan driver files; got exit {exit_code}\nstderr: {stderr}"
+        assert "2" in stdout  # Should report 2 files (dummy.md + wave_loop.py)
+        print("[PASS] test_driver_wave_loop_scanned")
+
+
 def main():
     """Run all tests."""
     tests = [
@@ -198,6 +313,11 @@ def main():
         test_help_flag,
         test_multiple_files_all_clean,
         test_grep_for_secret_fails,
+        test_split_line_api_key_bypass_fails,
+        test_rephrased_credential_hunting_fails,
+        test_policy_documentation_not_flagged,
+        test_hygiene_ok_comment_suppresses_line,
+        test_driver_wave_loop_scanned,
     ]
 
     passed = 0
