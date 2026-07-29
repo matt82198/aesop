@@ -810,5 +810,185 @@ class MergedPRsGhAndGitFallbackTest(SelfStatsFixtureCase):
             self.assertEqual(count, 1, f"should handle gh timeout gracefully (got {count})")
 
 
+class AuthorClassificationTest(unittest.TestCase):
+    """Test author classification logic."""
+
+    def test_classify_human_author(self):
+        """Should classify human author by email."""
+        classification, metadata = self_stats.classify_author("Matt Culliton", "matt82198@gmail.com")
+        self.assertEqual(classification, "human")
+        self.assertIsNone(metadata)
+
+    def test_classify_multiple_human_identities_same_email(self):
+        """Multiple names with same email should all be human."""
+        for name in ["Matt Culliton", "AliceAdmin", "John \"Jack\" Doe"]:
+            classification, metadata = self_stats.classify_author(name, "matt82198@gmail.com")
+            self.assertEqual(classification, "human", f"{name} with matt82198@gmail.com should be human")
+
+    def test_classify_model_anthropic_email(self):
+        """Should classify model authors by noreply@anthropic.com email."""
+        test_cases = [
+            ("Claude Opus 4.8", "noreply@anthropic.com", "Opus 4.8"),
+            ("Claude Haiku 4.5", "noreply@anthropic.com", "Haiku 4.5"),
+            ("Claude Fable 5", "noreply@anthropic.com", "Fable 5"),
+            ("Claude Opus 5.0", "noreply@anthropic.com", "Opus 5.0"),
+        ]
+        for name, email, expected_tier in test_cases:
+            classification, metadata = self_stats.classify_author(name, email)
+            self.assertEqual(classification, "model", f"{name} should be classified as model")
+            self.assertEqual(metadata, expected_tier, f"{name} should extract tier as {expected_tier}, got {metadata}")
+
+    def test_classify_model_aesop_email(self):
+        """Should classify model authors by noreply@aesop email."""
+        classification, metadata = self_stats.classify_author("Claude Fable 5", "noreply@aesop")
+        self.assertEqual(classification, "model")
+        self.assertEqual(metadata, "Fable 5")
+
+    def test_normalize_model_tier_variants(self):
+        """Should normalize model tier name variants."""
+        test_cases = [
+            ("Claude Opus 4.8 (1M context)", "noreply@anthropic.com", "Opus 4.8"),
+            ("Claude Haiku 4.5 (preview)", "noreply@anthropic.com", "Haiku 4.5"),
+            ("Claude Fable 5 (beta)", "noreply@anthropic.com", "Fable 5"),
+        ]
+        for name, email, expected_tier in test_cases:
+            classification, metadata = self_stats.classify_author(name, email)
+            self.assertEqual(classification, "model")
+            self.assertEqual(metadata, expected_tier, f"Should normalize {name} to {expected_tier}")
+
+    def test_classify_bot(self):
+        """Should classify bot authors by [bot] in name."""
+        classification, metadata = self_stats.classify_author("dependabot[bot]", "49699333+dependabot[bot]@users.noreply.github.com")
+        self.assertEqual(classification, "bot")
+        self.assertIsNone(metadata)
+
+    def test_classify_junk_by_email(self):
+        """Should classify junk by test email."""
+        classification, metadata = self_stats.classify_author("Test User", "test@example.com")
+        self.assertEqual(classification, "junk")
+        self.assertIsNone(metadata)
+
+    def test_classify_junk_by_aesop_open_source_email(self):
+        """Should classify aesop@open-source as junk."""
+        test_cases = [
+            ("AliceAdmin", "aesop@open-source"),
+            ("John \"Jack\" Doe", "aesop@open-source"),
+            ("aesop", "aesop@open-source"),
+        ]
+        for name, email in test_cases:
+            classification, metadata = self_stats.classify_author(name, email)
+            self.assertEqual(classification, "junk", f"{name} with {email} should be junk")
+
+    def test_classify_junk_by_generic_name(self):
+        """Should classify generic bot/system names as junk."""
+        test_cases = [
+            ("aesop", "aesop@example.com"),
+            ("Aesop Contributors", "aesop@example.com"),
+        ]
+        for name, email in test_cases:
+            classification, metadata = self_stats.classify_author(name, email)
+            self.assertEqual(classification, "junk", f"Generic name '{name}' should be junk")
+
+    def test_extract_model_tier(self):
+        """Should correctly normalize model tier names."""
+        test_cases = [
+            ("Claude Opus 4.8", "Opus 4.8"),
+            ("Claude Opus 4.8 (1M context)", "Opus 4.8"),
+            ("Claude Haiku 4.5", "Haiku 4.5"),
+            ("Claude Fable 5", "Fable 5"),
+            ("Claude Fable 5 (beta)", "Fable 5"),
+            ("Opus 4.8", "Opus 4.8"),  # Already normalized
+            ("Haiku 4.5 (preview)", "Haiku 4.5"),
+        ]
+        for input_name, expected_output in test_cases:
+            result = self_stats.extract_model_tier(input_name)
+            self.assertEqual(result, expected_output, f"Failed to normalize {input_name}")
+
+
+class ClassifiedAuthorsGitStatsTest(SelfStatsFixtureCase):
+    """Test classified author statistics (human, model, bot, junk)."""
+
+    def setUp(self):
+        super().setUp()
+        os.chdir(str(self.repo_root))
+        # Configure repo with human email for tests
+        subprocess.run(["git", "config", "user.email", "matt82198@gmail.com"], cwd=str(self.repo_root), capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Matt Culliton"], cwd=str(self.repo_root), capture_output=True)
+
+    def test_authors_human_single_email(self):
+        """Should count distinct human emails (currently 1)."""
+        # setUp already configured with matt82198@gmail.com
+        self.make_commit("commit from Matt")
+
+        # Simulate another identity with same email via coauthor trailer
+        self.make_commit("second commit", coauthor="Alice Admin <matt82198@gmail.com>")
+
+        stats = self_stats.GitStats(repo_root=str(self.repo_root))
+        self.assertEqual(stats.authors_human, 1, "should count distinct human emails, not names")
+
+    def test_model_tiers_multiple(self):
+        """Should count distinct model tiers."""
+        self.make_commit("commit 1")
+        self.make_commit("commit 2", coauthor="Claude Haiku 4.5 <noreply@anthropic.com>")
+        self.make_commit("commit 3", coauthor="Claude Opus 4.8 <noreply@anthropic.com>")
+        self.make_commit("commit 4", coauthor="Claude Fable 5 <noreply@anthropic.com>")
+
+        stats = self_stats.GitStats(repo_root=str(self.repo_root))
+        self.assertEqual(stats.model_tiers, 3, "should count 3 distinct model tiers")
+        self.assertEqual(set(stats.model_tier_names), {"Haiku 4.5", "Opus 4.8", "Fable 5"})
+
+    def test_model_tiers_normalize_variants(self):
+        """Should deduplicate model tier variants (e.g., Opus 4.8 with/without context hint)."""
+        self.make_commit("commit 1")
+        self.make_commit("commit 2", coauthor="Claude Opus 4.8 <noreply@anthropic.com>")
+        self.make_commit("commit 3", coauthor="Claude Opus 4.8 (1M context) <noreply@anthropic.com>")
+
+        stats = self_stats.GitStats(repo_root=str(self.repo_root))
+        self.assertEqual(stats.model_tiers, 1, "should deduplicate Opus 4.8 variants")
+        self.assertEqual(stats.model_tier_names, ["Opus 4.8"])
+
+    def test_model_tier_names_sorted(self):
+        """Should return model tier names in sorted order."""
+        self.make_commit("commit 1")
+        self.make_commit("commit 2", coauthor="Claude Fable 5 <noreply@anthropic.com>")
+        self.make_commit("commit 3", coauthor="Claude Haiku 4.5 <noreply@anthropic.com>")
+        self.make_commit("commit 4", coauthor="Claude Opus 4.8 <noreply@anthropic.com>")
+
+        stats = self_stats.GitStats(repo_root=str(self.repo_root))
+        self.assertEqual(stats.model_tier_names, ["Fable 5", "Haiku 4.5", "Opus 4.8"])
+
+    def test_json_includes_classified_fields(self):
+        """JSON output should include authors_human, model_tiers, model_tier_names."""
+        self.make_commit("commit 1")
+        self.make_commit("commit 2", coauthor="Claude Haiku 4.5 <noreply@anthropic.com>")
+
+        counter = self_stats.StatsCounter(repo_root=str(self.repo_root), data_file=str(self.data_file))
+        output = counter.json()
+        data = json.loads(output)
+
+        self.assertIn("authors_human", data["git"])
+        self.assertIn("model_tiers", data["git"])
+        self.assertIn("model_tier_names", data["git"])
+        self.assertGreaterEqual(data["git"]["authors_human"], 1)
+        self.assertEqual(data["git"]["model_tiers"], 1)
+        self.assertEqual(data["git"]["model_tier_names"], ["Haiku 4.5"])
+
+    def test_markdown_renders_classified_authors(self):
+        """Markdown output should render authors as 'N human + M Claude model tiers'."""
+        self.make_commit("commit 1")
+        self.make_commit("commit 2", coauthor="Claude Haiku 4.5 <noreply@anthropic.com>")
+        self.make_commit("commit 3", coauthor="Claude Opus 4.8 <noreply@anthropic.com>")
+
+        counter = self_stats.StatsCounter(repo_root=str(self.repo_root), data_file=str(self.data_file))
+        output = counter.markdown()
+
+        # Should contain the new format
+        self.assertIn("Authors", output, "should have 'Authors' row")
+        self.assertIn("human", output, "should mention 'human'")
+        self.assertIn("Claude model tier", output, "should mention 'Claude model tier'")
+        # Verify the tiers count is correct
+        self.assertIn("2 Claude model tier", output, "should list 2 model tiers")
+
+
 if __name__ == "__main__":
     unittest.main()

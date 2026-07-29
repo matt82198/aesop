@@ -33,7 +33,98 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple, Set, List
+
+
+# Author classification rules
+AUTHOR_CLASSIFICATION = {
+    "human": {
+        "emails": ["matt82198@gmail.com"],
+        "description": "Real human developers (deduplicated by email)"
+    },
+    "model": {
+        "email_patterns": [
+            r"^noreply@anthropic\.com$",
+            r"^noreply@aesop$"
+        ],
+        "description": "Claude AI model tiers (deduplicated by normalized tier name)"
+    },
+    "bot": {
+        "name_patterns": [r"\[bot\]$"],
+        "description": "Automated bots (e.g., dependabot)"
+    },
+    "junk": {
+        "emails": ["test@example.com", "aesop@open-source"],
+        "names": ["aesop", "Aesop Contributors"],
+        "description": "Test fixtures and generic identities (excluded from counts)"
+    }
+}
+
+
+def extract_model_tier(model_name: str) -> str:
+    """Extract and normalize model tier from name.
+
+    Examples:
+      "Claude Opus 4.8" -> "Opus 4.8"
+      "Claude Opus 4.8 (1M context)" -> "Opus 4.8"
+      "Claude Fable 5" -> "Fable 5"
+      "Claude Haiku 4.5" -> "Haiku 4.5"
+
+    Returns the normalized tier name, or the original if unrecognized.
+    """
+    # Remove "Claude " prefix if present
+    name = model_name.replace("Claude ", "").strip()
+
+    # Remove anything in parentheses (context hints, etc.)
+    name = re.sub(r'\s*\([^)]*\)\s*', '', name).strip()
+
+    return name
+
+
+def classify_author(name: str, email: str) -> Tuple[str, Optional[str]]:
+    """Classify an author identity.
+
+    Args:
+        name: Author display name
+        email: Author email address
+
+    Returns:
+        Tuple of (classification, metadata):
+        - classification: "human", "model", "bot", "junk"
+        - metadata: For models, the normalized tier name; otherwise None
+
+    Classification priority:
+    1. Junk (test fixtures, generic names)
+    2. Bot (matches [bot] pattern)
+    3. Model (specific email patterns)
+    4. Human (specific emails)
+    5. Default: junk (unknown identities)
+    """
+
+    # Check junk first (highest priority)
+    if email in AUTHOR_CLASSIFICATION["junk"]["emails"]:
+        return ("junk", None)
+    if name in AUTHOR_CLASSIFICATION["junk"]["names"]:
+        return ("junk", None)
+
+    # Check bot
+    for pattern in AUTHOR_CLASSIFICATION["bot"]["name_patterns"]:
+        if re.search(pattern, name):
+            return ("bot", None)
+
+    # Check model
+    for pattern in AUTHOR_CLASSIFICATION["model"]["email_patterns"]:
+        if re.match(pattern, email):
+            # Extract tier name from the display name
+            tier = extract_model_tier(name)
+            return ("model", tier)
+
+    # Check human
+    if email in AUTHOR_CLASSIFICATION["human"]["emails"]:
+        return ("human", None)
+
+    # Default: treat unknown as junk (conservative)
+    return ("junk", None)
 
 
 class GitStats:
@@ -50,6 +141,9 @@ class GitStats:
         self._files_tracked = None
         self._distinct_coauthors = None
         self._lines_of_code = None
+        self._authors_human = None
+        self._model_tiers = None
+        self._model_tier_names = None
 
     def _run_git(self, *args, check=True) -> str:
         """Run git command in repo, return stdout."""
@@ -295,6 +389,104 @@ class GitStats:
             return 0
 
     @property
+    def authors_human(self) -> int:
+        """Count of distinct human authors (deduplicated by email).
+
+        Counts distinct human emails from all commit authors and co-authors.
+        """
+        if self._authors_human is not None:
+            return self._authors_human
+
+        try:
+            human_emails: Set[str] = set()
+
+            # Get all authors
+            output = self._run_git("log", "--format=%an|%ae", check=False)
+            if output:
+                for line in output.split("\n"):
+                    if not line.strip():
+                        continue
+                    parts = line.split("|", 1)
+                    if len(parts) == 2:
+                        name, email = parts
+                        classification, _ = classify_author(name.strip(), email.strip())
+                        if classification == "human":
+                            human_emails.add(email.strip())
+
+            # Get all co-authors from commit messages
+            commit_msg = self._run_git("log", "--format=%B", check=False)
+            if commit_msg:
+                for match in re.finditer(r"Co-Authored-By:\s*(.+?)\s*<(.+?)>", commit_msg):
+                    name, email = match.group(1).strip(), match.group(2).strip()
+                    classification, _ = classify_author(name, email)
+                    if classification == "human":
+                        human_emails.add(email)
+
+            count = len(human_emails)
+            self._authors_human = count
+            return count
+        except Exception:
+            self._authors_human = 0
+            return 0
+
+    @property
+    def model_tiers(self) -> int:
+        """Count of distinct Claude model tiers used.
+
+        Counts unique model tiers (e.g., Haiku 4.5, Opus 4.8, Fable 5) from Co-Authored-By trailers.
+        Variants like "Claude Opus 4.8" and "Claude Opus 4.8 (1M context)" are merged to one tier.
+        """
+        if self._model_tiers is not None:
+            return self._model_tiers
+
+        try:
+            tiers: Set[str] = set()
+
+            # Get all co-authors from commit messages
+            commit_msg = self._run_git("log", "--format=%B", check=False)
+            if commit_msg:
+                for match in re.finditer(r"Co-Authored-By:\s*(.+?)\s*<(.+?)>", commit_msg):
+                    name, email = match.group(1).strip(), match.group(2).strip()
+                    classification, tier = classify_author(name, email)
+                    if classification == "model" and tier:
+                        tiers.add(tier)
+
+            count = len(tiers)
+            self._model_tiers = count
+            return count
+        except Exception:
+            self._model_tiers = 0
+            return 0
+
+    @property
+    def model_tier_names(self) -> List[str]:
+        """List of distinct Claude model tier names.
+
+        Returns sorted list of unique model tiers found in Co-Authored-By trailers.
+        """
+        if self._model_tier_names is not None:
+            return self._model_tier_names
+
+        try:
+            tiers: Set[str] = set()
+
+            # Get all co-authors from commit messages
+            commit_msg = self._run_git("log", "--format=%B", check=False)
+            if commit_msg:
+                for match in re.finditer(r"Co-Authored-By:\s*(.+?)\s*<(.+?)>", commit_msg):
+                    name, email = match.group(1).strip(), match.group(2).strip()
+                    classification, tier = classify_author(name, email)
+                    if classification == "model" and tier:
+                        tiers.add(tier)
+
+            result = sorted(list(tiers))
+            self._model_tier_names = result
+            return result
+        except Exception:
+            self._model_tier_names = []
+            return []
+
+    @property
     def lines_of_code(self) -> int:
         """Count total lines in tracked files."""
         if self._lines_of_code is not None:
@@ -487,7 +679,18 @@ class StatsCounter:
             rows.append(
                 f"| Files Tracked | {self.git.files_tracked} <!-- metrics-verified: self_stats.py (git log) --> |"
             )
-        if self.git.distinct_coauthors > 0:
+        # Render classified author stats
+        if self.git.authors_human > 0 or self.git.model_tiers > 0:
+            author_parts = []
+            if self.git.authors_human > 0:
+                author_parts.append(f"{self.git.authors_human} human")
+            if self.git.model_tiers > 0:
+                author_parts.append(f"{self.git.model_tiers} Claude model tier{'s' if self.git.model_tiers != 1 else ''}")
+            authors_text = " + ".join(author_parts)
+            rows.append(
+                f"| Authors | {authors_text} <!-- metrics-verified: self_stats.py (git log) --> |"
+            )
+        elif self.git.distinct_coauthors > 0:
             rows.append(
                 f"| Distinct Co-authors | {self.git.distinct_coauthors} <!-- metrics-verified: self_stats.py (git log) --> |"
             )
@@ -533,6 +736,9 @@ class StatsCounter:
                 "insertions_deletions": self.git.insertions_deletions,
                 "files_tracked": self.git.files_tracked,
                 "distinct_coauthors": self.git.distinct_coauthors,
+                "authors_human": self.git.authors_human,
+                "model_tiers": self.git.model_tiers,
+                "model_tier_names": self.git.model_tier_names,
             },
             "telemetry": {
                 "total_sessions": self.telemetry.total_sessions,
@@ -631,7 +837,23 @@ class StatsCounter:
             rows.append(
                 f"| Files Tracked | {git_stats['files_tracked']} <!-- metrics-verified: self_stats.py (git log) --> |"
             )
-        if git_stats.get("distinct_coauthors", 0) > 0:
+        # Render classified author stats (prefer new fields over legacy distinct_coauthors)
+        authors_human = git_stats.get("authors_human", 0)
+        model_tiers = git_stats.get("model_tiers", 0)
+        model_tier_names = git_stats.get("model_tier_names", [])
+        if authors_human > 0 or model_tiers > 0:
+            # Build the authors row using new classified fields
+            author_parts = []
+            if authors_human > 0:
+                author_parts.append(f"{authors_human} human")
+            if model_tiers > 0:
+                author_parts.append(f"{model_tiers} Claude model tier{'s' if model_tiers != 1 else ''}")
+            authors_text = " + ".join(author_parts)
+            rows.append(
+                f"| Authors | {authors_text} <!-- metrics-verified: self_stats.py (git log) --> |"
+            )
+        elif git_stats.get("distinct_coauthors", 0) > 0:
+            # Fallback to legacy field for backward compatibility
             rows.append(
                 f"| Distinct Co-authors | {git_stats['distinct_coauthors']} <!-- metrics-verified: self_stats.py (git log) --> |"
             )
