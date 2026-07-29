@@ -476,9 +476,8 @@ async function printNextStepsAndWatchdog(rl, targetDir, configPath, port) {
   console.log('2. Set real repository URLs in aesop.config.json:');
   console.log('     Edit aesop.config.json — replace placeholder URLs (https://github.com/user/...) with actual repo URLs');
   console.log('');
-  console.log('3. Copy the skills (required for orchestration):');
-  console.log('     cp ~/.claude/skills/power/SKILL.md . (verify it exists first)');
-  console.log('     cp ~/.claude/skills/buildsystem/SKILL.md . (verify it exists first)');
+  console.log('3. Set up orchestration skills:');
+  console.log('     Skills scaffolded to ./skills/ — copy to ~/.claude/skills/ or run /power to auto-discover');
   console.log('');
   console.log('4. Run preflight checks:');
   console.log('     aesop doctor  (or: npx @matt82198/aesop doctor)');

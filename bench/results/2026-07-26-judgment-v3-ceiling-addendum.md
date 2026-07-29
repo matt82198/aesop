@@ -1,14 +1,14 @@
 # Addendum: Judgment-v3 and the Equivalence Margin Ceiling Rule
 
 **Date:** 2026-07-26  
-**Scope:** Application of the pre-declared ceiling rule (bench/EQUIVALENCE-MARGIN.md) to the headline benchmark result  
+**Scope:** Application of the pre-declared ceiling rule (bench/METHODOLOGY.md) to the headline benchmark result  
 **Finding:** The ceiling rule disqualifies judgment-v3 from supporting an equivalence claim; it demonstrates a sufficiency floor instead.
 
 ---
 
 ## The Ceiling Rule
 
-From `bench/EQUIVALENCE-MARGIN.md` (pre-declared 2026-07-26):
+From `bench/METHODOLOGY.md` (pre-declared 2026-07-26):
 
 > **Ceiling rule (pre-declared): if two or more tiers land at or above 92%, the instrument failed to discriminate — we say so explicitly and harden the task set before making any equivalence claim.**
 
@@ -103,7 +103,7 @@ All agent-authored receipts in bench artifacts cross-checked; no anachronistic o
 
 ## References
 
-- **EQUIVALENCE-MARGIN.md** — The full pre-declaration (bench/EQUIVALENCE-MARGIN.md)
+- **EQUIVALENCE-MARGIN.md** — The full pre-declaration (bench/METHODOLOGY.md)
 - **2026-07-17 Judgment-v3 Run** — bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md
 - **Benchmark Interpretation** — bench/INTERPRETATION.md (notes ceiling rule application to all runs)
 - **Task Harness** — tests/test_bench_v3.py (discrimination guards)
