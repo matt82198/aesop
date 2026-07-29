@@ -7,10 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Version scheme**: Stable releases are `0.x.y`; `0.x.0-beta.N` / `-rc.N` are pre-releases; `0.1.0-wave.N` were internal wave-milestone previews.
 
-## [Unreleased]
+## [0.5.0] - 2026-07-29
+
+### Added
+
+#### Relicensing & Open Source
+- **MIT relicense** (PR #483): Aesop relicensed from PolyForm Strict to MIT, returning to open source. Original rationale (nonprofit research) no longer applies; team consensus favors maximizing adoption pathways for an orchestration harness.
+
+#### Evidence & Observability (Integration PR #482)
+- **Wave latency report** (PR #472, shipped in #482): Per-wave execution timeline with phase breakdown (dispatch, execution, merge, verify), per-agent 50th/95th-percentile latencies, and actionable bottleneck identification for runaway phases.
+- **Incident-log generator + docs/INCIDENTS.md** (PR #469, shipped in #482): Automated incident chronicle extracted from audit findings, state-ledger stalls, and agent forensics; new `docs/INCIDENTS.md` surfaces incidents with root causes and resolutions for fleet operators.
+- **Chaos-wave resilience harness** (PR #474, shipped in #482): Optional opt-in test suite that injects failures (network timeouts, file I/O errors, signal interrupts) at dispatch boundaries to verify crash-only recovery and stall detection. Runs as a separate test lane; no impact when disabled.
+
+#### Machinery Hardening
+- **Sandboxed-cwd test guards** (PR #473, shipped in #482): Runtime hygiene enforcement — tests run in isolated temp directories with automatic cleanup; `test_test_hygiene.py` validator prevents pollution of repo root and shared git config. Enforced in CI (fail-closed on violations).
+- **Dashboard heartbeat-path fix** (PR #477, shipped in #482): Corrected orchestrator heartbeat emission in dashboard SSE stream; stale-detection timeout now fires correctly after 30min inactivity.
+- **Adversarial-review-in-loop phase** (PR #479, shipped in #482): New optional audit phase integrates adversarial verification directly into the wave cycle — findings get cross-checked by independent lens before fix dispatch. Gated by `review_config.adversarial_enable` (default: false).
+- **Cross-operator handoff proof + HANDOFF-CERTIFICATE.md** (PR #479, shipped in #482): Structured handoff log with signed state snapshots and operator transitions; new `HANDOFF-CERTIFICATE.md` documents custody changes for audit trails and multi-team coordination.
+- **Dashboard error boundaries** (PR #476, shipped in #482): React error boundaries added to dashboard views; graceful fallback UI on component render failures (no white-screen-of-death).
+- **Dashboard AC authoring** (PR #454, shipped in #482): Operators can now add/edit acceptance criteria (AC) directly in the dashboard for open backlog items; authored AC takes precedence over template-derived AC.
+- **Append-only lane journal + zombie-resurrection gate** (PR #487): `tracker_guard` tool enforces append-only lane state and fail-closed resurrection of orphaned agents; prevents state divergence across team coordination.
+- **/dashboard skill** (PR #486): New orchestration skill for launching and monitoring the web dashboard; idempotent health check, background serve, and optional stop.
+
+#### Quality & Reliability
+- **Self_stats fail-closed --check mode** (PR #481): Stats verification (`--check` flag) now reads-only; no tree mutation in CI. Distinct error messages for missing vs unreadable stats.json; only `--regenerate` writes.
+- **Cross-OS drift weekly snapshot** (PR #484): Scheduled GitHub Actions workflow (Monday 09:00 UTC, manual dispatch available) measures Windows vs Linux CI outcome divergence over last 20 runs; results committed as `docs/CROSSOS-DRIFT.json` + `docs/CROSSOS-DRIFT.md` for transparency and forensics.
+- **Wave-templates CI gate** (PR #488): Pre-commit validation gate for wave manifest templates, wired into the main CI shard; prevents invalid manifest merges.
+
+#### Dashboard Completion
+- **Mission-Control dashboard MVP** (PR #489): Status-first HealthHeader with fleet health roll-up, grouped agents panel with per-agent status cards, and wave progress timeline. Honest zero counts on empty fleet (smoke-test safe).
 
 ### Changed
-- Relicensed from PolyForm Strict 1.0.0 to MIT — the project returns to open source.
+
+- **README & bench positioning** (PR #485, consolidation): Separated honest-benchmarks section from marketing copy; added known-limitations callout (small N=39 held-out, cost-ceiling tied to ledger not live token spend for Claude Code driver, local-first architecture). Verified-shape headline and receipts in bench methodology consolidation.
+
+### Fixed
+
+- **Stats drift gate compliance**: No stats file mutations in `--check` runs; CI stays clean.
+- **Cross-OS transparency**: Baseline drift snapshot seeded (Ubuntu 100%, Windows 95%) with per-run divergence tracking for systematic improvement.
+
+### Documentation
+
+- **INCIDENTS.md**: New incident chronicle for fleet operators (weekly summary of crashes, stalls, recovery actions).
+- **HANDOFF-CERTIFICATE.md**: Structured handoff audit trail for multi-team custody.
+- **CROSSOS-DRIFT.md / CROSSOS-DRIFT.json**: Weekly cross-OS CI outcome report.
+- **Positioning, benchmarks, limitations**: PR #485 consolidated bench methodology, honest-limitations callout, verified-shape headline.
+
+### Security & Compliance
+
+- (No new security vulnerabilities fixed; all prior hardening from v0.4.x remains in effect.)
+
+## [Unreleased]
 
 ## [0.4.1] - 2026-07-26
 
