@@ -26,19 +26,27 @@ from typing import Dict, List, Optional, Tuple
 try:
     import anthropic
 except ImportError:
-    print("ERROR: anthropic SDK not installed. Run: pip install anthropic")
-    sys.exit(1)
+    anthropic = None  # checked at runtime in make_api_runner; import stays side-effect free
 
-# Import the bench_runner machinery
-sys.path.insert(0, str(Path(__file__).parent))
-from bench_runner import (
-    load_tasks,
-    load_ground_truth,
-    run_bench,
-    build_summary,
-    print_table,
-    print_comparison,
-)
+# Import the bench_runner machinery (direct run vs. tools.* package import)
+try:
+    from bench_runner import (
+        load_tasks,
+        load_ground_truth,
+        run_bench,
+        build_summary,
+        print_table,
+        print_comparison,
+    )
+except ImportError:
+    from tools.bench_runner import (
+        load_tasks,
+        load_ground_truth,
+        run_bench,
+        build_summary,
+        print_table,
+        print_comparison,
+    )
 
 BENCH_DIR = Path(__file__).resolve().parent.parent / "bench"
 RESULTS_DIR = BENCH_DIR / "results"
@@ -79,6 +87,9 @@ def get_api_key() -> str:
 
 def make_api_runner(model_id: str, api_key: str):
     """Create a runner that calls the Anthropic API directly."""
+    if anthropic is None:
+        print("ERROR: anthropic SDK not installed. Run: pip install anthropic")
+        sys.exit(1)
     client = anthropic.Anthropic(api_key=api_key)
 
     def runner(prompt: str) -> Tuple[str, Dict]:
