@@ -132,3 +132,41 @@ cd bench/seam_tasks/st04 && python -m pytest oracle -q
 - `test_defaults_applied_to_empty_params`: Happy path with no user params
 - `test_all_user_params_respected`: Verifies all user params are preserved
 - `test_request_offset_respected`: Catches the merge order bug (user values overwritten)
+
+## Visible Repro Test
+
+### Test Assertions
+The visible test `repo/test_repro.py` contains two focused assertions:
+- User-provided page_size overrides default page_size
+- User-provided page overrides default page
+
+### Fail Output (Defective Code)
+```
+cd bench/seam_tasks/st04/repo && python -m pytest test_repro.py -q
+
+FF                                                                       [100%]
+================================== FAILURES ===================================
+__________ TestPaginatorRepro.test_user_page_size_overrides_default ___________
+
+    def test_user_page_size_overrides_default(self):
+        user_params = {"page_size": 50}
+        result = get_pagination_params(user_params)
+>       assert result["page_size"] == 50
+E       assert 10 == 50
+
+test_repro.py:15: AssertionError
+```
+
+### Pass Output (Fixed Code)
+```
+cd bench/seam_tasks/st04/repo && python -m pytest test_repro.py -q
+
+..                                                                       [100%]
+2 passed in 0.01s
+```
+
+### Distinction from Oracle
+The visible test is simpler and more focused than the oracle suite:
+- Visible: Two scenarios (user page_size and user page override defaults)
+- Oracle: 7 comprehensive tests covering both functions, partial merges, and edge cases
+- Visible test encodes only the observable symptom; oracle is thorough verification

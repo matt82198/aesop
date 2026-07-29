@@ -68,6 +68,9 @@ class TaskFixture:
     repo_path: Path
     oracle_path: Path
     solution_path: Optional[Path] = None
+    # Visible reproduction test the worker may run for repair-loop feedback
+    # (distinct from the hidden grading oracle). None -> repair loop is inert.
+    visible_test_cmd: Optional[str] = None
 
 
 @dataclass
@@ -119,6 +122,7 @@ def load_task(task_dir: Path) -> TaskFixture:
         repo_path=task_dir / "repo",
         oracle_path=task_dir / "oracle",
         solution_path=(task_dir / "SOLUTION.md") if (task_dir / "SOLUTION.md").exists() else None,
+        visible_test_cmd=task_data.get("visible_test_cmd"),
     )
 
 
@@ -148,7 +152,11 @@ def run_bounded_repair(
         "prompt": task.statement,
         "ownsFiles": list(owned_files),
         "workDir": str(sandbox_dir),
-        "testCmd": "python -m pytest . -q",  # Basic test; fixture may override via oracle
+        # Visible repair-loop signal: prefer the task's own reproduction test if
+        # it ships one (engages the iterative loop); otherwise fall back to
+        # collecting whatever tests are in the repo (exit 5 / no-tests keeps the
+        # arm single-pass, per the seated-single-pass note).
+        "testCmd": task.visible_test_cmd or "python -m pytest . -q",
         "model": driver.resolve_model(ROLE_WORKER),
     }
 
@@ -181,16 +189,31 @@ def run_bounded_repair(
             # Check result.
             ok = result.get("ok", False)
             test_exit = result.get("testExit")
+            files_written = result.get("filesWritten") or []
             error = result.get("error", "")
 
-            if ok:
-                # Test passed! Return success.
-                # retries_used = number of repairs that happened before this success.
-                return True, error or "Fixed", retries_used, total_tokens
+            # These seam tasks deliberately ship NO visible tests (the grading
+            # oracle is hidden from the worker), so the visible test returns
+            # "no tests collected" (exit 5) rather than pass, and dispatch_item's
+            # ok is never True. Treat a worker that SUBMITTED files as done and
+            # let the hidden oracle be the grader. Only iterate the repair loop
+            # when a visible test actually RAN and FAILED (exit not in {0,5,None})
+            # — i.e. a task that provides its own visible tests. With no such
+            # signal here, the S arm is a seated SINGLE-PASS through the seam
+            # (scoped context + dispatch template + driver), oracle-graded.
+            visible_test_ran_and_failed = test_exit not in (0, 5, None)
+            if ok or (files_written and not visible_test_ran_and_failed):
+                return True, error or "submitted", retries_used, total_tokens
 
-            # Test failed: prepare for next repair attempt.
-            last_error = error
-            last_test_exit = test_exit
+            if not files_written:
+                # Worker produced no submission at all (genuine failure/refusal).
+                last_error = error or "no files written"
+                last_test_exit = test_exit
+                # fall through to repair/exhaust
+            else:
+                # A real visible-test failure -> feed it back and repair.
+                last_error = error
+                last_test_exit = test_exit
 
             if attempt < total_attempts - 1:
                 # Will do another repair attempt.
@@ -228,6 +251,13 @@ def run_oracle(oracle_path: Path, sandbox_dir: Path, timeout_s: int = 120) -> bo
     shutil.copytree(oracle_path, sandbox_oracle)
 
     # Run oracle_cmd in the sandbox.
+    # Use PYTHONPATH to ensure sandbox/repo is on Python's path for oracle imports.
+    # This is critical for cross-platform compatibility (Windows + Linux pytest discovery).
+    sandbox_repo = sandbox_dir / "repo"
+    env = os.environ.copy()
+    if str(sandbox_repo) not in env.get("PYTHONPATH", ""):
+        env["PYTHONPATH"] = str(sandbox_repo)
+
     try:
         result = subprocess.run(
             [sys.executable, "-m", "pytest", "oracle", "-q"],
@@ -235,6 +265,7 @@ def run_oracle(oracle_path: Path, sandbox_dir: Path, timeout_s: int = 120) -> bo
             capture_output=True,
             text=True,
             timeout=timeout_s,
+            env=env,
         )
         return result.returncode == 0
     except subprocess.TimeoutExpired:
@@ -263,20 +294,24 @@ def execute_task_run(
         policy = verification_policy(caps)
         policy_repair_cap = policy.get("repair_cap", 1)
 
-        # Create isolated sandbox.
+        # Create isolated sandbox with proper layout.
         with tempfile.TemporaryDirectory() as tmpdir:
             sandbox_dir = Path(tmpdir)
+            sandbox_repo_dir = sandbox_dir / "repo"
+            sandbox_repo_dir.mkdir()
 
-            # Copy repo into sandbox.
+            # Copy repo into sandbox/repo/ (not flat!).
+            # Oracle expects to find code at ../repo relative to oracle/ dir.
             for item in task.repo_path.iterdir():
                 if item.is_file():
-                    shutil.copy2(item, sandbox_dir / item.name)
+                    shutil.copy2(item, sandbox_repo_dir / item.name)
                 elif item.is_dir() and not item.name.startswith("."):
-                    shutil.copytree(item, sandbox_dir / item.name)
+                    shutil.copytree(item, sandbox_repo_dir / item.name)
 
             # Run bounded repair loop with APPLIED cap (uniform across tiers).
+            # Worker edits go into sandbox/repo/, visible tests run from there.
             worker_ok, worker_verdict, retries, tokens = run_bounded_repair(
-                driver, task, sandbox_dir, applied_repair_cap
+                driver, task, sandbox_repo_dir, applied_repair_cap
             )
 
             # Run oracle if worker succeeded.

@@ -98,3 +98,34 @@ All tests PASS:
 ## Summary
 
 This bug requires understanding the interaction between **five component layers** (config → loader → registry → cache_decorator → app) across **initialization timing**. The cache correctly freezes the result of its decorated function, but that result is captured at the wrong time in the startup sequence. The defect emerges from the call order: app invokes setup_routes() (which uses cache) before invoking initialize_registry() (which loads data). Localization requires tracing through all five modules to understand why the registry is empty when the cache is populated.
+
+## Visible Repro Test
+
+### Test Assertions
+The visible test `repo/test_repro.py` encodes the observable symptom:
+- registry initialization happens before route access
+
+### Fail Output (Defective Code)
+```
+cd bench/seam_tasks/st09/repo && python -m pytest test_repro.py -q
+
+F...                                                                     [100%]
+...
+route access before init raises unhandled exception
+...
+1 failed, 0+ passed in X.XXs
+```
+
+### Pass Output (Fixed Code)
+```
+cd bench/seam_tasks/st09/repo && python -m pytest test_repro.py -q
+
+...                                                                      [100%]
+1+ passed in 0.XXs
+```
+
+### Distinction from Oracle
+The visible test is simpler and more focused than the oracle suite:
+- Visible: Minimal test demonstrating the observable symptom
+- Oracle: Comprehensive tests covering edge cases and multiple scenarios
+- Visible test encodes only what the task statement describes; oracle is thorough verification

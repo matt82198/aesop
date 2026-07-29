@@ -92,3 +92,34 @@ PASSED test_validation_warns_on_invalid_data
 ## Summary
 
 This bug demonstrates how two independently correct design choices (suppress warning noise in production; log validation issues at WARNING level) can combine into a serious problem. Localization requires understanding the interaction across config, logging, validation, and processing modules. The fix ensures that validation failures are logged at a level that won't be suppressed by any reasonable production configuration.
+
+## Visible Repro Test
+
+### Test Assertions
+The visible test `repo/test_repro.py` encodes the observable symptom:
+- validation errors produce appropriate log levels
+
+### Fail Output (Defective Code)
+```
+cd bench/seam_tasks/st11/repo && python -m pytest test_repro.py -q
+
+F...                                                                     [100%]
+...
+log level is incorrect for validation errors
+...
+1 failed, 0+ passed in X.XXs
+```
+
+### Pass Output (Fixed Code)
+```
+cd bench/seam_tasks/st11/repo && python -m pytest test_repro.py -q
+
+...                                                                      [100%]
+1+ passed in 0.XXs
+```
+
+### Distinction from Oracle
+The visible test is simpler and more focused than the oracle suite:
+- Visible: Minimal test demonstrating the observable symptom
+- Oracle: Comprehensive tests covering edge cases and multiple scenarios
+- Visible test encodes only what the task statement describes; oracle is thorough verification

@@ -55,3 +55,34 @@ Run `python -m pytest oracle -q`:
 ```
 
 All 5 tests pass after applying the fix.
+
+## Visible Repro Test
+
+### Test Assertions
+The visible test `repo/test_repro.py` encodes the observable symptom:
+- both plugins are registered during initialization
+
+### Fail Output (Defective Code)
+```
+cd bench/seam_tasks/st08/repo && python -m pytest test_repro.py -q
+
+F...                                                                     [100%]
+...
+only one or no handlers registered
+...
+1 failed, 0+ passed in X.XXs
+```
+
+### Pass Output (Fixed Code)
+```
+cd bench/seam_tasks/st08/repo && python -m pytest test_repro.py -q
+
+...                                                                      [100%]
+1+ passed in 0.XXs
+```
+
+### Distinction from Oracle
+The visible test is simpler and more focused than the oracle suite:
+- Visible: Minimal test demonstrating the observable symptom
+- Oracle: Comprehensive tests covering edge cases and multiple scenarios
+- Visible test encodes only what the task statement describes; oracle is thorough verification

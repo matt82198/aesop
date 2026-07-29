@@ -81,3 +81,46 @@ cd bench/seam_tasks/st01 && python -m pytest oracle -q
 - `test_request_after_boundary_allowed`: Verifies old requests are cleared after window
 - `test_normal_rate_limit_within_window`: Ensures rate limit is enforced (happy path)
 - `test_reset_clears_history`: Verifies reset works correctly (happy path)
+
+## Visible Repro Test
+
+### Test Assertions
+The visible test `repo/test_repro.py` contains one focused assertion:
+- Requests made at exactly the window boundary (after `window_duration` seconds) must be allowed
+
+### Fail Output (Defective Code)
+```
+cd bench/seam_tasks/st01/repo && python -m pytest test_repro.py -q
+
+F                                                                        [100%]
+================================== FAILURES ===================================
+________ TestRateLimiterBoundaryRepro.test_request_at_window_boundary _________
+
+    def test_request_at_window_boundary(self):
+        limiter = RateLimiter(max_requests=2, window_duration=10)
+        with patch('rate_limiter.time') as mock_time:
+            mock_time.time.return_value = 0
+            assert limiter.allow() is True
+            mock_time.time.return_value = 5
+            assert limiter.allow() is True
+            mock_time.time.return_value = 10
+>           assert limiter.allow() is True
+E           assert False is True
+
+test_repro.py:26: AssertionError
+1 failed in 0.07s
+```
+
+### Pass Output (Fixed Code)
+```
+cd bench/seam_tasks/st01/repo && python -m pytest test_repro.py -q
+
+.                                                                        [100%]
+1 passed in 0.02s
+```
+
+### Distinction from Oracle
+The visible test is simpler and more focused than the oracle suite:
+- Visible: Single test case with 1 focused scenario (boundary at exactly window_duration)
+- Oracle: 4 comprehensive tests covering multiple scenarios (boundary, after-boundary, within-window, reset)
+- Visible test encodes only the observable symptom; oracle is thorough verification

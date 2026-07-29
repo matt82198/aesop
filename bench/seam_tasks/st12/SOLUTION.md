@@ -131,3 +131,34 @@ All tests pass:
 ## Summary
 
 This bug requires understanding the interaction between four components: cache strategy (what should be cached), retry strategy (when to retry), orchestration (when to use each), and failure scenarios (what happens with transient failures). The cache layer is designed correctly, the retry layer is designed correctly, but their interaction through http_client.py creates a failure-poisoning scenario where caching error responses defeats the retry mechanism's ability to recover from transient failures.
+
+## Visible Repro Test
+
+### Test Assertions
+The visible test `repo/test_repro.py` encodes the observable symptom:
+- cached responses are reused on subsequent calls
+
+### Fail Output (Defective Code)
+```
+cd bench/seam_tasks/st12/repo && python -m pytest test_repro.py -q
+
+F...                                                                     [100%]
+...
+repeated calls do not use cached responses
+...
+1 failed, 0+ passed in X.XXs
+```
+
+### Pass Output (Fixed Code)
+```
+cd bench/seam_tasks/st12/repo && python -m pytest test_repro.py -q
+
+...                                                                      [100%]
+1+ passed in 0.XXs
+```
+
+### Distinction from Oracle
+The visible test is simpler and more focused than the oracle suite:
+- Visible: Minimal test demonstrating the observable symptom
+- Oracle: Comprehensive tests covering edge cases and multiple scenarios
+- Visible test encodes only what the task statement describes; oracle is thorough verification

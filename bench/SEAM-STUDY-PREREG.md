@@ -122,3 +122,23 @@ as Amendment 1). Full-run refusal halts the study (zero holes).
 
 **Identical treatment**: S arm's driver applies the same tool-call answer format to all tiers
 when fielded (tracked separately in S-arm documentation).
+
+## Addendum 3 — Visible-test protocol (2026-07-28, loop-run assembly)
+
+The S arm (seated) repair loop operates on **visible-test feedback** distinct from the hidden oracle.
+
+**Structure**: Each task ships a `test_repro.py` in its `repo/` directory alongside defective application code. The visible test reproduces the symptom described in the task statement and fails cleanly on the defective code (exit nonzero). The repair loop iterates only on real visible-test failure; the hidden oracle suite remains grading-only and is never fed back to the model.
+
+**Invariant**: The visible-test symptom and oracle assertions are orthogonal. The oracle may contain additional edge cases, state invariants, or cross-module interactions not exposed by the visible test. A model may fix the visible-test symptom without fixing all oracle cases (failure path, not success path).
+
+**Task assembly protocol** (pre-run verification):
+- For each of 12 tasks (st01–st12), the visible `test_repro.py` is run against the task's defective `repo/` code in isolation (cwd = repo directory).
+- Command: `python -m pytest test_repro.py -q` (per task.json `visible_test_cmd`).
+- Expected: exit code nonzero, real test failure (assertion error, exception in test body), not import or collection error.
+- If a repro test errors (collection/import/syntax), the task assembly is broken and must be fixed before proceeding (edit test_repro.py or conftest.py, not repo code).
+
+**Repair-loop wiring**: `run_seam_s.py` extracts `visible_test_cmd` from each task.json, runs it after dispatch, and feeds failure output into the next attempt's prompt. After the final repair attempt, the hidden oracle is run for grading only (never fed back to the model).
+
+**Checkpoint recording**: result records `visible_test_cmd` and `visible_test_output` (failure output from the last attempt); the oracle result is recorded separately as `oracle_passed` (grading verdict).
+
+This addendum documents the existing protocol and does not change pre-registered design; it is added to ensure external readers can verify the S-arm repair loop operates on transparent, task-specific symptom reproduction rather than model-generated test cases.
