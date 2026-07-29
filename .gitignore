@@ -39,6 +39,11 @@ bench/results/frontier_slice_results.json
 node_modules/
 __pycache__/
 *.pyc
+package-lock.json
+
+# Playwright test artifacts
+playwright-report/
+test-results/
 
 # Test output artifacts
 node_test_output.txt
