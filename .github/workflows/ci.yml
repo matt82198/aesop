@@ -265,11 +265,14 @@ jobs:
       - name: Install npm dependencies (for Playwright TypeScript specs)
         run: npm ci
 
-      - name: Install Playwright and Chromium
-        run: pip install playwright && playwright install --with-deps chromium
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
 
       - name: Run Playwright specs (npx playwright test)
         run: npx playwright test
+
+      - name: Install Python Playwright (for Python browser proofs)
+        run: pip install playwright
 
       - name: Run dashboard browser proof (verify_dash)
         run: python tools/verify_dash.py
