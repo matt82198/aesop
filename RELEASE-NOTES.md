@@ -1,4 +1,33 @@
-# aesop 0.4.0 — AI Micro-Kernel: Two Swappable Seats
+# aesop 0.5.0 — Open Source, Again
+
+**Headline**: MIT open-source relicense removes adoption barriers for team-scale orchestration. Wave latency telemetry + chaos injection harness surface bottlenecks and validate recovery under failure. Evidence audit trail (incident chronicles, handoff certificates, cross-OS drift tracking) gives operators ground truth on fleet health. Dashboard completion with AC authoring, error boundaries, and honest benchmarks.
+
+## Shipping
+
+### 5-Bullet Summary
+
+1. **MIT open source**: Aesop relicensed to MIT, removing adoption barriers for team-scale orchestration.
+2. **Wave latency telemetry**: Per-phase execution timelines + agent percentiles surface bottlenecks; chaos injection harness validates recovery under failure.
+3. **Evidence audit trail**: Incident chronicles, handoff certificates, and cross-OS drift snapshots give operators ground truth on fleet health and custody transfers.
+4. **Dashboard completeness**: AC authoring, error boundaries, and corrected heartbeat path finish first-class dashboard support for non-CLI operators.
+5. **Honest benchmarks**: README now separates realistic limitations (small N=39, local-first, ledger-based cost ceiling for Claude driver) from capability claims; supported by held-out measurement.
+
+### Everything Else
+
+- Sandboxed test hygiene (isolated temp dirs, pollution guards).
+- Stats verification fail-closed (no CI tree mutation).
+- Adversarial-review phase (opt-in, gated).
+- Append-only lane journal + zombie-resurrection fail-closed gate (`tracker_guard`).
+- /dashboard skill for launching and monitoring the web dashboard.
+- Mission-Control dashboard MVP — status-first HealthHeader, grouped agents, wave progress timeline.
+- Scheduled cross-OS CI monitoring (windows/linux divergence tracking).
+- Wave-templates CI validation gate.
+
+---
+
+## Prior releases
+
+### aesop 0.4.0 — AI Micro-Kernel: Two Swappable Seats
 
 **Headline**: Unified two-seat configuration enables swapping both worker AND orchestrator models (Claude, Codex, OpenAI-compatible backends) without code changes. Live orchestrator seat-swap gate proven in gate-2 audit. Hardened over two audit passes and a six-round refinement loop before release.
 

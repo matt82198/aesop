@@ -2,7 +2,7 @@
 
 **What this file is:** The live durable checkpoint that Aesop itself uses during its own `/buildsystem` loop. It records the current system version, architectural decisions, known limitations, and the next milestone. This is not historical archive; it is read by the orchestrator to understand operational state.
 
-**Current Version:** v0.4.0 (released 2026-07-25, live on npm latest). Unified two-seat orchestrator/worker model configuration, IPv6/DNS hardening, live model-swap support.
+**Current Version:** v0.5.0 (released 2026-07-29, live on npm latest). MIT open-source relicense; wave latency telemetry + chaos injection harness; evidence audit trail (incident chronicles, handoff certificates, cross-OS drift); dashboard completion with AC authoring.
 
 ## Architectural Thesis
 
