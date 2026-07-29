@@ -167,4 +167,4 @@ Each: symptom → cause → fix.
 
 ---
 
-**License**: PolyForm Strict 1.0.0 (source-available, noncommercial). See [LICENSE](../LICENSE) for details.
+**License**: MIT License (open-source). See [LICENSE](../LICENSE) for details.

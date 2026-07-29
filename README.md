@@ -30,7 +30,7 @@ Crash recovery is not a special path; it is how the system *always* starts. This
 
 **Why it's built this way:** [The Aesop Hypothesis](./docs/THE-AESOP-HYPOTHESIS.md) — the design philosophy, the trade-offs, the cancelled architectures with published data.
 
-**New in 0.4.0:** Swap the **worker** and **orchestrator** model (Claude, Codex, or any OpenAI-compatible endpoint) from one `seats` config block without code changes. See [docs/MICROKERNEL.md](./docs/MICROKERNEL.md) for the two-seat architecture and a 60-second quickstart. Single-instance proven; multi-instance coordination is scheduled.
+**New in 0.5.0:** Swap the **worker** and **orchestrator** model (Claude, Codex, or any OpenAI-compatible endpoint) from one `seats` config block without code changes. See [docs/MICROKERNEL.md](./docs/MICROKERNEL.md) for the two-seat architecture and a 60-second quickstart. Single-instance proven; multi-instance coordination is scheduled.
 
 ## Feature Demo
 
@@ -158,7 +158,7 @@ The guardrails below are not theoretical. Real activations: the pre-push secret 
 - **[docs/DISPATCH-MODEL.md](./docs/DISPATCH-MODEL.md)** — Cost analysis and scaling  
 - **[docs/CARDINAL-RULES.md](./docs/CARDINAL-RULES.md)** — 10 foundational principles  
 - **[docs/autonomous-swe.md](./docs/autonomous-swe.md)** — What "autonomous" means (and doesn't), evidence for all claims, honest limits  
-- **[RELEASE-NOTES.md](./RELEASE-NOTES.md)** — Version 0.4.0 (the two-seat micro-kernel): swappable worker + orchestrator models from one config, live orchestrator seat-swap gate, IPv6/DNS hardening, scaffolding completeness
+- **[RELEASE-NOTES.md](./RELEASE-NOTES.md)** — Version 0.5.0: relicensed to MIT, hardened machinery, observability improvements, dashboard MVP, and incident logging
 
 ## Contributing
 
