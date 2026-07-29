@@ -154,9 +154,9 @@ def fix_mode(claudemd_path: Path, dry_run: bool = False) -> int:
 
         if dry_run:
             print(f"[DRY-RUN] Would update counts:")
-            print(f"  Node: {re.search(r'Node \\((\\d+)', original_content).group(1)} → {act_node}")
-            print(f"  Shell: {re.search(r'Shell \\((\\d+)', original_content).group(1)} → {act_shell}")
-            print(f"  Python: {re.search(r'Python \\((\\d+)', original_content).group(1)} → {act_python}")
+            print(f"  Node: {re.search(r'Node \((\d+)', original_content).group(1)} → {act_node}")
+            print(f"  Shell: {re.search(r'Shell \((\d+)', original_content).group(1)} → {act_shell}")
+            print(f"  Python: {re.search(r'Python \((\d+)', original_content).group(1)} → {act_python}")
             print()
             print("Run without --dry-run to apply changes.")
             return 0
