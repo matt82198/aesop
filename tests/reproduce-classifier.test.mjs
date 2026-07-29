@@ -33,18 +33,23 @@ if (classifyFunctionMatch) {
   throw new Error('Could not extract classifyDoctorFailure function from reproduce.js');
 }
 
-// Extract detectContext function for testing context detection logic
-const detectFunctionMatch = reproduceContent.match(
-  /function detectContext\(\)\s*\{[\s\S]*?\n  return isAesopRepo \? 'repo' : 'installed';\n\}/
-);
-
-let detectContext;
-if (detectFunctionMatch) {
-  // Create a wrapper to inject test context
-  eval(`detectContext = ${detectFunctionMatch[0]}`);
-} else {
-  throw new Error('Could not extract detectContext function from reproduce.js');
-}
+// detectContext was extracted from reproduce.js into tools/detect-context.js
+// (a proper CommonJS module). Its behavioral coverage lives in
+// tests/reproduce-context-detection.test.mjs, which requires the module directly.
+// Here we only assert that reproduce.js consumes the shared module (no drift back
+// to an inline copy).
+test('reproduce.js imports detectContext from the shared detect-context module', () => {
+  assert.match(
+    reproduceContent,
+    /require\(['"]\.\/detect-context['"]\)/,
+    'reproduce.js must require ./detect-context (shared module), not inline its own copy'
+  );
+  assert.doesNotMatch(
+    reproduceContent,
+    /function detectContext\(/,
+    'reproduce.js must not redefine detectContext inline'
+  );
+});
 
 test('classifyDoctorFailure - genuine pre-init findings should be classified as expected', (t) => {
   // Test case 1: Missing config file (genuine pre-init finding)

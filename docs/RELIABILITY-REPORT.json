@@ -1,0 +1,68 @@
+{
+  "timestamp": 1785336439,
+  "sandbox": "C:\\Users\\matt8\\AppData\\Local\\Temp\\chaos-wave-87oi5prx",
+  "faults": [
+    {
+      "fault_class": "F1",
+      "name": "Worker Termination",
+      "detection_mechanism": "Journal stale check (in-progress flag)",
+      "detection_time_s": 0.0,
+      "recovery_path": "Crash-only start from journal; re-dispatch item",
+      "recovery_time_s": 0.0,
+      "mttr_s": 0.0,
+      "verdict": "PASS",
+      "notes": "Detected 1 in-progress item(s)"
+    },
+    {
+      "fault_class": "F2",
+      "name": "Checkpoint Corruption",
+      "detection_mechanism": "JSON parse error on corrupted line",
+      "detection_time_s": 0.001,
+      "recovery_path": "Skip corrupted entry, resume from valid entries",
+      "recovery_time_s": 0.0,
+      "mttr_s": 0.001,
+      "verdict": "PASS",
+      "notes": "Recovered 2/2 items, 1 parse error(s)"
+    },
+    {
+      "fault_class": "F3",
+      "name": "Secret Planted",
+      "detection_mechanism": "Regex pattern match (OpenAI-style sk- token)",
+      "detection_time_s": 0.001,
+      "recovery_path": "Secret-scan pre-push gate BLOCKS; require fix before push",
+      "recovery_time_s": 0.0,
+      "mttr_s": 0.0,
+      "verdict": "PASS",
+      "notes": "Detected secret: (masked)"
+    },
+    {
+      "fault_class": "F4",
+      "name": "Heartbeat Stall",
+      "detection_mechanism": "Heartbeat age check (now - timestamp >= threshold)",
+      "detection_time_s": 0.0,
+      "recovery_path": "Watchdog signals stale worker; orchestrator restarts or skips",
+      "recovery_time_s": 0.5,
+      "mttr_s": 0.5,
+      "verdict": "PASS",
+      "notes": "Heartbeat age 40s (threshold 30s)"
+    },
+    {
+      "fault_class": "F5",
+      "name": "Red Test",
+      "detection_mechanism": "Exact gate: test exit code != 0",
+      "detection_time_s": 0.041,
+      "recovery_path": "Merge gate refuses; test output sent to repair prompt; retry",
+      "recovery_time_s": 0.1,
+      "mttr_s": 0.141,
+      "verdict": "PASS",
+      "notes": "Exit code 1, output available for repair"
+    }
+  ],
+  "summary": {
+    "total_faults": 5,
+    "passed": 5,
+    "failed": 0,
+    "errors": 0,
+    "success_rate": "100%"
+  }
+}

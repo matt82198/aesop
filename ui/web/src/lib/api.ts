@@ -13,6 +13,7 @@ import type {
   AgentDetail,
   AgentInspectorDetail,
   TrackerItem,
+  AcceptanceCriterion,
   SubmitResponse,
   WavePRBoardData,
   WaveFailureData,
@@ -242,6 +243,7 @@ export async function createTrackerItem(data: {
   tags?: string[];
   notes?: string;
   pr_link?: string;
+  acceptanceCriteria?: AcceptanceCriterion[];
 }): Promise<TrackerItem> {
   return typedFetch('/api/tracker', {
     method: 'POST',
@@ -262,6 +264,7 @@ export async function updateTrackerItem(
     notes: string;
     pr_link: string;
     tags: string[];
+    acceptanceCriteria: AcceptanceCriterion[];
   }>
 ): Promise<TrackerItem> {
   const url = `/api/tracker/${encodeURIComponent(itemId)}`;

@@ -91,6 +91,9 @@ export const TESTIDS = {
   trackerForm: 'tracker-form',
   trackerFormTitle: 'tracker-form-title',
   trackerFormSubmit: 'tracker-form-submit',
+  trackerFormAddAC: 'tracker-form-add-ac',
+  trackerFormRemoveAC: 'tracker-form-remove-ac',
+  trackerEditAC: 'tracker-edit-ac',
   backlogPanel: 'backlog-panel',
 
   // Activity view
@@ -340,6 +343,10 @@ export const fixtureTrackerItems: TrackerItem[] = [
     tags: ['ui', 'wave-14'],
     notes: 'U1 trunk unit; U4-U7 build on its types/fixtures/shell.',
     pr_link: 'https://github.com/matt82198/aesop/pull/113',
+    acceptanceCriteria: [
+      { statement: 'Vite build passes', verifiable_by: 'npm run build' },
+      { statement: 'Tests green', verifiable_by: 'vitest' },
+    ],
     created_at: '2026-07-12T18:30:00Z',
     completed_at: null,
   },

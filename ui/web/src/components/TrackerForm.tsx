@@ -1,6 +1,6 @@
 /**
  * TrackerForm — form to create new tracker items.
- * Labeled inputs for title, priority, tags, notes.
+ * Labeled inputs for title, priority, tags, notes, and optional acceptanceCriteria.
  * Submit via api.ts with CSRF.
  * Validation, success/error announced via aria-live.
  */
@@ -8,6 +8,7 @@
 import { useState } from 'react';
 import { TESTIDS } from '../test/fixtures';
 import { createTrackerItem } from '../lib/api';
+import type { AcceptanceCriterion } from '../lib/types';
 
 interface TrackerFormProps {
   onSuccess?: () => void;
@@ -18,6 +19,9 @@ export function TrackerForm({ onSuccess }: TrackerFormProps) {
   const [priority, setPriority] = useState('P1');
   const [tags, setTags] = useState('');
   const [notes, setNotes] = useState('');
+  const [acList, setAcList] = useState<AcceptanceCriterion[]>([]);
+  const [acStatement, setAcStatement] = useState('');
+  const [acVerifiable, setAcVerifiable] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -51,6 +55,7 @@ export function TrackerForm({ onSuccess }: TrackerFormProps) {
         priority,
         tags: tagArray,
         notes: notes.trim() || undefined,
+        acceptanceCriteria: acList.length > 0 ? acList : undefined,
       });
 
       setSuccess(true);
@@ -58,12 +63,33 @@ export function TrackerForm({ onSuccess }: TrackerFormProps) {
       setPriority('P1');
       setTags('');
       setNotes('');
+      setAcList([]);
+      setAcStatement('');
+      setAcVerifiable('');
       onSuccess?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create item');
     } finally {
       setLoading(false);
     }
+  }
+
+  function addAcceptanceCriterion() {
+    if (!acStatement.trim() || !acVerifiable.trim()) {
+      setError('Both statement and verifiable_by are required for AC');
+      return;
+    }
+    setAcList([...acList, {
+      statement: acStatement.trim(),
+      verifiable_by: acVerifiable.trim(),
+    }]);
+    setAcStatement('');
+    setAcVerifiable('');
+    setError(null);
+  }
+
+  function removeAcceptanceCriterion(index: number) {
+    setAcList(acList.filter((_, i) => i !== index));
   }
 
   return (
@@ -118,6 +144,69 @@ export function TrackerForm({ onSuccess }: TrackerFormProps) {
           rows={3}
           disabled={loading}
         />
+      </div>
+
+      <div className="form-group">
+        <label>Acceptance Criteria (optional)</label>
+        <div style={{ marginBottom: '1rem', padding: '0.5rem', backgroundColor: '#f5f5f5', borderRadius: '4px' }}>
+          <div className="form-group">
+            <label htmlFor="ac-statement">Statement</label>
+            <input
+              id="ac-statement"
+              type="text"
+              value={acStatement}
+              onChange={(e) => setAcStatement(e.target.value)}
+              placeholder="e.g., All tests pass"
+              disabled={loading}
+            />
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="ac-verifiable">Verifiable By</label>
+            <input
+              id="ac-verifiable"
+              type="text"
+              value={acVerifiable}
+              onChange={(e) => setAcVerifiable(e.target.value)}
+              placeholder="e.g., pytest tests/test_feature.py"
+              disabled={loading}
+            />
+          </div>
+
+          <button
+            type="button"
+            onClick={addAcceptanceCriterion}
+            disabled={loading}
+            style={{ marginBottom: '1rem' }}
+            data-testid={TESTIDS.trackerFormAddAC}
+          >
+            Add Criterion
+          </button>
+
+          {acList.length > 0 && (
+            <div style={{ marginTop: '1rem' }}>
+              <strong>Added criteria:</strong>
+              <ul style={{ marginTop: '0.5rem' }}>
+                {acList.map((ac, idx) => (
+                  <li key={idx} style={{ marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span>
+                      <strong>{ac.statement}</strong> - {ac.verifiable_by}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeAcceptanceCriterion(idx)}
+                      disabled={loading}
+                      style={{ marginLeft: '1rem', padding: '0.25rem 0.5rem' }}
+                      data-testid={`${TESTIDS.trackerFormRemoveAC}-${idx}`}
+                    >
+                      Remove
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
       </div>
 
       <button

@@ -24,6 +24,8 @@ def verification_policy(caps: DriverCapabilities) -> dict:
       repair_cap: int -- maximum repair attempts per worker.
       require_adversarial_review: bool -- if True, require refutation-style
           review (reason about code vs contract, not just re-run tests).
+      adversarial_review_sample_frac: float in [0.0, 1.0] -- fraction of
+          verified items to send for adversarial review (applies when enabled).
 
     The tier is a proxy for tool_use_accuracy and determines the orchestrator's
     burden. Weaker backends (lower accuracy) require higher tiers + heavier
@@ -47,6 +49,7 @@ def verification_policy(caps: DriverCapabilities) -> dict:
             "spot_check_frac": 0.10,
             "repair_cap": 1,
             "require_adversarial_review": False,
+            "adversarial_review_sample_frac": 0.0,
         }
     elif tier == 2:
         return {
@@ -54,6 +57,7 @@ def verification_policy(caps: DriverCapabilities) -> dict:
             "spot_check_frac": 0.50,
             "repair_cap": 2,
             "require_adversarial_review": True,
+            "adversarial_review_sample_frac": 0.10,
         }
     elif tier == 3:
         return {
@@ -61,6 +65,7 @@ def verification_policy(caps: DriverCapabilities) -> dict:
             "spot_check_frac": 1.00,
             "repair_cap": 2,
             "require_adversarial_review": True,
+            "adversarial_review_sample_frac": 0.20,
         }
     elif tier == 4:
         return {
@@ -68,6 +73,7 @@ def verification_policy(caps: DriverCapabilities) -> dict:
             "spot_check_frac": 1.00,
             "repair_cap": 3,
             "require_adversarial_review": True,
+            "adversarial_review_sample_frac": 0.30,
         }
     else:
         raise ValueError(

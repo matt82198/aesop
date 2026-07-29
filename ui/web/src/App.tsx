@@ -17,7 +17,6 @@ import { Work } from './views/Work';
 import Activity from './views/Activity';
 import { Cost } from './views/Cost';
 import { WavePRBoard } from './views/WavePRBoard';
-import { TESTIDS } from './test/fixtures';
 
 const THEME_STORAGE_KEY = 'aesop-theme';
 type Theme = 'light' | 'dark' | null; // null = follow OS preference
@@ -76,15 +75,6 @@ const NAV_ITEMS: Array<{ hash: Route; label: string }> = [
   { hash: '#/cost', label: 'Cost' },
   { hash: '#/prs', label: 'PR Board' },
 ];
-
-function Placeholder({ name, testid }: { name: string; testid: string }) {
-  return (
-    <section className="view-placeholder" data-testid={testid} aria-label={`${name} view`}>
-      <h2>{name}</h2>
-      <p>{name} view lands in a later unit of wave 14.</p>
-    </section>
-  );
-}
 
 export default function App() {
   const route = useHashRoute();
@@ -149,8 +139,7 @@ export default function App() {
           <Work tracker={sseState.tracker ?? null} backlog={sseState.backlog ?? null} />
         )}
         {route === '#/activity' && <Activity state={sseState} />}
-        {route === '#/cost' &&
-          (sseState.cost ? <Cost cost={sseState.cost} /> : <Placeholder name="Cost" testid={TESTIDS.viewCost} />)}
+        {route === '#/cost' && <Cost cost={sseState.cost} onRetry={handleRefresh} />}
         {route === '#/prs' && <WavePRBoard />}
       </main>
     </>

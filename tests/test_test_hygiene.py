@@ -415,5 +415,108 @@ class TestRuntimeConfigGuard(unittest.TestCase):
         )
 
 
+class TestGitMutationsRequireCwdGuard(unittest.TestCase):
+    """Enforce that git-mutating subprocess calls use cwd= argument or run in temp fixtures.
+
+    Wave-25 incident: a test ran `git commit` without cwd isolation, committed
+    "Test User" identity to the real repo's main branch, corrupting package.json.
+
+    Git-mutating operations (git commit, git init, git add, git reset, git checkout, etc)
+    MUST either:
+    1. Use subprocess(..., cwd=temp_repo_path) to isolate to a temp directory, OR
+    2. Run inside a setUpModule/setUp that establishes a temp cwd with restoration
+    3. Use an existing helper like gitCmd(cwd, ...) that handles isolation
+
+    This scanner flags any test file that calls git-mutating commands via subprocess
+    without one of these patterns.
+    """
+
+    def test_no_bare_git_mutations_without_cwd_guard(self):
+        """Fail if any test calls git-mutating commands without cwd isolation."""
+        tests_dir = Path(__file__).parent
+        violations = []
+
+        # Git-mutating commands that MUST be scoped to a temp directory
+        GIT_MUTATIONS = {'commit', 'init', 'add', 'reset', 'checkout', 'clean', 'push'}
+
+        for test_file in sorted(tests_dir.glob("test_*.py")):
+            if test_file.name == "test_test_hygiene.py":
+                continue
+
+            try:
+                with open(test_file, "r", encoding="utf-8") as f:
+                    source = f.read()
+                    tree = ast.parse(source, filename=str(test_file))
+            except SyntaxError as e:
+                self.fail(f"Syntax error in {test_file}: {e}")
+
+            lines = source.split('\n')
+            for i, line in enumerate(lines, start=1):
+                stripped = line.strip()
+
+                # Skip comments and non-subprocess lines
+                if stripped.startswith("#") or 'subprocess' not in stripped:
+                    continue
+
+                # Look for patterns: subprocess.run([..., "git", "<mutation>", ...], ...)
+                # or subprocess.run(['git', '<mutation>', ...])
+                # or execSync(...git <mutation>...)
+                # These are OK if they have cwd= argument or are in a setUp/fixture context
+
+                is_git_mutation_call = False
+                mutation_found = None
+
+                for mutation in GIT_MUTATIONS:
+                    if f'"{mutation}"' in line or f"'{mutation}'" in line:
+                        if 'git' in line and 'subprocess' in line:
+                            is_git_mutation_call = True
+                            mutation_found = mutation
+                            break
+
+                if not is_git_mutation_call:
+                    continue
+
+                # Check if this line has a cwd= argument (good)
+                if 'cwd=' in line:
+                    continue
+
+                # Check if this line is part of a fixture/setup context (look back for context)
+                # Good patterns:
+                #  - Inside setUp, tearDown, setUpModule, tearDownModule
+                #  - Inside a function starting with _init, _make, _fixture
+                #  - Inside a try/finally with os.chdir restoration
+                in_fixture_context = False
+
+                for j in range(i - 1, max(0, i - 30), -1):
+                    context_line = lines[j - 1]
+                    if ('def setUp' in context_line or
+                        'def tearDown' in context_line or
+                        'def setUpModule' in context_line or
+                        'def tearDownModule' in context_line or
+                        'def _' in context_line or
+                        'def _init' in context_line or
+                        'def make_' in context_line or
+                        'tempfile' in context_line or
+                        'mktemp' in context_line):
+                        in_fixture_context = True
+                        break
+
+                if in_fixture_context:
+                    continue
+
+                # Violation found
+                violations.append(
+                    f"{test_file.name}:{i} "
+                    f"git {mutation_found} called without cwd= guard and not in fixture context. "
+                    f"Pattern: {stripped[:80]}. "
+                    f"FIX: Add cwd=<temp_path> to subprocess call, or move into setUp/fixture method."
+                )
+
+        if violations:
+            msg = "Found git-mutating subprocess calls without cwd guards (wave-25 isolation pattern):\n"
+            msg += "\n".join(f"  {v}" for v in violations)
+            self.fail(msg)
+
+
 if __name__ == "__main__":
     unittest.main()
