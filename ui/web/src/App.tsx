@@ -112,6 +112,7 @@ export default function App() {
         orchestrator={sseState.status ?? null}
         agents={sseState.agents ?? null}
         alerts={sseState.data?.alerts ?? null}
+        cost={sseState.cost ?? null}
         connectionStatus={connection}
         dataTimestamp={dataTimestamp}
         heartbeatTimestamp={sseState.lastHeartbeat}

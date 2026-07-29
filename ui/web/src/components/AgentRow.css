@@ -1,11 +1,15 @@
 .agent-row {
   list-style: none;
-  border-bottom: 1px solid var(--color-border-subtle);
-  padding: var(--space-3) 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  transition: box-shadow var(--transition-normal), border-color var(--transition-normal);
 }
 
-.agent-row:last-child {
-  border-bottom: none;
+.agent-row:hover {
+  box-shadow: var(--shadow-md);
+  border-color: var(--color-border);
 }
 
 .agent-row__inspect {
@@ -30,6 +34,15 @@
   outline-offset: 2px;
 }
 
+.agent-row__topline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+}
+
 .agent-row__toggle {
   display: inline-flex;
   align-items: center;
@@ -37,7 +50,7 @@
   width: var(--space-5);
   height: var(--space-5);
   padding: 0;
-  margin-right: var(--space-2);
+  flex-shrink: 0;
   background: transparent;
   border: none;
   cursor: pointer;
@@ -61,14 +74,6 @@
   line-height: 1;
 }
 
-.agent-row__header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  font-size: var(--font-size-sm);
-  line-height: var(--line-height-normal);
-}
-
 .agent-row__status-icon {
   display: inline-block;
   font-size: var(--font-size-lg);
@@ -79,8 +84,11 @@
   font-family: var(--font-mono);
   font-weight: var(--font-weight-bold);
   color: var(--color-accent);
-  flex-shrink: 0;
-  min-width: 100px;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .agent-row__age {
@@ -88,13 +96,17 @@
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
   flex-shrink: 0;
-  min-width: 50px;
 }
 
+/* Full-width block below the topline — never squeezed into a sliver by
+   sibling flex items, so long task descriptions wrap on word boundaries
+   instead of collapsing to one character per line. */
 .agent-row__hint {
+  display: block;
+  margin-top: var(--space-2);
   color: var(--color-text);
-  flex-grow: 1;
-  word-break: break-word;
+  font-size: var(--font-size-sm);
+  overflow-wrap: break-word;
 }
 
 .agent-row__detail {

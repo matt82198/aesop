@@ -10,6 +10,8 @@ import {
   fixtureAlertsEmpty,
   fixtureAgents,
   fixtureStatus,
+  fixtureCost,
+  fixtureCostWithPricing,
   TESTIDS,
 } from '../test/fixtures';
 
@@ -274,5 +276,80 @@ describe('HealthHeader', () => {
 
     const orchestratorCell = screen.getByTestId(TESTIDS.healthOrchestrator);
     expect(orchestratorCell).toHaveTextContent('Audit');
+  });
+
+  it('renders 3 status-first zones (fleet, system, controls)', () => {
+    render(
+      <HealthHeader
+        watchdog={fixtureWatchdog}
+        monitor={fixtureMonitor}
+        orchestrator={fixtureStatus}
+        agents={fixtureAgents}
+        alerts={fixtureAlertsEmpty}
+        connectionStatus={{ status: 'live' }}
+        onThemeToggle={mockThemeToggle}
+        onRefresh={mockRefresh}
+      />
+    );
+
+    expect(screen.getByTestId(`${TESTIDS.healthZone}-fleet`)).toBeInTheDocument();
+    expect(screen.getByTestId(`${TESTIDS.healthZone}-system`)).toBeInTheDocument();
+    expect(screen.getByTestId(`${TESTIDS.healthZone}-controls`)).toBeInTheDocument();
+  });
+
+  it('breaks down agent status badges from the live agents array (1 running, 1 idle, 1 issue)', () => {
+    render(
+      <HealthHeader
+        watchdog={fixtureWatchdog}
+        monitor={fixtureMonitor}
+        orchestrator={fixtureStatus}
+        agents={fixtureAgents}
+        alerts={fixtureAlertsEmpty}
+        connectionStatus={{ status: 'live' }}
+        onThemeToggle={mockThemeToggle}
+        onRefresh={mockRefresh}
+      />
+    );
+
+    expect(screen.getByTestId(TESTIDS.healthAgentsRunning)).toHaveTextContent('1');
+    expect(screen.getByTestId(TESTIDS.healthAgentsIdle)).toHaveTextContent('1');
+    expect(screen.getByTestId(TESTIDS.healthAgentsIssues)).toHaveTextContent('1');
+  });
+
+  it('shows an honest empty-state for cost when pricing is not configured', () => {
+    render(
+      <HealthHeader
+        watchdog={fixtureWatchdog}
+        monitor={fixtureMonitor}
+        orchestrator={fixtureStatus}
+        agents={fixtureAgents}
+        alerts={fixtureAlertsEmpty}
+        cost={fixtureCost}
+        connectionStatus={{ status: 'live' }}
+        onThemeToggle={mockThemeToggle}
+        onRefresh={mockRefresh}
+      />
+    );
+
+    expect(screen.getByTestId(TESTIDS.healthCost)).toHaveTextContent('n/a');
+  });
+
+  it('shows a real dollar cost snapshot when pricing is configured', () => {
+    render(
+      <HealthHeader
+        watchdog={fixtureWatchdog}
+        monitor={fixtureMonitor}
+        orchestrator={fixtureStatus}
+        agents={fixtureAgents}
+        alerts={fixtureAlertsEmpty}
+        cost={fixtureCostWithPricing}
+        connectionStatus={{ status: 'live' }}
+        onThemeToggle={mockThemeToggle}
+        onRefresh={mockRefresh}
+      />
+    );
+
+    // 4.19 + 5.83 = 10.02 (sum of estimates_by_model.total_cost)
+    expect(screen.getByTestId(TESTIDS.healthCost)).toHaveTextContent('$10.02');
   });
 });

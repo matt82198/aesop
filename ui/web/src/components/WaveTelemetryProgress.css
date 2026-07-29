@@ -1,92 +1,156 @@
 .wave-telemetry-progress {
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 8px;
-  background: var(--color-surface-secondary);
-  padding: 1.5rem;
+  border: 1px solid var(--color-border);
+  border-left: 4px solid var(--color-accent);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  padding: var(--space-5);
 }
 
 .wave-progress-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 1.5rem;
+  margin-bottom: var(--space-4);
 }
 
 .wave-progress-header h3 {
   margin: 0;
-  font-size: 0.875rem;
-  font-weight: 500;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--color-text-secondary);
+  color: var(--color-text-muted);
 }
 
 .wave-progress-badge {
-  background: var(--color-accent-secondary);
-  color: var(--color-text-on-accent);
-  padding: 0.25rem 0.75rem;
-  border-radius: 4px;
-  font-size: 0.875rem;
-  font-weight: 600;
+  background: var(--color-status-info-bg);
+  color: var(--color-status-info);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
   text-transform: uppercase;
 }
 
 .wave-progress-content {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: var(--space-4);
 }
 
 .wave-progress-phase,
 .wave-progress-blocker {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: var(--space-1);
 }
 
 .phase-label,
 .blocker-label {
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--color-text-secondary);
+  color: var(--color-text-muted);
 }
 
-.phase-value,
+.phase-value {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text);
+  word-break: break-word;
+}
+
 .blocker-value {
-  font-size: 1rem;
-  font-weight: 500;
-  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-normal);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
   word-break: break-word;
 }
 
 .wave-progress-error {
-  color: var(--color-severity-error);
-  font-size: 0.875rem;
+  color: var(--color-status-error);
+  font-size: var(--font-size-sm);
   margin: 0;
 }
 
-@media (prefers-color-scheme: dark) {
-  .wave-telemetry-progress {
-    --color-surface-secondary: #1a1a1a;
-    --color-border-secondary: #333;
-    --color-text-secondary: #999;
-    --color-text-primary: #fff;
-    --color-accent-secondary: #444;
-    --color-text-on-accent: #ccc;
-    --color-severity-error: #ff6b6b;
-  }
+/* ---- Verification pass-rate bar (real ok_rate from /api/wave/telemetry) ---- */
+.wave-progress-bar-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
-@media (prefers-color-scheme: light) {
-  .wave-telemetry-progress {
-    --color-surface-secondary: #f5f5f5;
-    --color-border-secondary: #d0d0d0;
-    --color-text-secondary: #666;
-    --color-text-primary: #000;
-    --color-accent-secondary: #e0e0e0;
-    --color-text-on-accent: #333;
-    --color-severity-error: #d32f2f;
+.wave-progress-bar-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.wave-progress-bar-label {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+}
+
+.wave-progress-bar-value {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text);
+}
+
+.wave-progress-bar {
+  height: 8px;
+  background: var(--color-bg-inset);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.wave-progress-bar-fill {
+  height: 100%;
+  border-radius: var(--radius-sm);
+  transition: width var(--transition-normal);
+  background: var(--color-status-neutral);
+}
+
+.wave-progress-bar-fill[data-status='ok'] {
+  background: var(--color-status-ok);
+}
+
+.wave-progress-bar-fill[data-status='warn'] {
+  background: var(--color-status-warn);
+}
+
+.wave-progress-bar-fill[data-status='error'] {
+  background: var(--color-status-error);
+}
+
+/* ---- Secondary real-data meta row (tokens, top model, burn rate) ---- */
+.wave-progress-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.wave-progress-meta__item {
+  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+  color: var(--color-text-muted);
+}
+
+.wave-progress-meta__item--warn {
+  color: var(--color-status-warn);
+  font-weight: var(--font-weight-bold);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wave-progress-bar-fill {
+    transition: none;
   }
 }

@@ -24,6 +24,10 @@ interface WaveTelemetry {
   tokens_used: number;
   top_model: string;
   ok_rate: number;
+  // Optional real fields from ui/wave_telemetry.py — not yet exercised by all
+  // callers/tests, so kept optional rather than widening the required contract.
+  tokens_burned_per_min?: number;
+  cost_ceiling_exceeded?: boolean;
 }
 
 interface WaveTelemetryProgressProps {
@@ -106,6 +110,14 @@ export function WaveTelemetryProgress({ fetcher = defaultFetcher }: WaveTelemetr
   // Normalize phase for display (e.g., "rc-1-published-source-available" → "Published (rc.1)")
   const phaseDisplay = formatPhaseForDisplay(telemetry.phase);
 
+  // ok_rate defaults to 0.0 both when no verification runs have happened yet AND
+  // when they all genuinely failed — tokens_used > 0 is the real signal that
+  // runs exist, so we don't paint a misleading 0% bar for "no data yet".
+  const hasRuns = telemetry.tokens_used > 0;
+  const passRatePct = Math.round((telemetry.ok_rate ?? 0) * 100);
+  const barStatus = passRatePct >= 90 ? 'ok' : passRatePct >= 70 ? 'warn' : 'error';
+  const blockerDisplay = telemetry.blocker === 'unknown' ? 'No blocker recorded' : telemetry.blocker;
+
   return (
     <section
       className="wave-telemetry-progress"
@@ -123,9 +135,49 @@ export function WaveTelemetryProgress({ fetcher = defaultFetcher }: WaveTelemetr
           <div className="phase-value">{phaseDisplay}</div>
         </div>
 
+        <div className="wave-progress-bar-section">
+          <div className="wave-progress-bar-row">
+            <span className="wave-progress-bar-label">Verification pass rate</span>
+            <span className="wave-progress-bar-value">
+              {hasRuns ? `${passRatePct}%` : 'n/a — no runs yet'}
+            </span>
+          </div>
+          <div
+            className="wave-progress-bar"
+            role="progressbar"
+            aria-valuenow={hasRuns ? passRatePct : undefined}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label="Verification pass rate"
+          >
+            <div
+              className="wave-progress-bar-fill"
+              data-status={barStatus}
+              style={{ width: hasRuns ? `${passRatePct}%` : '0%' }}
+            />
+          </div>
+        </div>
+
         <div className="wave-progress-blocker">
           <div className="blocker-label">Top Blocker</div>
-          <div className="blocker-value">{telemetry.blocker}</div>
+          <div className="blocker-value">{blockerDisplay}</div>
+        </div>
+
+        <div className="wave-progress-meta">
+          <span className="wave-progress-meta__item">
+            Tokens: {telemetry.tokens_used.toLocaleString()}
+          </span>
+          <span className="wave-progress-meta__item">Top model: {telemetry.top_model}</span>
+          {typeof telemetry.tokens_burned_per_min === 'number' && telemetry.tokens_burned_per_min > 0 && (
+            <span className="wave-progress-meta__item">
+              Burn: {telemetry.tokens_burned_per_min.toLocaleString()}/min
+            </span>
+          )}
+          {telemetry.cost_ceiling_exceeded && (
+            <span className="wave-progress-meta__item wave-progress-meta__item--warn">
+              Cost ceiling exceeded
+            </span>
+          )}
         </div>
       </div>
     </section>
