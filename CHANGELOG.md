@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Version scheme**: Stable releases are `0.x.y`; `0.x.0-beta.N` / `-rc.N` are pre-releases; `0.1.0-wave.N` were internal wave-milestone previews.
 
+## [Unreleased]
+
+### Changed
+- Relicensed from PolyForm Strict 1.0.0 to MIT — the project returns to open source.
+
 ## [0.4.1] - 2026-07-26
 
 ### Added (late-merging items — canonical in the v0.4.1 release notes)
