@@ -18,13 +18,13 @@
 
 ## How It Works
 
-**Agent behavior is source code.** Every orchestration rule lives in durable files (STATE.md, BUILDLOG.md, Python guardrails, git history). When a machine fails, you re-read from disk—no special recovery path. The architecture is: stateless workers (parallel Haiku agents, ~1/3 Opus cost each), persistent filesystem brain (git-backed), fail-closed guardrails (pre-push secret-scan, cost ceiling, verification re-runs), and observable heartbeats (to detect and auto-restart stalls).
+**Agent behavior is source code.** Every orchestration rule lives in durable files (STATE.md, BUILDLOG.md, Python guardrails, git history). When a machine fails, you re-read from disk—no special recovery path. The architecture is: crash-only workers (request-scoped Haiku agents over persistent filesystem state, ~1/3 Opus cost each), persistent filesystem brain (git-backed), fail-closed guardrails (pre-push secret-scan, cost ceiling, verification re-runs), and observable heartbeats (to detect and auto-restart stalls).
 
-**Proof:** This repo is built entirely by Aesop. On a 39-task judgment benchmark, Haiku scored 39/39 vs Opus 38/39 at ~1/3 the per-token cost. Flat Haiku-first dispatch measured ~4× cheaper than the cancelled hierarchical design at identical graded quality (A/B). The loop study (seam-level tasks: local orchestration, code review, severity calibration) shows that stateless checkpointing + repair loops recover 20pp on hard tasks, lifting overall 67.8% → 77.2%.
+**Proof:** This repo is built entirely by Aesop. On a 39-task judgment benchmark, Haiku and Sonnet both scored 39/39 vs Opus 38/39 — the pre-declared ceiling rule trips, mapping a sufficiency floor for seam-level tasks (code review, severity calibration, local orchestration), not tier equivalence. Frontier reasoning and long-horizon planning are out of scope. Removing the hierarchical supervisor layer cut dispatch cost ~4× at identical graded quality (A/B; topology cancelled, data kept). The loop study shows that crash-only checkpointing + repair loops recover 20pp on hard tasks, lifting overall 67.8% → 77.2%.
 
 ## Why It Matters
 
-Crash recovery is not a special path; it is how the system *always* starts. This design choice eliminates distributed consensus, external state servers, and recovery machinery. The trade-off: you own the git repo as your state layer, and you provide the human-in-the-loop to set goals and vet outbound gates (publishing, releases, history rewrites). The result: crash-only is simpler, faster to debug, and easier to audit than systems that pretend to be stateless but hide state in a database.
+Crash recovery is not a special path; it is how the system *always* starts. This design choice eliminates distributed consensus, external state servers, and recovery machinery. The trade-off: you own the git repo as your state layer, and you provide the human-in-the-loop to set goals and vet outbound gates (publishing, releases, history rewrites). The result: crash-only (request-scoped workers over persistent filesystem state) is simpler, faster to debug, and easier to audit than systems with hidden distributed state.
 
 **Why it's built this way:** [The Aesop Hypothesis](./docs/THE-AESOP-HYPOTHESIS.md) — the design philosophy, the trade-offs, the cancelled architectures with published data.
 
@@ -95,6 +95,8 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 <!-- STATS:END -->
 
+**Project Timeline:** Aesop is 17 days old, built by 1 human + the fleet. Every number above is regenerable from git history by anyone who clones the repo (`bash scripts/verify-stats.sh --check`); no hidden telemetry.
+
 ## Get Started
 
 ```bash
@@ -110,7 +112,7 @@ npx @matt82198/aesop my-fleet --name "api" --repos "/path/to/repo"
 
 ## Why Haiku-First Works
 
-The benchmark proves sufficiency: across 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence, security spots), Haiku scored **39/39** vs Opus **38/39** at ~1/3 the per-token cost. See [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](./bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md). The pre-declared ceiling rule (when ≥2 tiers score ≥92%, the instrument failed to discriminate) trips on this result — both Haiku and Sonnet achieved 39/39, meaning the benchmark maps a *sufficiency floor*, not tier equivalence. **Curated set, N=39; scoped to extraction and judgment tasks with context at the seam** — does NOT reach frontier reasoning, long-horizon planning, or open-ended synthesis. Full analysis: [`bench/results/2026-07-26-judgment-v3-ceiling-addendum.md`](./bench/results/2026-07-26-judgment-v3-ceiling-addendum.md) and [`bench/EQUIVALENCE-MARGIN.md`](./bench/EQUIVALENCE-MARGIN.md).
+The benchmark proves sufficiency for seam-level engineering tasks: across 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence, security spots), Haiku scored **39/39** vs Opus **38/39** at ~1/3 the per-token cost. **Measured on seam-level engineering tasks (code review, severity calibration, local orchestration) — not frontier reasoning or long-horizon planning.** See [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](./bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md). The pre-declared ceiling rule (when ≥2 tiers score ≥92%, the instrument failed to discriminate) trips on this result — both Haiku and Sonnet achieved 39/39, meaning the benchmark maps a *sufficiency floor*, not tier equivalence. Full analysis: [`bench/results/2026-07-26-judgment-v3-ceiling-addendum.md`](./bench/results/2026-07-26-judgment-v3-ceiling-addendum.md) and [`bench/EQUIVALENCE-MARGIN.md`](./bench/EQUIVALENCE-MARGIN.md).
 
 ## Known Limitations
 
@@ -121,7 +123,10 @@ The benchmark proves sufficiency: across 39 judgment tasks (code review, severit
 
 ## Evidence & Receipts
 
-All evidence is committed to the repo and can be regenerated or verified by cloning:
+All evidence is committed to the repo and can be regenerated or verified by cloning.
+
+**Gates That Fired:**  
+The guardrails below are not theoretical. Real activations: the pre-push secret scan has blocked pushes—including a benchmark-vocabulary false-positive where the gate was kept strict and the content reworded; an agent's `--no-verify` bypass attempt was caught and the flag banned from every dispatch template; the watchdog has detected and auto-restarted stalled agents; and self-reported "green" results have been repeatedly refuted by re-running the exact CI gate—in one audited overnight session, nine such claims failed the re-run (BUILDLOG record). An early `--admin` merge of hallucinated docs led to those flags being forbidden in every orchestrated prompt.
 
 - **Metrics gate:** [`bash scripts/verify-stats.sh --check`](./scripts/verify-stats.sh) — verifies stats.json matches git; README refreshed on every commit.
 - **Test suite count:** [`python tools/verify_test_suite_count.py --check`](./tools/verify_test_suite_count.py) — confirms test count hasn't drifted.
