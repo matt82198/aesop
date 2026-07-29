@@ -38,6 +38,7 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from tools.common import get_state_dir
+from state_store.read_api import ReadAPI
 
 
 class SpanContext:
@@ -144,6 +145,9 @@ class OTelSink:
         self.state_dir = Path(state_dir) if state_dir else get_state_dir()
         self.state_dir.mkdir(parents=True, exist_ok=True)
 
+        # Initialize read API facade for state surfaces
+        self.api = ReadAPI(self.state_dir)
+
         # Get endpoint from parameter or env var
         self.endpoint = endpoint or os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
 
@@ -249,15 +253,9 @@ class OTelSink:
                 continue
 
     def ingest_tracker_state(self):
-        """Ingest tracker.json as metrics (items by status)."""
-        tracker_file = self.state_dir / "tracker.json"
-        if not tracker_file.exists():
-            return
-
-        try:
-            content = tracker_file.read_text(encoding="utf-8")
-            data = json.loads(content)
-        except Exception:
+        """Ingest tracker state as metrics (items by status) via read API facade."""
+        data = self.api.read_tracker_snapshot()
+        if not data:
             return
 
         items = data.get("items", [])
@@ -290,15 +288,9 @@ class OTelSink:
         self.metrics.append(total_metric)
 
     def ingest_orchestrator_status(self):
-        """Ingest orchestrator-status.json as orchestrator phase span."""
-        status_file = self.state_dir / "orchestrator-status.json"
-        if not status_file.exists():
-            return
-
-        try:
-            content = status_file.read_text(encoding="utf-8")
-            data = json.loads(content)
-        except Exception:
+        """Ingest orchestrator status as orchestrator phase span via read API facade."""
+        data = self.api.read_orchestrator_status()
+        if not data:
             return
 
         phase = data.get("phase", "unknown")
