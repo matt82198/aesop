@@ -18,6 +18,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 
 ## Tool index (one-liners)
 
+- `agent_prompt_hygiene.py` — Gate detecting forbidden patterns in agent/dispatch prompt templates
 - `alert_bridge.py` — Slack/Discord webhook bridge for SECURITY-ALERTS
 - `bench_runner.py` — Held-out benchmark runner + scorer (Haiku/Sonnet/Opus pluggable)
 - `buildlog.py` — Uniform BUILDLOG.md appender
