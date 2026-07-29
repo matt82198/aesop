@@ -78,20 +78,6 @@ Exits with failure on file-read errors (not silently passing). CI validates ever
 
 **Windows CI green** — Full parity support on Windows-latest GitHub Actions: promoted to a required check after 6 consecutive green main runs.
 
-## Proof Numbers
-
-Aesop builds itself. These numbers are live from git, verified by anyone who clones.
-
-## Get Started
-
-```bash
-npx @matt82198/aesop my-fleet --name "api" --repos "/path/to/repo"
-```
-→ Copy `skills/` into `~/.claude/skills` to enable the `/power` and `/buildsystem` commands.
-→ See [docs/INSTALL.md](./docs/INSTALL.md) for setup and first `/power` → `/buildsystem` cycle.
-→ See [docs/DEMO.md](./docs/DEMO.md) for a complete walkthrough of one wave.
-
-
 <!-- STATS:START -->
 
 ## Aesop builds itself
@@ -111,20 +97,17 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 **Project Timeline:** Aesop is 17 days old, built by 1 human + the fleet. Every number above is regenerable from git history by anyone who clones the repo (`bash scripts/verify-stats.sh --check`); no hidden telemetry.
 
+## Get Started
 
-
-
-
+```bash
+npx @matt82198/aesop my-fleet --name "api" --repos "/path/to/repo"
+```
+→ Copy `skills/` into `~/.claude/skills` to enable the `/power` and `/buildsystem` commands.
+→ See [docs/INSTALL.md](./docs/INSTALL.md) for setup and first `/power` → `/buildsystem` cycle.
+→ See [docs/DEMO.md](./docs/DEMO.md) for a complete walkthrough of one wave.
 
 
 *Wave: one complete build cycle (intake → dispatch → verify → ship) run by the orchestration engine.*
-
-
-
-
-
-
-
 
 
 ## Why Haiku-First Works
