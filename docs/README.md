@@ -216,7 +216,7 @@ A: The pre-push hook is auto-installed. Customize `tools/secret_scan.py` with yo
 
 ## Contributing
 
-Aesop is **source-available** under the PolyForm Strict License 1.0.0, which doesn't permit modification or redistribution — so outside code patches can't be merged as contributions. **Issues, bug reports, and discussion are warmly welcome**, and are the best way to help. The repo develops itself via its own `/buildsystem` loop; code changes are made by the maintainer at their discretion, or by prior arrangement.
+Aesop is **MIT-licensed** and open-source. **Issues, bug reports, code patches, and discussion are warmly welcome** — they're the best way to help. Contributions via pull request are welcome. The repo develops itself via its own `/buildsystem` loop.
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for details and [CARDINAL-RULES.md](CARDINAL-RULES.md) for core principles.
 
@@ -224,4 +224,4 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for details and [CARDINAL-RULES.md](CA
 
 ## License
 
-**Source-available** under the [PolyForm Strict License 1.0.0](../LICENSE). Use is permitted for a permitted purpose; **modification and redistribution are not**. See [`LICENSE`](../LICENSE) for full terms.
+**MIT-licensed** and open-source under the [MIT License](../LICENSE). See [`LICENSE`](../LICENSE) for full terms.
