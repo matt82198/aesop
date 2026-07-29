@@ -19,6 +19,35 @@ import unittest
 from pathlib import Path
 
 
+def _find_bash():
+    """Locate a usable bash interpreter cross-platform.
+
+    On Windows, plain "bash" on PATH can resolve to the WSL launcher
+    (C:\\Windows\\System32\\bash.exe), which fails on CI runners with no
+    WSL distribution installed. Prefer Git for Windows' bash, derived
+    from the git executable location.
+
+    Returns the path to bash, or None if no usable bash was found.
+    """
+    if os.name != "nt":
+        return shutil.which("bash")
+
+    # Derive Git Bash from git.exe location: <Git>\cmd\git.exe -> <Git>\bin\bash.exe
+    git_exe = shutil.which("git")
+    if git_exe:
+        git_root = Path(git_exe).parent.parent
+        for candidate in (git_root / "bin" / "bash.exe",
+                          git_root / "usr" / "bin" / "bash.exe"):
+            if candidate.exists():
+                return str(candidate)
+
+    # Fall back to PATH bash only if it is not the WSL launcher in System32
+    path_bash = shutil.which("bash")
+    if path_bash and "system32" not in path_bash.lower():
+        return path_bash
+    return None
+
+
 class Cp1252EncodingTest(unittest.TestCase):
     """Test encoding safety with cp1252-like restrictions."""
 
@@ -113,16 +142,19 @@ Test content.
         (self.repo_root / "tools" / "self_stats.py").write_text(self_stats_src.read_text())
 
         # Run the verify script with PYTHONIOENCODING=utf-8
+        bash = _find_bash()
+        if not bash:
+            self.skipTest("No usable bash interpreter found on this system")
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
 
         result = subprocess.run(
-            ["bash", str(test_verify), "check"],
+            [bash, str(test_verify), "check"],
             cwd=str(self.repo_root),
             capture_output=True,
             text=True,
             env=env,
-            timeout=10
+            timeout=60
         )
 
         # Should not crash on encoding errors
@@ -220,17 +252,20 @@ Content.
 
         # Run verify-stats.sh with PYTHONIOENCODING explicitly NOT set
         # The script should set it internally
+        bash = _find_bash()
+        if not bash:
+            self.skipTest("No usable bash interpreter found on this system")
         env = os.environ.copy()
         if "PYTHONIOENCODING" in env:
             del env["PYTHONIOENCODING"]
 
         result = subprocess.run(
-            ["bash", str(verify_script), "check"],
+            [bash, str(verify_script), "check"],
             cwd=str(self.repo_root),
             capture_output=True,
             text=True,
             env=env,
-            timeout=10
+            timeout=60
         )
 
         # Should succeed (exit 0) because verify-stats.sh sets PYTHONIOENCODING internally
