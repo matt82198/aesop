@@ -228,21 +228,33 @@ main() {
   if [ "$MODE" = "--once" ]; then
     if check_halt "$AESOP_ROOT/state/FLEET-BACKUP.log"; then
       release_lock "$LOCK_DIR"
+      printf 'WATCHDOG SMOKE: PASSED\n'
       exit 0
     fi
     full_out=$("${CYCLE_CMD_ARRAY[@]}" 2>&1)
     cmd_exit=$?
     echo "$full_out"
-    if [ $cmd_exit -ne 0 ]; then
+    if [ $cmd_exit -eq 3 ]; then
+      # FIX #5 contract (mirrored in daemons/backup-fleet.sh main()): exit 3
+      # from the cycle command means "blocked cycle" -- at least one repo was
+      # BLOCKED by the secret-scan gate. This is a WARN, not a hard error:
+      # log it and fall through to the normal PASSED/exit-0 path below
+      # instead of the FAILED/exit-$cmd_exit path used for other non-zero codes.
+      warn_msg="[$(date '+%F %T')] WARN: cycle #1 reported blocked repo(s) (secret-scan gate; exit code 3)"
+      echo "$warn_msg" >> "$AESOP_ROOT/state/FLEET-BACKUP.log"
+    elif [ $cmd_exit -ne 0 ]; then
       err_msg="[$(date '+%F %T')] ERROR: cycle #1 failed with exit code $cmd_exit"
       echo "$err_msg" >> "$AESOP_ROOT/state/FLEET-BACKUP.log"
-      echo "[ERROR: exit $cmd_exit]" >&2
+      printf 'WATCHDOG SMOKE: FAILED — [ERROR: exit %d]\n' "$cmd_exit" >&2
+      release_lock "$LOCK_DIR"
+      exit $cmd_exit
     fi
     if [ -n "$PYTHON_EXE" ]; then
       "$PYTHON_EXE" "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
     fi
     release_lock "$LOCK_DIR"
-    exit $cmd_exit
+    printf 'WATCHDOG SMOKE: PASSED\n'
+    exit 0
   fi
 
   n=0
@@ -257,6 +269,14 @@ main() {
     if [ $cmd_exit -eq 0 ]; then
       out=$(echo "$full_out" | tail -2)
       printf '%s  cycle #%d\n%s\n' "$(date '+%H:%M:%S')" "$n" "$out"
+    elif [ $cmd_exit -eq 3 ]; then
+      # FIX #5 contract (mirrored in daemons/backup-fleet.sh main()): exit 3
+      # means "blocked cycle" (>=1 repo BLOCKED by the secret-scan gate) --
+      # WARN, not ERROR. The daemon stays up and keeps its normal 150s
+      # cadence; only the log level and console label differ from ERROR.
+      echo "[$(date '+%F %T')] WARN: cycle #$n reported blocked repo(s) (secret-scan gate; exit code 3)" >> "$AESOP_ROOT/state/FLEET-BACKUP.log"
+      out=$(echo "$full_out" | tail -2)
+      printf '%s  cycle #%d [WARN: blocked repo(s), exit 3]\n%s\n' "$(date '+%H:%M:%S')" "$n" "$out"
     else
       echo "[$(date '+%F %T')] ERROR: cycle #$n failed with exit code $cmd_exit" >> "$AESOP_ROOT/state/FLEET-BACKUP.log"
       out=$(echo "$full_out" | tail -2)

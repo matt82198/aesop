@@ -51,6 +51,7 @@ import os
 import posixpath
 import re
 import shlex
+import subprocess
 import sys
 import threading
 import time
@@ -413,6 +414,91 @@ def _load_journal_state(state_dir: str) -> Dict[str, Dict[str, Any]]:
         pass
 
     return journal_state
+
+
+def _cap_test_output(stdout: str, stderr: str, max_chars: int = 4000) -> str:
+    """Cap test output to a reasonable size (tail last ~4000 chars / ~60 lines).
+
+    Combines stdout and stderr, truncates to max_chars from the end,
+    preserving the most recent/important output.
+
+    Args:
+        stdout: test stdout text
+        stderr: test stderr text
+        max_chars: maximum characters to keep (default ~4000)
+
+    Returns:
+        str: capped test output, or empty string if both are empty
+    """
+    combined = ""
+    if stdout:
+        combined += stdout
+    if stderr:
+        if combined:
+            combined += "\n--- STDERR ---\n"
+        combined += stderr
+
+    if not combined:
+        return ""
+
+    # If under limit, return as-is
+    if len(combined) <= max_chars:
+        return combined
+
+    # Truncate to last max_chars, preserving tail
+    return combined[-max_chars:]
+
+
+def _get_owned_files_diff(workdir: str, owned_files: List[str], max_chars: int = 8000) -> str:
+    """Get git diff of owned files, capped to a reasonable size.
+
+    Runs git diff on the specified files and returns the diff output,
+    truncated to max_chars if needed.
+
+    Args:
+        workdir: working directory (repo root)
+        owned_files: list of owned file paths (repo-relative)
+        max_chars: maximum characters to keep (default ~8000)
+
+    Returns:
+        str: git diff output for owned files, capped, or empty string if no diff
+    """
+    if not owned_files:
+        return ""
+
+    try:
+        # Build git diff command
+        diff_cmd = "git diff --"
+        for f in owned_files:
+            diff_cmd += f" {_quote_arg(f)}"
+
+        # Run git diff in the workdir
+        result = subprocess.run(
+            diff_cmd,
+            cwd=workdir,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        if result.returncode != 0:
+            # No diff or git error (not a repo, files not tracked, etc.)
+            return ""
+
+        diff_output = result.stdout
+        if not diff_output:
+            return ""
+
+        # Cap to max_chars from the end (preserve most recent diff hunks)
+        if len(diff_output) <= max_chars:
+            return diff_output
+
+        return diff_output[-max_chars:]
+
+    except Exception:
+        # Fail-closed: any error (timeout, git not found, etc.) -> no diff
+        return ""
 
 
 def _should_skip_from_journal(journal_entry: Dict[str, Any]) -> bool:
@@ -1443,6 +1529,8 @@ def _run_wave_inner(
                 "error": dispatch_result.get("error"),
                 "filesWritten": dispatch_result.get("filesWritten", []),
                 "workerId": dispatch_result.get("workerId"),
+                "testStdout": dispatch_result.get("testStdout", ""),
+                "testStderr": dispatch_result.get("testStderr", ""),
             }
 
             # Write journal entry for this item's outcome. filesWritten is
@@ -1576,9 +1664,24 @@ def _run_wave_inner(
                 test_output += f"Error: {item_result['error']}\n"
             repair_prompt = original_prompt + test_output
 
-            # Create a repair item.
+            # Create a repair item and enrich with context.
             repair_item = dict(item)
             repair_item["prompt"] = repair_prompt
+
+            # Enrich repair item with lastTestOutput if test output was captured.
+            captured_stdout = item_result.get("testStdout", "")
+            captured_stderr = item_result.get("testStderr", "")
+            if captured_stdout or captured_stderr:
+                last_test_output = _cap_test_output(captured_stdout, captured_stderr)
+                if last_test_output:
+                    repair_item["lastTestOutput"] = last_test_output
+
+            # Enrich repair item with ownsFilesDiff (git diff of owned files).
+            owned_files = item.get("ownsFiles", [])
+            if owned_files:
+                owns_files_diff = _get_owned_files_diff(workdir, owned_files)
+                if owns_files_diff:
+                    repair_item["ownsFilesDiff"] = owns_files_diff
 
             try:
                 # Build the manifest item.

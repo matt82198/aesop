@@ -47,20 +47,31 @@ def main():
         sys.path.insert(0, str(root))
 
     # Parse shard ID and total shards from env or CLI args
-    if len(sys.argv) >= 3:
+    cli_args = sys.argv[1:]
+    usage = "Usage: python tools/ci_shard_runner.py [shard_id total_shards]"
+
+    if any(a in ("-h", "--help") for a in cli_args):
+        print(usage)
+        sys.exit(0)
+
+    if len(cli_args) == 2:
         try:
-            shard_id = int(sys.argv[1])
-            total_shards = int(sys.argv[2])
-        except (ValueError, IndexError):
-            print("ERROR: Usage: python ci_shard_runner.py [shard_id total_shards]")
+            shard_id = int(cli_args[0])
+            total_shards = int(cli_args[1])
+        except ValueError:
+            print(f"ERROR: {usage}")
             sys.exit(1)
-    else:
+    elif len(cli_args) == 0:
         try:
             shard_id = int(os.environ.get("SHARD_ID", os.environ.get("MATRIX_PYTHON_SHARD", "0")))
             total_shards = int(os.environ.get("TOTAL_SHARDS", "4"))
         except ValueError:
             print("ERROR: SHARD_ID and TOTAL_SHARDS must be integers")
             sys.exit(1)
+    else:
+        print(f"ERROR: Unknown argument(s): {' '.join(cli_args)}", file=sys.stderr)
+        print(usage, file=sys.stderr)
+        sys.exit(2)
 
     # Get tracked test files only (exclude WIP untracked files)
     try:

@@ -1,0 +1,9 @@
+{
+  "task_id": "seam-starter-001",
+  "band": "starter",
+  "statement": "Fix the broken test in test_sample.py. The add function should return the sum of two numbers, but currently it returns the product. Change the implementation to return x + y instead of x * y.",
+  "context_files": [
+    "test_sample.py"
+  ],
+  "oracle_cmd": "python -m pytest oracle -q"
+}

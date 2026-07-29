@@ -89,6 +89,15 @@ def build_manifest_item(driver: AgentDriver, item: Dict[str, Any]) -> Dict[str, 
         The dict is suitable for passing to wave-flat-dispatch.template.mjs as an
         item in the items[] array. All four policy fields are consumed directly
         by the template; it does NOT recompute them.
+
+        acceptanceCriteria (optional, additive): if the item already carries a
+        non-empty acceptanceCriteria, it is left UNTOUCHED (authored wins, no
+        merge/override). Otherwise, if the item has a testCmd, a BASELINE
+        criterion is derived: [{"statement": "The item's tests pass with no
+        regressions.", "verifiable_by": <testCmd>}]. If neither an authored
+        acceptanceCriteria nor a testCmd is present, no key is set at all --
+        a true no-op, so the build prompt stays byte-identical to before this
+        feature existed.
     """
     caps = driver.probe_capabilities()
     model = driver.resolve_model(ROLE_WORKER)
@@ -112,6 +121,19 @@ def build_manifest_item(driver: AgentDriver, item: Dict[str, Any]) -> Dict[str, 
     result["requireAdversarialReview"] = policy["require_adversarial_review"]
     result["spotCheckFrac"] = policy["spot_check_frac"]
     result["validateAllJson"] = policy["validate_all_json"]
+
+    # Derive a BASELINE acceptanceCriteria from testCmd when the item has none
+    # of its own. Authored criteria always win (left untouched, never merged
+    # or overridden). True no-op when neither is present: no key is set, so
+    # the build prompt is byte-identical to before this feature existed.
+    existing = result.get("acceptanceCriteria")
+    if not existing and result.get("testCmd"):
+        result["acceptanceCriteria"] = [
+            {
+                "statement": "The item's tests pass with no regressions.",
+                "verifiable_by": result["testCmd"],
+            },
+        ]
 
     return result
 
@@ -207,6 +229,8 @@ def dispatch_item(
                 "error": f"dispatch_worker failed: {result.error}",
                 "workerId": result.worker_id,
                 "verified": False,  # Not verified (dispatch failed)
+                "testStdout": "",
+                "testStderr": "",
             }
 
         # Worker succeeded; now run the test command.
@@ -224,6 +248,8 @@ def dispatch_item(
                 "workerId": result.worker_id,
                 "verified": False,  # Not verified (no test to run)
                 "reason": "no_test_command",
+                "testStdout": "",
+                "testStderr": "",
             }
 
         test_result = driver.run_command(test_cmd, cwd=exec_workdir)
@@ -239,6 +265,8 @@ def dispatch_item(
             "error": None if ok else f"test failed with exit {test_result.exit_code}",
             "workerId": result.worker_id,
             "verified": ok,  # Verified if and only if test passed (exit 0)
+            "testStdout": test_result.stdout,
+            "testStderr": test_result.stderr,
         }
 
     except Exception as exc:
@@ -251,4 +279,6 @@ def dispatch_item(
             "error": f"dispatch_item internal error: {exc}",
             "workerId": None,
             "verified": False,  # Not verified (exception during execution)
+            "testStdout": "",
+            "testStderr": "",
         }

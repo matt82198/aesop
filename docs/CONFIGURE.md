@@ -10,8 +10,8 @@ After setup, you'll have an `aesop.config.json` in your harness root. This file 
 
 ```json
 {
-  "aesopRoot": "/home/user/aesop",
-  "braindRoot": "/home/user/.claude",
+  "aesop_root": "/home/user/aesop",
+  "brain_root": "/home/user/.claude",
   "repos": [
     {
       "path": "/home/user/my-api",
@@ -22,14 +22,16 @@ After setup, you'll have an `aesop.config.json` in your harness root. This file 
       "name": "web-frontend"
     }
   ],
-  "dashboardPort": 8770,
+  "dashboard": {
+    "port": 8770
+  },
   "dashboardOrigin": "http://localhost:8770"
 }
 ```
 
 ### Field Reference
 
-#### `aesopRoot` (string, required)
+#### `aesop_root` (string, required)
 
 Absolute path to this Aesop harness directory. Used by daemons to locate scripts and state files.
 
@@ -39,7 +41,7 @@ Absolute path to this Aesop harness directory. Used by daemons to locate scripts
 
 ---
 
-#### `braindRoot` (string, required)
+#### `brain_root` (string, required)
 
 Absolute path to your Claude Code home directory. This is where skills (`.claude/skills/`) and memory (`.claude/MEMORY.md`) live.
 
@@ -78,7 +80,7 @@ Each repo object has:
 
 ---
 
-#### `dashboardPort` (number, default: 8770)
+#### `dashboard.port` (number, default: 8770)
 
 HTTP port for the web dashboard. The dashboard runs a Python HTTP server on this port.
 
@@ -116,15 +118,17 @@ The origin (scheme + host + port) for the dashboard. Used for CORS validation an
 
 ```json
 {
-  "aesopRoot": "/home/user/aesop",
-  "braindRoot": "/home/user/.claude",
+  "aesop_root": "/home/user/aesop",
+  "brain_root": "/home/user/.claude",
   "repos": [
     {
       "path": "/home/user/my-app",
       "name": "my-app"
     }
   ],
-  "dashboardPort": 8770,
+  "dashboard": {
+    "port": 8770
+  },
   "dashboardOrigin": "http://localhost:8770"
 }
 ```
@@ -133,8 +137,8 @@ The origin (scheme + host + port) for the dashboard. Used for CORS validation an
 
 ```json
 {
-  "aesopRoot": "/home/user/aesop",
-  "braindRoot": "/home/user/.claude",
+  "aesop_root": "/home/user/aesop",
+  "brain_root": "/home/user/.claude",
   "repos": [
     {
       "path": "/home/user/services/auth",
@@ -153,7 +157,9 @@ The origin (scheme + host + port) for the dashboard. Used for CORS validation an
       "name": "infrastructure"
     }
   ],
-  "dashboardPort": 8770,
+  "dashboard": {
+    "port": 8770
+  },
   "dashboardOrigin": "http://localhost:8770"
 }
 ```
@@ -162,15 +168,17 @@ The origin (scheme + host + port) for the dashboard. Used for CORS validation an
 
 ```json
 {
-  "aesopRoot": "C:\\Users\\user\\aesop",
-  "braindRoot": "C:\\Users\\user\\.claude",
+  "aesop_root": "C:\\Users\\user\\aesop",
+  "brain_root": "C:\\Users\\user\\.claude",
   "repos": [
     {
       "path": "C:\\Users\\user\\projects\\my-api",
       "name": "api"
     }
   ],
-  "dashboardPort": 8770,
+  "dashboard": {
+    "port": 8770
+  },
   "dashboardOrigin": "http://localhost:8770"
 }
 ```
@@ -205,14 +213,17 @@ Aesop credentials (GitHub tokens, API keys) should never go in `aesop.config.jso
 You can override config values via environment variables (optional):
 
 ```bash
-# Override the Aesop root
+# Override the Aesop root (used by daemons)
 export AESOP_ROOT=/path/to/aesop
 
-# Override the Claude Code home
-export CLAUDE_CODE_HOME=/path/to/.claude
+# Override the Aesop state directory (default: ./state)
+export AESOP_STATE_ROOT=/path/to/state
 
-# Enable debug logging in daemons
-export DEBUG=1
+# Override the Claude Code home (used by /power skill and orchestrator)
+export BRAIN_ROOT=/path/to/.claude
+
+# Override the scripts directory
+export SCRIPTS_ROOT=/path/to/scripts
 ```
 
 If set, these override the values in `aesop.config.json`.

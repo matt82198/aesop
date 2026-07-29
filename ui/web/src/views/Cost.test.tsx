@@ -166,6 +166,34 @@ describe('Cost view', () => {
       expect(screen.getByTestId(TESTIDS.verdictCostMetrics)).toBeInTheDocument();
       expect(screen.getByTestId(TESTIDS.modelMixChart)).toBeInTheDocument();
     });
+  });
+
+  describe('wave and agent cost breakdown (wave RC4 additions)', () => {
+    it('renders wave agent breakdown component', () => {
+      render(<Cost cost={fixtureCost} />);
+      expect(screen.getByTestId(TESTIDS.waveAgentBreakdown)).toBeInTheDocument();
+    });
+
+    it('renders "Per Wave & Agent Breakdown" heading', () => {
+      render(<Cost cost={fixtureCost} />);
+      expect(screen.getByText('Per Wave & Agent Breakdown')).toBeInTheDocument();
+    });
+
+    it('shows wave breakdown section', () => {
+      render(<Cost cost={fixtureCost} />);
+      expect(screen.getByText('Cost per Wave')).toBeInTheDocument();
+    });
+
+    it('shows agent breakdown section', () => {
+      render(<Cost cost={fixtureCost} />);
+      expect(screen.getByText('Cost per Agent Type')).toBeInTheDocument();
+    });
+
+    it('displays wave and agent data when available', () => {
+      render(<Cost cost={fixtureCostWithPricing} />);
+      expect(screen.getByText('wave-14')).toBeInTheDocument();
+      expect(screen.getByText('Agent')).toBeInTheDocument();
+    });
 
     it('weekly rollup shows data when per_week_costs is populated', () => {
       render(<Cost cost={fixtureCost} />);

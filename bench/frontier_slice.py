@@ -67,7 +67,7 @@ def load_frontier_tasks(path: str = "bench/tasks_frontier.jsonl") -> List[Fronti
     """Load frontier tasks from JSONL file."""
     tasks = []
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 if line.strip():
                     obj = json.loads(line)
@@ -82,7 +82,7 @@ def load_ground_truth(path: str = "bench/ground_truth_frontier.jsonl") -> Dict[s
     """Load ground truth from JSONL file."""
     gt = {}
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for line in f:
                 if line.strip():
                     obj = json.loads(line)
@@ -374,11 +374,18 @@ def main():
     )
     parser.add_argument(
         "--output",
-        default="bench/results/frontier_slice_results.json",
-        help="Output JSON file",
+        default=None,
+        help="Output JSON file (env: FRONTIER_SLICE_OUTPUT; default: state/bench/frontier_slice_results.json)",
     )
 
     args = parser.parse_args()
+
+    # Resolve output path: env var > CLI arg > default (gitignored state dir)
+    if args.output is None:
+        args.output = os.environ.get(
+            "FRONTIER_SLICE_OUTPUT",
+            "state/bench/frontier_slice_results.json"
+        )
 
     # Load tasks and ground truth
     tasks = load_frontier_tasks(args.tasks)
@@ -415,7 +422,9 @@ def main():
 
     print(f"Results saved to: {output_path}")
 
-    return 0 if accuracy >= 50.0 else 1
+    # Exit 0 = run completed and every task was scored; accuracy is DATA, not
+    # process health (a low FakeTransport score must not read as a crash).
+    return 0 if len(scores) == len(tasks) else 1
 
 
 if __name__ == "__main__":

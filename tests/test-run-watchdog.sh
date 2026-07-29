@@ -464,4 +464,81 @@ echo "PASS: AUDIT FIX 2 - Lock dir without pid file was treated as stale"
 rm -f "$OUT_BROKEN2"
 
 echo ""
+echo "=== Test 8: FIX #5 contract - cycle exit code 3 (blocked cycle) is WARN, not ERROR ==="
+# Clean state
+rm -rf "${TEST_STATE_DIR}"
+mkdir -p "${TEST_STATE_DIR}"
+echo "0" > "${CYCLE_COUNTER}"
+
+# Mock cycle that reports a "blocked cycle" (exit 3), mirroring
+# daemons/backup-fleet.sh main()'s any_blocked contract.
+BLOCKED_MOCK="${TMP_DIR}/blocked-mock.sh"
+cat > "${BLOCKED_MOCK}" << 'EOFBLOCKED'
+#!/bin/bash
+echo "[mock-cycle] BLOCKED: some-repo"
+exit 3
+EOFBLOCKED
+chmod +x "${BLOCKED_MOCK}"
+
+OUT_BLOCKED=$(mktemp)
+set +e
+AESOP_ROOT="${AESOP_ROOT}" \
+  AESOP_WATCHDOG_CYCLE_CMD="${BLOCKED_MOCK}" \
+  bash "${REPO_ROOT}/daemons/run-watchdog.sh" --once > "$OUT_BLOCKED" 2>&1
+EXIT_BLOCKED=$?
+set -e
+
+echo "Mock cycle that reports a blocked cycle (exit 3):"
+cat "$OUT_BLOCKED"
+echo ""
+
+# --once mode must NOT treat this as a hard failure: overall exit stays 0
+# and SMOKE reports PASSED, never FAILED/exit-3-propagated.
+if [ "$EXIT_BLOCKED" -eq 0 ]; then
+  echo "PASS: run-watchdog.sh --once treats cycle exit 3 as non-fatal (exit 0)"
+else
+  echo "FAIL: run-watchdog.sh --once should exit 0 on a blocked (exit 3) cycle, got $EXIT_BLOCKED"
+  exit 1
+fi
+
+if grep -q "WATCHDOG SMOKE: PASSED" "$OUT_BLOCKED" 2>/dev/null; then
+  echo "PASS: SMOKE reported PASSED (not FAILED) for a blocked cycle"
+else
+  echo "FAIL: SMOKE should report PASSED for a blocked (exit 3) cycle"
+  exit 1
+fi
+
+LOG_FILE_BLOCKED="${AESOP_ROOT}/state/FLEET-BACKUP.log"
+if grep -q "WARN: cycle #1 reported blocked repo" "$LOG_FILE_BLOCKED" 2>/dev/null; then
+  echo "PASS: exit 3 logged as WARN, not ERROR"
+else
+  echo "FAIL: expected a WARN log line for exit code 3"
+  cat "$LOG_FILE_BLOCKED" || true
+  exit 1
+fi
+
+if grep -q "ERROR: cycle #1 failed with exit code 3" "$LOG_FILE_BLOCKED" 2>/dev/null; then
+  echo "FAIL: exit code 3 was logged as a hard ERROR (should be WARN)"
+  exit 1
+else
+  echo "PASS: exit code 3 was NOT logged as a hard ERROR"
+fi
+
+rm -f "$OUT_BLOCKED" "$BLOCKED_MOCK"
+echo "PASS: FIX #5 contract - --once mode handles cycle exit 3 as WARN"
+
+echo ""
+echo "=== Test 9: FIX #5 contract - daemon loop mode has a distinct exit-3 WARN branch (static check) ==="
+# The persistent daemon loop already never halts on ANY non-zero cycle exit
+# (it always continues to the next 150s sleep), so the behavior this proves
+# is the log-level distinction: exit 3 must be logged/labeled WARN, not fall
+# through to the generic ERROR branch used for other non-zero exit codes.
+if grep -qF 'elif [ $cmd_exit -eq 3 ]' "${REPO_ROOT}/daemons/run-watchdog.sh"; then
+  echo "PASS: daemon loop mode has a distinct exit-3 WARN branch (not the generic ERROR path)"
+else
+  echo "FAIL: daemon loop mode is missing a distinct exit-3 WARN branch"
+  exit 1
+fi
+
+echo ""
 echo "=== All tests passed ==="

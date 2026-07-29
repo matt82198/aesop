@@ -8,6 +8,19 @@
 
 **Agent behavior is source code.** Everything a fleet does — every decision, every checkpoint, every recovery path — lives in durable, human-diffable files: git history, plain-text STATE.md, append-only BUILDLOG.md, Python scripts, shell hooks. No vector embeddings, no distributed consensus, no magic. When a machine fails, you re-read from disk. When a human operator needs to audit a decision, they grep the git log or read the state file. When you need to reason about cost, you look at the dispatch rules in code.
 
+## Ancestors: Naming the Ideas
+
+Aesop does not invent crash-recoverable orchestration. It **composes and measures** four proven ideas from distributed systems research:
+
+1. **Temporal** (Czezatke & Stengel, 2019) — durable execution via plain-text event logs, essential for crash recovery without external state.
+2. **Crash-only software** (Candea & Fox, 2003) — design every component as stateless; recovery is the normal startup path.
+3. **Erlang/OTP supervision trees** (Armstrong et al., 1996) — organize fault tolerance as a hierarchy of restarts, each with a bounded retry policy.
+4. **Kubernetes controller reconciliation** (Burns et al., 2015) — durable desired state + controllers that converge reality to it via append-only logs.
+
+Aesop ports these patterns to agent orchestration: the wave loop is a reconciliation controller; STATE.md + BUILDLOG.md are the durable event log; workers are supervised processes with retry caps; crashes trigger re-reads from disk. The contribution is not any single idea, but the composition, measurement (benchmarks with committed artifacts), and the discipline of naming ancestors instead of claiming novelty.
+
+---
+
 This hypothesis rests on five pillars:
 
 1. **Durable plain-text state** — git + POSIX text as the state layer, not Postgres or vector DBs.
@@ -60,7 +73,9 @@ Today's dispatch is flat: one Opus/Fable orchestrator on the main thread, 5–8 
 
 **The benchmark proves Haiku is good enough.** The held-out judgment benchmark (v3 = 28 additional tasks, building on v2 = 11 prior) tested Haiku, Sonnet, and Opus across 39 combined judgment tasks: bug-in-diff (with concurrency races and resource leaks), finding-inflation, acceptance-criteria coverage, severity calibration, root-cause-from-trace, refactor-equivalence, security issue spotting. All three models converged on identical answers for all 28 v3 tasks. Combined score: **Haiku 39/39** vs **Opus 38/39** (Opus erred on one severity call; Haiku did not). At ~1/3 the per-token cost.
 
-**Honest limits on the benchmark:** Curated (N=39), not sampled from real fleet transcripts. No frontier-reaching task found where Opus beats Haiku. The benchmark maps a floor ("Haiku is sufficient for these judgment shapes"), not the absolute frontier. Cost is token-price ratio, not wall-clock latency. These are not hidden; they are load-bearing caveats.
+**Ceiling rule: the benchmark demonstrates sufficiency, not equivalence.** A pre-declared ceiling rule (when ≥2 tiers score ≥92%, the instrument failed to discriminate) trips on this result: both Haiku and Sonnet achieved 39/39 (100%), confirming the benchmark found a *convergence zone* where both models ace the task set, not a *separating frontier* where one outperforms the other. This is the intended result — the honest interpretation is that **Haiku is sufficient for the judgment shapes measured here**, not that it is tier-equivalent to Sonnet or Opus everywhere. See [`bench/results/2026-07-26-judgment-v3-ceiling-addendum.md`](../bench/results/2026-07-26-judgment-v3-ceiling-addendum.md) for the full forensic analysis.
+
+**Honest limits on the benchmark:** Curated (N=39), not sampled from real fleet transcripts. No frontier-reaching task found where Opus beats Haiku in this set. The benchmark maps a floor ("Haiku is sufficient for scoped judgment and extraction tasks with context at the seam"), not the absolute frontier. **What it does NOT test**: open-ended synthesis (designing novel systems from scratch), frontier reasoning (problems requiring 100+ steps of chaining or novel proof techniques), long-horizon planning (multi-phase dependency graphs). Cost is token-price ratio, not wall-clock latency. For detailed equivalence analysis, see [`bench/EQUIVALENCE-MARGIN.md`](../bench/EQUIVALENCE-MARGIN.md). These caveats are not hidden; they are load-bearing.
 
 **Cite:** [`docs/DISPATCH-MODEL.md`](./DISPATCH-MODEL.md) — cost model and patterns; [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](../bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md) — benchmark run and interpretation.
 
@@ -103,8 +118,8 @@ The point: **observability means you see the real bottleneck**, and you fix it, 
 
 These are not claims about what Aesop *could* do. They are receipts:
 
-- **1,088 commits, 251 merged PRs, 30 waves** (verified by anyone who clones; `tools/self_stats.py`).
-- **143,403 lines of code** across 546 files, delivered end-to-end: from feature intake to merge.
+- **1,181 commits, 387 merged PRs, 30 waves** (verified by anyone who clones; `tools/self_stats.py`).
+- **173,035 lines of code** across 642 files tracked, delivered end-to-end: from feature intake to merge.
 - **Benchmark results** committed in `bench/results/` — 39 judgment tasks, all models scored by deterministic Python scoring (no LLM in the grading loop).
 - **Kill-switch proof** — `tools/halt.py` is wired into the live dispatch path and was exercised on a real wave.
 - **Cost ceiling** — implemented in `tools/cost_ceiling.py`, enforced per-wave.
@@ -119,9 +134,10 @@ This is not a universal solution. The system has explicit boundaries:
 
 1. **Single-box by design.** Aesop runs on one machine. Multi-instance coordination is on the roadmap, not shipped. If you need 100-machine scale today, this is not the tool.
 2. **Small-N benchmarks.** 39 judgment tasks is directional evidence, not statistical proof. Frontier reasoning (where Opus depth might matter 3×) is not tested here.
-3. **Lab-measured multi-writer throughput.** 800 events/sec is measured in a stress test, not production. Team scale beyond one machine requires additional work (leases, event-sourcing, distributed consensus).
-4. **No third-party verification yet.** The artifacts are committed so a skeptic can reproduce — that is transparency, not independent replication.
-5. **Release candidate.** APIs, config, and dashboard contracts may still shift. Pin the exact version if you need stability.
+3. **Scored judgment vs. open-ended generation — a measured boundary.** An all-Haiku audit (wave-24) reported four P0 issues, verification found zero real (2 hallucinated, 2 severity-inflated). This is not a Haiku failure — it is a *cheap-model failure mode* when the model chooses what to report in open-ended generation. The benchmark proves Haiku holds on *scored, single-shot judgment* (when the task structure and rubric are explicit). The architecture mitigates this boundary by pairing cheap generation (workers) with independent verification (multi-tier review gate) — the separation of concerns is precisely designed for this measured failure mode. Selection (deciding what to report) is where cheap models diverge from expensive ones; scoring (evaluating a bounded task with a rubric) is where they converge.
+4. **Lab-measured multi-writer throughput.** 800 events/sec is measured in a stress test, not production. Team scale beyond one machine requires additional work (leases, event-sourcing, distributed consensus).
+5. **No third-party verification yet.** The artifacts are committed so a skeptic can reproduce — that is transparency, not independent replication.
+6. **Release candidate.** APIs, config, and dashboard contracts may still shift. Pin the exact version if you need stability.
 
 ---
 
@@ -135,6 +151,6 @@ Aesop bets on:
 - **Small is faster than smart.** Flat fan-out (5–8 Haiku agents) beats hierarchical dispatch (4.3× cost), even at scale, because the simpler system has fewer failure modes.
 - **Cost as a first-class constraint.** The whole system is designed around $0.01–0.02 per wave. Expensive paths are rejected before they ship.
 
-The evidence is in the receipts: 1,088 commits, 251 PRs, 30 waves, zero hallucinated audits (via adversarial verification), and a benchmark that proves Haiku is good enough.
+The evidence is in the receipts: 1,181 commits, 387 PRs, 30 waves, zero hallucinated audits (via adversarial verification), and a benchmark that proves Haiku is good enough for scoped judgment work.
 
 **Read more:** [`docs/autonomous-swe.md`](./autonomous-swe.md) — honest account of what shipped, what didn't, and where the gaps are.

@@ -69,19 +69,67 @@ class GitStats:
 
     @property
     def merged_prs(self) -> int:
-        """Count merge commits with 'Merge pull request #' in message."""
+        """Count merged PRs using gh API (preferred) or git fallback.
+
+        Prefers `gh` API: gh api -X GET search/issues -f q="repo:matt82198/aesop is:pr is:merged" --jq .total_count
+        Falls back to git: counts distinct PR numbers from both merge-commit and squash-merge patterns.
+        """
         if self._merged_prs is not None:
             return self._merged_prs
 
+        # Try gh API first (preferred, authoritative)
         try:
-            # Get all commit messages
-            output = self._run_git("log", "--format=%B", check=False)
+            result = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    "-X",
+                    "GET",
+                    "search/issues",
+                    "-f",
+                    "q=repo:matt82198/aesop is:pr is:merged",
+                    "--jq",
+                    ".total_count"
+                ],
+                cwd=str(self.repo_root),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=10
+            )
+            if result.returncode == 0 and result.stdout:
+                try:
+                    count = int(result.stdout.strip())
+                    self._merged_prs = count
+                    return count
+                except (ValueError, TypeError):
+                    # gh returned non-numeric output, fall through to git
+                    pass
+        except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+            # gh not found, timeout, or other error — fall through to git
+            pass
+
+        # Git fallback: count distinct PR numbers from commit subjects
+        try:
+            output = self._run_git("log", "--format=%s", check=False)
             if not output:
                 self._merged_prs = 0
                 return 0
 
-            # Count lines matching "Merge pull request #"
-            count = output.count("Merge pull request #")
+            # Collect distinct PR numbers from both patterns:
+            # 1. "Merge pull request #N" (merge-commit style)
+            # 2. "(#N)" at end of subject (squash-merge style)
+            pr_numbers = set()
+
+            for match in re.finditer(r"^Merge pull request #(\d+)", output, re.MULTILINE):
+                pr_numbers.add(int(match.group(1)))
+
+            for match in re.finditer(r"\(#(\d+)\)\s*$", output, re.MULTILINE):
+                pr_numbers.add(int(match.group(1)))
+
+            count = len(pr_numbers)
             self._merged_prs = count
             return count
         except Exception:
@@ -211,7 +259,11 @@ class GitStats:
 
     @property
     def distinct_coauthors(self) -> int:
-        """Count of distinct authors including co-authors."""
+        """Count of distinct authors including co-authors.
+
+        Filters out fixture identities (Test User <test@example.com>) that leaked
+        into commits due to test config pollution (fix/git-identity-guard).
+        """
         if self._distinct_coauthors is not None:
             return self._distinct_coauthors
 
@@ -230,6 +282,9 @@ class GitStats:
                 for match in re.finditer(r"Co-Authored-By:\s*(.+?)(?:\n|$)", commit_msg):
                     coauthor = match.group(1).strip()
                     if coauthor:
+                        # Exclude fixture identities (test pollution)
+                        if coauthor == "Test User <test@example.com>":
+                            continue
                         authors.add(coauthor)
 
             count = len(authors)

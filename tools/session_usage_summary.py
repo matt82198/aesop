@@ -87,6 +87,10 @@ def parse_transcript(filepath, agent_name=None):
 
 
 def main():
+    if any(a in ("-h", "--help") for a in sys.argv[1:]):
+        print(f"Usage: {sys.argv[0]} <session_dir> [<main_transcript>]")
+        sys.exit(0)
+
     if len(sys.argv) < 2:
         print(f"Usage: {sys.argv[0]} <session_dir> [<main_transcript>]", file=sys.stderr)
         sys.exit(1)

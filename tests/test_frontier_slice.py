@@ -143,7 +143,7 @@ class TestTaskSchemaValidation(unittest.TestCase):
     def test_all_tasks_valid_json(self):
         """All task lines should be valid JSON."""
         path = bench_dir / "tasks_frontier.jsonl"
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for i, line in enumerate(f, 1):
                 if line.strip():
                     try:
@@ -154,7 +154,7 @@ class TestTaskSchemaValidation(unittest.TestCase):
     def test_all_tasks_have_required_fields(self):
         """All tasks must have id, category, match, prompt, discrimination_rationale."""
         path = bench_dir / "tasks_frontier.jsonl"
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for i, line in enumerate(f, 1):
                 if line.strip():
                     obj = json.loads(line)
@@ -165,7 +165,7 @@ class TestTaskSchemaValidation(unittest.TestCase):
     def test_match_is_exact_or_regex(self):
         """Match field must be 'exact' or 'regex'."""
         path = bench_dir / "tasks_frontier.jsonl"
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for i, line in enumerate(f, 1):
                 if line.strip():
                     obj = json.loads(line)
@@ -178,7 +178,7 @@ class TestTaskSchemaValidation(unittest.TestCase):
     def test_no_absolute_paths_in_prompts(self):
         """Tasks should not contain absolute paths (redaction check)."""
         path = bench_dir / "tasks_frontier.jsonl"
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for i, line in enumerate(f, 1):
                 if line.strip():
                     obj = json.loads(line)
@@ -204,7 +204,7 @@ class TestTaskSchemaValidation(unittest.TestCase):
             r"(password|passwd|pwd|secret|token)\s*[:=]",  # Secrets
             r"(github|gitlab|bitbucket).*token",  # Git tokens
         ]
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for i, line in enumerate(f, 1):
                 if line.strip():
                     obj = json.loads(line)
@@ -233,7 +233,7 @@ class TestGroundTruthValidation(unittest.TestCase):
     def test_all_ground_truth_valid_json(self):
         """All ground truth lines should be valid JSON."""
         path = bench_dir / "ground_truth_frontier.jsonl"
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for i, line in enumerate(f, 1):
                 if line.strip():
                     try:
@@ -244,7 +244,7 @@ class TestGroundTruthValidation(unittest.TestCase):
     def test_all_ground_truth_have_id(self):
         """All ground truth entries must have id."""
         path = bench_dir / "ground_truth_frontier.jsonl"
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for i, line in enumerate(f, 1):
                 if line.strip():
                     obj = json.loads(line)
@@ -253,7 +253,7 @@ class TestGroundTruthValidation(unittest.TestCase):
     def test_ground_truth_has_expected_or_regex(self):
         """Each ground truth must have expected or expected_regex."""
         path = bench_dir / "ground_truth_frontier.jsonl"
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for i, line in enumerate(f, 1):
                 if line.strip():
                     obj = json.loads(line)
@@ -268,7 +268,7 @@ class TestGroundTruthValidation(unittest.TestCase):
         """Each regex ground truth must have exemplar and counter_example fields."""
         import re
         path = bench_dir / "ground_truth_frontier.jsonl"
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             for i, line in enumerate(f, 1):
                 if line.strip():
                     obj = json.loads(line)
@@ -388,31 +388,33 @@ class TestOfflineMode(unittest.TestCase):
 
     def test_offline_mode_produces_json(self):
         """Offline mode should produce JSON output file."""
-        output_path = bench_dir / "results" / "frontier_slice_results.json"
+        import tempfile
+        import os as os_module
 
-        # Clean up any existing file
-        if output_path.exists():
-            output_path.unlink()
+        # Use temp directory for test output isolation
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "frontier_slice_results.json"
 
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(bench_dir / "frontier_slice.py"),
-                "--mode", "offline",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        self.assertEqual(result.returncode, 0)
-        self.assertTrue(output_path.exists(), f"Output file not created: {output_path}")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(bench_dir / "frontier_slice.py"),
+                    "--mode", "offline",
+                    "--output", str(output_path),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0)
+            self.assertTrue(output_path.exists(), f"Output file not created: {output_path}")
 
-        # Validate JSON
-        with open(output_path) as f:
-            data = json.load(f)
-            self.assertIn("accuracy_percent", data)
-            self.assertIn("tasks", data)
-            self.assertGreater(len(data["tasks"]), 0)
+            # Validate JSON
+            with open(output_path) as f:
+                data = json.load(f)
+                self.assertIn("accuracy_percent", data)
+                self.assertIn("tasks", data)
+                self.assertGreater(len(data["tasks"]), 0)
 
 
 # ============================================================================
