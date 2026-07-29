@@ -40,35 +40,21 @@ jobs:
             git diff --stat README.md stats.json
           fi
 
-      - name: Check for existing open PR
-        if: steps.check.outputs.changed == 'true'
-        id: find-pr
-        run: |
-          # Look for an existing open PR with the specific title
-          PR_BRANCH=$(gh pr list --state open --author "github-actions" --search "title:\"chore(stats): scheduled refresh\"" --json headRefName -q '.[0].headRefName' 2>/dev/null || echo "")
-          if [ -z "$PR_BRANCH" ]; then
-            echo "found=false" >> $GITHUB_OUTPUT
-          else
-            echo "found=true" >> $GITHUB_OUTPUT
-            echo "branch=$PR_BRANCH" >> $GITHUB_OUTPUT
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update or create branch
+      - name: Create or update branch
         if: steps.check.outputs.changed == 'true'
         id: branch
         run: |
-          # Check if branch exists
           BRANCH_NAME="chore/stats-refresh-$(date +%Y-%m-%d)"
-          if git rev-parse --verify "$BRANCH_NAME" 2>/dev/null; then
-            # Branch exists, reset to main and apply changes
-            git fetch origin main:temp-main
+          git fetch origin main:temp-main
+          git reset --hard temp-main
+          bash scripts/verify-stats.sh --regenerate
+
+          # Check if branch exists and update or create
+          if git rev-parse --verify "origin/$BRANCH_NAME" 2>/dev/null; then
+            git checkout "$BRANCH_NAME"
             git reset --hard temp-main
             bash scripts/verify-stats.sh --regenerate
-            git checkout "$BRANCH_NAME" || git checkout -b "$BRANCH_NAME"
           else
-            # Create new branch
             git checkout -b "$BRANCH_NAME"
           fi
           echo "branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
@@ -79,9 +65,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
           git add README.md stats.json
-          git commit -m "chore(stats): scheduled refresh
-
-Co-Authored-By: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+          git commit -m "chore(stats): scheduled refresh" -m "Co-Authored-By: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
 
       - name: Push branch
         if: steps.check.outputs.changed == 'true'
@@ -111,9 +95,3 @@ Co-Authored-By: github-actions[bot] <41898282+github-actions[bot]@users.noreply.
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Fail if regenerate had errors
-        if: failure()
-        run: |
-          echo "Stats regeneration failed. Check the logs above."
-          exit 1
