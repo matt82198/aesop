@@ -40,6 +40,10 @@ node_modules/
 __pycache__/
 *.pyc
 
+# Playwright test artifacts
+playwright-report/
+test-results/
+
 # Test output artifacts
 node_test_output.txt
 *_test_output.txt
