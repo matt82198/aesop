@@ -32,15 +32,12 @@ class TestVerifyTestCoverage(unittest.TestCase):
         self.assertIn("--fix", result.stdout)
 
     def test_all_current_tests_covered(self):
-        """Test that known orphaned test files are detected.
+        """Test that the real repo has no orphaned test files.
 
-        This verifies that Guardrail G2 correctly identifies the 3 orphaned shell tests:
-        - tests/dash-watchdog-gui.test.sh
-        - tests/test-run-watchdog-smoke-signal.sh
-        - tests/test_waveguard.sh
-
-        These tests exist on disk but are not run by any CI job, which is the bug
-        this guardrail is designed to catch.
+        This branch wired the historically-orphaned shell tests
+        (dash-watchdog-gui.test.sh, test-run-watchdog-smoke-signal.sh,
+        test_waveguard.sh) into package.json test:sh, so the repo must now
+        pass the Guardrail G2 gate cleanly.
         """
         result = subprocess.run(
             ["python", str(self.tool_path), "--check"],
@@ -49,15 +46,69 @@ class TestVerifyTestCoverage(unittest.TestCase):
             timeout=10,
             cwd=str(self.repo_root),
         )
-        # Should detect orphans
-        self.assertNotEqual(
+        self.assertEqual(
             result.returncode,
             0,
-            "Expected to find orphaned test files but none were detected",
+            f"Expected no orphaned test files, but the gate failed:\n"
+            f"{result.stdout}\n{result.stderr}",
         )
-        # Verify the known orphaned tests are detected
-        self.assertIn("dash-watchdog-gui.test.sh", result.stdout)
-        self.assertIn("test_waveguard.sh", result.stdout)
+
+    def test_historical_orphans_detected(self):
+        """Regression: the 3 historically-orphaned shell tests are detected.
+
+        Reproduces the original bug this guardrail was built to catch:
+        - tests/dash-watchdog-gui.test.sh
+        - tests/test-run-watchdog-smoke-signal.sh
+        - tests/test_waveguard.sh
+        existed on disk but were not run by any CI job. Rebuilt here as a
+        hermetic temp fixture because the real repo has since wired them in.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            tests_dir = tmpdir_path / "tests"
+            tests_dir.mkdir()
+            tools_dir = tmpdir_path / "tools"
+            tools_dir.mkdir()
+
+            # package.json test:sh missing the three orphans (the historical state)
+            (tmpdir_path / "package.json").write_text(json.dumps({
+                "scripts": {
+                    "test:sh": "bash tests/test_pre_push_policy.sh && bash hooks/pre-push-policy.sh --test"
+                }
+            }))
+
+            # Covered test
+            (tests_dir / "test_pre_push_policy.sh").write_text("#!/bin/bash\necho ok")
+
+            # The three historically-orphaned shell tests
+            for name in (
+                "dash-watchdog-gui.test.sh",
+                "test-run-watchdog-smoke-signal.sh",
+                "test_waveguard.sh",
+            ):
+                (tests_dir / name).write_text("#!/bin/bash\necho orphan")
+
+            tools_dir.joinpath("verify_test_coverage.py").write_text(
+                self.tool_path.read_text()
+            )
+
+            result = subprocess.run(
+                ["python", str(tools_dir / "verify_test_coverage.py"), "--check"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=str(tmpdir_path),
+            )
+
+            self.assertNotEqual(
+                result.returncode,
+                0,
+                f"Expected to detect orphaned test files but none were found:\n"
+                f"{result.stdout}\n{result.stderr}",
+            )
+            self.assertIn("dash-watchdog-gui.test.sh", result.stdout)
+            self.assertIn("test-run-watchdog-smoke-signal.sh", result.stdout)
+            self.assertIn("test_waveguard.sh", result.stdout)
 
     def test_orphan_detection_python(self):
         """Test that an orphaned Python test file is detected."""
