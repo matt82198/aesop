@@ -89,6 +89,11 @@ export interface Alert {
   lines: string[];
 }
 
+export interface AcceptanceCriterion {
+  statement: string;
+  verifiable_by: string;
+}
+
 export interface TrackerItem {
   id: string;
   title: string;
@@ -99,6 +104,7 @@ export interface TrackerItem {
   tags: string[];
   notes: string | null;
   pr_link: string | null;
+  acceptanceCriteria?: AcceptanceCriterion[]; // Optional authored AC
   created_at: string; // ISO 8601
   completed_at: string | null;
 }

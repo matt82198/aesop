@@ -10,6 +10,7 @@ import { TESTIDS } from '../test/fixtures';
 import type { TrackerItem } from '../lib/types';
 import { updateTrackerItem } from '../lib/api';
 import { sanitizeUrl } from '../lib/sanitizeUrl';
+import { TrackerEditACModal } from './TrackerEditACModal';
 
 interface TrackerCardProps {
   item: TrackerItem;
@@ -26,6 +27,7 @@ export function TrackerCard({ item, onUpdate }: TrackerCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showACModal, setShowACModal] = useState(false);
 
   async function handleAction(action: 'claim' | 'done' | 'archive') {
     setLoading(true);
@@ -96,6 +98,44 @@ export function TrackerCard({ item, onUpdate }: TrackerCardProps) {
             </div>
           )}
 
+          {item.acceptanceCriteria && item.acceptanceCriteria.length > 0 && (
+            <div className="detail-section">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <label className="detail-label">Acceptance Criteria</label>
+                <button
+                  type="button"
+                  onClick={() => setShowACModal(true)}
+                  style={{ padding: '0.25rem 0.75rem', fontSize: '0.875rem' }}
+                  disabled={loading}
+                >
+                  Edit
+                </button>
+              </div>
+              <ul style={{ marginTop: '0.5rem', listStyle: 'none', paddingLeft: 0 }}>
+                {item.acceptanceCriteria.map((ac, idx) => (
+                  <li key={idx} style={{ marginBottom: '0.5rem', padding: '0.5rem', backgroundColor: 'var(--bg-secondary)', borderRadius: '4px' }}>
+                    <strong>{ac.statement}</strong>
+                    <br />
+                    <small style={{ color: 'var(--text-secondary)' }}>{ac.verifiable_by}</small>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {(!item.acceptanceCriteria || item.acceptanceCriteria.length === 0) && (
+            <div className="detail-section">
+              <button
+                type="button"
+                onClick={() => setShowACModal(true)}
+                style={{ padding: '0.5rem 1rem', fontSize: '0.875rem', marginBottom: '0.5rem' }}
+                disabled={loading}
+              >
+                + Add Acceptance Criteria
+              </button>
+            </div>
+          )}
+
           <div className="detail-section">
             <label className="detail-label">Created</label>
             <time>{new Date(item.created_at).toLocaleString()}</time>
@@ -154,6 +194,16 @@ export function TrackerCard({ item, onUpdate }: TrackerCardProps) {
         <div className="card-error" role="alert" aria-live="assertive">
           {error}
         </div>
+      )}
+
+      {showACModal && (
+        <TrackerEditACModal
+          item={item}
+          onClose={() => setShowACModal(false)}
+          onSuccess={() => {
+            // Refresh is handled by SSE, just close the modal
+          }}
+        />
       )}
     </div>
   );

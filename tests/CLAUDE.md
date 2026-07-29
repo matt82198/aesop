@@ -105,6 +105,7 @@ Tests document **actual gaps** found in rounds of refactoring/audit:
 - **Self-test mode**: Hooks & tools (pre-push-policy.sh, reconstitute.sh, tools/secret_scan.py) include `--test` flag for inline validation.
 
 ## Dropped (reason)
+- Python count revised 152→153 (adds test_ui_acceptance_criteria [tracker acceptanceCriteria authoring feature: REST CRUD + React modal authoring + form validation + wave display; PR #454]).
 - Python count revised 147→148 (seam-loop-consolidation PR adds test_seam_s_e2e_oracle [5 new: oracle-layout e2e, worker-patch application, visible-test execution, oracle grading with known-good fix, oracle failure on no-op, subprocess pytest invocation]).
 - Python count revised 151→152 (adds test_cli_help_hygiene [15 new: uniform --help (usage on stdout, exit 0, no side effect) + fail-closed unknown-flag exit codes for the 7 hand-parsed argv tools -- halt.py, stateapi_lint.py, ci_shard_runner.py, session_usage_summary.py, git_identity_check.py, wave_backlog_analyzer.py, alert_bridge.py]).
 - Python count revised 150→151 (context-eng UI wave adds test_ui_wave_context [spec-sharpness + file-scope read-only views, PR #444]).
