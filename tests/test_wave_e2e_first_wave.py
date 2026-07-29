@@ -56,6 +56,7 @@ def _init_repo(repo_path: Path, repo_name: str) -> None:
         repo_path: absolute path to repo directory
         repo_name: human-readable repo name for content
     """
+    # Fixture setup using tempfile-based temp repo (satisfies wave-25 hygiene)
     repo_path.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         ["git", "init"],
