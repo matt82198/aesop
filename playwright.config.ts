@@ -25,7 +25,8 @@ export default defineConfig({
   ],
 
   webServer: {
-    command: 'python -m unittest -h',  // dummy; we'll start server separately
+    command: 'python ui/serve.py',
+    port: 8770,
     timeout: 120 * 1000,
     reuseExistingServer: true,
   },
