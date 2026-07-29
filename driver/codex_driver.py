@@ -251,7 +251,8 @@ class CodexDriver(AgentDriver):
 
         Tier-2 backend: orchestrator provides parallelism, file I/O, and command
         execution. Structured output via JSON schema. No filesystem/shell/worktree
-        access. Below-Claude accuracy (0.92) -> heavier verification required.
+        access. Accuracy measured 1.0 (32-task harness, 2026-07-29), but workers
+        cannot self-verify (no fs/shell) -> heavier verification still required.
         """
         return DriverCapabilities(
             name=self.name,
@@ -262,7 +263,7 @@ class CodexDriver(AgentDriver):
             worktree_isolation=False,  # temp-dir fallback; no git
             native_cost_tracking=True,  # usage.total_tokens per response
             native_stall_detection=False,  # orchestrator times out
-            tool_use_accuracy=0.92,  # ~0.90-0.95 vs Claude's ~0.99
+            tool_use_accuracy=1.0,  # Measured 100% on gpt-4o-mini (32-task structured-output harness, 2026-07-29; see bench/results/openai-tooluse-gpt4omini-32tasks.json)
             recommended_verification_tier=2,  # validate all JSON; ~50% spot-check
             available_models=("gpt-3.5-turbo", "gpt-4-turbo", "gpt-4o-mini", "gpt-4o"),
             notes=(
