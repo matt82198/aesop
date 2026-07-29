@@ -8,10 +8,11 @@
 
 ## Module layout
 
-Four orchestration skills, each invoked via CLI (e.g., `/buildsystem`, `/power`):
+Five orchestration skills, each invoked via CLI (e.g., `/buildsystem`, `/power`, `/dashboard`):
 
 - **power/** — prime the filesystem brain (load CLAUDE.md rules, dispatch model, memory, state); init-prime or fast-path for already-primed repos
 - **buildsystem/** — execute one complete orchestrated development wave (backlog rank → parallel Haiku fleet → merge train → checkpoint → audit)
+- **dashboard/** — launch the aesop web dashboard (idempotent startup, SSE realtime updates, CSRF protection)
 - **healthcheck/** — check fleet health (one colored ball: green/yellow/red based on heartbeats, alerts, orchestrator status)
 - **fleet/** — snapshot fleet state as JSON (agents, heartbeats, tracker lanes, orchestrator status) — never mutates
 
