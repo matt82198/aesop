@@ -110,7 +110,68 @@ Expected output:
 
 If you see errors, check the logs in `state/FLEET-BACKUP.log`.
 
-**Note**: The `reproduce` command runs full test suites if you're working in the aesop repo itself. For scaffolded fleets, verification uses `aesop doctor` + `watchdog --once` to check preflight requirements and basic health.
+---
+
+## Zero-Friction Reproduce Path
+
+**For external users or fresh installations**: a single command verifies your Aesop setup end-to-end.
+
+### Single-command verification
+
+```bash
+npx @matt82198/aesop reproduce
+```
+
+This runs one of two offline verification suites depending on context:
+
+**Repo mode** (if running inside the aesop repository):
+- Node syntax check (*.mjs files)
+- Shell syntax check (*.sh files)
+- Node.js test suites (`npm run test:node`)
+- Shell test suites (`npm run test:sh`)
+- React component tests (vitest)
+- Python tool import/compile smoke tests
+- Python unit tests
+- Benchmark scorer tests
+- Offline benchmark reproduction
+
+**Installed mode** (for scaffolded fleets or npm-installed packages):
+- Preflight checks (`aesop doctor`) — verifies Node/Python/git/config/hooks
+- Health score check (`aesop health-score`) — verifies daemon and state-store health
+- Secret-scan selftest — validates credential detection rules
+- Packaging assertions — ensures required directories and files are present
+
+**Output**:
+- ASCII table with per-check timing and status (PASS/SKIP/FAIL)
+- Summary with pass count and total time
+- Exit code 0 if all checks pass, 1 if any fail
+
+**Examples**:
+
+```bash
+# Repo: full offline test suite
+cd ~/my-aesop && npx . reproduce
+
+# Installed: quick health verification
+npx @matt82198/aesop reproduce
+```
+
+### Three-command offline sequence (if reproduce fails)
+
+If you want to troubleshoot the reproduce command step-by-step:
+
+```bash
+# Step 1: Preflight check (Node, Python, git, config, directories, hooks)
+npx @matt82198/aesop doctor
+
+# Step 2: Health check (daemon heartbeats, state-store readiness)
+npx @matt82198/aesop health-score
+
+# Step 3: Secret-scan selftest (verify credential detection)
+python tools/scanner_selftest.py
+```
+
+Each command prints diagnostic output and exits non-zero if anything fails. This sequence is equivalent to the full `reproduce` suite but allows you to inspect failures individually.
 
 ---
 
