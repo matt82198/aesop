@@ -41,6 +41,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import common
 
+# Ensure state_store is importable (sys.path fix for bootstrapping)
+repo_root = Path(__file__).parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
+
+from state_store.read_api import ReadAPI
+
 
 def get_journal_path():
     """Return path to tracker-journal.jsonl."""
@@ -53,15 +60,20 @@ def get_tracker_path():
 
 
 def read_tracker():
-    """Read tracker.json. Returns None if missing."""
-    tracker_path = get_tracker_path()
-    if not tracker_path.exists():
+    """Read tracker.json via the state_store facade. Returns None if missing/empty.
+
+    Uses state_store.read_api.ReadAPI for all tracker reads.
+    Respects AESOP_STATE_ROOT env var.
+    """
+    state_dir = common.get_state_dir()
+    api = ReadAPI(state_dir)
+    tracker_data = api.read_tracker_snapshot()
+
+    # Return None if tracker is empty dict (no tracker.json exists)
+    # Return tracker data if it has items or other content
+    if not tracker_data:
         return None
-    try:
-        return json.loads(tracker_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, IOError) as e:
-        print(f"ERROR: Could not read tracker.json: {e}", file=sys.stderr)
-        return None
+    return tracker_data
 
 
 def write_tracker(tracker_data):
