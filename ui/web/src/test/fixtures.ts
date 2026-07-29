@@ -233,6 +233,13 @@ export const fixtureAgents: Agent[] = [
   },
 ];
 
+// All agents healthy (running/idle only) — used to assert the Warnings badge
+// renders in its zero/success state (item 1a, dashboard-polish-nits).
+export const fixtureAgentsNoIssues: Agent[] = [
+  fixtureAgents[0],
+  fixtureAgents[1],
+];
+
 export const fixtureAgentDetail: AgentDetail = {
   id: 'a77b995bcdb95',
   dispatch_prompt:

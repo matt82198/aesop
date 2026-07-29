@@ -9,6 +9,7 @@ import {
   fixtureAlerts,
   fixtureAlertsEmpty,
   fixtureAgents,
+  fixtureAgentsNoIssues,
   fixtureStatus,
   fixtureCost,
   fixtureCostWithPricing,
@@ -314,6 +315,44 @@ describe('HealthHeader', () => {
     expect(screen.getByTestId(TESTIDS.healthAgentsRunning)).toHaveTextContent('1');
     expect(screen.getByTestId(TESTIDS.healthAgentsIdle)).toHaveTextContent('1');
     expect(screen.getByTestId(TESTIDS.healthAgentsIssues)).toHaveTextContent('1');
+  });
+
+  it('renders the Warnings badge in its success/green state when there are zero warnings', () => {
+    render(
+      <HealthHeader
+        watchdog={fixtureWatchdog}
+        monitor={fixtureMonitor}
+        orchestrator={fixtureStatus}
+        agents={fixtureAgentsNoIssues}
+        alerts={fixtureAlertsEmpty}
+        connectionStatus={{ status: 'live' }}
+        onThemeToggle={mockThemeToggle}
+        onRefresh={mockRefresh}
+      />
+    );
+
+    const issuesBadge = screen.getByTestId(TESTIDS.healthAgentsIssues);
+    expect(issuesBadge).toHaveTextContent('0');
+    expect(issuesBadge).toHaveAttribute('data-empty', 'true');
+  });
+
+  it('renders the Warnings badge in its normal/error state when there are warnings', () => {
+    render(
+      <HealthHeader
+        watchdog={fixtureWatchdog}
+        monitor={fixtureMonitor}
+        orchestrator={fixtureStatus}
+        agents={fixtureAgents}
+        alerts={fixtureAlertsEmpty}
+        connectionStatus={{ status: 'live' }}
+        onThemeToggle={mockThemeToggle}
+        onRefresh={mockRefresh}
+      />
+    );
+
+    const issuesBadge = screen.getByTestId(TESTIDS.healthAgentsIssues);
+    expect(issuesBadge).toHaveTextContent('1');
+    expect(issuesBadge).toHaveAttribute('data-empty', 'false');
   });
 
   it('shows an honest empty-state for cost when pricing is not configured', () => {

@@ -124,6 +124,19 @@ describe('DispatchPanel', () => {
     expect(container.textContent).toContain(':');
   });
 
+  it('does not duplicate the phase string within a single agent row', async () => {
+    render(<DispatchPanel fetcher={ready(fixtureWaveDispatch)} />);
+
+    const rows = await screen.findAllByTestId(TESTIDS.dispatchAgentRow);
+    expect(rows.length).toBe(fixtureWaveDispatch.agents.length);
+
+    rows.forEach((row, idx) => {
+      const phase = fixtureWaveDispatch.agents[idx].phase;
+      const occurrences = (row.textContent?.split(phase).length ?? 1) - 1;
+      expect(occurrences).toBe(1);
+    });
+  });
+
   it('displays all phase types with correct colors', async () => {
     render(<DispatchPanel fetcher={ready(fixtureWaveDispatch)} />);
 
