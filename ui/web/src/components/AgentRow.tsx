@@ -102,19 +102,19 @@ export function AgentRow({ agent, onInspect }: AgentRowProps) {
 
   return (
     <li className="agent-row" data-testid={TESTIDS.agentRow} key={agent.id}>
-      <button
-        type="button"
-        ref={expandButtonRef}
-        className="agent-row__toggle"
-        onClick={handleToggle}
-        aria-expanded={isExpanded}
-        aria-controls={`agent-detail-${agent.id}`}
-        aria-label={`${isExpanded ? 'Collapse' : 'Expand'} agent ${agent.id}`}
-      >
-        <span className="agent-row__toggle-icon">{isExpanded ? '▼' : '▶'}</span>
-      </button>
+      <div className="agent-row__topline">
+        <button
+          type="button"
+          ref={expandButtonRef}
+          className="agent-row__toggle"
+          onClick={handleToggle}
+          aria-expanded={isExpanded}
+          aria-controls={`agent-detail-${agent.id}`}
+          aria-label={`${isExpanded ? 'Collapse' : 'Expand'} agent ${agent.id}`}
+        >
+          <span className="agent-row__toggle-icon">{isExpanded ? '▼' : '▶'}</span>
+        </button>
 
-      <div className="agent-row__header">
         <span
           className="agent-row__status-icon"
           style={{ color: getStatusColor(agent.status) }}
@@ -130,8 +130,6 @@ export function AgentRow({ agent, onInspect }: AgentRowProps) {
           {agent.age_s < 60 ? `${agent.age_s}s` : `${Math.floor(agent.age_s / 60)}m`}
         </span>
 
-        <span className="agent-row__hint">{agent.hint}</span>
-
         {onInspect && (
           <button
             type="button"
@@ -144,6 +142,8 @@ export function AgentRow({ agent, onInspect }: AgentRowProps) {
           </button>
         )}
       </div>
+
+      <div className="agent-row__hint">{agent.hint}</div>
 
       {isExpanded && (
         <div className="agent-row__detail" id={`agent-detail-${agent.id}`} data-testid={TESTIDS.agentRowDetail}>

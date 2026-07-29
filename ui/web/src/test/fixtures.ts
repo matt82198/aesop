@@ -53,16 +53,26 @@ export const TESTIDS = {
   healthOrchestrator: 'health-orchestrator',
   healthAgentsCount: 'health-agents-count',
   healthAlertsCount: 'health-alerts-count',
+  healthAgentsRunning: 'health-agents-running',
+  healthAgentsIdle: 'health-agents-idle',
+  healthAgentsIssues: 'health-agents-issues',
+  healthCost: 'health-cost',
+  healthZone: 'health-zone',
   sseStatus: 'sse-status',
   themeToggle: 'theme-toggle',
   refreshButton: 'refresh-button',
 
   // Overview view
   viewOverview: 'view-overview',
+  overviewMain: 'overview-main',
+  overviewSidebar: 'overview-sidebar',
   waveTelemetryProgress: 'wave-telemetry-progress',
+  agentsPanel: 'agents-panel',
   agentRow: 'agent-row',
   agentRowDetail: 'agent-row-detail',
   agentInspectOpen: 'agent-inspect-open',
+  agentsSummaryCard: 'agents-summary-card',
+  agentsGroup: 'agents-group',
 
   // Agent Inspector drawer (read-only agent detail + transcript tail)
   agentInspector: 'agent-inspector',

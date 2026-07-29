@@ -99,6 +99,27 @@ describe('WaveTelemetryProgress', () => {
     consoleErrorSpy.mockRestore();
   });
 
+  it('shows verification pass rate as a percentage when runs exist', async () => {
+    render(<WaveTelemetryProgress fetcher={ready(fixtureData)} />);
+
+    // fixtureData: tokens_used=1500000 (>0, so "has runs"), ok_rate=0.95 -> 95%
+    expect(await screen.findByText('95%')).toBeInTheDocument();
+  });
+
+  it('shows an honest empty-state for pass rate when no runs have happened yet', async () => {
+    const noRunsData: WaveTelemetry = { ...fixtureData, tokens_used: 0, ok_rate: 0.0 };
+    render(<WaveTelemetryProgress fetcher={ready(noRunsData)} />);
+
+    expect(await screen.findByText('n/a — no runs yet')).toBeInTheDocument();
+  });
+
+  it('renders "No blocker recorded" instead of the raw "unknown" sentinel', async () => {
+    const noBlockerData: WaveTelemetry = { ...fixtureData, blocker: 'unknown' };
+    render(<WaveTelemetryProgress fetcher={ready(noBlockerData)} />);
+
+    expect(await screen.findByText('No blocker recorded')).toBeInTheDocument();
+  });
+
   it('uses default fetcher when none provided', () => {
     // This should not throw type errors when no fetcher is provided
     expect(() => {
