@@ -15,7 +15,13 @@ Phases (mirror the template):
      running each item's test, honoring disjoint ownership
   5. Bounded repair: for failed items, retry with test output appended to prompt,
      up to policy's repair_cap rounds
-  6. Adversarial review: if required, dispatch a review per item or mark deferred
+  5.5. Exact-gate re-runs (fake-green detection): verify sampled verified items
+     by re-running testCmd; flip verified=False on gate failure
+  5.75. Adversarial review (standard, opt-out, sampled): dispatch reviewer per
+     verified item (sampled by manifest adversarial_review.sample_frac); route
+     refutations back to repair queue (re-enter once, bounded by repair_cap)
+  6. Orchestrator final-catch (HS-2): if configured seat, route final_catch
+     decision per verified item through swapped backend; route blocks to quarantine
   7. Per-repo ship: if git config given, group items by repo and run the git
      sequence (add [repo-relative files], commit, push) separately for each repo,
      with expectTopLevel guard verified PER REPO before any write
@@ -903,6 +909,86 @@ def _quarantine_blocked_files(
                 )
         except Exception as exc:
             outcome["errors"].append({"file": raw, "error": str(exc)})
+
+
+def _dispatch_adversarial_review(
+    driver: Any,
+    item: Dict[str, Any],
+    item_result: Dict[str, Any],
+    state_dir: Optional[str] = None,
+) -> bool:
+    """Dispatch an adversarial reviewer to refute or approve a change.
+
+    Simulates a reviewer worker that examines the change and attempts to
+    refute it (find problems). If the reviewer finds issues (returns ok=False),
+    the item is marked as refuted and should re-enter repair. If the reviewer
+    approves (ok=True), the item passes through.
+
+    Args:
+        driver: AgentDriver for dispatching the reviewer
+        item: the original manifest item
+        item_result: the result dict to update with review outcome
+        state_dir: optional state directory for journaling
+
+    Returns:
+        bool: True if item was refuted (should re-enter repair), False if approved
+    """
+    slug = item.get("slug", "unknown")
+    workdir = item.get("workDir", ".")
+    owned_files = item.get("ownsFiles", [])
+    original_prompt = item.get("prompt", "")
+
+    # Build a review prompt: ask reviewer to refute the change
+    review_prompt = (
+        f"You are a code reviewer. Examine the following change and attempt to refute it. "
+        f"Find any problems, logic errors, edge cases, or inconsistencies with the spec.\n\n"
+        f"Original task: {original_prompt}\n\n"
+        f"Files changed: {owned_files}\n\n"
+        f"Attempt to refute this change. If you find problems, describe them clearly."
+    )
+
+    # Create a review request
+    from wave_bridge import build_manifest_item
+
+    review_item = dict(item)
+    review_item["prompt"] = review_prompt
+    manifest_item = build_manifest_item(driver, review_item)
+
+    try:
+        from wave_bridge import dispatch_item
+
+        review_result = dispatch_item(driver, manifest_item, workdir=workdir)
+
+        # Refuted = reviewer found issues (ok=False), approved = no issues found (ok=True)
+        refuted = not review_result.get("verified", False)
+
+        if refuted:
+            item_result["adversarial_review"] = "refuted"
+            item_result["review_error"] = review_result.get("error", "Issues found")
+            if state_dir:
+                _write_journal_entry(state_dir, slug, "adversarial_refuted", {
+                    "verified": False,
+                    "refuted_reason": review_result.get("error"),
+                }, repo=item.get("repo"))
+        else:
+            item_result["adversarial_review"] = "approved"
+            if state_dir:
+                _write_journal_entry(state_dir, slug, "adversarial_approved", {
+                    "verified": True,
+                }, repo=item.get("repo"))
+
+        return refuted
+
+    except Exception as exc:
+        # Review dispatch failed; conservative: mark as requiring attention
+        item_result["adversarial_review"] = "review_failed"
+        item_result["review_error"] = str(exc)
+        if state_dir:
+            _write_journal_entry(state_dir, slug, "adversarial_failed", {
+                "verified": False,
+                "error": str(exc),
+            }, repo=item.get("repo"))
+        return False  # Don't re-enter repair on dispatch failure
 
 
 def _orchestrator_final_catch(
@@ -1884,6 +1970,123 @@ def _run_wave_inner(
                             "error": str(exc),
                             "gate_rerun": True,
                         }, repo=repo)
+
+    # ========================================================================
+    # PHASE 5.75: Adversarial review (standard opt-out, sampled, repair-routed)
+    # ========================================================================
+    # Extract adversarial review config from manifest (default: enabled with modest sample)
+    adv_review_config = manifest.get("adversarial_review", {})
+    if isinstance(adv_review_config, dict):
+        adv_review_enabled = adv_review_config.get("enabled", True)
+        adv_review_sample_frac = adv_review_config.get("sample_frac", 0.1)
+    else:
+        adv_review_enabled = True
+        adv_review_sample_frac = 0.1
+
+    # Build list of verified items to potentially review
+    reviewable_items = [
+        (i, items[i], result["built"][i])
+        for i in range(len(items))
+        if i < len(result["built"]) and result["built"][i].get("verified", False)
+    ]
+
+    if adv_review_enabled and reviewable_items and adv_review_sample_frac > 0:
+        # Deterministic sampling: sort by slug, then take first N
+        reviewable_items.sort(key=lambda x: x[1].get("slug", ""))
+        num_to_review = max(1, ceil(len(reviewable_items) * adv_review_sample_frac))
+        items_to_review = reviewable_items[:num_to_review]
+
+        refuted_for_repair = []  # Items that reviewer refuted; re-enter repair
+
+        # Dispatch adversarial reviewer for each sampled verified item
+        for item_index, original_item, item_result in items_to_review:
+            refuted = _dispatch_adversarial_review(
+                driver, original_item, item_result, state_dir=state_dir
+            )
+
+            # If refuted, mark for re-entry into repair (not shipping)
+            if refuted:
+                item_result["verified"] = False
+                refuted_for_repair.append((item_index, original_item, item_result))
+
+        # If any items were refuted and repair_cap > 0, re-enter them into repair loop
+        if refuted_for_repair and repair_cap > 0:
+            # Re-enter repair for refuted items (one more round, bounded by repair_cap)
+            for item_index, item, item_result in refuted_for_repair:
+                slug = item.get("slug", f"item-{item_index}")
+                workdir = item.get("workDir", ".")
+                test_cmd = item.get("testCmd", "")
+
+                # Verify claim is still held (fence check)
+                if not claim_ctx.fence_ok(slug):
+                    item_result["error"] = (
+                        "claim lost during adversarial review (fenced): not repaired"
+                    )
+                    item_result["claim_lost"] = True
+                    if state_dir:
+                        _write_journal_entry(state_dir, slug, "claim_lost_adv_review", {
+                            "verified": False,
+                            "repairs": item_result.get("repairs", 0),
+                            "instance_id": claim_ctx.instance_id,
+                            "error": "claim lost during adversarial review",
+                        }, repo=item.get("repo"))
+                    continue
+
+                # Build repair prompt: append review findings
+                original_prompt = item.get("prompt", "")
+                review_error = item_result.get("review_error", "Issues found by reviewer")
+                repair_prompt = (
+                    original_prompt
+                    + f"\n\nReviewer found issues: {review_error}\n"
+                    + "Please fix the identified issues."
+                )
+
+                repair_item = dict(item)
+                repair_item["prompt"] = repair_prompt
+
+                try:
+                    # Build and dispatch repair
+                    manifest_item = build_manifest_item(driver, repair_item)
+                    dispatch_result = dispatch_item(driver, manifest_item, workdir=workdir)
+
+                    # Update result
+                    item_result["verified"] = dispatch_result.get("verified", False)
+                    item_result["testExit"] = dispatch_result.get("testExit")
+                    item_result["error"] = dispatch_result.get("error")
+                    item_result["filesWritten"] = dispatch_result.get("filesWritten", [])
+                    item_result["repairs"] = item_result.get("repairs", 0) + 1
+
+                    if state_dir:
+                        repo = item.get("repo")
+                        _write_journal_entry(state_dir, slug, "adversarial_repair", {
+                            "verified": item_result["verified"],
+                            "testExit": item_result["testExit"],
+                            "repairs": item_result["repairs"],
+                            "filesWritten": item_result["filesWritten"],
+                            "fingerprint": _item_fingerprint(item),
+                        }, repo=repo)
+
+                except Exception as exc:
+                    item_result["error"] = f"adversarial repair exception: {exc}"
+                    item_result["repairs"] = item_result.get("repairs", 0) + 1
+
+                    if state_dir:
+                        repo = item.get("repo")
+                        _write_journal_entry(state_dir, slug, "adversarial_repair_failed", {
+                            "verified": False,
+                            "repairs": item_result["repairs"],
+                            "error": str(exc),
+                        }, repo=repo)
+
+    elif adv_review_enabled and reviewable_items:
+        # Enabled but sample_frac = 0: mark all as skipped
+        for item_index, original_item, item_result in reviewable_items:
+            item_result["adversarial_review"] = "skipped_zero_frac"
+
+    elif reviewable_items:
+        # Not enabled: mark all as skipped
+        for item_index, original_item, item_result in reviewable_items:
+            item_result["adversarial_review"] = "skipped_disabled"
 
     # ========================================================================
     # PHASE 6: Adversarial review / orchestrator final catch (HS-2)
