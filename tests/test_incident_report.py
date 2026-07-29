@@ -137,22 +137,148 @@ class TestIncidentParser(unittest.TestCase):
         self.assertIsNotNone(what_happened)
         self.assertIn('actually execute', what_happened.lower())
 
-    def test_incident_from_real_commit(self):
-        """Extract incident metadata from a real commit."""
+    def test_incident_from_synthetic_commits(self):
+        """Extract incident metadata from synthetic test commits (hermetic).
+
+        Creates a temporary git repo with 4 commits shaped like real incidents:
+        - fake-green: browser-proofs tests never ran
+        - ci-drift: pytest missing from workflow
+        - flake: deflake timing test
+        - gate-activation: secret gate caught bypass
+
+        Verifies the parser correctly classifies each type.
+        """
         try:
             from tools.incident_report import IncidentParser
+            import subprocess
+            import os
         except ImportError:
             self.skipTest("incident_report module not yet implemented")
 
-        # This test requires git to work
+        # Create isolated temp directory for test repo (hygiene rule: no cwd pollution)
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Initialize a test repo
+            subprocess.run(
+                ["git", "init"],
+                cwd=tmpdir,
+                capture_output=True,
+                check=True
+            )
+
+            # Set git identity to avoid pollution
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"],
+                cwd=tmpdir,
+                capture_output=True,
+                check=True
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test User"],
+                cwd=tmpdir,
+                capture_output=True,
+                check=True
+            )
+
+            # Create synthetic commits matching incident patterns
+            commits = [
+                {
+                    "file": "test.txt",
+                    "subject": "ci(browser-proofs): actually execute playwright specs",
+                    "body": "Fixes the long-standing issue where browser-proofs never ran any specs",
+                    "expected_class": "fake-green"
+                },
+                {
+                    "file": "test.txt",
+                    "subject": "fix(ci): add pytest to main-full workflow (post-#450 drift)",
+                    "body": "The main-full.yml workflow was missing pytest",
+                    "expected_class": "ci-drift"
+                },
+                {
+                    "file": "test.txt",
+                    "subject": "fix: deflake watchdog boundary tests with logical time",
+                    "body": "Root cause: timing race condition in boundary tests",
+                    "expected_class": "flake"
+                },
+                {
+                    "file": "test.txt",
+                    "subject": "fix: secret-scan gate closes worktree bypasses",
+                    "body": "Pre-push gate now detects file changes in commits",
+                    "expected_class": "gate-activation"
+                },
+            ]
+
+            # Create commits in test repo
+            for i, commit in enumerate(commits):
+                # Write file
+                filepath = os.path.join(tmpdir, commit["file"])
+                with open(filepath, 'w') as f:
+                    f.write(f"Content {i}\n")
+
+                # Stage
+                subprocess.run(
+                    ["git", "add", commit["file"]],
+                    cwd=tmpdir,
+                    capture_output=True,
+                    check=True
+                )
+
+                # Commit with message
+                subprocess.run(
+                    ["git", "commit", "-m", f"{commit['subject']}\n\n{commit['body']}"],
+                    cwd=tmpdir,
+                    capture_output=True,
+                    check=True
+                )
+
+            # Parse incidents from the test repo
+            parser = IncidentParser(repo_root=tmpdir)
+            incidents = parser.find_all_incidents()
+
+            # Verify we found 4 incidents
+            self.assertEqual(len(incidents), 4,
+                "Should find exactly 4 synthetic incidents in test repo")
+
+            # Verify each incident is classified correctly
+            # (ordered by date desc, so reverse the expected list)
+            expected_classes = [c["expected_class"] for c in commits[::-1]]
+            actual_classes = [i["class"] for i in incidents]
+
+            self.assertEqual(actual_classes, expected_classes,
+                f"Incident classes mismatch: {actual_classes} != {expected_classes}")
+
+    def test_incident_from_real_history_skip_shallow(self):
+        """Optional test for real git history (skips in shallow clones).
+
+        Only runs when full history is available. This test validates that
+        the parser works against real incident patterns in actual repo history.
+        """
+        try:
+            from tools.incident_report import IncidentParser
+            import subprocess
+        except ImportError:
+            self.skipTest("incident_report module not yet implemented")
+
+        # Check if this is a shallow clone
+        result = subprocess.run(
+            ["git", "rev-parse", "--is-shallow-repository"],
+            cwd=".",
+            capture_output=True,
+            text=True,
+            check=False
+        )
+
+        is_shallow = result.stdout.strip() == "true"
+        if is_shallow:
+            self.skipTest("Shallow clone (fetch-depth 1 in CI) — skipping real-history test; hermetic test validates classification logic")
+
+        # Full history available: validate against real commits
         parser = IncidentParser(repo_root=".")
+        incidents = parser.find_all_incidents(limit=10)
 
-        # Search for a real incident in the repo
-        incidents = parser.find_all_incidents(limit=5)
-
-        # Should find at least one incident
+        # Should find at least some incidents in full history
         self.assertGreater(len(incidents), 0,
-            "Should find at least one incident in real git history")
+            "Should find incidents in full repository history")
 
     def test_deterministic_ordering(self):
         """Entries should be stable-ordered (date, then hash)."""
