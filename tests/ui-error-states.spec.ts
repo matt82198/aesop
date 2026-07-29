@@ -17,7 +17,7 @@ test.describe('Cost View Error States', () => {
 
     // Cost view should load (either with data, error, or placeholder)
     const costView = page.locator('[data-testid="view-cost"]');
-    expect(costView).toBeVisible();
+    await expect(costView).toBeVisible();
   });
 
   test('cost error state has proper styling when data unavailable', async ({ page }) => {
@@ -29,7 +29,7 @@ test.describe('Cost View Error States', () => {
     const errorElement = page.locator('[data-testid="cost-error"]');
 
     // Should render either error or data
-    expect(costView).toBeVisible();
+    await expect(costView).toBeVisible();
 
     // If error is shown, verify styling
     if (await errorElement.isVisible().catch(() => false)) {
@@ -70,7 +70,7 @@ test.describe('PR-Board View Error States', () => {
 
     // PR board should load without crashing
     const prBoardView = page.locator('[data-testid="view-prboard"]');
-    expect(prBoardView).toBeVisible();
+    await expect(prBoardView).toBeVisible();
 
     // Check for one of the expected states
     const states = [
@@ -196,7 +196,7 @@ test.describe('Mobile Layout (6/6 Viewports)', () => {
 
       // Page should render without crashing
       const main = page.locator('main');
-      expect(main).toBeVisible();
+      await expect(main).toBeVisible();
     }
   });
 
@@ -209,7 +209,7 @@ test.describe('Mobile Layout (6/6 Viewports)', () => {
       await page.waitForLoadState('networkidle');
 
       const main = page.locator('main');
-      expect(main).toBeVisible();
+      await expect(main).toBeVisible();
     }
   });
 
@@ -222,7 +222,7 @@ test.describe('Mobile Layout (6/6 Viewports)', () => {
       await page.waitForLoadState('networkidle');
 
       const main = page.locator('main');
-      expect(main).toBeVisible();
+      await expect(main).toBeVisible();
     }
   });
 
