@@ -42,6 +42,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import common
 
+# Import the read_api facade
+repo_root = Path(__file__).parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
+from state_store.read_api import ReadAPI
+
 
 def get_tracker_path(state_root=None):
     """Return path to tracker.json."""
@@ -51,15 +57,12 @@ def get_tracker_path(state_root=None):
 
 
 def read_tracker(state_root=None):
-    """Read tracker.json. Returns None if missing."""
-    tracker_path = get_tracker_path(state_root)
-    if not tracker_path.exists():
-        return None
-    try:
-        return json.loads(tracker_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, IOError) as e:
-        print(f"ERROR: Could not read tracker.json: {e}", file=sys.stderr)
-        return None
+    """Read tracker.json using the read_api facade. Returns empty dict if missing."""
+    state_dir = state_root or common.get_state_dir()
+    api = ReadAPI(state_dir)
+    snapshot = api.read_tracker_snapshot()
+    # Return None if empty (for backward compatibility with callers checking None)
+    return snapshot if snapshot else None
 
 
 def write_tracker(tracker_data, state_root=None):
