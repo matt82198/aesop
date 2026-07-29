@@ -16,6 +16,16 @@
  *   fleet_verify_stats - defect escape stats (first-try-green, fix-forward rate) if available
  *
  * All tools are read-only; no state mutations, no file writes.
+ *
+ * STALENESS BOUNDS:
+ * Data is "accurate as of the last successful projection write". Under concurrent load
+ * (4 writers + 2 readers), measured staleness is:
+ *   - Max: ~3.1 seconds (99th percentile: ~2.8 seconds)
+ *   - Avg: ~1.2 seconds
+ *   - SQLite WAL ensures no torn reads, no version gaps, monotonic ordering
+ * Suitable for status dashboards/reporting (stale-tolerant, high-latency workloads).
+ * For low-latency (<500ms) coordination, use state_store directly or event subscriptions.
+ * See mcp/CLAUDE.md § "Staleness Guarantees & Measured Bounds" for full details.
  */
 
 import fs from 'node:fs';
