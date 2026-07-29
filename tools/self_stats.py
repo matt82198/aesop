@@ -799,6 +799,25 @@ class StatsCounter:
         except (json.JSONDecodeError, IOError):
             return None
 
+    def get_stats_load_error(self, stats_file: str = "stats.json") -> Optional[str]:
+        """Check if stats.json exists and is readable. Return error type or None.
+
+        Returns:
+            None if file exists and is readable
+            "MISSING" if file doesn't exist
+            "UNREADABLE" if file exists but is corrupted/unreadable
+        """
+        stats_path = Path(stats_file)
+        if not stats_path.exists():
+            return "MISSING"
+
+        try:
+            with open(stats_path, 'r', encoding='utf-8') as f:
+                json.load(f)
+            return None  # File is readable
+        except (json.JSONDecodeError, IOError):
+            return "UNREADABLE"
+
     def markdown_from_dict(self, stats_dict: Dict[str, Any]) -> str:
         """Generate markdown block from a stats dictionary (e.g., from stats.json)."""
         lines = []
@@ -930,24 +949,37 @@ class StatsCounter:
 
         return True
 
-    def check_readme(self, readme_path: str = "README.md", stats_file: str = "stats.json") -> bool:
+    def check_readme(self, readme_path: str = "README.md", stats_file: str = "stats.json") -> Tuple[bool, Optional[str]]:
         """Check if README's marked block matches current stats.json.
 
-        Returns True if they match, False if they don't (or markers not found).
-        Exit code usage: sys.exit(0) if True, sys.exit(1) if False.
+        Returns:
+            (bool, error_msg_tuple): bool is True if match, False if mismatch/no-markers
+                                    error_msg_tuple is None for success/drift, or (error_type, message)
+                                    for MISSING/UNREADABLE (fail-closed semantics)
+
+        Fail-closed: if stats.json is MISSING or UNREADABLE, returns False with error info.
+        Never writes stats.json (--regenerate is the only mode that writes).
         """
-        # Load stats from file
+        # Check if stats.json is readable (fail-closed if not)
+        load_error = self.get_stats_load_error(stats_file)
+        if load_error is not None:
+            # Return False with error info (will be handled by CLI to exit 1 with stderr)
+            error_message = f"ERROR: stats.json {load_error.lower()}"
+            if load_error == "MISSING":
+                error_message = f"MISSING: stats.json not found — run --regenerate"
+            elif load_error == "UNREADABLE":
+                error_message = f"UNREADABLE: stats.json is corrupted or unreadable"
+            return (False, (load_error, error_message))
+
+        # Load stats from file (should succeed since we just checked it)
         stats_dict = self.load_stats(stats_file)
         if stats_dict is None:
-            # stats.json doesn't exist, regenerate it
-            self.save_stats(stats_file)
-            stats_dict = self.load_stats(stats_file)
-            if stats_dict is None:
-                return False
+            # Shouldn't reach here (we just verified it loads), but fail-closed
+            return (False, ("UNREADABLE", "UNREADABLE: stats.json could not be loaded"))
 
         readme_file = Path(readme_path)
         if not readme_file.exists():
-            return False
+            return (False, None)
 
         with open(readme_file, 'r', encoding='utf-8', errors='replace') as f:
             content = f.read()
@@ -958,7 +990,7 @@ class StatsCounter:
 
         if start_marker not in content or end_marker not in content:
             # Markers not found, treat as no-op (return True since nothing to check)
-            return True
+            return (True, None)
 
         # Extract current block
         start_idx = content.find(start_marker)
@@ -968,8 +1000,9 @@ class StatsCounter:
         # Generate expected block
         expected_block = self.markdown_from_dict(stats_dict)
 
-        # Compare
-        return current_block.strip() == expected_block.strip()
+        # Compare: return (True, None) if match, (False, None) if drift
+        matches = current_block.strip() == expected_block.strip()
+        return (matches, None)
 
 
 def main():
@@ -1061,7 +1094,17 @@ def main():
         readme_path = Path(args.repo) / args.readme if not Path(args.readme).is_absolute() else args.readme
         stats_file = Path(args.repo) / args.stats_file if not Path(args.stats_file).is_absolute() else args.stats_file
 
-        if counter.check_readme(str(readme_path), str(stats_file)):
+        matches, error_info = counter.check_readme(str(readme_path), str(stats_file))
+
+        # Handle fail-closed errors (MISSING or UNREADABLE)
+        if error_info is not None:
+            error_type, error_message = error_info
+            sys.stderr.write(f"{error_message}\n")
+            sys.stderr.flush()
+            sys.exit(1)
+
+        # Handle match/drift
+        if matches:
             out.write(f"OK: {readme_path} matches {stats_file}\n")
             out.flush()
             sys.exit(0)
