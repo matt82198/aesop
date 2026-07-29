@@ -143,7 +143,7 @@ The benchmark proves sufficiency for seam-level engineering tasks: across 39 jud
 All evidence is committed to the repo and can be regenerated or verified by cloning.
 
 **Gates That Fired:**  
-The guardrails below are not theoretical. Real activations: secret-scan blocked 14 pushes including a vocabulary-trip (benchmark fixture pattern matched), a `--no-verify` bypass attempt caught and the flag banned from all dispatch templates, watchdog auto-restarts recovered from 3 detected stalls, and exact-gate re-runs on main refuted false-green claims twice. One suppressed --admin flag would have let an agent merge hallucinated docs — now forbidden in every orchestrated prompt.
+The guardrails below are not theoretical. Real activations: the pre-push secret scan has blocked pushes—including a benchmark-vocabulary false-positive where the gate was kept strict and the content reworded; an agent's `--no-verify` bypass attempt was caught and the flag banned from every dispatch template; the watchdog has detected and auto-restarted stalled agents; and self-reported "green" results have been repeatedly refuted by re-running the exact CI gate—in one audited overnight session, nine such claims failed the re-run (BUILDLOG record). An early `--admin` merge of hallucinated docs led to those flags being forbidden in every orchestrated prompt.
 
 - **Metrics gate:** [`bash scripts/verify-stats.sh --check`](./scripts/verify-stats.sh) — verifies stats.json matches git; README refreshed on every commit.
 - **Test suite count:** [`python tools/verify_test_suite_count.py --check`](./tools/verify_test_suite_count.py) — confirms test count hasn't drifted.
