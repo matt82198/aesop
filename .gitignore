@@ -18,6 +18,7 @@ aesop.config.json
 ledger/
 *-BACKUP.log
 *.jsonl
+bench/results/frontier_slice_results.json
 
 # Exceptions: committed benchmark ground truth and sampled task sets
 !bench/tasks_sampled_judgment.jsonl

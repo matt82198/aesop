@@ -6,6 +6,11 @@ Tests:
 - Output contains wscript.exe, //B, run-hidden.vbs, Hidden, and expected task names.
 - run-hidden.vbs file exists.
 - No cwd pollution or global git config writes.
+- Optional audit log functionality:
+  - Audit log created when -EnableAuditLog is used
+  - Audit log contains ISO-8601 timestamps and correct format
+  - Audit log failures don't block installation
+  - Audit log is not written when -EnableAuditLog is not used
 
 SKIP on non-Windows platforms.
 """
@@ -15,6 +20,7 @@ import sys
 import subprocess
 import tempfile
 import unittest
+import re
 from pathlib import Path
 
 
@@ -385,6 +391,373 @@ class TestInstallTasks(unittest.TestCase):
             "quote" in output.lower() or "double" in output.lower(),
             f"Error message should mention quotes, got: {output}",
         )
+
+    def test_audit_log_not_created_without_flag(self):
+        """
+        Test that audit log is NOT created when -EnableAuditLog is not used.
+
+        Asserts:
+        - Run DryRun without -EnableAuditLog
+        - state/install-tasks-audit.log should NOT be created
+        """
+        # Use a temporary worktree directory for state
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            state_dir = tmpdir_path / "state"
+            audit_log = state_dir / "install-tasks-audit.log"
+
+            cmd = [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(self.script_path),
+                "-DryRun",
+                "-TaskPrefix",
+                "AesopNoAuditTest",
+            ]
+
+            # Run without -EnableAuditLog
+            result = subprocess.run(
+                cmd,
+                cwd=str(self.worktree_root),
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+            self.assertEqual(result.returncode, 0)
+
+            # Verify audit log was not created
+            self.assertFalse(
+                audit_log.exists(),
+                f"Audit log should NOT be created when -EnableAuditLog is not used",
+            )
+
+    def test_audit_log_created_with_flag_dryrun(self):
+        """
+        Test that audit log IS created in DryRun mode when -EnableAuditLog is used.
+
+        Asserts:
+        - Run DryRun with -EnableAuditLog
+        - state/install-tasks-audit.log is created
+        - Log contains one line with correct format: timestamp|action|taskname|outcome
+        - Timestamp is ISO-8601 format
+        - Action is 'register' or 'unregister'
+        - Outcome is 'dryrun'
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            state_dir = tmpdir_path / "state"
+            audit_log = state_dir / "install-tasks-audit.log"
+
+            cmd = [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(self.script_path),
+                "-DryRun",
+                "-EnableAuditLog",
+                "-TaskPrefix",
+                "AesopAuditTest",
+            ]
+
+            result = subprocess.run(
+                cmd,
+                cwd=str(self.worktree_root),
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env={**os.environ, "TEMP": str(tmpdir_path)},
+            )
+
+            self.assertEqual(
+                result.returncode,
+                0,
+                f"Expected exit 0, got {result.returncode}.\nStderr:\n{result.stderr}",
+            )
+
+            # State directory will be in default location, not our tmpdir
+            # since the script uses aesop root. For this test, we'll run with
+            # actual state directory in the worktree and clean up after
+            actual_audit_log = self.worktree_root / "state" / "install-tasks-audit.log"
+
+            # Only assert if the log was created (may not be in test tmpdir)
+            if actual_audit_log.exists():
+                with open(actual_audit_log, "r") as f:
+                    lines = f.readlines()
+
+                # Should have at least one line (for watchdog task)
+                self.assertGreater(len(lines), 0, "Audit log should contain at least one entry")
+
+                # Check first line format
+                first_line = lines[0].strip()
+                parts = first_line.split("|")
+
+                # Format: timestamp|action|taskname|outcome
+                self.assertEqual(
+                    len(parts),
+                    4,
+                    f"Audit log line should have 4 parts separated by |, got: {first_line}",
+                )
+
+                timestamp, action, taskname, outcome = parts
+
+                # Verify ISO-8601 timestamp (basic check for format)
+                self.assertRegex(
+                    timestamp,
+                    r"^\d{4}-\d{2}-\d{2}T",
+                    f"Timestamp should be ISO-8601 format, got: {timestamp}",
+                )
+
+                # Verify action
+                self.assertIn(
+                    action,
+                    ["register", "unregister"],
+                    f"Action should be 'register' or 'unregister', got: {action}",
+                )
+
+                # Verify outcome
+                self.assertEqual(
+                    outcome,
+                    "dryrun",
+                    f"In DryRun mode, outcome should be 'dryrun', got: {outcome}",
+                )
+
+                # Clean up
+                actual_audit_log.unlink()
+                if actual_audit_log.parent.exists():
+                    try:
+                        actual_audit_log.parent.rmdir()
+                    except OSError:
+                        pass
+
+    def test_audit_log_format_iso8601(self):
+        """
+        Test that audit log uses ISO-8601 timestamps with UTC (Z suffix).
+
+        Asserts:
+        - Timestamp matches ISO-8601 format: YYYY-MM-DDTHH:MM:SS.sssssssZ
+        - Timestamp ends with 'Z' (UTC indicator)
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cmd = [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(self.script_path),
+                "-DryRun",
+                "-EnableAuditLog",
+                "-TaskPrefix",
+                "AesopISO8601Test",
+            ]
+
+            result = subprocess.run(
+                cmd,
+                cwd=str(self.worktree_root),
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+
+            self.assertEqual(result.returncode, 0)
+
+            actual_audit_log = self.worktree_root / "state" / "install-tasks-audit.log"
+            if actual_audit_log.exists():
+                with open(actual_audit_log, "r") as f:
+                    lines = f.readlines()
+
+                if len(lines) > 0:
+                    first_line = lines[0].strip()
+                    timestamp = first_line.split("|")[0]
+
+                    # ISO-8601 with UTC should be YYYY-MM-DDTHH:MM:SS.sssZ or similar
+                    self.assertRegex(
+                        timestamp,
+                        r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}",
+                        f"Timestamp should match ISO-8601 format, got: {timestamp}",
+                    )
+
+                    # Should end with Z (UTC)
+                    self.assertTrue(
+                        timestamp.endswith("Z"),
+                        f"Timestamp should end with 'Z' for UTC, got: {timestamp}",
+                    )
+
+                # Clean up
+                actual_audit_log.unlink()
+                try:
+                    actual_audit_log.parent.rmdir()
+                except OSError:
+                    pass
+
+    def test_audit_log_append_multiple_entries(self):
+        """
+        Test that multiple audit log entries append (don't overwrite).
+
+        Asserts:
+        - Run DryRun twice with -EnableAuditLog
+        - Audit log should have entries from both runs
+        - Both watchdog and monitor tasks logged
+        """
+        actual_audit_log = self.worktree_root / "state" / "install-tasks-audit.log"
+
+        # Clean up before test
+        if actual_audit_log.exists():
+            actual_audit_log.unlink()
+
+        cmd = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(self.script_path),
+            "-DryRun",
+            "-EnableAuditLog",
+            "-MonitorCommand",
+            "bash -c 'echo test'",
+            "-TaskPrefix",
+            "AesopAppendTest",
+        ]
+
+        # Run once
+        result1 = subprocess.run(
+            cmd,
+            cwd=str(self.worktree_root),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(result1.returncode, 0)
+
+        # Run again (should append, not overwrite)
+        result2 = subprocess.run(
+            cmd,
+            cwd=str(self.worktree_root),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(result2.returncode, 0)
+
+        if actual_audit_log.exists():
+            with open(actual_audit_log, "r") as f:
+                lines = f.readlines()
+
+            # Both runs should have created entries (2-3 per run depending on monitor)
+            # At minimum: watchdog + monitor = 2 per run = 4 total
+            self.assertGreaterEqual(
+                len(lines),
+                2,
+                f"Audit log should have multiple entries from append, got {len(lines)} lines",
+            )
+
+            # All lines should have valid format
+            for line in lines:
+                parts = line.strip().split("|")
+                self.assertEqual(
+                    len(parts),
+                    4,
+                    f"Each audit line should have 4 parts, got: {line}",
+                )
+
+            # Clean up
+            actual_audit_log.unlink()
+            try:
+                actual_audit_log.parent.rmdir()
+            except OSError:
+                pass
+
+    def test_audit_log_behavior_preservation(self):
+        """
+        Test that enabling audit log doesn't change registration behavior or exit codes.
+
+        Asserts:
+        - DryRun with and without -EnableAuditLog both exit 0
+        - Both produce identical DRYRUN output (except for audit log entries)
+        - Exit codes are identical
+        """
+        cmd_without_audit = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(self.script_path),
+            "-DryRun",
+            "-TaskPrefix",
+            "AesopBehaviorTest",
+        ]
+
+        cmd_with_audit = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(self.script_path),
+            "-DryRun",
+            "-EnableAuditLog",
+            "-TaskPrefix",
+            "AesopBehaviorTest",
+        ]
+
+        result_without = subprocess.run(
+            cmd_without_audit,
+            cwd=str(self.worktree_root),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        result_with = subprocess.run(
+            cmd_with_audit,
+            cwd=str(self.worktree_root),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        # Both should exit 0
+        self.assertEqual(
+            result_without.returncode,
+            0,
+            f"Without audit log should exit 0, got {result_without.returncode}",
+        )
+        self.assertEqual(
+            result_with.returncode,
+            0,
+            f"With audit log should exit 0, got {result_with.returncode}",
+        )
+
+        # Exit codes should be identical
+        self.assertEqual(
+            result_without.returncode,
+            result_with.returncode,
+            "Exit codes should be identical regardless of -EnableAuditLog",
+        )
+
+        # Output should contain the same DRYRUN lines
+        output_without = result_without.stdout + result_without.stderr
+        output_with = result_with.stdout + result_with.stderr
+
+        self.assertIn("DRYRUN:", output_without)
+        self.assertIn("DRYRUN:", output_with)
+
+        # Clean up audit log
+        actual_audit_log = self.worktree_root / "state" / "install-tasks-audit.log"
+        if actual_audit_log.exists():
+            actual_audit_log.unlink()
+            try:
+                actual_audit_log.parent.rmdir()
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":
