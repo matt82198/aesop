@@ -159,6 +159,10 @@ def reader_worker(store, collector, thread_id, duration_sec):
             if "database is locked" not in str(e):
                 collector.record_wal_error(f"Reader {thread_id} DB error: {e}")
             time.sleep(0.01)
+        except Exception as e:
+            # Catch unexpected errors to avoid thread crashes
+            collector.record_wal_error(f"Reader {thread_id} unexpected error: {e}")
+            break
 
 
 class TestMCPStaleness(unittest.TestCase):
@@ -171,24 +175,28 @@ class TestMCPStaleness(unittest.TestCase):
             store = EventStore(db_path)
             collector = StalenessCollector()
 
-            with ThreadPoolExecutor(max_workers=6) as executor:
-                futures = []
+            try:
+                with ThreadPoolExecutor(max_workers=6) as executor:
+                    futures = []
 
-                # 4 writers
-                for i in range(4):
-                    fut = executor.submit(writer_worker, store, collector, i, 100)
-                    futures.append(("writer", i, fut))
+                    # 4 writers
+                    for i in range(4):
+                        fut = executor.submit(writer_worker, store, collector, i, 100)
+                        futures.append(("writer", i, fut))
 
-                time.sleep(0.05)
+                    time.sleep(0.05)
 
-                # 2 readers
-                for i in range(2):
-                    fut = executor.submit(reader_worker, store, collector, i, 2.0)
-                    futures.append(("reader", i, fut))
+                    # 2 readers
+                    for i in range(2):
+                        fut = executor.submit(reader_worker, store, collector, i, 2.0)
+                        futures.append(("reader", i, fut))
 
-                # Wait for all to complete
-                for role, idx, fut in futures:
-                    fut.result(timeout=30)
+                    # Wait for all to complete (with timeout per future)
+                    for role, idx, fut in futures:
+                        fut.result(timeout=30)
+            finally:
+                # Ensure proper cleanup even if there are errors
+                executor.shutdown(wait=True)
 
             summary = collector.summary()
 
@@ -249,10 +257,13 @@ class TestMCPStaleness(unittest.TestCase):
                     with lock:
                         all_versions.append(v)
 
-            with ThreadPoolExecutor(max_workers=4) as executor:
-                futures = [executor.submit(append_events, i, 50) for i in range(4)]
-                for fut in futures:
-                    fut.result()
+            try:
+                with ThreadPoolExecutor(max_workers=4) as executor:
+                    futures = [executor.submit(append_events, i, 50) for i in range(4)]
+                    for fut in futures:
+                        fut.result(timeout=30)
+            finally:
+                executor.shutdown(wait=True)
 
             # Should have 200 unique versions (4 threads × 50 events)
             self.assertEqual(len(all_versions), 200)
@@ -301,24 +312,28 @@ class TestMCPStaleness(unittest.TestCase):
             store = EventStore(db_path)
             collector = StalenessCollector()
 
-            with ThreadPoolExecutor(max_workers=6) as executor:
-                futures = []
+            try:
+                with ThreadPoolExecutor(max_workers=6) as executor:
+                    futures = []
 
-                # 4 writers
-                for i in range(4):
-                    fut = executor.submit(writer_worker, store, collector, i, 150)
-                    futures.append(("writer", i, fut))
+                    # 4 writers
+                    for i in range(4):
+                        fut = executor.submit(writer_worker, store, collector, i, 150)
+                        futures.append(("writer", i, fut))
 
-                time.sleep(0.05)
+                    time.sleep(0.05)
 
-                # 2 readers for 3 seconds
-                for i in range(2):
-                    fut = executor.submit(reader_worker, store, collector, i, 3.0)
-                    futures.append(("reader", i, fut))
+                    # 2 readers for 3 seconds
+                    for i in range(2):
+                        fut = executor.submit(reader_worker, store, collector, i, 3.0)
+                        futures.append(("reader", i, fut))
 
-                # Wait for all to complete
-                for role, idx, fut in futures:
-                    fut.result(timeout=30)
+                    # Wait for all to complete (with timeout per future)
+                    for role, idx, fut in futures:
+                        fut.result(timeout=30)
+            finally:
+                # Ensure proper cleanup even if there are errors
+                executor.shutdown(wait=True)
 
             summary = collector.summary()
 
