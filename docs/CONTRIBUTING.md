@@ -1,10 +1,10 @@
 # Contributing to Aesop
 
-Aesop is **source-available** under the [PolyForm Strict License 1.0.0](../LICENSE). You may read, run, and use the software for any permitted purpose (noncommercial, personal, or organizational research), but **modification and redistribution are not permitted**.
+Aesop is **MIT-licensed** under the [MIT License](../LICENSE). Contributions via pull request are warmly welcome.
 
 ## Contribution Policy
 
-**Outside code patches cannot be merged as contributions** due to license terms. However, feedback and collaboration are genuinely welcome:
+**Code patches are welcome and encouraged.** Open a pull request with your changes, and the maintainer will review it. Feedback and collaboration are also valued:
 
 - **Issues and bug reports** — describe what's broken or confusing.
 - **Discussion and ideas** — feature requests, design critiques, use-case questions.
@@ -65,7 +65,7 @@ Co-Authored-By: Bob <bob@example.com>"
 
 ## License & DCO
 
-By proposing changes, you affirm that you own or have the right to contribute your work and agree to license it under PolyForm Strict 1.0.0. See [LICENSE](../LICENSE) for the full terms.
+By proposing changes, you affirm that you own or have the right to contribute your work and agree to license it under the MIT License. See [LICENSE](../LICENSE) for the full terms.
 
 ## Questions?
 
