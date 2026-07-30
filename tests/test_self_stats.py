@@ -756,14 +756,17 @@ class MergedPRsGhAndGitFallbackTest(SelfStatsFixtureCase):
                     return mock_result
             raise NotImplementedError(f"Unexpected subprocess call: {args}")
 
-        with patch('subprocess.run') as mock_run:
-            mock_run.side_effect = run_side_effect
-            stats._merged_prs = None
+        with patch.object(self_stats.GitStats, '_origin_slug', return_value='example/fixture'):
+            with patch('subprocess.run') as mock_run:
+                mock_run.side_effect = run_side_effect
+                stats._merged_prs = None
 
-            count = stats.merged_prs
+                count = stats.merged_prs
 
-            # Should be 3 (PRs #1, #2, #3)
-            self.assertEqual(count, 3, f"should count all 3 PRs (got {count})")
+                # Should be 3 (PRs #1, #2, #3)
+                self.assertEqual(count, 3, f"should count all 3 PRs (got {count})")
+                self.assertEqual(stats.merged_prs_source, "git-log",
+                                 "git fallback must record source 'git-log'")
 
     def test_git_fallback_counts_distinct_pr_numbers(self):
         """Git fallback should count distinct PR numbers (dedupe)."""
@@ -785,14 +788,15 @@ class MergedPRsGhAndGitFallbackTest(SelfStatsFixtureCase):
                     return mock_result
             raise NotImplementedError(f"Unexpected subprocess call: {args}")
 
-        with patch('subprocess.run') as mock_run:
-            mock_run.side_effect = run_side_effect
-            stats._merged_prs = None
+        with patch.object(self_stats.GitStats, '_origin_slug', return_value='example/fixture'):
+            with patch('subprocess.run') as mock_run:
+                mock_run.side_effect = run_side_effect
+                stats._merged_prs = None
 
-            count = stats.merged_prs
+                count = stats.merged_prs
 
-            # Should be 2 (PR #1 counted once, PR #3)
-            self.assertEqual(count, 2, f"should dedupe PR numbers (got {count})")
+                # Should be 2 (PR #1 counted once, PR #3)
+                self.assertEqual(count, 2, f"should dedupe PR numbers (got {count})")
 
     def test_merged_prs_with_gh_api_success(self):
         """When gh API succeeds with valid integer, should return the gh count."""
@@ -800,15 +804,45 @@ class MergedPRsGhAndGitFallbackTest(SelfStatsFixtureCase):
 
         stats = self_stats.GitStats(repo_root=str(self.repo_root))
 
-        with patch('subprocess.run') as mock_run:
-            mock_result = type('Result', (), {'returncode': 0, 'stdout': '387\n'})()
-            mock_run.return_value = mock_result
+        with patch.object(self_stats.GitStats, '_origin_slug', return_value='example/fixture'):
+            with patch('subprocess.run') as mock_run:
+                mock_result = type('Result', (), {'returncode': 0, 'stdout': '387\n'})()
+                mock_run.return_value = mock_result
 
+                stats._merged_prs = None
+                count = stats.merged_prs
+
+                # Should return 387 from gh
+                self.assertEqual(count, 387, f"should return gh API count (got {count})")
+                self.assertEqual(stats.merged_prs_source, "gh-api",
+                                 "gh API path must record source 'gh-api'")
+
+    def test_gh_not_attempted_without_github_origin(self):
+        """Without a GitHub origin remote, gh must never be invoked (reproducible offline)."""
+        from unittest.mock import patch
+        import subprocess as real_subprocess
+
+        # Fixture repo has no origin remote at all
+        stats = self_stats.GitStats(repo_root=str(self.repo_root))
+
+        gh_calls = []
+
+        def run_side_effect(*args, **kwargs):
+            if args and args[0] and args[0][0] == 'gh':
+                gh_calls.append(args)
+                raise AssertionError("gh must not be invoked when origin is not a GitHub repo")
+            return real_subprocess.run(*args, **kwargs)
+
+        with patch.object(self_stats, 'subprocess') as mock_subprocess:
+            mock_subprocess.run.side_effect = run_side_effect
+            mock_subprocess.TimeoutExpired = real_subprocess.TimeoutExpired
             stats._merged_prs = None
+
             count = stats.merged_prs
 
-            # Should return 387 from gh
-            self.assertEqual(count, 387, f"should return gh API count (got {count})")
+            self.assertEqual(gh_calls, [], "gh must be skipped without a GitHub origin")
+            self.assertGreaterEqual(count, 3, "git fallback should still count fixture PRs")
+            self.assertEqual(stats.merged_prs_source, "git-log")
 
     def test_merged_prs_falls_back_to_git_on_gh_failure(self):
         """When gh API fails (non-zero exit), should fall back to git count."""
@@ -832,14 +866,17 @@ class MergedPRsGhAndGitFallbackTest(SelfStatsFixtureCase):
             mock_result = type('Result', (), {'stdout': '', 'returncode': 0})()
             return mock_result
 
-        with patch('subprocess.run') as mock_run:
-            mock_run.side_effect = run_side_effect
-            stats._merged_prs = None
+        with patch.object(self_stats.GitStats, '_origin_slug', return_value='example/fixture'):
+            with patch('subprocess.run') as mock_run:
+                mock_run.side_effect = run_side_effect
+                stats._merged_prs = None
 
-            count = stats.merged_prs
+                count = stats.merged_prs
 
-            # Should fall back and return git count (2 in this case)
-            self.assertEqual(count, 2, f"should fall back to git on gh failure (got {count})")
+                # Should fall back and return git count (2 in this case)
+                self.assertEqual(count, 2, f"should fall back to git on gh failure (got {count})")
+                self.assertEqual(stats.merged_prs_source, "git-log",
+                                 "fallback path must record source 'git-log'")
 
     def test_merged_prs_handles_gh_non_numeric_output(self):
         """When gh returns non-numeric output, should fall back to git."""
@@ -862,14 +899,16 @@ class MergedPRsGhAndGitFallbackTest(SelfStatsFixtureCase):
             mock_result = type('Result', (), {'stdout': '', 'returncode': 0})()
             return mock_result
 
-        with patch('subprocess.run') as mock_run:
-            mock_run.side_effect = run_side_effect
-            stats._merged_prs = None
+        with patch.object(self_stats.GitStats, '_origin_slug', return_value='example/fixture'):
+            with patch('subprocess.run') as mock_run:
+                mock_run.side_effect = run_side_effect
+                stats._merged_prs = None
 
-            count = stats.merged_prs
+                count = stats.merged_prs
 
-            # Should fall back to git count
-            self.assertEqual(count, 1, f"should fall back when gh output is invalid (got {count})")
+                # Should fall back to git count
+                self.assertEqual(count, 1, f"should fall back when gh output is invalid (got {count})")
+                self.assertEqual(stats.merged_prs_source, "git-log")
 
     def test_merged_prs_handles_gh_timeout(self):
         """When gh times out, should fall back to git without raising."""
@@ -891,13 +930,15 @@ class MergedPRsGhAndGitFallbackTest(SelfStatsFixtureCase):
             mock_result = type('Result', (), {'stdout': '', 'returncode': 0})()
             return mock_result
 
-        with patch('subprocess.run') as mock_run:
-            mock_run.side_effect = run_side_effect
-            stats._merged_prs = None
+        with patch.object(self_stats.GitStats, '_origin_slug', return_value='example/fixture'):
+            with patch('subprocess.run') as mock_run:
+                mock_run.side_effect = run_side_effect
+                stats._merged_prs = None
 
-            # Should not raise, should fall back to git
-            count = stats.merged_prs
-            self.assertEqual(count, 1, f"should handle gh timeout gracefully (got {count})")
+                # Should not raise, should fall back to git
+                count = stats.merged_prs
+                self.assertEqual(count, 1, f"should handle gh timeout gracefully (got {count})")
+                self.assertEqual(stats.merged_prs_source, "git-log")
 
 
 class AuthorClassificationTest(unittest.TestCase):
@@ -1078,6 +1119,280 @@ class ClassifiedAuthorsGitStatsTest(SelfStatsFixtureCase):
         self.assertIn("Claude model tier", output, "should mention 'Claude model tier'")
         # Verify the tiers count is correct
         self.assertIn("2 Claude model tier", output, "should list 2 model tiers")
+
+
+class SingleSourceMergedPrTest(SelfStatsFixtureCase):
+    """The merged-PR count must be single-sourced: one field, one definition,
+    with the source ('gh-api' | 'git-log') recorded, and economics consuming
+    the SAME count (never recomputing its own)."""
+
+    def setUp(self):
+        super().setUp()
+        os.chdir(str(self.repo_root))
+        self.make_commit("initial")
+        self.make_merge_commit(1)
+        # Squash-style commit so union heuristic differs from merge-commit-only counting
+        test_file = self.repo_root / "test.txt"
+        test_file.write_text("squash work\n")
+        subprocess.run(["git", "add", "test.txt"], cwd=str(self.repo_root), capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "feat: squash work (#2)"],
+            cwd=str(self.repo_root), capture_output=True, check=True
+        )
+        self.stats_file = self.repo_root / "stats.json"
+
+    def test_json_output_includes_source_field(self):
+        """counter.json() must include git.merged_prs_source on the git block."""
+        counter = self_stats.StatsCounter(repo_root=str(self.repo_root), data_file=str(self.data_file))
+        data = json.loads(counter.json())
+        self.assertIn("merged_prs_source", data["git"])
+        self.assertIn(data["git"]["merged_prs_source"], ("gh-api", "git-log"))
+
+    def test_regenerated_stats_source_is_git_log_without_gh(self):
+        """Fixture repo has no GitHub origin, so regenerated stats must say source git-log."""
+        counter = self_stats.StatsCounter(repo_root=str(self.repo_root), data_file=str(self.data_file))
+        counter.save_stats(str(self.stats_file))
+        with open(self.stats_file, encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(data["git"]["merged_prs_source"], "git-log")
+        # Union heuristic: PR #1 (merge commit) + PR #2 (squash) = 2
+        self.assertEqual(data["git"]["merged_prs"], 2)
+
+    def test_economics_consumes_same_merged_pr_count(self):
+        """Economics block must carry the exact same merged-PR count as the git block."""
+        counter = self_stats.StatsCounter(repo_root=str(self.repo_root), data_file=str(self.data_file))
+        counter.save_stats(str(self.stats_file))
+        with open(self.stats_file, encoding="utf-8") as f:
+            data = json.load(f)
+
+        self.assertIn("economics", data, "economics block should be present")
+        econ = data["economics"]
+        git_count = data["git"]["merged_prs"]
+
+        econ_counts = []
+        if "merged_prs" in econ:
+            econ_counts.append(econ["merged_prs"])
+        if isinstance(econ.get("cost_per_merged_pr"), dict):
+            econ_counts.append(econ["cost_per_merged_pr"]["merged_prs"])
+        self.assertTrue(econ_counts, "economics must expose the merged-PR count it used")
+        for c in econ_counts:
+            self.assertEqual(c, git_count,
+                             "economics merged-PR count must equal git.merged_prs (single source)")
+        # Source must be carried too
+        self.assertEqual(econ.get("merged_prs_source"), data["git"]["merged_prs_source"])
+
+    def test_regenerated_stats_include_head_sha(self):
+        """Regenerated stats must record the HEAD sha for provenance."""
+        counter = self_stats.StatsCounter(repo_root=str(self.repo_root), data_file=str(self.data_file))
+        counter.save_stats(str(self.stats_file))
+        with open(self.stats_file, encoding="utf-8") as f:
+            data = json.load(f)
+
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(self.repo_root), capture_output=True, text=True, timeout=30
+        ).stdout.strip()
+        self.assertEqual(data.get("head_sha"), head)
+
+    def test_no_zero_filler_economics_without_ledger(self):
+        """With no token ledger, economics must NOT ship 0.0 token/cost fields."""
+        counter = self_stats.StatsCounter(repo_root=str(self.repo_root), data_file=str(self.data_file))
+        counter.save_stats(str(self.stats_file))
+        with open(self.stats_file, encoding="utf-8") as f:
+            data = json.load(f)
+
+        econ = data.get("economics", {})
+        self.assertIs(econ.get("token_ledger_available"), False,
+                      "economics must explicitly mark the token ledger unavailable")
+        flat = json.dumps(econ)
+        for filler_key in ("tokens_per_loc", "tokens_per_pr", "tokens_per_wave",
+                           "cost_per_backlog_item"):
+            self.assertNotIn(filler_key, flat,
+                             f"'{filler_key}' must be omitted when unmeasured, never 0.0 filler")
+
+
+class StatsIntegrityValidationTest(SelfStatsFixtureCase):
+    """validate_stats_integrity: contradiction, zero-filler, source, staleness."""
+
+    def setUp(self):
+        super().setUp()
+        os.chdir(str(self.repo_root))
+        self.make_commit("initial")
+        self.make_merge_commit(1)
+        self.stats_file = self.repo_root / "stats.json"
+        counter = self_stats.StatsCounter(repo_root=str(self.repo_root), data_file=str(self.data_file))
+        counter.save_stats(str(self.stats_file))
+        with open(self.stats_file, encoding="utf-8") as f:
+            self.stats_dict = json.load(f)
+
+    def _validate(self, d, **kwargs):
+        kwargs.setdefault("repo_root", str(self.repo_root))
+        return self_stats.validate_stats_integrity(d, **kwargs)
+
+    def test_fresh_stats_pass_validation(self):
+        errors = self._validate(self.stats_dict)
+        self.assertEqual(errors, [], f"freshly regenerated stats must validate clean: {errors}")
+
+    def test_pr_count_contradiction_detected(self):
+        d = json.loads(json.dumps(self.stats_dict))
+        d["economics"]["merged_prs"] = d["git"]["merged_prs"] + 100
+        errors = self._validate(d)
+        self.assertTrue(any("merged" in e.lower() and "contradiction" in e.lower() for e in errors),
+                        f"contradicting PR counts must fail validation: {errors}")
+
+    def test_full_economics_block_contradiction_detected(self):
+        d = json.loads(json.dumps(self.stats_dict))
+        d["economics"]["cost_per_merged_pr"] = {
+            "merged_prs": d["git"]["merged_prs"] + 5,
+            "total_tokens": 100,
+            "tokens_per_pr": 1.0,
+        }
+        d["economics"]["token_ledger_available"] = True
+        errors = self._validate(d)
+        self.assertTrue(any("contradiction" in e.lower() for e in errors),
+                        f"cost_per_merged_pr.merged_prs disagreeing must fail: {errors}")
+
+    def test_zero_filler_economics_detected(self):
+        """Old-style all-zero economics (total_tokens=0 with 0.0 ratios present) must fail."""
+        d = json.loads(json.dumps(self.stats_dict))
+        n = d["git"]["merged_prs"]
+        d["economics"] = {
+            "cost_per_loc": {"lines_of_code": 100, "total_tokens": 0, "tokens_per_loc": 0.0},
+            "cost_per_merged_pr": {"merged_prs": n, "total_tokens": 0, "tokens_per_pr": 0.0},
+            "cost_per_wave": {"wave_count": 3, "total_tokens": 0, "tokens_per_wave": 0.0},
+            "unit_economics": {
+                "cost_per_backlog_item": 0.0,
+                "cost_per_wave_item": 0.0,
+                "backlog_item_proxy": "merged_prs",
+                "items_count": n,
+            },
+        }
+        errors = self._validate(d)
+        self.assertTrue(any("zero-filler" in e.lower() for e in errors),
+                        f"0.0-but-present token metrics must fail validation: {errors}")
+
+    def test_missing_source_field_detected(self):
+        d = json.loads(json.dumps(self.stats_dict))
+        d["git"].pop("merged_prs_source", None)
+        errors = self._validate(d)
+        self.assertTrue(any("merged_prs_source" in e for e in errors),
+                        f"missing source field must fail validation: {errors}")
+
+    def test_stale_generated_at_detected(self):
+        d = json.loads(json.dumps(self.stats_dict))
+        old = datetime.now(self_stats.timezone.utc) - timedelta(days=60)
+        d["generated_at"] = old.isoformat()
+        errors = self._validate(d)
+        self.assertTrue(any("stale" in e.lower() and "regenerate" in e.lower() for e in errors),
+                        f"generated_at 60 days old must fail with regenerate hint: {errors}")
+
+    def test_generated_at_within_threshold_passes(self):
+        d = json.loads(json.dumps(self.stats_dict))
+        recent = datetime.now(self_stats.timezone.utc) - timedelta(days=2)
+        d["generated_at"] = recent.isoformat()
+        errors = self._validate(d, max_age_days=14)
+        self.assertEqual(errors, [], f"2-day-old stats within 14-day window must pass: {errors}")
+
+    def _current_commit_count(self):
+        out = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD"],
+            cwd=str(self.repo_root), capture_output=True, text=True, timeout=30,
+        ).stdout.strip()
+        return int(out)
+
+    def test_commit_lag_beyond_threshold_detected(self):
+        d = json.loads(json.dumps(self.stats_dict))
+        d["git"]["total_commits"] = self._current_commit_count() - 10
+        errors = self._validate(d, max_commits_behind=5)
+        self.assertTrue(any("stale" in e.lower() and "commit" in e.lower() for e in errors),
+                        f"stats 10 commits behind with threshold 5 must fail: {errors}")
+
+    def test_commit_lag_within_threshold_passes(self):
+        d = json.loads(json.dumps(self.stats_dict))
+        d["git"]["total_commits"] = self._current_commit_count() - 2
+        errors = self._validate(d, max_commits_behind=5)
+        self.assertEqual(errors, [], f"2 commits behind with threshold 5 must pass: {errors}")
+
+    def test_shallow_clone_negative_delta_not_flagged(self):
+        """If the recorded count exceeds the visible history (shallow clone), skip the commit check."""
+        d = json.loads(json.dumps(self.stats_dict))
+        d["git"]["total_commits"] = d["git"]["total_commits"] + 1000
+        errors = self._validate(d, max_commits_behind=5)
+        self.assertEqual([e for e in errors if "commit" in e.lower()], [],
+                         f"shallow-clone negative delta must not be flagged stale: {errors}")
+
+
+class StatsCheckIntegrityCliTest(SelfStatsFixtureCase):
+    """--check must fail (exit 1) on internal contradiction or stale receipts,
+    even when README matches stats.json byte-for-byte."""
+
+    def setUp(self):
+        super().setUp()
+        os.chdir(str(self.repo_root))
+        self.make_commit("initial")
+        self.make_merge_commit(1)
+        self.stats_file = self.repo_root / "stats.json"
+        self.readme_file = self.repo_root / "README.md"
+
+        self.readme_file.write_text(
+            "# Project\n\n<!-- STATS:START -->\nplaceholder\n<!-- STATS:END -->\n\nFooter.\n",
+            encoding="utf-8",
+        )
+        counter = self_stats.StatsCounter(repo_root=str(self.repo_root), data_file=str(self.data_file))
+        counter.save_stats(str(self.stats_file))
+        subprocess.run(
+            [sys.executable, str(TOOLS_DIR / "self_stats.py"), "--update-readme",
+             "--stats-file", str(self.stats_file), "--readme", str(self.readme_file)],
+            cwd=str(self.repo_root), capture_output=True, text=True, timeout=120, check=True,
+        )
+
+    def _run_check(self):
+        return subprocess.run(
+            [sys.executable, str(TOOLS_DIR / "self_stats.py"), "--check",
+             "--repo", str(self.repo_root),
+             "--stats-file", str(self.stats_file), "--readme", str(self.readme_file)],
+            cwd=str(self.repo_root), capture_output=True, text=True, timeout=120,
+        )
+
+    def _mutate_stats(self, mutator):
+        with open(self.stats_file, encoding="utf-8") as f:
+            data = json.load(f)
+        mutator(data)
+        with open(self.stats_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+    def test_check_passes_on_fresh_consistent_stats(self):
+        result = self._run_check()
+        self.assertEqual(result.returncode, 0,
+                         f"fresh consistent stats must pass --check; stdout={result.stdout} stderr={result.stderr}")
+
+    def test_check_fails_on_pr_count_contradiction(self):
+        def mutate(data):
+            data["economics"]["merged_prs"] = data["git"]["merged_prs"] + 42
+
+        self._mutate_stats(mutate)
+        # README still renders only the git block, so re-sync it to keep README matching
+        subprocess.run(
+            [sys.executable, str(TOOLS_DIR / "self_stats.py"), "--update-readme",
+             "--stats-file", str(self.stats_file), "--readme", str(self.readme_file)],
+            cwd=str(self.repo_root), capture_output=True, text=True, timeout=120, check=True,
+        )
+        result = self._run_check()
+        self.assertNotEqual(result.returncode, 0, "contradicting PR counts must fail --check")
+        combined = result.stdout + result.stderr
+        self.assertIn("contradiction", combined.lower())
+
+    def test_check_fails_on_stale_generated_at(self):
+        def mutate(data):
+            old = datetime.now(self_stats.timezone.utc) - timedelta(days=60)
+            data["generated_at"] = old.isoformat()
+
+        self._mutate_stats(mutate)
+        result = self._run_check()
+        self.assertNotEqual(result.returncode, 0, "stale stats.json must fail --check")
+        combined = (result.stdout + result.stderr).lower()
+        self.assertIn("stale", combined)
+        self.assertIn("regenerate", combined, "staleness failure must include a regenerate hint")
 
 
 if __name__ == "__main__":
