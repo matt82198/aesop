@@ -135,7 +135,7 @@ class TestHeartbeatAndStaleness(unittest.TestCase):
         hb1 = status1["last_heartbeat"]
 
         # Small delay then send heartbeat
-        time.sleep(0.01)
+        time.sleep(0.01)  # sleep-ok
         heartbeat(self.store, instance_id)
 
         status2 = get_instance_status(self.store, instance_id)
