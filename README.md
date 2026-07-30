@@ -35,7 +35,7 @@ Each framework below is good at what it optimizes for. Aesop optimizes for the p
 
 ## What It Does
 
-**Aesop** is an **orchestration harness that runs fleets of LLM coding agents**, verifies their output, and ships merge-ready code to CI. Each agent reads your repository state, fixes a ranked backlog item, runs tests locally, and auto-pushes. If a machine crashes mid-task, the next run re-reads from disk and continues — no external state server, no vector DB, no consensus machinery. The entire system and all decisions live in source-controlled, human-diffable files: git history, STATE.md, BUILDLOG.md, guardrail scripts. Aesop is battle-tested: 191 test suites across 3 harnesses (shell, Node, Python), 13 core domains built in parallel, 5-round audit convergence to zero verified defects, 4x measured cost reduction—all shipped by its own `/buildsystem` loop.
+**Aesop** is an **orchestration harness that runs fleets of LLM coding agents**, verifies their output, and ships merge-ready code to CI. Each agent reads your repository state, fixes a ranked backlog item, runs tests locally, and auto-pushes. If a machine crashes mid-task, the next run re-reads from disk and continues — no external state server, no vector DB, no consensus machinery. The entire system and all decisions live in source-controlled, human-diffable files: git history, STATE.md, BUILDLOG.md, guardrail scripts. Aesop is battle-tested: 244 test suites across 3 harnesses (shell, Node, Python), 13 core domains built in parallel, 5-round audit convergence to zero verified defects, 4x measured cost reduction—all shipped by its own `/buildsystem` loop.
 
 ## How It Works
 
@@ -74,7 +74,7 @@ Crash recovery is not a special path; it is how the system *always* starts. This
 
 **Why it's built this way:** [The Aesop Hypothesis](./docs/THE-AESOP-HYPOTHESIS.md) — the design philosophy, the trade-offs, the cancelled architectures with published data.
 
-**New in 0.6.0:** Wave Gantt visualization, quality scorecards, audit/reasoning tails, PR Board view, and context-file tracking in the dashboard. Swap the **worker** and **orchestrator** model (Claude, Codex, or any OpenAI-compatible endpoint) from one `seats` config block without code changes. See [docs/MICROKERNEL.md](./docs/MICROKERNEL.md) for the two-seat architecture and a 60-second quickstart. Single-instance proven; multi-instance coordination is scheduled.
+**New in 0.7.0:** Guardrail enforcement (fixture-intent manifest validator, dispatch_lint, CLAUDE.md sync gate G5, workflow pin linter G7, git-stash gate G8, encoding validator G10, commit linter, docstring/dead-code/import-cycle checkers). Multi-instance orchestration MVP with lease-based SQLite claims. Tools suite expansion: port-fidelity validator, init-project scaffolder, batch auto-merge, state-query temporal API, cost forecasting, tracker reconciliation, wave-history analyzer. Tooling dashboard panel. Model dedupe normalization in stats. See [docs/MICROKERNEL.md](./docs/MICROKERNEL.md) for the two-seat architecture and [docs/INSTALL.md](./docs/INSTALL.md) for setup.
 
 ## Feature Demo
 
