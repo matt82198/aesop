@@ -82,7 +82,7 @@ def reload():
         derived_config_file = AESOP_ROOT / "aesop.config.json"
         if derived_config_file.exists():
             try:
-                with open(derived_config_file) as f:
+                with open(derived_config_file, encoding="utf-8") as f:
                     derived_config = json.load(f)
                     if "aesop_root" in derived_config:
                         AESOP_ROOT = Path(derived_config["aesop_root"]).expanduser()
@@ -95,7 +95,7 @@ def reload():
     config_data = {}
     if CONFIG_FILE.exists():
         try:
-            with open(CONFIG_FILE) as f:
+            with open(CONFIG_FILE, encoding="utf-8") as f:
                 config_data = json.load(f)
         except Exception as e:
             print(f"[config] Failed to load {CONFIG_FILE}: {e}", file=sys.stderr)

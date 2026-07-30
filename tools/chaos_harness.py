@@ -105,14 +105,14 @@ def fault_f1_worker_termination(sandbox: Path) -> Dict[str, Any]:
         "worker_pid": 99999,  # Non-existent PID
     }
 
-    with open(journal_file, "a") as f:
+    with open(journal_file, "a", encoding="utf-8") as f:
         f.write(json.dumps(in_progress_entry) + "\n")
 
     # Act: Measure detection time (scan journal for in-progress)
     detection_start = time.time()
     in_progress_items = []
 
-    with open(journal_file) as f:
+    with open(journal_file, encoding="utf-8") as f:
         for line in f:
             entry = json.loads(line)
             if entry.get("status") == "in-progress":
@@ -127,7 +127,7 @@ def fault_f1_worker_termination(sandbox: Path) -> Dict[str, Any]:
         item["recovery_timestamp"] = time.time()
 
     # Append recovery entry
-    with open(journal_file, "a") as f:
+    with open(journal_file, "a", encoding="utf-8") as f:
         f.write(json.dumps(item) + "\n")
 
     recovery_time = time.time() - recovery_start
@@ -166,7 +166,7 @@ def fault_f2_checkpoint_corruption(sandbox: Path) -> Dict[str, Any]:
     ]
 
     # Write valid entries
-    with open(journal_file, "w") as f:
+    with open(journal_file, "w", encoding="utf-8") as f:
         for entry in valid_entries:
             f.write(json.dumps(entry) + "\n")
 
@@ -194,7 +194,7 @@ def fault_f2_checkpoint_corruption(sandbox: Path) -> Dict[str, Any]:
     # Recovery: continue with recovered items
     recovery_start = time.time()
     # Rewrite journal with valid entries only
-    with open(journal_file, "w") as f:
+    with open(journal_file, "w", encoding="utf-8") as f:
         for entry in recovered_items:
             f.write(json.dumps(entry) + "\n")
     recovery_time = time.time() - recovery_start
@@ -518,7 +518,7 @@ def main():
 
         # Write JSON
         json_path = repo_root / args.json
-        with open(json_path, "w") as f:
+        with open(json_path, "w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
         print(f"[+] Wrote JSON report: {json_path}")
 

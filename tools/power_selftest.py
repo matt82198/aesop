@@ -42,7 +42,7 @@ def load_config():
     try:
         config_path = Path.cwd() / 'aesop.config.json'
         if config_path.exists():
-            with open(config_path) as f:
+            with open(config_path, encoding="utf-8") as f:
                 return json.load(f)
     except Exception:
         pass
@@ -91,7 +91,7 @@ def check_hooks():
         if not settings_path.exists():
             return Check('hooks', 'OK', '(n/a)', False)
 
-        with open(settings_path) as f:
+        with open(settings_path, encoding="utf-8") as f:
             settings = json.load(f)
 
         hooks = settings.get('hooks', {})

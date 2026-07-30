@@ -37,7 +37,7 @@ else:
 def count_lines(filepath):
     """Count lines in a file."""
     try:
-        with open(filepath, 'r') as f:
+        with open(filepath, 'r', encoding='utf-8') as f:
             return sum(1 for _ in f)
     except IOError:
         return 0
@@ -54,7 +54,7 @@ def get_file_size(filepath):
 def read_lines(filepath):
     """Read all lines from file, preserving newlines."""
     try:
-        with open(filepath, 'r') as f:
+        with open(filepath, 'r', encoding='utf-8') as f:
             return f.readlines()
     except IOError as e:
         raise IOError(f"Failed to read {filepath}: {e}")
@@ -63,7 +63,7 @@ def read_lines(filepath):
 def write_lines(filepath, lines):
     """Write lines to file."""
     try:
-        with open(filepath, 'w') as f:
+        with open(filepath, 'w', encoding='utf-8') as f:
             f.writelines(lines)
     except IOError as e:
         raise IOError(f"Failed to write {filepath}: {e}")
@@ -164,7 +164,7 @@ def rotate_log(logfile, max_lines, max_bytes, archive_dir, check_only=False):
 
     # Perform rotation with exclusive lock to prevent concurrent write races
     try:
-        with open(str(logfile), 'r+') as f:
+        with open(str(logfile), 'r+', encoding='utf-8') as f:
             # Acquire exclusive lock to guard read-compute-write sequence
             acquire_lock(f.fileno())
             try:
