@@ -448,7 +448,7 @@ When a model tier is not found in the pricing table, runners (`run_seam_u.py`, `
 - Log a WARNING to stderr: `unknown model pricing for tier '<tier>' — cost marked as UNKNOWN`
 - Set `cost_usd: null` in results for that task
 - Add `cost_note: "unknown-model-pricing:<tier>"` to results
-- **Never silently report $0.00 cost** (which could hide billing surprises)
+- **Never silently report $0.00 cost** (which could hide billing surprises) <!-- metrics-verified: design_policy -->
 
 Fallback pricing estimates (when model not in table) are clearly labeled as `[FALLBACK - model not in pricing table]` in cost estimate output.
 
