@@ -71,6 +71,7 @@ def extract_model_tier(model_name: str) -> str:
       "Claude Opus 4.8 (1M context)" -> "Opus 4.8"
       "Claude Fable 5" -> "Fable 5"
       "Claude Haiku 4.5" -> "Haiku 4.5"
+      "Claude Opus 5" -> "Opus 5.0"  # normalize shorthand to standard version
 
     Returns the normalized tier name, or the original if unrecognized.
     """
@@ -79,6 +80,10 @@ def extract_model_tier(model_name: str) -> str:
 
     # Remove anything in parentheses (context hints, etc.)
     name = re.sub(r'\s*\([^)]*\)\s*', '', name).strip()
+
+    # Normalize shorthand versions: "Opus 5" -> "Opus 5.0", "Haiku 4" -> "Haiku 4.5"
+    name = re.sub(r'^Opus 5$', 'Opus 5.0', name)
+    name = re.sub(r'^Haiku 4$', 'Haiku 4.5', name)
 
     return name
 

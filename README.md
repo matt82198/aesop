@@ -35,7 +35,7 @@ Each framework below is good at what it optimizes for. Aesop optimizes for the p
 
 ## What It Does
 
-**Aesop** is an **orchestration harness that runs fleets of LLM coding agents**, verifies their output, and ships merge-ready code to CI. Each agent reads your repository state, fixes a ranked backlog item, runs tests locally, and auto-pushes. If a machine crashes mid-task, the next run re-reads from disk and continues — no external state server, no vector DB, no consensus machinery. The entire system and all decisions live in source-controlled, human-diffable files: git history, STATE.md, BUILDLOG.md, guardrail scripts. Aesop is battle-tested: 191 test suites across 3 harnesses (shell, Node, Python), 13 core domains built in parallel, 5-round audit convergence to zero verified defects, 4x measured cost reduction—all shipped by its own `/buildsystem` loop.
+**Aesop** is an **orchestration harness that runs fleets of LLM coding agents**, verifies their output, and ships merge-ready code to CI. Each agent reads your repository state, fixes a ranked backlog item, runs tests locally, and auto-pushes. If a machine crashes mid-task, the next run re-reads from disk and continues — no external state server, no vector DB, no consensus machinery. The entire system and all decisions live in source-controlled, human-diffable files: git history, STATE.md, BUILDLOG.md, guardrail scripts. Aesop is battle-tested: 244 test suites across 3 harnesses (shell, Node, Python), 13 core domains built in parallel, 5-round audit convergence to zero verified defects, 4x measured cost reduction—all shipped by its own `/buildsystem` loop.
 
 ## How It Works
 
