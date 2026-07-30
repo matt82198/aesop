@@ -50,7 +50,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **cost.py**: Parser for `state/ledger/OUTCOMES-LEDGER.md` (markdown table); returns per-model + per-day aggregates, verdict scorecards, optional dollar estimates (if `aesop.config.json` supplies `pricing` map).
 
-**state_query_panel.py** — Time-travel state query API endpoints (`GET /api/state/events`, `GET /api/state/streams`). Wraps `state_store.StateAPI` + `EventStore` for querying event-sourced tracker with temporal/stream/type filters. Supports `?stream=`, `?type=`, `?after=ISO_ts`, `?before=ISO_ts`, `?limit=N` (default 100, max 500). Fails gracefully (empty results) if database missing.
+**state_query_panel.py** — Time-travel state query API: `GET /api/state/events` (temporal/stream/type filters) and `GET /api/state/streams` (aggregate view). Wraps `state_store.StateAPI`; gracefully degrades if DB missing.
 
 **wave_prs.py** — Wave PR board: `get_wave_prs()` gathers open PRs + PR-less `feat/*` branches, rolls CI checks into passing/failing/pending/none, derives top blocker, caches ~5s. Degrades to `{available:false, error}` when gh missing/un-authed. Subprocess reads use `encoding='utf-8', errors='replace'`. Override gh binary: `AESOP_GH_BIN` env var.
 
@@ -93,8 +93,8 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 - `GET /api/cost` — Cost/scorecard from ledger. `GET /api/backlog` — Audit backlog by tier.
 - `GET /api/agents` — Fleet agent list. `GET /api/agent?id=<id>` — Agent detail (path-traversal-safe).
 - `GET /api/tracker` — Tracker items (optional `status`/`priority` filters).
-- `GET /api/state/events` — Time-travel query of event store: `?stream=<name>` `?type=<type>` `?after=<iso_ts>` `?before=<iso_ts>` `?limit=<n>` (default 100, max 500). Returns JSON array of events.
-- `GET /api/state/streams` — Aggregate view: `{streams: [{name, count, latest_ts}]}`. Lists all streams with event counts and latest timestamp.
+- `GET /api/state/events` — Time-travel query: `?stream=` `?type=` `?after=` `?before=` `?limit=` (max 500). Returns JSON array.
+- `GET /api/state/streams` — Aggregate: `{streams: [{name, count, latest_ts}]}`.
 - `GET /api/wave/prs` — PR board with CI rollup (cached ~5s; degrades `{available:false}`).
 - `GET /api/wave/telemetry` — Phase + blocker + cost metrics. `GET /api/wave/dispatch` — Per-agent phase visibility (polled 2-3s).
 - `GET /api/wave/failure?pr=N` — CI failure drill-down with log excerpts (cached ~5s).
@@ -201,13 +201,10 @@ npx playwright test
 
 ## Invariants & Gotchas
 
-- **Stdlib-only backend**: `http.server`, `json`, `subprocess`, `threading` only. ThreadingHTTPServer required (SSE = 1 thread/client).
-- **Collector fail-open**: crash → server stays up, realtime updates stop.
-- **Token**: 0600 (Unix) / ACL (Windows); `state/.ui-session-token` gitignored, regenerated if missing.
-- **Config at call time**: `import config` + `config.X`; never `from config import X` (breaks test isolation).
-- **Dist always required**: missing = hard 500. Vite content-hashed assets. Dev: `npm run dev` from `ui/web/`.
+- **Stdlib-only backend**: `http.server`, `json`, `subprocess`, `threading`. ThreadingHTTPServer required (SSE = 1 thread/client).
+- **Collector fail-open**, **Token** (0600 / ACL; regenerated if missing), **Config** (`import config; config.X`, never `from config import X`), **Dist always required** (hard 500 if missing).
 
 ## Dropped
-- Wave-14 rewrite plan (separate docs). Legacy template (wave-9). MCP/state_store internals (own domains).
+- Wave-14 rewrite plan, legacy template (wave-9), MCP/state_store internals (own domains).
 
 Map of all domains: /CLAUDE.md
