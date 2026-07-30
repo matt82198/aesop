@@ -2,6 +2,22 @@
 
 **Purpose**: Local observability dashboard. Python backend serves a React+Vite frontend on a configurable port via Server-Sent Events (realtime updates), with CSRF + session protection and event-sourced state.
 
+## Try it in 30 seconds (no API key)
+
+A fresh scaffold has empty state, so a stranger sees a dead shell. `--demo`
+serves a seeded, self-identifying fleet snapshot instead — no API key, no gh
+auth, no prior runs needed:
+
+```bash
+git clone https://github.com/matt82198/aesop.git && cd aesop
+python ui/serve.py --demo        # then open http://127.0.0.1:8770
+# or via the CLI: npx @matt82198/aesop dash --demo
+```
+
+The page carries a fixed **DEMO DATA** banner and `/api/state` returns
+`"demo": true` — seeded data can never be mistaken for a live fleet (honesty
+is the project's brand). Default mode (no flag) is byte-identical to before.
+
 ## Universal rules (every domain)
 - Feature branch only, never main; every push gated by `python tools/secret_scan.py --staged` exit 0.
 - Tests never pollute cwd or global git config; temp dirs only; dummy secrets are runtime-concatenated, never literal.
@@ -41,6 +57,8 @@
 **wave_dispatch.py** — Wave dispatch (live per-agent visibility): `get_wave_dispatch()` reads agent transcripts from `~/.claude/projects/*/memory/agent-*.jsonl`, infers phase (dispatch/thinking/tool-use/stall/done) from transcript tail, estimates tokens from file size (~4.5 bytes per token), and computes activity age from mtime. Returns per-agent rows with phase badge, age, token count, and warnings (inactive >5min, stalled >10min). Degrades to `{available:false}` when no agents found. Polls every 2-3s in Activity view.
 
 **wave_failure.py** — Wave PR failure drill-down: `get_wave_failure(pr_number)` shells `gh run view --json jobs` for jobs on PR branch, then `gh api .../jobs/{id}/logs` for failing jobs; extracts ~100-line log tails. Caches ~5s per PR; degrades to `{available:false, error}` when gh missing/un-authed. Override gh binary: `AESOP_GH_BIN` env var.
+
+**demo.py** — Zero-key demo mode. `maybe_activate()` (called by serve.py BEFORE `config.reload()`) fires on `--demo` in argv or `AESOP_DEMO=1`: it seeds a throwaway demo root (heartbeats, tracker.json, orchestrator-status.json, outcomes ledger, `AUDIT-BACKLOG.md`, fabricated agent transcripts) with now-relative timestamps, then points `AESOP_STATE_ROOT` / `AESOP_WATCHDOG_HEARTBEAT` / `AESOP_MONITOR_HEARTBEAT` / `AESOP_TRANSCRIPTS_ROOT` / `AESOP_AUDIT_BACKLOG` at it so every collector reads the snapshot through its normal path (no collector logic forked). The two shell-out collectors read fabricated data directly when `enabled()`: `get_fleet_agents()` (agents.py) → `get_demo_agents()`, `get_wave_prs()` (wave_prs.py) → `get_demo_wave_prs()`. A daemon refresher (~45s) rewrites heartbeats / orchestrator `updated_at` / transcript mtimes so ages always read fresh. `AESOP_ROOT` is NOT moved (WEB_DIST must keep resolving the committed dist). Honesty: handler injects `BANNER_HTML` ("DEMO DATA") after `<body>` and `/api/state` gets a top-level `"demo": true`. No-op in default mode. Optional `AESOP_DEMO_ROOT` pins the demo root (tests).
 
 **api/__init__.py**, **api/tracker.py**, **api/submit.py**: API handlers for mutations (tracker CRUD, inbox append).
 
@@ -133,6 +151,8 @@ Environment variables override config file, which overrides built-in defaults:
    - `AESOP_TRANSCRIPTS_ROOT` — Claude transcript directory (overrides config `transcripts_root`).
    - `AESOP_UI_COLLECT_INTERVAL` — collector thread poll cadence in seconds (default: 1.0).
    - `AESOP_GH_BIN` — gh CLI binary path (default: `gh` on PATH).
+   - `AESOP_AUDIT_BACKLOG` — override `AUDIT-BACKLOG.md` path (default: `AESOP_ROOT/AUDIT-BACKLOG.md`); used by demo mode.
+   - `AESOP_DEMO` / `AESOP_DEMO_ROOT` — demo mode toggle + optional fixed demo root (see demo.py; normally set by the `--demo` flag).
 
 2. **Config file** (`aesop.config.json`):
    - `state_root` — path to state/ directory.

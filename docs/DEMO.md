@@ -1,5 +1,30 @@
 # Init-Prime-Demo: Your First Complete Aesop Flow
 
+## Try it in 30 seconds (no API key)
+
+Want to see the dashboard *before* wiring up a fleet? The zero-key demo mode
+serves a realistic, seeded fleet snapshot — no API key, no `gh` auth, no prior
+runs required:
+
+```bash
+git clone https://github.com/matt82198/aesop.git && cd aesop
+python ui/serve.py --demo        # then open http://127.0.0.1:8770
+```
+
+Or, from a scaffolded harness, `npx @matt82198/aesop dash --demo`.
+
+You'll see a mid-execution wave ("wave-2: guardrail wiring + stats hardening"):
+8–10 agents in mixed running/idle states, healthy watchdog + monitor
+heartbeats, a populated PR board, a non-zero cost panel, and live wave
+progress. Every timestamp is generated fresh so ages never go stale while the
+demo runs. The page carries a **DEMO DATA** banner and `/api/state` returns
+`"demo": true` — seeded data is always clearly labelled, never mistaken for a
+live fleet. Running without `--demo` is unchanged.
+
+The rest of this page is the full end-to-end walkthrough.
+
+---
+
 **TL;DR**: This 10-minute walkthrough takes you from nothing to a working orchestration harness, primed and ready for your first wave.
 
 Covered in this demo:
