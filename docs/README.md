@@ -1,6 +1,6 @@
 # Aesop Documentation
 
-Aesop is an autonomous developer system that crawls into any repository and orchestrates intelligent work. It ranks tasks, dispatches parallel Haiku agents, verifies merges, audits the work, and feeds the next iteration. **State persists across multiple instances via a durable SQLite event log**, so your whole team uses one coordinated system.
+Aesop is an autonomous developer system that crawls into any repository and orchestrates intelligent work. It ranks tasks, dispatches parallel Haiku agents, verifies merges, audits the work, and feeds the next iteration. **State is durable and single-instance by design** — git-tracked checkpoints plus an event-sourced SQLite log that survives crashes and machine wipes. Multi-instance team coordination is on the roadmap, not shipped; see [TEAM-STATE.md](TEAM-STATE.md) for the current model and the plan.
 
 ---
 
@@ -123,6 +123,7 @@ Once you've completed the adopter journey, use these for operational reference:
 - **[RESTORE.md](RESTORE.md)** — Reconstitute Aesop & fleet on a new machine from git + watchdog backups
 - **[PUBLISHING.md](PUBLISHING.md)** — Release Aesop to npm using GitHub Actions with OIDC trusted publishing
 - **[av-resilience.md](av-resilience.md)** — Antivirus and behavioral-engine resilience patterns for reliable agent execution
+- **[RECEIPTS.md](RECEIPTS.md)** — Per-wave operational metrics (CI economics, diagnosed bottlenecks, structural fixes applied); transparency on the system building itself
 
 ### Lessons & Case Studies
 - **[autonomous-swe.md](autonomous-swe.md)** — What "autonomous SWE" means here (a fleet running the wave loop under a human who owns the outward gates): the committed evidence behind each claim (held-out benchmark, verified audit, proven kill-switch, reproducible package), the 0.1.0-rc.1 baseline, 0.4.0 evolution (multi-model support), and the limits the project owns
@@ -145,7 +146,7 @@ Once you've completed the adopter journey, use these for operational reference:
 **I need to understand how state survives a crash**
 → [CHECKPOINTING.md](CHECKPOINTING.md)
 
-**I want to understand multi-instance coordination**
+**I want to understand the team-state model (single-instance today; multi-instance is roadmap)**
 → [TEAM-STATE.md](TEAM-STATE.md)
 
 **I want to swap the worker or orchestrator model (Ollama, OpenRouter, OpenAI...)**
