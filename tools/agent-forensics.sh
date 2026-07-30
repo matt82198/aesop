@@ -162,31 +162,33 @@ diff_behavior() {
   fi
 }
 
-# --- Main dispatch ---
-case "${1:-}" in
-  --diff)
-    if [ $# -lt 3 ]; then
-      show_error "--diff requires two commits: --diff <commitA> <commitB>"
-    fi
-    diff_behavior "$2" "$3"
-    ;;
-  --help|-h)
-    # Requested help is not an error: usage to stdout, exit 0.
-    show_usage
-    exit 0
-    ;;
-  '')
-    # Missing args is a genuine usage error: usage to stderr, exit 1.
-    show_usage >&2
-    exit 1
-    ;;
-  *)
-    print_commit_header "$1"
-    print_rules "$1"
-    print_claude_md "$1"
-    print_state_md "$1"
-    print_buildlog "$1"
-    ;;
-esac
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  # --- Main dispatch ---
+  case "${1:-}" in
+    --diff)
+      if [ $# -lt 3 ]; then
+        show_error "--diff requires two commits: --diff <commitA> <commitB>"
+      fi
+      diff_behavior "$2" "$3"
+      ;;
+    --help|-h)
+      # Requested help is not an error: usage to stdout, exit 0.
+      show_usage
+      exit 0
+      ;;
+    '')
+      # Missing args is a genuine usage error: usage to stderr, exit 1.
+      show_usage >&2
+      exit 1
+      ;;
+    *)
+      print_commit_header "$1"
+      print_rules "$1"
+      print_claude_md "$1"
+      print_state_md "$1"
+      print_buildlog "$1"
+      ;;
+  esac
 
-exit 0
+  exit 0
+fi

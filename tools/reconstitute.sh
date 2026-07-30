@@ -479,13 +479,15 @@ main() {
   reconstruct_fleet
 }
 
-# Check if --test was explicitly passed (before parse_args overwrites it)
-TEST_SUITE=0
-for arg in "$@"; do
-  if [ "$arg" = "--test" ]; then
-    TEST_SUITE=1
-    break
-  fi
-done
+if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  # Check if --test was explicitly passed (before parse_args overwrites it)
+  TEST_SUITE=0
+  for arg in "$@"; do
+    if [ "$arg" = "--test" ]; then
+      TEST_SUITE=1
+      break
+    fi
+  done
 
-main "$@"
+  main "$@"
+fi

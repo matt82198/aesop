@@ -22,7 +22,6 @@ cleanup_temp_files() {
 }
 trap cleanup_temp_files EXIT INT TERM
 
-date +%s > "$HEARTBEAT" 2>/dev/null
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { echo "[$(ts)] $*" | tee -a "$LOG"; }
 
@@ -422,5 +421,6 @@ $real_dir"
 }
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
+  date +%s > "$HEARTBEAT" 2>/dev/null
   main "$@"
 fi
