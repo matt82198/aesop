@@ -97,32 +97,29 @@ def get_git_changed_files(repo_root: Path, base_ref: str = "main") -> Tuple[List
     Returns:
         Tuple of (changed_files, is_error)
     """
+    import os
+
+    # In GitHub Actions PRs, GITHUB_BASE_REF is the target branch name
+    github_base = os.environ.get("GITHUB_BASE_REF", "")
+
+    refs_to_try = []
+    if github_base:
+        refs_to_try.append(f"origin/{github_base}...HEAD")
+    refs_to_try.append(f"origin/{base_ref}...HEAD")
+    refs_to_try.append("HEAD~1...HEAD")
+
     try:
-        # Try to get diff between HEAD and the base ref
-        result = subprocess.run(
-            ["git", "diff", "--name-only", f"origin/{base_ref}...HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            cwd=repo_root,
-        )
-
-        if result.returncode == 0:
-            files = [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
-            return files, False
-
-        # If that fails, try local HEAD~1
-        result = subprocess.run(
-            ["git", "diff", "--name-only", "HEAD~1...HEAD"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            cwd=repo_root,
-        )
-
-        if result.returncode == 0:
-            files = [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
-            return files, False
+        for ref_spec in refs_to_try:
+            result = subprocess.run(
+                ["git", "diff", "--name-only", ref_spec],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=repo_root,
+            )
+            if result.returncode == 0:
+                files = [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
+                return files, False
 
         return [], True
     except subprocess.TimeoutExpired:
