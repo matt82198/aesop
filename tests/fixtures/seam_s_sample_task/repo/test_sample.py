@@ -2,8 +2,8 @@
 
 
 def add(x, y):
-    """Add two numbers. Currently broken: returns product instead of sum."""
-    return x * y
+    """Add two numbers."""
+    return x + y
 
 
 def test_add_basic():
