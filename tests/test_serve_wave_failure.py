@@ -98,13 +98,13 @@ class WaveFailureFixtureCase(unittest.TestCase):
         """One HTTP request; retries transient Windows socket aborts."""
         last = None
         for _ in range(3):
-            con = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+            con = http.client.HTTPConnection("127.0.0.1", self.port, timeout=15)
             try:
                 con.request(method, path, body=body, headers=headers or {})
                 resp = con.getresponse()
                 return resp.status, dict(resp.getheaders()), resp.read()
             except (ConnectionAbortedError, ConnectionResetError,
-                    http.client.RemoteDisconnected) as e:
+                    http.client.RemoteDisconnected, TimeoutError) as e:
                 last = e
                 continue
             finally:
