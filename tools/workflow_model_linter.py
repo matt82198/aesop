@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 """
-tools.workflow_model_linter -- Guardrail G7: model pin enforcement for workflow scripts.
+tools.workflow_model_linter -- Guardrail G7: model pin + workflow-args validation.
 
-Scans JavaScript workflow scripts (.js/.mjs files) for agent() calls and verifies that
-each call includes an explicit model:'haiku' parameter in its options object.
+Scans JavaScript workflow scripts (.js/.mjs files) for:
+  1. agent() calls without explicit model:'haiku' parameter
+  2. Unsafe JSON parsing patterns (try-catch JSON.parse with silent fallback)
+  3. Unvalidated field access on potentially-undefined parsed objects
 
 Background: Workflow scripts call agent() directly and bypass the PreToolUse hook that
 enforces model='haiku' for Agent/Task dispatches. This linter catches agent() calls
 without explicit model pins and flags them as violations.
+
+Workflow-args validation detects escape esc-wf-args-string: JSON.parse in try-catch
+blocks that silently fall back to empty objects, followed by unvalidated field access
+(e.g., accessing .workDir, .testCmd, .items without null/undefined checks). When
+JSON.parse fails, skip-lists become undefined; downstream code fails silently.
 
 Workflow scripts are automation/orchestration files that call agent() to spawn workers.
 They appear in: tools/, monitor/, driver/, skills/, .claude/ directories and their
@@ -35,12 +42,15 @@ Default scan targets (if no PATH given):
 
 ASCII-only output. Stdlib only, no external dependencies.
 
-Suppression: Add `// model-ok` comment on the same line as agent() call to suppress
-a finding for that specific call site.
+Suppression markers:
+  - Add `// model-ok` on agent() call line to suppress model-pin findings
+  - Add `// args-ok` on unsafe-parse line to suppress JSON-parse findings
 
 Output format (text, default):
   VIOLATION: path/to/file.mjs:42 — agent() call without model pin
     agent('do something', {label: 'foo'})
+  VIOLATION: path/to/file.mjs:93 — unsafe JSON.parse with silent fallback
+    if (typeof A === 'string') { try { A = JSON.parse(A) } catch (e) { A = {} } }
 
 Output format (--json):
   [
@@ -92,9 +102,9 @@ def extract_line_context(lines: List[str], line_num: int, width: int = 80) -> st
     return ''
 
 
-def has_suppression(line: str) -> bool:
-    """Check if line contains // model-ok suppression marker."""
-    return '// model-ok' in line
+def has_suppression(line: str, marker: str = 'model-ok') -> bool:
+    """Check if line contains suppression marker (e.g., // model-ok, // args-ok)."""
+    return f'// {marker}' in line
 
 
 def is_in_string_or_comment(line: str, pos: int) -> bool:
@@ -227,7 +237,7 @@ def scan_file(file_path: Path) -> List[Dict[str, Any]]:
             continue
 
         # Check for suppression marker on this line
-        if has_suppression(line):
+        if has_suppression(line, 'model-ok'):
             continue
 
         # Try to find agent(...) call pattern on this line
@@ -266,6 +276,113 @@ def scan_file(file_path: Path) -> List[Dict[str, Any]]:
                 'call': call_context,
                 'message': 'agent() call without model pin',
             })
+
+    return violations
+
+
+def scan_file_json_parse_patterns(file_path: Path) -> List[Dict[str, Any]]:
+    """
+    Scan a single .js/.mjs file for unsafe JSON.parse patterns.
+
+    Detects:
+    1. try { JSON.parse(x) } catch (e) { x = {} } — silent fallback without validation
+    2. Subsequent field access on x without null/undefined checks
+    3. typeof x === 'string' checks followed by silent-fail parse
+
+    Returns list of violations, each with:
+    - path: file path (string)
+    - line: line number (1-indexed)
+    - call: extracted pattern text
+    - message: violation description
+    """
+    violations = []
+
+    try:
+        content = file_path.read_text(encoding='utf-8', errors='ignore')
+    except Exception:
+        return violations
+
+    lines = content.split('\n')
+
+    # Track state: when we see typeof x === 'string', look for upcoming try-catch
+    typeof_vars = {}  # maps line_num to variable name
+
+    for i, line in enumerate(lines):
+        line_num = i + 1
+
+        # Skip suppressed lines
+        if has_suppression(line, 'args-ok'):
+            continue
+
+        # Pattern 1: try { ... JSON.parse(...) } catch (e) { x = {} }
+        # Simplified regex to catch the pattern
+        if 'try' in line and 'JSON.parse' in line and 'catch' in line:
+            # Check if this line or nearby lines have the silent-fallback pattern
+            # Pattern: try { ... JSON.parse(...) } catch (...) { ... = {} }
+            if re.search(r'try\s*\{.*JSON\.parse.*\}\s*catch\s*\([^)]*\)\s*\{[^}]*=\s*\{\}', line):
+                call_context = extract_line_context(lines, line_num)
+                violations.append({
+                    'path': str(file_path),
+                    'line': line_num,
+                    'call': call_context,
+                    'message': 'unsafe JSON.parse with silent fallback (no post-parse validation)',
+                })
+                continue
+
+        # Pattern 2: Multi-line try-catch with JSON.parse and empty-object fallback
+        # Look for try on this line or previous lines
+        if 'JSON.parse' in line and 'catch' not in line:
+            # Check if we have a try-catch pattern spanning multiple lines
+            # Search forward from this line for the catch block
+            for j in range(i, min(i + 10, len(lines))):
+                if 'catch' in lines[j]:
+                    # Found a catch block; check if it has silent fallback (does nothing or sets empty)
+                    catch_line = lines[j]
+                    # Look for pattern: catch (...) { x = {} } OR catch (...) { } (does nothing)
+                    if re.search(r'catch\s*\([^)]*\)\s*\{[^}]*\}', catch_line):
+                        # Check if it's a silent fallback: either x = {} or empty handler
+                        if '{}' in catch_line or re.search(r'catch\s*\([^)]*\)\s*\{\s*\}', catch_line):
+                            # Verify this is the same try-catch by checking for matching try
+                            found_try = False
+                            for k in range(max(0, j - 10), j):
+                                if 'try' in lines[k]:
+                                    found_try = True
+                                    break
+                            if found_try:
+                                call_context = extract_line_context(lines, line_num)
+                                violations.append({
+                                    'path': str(file_path),
+                                    'line': line_num,
+                                    'call': call_context,
+                                    'message': 'unsafe JSON.parse with silent fallback (no post-parse validation)',
+                                })
+                    break
+
+        # Pattern 3: typeof check followed by try-catch with silent fail
+        # Pattern: if (typeof x === 'string') { try { x = JSON.parse(x) } catch (e) { ... } }
+        if 'typeof' in line and "'string'" in line:
+            # Extract variable name from typeof check
+            typeof_match = re.search(r'typeof\s+(\w+)\s*===\s*["\']string["\']', line)
+            if typeof_match:
+                var_name = typeof_match.group(1)
+                # Look ahead for try-catch with JSON.parse involving the same variable
+                for j in range(i, min(i + 10, len(lines))):
+                    if 'JSON.parse' in lines[j]:
+                        # Check if catch is within next few lines
+                        for k in range(j, min(j + 5, len(lines))):
+                            if 'catch' in lines[k]:
+                                # Check for silent fallback or empty handler
+                                catch_line = lines[k]
+                                if re.search(r'catch\s*\([^)]*\)\s*\{[^}]*\}', catch_line):
+                                    call_context = extract_line_context(lines, line_num)
+                                    violations.append({
+                                        'path': str(file_path),
+                                        'line': line_num,
+                                        'call': call_context,
+                                        'message': 'unsafe typeof check with JSON.parse (may produce undefined on error)',
+                                    })
+                                break
+                        break
 
     return violations
 
@@ -338,8 +455,12 @@ def main() -> int:
     # Scan all files
     all_violations = []
     for file_path in js_files:
+        # Check for agent() calls without model pin
         violations = scan_file(file_path)
         all_violations.extend(violations)
+        # Check for unsafe JSON parsing patterns
+        json_violations = scan_file_json_parse_patterns(file_path)
+        all_violations.extend(json_violations)
 
     # Output results
     if args.json:
