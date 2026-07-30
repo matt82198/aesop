@@ -25,7 +25,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `bench_runner.py` — Held-out benchmark runner + scorer (Haiku/Sonnet/Opus pluggable)
 - `build_static_dash.py` — Build a static, self-contained snapshot of the dashboard with demo data for GitHub Pages; starts demo server, captures API state, produces _site/ with fetch/EventSource shim; CLI: `--output DIR`
 - `buildlog.py` — Uniform BUILDLOG.md appender (writes via state_store WriteAPI: entry also lands as buildlog_entry event)
-- `chaos_harness.py` — Chaos-wave resilience harness: offline deterministic fault injection (worker kill, checkpoint corruption, planted secret, heartbeat stall, forced red test) with detection/recovery measurement; CLI: `--offline [--state-root DIR] [--output REPORT.md] [--json REPORT.json]`
+- `chaos_harness.py` — Chaos-wave resilience harness: offline fault injection (worker kill, checkpoint corruption, planted secret, heartbeat stall, forced red test); CLI: `--offline [--state-root DIR] [--output REPORT.md] [--json REPORT.json]`
 - `claudemd_contract.py` — Domain CLAUDE.md contract validator (purpose statement, key sections, non-empty); fail-closed exit 1 on violation, 2 on usage error
 - `ci_merge_wait.py` — CI-gated merge helper (polls gh pr view until SUCCESS; fail-closed: empty rollup=PENDING, --expect-checks requires ALL named checks present AND concluded, --allow-no-checks escape hatch)
 - `ci_shard_runner.py` — Shard-aware Python test runner (distributes tracked test files across N shards round-robin; spawn-safe with __main__ guard; used by ci and windows-shard jobs)
@@ -83,10 +83,11 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `seated_shadow_adjudication.py` — Seated variant of the shadow wave (increment 4a): builds context packs from the REAL file brain (STATE.md/tracker) + real cited repo code, routes through the completed OrchestratorDriver.decide() seam; frontier-first + early-abort; measures whether real seated context changes adjudication vs the decontextualized ladder; --offline/--live (seat from seats.orchestrator; --model/--config override), --repeat N, per-model results to bench/results/
 - `stall_check.py` — Automated agent transcript stall detector; optional --active-from flag refines STALLED verdict to require both stale mtime AND active task file; --emit-recovery emits JSON advisories; --recovery-dir writes recovery-<agent>.json files (idempotent)
 - `status.js` — One-shot fleet status snapshot (watchdog/monitor heartbeat age, dashboard port reachability, git branch and working tree state)
-- `subprocess_guard.py` — G6 AST guard for subprocess anti-patterns in tests/ (bare `subprocess.run(['bash', ...])`/`Popen` without explicit `cwd=`, `shell=True`, explicit `cwd=None`, `os.system()`); suppress via `# subprocess-ok` inline comment; CLI: `[--check] [--json] [--paths PATH ...]` (default scan dir: `tests/`); exit 0=clean, 1=findings; stdlib only, ASCII-only output
+- `subprocess_guard.py` — G6 AST guard for subprocess anti-patterns in tests/ (bare subprocess without cwd, shell=True, os.system); `# subprocess-ok` suppresses; CLI: `[--check] [--json] [--paths PATH ...]`; exit 0=clean, 1=findings
 - `svg_to_png.mjs` — Rasterize SVG to PNG via @resvg/resvg-js (lazy import error handling)
-- `test_battery.py` — Local union test battery: runs the 4 harnesses (py/node/sh/ui) as parallel subprocesses with per-harness rc capture, stdin closed, logs to temp; parallel mode sets AESOP_TEST_CHILD_TIMEOUT_MS=90000 for node scaffold children; `--serial` fallback, `--skip <h>`, `--json`; exit 0 only when all harnesses green
+- `test_battery.py` — Local union test battery: runs 4 harnesses (py/node/sh/ui) in parallel; `--serial` fallback, `--skip <h>`, `--json`; exit 0 only when all green
 - `tracker_autoclose.py` — Tracker zombie-prevention auto-close gate (guardrail G1): closes items whose linked PRs merged or whose ownsFiles shipped on main; CLI: `[--check | --dry-run]`; exit 0=all resolved, 1=items still open; timezone-aware UTC timestamps
+- `todo_tracker.py` — Scan codebase for TODO/FIXME/HACK/XXX comments; groups by tag, reports totals; CLI: `[--check] [--json] [--tag TODO,FIXME] [--paths DIR...] [--root DIR]`; --check exits 1 on FIXME/HACK; stdlib-only
 - `tracker_guard.py` — Append-only lane journal + zombie-resurrection fail-closed gate; prevents items in terminal lanes (done/rejected) from re-entering active lanes (ranked/proposed/in-progress/accepted); modes: --seed (bootstrap journal), --check (detect violations, exit 1 if found, default), --enforce (revert zombies to terminal lane); CLI: `tracker_guard.py [--seed | --check | --enforce]`; journaled in state/tracker-journal.jsonl with rotation at 5000 lines
 - `transcript_digest.py` — Digest agent-*.jsonl transcripts into compact redacted per-agent briefs (state/ledger/transcripts-brief.jsonl; deterministic, idempotent, strips paths/emails/tokens)
 - `claudemd_lint.py` — Lint the domain CLAUDE.md layer: doc-pointers resolve, cited npm scripts exist, runtime/state artifacts not flagged, domain cross-refs prohibited; 4 checks: DOC-POINTER, TEST-CMD, DOMAIN-CROSS-REF (domain CLAUDE.md must not reference other domain CLAUDE.md with directives; parent-child refs allowed), line-count; --json; root CLAUDE.md exempt from cross-ref check
@@ -127,12 +128,8 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 
 CLI: `secret_scan.py --staged [--repo PATH]` | `--history [--repo PATH]` | `--from-stdin [--repo PATH]` | `PATH [PATH...]`
 
-Exit: 0=clean, 1=findings, 2=error. Pragma escape (pattern findings only; filenames always fatal):
-```
-# secretscan: allow-pattern-docs
-```
-
-`--from-stdin`: Read newline-delimited file paths from stdin for direct scanning (e.g., `git diff --name-only | secret_scan.py --from-stdin`).
+Exit: 0=clean, 1=findings, 2=error. Pragma: `# secretscan: allow-pattern-docs` (pattern findings only; filenames always fatal).
+`--from-stdin`: Read newline-delimited file paths from stdin (e.g., `git diff --name-only | secret_scan.py --from-stdin`).
 
 ## agent-forensics.sh — Behavior forensics
 
