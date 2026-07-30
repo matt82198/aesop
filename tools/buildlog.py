@@ -24,6 +24,8 @@ Behavior:
     - If repo not found or not a git repo, omits HEAD and notes "(no-repo)".
     - Creates BUILDLOG.md with append-only header if missing.
     - Never overwrites; always returns the line appended.
+    - Writes through state_store.write_api.WriteAPI (unified write path):
+      each append also lands as a buildlog_entry event in the event store.
 """
 
 import argparse
@@ -33,10 +35,19 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 try:
     from common import get_state_dir
 except ImportError:
     from tools.common import get_state_dir
+
+from state_store.write_api import WriteAPI, WriteConflict
+
+# Historical BUILDLOG header this tool has always written (byte-compatible)
+BUILDLOG_HEADER = "# Build Log (append-only)\n"
 
 
 def get_git_head(repo_path):
@@ -93,31 +104,24 @@ def build_entry_line(message, short_hash=None, subject=None):
     return line
 
 
-def ensure_buildlog_header(buildlog_path):
-    """Create BUILDLOG.md with header if missing.
+def append_entry(state_dir, line):
+    """Append line to BUILDLOG.md via the WriteAPI facade (unified write path).
+
+    The facade writes the file atomically (with OCC + file locking) and mirrors
+    the entry as a buildlog_entry event in the event store, so markdown and
+    SQLite state can never drift.
 
     Args:
-        buildlog_path: Path to BUILDLOG.md file.
-    """
-    if buildlog_path.exists():
-        return
-
-    header = "# Build Log (append-only)\n"
-    buildlog_path.parent.mkdir(parents=True, exist_ok=True)
-    buildlog_path.write_text(header)
-
-
-def append_entry(buildlog_path, line):
-    """Append line to BUILDLOG.md.
-
-    Args:
-        buildlog_path: Path to BUILDLOG.md file.
+        state_dir: Path to the state directory containing BUILDLOG.md.
         line: Entry line to append.
-    """
-    ensure_buildlog_header(buildlog_path)
 
-    with open(buildlog_path, "a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    Raises:
+        WriteConflict: If the facade detects a concurrent modification or
+                       the atomic write fails (fail-closed).
+    """
+    api = WriteAPI(state_dir)
+    api.ensure_buildlog_exists(header=BUILDLOG_HEADER)
+    api.append_buildlog(line, actor="buildlog-tool")
 
 
 def main():
@@ -166,9 +170,12 @@ def main():
     # Build and format entry
     line = build_entry_line(args.message, short_hash, subject)
 
-    # Append to BUILDLOG.md
-    buildlog_path = state_dir / "BUILDLOG.md"
-    append_entry(buildlog_path, line)
+    # Append to BUILDLOG.md via the WriteAPI facade (fail-closed on write failure)
+    try:
+        append_entry(state_dir, line)
+    except (WriteConflict, OSError) as e:
+        print(f"ERROR: failed to append BUILDLOG entry: {e}", file=sys.stderr)
+        sys.exit(1)
 
     # Print the exact line appended (with repo note if --head requested and failed)
     output_line = line + repo_note if repo_note else line
