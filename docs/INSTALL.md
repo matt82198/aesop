@@ -26,7 +26,7 @@ npm test
 
 # Launch the web dashboard (requires Python 3 on PATH)
 npx . dash
-# Opens http://localhost:8770 — four views: Overview, Work, Activity, Cost
+# Opens http://localhost:8770 — five views: Overview, Work, Activity, Cost
 ```
 
 Everything above runs locally with zero network calls and no API keys. The `doctor` command checks your environment, the test suite validates the codebase, and the dashboard gives you a feel for the fleet-monitoring UI.

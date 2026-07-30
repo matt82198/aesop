@@ -13,33 +13,50 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
-      - name: Run cross-OS drift analysis (JSON)
+      - name: Run cross-OS drift analysis with exit-code handling
         run: |
+          # Run JSON output
           python tools/crossos_drift.py --runs 20 --json > docs/CROSSOS-DRIFT.json
-        continue-on-error: true
+          json_exit=$?
 
-      - name: Run cross-OS drift analysis (Markdown)
-        run: |
+          # Run Markdown output
           python tools/crossos_drift.py --runs 20 > docs/CROSSOS-DRIFT.md
-        continue-on-error: true
+          md_exit=$?
 
-      - name: Check for authentication failure
-        run: |
-          # Check if the drift tool exited with code 3 (auth failure)
-          # If both runs errored, we assume auth failure and skip the commit
-          if [ -f docs/CROSSOS-DRIFT.json ] && [ -f docs/CROSSOS-DRIFT.md ]; then
-            echo "Cross-OS drift snapshot generated successfully"
-          else
-            echo "ERROR: Failed to generate cross-OS drift snapshot (authentication or execution error)"
+          # Handle exit codes:
+          # Exit 3 = auth failure (skip commit, exit 0 to not fail scheduled run)
+          # Any other non-zero = actual failure (fail the workflow)
+
+          if [ "$json_exit" -eq 3 ] || [ "$md_exit" -eq 3 ]; then
+            echo "WARNING: Authentication failure (exit 3); skipping commit"
+            rm -f docs/CROSSOS-DRIFT.json docs/CROSSOS-DRIFT.md
+            exit 0
+          fi
+
+          if [ "$json_exit" -ne 0 ]; then
+            echo "ERROR: JSON drift analysis failed with exit code $json_exit"
             exit 1
           fi
+
+          if [ "$md_exit" -ne 0 ]; then
+            echo "ERROR: Markdown drift analysis failed with exit code $md_exit"
+            exit 1
+          fi
+
+          # Verify both files exist and are non-empty
+          if [ ! -s docs/CROSSOS-DRIFT.json ] || [ ! -s docs/CROSSOS-DRIFT.md ]; then
+            echo "ERROR: Output files missing or empty"
+            exit 1
+          fi
+
+          echo "Cross-OS drift snapshot generated successfully"
 
       - name: Configure git identity
         run: |

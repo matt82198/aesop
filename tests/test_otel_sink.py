@@ -323,13 +323,14 @@ class TestCLIInterface(unittest.TestCase):
 
     def test_endpoint_env_var(self):
         """Verify OTEL_EXPORTER_OTLP_ENDPOINT env var is respected."""
-        os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://localhost:4317"
+        try:
+            os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://localhost:4317"
 
-        sink = OTelSink(state_dir=self.state_dir, dry_run=True)
-        # Endpoint should be set from env var
-        self.assertIsNotNone(sink.endpoint)
-
-        del os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"]
+            sink = OTelSink(state_dir=self.state_dir, dry_run=True)
+            # Endpoint should be set from env var
+            self.assertIsNotNone(sink.endpoint)
+        finally:
+            del os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"]
 
 
 class TestWindowsLinuxParity(unittest.TestCase):
