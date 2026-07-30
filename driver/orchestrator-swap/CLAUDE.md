@@ -86,6 +86,16 @@ BEFORE run_wave dispatch (phase=ceiling); mid-wave trips are run_wave's responsi
 Tracker sync: LOUD on unmapped slugs (tracker_unmapped_slugs -> success false). Full JSON
 shape lives in wave_scheduler.py's module docstring.
 
+## Increment Ladder
+
+- **Increment 0** (contract extraction): decision catalog + schema registry (decisions/*.schema.json)
+- **Increment 1** (OrchestratorDriver seam): orchestrator_driver.py + orchestrator_backend.py + context_pack.py
+- **Increment 2** (shadow mode, one real wave): offline shadow adjudication with Claude + challenger comparison
+- **Increment 3** (live swap of ONE class): adjudication_gate.py — two-tier challenger/incumbent escalation (28/28 tests passing)
+- **Increment 4a** (seated shadow adjudication): real file-brain context + A/B measurement (bench/tools domain)
+
 ## Status
 
-HS-1 (unified config) + HS-2 (wave-loop orchestrator integration) + increment 3 (adjudication gate: conservative two-tier escalation) shipped. Proof: bench/results/hs2-swap-proof-2026-07-25.md; adjudication_gate: 28 tests passing. Merge manual in pilot. RS3-W round-2 robustness + RS5 claim lifecycle active.
+**Increments 0-4a SHIPPED.** HS-1 (unified config: backend_config.py) + HS-2 (wave-loop orchestrator integration: run_wave) provide the seating infrastructure. Increment 3 adjudication_gate implements conservative two-tier escalation (proof: 28 passing tests, bench/results/hs2-swap-proof-2026-07-25.md; merge manual in pilot). RS3-W round-2 robustness + RS5 claim lifecycle active in wave_loop.py.
+
+Next increment: increment 5 (micro-kernel formalization: docs/MICROKERNEL.md, file-brain/dispatch/verify/run_command/git/gh syscall table) — primarily documentation, outside driver/ domain scope.
