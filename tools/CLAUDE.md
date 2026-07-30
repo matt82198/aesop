@@ -39,6 +39,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `fleet.js` — One-shot fleet snapshot (JSON: agents, heartbeats, tracker, orchestrator status; Node STDLIB only)
 - `fleet_ledger.py` — Append-only cost ledger with harvest/rotate
 - `fleet_prompt_extractor.py` — Extract and deduplicate Agent/Task spawn prompts
+- `gen_state_md.py` — STATE.md checkpoint generator from event-sourced state store; reads tracker projection via StateAPI read facade; renders markdown with current status header (ISO timestamp), open tracker items by lane, and next steps; CLI: `[--state-root DIR] [--out PATH]`; exit 0=success / 1=malformed store; deterministic + ASCII-safe
 - `git_identity_check.py` — Validate repo git user.name/user.email via --expect-name/--expect-email CLI args OR aesop.config.json identity block; verifies .git/config physically (not config cache)
 - `halt.py` — Kill-switch: writes/reads/clears `.HALT` sentinel (daemons/dispatch check it)
 - `handoff_proof.py` — Team-handoff proof: crash-only resume demo on the real driver/wave_loop.py engine offline (control vs interrupted+resumed runs must reach identical terminal state); outputs docs/HANDOFF-CERTIFICATE.md + state/handoff-proof-*.json
