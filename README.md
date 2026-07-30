@@ -107,14 +107,15 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 | Metric | Value |
 | --- | --- |
-| Merged PRs | 519 <!-- metrics-verified: self_stats.py (git log) --> |
-| Total Commits | 1432 <!-- metrics-verified: self_stats.py (git log) --> |
+| Merged PRs | 520 <!-- metrics-verified: self_stats.py (git log) --> |
+| Total Commits | 1433 <!-- metrics-verified: self_stats.py (git log) --> |
 | Project Age | 18 days <!-- metrics-verified: self_stats.py (git log) --> |
-| Insertions + Deletions | 292,580 <!-- metrics-verified: self_stats.py (git log) --> |
+| Insertions + Deletions | 292,607 <!-- metrics-verified: self_stats.py (git log) --> |
 | Files Tracked | 936 <!-- metrics-verified: self_stats.py (git log) --> |
 | Authors | 1 human + 5 Claude model tiers <!-- metrics-verified: self_stats.py (git log) --> |
 
 <!-- STATS:END -->
+
 
 
 
