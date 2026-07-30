@@ -99,6 +99,10 @@ jobs:
             bash -n "$file" || exit 1
           done
 
+      - name: Test coverage gate (Guardrail G2)
+        if: matrix.python-shard == 0
+        run: python tools/verify_test_coverage.py --check
+
       - name: Run Node.js tests
         run: npm run test:node
 
@@ -158,6 +162,10 @@ jobs:
       - name: README stats freshness gate
         if: matrix.python-shard == 0
         run: python tools/self_stats.py --check
+
+      - name: Tracker auto-close gate (Guardrail G1)
+        if: matrix.python-shard == 0
+        run: python tools/tracker_autoclose.py --check
 
       - name: Secret scan
         if: matrix.python-shard == 0
