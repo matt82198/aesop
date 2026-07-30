@@ -29,6 +29,13 @@ import sys
 # as `python ui/serve.py` and when it is loaded by path via importlib (tests).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import demo
+# Zero-key demo mode: `python ui/serve.py --demo` (or AESOP_DEMO=1) points the
+# collectors at a seeded, self-identifying fleet snapshot. Must run BEFORE
+# config.reload() so the demo env vars are visible when config resolves paths.
+# No-op (default mode untouched) when neither the flag nor the env is present.
+demo.maybe_activate()
+
 import config
 config.reload()
 

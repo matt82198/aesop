@@ -137,7 +137,13 @@ def reload():
     BACKUP_LOG = STATE_DIR / "FLEET-BACKUP.log"
     ALERTS_LOG = STATE_DIR / "SECURITY-ALERTS.log"
     INBOX_FILE = STATE_DIR / "ui-inbox.md"
-    AUDIT_BACKLOG_FILE = AESOP_ROOT / "AUDIT-BACKLOG.md"
+    # AUDIT_BACKLOG_FILE: env AESOP_AUDIT_BACKLOG > AESOP_ROOT/AUDIT-BACKLOG.md.
+    # The env override lets demo mode (ui/demo.py) point the backlog panel at a
+    # seeded snapshot without moving AESOP_ROOT (which must stay on the real
+    # install so WEB_DIST keeps resolving the committed dist).
+    AUDIT_BACKLOG_FILE = Path(
+        os.getenv("AESOP_AUDIT_BACKLOG", str(AESOP_ROOT / "AUDIT-BACKLOG.md"))
+    ).expanduser()
     UI_SESSION_TOKEN_FILE = STATE_DIR / ".ui-session-token"
     TRACKER_FILE = STATE_DIR / "tracker.json"
     ORCH_STATUS_FILE = STATE_DIR / "orchestrator-status.json"
