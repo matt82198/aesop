@@ -14,15 +14,34 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
+**Aesop is an autonomous coding-agent harness that built itself** — hundreds of PRs merged across 30+ waves, every number counted from the repo's own git history ([receipts below](#aesop-builds-itself)), every merge gated by guardrails that live in code, not prose. Crash-only by design: restart is the only recovery path.
+
+![Aesop fleet dashboard during a live wave — real agents, real PR board](assets/wave-demo.gif)
+
+*The actual dashboard during wave 2 of the 2026-07-30 session: 12 agents, 5 lanes running, live PR board — not a mockup.*
+
+## Why It's Different
+
+Each framework below is good at what it optimizes for. Aesop optimizes for the part they leave to you: **shipping verified merges unattended** — fail-closed gates in code, crash-only state, receipts regenerable from git.
+
+| | Orchestration model | Verification story | State model |
+| --- | --- | --- | --- |
+| **LangGraph** | Graph workflows you define in code — excellent control flow | You build the checks; no built-in merge gate | Checkpointers (SQLite/Postgres) you configure |
+| **AutoGen** | Conversation-driven multi-agent teams | Human-in-the-loop or custom evaluators | Conversation history per run |
+| **CrewAI** | Role-based crews with task pipelines — fast to prototype | Optional QA agents you wire in | Task outputs handed between agents |
+| **OpenHands** | One autonomous dev agent in a sandbox | Agent self-verifies; you review the PR | Sandboxed workspace per session |
+| **Claude Code (plain)** | One interactive session, subagents on demand | You watch and verify by hand | Session context, gone on exit |
+| **Aesop** | Parallel Haiku fleets over disjoint file lanes; orchestrator stays on the main thread | Verified-merge discipline: fail-closed secret scan, re-run of the exact CI gate, adversarial review — [gates that have actually fired](#evidence--receipts) | Crash-only: durable files + git + SQLite event log; restart IS recovery |
+
 ## What It Does
 
 **Aesop** is an **orchestration harness that runs fleets of LLM coding agents**, verifies their output, and ships merge-ready code to CI. Each agent reads your repository state, fixes a ranked backlog item, runs tests locally, and auto-pushes. If a machine crashes mid-task, the next run re-reads from disk and continues — no external state server, no vector DB, no consensus machinery. The entire system and all decisions live in source-controlled, human-diffable files: git history, STATE.md, BUILDLOG.md, guardrail scripts. Aesop is battle-tested: 191 test suites across 3 harnesses (shell, Node, Python), 13 core domains built in parallel, 5-round audit convergence to zero verified defects, 4x measured cost reduction—all shipped by its own `/buildsystem` loop.
 
 ## How It Works
 
-**Agent behavior is source code.** Every orchestration rule lives in durable files (STATE.md, BUILDLOG.md, Python guardrails, git history). When a machine fails, you re-read from disk—no special recovery path. The architecture is: crash-only workers (request-scoped Haiku agents over persistent filesystem state, ~1/3 Opus cost each), persistent filesystem brain (git-backed), fail-closed guardrails (pre-push secret-scan, cost ceiling, verification re-runs), and observable heartbeats (to detect and auto-restart stalls).
+**Agent behavior is source code.** Every orchestration rule lives in durable files (STATE.md, BUILDLOG.md, Python guardrails, git history). When a machine fails, you re-read from disk—no special recovery path. The architecture is: crash-only workers (request-scoped Haiku agents over persistent filesystem state, 1/5 the per-token cost of Opus — see [docs/DISPATCH-MODEL.md](./docs/DISPATCH-MODEL.md)), persistent filesystem brain (git-backed), fail-closed guardrails (pre-push secret-scan, cost ceiling, verification re-runs), and observable heartbeats (to detect and auto-restart stalls).
 
-**Proof:** This repo is built entirely by Aesop. Haiku proved sufficient for seam-level judgment tasks (39/39; pre-declared ceiling rule flags limited discrimination — sufficiency floor, not tier equivalence). Frontier reasoning and long-horizon planning are out of scope. Removing the hierarchical supervisor layer cut dispatch cost ~4× at identical graded quality (A/B; topology cancelled, data kept). The loop study shows that crash-only checkpointing + repair loops recover 20pp on hard tasks, lifting overall 67.8% → 77.2%.
+**Proof:** This repo is built entirely by Aesop. Haiku proved sufficient for seam-level judgment tasks (39/39; pre-declared ceiling rule flags limited discrimination — sufficiency floor, not tier equivalence). Frontier reasoning and long-horizon planning are out of scope. Removing the hierarchical supervisor layer cut dispatch cost ~4× at identical graded quality (A/B; topology cancelled, data kept). The loop study isolates the lever behind that recovery: putting the failing repro test in context lifts one-shot hard-task pass rate +16.7pp on its own; the full seated repair loop reaches 77.2% overall (from a 67.8% checkpoint baseline), with the hard-task gain driven by the repro-test-in-context prompt lever rather than repair iteration.
 
 ## Why It Matters
 
@@ -114,7 +133,7 @@ npx @matt82198/aesop my-fleet --name "api" --repos "/path/to/repo"
 
 ## Why Haiku-First Works
 
-The benchmark proves sufficiency for seam-level engineering tasks: across 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence, security spots), Haiku scored **39/39** vs Opus **38/39** at ~1/3 the per-token cost. **Measured on seam-level engineering tasks (code review, severity calibration, local orchestration) — not frontier reasoning or long-horizon planning.** See [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](./bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md). The pre-declared ceiling rule (when ≥2 tiers score ≥92%, the instrument failed to discriminate) trips on this result — both Haiku and Sonnet achieved 39/39, meaning the benchmark maps a *sufficiency floor*, not tier equivalence. Full analysis: [`bench/results/2026-07-26-judgment-v3-ceiling-addendum.md`](./bench/results/2026-07-26-judgment-v3-ceiling-addendum.md) and [`bench/METHODOLOGY.md`](./bench/METHODOLOGY.md).
+The benchmark proves sufficiency for seam-level engineering tasks: across 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence, security spots), Haiku scored **39/39** vs Opus **38/39** at 1/5 the per-token cost of Opus (1/3 of Sonnet — list pricing; cost model in [docs/DISPATCH-MODEL.md](./docs/DISPATCH-MODEL.md)). **Measured on seam-level engineering tasks (code review, severity calibration, local orchestration) — not frontier reasoning or long-horizon planning.** See [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](./bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md). The pre-declared ceiling rule (when ≥2 tiers score ≥92%, the instrument failed to discriminate) trips on this result — both Haiku and Sonnet achieved 39/39, meaning the benchmark maps a *sufficiency floor*, not tier equivalence. Full analysis: [`bench/results/2026-07-26-judgment-v3-ceiling-addendum.md`](./bench/results/2026-07-26-judgment-v3-ceiling-addendum.md) and [`bench/METHODOLOGY.md`](./bench/METHODOLOGY.md).
 
 ## Known Limitations
 
@@ -143,7 +162,7 @@ The guardrails below are not theoretical. Real activations: the pre-push secret 
 - **Benchmark pre-registration:** [`bench/SEAM-STUDY-PREREG.md`](./bench/SEAM-STUDY-PREREG.md) — pre-declared design, success criteria, ceiling rule.
 - **Equivalence margin amendments:** [`bench/METHODOLOGY.md`](./bench/METHODOLOGY.md) — pre-reg record and all amendments after each run.
 - **Dated results:** [`bench/results/`](./bench/results/) — all judgment and frontier runs with timestamps.
-  - **Loop study (2026-07-28):** [`bench/results/seam-loop-study-2026-07-28.md`](./bench/results/seam-loop-study-2026-07-28.md) — checkpoint recovery + repair loop data: 122/180 (checkpoint) → 139/180 (loop), +20pp on hard tasks.
+  - **Loop study (2026-07-28):** [`bench/results/seam-loop-study-2026-07-28.md`](./bench/results/seam-loop-study-2026-07-28.md) — checkpoint recovery + repair loop data: 122/180 (checkpoint) → 139/180 (loop), +20pp on hard tasks — the study isolates the repro-test-in-context prompt lever (+16.7pp one-shot on hard tasks) as the main driver.
 - **Kill switch & ceilings:** [`tools/halt.py`](./tools/halt.py), [`tools/cost_ceiling.py`](./tools/cost_ceiling.py) — enforced at dispatch time.
 - **Secret gate:** [`tools/secret_scan.py`](./tools/secret_scan.py) — pre-push enforcement; non-zero exit on leak.
 - **Green-never-ran detection:** [`tools/ci_workflow_lint.py`](./tools/ci_workflow_lint.py) — ensures every CI suite actually runs before merge.
