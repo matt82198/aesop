@@ -31,6 +31,15 @@ folded into this scaffold.
 - `ground_truth.jsonl` — one JSON object per line, keyed by `id`:
   - exact tasks: `{"id": ..., "expected": "<string>"}`
   - regex tasks: `{"id": ..., "expected_regex": "<pattern>"}`
+- `frontier_eligibility.py` — Frontier slice eligibility checks (task difficulty thresholds).
+- `probe_refusals.py` — Refusal-probe harness: detects model refusals on edge-case prompts.
+- `run_seam_s.py` — Seam study runner (Sonnet model).
+- `run_seam_u.py` — Seam study runner (user-specified model).
+- `METHODOLOGY.md` — Pre-registration record, amendments, and scoring methodology.
+- `RESULTS-INDEX.md` — Index of all dated benchmark result files.
+- `SEAM-STUDY-PREREG.md` — Pre-declared design, success criteria, and ceiling rule.
+- `seam_tasks/` — Seam study task definitions and ground truth.
+- `ext120/` — Extended 120-task benchmark set and ground truth.
 - `tools/bench_runner.py` (repo root `tools/`, not under `bench/`) — the scorer
   and CLI. See below.
 
