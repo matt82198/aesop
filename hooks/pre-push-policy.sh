@@ -522,6 +522,48 @@ check_secret_scan() {
   return $overall_exit_code
 }
 
+check_tracker_guard() {
+  # Tracker zombie-resurrection gate (tools/tracker_guard.py --check).
+  # Runs against the LIVE runtime state (AESOP_STATE_ROOT, default
+  # $AESOP_ROOT/state). This gate is wired here -- not in CI -- because
+  # state/tracker.json is git-ignored runtime state: a CI checkout never
+  # has it, so a CI step would be a permanently-green decoration. The
+  # pre-push hook is the point where the real state exists.
+  #
+  # Fail-open ONLY for missing optional tooling (hook is installed into
+  # repos without an aesop checkout; no aesop install == no tracker state
+  # to guard -- consistent with the hooks/ key invariant). An actual
+  # zombie detection (exit 1 from --check) stays fail-closed and blocks
+  # the push. tracker_guard itself exits 0 when tracker.json is absent.
+  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local guard_script="$aesop_root/tools/tracker_guard.py"
+
+  if [ ! -f "$guard_script" ]; then
+    log_event "tracker_guard_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; tracker guard skipped\n' >&2
+    log_event "tracker_guard_skipped_no_python"
+    return 0
+  fi
+
+  local guard_output
+  guard_output=$(AESOP_STATE_ROOT="${AESOP_STATE_ROOT:-$aesop_root/state}" "$py_bin" "$guard_script" --check 2>&1)
+  local guard_exit_code=$?
+
+  if [ $guard_exit_code -ne 0 ]; then
+    if [ -n "$guard_output" ]; then
+      printf '%s\n' "$guard_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
 log_event() {
   # Finding 1 & 2: Acquire lock before read-modify-append, add seq field, update sidecar
   local event_type="$1"
@@ -1190,6 +1232,12 @@ main() {
   if ! check_secret_scan <<< "$prepush_stdin"; then
     printf 'Error: Secret scan failed. Push blocked.\n' >&2
     log_block "secret_scan_failure"
+    exit 1
+  fi
+
+  if ! check_tracker_guard; then
+    printf 'Error: Tracker zombie-resurrection gate failed. Push blocked.\n' >&2
+    log_block "tracker_guard_failure"
     exit 1
   fi
 
