@@ -228,6 +228,32 @@ class SpecContractValidatorTest(unittest.TestCase):
         rules = [f["rule"] for f in findings]
         self.assertNotIn("missing_isolation_marker", rules)
 
+    def test_isolation_marker_without_space_after_colon(self):
+        """Isolation marker should work even without space after colon (finding #3)."""
+        # Test "[ISOLATION:sibling worktree]" (no space after colon)
+        source = _dispatch_source(
+            "[ISOLATION:sibling worktree] Implement the feature: Write(the new module) then commit."
+        )
+        calls = find_dispatch_calls(source)
+        findings = validate_call(calls[0])
+        rules = [f["rule"] for f in findings]
+        # Should NOT flag missing_isolation_marker because the marker is present
+        self.assertNotIn("missing_isolation_marker", rules,
+                        "Isolation marker should be recognized even without space after colon")
+
+    def test_isolation_marker_with_space_after_colon(self):
+        """Isolation marker with space after colon should work as before."""
+        # Test "[ISOLATION: sibling worktree]" (with space after colon)
+        source = _dispatch_source(
+            "[ISOLATION: sibling worktree] Implement the feature: Write(the new module) then commit."
+        )
+        calls = find_dispatch_calls(source)
+        findings = validate_call(calls[0])
+        rules = [f["rule"] for f in findings]
+        # Should NOT flag missing_isolation_marker because the marker is present
+        self.assertNotIn("missing_isolation_marker", rules,
+                        "Isolation marker with space should work as before")
+
     # -- 6. role routing (advisory) ---------------------------------------------
 
     def test_unknown_specialist_type_flagged(self):

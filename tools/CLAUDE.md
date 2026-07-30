@@ -24,6 +24,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `bench_api_runner.py` — Bench v2+v3 via Anthropic API (BENCH_API_KEY, API-only per bench-no-cli-fallback rule); reuses bench_runner machinery; CLI: `bench_api_runner.py <v2|v3|all> <model...>`
 - `bench_results_cache.py` — Append-only benchmark results journal (state/bench-runs.jsonl); idempotent dedup by model+timestamp; stdlib-only
 - `bench_runner.py` — Held-out benchmark runner + scorer (Haiku/Sonnet/Opus pluggable)
+- `fixture_intent_check.py` — Deliberately-broken fixture manifest validator; verifies bench/fixtures-intent.json tracks all intentionally-broken/incomplete fixtures to distinguish benchmarks from regressions; CLI: `[--manifest PATH] [--root DIR] [--json]`; exit 0=valid/1=findings/2=error; stdlib-only
 - `build_static_dash.py` — Build a static, self-contained snapshot of the dashboard with demo data for GitHub Pages; starts demo server, captures API state, produces _site/ with fetch/EventSource shim; CLI: `--output DIR`
 - `buildlog.py` — Uniform BUILDLOG.md appender (writes via state_store WriteAPI: entry also lands as buildlog_entry event)
 - `chaos_harness.py` — Chaos-wave resilience harness: offline deterministic fault injection (worker kill, checkpoint corruption, planted secret, heartbeat stall, forced red test) with detection/recovery measurement; CLI: `--offline [--state-root DIR] [--output REPORT.md] [--json REPORT.json]`
@@ -63,7 +64,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `launch_tui.py` — Spawn bash TUI script in detached terminal
 - `list_test_suites.py` — Generate live test suite inventory: scans filesystem for test files (tests/*.test.mjs, tests/test_*.py, tests/*.test.sh, tests/test_*.sh, tests/test-*.sh, hooks/pre-push-policy.sh --test) and outputs grouped listing with first-line doc summaries; ASCII-safe, deterministic; CLI: `list_test_suites.py [--repo ROOT]`; used in tests/CLAUDE.md docs and CI coverage gates; replaces hand-maintained suite listings (kills conflict magnet in merge conflicts)
 - `lock.mjs` — Fail-closed atomic lock (exponential backoff + stale-lock detection)
-- `merge_train.py` — Serial merge train: update-branch, wait for CI, merge, verify MERGED state (handles strict-up-to-date treadmill)
+- `merge_train.py` — Serial merge train: update-branch, wait for CI, merge, verify MERGED state (handles strict-up-to-date treadmill); one-shot merge loop for specific PR queue; use for serial CI-gated merges, optionally batched via integration branch
 - `metrics_gate.py` — PR gate for hard numeric claims in markdown
 - `multi_dispatch.py` — Multi-instance-aware dispatch wrapper (checks file claims before dispatch, releases on completion)
 - `mutation_test.py` — Test quality harness via mutation testing (apply code mutations, run tests, report survived mutations as test gaps); CLI: `--target <module.py> --test <test_module.py> [--json]`; exit 0 on valid results (advisory), exit 1 when the sandbox baseline fails (results invalid, fail-closed)
@@ -102,8 +103,13 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `tracker_guard.py` — Append-only lane journal + zombie-resurrection fail-closed gate; prevents items in terminal lanes (done/rejected) from re-entering active lanes (ranked/proposed/in-progress/accepted); modes: --seed (bootstrap journal), --check (detect violations, exit 1 if found, default), --enforce (revert zombies to terminal lane); CLI: `tracker_guard.py [--seed | --check | --enforce]`; journaled in state/tracker-journal.jsonl with rotation at 5000 lines
 - `transcript_digest.py` — Digest agent-*.jsonl transcripts into compact redacted per-agent briefs (state/ledger/transcripts-brief.jsonl; deterministic, idempotent, strips paths/emails/tokens)
 - `claudemd_lint.py` — Lint the domain CLAUDE.md layer: doc-pointers resolve, cited npm scripts exist, runtime/state artifacts not flagged, domain cross-refs prohibited; 4 checks: DOC-POINTER, TEST-CMD, DOMAIN-CROSS-REF (domain CLAUDE.md must not reference other domain CLAUDE.md with directives; parent-child refs allowed), line-count; --json; root CLAUDE.md exempt from cross-ref check
-- `claudemd_sync_gate.py` — CLAUDE.md synchronization gate (Guardrail G5): for each domain directory with code changes, verifies that its CLAUDE.md was also modified in the same PR; exempts: test-only changes, docs-only, meta files (stats.json, README.md, CHANGELOG.md, package.json, .nvmrc), .github/ (CI), CLAUDE.md-only changes; CLI: `--check` (default, fail-closed) | `--json` | `--base-ref` [BRANCH] (default main); exit 0=synced, 1=drift, 2=error
-- `auto_merge.py` — Batch PR merge tool (fix-by-default: merge main into broken branches + merge green PRs; `--no-fix`/`--loop`/`--dry-run`/`--json`)
+<<<<<<< HEAD
+- `claudemd_sync_gate.py` — CLAUDE.md synchronization gate (Guardrail G5): for each domain directory with code changes, verifies the corresponding domain/CLAUDE.md was also modified in the same PR; exempts: test-only changes, docs-only, meta files (stats.json, README.md, CHANGELOG.md, package.json, .nvmrc), .github/ (CI), CLAUDE.md-only changes; CLI: `--check` (default, fail-closed) | `--json` | `--base-ref` [BRANCH] (default main); exit 0=synced, 1=drift, 2=error
+- `auto_merge.py` — Batch PR merge tool (fix-by-default: merge main into broken branches + merge green PRs; `--no-fix`/`--loop`/`--dry-run`/`--json`); continuous polling merge tool; run with `--loop` to continuously merge all green PRs; use merge_train.py for one-shot serial CI-gated queues
+=======
+- `claudemd_sync_gate.py` — CLAUDE.md synchronization gate (Guardrail G5): for each domain directory with code changes, verifies the corresponding domain/CLAUDE.md was also modified in the same PR; exempts: test-only changes, docs-only, meta files (stats.json, README.md, CHANGELOG.md, package.json, .nvmrc), .github/ (CI), CLAUDE.md-only changes; CLI: `--check` (default, fail-closed) | `--json` | `--base-ref` [BRANCH] (default main); exit 0=synced, 1=drift, 2=error
+- `auto_merge.py` — Batch PR merge tool (fix-by-default: merge main into broken branches + merge green PRs; `--no-fix`/`--loop`/`--dry-run`/`--json`); continuous polling merge tool; run with `--loop` to continuously merge all green PRs; use merge_train.py for one-shot serial CI-gated queues
+>>>>>>> origin/main
 - `audit_report.py` — Deterministic markdown audit report aggregator (defect_escape, mutation results, lint/drift findings, ledger verdict rates); --out/--strict/--json inputs from machine outputs only
 - `claudemd_drift.py` — Semantic drift detector: CLAUDE.md claims vs disk reality (missing refs, unmapped dirs, dead map entries, absent CLI flags); exit 1 on drift; --json
 - `cost_econ.py` — Cost economics metrics (cost-per-LOC, per-merged-PR, per-wave/backlog-item) from stats.json + fleet ledger; shares ui/cost.py pricing; honesty caveats documented in output
@@ -138,10 +144,6 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `watch.js` — Launch the watchdog daemon (spawns bash daemons/run-watchdog.sh with inherited stdio in foreground mode)
 - `workflow_model_linter.py` — Guardrail G7: workflow model pin linter; AST-scans .js/.mjs files for agent() calls missing explicit model:'haiku' parameter (bypasses PreToolUse hook); suppress via `// model-ok`; CLI: `--check` (default) | `--json` | `--help`; exit 0=clean/1=violations/2=error; stdlib-only
 - `watcher_linter.py` — Guardrail G3: watcher/polling anti-pattern linter (mechanizes "no watcher pattern in long runs"); AST-scans tools/monitor/driver/daemons for while-True+sleep loops, watch_/monitor_/poll_-named functions with infinite loops, and subprocess calls inside infinite loops (exempts loops with a break/return/raise/exit -- legitimate bounded poll-until-timeout code is not flagged); string-scans prompt-ish assignments/kwargs/dict-keys for "wait for a monitor/watcher/signal/notification", "poll"/"poll for", "watch for changes" phrasing; suppress via `# watcher-ok` inline comment; CLI: `--check` (default) | `--json` | `--paths DIR...` | `--root DIR`; exit 0=clean/1=findings/2=error; stdlib-only, ASCII output
-- `agent-forensics.sh` — Incident forensics; behavior reconstruction (read-only git plumbing)
-
 ## Gates & tests
 
-- `secret_scan.py --staged` — pre-push gate (exit 0=clean/1=findings/2=error; `# secretscan: allow-pattern-docs` pragma)
-- `agent-forensics.sh <commit>` — behavior forensics; `--diff <A> <B>` for rules/docs diff
-- **Python**: `npm run test:py`; **Shell**: `bash -n tools/*.sh && shellcheck tools/*.sh`; **Node**: `node --check tools/*.mjs`
+- `secret_scan.py --staged` — pre-push gate (exit 0=clean/1=findings/2=error); Python: `npm run test:py`; Shell: `shellcheck tools/*.sh`; Node: `node --check tools/*.mjs`
