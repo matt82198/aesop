@@ -25,7 +25,9 @@ from claudemd_lint import (
     lint_claudemd,
     extract_path_references,
     extract_npm_scripts,
+    extract_domain_claude_references,
     is_runtime_artifact,
+    get_sibling_domains,
 )
 
 
@@ -569,6 +571,218 @@ class TestCompleteIntegration(unittest.TestCase):
             self.assertIn("missing-npm-script", by_type, "Should catch missing npm script")
             self.assertIn("pytest-vs-unittest", by_type, "Should catch pytest/unittest mismatch")
             self.assertIn("line-count", by_type, "Should catch line count violation")
+
+
+class TestDomainClaudeReferenceExtraction(unittest.TestCase):
+    """Test extraction of domain CLAUDE.md references."""
+
+    def test_extract_simple_domain_claude_references(self):
+        """Extract references like 'tools/CLAUDE.md' and 'daemons/CLAUDE.md'."""
+        text = "See tools/CLAUDE.md and daemons/CLAUDE.md for details."
+        refs = extract_domain_claude_references(text)
+        self.assertIn("tools", refs)
+        self.assertIn("daemons", refs)
+
+    def test_extract_nested_domain_claude_references(self):
+        """Extract nested domain paths like 'driver/orchestrator-swap/CLAUDE.md'."""
+        text = "Read driver/orchestrator-swap/CLAUDE.md for the orchestrator."
+        refs = extract_domain_claude_references(text)
+        self.assertIn("driver/orchestrator-swap", refs)
+
+    def test_ignore_root_claude_md(self):
+        """Should NOT extract plain 'CLAUDE.md' (root file)."""
+        text = "See CLAUDE.md for the domain map."
+        refs = extract_domain_claude_references(text)
+        # Should be empty because 'CLAUDE.md' alone (no domain prefix) is not extracted
+        self.assertNotIn("CLAUDE.md", refs)
+        self.assertEqual(len(refs), 0)
+
+    def test_ignore_relative_claude_md(self):
+        """Should NOT extract './CLAUDE.md' or '../CLAUDE.md'."""
+        text = "See ./CLAUDE.md or ../CLAUDE.md for reference."
+        refs = extract_domain_claude_references(text)
+        self.assertEqual(len(refs), 0, "Should not extract relative root references")
+
+
+class TestSiblingDomainsDetection(unittest.TestCase):
+    """Test detection of sibling domain paths."""
+
+    def test_get_sibling_domains(self):
+        """Should discover all domains except root and current domain."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+
+            # Create domain structure
+            for domain in ["tools", "daemons", "monitor"]:
+                domain_dir = repo_root / domain
+                domain_dir.mkdir()
+                (domain_dir / "CLAUDE.md").write_text(f"# {domain.title()} Domain")
+
+            # Create the current domain
+            current_dir = repo_root / "tools"
+            current_claudemd = current_dir / "CLAUDE.md"
+
+            # Get siblings (should exclude 'tools' itself, not include root)
+            siblings = get_sibling_domains(repo_root, current_claudemd)
+
+            self.assertIn("daemons", siblings)
+            self.assertIn("monitor", siblings)
+            self.assertNotIn("tools", siblings, "Should exclude current domain")
+
+    def test_exclude_root_claude_md_from_siblings(self):
+        """Root CLAUDE.md should not be considered a sibling domain."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+
+            # Create root CLAUDE.md
+            (repo_root / "CLAUDE.md").write_text("# Root")
+
+            # Create a domain
+            tools_dir = repo_root / "tools"
+            tools_dir.mkdir()
+            current_claudemd = tools_dir / "CLAUDE.md"
+            current_claudemd.write_text("# Tools Domain")
+
+            siblings = get_sibling_domains(repo_root, current_claudemd)
+
+            # Root should not appear as a domain (it has no domain prefix)
+            self.assertNotIn("", siblings, "Root should not be in sibling domains")
+
+
+class TestDomainCrossRefCheck(unittest.TestCase):
+    """Test detection of domain CLAUDE.md cross-references."""
+
+    def test_catch_domain_cross_ref_in_domain_claudemd(self):
+        """MUST CATCH a domain CLAUDE.md that references another domain."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+
+            # Create package.json
+            pkg = repo_root / "package.json"
+            pkg.write_text(json.dumps({"scripts": {"test:py": "python -m unittest"}}))
+
+            # Create two domains
+            tools_dir = repo_root / "tools"
+            tools_dir.mkdir()
+            tools_claudemd = tools_dir / "CLAUDE.md"
+
+            daemons_dir = repo_root / "daemons"
+            daemons_dir.mkdir()
+            (daemons_dir / "CLAUDE.md").write_text("# Daemons Domain")
+
+            # Write tools/CLAUDE.md with reference to daemons/CLAUDE.md
+            tools_claudemd.write_text(
+                "# Tools Domain\n\n"
+                "For daemon details, see daemons/CLAUDE.md."
+            )
+
+            findings = lint_claudemd(tools_claudemd, repo_root)
+
+            # Should find the cross-reference violation
+            cross_ref_findings = [f for f in findings if f["type"] == "domain-cross-ref"]
+            self.assertGreater(
+                len(cross_ref_findings), 0,
+                "Should catch domain cross-ref violation"
+            )
+            self.assertTrue(
+                any("daemons" in f["message"] for f in cross_ref_findings),
+                "Should mention the referenced domain"
+            )
+
+    def test_allow_root_claude_md_to_reference_domains(self):
+        """Root CLAUDE.md SHOULD be allowed to reference domain CLAUDE.md files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+
+            # Create package.json
+            pkg = repo_root / "package.json"
+            pkg.write_text(json.dumps({"scripts": {"test:py": "python -m unittest"}}))
+
+            # Create domains
+            for domain in ["tools", "daemons", "monitor"]:
+                domain_dir = repo_root / domain
+                domain_dir.mkdir()
+                (domain_dir / "CLAUDE.md").write_text(f"# {domain.title()}")
+
+            # Create root CLAUDE.md with domain references
+            root_claudemd = repo_root / "CLAUDE.md"
+            root_claudemd.write_text(
+                "# Root CLAUDE.md\n\n"
+                "- See tools/CLAUDE.md for tools\n"
+                "- See daemons/CLAUDE.md for daemons\n"
+                "- See monitor/CLAUDE.md for monitor\n"
+            )
+
+            findings = lint_claudemd(root_claudemd, repo_root)
+
+            # Should NOT find any domain-cross-ref violations (root is exempt)
+            cross_ref_findings = [f for f in findings if f["type"] == "domain-cross-ref"]
+            self.assertEqual(
+                len(cross_ref_findings), 0,
+                "Root CLAUDE.md should be exempt from domain-cross-ref check"
+            )
+
+    def test_nested_domain_cross_ref_check(self):
+        """Should catch cross-refs in nested domains like 'driver/orchestrator-swap'."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+
+            # Create package.json
+            pkg = repo_root / "package.json"
+            pkg.write_text(json.dumps({"scripts": {"test:py": "python -m unittest"}}))
+
+            # Create driver/orchestrator-swap domain
+            orch_swap_dir = repo_root / "driver" / "orchestrator-swap"
+            orch_swap_dir.mkdir(parents=True)
+            orch_swap_claudemd = orch_swap_dir / "CLAUDE.md"
+
+            # Create tools domain
+            tools_dir = repo_root / "tools"
+            tools_dir.mkdir()
+            (tools_dir / "CLAUDE.md").write_text("# Tools")
+
+            # Write orchestrator-swap CLAUDE.md with reference to tools
+            orch_swap_claudemd.write_text(
+                "# Orchestrator-Swap Domain\n\n"
+                "For utilities, read tools/CLAUDE.md."
+            )
+
+            findings = lint_claudemd(orch_swap_claudemd, repo_root)
+
+            # Should find the cross-reference
+            cross_ref_findings = [f for f in findings if f["type"] == "domain-cross-ref"]
+            self.assertGreater(len(cross_ref_findings), 0)
+
+    def test_allow_same_domain_references(self):
+        """A domain CLAUDE.md MAY reference itself (same domain)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+
+            # Create package.json
+            pkg = repo_root / "package.json"
+            pkg.write_text(json.dumps({"scripts": {"test:py": "python -m unittest"}}))
+
+            # Create driver domain with nested structure
+            driver_dir = repo_root / "driver"
+            driver_dir.mkdir()
+            driver_claudemd = driver_dir / "CLAUDE.md"
+
+            orchestrator_dir = driver_dir / "orchestrator-swap"
+            orchestrator_dir.mkdir()
+            (orchestrator_dir / "CLAUDE.md").write_text("# Nested")
+
+            # Write driver/CLAUDE.md with reference to driver/orchestrator-swap/CLAUDE.md
+            # This is self-referential (same domain), should be allowed
+            driver_claudemd.write_text(
+                "# Driver Domain\n\n"
+                "For orchestrator swap, see driver/orchestrator-swap/CLAUDE.md."
+            )
+
+            findings = lint_claudemd(driver_claudemd, repo_root)
+
+            cross_ref_findings = [f for f in findings if f["type"] == "domain-cross-ref"]
+            self.assertEqual(len(cross_ref_findings), 0,
+                "Parent-child domain references (driver -> driver/orchestrator-swap) should be allowed")
 
 
 if __name__ == "__main__":
