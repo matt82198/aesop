@@ -84,24 +84,18 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 ## API Routes (complete list)
 
 **Read-only (no CSRF required)**:
-- `GET /` — Renders `ui/web/dist/index.html` with CSRF token substituted (hard 500 if dist missing).
-- `GET /data` — Dashboard data snapshot: heartbeat, daemon state, repos, events, alerts, messages.
-- `GET /assets/*` — Static files from `ui/web/dist/assets/` (content-hashed, immutable cache headers, path-traversal-safe).
-- `GET /api/state` — Consolidated first-paint snapshot: `{data, backlog, agents, tracker, status, cost}` in one round trip (reuses latest SSE snapshots).
-- `GET /api/session` — Returns `{token}` for Vite dev server; Origin-checked fail-closed (local origins only).
-- `GET /api/cost` — Cost/scorecard summary from `state/ledger/OUTCOMES-LEDGER.md` (per-model, per-day, verdicts, optional pricing).
-- `GET /api/backlog` — Audit backlog parsed into tiers (P0/P1/P2/Needs decision).
-- `GET /api/agents` — Rich fleet agent list with metadata (from Claude transcripts directory).
-- `GET /api/agent?id=<id>` — Agent detail: dispatch prompt + ~40-line secret-redacted transcript tail; id-safety gates reject path-traversal.
-- `GET /api/tracker` — List tracker items; query params: `status`, `priority` (optional filters).
-- `GET /agent?id=<id>` — Agent dispatch prompt (deprecated; use `/api/agent?` instead).
-- `GET /api/wave/prs` — Wave PR board: open PRs (`gh pr list`) + PR-less `feat/*` branches (`git for-each-ref`), each with CI rollup/mergeable/age/top blocker. Cached ~5s; degrades `{available:false, error}`.
-- `GET /api/wave/telemetry` — Wave telemetry: current phase (from `STATE.md`), top blocker (from `AUDIT-BACKLOG.md`), cost metrics. Reads state at call time; degrades on missing files.
-- `GET /api/wave/dispatch` — Wave dispatch (live per-agent phase visibility): per-agent id/phase/age/tokens from transcript analysis. Polled by React Activity view every 2-3s. Degrades `{available:false}` when no active workflow. Reads at call time.
-- `GET /api/wave/failure?pr=N` — Wave PR failure drill-down: CI jobs for latest run on PR branch, with ~100-line log excerpts for failing jobs. Cached ~5s per PR; degrades `{available:false, error}`.
-- *(All `/api/wave/*` routes are read-only, read state at call time, and are polled not SSE; gh-backed routes honor `AESOP_GH_BIN`.)*
-- `GET /events` — Server-Sent Events stream (6 sections: data, backlog, agents, tracker, status, cost). Keepalive every ~15s. Read-only; no CSRF.
-- `GET /favicon.ico` — Returns 204 No Content (no favicon asset shipped with dashboard).
+- `GET /` — Renders `ui/web/dist/index.html` with CSRF token (hard 500 if dist missing).
+- `GET /data` — Dashboard data snapshot. `GET /assets/*` — Static files (content-hashed, immutable cache, path-traversal-safe).
+- `GET /api/state` — First-paint snapshot: `{data, backlog, agents, tracker, status, cost}` in one round trip.
+- `GET /api/session` — Returns `{token}` for Vite dev server (Origin-checked fail-closed, local only).
+- `GET /api/cost` — Cost/scorecard from ledger. `GET /api/backlog` — Audit backlog by tier.
+- `GET /api/agents` — Fleet agent list. `GET /api/agent?id=<id>` — Agent detail (path-traversal-safe).
+- `GET /api/tracker` — Tracker items (optional `status`/`priority` filters).
+- `GET /api/wave/prs` — PR board with CI rollup (cached ~5s; degrades `{available:false}`).
+- `GET /api/wave/telemetry` — Phase + blocker + cost metrics. `GET /api/wave/dispatch` — Per-agent phase visibility (polled 2-3s).
+- `GET /api/wave/failure?pr=N` — CI failure drill-down with log excerpts (cached ~5s).
+- All `/api/wave/*` routes: read-only, call-time reads, polled not SSE; gh-backed honor `AESOP_GH_BIN`.
+- `GET /events` — SSE stream (6 sections, keepalive ~15s). `GET /favicon.ico` — 204.
 
 **Mutations (CSRF-gated)**:
 - `POST /submit` — Append to inbox (X-Aesop-Token + Origin/Referer validation, fail-closed).
@@ -199,27 +193,17 @@ npx playwright test
 # Headed mode (debug): npx playwright test --headed
 ```
 
-**Full suite** (from repo root):
-```bash
-npm run test:py && npm run test:node && npm run test:all
-```
+**Full suite**: `npm run test:py && npm run test:node && npm run test:all`
 
 ## Invariants & Gotchas
 
-- **Stdlib-only backend**: No external Python dependencies (requests, flask, etc.). Uses only `http.server`, `json`, `subprocess`, `threading`.
-- **ThreadingHTTPServer required**: SSE model requires one thread per client. Standard HTTPServer (processes) cannot hold SSE connections open.
-- **Collector fail-open**: If collector thread crashes, server continues; realtime updates stop but dashboard accessible.
-- **Token file permissions**: Unix: chmod 0600 (user-only). Windows: respects file permissions via ACLs.
-- **Paths git-ignored**: `state/.ui-session-token` is ephemeral (regenerated if missing), never committed.
-- **Config read at call time**: `import config` + `config.X` on every call; never `from config import X` (breaks test isolation).
-- **Dist always required**: No fallback to legacy template (wave-14 U9); missing dist = hard 500.
-- **Content-hashed assets**: Vite build outputs `assets/` with content hashes in filenames (immutable cache headers).
-- **Vite dev server**: Proxies API to :8770; run `npm run dev` from `ui/web/`.
+- **Stdlib-only backend**: `http.server`, `json`, `subprocess`, `threading` only. ThreadingHTTPServer required (SSE = 1 thread/client).
+- **Collector fail-open**: crash → server stays up, realtime updates stop.
+- **Token**: 0600 (Unix) / ACL (Windows); `state/.ui-session-token` gitignored, regenerated if missing.
+- **Config at call time**: `import config` + `config.X`; never `from config import X` (breaks test isolation).
+- **Dist always required**: missing = hard 500. Vite content-hashed assets. Dev: `npm run dev` from `ui/web/`.
 
-## Dropped (reason)
-- Wave-14 dashboard rewrite plan details (separate docs; use `frontend-design` skill for UX/UI decisions).
-- Legacy HTML template (wave-9 split); only React app (`ui/web/dist/`) now served.
-- Detailed MCP server role (separate domain: `mcp/CLAUDE.md`).
-- State store internals (separate domain: `state_store/CLAUDE.md`).
+## Dropped
+- Wave-14 rewrite plan (separate docs). Legacy template (wave-9). MCP/state_store internals (own domains).
 
 Map of all domains: /CLAUDE.md
