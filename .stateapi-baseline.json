@@ -8,6 +8,7 @@
     "tools/claudemd_lint.py@state-md-write",
     "tools/claudemd_lint.py@tracker-json",
     "tools/cost_econ.py@ledger-md",
+    "tools/cost_forecast.py@ledger-md",
     "tools/fleet_ledger.py@ledger-md",
     "tools/health_score.py@monitor-hb",
     "tools/health_score.py@watchdog-hb",
