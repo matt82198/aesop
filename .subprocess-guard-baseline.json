@@ -1,0 +1,10 @@
+{
+  "_comment": "Guardrail G6 ratchet baseline (see tools/subprocess_guard.py --help). Regenerate ONLY via --update-baseline after reviewing the diff; CI must never pass --update-baseline.",
+  "violations": {
+    "tests/test_hs2_block_gate.py@SHELL_TRUE": 6,
+    "tests/test_symlink_guard.py@SHELL_TRUE": 3,
+    "tests/test_wave_cross_repo_ship.py@SHELL_TRUE": 5,
+    "tests/test_wave_loop_rs3.py@SHELL_TRUE": 1,
+    "tests/test_wave_manifest_lint.py@BARE_BASH_NO_CWD": 1
+  }
+}
