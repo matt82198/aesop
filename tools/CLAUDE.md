@@ -49,8 +49,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `git_identity_check.py` — Validate repo git user.name/user.email via --expect-name/--expect-email CLI args OR aesop.config.json identity block; verifies .git/config physically (not config cache)
 - `halt.py` — Kill-switch: writes/reads/clears `.HALT` sentinel (daemons/dispatch check it)
 - `handoff_proof.py` — Team-handoff proof: crash-only resume demo on the real driver/wave_loop.py engine offline (control vs interrupted+resumed runs must reach identical terminal state); outputs docs/HANDOFF-CERTIFICATE.md + state/handoff-proof-*.json
-- `health-score.js` — Readiness score for primed projects (0-100 weighted score: config, git hooks, CLAUDE.md, state writable, daemon heartbeats, git identity, secret-scan runnable)
-- `health_score.py` — Readiness score (0-100) for primed projects; CLI: `--cwd <path> [--json]`; checks: config, hooks, CLAUDE.md, writable, heartbeats, git-identity, secret-scan (weighted scoring)
+- `health-score.js`, `health_score.py` — Readiness score (0-100) for primed projects (config, hooks, CLAUDE.md, state, heartbeats, git-identity, secret-scan); JS wraps Python; CLI: `--cwd <path> [--json]`
 - `health.js`, `healthcheck.py` — Fleet health aggregator (heartbeat/alert/orchestrator status); health.js wraps Python
 - `heartbeat.py` — Single-instance loop liveness registry
 - `inbox_drain.py` — Drain UI inbox submissions
@@ -97,6 +96,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `audit_report.py` — Deterministic markdown audit report aggregator (defect_escape, mutation results, lint/drift findings, ledger verdict rates); --out/--strict/--json inputs from machine outputs only
 - `claudemd_drift.py` — Semantic drift detector: CLAUDE.md claims vs disk reality (missing refs, unmapped dirs, dead map entries, absent CLI flags); exit 1 on drift; --json
 - `cost_econ.py` — Cost economics metrics (cost-per-LOC, per-merged-PR, per-wave/backlog-item) from stats.json + fleet ledger; shares ui/cost.py pricing; honesty caveats documented in output
+- `dead_code_check.py` — AST-based Python dead code detector (unused functions/classes/variables); `# dead-code-ok` suppression; CLI: `[--check] [--json] [--paths DIR...] [--root DIR]`; exit 0=clean/1=findings/2=error; stdlib-only
 - `dash.js` — Launch the web dashboard (spawns python ui/serve.py with configured port from PORT env var, aesop.config.json, or default 8770)
 - `wave_backlog_analyzer.py` — Pre-wave backlog risk analyzer (per-item risk_level/estimated_retries from git fix-forward history + tracker lanes); warn-level only, --json
 - `wave_history.py` — Per-wave history summarizer from event store; CLI: `[--json] [--latest N] [--state-root PATH]`; stdlib-only, fail-closed on missing DB
