@@ -17,7 +17,10 @@ Runs on `git push` via `.git/hooks/pre-push` (symlink on Unix/macOS/Git Bash; co
 2. `check_branch_policy()` — blocks direct pushes to main/master; exit 1 on violation
 3. `check_secret_scan()` — runs `tools/secret_scan.py --staged`; exit 1 on failure
 4. `check_tracker_guard()` — runs `tools/tracker_guard.py --check` against live runtime state (`AESOP_STATE_ROOT`, default `$AESOP_ROOT/state`); exit 1 (push blocked, `tracker_guard_failure` logged) on zombie-resurrection detection. Wired here rather than CI because tracker.json is git-ignored runtime state a CI checkout never has. Fail-open only when the tool itself is absent (`tracker_guard_skipped_tool_missing` logged) — the hook installs into repos without an aesop checkout.
-5. Policy violations trigger `log_block()` to append audit record (JSON-lines) before exit
+5. `check_claudemd_sync_gate()` — runs `tools/claudemd_sync_gate.py` (Guardrail G5); exit 1 on commit-scope drift (domain code changes without accompanying CLAUDE.md updates in the same commit). Fail-open only when tool missing (`claudemd_sync_gate_skipped_tool_missing` logged).
+6. `check_verify_test_suite_count()` — runs `tools/verify_test_suite_count.py --check`; exit 1 on test suite count drift. Fail-open only when tool missing (`verify_test_suite_count_skipped_tool_missing` logged).
+7. `check_claudemd_lint()` — runs `tools/claudemd_lint.py`; exit 1 on linting violations (doc pointers, test commands, domain cross-refs, line counts). Fail-open only when tool missing (`claudemd_lint_skipped_tool_missing` logged).
+8. Policy violations trigger `log_block()` to append audit record (JSON-lines) before exit
 
 **Audit Ledger**: Append-only path: `${AESOP_ROOT:-$HOME/aesop}/state/SECURITY-AUDIT.log` (git-ignored). 
 Schema: `{"seq":N,"prev_hash":"SHA256_OF_PREV_LINE","ts":"2025-07-12T14:32:01Z","repo":"aesop","event":"push_blocked","reason":"secret_scan_failure"|"push_to_protected_branch","user":"alice"}`
