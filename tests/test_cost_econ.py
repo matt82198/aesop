@@ -148,17 +148,23 @@ class TestCostPerLOC(CostEconTestCase):
         self.assertAlmostEqual(metrics["cost_per_loc"]["tokens_per_loc"], 30.0, places=1)
 
     def test_cost_per_loc_with_empty_ledger(self):
-        """Handle gracefully when ledger is empty."""
+        """No ledger data: token/cost fields must be OMITTED, never emitted as 0.0 filler."""
         self.make_commit_with_loc("initial", num_lines=100)
 
         from tools import cost_econ
 
         metrics = cost_econ.calculate_economics(str(self.repo_root))
 
-        # Should return 0 or N/A for cost metrics when no ledger data
-        self.assertIn("cost_per_loc", metrics)
-        self.assertEqual(metrics["cost_per_loc"]["total_tokens"], 0)
-        self.assertEqual(metrics["cost_per_loc"]["lines_of_code"], 100)
+        self.assertIs(metrics.get("token_ledger_available"), False,
+                      "must explicitly mark token ledger unavailable")
+        # Denominators are still honest git facts
+        self.assertEqual(metrics.get("lines_of_code"), 100)
+        # Token ratio fields must not exist anywhere in the output
+        flat = json.dumps(metrics)
+        for filler_key in ("tokens_per_loc", "tokens_per_pr", "tokens_per_wave",
+                           "cost_per_backlog_item"):
+            self.assertNotIn(filler_key, flat,
+                             f"'{filler_key}' must be omitted when unmeasured")
 
 
 class TestCostPerMergedPR(CostEconTestCase):
@@ -283,23 +289,82 @@ class TestEconomicsMetricsInStatsJson(unittest.TestCase):
     """Test integration of economics metrics into stats.json."""
 
     def test_stats_json_structure_includes_economics(self):
-        """stats.json dict should have structure for economics metrics."""
-        # Import the functions we need
-        from tools import cost_econ, self_stats
+        """calculate_economics returns the honest contract in both availability states."""
+        from tools import cost_econ
 
-        # Test that calculate_economics returns the expected structure
         metrics = cost_econ.calculate_economics(".")
 
-        # Check all expected keys are present
-        self.assertIn("cost_per_loc", metrics)
-        self.assertIn("cost_per_merged_pr", metrics)
-        self.assertIn("cost_per_wave", metrics)
-        self.assertIn("unit_economics", metrics)
+        # Availability flag and single-sourced PR provenance are always present
+        self.assertIn("token_ledger_available", metrics)
+        self.assertIn("merged_prs_source", metrics)
 
-        # Verify sub-structure
-        self.assertIn("tokens_per_loc", metrics["cost_per_loc"])
-        self.assertIn("tokens_per_pr", metrics["cost_per_merged_pr"])
-        self.assertIn("cost_per_backlog_item", metrics["unit_economics"])
+        if metrics["token_ledger_available"]:
+            # Full structure with measured token data
+            self.assertIn("cost_per_loc", metrics)
+            self.assertIn("cost_per_merged_pr", metrics)
+            self.assertIn("cost_per_wave", metrics)
+            self.assertIn("unit_economics", metrics)
+            self.assertIn("tokens_per_loc", metrics["cost_per_loc"])
+            self.assertIn("tokens_per_pr", metrics["cost_per_merged_pr"])
+            self.assertIn("cost_per_backlog_item", metrics["unit_economics"])
+            self.assertGreater(metrics["cost_per_loc"]["total_tokens"], 0,
+                               "ledger marked available must mean measured tokens > 0")
+        else:
+            # Slim honest structure: denominators only, no 0.0 token filler
+            self.assertIn("merged_prs", metrics)
+            self.assertIn("lines_of_code", metrics)
+            self.assertIn("wave_count", metrics)
+            flat = json.dumps(metrics)
+            for filler_key in ("tokens_per_loc", "tokens_per_pr", "tokens_per_wave"):
+                self.assertNotIn(filler_key, flat)
+
+
+class TestSingleSourceMergedPrCount(CostEconTestCase):
+    """Economics must consume the caller-provided merged-PR count (single source),
+    and its own fallback must use the SAME definition as self_stats (distinct PR
+    numbers from merge-commit AND squash-merge subjects)."""
+
+    def test_merged_prs_override_is_used_verbatim(self):
+        self.make_commit_with_loc("initial", num_lines=50)
+        self.make_ledger_entry("2026-07-21T00:00:00", "claude-haiku-4-5-20251001", 1000, 2000)
+
+        from tools import cost_econ
+
+        metrics = cost_econ.calculate_economics(
+            str(self.repo_root), merged_prs=123, merged_prs_source="gh-api"
+        )
+
+        self.assertEqual(metrics["cost_per_merged_pr"]["merged_prs"], 123)
+        self.assertEqual(metrics["merged_prs_source"], "gh-api")
+        # unit_economics must use the same count, not recompute
+        self.assertEqual(metrics["unit_economics"]["items_count"], 123)
+
+    def test_fallback_counts_distinct_prs_across_merge_and_squash(self):
+        """Fallback definition must match self_stats: union of both patterns, deduped."""
+        self.make_commit_with_loc("feat: initial", num_lines=10)
+
+        # Merge-commit style PR #1
+        subprocess.run(["git", "checkout", "-b", "feature"], cwd=str(self.repo_root),
+                       capture_output=True, check=True)
+        self.make_commit_with_loc("feat: branch work", num_lines=10)
+        subprocess.run(["git", "checkout", "main"], cwd=str(self.repo_root),
+                       capture_output=True, check=True)
+        subprocess.run(
+            ["git", "merge", "--no-ff", "feature", "-m", "Merge pull request #1 from test/feature"],
+            cwd=str(self.repo_root), capture_output=True, check=True,
+        )
+        # Squash-merge style PR #2
+        self.make_commit_with_loc("feat: squashed work (#2)", num_lines=10)
+
+        self.make_ledger_entry("2026-07-21T00:00:00", "claude-haiku-4-5-20251001", 500, 500)
+
+        from tools import cost_econ
+
+        metrics = cost_econ.calculate_economics(str(self.repo_root))
+
+        self.assertEqual(metrics["cost_per_merged_pr"]["merged_prs"], 2,
+                         "fallback must count merge-commit AND squash PRs (union, deduped)")
+        self.assertEqual(metrics["merged_prs_source"], "git-log")
 
 
 class TestHonestyDocumentation(unittest.TestCase):

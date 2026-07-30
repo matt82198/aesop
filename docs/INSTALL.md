@@ -1,21 +1,51 @@
 # Installation & Setup
 
-**TL;DR**: Install Aesop in ~5 minutes using `npx`, set your repos, then verify with a single watchdog test run.
-
 **New repo?** Follow the scaffolding guide below.
 **Existing repo?** See [PORTING.md](PORTING.md) for adopting Aesop on a foreign codebase (with 10 common pitfalls covered).
 
 ---
 
-## Prerequisites
+## Tier 1: Quick Try (2 min, no API keys)
 
-Before you start, make sure you have:
+Explore Aesop without any API keys, Python, or configuration. You only need **Node.js >= 18** and **git**.
+
+```bash
+# Clone and install
+git clone https://github.com/matt82198/aesop.git
+cd aesop
+npm install
+
+# See the CLI and all available commands
+npx . --help
+
+# Run the preflight readiness check (pure Node.js, no keys needed)
+npx . doctor
+
+# Run the full offline test suite
+npm test
+
+# Launch the web dashboard (requires Python 3 on PATH)
+npx . dash
+# Opens http://localhost:8770 — four views: Overview, Work, Activity, Cost
+```
+
+Everything above runs locally with zero network calls and no API keys. The `doctor` command checks your environment, the test suite validates the codebase, and the dashboard gives you a feel for the fleet-monitoring UI.
+
+When you are ready to run the actual multi-agent orchestration, continue to Tier 2.
+
+---
+
+## Tier 2: Full Setup (orchestration with LLM agents)
+
+### Prerequisites
+
+To run the orchestration loop (dispatching agents, running waves, shipping code), you need:
 
 - **Claude Code CLI** (v0.1+) — the orchestration harness integration
 - **Git** (v2.40+) — version control and worktree support
 - **Bash** (v4+) or Git Bash on Windows — shell scripting support
 - **Node.js** (v18+) — for dashboard and monitor signals
-- **Python** (v3.10+) — for secret-scan and log rotation
+- **Python** (v3.10+) — for secret-scan, guardrails, and log rotation
 - **jq** (optional) — for TUI dashboard parsing
 
 ### Install Claude Code CLI

@@ -80,14 +80,24 @@ def _get_lines_of_code(repo_root: str) -> int:
 
 
 def _get_merged_prs(repo_root: str) -> int:
-    """Count merge commits with 'Merge pull request #' in message."""
+    """Count distinct merged PRs from commit subjects (fallback definition).
+
+    Uses the SAME definition as tools/self_stats.py git fallback: the union of
+    merge-commit ("Merge pull request #N") and squash-merge ("... (#N)") PR
+    numbers, deduplicated. Kept identical so economics and the git block never
+    disagree when both fall back to git.
+    """
     try:
-        output = _run_git(repo_root, "log", "--format=%B")
+        output = _run_git(repo_root, "log", "--format=%s")
         if not output:
             return 0
 
-        count = output.count("Merge pull request #")
-        return count
+        pr_numbers = set()
+        for match in re.finditer(r"^Merge pull request #(\d+)", output, re.MULTILINE):
+            pr_numbers.add(int(match.group(1)))
+        for match in re.finditer(r"\(#(\d+)\)\s*$", output, re.MULTILINE):
+            pr_numbers.add(int(match.group(1)))
+        return len(pr_numbers)
     except Exception:
         return 0
 
@@ -244,7 +254,9 @@ def _get_total_tokens_by_model(state_dir: Path) -> Dict[str, Dict[str, int]]:
 def calculate_economics(
     repo_root: str = ".",
     state_dir: Optional[str] = None,
-    config_file: Optional[str] = None
+    config_file: Optional[str] = None,
+    merged_prs: Optional[int] = None,
+    merged_prs_source: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Calculate cost economics metrics for a repository.
 
@@ -252,14 +264,22 @@ def calculate_economics(
         repo_root: Path to git repository
         state_dir: Path to aesop state directory (defaults to repo_root/state)
         config_file: Path to aesop.config.json for pricing (optional)
+        merged_prs: Single-sourced merged-PR count from the caller (self_stats).
+            When provided, it is used verbatim and never recomputed here, so the
+            economics block can never contradict the git block. When None, this
+            module falls back to the SAME git-log definition self_stats uses.
+        merged_prs_source: Provenance of merged_prs ('gh-api' | 'git-log').
+            Defaults to 'git-log' when the count is computed here.
 
     Returns:
-        dict: Economics metrics including:
-            - cost_per_loc: cost per line of code
-            - cost_per_merged_pr: cost per shipped feature
-            - cost_per_wave: cost per development cycle
-            - unit_economics: unit cost breakdown
-            - cost_estimates: optional dollar costs
+        dict: Economics metrics. The shape depends on token-ledger availability:
+          - token_ledger_available == False: a slim, honest block carrying only
+            the git-derived denominators (merged_prs, lines_of_code, wave_count)
+            plus provenance. No token/cost ratio fields are emitted, because
+            0.0 filler reads as a measured value.
+          - token_ledger_available == True: the full block with cost_per_loc,
+            cost_per_merged_pr, cost_per_wave, unit_economics and (if pricing is
+            configured) cost_estimates.
     """
     repo_path = Path(repo_root)
     if state_dir:
@@ -269,15 +289,37 @@ def calculate_economics(
 
     # Get git metrics
     loc = _get_lines_of_code(str(repo_path))
-    merged_prs = _get_merged_prs(str(repo_path))
+    # Single-source the merged-PR count: use the caller's value verbatim, else
+    # fall back to the shared git-log definition.
+    if merged_prs is None:
+        merged_prs = _get_merged_prs(str(repo_path))
+        source = merged_prs_source or "git-log"
+    else:
+        source = merged_prs_source or "git-log"
     wave_count = _get_wave_count(str(repo_path))
 
     # Get token metrics
     total_tokens = _get_total_tokens(state_path)
     model_tokens = _get_total_tokens_by_model(state_path)
 
-    # Initialize result
+    token_ledger_available = total_tokens > 0
+
+    # No token ledger: emit an honest slim block. Omitting the ratio fields is
+    # deliberate — a 0.0 tokens_per_pr is indistinguishable from a real measure.
+    if not token_ledger_available:
+        return {
+            "token_ledger_available": False,
+            "merged_prs": merged_prs,
+            "merged_prs_source": source,
+            "lines_of_code": loc,
+            "wave_count": wave_count,
+        }
+
+    # Full block with measured token data.
     result = {
+        "token_ledger_available": True,
+        "merged_prs": merged_prs,
+        "merged_prs_source": source,
         "cost_per_loc": {
             "lines_of_code": loc,
             "total_tokens": total_tokens,
@@ -300,7 +342,9 @@ def calculate_economics(
             ),
             "cost_per_wave_item": 0.0 if wave_count == 0 else total_tokens / wave_count,
             "backlog_item_proxy": "merged_prs" if merged_prs > 0 else "waves",
-            "items_count": max(merged_prs, wave_count) or 1,
+            # items_count must equal the single-sourced PR count when PRs are the
+            # proxy, so validate_stats_integrity never flags a contradiction.
+            "items_count": merged_prs if merged_prs > 0 else (wave_count or 1),
         },
     }
 
@@ -430,6 +474,16 @@ def main():
 
     if args.json:
         print(json.dumps(metrics, indent=2))
+    elif not metrics.get("token_ledger_available", False):
+        # Honest slim output: no token ledger, so no per-unit token metrics.
+        print("\nCost Economics Metrics")
+        print("=" * 60)
+        print("\nToken ledger: UNAVAILABLE (no OUTCOMES-LEDGER.md data)")
+        print("Per-unit token/cost metrics omitted (not measured).")
+        print(f"\n  Merged PRs (source {metrics.get('merged_prs_source')}): {metrics.get('merged_prs')}")
+        print(f"  Lines of Code:        {metrics.get('lines_of_code'):,}")
+        print(f"  Wave Count:           {metrics.get('wave_count')}")
+        print("\n" + "=" * 60)
     else:
         # Human-readable output
         print("\nCost Economics Metrics")
