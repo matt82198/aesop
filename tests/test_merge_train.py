@@ -450,5 +450,313 @@ class TestMergeTrain(unittest.TestCase):
             self.fail("Help output contains non-ASCII characters")
 
 
+class TestIntegrationMode(unittest.TestCase):
+    """Tests for --integration batch merge mode."""
+
+    def setUp(self):
+        self.tool_path = Path(__file__).parent.parent / "tools" / "merge_train.py"
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("merge_train", self.tool_path)
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+
+    def _run_tool_subprocess(self, *args):
+        cmd = [sys.executable, str(self.tool_path)] + list(args)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        return result
+
+    def test_integration_flag_recognized(self):
+        result = self._run_tool_subprocess("--integration", "--help")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("integration", result.stdout.lower())
+
+    def test_integration_short_flag_recognized(self):
+        result = self._run_tool_subprocess("-i", "--help")
+        self.assertEqual(result.returncode, 0)
+
+    def test_integration_flag_with_batch_name(self):
+        result = self._run_tool_subprocess("--integration", "my-batch", "--help")
+        self.assertEqual(result.returncode, 0)
+
+    def test_create_integration_branch_calls_git(self):
+        with patch.object(self.module, 'git') as mock_git:
+            mock_git.return_value = (True, "")
+            ok = self.module.create_integration_branch("batch-wave")
+            self.assertTrue(ok)
+            calls = [c[0] for c in mock_git.call_args_list]
+            fetch_call = [c for c in calls if "fetch" in c]
+            self.assertTrue(len(fetch_call) > 0, "Should fetch origin before branching")
+            checkout_call = [c for c in calls if "checkout" in c]
+            self.assertTrue(len(checkout_call) > 0, "Should checkout the integration branch")
+
+    def test_create_integration_branch_name_format(self):
+        with patch.object(self.module, 'git') as mock_git:
+            mock_git.return_value = (True, "")
+            self.module.create_integration_branch("my-batch")
+            checkout_calls = [c for c in mock_git.call_args_list
+                              if "checkout" in c[0]]
+            found = any("integrate/my-batch" in " ".join(c[0]) for c in checkout_calls)
+            self.assertTrue(found, "Branch name should be integrate/<batch-name>")
+
+    def test_merge_pr_into_integration_success(self):
+        with patch.object(self.module, 'gh') as mock_gh, \
+             patch.object(self.module, 'git') as mock_git:
+            mock_gh.return_value = {
+                "headRefOid": "abc123",
+                "headRefName": "feat/thing",
+                "title": "Add thing",
+            }
+            mock_git.return_value = (True, "")
+            ok = self.module.merge_pr_into_integration(42)
+            self.assertTrue(ok)
+            merge_calls = [c for c in mock_git.call_args_list
+                           if "merge" in c[0]]
+            self.assertTrue(len(merge_calls) > 0, "Should call git merge")
+
+    def test_merge_pr_into_integration_conflict_returns_false(self):
+        with patch.object(self.module, 'gh') as mock_gh, \
+             patch.object(self.module, 'git') as mock_git:
+            mock_gh.return_value = {
+                "headRefOid": "abc123",
+                "headRefName": "feat/conflict",
+                "title": "Conflicts",
+            }
+            def git_side_effect(*args):
+                if "merge" in args and "--abort" not in args:
+                    return (False, "CONFLICT (content): Merge conflict in file.py")
+                return (True, "")
+            mock_git.side_effect = git_side_effect
+            ok = self.module.merge_pr_into_integration(42)
+            self.assertFalse(ok)
+
+    def test_merge_pr_into_integration_aborts_on_conflict(self):
+        with patch.object(self.module, 'gh') as mock_gh, \
+             patch.object(self.module, 'git') as mock_git:
+            mock_gh.return_value = {
+                "headRefOid": "abc123",
+                "headRefName": "feat/conflict",
+                "title": "Conflicts",
+            }
+            def git_side_effect(*args):
+                if "merge" in args and "--abort" not in args:
+                    return (False, "CONFLICT")
+                return (True, "")
+            mock_git.side_effect = git_side_effect
+            self.module.merge_pr_into_integration(42)
+            abort_calls = [c for c in mock_git.call_args_list
+                           if "merge" in c[0] and "--abort" in c[0]]
+            self.assertTrue(len(abort_calls) > 0, "Should abort merge on conflict")
+
+    def test_push_integration_branch(self):
+        with patch.object(self.module, 'git') as mock_git:
+            mock_git.return_value = (True, "")
+            ok = self.module.push_integration_branch("integrate/batch-wave")
+            self.assertTrue(ok)
+            push_calls = [c for c in mock_git.call_args_list if "push" in c[0]]
+            self.assertTrue(len(push_calls) > 0)
+
+    def test_create_integration_pr(self):
+        with patch.object(self.module, 'gh') as mock_gh:
+            mock_gh.side_effect = [
+                [],
+                "https://github.com/org/repo/pull/99",
+            ]
+            url = self.module.create_integration_pr(
+                "integrate/batch-wave", [10, 11, 12])
+            self.assertIn("pull", url)
+            create_calls = [c for c in mock_gh.call_args_list
+                            if "pr" in c[0] and "create" in c[0]]
+            self.assertTrue(len(create_calls) > 0)
+
+    def test_create_integration_pr_finds_existing(self):
+        with patch.object(self.module, 'gh') as mock_gh:
+            mock_gh.return_value = [{"number": 99, "url": "https://github.com/org/repo/pull/99"}]
+            url = self.module.create_integration_pr(
+                "integrate/batch-wave", [10, 11])
+            self.assertIn("99", url)
+
+    def test_close_superseded_prs(self):
+        with patch.object(self.module, 'gh') as mock_gh:
+            mock_gh.return_value = ""
+            self.module.close_superseded_prs([10, 11, 12])
+            close_calls = [c for c in mock_gh.call_args_list
+                           if "pr" in c[0] and "close" in c[0]]
+            self.assertEqual(len(close_calls), 3)
+
+    def test_cleanup_integration_branch(self):
+        with patch.object(self.module, 'git') as mock_git:
+            mock_git.return_value = (True, "")
+            self.module.cleanup_integration_branch("integrate/batch-wave")
+            delete_calls = [c for c in mock_git.call_args_list
+                            if "branch" in c[0] and "-D" in c[0]]
+            self.assertTrue(len(delete_calls) > 0)
+            push_delete_calls = [c for c in mock_git.call_args_list
+                                 if "push" in c[0] and "--delete" in c[0]]
+            self.assertTrue(len(push_delete_calls) > 0)
+
+    def test_run_integration_train_happy_path(self):
+        m = self.module
+        with patch.object(m, 'create_integration_branch') as mock_create, \
+             patch.object(m, 'merge_pr_into_integration') as mock_merge_pr, \
+             patch.object(m, 'push_integration_branch') as mock_push, \
+             patch.object(m, 'create_integration_pr') as mock_create_pr, \
+             patch.object(m, 'wait_for_integration_ci') as mock_wait, \
+             patch.object(m, 'merge_integration_pr') as mock_merge_int, \
+             patch.object(m, 'close_superseded_prs') as mock_close, \
+             patch.object(m, 'cleanup_integration_branch') as mock_cleanup:
+
+            mock_create.return_value = True
+            mock_merge_pr.return_value = True
+            mock_push.return_value = True
+            mock_create_pr.return_value = "https://github.com/org/repo/pull/99"
+            mock_wait.return_value = True
+            mock_merge_int.return_value = True
+
+            result = m.run_integration_train([10, 11, 12], "batch-wave")
+            self.assertTrue(result)
+
+            mock_create.assert_called_once_with("batch-wave")
+            self.assertEqual(mock_merge_pr.call_count, 3)
+            mock_push.assert_called_once()
+            mock_create_pr.assert_called_once()
+            mock_wait.assert_called_once()
+            mock_merge_int.assert_called_once()
+            mock_close.assert_called_once_with([10, 11, 12])
+            mock_cleanup.assert_called_once()
+
+    def test_run_integration_train_skips_conflicting_prs(self):
+        m = self.module
+        with patch.object(m, 'create_integration_branch') as mock_create, \
+             patch.object(m, 'merge_pr_into_integration') as mock_merge_pr, \
+             patch.object(m, 'push_integration_branch') as mock_push, \
+             patch.object(m, 'create_integration_pr') as mock_create_pr, \
+             patch.object(m, 'wait_for_integration_ci') as mock_wait, \
+             patch.object(m, 'merge_integration_pr') as mock_merge_int, \
+             patch.object(m, 'close_superseded_prs') as mock_close, \
+             patch.object(m, 'cleanup_integration_branch') as mock_cleanup:
+
+            mock_create.return_value = True
+            mock_merge_pr.side_effect = [True, False, True]
+            mock_push.return_value = True
+            mock_create_pr.return_value = "https://github.com/org/repo/pull/99"
+            mock_wait.return_value = True
+            mock_merge_int.return_value = True
+
+            result = m.run_integration_train([10, 11, 12], "batch-wave")
+            self.assertTrue(result)
+            mock_close.assert_called_once_with([10, 12])
+
+    def test_run_integration_train_all_conflict_aborts(self):
+        m = self.module
+        with patch.object(m, 'create_integration_branch') as mock_create, \
+             patch.object(m, 'merge_pr_into_integration') as mock_merge_pr, \
+             patch.object(m, 'cleanup_integration_branch') as mock_cleanup:
+
+            mock_create.return_value = True
+            mock_merge_pr.return_value = False
+
+            result = m.run_integration_train([10, 11], "batch-wave")
+            self.assertFalse(result)
+            mock_cleanup.assert_called_once()
+
+    def test_run_integration_train_ci_fails_aborts(self):
+        m = self.module
+        with patch.object(m, 'create_integration_branch') as mock_create, \
+             patch.object(m, 'merge_pr_into_integration') as mock_merge_pr, \
+             patch.object(m, 'push_integration_branch') as mock_push, \
+             patch.object(m, 'create_integration_pr') as mock_create_pr, \
+             patch.object(m, 'wait_for_integration_ci') as mock_wait, \
+             patch.object(m, 'cleanup_integration_branch') as mock_cleanup:
+
+            mock_create.return_value = True
+            mock_merge_pr.return_value = True
+            mock_push.return_value = True
+            mock_create_pr.return_value = "https://github.com/org/repo/pull/99"
+            mock_wait.return_value = False
+
+            result = m.run_integration_train([10, 11], "batch-wave")
+            self.assertFalse(result)
+
+    def test_run_integration_train_branch_create_fails(self):
+        m = self.module
+        with patch.object(m, 'create_integration_branch') as mock_create:
+            mock_create.return_value = False
+            result = m.run_integration_train([10], "batch-wave")
+            self.assertFalse(result)
+
+    def test_git_helper_function_exists(self):
+        self.assertTrue(hasattr(self.module, 'git'))
+        import inspect
+        sig = inspect.signature(self.module.git)
+        params = list(sig.parameters.keys())
+        self.assertIn('args', params)
+
+    def test_wait_for_integration_ci_uses_pr_state(self):
+        with patch.object(self.module, 'pr_state') as mock_pr_state:
+            mock_pr_state.return_value = {
+                "state": "OPEN", "merge": "CLEAN", "checks": "green",
+                "title": "integration", "headRefName": "integrate/batch-wave",
+            }
+            ok = self.module.wait_for_integration_ci(99, poll_interval=0, max_polls=1)
+            self.assertTrue(ok)
+
+    def test_wait_for_integration_ci_pending_polls(self):
+        call_count = {"n": 0}
+        def pr_state_side_effect(n):
+            call_count["n"] += 1
+            if call_count["n"] < 3:
+                return {"state": "OPEN", "merge": "CLEAN", "checks": "pending",
+                        "title": "int", "headRefName": "integrate/x"}
+            return {"state": "OPEN", "merge": "CLEAN", "checks": "green",
+                    "title": "int", "headRefName": "integrate/x"}
+
+        with patch.object(self.module, 'pr_state') as mock_ps, \
+             patch('time.sleep'):
+            mock_ps.side_effect = pr_state_side_effect
+            ok = self.module.wait_for_integration_ci(99, poll_interval=0, max_polls=10)
+            self.assertTrue(ok)
+            self.assertEqual(call_count["n"], 3)
+
+    def test_wait_for_integration_ci_fail_returns_false(self):
+        with patch.object(self.module, 'pr_state') as mock_ps:
+            mock_ps.return_value = {
+                "state": "OPEN", "merge": "CLEAN", "checks": "FAIL",
+                "title": "int", "headRefName": "integrate/x",
+            }
+            ok = self.module.wait_for_integration_ci(99, poll_interval=0, max_polls=1)
+            self.assertFalse(ok)
+
+    def test_wait_for_integration_ci_timeout_returns_false(self):
+        with patch.object(self.module, 'pr_state') as mock_ps, \
+             patch('time.sleep'):
+            mock_ps.return_value = {
+                "state": "OPEN", "merge": "CLEAN", "checks": "pending",
+                "title": "int", "headRefName": "integrate/x",
+            }
+            ok = self.module.wait_for_integration_ci(99, poll_interval=0, max_polls=2)
+            self.assertFalse(ok)
+
+    def test_merge_integration_pr_squash(self):
+        with patch.object(self.module, 'gh') as mock_gh:
+            mock_gh.side_effect = [
+                "",
+                "MERGED",
+            ]
+            ok = self.module.merge_integration_pr(99)
+            self.assertTrue(ok)
+            merge_calls = [c for c in mock_gh.call_args_list
+                           if "pr" in c[0] and "merge" in c[0]]
+            self.assertTrue(len(merge_calls) > 0)
+
+    def test_merge_integration_pr_verify_state(self):
+        with patch.object(self.module, 'gh') as mock_gh:
+            mock_gh.side_effect = [
+                "",
+                "OPEN",
+            ]
+            ok = self.module.merge_integration_pr(99)
+            self.assertFalse(ok)
+
+
 if __name__ == "__main__":
     unittest.main()
