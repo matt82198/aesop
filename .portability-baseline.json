@@ -1,0 +1,33 @@
+{
+  "_comment": "Portability-gate ratchet baseline (see tools/portability_check.py --help). Regenerate ONLY via --update-baseline after reviewing the diff; CI must never pass --update-baseline.",
+  "violations": {
+    "daemons/run-watchdog.sh@private_token": 2,
+    "daemons/selfheal.sh@private_token": 1,
+    "docs/CONFIGURE.md@posix_home_path": 15,
+    "docs/INSTALL.md@posix_home_path": 9,
+    "docs/PORTING.md@posix_home_path": 1,
+    "docs/RELIABILITY-REPORT.json@private_token": 1,
+    "driver/agent_driver.py@private_token": 1,
+    "driver/context_pack.py@private_token": 4,
+    "scan/fleet-scan.example.mjs@private_token": 1,
+    "state_store/__init__.py@private_token": 1,
+    "tools/claudemd_drift.py@private_token": 1,
+    "tools/launch_tui.py@posix_home_path": 3,
+    "tools/launch_tui.py@windows_user_path": 3,
+    "tools/portability_check.py@private_token": 4,
+    "tools/seated_shadow_adjudication.py@posix_home_path": 8,
+    "tools/seated_shadow_adjudication.py@private_token": 24,
+    "tools/seated_shadow_adjudication.py@windows_user_path": 4,
+    "tools/shadow_adjudication.py@posix_home_path": 8,
+    "tools/shadow_adjudication.py@private_token": 21,
+    "tools/shadow_adjudication.py@windows_user_path": 4,
+    "tools/transcript_digest.py@private_token": 2,
+    "tools/verify_ui_trio.py@posix_home_path": 3,
+    "tools/verify_ui_trio.py@private_token": 5,
+    "tools/verify_ui_trio_redaction_proof.py@posix_home_path": 6,
+    "tools/verify_ui_trio_redaction_proof.py@private_token": 7,
+    "ui/README.md@posix_home_path": 1,
+    "ui/config.py@private_token": 6,
+    "ui/wave_reasoning_tail.py@private_token": 2
+  }
+}
