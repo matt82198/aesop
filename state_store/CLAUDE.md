@@ -78,6 +78,17 @@ Run from repo root:
 
 **Projection**: `project_agent_lifecycle(events)` folds these into per-agent lifecycle state with transition history (state + timestamp). Enables Activity view to show agents entering/leaving states over time.
 
+## Multi-instance coordination (MVP — this increment)
+
+**New module: instance_projection.py** — Event-sourced instance lifecycle tracking:
+  - Event types: `instance_registered`, `instance_heartbeat`, `instance_failed`, `file_claim_requested`, `file_claim_released`
+  - Projection tables: instances (id, hostname, pid, status, heartbeats), file_claims (instance+paths)
+  - Core API: `register_instance()`, `heartbeat()`, `claim_files()`, `release_files()`, `list_active_instances()`, `detect_stale_instances()`, `get_claimed_files()`, `get_all_claimed_files()`
+  - Stale detection: configurable threshold (default 300s); crashed instances' claims become reclaimable after TTL
+  - Fail-closed: all operations fail gracefully, returning False or empty collections on error
+
+**Instance coordination is a prerequisite** for multi-machine orchestration (team-scale single-project development). Used by `tools/instance_manager.py` (CLI) and `tools/multi_dispatch.py` (dispatch guard).
+
 ## Next (cutover, follow-up — NOT this increment)
 **Phase 1 (early)**: Add `orchestrator_status` stream (orchestrator_status → `append("orchestrator_status", "phase_changed", ...)`, read from `project("orchestrator_status")` on recovery).
 **Phase 2 (middle)**: Tracker dual-read (StateAPI for CRUD, export job keeps `tracker.json` rendered).
