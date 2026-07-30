@@ -6,14 +6,17 @@
  * Resolves AESOP_ROOT from env or --root flag; gracefully handles missing state files.
  *
  * Tools:
- *   fleet_status       - heartbeat ages + orchestrator status + alert count
- *   fleet_agents       - active agents from transcripts via dash-extra.mjs passthrough
- *   fleet_tracker      - open items by lane from state/tracker.json
- *   fleet_cost         - per-model token totals from state/ledger/OUTCOMES-LEDGER.md
- *   fleet_cost_by_wave - per-wave token totals from state/ledger/OUTCOMES-LEDGER.md
- *   fleet_budget       - cost ceiling, current spend, remaining headroom, halt status
- *   fleet_cost_trend   - per-wave token trend over last N waves from ledger
- *   fleet_verify_stats - defect escape stats (first-try-green, fix-forward rate) if available
+ *   fleet_status         - heartbeat ages + orchestrator status + alert count
+ *   fleet_agents         - active agents from transcripts via dash-extra.mjs passthrough
+ *   fleet_tracker        - open items by lane from state/tracker.json
+ *   fleet_cost           - per-model token totals from state/ledger/OUTCOMES-LEDGER.md
+ *   fleet_cost_by_wave   - per-wave token totals from state/ledger/OUTCOMES-LEDGER.md
+ *   fleet_budget         - cost ceiling, current spend, remaining headroom, halt status
+ *   fleet_cost_trend     - per-wave token trend over last N waves from ledger
+ *   fleet_verify_stats   - defect escape stats (first-try-green, fix-forward rate) if available
+ *   fleet_instances      - active instances + stale, with heartbeat age
+ *   fleet_claims         - current file claims by instance
+ *   fleet_multibox_summary - dashboard summary (instance/claim counts, stale count)
  *
  * All tools are read-only; no state mutations, no file writes.
  *
@@ -675,6 +678,281 @@ function getFleetVerifyStats() {
   return result;
 }
 
+/**
+ * fleet_instances: Get active instances and stale instances with heartbeat info
+ * Spawns instances-claims.py helper to read from state_store
+ */
+async function getFleetInstances() {
+  return new Promise((resolve) => {
+    const helperPath = path.join(AESOP_ROOT, 'mcp', 'instances-claims.py');
+    const dbPath = path.join(STATE_ROOT, 'aesop.db');
+
+    // If helper or DB doesn't exist, return empty result
+    if (!fs.existsSync(helperPath) || !fs.existsSync(dbPath)) {
+      resolve({
+        absent: true,
+        reason: helperPath ? 'state_store database not found' : 'instances-claims.py helper not found',
+        instances: [],
+        stale_threshold_seconds: 300
+      });
+      return;
+    }
+
+    try {
+      const proc = spawn('python3', [helperPath, '--db', dbPath, '--root', AESOP_ROOT], {
+        cwd: AESOP_ROOT,
+        env: {
+          ...process.env,
+          AESOP_ROOT,
+          AESOP_STATE_ROOT: STATE_ROOT
+        },
+        timeout: 5000
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      proc.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      proc.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      proc.on('close', (code) => {
+        if (code === 0 && stdout.trim()) {
+          try {
+            const data = JSON.parse(stdout);
+            // Extract instances array, handle both formats
+            const instances = data.instances || [];
+            const staleThreshold = data.summary?.stale_threshold_seconds || 300;
+            resolve({
+              absent: false,
+              instances,
+              stale_threshold_seconds: staleThreshold
+            });
+          } catch (e) {
+            resolve({
+              absent: true,
+              reason: `Failed to parse instances JSON: ${e.message}`,
+              instances: [],
+              stale_threshold_seconds: 300
+            });
+          }
+        } else {
+          resolve({
+            absent: true,
+            reason: 'instances-claims.py failed',
+            instances: [],
+            stale_threshold_seconds: 300
+          });
+        }
+      });
+
+      proc.on('error', (err) => {
+        resolve({
+          absent: true,
+          reason: `Process error: ${err.message}`,
+          instances: [],
+          stale_threshold_seconds: 300
+        });
+      });
+    } catch (e) {
+      resolve({
+        absent: true,
+        reason: `Failed to spawn helper: ${e.message}`,
+        instances: [],
+        stale_threshold_seconds: 300
+      });
+    }
+  });
+}
+
+/**
+ * fleet_claims: Get all current file claims by instance
+ * Spawns instances-claims.py helper to read from state_store
+ */
+async function getFleetClaims() {
+  return new Promise((resolve) => {
+    const helperPath = path.join(AESOP_ROOT, 'mcp', 'instances-claims.py');
+    const dbPath = path.join(STATE_ROOT, 'aesop.db');
+
+    if (!fs.existsSync(helperPath) || !fs.existsSync(dbPath)) {
+      resolve({
+        absent: true,
+        reason: 'state_store not available',
+        by_instance: {}
+      });
+      return;
+    }
+
+    try {
+      const proc = spawn('python3', [helperPath, '--db', dbPath, '--root', AESOP_ROOT], {
+        cwd: AESOP_ROOT,
+        env: {
+          ...process.env,
+          AESOP_ROOT,
+          AESOP_STATE_ROOT: STATE_ROOT
+        },
+        timeout: 5000
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      proc.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      proc.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      proc.on('close', (code) => {
+        if (code === 0 && stdout.trim()) {
+          try {
+            const data = JSON.parse(stdout);
+            const claims = data.claims || {};
+            resolve({
+              absent: false,
+              by_instance: claims
+            });
+          } catch (e) {
+            resolve({
+              absent: true,
+              reason: `Failed to parse claims JSON: ${e.message}`,
+              by_instance: {}
+            });
+          }
+        } else {
+          resolve({
+            absent: true,
+            reason: 'instances-claims.py failed',
+            by_instance: {}
+          });
+        }
+      });
+
+      proc.on('error', (err) => {
+        resolve({
+          absent: true,
+          reason: `Process error: ${err.message}`,
+          by_instance: {}
+        });
+      });
+    } catch (e) {
+      resolve({
+        absent: true,
+        reason: `Failed to spawn helper: ${e.message}`,
+        by_instance: {}
+      });
+    }
+  });
+}
+
+/**
+ * fleet_multibox_summary: Dashboard-ready summary of multibox coordination
+ * Spawns instances-claims.py helper to read from state_store
+ */
+async function getFleetMultiboxSummary() {
+  return new Promise((resolve) => {
+    const helperPath = path.join(AESOP_ROOT, 'mcp', 'instances-claims.py');
+    const dbPath = path.join(STATE_ROOT, 'aesop.db');
+
+    if (!fs.existsSync(helperPath) || !fs.existsSync(dbPath)) {
+      resolve({
+        absent: true,
+        reason: 'state_store not available',
+        instance_count: 0,
+        active_count: 0,
+        stale_count: 0,
+        claim_count: 0
+      });
+      return;
+    }
+
+    try {
+      const proc = spawn('python3', [helperPath, '--db', dbPath, '--root', AESOP_ROOT], {
+        cwd: AESOP_ROOT,
+        env: {
+          ...process.env,
+          AESOP_ROOT,
+          AESOP_STATE_ROOT: STATE_ROOT
+        },
+        timeout: 5000
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      proc.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      proc.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      proc.on('close', (code) => {
+        if (code === 0 && stdout.trim()) {
+          try {
+            const data = JSON.parse(stdout);
+            const summary = data.summary || {
+              instance_count: 0,
+              active_count: 0,
+              stale_count: 0,
+              claim_count: 0
+            };
+            resolve({
+              absent: false,
+              ...summary
+            });
+          } catch (e) {
+            resolve({
+              absent: true,
+              reason: `Failed to parse summary JSON: ${e.message}`,
+              instance_count: 0,
+              active_count: 0,
+              stale_count: 0,
+              claim_count: 0
+            });
+          }
+        } else {
+          resolve({
+            absent: true,
+            reason: 'instances-claims.py failed',
+            instance_count: 0,
+            active_count: 0,
+            stale_count: 0,
+            claim_count: 0
+          });
+        }
+      });
+
+      proc.on('error', (err) => {
+        resolve({
+          absent: true,
+          reason: `Process error: ${err.message}`,
+          instance_count: 0,
+          active_count: 0,
+          stale_count: 0,
+          claim_count: 0
+        });
+      });
+    } catch (e) {
+      resolve({
+        absent: true,
+        reason: `Failed to spawn helper: ${e.message}`,
+        instance_count: 0,
+        active_count: 0,
+        stale_count: 0,
+        claim_count: 0
+      });
+    }
+  });
+}
+
 // ============================================================================
 // MCP Tool & Resource Definitions
 // ============================================================================
@@ -749,6 +1027,30 @@ const TOOLS = [
       type: 'object',
       properties: {}
     }
+  },
+  {
+    name: 'fleet_instances',
+    description: 'Get active and stale instances with heartbeat age for multi-instance coordination',
+    inputSchema: {
+      type: 'object',
+      properties: {}
+    }
+  },
+  {
+    name: 'fleet_claims',
+    description: 'Get all current file claims by instance from multi-instance coordination layer',
+    inputSchema: {
+      type: 'object',
+      properties: {}
+    }
+  },
+  {
+    name: 'fleet_multibox_summary',
+    description: 'Get dashboard summary of multi-instance status: instance count, active/stale, claim count',
+    inputSchema: {
+      type: 'object',
+      properties: {}
+    }
   }
 ];
 
@@ -804,6 +1106,15 @@ async function handleToolCall(requestId, params) {
         break;
       case 'fleet_verify_stats':
         result = getFleetVerifyStats();
+        break;
+      case 'fleet_instances':
+        result = await getFleetInstances();
+        break;
+      case 'fleet_claims':
+        result = await getFleetClaims();
+        break;
+      case 'fleet_multibox_summary':
+        result = await getFleetMultiboxSummary();
         break;
       default:
         mcp.writeError(requestId, -32601, `Unknown tool: ${name}`);
