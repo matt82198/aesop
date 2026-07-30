@@ -1,6 +1,6 @@
 # Aesop — Project CLAUDE.md
 
-**What**: Source-available multi-agent orchestration harness for autonomous software development.
+**What**: MIT-licensed multi-agent orchestration harness for autonomous software development.
 
 ## Domain map
 
