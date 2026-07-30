@@ -34,6 +34,13 @@ _collector_started = False
 
 _collector_stop_event = threading.Event()
 
+# Track collector health for staleness detection (wave-31 reliability)
+_collector_health_lock = threading.Lock()
+_collector_health = {
+    "last_successful_cycle": None,  # epoch seconds of last full successful cycle
+    "per_source_errors": {},  # dict[source_name, list[error_info]]
+}
+
 
 def reset_state():
     """Reset collector/SSE singleton state for a fresh serve import.
@@ -45,7 +52,7 @@ def reset_state():
     pre-split monolith had. In production serve is imported once, so this is a
     harmless no-op before the collector ever starts.
     """
-    global _collector_started, _collector_stop_event
+    global _collector_started, _collector_stop_event, _collector_health
     with _collector_lock:
         _collector_stop_event.set()        # stop a thread left over from a prior import
         _collector_stop_event = threading.Event()
@@ -56,6 +63,9 @@ def reset_state():
     with _sse_lock:
         _sse_clients.clear()
         _dropped_counts.clear()
+    with _collector_health_lock:
+        _collector_health["last_successful_cycle"] = None
+        _collector_health["per_source_errors"] = {}
 
 
 def register_sse_client():
@@ -129,6 +139,7 @@ def _maybe_emit(name, snapshot, last_hashes):
 
 def collector_loop(stop_event):
     """Background loop: poll cheap sources, gate expensive ones, broadcast on change."""
+    global _collector_health
     last_hashes = {}
     last_backlog_mtime = object()  # sentinel guaranteed != any real mtime/None
     last_agents_fingerprint = None
@@ -151,6 +162,23 @@ def collector_loop(stop_event):
     cached_data_snapshot = {}
     # Wave-20: heartbeat emission to detect collector thread death
     last_heartbeat_time = 0.0
+
+    def _record_error(source_name, error):
+        """Record an error for a source and update collector health."""
+        with _collector_health_lock:
+            if source_name not in _collector_health["per_source_errors"]:
+                _collector_health["per_source_errors"][source_name] = []
+            error_list = _collector_health["per_source_errors"][source_name]
+            error_info = f"{type(error).__name__}:{str(error)[:50]}"
+            if error_info not in error_list:
+                error_list.append(error_info)
+            if len(error_list) > 5:
+                error_list.pop(0)
+
+    def _record_success(source_name):
+        """Clear errors for a source upon successful collection."""
+        with _collector_health_lock:
+            _collector_health["per_source_errors"][source_name] = []
 
     while not stop_event.is_set():
         try:
@@ -185,7 +213,12 @@ def collector_loop(stop_event):
                 last_backup_log_size = backup_log_size
                 last_alerts_log_mtime = alerts_log_mtime
                 last_alerts_log_size = alerts_log_size
-                cached_data_snapshot = _snapshot_data()
+                try:
+                    cached_data_snapshot = _snapshot_data()
+                    _record_success('data')
+                except Exception as e:
+                    _record_error('data', e)
+                    print(f"[collector] data snapshot error: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
 
             _maybe_emit("data", cached_data_snapshot, last_hashes)
 
@@ -195,15 +228,25 @@ def collector_loop(stop_event):
                 backlog_mtime = None
             if backlog_mtime != last_backlog_mtime:
                 last_backlog_mtime = backlog_mtime
-                cached_backlog_snapshot = parse_audit_backlog()
+                try:
+                    cached_backlog_snapshot = parse_audit_backlog()
+                    _record_success('backlog')
+                except Exception as e:
+                    _record_error('backlog', e)
+                    print(f"[collector] backlog snapshot error: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
             _maybe_emit("backlog", cached_backlog_snapshot, last_hashes)
 
             fingerprint = _transcripts_fingerprint()
             if fingerprint != last_agents_fingerprint:
                 last_agents_fingerprint = fingerprint
-                agents = get_fleet_agents()
-                # Wave-19: strip large prompt fields before broadcast
-                cached_agents_snapshot = sanitize_agents_for_broadcast(agents)
+                try:
+                    agents = get_fleet_agents()
+                    # Wave-19: strip large prompt fields before broadcast
+                    cached_agents_snapshot = sanitize_agents_for_broadcast(agents)
+                    _record_success('agents')
+                except Exception as e:
+                    _record_error('agents', e)
+                    print(f"[collector] agents snapshot error: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
             _maybe_emit("agents", cached_agents_snapshot, last_hashes)
 
             # Emit tracker section (mtime+size-gated)
@@ -217,7 +260,12 @@ def collector_loop(stop_event):
             if (tracker_mtime, tracker_size) != (last_tracker_mtime, last_tracker_size):
                 last_tracker_mtime = tracker_mtime
                 last_tracker_size = tracker_size
-                cached_tracker_snapshot = _snapshot_tracker()
+                try:
+                    cached_tracker_snapshot = _snapshot_tracker()
+                    _record_success('tracker')
+                except Exception as e:
+                    _record_error('tracker', e)
+                    print(f"[collector] tracker snapshot error: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
             _maybe_emit("tracker", cached_tracker_snapshot, last_hashes)
 
             # Emit status section (mtime+size-gated)
@@ -231,7 +279,12 @@ def collector_loop(stop_event):
             if (status_mtime, status_size) != (last_status_mtime, last_status_size):
                 last_status_mtime = status_mtime
                 last_status_size = status_size
-                cached_status_snapshot = _snapshot_orchestrator_status()
+                try:
+                    cached_status_snapshot = _snapshot_orchestrator_status()
+                    _record_success('status')
+                except Exception as e:
+                    _record_error('status', e)
+                    print(f"[collector] status snapshot error: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
             _maybe_emit("status", cached_status_snapshot, last_hashes)
 
             # Emit cost section (mtime+size-gated on the outcomes ledger)
@@ -245,8 +298,19 @@ def collector_loop(stop_event):
             if (cost_mtime, cost_size) != (last_cost_mtime, last_cost_size):
                 last_cost_mtime = cost_mtime
                 last_cost_size = cost_size
-                cached_cost_snapshot = cost.get_cost_summary()
+                try:
+                    cached_cost_snapshot = cost.get_cost_summary()
+                    _record_success('cost')
+                except Exception as e:
+                    _record_error('cost', e)
+                    print(f"[collector] cost snapshot error: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
             _maybe_emit("cost", cached_cost_snapshot, last_hashes)
+
+            # Emit collector health snapshot
+            with _collector_health_lock:
+                _collector_health["last_successful_cycle"] = current_time
+            health_snapshot = dict(_collector_health)
+            _maybe_emit("collector_health", health_snapshot, last_hashes)
 
             # Drain inbox
             try:

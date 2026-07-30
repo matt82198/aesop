@@ -138,17 +138,19 @@ class TestRunTool(ToolingPanelIsolationCase):
         result = tooling_panel._run_tool("good_tool.py")
         self.assertEqual(result, {"count": 7})
 
-    def test_run_tool_nonzero_exit_returns_none(self):
-        """Tool that exits with nonzero returns None."""
+    def test_run_tool_nonzero_exit_raises_tool_error(self):
+        """Tool that exits with nonzero raises ToolError with exit-nonzero class."""
         self._write_tool("bad_exit.py", "import sys; sys.exit(1)\n")
-        result = tooling_panel._run_tool("bad_exit.py")
-        self.assertIsNone(result)
+        with self.assertRaises(tooling_panel.ToolError) as ctx:
+            tooling_panel._run_tool("bad_exit.py")
+        self.assertEqual(ctx.exception.error_class, "tool-exit-nonzero")
 
-    def test_run_tool_invalid_json_returns_none(self):
-        """Tool that outputs invalid JSON returns None."""
+    def test_run_tool_invalid_json_raises_tool_error(self):
+        """Tool that outputs invalid JSON raises ToolError with parse-error class."""
         self._write_tool("bad_json.py", "print('not json')\n")
-        result = tooling_panel._run_tool("bad_json.py")
-        self.assertIsNone(result)
+        with self.assertRaises(tooling_panel.ToolError) as ctx:
+            tooling_panel._run_tool("bad_json.py")
+        self.assertEqual(ctx.exception.error_class, "parse-error")
 
     def test_run_tool_empty_output_returns_none(self):
         """Tool that outputs nothing returns None."""
@@ -196,8 +198,8 @@ class TestToolingSummary(ToolingPanelIsolationCase):
     def test_summary_with_working_tool(self):
         """When a tool exists and returns valid JSON, metric is populated."""
         self._write_tool("todo_tracker.py", (
-            "import json, sys\n"
-            "json.dump({'count': 15}, sys.stdout)\n"
+            "import json\n"
+            "print(json.dumps({'count': 15}))\n"
         ))
         summary = tooling_panel.get_tooling_summary()
         self.assertEqual(summary["todo_count"], 15)

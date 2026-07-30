@@ -51,8 +51,10 @@ export function useSSE() {
   const getReconnectDelay = useCallback(() => {
     const baseDelay = 1000; // 1 second
     const maxDelay = 10000; // 10 seconds
-    const delay = Math.min(baseDelay * Math.pow(2, reconnectAttemptRef.current), maxDelay);
-    return delay;
+    const exponentialDelay = Math.min(baseDelay * Math.pow(2, reconnectAttemptRef.current), maxDelay);
+    // Add jitter: ±10% to avoid thundering herd
+    const jitterFactor = 0.9 + Math.random() * 0.2; // Range: [0.9, 1.1]
+    return exponentialDelay * jitterFactor;
   }, []);
 
   const connect = useCallback(() => {
