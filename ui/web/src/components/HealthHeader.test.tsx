@@ -391,4 +391,70 @@ describe('HealthHeader', () => {
     // 4.19 + 5.83 = 10.02 (sum of estimates_by_model.total_cost)
     expect(screen.getByTestId(TESTIDS.healthCost)).toHaveTextContent('$10.02');
   });
+
+  it('displays freshness dot indicator in fresh state when data < 20s old', () => {
+    const freshTimestamp = Date.now() - 5000; // 5s old
+    render(
+      <HealthHeader
+        watchdog={fixtureWatchdog}
+        monitor={fixtureMonitor}
+        orchestrator={fixtureStatus}
+        agents={fixtureAgents}
+        alerts={fixtureAlertsEmpty}
+        dataTimestamp={freshTimestamp}
+        now={Date.now()}
+        connectionStatus={{ status: 'live' }}
+        onThemeToggle={mockThemeToggle}
+        onRefresh={mockRefresh}
+      />
+    );
+
+    const freshnessDiv = screen.getByTestId('health-freshness-dot');
+    expect(freshnessDiv).toBeInTheDocument();
+    expect(freshnessDiv).toHaveClass('health-header__freshness-dot--fresh');
+  });
+
+  it('displays freshness dot indicator in aging state when data 20-60s old', () => {
+    const agingTimestamp = Date.now() - 30000; // 30s old
+    render(
+      <HealthHeader
+        watchdog={fixtureWatchdog}
+        monitor={fixtureMonitor}
+        orchestrator={fixtureStatus}
+        agents={fixtureAgents}
+        alerts={fixtureAlertsEmpty}
+        dataTimestamp={agingTimestamp}
+        now={Date.now()}
+        connectionStatus={{ status: 'live' }}
+        onThemeToggle={mockThemeToggle}
+        onRefresh={mockRefresh}
+      />
+    );
+
+    const freshnessDiv = screen.getByTestId('health-freshness-dot');
+    expect(freshnessDiv).toBeInTheDocument();
+    expect(freshnessDiv).toHaveClass('health-header__freshness-dot--aging');
+  });
+
+  it('displays freshness dot indicator in stale state when data > 60s old', () => {
+    const staleTimestamp = Date.now() - 90000; // 90s old
+    render(
+      <HealthHeader
+        watchdog={fixtureWatchdog}
+        monitor={fixtureMonitor}
+        orchestrator={fixtureStatus}
+        agents={fixtureAgents}
+        alerts={fixtureAlertsEmpty}
+        dataTimestamp={staleTimestamp}
+        now={Date.now()}
+        connectionStatus={{ status: 'live' }}
+        onThemeToggle={mockThemeToggle}
+        onRefresh={mockRefresh}
+      />
+    );
+
+    const freshnessDiv = screen.getByTestId('health-freshness-dot');
+    expect(freshnessDiv).toBeInTheDocument();
+    expect(freshnessDiv).toHaveClass('health-header__freshness-dot--stale');
+  });
 });
