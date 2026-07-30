@@ -23,13 +23,14 @@
 
 **Runtime commands** (after scaffolding; dispatch pattern in cli.js lines 14–30):
 ```javascript
-const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health-score', 'reproduce'];
+const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health', 'health-score', 'reproduce'];
 const commandMap = {
   'doctor': '../tools/doctor.js',   // Preflight check (Node, Python, git, config, dirs, hooks, port)
   'watch': '../tools/watch.js',     // Launch daemon; spawns daemons/run-watchdog.sh
   'dash': '../tools/dash.js',       // Launch web dashboard; spawns python3 ui/serve.py (default localhost:8770)
   'status': '../tools/status.js',   // One-shot snapshot (heartbeats, port, git branch)
-  'fleet': '../tools/fleet.js'      // One-shot JSON snapshot (agents, heartbeats, tracker, orchestrator; Node STDLIB only, graceful degrade)
+  'fleet': '../tools/fleet.js',     // One-shot JSON snapshot (agents, heartbeats, tracker, orchestrator; Node STDLIB only, graceful degrade)
+  'health': '../tools/health.js'    // Fleet health aggregator (heartbeats, alerts, orchestrator, tracker; Python wrapper)
 };
 require(commandMap[args[0]]); // Load + run; returns immediately after
 ```
