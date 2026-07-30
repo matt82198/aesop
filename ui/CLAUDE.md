@@ -66,15 +66,25 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **tooling_panel.py** — Tooling dashboard panel: `GET /api/tooling/summary` aggregates results from repo analysis tools (todo_tracker, test_coverage_gaps, dead_code_check, import_cycle_check, encoding_lint). Runs tools via subprocess, caches 60s, gracefully degrades to null for missing tools. `?force=1` bypasses cache.
 
+**quality_scorecard.py** — Quality scorecard API: spec-sharpness and per-wave quality metrics.
+
+**wave_audit_tail.py** — Wave audit tail: streams recent audit findings for live dashboard display.
+
+**wave_gantt.py** — Wave Gantt chart data: per-agent timeline for wave execution visualization.
+
+**wave_reasoning_tail.py** — Wave reasoning tail: streams orchestrator reasoning for live display.
+
+**wave_context.py** — Wave context file listing: files touched by wave agents for context display.
+
 **api/__init__.py**, **api/tracker.py**, **api/submit.py**: Mutation handlers (tracker CRUD, inbox append).
 
 ## Frontend (React 18 + Vite + TypeScript)
 
 **ui/web/src/**:
 - **main.tsx**: Vite entry point; renders `<App />` to `#root`.
-- **App.tsx**: App shell; hash-routed views (/#/, /#/work, /#/activity, /#/cost).
+- **App.tsx**: App shell; hash-routed views (/#/, /#/work, /#/activity, /#/cost, /#/prs).
 - **styles/tokens.css** + **global.css**: Design tokens (light/dark palettes, spacing, typography).
-- **views/**: Overview, Work, Activity, Cost, WavePRBoard (with SSE bindings). WavePRBoard polls `/api/wave/prs` every 5s; drills down to FailureDrilldown on click.
+- **views/**: Overview, Work, Activity, Cost, WavePRBoard (with SSE bindings). 5 views total: `/#/` (Overview), `/#/work` (Work), `/#/activity` (Activity), `/#/cost` (Cost), `/#/prs` (PR Board). WavePRBoard polls `/api/wave/prs` every 5s; drills down to FailureDrilldown on click.
 - **components/**: HealthHeader, AgentsPanel, TrackerBoard, Timeline, CostChart, CostAnalyticsPanel, FailureDrilldown, BenchmarkPanel, etc.
   - BenchmarkPanel: Results table (model/accuracy/tokens/latency/cost/timestamp) + model comparison cards; fetches `/api/bench` and `/api/bench/compare`; dark/light theme, responsive grid.
   - CostAnalyticsPanel (wave-29 UX): info-dense operator view with (a) spend per wave (bar chart), (b) model efficiency vs Opus counterfactual, (c) burn rate + end-of-wave projection with ceiling alert; graceful DATA-UNAVAILABLE states when ledger/ceiling missing.
@@ -91,7 +101,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 ## API Routes
 
-**Read-only**: `/` (HTML+CSRF), `/data`, `/assets/*`, `/api/state` (first-paint snapshot), `/api/session` (dev token), `/api/cost`, `/api/backlog`, `/api/agents`, `/api/agent?id=`, `/api/tracker` (?status/priority), `/api/state/events` (?stream/type/after/before/limit), `/api/state/streams`, `/api/wave/prs` (CI rollup, 5s cache), `/api/wave/telemetry`, `/api/wave/dispatch` (2-3s poll), `/api/wave/failure?pr=N`, `/api/bench`, `/api/bench/compare`, `/api/tooling/summary` (60s cache, ?force=1), `/events` (SSE, 6 sections, 15s keepalive), `/favicon.ico` (204). All `/api/wave/*` honor `AESOP_GH_BIN`.
+**Read-only**: `/` (HTML+CSRF), `/data`, `/assets/*`, `/api/state` (first-paint snapshot), `/api/session` (dev token), `/api/cost`, `/api/backlog`, `/api/agents`, `/api/agent?id=`, `/api/tracker` (?status/priority), `/api/state/events` (?stream/type/after/before/limit), `/api/state/streams`, `/api/wave/prs` (CI rollup, 5s cache), `/api/wave/telemetry`, `/api/wave/dispatch` (2-3s poll), `/api/wave/failure?pr=N`, `/api/wave/gantt`, `/api/wave/audit-tail`, `/api/wave/reasoning-tail`, `/api/wave/quality-scorecards`, `/api/context/files`, `/api/quality/spec-sharpness`, `/api/bench`, `/api/bench/compare`, `/api/tooling/summary` (60s cache, ?force=1), `/events` (SSE, 6 sections, 15s keepalive), `/favicon.ico` (204). All `/api/wave/*` honor `AESOP_GH_BIN`.
 
 **Mutations (CSRF-gated)**: `POST /submit` (inbox), `POST /api/tracker` (create), `POST /api/tracker/<id>` (?action=update|delete).
 
