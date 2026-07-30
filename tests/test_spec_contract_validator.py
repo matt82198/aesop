@@ -1,9 +1,9 @@
 """Tests for tools.spec_contract_validator -- Guardrail G4 spec-contract validation.
 
-Covers: forbidden-flag detection, credential-hunting detection, clean dispatches passing,
-`# contract-ok` suppression, isolation-marker detection, env-var allowlisting, role-routing,
-and JSON/CLI output shape. Fixtures are written to tempfile.TemporaryDirectory() -- no cwd
-or global git-config pollution.
+Covers: forbidden-flag detection, credential-hunting detection, git-stash prohibition (G8),
+clean dispatches passing, `# contract-ok` suppression, isolation-marker detection,
+env-var allowlisting, role-routing, and JSON/CLI output shape. Fixtures are written to
+tempfile.TemporaryDirectory() -- no cwd or global git-config pollution.
 """
 import json
 import subprocess
@@ -100,7 +100,57 @@ class SpecContractValidatorTest(unittest.TestCase):
         rules_and_details = {(f["rule"], f["detail"]) for f in findings}
         self.assertIn(("env_var_not_allowlisted", "SHADOW_ADMIN_TOKEN"), rules_and_details)
 
-    # -- 3. clean dispatch passes --------------------------------------------
+    # -- 3. git stash prohibition (G8) -----------------------------------------------
+
+    def test_git_stash_detected(self):
+        source = _dispatch_source("Save your changes with git stash before switching branches.")
+        calls = find_dispatch_calls(source)
+        self.assertEqual(len(calls), 1)
+        findings = validate_call(calls[0])
+        rules = [f["rule"] for f in findings]
+        self.assertIn("git_stash_forbidden", rules)
+        detail = [f["detail"] for f in findings if f["rule"] == "git_stash_forbidden"]
+        self.assertIn("git stash", detail)
+
+    def test_git_stash_case_insensitive(self):
+        """git stash detection should be case-insensitive."""
+        source = _dispatch_source("Save work using GIT STASH temporarily.")
+        calls = find_dispatch_calls(source)
+        self.assertEqual(len(calls), 1)
+        findings = validate_call(calls[0])
+        rules = [f["rule"] for f in findings]
+        self.assertIn("git_stash_forbidden", rules)
+
+    def test_git_stash_suppressed_with_contract_ok(self):
+        """git stash suppressed with # contract-ok comment."""
+        prompt_body = "Save changes with git stash before proceeding."
+        source = (
+            f'result = agent(\n'
+            f'    description="do the thing",\n'
+            f'    prompt="""{prompt_body}""",\n'
+            f')  # contract-ok\n'
+        )
+        calls = find_dispatch_calls(source)
+        self.assertEqual(len(calls), 1)
+        self.assertTrue(calls[0]["suppressed"])
+        # End-to-end via scan_file: no findings surface.
+        target = self.repo_root / "tools" / "suppressed_stash_dispatch.py"
+        target.write_text(source, encoding="utf-8")
+        results = scan_file(target)
+        self.assertEqual(results, [])
+
+    def test_prompt_without_git_stash_passes(self):
+        """A prompt without git stash should pass cleanly."""
+        source = _dispatch_source(
+            "[ISOLATION: sibling worktree] Implement the feature, git commit and push to your branch."
+        )
+        calls = find_dispatch_calls(source)
+        self.assertEqual(len(calls), 1)
+        findings = validate_call(calls[0])
+        rules = [f["rule"] for f in findings]
+        self.assertNotIn("git_stash_forbidden", rules)
+
+    # -- 4. clean dispatch passes --------------------------------------------
 
     def test_clean_dispatch_produces_no_findings(self):
         source = _dispatch_source(
