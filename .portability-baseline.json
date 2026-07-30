@@ -7,6 +7,7 @@
     "docs/INSTALL.md@posix_home_path": 9,
     "docs/PORTING.md@posix_home_path": 1,
     "docs/RELIABILITY-REPORT.json@private_token": 1,
+    "docs/ab-cost-dataset.md@private_token": 8,
     "driver/agent_driver.py@private_token": 1,
     "driver/context_pack.py@private_token": 4,
     "scan/fleet-scan.example.mjs@private_token": 1,

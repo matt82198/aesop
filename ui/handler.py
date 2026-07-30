@@ -12,6 +12,7 @@ from pathlib import Path
 import config
 import cost
 import csrf
+import demo
 import quality_scorecard
 import sse
 import wave_prs
@@ -315,6 +316,19 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             return
 
         html = render_dashboard(csrf.SESSION_TOKEN, template_path=dist_index)
+        # Zero-key demo mode: inject a fixed "DEMO DATA" banner right after
+        # <body> so the seeded snapshot can never be mistaken for live state
+        # (honesty is this project's brand). No-op in default mode.
+        if demo.enabled():
+            lower = html.lower()
+            idx = lower.find("<body")
+            if idx != -1:
+                insert_at = html.find(">", idx)
+                if insert_at != -1:
+                    insert_at += 1
+                    html = html[:insert_at] + demo.BANNER_HTML + html[insert_at:]
+            else:
+                html = demo.BANNER_HTML + html
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
@@ -406,6 +420,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                     state[name] = json.loads(payload)
                 else:
                     state[name] = computers[name]()
+
+            # Zero-key demo mode self-identifies in the payload so the frontend
+            # (and any API consumer) can tell seeded data from live state.
+            if demo.enabled():
+                state["demo"] = True
 
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
