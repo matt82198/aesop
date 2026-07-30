@@ -92,33 +92,40 @@ def parse_package_json():
 
 
 def get_shell_test_coverage():
-    """Find shell test files that are covered by npm test:sh script."""
+    """Find shell test files that are covered by npm test:sh script.
+
+    Handles both:
+    - Legacy: explicit bash file references (e.g., bash tests/test_*.sh && bash ...)
+    - New: glob runner invocation (bash tools/run_shell_tests.sh)
+    """
     scripts = parse_package_json()
     test_sh = scripts.get("test:sh", "")
 
-    # Parse the test:sh script to extract all bash test file references
-    # Example: bash tests/test_*.sh && bash tests/test-*.sh && bash tests/backup-fleet.test.sh
     covered = set()
 
-    # Extract all bash file references
+    # Check if test:sh delegates to the glob runner
+    if "bash tools/run_shell_tests.sh" in test_sh or "bash ./tools/run_shell_tests.sh" in test_sh:
+        # The glob runner discovers tests matching: *.test.sh, test_*.sh, test-*.sh
+        # Replicate its discovery in Python (cross-platform, no bash dependency)
+        covered.update(find_disk_files("*.test.sh"))
+        covered.update(find_disk_files("test_*.sh"))
+        covered.update(find_disk_files("test-*.sh"))
+        return covered
+
+    # Legacy parsing: extract explicit bash file references
+    # Example: bash tests/test_*.sh && bash tests/test-*.sh && bash tests/backup-fleet.test.sh
     bash_pattern = r"bash\s+([^\s&|]+)"
     for match in re.finditer(bash_pattern, test_sh):
         file_path = match.group(1).strip()
-        # If it contains a glob pattern, we need to match it
         if "*" in file_path:
-            # Extract the glob pattern
-            pattern = file_path.split("/")[-1]  # Get the filename pattern
+            pattern = file_path.split("/")[-1]
             if "test_*.sh" in pattern:
-                # Match tests/test_*.sh
                 covered.update(find_disk_files("test_*.sh"))
             elif "test-*.sh" in pattern:
-                # Match tests/test-*.sh
                 covered.update(find_disk_files("test-*.sh"))
             elif "*.test.sh" in pattern:
-                # Match tests/*.test.sh
                 covered.update(find_disk_files("*.test.sh"))
         else:
-            # It's an explicit file reference
             covered.add(file_path)
 
     return covered
