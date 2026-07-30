@@ -358,6 +358,210 @@ jobs:
         self.assertIsInstance(exit_code, int)
         self.assertIsInstance(findings, list)
 
+    def _write_claudemd(self, content):
+        """Write a tools/CLAUDE.md file."""
+        tools_dir = self.fixture_root / "tools"
+        tools_dir.mkdir(exist_ok=True)
+        claudemd_path = tools_dir / "CLAUDE.md"
+        claudemd_path.write_text(content, encoding='utf-8')
+        return claudemd_path
+
+    def test_cli_gate_parity_missing_documented_gate(self):
+        """
+        Reproduce the escape: a documented CI gate is missing from workflows.
+
+        Fixture scenario:
+        - tools/CLAUDE.md documents verify_test_suite_count.py as a CI gate
+        - ci.yml does NOT invoke it
+        - Linter should flag this
+        """
+        # Write CLAUDE.md documenting a verify_*.py as a CI gate
+        claudemd_content = """# tools/ — Build utilities
+
+- `verify_test_suite_count.py` — Test suite count drift gate (auto-verifiable + auto-fixable); CLI: `--check` (fail if counts drift; CI gate)
+- `verify_test_coverage.py` — Guardrail G2: CI gate that verifies all on-disk test files are run
+"""
+        self._write_claudemd(claudemd_content)
+
+        # Write a workflow that does NOT invoke these gates
+        workflow_content = """
+name: CI
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Some other check
+        run: python tools/some_other_check.py
+"""
+        self._write_workflow("ci.yml", workflow_content)
+
+        # Run linter
+        exit_code, findings = ci_workflow_lint.lint_workflows(str(self.fixture_root))
+
+        # Should find that documented gates are missing
+        self.assertEqual(exit_code, 1)
+        gate_parity_findings = [f for f in findings if "gate not invoked" in f.lower()]
+        self.assertTrue(gate_parity_findings,
+                       f"Expected gate parity findings, got all findings: {findings}")
+
+        # Should report both missing gates
+        finding_text = " ".join(gate_parity_findings)
+        self.assertIn("verify_test_suite_count.py", finding_text,
+                     f"Expected verify_test_suite_count.py in findings, got: {finding_text}")
+        self.assertIn("verify_test_coverage.py", finding_text,
+                     f"Expected verify_test_coverage.py in findings, got: {finding_text}")
+
+    def test_cli_gate_parity_all_gates_present(self):
+        """
+        When all documented CI gates are invoked by workflows, linter passes.
+
+        Fixture scenario:
+        - tools/CLAUDE.md documents two gates
+        - ci.yml invokes both
+        - Linter should NOT report gate parity findings
+        """
+        # Write CLAUDE.md documenting gates
+        claudemd_content = """# tools/ — Build utilities
+
+- `verify_test_suite_count.py` — Test suite count drift gate; CLI: `--check` (CI gate)
+- `verify_test_coverage.py` — Guardrail G2: CI gate that verifies test coverage
+"""
+        self._write_claudemd(claudemd_content)
+
+        # Write a workflow that invokes both gates
+        workflow_content = """
+name: CI
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Test coverage gate
+        run: python tools/verify_test_coverage.py --check
+
+      - name: Test suite count gate
+        run: python tools/verify_test_suite_count.py --check
+"""
+        self._write_workflow("ci.yml", workflow_content)
+
+        # Run linter
+        exit_code, findings = ci_workflow_lint.lint_workflows(str(self.fixture_root))
+
+        # Should NOT report gate parity findings
+        gate_parity_findings = [f for f in findings if "gate not invoked" in f.lower()]
+        self.assertFalse(gate_parity_findings,
+                        f"Should not find gate parity issues, got: {gate_parity_findings}")
+
+    def test_cli_gate_parity_partial_gates_present(self):
+        """
+        When some documented CI gates are missing from workflows, report only missing ones.
+
+        Fixture scenario:
+        - CLAUDE.md documents three gates
+        - ci.yml invokes two
+        - Linter should report only the missing one
+        """
+        # Write CLAUDE.md documenting three gates (all with gate keywords)
+        claudemd_content = """# tools/ — Build utilities
+
+- `verify_foo.py` — Verification gate for foo feature (self-hosted test port)
+- `verify_test_suite_count.py` — Test suite count drift gate; CLI: `--check` (CI gate)
+- `verify_test_coverage.py` — Guardrail G2: CI gate that verifies test coverage
+"""
+        self._write_claudemd(claudemd_content)
+
+        # Write a workflow that invokes only two of them
+        workflow_content = """
+name: CI
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test coverage gate
+        run: python tools/verify_test_coverage.py --check
+
+      - name: Test suite count gate
+        run: python tools/verify_test_suite_count.py --check
+"""
+        self._write_workflow("ci.yml", workflow_content)
+
+        # Run linter
+        exit_code, findings = ci_workflow_lint.lint_workflows(str(self.fixture_root))
+
+        # Should report only verify_foo.py as missing
+        gate_parity_findings = [f for f in findings if "gate not invoked" in f.lower()]
+        self.assertEqual(len(gate_parity_findings), 1,
+                        f"Expected one gate parity finding, got: {gate_parity_findings}")
+        self.assertIn("verify_foo.py", gate_parity_findings[0],
+                     f"Expected verify_foo.py in finding, got: {gate_parity_findings[0]}")
+
+    def test_cli_gate_parity_no_claudemd(self):
+        """
+        If tools/CLAUDE.md doesn't exist, gate parity check should not fail.
+
+        This is a graceful degradation: the check won't run, but it shouldn't
+        cause the linter to crash.
+        """
+        # Write a minimal valid workflow
+        workflow_content = """
+name: CI
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+"""
+        self._write_workflow("ci.yml", workflow_content)
+
+        # Run linter (tools/CLAUDE.md was never written)
+        exit_code, findings = ci_workflow_lint.lint_workflows(str(self.fixture_root))
+
+        # Should not crash
+        self.assertIsInstance(exit_code, int)
+        self.assertIsInstance(findings, list)
+
+    def test_cli_gate_parity_guardrail_markers(self):
+        """
+        Verify that the gate detection looks for Guardrail markers (G1, G2, etc).
+
+        Fixture scenario:
+        - CLAUDE.md has a verify_*.py with "Guardrail G5" in description
+        - ci.yml does NOT invoke it
+        - Linter should detect it as a documented gate and report it missing
+        """
+        # Write CLAUDE.md with Guardrail G5 marker
+        claudemd_content = """# tools/ — Build utilities
+
+- `verify_sync.py` — Guardrail G5: CLAUDE.md sync gate (blah blah)
+"""
+        self._write_claudemd(claudemd_content)
+
+        # Write a workflow that doesn't invoke it
+        workflow_content = """
+name: CI
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Nothing to see here
+        run: echo "hello"
+"""
+        self._write_workflow("ci.yml", workflow_content)
+
+        # Run linter
+        exit_code, findings = ci_workflow_lint.lint_workflows(str(self.fixture_root))
+
+        # Should report verify_sync.py as missing
+        gate_parity_findings = [f for f in findings if "gate not invoked" in f.lower()]
+        self.assertTrue(gate_parity_findings,
+                       f"Expected gate parity findings, got: {findings}")
+        self.assertIn("verify_sync.py", " ".join(gate_parity_findings))
+
 
 class GuardrailGateWiringTest(unittest.TestCase):
     """Meta-gate: the six guardrail tools must stay wired as REAL enforcement.

@@ -7,6 +7,7 @@ Checks:
   2. Every npm ci step has a package-lock.json in its working directory
   3. Every test suite in package.json scripts (test:py/test:node/test:sh) is invoked by CI
   4. Best-effort check for file references in workflow steps
+  5. CLI workflow gate parity: all documented CI gates (Guardrails) must be invoked by workflows
 
 Exit: 0 if all checks pass, 1 if any findings. Support --json for structured output.
 
@@ -331,6 +332,104 @@ def check_file_references(workflow_data, root):
     return findings
 
 
+def extract_documented_gates(root):
+    """Extract all verify_*.py tools documented as CI gates or Guardrails in tools/CLAUDE.md.
+
+    Returns:
+        Set[str]: Set of tool filenames (e.g., 'verify_foo.py')
+    """
+    documented_gates = set()
+    claudemd_path = Path(root) / "tools" / "CLAUDE.md"
+
+    if not claudemd_path.exists():
+        return documented_gates
+
+    try:
+        with open(claudemd_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except Exception:
+        return documented_gates
+
+    # Look for lines containing verify_*.py with 'gate', 'Guardrail', or 'G[0-9]' markers
+    lines = content.split('\n')
+    for line in lines:
+        # Pattern: backtick-quoted tool name followed by description
+        # e.g., "`verify_foo.py` — Description with Guardrail G2 or CI gate"
+        match = re.search(r'`(verify_\w+\.py)`\s*—\s*(.+)$', line)
+        if match:
+            tool_name = match.group(1)
+            description = match.group(2)
+
+            # Check if description indicates this is a CI gate or Guardrail
+            # Look for keywords: "gate" (as whole word), "Guardrail", or Guardrail marker "G[0-9]"
+            if (re.search(r'\bgate\b', description, re.IGNORECASE) or
+                'Guardrail' in description or
+                re.search(r'G\d+', description)):
+                documented_gates.add(tool_name)
+
+    return documented_gates
+
+
+def extract_workflow_invocations(workflow_files, workflow_data_list):
+    """Extract all verify_*.py tool invocations from workflow files.
+
+    Returns:
+        Set[str]: Set of invoked tool filenames (e.g., 'verify_foo.py')
+    """
+    invoked_tools = set()
+
+    for workflow_data in workflow_data_list:
+        if not workflow_data:
+            continue
+
+        jobs = workflow_data.get("jobs", {})
+        for job_name, job_data in jobs.items():
+            steps = job_data.get("steps", [])
+
+            for step in steps:
+                if not isinstance(step, dict):
+                    continue
+
+                run = step.get("run", "")
+                if not isinstance(run, str):
+                    continue
+
+                # Look for "python tools/verify_*.py" invocations
+                matches = re.findall(r'python[3]?\s+tools/(verify_\w+\.py)', run)
+                for tool_name in matches:
+                    invoked_tools.add(tool_name)
+
+    return invoked_tools
+
+
+def check_cli_workflow_gate_parity(root, workflow_files, workflow_data_list):
+    """Verify that all documented CI gates are actually wired into workflows.
+
+    Returns:
+        List[str]: List of findings for missing gate invocations
+    """
+    findings = []
+
+    # Extract documented gates from tools/CLAUDE.md
+    documented_gates = extract_documented_gates(root)
+
+    if not documented_gates:
+        return findings  # No documented gates to check
+
+    # Extract actual workflow invocations
+    invoked_tools = extract_workflow_invocations(workflow_files, workflow_data_list)
+
+    # Report any documented gates that are missing from workflows
+    missing_gates = documented_gates - invoked_tools
+    for tool_name in sorted(missing_gates):
+        findings.append(
+            f"Documented CI gate not invoked by workflows: {tool_name} "
+            f"(documented in tools/CLAUDE.md but missing from .github/workflows/ci.yml)"
+        )
+
+    return findings
+
+
 def lint_workflows(root, json_output=False):
     """Lint all workflows in a repository.
 
@@ -383,6 +482,9 @@ def lint_workflows(root, json_output=False):
     for workflow_data in workflow_data_list:
         if workflow_data:
             findings.extend(check_file_references(workflow_data, root))
+
+    # Check CLI workflow gate parity
+    findings.extend(check_cli_workflow_gate_parity(root, workflow_files, workflow_data_list))
 
     # Format findings with numbers
     numbered_findings = []
