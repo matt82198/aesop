@@ -13,10 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -34,7 +34,7 @@ jobs:
         run: |
           # Check if the drift tool exited with code 3 (auth failure)
           # If both runs errored, we assume auth failure and skip the commit
-          if [ -f docs/CROSSOS-DRIFT.json ] && [ -f docs/CROSSOS-DRIFT.md ]; then
+          if [ -s docs/CROSSOS-DRIFT.json ] && [ -s docs/CROSSOS-DRIFT.md ]; then
             echo "Cross-OS drift snapshot generated successfully"
           else
             echo "ERROR: Failed to generate cross-OS drift snapshot (authentication or execution error)"
