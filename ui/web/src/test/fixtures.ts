@@ -273,7 +273,7 @@ export const fixtureAgentInspector: AgentInspectorDetail = {
 export const fixtureAlerts: Alert = {
   count: 2,
   lines: [
-    '2026-07-13T09:11:02Z HIGH agent-c99ff00 wrote outside its worktree: C:/Users/matt8/aesop/ui/serve.py',
+    '2026-07-13T09:11:02Z HIGH agent-c99ff00 wrote outside its worktree: <REPO>/ui/serve.py',
     '2026-07-13T11:45:38Z MED agent-b12c4d9 3 consecutive test failures on feat/wave14-u5-work',
   ],
 };

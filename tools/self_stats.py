@@ -39,9 +39,24 @@ from typing import Optional, Dict, Any, Tuple, Set, List
 
 
 # Author classification rules
+# Note: Primary author email is extracted from git config if available.
+# This allows classification to work for any repo without hardcoded personal info.
+def _get_default_author_email():
+    """Get author email from git config for the current repo."""
+    try:
+        result = subprocess.run(
+            ["git", "config", "user.email"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None  # No email classification if not configured
+
 AUTHOR_CLASSIFICATION = {
     "human": {
-        "emails": ["matt82198@gmail.com"],
+        "emails": [e for e in [_get_default_author_email()] if e],
         "description": "Real human developers (deduplicated by email)"
     },
     "model": {
