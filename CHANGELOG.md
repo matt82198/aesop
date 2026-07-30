@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Version scheme**: Stable releases are `0.x.y`; `0.x.0-beta.N` / `-rc.N` are pre-releases; `0.1.0-wave.N` were internal wave-milestone previews.
 
+## [0.6.1] - 2026-07-31
+
+### Added
+
+- **Guardrails**: Fixture-intent manifest validator (#603), dispatch_lint for merge automation enforcement, CLAUDE.md sync gate (G5), workflow model pin linter (G7), git-stash prohibition check (G8), encoding validation (G10), commit message linter, docstring coverage checker, dead code detector, import cycle detector, TODO/FIXME tracker, test coverage gap finder, file size linter, bash_guard_check for exec-guard validation.
+- **Tools**: Port-fidelity-check validator, init-project scaffolder, batch auto-merge tool (auto_merge.py), state-query temporal API, cost forecasting for budget runway, tracker reconciliation (zombie detection), wave-history event store analyzer, health subcommand for fleet visibility, dependency graph generator.
+- **Dashboard**: Tooling panel for guardrail/tool metrics summary, benchmark results cache and display panel.
+- **Core**: Multi-instance orchestration MVP with lease-based SQLite claims; REST API for state-query time-travel.
+- **Documentation**: Architecture decision records (ADR-1 through ADR-6), test strategy document, architecture Mermaid diagrams, cost transparency section in README.
+
+### Changed
+
+- **Benchmarks**: Enhanced fake-green detection scoring; corrected cost-honesty HALT check.
+- **Auto-merge**: Eliminated shell=True command injection vulnerability.
+- **Instance manager**: Consistency fixes for multi-instance coordination.
+
+### Fixed
+
+- CI/test hygiene: Fixed workflow actions env vars, added BASH_SOURCE exec guards to all shell scripts, isolated orchestration tests from live conductor3 state, corrected Windows cp1252 encoding in test file opens, fixed race conditions in instance_manager tests.
+- Documentation: Fixed cross-file drift, updated domain CLAUDE.md entries, corrected test counts, resolved multi-instance contradictions.
+- Guardrail enforcement: Added missing tool entries, corrected dispatch_lint pattern suppression, fixed benchmark fixture state reversion, corrected arithmetic in sum function test.
+- Workflow: Removed fail-open continue-on-error from cross-OS drift workflow.
+
 ## [0.6.0] - 2026-07-30
 
 ### Added
