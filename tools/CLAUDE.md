@@ -147,4 +147,3 @@ CLI: `bash tools/agent-forensics.sh <commit>` (print snapshot) | `--diff <commit
 ---
 
 Map of all domains: /CLAUDE.md
-# trigger
