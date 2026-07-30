@@ -4,14 +4,14 @@
 One command to clear the PR backlog. No serial merge trains.
 
 Modes:
-  --merge-green    Merge all PRs with passing CI (default behavior)
-  --fix            Merge main into all non-green branches, fix test counts,
-                   push to re-trigger CI
+  (default)        Merge green PRs AND fix non-green branches (merge main,
+                   resolve test counts, push to re-trigger CI)
+  --no-fix         Only merge green PRs, skip fixing broken branches
   --loop           Fix + merge in a loop until all PRs are merged or stuck
   --dry-run        Show plan without acting
 
 Usage:
-    python tools/auto_merge.py [--fix] [--loop] [--dry-run] [--json]
+    python tools/auto_merge.py [--no-fix] [--loop] [--dry-run] [--json]
 
 Exit codes: 0=all merged, 1=some blocked, 2=error
 """
