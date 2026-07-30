@@ -24,6 +24,7 @@ import wave_audit_tail
 import wave_reasoning_tail
 import wave_context
 import bench_panel
+import tooling_panel
 import api
 import api.tracker
 import api.submit
@@ -262,6 +263,8 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.serve_api_bench()
         elif self.path == "/api/bench/compare":
             self.serve_api_bench_compare()
+        elif self.path.startswith("/api/tooling/summary"):
+            self.serve_api_tooling_summary()
         elif self.path.startswith("/api/tracker"):
             self.serve_tracker()
         elif self.path.startswith("/api/state/events"):
@@ -544,6 +547,18 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
             except Exception:
                 pass  # best-effort error response; client may be gone
+
+    def serve_api_tooling_summary(self):
+        """GET /api/tooling/summary — aggregated tooling scan results.
+
+        Read-only; runs tool subprocesses (short timeout, cached 60s).
+        Gracefully degrades to null for any metric whose tool is missing.
+        Query param ?force=1 bypasses cache.
+        """
+        query = urllib.parse.urlparse(self.path).query
+        params = urllib.parse.parse_qs(query)
+        force = params.get("force", ["0"])[0] == "1"
+        tooling_panel.serve_api_tooling_summary(self, force=force)
 
     def serve_api_wave_prs(self):
         """GET /api/wave/prs — open PRs + PR-less feat/* branches for the PR board.

@@ -18,6 +18,7 @@ import { AlertsPanel } from '../components/AlertsPanel';
 import { EventsFeed } from '../components/EventsFeed';
 import { ReposPanel } from '../components/ReposPanel';
 import { InboxForm } from '../components/InboxForm';
+import { ToolingPanel } from '../components/ToolingPanel';
 import { WaveTelemetryProgress } from '../components/WaveTelemetryProgress';
 import { TESTIDS } from '../test/fixtures';
 import './Overview.css';
@@ -47,6 +48,7 @@ export function Overview({ agents, alerts, events, repos }: OverviewProps) {
       </div>
 
       <div className="overview__sidebar" data-testid={TESTIDS.overviewSidebar}>
+        <ToolingPanel />
         <AlertsPanel alerts={alerts} />
         <EventsFeed events={events} />
         <ReposPanel repos={repos} />
