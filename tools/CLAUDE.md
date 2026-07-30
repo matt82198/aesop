@@ -97,6 +97,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `test_battery.py` — Local union test battery: runs the 4 harnesses (py/node/sh/ui) as parallel subprocesses with per-harness rc capture, stdin closed, logs to temp; parallel mode sets AESOP_TEST_CHILD_TIMEOUT_MS=90000 for node scaffold children; `--serial` fallback, `--skip <h>`, `--json`; exit 0 only when all harnesses green
 - `test_coverage_gaps.py` — Test coverage gap finder (identifies untested modules)
 - `todo_tracker.py` — TODO/FIXME/HACK comment tracker for codebase hygiene
+- `tools_drift_check.py` — Guardrail G5.1: pre-push gate verifying all tools/*.{py,mjs,sh} files documented in tools/CLAUDE.md (mirrors CI domain-map-drift.test.mjs "tools FILES drift" test); catches escape when files added without docs; exit 0=clean/1=drift/2=error; fail-open when tool missing
 - `tracker_autoclose.py` — Tracker zombie-prevention auto-close gate
 - `tracker_reconcile.py` — Tracker zombie reconciliation tool (detects shipped-but-open items)
 - `wave_history.py` — Wave history CLI for per-wave event store analysis (guardrail G1): closes items whose linked PRs merged or whose ownsFiles shipped on main; CLI: `[--check | --dry-run]`; exit 0=all resolved, 1=items still open; timezone-aware UTC timestamps

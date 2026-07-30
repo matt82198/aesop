@@ -564,6 +564,47 @@ check_tracker_guard() {
   return 0
 }
 
+check_tools_drift() {
+  # Tools files drift gate (tools/tools_drift_check.py).
+  # Ensures that all tools/*.{py,mjs,sh} files are documented in tools/CLAUDE.md.
+  # This mirrors the CI gate from tests/domain-map-drift.test.mjs but runs locally
+  # to catch drift before the commit leaves the developer's machine.
+  #
+  # Root cause caught: tools/state_rebuild.py was added without documentation
+  # in tools/CLAUDE.md, violating the cardinal rule "Domain docs stay
+  # minimal-but-complete; update this file in the same PR as code it describes."
+  #
+  # Fail-open ONLY for missing optional tooling. An actual drift detection
+  # (exit 1 from the check) stays fail-closed and blocks the push.
+  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local drift_script="$aesop_root/tools/tools_drift_check.py"
+
+  if [ ! -f "$drift_script" ]; then
+    log_event "tools_drift_check_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; tools drift check skipped\n' >&2
+    log_event "tools_drift_check_skipped_no_python"
+    return 0
+  fi
+
+  local drift_output
+  drift_output=$("$py_bin" "$drift_script" 2>&1)
+  local drift_exit_code=$?
+
+  if [ $drift_exit_code -ne 0 ]; then
+    if [ -n "$drift_output" ]; then
+      printf '%s\n' "$drift_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
 log_event() {
   # Finding 1 & 2: Acquire lock before read-modify-append, add seq field, update sidecar
   local event_type="$1"
@@ -1232,6 +1273,12 @@ main() {
   if ! check_secret_scan <<< "$prepush_stdin"; then
     printf 'Error: Secret scan failed. Push blocked.\n' >&2
     log_block "secret_scan_failure"
+    exit 1
+  fi
+
+  if ! check_tools_drift; then
+    printf 'Error: Tools drift check failed. Push blocked.\n' >&2
+    log_block "tools_drift_check_failure"
     exit 1
   fi
 
