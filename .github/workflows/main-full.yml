@@ -52,3 +52,6 @@ jobs:
       - name: Run shell test suites (ubuntu only)
         if: runner.os == 'Linux'
         run: npm run test:sh
+
+      - name: README stats freshness gate (drift guard)
+        run: python tools/self_stats.py --check
