@@ -8,7 +8,7 @@ Scans Python/JS/MD files for agent dispatch patterns and flags FORBIDDEN pattern
   - `--no-verify` flag (pre-commit hook bypass)
   - `--force` in git context (dangerous history rewrite)
   - `git stash` (shared across worktrees, cross-contamination risk)
-  - Credential/key hunting patterns (find.*key, grep.*token, env.*KEY)
+  - Credential/key hunting patterns (find.*key, grep.*token, env.*KEY)  # hygiene-ok
 
 Modes:
   dispatch_lint.py --check [PATH]          Exit 1 if violations found
@@ -63,12 +63,12 @@ FORBIDDEN_PATTERNS = {
         "fix": "Use diff>patch + checkout + apply instead; see MEMORY.md",
     },
     "find_key_hunting": {
-        "pattern": r"\bfind\s+.*\s+\(-\w*name\w*\s+.*['\"]?[^'\"]*(?:key|secret|token|password)[^'\"]*['\"]?",
+        "pattern": r"\bfind\s+.*\s+\(-\w*name\w*\s+.*['\"]?[^'\"]*(?:key|secret|token|password)[^'\"]*['\"]?",  # hygiene-ok
         "description": "Credential hunting pattern forbidden (missing key = SKIP, never search)",
         "fix": "Specify exact transport and allowed env vars instead; see no-credential-hunting memory",
     },
     "grep_token_hunting": {
-        "pattern": r"\bgrep\s+.*(?:token|secret|password|api[_-]?key|auth)\b",
+        "pattern": r"\bgrep\s+.*(?:token|secret|password|api[_-]?key|auth)\b",  # hygiene-ok
         "description": "Credential hunting pattern forbidden",
         "fix": "Specify exact transport and allowed env vars instead",
     },
