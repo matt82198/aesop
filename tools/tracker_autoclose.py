@@ -35,7 +35,7 @@ import json
 import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Import common utilities
@@ -170,7 +170,7 @@ def autoclose_items(tracker_data, dry_run=False, state_root=None):
             # Auto-close this item
             if not dry_run:
                 item["status"] = "done"
-                item["completed_at"] = datetime.utcnow().isoformat() + "Z"
+                item["completed_at"] = datetime.now(timezone.utc).isoformat()
                 # Append to notes
                 evidence = f"RECONCILED: PR #{merged_pr} merged"
                 if notes:
