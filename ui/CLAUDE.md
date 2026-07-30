@@ -35,7 +35,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **csrf.py**: Session-token generation (atomic O_EXCL 0600 mode) + `validate_csrf_request()` (Origin/Referer check + X-Aesop-Token header). `init()` sets `SESSION_TOKEN` (43-char URL-safe base64). Token persisted to `state/.ui-session-token` (readable only by owner).
 
-**collectors.py**: Read-only data collectors (heartbeats, repos, events, alerts, messages, backlog parse), tracker CRUD, and SSE section snapshots. Functions: `_snapshot_data`, `_snapshot_tracker`, `_snapshot_orchestrator_status`, `drain_tracker_inbox`, `get_alerts`, `get_heartbeat_status`, `get_agent_lifecycle_events` (wave-29: agent state transitions from transcript analysis), etc.
+**collectors.py**: Read-only data collectors (heartbeats, repos, events, alerts, messages, backlog parse), tracker CRUD via WriteAPI, and SSE section snapshots. Functions: `_snapshot_data`, `_snapshot_tracker`, `_snapshot_orchestrator_status`, `drain_tracker_inbox`, `get_alerts`, `get_heartbeat_status`, `get_agent_lifecycle_events` (wave-29: agent state transitions from transcript analysis), etc. **Inc 1 (2026-07-30):** Tracker CRUD (`create_tracker_item`, `update_tracker_item`, `delete_tracker_item`) now routes through `state_store.write_api.WriteAPI`, which provides atomic append + render under OCC. Deleted independent `save_tracker()` render path. `load_tracker()` still reads `tracker.json` as a cache.
 
 **agents.py**: Agent transcript reading (`get_fleet_agents`, `extract_agent_dispatch_prompt`, `get_agent_detail`), path-traversal-safe agent-id handling via `_AGENT_ID_FORBIDDEN`.
 
@@ -115,7 +115,11 @@ Realtime via `GET /events` (ThreadingHTTPServer required). 6 sections (data/back
 
 ## State Store Integration
 
-Dual-path: write via event-sourced SQLite WAL (`state/tracker_events.db`), read via `tracker.json` projection (committed to git). Render-failure recovery: falls back to last-known good export.
+**Inc 1 consolidation (2026-07-30):**
+- Write: All tracker CRUD routes through `state_store.write_api.WriteAPI`, which appends events to SQLite and renders views atomically via `state_store.materialize`.
+- Read: `load_tracker()` reads the materialized `tracker.json` (git-ignored, gitignored, rebuildable — NOT committed). `tracker.json` is a derived view of the event store, kept current by WriteAPI.
+- Canonical render path: `materialize_tracker()` (one pure function) — all callers use this, not independent render logic.
+- Recovery: `python tools/state_rebuild.py --all` rebuilds views from event store with zero data loss.
 
 ## Configuration
 

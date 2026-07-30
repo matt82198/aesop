@@ -310,6 +310,132 @@ class WriteAPI:
 
         return created_items[item_id]
 
+    def tracker_update_item(
+        self,
+        item_id: str,
+        update_data: dict,
+        actor: str = "api",
+    ) -> dict:
+        """Update an existing tracker item with arbitrary fields (event-sourced).
+
+        Appends an item_updated event with the patch data, then re-renders tracker.json
+        atomically. Fail-closed: event append failure blocks projection write.
+
+        Args:
+            item_id: The item UUID to update
+            update_data: Dict with fields to update (id will be added if missing)
+            actor: Actor performing the update (default "api")
+
+        Returns:
+            dict: The updated item from the tracker projection
+
+        Raises:
+            ValueError: If item_id not found or other validation failure
+            WriteConflict: If projection write fails due to concurrent modification
+        """
+        store = self._make_store()
+
+        # Read current tracker to verify item exists
+        current_tracker = self._load_tracker_safe()
+        current_items = {item["id"]: item for item in current_tracker.get("items", [])}
+
+        if item_id not in current_items:
+            raise ValueError(f"Item not found: {item_id}")
+
+        # Build the update payload (ensure id is present)
+        update_payload = {"id": item_id}
+        update_payload.update(update_data)
+
+        # CRITICAL: Capture on-disk hash at operation START (before event append)
+        start_disk_hash = None
+        if self.tracker_file.exists():
+            try:
+                current_on_disk = json.loads(
+                    self.tracker_file.read_text(encoding="utf-8")
+                )
+                start_disk_hash = self._compute_content_hash(current_on_disk)
+            except Exception:
+                pass
+
+        # Append the event (fail-closed: if this fails, no projection write)
+        try:
+            store.append("tracker", "item_updated", update_payload, actor)
+        except Exception as e:
+            raise ValueError(f"Failed to append update event: {e}") from e
+
+        # Re-render the projection atomically
+        self._render_tracker_atomic(store, start_disk_hash=start_disk_hash)
+
+        # Return the updated item from the freshly projected state
+        updated_tracker = self._load_tracker_safe()
+        updated_items = {item["id"]: item for item in updated_tracker.get("items", [])}
+
+        if item_id not in updated_items:
+            raise ValueError(f"Item disappeared after update: {item_id}")
+
+        return updated_items[item_id]
+
+    def tracker_archive_item(
+        self,
+        item_id: str,
+        actor: str = "api",
+    ) -> dict:
+        """Archive (soft-delete) an existing tracker item.
+
+        Appends an item_archived event, then re-renders tracker.json atomically.
+
+        Args:
+            item_id: The item UUID to archive
+            actor: Actor performing the archive (default "api")
+
+        Returns:
+            dict: The archived item from the tracker projection
+
+        Raises:
+            ValueError: If item_id not found or other validation failure
+            WriteConflict: If projection write fails due to concurrent modification
+        """
+        store = self._make_store()
+
+        # Read current tracker to verify item exists
+        current_tracker = self._load_tracker_safe()
+        current_items = {item["id"]: item for item in current_tracker.get("items", [])}
+
+        if item_id not in current_items:
+            raise ValueError(f"Item not found: {item_id}")
+
+        # Build the archive payload
+        archive_payload = {"id": item_id}
+
+        # CRITICAL: Capture on-disk hash at operation START
+        start_disk_hash = None
+        if self.tracker_file.exists():
+            try:
+                current_on_disk = json.loads(
+                    self.tracker_file.read_text(encoding="utf-8")
+                )
+                start_disk_hash = self._compute_content_hash(current_on_disk)
+            except Exception:
+                pass
+
+        # Append the event
+        try:
+            store.append("tracker", "item_archived", archive_payload, actor)
+        except Exception as e:
+            raise ValueError(f"Failed to append archive event: {e}") from e
+
+        # Re-render the projection atomically
+        self._render_tracker_atomic(store, start_disk_hash=start_disk_hash)
+
+        # Return the archived item from the freshly projected state
+        updated_tracker = self._load_tracker_safe()
+        updated_items = {item["id"]: item for item in updated_tracker.get("items", [])}
+
+        if item_id not in updated_items:
+            raise ValueError(f"Item disappeared after archive: {item_id}")
+
+        return updated_items[item_id]
+
     def rebuild_projection(self) -> None:
         """Rebuild tracker.json from the event store.
 
