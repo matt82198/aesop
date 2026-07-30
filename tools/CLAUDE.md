@@ -57,7 +57,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `import_cycle_check.py` — AST-based import cycle detector for Python modules
 - `inbox_drain.py` — Drain UI inbox submissions
 - `init_project.py` — Project scaffolder (`aesop init`): creates CLAUDE.md, config, state dir, CI template, pre-push hook
-- `instance_manager.py` — Multi-instance coordination CLI (register/heartbeat/list/claim/release/status)
+- `instance_manager.py` — Multi-instance coordination CLI (register/heartbeat/list/claim/release/status); respects AESOP_STATE_ROOT env var for db path; --json flag for JSON output on all subcommands; validates status response is dict (exit 2 on contract violation)
 - `incident_report.py` — Incident log generator: mines git history for operational failures (fake-green, ci-drift, test-pollution, flake, conflict, stall, gate-activation, doc-invented); generates docs/INCIDENTS.md table; CLI: `[--repo PATH]` (print) | `--regenerate [--output FILE]` | `--check` (drift exit 1); all output deterministic, idempotent
 - `latency_report.py` — Wave latency report generator: parses wave journals/bench results/BUILDLOG timestamps into per-wave, per-phase, and percentile timing breakdowns with explicit estimated-vs-measured caveats; CLI: `[--out docs/LATENCY.md]`
 - `launch_tui.py` — Spawn bash TUI script in detached terminal

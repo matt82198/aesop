@@ -7,12 +7,16 @@ Covers:
   - Conflict detection (two instances claiming same file)
   - Multiple concurrent instances
   - Error handling and fail-closed semantics
+  - Environment variable fallback for database path
+  - JSON output consistency
+  - Status response contract validation
 
 Uses temporary SQLite databases to avoid pollution; enforces isolation per test.
 """
 import json
 import os
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
@@ -35,6 +39,7 @@ from state_store.instance_projection import (
     get_all_claimed_files,
     detect_stale_instances,
 )
+from tools.instance_manager import resolve_db_path
 
 
 class TestInstanceRegistration(unittest.TestCase):
@@ -544,6 +549,227 @@ class TestComplexScenarios(unittest.TestCase):
         all_claimed = get_all_claimed_files(self.store)
         for inst_id, expected_files in zip(instances, file_sets):
             self.assertEqual(set(all_claimed[inst_id]), set(expected_files))
+
+
+class TestEnvFallback(unittest.TestCase):
+    """Test environment variable fallback for database path."""
+
+    def test_resolve_db_path_with_cli_arg(self):
+        """CLI --db argument takes precedence."""
+        path = resolve_db_path("custom/path.db")
+        self.assertEqual(path, "custom/path.db")
+
+    def test_resolve_db_path_with_env_var(self):
+        """AESOP_STATE_ROOT environment variable is used when no CLI arg."""
+        old_env = os.environ.get("AESOP_STATE_ROOT")
+        try:
+            os.environ["AESOP_STATE_ROOT"] = "/tmp/state_root"
+            path = resolve_db_path(None)
+            self.assertTrue(path.endswith("state.db"))
+            self.assertIn("state_root", path)
+        finally:
+            if old_env:
+                os.environ["AESOP_STATE_ROOT"] = old_env
+            else:
+                os.environ.pop("AESOP_STATE_ROOT", None)
+
+    def test_resolve_db_path_default(self):
+        """Default path when no CLI arg or env var."""
+        old_env = os.environ.get("AESOP_STATE_ROOT")
+        try:
+            os.environ.pop("AESOP_STATE_ROOT", None)
+            path = resolve_db_path(None)
+            self.assertEqual(path, "./state/state.db")
+        finally:
+            if old_env:
+                os.environ["AESOP_STATE_ROOT"] = old_env
+
+    def test_resolve_db_path_priority(self):
+        """CLI arg takes priority over env var."""
+        old_env = os.environ.get("AESOP_STATE_ROOT")
+        try:
+            os.environ["AESOP_STATE_ROOT"] = "/tmp/env_root"
+            path = resolve_db_path("cli_path.db")
+            self.assertEqual(path, "cli_path.db")
+        finally:
+            if old_env:
+                os.environ["AESOP_STATE_ROOT"] = old_env
+            else:
+                os.environ.pop("AESOP_STATE_ROOT", None)
+
+
+class TestJsonOutput(unittest.TestCase):
+    """Test --json flag produces valid JSON for all subcommands."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.temp_dir.name, "test.db")
+        self.store = StateAPI(self.db_path)
+        self.script_path = os.path.join(ROOT, "tools", "instance_manager.py")
+
+    def tearDown(self):
+        try:
+            self.store.close()
+        except Exception:
+            pass
+        self.temp_dir.cleanup()
+
+    def _run_cli(self, args, use_json=False):
+        """Run instance_manager CLI and return stdout."""
+        cmd = [
+            sys.executable,
+            self.script_path,
+            "--db",
+            self.db_path,
+        ]
+        if use_json:
+            cmd.append("--json")
+        cmd.extend(args)
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.stdout.strip(), result.stderr.strip(), result.returncode
+
+    def test_json_register_output(self):
+        """--json flag produces valid JSON for register command."""
+        stdout, stderr, rc = self._run_cli(["register", "host1:1:abc", "host1", "1"], use_json=True)
+        self.assertEqual(rc, 0, f"stderr: {stderr}")
+
+        data = json.loads(stdout)
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["instance_id"], "host1:1:abc")
+
+    def test_json_heartbeat_output(self):
+        """--json flag produces valid JSON for heartbeat command."""
+        # Register first
+        self._run_cli(["register", "host1:1:abc", "host1", "1"])
+
+        # Heartbeat with --json
+        stdout, stderr, rc = self._run_cli(["heartbeat", "host1:1:abc"], use_json=True)
+        self.assertEqual(rc, 0, f"stderr: {stderr}")
+
+        data = json.loads(stdout)
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["instance_id"], "host1:1:abc")
+
+    def test_json_claim_output(self):
+        """--json flag produces valid JSON for claim command."""
+        # Register first
+        self._run_cli(["register", "host1:1:abc", "host1", "1"])
+
+        # Claim with --json
+        stdout, stderr, rc = self._run_cli(
+            ["claim", "host1:1:abc", "/file1.txt", "/file2.txt"],
+            use_json=True,
+        )
+        self.assertEqual(rc, 0, f"stderr: {stderr}")
+
+        data = json.loads(stdout)
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["instance_id"], "host1:1:abc")
+        self.assertEqual(data["files_claimed"], 2)
+
+    def test_json_release_output(self):
+        """--json flag produces valid JSON for release command."""
+        # Register and claim first
+        self._run_cli(["register", "host1:1:abc", "host1", "1"])
+        self._run_cli(["claim", "host1:1:abc", "/file1.txt"])
+
+        # Release with --json
+        stdout, stderr, rc = self._run_cli(
+            ["release", "host1:1:abc", "/file1.txt"],
+            use_json=True,
+        )
+        self.assertEqual(rc, 0, f"stderr: {stderr}")
+
+        data = json.loads(stdout)
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["instance_id"], "host1:1:abc")
+        self.assertEqual(data["files_released"], 1)
+
+    def test_json_list_output(self):
+        """--json flag works with list command (already JSON)."""
+        # Register instances first
+        self._run_cli(["register", "host1:1:abc", "host1", "1"])
+        self._run_cli(["register", "host2:2:def", "host2", "2"])
+
+        # List with --json
+        stdout, stderr, rc = self._run_cli(["list"], use_json=True)
+        self.assertEqual(rc, 0, f"stderr: {stderr}")
+
+        data = json.loads(stdout)
+        self.assertIsInstance(data, list)
+        self.assertEqual(len(data), 2)
+
+    def test_json_status_output(self):
+        """--json flag wraps status response."""
+        # Register first
+        self._run_cli(["register", "host1:1:abc", "host1", "1"])
+
+        # Status with --json
+        stdout, stderr, rc = self._run_cli(["status", "host1:1:abc"], use_json=True)
+        self.assertEqual(rc, 0, f"stderr: {stderr}")
+
+        data = json.loads(stdout)
+        # With --json, the status is wrapped in {"status": {...}}
+        self.assertIn("status", data)
+        self.assertIsInstance(data["status"], dict)
+        self.assertEqual(data["status"]["instance_id"], "host1:1:abc")
+
+    def test_plain_output_backward_compat(self):
+        """Default (non-JSON) output remains backward compatible."""
+        # Register without --json
+        stdout, stderr, rc = self._run_cli(["register", "host1:1:abc", "host1", "1"])
+        self.assertEqual(rc, 0, f"stderr: {stderr}")
+
+        # Plain text output
+        self.assertIn("registered:", stdout)
+        self.assertNotIn("{", stdout)  # Not JSON
+
+
+class TestStatusContractValidation(unittest.TestCase):
+    """Test status response contract validation."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = os.path.join(self.temp_dir.name, "test.db")
+        self.store = StateAPI(self.db_path)
+
+    def tearDown(self):
+        try:
+            self.store.close()
+        except Exception:
+            pass
+        self.temp_dir.cleanup()
+
+    def test_status_returns_dict_on_success(self):
+        """get_instance_status returns a dict for registered instance."""
+        instance_id = "host1:1234:abc123"
+        register_instance(self.store, instance_id, "host1", 1234)
+
+        status = get_instance_status(self.store, instance_id)
+        self.assertIsInstance(status, dict, "Status must be a dict")
+        self.assertIn("instance_id", status)
+        self.assertIn("status", status)
+
+    def test_status_returns_none_for_nonexistent(self):
+        """get_instance_status returns None for non-existent instance."""
+        status = get_instance_status(self.store, "nonexistent:0:xyz")
+        self.assertIsNone(status)
+
+    def test_status_dict_has_required_fields(self):
+        """Status dict contains all required fields."""
+        instance_id = "host1:1234:abc123"
+        register_instance(self.store, instance_id, "host1", 1234)
+
+        status = get_instance_status(self.store, instance_id)
+        required_fields = ["instance_id", "hostname", "pid", "status", "registered_at", "last_heartbeat"]
+        for field in required_fields:
+            self.assertIn(field, status, f"Status must contain '{field}'")
 
 
 if __name__ == "__main__":
