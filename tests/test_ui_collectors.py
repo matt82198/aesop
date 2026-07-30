@@ -84,7 +84,7 @@ class TestDataSourceGating(unittest.TestCase):
             initial_events = data1['events']
 
             # Add new data without changing mtime (by sleeping minimally)
-            time.sleep(0.01)
+            time.sleep(0.01)  # sleep-ok
             log_file.write_text("initial event\nnew event\n", encoding='utf-8')
             # Touch to update mtime
             os.utime(str(log_file), None)
@@ -103,7 +103,7 @@ class TestDataSourceGating(unittest.TestCase):
             initial_alerts = data1['alerts']['count']
 
             # Update file and touch mtime
-            time.sleep(0.01)
+            time.sleep(0.01)  # sleep-ok
             log_file.write_text("ALERT 1\nALERT 2\n", encoding='utf-8')
             os.utime(str(log_file), None)
 
@@ -133,7 +133,7 @@ class TestTranscriptsFingerprintReuse(unittest.TestCase):
             json.dumps({"role": "user", "content": [{"text": "old message"}]}) + "\n",
             encoding='utf-8'
         )
-        time.sleep(0.01)
+        time.sleep(0.01)  # sleep-ok
 
         # Create newer
         messages = []

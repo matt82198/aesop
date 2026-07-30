@@ -109,7 +109,7 @@ class TrackerCSRFTestCase(unittest.TestCase):
                 con.close()
                 return  # Server is ready
             except (OSError, http.client.HTTPException, TimeoutError):
-                time.sleep(0.05)  # Short backoff before next attempt
+                time.sleep(0.05)  # Short backoff before next attempt  # sleep-ok
         raise TimeoutError(f"Server did not become ready within {timeout}s")
 
     def _conn(self):

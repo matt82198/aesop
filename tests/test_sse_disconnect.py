@@ -217,7 +217,7 @@ class DisconnectTestCase(unittest.TestCase):
 
         # Let con1 receive a couple events
         resp1.fp.readline()  # first event
-        time.sleep(0.05)
+        time.sleep(0.05)  # sleep-ok
         resp1.fp.readline()  # second event
 
         # Connect con2 while con1 is still open
@@ -228,11 +228,11 @@ class DisconnectTestCase(unittest.TestCase):
         for _ in range(3):
             line = resp2.fp.readline()
             self.assertTrue(line, "con2 should continue receiving")
-            time.sleep(0.03)
+            time.sleep(0.03)  # sleep-ok
 
         # Now close con1
         con1.close()
-        time.sleep(0.05)
+        time.sleep(0.05)  # sleep-ok
 
         # con2 should still work
         line = resp2.fp.readline()

@@ -84,6 +84,9 @@ Run: `npm run test:py` or `python -m unittest discover -s tests`
   evidence (forensic assertion messages). Local-green alone shipped two wrong fixes in one
   day; the third attempt with mandated repro found the real cause in one round.
 
+### Timer Resolution (Windows CI ~15ms resolution)
+- **time.sleep() enforcement**: Never use `time.sleep()` with values < 0.1 seconds (100ms) in tests; Windows CI timer resolution is ~15ms, so smaller sleeps are unreliable. Add `# sleep-ok` suppression comment for race-condition yields where sleep is not for timing assertions (validated by test_test_hygiene.py AST scanner).
+
 ### Dummy Secrets (Never Literal)
 - Test secrets assembled at runtime via string concat (e.g., `"prefix" + "suffix"`) to evade `secret_scan.py`.
 - Never commit literal `dummy_key_123` or test credentials to any file.

@@ -312,7 +312,7 @@ class TestRotateLogs(unittest.TestCase):
         # Append lines while rotation happens
         def append_concurrent():
             # Give rotation a moment to start
-            time.sleep(0.05)
+            time.sleep(0.05)  # sleep-ok
             # Append 10 lines to the log
             with open(logfile, 'a') as f:
                 for i in range(251, 261):
