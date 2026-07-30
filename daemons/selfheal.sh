@@ -8,21 +8,6 @@
 
 set -u
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AESOP_ROOT="${AESOP_ROOT:-$(dirname "$SCRIPT_DIR")}"
-CONDUCTOR_ROOT="${CONDUCTOR_ROOT:-$(dirname "$AESOP_ROOT")/conductor3}"
-MODE="${1:-daemon}"
-
-SELFHEAL_LOCK_DIR="$AESOP_ROOT/state/.selfheal-lock"
-SELFHEAL_LOG="$AESOP_ROOT/state/SELFHEAL.log"
-SELFHEAL_STALE_THRESHOLD=600
-
-WATCHDOG_HB="$AESOP_ROOT/state/.watchdog-heartbeat"
-WATCHDOG_STALE_THRESHOLD=600
-
-MONITOR_HB="$CONDUCTOR_ROOT/monitor/.monitor-heartbeat"
-MONITOR_STALE_THRESHOLD=600
-
 ts() {
   date '+%Y-%m-%d %H:%M:%S'
 }
@@ -227,5 +212,20 @@ main() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  AESOP_ROOT="${AESOP_ROOT:-$(dirname "$SCRIPT_DIR")}"
+  CONDUCTOR_ROOT="${CONDUCTOR_ROOT:-$(dirname "$AESOP_ROOT")/conductor3}"
+  MODE="${1:-daemon}"
+
+  SELFHEAL_LOCK_DIR="$AESOP_ROOT/state/.selfheal-lock"
+  SELFHEAL_LOG="$AESOP_ROOT/state/SELFHEAL.log"
+  SELFHEAL_STALE_THRESHOLD=600
+
+  WATCHDOG_HB="$AESOP_ROOT/state/.watchdog-heartbeat"
+  WATCHDOG_STALE_THRESHOLD=600
+
+  MONITOR_HB="$CONDUCTOR_ROOT/monitor/.monitor-heartbeat"
+  MONITOR_STALE_THRESHOLD=600
+
   main "$@"
 fi
