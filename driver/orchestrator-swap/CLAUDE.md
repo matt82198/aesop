@@ -88,4 +88,4 @@ shape lives in wave_scheduler.py's module docstring.
 
 ## Status
 
-HS-1 + HS-2 seat swap shipped (proof: bench/results/hs2-swap-proof-2026-07-25.md; merge manual in pilot) + RS3-W round-2 robustness + RS5 claim lifecycle.
+HS-1 (unified config) + HS-2 (wave-loop orchestrator integration) + increment 3 (adjudication gate: conservative two-tier escalation) shipped. Proof: bench/results/hs2-swap-proof-2026-07-25.md; adjudication_gate: 28 tests passing. Merge manual in pilot. RS3-W round-2 robustness + RS5 claim lifecycle active.
