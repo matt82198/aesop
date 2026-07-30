@@ -564,6 +564,47 @@ check_tracker_guard() {
   return 0
 }
 
+check_import_resolution() {
+  # Python import resolution validator (guardrail G5).
+  # Parses all staged .py files via AST, extracts import/from-import statements,
+  # resolves each module against repo structure and sys.stdlib_module_names.
+  # Fail-closed (exit 1) if any import cannot resolve.
+  #
+  # Root cause: Agent wrote file with unresolvable import to primary tree
+  # during worktree isolation, bypassing any import-resolution gate.
+  # This guardrail validates all staged .py imports before push.
+  #
+  # Fail-open ONLY for missing optional tool (repo without aesop checkout);
+  # actual resolution failures stay fail-closed.
+  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local import_check_script="$aesop_root/tools/import_resolution_check.py"
+
+  if [ ! -f "$import_check_script" ]; then
+    log_event "import_check_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; import resolution check skipped\n' >&2
+    log_event "import_check_skipped_no_python"
+    return 0
+  fi
+
+  local check_output
+  check_output=$("$py_bin" "$import_check_script" 2>&1)
+  local check_exit_code=$?
+
+  if [ $check_exit_code -ne 0 ]; then
+    if [ -n "$check_output" ]; then
+      printf '%s\n' "$check_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
 log_event() {
   # Finding 1 & 2: Acquire lock before read-modify-append, add seq field, update sidecar
   local event_type="$1"
@@ -1232,6 +1273,12 @@ main() {
   if ! check_secret_scan <<< "$prepush_stdin"; then
     printf 'Error: Secret scan failed. Push blocked.\n' >&2
     log_block "secret_scan_failure"
+    exit 1
+  fi
+
+  if ! check_import_resolution; then
+    printf 'Error: Python import resolution check failed. Push blocked.\n' >&2
+    log_block "import_check_failure"
     exit 1
   fi
 

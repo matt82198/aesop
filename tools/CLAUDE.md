@@ -56,6 +56,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `health.js`, `healthcheck.py` — Fleet health aggregator (heartbeat/alert/orchestrator status); health.js wraps Python
 - `heartbeat.py` — Single-instance loop liveness registry
 - `import_cycle_check.py` — AST-based import cycle detector for Python modules
+- `import_resolution_check.py` — Guardrail G5: Python import resolution validator (parses staged .py files via AST, resolves imports against repo structure + stdlib, fail-closed on unresolvable modules); catches isolation escapes where agent writes to primary tree with unresolvable imports; CLI: no args (exit 0=all resolvable/1=unresolvable); logs audit trail to state/IMPORT-AUDIT.log; integrated into pre-push-policy.sh after secret_scan
 - `inbox_drain.py` — Drain UI inbox submissions
 - `init_project.py` — Project scaffolder (`aesop init`): creates CLAUDE.md, config, state dir, CI template, pre-push hook
 - `instance_manager.py` — Multi-instance coordination CLI (register/heartbeat/list/claim/release/status); respects AESOP_STATE_ROOT env var for db path; --json flag for JSON output on all subcommands; validates status response is dict (exit 2 on contract violation)
