@@ -1,6 +1,6 @@
 # Aesop Documentation
 
-Aesop is an autonomous developer system that crawls into any repository and orchestrates intelligent work. It ranks tasks, dispatches parallel Haiku agents, verifies merges, audits the work, and feeds the next iteration. **State persists across multiple instances via a durable SQLite event log**, so your whole team uses one coordinated system.
+Aesop is an autonomous developer system that crawls into any repository and orchestrates intelligent work. It ranks tasks, dispatches parallel Haiku agents, verifies merges, audits the work, and feeds the next iteration. **State is durable and single-instance by design** — git-tracked checkpoints plus an event-sourced SQLite log that survives crashes and machine wipes. Multi-instance team coordination is on the roadmap, not shipped; see [TEAM-STATE.md](TEAM-STATE.md) for the current model and the plan.
 
 ---
 
@@ -145,7 +145,7 @@ Once you've completed the adopter journey, use these for operational reference:
 **I need to understand how state survives a crash**
 → [CHECKPOINTING.md](CHECKPOINTING.md)
 
-**I want to understand multi-instance coordination**
+**I want to understand the team-state model (single-instance today; multi-instance is roadmap)**
 → [TEAM-STATE.md](TEAM-STATE.md)
 
 **I want to swap the worker or orchestrator model (Ollama, OpenRouter, OpenAI...)**
