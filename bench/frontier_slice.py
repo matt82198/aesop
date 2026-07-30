@@ -37,6 +37,9 @@ from typing import Callable, Dict, List, Optional, Tuple
 # Import bench utilities if needed
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Module-level error tracking for API runs
+_error_tasks = []  # Populated by run_live_frontier_benchmark on API errors
+
 
 # ============================================================================
 # Task Loading
@@ -241,8 +244,18 @@ def run_live_frontier_benchmark(
         "claude-3-5-opus-20241022": 75.00,
     }
 
-    input_rate = input_cost_per_mtok.get(model, 10.0)
-    output_rate = output_cost_per_mtok.get(model, 30.0)
+    input_rate = input_cost_per_mtok.get(model)
+    output_rate = output_cost_per_mtok.get(model)
+
+    # Label fallback rates clearly when model not in pricing table
+    input_rate_label = ""
+    output_rate_label = ""
+    if input_rate is None:
+        input_rate = 10.0
+        input_rate_label = " [FALLBACK - model not in pricing table]"
+    if output_rate is None:
+        output_rate = 30.0
+        output_rate_label = " [FALLBACK - model not in pricing table]"
 
     estimated_cost_usd = (
         (input_tokens_estimate / 1_000_000) * input_rate +
@@ -251,14 +264,38 @@ def run_live_frontier_benchmark(
 
     print(f"\n{'='*70}")
     print(f"COST ESTIMATE: {len(tasks)} frontier tasks")
-    print(f"  Input:  ~{input_tokens_estimate:,} tokens @ ${input_rate:.2f}/MTok")
-    print(f"  Output: ~{output_tokens_estimate:,} tokens @ ${output_rate:.2f}/MTok")
+    print(f"  Input:  ~{input_tokens_estimate:,} tokens @ ${input_rate:.2f}/MTok{input_rate_label}")
+    print(f"  Output: ~{output_tokens_estimate:,} tokens @ ${output_rate:.2f}/MTok{output_rate_label}")
     print(f"  Total:  ~${estimated_cost_usd:.2f} USD")
     print(f"{'='*70}\n")
 
     if not confirm_spend:
         print("Use --confirm-spend to actually run (without it, exits 2).")
+        if input_rate_label or output_rate_label:
+            print("Note: FALLBACK pricing rates were used in the estimate above.")
         sys.exit(2)
+
+    # Check API key up front (fail-closed) before creating client
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        print("SKIP: ANTHROPIC_API_KEY not set — skipping live run", file=sys.stderr)
+        return ([], 0.0)
+
+    # Check HALT sentinel before starting API calls
+    try:
+        from tools import halt
+    except ImportError:
+        try:
+            import halt
+        except ImportError:
+            halt = None
+
+    if halt:
+        if halt.is_halted():
+            halt_info = halt.get_halt_info()
+            reason = halt_info.get("reason") if halt_info else "(no reason recorded)"
+            print(f"SKIP: HALT sentinel detected — {reason}", file=sys.stderr)
+            return ([], 0.0)
 
     # Import Claude client
     try:
@@ -267,14 +304,17 @@ def run_live_frontier_benchmark(
         print("ERROR: anthropic not installed. Install with: pip install anthropic", file=sys.stderr)
         sys.exit(1)
 
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    client = anthropic.Anthropic(api_key=api_key)
 
+    global _error_tasks
     scores = []
     ground_truth = load_ground_truth()
+    _error_tasks = []  # Reset and track tasks that failed with API errors
 
     for i, task in enumerate(tasks):
         print(f"  [{i+1}/{len(tasks)}] {task.id} ({task.category})...", end=" ", flush=True)
 
+        response_text = None
         try:
             response = client.messages.create(
                 model=model,
@@ -286,11 +326,20 @@ def run_live_frontier_benchmark(
             response_text = response.content[0].text if response.content else ""
             print("OK")
         except Exception as e:
-            response_text = f"(Error: {e})"
-            print(f"ERROR: {e}")
+            # API error: record as status "error", do NOT score
+            error_msg = str(e)
+            print(f"ERROR: {error_msg}")
+            _error_tasks.append({
+                "task_id": task.id,
+                "category": task.category,
+                "error": error_msg,
+            })
+            # Small delay to avoid rate limits even on error
+            time.sleep(0.5)
+            continue  # Skip scoring for error tasks
 
         gt = ground_truth.get(task.id)
-        if gt:
+        if gt and response_text is not None:
             score = score_response(task, response_text, gt)
             scores.append(score)
 
@@ -402,6 +451,12 @@ def main():
     # Print results
     print_results_table(scores, accuracy, args.mode, args.model)
 
+    # Report any API errors (live mode only)
+    if args.mode == "live" and _error_tasks:
+        print(f"\nWARNING: {len(_error_tasks)} task(s) had API errors and were excluded from accuracy:")
+        for error_task in _error_tasks:
+            print(f"  - {error_task['task_id']}: {error_task['error'][:80]}")
+
     # Save results
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -417,6 +472,11 @@ def main():
         "tasks": [asdict(s) for s in scores],
     }
 
+    # Include error tasks if present
+    if _error_tasks:
+        results["error_tasks"] = _error_tasks
+        results["error_count"] = len(_error_tasks)
+
     with open(output_path, "w") as f:
         json.dump(results, f, indent=2)
 
@@ -424,7 +484,11 @@ def main():
 
     # Exit 0 = run completed and every task was scored; accuracy is DATA, not
     # process health (a low FakeTransport score must not read as a crash).
-    return 0 if len(scores) == len(tasks) else 1
+    # If there were API errors (incomplete run), exit 1
+    exit_code = 0 if len(scores) == len(tasks) else 1
+    if _error_tasks:
+        print(f"Exiting with code {exit_code} due to {len(_error_tasks)} error(s)", file=sys.stderr)
+    return exit_code
 
 
 if __name__ == "__main__":

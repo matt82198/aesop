@@ -1,0 +1,30 @@
+[
+  {
+    "path": "tests/fixtures/seam_s_sample_task/repo/test_sample.py",
+    "reason": "AI bug-detection benchmark: add() intentionally returns x*y instead of x+y",
+    "expected_failure_pattern": "AssertionError",
+    "fixture_type": "deliberately_broken_code",
+    "added": "2026-07-30"
+  },
+  {
+    "path": "tests/fixtures/seam_sample_task/repo/main.py",
+    "reason": "AI bug-detection benchmark: count() intentionally has off-by-one error (len(items)+1)",
+    "expected_failure_pattern": "AssertionError",
+    "fixture_type": "deliberately_broken_code",
+    "added": "2026-07-30"
+  },
+  {
+    "path": "bench/fixtures/mutation_fault_fixture.py",
+    "reason": "Mutation testing fixture: correct code with intentional gaps in test coverage",
+    "expected_failure_pattern": "null",
+    "fixture_type": "intentional_coverage_gap",
+    "added": "2026-07-30"
+  },
+  {
+    "path": "bench/fixtures/test_mutation_fault_fixture.py",
+    "reason": "Mutation testing fixture: deliberately incomplete test suite to measure mutation tool accuracy",
+    "expected_failure_pattern": "null",
+    "fixture_type": "intentional_coverage_gap",
+    "added": "2026-07-30"
+  }
+]

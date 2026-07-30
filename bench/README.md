@@ -21,6 +21,27 @@ truth, proven correct against a zero-cost mock runner. Producing an actual verdi
 tokens against real models and should be reported as its own dated result, not
 folded into this scaffold.
 
+## Fixture intent manifest
+
+Deliberately-broken fixtures used for AI bug-detection benchmarks and mutation-testing validation are tracked in `fixtures-intent.json`. Each entry documents:
+- **path** — fixture file location (repo-relative)
+- **reason** — why this fixture is intentionally broken/incomplete
+- **fixture_type** — `deliberately_broken_code` (tests fail by design) or `intentional_coverage_gap` (correct code with test gaps)
+- **added** — ISO date when fixture was added
+
+This manifest allows CI and analysis tools to distinguish benchmark fixtures from real regressions. Validate with:
+
+```bash
+python tools/fixture_intent_check.py --root .
+python tools/fixture_intent_check.py --root . --json  # JSON output for CI
+```
+
+Fixtures included:
+- `tests/fixtures/seam_s_sample_task/repo/test_sample.py` — add() returns x*y (tests fail)
+- `tests/fixtures/seam_sample_task/repo/main.py` — count() has off-by-one (tests fail)
+- `bench/fixtures/mutation_fault_fixture.py` — correct code with intentional coverage gaps
+- `bench/fixtures/test_mutation_fault_fixture.py` — incomplete test suite (mutation tool validation)
+
 ## What's in here
 
 - `tasks.jsonl` — 12 held-out tasks, one JSON object per line. Each task has:
@@ -31,6 +52,15 @@ folded into this scaffold.
 - `ground_truth.jsonl` — one JSON object per line, keyed by `id`:
   - exact tasks: `{"id": ..., "expected": "<string>"}`
   - regex tasks: `{"id": ..., "expected_regex": "<pattern>"}`
+- `frontier_eligibility.py` — Frontier slice eligibility checks (task difficulty thresholds).
+- `probe_refusals.py` — Refusal-probe harness: detects model refusals on edge-case prompts.
+- `run_seam_s.py` — Seam study runner (Sonnet model).
+- `run_seam_u.py` — Seam study runner (user-specified model).
+- `METHODOLOGY.md` — Pre-registration record, amendments, and scoring methodology.
+- `RESULTS-INDEX.md` — Index of all dated benchmark result files.
+- `SEAM-STUDY-PREREG.md` — Pre-declared design, success criteria, and ceiling rule.
+- `seam_tasks/` — Seam study task definitions and ground truth.
+- `ext120/` — Extended 120-task benchmark set and ground truth.
 - `tools/bench_runner.py` (repo root `tools/`, not under `bench/`) — the scorer
   and CLI. See below.
 
@@ -430,3 +460,35 @@ Every regex ground truth now includes two validation fields:
 Validation is machine-checked: `tests/test_frontier_slice.py::TestGroundTruthValidation::test_regex_ground_truth_has_exemplar_and_counter` asserts that every exemplar matches and every counter_example fails.
 
 **Offline accuracy with tightened patterns: 55.0% (11/20)** — represents the FakeTransport mock runner's performance against substance-demanding patterns. The mock runner is weak on semantic judgment and multi-step reasoning; this reflects its limited instruction-following, not a ceiling for real models. (P2 gate-2 round-2 fix: broadened ft08 and ft15 synonym alternations to reduce false negatives.)
+
+## Cost & Error Handling
+
+### Unknown Model Pricing
+
+When a model tier is not found in the pricing table, runners (`run_seam_u.py`, `frontier_slice.py`):
+- Log a WARNING to stderr: `unknown model pricing for tier '<tier>' — cost marked as UNKNOWN`
+- Set `cost_usd: null` in results for that task
+- Add `cost_note: "unknown-model-pricing:<tier>"` to results
+- **Never silently report $0.00 cost** (which could hide billing surprises) <!-- metrics-verified: design_policy -->
+
+Fallback pricing estimates (when model not in table) are clearly labeled as `[FALLBACK - model not in pricing table]` in cost estimate output.
+
+### API Errors & Incomplete Runs
+
+When a live API call fails (network error, 401, 429, etc.):
+- The task is recorded with `status: "error"` (not scored)
+- Error tasks are **excluded from accuracy calculation** (not in numerator or denominator)
+- Error details are stored in the results JSON under `error_tasks` array
+- Exit code is 1 if any task had an error (incomplete run)
+- Exit code is 0 only if all tasks completed without errors
+
+This ensures API errors cannot fake-green the accuracy score by returning malformed responses that accidentally match ground truth.
+
+### Cost Ceiling & HALT Gate
+
+Before any live API run, both runners check for the `.HALT` sentinel (tools/halt.py):
+- If HALT is active: the run is skipped with a "SKIP" message to stderr
+- Exit is 0 (clean skip, not a failure)
+- This allows stopping active runs when cost ceiling is breached
+
+The pattern mirrors the repo rule: "missing key = SKIP + report, never hunt, never crash late."
