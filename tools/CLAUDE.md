@@ -36,6 +36,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `cost_ceiling.py` — Cost-ceiling checker; trips HALT kill-switch on token limits exceeded
 - `cost_forecast.py` — Cost forecasting tool: weighted-moving-average daily burn rate, predicted monthly spend, days-to-ceiling; reads fleet ledger; CLI: `--ceiling DOLLARS [--ledger PATH] [--json] [--check] [--help]`; stdlib-only, fail-closed on unknown flags
 - `cost_projection.py` — Live burn-rate observability; projects end-of-wave spend and fires threshold alerts at 70% and 90% of ceiling; CLI: `--projection [--window N] [--json]` or `--check-alerts --wave N [--json]`; idempotent per wave via flag files under state/
+- `dep_graph.py` — Python module dependency graph generator (Mermaid/DOT/JSON); CLI: `--paths DIR... --root DIR --format mermaid|dot|json --output FILE`; highlights cycles; stdlib-only
 - `defect_escape.py` — Haiku code quality telemetry (fix-forward rate, first-try estimate); CLI: `--repo <path> --since <ISO date> [--json]`
 - `doctor.js` — Preflight checklist for adopter onboarding (diagnostic checks: config, hooks, CLAUDE.md, state, heartbeats, git identity, secret-scan; exit 0=all pass, 1=failed)
 - `ensure_state.py` — Scaffold STATE.md and BUILDLOG.md templates (writes via state_store WriteAPI: scaffold emits state_md_written + buildlog events)
@@ -79,8 +80,8 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `self_stats.py` — Git-derived metrics counter + README block generator
 - `session_usage_summary.py` — Aggregate token usage across session transcripts
 - `spec_contract_validator.py` — Guardrail G4: AST-scans agent-dispatch call sites (`agent(`/`Agent(`/`Task(`/`subagent_type=`/`agentType=`) in driver/*.py, monitor/*.py, tools/*.py for forbidden flags (--admin/--auto/--force/--no-verify), credential-hunting + env-var allowlist violations, missing isolation marker on file-writing prompts, and advisory role-routing (unknown specialist types); `# contract-ok` inline comment suppresses a call site; CLI: `--check` (default) | `--json` | `--paths DIR_OR_FILE...` | `--root PATH`; stdlib only, ASCII output; exit 0=clean/1=findings/2=error
-- `shadow_adjudication.py` — Orchestrator-swap shadow wave: replays the ground-truth adjudication corpus (driver/decisions/shadow/) through OrchestratorDriver.decide() on a challenger backend; blind (labels never reach prompts), 40-call cap, scorecard + success-bar to bench/results/; --offline FakeTransport for tests; --live builds the seat from aesop.config.json seats.orchestrator (--model/--config override; hosted seats need their api_key_env, is_local none)
-- `seated_shadow_adjudication.py` — Seated variant of the shadow wave (increment 4a): builds context packs from the REAL file brain (STATE.md/tracker) + real cited repo code, routes through the completed OrchestratorDriver.decide() seam; frontier-first + early-abort; measures whether real seated context changes adjudication vs the decontextualized ladder; --offline/--live (seat from seats.orchestrator; --model/--config override), --repeat N, per-model results to bench/results/
+- `shadow_adjudication.py` — Shadow wave: replay adjudication corpus through OrchestratorDriver.decide() on challenger backend; blind, 40-call cap; --offline/--live (seats.orchestrator, --model/--config override)
+- `seated_shadow_adjudication.py` — Seated shadow wave (inc 4a): real file-brain context packs through OrchestratorDriver.decide(); --offline/--live, --repeat N, per-model results to bench/results/
 - `stall_check.py` — Automated agent transcript stall detector; optional --active-from flag refines STALLED verdict to require both stale mtime AND active task file; --emit-recovery emits JSON advisories; --recovery-dir writes recovery-<agent>.json files (idempotent)
 - `status.js` — One-shot fleet status snapshot (watchdog/monitor heartbeat age, dashboard port reachability, git branch and working tree state)
 - `subprocess_guard.py` — G6 AST guard for subprocess anti-patterns in tests/ (bare subprocess without cwd, shell=True, os.system); `# subprocess-ok` suppresses; CLI: `[--check] [--json] [--paths PATH ...]`; exit 0=clean, 1=findings
@@ -128,8 +129,11 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 
 CLI: `secret_scan.py --staged [--repo PATH]` | `--history [--repo PATH]` | `--from-stdin [--repo PATH]` | `PATH [PATH...]`
 
-Exit: 0=clean, 1=findings, 2=error. Pragma: `# secretscan: allow-pattern-docs` (pattern findings only; filenames always fatal).
-`--from-stdin`: Read newline-delimited file paths from stdin (e.g., `git diff --name-only | secret_scan.py --from-stdin`).
+Exit: 0=clean, 1=findings, 2=error. Pragma escape (pattern findings only; filenames always fatal):
+```
+# secretscan: allow-pattern-docs
+```
+`--from-stdin`: Read newline-delimited file paths from stdin for direct scanning (e.g., `git diff --name-only | secret_scan.py --from-stdin`).
 
 ## agent-forensics.sh — Behavior forensics
 
