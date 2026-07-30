@@ -20,6 +20,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 
 - `agent_prompt_hygiene.py` — Gate detecting forbidden patterns in agent/dispatch prompt templates
 - `alert_bridge.py` — Slack/Discord webhook bridge for SECURITY-ALERTS
+- `bash_guard_check.py` — BASH_SOURCE exec guard validator for shell scripts; detects missing guards in scripts with functions + top-level commands
 - `bench_api_runner.py` — Bench v2+v3 via Anthropic API (BENCH_API_KEY, API-only per bench-no-cli-fallback rule); reuses bench_runner machinery; CLI: `bench_api_runner.py <v2|v3|all> <model...>`
 - `bench_results_cache.py` — Append-only benchmark results journal (state/bench-runs.jsonl); idempotent dedup by model+timestamp; stdlib-only
 - `bench_runner.py` — Held-out benchmark runner + scorer (Haiku/Sonnet/Opus pluggable)
@@ -41,6 +42,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `doctor.js` — Preflight checklist for adopter onboarding (diagnostic checks: config, hooks, CLAUDE.md, state, heartbeats, git identity, secret-scan; exit 0=all pass, 1=failed)
 - `ensure_state.py` — Scaffold STATE.md and BUILDLOG.md templates (writes via state_store WriteAPI: scaffold emits state_md_written + buildlog events)
 - `eod_sweep.py` — End-of-day safety check (dirty trees, unpushed commits); verdict appended to BUILDLOG.md via state_store WriteAPI (--buildlog filename must be BUILDLOG.md, fail-closed)
+- `file_size_lint.py` — Python file size linter (flags oversized modules)
 - `fleet.js` — One-shot fleet snapshot (JSON: agents, heartbeats, tracker, orchestrator status; Node STDLIB only)
 - `fleet_ledger.py` — Append-only cost ledger with harvest/rotate
 - `fleet_prompt_extractor.py` — Extract and deduplicate Agent/Task spawn prompts
@@ -52,7 +54,10 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `health_score.py` — Readiness score (0-100) for primed projects; CLI: `--cwd <path> [--json]`; checks: config, hooks, CLAUDE.md, writable, heartbeats, git-identity, secret-scan (weighted scoring)
 - `health.js`, `healthcheck.py` — Fleet health aggregator (heartbeat/alert/orchestrator status); health.js wraps Python
 - `heartbeat.py` — Single-instance loop liveness registry
+- `import_cycle_check.py` — AST-based import cycle detector for Python modules
 - `inbox_drain.py` — Drain UI inbox submissions
+- `init_project.py` — Project scaffolder (`aesop init`): creates CLAUDE.md, config, state dir, CI template, pre-push hook
+- `instance_manager.py` — Multi-instance coordination CLI (register/heartbeat/list/claim/release/status)
 - `incident_report.py` — Incident log generator: mines git history for operational failures (fake-green, ci-drift, test-pollution, flake, conflict, stall, gate-activation, doc-invented); generates docs/INCIDENTS.md table; CLI: `[--repo PATH]` (print) | `--regenerate [--output FILE]` | `--check` (drift exit 1); all output deterministic, idempotent
 - `latency_report.py` — Wave latency report generator: parses wave journals/bench results/BUILDLOG timestamps into per-wave, per-phase, and percentile timing breakdowns with explicit estimated-vs-measured caveats; CLI: `[--out docs/LATENCY.md]`
 - `launch_tui.py` — Spawn bash TUI script in detached terminal
@@ -60,10 +65,12 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `lock.mjs` — Fail-closed atomic lock (exponential backoff + stale-lock detection)
 - `merge_train.py` — Serial merge train: update-branch, wait for CI, merge, verify MERGED state (handles strict-up-to-date treadmill)
 - `metrics_gate.py` — PR gate for hard numeric claims in markdown
+- `multi_dispatch.py` — Multi-instance-aware dispatch wrapper (checks file claims before dispatch, releases on completion)
 - `mutation_test.py` — Test quality harness via mutation testing (apply code mutations, run tests, report survived mutations as test gaps); CLI: `--target <module.py> --test <test_module.py> [--json]`; exit 0 on valid results (advisory), exit 1 when the sandbox baseline fails (results invalid, fail-closed)
 - `orchestrator_status.py` — Atomic orchestrator status updates
 - `otel_sink.py` — OpenTelemetry tracing integration (spans/metrics emitter for fleet observability)
 - `playwright_common.py` — Shared Playwright harness boilerplate: `free_port()`, `copy_dist()`, `start_server()`, `stop_server()` extracted from verify_*.py to reduce duplication (module for import, not CLI)
+- `port_fidelity_check.py` — Validates port/copy/vendor/migrate dispatch prompts require source path, source-unique marker, and independent verification
 - `portability_check.py` — Shipped-surface gate: scan for hardcoded personal/environment paths (Windows user paths, POSIX home paths, private-machine tokens 'conductor3'/'matt8'); exit 0 clean / 1 with findings; --json output, --root flag for base directory; stdlib only
 - `power_selftest.py` — Health check harness for /power bootstrap
 - `prepublish_scan.py` — Pre-publish full history + staged-changes scan gate
@@ -87,14 +94,23 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `subprocess_guard.py` — G6 AST guard for subprocess anti-patterns in tests/ (bare `subprocess.run(['bash', ...])`/`Popen` without explicit `cwd=`, `shell=True`, explicit `cwd=None`, `os.system()`); suppress via `# subprocess-ok` inline comment; CLI: `[--check] [--json] [--paths PATH ...]` (default scan dir: `tests/`); exit 0=clean, 1=findings; stdlib only, ASCII-only output
 - `svg_to_png.mjs` — Rasterize SVG to PNG via @resvg/resvg-js (lazy import error handling)
 - `test_battery.py` — Local union test battery: runs the 4 harnesses (py/node/sh/ui) as parallel subprocesses with per-harness rc capture, stdin closed, logs to temp; parallel mode sets AESOP_TEST_CHILD_TIMEOUT_MS=90000 for node scaffold children; `--serial` fallback, `--skip <h>`, `--json`; exit 0 only when all harnesses green
-- `tracker_autoclose.py` — Tracker zombie-prevention auto-close gate (guardrail G1): closes items whose linked PRs merged or whose ownsFiles shipped on main; CLI: `[--check | --dry-run]`; exit 0=all resolved, 1=items still open; timezone-aware UTC timestamps
+- `test_coverage_gaps.py` — Test coverage gap finder (identifies untested modules)
+- `todo_tracker.py` — TODO/FIXME/HACK comment tracker for codebase hygiene
+- `tracker_autoclose.py` — Tracker zombie-prevention auto-close gate
+- `tracker_reconcile.py` — Tracker zombie reconciliation tool (detects shipped-but-open items)
+- `wave_history.py` — Wave history CLI for per-wave event store analysis (guardrail G1): closes items whose linked PRs merged or whose ownsFiles shipped on main; CLI: `[--check | --dry-run]`; exit 0=all resolved, 1=items still open; timezone-aware UTC timestamps
 - `tracker_guard.py` — Append-only lane journal + zombie-resurrection fail-closed gate; prevents items in terminal lanes (done/rejected) from re-entering active lanes (ranked/proposed/in-progress/accepted); modes: --seed (bootstrap journal), --check (detect violations, exit 1 if found, default), --enforce (revert zombies to terminal lane); CLI: `tracker_guard.py [--seed | --check | --enforce]`; journaled in state/tracker-journal.jsonl with rotation at 5000 lines
 - `transcript_digest.py` — Digest agent-*.jsonl transcripts into compact redacted per-agent briefs (state/ledger/transcripts-brief.jsonl; deterministic, idempotent, strips paths/emails/tokens)
 - `claudemd_lint.py` — Lint the domain CLAUDE.md layer: doc-pointers resolve, cited npm scripts exist, runtime/state artifacts not flagged, domain cross-refs prohibited; 4 checks: DOC-POINTER, TEST-CMD, DOMAIN-CROSS-REF (domain CLAUDE.md must not reference other domain CLAUDE.md with directives; parent-child refs allowed), line-count; --json; root CLAUDE.md exempt from cross-ref check
 - `claudemd_sync_gate.py` — CLAUDE.md synchronization gate (Guardrail G5): for each domain directory with code changes, verifies the corresponding domain/CLAUDE.md was also modified in the same PR; exempts: test-only changes, docs-only, meta files (stats.json, README.md, CHANGELOG.md, package.json, .nvmrc), .github/ (CI), CLAUDE.md-only changes; CLI: `--check` (default, fail-closed) | `--json` | `--base-ref` [BRANCH] (default main); exit 0=synced, 1=drift, 2=error
+- `auto_merge.py` — Batch PR merge tool (fix-by-default: merge main into broken branches + merge green PRs; `--no-fix`/`--loop`/`--dry-run`/`--json`)
 - `audit_report.py` — Deterministic markdown audit report aggregator (defect_escape, mutation results, lint/drift findings, ledger verdict rates); --out/--strict/--json inputs from machine outputs only
 - `claudemd_drift.py` — Semantic drift detector: CLAUDE.md claims vs disk reality (missing refs, unmapped dirs, dead map entries, absent CLI flags); exit 1 on drift; --json
 - `cost_econ.py` — Cost economics metrics (cost-per-LOC, per-merged-PR, per-wave/backlog-item) from stats.json + fleet ledger; shares ui/cost.py pricing; honesty caveats documented in output
+- `dead_code_check.py` — AST-based dead code detector (unused functions/classes/imports)
+- `dep_graph.py` — Dependency graph analyzer for import relationships
+- `docstring_check.py` — AST-based docstring coverage checker for Python modules
+- `encoding_lint.py` — Encoding lint checker for open() calls missing encoding parameter
 - `dash.js` — Launch the web dashboard (spawns python ui/serve.py with configured port from PORT env var, aesop.config.json, or default 8770)
 - `wave_backlog_analyzer.py` — Pre-wave backlog risk analyzer (per-item risk_level/estimated_retries from git fix-forward history + tracker lanes); warn-level only, --json
 - `wave_templates.py` — Wave-manifest preset generator: instantiate/validate templates/wave-presets/*.json into ready manifests; CLI: `validate [--template saas|data|library|all]` (exits 0=clean / 1=defects per item), `instantiate <preset> --project-name --base-dir [--output FILE]`
@@ -124,26 +140,8 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `watcher_linter.py` — Guardrail G3: watcher/polling anti-pattern linter (mechanizes "no watcher pattern in long runs"); AST-scans tools/monitor/driver/daemons for while-True+sleep loops, watch_/monitor_/poll_-named functions with infinite loops, and subprocess calls inside infinite loops (exempts loops with a break/return/raise/exit -- legitimate bounded poll-until-timeout code is not flagged); string-scans prompt-ish assignments/kwargs/dict-keys for "wait for a monitor/watcher/signal/notification", "poll"/"poll for", "watch for changes" phrasing; suppress via `# watcher-ok` inline comment; CLI: `--check` (default) | `--json` | `--paths DIR...` | `--root DIR`; exit 0=clean/1=findings/2=error; stdlib-only, ASCII output
 - `agent-forensics.sh` — Incident forensics; behavior reconstruction (read-only git plumbing)
 
-## secret_scan.py — Pre-push gate
+## Gates & tests
 
-CLI: `secret_scan.py --staged [--repo PATH]` | `--history [--repo PATH]` | `--from-stdin [--repo PATH]` | `PATH [PATH...]`
-
-Exit: 0=clean, 1=findings, 2=error. Pragma escape (pattern findings only; filenames always fatal):
-```
-# secretscan: allow-pattern-docs
-```
-
-`--from-stdin`: Read newline-delimited file paths from stdin for direct scanning (e.g., `git diff --name-only | secret_scan.py --from-stdin`).
-
-## agent-forensics.sh — Behavior forensics
-
-CLI: `bash tools/agent-forensics.sh <commit>` (print snapshot) | `--diff <commitA> <commitB>` (diff rules/docs)
-
-## Test commands
-
-- **Python**: `npm run test:py` (= `python -m unittest discover -s tests`); a single module: `python -m unittest tests.test_<name>` (tests live in tests/, not tools/; the repo uses unittest, not pytest)
-- **Shell**: `bash -n tools/*.sh && shellcheck tools/*.sh` (syntax + linting)
-- **Node**: `node --check tools/*.mjs` (syntax validation)
-- **Full suite**: `python tools/scanner_selftest.py && python tools/power_selftest.py` (mandatory CI gates)
-
----
+- `secret_scan.py --staged` — pre-push gate (exit 0=clean/1=findings/2=error; `# secretscan: allow-pattern-docs` pragma)
+- `agent-forensics.sh <commit>` — behavior forensics; `--diff <A> <B>` for rules/docs diff
+- **Python**: `npm run test:py`; **Shell**: `bash -n tools/*.sh && shellcheck tools/*.sh`; **Node**: `node --check tools/*.mjs`
