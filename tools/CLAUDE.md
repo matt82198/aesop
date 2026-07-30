@@ -17,21 +17,20 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - **lock.mjs is the ONLY lock implementation**: never reimplement locking in `proposals.mjs` or elsewhere; all proposals/state updates must use fail-closed `lock.mjs` with exponential backoff + stale-lock breaking.
 
 ## Tool index (one-liners)
-
 - `agent_prompt_hygiene.py` — Gate detecting forbidden patterns in agent/dispatch prompt templates
 - `alert_bridge.py` — Slack/Discord webhook bridge for SECURITY-ALERTS
-- `bench_api_runner.py` — Bench v2+v3 via Anthropic API (BENCH_API_KEY, API-only per bench-no-cli-fallback rule); reuses bench_runner machinery; CLI: `bench_api_runner.py <v2|v3|all> <model...>`
-- `bench_results_cache.py` — Append-only benchmark results journal (state/bench-runs.jsonl); idempotent dedup by model+timestamp; stdlib-only
+- `bench_api_runner.py` — Bench v2+v3 via Anthropic API (BENCH_API_KEY, API-only); CLI: `bench_api_runner.py <v2|v3|all> <model...>`
+- `bench_results_cache.py` — Append-only benchmark results journal (state/bench-runs.jsonl); idempotent dedup by model+timestamp
 - `bench_runner.py` — Held-out benchmark runner + scorer (Haiku/Sonnet/Opus pluggable)
-- `build_static_dash.py` — Build a static, self-contained snapshot of the dashboard with demo data for GitHub Pages; starts demo server, captures API state, produces _site/ with fetch/EventSource shim; CLI: `--output DIR`
+- `build_static_dash.py` — Static dashboard snapshot for GitHub Pages (demo data, _site/ output); CLI: `--output DIR`
 - `buildlog.py` — Uniform BUILDLOG.md appender (writes via state_store WriteAPI: entry also lands as buildlog_entry event)
-- `chaos_harness.py` — Chaos-wave resilience harness: offline deterministic fault injection (worker kill, checkpoint corruption, planted secret, heartbeat stall, forced red test) with detection/recovery measurement; CLI: `--offline [--state-root DIR] [--output REPORT.md] [--json REPORT.json]`
+- `chaos_harness.py` — Chaos-wave resilience harness: offline fault injection (worker kill, corruption, planted secret, stall, red test); CLI: `--offline [--state-root DIR] [--output REPORT.md] [--json REPORT.json]`
 - `claudemd_contract.py` — Domain CLAUDE.md contract validator (purpose statement, key sections, non-empty); fail-closed exit 1 on violation, 2 on usage error
-- `ci_merge_wait.py` — CI-gated merge helper (polls gh pr view until SUCCESS; fail-closed: empty rollup=PENDING, --expect-checks requires ALL named checks present AND concluded, --allow-no-checks escape hatch)
+- `ci_merge_wait.py` — CI-gated merge helper (polls gh pr view until SUCCESS; fail-closed: empty rollup=PENDING, --expect-checks, --allow-no-checks)
 - `ci_shard_runner.py` — Shard-aware Python test runner (distributes tracked test files across N shards round-robin; spawn-safe with __main__ guard; used by ci and windows-shard jobs)
 - `ci_workflow_lint.py` — CI workflow linter (YAML parsing, npm ci lockfile checks, test coverage)
-- `crossos_drift.py` — Cross-OS CI drift measurement (Windows vs Linux outcome drift from GitHub Actions history; CLI: `--runs N=10 [--json]`; reports pass rates, divergence set, failing test aggregation; exit 3 on auth failure)
 - `commit_lint.py` — Conventional commit message linter (type/scope/length/trailer checks); CLI: `[--message MSG] [--range RANGE] [--json] [--check]`; exit 0=clean/1=violations/2=error; stdlib-only
+- `crossos_drift.py` — Cross-OS CI drift measurement (Windows vs Linux outcome drift from GitHub Actions history; CLI: `--runs N=10 [--json]`; reports pass rates, divergence set, failing test aggregation; exit 3 on auth failure)
 - `common.py` — Shared utilities (state directory resolution, heartbeat staleness)
 - `cost_ceiling.py` — Cost-ceiling checker; trips HALT kill-switch on token limits exceeded
 - `cost_forecast.py` — Cost forecasting tool: weighted-moving-average daily burn rate, predicted monthly spend, days-to-ceiling; reads fleet ledger; CLI: `--ceiling DOLLARS [--ledger PATH] [--json] [--check] [--help]`; stdlib-only, fail-closed on unknown flags
@@ -40,7 +39,6 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `defect_escape.py` — Haiku code quality telemetry (fix-forward rate, first-try estimate); CLI: `--repo <path> --since <ISO date> [--json]`
 - `doctor.js` — Preflight checklist for adopter onboarding (diagnostic checks: config, hooks, CLAUDE.md, state, heartbeats, git identity, secret-scan; exit 0=all pass, 1=failed)
 - `ensure_state.py` — Scaffold STATE.md and BUILDLOG.md templates (writes via state_store WriteAPI: scaffold emits state_md_written + buildlog events)
-- `encoding_lint.py` — Guardrail G10: enforce encoding='utf-8' on file opens; AST-scans for `open()` without encoding=; allows binary modes; suppress via `# encoding-ok`; CLI: `--check` | `--json` | `--paths DIR...`; stdlib-only
 - `eod_sweep.py` — End-of-day safety check (dirty trees, unpushed commits); verdict appended to BUILDLOG.md via state_store WriteAPI (--buildlog filename must be BUILDLOG.md, fail-closed)
 - `fleet.js` — One-shot fleet snapshot (JSON: agents, heartbeats, tracker, orchestrator status; Node STDLIB only)
 - `fleet_ledger.py` — Append-only cost ledger with harvest/rotate
@@ -49,14 +47,16 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `git_identity_check.py` — Validate repo git user.name/user.email via --expect-name/--expect-email CLI args OR aesop.config.json identity block; verifies .git/config physically (not config cache)
 - `halt.py` — Kill-switch: writes/reads/clears `.HALT` sentinel (daemons/dispatch check it)
 - `handoff_proof.py` — Team-handoff proof: crash-only resume demo on the real driver/wave_loop.py engine offline (control vs interrupted+resumed runs must reach identical terminal state); outputs docs/HANDOFF-CERTIFICATE.md + state/handoff-proof-*.json
-- `health-score.js`, `health_score.py` — Readiness score (0-100) for primed projects (config, hooks, CLAUDE.md, state, heartbeats, git-identity, secret-scan); JS wraps Python; CLI: `--cwd <path> [--json]`
+- `health-score.js` — Readiness score for primed projects (0-100 weighted score: config, git hooks, CLAUDE.md, state writable, daemon heartbeats, git identity, secret-scan runnable)
+- `health_score.py` — Readiness score (0-100) for primed projects; CLI: `--cwd <path> [--json]`; checks: config, hooks, CLAUDE.md, writable, heartbeats, git-identity, secret-scan (weighted scoring)
 - `health.js`, `healthcheck.py` — Fleet health aggregator (heartbeat/alert/orchestrator status); health.js wraps Python
 - `heartbeat.py` — Single-instance loop liveness registry
+- `import_cycle_check.py` — AST-based Python import cycle detector (DFS on internal module graph); CLI: `[--check] [--json] [--root DIR] [--paths DIR...]`; exit 0=clean/1=cycles/2=error
 - `inbox_drain.py` — Drain UI inbox submissions
 - `incident_report.py` — Incident log generator: mines git history for operational failures (fake-green, ci-drift, test-pollution, flake, conflict, stall, gate-activation, doc-invented); generates docs/INCIDENTS.md table; CLI: `[--repo PATH]` (print) | `--regenerate [--output FILE]` | `--check` (drift exit 1); all output deterministic, idempotent
 - `latency_report.py` — Wave latency report generator: parses wave journals/bench results/BUILDLOG timestamps into per-wave, per-phase, and percentile timing breakdowns with explicit estimated-vs-measured caveats; CLI: `[--out docs/LATENCY.md]`
 - `launch_tui.py` — Spawn bash TUI script in detached terminal
-- `list_test_suites.py` — Live test suite inventory (scans tests/ for .mjs/.py/.sh + hooks --test); grouped listing with doc summaries; CLI: `[--repo ROOT]`; deterministic, ASCII-safe
+- `list_test_suites.py` — Generate live test suite inventory: scans filesystem for test files (tests/*.test.mjs, tests/test_*.py, tests/*.test.sh, tests/test_*.sh, tests/test-*.sh, hooks/pre-push-policy.sh --test) and outputs grouped listing with first-line doc summaries; ASCII-safe, deterministic; CLI: `list_test_suites.py [--repo ROOT]`; used in tests/CLAUDE.md docs and CI coverage gates; replaces hand-maintained suite listings (kills conflict magnet in merge conflicts)
 - `lock.mjs` — Fail-closed atomic lock (exponential backoff + stale-lock detection)
 - `merge_train.py` — Serial merge train: update-branch, wait for CI, merge, verify MERGED state (handles strict-up-to-date treadmill)
 - `metrics_gate.py` — PR gate for hard numeric claims in markdown
@@ -64,7 +64,6 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `orchestrator_status.py` — Atomic orchestrator status updates
 - `otel_sink.py` — OpenTelemetry tracing integration (spans/metrics emitter for fleet observability)
 - `playwright_common.py` — Shared Playwright harness boilerplate: `free_port()`, `copy_dist()`, `start_server()`, `stop_server()` extracted from verify_*.py to reduce duplication (module for import, not CLI)
-- `port_fidelity_check.py` — Port-fidelity validator: dispatch prompts with port/copy/vendor/migrate must include source-path + marker-assertion + independent-verification requirements; CLI: `--check [--json] [--paths DIR...] [--root DIR]`; stdlib only
 - `portability_check.py` — Shipped-surface gate: scan for hardcoded personal/environment paths (Windows user paths, POSIX home paths, private-machine tokens 'conductor3'/'matt8'); exit 0 clean / 1 with findings; --json output, --root flag for base directory; stdlib only
 - `power_selftest.py` — Health check harness for /power bootstrap
 - `prepublish_scan.py` — Pre-publish full history + staged-changes scan gate
@@ -88,26 +87,18 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `subprocess_guard.py` — G6 AST guard for subprocess anti-patterns in tests/ (bare `subprocess.run(['bash', ...])`/`Popen` without explicit `cwd=`, `shell=True`, explicit `cwd=None`, `os.system()`); suppress via `# subprocess-ok` inline comment; CLI: `[--check] [--json] [--paths PATH ...]` (default scan dir: `tests/`); exit 0=clean, 1=findings; stdlib only, ASCII-only output
 - `svg_to_png.mjs` — Rasterize SVG to PNG via @resvg/resvg-js (lazy import error handling)
 - `test_battery.py` — Local union test battery: runs the 4 harnesses (py/node/sh/ui) as parallel subprocesses with per-harness rc capture, stdin closed, logs to temp; parallel mode sets AESOP_TEST_CHILD_TIMEOUT_MS=90000 for node scaffold children; `--serial` fallback, `--skip <h>`, `--json`; exit 0 only when all harnesses green
-- `tracker_autoclose.py` — Guardrail G1: auto-close items whose linked PRs merged or ownsFiles shipped; CLI: `[--check | --dry-run]`; exit 0=resolved, 1=open; timezone-aware UTC
-- `tracker_guard.py` — Append-only lane journal + zombie-resurrection gate; modes: --seed, --check (default, exit 1 on violations), --enforce; journaled in state/tracker-journal.jsonl (rotation at 5000)
-- `tracker_reconcile.py` — Zombie detection + reconciliation: scans open items for merged PRs (gh) and git-log evidence; `[--fix] [--json] [--root DIR]`; exit 0=clean/fixed, 1=zombies, 2=error
+- `tracker_autoclose.py` — Tracker zombie-prevention auto-close gate (guardrail G1): closes items whose linked PRs merged or whose ownsFiles shipped on main; CLI: `[--check | --dry-run]`; exit 0=all resolved, 1=items still open; timezone-aware UTC timestamps
+- `tracker_guard.py` — Append-only lane journal + zombie-resurrection fail-closed gate; prevents items in terminal lanes (done/rejected) from re-entering active lanes (ranked/proposed/in-progress/accepted); modes: --seed (bootstrap journal), --check (detect violations, exit 1 if found, default), --enforce (revert zombies to terminal lane); CLI: `tracker_guard.py [--seed | --check | --enforce]`; journaled in state/tracker-journal.jsonl with rotation at 5000 lines
 - `transcript_digest.py` — Digest agent-*.jsonl transcripts into compact redacted per-agent briefs (state/ledger/transcripts-brief.jsonl; deterministic, idempotent, strips paths/emails/tokens)
-- `file_size_lint.py` — Python file size linter: warns on .py exceeding line/byte thresholds; `# filesize-ok` + ALLOWED_OVERSIZE suppression; CLI: `[--check] [--json] [--max-lines N] [--max-bytes N] [--paths DIR...] [--root DIR]`; exit 0/1/2; stdlib-only
 - `claudemd_lint.py` — Lint the domain CLAUDE.md layer: doc-pointers resolve, cited npm scripts exist, runtime/state artifacts not flagged, domain cross-refs prohibited; 4 checks: DOC-POINTER, TEST-CMD, DOMAIN-CROSS-REF (domain CLAUDE.md must not reference other domain CLAUDE.md with directives; parent-child refs allowed), line-count; --json; root CLAUDE.md exempt from cross-ref check
 - `claudemd_sync_gate.py` — CLAUDE.md synchronization gate (Guardrail G5): for each domain directory with code changes, verifies the corresponding domain/CLAUDE.md was also modified in the same PR; exempts: test-only changes, docs-only, meta files (stats.json, README.md, CHANGELOG.md, package.json, .nvmrc), .github/ (CI), CLAUDE.md-only changes; CLI: `--check` (default, fail-closed) | `--json` | `--base-ref` [BRANCH] (default main); exit 0=synced, 1=drift, 2=error
 - `audit_report.py` — Deterministic markdown audit report aggregator (defect_escape, mutation results, lint/drift findings, ledger verdict rates); --out/--strict/--json inputs from machine outputs only
 - `claudemd_drift.py` — Semantic drift detector: CLAUDE.md claims vs disk reality (missing refs, unmapped dirs, dead map entries, absent CLI flags); exit 1 on drift; --json
 - `cost_econ.py` — Cost economics metrics (cost-per-LOC, per-merged-PR, per-wave/backlog-item) from stats.json + fleet ledger; shares ui/cost.py pricing; honesty caveats documented in output
-- `dead_code_check.py` — AST-based Python dead code detector (unused functions/classes/variables); `# dead-code-ok` suppression; CLI: `[--check] [--json] [--paths DIR...] [--root DIR]`; exit 0=clean/1=findings/2=error; stdlib-only
 - `dash.js` — Launch the web dashboard (spawns python ui/serve.py with configured port from PORT env var, aesop.config.json, or default 8770)
 - `wave_backlog_analyzer.py` — Pre-wave backlog risk analyzer (per-item risk_level/estimated_retries from git fix-forward history + tracker lanes); warn-level only, --json
-- `wave_history.py` — Per-wave history summarizer from event store; CLI: `[--json] [--latest N] [--state-root PATH]`; stdlib-only, fail-closed on missing DB
-- `wave_ledger_hook.py` — Orchestrator-tail CLI wrapper to append per-wave telemetry to OUTCOMES-LEDGER.md (idempotent phase appends; validates timestamp for markdown table safety)
-- `wave_manifest_lint.py` — Wave manifest preflight validator: (1) file-ownership disjointness (no overlaps via fnmatch glob matching); (2) ownsFiles path existence (new files flagged as INFO); (3) prompt sanity (non-empty + [ISOLATION: sibling worktree] required + [[ALLOW-NON-HAIKU]] warns unless [[ALLOW-SONNET]]/[[ALLOW-OPUS]]); (4) git history churn (14-day commits >3 = WARN); (5) testCmd validation (on PATH or repo-relative script). CLI: `wave_manifest_lint.py <manifest.json> [--json] [--strict] [--root DIR]`. Exit 0=PASS (warnings OK) / 1=FAIL or (--strict) WARN. ASCII+JSON output
-- `wave_preflight.py` — Wave-open readiness validator: (1) repo-readiness checks (branch/clean-tree/HALT/heartbeats/tracker JSON parse); (2) backlog validation via --tracker (flags: missing ownsFiles, stale file refs, ownership overlaps, ledger aggregate retry rate); (3) --from-stdin mode reads repo roots from stdin to check multiple repos in one run; --json mode + --state-root/AESOP_STATE_ROOT split from --root; warn-level checks never flip exit 1; advisory tool exit 0 for --tracker mode
-- `wave_resume.py` — Mid-wave recovery: parse workflow journal.jsonl + worktree to classify items as completed (files written + tests green) vs remaining, enabling resume from last good phase instead of re-run
-- `wave_scorecard.py` — Wave quality scorecard generator (deterministic metrics from on-disk telemetry); computes items dispatched/succeeded, repair rounds, first-try-green rate, tokens + cost by phase/model, agent success by type, retry frequency; CLI: `[--json|--md] [--waves N] [--state-root PATH]` (default ASCII); emits n/a for missing sources; hermetic, stdlib-only
 - `wave_templates.py` — Wave-manifest preset generator: instantiate/validate templates/wave-presets/*.json into ready manifests; CLI: `validate [--template saas|data|library|all]` (exits 0=clean / 1=defects per item), `instantiate <preset> --project-name --base-dir [--output FILE]`
+- `wave_scorecard.py` — Wave quality scorecard generator (deterministic metrics from on-disk telemetry); computes items dispatched/succeeded, repair rounds, first-try-green rate, tokens + cost by phase/model, agent success by type, retry frequency; CLI: `[--json|--md] [--waves N] [--state-root PATH]` (default ASCII); emits n/a for missing sources; hermetic, stdlib-only
 - `verify_scorecards.py` — Browser proof for the wave quality scorecards panel (self-hosted test port + fixtures; AESOP_PROOF_FIXTURES gated)
 - `transcript_replay.py` — Replay post-commit edits from transcripts to recover work
 - `transcript_timeline.py` — Extract Write/Edit/Read timeline from transcripts
@@ -124,6 +115,10 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `verify_ui_trio_redaction_proof.py` — Offline falsifiability proof: verify that transcript redaction detects leaks (POSIX paths, Windows paths, sk- tokens) when unredacted; exit 0=proof passes / 1=proof failed
 - `verify_test_coverage.py` — Guardrail G2: CI gate that verifies all on-disk test files are run by some CI job (prevents fake-green: test files existing but never executed). Discovers: Python (git ls-files tests/test_*.py), Node (tests/*.test.mjs via npm test:node glob), Shell (explicit bash commands in package.json test:sh), Playwright (testMatch pattern in playwright.config.ts). CLI: `--check` (exit 1 if orphans found; CI gate) | `--fix` (suggest how to add orphans) | `--help`; hermetic, stdlib-only; exit 0=all covered, 1=orphans found, 2=error
 - `verify_test_suite_count.py` — Test suite count drift gate (auto-verifiable + auto-fixable); CLI: `--check` (fail if counts drift; CI gate) | `--fix [--dry-run]` (auto-rewrite tests/CLAUDE.md counts to match disk; lanes use this); --repo/--claudemd overrides; idempotent; exit 0=clean/fixed, 1=drift/error
+- `wave_ledger_hook.py` — Orchestrator-tail CLI wrapper to append per-wave telemetry to OUTCOMES-LEDGER.md (idempotent phase appends; validates timestamp for markdown table safety)
+- `wave_preflight.py` — Wave-open readiness validator: (1) repo-readiness checks (branch/clean-tree/HALT/heartbeats/tracker JSON parse); (2) backlog validation via --tracker (flags: missing ownsFiles, stale file refs, ownership overlaps, ledger aggregate retry rate); (3) --from-stdin mode reads repo roots from stdin to check multiple repos in one run; --json mode + --state-root/AESOP_STATE_ROOT split from --root; warn-level checks never flip exit 1; advisory tool exit 0 for --tracker mode
+- `wave_manifest_lint.py` — Wave manifest preflight validator: (1) file-ownership disjointness (no overlaps via fnmatch glob matching); (2) ownsFiles path existence (new files flagged as INFO); (3) prompt sanity (non-empty + [ISOLATION: sibling worktree] required + [[ALLOW-NON-HAIKU]] warns unless [[ALLOW-SONNET]]/[[ALLOW-OPUS]]); (4) git history churn (14-day commits >3 = WARN); (5) testCmd validation (on PATH or repo-relative script). CLI: `wave_manifest_lint.py <manifest.json> [--json] [--strict] [--root DIR]`. Exit 0=PASS (warnings OK) / 1=FAIL or (--strict) WARN. ASCII+JSON output
+- `wave_resume.py` — Mid-wave recovery: parse workflow journal.jsonl + worktree to classify items as completed (files written + tests green) vs remaining, enabling resume from last good phase instead of re-run
 - `watch.js` — Launch the watchdog daemon (spawns bash daemons/run-watchdog.sh with inherited stdio in foreground mode)
 - `workflow_model_linter.py` — Guardrail G7: workflow model pin linter; AST-scans .js/.mjs files for agent() calls missing explicit model:'haiku' parameter (bypasses PreToolUse hook); suppress via `// model-ok`; CLI: `--check` (default) | `--json` | `--help`; exit 0=clean/1=violations/2=error; stdlib-only
 - `watcher_linter.py` — Guardrail G3: watcher/polling anti-pattern linter (mechanizes "no watcher pattern in long runs"); AST-scans tools/monitor/driver/daemons for while-True+sleep loops, watch_/monitor_/poll_-named functions with infinite loops, and subprocess calls inside infinite loops (exempts loops with a break/return/raise/exit -- legitimate bounded poll-until-timeout code is not flagged); string-scans prompt-ish assignments/kwargs/dict-keys for "wait for a monitor/watcher/signal/notification", "poll"/"poll for", "watch for changes" phrasing; suppress via `# watcher-ok` inline comment; CLI: `--check` (default) | `--json` | `--paths DIR...` | `--root DIR`; exit 0=clean/1=findings/2=error; stdlib-only, ASCII output
@@ -142,6 +137,7 @@ Exit: 0=clean, 1=findings, 2=error. Pragma escape (pattern findings only; filena
 ## agent-forensics.sh — Behavior forensics
 
 CLI: `bash tools/agent-forensics.sh <commit>` (print snapshot) | `--diff <commitA> <commitB>` (diff rules/docs)
+
 ## Test commands
 
 - **Python**: `npm run test:py` (= `python -m unittest discover -s tests`); a single module: `python -m unittest tests.test_<name>` (tests live in tests/, not tools/; the repo uses unittest, not pytest)
@@ -150,4 +146,5 @@ CLI: `bash tools/agent-forensics.sh <commit>` (print snapshot) | `--diff <commit
 - **Full suite**: `python tools/scanner_selftest.py && python tools/power_selftest.py` (mandatory CI gates)
 
 ---
+
 Map of all domains: /CLAUDE.md
