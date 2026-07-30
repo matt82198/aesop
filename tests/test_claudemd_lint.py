@@ -780,14 +780,9 @@ class TestDomainCrossRefCheck(unittest.TestCase):
 
             findings = lint_claudemd(driver_claudemd, repo_root)
 
-            # Should NOT flag this as a cross-ref (both are under 'driver' domain)
             cross_ref_findings = [f for f in findings if f["type"] == "domain-cross-ref"]
-            # Actually, this will be flagged because driver/orchestrator-swap IS discovered
-            # as a sibling domain. Let me verify the current logic...
-            # get_sibling_domains will return {'driver/orchestrator-swap'} when current is 'driver'
-            # So this WILL be flagged. That's a different discussion about same-domain refs.
-            # For now, let's test that it does get flagged:
-            self.assertGreater(len(cross_ref_findings), 0)
+            self.assertEqual(len(cross_ref_findings), 0,
+                "Parent-child domain references (driver -> driver/orchestrator-swap) should be allowed")
 
 
 if __name__ == "__main__":

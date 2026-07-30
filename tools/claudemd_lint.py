@@ -359,8 +359,11 @@ def lint_claudemd(
         domain_refs = extract_domain_claude_references(content)
         sibling_domains = get_sibling_domains(repo_root, claudemd_path)
 
+        current_domain = str(claudemd_path.relative_to(repo_root).parent).replace("\\", "/")
         for domain_ref in domain_refs:
-            # Check if this is a sibling domain (not the root)
+            # Allow parent→child references (e.g., driver → driver/orchestrator-swap)
+            if domain_ref.startswith(current_domain + "/"):
+                continue
             if domain_ref in sibling_domains:
                 findings.append({
                     "type": "domain-cross-ref",
