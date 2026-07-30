@@ -23,6 +23,16 @@ import time
 
 print = functools.partial(print, flush=True)
 
+# Transient error patterns from gh run rerun that indicate we should keep the PR queued
+# without consuming a retry (TOCTOU races, workflow state changes, etc.)
+RETRIABLE_RERUN_ERRORS = [
+    "already running",
+    "workflow is already running",
+    "run not found",
+    "could not find run",
+    "workflow completed",
+]
+
 
 def gh(*args: str) -> dict | str:
     cmd = ["gh"] + list(args)
@@ -120,8 +130,10 @@ def retry_ci(n: int, head_ref_name: str) -> bool:
     rerun_result = gh("run", "rerun", str(run_id), "--failed")
     if isinstance(rerun_result, dict) and "error" in rerun_result:
         err = rerun_result["error"].lower()
-        if "already running" in err or "workflow is already running" in err:
-            # Workflow just started, keep PR queued without consuming retry
+        # Check if this is a transient/retriable error
+        if any(pattern in err for pattern in RETRIABLE_RERUN_ERRORS):
+            # Transient error (TOCTOU race, workflow state change, etc.)
+            # Keep PR queued without consuming retry
             return False
         print(f"  [WARN] run rerun #{run_id} failed: {rerun_result['error'][:80]}")
         return False
