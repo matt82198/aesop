@@ -359,6 +359,97 @@ jobs:
         self.assertIsInstance(findings, list)
 
 
+class GuardrailGateWiringTest(unittest.TestCase):
+    """Meta-gate: the six guardrail tools must stay wired as REAL enforcement.
+
+    An evidence audit (2026-07-29) found these tools existed with unit tests
+    but were never invoked against the real repo from .github/workflows/ or
+    hooks/ -- decorations, while README/#518 claimed enforcement. This class
+    asserts each tool's check-mode invocation is present at its enforcement
+    point, guarding against future unwiring.
+
+    Enforcement points:
+      - CI (.github/workflows/ci.yml): watcher_linter (G3),
+        spec_contract_validator (G4), subprocess_guard (G6, ratchet),
+        agent_prompt_hygiene, portability_check (ratchet).
+      - Pre-push hook (hooks/pre-push-policy.sh): tracker_guard -- its
+        subject (state/tracker.json) is git-ignored runtime state that a CI
+        checkout never has, so a CI step would be permanently-green
+        decoration; the hook runs where the real state lives.
+    """
+
+    REAL_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+    # Exact invocation substrings (not just tool names) so a commented-out or
+    # renamed step cannot satisfy the check with a stray mention.
+    CI_GATE_INVOCATIONS = [
+        "python tools/watcher_linter.py --check",
+        "python tools/spec_contract_validator.py --check",
+        "python tools/subprocess_guard.py --check --baseline .subprocess-guard-baseline.json",
+        "python tools/agent_prompt_hygiene.py .",
+        "python tools/portability_check.py --root . --baseline .portability-baseline.json",
+    ]
+
+    def _read(self, relative):
+        path = self.REAL_REPO_ROOT / relative
+        self.assertTrue(path.exists(), "%s missing from repo" % relative)
+        return path.read_text(encoding="utf-8")
+
+    def test_ci_workflow_invokes_guardrail_gates(self):
+        """Each CI-enforced gate appears as a run command in ci.yml."""
+        ci_yml = self._read(".github/workflows/ci.yml")
+        for invocation in self.CI_GATE_INVOCATIONS:
+            self.assertIn(
+                invocation, ci_yml,
+                "Guardrail gate unwired from ci.yml: expected '%s'" % invocation,
+            )
+
+    def test_ci_gate_steps_are_uncommented_run_commands(self):
+        """The gate invocations live on `run:` lines, not comments."""
+        ci_yml = self._read(".github/workflows/ci.yml")
+        for invocation in self.CI_GATE_INVOCATIONS:
+            found = False
+            for line in ci_yml.splitlines():
+                stripped = line.strip()
+                if invocation in stripped:
+                    self.assertFalse(
+                        stripped.startswith("#"),
+                        "Gate invocation is commented out in ci.yml: %s" % stripped,
+                    )
+                    self.assertTrue(
+                        stripped.startswith("run:"),
+                        "Gate invocation is not a run command in ci.yml: %s" % stripped,
+                    )
+                    found = True
+            self.assertTrue(found, "Gate invocation missing from ci.yml: %s" % invocation)
+
+    def test_pre_push_hook_invokes_tracker_guard(self):
+        """tracker_guard --check is wired into the pre-push policy hook."""
+        hook = self._read("hooks/pre-push-policy.sh")
+        self.assertIn("tracker_guard.py", hook)
+        self.assertIn("check_tracker_guard", hook)
+        self.assertRegex(
+            hook,
+            r'"\$guard_script"\s+--check',
+            "tracker_guard.py must be invoked with --check in the hook",
+        )
+        self.assertIn(
+            "if ! check_tracker_guard; then", hook,
+            "check_tracker_guard must gate main() fail-closed",
+        )
+
+    def test_ratchet_baseline_files_exist_and_parse(self):
+        """Both ratchet baselines are committed, parse, and are non-trivial."""
+        for name in (".subprocess-guard-baseline.json", ".portability-baseline.json"):
+            raw = self._read(name)
+            data = json.loads(raw)
+            self.assertIsInstance(data.get("violations"), dict, "%s malformed" % name)
+            for key, count in data["violations"].items():
+                self.assertIn("@", key, "%s: baseline key '%s' not file@type" % (name, key))
+                self.assertIsInstance(count, int, "%s: count for '%s' not int" % (name, key))
+                self.assertGreater(count, 0, "%s: count for '%s' must be > 0" % (name, key))
+
+
 class TestToolsImportable(unittest.TestCase):
     """Verify ci_workflow_lint is importable and callable."""
 

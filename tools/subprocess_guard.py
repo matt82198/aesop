@@ -34,12 +34,25 @@ Exit codes:
 
 Usage:
   python tools/subprocess_guard.py [--check] [--json] [--paths PATH [PATH ...]]
+                                   [--baseline FILE] [--update-baseline]
 
 Options:
   --check          Check mode (default; scans and reports/exits accordingly)
   --json           Output findings as JSON instead of text
   --paths PATH...  Override the default scan location (tests/) with one or
                     more files/directories (recursively scanned for *.py)
+  --baseline FILE  Ratchet mode (same pattern as .stateapi-baseline.json):
+                    compare findings against a committed baseline of
+                    "file@RULE" -> count entries. PASS only when the current
+                    scan EXACTLY matches the baseline. New findings (new key,
+                    or count above baseline) FAIL; stale entries (key gone,
+                    or count below baseline) also FAIL so the baseline must
+                    be regenerated and the burn-down is recorded in git.
+                    Missing baseline file behaves as an empty baseline
+                    (fail-closed on every finding).
+  --update-baseline
+                    Regenerate the --baseline file from the current scan and
+                    exit 0. CI MUST NEVER pass this flag.
 """
 import argparse
 import ast
@@ -269,6 +282,63 @@ def scan_paths(paths, repo_root=None):
     return all_findings
 
 
+def findings_to_baseline_keys(findings):
+    """Aggregate findings into a {"file@RULE": count} dict (posix separators)."""
+    keys = {}
+    for f in findings:
+        key = "{0}@{1}".format(str(f["file"]).replace("\\", "/"), f["rule"])
+        keys[key] = keys.get(key, 0) + 1
+    return keys
+
+
+def load_baseline(baseline_file):
+    """Load a baseline file; missing/unreadable file means empty baseline (fail-closed)."""
+    import json
+    p = Path(baseline_file)
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    violations = data.get("violations", {})
+    if not isinstance(violations, dict):
+        return {}
+    return {str(k).replace("\\", "/"): int(v) for k, v in violations.items()}
+
+
+def save_baseline(baseline_file, keys):
+    """Write the baseline file from a {"file@RULE": count} dict."""
+    import json
+    data = {
+        "_comment": (
+            "Guardrail G6 ratchet baseline (see tools/subprocess_guard.py --help). "
+            "Regenerate ONLY via --update-baseline after reviewing the diff; "
+            "CI must never pass --update-baseline."
+        ),
+        "violations": {k: keys[k] for k in sorted(keys)},
+    }
+    Path(baseline_file).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def check_ratchet(baseline_keys, current_keys):
+    """Bidirectional exact-match ratchet.
+
+    Returns (is_ok, stale, new) where stale/new are sorted lists of
+    "key (baseline N, current M)" description strings.
+    """
+    stale = []
+    new = []
+    for key in sorted(set(baseline_keys) | set(current_keys)):
+        b = baseline_keys.get(key, 0)
+        c = current_keys.get(key, 0)
+        if c > b:
+            new.append("{0} (baseline {1}, current {2})".format(key, b, c))
+        elif c < b:
+            stale.append("{0} (baseline {1}, current {2})".format(key, b, c))
+    return (not stale and not new), stale, new
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
 
@@ -294,11 +364,71 @@ def main(argv=None):
         help="Override the default scan location (tests/) with one or more "
              "files/directories.",
     )
+    parser.add_argument(
+        "--baseline",
+        default=None,
+        help="Ratchet mode: compare findings against this committed baseline "
+             "file (exact-match, fail-closed; see module docstring).",
+    )
+    parser.add_argument(
+        "--update-baseline",
+        action="store_true",
+        help="Regenerate the --baseline file from the current scan (CI must "
+             "never pass this).",
+    )
 
     args = parser.parse_args(argv)
 
+    if args.update_baseline and not args.baseline:
+        print("subprocess_guard: --update-baseline requires --baseline FILE", file=sys.stderr)
+        return 2
+
     scan_targets = args.paths if args.paths else [str(REPO_ROOT / DEFAULT_SCAN_DIR)]
     findings = scan_paths(scan_targets)
+
+    if args.baseline and args.update_baseline:
+        current_keys = findings_to_baseline_keys(findings)
+        save_baseline(args.baseline, current_keys)
+        print("subprocess_guard: baseline updated ({0} entr{1}, {2} finding(s)) -> {3}".format(
+            len(current_keys), "y" if len(current_keys) == 1 else "ies",
+            len(findings), args.baseline))
+        return 0
+
+    if args.baseline:
+        current_keys = findings_to_baseline_keys(findings)
+        baseline_keys = load_baseline(args.baseline)
+        is_ok, stale, new = check_ratchet(baseline_keys, current_keys)
+        if args.json:
+            import json
+            print(json.dumps({
+                "ok": is_ok,
+                "mode": "ratchet",
+                "baseline": str(args.baseline),
+                "stale": stale,
+                "new": new,
+                "findings": findings,
+            }, indent=2))
+        else:
+            if is_ok:
+                print("subprocess_guard: PASS (ratchet: {0} baselined finding(s) "
+                      "across {1} entr{2})".format(
+                          len(findings), len(baseline_keys),
+                          "y" if len(baseline_keys) == 1 else "ies"))
+            else:
+                if new:
+                    print("subprocess_guard: {0} NEW violation key(s) above baseline:".format(len(new)))
+                    for item in new:
+                        print("  NEW   {0}".format(item))
+                if stale:
+                    print("subprocess_guard: {0} STALE baseline entr{1} (violations fixed; "
+                          "regenerate the baseline to record the burn-down):".format(
+                              len(stale), "y" if len(stale) == 1 else "ies"))
+                    for item in stale:
+                        print("  STALE {0}".format(item))
+                print("\nFAIL: baseline mismatch. Fix new violations (or add a reviewed "
+                      "'# {0}' suppression), then regenerate with --update-baseline "
+                      "if intentional.".format(SUPPRESS_MARKER))
+        return 0 if is_ok else 1
 
     if args.json:
         import json
