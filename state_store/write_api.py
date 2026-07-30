@@ -371,18 +371,23 @@ class WriteAPI:
         except Exception as e:
             raise ValueError(f"Failed to append buildlog_entry event: {e}") from e
 
-    def ensure_buildlog_exists(self) -> None:
+    def ensure_buildlog_exists(self, header: str = "# BUILDLOG\n") -> None:
         """Ensure BUILDLOG.md exists with header. Idempotent.
 
         If BUILDLOG.md doesn't exist, creates it with a header. Does not append
         any events to the event store (it's a structural requirement, not a write).
+
+        Args:
+            header: Header content to write when creating the file (default
+                    "# BUILDLOG\\n"). Migrated legacy writers pass their own
+                    historical header to stay byte-compatible. Ignored if the
+                    file already exists (never overwrites).
 
         Returns:
             None
         """
         buildlog_file = self.state_dir / "BUILDLOG.md"
         if not buildlog_file.exists():
-            header = "# BUILDLOG\n"
             buildlog_file.write_text(header, encoding="utf-8")
 
     def rebuild_state_md(self, content: str, actor: str = "api", force: bool = False) -> None:

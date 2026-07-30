@@ -6,6 +6,10 @@ Usage: ensure_state.py --state-dir DIR
 
 Creates STATE.md and BUILDLOG.md templates in the state directory
 if they do not already exist. Never overwrites existing files.
+
+Writes go through state_store.write_api.WriteAPI (unified write path):
+each scaffold write also lands as an event in the event store, so
+markdown and SQLite state can never drift.
 """
 # secretscan: allow-pattern-docs
 
@@ -14,6 +18,12 @@ import os
 import argparse
 import datetime
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from state_store.write_api import WriteAPI
 
 
 STATE_TEMPLATE = """# STATE — authoritative project checkpoint
@@ -46,28 +56,27 @@ def ensure_state_files(state_dir):
     Returns list of (filename, status) tuples: ('STATE.md', 'CREATED'), etc.
     """
     state_path = Path(state_dir)
-    state_path.mkdir(parents=True, exist_ok=True)
+    api = WriteAPI(state_path)  # creates the state directory if missing
 
     results = []
 
-    # STATE.md
+    # STATE.md (unified write path: file + state_md_written event)
     state_file = state_path / 'STATE.md'
     if state_file.exists():
         results.append(('STATE.md', 'EXISTS'))
     else:
-        with open(state_file, 'w', encoding='utf-8') as f:
-            f.write(STATE_TEMPLATE)
+        api.write_state_md(STATE_TEMPLATE, actor='ensure_state')
         results.append(('STATE.md', 'CREATED'))
 
-    # BUILDLOG.md
+    # BUILDLOG.md (unified write path: header + created line, byte-compatible
+    # with the legacy scaffold; the created line lands as a buildlog_entry event)
     buildlog_file = state_path / 'BUILDLOG.md'
     if buildlog_file.exists():
         results.append(('BUILDLOG.md', 'EXISTS'))
     else:
         timestamp = datetime.datetime.now().isoformat()
-        with open(buildlog_file, 'w', encoding='utf-8') as f:
-            f.write(f'{BUILDLOG_HEADER}\n')
-            f.write(f'created {timestamp}\n')
+        api.ensure_buildlog_exists(header=f'{BUILDLOG_HEADER}\n')
+        api.append_buildlog(f'created {timestamp}', actor='ensure_state')
         results.append(('BUILDLOG.md', 'CREATED'))
 
     return results
