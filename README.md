@@ -74,7 +74,7 @@ Crash recovery is not a special path; it is how the system *always* starts. This
 
 **Why it's built this way:** [The Aesop Hypothesis](./docs/THE-AESOP-HYPOTHESIS.md) — the design philosophy, the trade-offs, the cancelled architectures with published data.
 
-**New in 0.5.0:** Swap the **worker** and **orchestrator** model (Claude, Codex, or any OpenAI-compatible endpoint) from one `seats` config block without code changes. See [docs/MICROKERNEL.md](./docs/MICROKERNEL.md) for the two-seat architecture and a 60-second quickstart. Single-instance proven; multi-instance coordination is scheduled.
+**New in 0.6.0:** Wave Gantt visualization, quality scorecards, audit/reasoning tails, PR Board view, and context-file tracking in the dashboard. Swap the **worker** and **orchestrator** model (Claude, Codex, or any OpenAI-compatible endpoint) from one `seats` config block without code changes. See [docs/MICROKERNEL.md](./docs/MICROKERNEL.md) for the two-seat architecture and a 60-second quickstart. Single-instance proven; multi-instance coordination is scheduled.
 
 ## Feature Demo
 
@@ -100,7 +100,7 @@ Generates a manifest for typical 3-tier (API, frontend, ops) or data pipelines.
 ```bash
 npx @matt82198/aesop dash
 ```
-Opens http://localhost:8770. Four views: Overview (agents, events), Work (kanban), Activity (reasoning tail), Cost (spend/tokens).
+Opens http://localhost:8770. Five views: Overview (agents, events), Work (kanban), Activity (reasoning tail), Cost (spend/tokens), PR Board (CI rollup).
 
 **Health score** — Readiness assessment: env, git, Python, Node, ports, config, hooks:
 ```bash
