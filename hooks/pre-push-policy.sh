@@ -564,6 +564,43 @@ check_tracker_guard() {
   return 0
 }
 
+check_claudemd_sync() {
+  # CLAUDE.md synchronization gate (tools/claudemd_sync_gate.py --check).
+  # For each domain directory with code changes, verifies the corresponding
+  # domain/CLAUDE.md was also modified in the same commit/PR.
+  #
+  # Fail-open ONLY for missing optional tooling (repos without claudemd_sync_gate.py
+  # can still push; missing tool does not block). An actual drift detection
+  # (exit 1 from --check) stays fail-closed and blocks the push.
+  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local sync_script="$aesop_root/tools/claudemd_sync_gate.py"
+
+  if [ ! -f "$sync_script" ]; then
+    log_event "claudemd_sync_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; claudemd sync check skipped\n' >&2
+    log_event "claudemd_sync_skipped_no_python"
+    return 0
+  fi
+
+  local sync_output
+  sync_output=$("$py_bin" "$sync_script" --check 2>&1)
+  local sync_exit_code=$?
+
+  if [ $sync_exit_code -ne 0 ]; then
+    if [ -n "$sync_output" ]; then
+      printf '%s\n' "$sync_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
 log_event() {
   # Finding 1 & 2: Acquire lock before read-modify-append, add seq field, update sidecar
   local event_type="$1"
@@ -1238,6 +1275,12 @@ main() {
   if ! check_tracker_guard; then
     printf 'Error: Tracker zombie-resurrection gate failed. Push blocked.\n' >&2
     log_block "tracker_guard_failure"
+    exit 1
+  fi
+
+  if ! check_claudemd_sync; then
+    printf 'Error: CLAUDE.md synchronization check failed. Push blocked.\n' >&2
+    log_block "claudemd_sync_failure"
     exit 1
   fi
 
