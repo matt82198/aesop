@@ -34,6 +34,9 @@ ENV_KEYS = (
     "AESOP_STATE_ROOT",
     "AESOP_TRANSCRIPTS_ROOT",
     "AESOP_UI_COLLECT_INTERVAL",
+    "AESOP_CONDUCTOR3_ROOT",
+    "AESOP_WATCHDOG_HEARTBEAT",
+    "AESOP_MONITOR_HEARTBEAT",
 )
 
 
@@ -55,6 +58,8 @@ class HealthcheckTestCase(unittest.TestCase):
         os.environ["AESOP_STATE_ROOT"] = str(self.state_dir)
         os.environ["AESOP_TRANSCRIPTS_ROOT"] = str(self.fixture_root / "transcripts")
         os.environ["AESOP_UI_COLLECT_INTERVAL"] = "0.2"
+        # Point conductor3 to temp dir to prevent resolving to real ~/conductor3
+        os.environ["AESOP_CONDUCTOR3_ROOT"] = str(self.fixture_root / "conductor3")
 
     def tearDown(self):
         """Restore original env and clean up temp files."""

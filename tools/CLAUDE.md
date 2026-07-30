@@ -47,6 +47,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `handoff_proof.py` — Team-handoff proof: crash-only resume demo on the real driver/wave_loop.py engine offline (control vs interrupted+resumed runs must reach identical terminal state); outputs docs/HANDOFF-CERTIFICATE.md + state/handoff-proof-*.json
 - `health-score.js` — Readiness score for primed projects (0-100 weighted score: config, git hooks, CLAUDE.md, state writable, daemon heartbeats, git identity, secret-scan runnable)
 - `health_score.py` — Readiness score (0-100) for primed projects; CLI: `--cwd <path> [--json]`; checks: config, hooks, CLAUDE.md, writable, heartbeats, git-identity, secret-scan (weighted scoring)
+- `health.js` — Fleet health aggregator CLI wrapper (spawns Python healthcheck.py with arg passthrough)
 - `healthcheck.py` — Fleet health aggregator (heartbeat/alert/orchestrator status)
 - `heartbeat.py` — Single-instance loop liveness registry
 - `inbox_drain.py` — Drain UI inbox submissions
