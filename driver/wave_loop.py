@@ -630,23 +630,18 @@ def _release_stale_leases(state_dir: str, journal_state: Dict[str, Dict[str, Any
             return
 
         event_store = store.EventStore(str(db_path))
-
-        # RS3-W N4: journal_state KEYS are (repo, slug) tuples, but claims
-        # are made with resource=<slug string> (see build_item's try_claim).
-        # Releasing with the tuple never matched a claim, so a crashed
-        # instance's lease persisted forever. Release with the SAME key
-        # shape claims use: the entry's slug string.
-        for entry in journal_state.values():
-            old_instance_id = entry.get("instance_id")
-            resource = entry.get("slug")
-            if old_instance_id and resource:
-                try:
-                    coordination.release(event_store, resource=resource, instance_id=old_instance_id)
-                except Exception:
-                    # Ignore release errors; fail-closed.
-                    pass
+        try:
+            for entry in journal_state.values():
+                old_instance_id = entry.get("instance_id")
+                resource = entry.get("slug")
+                if old_instance_id and resource:
+                    try:
+                        coordination.release(event_store, resource=resource, instance_id=old_instance_id)
+                    except Exception:
+                        pass
+        finally:
+            event_store.close()
     except Exception:
-        # Fail-closed: if coordination is unavailable, continue without release.
         pass
 
 
@@ -711,13 +706,16 @@ class _ClaimContext:
         self.ttl = ttl
         self._held: Dict[str, bool] = {}
         self._lock = threading.Lock()
+        self._cached_store = None
 
     def _enabled(self) -> bool:
         return coordination is not None and self.state_dir is not None
 
     def _event_store(self):
-        from state_store import store
-        return store.EventStore(str(Path(self.state_dir) / "state.db"))
+        if self._cached_store is None:
+            from state_store import store
+            self._cached_store = store.EventStore(str(Path(self.state_dir) / "state.db"))
+        return self._cached_store
 
     def acquire(self, slug: str) -> bool:
         """Claim slug for this wave; True only if the claim is held."""
@@ -755,11 +753,16 @@ class _ClaimContext:
             return False
 
     def release_all(self) -> None:
-        """Release every held claim exactly once (idempotent by pop)."""
+        """Release every held claim exactly once (idempotent by pop).
+
+        Also closes the cached EventStore so SQLite connections are freed
+        before TemporaryDirectory cleanup (Windows file-lock fix).
+        """
         with self._lock:
             slugs = list(self._held)
             self._held.clear()
         if coordination is None or self.state_dir is None:
+            self._close_store()
             return
         for slug in slugs:
             try:
@@ -769,9 +772,16 @@ class _ClaimContext:
                     instance_id=self.instance_id,
                 )
             except Exception:
-                # Best-effort: TTL expiry is the backstop for a failed
-                # release (never raise out of run_wave's finally).
                 pass
+        self._close_store()
+
+    def _close_store(self) -> None:
+        if self._cached_store is not None:
+            try:
+                self._cached_store.close()
+            except Exception:
+                pass
+            self._cached_store = None
 
 
 def _is_live_orchestrator_backend(backend: Any) -> bool:

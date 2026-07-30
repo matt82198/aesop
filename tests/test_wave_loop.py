@@ -578,7 +578,7 @@ class TestCostCeilingAbort(unittest.TestCase):
                 import cost_ceiling  # noqa: F401
 
                 # Create a state_dir with a low ceiling.
-                with tempfile.TemporaryDirectory() as state_dir:
+                with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as state_dir:
                     # Patch wave_loop.cost_ceiling.check using the proper namespace.
                     def mock_check(*args, **kwargs):
                         return {"exceeded": True, "spent": 10000, "limit": 100}
@@ -694,7 +694,7 @@ class TestCostCeilingWithNoneTokens(unittest.TestCase):
                     sys.path.insert(0, str(TOOLS_DIR))
                 import cost_ceiling  # noqa: F401
 
-                with tempfile.TemporaryDirectory() as state_dir:
+                with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as state_dir:
                     # Capture what spent= argument is passed to cost_ceiling.check()
                     captured_args = {}
 
@@ -752,7 +752,7 @@ class TestCostCeilingWithNoneTokens(unittest.TestCase):
                     sys.path.insert(0, str(TOOLS_DIR))
                 import cost_ceiling  # noqa: F401
 
-                with tempfile.TemporaryDirectory() as state_dir:
+                with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as state_dir:
                     # Simulate ceiling check that detects excess
                     def mock_check(*args, **kwargs):
                         # When driver returns 10000 tokens and ceiling is 1000
@@ -1567,7 +1567,7 @@ class TestWaveRecoveryJournal(unittest.TestCase):
         """Wave run should create journal entries for each item."""
         from wave_loop import _write_journal_entry, _load_journal_state
 
-        with tempfile.TemporaryDirectory() as state_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as state_dir:
             # Write journal entries.
             _write_journal_entry(state_dir, "item-1", "dispatched", {"verified": True, "testExit": 0}, repo=None)
             _write_journal_entry(state_dir, "item-2", "dispatched", {"verified": False, "testExit": 1}, repo=None)
@@ -1587,7 +1587,7 @@ class TestWaveRecoveryJournal(unittest.TestCase):
         """Loading journal from empty state_dir should return empty dict."""
         from wave_loop import _load_journal_state
 
-        with tempfile.TemporaryDirectory() as state_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as state_dir:
             journal = _load_journal_state(state_dir)
             self.assertEqual(journal, {})
 
@@ -1620,7 +1620,7 @@ class TestWaveRecoveryResume(unittest.TestCase):
             ]
         }
 
-        with tempfile.TemporaryDirectory() as state_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as state_dir:
             tmpdir_path = Path(state_dir) / "work"
             tmpdir_path.mkdir()
 
@@ -1670,7 +1670,7 @@ class TestWaveRecoveryTrustButVerify(unittest.TestCase):
             ]
         }
 
-        with tempfile.TemporaryDirectory() as state_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as state_dir:
             tmpdir_path = Path(state_dir) / "work"
             tmpdir_path.mkdir()
 
@@ -1726,7 +1726,7 @@ class TestWaveRecoveryMixedResume(unittest.TestCase):
             ]
         }
 
-        with tempfile.TemporaryDirectory() as state_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as state_dir:
             tmpdir_path = Path(state_dir) / "work"
             tmpdir_path.mkdir()
 
@@ -1765,7 +1765,7 @@ class TestWaveRecoveryStaleLease(unittest.TestCase):
             ]
         }
 
-        with tempfile.TemporaryDirectory() as state_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as state_dir:
             tmpdir_path = Path(state_dir) / "work"
             tmpdir_path.mkdir()
 
@@ -1817,7 +1817,7 @@ class TestWaveRecoveryHonestAccounting(unittest.TestCase):
             ]
         }
 
-        with tempfile.TemporaryDirectory() as state_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as state_dir:
             tmpdir_path = Path(state_dir) / "work"
             tmpdir_path.mkdir()
 
@@ -2027,7 +2027,7 @@ class TestPathTraversalProtection(unittest.TestCase):
         """Journal write should sanitize slug to prevent path traversal."""
         from wave_loop import _write_journal_entry, _load_journal_state
 
-        with tempfile.TemporaryDirectory() as state_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as state_dir:
             state_path = Path(state_dir)
 
             # Attempt to write with a traversal slug
@@ -2048,7 +2048,7 @@ class TestPathTraversalProtection(unittest.TestCase):
         """Journal load should only read files matching safe slug pattern."""
         from wave_loop import _load_journal_state, _write_journal_entry
 
-        with tempfile.TemporaryDirectory() as state_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as state_dir:
             state_path = Path(state_dir)
             journal_dir = state_path / "journal"
             journal_dir.mkdir(parents=True, exist_ok=True)
@@ -2506,7 +2506,7 @@ class TestRealCostCeilingIntegration(unittest.TestCase):
             ]
         }
 
-        with tempfile.TemporaryDirectory() as state_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as state_dir:
             with tempfile.TemporaryDirectory() as tmpdir:
                 tmpdir_path = Path(tmpdir)
                 (tmpdir_path / "file1.py").write_text("# test\n")
@@ -2571,7 +2571,7 @@ class TestRealCostCeilingIntegration(unittest.TestCase):
             ]
         }
 
-        with tempfile.TemporaryDirectory() as state_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as state_dir:
             with tempfile.TemporaryDirectory() as tmpdir:
                 tmpdir_path = Path(tmpdir)
                 (tmpdir_path / "file1.py").write_text("# test\n")
@@ -2638,7 +2638,7 @@ class TestRealCostCeilingIntegration(unittest.TestCase):
             ]
         }
 
-        with tempfile.TemporaryDirectory() as state_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as state_dir:
             with tempfile.TemporaryDirectory() as tmpdir:
                 tmpdir_path = Path(tmpdir)
                 (tmpdir_path / "file1.py").write_text("# test\n")
