@@ -8,7 +8,10 @@ For each */CLAUDE.md in a repo:
    BRIEF.md, PROPOSALS.md, BUILDLOG.md, MEMORY.md, STATE.md, OUTCOMES-LEDGER.md, tracker.json).
 2. TEST-CMD check — any `npm run <script>` cited must exist in package.json scripts.
    Flags `pytest` if the repo uses unittest (grep package.json test:py).
-3. Optional — flags files over --max-lines (default 150).
+3. DOMAIN-CROSS-REF check — domain CLAUDE.md files must not reference other domain
+   CLAUDE.md files (violates one-file-per-domain-dispatch rule). Root CLAUDE.md is exempt
+   (it's the navigation map).
+4. Optional — flags files over --max-lines (default 150).
 
 Exit: 0=clean, 1=findings. Supports --json flag.
 """
@@ -135,6 +138,41 @@ def extract_path_references(text: str) -> List[str]:
     return sorted(refs)
 
 
+def extract_domain_claude_references(text: str) -> List[str]:
+    r"""Extract DIRECTIVE references to domain CLAUDE.md files.
+
+    Returns list of domain paths like ['tools', 'daemons', 'monitor'] for
+    directive references like "read tools/CLAUDE.md" or "see daemons/CLAUDE.md".
+
+    Matches references that appear in sentences containing directive keywords
+    (read, see, refer to, check, review) to distinguish directives from
+    incidental mentions like "used in tests/CLAUDE.md".
+
+    Excludes:
+    - Root CLAUDE.md (matches r'^/?CLAUDE\.md$')
+    - Nested paths like "docs/" or "./" relative references
+    """
+    # Strategy: split text into sentences, then for each sentence containing
+    # a directive keyword, find domain/CLAUDE.md references
+
+    # Split into sentences by period/semicolon/newline, but not in the middle of filenames
+    # Split on: . followed by space/newline, or ; or newline
+    sentences = re.split(r'(?<=[.;])\s+|\n', text)
+
+    refs = set()
+    directive_keywords = r'(?:read|see|refer to|check|review)'
+
+    for sentence in sentences:
+        # Check if this sentence contains a directive keyword
+        if re.search(directive_keywords, sentence, re.IGNORECASE):
+            # Find all domain/CLAUDE.md in this sentence
+            domain_pattern = r"([a-z_][a-z0-9_\-]*(?:/[a-z_][a-z0-9_\-]*)*)/CLAUDE\.md"
+            for match in re.finditer(domain_pattern, sentence, re.IGNORECASE):
+                refs.add(match.group(1))
+
+    return sorted(refs)
+
+
 def extract_npm_scripts(text: str) -> List[str]:
     """Extract all `npm run <script>` references."""
     pattern = r"npm\s+run\s+([a-zA-Z0-9:_\-]+)"
@@ -175,6 +213,41 @@ def check_test_cmd_match(repo_root: Path) -> Tuple[bool, str]:
     test_py = scripts.get("test:py", "")
     is_unittest = "unittest" in test_py
     return is_unittest, test_py
+
+
+def get_sibling_domains(repo_root: Path, current_claudemd_path: Path) -> set:
+    """Get all sibling domain CLAUDE.md paths (domains other than the current one).
+
+    Returns a set of domain paths like {'tools', 'daemons', 'monitor'}.
+    Excludes the root CLAUDE.md and the current file's domain.
+    """
+    domains = set()
+
+    # Find all CLAUDE.md files in the repo
+    for claudemd in repo_root.rglob("CLAUDE.md"):
+        parts = claudemd.parts
+
+        # Skip node_modules, .git, etc.
+        if any(part in {"node_modules", ".git", "dist", ".pytest_cache", "__pycache__"} for part in parts):
+            continue
+
+        # If it's the root CLAUDE.md, skip it
+        if claudemd.parent == repo_root:
+            continue
+
+        # Get the domain (directory relative to repo_root)
+        try:
+            rel_path = claudemd.relative_to(repo_root).parent
+            domain = str(rel_path).replace("\\", "/")
+
+            # Exclude the current domain
+            current_domain = str(current_claudemd_path.relative_to(repo_root).parent).replace("\\", "/")
+            if domain != current_domain:
+                domains.add(domain)
+        except ValueError:
+            continue
+
+    return domains
 
 
 def lint_claudemd(
@@ -278,6 +351,25 @@ def lint_claudemd(
                 "message": f"{claudemd_path.relative_to(repo_root)}: "
                            f"npm run '{script}' not in package.json scripts",
             })
+
+    # DOMAIN-CROSS-REF check: domain CLAUDE.md files must not reference other domains
+    # Exception: root CLAUDE.md is exempt (it's the navigation map)
+    is_root = claudemd_path.parent == repo_root
+    if not is_root:
+        domain_refs = extract_domain_claude_references(content)
+        sibling_domains = get_sibling_domains(repo_root, claudemd_path)
+
+        for domain_ref in domain_refs:
+            # Check if this is a sibling domain (not the root)
+            if domain_ref in sibling_domains:
+                findings.append({
+                    "type": "domain-cross-ref",
+                    "line": "?",
+                    "message": f"{claudemd_path.relative_to(repo_root)}: "
+                               f"domain CLAUDE.md must not reference other domain CLAUDE.md files; "
+                               f"found reference to '{domain_ref}/CLAUDE.md' "
+                               f"(violation of one-file-per-domain-dispatch rule)",
+                })
 
     return findings
 
