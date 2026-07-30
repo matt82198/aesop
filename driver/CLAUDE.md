@@ -26,6 +26,11 @@
   Tests: test_wave_loop_rs3.
 - **wave_bridge.py** — Phase 3: bridges AgentDriver backends to wave manifest items
   (build_manifest_item / dispatch_item; green ONLY from test exit code, see below).
+- **anthropic_driver.py** — Anthropic Messages API driver for bench seam (direct HTTP, no SDK).
+- **anthropic_transport.py** — stdlib urllib transport for the Anthropic endpoint.
+- **backend_config.py** — Seat config builder: reads `aesop.config.json` seats block, constructs driver instances.
+- **context_pack.py** — Context-pack assembly for orchestrator decisions (allowlist-only reads).
+- **wave_scheduler.py** — Wave-manifest scheduler: builds worker driver from config, dispatches wave items.
 - **decisions/** — Decision type schema registry (sibling lane owns schemas; absent = optional).
 - **../tests/** — test_agent_driver (contract), test_codex_driver_e2e (offline + gated
   live), test_wave_bridge, test_orchestrator_driver, test_adjudication_gate,
