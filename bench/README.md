@@ -21,6 +21,27 @@ truth, proven correct against a zero-cost mock runner. Producing an actual verdi
 tokens against real models and should be reported as its own dated result, not
 folded into this scaffold.
 
+## Fixture intent manifest
+
+Deliberately-broken fixtures used for AI bug-detection benchmarks and mutation-testing validation are tracked in `fixtures-intent.json`. Each entry documents:
+- **path** — fixture file location (repo-relative)
+- **reason** — why this fixture is intentionally broken/incomplete
+- **fixture_type** — `deliberately_broken_code` (tests fail by design) or `intentional_coverage_gap` (correct code with test gaps)
+- **added** — ISO date when fixture was added
+
+This manifest allows CI and analysis tools to distinguish benchmark fixtures from real regressions. Validate with:
+
+```bash
+python tools/fixture_intent_check.py --root .
+python tools/fixture_intent_check.py --root . --json  # JSON output for CI
+```
+
+Fixtures included:
+- `tests/fixtures/seam_s_sample_task/repo/test_sample.py` — add() returns x*y (tests fail)
+- `tests/fixtures/seam_sample_task/repo/main.py` — count() has off-by-one (tests fail)
+- `bench/fixtures/mutation_fault_fixture.py` — correct code with intentional coverage gaps
+- `bench/fixtures/test_mutation_fault_fixture.py` — incomplete test suite (mutation tool validation)
+
 ## What's in here
 
 - `tasks.jsonl` — 12 held-out tasks, one JSON object per line. Each task has:
