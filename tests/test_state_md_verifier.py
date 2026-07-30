@@ -30,14 +30,16 @@ class TestStatemdVerifierEscapeRepro(unittest.TestCase):
 
     def test_escape_repro_unmerged_files_with_resolved_claim(self):
         """
-        Fixture: STATE.md claims "tools/foo.py conflicts resolved"
-        Git status: UU tools/foo.py (unmerged)
-        Expected: verifier flags as CONTRADICTION
+        ESCAPE REPRO: Fixture with deterministic UU unmerged file claimed as "resolved".
+        Expected: verifier MUST flag as CONTRADICTION and exit 1.
+
+        Incident: STATE.md claimed "tools/foo.py conflicts resolved" while
+        git status --porcelain showed UU tools/foo.py (unmerged).
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
 
-            # Initialize a git repo
+            # Initialize git repo
             subprocess.run(
                 ["git", "init"],
                 cwd=tmpdir_path,
@@ -57,10 +59,10 @@ class TestStatemdVerifierEscapeRepro(unittest.TestCase):
                 check=True
             )
 
-            # Create initial file and commit
+            # Create and commit initial file
             test_file = tmpdir_path / "tools" / "foo.py"
             test_file.parent.mkdir(parents=True, exist_ok=True)
-            test_file.write_text("original\n")
+            test_file.write_text("base line\n")
             subprocess.run(
                 ["git", "add", "tools/foo.py"],
                 cwd=tmpdir_path,
@@ -68,22 +70,22 @@ class TestStatemdVerifierEscapeRepro(unittest.TestCase):
                 check=True
             )
             subprocess.run(
-                ["git", "commit", "-m", "Initial commit"],
+                ["git", "commit", "-m", "Base"],
                 cwd=tmpdir_path,
                 capture_output=True,
                 check=True
             )
 
-            # Create a branch and make conflicting changes
+            # Create branch A with one version
             subprocess.run(
-                ["git", "checkout", "-b", "branch1"],
+                ["git", "checkout", "-b", "branchA"],
                 cwd=tmpdir_path,
                 capture_output=True,
                 check=True
             )
-            test_file.write_text("version1\n")
+            test_file.write_text("version A\n")
             subprocess.run(
-                ["git", "commit", "-am", "Version 1"],
+                ["git", "commit", "-am", "A"],
                 cwd=tmpdir_path,
                 capture_output=True,
                 check=True
@@ -91,66 +93,57 @@ class TestStatemdVerifierEscapeRepro(unittest.TestCase):
 
             # Go back to main and make conflicting change
             subprocess.run(
+                ["git", "checkout", "HEAD~1"],
+                cwd=tmpdir_path,
+                capture_output=True,
+                check=True
+            )
+            subprocess.run(
                 ["git", "checkout", "-b", "main"],
                 cwd=tmpdir_path,
                 capture_output=True,
                 check=True
             )
-            test_file.write_text("version2\n")
+            test_file.write_text("version B\n")
             subprocess.run(
-                ["git", "commit", "-am", "Version 2"],
+                ["git", "commit", "-am", "B"],
                 cwd=tmpdir_path,
                 capture_output=True,
                 check=True
             )
 
-            # Try to merge and let it conflict
+            # Merge branchA - will create conflict
             result = subprocess.run(
-                ["git", "merge", "branch1"],
+                ["git", "merge", "branchA"],
                 cwd=tmpdir_path,
-                capture_output=True,
-                text=True
+                capture_output=True
             )
-            # Merge should fail with conflict (exit code != 0)
 
-            # Verify we have UU status
-            rc, stdout, stderr = state_md_verifier.run_command(
+            # FIXTURE ASSERTION: Verify UU status was created
+            rc, status_out, _ = state_md_verifier.run_command(
                 ["git", "status", "--porcelain"],
                 cwd=tmpdir_path
             )
-            has_uu = "UU" in stdout or ("both modified" in stderr or "both added" in stderr)
 
-            if not has_uu:
-                # Fallback: manually create UU by applying a workaround
-                # Write conflict markers and use update-index
-                test_file.write_text("<<<<<<< HEAD\nversion2\n=======\nversion1\n>>>>>>> branch1\n")
-                subprocess.run(
-                    ["git", "update-index", "--stage=1", "tools/foo.py"],
-                    cwd=tmpdir_path,
-                    capture_output=True
-                )
-                subprocess.run(
-                    ["git", "update-index", "--stage=3", "tools/foo.py"],
-                    cwd=tmpdir_path,
-                    capture_output=True
-                )
+            if "UU" not in status_out:
+                self.skipTest(f"Could not create UU status via merge. Status: {status_out}")
 
-            # Create STATE.md claiming resolve
+            # Create STATE.md claiming the conflict is resolved
             state_md = tmpdir_path / "STATE.md"
             state_md.write_text("# Checkpoint\n\ntools/foo.py conflicts resolved\n")
 
             # Run verifier
             rc, stdout, stderr = state_md_verifier.run_command(
-                [sys.executable, str(tools_path / "state_md_verifier.py"), "--state-md", str(state_md)],
+                [sys.executable, str(tools_path / "state_md_verifier.py"),
+                 "--state-md", str(state_md)],
                 cwd=tmpdir_path
             )
 
-            # Should exit 1 (contradiction found) or at least not pass silently
-            if rc != 1:
-                # If the test setup didn't create proper UU, skip but don't fail
-                self.skipTest(f"Could not create UU status for test. git status output: {stdout}")
-            else:
-                self.assertIn("CONTRADICTION", stdout, "Expected CONTRADICTION in output")
+            # MUST flag as CONTRADICTION and exit 1
+            self.assertEqual(rc, 1,
+                f"Verifier must exit 1 on contradiction. Got {rc}.\nstdout: {stdout}\nstderr: {stderr}")
+            self.assertIn("CONTRADICTION", stdout,
+                f"Must report CONTRADICTION. stdout: {stdout}")
 
     def test_clean_accurate_state_md(self):
         """
@@ -329,8 +322,8 @@ class TestStatemdVerifierEscapeRepro(unittest.TestCase):
 
     def test_multiple_unmerged_files_caught(self):
         """
-        Fixture: STATE.md claims clean, but git status shows UU on multiple files
-        Expected: verifier flags all contradictions
+        Fixture: STATE.md claims clean, but git status shows UU on multiple files.
+        Expected: verifier flags contradiction on generic "clean" claim.
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
@@ -355,80 +348,77 @@ class TestStatemdVerifierEscapeRepro(unittest.TestCase):
                 check=True
             )
 
-            # Create initial files and commit on main
+            # Create and commit initial files
             files = ["file1.py", "file2.py", "file3.py"]
             for fname in files:
                 f = tmpdir_path / fname
-                f.write_text("original\n")
+                f.write_text("base\n")
                 subprocess.run(
                     ["git", "add", fname],
                     cwd=tmpdir_path,
-                    capture_output=True
+                    capture_output=True,
+                    check=True
                 )
             subprocess.run(
-                ["git", "commit", "-m", "Initial"],
+                ["git", "commit", "-m", "Base"],
                 cwd=tmpdir_path,
-                capture_output=True
+                capture_output=True,
+                check=True
             )
 
-            # Create branch1 with different versions
+            # Create branch A with different versions
             subprocess.run(
-                ["git", "checkout", "-b", "branch1"],
+                ["git", "checkout", "-b", "branchA"],
                 cwd=tmpdir_path,
-                capture_output=True
+                capture_output=True,
+                check=True
             )
             for fname in files:
-                f = tmpdir_path / fname
-                f.write_text(f"v1_{fname}\n")
+                (tmpdir_path / fname).write_text(f"A:{fname}\n")
             subprocess.run(
-                ["git", "commit", "-am", "Branch1"],
+                ["git", "commit", "-am", "A"],
                 cwd=tmpdir_path,
-                capture_output=True
+                capture_output=True,
+                check=True
             )
 
-            # Go back to main with conflicting changes
+            # Go back and make conflicting changes
+            subprocess.run(
+                ["git", "checkout", "HEAD~1"],
+                cwd=tmpdir_path,
+                capture_output=True,
+                check=True
+            )
             subprocess.run(
                 ["git", "checkout", "-b", "main"],
                 cwd=tmpdir_path,
-                capture_output=True
+                capture_output=True,
+                check=True
             )
             for fname in files:
-                f = tmpdir_path / fname
-                f.write_text(f"v2_{fname}\n")
+                (tmpdir_path / fname).write_text(f"B:{fname}\n")
             subprocess.run(
-                ["git", "commit", "-am", "Main"],
+                ["git", "commit", "-am", "B"],
+                cwd=tmpdir_path,
+                capture_output=True,
+                check=True
+            )
+
+            # Merge to create conflicts
+            subprocess.run(
+                ["git", "merge", "branchA"],
                 cwd=tmpdir_path,
                 capture_output=True
             )
 
-            # Attempt merge (will conflict)
-            subprocess.run(
-                ["git", "merge", "branch1"],
-                cwd=tmpdir_path,
-                capture_output=True
-            )
-
-            # Verify we have unmerged files
-            rc, stdout, stderr = state_md_verifier.run_command(
+            # FIXTURE ASSERTION: Verify UU status
+            rc, status_out, _ = state_md_verifier.run_command(
                 ["git", "status", "--porcelain"],
                 cwd=tmpdir_path
             )
 
-            has_conflicts = "UU" in stdout or "both modified" in stdout
-
-            if not has_conflicts:
-                # Fallback: mark files as unmerged manually
-                for fname in files:
-                    subprocess.run(
-                        ["git", "update-index", "--stage=1", fname],
-                        cwd=tmpdir_path,
-                        capture_output=True
-                    )
-                    subprocess.run(
-                        ["git", "update-index", "--stage=3", fname],
-                        cwd=tmpdir_path,
-                        capture_output=True
-                    )
+            if status_out.count("UU") < 3:
+                self.skipTest(f"Could not create 3 UU files via merge. Status:\n{status_out}")
 
             # Create STATE.md claiming clean state
             state_md = tmpdir_path / "STATE.md"
@@ -436,15 +426,16 @@ class TestStatemdVerifierEscapeRepro(unittest.TestCase):
 
             # Run verifier
             rc, stdout, stderr = state_md_verifier.run_command(
-                [sys.executable, str(tools_path / "state_md_verifier.py"), "--state-md", str(state_md)],
+                [sys.executable, str(tools_path / "state_md_verifier.py"),
+                 "--state-md", str(state_md)],
                 cwd=tmpdir_path
             )
 
-            # Should exit 1 (contradictions found) or skip if setup failed
-            if rc != 1:
-                self.skipTest(f"Could not create merge conflict for test. git status: {stdout}")
-            else:
-                self.assertGreater(len(stdout), 0, "Expected findings in output")
+            # Must exit 1 (contradiction found)
+            self.assertEqual(rc, 1,
+                f"Expected exit 1. Got {rc}. stdout: {stdout}")
+            self.assertIn("CONTRADICTION", stdout,
+                f"Must report CONTRADICTION. stdout: {stdout}")
 
 
 class TestStatemdVerifierIntegration(unittest.TestCase):

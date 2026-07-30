@@ -238,11 +238,12 @@ def verify_pushed_claims(claims, git_root):
 
     return findings
 
-    return findings
-
 
 def verify_merged_claims(claims, git_root):
     """Verify "MERGED" PR claims via gh pr view (or SKIP if gh unavailable).
+
+    When a PR cannot be resolved in the current repo (e.g., PR from different repo),
+    classify as UNVERIFIABLE, not ERROR. Only ERROR if gh itself fails.
 
     Returns findings list.
     """
@@ -288,12 +289,23 @@ def verify_merged_claims(claims, git_root):
             )
 
             if rc != 0:
-                findings.append({
-                    "claim": claim,
-                    "line": line,
-                    "status": "ERROR",
-                    "detail": f"gh pr view {pr_num} failed: {stderr}"
-                })
+                # Check if it's a "not found" error (unresolvable PR) vs a real error
+                if "Could not resolve to a PullRequest" in stderr or "not found" in stderr.lower():
+                    # PR doesn't exist in this repo — classify as UNVERIFIABLE
+                    findings.append({
+                        "claim": claim,
+                        "line": line,
+                        "status": "UNVERIFIABLE",
+                        "detail": f"PR #{pr_num} not found in current repo"
+                    })
+                else:
+                    # Real error (network, auth, etc.)
+                    findings.append({
+                        "claim": claim,
+                        "line": line,
+                        "status": "ERROR",
+                        "detail": f"gh pr view {pr_num} failed: {stderr}"
+                    })
                 continue
 
             try:
