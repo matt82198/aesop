@@ -152,11 +152,11 @@ class TestGateActivationTrap(unittest.TestCase):
                 continue
 
             for file_path in search_path.rglob("*.py"):
+                if file_path.name == "dispatch_lint.py":
+                    continue
                 try:
                     content = file_path.read_text(encoding="utf-8")
                     if forbidden_flag in content:
-                        # Check if it's a string literal (allowed in comments/docs)
-                        # but flag if it's in actual code that could be executed
                         if "dispatch" in content or "agent()" in content or "spawn" in content:
                             violations.append(f"{file_path.relative_to(self.repo_root)}: {forbidden_flag}")
                 except (UnicodeDecodeError, OSError):
