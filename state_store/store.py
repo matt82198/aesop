@@ -3,10 +3,17 @@
 Durable substrate for aesop's event-sourced state layer (the DB-source-of-truth
 design; git becomes a rendered export, not the coordination layer). Backend is
 SQLite in WAL mode so many readers and serialized writers share one file; the
-same interface is meant to swap to Postgres behind ``state_store.api.StateAPI``
-for team scale without touching call sites.
+same interface is designed to allow a backend swap behind
+``state_store.api.StateAPI`` without touching call sites.
 
-Stdlib only (sqlite3, json, time) per aesop's no-external-deps invariant.
+Connection reuse: each thread gets a lazily-created, cached connection via
+``threading.local()``, avoiding per-call connect/close overhead while remaining
+safe for multi-threaded callers (each thread has its own connection). Callers
+sharing an EventStore across processes still get per-process isolation because
+``threading.local()`` is per-thread-per-process.
+
+Stdlib only (sqlite3, json, time, threading) per aesop's no-external-deps
+invariant.
 """
 from __future__ import annotations
 
@@ -14,6 +21,7 @@ import hashlib
 import json
 import sqlite3
 import sys
+import threading
 import time
 
 # Retry configuration for database lock contention (especially under parallel CI shards)
@@ -75,61 +83,92 @@ class EventStore:
     """Append-only event log stored at ``db_path``.
 
     Safe under concurrent appends from multiple threads AND multiple EventStore
-    instances on the same file: every call opens its own connection with
-    ``PRAGMA busy_timeout`` and assigns the per-stream version inside a
-    ``BEGIN IMMEDIATE`` transaction, so the read-max-version-then-insert is
-    atomic and two writers can never collide or duplicate a version.
+    instances on the same file. Uses thread-local connection pooling: each
+    thread gets its own cached SQLite connection with ``PRAGMA busy_timeout``
+    and WAL mode set once, reused across calls. Per-stream version assignment
+    happens inside a ``BEGIN IMMEDIATE`` transaction, so the
+    read-max-version-then-insert is atomic and two writers can never collide or
+    duplicate a version.
 
     Implements defense-in-depth retry logic for 'database is locked' errors that
     can occur under heavy parallel contention (e.g., CI shards).
+
+    Call ``close()`` when the store is no longer needed to release the current
+    thread's cached connection. Connections for other threads are cleaned up
+    when those threads exit (Python's threading.local semantics).
     """
 
     def __init__(self, db_path: str):
         self.db_path = db_path
+        self._local = threading.local()
 
         def _init_db():
-            conn = sqlite3.connect(self.db_path)
-            try:
-                conn.execute("PRAGMA journal_mode=WAL")
-                conn.execute("PRAGMA busy_timeout=5000")
-                conn.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS events (
-                        id      INTEGER PRIMARY KEY AUTOINCREMENT,
-                        ts      REAL    NOT NULL,
-                        actor   TEXT    NOT NULL,
-                        stream  TEXT    NOT NULL,
-                        type    TEXT    NOT NULL,
-                        payload TEXT    NOT NULL,
-                        version INTEGER NOT NULL
-                    )
-                    """
+            conn = self._get_conn()
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS events (
+                    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts      REAL    NOT NULL,
+                    actor   TEXT    NOT NULL,
+                    stream  TEXT    NOT NULL,
+                    type    TEXT    NOT NULL,
+                    payload TEXT    NOT NULL,
+                    version INTEGER NOT NULL
                 )
-                conn.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_events_stream_version "
-                    "ON events(stream, version)"
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_stream_version "
+                "ON events(stream, version)"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS snapshots (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts           REAL    NOT NULL,
+                    stream       TEXT    NOT NULL,
+                    event_version INTEGER NOT NULL,
+                    projection   TEXT    NOT NULL,
+                    checksum     TEXT    NOT NULL
                 )
-                conn.execute(
-                    """
-                    CREATE TABLE IF NOT EXISTS snapshots (
-                        id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                        ts           REAL    NOT NULL,
-                        stream       TEXT    NOT NULL,
-                        event_version INTEGER NOT NULL,
-                        projection   TEXT    NOT NULL,
-                        checksum     TEXT    NOT NULL
-                    )
-                    """
-                )
-                conn.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_snapshots_stream_version "
-                    "ON snapshots(stream, event_version)"
-                )
-                conn.commit()
-            finally:
-                conn.close()
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_snapshots_stream_version "
+                "ON snapshots(stream, event_version)"
+            )
+            conn.commit()
 
         _retry_on_db_lock(_init_db)
+
+    def _get_conn(self) -> sqlite3.Connection:
+        """Return a cached, per-thread SQLite connection.
+
+        Lazily creates a connection on first call per thread, sets WAL mode and
+        busy_timeout once, then reuses it for all subsequent calls on that thread.
+        Thread-local storage ensures no cross-thread sharing of connections.
+        """
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            self._local.conn = conn
+        return conn
+
+    def close(self) -> None:
+        """Close the current thread's cached connection, if any.
+
+        Safe to call multiple times. After close(), the next operation on this
+        thread will lazily open a fresh connection.
+        """
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            self._local.conn = None
 
     def append(
         self,
@@ -169,9 +208,8 @@ class EventStore:
         """
 
         def _do_append():
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_conn()
             try:
-                conn.execute("PRAGMA busy_timeout=5000")
                 # BEGIN IMMEDIATE takes the write lock up front so the
                 # read-max-then-insert below is atomic under contention.
                 conn.execute("BEGIN IMMEDIATE")
@@ -197,8 +235,14 @@ class EventStore:
                 )
                 conn.commit()
                 return version
-            finally:
-                conn.close()
+            except ConcurrencyConflict:
+                raise
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise
 
         return _retry_on_db_lock(_do_append)
 
@@ -206,35 +250,52 @@ class EventStore:
         """Return all events for ``stream`` ascending by version (empty if none)."""
         return self._rows("WHERE stream = ? ORDER BY version ASC", (stream,))
 
+    def read_since(self, stream: str, after_version: int) -> list:
+        """Return events for ``stream`` with version > ``after_version``.
+
+        Enables tail-replay: given a snapshot at version N, read_since(stream, N)
+        returns only the events appended after the snapshot, avoiding a full-stream
+        scan. Combined with snapshot read/write, this provides O(tail) reads
+        instead of O(total) for long-lived streams like claims.
+
+        Args:
+            stream: The stream name (e.g. "tracker", "claims")
+            after_version: Return only events with version strictly greater than this.
+                          Use 0 to read all events (equivalent to read()).
+
+        Returns:
+            List of event dicts, ascending by version.
+        """
+        return self._rows(
+            "WHERE stream = ? AND version > ? ORDER BY version ASC",
+            (stream, after_version),
+        )
+
     def read_all(self) -> list:
         """Return all events across all streams ascending by id."""
         return self._rows("ORDER BY id ASC", ())
 
     def _rows(self, clause: str, params) -> list:
-        conn = sqlite3.connect(self.db_path)
-        try:
-            conn.execute("PRAGMA busy_timeout=5000")
-            cur = conn.execute(
-                "SELECT id, ts, actor, stream, type, payload, version FROM events " + clause,
-                params,
-            )
-            rows = []
-            for r in cur.fetchall():
-                try:
-                    payload = json.loads(r[5])
-                    rows.append({
-                        "id": r[0], "ts": r[1], "actor": r[2], "stream": r[3],
-                        "type": r[4], "payload": payload, "version": r[6],
-                    })
-                except json.JSONDecodeError as e:
-                    # Log corrupt event (stream id + sequence) to stderr and skip
-                    print(
-                        f"WARNING: corrupt JSON payload in stream={r[3]} id={r[0]}: {e}",
-                        file=sys.stderr,
-                    )
-            return rows
-        finally:
-            conn.close()
+        conn = self._get_conn()
+        cur = conn.execute(
+            "SELECT id, ts, actor, stream, type, payload, version FROM events " + clause,
+            params,
+        )
+        rows = []
+        for r in cur.fetchall():
+            try:
+                payload = json.loads(r[5])
+                rows.append({
+                    "id": r[0], "ts": r[1], "actor": r[2], "stream": r[3],
+                    "type": r[4], "payload": payload, "version": r[6],
+                })
+            except json.JSONDecodeError as e:
+                # Log corrupt event (stream id + sequence) to stderr and skip
+                print(
+                    f"WARNING: corrupt JSON payload in stream={r[3]} id={r[0]}: {e}",
+                    file=sys.stderr,
+                )
+        return rows
 
     def save_snapshot(self, stream: str, event_version: int, projection: dict) -> None:
         """Save a materialized projection snapshot at a specific event version.
@@ -243,14 +304,13 @@ class EventStore:
         project() can resume from this snapshot's version and fold only newer events.
 
         Args:
-            stream: the stream name (e.g. "tracker")
+            stream: the stream name (e.g. "tracker", "claims")
             event_version: the per-stream event version this snapshot was computed through
             projection: the materialized state dict (e.g. the full tracker projection)
         """
         def _do_save_snapshot():
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_conn()
             try:
-                conn.execute("PRAGMA busy_timeout=5000")
                 projection_json = json.dumps(projection, separators=(",", ":"), sort_keys=True)
                 checksum = hashlib.sha256(projection_json.encode()).hexdigest()
                 conn.execute(
@@ -259,8 +319,12 @@ class EventStore:
                     (time.time(), stream, event_version, projection_json, checksum),
                 )
                 conn.commit()
-            finally:
-                conn.close()
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise
 
         _retry_on_db_lock(_do_save_snapshot)
 
@@ -274,36 +338,32 @@ class EventStore:
         On corrupt/unreadable snapshot, logs a warning and returns None (falls back to
         full replay).
         """
-        conn = sqlite3.connect(self.db_path)
+        conn = self._get_conn()
+        cur = conn.execute(
+            "SELECT event_version, projection, checksum FROM snapshots "
+            "WHERE stream = ? ORDER BY event_version DESC LIMIT 1",
+            (stream,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        event_version, projection_json, checksum = row
         try:
-            conn.execute("PRAGMA busy_timeout=5000")
-            cur = conn.execute(
-                "SELECT event_version, projection, checksum FROM snapshots "
-                "WHERE stream = ? ORDER BY event_version DESC LIMIT 1",
-                (stream,),
-            )
-            row = cur.fetchone()
-            if row is None:
-                return None
-            event_version, projection_json, checksum = row
-            try:
-                projection = json.loads(projection_json)
-                # Verify checksum
-                computed_checksum = hashlib.sha256(projection_json.encode()).hexdigest()
-                if computed_checksum != checksum:
-                    print(
-                        f"WARNING: snapshot checksum mismatch for stream={stream} "
-                        f"version={event_version}; falling back to full replay",
-                        file=sys.stderr,
-                    )
-                    return None
-                return (event_version, projection, checksum)
-            except json.JSONDecodeError as e:
+            projection = json.loads(projection_json)
+            # Verify checksum
+            computed_checksum = hashlib.sha256(projection_json.encode()).hexdigest()
+            if computed_checksum != checksum:
                 print(
-                    f"WARNING: corrupt JSON in snapshot for stream={stream} "
-                    f"version={event_version}: {e}; falling back to full replay",
+                    f"WARNING: snapshot checksum mismatch for stream={stream} "
+                    f"version={event_version}; falling back to full replay",
                     file=sys.stderr,
                 )
                 return None
-        finally:
-            conn.close()
+            return (event_version, projection, checksum)
+        except json.JSONDecodeError as e:
+            print(
+                f"WARNING: corrupt JSON in snapshot for stream={stream} "
+                f"version={event_version}: {e}; falling back to full replay",
+                file=sys.stderr,
+            )
+            return None

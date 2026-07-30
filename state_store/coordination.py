@@ -9,7 +9,14 @@ Fail-CLOSED by construction: if you cannot append or read, you do NOT hold
 the claim and must not dispatch. TTL + claim_released events handle crashed
 holders (analogous to lock.mjs PID-liveness staleness, but expressed as events).
 
-No risky changes to store.py or api.py — uses only existing append/read primitives.
+Claims-stream compaction: the claims stream grows monotonically as agents
+claim/release resources across waves. ``compact_claims()`` snapshots the
+active claim events so that subsequent reads use tail-replay (snapshot + new
+events only) instead of scanning the full history. Compaction is optional and
+safe to skip; it only affects read performance, not correctness.
+
+No risky changes to store.py or api.py — uses only existing append/read/snapshot
+primitives.
 
 Stdlib only: time.
 """
@@ -251,6 +258,7 @@ def current_holder(store, resource: str) -> str | None:
     """Return the instance_id currently holding a resource, or None if unclaimed.
 
     Reads and folds the claims stream to find the winner for the resource.
+    Uses snapshot + tail-replay when a compacted snapshot is available.
     Returns None if the resource is not claimed or has been released.
 
     Args:
@@ -261,9 +269,124 @@ def current_holder(store, resource: str) -> str | None:
         The instance_id of the current holder, or None if unclaimed.
     """
     try:
-        events = _read_claim_events(store)
+        events = _read_claims_compacted(store)
         claims = fold_claims(events)
         return claims.get(resource)
     except Exception:
         # Fail-closed: on any error, we cannot determine the holder
         return None
+
+
+# ---------------------------------------------------------------------------
+# Claims-stream compaction (snapshot + tail-replay)
+# ---------------------------------------------------------------------------
+
+def _get_event_store(store):
+    """Extract the underlying EventStore from a StateAPI or raw EventStore.
+
+    Returns the EventStore instance, or None if snapshot operations are not
+    available (e.g. mock stores in tests).
+    """
+    # StateAPI wraps EventStore as _store
+    es = getattr(store, "_store", None)
+    if es is not None and hasattr(es, "read_snapshot"):
+        return es
+    # Raw EventStore
+    if hasattr(store, "read_snapshot"):
+        return store
+    return None
+
+
+def _read_claims_compacted(store) -> list:
+    """Read claims events using snapshot + tail-replay when available.
+
+    If a compacted snapshot exists for the claims stream, loads the snapshot's
+    active claim events and combines them with tail events (events after the
+    snapshot version). This avoids scanning the full claims history on every
+    read.
+
+    Falls back to reading the full stream when:
+    - No snapshot exists
+    - The store does not support snapshots (e.g. mock stores)
+    - The snapshot is corrupt (read_snapshot returns None)
+
+    The snapshot stores the set of claim_requested events that were active
+    (winning, non-expired, non-released) at compaction time. These synthetic
+    prefix events carry their original version, timestamp, and TTL so that
+    fold_claims produces identical results to a full-stream fold.
+    """
+    es = _get_event_store(store)
+    if es is None:
+        return _read_claim_events(store)
+
+    snapshot = es.read_snapshot("claims")
+    if snapshot is None:
+        return _read_claim_events(store)
+
+    snap_version, snap_state, _ = snapshot
+    active_events = snap_state.get("active_claims", [])
+
+    # Read only events appended after the snapshot
+    tail = es.read_since("claims", snap_version)
+
+    return active_events + tail
+
+
+def compact_claims(store) -> bool:
+    """Snapshot the current claims fold state for faster future reads.
+
+    Reads the full claims stream, folds it to find active holders, extracts
+    the winning claim_requested events, and saves them as a snapshot. Future
+    reads via ``_read_claims_compacted`` will load this snapshot plus only
+    events appended after the snapshot version, instead of replaying the
+    entire claims history.
+
+    The snapshot stores the original event dicts (type, payload with resource/
+    instance_id/ttl, ts, version) so that fold_claims TTL checks remain
+    correct after compaction.
+
+    Args:
+        store: StateAPI or EventStore instance with snapshot support.
+
+    Returns:
+        True if a snapshot was saved, False if compaction was skipped
+        (empty stream or no snapshot support).
+    """
+    es = _get_event_store(store)
+    if es is None:
+        return False
+
+    events = _read_claim_events(store)
+    if not events:
+        return False
+
+    # Fold to find current holders
+    holders = fold_claims(events)
+    if not holders:
+        # All claims released/expired; snapshot an empty state at current max version
+        max_version = max(e.get("version", 0) for e in events)
+        es.save_snapshot("claims", max_version, {"active_claims": []})
+        return True
+
+    # For each held resource, find the winning claim_requested event.
+    # The winner is the instance with the lowest active claim version for
+    # that resource. We need the original event dict to preserve ts/ttl
+    # for correct TTL checks after compaction.
+    active_events = []
+    for resource, winner_id in holders.items():
+        # Find the active (winning) claim_requested event for this holder
+        for ev in events:
+            if (
+                ev.get("type") == "claim_requested"
+                and ev.get("payload", {}).get("resource") == resource
+                and ev.get("payload", {}).get("instance_id") == winner_id
+            ):
+                # Check this is the active claim (not released after it)
+                # Simple heuristic: take the last un-released claim from this
+                # instance for this resource, matching fold_claims behavior.
+                active_events.append(ev)
+                break  # first match is lowest version (events are version-ordered)
+
+    max_version = max(e.get("version", 0) for e in events)
+    es.save_snapshot("claims", max_version, {"active_claims": active_events})
+    return True

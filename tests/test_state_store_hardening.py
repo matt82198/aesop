@@ -38,6 +38,7 @@ class TestStoreCorruptPayload(unittest.TestCase):
         self.store = EventStore(str(self.db_path))
 
     def tearDown(self):
+        self.store.close()
         self.tmpdir.cleanup()
 
     def test_read_skips_corrupt_payload_logs_to_stderr(self):
@@ -123,6 +124,8 @@ class TestIngestValidation(unittest.TestCase):
         self.api = MockAPI(str(self.db_path))
 
     def tearDown(self):
+        self.store.close()
+        self.api.store.close()
         self.tmpdir.cleanup()
 
     def test_ingest_rejects_non_dict_event(self):
