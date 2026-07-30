@@ -216,6 +216,58 @@ def helper():
         # Should pass: file doesn't have regression context
         self.assertEqual(exit_code, 0, f"Expected exit 0 (clean), got {exit_code}\nOutput: {output}")
 
+    def test_no_false_positive_on_timeout_string_constant(self):
+        """No false positive: string constants mentioning exit 124 are not flagged."""
+        # This reproduces the false positive from driver/proc_util.py
+        dispatch_file = self.repo_root / "driver" / "util_with_timeout_string.py"
+        dispatch_file.write_text(
+            '''
+"""Utility with timeout handling."""
+
+# This is a string constant describing timeout behavior, NOT code that infers failures
+_TIMEOUT_NOTE = "Command timed out after {t}s; process tree killed (exit 124)"
+
+def handle_timeout(proc):
+    """Handle a timed-out process gracefully."""
+    # This is legitimate timeout handling, not failure inference
+    return _TIMEOUT_NOTE
+'''
+        )
+
+        exit_code, output = self.run_validator("--check")
+
+        # Should pass: string constants are not violations
+        self.assertEqual(exit_code, 0, f"Expected exit 0 (string constant is not a violation), got {exit_code}\nOutput: {output}")
+        self.assertIn("No regression gate violations", output)
+
+    def test_catch_timeout_exit_code_in_conditional_logic(self):
+        """ESSENTIAL: still catches exit 124 checks in actual conditional code."""
+        # This is the REAL escape: code that checks if result == 124 and infers failure
+        dispatch_file = self.repo_root / "monitor" / "verify_bad_timeout_logic.py"
+        dispatch_file.write_text(
+            '''
+"""Verification that infers failures from timeout - this is the real escape."""
+
+def verify_tests():
+    """Regression verification with bad timeout logic."""
+    import subprocess
+    result = subprocess.run(["python", "tools/ci_shard_runner.py", "0", "4"], timeout=300)
+
+    # WRONG: checking if result.returncode == 124 and inferring test failures
+    if result.returncode == 124:
+        print("Tests failed: timeout occurred")  # WRONG - timeout is not test failure
+        return False
+
+    return result.returncode == 0
+'''
+        )
+
+        exit_code, output = self.run_validator("--check")
+
+        # Should fail: this IS a violation (comparing exit code to 124)
+        self.assertEqual(exit_code, 1, f"Expected exit 1 (violation), got {exit_code}\nOutput: {output}")
+        self.assertIn("124", output)
+
     def test_multiple_violations_same_file(self):
         """Multiple violations: catches all violations in one file."""
         dispatch_file = self.repo_root / "driver" / "multi_violations.py"

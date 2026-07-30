@@ -131,17 +131,30 @@ def find_violations(file_path: Path, content: str) -> List[Dict]:
 
                 # Additional filter for patterns that commonly have false positives
                 if pattern_key == "timeout_exit_code":
-                    # Only flag if line looks like code, not documentation
-                    if any(cond in line for cond in ["if ", " == ", " = ", "result", "returncode"]):
-                        violations.append({
-                            "file": str(file_path),
-                            "line": line_num,
-                            "pattern": pattern_key,
-                            "description": pattern_info["description"],
-                            "fix": pattern_info["fix"],
-                            "why": pattern_info["why"],
-                            "code": line.strip()[:100],
-                        })
+                    # NARROW FILTER: Only flag actual code logic that infers failures from exit 124
+                    # Reject string constants: skip lines that are pure string assignments (= "...124...")
+                    if re.search(r'=\s*["\'].*124.*["\']', line):
+                        continue
+
+                    # Reject documentation-only lines (no code operators)
+                    has_code_logic = any(op in line for op in ["if ", "elif ", "while ", " == ", " != ", " === ", " !== "])
+                    if not has_code_logic:
+                        continue
+
+                    # Must have some indication of comparing or checking the exit code
+                    has_exit_check = re.search(r'(exit.*==|==.*124|exit.*code.*124|result.*==|returncode.*==)', line, re.IGNORECASE)
+                    if not has_exit_check:
+                        continue
+
+                    violations.append({
+                        "file": str(file_path),
+                        "line": line_num,
+                        "pattern": pattern_key,
+                        "description": pattern_info["description"],
+                        "fix": pattern_info["fix"],
+                        "why": pattern_info["why"],
+                        "code": line.strip()[:100],
+                    })
                 else:
                     # Other patterns: add without additional filtering
                     violations.append({
