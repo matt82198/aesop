@@ -58,6 +58,7 @@
 - **Fail-safe verdicts**: `OrchestratorDriver.decide()` returns DECISION_FAILED after retries exhausted; never fabricates a passing verdict (never-green principle).
 - **AdjudicationGate safety invariant** (increment 3): the final verdict is EITHER a confident
   challenger verdict OR the incumbent's; undetermined/DECISION_FAILED/low-confidence is NEVER final.
+- **Regression gate (Guardrail G8)**: audit/regression/verification dispatches must cite the actual CI gate (`tools/ci_shard_runner.py` from .github/workflows/ci.yml line 160), never development proxies (`pytest tests/`, `python -m unittest tests`). Exit code 124 (timeout) indicates incomplete collection, not failure evidence. Enforced by `tools/regression_gate_validator.py --check` in CI.
 - stdlib-only, ASCII-only, Windows + Linux safe. Concrete adapters own any provider SDK, not this layer.
 
 ## Phase 2 (Codex) + Phase 3 (Bridge) Implementation Details

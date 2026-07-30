@@ -71,6 +71,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `otel_sink.py` — OpenTelemetry tracing integration (spans/metrics emitter for fleet observability)
 - `playwright_common.py` — Shared Playwright harness boilerplate: `free_port()`, `copy_dist()`, `start_server()`, `stop_server()` extracted from verify_*.py to reduce duplication (module for import, not CLI)
 - `port_fidelity_check.py` — Validates port/copy/vendor/migrate dispatch prompts require source path, source-unique marker, and independent verification
+- `regression_gate_validator.py` — Guardrail G8: regression/audit/verification dispatch validator; scans driver/*.py, monitor/*.py for citations of test commands; enforces that Python tests must cite `tools/ci_shard_runner.py` (the actual CI gate in .github/workflows/ci.yml line 160), never `pytest tests/` (dev proxy) or generic test runners; detects timeout exit codes (124) as incomplete collection evidence (not test failures); modes: `--check` (default), `--json`; suppression via `# regression-gate-ok`; exit 0=clean/1=violations/2=error
 - `portability_check.py` — Shipped-surface gate: scan for hardcoded personal/environment paths (Windows user paths, POSIX home paths, private-machine tokens 'conductor3'/'matt8'); exit 0 clean / 1 with findings; --json output, --root flag for base directory; stdlib only
 - `power_selftest.py` — Health check harness for /power bootstrap
 - `prepublish_scan.py` — Pre-publish full history + staged-changes scan gate
