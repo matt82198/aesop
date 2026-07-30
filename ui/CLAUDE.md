@@ -50,6 +50,8 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **cost.py**: Parser for `state/ledger/OUTCOMES-LEDGER.md` (markdown table); returns per-model + per-day aggregates, verdict scorecards, optional dollar estimates (if `aesop.config.json` supplies `pricing` map).
 
+**state_query_panel.py** — Time-travel state query API endpoints (`GET /api/state/events`, `GET /api/state/streams`). Wraps `state_store.StateAPI` + `EventStore` for querying event-sourced tracker with temporal/stream/type filters. Supports `?stream=`, `?type=`, `?after=ISO_ts`, `?before=ISO_ts`, `?limit=N` (default 100, max 500). Fails gracefully (empty results) if database missing.
+
 **wave_prs.py** — Wave PR board: `get_wave_prs()` gathers open PRs + PR-less `feat/*` branches, rolls CI checks into passing/failing/pending/none, derives top blocker, caches ~5s. Degrades to `{available:false, error}` when gh missing/un-authed. Subprocess reads use `encoding='utf-8', errors='replace'`. Override gh binary: `AESOP_GH_BIN` env var.
 
 **wave_telemetry.py** — Wave telemetry: `get_wave_telemetry()` extracts current phase (from `STATE.md`), top blocker (from `AUDIT-BACKLOG.md`), cost metrics (from ledger). Reads state at call time (no cache); degrades gracefully on missing files.
@@ -91,6 +93,8 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 - `GET /api/cost` — Cost/scorecard from ledger. `GET /api/backlog` — Audit backlog by tier.
 - `GET /api/agents` — Fleet agent list. `GET /api/agent?id=<id>` — Agent detail (path-traversal-safe).
 - `GET /api/tracker` — Tracker items (optional `status`/`priority` filters).
+- `GET /api/state/events` — Time-travel query of event store: `?stream=<name>` `?type=<type>` `?after=<iso_ts>` `?before=<iso_ts>` `?limit=<n>` (default 100, max 500). Returns JSON array of events.
+- `GET /api/state/streams` — Aggregate view: `{streams: [{name, count, latest_ts}]}`. Lists all streams with event counts and latest timestamp.
 - `GET /api/wave/prs` — PR board with CI rollup (cached ~5s; degrades `{available:false}`).
 - `GET /api/wave/telemetry` — Phase + blocker + cost metrics. `GET /api/wave/dispatch` — Per-agent phase visibility (polled 2-3s).
 - `GET /api/wave/failure?pr=N` — CI failure drill-down with log excerpts (cached ~5s).

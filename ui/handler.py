@@ -26,6 +26,7 @@ import wave_context
 import api
 import api.tracker
 import api.submit
+import state_query_panel
 from render import render_dashboard
 from csrf import validate_csrf_request
 from collectors import (_snapshot_data, _snapshot_tracker,
@@ -258,6 +259,10 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.serve_api_file_scope()
         elif self.path.startswith("/api/tracker"):
             self.serve_tracker()
+        elif self.path.startswith("/api/state/events"):
+            state_query_panel.serve_api_state_events(self)
+        elif self.path == "/api/state/streams":
+            state_query_panel.serve_api_state_streams(self)
         elif self.path.startswith("/assets/"):
             self.serve_asset()
         elif self.path.startswith("/agent?"):
