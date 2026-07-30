@@ -39,24 +39,49 @@ from typing import Optional, Dict, Any, Tuple, Set, List
 
 
 # Author classification rules
-# Note: Primary author email is extracted from git config if available.
-# This allows classification to work for any repo without hardcoded personal info.
-def _get_default_author_email():
-    """Get author email from git config for the current repo."""
+# Note: Primary author email is resolved from git config rather than hardcoded,
+# so classification works for any repo without baking in personal info.
+#
+# This lookup MUST stay call-time, not import-time. Evaluating it at import
+# froze the result to whatever git config the interpreter happened to start in,
+# so classification depended on the caller's cwd instead of the repo actually
+# being analyzed (a fresh clone or CI checkout then counted every human commit
+# as "junk" and published authors_human=0).
+def _get_default_author_email(repo_root: Optional[str] = None) -> Optional[str]:
+    """Get the configured author email for a repo (call-time, repo-scoped)."""
+    cmd = ["git"]
+    if repo_root:
+        cmd += ["-C", str(repo_root)]
+    cmd += ["config", "user.email"]
     try:
-        result = subprocess.run(
-            ["git", "config", "user.email"],
-            capture_output=True, text=True, timeout=5
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
     except Exception:
         pass
     return None  # No email classification if not configured
 
+
+def human_emails(repo_root: Optional[str] = None) -> List[str]:
+    """Resolve the set of emails treated as human authors, at call time.
+
+    Precedence:
+      1. AESOP_HUMAN_EMAILS env var (comma-separated) — for repos with several
+         human contributors, or to make CI deterministic.
+      2. The analyzed repo's configured `user.email`.
+    """
+    override = os.environ.get("AESOP_HUMAN_EMAILS", "").strip()
+    if override:
+        return [e.strip() for e in override.split(",") if e.strip()]
+    email = _get_default_author_email(repo_root)
+    return [email] if email else []
+
+
 AUTHOR_CLASSIFICATION = {
     "human": {
-        "emails": [e for e in [_get_default_author_email()] if e],
+        # Resolved at call time via human_emails(); see note above. Kept empty
+        # here so nothing reads a stale import-time snapshot.
+        "emails": [],
         "description": "Real human developers (deduplicated by email)"
     },
     "model": {
@@ -103,12 +128,15 @@ def extract_model_tier(model_name: str) -> str:
     return name
 
 
-def classify_author(name: str, email: str) -> Tuple[str, Optional[str]]:
+def classify_author(
+    name: str, email: str, repo_root: Optional[str] = None
+) -> Tuple[str, Optional[str]]:
     """Classify an author identity.
 
     Args:
         name: Author display name
         email: Author email address
+        repo_root: Repo whose git config supplies the human email (defaults to cwd)
 
     Returns:
         Tuple of (classification, metadata):
@@ -141,8 +169,8 @@ def classify_author(name: str, email: str) -> Tuple[str, Optional[str]]:
             tier = extract_model_tier(name)
             return ("model", tier)
 
-    # Check human
-    if email in AUTHOR_CLASSIFICATION["human"]["emails"]:
+    # Check human (resolved at call time against the analyzed repo)
+    if email in human_emails(repo_root):
         return ("human", None)
 
     # Default: treat unknown as junk (conservative)
@@ -608,7 +636,7 @@ class GitStats:
                     parts = line.split("|", 1)
                     if len(parts) == 2:
                         name, email = parts
-                        classification, _ = classify_author(name.strip(), email.strip())
+                        classification, _ = classify_author(name.strip(), email.strip(), self.repo_root)
                         if classification == "human":
                             human_emails.add(email.strip())
 
@@ -617,7 +645,7 @@ class GitStats:
             if commit_msg:
                 for match in re.finditer(r"Co-Authored-By:\s*(.+?)\s*<(.+?)>", commit_msg):
                     name, email = match.group(1).strip(), match.group(2).strip()
-                    classification, _ = classify_author(name, email)
+                    classification, _ = classify_author(name, email, self.repo_root)
                     if classification == "human":
                         human_emails.add(email)
 
@@ -646,7 +674,7 @@ class GitStats:
             if commit_msg:
                 for match in re.finditer(r"Co-Authored-By:\s*(.+?)\s*<(.+?)>", commit_msg):
                     name, email = match.group(1).strip(), match.group(2).strip()
-                    classification, tier = classify_author(name, email)
+                    classification, tier = classify_author(name, email, self.repo_root)
                     if classification == "model" and tier:
                         tiers.add(tier)
 
@@ -674,7 +702,7 @@ class GitStats:
             if commit_msg:
                 for match in re.finditer(r"Co-Authored-By:\s*(.+?)\s*<(.+?)>", commit_msg):
                     name, email = match.group(1).strip(), match.group(2).strip()
-                    classification, tier = classify_author(name, email)
+                    classification, tier = classify_author(name, email, self.repo_root)
                     if classification == "model" and tier:
                         tiers.add(tier)
 

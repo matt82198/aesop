@@ -19,6 +19,7 @@ Exit codes:
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -338,7 +339,7 @@ def main():
         "--state-md",
         type=str,
         default=None,
-        help="Path to STATE.md (default: ./STATE.md or conductor3/STATE.md)"
+        help="Path to STATE.md (default: ./STATE.md, else $AESOP_STATE_MD)"
     )
     parser.add_argument(
         "--json",
@@ -358,11 +359,13 @@ def main():
     if args.state_md:
         state_md_path = Path(args.state_md).resolve()
     else:
-        # Try local STATE.md first, then conductor3/STATE.md
-        candidates = [
-            Path("STATE.md").resolve(),
-            Path("conductor3/STATE.md").resolve()
-        ]
+        # Try local STATE.md first, then an operator-configured location.
+        # The fallback is env-driven so no site-specific directory name is
+        # baked into the shipped source (portability gate).
+        candidates = [Path("STATE.md").resolve()]
+        env_state_md = os.environ.get("AESOP_STATE_MD")
+        if env_state_md:
+            candidates.append(Path(env_state_md).resolve())
         state_md_path = None
         for candidate in candidates:
             if candidate.exists():
