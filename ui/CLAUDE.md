@@ -64,6 +64,8 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **bench_panel.py**: Benchmark API routes (`/api/bench`, `/api/bench/compare`). Reads `bench_results_cache` at call time.
 
+**tooling_panel.py** — Tooling dashboard panel: `GET /api/tooling/summary` aggregates results from repo analysis tools (todo_tracker, test_coverage_gaps, dead_code_check, import_cycle_check, encoding_lint). Runs tools via subprocess, caches 60s, gracefully degrades to null for missing tools. `?force=1` bypasses cache.
+
 **api/__init__.py**, **api/tracker.py**, **api/submit.py**: Mutation handlers (tracker CRUD, inbox append).
 
 ## Frontend (React 18 + Vite + TypeScript)
@@ -77,6 +79,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
   - BenchmarkPanel: Results table (model/accuracy/tokens/latency/cost/timestamp) + model comparison cards; fetches `/api/bench` and `/api/bench/compare`; dark/light theme, responsive grid.
   - CostAnalyticsPanel (wave-29 UX): info-dense operator view with (a) spend per wave (bar chart), (b) model efficiency vs Opus counterfactual, (c) burn rate + end-of-wave projection with ceiling alert; graceful DATA-UNAVAILABLE states when ledger/ceiling missing.
   - FailureDrilldown: drawer showing CI job list + ~100-line log excerpts on expand; fetches `/api/wave/failure?pr=N`.
+  - ToolingPanel: compact card grid showing repo tooling health (TODO count, coverage, dead code, import cycles, encoding issues); fetches `/api/tooling/summary`; green/yellow/red severity coding; refresh button; responsive grid.
 - **lib/api.ts**: Typed fetch helpers + CSRF header injection + `/api/session` fallback for dev server.
 - **lib/useSSE.ts**: EventSource hook with reconnect logic, per-section state, connection status.
 - **lib/types.ts**: TypeScript types for all API payloads (backend contract).
@@ -102,6 +105,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 - `GET /api/wave/telemetry` — Phase + blocker + cost metrics. `GET /api/wave/dispatch` — Per-agent phase visibility (polled 2-3s).
 - `GET /api/wave/failure?pr=N` — CI failure drill-down with log excerpts (cached ~5s).
 - `GET /api/bench` — Latest benchmark results from journal. `GET /api/bench/compare` — Model comparison data.
+- `GET /api/tooling/summary` — Aggregated tooling scan results (cached 60s; `?force=1` re-scans; null for missing tools).
 - All `/api/wave/*` routes: read-only, call-time reads, polled not SSE; gh-backed honor `AESOP_GH_BIN`.
 - `GET /events` — SSE stream (6 sections, keepalive ~15s). `GET /favicon.ico` — 204.
 
