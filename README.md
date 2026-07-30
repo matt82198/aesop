@@ -43,6 +43,90 @@ Each framework below is good at what it optimizes for. Aesop optimizes for the p
 
 **Proof:** This repo is built entirely by Aesop. Haiku proved sufficient for seam-level judgment tasks (39/39; pre-declared ceiling rule flags limited discrimination — sufficiency floor, not tier equivalence). Frontier reasoning and long-horizon planning are out of scope. Removing the hierarchical supervisor layer cut dispatch cost ~4× at identical graded quality (A/B; topology cancelled, data kept). The loop study isolates the lever behind that recovery: putting the failing repro test in context lifts one-shot hard-task pass rate +16.7pp on its own; the full seated repair loop reaches 77.2% overall (from a 67.8% checkpoint baseline), with the hard-task gain driven by the repro-test-in-context prompt lever rather than repair iteration.
 
+## System Architecture
+
+The Aesop system orchestrates parallel Haiku agents over a durable filesystem state layer, with fail-closed guardrails and live observability. Here's how the pieces connect:
+
+```mermaid
+graph TB
+    Start["Ranked Backlog"]
+    Orch["Orchestrator<br/>(Fable/Opus)<br/>Main Thread"]
+    Fleet["Parallel Haiku Fleet<br/>(5–8 worktree-isolated agents)"]
+    Agent1["Agent 1<br/>(feat branch)"]
+    Agent2["Agent 2<br/>(feat branch)"]
+    AgentN["Agent N<br/>(feat branch)"]
+    
+    Stash["State Store<br/>(SQLite WAL)"]
+    StateFiles["STATE.md +<br/>BUILDLOG.md"]
+    Git["Git<br/>(persisted)"]
+    
+    Watchdog["Watchdog Daemon<br/>(heartbeat +<br/>respawn)"]
+    
+    Gates["Guardrails<br/>● Pre-push secret-scan<br/>● Cost ceiling<br/>● Re-run CI gates"]
+    
+    MergeTrain["Integration Branch<br/>(Merge Train)"]
+    
+    Audit["Closing Audit<br/>(findings,<br/>fleet-ops)"]
+    
+    Monitor["Monitor Daemon<br/>(signals,<br/>observability)"]
+    Dashboard["Dashboard<br/>(live status)"]
+    
+    NextWave["Next Wave<br/>Backlog"]
+    
+    Start -->|Orchestrator reads| Orch
+    Orch -->|Dispatches| Fleet
+    Fleet --> Agent1
+    Fleet --> Agent2
+    Fleet --> AgentN
+    
+    Agent1 -->|commit + push| MergeTrain
+    Agent2 -->|commit + push| MergeTrain
+    AgentN -->|commit + push| MergeTrain
+    
+    Agent1 -->|State updates| Stash
+    Agent2 -->|State updates| Stash
+    AgentN -->|State updates| Stash
+    
+    Watchdog -->|Polls heartbeats| Fleet
+    Watchdog -->|Auto-respawn on stall| Fleet
+    
+    MergeTrain -->|Code review| Orch
+    Gates -->|Blocks unsafe merges| Orch
+    
+    Orch -->|Reviews PRs| MergeTrain
+    Orch -->|Merges green PRs| MergeTrain
+    
+    MergeTrain -->|Integration tests| Stash
+    Stash -->|Persists| StateFiles
+    StateFiles -->|Git-committed| Git
+    
+    Monitor -->|Collects signals| Watchdog
+    Monitor -->|Collects signals| Fleet
+    Monitor -->|Observes| Orch
+    
+    Monitor -->|Feeds| Dashboard
+    StateFiles -->|Feeds| Dashboard
+    Dashboard -->|Displays to| Orch
+    
+    Audit -->|Analyzes results| StateFiles
+    Git -->|Audit reviews| Audit
+    Audit -->|Findings→backlog| NextWave
+```
+
+### Key Components
+
+| Component | Role | Cost |
+| --- | --- | --- |
+| **Orchestrator** | Main thread (Fable/Opus): dispatches agents, reviews PRs, approves merges, conducts audit | ~$0.02/wave |
+| **Haiku Fleet** | Parallel workers (5–8 agents): fix backlog items, run tests, push branches | ~$0.01–0.02/wave |
+| **State Store** | SQLite WAL: event-sourced state, projections for dashboard | Persisted |
+| **Watchdog** | Background daemon: detects stalls, auto-respawns agents, security scans | Async |
+| **Guardrails** | Pre-push secret-scan, cost ceiling, re-run CI gates — all fail-closed | Local checks |
+| **Dashboard** | Live web UI (http://localhost:8770): fleet health, work kanban, activity, cost | SSE-fed |
+| **Monitor** | Background observer: collects health signals, triggers audit inputs | Async |
+
+See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for a detailed walkthrough of each component, durable state model, and scaling characteristics.
+
 ## Why It Matters
 
 Crash recovery is not a special path; it is how the system *always* starts. This design choice eliminates distributed consensus, external state servers, and recovery machinery. The trade-off: you own the git repo as your state layer, and you provide the human-in-the-loop to set goals and vet outbound gates (publishing, releases, history rewrites). The result: crash-only (request-scoped workers over persistent filesystem state) is simpler, faster to debug, and easier to audit than systems with hidden distributed state.
