@@ -551,3 +551,24 @@ export interface FileScopeData {
   drift: FileScopeDrift;
 }
 
+/**
+ * Benchmark result from GET /api/bench.
+ * Records model performance: accuracy, token usage, latency, cost estimates.
+ */
+export interface BenchResult {
+  timestamp: number; // Unix epoch seconds
+  model: string;
+  tasks?: number;
+  passed?: number;
+  accuracy: number; // 0.0-1.0
+  total_tokens?: number;
+  avg_latency_ms?: number;
+  cost_estimate?: number;
+}
+
+/**
+ * GET /api/bench/compare — model comparison summary.
+ * Maps model name to its latest stats.
+ */
+export type BenchComparison = Record<string, BenchResult>;
+

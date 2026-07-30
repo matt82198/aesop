@@ -1,0 +1,166 @@
+/* BenchmarkPanel — benchmark results table and model comparison */
+
+.benchmark-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-3);
+}
+
+.benchmark-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.benchmark-section h3 {
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text);
+  margin: 0;
+}
+
+/* Results table */
+.benchmark-table-wrapper {
+  overflow-x: auto;
+  border-radius: var(--radius-md);
+}
+
+.benchmark-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+  background: var(--color-surface);
+}
+
+.benchmark-table caption {
+  text-align: left;
+  padding: var(--space-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  caption-side: top;
+}
+
+.benchmark-table thead {
+  background: var(--color-bg-inset);
+  border-bottom: 2px solid var(--color-border);
+}
+
+.benchmark-table th {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text);
+}
+
+.benchmark-table th.col-numeric {
+  text-align: right;
+}
+
+.benchmark-table tbody tr {
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.benchmark-table tbody tr:hover {
+  background: var(--color-bg-subtle);
+}
+
+.benchmark-table td {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  color: var(--color-text);
+}
+
+.benchmark-table td.col-numeric {
+  text-align: right;
+  font-family: var(--font-mono);
+}
+
+.benchmark-table .model-name {
+  font-weight: var(--font-weight-medium);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  word-break: break-word;
+  max-width: 120px;
+}
+
+.benchmark-table .timestamp {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+/* Model comparison cards */
+.comparison-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: var(--space-3);
+}
+
+.model-card {
+  padding: var(--space-3);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.model-card h4 {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text);
+  margin: 0;
+  font-family: var(--font-mono);
+}
+
+.model-stats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.model-stats dt {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.model-stats dd {
+  font-size: var(--font-size-sm);
+  font-family: var(--font-mono);
+  color: var(--color-text);
+  margin: 0;
+  margin-left: var(--space-2);
+}
+
+.error-message {
+  padding: var(--space-3);
+  background: var(--color-status-error);
+  color: white;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .comparison-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .benchmark-table {
+    font-size: var(--font-size-xs);
+  }
+
+  .benchmark-table th,
+  .benchmark-table td {
+    padding: var(--space-1) var(--space-2);
+  }
+
+  .benchmark-table .model-name {
+    max-width: 80px;
+  }
+}
