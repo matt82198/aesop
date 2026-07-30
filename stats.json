@@ -1,11 +1,11 @@
 {
   "git": {
-    "merged_prs": 514,
+    "merged_prs": 515,
     "merged_prs_source": "gh-api",
-    "total_commits": 1429,
+    "total_commits": 1428,
     "project_age_days": 18,
     "wave_count": 31,
-    "insertions_deletions": 290887,
+    "insertions_deletions": 291243,
     "files_tracked": 928,
     "distinct_coauthors": 14,
     "authors_human": 1,
@@ -27,14 +27,14 @@
     "cumulative_tokens": null,
     "total_coding_hours": null
   },
-  "generated_at": "2026-07-30T04:03:10.895416+00:00",
-  "loc": 248638,
-  "head_sha": "ad9a35eeec12938624d7c24ba2ab91f8edf4f72f",
+  "generated_at": "2026-07-30T04:49:00.725126+00:00",
+  "loc": 248803,
+  "head_sha": "f8852ab8cd87e0c15a70c4df9afc7c78e83733f6",
   "economics": {
     "token_ledger_available": false,
-    "merged_prs": 514,
+    "merged_prs": 515,
     "merged_prs_source": "gh-api",
-    "lines_of_code": 248638,
+    "lines_of_code": 248803,
     "wave_count": 31
   },
   "economics_caveats": {
