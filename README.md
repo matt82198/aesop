@@ -88,16 +88,16 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 | Metric | Value |
 | --- | --- |
-| Merged PRs | 455 <!-- metrics-verified: self_stats.py (git log) --> |
-| Total Commits | 1249 <!-- metrics-verified: self_stats.py (git log) --> |
-| Project Age | 17 days <!-- metrics-verified: self_stats.py (git log) --> |
-| Insertions + Deletions | 260,978 <!-- metrics-verified: self_stats.py (git log) --> |
-| Files Tracked | 843 <!-- metrics-verified: self_stats.py (git log) --> |
+| Merged PRs | 506 <!-- metrics-verified: self_stats.py (git log) --> |
+| Total Commits | 1373 <!-- metrics-verified: self_stats.py (git log) --> |
+| Project Age | 18 days <!-- metrics-verified: self_stats.py (git log) --> |
+| Insertions + Deletions | 284,719 <!-- metrics-verified: self_stats.py (git log) --> |
+| Files Tracked | 912 <!-- metrics-verified: self_stats.py (git log) --> |
 | Authors | 1 human + 4 Claude model tiers <!-- metrics-verified: self_stats.py (git log) --> |
 
 <!-- STATS:END -->
 
-**Project Timeline:** Aesop is 17 days old, built by 1 human + the fleet. Every number above is regenerable from git history by anyone who clones the repo (`bash scripts/verify-stats.sh --check`); no hidden telemetry.
+**Project Timeline:** Aesop is 18 days old, built by 1 human + the fleet. Every number above is regenerable from git history by anyone who clones the repo (`bash scripts/verify-stats.sh --check`); no hidden telemetry.
 
 ## Get Started
 
