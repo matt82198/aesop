@@ -317,6 +317,41 @@ git stash  # BAD
         self.assertIn("git_stash", patterns)
         self.assertNotIn("force_flag", patterns)
 
+    def test_ignores_comment_only_pattern(self):
+        """Patterns in comments should not trigger violations (issue #1)."""
+        content = """Agent()
+# Example: gh pr merge 123 (deprecated, use auto_merge.py instead)
+def good_merge():
+    python tools/auto_merge.py -u 123
+"""
+        violations = find_violations(Path("test.py"), content)
+        # Should have 0 violations because the pattern is only in a comment
+        self.assertEqual(len(violations), 0)
+
+    def test_ignores_comment_uppercase_pattern(self):
+        """Patterns in comments with uppercase should not trigger violations."""
+        content = """Agent()
+# See GH PR MERGE logic in the old system
+def good_merge():
+    python tools/auto_merge.py -u 123
+"""
+        violations = find_violations(Path("test.py"), content)
+        # Should have 0 violations because the pattern is only in a comment
+        self.assertEqual(len(violations), 0)
+
+    def test_detects_real_code_not_comment(self):
+        """Patterns in actual code (not comments) should still trigger violations."""
+        content = """Agent()
+def bad_merge():
+    gh pr merge 123
+# This is just a comment mentioning gh pr merge
+"""
+        violations = find_violations(Path("test.py"), content)
+        # Should have 1 violation for the actual code line
+        self.assertEqual(len(violations), 1)
+        self.assertEqual(violations[0]["pattern"], "gh_pr_merge")
+        self.assertEqual(violations[0]["line"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -149,7 +149,9 @@ def _is_const_none(value_node):
 def _is_suppressed(source_lines, node):
     """Check for a `# subprocess-ok` marker on any physical line spanning the call."""
     start = node.lineno
-    end = getattr(node, "end_lineno", node.lineno) or node.lineno
+    end = getattr(node, "end_lineno", None)
+    if end is None:
+        end = node.lineno
     for lineno in range(start, end + 1):
         idx = lineno - 1
         if 0 <= idx < len(source_lines) and SUPPRESS_MARKER in source_lines[idx]:

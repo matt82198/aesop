@@ -107,6 +107,41 @@ def check_suppression(line: str) -> bool:
     return "# dispatch-ok" in line or "// dispatch-ok" in line
 
 
+def is_comment_only(line: str, pattern: str) -> bool:
+    """Check if a pattern appears only in a comment, not in code.
+
+    Returns True if the pattern is only found after # or // comment markers,
+    indicating it's a comment-only reference that shouldn't trigger a violation.
+    """
+    stripped = line.strip()
+
+    # Find comment markers
+    hash_pos = line.find('#')
+    slash_pos = line.find('//')
+
+    # Determine the actual comment start position
+    comment_start = None
+    if hash_pos != -1 and slash_pos != -1:
+        comment_start = min(hash_pos, slash_pos)
+    elif hash_pos != -1:
+        comment_start = hash_pos
+    elif slash_pos != -1:
+        comment_start = slash_pos
+
+    # If no comment marker found, pattern is in code
+    if comment_start is None:
+        return False
+
+    # Check if pattern appears before the comment marker (in code)
+    code_part = line[:comment_start]
+    if re.search(pattern, code_part, re.IGNORECASE):
+        # Pattern found in code part, not just comment
+        return False
+
+    # Pattern only found in comment or not at all
+    return True
+
+
 def find_violations(
     file_path: Path, content: str
 ) -> List[Dict]:
@@ -126,6 +161,10 @@ def find_violations(
 
         for pattern_key, pattern_info in FORBIDDEN_PATTERNS.items():
             if re.search(pattern_info["pattern"], line, re.IGNORECASE):
+                # Skip if pattern only appears in comments
+                if is_comment_only(line, pattern_info["pattern"]):
+                    continue
+
                 violations.append({
                     "file": str(file_path),
                     "line": line_num,
