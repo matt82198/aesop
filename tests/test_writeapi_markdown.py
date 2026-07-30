@@ -187,6 +187,23 @@ class WriteAPIMarkdownTest(unittest.TestCase):
         # Should have a header
         self.assertIn("BUILDLOG", content)
 
+    def test_ensure_buildlog_custom_header(self):
+        """ensure_buildlog_exists(header=...) writes the caller's header, once.
+
+        WS4 increment 2: migrated legacy writers (tools/buildlog.py,
+        tools/ensure_state.py, tools/eod_sweep.py) each own a historical header
+        format; the facade must let them preserve it byte-for-byte.
+        """
+        header = "# Build Log (append-only)\n"
+        self.api.ensure_buildlog_exists(header=header)
+
+        buildlog_file = self.state_dir / "BUILDLOG.md"
+        self.assertEqual(buildlog_file.read_text(encoding="utf-8"), header)
+
+        # Idempotent: a second call with a different header must not overwrite
+        self.api.ensure_buildlog_exists(header="# other header\n")
+        self.assertEqual(buildlog_file.read_text(encoding="utf-8"), header)
+
     def test_buildlog_append_to_existing_file(self):
         """append_buildlog() should append to existing BUILDLOG.md, not overwrite."""
         # Pre-create with some content

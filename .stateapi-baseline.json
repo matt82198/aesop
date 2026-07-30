@@ -1,7 +1,6 @@
 {
   "violations": [
     "tools/alert_bridge.py@watchdog-hb",
-    "tools/buildlog.py@buildlog-md-write",
     "tools/claudemd_lint.py@buildlog-md-write",
     "tools/claudemd_lint.py@ledger-md",
     "tools/claudemd_lint.py@monitor-hb",
@@ -9,10 +8,6 @@
     "tools/claudemd_lint.py@state-md-write",
     "tools/claudemd_lint.py@tracker-json",
     "tools/cost_econ.py@ledger-md",
-    "tools/ensure_state.py@buildlog-md-write",
-    "tools/ensure_state.py@state-md-write",
-    "tools/eod_sweep.py@buildlog-md-write",
-    "tools/eod_sweep.py@state-buildlog-md-write",
     "tools/fleet_ledger.py@ledger-md",
     "tools/health_score.py@monitor-hb",
     "tools/health_score.py@watchdog-hb",
