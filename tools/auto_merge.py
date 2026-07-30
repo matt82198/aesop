@@ -22,11 +22,34 @@ import sys
 import time
 
 
-def run(cmd, check=True, capture=True):
-    r = subprocess.run(
-        cmd, capture_output=capture,
-        text=True, encoding='utf-8'
-    )
+def run(cmd, check=True, capture=True, timeout=30):
+    """Run a command safely with timeout protection.
+
+    Args:
+        cmd: List of command and arguments (no shell=True).
+        check: If True, raise CalledProcessError on non-zero exit.
+        capture: If True, capture stdout/stderr.
+        timeout: Timeout in seconds (default 30). Raises TimeoutExpired if exceeded.
+
+    Returns:
+        subprocess.CompletedProcess result.
+
+    Raises:
+        subprocess.CalledProcessError: If check=True and returncode != 0.
+        subprocess.TimeoutExpired: If timeout exceeded.
+    """
+    try:
+        r = subprocess.run(
+            cmd, capture_output=capture,
+            text=True, encoding='utf-8', timeout=timeout
+        )
+    except subprocess.TimeoutExpired as e:
+        raise subprocess.TimeoutExpired(
+            cmd=e.cmd,
+            timeout=e.timeout,
+            output=e.stdout,
+            stderr=e.stderr
+        ) from e
     if check and r.returncode != 0:
         raise subprocess.CalledProcessError(r.returncode, cmd, r.stdout, r.stderr)
     return r
