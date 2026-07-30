@@ -15,10 +15,12 @@ Runs on `git push` via `.git/hooks/pre-push` (symlink on Unix/macOS/Git Bash; co
 **Checks & Exit Contract**:
 1. `main()` TTY guard — rejects interactive hook invocation (tty stdin) with exit 1 before any checks (fail-closed); logs `interactive_invocation_blocked`. Real `git push` always pipes stdin; tty means human ran hook directly.
 2. `check_branch_policy()` — blocks direct pushes to main/master; exit 1 on violation
-3. `check_secret_scan()` — runs `tools/secret_scan.py --staged`; exit 1 on failure
+3. `check_secret_scan()` — runs `tools/secret_scan.py --range` for each ref tuple on git pre-push stdin; exit 1 on findings. Scans all branches in multi-ref pushes (e.g., `git push --all`).
 4. `check_import_resolution()` — runs `tools/import_resolution_check.py` on staged .py files (guardrail G5); parses via AST, resolves imports against repo structure + stdlib; exit 1 on unresolvable imports. Fail-open only when tool is absent (`import_check_skipped_tool_missing` logged); actual resolution failures are fail-closed.
 5. `check_tracker_guard()` — runs `tools/tracker_guard.py --check` against live runtime state (`AESOP_STATE_ROOT`, default `$AESOP_ROOT/state`); exit 1 (push blocked, `tracker_guard_failure` logged) on zombie-resurrection detection. Wired here rather than CI because tracker.json is git-ignored runtime state a CI checkout never has. Fail-open only when the tool itself is absent (`tracker_guard_skipped_tool_missing` logged) — the hook installs into repos without an aesop checkout.
-6. Policy violations trigger `log_block()` to append audit record (JSON-lines) before exit
+6. `check_claudemd_sync()` — runs `tools/claudemd_sync_gate.py --check` to verify domain code changes are accompanied by corresponding domain/CLAUDE.md updates; exit 1 on drift. Detects when domain directories change without documenting what changed. Fail-open only for missing tool.
+7. `check_metrics()` — runs `tools/metrics_gate.py` to verify hard numeric claims (percentages, multipliers, dollar amounts) in markdown have source verification markers; exit 1 on unverified claims. Fail-open only for missing tool.
+8. Policy violations trigger `log_block()` to append audit record (JSON-lines) before exit
 
 **Audit Ledger**: Append-only path: `${AESOP_ROOT:-$HOME/aesop}/state/SECURITY-AUDIT.log` (git-ignored). 
 Schema: `{"seq":N,"prev_hash":"SHA256_OF_PREV_LINE","ts":"2025-07-12T14:32:01Z","repo":"aesop","event":"push_blocked","reason":"secret_scan_failure"|"push_to_protected_branch","user":"alice"}`
@@ -32,7 +34,7 @@ Schema: `{"seq":N,"prev_hash":"SHA256_OF_PREV_LINE","ts":"2025-07-12T14:32:01Z",
 - Copy (Windows): `cp hooks/pre-push-policy.sh .git/hooks/pre-push` (or PowerShell `Copy-Item`)
 - Auto-installed by scaffold; `npx @matt82198/aesop [dir] --force` to replace existing hook.
 
-**Test Command**: `bash hooks/pre-push-policy.sh --test` — validates branch policy blocks main/master, allows feature/*, audit log JSON format valid, JSON escaping handles special chars, stdin handling (git pre-push pipe) doesn't crash. Exit 0 = pass; exit 1 = fail.
+**Test Command**: `bash hooks/pre-push-policy.sh --test` — runs 18 validation tests covering: branch policy (blocks main/master, allows feature/*, tag-only, mixed), secret scan (multi-ref, no-starvation), audit log (JSON format, escaping, hash-chain), hash verification, new documentation gates fail-open. Exit 0 = pass; exit 1 = fail.
 
 **Verify Audit Log**: `bash hooks/pre-push-policy.sh --verify-audit-log` — detects hash-chain breaks and tail truncation via sidecar anchor.
 

@@ -586,7 +586,8 @@ check_import_resolution() {
 
   local py_bin=""
   if ! py_bin=$(resolve_py_bin); then
-    printf 'Warning: no python interpreter found; import resolution check skipped\n' >&2
+    printf 'Warning: no python interpreter found; import resolution check skipped
+' >&2
     log_event "import_check_skipped_no_python"
     return 0
   fi
@@ -597,7 +598,82 @@ check_import_resolution() {
 
   if [ $check_exit_code -ne 0 ]; then
     if [ -n "$check_output" ]; then
-      printf '%s\n' "$check_output" >&2
+      printf '%s
+' "$check_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
+check_claudemd_sync() {
+  # CLAUDE.md synchronization gate (tools/claudemd_sync_gate.py --check).
+  # Ensures code changes are accompanied by domain CLAUDE.md updates.
+  # Runs at push time so authors see drift immediately.
+  #
+  # Fail-open for missing optional tooling; fail-closed for actual drift.
+  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local sync_script="$aesop_root/tools/claudemd_sync_gate.py"
+
+  if [ ! -f "$sync_script" ] || [ ! -x "$sync_script" ]; then
+    log_event "claudemd_sync_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; CLAUDE.md sync gate skipped
+' >&2
+    log_event "claudemd_sync_skipped_no_python"
+    return 0
+  fi
+
+  local sync_output
+  sync_output=$("$py_bin" "$sync_script" --check 2>&1)
+  local sync_exit_code=$?
+
+  if [ $sync_exit_code -ne 0 ]; then
+    if [ -n "$sync_output" ]; then
+      printf '%s
+' "$sync_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
+check_metrics() {
+  # Metrics verification gate (tools/metrics_gate.py).
+  # Ensures hard numeric claims in markdown are verified with source markers.
+  # Runs at push time so authors see unverified metrics immediately.
+  #
+  # Fail-open for missing optional tooling; fail-closed for unverified metrics.
+  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local metrics_script="$aesop_root/tools/metrics_gate.py"
+
+  if [ ! -f "$metrics_script" ] || [ ! -x "$metrics_script" ]; then
+    log_event "metrics_gate_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; metrics gate skipped
+' >&2
+    log_event "metrics_gate_skipped_no_python"
+    return 0
+  fi
+
+  local metrics_output
+  metrics_output=$("$py_bin" "$metrics_script" 2>&1)
+  local metrics_exit_code=$?
+
+  if [ $metrics_exit_code -ne 0 ]; then
+    if [ -n "$metrics_output" ]; then
+      printf '%s
+' "$metrics_output" >&2
     fi
     return 1
   fi
@@ -1217,12 +1293,48 @@ refs/heads/feature/test $local_sha refs/heads/main 00000000000000000000000000000
     test_failed=$((test_failed + 1))
   fi
 
+  printf '\n=== Test 17: check_claudemd_sync skipped when tool missing ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_no_claudemd"
+    mkdir -p "$AESOP_ROOT"
+
+    if check_claudemd_sync >/dev/null 2>&1; then
+      printf 'PASS: check_claudemd_sync returns 0 (fail-open) when tool missing\n'
+    else
+      printf 'FAIL: check_claudemd_sync should fail-open when tool missing\n'
+      exit 1
+    fi
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
+  printf '\n=== Test 18: check_metrics skipped when tool missing ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_no_metrics"
+    mkdir -p "$AESOP_ROOT"
+
+    if check_metrics >/dev/null 2>&1; then
+      printf 'PASS: check_metrics returns 0 (fail-open) when tool missing\n'
+    else
+      printf 'FAIL: check_metrics should fail-open when tool missing\n'
+      exit 1
+    fi
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
   printf '\n=== Test Results ===\n'
   printf 'PASSED: %d\n' "$test_passed"
   printf 'FAILED: %d\n' "$test_failed"
 
   if [ "$test_failed" -eq 0 ]; then
-    printf '\nAll 16 tests passed.\n'
+    printf '\nAll 18 tests passed.\n'
     return 0
   else
     printf '\nSome tests failed.\n'
@@ -1285,6 +1397,18 @@ main() {
   if ! check_tracker_guard; then
     printf 'Error: Tracker zombie-resurrection gate failed. Push blocked.\n' >&2
     log_block "tracker_guard_failure"
+    exit 1
+  fi
+
+  if ! check_claudemd_sync; then
+    printf 'Error: CLAUDE.md synchronization gate failed. Push blocked.\n' >&2
+    log_block "claudemd_sync_failure"
+    exit 1
+  fi
+
+  if ! check_metrics; then
+    printf 'Error: Metrics verification gate failed. Push blocked.\n' >&2
+    log_block "metrics_gate_failure"
     exit 1
   fi
 
