@@ -4,15 +4,62 @@ set -uo pipefail
 # Glob-based shell test runner — discovers and runs all shell tests sequentially.
 # Discovers from: tests/*.test.sh tests/test_*.sh tests/test-*.sh hooks/pre-push-policy.sh --test
 # Fails fast with clear output.
+#
+# Usage:
+#   bash run_shell_tests.sh [REPO_ROOT]          # Run all discovered tests
+#   bash run_shell_tests.sh --list [REPO_ROOT]   # List discovered test files (one per line)
 
-REPO_ROOT="${1:-.}"
+mode="run"
+REPO_ROOT="."
+
+if [ "$#" -gt 0 ]; then
+  if [ "$1" = "--list" ]; then
+    mode="list"
+    REPO_ROOT="${2:-.}"
+  else
+    REPO_ROOT="$1"
+  fi
+fi
+
 TESTS_DIR="${REPO_ROOT}/tests"
 HOOKS_DIR="${REPO_ROOT}/hooks"
 
 failed_tests=()
 passed_tests=()
 
-# Run a single test file/command
+# Discover test files (returns array in global discovered_tests)
+discover_tests() {
+  discovered_tests=()
+  discovered_hooks=()
+
+  # Discover tests/*.test.sh
+  for test in "$TESTS_DIR"/*.test.sh; do
+    if [ -f "$test" ]; then
+      discovered_tests+=("$test")
+    fi
+  done
+
+  # Discover tests/test_*.sh
+  for test in "$TESTS_DIR"/test_*.sh; do
+    if [ -f "$test" ]; then
+      discovered_tests+=("$test")
+    fi
+  done
+
+  # Discover tests/test-*.sh
+  for test in "$TESTS_DIR"/test-*.sh; do
+    if [ -f "$test" ]; then
+      discovered_tests+=("$test")
+    fi
+  done
+
+  # Check for hooks/pre-push-policy.sh --test
+  if [ -f "$HOOKS_DIR/pre-push-policy.sh" ]; then
+    discovered_hooks+=("$HOOKS_DIR/pre-push-policy.sh")
+  fi
+}
+
+# Run a single test file
 run_test() {
   local test_path="$1"
   local test_name="$2"
@@ -40,34 +87,30 @@ run_test_command() {
   fi
 }
 
+# List mode: print discovered test files (one per line, relative paths for coverage gate)
+if [ "$mode" = "list" ]; then
+  discover_tests
+  for test in "${discovered_tests[@]}"; do
+    echo "$test"
+  done
+  exit 0
+fi
+
+# Run mode: discover and execute tests
 echo "Shell test runner — discovering and running tests from $TESTS_DIR"
 echo ""
 
-# Discover and run tests/*.test.sh
-for test in "$TESTS_DIR"/*.test.sh; do
-  if [ -f "$test" ]; then
-    run_test "$test" "$(basename "$test")"
-  fi
+discover_tests
+
+# Run all discovered test files
+for test in "${discovered_tests[@]}"; do
+  run_test "$test" "$(basename "$test")"
 done
 
-# Discover and run tests/test_*.sh
-for test in "$TESTS_DIR"/test_*.sh; do
-  if [ -f "$test" ]; then
-    run_test "$test" "$(basename "$test")"
-  fi
+# Run hooks tests
+for hook in "${discovered_hooks[@]}"; do
+  run_test_command "bash '$hook' --test" "$(basename "$hook") --test"
 done
-
-# Discover and run tests/test-*.sh
-for test in "$TESTS_DIR"/test-*.sh; do
-  if [ -f "$test" ]; then
-    run_test "$test" "$(basename "$test")"
-  fi
-done
-
-# Run hooks/pre-push-policy.sh --test if it exists
-if [ -f "$HOOKS_DIR/pre-push-policy.sh" ]; then
-  run_test_command "bash '$HOOKS_DIR/pre-push-policy.sh' --test" "hooks/pre-push-policy.sh --test"
-fi
 
 echo ""
 echo "---"

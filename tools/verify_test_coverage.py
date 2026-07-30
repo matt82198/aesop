@@ -92,15 +92,42 @@ def parse_package_json():
 
 
 def get_shell_test_coverage():
-    """Find shell test files that are covered by npm test:sh script."""
+    """Find shell test files that are covered by npm test:sh script.
+
+    Handles both:
+    - Legacy: explicit bash file references (e.g., bash tests/test_*.sh && bash ...)
+    - New: glob runner invocation (bash tools/run_shell_tests.sh)
+    """
     scripts = parse_package_json()
     test_sh = scripts.get("test:sh", "")
 
-    # Parse the test:sh script to extract all bash test file references
-    # Example: bash tests/test_*.sh && bash tests/test-*.sh && bash tests/backup-fleet.test.sh
     covered = set()
 
-    # Extract all bash file references
+    # Check if test:sh delegates to the glob runner
+    if "bash tools/run_shell_tests.sh" in test_sh or "bash ./tools/run_shell_tests.sh" in test_sh:
+        # Invoke the runner with --list mode to get discovered test files
+        try:
+            result = subprocess.run(
+                ["bash", "tools/run_shell_tests.sh", "--list"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                # Parse output: each line is a test file path
+                for line in result.stdout.strip().split("\n"):
+                    line = line.strip()
+                    if line:
+                        # Normalize path: remove leading ./, convert backslashes to forward slashes
+                        normalized = line.replace("\\", "/").lstrip("./")
+                        covered.add(normalized)
+            return covered
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+            # Fall through to legacy parsing if runner invocation fails
+            pass
+
+    # Legacy parsing: extract explicit bash file references
+    # Example: bash tests/test_*.sh && bash tests/test-*.sh && bash tests/backup-fleet.test.sh
     bash_pattern = r"bash\s+([^\s&|]+)"
     for match in re.finditer(bash_pattern, test_sh):
         file_path = match.group(1).strip()
