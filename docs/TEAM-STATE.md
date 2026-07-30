@@ -24,7 +24,7 @@ Aesop currently stores orchestration state in **two git-tracked files**:
 **In the repo now**:
 - `state_store/store.py` — EventStore with atomic `append()`, concurrency-safe writes
 - `state_store/projections.py` — Fold events into tracker state
-- `state_store/api.py` — Facade for backend swaps (SQLite today, Postgres later)
+- `state_store/api.py` — Facade (backend swap seam; currently SQLite WAL)
 - `tests/test_state_store.py` — Concurrent-write proofs, projection tests
 
 **Next steps**: Wire the orchestrator and agent writers to use `StateAPI` instead of git direct writes. This unblocks team-scale coordination without breaking single-instance durability (git exports remain).
@@ -202,15 +202,15 @@ Currently, dashboards query the git export (STATE.md, tracker.json). For real-ti
 
 **Effort**: ~1 sprint. Touch: `ui/`, `state_store/api.py`.
 
-### 3. **Team-Shared Database Setup**
+### 3. **Team-Shared Database Setup** (Not Scheduled)
 
-The current design assumes a **local SQLite file** (filesystem-shared at best). For a true team:
+The current design assumes a **local SQLite file** (filesystem-shared at best). For a true team needing multi-host coordination:
 
-- Backend swap: `StateAPI` points to Postgres instead of SQLite (seamless; only `api.py` changes).
-- Setup: Postgres server, connection pooling, schema migration job.
+- Backend swap: `StateAPI` points to a network-accessible backend instead of SQLite (seamless; only `api.py` changes).
+- Setup: Database server, connection pooling, schema migration job.
 - Tuning: Query optimization for high read/write load.
 
-**Effort**: ~2 sprints. Mostly infrastructure/testing; application code is abstracted.
+**Effort**: ~2 sprints. Mostly infrastructure/testing; application code is abstracted. **Not currently justified**: single-box SQLite handles ~704 ev/s (measured ceiling) vs ~100 ev/s (real-world throughput).
 
 ### 4. **Reconciliation & Conflict Resolution**
 
@@ -351,10 +351,11 @@ assert projected["items"] == original["items"]  # exact match
 - [ ] All reads go through `api.project()`.
 - [ ] Git becomes audit trail only.
 
-- [ ] **Wave N+4**: Postgres backend (optional, depends on team scale).
-- [ ] Postgres schema + migration job.
+- [ ] **Future (optional, contingent on team scale needs)**: Network backend swap.
+- [ ] Backend schema + migration job.
 - [ ] Backend swap in `StateAPI.__init__()`.
 - [ ] Load testing + performance tuning.
+- [ ] Not scheduled; single-box SQLite is sufficient for current workloads.
 
 ---
 

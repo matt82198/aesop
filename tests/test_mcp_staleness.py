@@ -197,6 +197,7 @@ class TestMCPStaleness(unittest.TestCase):
             finally:
                 # Ensure proper cleanup even if there are errors
                 executor.shutdown(wait=True)
+                store.close()
 
             summary = collector.summary()
 
@@ -218,24 +219,27 @@ class TestMCPStaleness(unittest.TestCase):
             db_path = os.path.join(tmpdir, "test_tracker.db")
             store = EventStore(db_path)
 
-            # Append events sequentially
-            versions = []
-            for i in range(10):
-                v = store.append(
-                    stream="test_stream",
-                    event_type="test_event",
-                    payload={"index": i},
-                    actor="test",
-                )
-                versions.append(v)
+            try:
+                # Append events sequentially
+                versions = []
+                for i in range(10):
+                    v = store.append(
+                        stream="test_stream",
+                        event_type="test_event",
+                        payload={"index": i},
+                        actor="test",
+                    )
+                    versions.append(v)
 
-            # Versions should be 1, 2, 3, ..., 10
-            self.assertEqual(versions, list(range(1, 11)))
+                # Versions should be 1, 2, 3, ..., 10
+                self.assertEqual(versions, list(range(1, 11)))
 
-            # Read all events and verify monotonicity
-            events = store.read("test_stream")
-            read_versions = [e["version"] for e in events]
-            self.assertEqual(read_versions, list(range(1, 11)))
+                # Read all events and verify monotonicity
+                events = store.read("test_stream")
+                read_versions = [e["version"] for e in events]
+                self.assertEqual(read_versions, list(range(1, 11)))
+            finally:
+                store.close()
 
     def test_concurrent_appends_no_version_collisions(self):
         """Verify that concurrent appends never produce duplicate versions."""
@@ -264,6 +268,7 @@ class TestMCPStaleness(unittest.TestCase):
                         fut.result(timeout=30)
             finally:
                 executor.shutdown(wait=True)
+                store.close()
 
             # Should have 200 unique versions (4 threads × 50 events)
             self.assertEqual(len(all_versions), 200)
@@ -276,34 +281,37 @@ class TestMCPStaleness(unittest.TestCase):
             db_path = os.path.join(tmpdir, "test_tracker.db")
             store = EventStore(db_path)
 
-            # Append some items
-            item_ids = []
-            for i in range(5):
-                item_id = f"item-{i}"
-                item_ids.append(item_id)
-                store.append(
-                    stream="tracker",
-                    event_type="item_created",
-                    payload={
-                        "id": item_id,
-                        "title": f"Item {i}",
-                        "priority": "P1",
-                        "status": "todo",
-                    },
-                    actor="test",
-                )
+            try:
+                # Append some items
+                item_ids = []
+                for i in range(5):
+                    item_id = f"item-{i}"
+                    item_ids.append(item_id)
+                    store.append(
+                        stream="tracker",
+                        event_type="item_created",
+                        payload={
+                            "id": item_id,
+                            "title": f"Item {i}",
+                            "priority": "P1",
+                            "status": "todo",
+                        },
+                        actor="test",
+                    )
 
-            # Project the tracker
-            events = store.read("tracker")
-            projection = project_tracker(events)
+                # Project the tracker
+                events = store.read("tracker")
+                projection = project_tracker(events)
 
-            # Verify projection shape
-            self.assertEqual(projection["version"], 1)
-            self.assertEqual(len(projection["items"]), 5)
+                # Verify projection shape
+                self.assertEqual(projection["version"], 1)
+                self.assertEqual(len(projection["items"]), 5)
 
-            # Verify all items present in order
-            projected_ids = [item["id"] for item in projection["items"]]
-            self.assertEqual(projected_ids, item_ids)
+                # Verify all items present in order
+                projected_ids = [item["id"] for item in projection["items"]]
+                self.assertEqual(projected_ids, item_ids)
+            finally:
+                store.close()
 
     def test_staleness_bounds_under_load(self):
         """Measure staleness bounds under realistic concurrent load."""
@@ -334,6 +342,7 @@ class TestMCPStaleness(unittest.TestCase):
             finally:
                 # Ensure proper cleanup even if there are errors
                 executor.shutdown(wait=True)
+                store.close()
 
             summary = collector.summary()
 

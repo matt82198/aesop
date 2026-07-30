@@ -38,11 +38,24 @@ class WriteAPIMarkdownTest(unittest.TestCase):
         self.state_dir = Path(self.tmp) / "state"
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.api = WriteAPI(str(self.state_dir))
+        self._stores = []  # track EventStore instances for tearDown cleanup
+
+    def _make_store(self):
+        """Create an EventStore and track it for tearDown cleanup."""
+        store = EventStore(str(self.state_dir / "tracker_events.db"))
+        self._stores.append(store)
+        return store
 
     def tearDown(self):
         """Clean up temp directory."""
         import shutil
 
+        self.api.close()
+        for s in self._stores:
+            try:
+                s.close()
+            except Exception:
+                pass
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_write_state_md_appends_event_and_file(self):
@@ -60,7 +73,7 @@ class WriteAPIMarkdownTest(unittest.TestCase):
         self.assertEqual(written_content, content)
 
         # Check event was appended to state_store
-        store = EventStore(str(self.state_dir / "tracker_events.db"))
+        store = self._make_store()
         events = store.read("state_markdown")
         self.assertEqual(len(events), 1, "One event should be appended to state_markdown stream")
         self.assertEqual(events[0]["type"], "state_md_written")
@@ -83,7 +96,7 @@ class WriteAPIMarkdownTest(unittest.TestCase):
         self.assertIn(line1, content)
 
         # Check event was appended to state_store
-        store = EventStore(str(self.state_dir / "tracker_events.db"))
+        store = self._make_store()
         events = store.read("buildlog")
         self.assertEqual(len(events), 1, "One event should be appended to buildlog stream")
         self.assertEqual(events[0]["type"], "buildlog_entry")
@@ -110,7 +123,7 @@ class WriteAPIMarkdownTest(unittest.TestCase):
             self.assertIn(entry, content)
 
         # Check all events in state_store
-        store = EventStore(str(self.state_dir / "tracker_events.db"))
+        store = self._make_store()
         events = store.read("buildlog")
         self.assertEqual(len(events), len(entries))
 
@@ -170,7 +183,7 @@ class WriteAPIMarkdownTest(unittest.TestCase):
         self.assertEqual(read_back, content)
 
         # Read it back from event store
-        store = EventStore(str(self.state_dir / "tracker_events.db"))
+        store = self._make_store()
         events = store.read("state_markdown")
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["payload"]["content"], content)
@@ -249,7 +262,7 @@ class WriteAPIMarkdownTest(unittest.TestCase):
         self.api.rebuild_state_md(content, force=True)
 
         # Verify the event was appended to the event store
-        store = EventStore(str(self.state_dir / "tracker_events.db"))
+        store = self._make_store()
         events = store.read("state_markdown")
 
         # Should have at least one event (the rebuild event)
@@ -275,7 +288,7 @@ class WriteAPIMarkdownTest(unittest.TestCase):
         self.api.write_state_md(content, actor="test")
 
         # Verify event was appended
-        store = EventStore(str(self.state_dir / "tracker_events.db"))
+        store = self._make_store()
         events_before = len(store.read("state_markdown"))
         self.assertEqual(events_before, 1, "First write should create one event")
 
@@ -319,8 +332,8 @@ class WriteAPIMarkdownTest(unittest.TestCase):
 
         def writer_thread(thread_id, content):
             """Simulate a concurrent writer."""
+            api = WriteAPI(str(self.state_dir))
             try:
-                api = WriteAPI(str(self.state_dir))
                 # Capture the hash from the current state
                 if state_file.exists():
                     current = state_file.read_text(encoding="utf-8")
@@ -340,6 +353,8 @@ class WriteAPIMarkdownTest(unittest.TestCase):
             except Exception as e:
                 results[thread_id] = f"error: {e}"
                 exceptions.append((thread_id, e))
+            finally:
+                api.close()
 
         # Start two concurrent writers
         t1 = threading.Thread(

@@ -97,6 +97,40 @@ class WriteAPI:
         self.state_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = str(self.state_dir / "tracker_events.db")
         self.tracker_file = self.state_dir / "tracker.json"
+        self._stores: list = []  # track EventStore instances for close()
+
+    def _make_store(self):
+        """Create an EventStore and track it for close()."""
+        store = EventStore(self.db_path)
+        self._stores.append(store)
+        return store
+
+    def close(self) -> None:
+        """Close all EventStore connections opened by this WriteAPI.
+
+        Must be called before deleting the state directory on Windows, where
+        open SQLite connections hold file locks that block shutil.rmtree().
+        Safe to call multiple times.
+        """
+        for store in self._stores:
+            try:
+                store.close()
+            except Exception:
+                pass
+        self._stores.clear()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
 
     def tracker_update_status(
         self,
@@ -125,7 +159,7 @@ class WriteAPI:
             ConcurrencyConflict: If EventStore append hits OCC mismatch (should not happen
                                in this phase, but reserved for future use)
         """
-        store = EventStore(self.db_path)
+        store = self._make_store()
 
         # Read current tracker to find the item
         current_tracker = self._load_tracker_safe()
@@ -255,7 +289,7 @@ class WriteAPI:
             "completed_at": None,
         }
 
-        store = EventStore(self.db_path)
+        store = self._make_store()
 
         # Append the event (fail-closed: if this fails, no projection write)
         try:
@@ -289,7 +323,7 @@ class WriteAPI:
         Raises:
             WriteConflict: If atomic write fails (disk write error, not conflict).
         """
-        store = EventStore(self.db_path)
+        store = self._make_store()
         # Bypass OCC check with force=True (recovery always bypasses conflict detection)
         self._render_tracker_atomic(store, start_disk_hash=None, force=True)
 
@@ -310,7 +344,7 @@ class WriteAPI:
             ValueError: If event append fails
             WriteConflict: If concurrent modification detected or atomic write fails
         """
-        store = EventStore(self.db_path)
+        store = self._make_store()
         state_file = self.state_dir / "STATE.md"
 
         # CRITICAL: Capture on-disk hash at operation START (before file write)
@@ -347,7 +381,7 @@ class WriteAPI:
             ValueError: If event append fails
             WriteConflict: If atomic write fails
         """
-        store = EventStore(self.db_path)
+        store = self._make_store()
         buildlog_file = self.state_dir / "BUILDLOG.md"
 
         # Ensure buildlog exists first (idempotent)
@@ -405,7 +439,7 @@ class WriteAPI:
             ValueError: If event append fails
             WriteConflict: If concurrent modification detected or atomic write fails
         """
-        store = EventStore(self.db_path)
+        store = self._make_store()
         state_file = self.state_dir / "STATE.md"
         start_disk_hash = None
 

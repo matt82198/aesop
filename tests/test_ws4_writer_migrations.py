@@ -33,8 +33,14 @@ class WriterMigrationBase(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.state_dir = self.tmp / "state"
+        self._stores = []  # track EventStore instances for tearDown cleanup
 
     def tearDown(self):
+        for s in self._stores:
+            try:
+                s.close()
+            except Exception:
+                pass
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def run_tool(self, script, *args, env_overrides=None):
@@ -56,7 +62,9 @@ class WriterMigrationBase(unittest.TestCase):
             db.exists(),
             f"unified write path must create the event store db at {db}",
         )
-        return EventStore(str(db)).read(stream)
+        store = EventStore(str(db))
+        self._stores.append(store)
+        return store.read(stream)
 
 
 class BuildlogToolMigrationTest(WriterMigrationBase):

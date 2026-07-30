@@ -45,9 +45,21 @@ class HermeticFixtureMixin:
         self.tmp = tempfile.mkdtemp()
         self.state_md = os.path.join(self.tmp, "STATE.md")
         self.db = os.path.join(self.tmp, "events.db")
+        self._stores = []  # track EventStore instances for tearDown cleanup
+
+    def _make_store(self):
+        """Create an EventStore and track it for tearDown cleanup."""
+        store = EventStore(self.db)
+        self._stores.append(store)
+        return store
 
     def tearDown(self):
         import shutil
+        for s in self._stores:
+            try:
+                s.close()
+            except Exception:
+                pass
         shutil.rmtree(self.tmp, ignore_errors=True)
 
 
@@ -71,17 +83,17 @@ class ReadStorePhaseTest(HermeticFixtureMixin, unittest.TestCase):
         self.assertFalse(os.path.exists(self.db))
 
     def test_empty_meta_stream_returns_none(self):
-        EventStore(self.db)  # creates an empty db with tables, no events
+        self._make_store()  # creates an empty db with tables, no events
         self.assertIsNone(read_store_phase(self.db))
 
     def test_returns_latest_phase_set_value(self):
-        store = EventStore(self.db)
+        store = self._make_store()
         store.append("meta", "phase_set", {"phase": "wave-27"}, "t")
         store.append("meta", "phase_set", {"phase": "wave-28"}, "t")
         self.assertEqual(read_store_phase(self.db), "wave-28")
 
     def test_ignores_unrelated_event_types_in_same_stream(self):
-        store = EventStore(self.db)
+        store = self._make_store()
         store.append("meta", "phase_set", {"phase": "wave-28"}, "t")
         store.append("meta", "something_else", {"phase": "wave-99"}, "t")
         self.assertEqual(read_store_phase(self.db), "wave-28")
@@ -124,7 +136,7 @@ class DecideResolutionTest(unittest.TestCase):
 class DetectDriftTest(HermeticFixtureMixin, unittest.TestCase):
     def test_known_drift_is_detected(self):
         _write_state_md(Path(self.state_md), "wave-28-reconcile")
-        store = EventStore(self.db)
+        store = self._make_store()
         store.append("meta", "phase_set", {"phase": "wave-27-old"}, "t")
 
         report = detect_drift(self.state_md, self.db)
@@ -138,7 +150,7 @@ class DetectDriftTest(HermeticFixtureMixin, unittest.TestCase):
 
     def test_known_agreement_is_clean(self):
         _write_state_md(Path(self.state_md), "wave-28-reconcile")
-        store = EventStore(self.db)
+        store = self._make_store()
         store.append("meta", "phase_set", {"phase": "wave-28-reconcile"}, "t")
 
         report = detect_drift(self.state_md, self.db)
@@ -156,7 +168,7 @@ class DetectDriftTest(HermeticFixtureMixin, unittest.TestCase):
     def test_never_mutates_state_md(self):
         _write_state_md(Path(self.state_md), "wave-28-reconcile")
         before = Path(self.state_md).read_text(encoding="utf-8")
-        store = EventStore(self.db)
+        store = self._make_store()
         store.append("meta", "phase_set", {"phase": "wave-27-old"}, "t")
         detect_drift(self.state_md, self.db)
         after = Path(self.state_md).read_text(encoding="utf-8")
@@ -166,7 +178,7 @@ class DetectDriftTest(HermeticFixtureMixin, unittest.TestCase):
 class ResolveDriftTest(HermeticFixtureMixin, unittest.TestCase):
     def test_resolve_writes_authoritative_value_to_store(self):
         _write_state_md(Path(self.state_md), "wave-28-reconcile")
-        store = EventStore(self.db)
+        store = self._make_store()
         store.append("meta", "phase_set", {"phase": "wave-27-old"}, "t")
 
         report = resolve_drift(self.state_md, self.db)
@@ -178,7 +190,7 @@ class ResolveDriftTest(HermeticFixtureMixin, unittest.TestCase):
 
     def test_resolve_never_writes_to_state_md(self):
         _write_state_md(Path(self.state_md), "wave-28-reconcile")
-        store = EventStore(self.db)
+        store = self._make_store()
         store.append("meta", "phase_set", {"phase": "wave-27-old"}, "t")
         before = Path(self.state_md).read_text(encoding="utf-8")
 
@@ -189,12 +201,12 @@ class ResolveDriftTest(HermeticFixtureMixin, unittest.TestCase):
 
     def test_resolve_on_clean_state_is_a_noop(self):
         _write_state_md(Path(self.state_md), "wave-28-reconcile")
-        store = EventStore(self.db)
+        store = self._make_store()
         store.append("meta", "phase_set", {"phase": "wave-28-reconcile"}, "t")
 
         events_before = len(store.read("meta"))
         report = resolve_drift(self.state_md, self.db)
-        events_after = len(EventStore(self.db).read("meta"))
+        events_after = len(self._make_store().read("meta"))
 
         self.assertFalse(report["drift"])
         self.assertEqual(report["fields"][0]["action"], "noop")
@@ -202,14 +214,14 @@ class ResolveDriftTest(HermeticFixtureMixin, unittest.TestCase):
 
     def test_resolve_is_idempotent_across_two_calls(self):
         _write_state_md(Path(self.state_md), "wave-28-reconcile")
-        store = EventStore(self.db)
+        store = self._make_store()
         store.append("meta", "phase_set", {"phase": "wave-27-old"}, "t")
 
         resolve_drift(self.state_md, self.db)
-        count_after_first = len(EventStore(self.db).read("meta"))
+        count_after_first = len(self._make_store().read("meta"))
 
         report_second = resolve_drift(self.state_md, self.db)
-        count_after_second = len(EventStore(self.db).read("meta"))
+        count_after_second = len(self._make_store().read("meta"))
 
         self.assertEqual(report_second["fields"][0]["action"], "noop")
         self.assertEqual(count_after_first, count_after_second, "resolving an already-resolved field must not append again")
@@ -225,7 +237,7 @@ class ResolveDriftTest(HermeticFixtureMixin, unittest.TestCase):
 class CliTest(HermeticFixtureMixin, unittest.TestCase):
     def test_exit_0_when_no_drift(self):
         _write_state_md(Path(self.state_md), "wave-28-reconcile")
-        store = EventStore(self.db)
+        store = self._make_store()
         store.append("meta", "phase_set", {"phase": "wave-28-reconcile"}, "t")
 
         buf = io.StringIO()
@@ -236,7 +248,7 @@ class CliTest(HermeticFixtureMixin, unittest.TestCase):
 
     def test_exit_1_when_drift_and_not_resolved(self):
         _write_state_md(Path(self.state_md), "wave-28-reconcile")
-        store = EventStore(self.db)
+        store = self._make_store()
         store.append("meta", "phase_set", {"phase": "wave-27-old"}, "t")
 
         buf = io.StringIO()
@@ -249,7 +261,7 @@ class CliTest(HermeticFixtureMixin, unittest.TestCase):
 
     def test_exit_0_after_resolve_clears_drift(self):
         _write_state_md(Path(self.state_md), "wave-28-reconcile")
-        store = EventStore(self.db)
+        store = self._make_store()
         store.append("meta", "phase_set", {"phase": "wave-27-old"}, "t")
 
         buf = io.StringIO()

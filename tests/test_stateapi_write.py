@@ -35,6 +35,7 @@ class WriteAPIBasicTest(unittest.TestCase):
 
     def tearDown(self):
         """Clean up temp directory."""
+        self.api.close()
         self.temp_dir.cleanup()
 
     def test_tracker_append_item_creates_item(self):
@@ -93,14 +94,17 @@ class WriteAPIBasicTest(unittest.TestCase):
 
         # Read events directly from store
         store = EventStore(str(self.state_dir / "tracker_events.db"))
-        events = store.read("tracker")
+        try:
+            events = store.read("tracker")
 
-        # Should have at least one event (the created event)
-        self.assertGreater(len(events), 0)
-        # Find the item_created event
-        created_events = [e for e in events if e["type"] == "item_created"]
-        self.assertEqual(len(created_events), 1)
-        self.assertEqual(created_events[0]["payload"]["title"], "Event test")
+            # Should have at least one event (the created event)
+            self.assertGreater(len(events), 0)
+            # Find the item_created event
+            created_events = [e for e in events if e["type"] == "item_created"]
+            self.assertEqual(len(created_events), 1)
+            self.assertEqual(created_events[0]["payload"]["title"], "Event test")
+        finally:
+            store.close()
 
     def test_tracker_append_item_updates_projection(self):
         """tracker_append_item updates tracker.json with the new item."""
@@ -138,16 +142,19 @@ class WriteAPIBasicTest(unittest.TestCase):
 
         # Read events from store
         store = EventStore(str(self.state_dir / "tracker_events.db"))
-        events = store.read("tracker")
+        try:
+            events = store.read("tracker")
 
-        # Should have 2 events: created + updated
-        self.assertGreater(len(events), 1)
-        # Find the item_updated event
-        updated_events = [
-            e for e in events if e["type"] == "item_updated" and e["payload"].get("id") == item_id
-        ]
-        self.assertEqual(len(updated_events), 1)
-        self.assertEqual(updated_events[0]["payload"]["status"], "in-progress")
+            # Should have 2 events: created + updated
+            self.assertGreater(len(events), 1)
+            # Find the item_updated event
+            updated_events = [
+                e for e in events if e["type"] == "item_updated" and e["payload"].get("id") == item_id
+            ]
+            self.assertEqual(len(updated_events), 1)
+            self.assertEqual(updated_events[0]["payload"]["status"], "in-progress")
+        finally:
+            store.close()
 
     def test_tracker_update_status_with_note(self):
         """tracker_update_status can add notes to an item."""
@@ -195,6 +202,7 @@ class WriteAPIFailClosedTest(unittest.TestCase):
 
     def tearDown(self):
         """Clean up temp directory."""
+        self.api.close()
         self.temp_dir.cleanup()
 
     def test_invalid_item_raises_before_append(self):
@@ -235,12 +243,15 @@ class WriteAPIFailClosedTest(unittest.TestCase):
 
         # Now verify against event store
         store = EventStore(str(self.state_dir / "tracker_events.db"))
-        events = store.read("tracker")
-        event_items = {e["payload"]["id"]: e["payload"]
-                       for e in events if e["type"] == "item_created"}
+        try:
+            events = store.read("tracker")
+            event_items = {e["payload"]["id"]: e["payload"]
+                           for e in events if e["type"] == "item_created"}
 
-        # Projection and event store should have same items
-        self.assertEqual(set(projection_items.keys()), set(event_items.keys()))
+            # Projection and event store should have same items
+            self.assertEqual(set(projection_items.keys()), set(event_items.keys()))
+        finally:
+            store.close()
 
 
 class WriteAPIProjectionTest(unittest.TestCase):
@@ -254,6 +265,7 @@ class WriteAPIProjectionTest(unittest.TestCase):
 
     def tearDown(self):
         """Clean up temp directory."""
+        self.api.close()
         self.temp_dir.cleanup()
 
     def test_projection_matches_events(self):
@@ -309,6 +321,7 @@ class WriteAPIAtomicityTest(unittest.TestCase):
 
     def tearDown(self):
         """Clean up temp directory."""
+        self.api.close()
         self.temp_dir.cleanup()
 
     def test_temp_file_cleanup(self):
@@ -350,6 +363,7 @@ class WriteAPIEdgeCasesTest(unittest.TestCase):
 
     def tearDown(self):
         """Clean up temp directory."""
+        self.api.close()
         self.temp_dir.cleanup()
 
     def test_append_item_with_custom_id(self):
@@ -419,6 +433,7 @@ class WriteAPIIntegrationTest(unittest.TestCase):
 
     def tearDown(self):
         """Clean up temp directory."""
+        self.api.close()
         self.temp_dir.cleanup()
 
     def test_append_to_existing_tracker_with_conflict(self):
@@ -465,9 +480,16 @@ class WriteAPIConflictDetectionTest(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.state_dir = Path(self.temp_dir.name)
         self.api = WriteAPI(self.state_dir)
+        self._extra_apis = []  # track extra WriteAPI instances
 
     def tearDown(self):
         """Clean up temp directory."""
+        for a in self._extra_apis:
+            try:
+                a.close()
+            except Exception:
+                pass
+        self.api.close()
         self.temp_dir.cleanup()
 
     def test_concurrent_writer_detected_raises_writeconflict(self):
@@ -475,6 +497,7 @@ class WriteAPIConflictDetectionTest(unittest.TestCase):
         # Use two WriteAPI instances to simulate concurrent modification
         api1 = WriteAPI(self.state_dir)
         api2 = WriteAPI(self.state_dir)
+        self._extra_apis.extend([api1, api2])
 
         # Create initial item via api1
         item1 = api1.tracker_append_item({"title": "Item 1"})
@@ -519,6 +542,7 @@ class WriteAPIConflictDetectionTest(unittest.TestCase):
         # Create initial state via two instances
         api1 = WriteAPI(self.state_dir)
         api2 = WriteAPI(self.state_dir)
+        self._extra_apis.extend([api1, api2])
 
         item1 = api1.tracker_append_item({"title": "Item 1"})
         item2 = api2.tracker_append_item({"title": "Item 2"})
@@ -591,6 +615,7 @@ class WriteAPIIdCollisionTest(unittest.TestCase):
 
     def tearDown(self):
         """Clean up temp directory."""
+        self.api.close()
         self.temp_dir.cleanup()
 
     def test_duplicate_explicit_id_raises_valueerror(self):
@@ -631,6 +656,7 @@ class WriteAPIProjectionRecoveryTest(unittest.TestCase):
 
     def tearDown(self):
         """Clean up temp directory."""
+        self.api.close()
         self.temp_dir.cleanup()
 
     def test_rebuild_projection_recovers_orphaned_event(self):

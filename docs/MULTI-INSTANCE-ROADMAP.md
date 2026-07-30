@@ -1,6 +1,6 @@
 # Multi-Instance Roadmap
 
-Architectural path from single-box SQLite to multi-instance coordination. Current state (2026-07-29) and planned phases.
+Architectural path from single-box SQLite to multi-instance coordination. Current state and planned phases. All phases beyond the current SQLite WAL backend are design sketches, not commitments; none are scheduled.
 
 ## Current Architecture: Single-Box SQLite WAL
 
@@ -14,22 +14,23 @@ Architectural path from single-box SQLite to multi-instance coordination. Curren
 - **Durability**: Append-only event log; projections (tracker.json, orchestrator status) derived from events
 - **Git role**: Read-only export (rendered snapshots, no state writes from git)
 
-### Measured Safety (2026-07-18 Spike)
+### Measured Safety (2026-07-18 Spike, Single-Box)
 
-- **Concurrent writers**: 4 simultaneous processes
-- **Throughput**: ~704 events/sec under contention
+- **Concurrent writers**: 4 simultaneous processes on one host
+- **Throughput**: ~704 events/sec under contention (single-host micro-benchmark; real-world wave throughput averages ~100 events/sec)
 - **Safety**: 0 lock errors across 800 events per writer (3200 total)
-- **OCC support** (Phase 2): Optimistic Concurrency Control via expected_version assertions; fail-closed on mismatch
+- **OCC support**: Optimistic Concurrency Control via expected_version assertions; fail-closed on mismatch
+- **Connection pooling**: Thread-local connection reuse (one cached connection per thread per EventStore instance)
 
 ### Limitations
 
 - **Single host only**: SQLite file-lock is local; no cross-machine readers/writers
-- **No distributed leasing**: Multi-instance coordination via Postgres required
-- **Scaling ceiling**: ~1000 events/sec before network latency + orchestrator overhead dominates (not yet measured)
+- **No distributed leasing**: Multi-instance coordination would require a network-accessible backend (e.g. Postgres)
+- **Scaling ceiling**: Not yet measured under sustained load; the ~704 ev/s micro-benchmark is well above current real-world throughput (~100 ev/s)
 
 ---
 
-## Phase 1: Read-Your-Writes + Multi-Instance Reader (2026-08-XX, Planned)
+## Phase 1: Read-Your-Writes + Multi-Instance Reader (Not Scheduled)
 
 **Goal**: Enable two Aesop instances on separate boxes to coordinate via shared Postgres; primary instance writes, secondary (read-only) follows.
 
@@ -72,7 +73,7 @@ Architectural path from single-box SQLite to multi-instance coordination. Curren
 
 ---
 
-## Phase 2: Multi-Writer Coordination (2026-09-XX, Planned)
+## Phase 2: Multi-Writer Coordination (Not Scheduled)
 
 **Goal**: Enable N instances to safely coordinate writes to the same stream (e.g., shared audit log, distributed leasing).
 
@@ -113,7 +114,7 @@ Architectural path from single-box SQLite to multi-instance coordination. Curren
 
 ---
 
-## Phase 3: Cross-Region Federation (2026-10-XX+, Stretch)
+## Phase 3: Cross-Region Federation (Stretch, Not Scheduled)
 
 **Goal**: Multiple regional Aesop clusters; events replicate asynchronously across regions; local reads always succeed.
 
@@ -139,15 +140,11 @@ Phase 3 is contingent on:
 
 ---
 
-## Migration Path: SQLite → Postgres → Federated
+## Migration Path: SQLite → Network Backend → Federated
 
-### Wave-by-Wave Rollout
+### Rollout (Not Scheduled)
 
-**Wave 26** (2026-07-23): Postgres Phase 1 branch cut; internal testing on staging cluster
-**Wave 27** (2026-07-30): Phase 1 rolled to 10% of production; monitor for connection pool exhaustion, query latency
-**Wave 28** (2026-08-06): Phase 1 rolled to 50% of production; if green, 100% by end of week
-**Wave 29-30**: Phase 2 (OCC multi-writer); testing on staging, gradual rollout
-**Wave 31+**: Phase 3 (federation); contingent on user demand + measured stability
+No backend migration is currently planned. The wave-by-wave rollout dates originally sketched here (Waves 26-31) have passed without the work being started, because single-box SQLite remains sufficient for current throughput and team size. When a migration is warranted (see decision tree below), a concrete rollout plan will be drafted at that time.
 
 ### Rollback Plan
 
@@ -175,7 +172,7 @@ Before each phase transition:
 **Benefits Today** (Single-box SQLite is sufficient):
 - No multi-instance coordination needed yet (orchestrator runs on one box)
 - Simplicity: stdlib sqlite3, no external deps, easier debugging
-- Performance: local file I/O is faster than network round-trip; 704 events/sec is well above current wave throughput (~100 events/sec average)
+- Performance: local file I/O is faster than network round-trip; ~704 events/sec (single-host micro-benchmark) is well above current wave throughput (~100 events/sec average)
 
 **When to Migrate**:
 1. **User demand** for multi-region failover
@@ -210,12 +207,12 @@ Does aesop need to coordinate across multiple hosts?
 
 ## Summary
 
-**Current (SQLite WAL)**: Production-ready, single-box only, 704 events/sec measured, OCC support planned for Phase 2.
+**Current (SQLite WAL)**: Production-ready, single-box only, ~704 events/sec measured (single-host micro-benchmark; real-world ~100 ev/s), OCC shipped, thread-local connection pooling, claims-stream compaction.
 
-**Phase 1 (Postgres, read-only follower)**: Planned 2026-08, enables multi-instance reads; no conflict risk.
+**Phase 1 (network backend, read-only follower)**: Design sketch only, not scheduled. Would enable multi-instance reads.
 
-**Phase 2 (Multi-writer OCC)**: Planned 2026-09, enables N writers via version-checked appends; retry loop needed.
+**Phase 2 (Multi-writer OCC)**: Design sketch only, not scheduled. OCC interface already stable on SQLite; a network backend would implement the same semantics in SQL.
 
 **Phase 3 (Cross-region federation)**: Stretch goal, contingent on user demand + Phase 1/2 stability.
 
-**No phase commits until measured production data supports the cost-benefit trade-off.**
+**No phase commits until measured production data supports the cost-benefit trade-off. Single-box SQLite is sufficient for current workloads.**

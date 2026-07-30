@@ -1,8 +1,10 @@
 """state_store.api — StateAPI facade over the event store + projections.
 
-The single seam callers use, so the backend (SQLite now, Postgres later) can be
-swapped without touching call sites. ``project(view)`` reads the same-named
-stream and folds it through the registered projector.
+The single seam callers use, so the backend can be swapped without touching
+call sites. Currently backed by SQLite WAL (single-box, production-ready).
+A future backend swap (e.g. Postgres for multi-host coordination) would
+change only this module. ``project(view)`` reads the same-named stream and
+folds it through the registered projector.
 """
 from __future__ import annotations
 
@@ -17,6 +19,27 @@ class StateAPI:
 
     def __init__(self, db_path: str):
         self._store = EventStore(db_path)
+
+    def close(self) -> None:
+        """Release the underlying EventStore's cached connection for this thread.
+
+        Safe to call multiple times. After close(), the next operation will
+        lazily reopen a connection.
+        """
+        self._store.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
 
     def append(
         self,
@@ -40,6 +63,14 @@ class StateAPI:
     def get(self, stream: str) -> list:
         """Return all events in ``stream`` ascending by version."""
         return self._store.read(stream)
+
+    def get_since(self, stream: str, after_version: int) -> list:
+        """Return events in ``stream`` with version > ``after_version``.
+
+        Enables tail-replay: given a snapshot at version N, get_since(stream, N)
+        returns only events appended after that point.
+        """
+        return self._store.read_since(stream, after_version)
 
     def project(self, view: str) -> dict:
         """Fold the same-named stream through its projector into current state."""
