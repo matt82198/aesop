@@ -564,6 +564,76 @@ check_tracker_guard() {
   return 0
 }
 
+check_g5_claudemd_sync() {
+  # Guardrail G5: CLAUDE.md synchronization gate (tools/claudemd_sync_gate.py --check).
+  # Ensures code changes in each domain are accompanied by domain/CLAUDE.md updates.
+  # Fail-open ONLY if tool is missing (not in repo), fail-closed on sync violations.
+  # This gate runs here (pre-push) instead of CI because it's a repo contract that
+  # must hold across all PRs locally before push, independent of CI timing.
+  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local sync_script="$aesop_root/tools/claudemd_sync_gate.py"
+
+  if [ ! -f "$sync_script" ]; then
+    log_event "g5_claudemd_sync_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; G5 CLAUDE.md sync gate skipped\n' >&2
+    log_event "g5_claudemd_sync_skipped_no_python"
+    return 0
+  fi
+
+  local sync_output
+  sync_output=$("$py_bin" "$sync_script" --check 2>&1)
+  local sync_exit_code=$?
+
+  if [ $sync_exit_code -ne 0 ]; then
+    if [ -n "$sync_output" ]; then
+      printf '%s\n' "$sync_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
+check_test_suite_count() {
+  # Test suite count verification gate (tools/verify_test_suite_count.py --check).
+  # Ensures test suite counts in tests/CLAUDE.md match actual test files on disk.
+  # Fail-open ONLY if tool is missing (not in repo), fail-closed on count drift.
+  # This gate runs here (pre-push) to catch drift before push, preventing sneaky
+  # test additions without documentation updates.
+  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local count_script="$aesop_root/tools/verify_test_suite_count.py"
+
+  if [ ! -f "$count_script" ]; then
+    log_event "test_suite_count_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; test suite count gate skipped\n' >&2
+    log_event "test_suite_count_skipped_no_python"
+    return 0
+  fi
+
+  local count_output
+  count_output=$("$py_bin" "$count_script" --check 2>&1)
+  local count_exit_code=$?
+
+  if [ $count_exit_code -ne 0 ]; then
+    if [ -n "$count_output" ]; then
+      printf '%s\n' "$count_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
 log_event() {
   # Finding 1 & 2: Acquire lock before read-modify-append, add seq field, update sidecar
   local event_type="$1"
@@ -1238,6 +1308,18 @@ main() {
   if ! check_tracker_guard; then
     printf 'Error: Tracker zombie-resurrection gate failed. Push blocked.\n' >&2
     log_block "tracker_guard_failure"
+    exit 1
+  fi
+
+  if ! check_g5_claudemd_sync; then
+    printf 'Error: G5 CLAUDE.md sync gate failed. Push blocked.\n' >&2
+    log_block "g5_claudemd_sync_failure"
+    exit 1
+  fi
+
+  if ! check_test_suite_count; then
+    printf 'Error: Test suite count verification failed. Push blocked.\n' >&2
+    log_block "test_suite_count_failure"
     exit 1
   fi
 
