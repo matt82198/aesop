@@ -80,7 +80,7 @@ All five passed. No infinite loops, no wedged state.
 ## Operational Proof
 
 Over 18 days:
-- **1,429 commits, 514 merged PRs, 31 waves** (git-verifiable)
+- **1,433 commits, 520 merged PRs, 31 waves** (git-verifiable)
 - **16 stall incidents resolved by watchdog + crash recovery** (no consensus voting, no lease revocation)
 - **Convergence loop: 52 → 0 verified defects over 5 rounds** (`docs/convergence-log-wave1.md`)
 - **Zero hallucinated audits** (via adversarial verification discipline)
@@ -147,7 +147,7 @@ cat docs/INCIDENTS.md
 
 All numbers regenerable. All incidents in git log. No telemetry, no closed-source black boxes.
 
-The system is not theoretical. It shipped 514 PRs, 31 waves, 1,429 commits. Built by itself. Rebuilt by itself every wave. Crashed and recovered, in production, documented.
+The system is not theoretical. It shipped 514 PRs, 31 waves, 1,433 commits. Built by itself. Rebuilt by itself every wave. Crashed and recovered, in production, documented.
 
 Restart is the only recovery path. And it works.
 
