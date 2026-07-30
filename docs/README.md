@@ -123,6 +123,7 @@ Once you've completed the adopter journey, use these for operational reference:
 - **[RESTORE.md](RESTORE.md)** — Reconstitute Aesop & fleet on a new machine from git + watchdog backups
 - **[PUBLISHING.md](PUBLISHING.md)** — Release Aesop to npm using GitHub Actions with OIDC trusted publishing
 - **[av-resilience.md](av-resilience.md)** — Antivirus and behavioral-engine resilience patterns for reliable agent execution
+- **[RECEIPTS.md](RECEIPTS.md)** — Per-wave operational metrics (CI economics, diagnosed bottlenecks, structural fixes applied); transparency on the system building itself
 
 ### Lessons & Case Studies
 - **[autonomous-swe.md](autonomous-swe.md)** — What "autonomous SWE" means here (a fleet running the wave loop under a human who owns the outward gates): the committed evidence behind each claim (held-out benchmark, verified audit, proven kill-switch, reproducible package), the 0.1.0-rc.1 baseline, 0.4.0 evolution (multi-model support), and the limits the project owns
