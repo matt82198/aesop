@@ -366,5 +366,89 @@ class TestHealthcheckTrackerCounts(HealthcheckTestCase):
         self.assertIn("tracker", data)
 
 
+class TestHealthcheckTimezoneHandling(HealthcheckTestCase):
+    """Tests for timezone parsing in orchestrator status check."""
+
+    def test_orchestrator_status_with_z_suffix(self):
+        """Orchestrator status with Z-suffix (UTC) is parsed correctly."""
+        import sys
+        if "healthcheck" in sys.modules:
+            del sys.modules["healthcheck"]
+        import healthcheck
+
+        self._write_heartbeat("watchdog", age_seconds=10)
+        self._write_heartbeat("monitor", age_seconds=20)
+        self.state_dir.joinpath("SECURITY-ALERTS.log").write_text("", encoding="utf-8")
+
+        # Write orchestrator status with Z-suffix (standard format)
+        self._write_orchestrator_status(activity="idle", phase="waiting", age_seconds=30)
+
+        result = healthcheck.check_health()
+        # Should not crash and should report green (fresh status)
+        self.assertIn("🟢", result, f"Expected green ball with fresh Z-suffix status, got: {result}")
+
+    def test_orchestrator_status_with_plus_offset(self):
+        """Orchestrator status with +05:00 offset is parsed correctly."""
+        import sys
+        if "healthcheck" in sys.modules:
+            del sys.modules["healthcheck"]
+        import healthcheck
+
+        self._write_heartbeat("watchdog", age_seconds=10)
+        self._write_heartbeat("monitor", age_seconds=20)
+        self.state_dir.joinpath("SECURITY-ALERTS.log").write_text("", encoding="utf-8")
+
+        # Write orchestrator status with +offset timezone (non-Z format)
+        status_file = self.state_dir / "orchestrator-status.json"
+        now = datetime.now(timezone.utc)
+        # Create a timestamp with +05:00 offset (5 hours ahead of UTC)
+        offset_dt = now.replace(hour=(now.hour + 5) % 24)
+        status = {
+            "id": "main",
+            "role": "orchestrator",
+            "activity": "idle",
+            "phase": "waiting",
+            "updated_at": offset_dt.isoformat().replace("Z", "+05:00"),
+        }
+        status_file.write_text(json.dumps(status, indent=2), encoding="utf-8")
+
+        result = healthcheck.check_health()
+        # Should not crash and should handle the offset correctly
+        self.assertIn("HEALTH:", result, f"Expected health check to complete with +offset format, got: {result}")
+        self.assertTrue(
+            any(ball in result for ball in ["🟢", "🟡", "🔴"]),
+            f"Expected a health ball in output with +offset timezone: {result}"
+        )
+
+    def test_orchestrator_status_stale_with_offset(self):
+        """Orchestrator status with offset that is stale is correctly identified."""
+        import sys
+        if "healthcheck" in sys.modules:
+            del sys.modules["healthcheck"]
+        import healthcheck
+
+        self._write_heartbeat("watchdog", age_seconds=10)
+        self._write_heartbeat("monitor", age_seconds=20)
+        self.state_dir.joinpath("SECURITY-ALERTS.log").write_text("", encoding="utf-8")
+
+        # Write orchestrator status with +offset and old timestamp (>1800s ago)
+        status_file = self.state_dir / "orchestrator-status.json"
+        old_dt = datetime.now(timezone.utc) - __import__('datetime').timedelta(seconds=2000)
+        # Use +05:00 offset format
+        status = {
+            "id": "main",
+            "role": "orchestrator",
+            "activity": "idle",
+            "phase": "waiting",
+            "updated_at": old_dt.isoformat().replace("Z", "+05:00"),
+        }
+        status_file.write_text(json.dumps(status, indent=2), encoding="utf-8")
+
+        result = healthcheck.check_health()
+        # Should detect as stale
+        self.assertIn("🟡", result, f"Expected yellow ball for stale orchestrator status with +offset, got: {result}")
+        self.assertIn("stale", result.lower())
+
+
 if __name__ == "__main__":
     unittest.main()

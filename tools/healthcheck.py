@@ -192,16 +192,29 @@ def _check_orchestrator_status(status_file):
         if not updated_at_str:
             return None
 
-        updated_at_str = updated_at_str.rstrip("Z")
+        # Handle both Z-suffix and +/-offset formats
+        if updated_at_str.endswith("Z"):
+            updated_at_str = updated_at_str[:-1]
+
         try:
+            # fromisoformat handles both naive and tz-aware datetimes
             updated_at = datetime.fromisoformat(updated_at_str)
-            age_seconds = int((datetime.now(timezone.utc).replace(tzinfo=None) - updated_at).total_seconds())
+
+            # Convert to UTC if tz-aware; assume UTC if naive
+            if updated_at.tzinfo is not None:
+                updated_at_utc = updated_at.astimezone(timezone.utc)
+                age_seconds = int((datetime.now(timezone.utc) - updated_at_utc).total_seconds())
+            else:
+                # Assume naive datetime is UTC
+                age_seconds = int((datetime.now(timezone.utc).replace(tzinfo=None) - updated_at).total_seconds())
 
             # >1800s (30min) is stale for orchestrator
             if age_seconds > 1800:
                 return ("YELLOW", f"orchestrator status stale ({age_seconds}s)")
-        except Exception:
-            pass
+        except ValueError as e:
+            # Log the parse error instead of silently failing
+            import sys
+            print(f"WARNING: failed to parse orchestrator updated_at '{updated_at_str}': {e}", file=sys.stderr)
 
         return None
     except Exception as e:
