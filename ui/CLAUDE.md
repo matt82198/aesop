@@ -1,6 +1,6 @@
 # ui/ — Web dashboard (self-contained domain guide)
 
-**Purpose**: Local observability dashboard. Python backend serves a React+Vite frontend on a configurable port via Server-Sent Events (realtime updates), with CSRF + session protection and event-sourced state.
+**Purpose**: Local observability dashboard. Python backend serves a React+Vite frontend on a configurable port via Server-Sent Events (realtime updates), with CSRF + session protection and event-sourced state. All file I/O uses explicit `encoding="utf-8"`.
 
 ## Try it in 30 seconds (no API key)
 
