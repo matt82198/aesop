@@ -4,12 +4,12 @@ Thank you for your interest in Aesop! Your feedback, questions, and bug reports 
 
 ## A note on the license
 
-Aesop is **source-available** under the [PolyForm Strict License 1.0.0](./LICENSE): you may read, run, and use the software for a permitted purpose, but the license **does not permit modification or redistribution**. Because of that, we can't accept outside code patches as merged contributions the way a permissively-licensed project would — an external patch would be a derivative work the license doesn't allow you to grant back.
+Aesop is **MIT-licensed** under the [MIT License](./LICENSE). This means contributions via pull requests are warmly welcome.
 
 What that means in practice:
 
 - **Issues, bug reports, and discussion are warmly welcome** — they're the best way to contribute and shape the project.
-- **Code changes are made by the maintainer** at their discretion. If you'd like to see a specific change or collaborate on code, open an issue to discuss it first — substantial contributions can be arranged directly with the maintainer under separate terms.
+- **Code patches via pull request are welcome** — open a PR with your changes, and the maintainer will review it.
 
 The rest of this guide documents how to run and test Aesop locally (useful for anyone using it) and how the maintainer's own development loop works.
 
