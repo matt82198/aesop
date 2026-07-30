@@ -99,15 +99,46 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 **Project Timeline:** Aesop is 17 days old, built by 1 human + the fleet. Every number above is regenerable from git history by anyone who clones the repo (`bash scripts/verify-stats.sh --check`); no hidden telemetry.
 
-## Get Started
+## Quick Try (2 min, no API keys)
+
+No API keys, no Python, no configuration. Just Node.js >= 18 and git.
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/matt82198/aesop.git
+cd aesop
+
+# 2. Install dependencies
+npm install
+
+# 3. See the CLI and all available commands
+npx . --help
+
+# 4. Run the preflight readiness check (pure Node.js, no keys needed)
+npx . doctor
+
+# 5. Launch the web dashboard (requires Python 3 — optional)
+npx . dash
+# Opens http://localhost:8770 — four views: Overview, Work, Activity, Cost
+```
+
+That is enough to explore the CLI, read the docs, run the test suite (`npm test`), and see the dashboard UI. No API keys are touched.
+
+## Full Setup (orchestration with LLM agents)
+
+To run the actual multi-agent orchestration loop you need:
+
+- **Claude Code CLI** (or another supported backend) with a valid API key
+- **Python 3.10+** for guardrails, secret scanning, and the dashboard backend
+- **Bash 4+** (or Git Bash on Windows) for daemon scripts
 
 ```bash
 npx @matt82198/aesop my-fleet --name "api" --repos "/path/to/repo"
 ```
-→ Copy `skills/` into `~/.claude/skills` to enable the `/power` and `/buildsystem` commands.
-→ See [docs/INSTALL.md](./docs/INSTALL.md) for setup and first `/power` → `/buildsystem` cycle.
-→ See [docs/DEMO.md](./docs/DEMO.md) for a complete walkthrough of one wave.
+Copy `skills/` into `~/.claude/skills` to enable the `/power` and `/buildsystem` commands.
 
+See [docs/INSTALL.md](./docs/INSTALL.md) for the complete setup guide (config, daemons, first wave).
+See [docs/DEMO.md](./docs/DEMO.md) for a walkthrough of one full wave cycle.
 
 *Wave: one complete build cycle (intake → dispatch → verify → ship) run by the orchestration engine.*
 
