@@ -32,6 +32,7 @@ class GenStateMdTest(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.state_dir = Path(self.tmp) / "state"
         self.state_dir.mkdir(parents=True, exist_ok=True)
+        self._stores = []  # track stores for tearDown cleanup
 
         # Set AESOP_STATE_ROOT for the generator
         self.original_state_root = os.environ.get("AESOP_STATE_ROOT")
@@ -40,6 +41,11 @@ class GenStateMdTest(unittest.TestCase):
     def tearDown(self):
         """Clean up temporary state directory."""
         import shutil
+        for s in self._stores:
+            try:
+                s.close()
+            except Exception:
+                pass
         shutil.rmtree(self.tmp, ignore_errors=True)
 
         # Restore original AESOP_STATE_ROOT
@@ -52,7 +58,8 @@ class GenStateMdTest(unittest.TestCase):
         """Initialize the event store database if needed."""
         from state_store import EventStore
         db_path = state_dir / "events.db"
-        EventStore(str(db_path))
+        store = EventStore(str(db_path))
+        self._stores.append(store)
 
     def test_empty_store_renders_checkpoint(self):
         """Test that an empty state store produces a valid checkpoint header."""
@@ -77,6 +84,7 @@ class GenStateMdTest(unittest.TestCase):
         # Add tracker items to the state store
         from state_store import StateAPI
         api = StateAPI(str(self.state_dir / "events.db"))
+        self._stores.append(api)
 
         # Create some items in different lanes
         api.append("tracker", "item_created", {
@@ -138,6 +146,7 @@ class GenStateMdTest(unittest.TestCase):
         # Add some items
         from state_store import StateAPI
         api = StateAPI(str(self.state_dir / "events.db"))
+        self._stores.append(api)
 
         api.append("tracker", "item_created", {
             "id": "item-1",
@@ -161,6 +170,7 @@ class GenStateMdTest(unittest.TestCase):
         # Add an item with unicode
         from state_store import StateAPI
         api = StateAPI(str(self.state_dir / "events.db"))
+        self._stores.append(api)
 
         api.append("tracker", "item_created", {
             "id": "item-1",

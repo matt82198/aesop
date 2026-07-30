@@ -274,11 +274,12 @@ class OCCTest(unittest.TestCase):
         self.tmp_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.tmp_dir, "test_occ.db")
         # Initialize DB
-        EventStore(self.db_path)
+        self._init_store = EventStore(self.db_path)
 
     def tearDown(self):
         """Clean up temp directory."""
         import shutil
+        self._init_store.close()
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     def test_backward_compat_append_without_expected_version(self):

@@ -89,11 +89,12 @@ class MultiProcessConcurrencyTest(unittest.TestCase):
         self.tmp_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.tmp_dir, "test_concurrency.db")
         # Initialize DB
-        EventStore(self.db_path)
+        self._init_store = EventStore(self.db_path)
 
     def tearDown(self):
         """Clean up temp directory."""
         import shutil
+        self._init_store.close()
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     def test_no_lost_update_across_processes(self):
@@ -494,10 +495,11 @@ class RetractOnErrorTest(unittest.TestCase):
     def setUp(self):
         self.tmp_dir = tempfile.mkdtemp()
         self.db_path = os.path.join(self.tmp_dir, "test_retract.db")
-        EventStore(self.db_path)
+        self._init_store = EventStore(self.db_path)
 
     def tearDown(self):
         import shutil
+        self._init_store.close()
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     def test_read_failure_does_not_strand_phantom_holder(self):

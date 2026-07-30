@@ -48,10 +48,11 @@ class EventStoreTest(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.db = os.path.join(self.tmp, "events.db")
         # Initialize the database with retry (can fail on WAL lock in parallel CI shards)
-        _retry_on_db_lock(lambda: EventStore(self.db))
+        self._init_store = _retry_on_db_lock(lambda: EventStore(self.db))
 
     def tearDown(self):
         import shutil
+        self._init_store.close()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_append_returns_monotonic_per_stream_version(self):
@@ -190,10 +191,11 @@ class ApiAndExportTest(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.db = os.path.join(self.tmp, "events.db")
         # Initialize the database with retry (can fail on WAL lock in parallel CI shards)
-        _retry_on_db_lock(lambda: EventStore(self.db))
+        self._init_store = _retry_on_db_lock(lambda: EventStore(self.db))
 
     def tearDown(self):
         import shutil
+        self._init_store.close()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_project_unknown_view_raises(self):

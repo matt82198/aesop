@@ -93,14 +93,16 @@ class EventStore:
     Implements defense-in-depth retry logic for 'database is locked' errors that
     can occur under heavy parallel contention (e.g., CI shards).
 
-    Call ``close()`` when the store is no longer needed to release the current
-    thread's cached connection. Connections for other threads are cleaned up
-    when those threads exit (Python's threading.local semantics).
+    Call ``close()`` when the store is no longer needed to release ALL cached
+    connections across all threads.  This is required on Windows where open
+    SQLite connections hold file locks that prevent temp-dir cleanup.
     """
 
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._local = threading.local()
+        self._all_conns: list[sqlite3.Connection] = []
+        self._all_conns_lock = threading.Lock()
 
         def _init_db():
             conn = self._get_conn()
@@ -147,6 +149,9 @@ class EventStore:
         Lazily creates a connection on first call per thread, sets WAL mode and
         busy_timeout once, then reuses it for all subsequent calls on that thread.
         Thread-local storage ensures no cross-thread sharing of connections.
+        All connections are also tracked in ``_all_conns`` so that ``close()``
+        can release every connection across all threads (needed on Windows where
+        open SQLite connections hold file locks that block temp-dir cleanup).
         """
         conn = getattr(self._local, "conn", None)
         if conn is None:
@@ -154,21 +159,34 @@ class EventStore:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=5000")
             self._local.conn = conn
+            with self._all_conns_lock:
+                self._all_conns.append(conn)
         return conn
 
     def close(self) -> None:
-        """Close the current thread's cached connection, if any.
+        """Close ALL cached connections across all threads.
 
-        Safe to call multiple times. After close(), the next operation on this
+        Releases every connection opened by this EventStore instance, not just
+        the calling thread's.  This is essential on Windows where open SQLite
+        connections hold file-level locks that prevent ``shutil.rmtree()`` from
+        deleting the database file (PermissionError / WinError 32).
+
+        Safe to call multiple times. After close(), the next operation on any
         thread will lazily open a fresh connection.
         """
+        # Clear the calling thread's reference so it does not reuse a closed conn.
         conn = getattr(self._local, "conn", None)
         if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
             self._local.conn = None
+
+        # Close every connection this store ever opened (including other threads').
+        with self._all_conns_lock:
+            for c in self._all_conns:
+                try:
+                    c.close()
+                except Exception:
+                    pass
+            self._all_conns.clear()
 
     def append(
         self,

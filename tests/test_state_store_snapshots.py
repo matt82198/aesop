@@ -40,6 +40,7 @@ class SnapshotCorrectnessTest(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+        self.store.close()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_snapshot_with_tail_replay_equals_full_replay(self):
@@ -151,6 +152,7 @@ class SnapshotFallbackTest(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+        self.store.close()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_missing_snapshot_falls_back_to_full_replay(self):
@@ -325,6 +327,7 @@ class SnapshotEdgeCasesTest(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+        self.store.close()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_snapshot_with_unknown_event_types(self):
