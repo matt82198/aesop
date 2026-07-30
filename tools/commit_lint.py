@@ -127,7 +127,7 @@ def main() -> int:
     # Reject unknown flags (argparse handles this, but be explicit about --help)
     results = []  # list of {"commit": str|None, "violations": list}
 
-    if args.message:
+    if args.message is not None:
         vs = lint_message(args.message)
         results.append({"commit": None, "violations": vs})
     elif args.range:

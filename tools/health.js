@@ -19,6 +19,17 @@ const { spawnSync } = require('child_process');
 const path = require('path');
 const pythonScript = path.join(__dirname, 'healthcheck.py');
 
+// Resolve Python interpreter portably (prefer python3, fallback to python)
+function resolvePythonInterpreter() {
+  if (spawnSync('python3', ['--version'], { stdio: 'ignore' }).error === undefined) {
+    return 'python3';
+  }
+  if (spawnSync('python', ['--version'], { stdio: 'ignore' }).error === undefined) {
+    return 'python';
+  }
+  return null;
+}
+
 // Get arguments: process.argv includes [node, script, health, --json, ...]
 let args = process.argv.slice(2);
 
@@ -27,7 +38,13 @@ if (args[0] === 'health') {
   args = args.slice(1);
 }
 
-const result = spawnSync('python3', [pythonScript, ...args], {
+const pythonInterpreter = resolvePythonInterpreter();
+if (!pythonInterpreter) {
+  console.error('Error running health: Python interpreter not found (tried python3, python)');
+  process.exit(1);
+}
+
+const result = spawnSync(pythonInterpreter, [pythonScript, ...args], {
   stdio: 'inherit',
   timeout: 30000
 });
@@ -37,4 +54,4 @@ if (result.error) {
   process.exit(1);
 }
 
-process.exitCode = result.status || 0;
+process.exitCode = result.status != null ? result.status : 1;

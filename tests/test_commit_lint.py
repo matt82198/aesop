@@ -117,6 +117,42 @@ class TestCommitLint(unittest.TestCase):
         vs = lint_message(msg)
         self.assertEqual(vs, [])
 
+    def test_cli_empty_message_explicit(self):
+        """CLI --message "" (empty string) is linted, not treated as flag absence."""
+        repo_root = str(__import__("pathlib").Path(__file__).resolve().parent.parent)
+        result = subprocess.run(
+            [sys.executable, "tools/commit_lint.py", "--message", "", "--json"],
+            capture_output=True, text=True, cwd=repo_root, timeout=30,
+        )
+        # Empty message should be linted (return 1, not read from stdin)
+        self.assertEqual(result.returncode, 1, f"Expected exit 1 for empty message, got {result.returncode}")
+        data = json.loads(result.stdout)
+        # Should have empty-message violation
+        violations = []
+        for r in data["results"]:
+            violations.extend(r["violations"])
+        rules = [v["rule"] for v in violations]
+        self.assertIn("empty-message", rules, f"Expected empty-message violation, got rules: {rules}")
+
+    def test_cli_empty_message_vs_no_message(self):
+        """Distinguish: --message "" (empty) vs no --message flag (reads stdin)."""
+        repo_root = str(__import__("pathlib").Path(__file__).resolve().parent.parent)
+        # Test with --message "" and a valid input on stdin (should not read stdin)
+        result = subprocess.run(
+            [sys.executable, "tools/commit_lint.py", "--message", "", "--json"],
+            input="feat: valid msg from stdin\n",  # This should NOT be used
+            capture_output=True, text=True, cwd=repo_root, timeout=30,
+        )
+        # Empty message should be linted (not fall through to stdin)
+        self.assertEqual(result.returncode, 1, f"Expected exit 1 for empty --message flag, got {result.returncode}")
+        data = json.loads(result.stdout)
+        # Should report empty-message violation
+        violations = []
+        for r in data["results"]:
+            violations.extend(r["violations"])
+        rules = [v["rule"] for v in violations]
+        self.assertIn("empty-message", rules, f"Expected empty-message violation (not stdin read), got: {rules}")
+
 
 if __name__ == "__main__":
     unittest.main()
