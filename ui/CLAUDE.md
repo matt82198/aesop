@@ -60,6 +60,8 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **demo.py** — Zero-key demo mode. `maybe_activate()` (called by serve.py BEFORE `config.reload()`) fires on `--demo` in argv or `AESOP_DEMO=1`: it seeds a throwaway demo root (heartbeats, tracker.json, orchestrator-status.json, outcomes ledger, `AUDIT-BACKLOG.md`, fabricated agent transcripts) with now-relative timestamps, then points `AESOP_STATE_ROOT` / `AESOP_WATCHDOG_HEARTBEAT` / `AESOP_MONITOR_HEARTBEAT` / `AESOP_TRANSCRIPTS_ROOT` / `AESOP_AUDIT_BACKLOG` at it so every collector reads the snapshot through its normal path (no collector logic forked). The two shell-out collectors read fabricated data directly when `enabled()`: `get_fleet_agents()` (agents.py) → `get_demo_agents()`, `get_wave_prs()` (wave_prs.py) → `get_demo_wave_prs()`. A daemon refresher (~45s) rewrites heartbeats / orchestrator `updated_at` / transcript mtimes so ages always read fresh. `AESOP_ROOT` is NOT moved (WEB_DIST must keep resolving the committed dist). Honesty: handler injects `BANNER_HTML` ("DEMO DATA") after `<body>` and `/api/state` gets a top-level `"demo": true`. No-op in default mode. Optional `AESOP_DEMO_ROOT` pins the demo root (tests).
 
+**bench_panel.py**: Benchmark results API route handlers. `get_bench_results()` → GET /api/bench (latest results from journal), `get_bench_comparison()` → GET /api/bench/compare (model comparison). Reads from `bench_results_cache` at call time (honors config.reload).
+
 **api/__init__.py**, **api/tracker.py**, **api/submit.py**: API handlers for mutations (tracker CRUD, inbox append).
 
 ## Frontend (React 18 + Vite + TypeScript)
@@ -69,7 +71,8 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 - **App.tsx**: App shell; hash-routed views (/#/, /#/work, /#/activity, /#/cost).
 - **styles/tokens.css** + **global.css**: Design tokens (light/dark palettes, spacing, typography).
 - **views/**: Overview, Work, Activity, Cost, WavePRBoard (with SSE bindings). WavePRBoard polls `/api/wave/prs` every 5s; drills down to FailureDrilldown on click.
-- **components/**: HealthHeader, AgentsPanel, TrackerBoard, Timeline, CostChart, CostAnalyticsPanel, FailureDrilldown, etc.
+- **components/**: HealthHeader, AgentsPanel, TrackerBoard, Timeline, CostChart, CostAnalyticsPanel, FailureDrilldown, BenchmarkPanel, etc.
+  - BenchmarkPanel: Results table (model/accuracy/tokens/latency/cost/timestamp) + model comparison cards; fetches `/api/bench` and `/api/bench/compare`; dark/light theme, responsive grid.
   - CostAnalyticsPanel (wave-29 UX): info-dense operator view with (a) spend per wave (bar chart), (b) model efficiency vs Opus counterfactual, (c) burn rate + end-of-wave projection with ceiling alert; graceful DATA-UNAVAILABLE states when ledger/ceiling missing.
   - FailureDrilldown: drawer showing CI job list + ~100-line log excerpts on expand; fetches `/api/wave/failure?pr=N`.
 - **lib/api.ts**: Typed fetch helpers + CSRF header injection + `/api/session` fallback for dev server.
@@ -94,6 +97,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 - `GET /api/wave/prs` — PR board with CI rollup (cached ~5s; degrades `{available:false}`).
 - `GET /api/wave/telemetry` — Phase + blocker + cost metrics. `GET /api/wave/dispatch` — Per-agent phase visibility (polled 2-3s).
 - `GET /api/wave/failure?pr=N` — CI failure drill-down with log excerpts (cached ~5s).
+- `GET /api/bench` — Latest benchmark results from journal. `GET /api/bench/compare` — Model comparison data.
 - All `/api/wave/*` routes: read-only, call-time reads, polled not SSE; gh-backed honor `AESOP_GH_BIN`.
 - `GET /events` — SSE stream (6 sections, keepalive ~15s). `GET /favicon.ico` — 204.
 
