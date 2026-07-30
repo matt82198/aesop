@@ -9,6 +9,15 @@ POSIX home paths (/home/<name>, /Users/<name>), and private-machine tokens
 
 Exit 0 clean, 1 with numbered file:line findings.
 Supports --json output and --root for base directory.
+
+Ratchet mode (--baseline FILE, same pattern as .stateapi-baseline.json):
+compare findings against a committed baseline of "file@type" -> count
+entries. PASS only when the current scan EXACTLY matches the baseline.
+New findings (new key, or count above baseline) FAIL; stale entries
+(key gone, or count below baseline) also FAIL so the baseline must be
+regenerated (--update-baseline) and the burn-down is recorded in git.
+A missing baseline file behaves as an empty baseline (fail-closed on
+every finding). CI MUST NEVER pass --update-baseline.
 """
 
 import sys
@@ -162,6 +171,62 @@ def scan_shipped_surface(root, json_output=False):
     return all_findings
 
 
+def findings_to_baseline_keys(findings):
+    """Aggregate findings into a {"file@type": count} dict (posix separators)."""
+    keys = {}
+    for f in findings:
+        key = '{0}@{1}'.format(
+            str(f['file']).replace('\\', '/'), f.get('type', 'unknown'))
+        keys[key] = keys.get(key, 0) + 1
+    return keys
+
+
+def load_baseline(baseline_file):
+    """Load a baseline file; missing/unreadable means empty baseline (fail-closed)."""
+    p = Path(baseline_file)
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+    violations = data.get('violations', {})
+    if not isinstance(violations, dict):
+        return {}
+    return {str(k).replace('\\', '/'): int(v) for k, v in violations.items()}
+
+
+def save_baseline(baseline_file, keys):
+    """Write the baseline file from a {"file@type": count} dict."""
+    data = {
+        '_comment': (
+            'Portability-gate ratchet baseline (see tools/portability_check.py '
+            '--help). Regenerate ONLY via --update-baseline after reviewing the '
+            'diff; CI must never pass --update-baseline.'
+        ),
+        'violations': {k: keys[k] for k in sorted(keys)},
+    }
+    Path(baseline_file).write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
+
+
+def check_ratchet(baseline_keys, current_keys):
+    """Bidirectional exact-match ratchet.
+
+    Returns (is_ok, stale, new) where stale/new are sorted lists of
+    "key (baseline N, current M)" description strings.
+    """
+    stale = []
+    new = []
+    for key in sorted(set(baseline_keys) | set(current_keys)):
+        b = baseline_keys.get(key, 0)
+        c = current_keys.get(key, 0)
+        if c > b:
+            new.append('{0} (baseline {1}, current {2})'.format(key, b, c))
+        elif c < b:
+            stale.append('{0} (baseline {1}, current {2})'.format(key, b, c))
+    return (not stale and not new), stale, new
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Portability gate: scan for hardcoded personal paths'
@@ -176,11 +241,69 @@ def main():
         action='store_true',
         help='Output findings as JSON'
     )
+    parser.add_argument(
+        '--baseline',
+        default=None,
+        help='Ratchet mode: compare findings against this committed baseline '
+             'file (exact-match, fail-closed; see module docstring)'
+    )
+    parser.add_argument(
+        '--update-baseline',
+        action='store_true',
+        help='Regenerate the --baseline file from the current scan '
+             '(CI must never pass this)'
+    )
 
     args = parser.parse_args()
     root = os.path.abspath(args.root)
 
+    if args.update_baseline and not args.baseline:
+        print('portability_check: --update-baseline requires --baseline FILE',
+              file=sys.stderr)
+        return 2
+
     findings = scan_shipped_surface(root, json_output=args.json)
+
+    if args.baseline and args.update_baseline:
+        current_keys = findings_to_baseline_keys(findings)
+        save_baseline(args.baseline, current_keys)
+        print('portability_check: baseline updated ({0} entries, {1} finding(s)) '
+              '-> {2}'.format(len(current_keys), len(findings), args.baseline))
+        return 0
+
+    if args.baseline:
+        current_keys = findings_to_baseline_keys(findings)
+        baseline_keys = load_baseline(args.baseline)
+        is_ok, stale, new = check_ratchet(baseline_keys, current_keys)
+        if args.json:
+            print(json.dumps({
+                'ok': is_ok,
+                'mode': 'ratchet',
+                'baseline': str(args.baseline),
+                'stale': stale,
+                'new': new,
+                'findings': findings,
+            }, indent=2))
+        else:
+            if is_ok:
+                print('portability_check: PASS (ratchet: {0} baselined finding(s) '
+                      'across {1} entries)'.format(len(findings), len(baseline_keys)))
+            else:
+                if new:
+                    print('portability_check: {0} NEW violation key(s) above '
+                          'baseline:'.format(len(new)), file=sys.stderr)
+                    for item in new:
+                        print('  NEW   {0}'.format(item), file=sys.stderr)
+                if stale:
+                    print('portability_check: {0} STALE baseline entries (violations '
+                          'fixed; regenerate the baseline to record the '
+                          'burn-down):'.format(len(stale)), file=sys.stderr)
+                    for item in stale:
+                        print('  STALE {0}'.format(item), file=sys.stderr)
+                print('\nFAIL: baseline mismatch. Fix new violations, then '
+                      'regenerate with --update-baseline if intentional.',
+                      file=sys.stderr)
+        return 0 if is_ok else 1
 
     if args.json:
         print(json.dumps(findings, indent=2))

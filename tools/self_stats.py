@@ -19,7 +19,9 @@ Output modes:
 Special modes:
   --regenerate - Regenerate stats.json from live git state
   --update-readme - Update README.md between <!-- STATS:START/END --> markers with stats from stats.json
-  --check - Exit non-zero if README's marked block doesn't match current stats.json (drift gate)
+  --check - Exit non-zero on: README drift vs stats.json, internal contradiction
+            (two disagreeing PR counts), zero-filler economics, missing merged-PR
+            source, or stale receipts (generated_at age / commit lag past thresholds)
 
 All hard metrics (percentages, multipliers, dollar amounts) in markdown output include
 <!-- metrics-verified: <source> --> markers for the metrics_gate.py CI gate.
@@ -127,6 +129,153 @@ def classify_author(name: str, email: str) -> Tuple[str, Optional[str]]:
     return ("junk", None)
 
 
+# Freshness gate defaults — practical, not per-commit. The daily stats-refresh
+# workflow keeps generated_at well under the age window; the commit-lag window is
+# generous so ordinary feature PRs (which don't regenerate stats) stay green.
+DEFAULT_MAX_AGE_DAYS = 30
+DEFAULT_MAX_COMMITS_BEHIND = 200
+
+# Economics token/cost ratio fields that are meaningless as 0.0 filler when no
+# token ledger is available. They must be OMITTED (not zero) in that case.
+_ECON_RATIO_FIELDS = (
+    ("cost_per_loc", "tokens_per_loc"),
+    ("cost_per_merged_pr", "tokens_per_pr"),
+    ("cost_per_wave", "tokens_per_wave"),
+    ("unit_economics", "cost_per_backlog_item"),
+)
+
+
+def _collect_merged_pr_counts(stats_dict: Dict[str, Any]) -> Dict[str, int]:
+    """Collect every merged-PR count asserted anywhere in stats.json.
+
+    Returns a mapping of location -> count so contradictions can be reported
+    with their source. A single-sourced file yields exactly one distinct value.
+    """
+    counts: Dict[str, int] = {}
+    git = stats_dict.get("git", {})
+    if isinstance(git, dict) and isinstance(git.get("merged_prs"), int):
+        counts["git.merged_prs"] = git["merged_prs"]
+
+    econ = stats_dict.get("economics", {})
+    if isinstance(econ, dict):
+        if isinstance(econ.get("merged_prs"), int):
+            counts["economics.merged_prs"] = econ["merged_prs"]
+        cpp = econ.get("cost_per_merged_pr")
+        if isinstance(cpp, dict) and isinstance(cpp.get("merged_prs"), int):
+            counts["economics.cost_per_merged_pr.merged_prs"] = cpp["merged_prs"]
+        unit = econ.get("unit_economics")
+        if (isinstance(unit, dict)
+                and unit.get("backlog_item_proxy") == "merged_prs"
+                and isinstance(unit.get("items_count"), int)):
+            counts["economics.unit_economics.items_count"] = unit["items_count"]
+    return counts
+
+
+def validate_stats_integrity(
+    stats_dict: Dict[str, Any],
+    repo_root: str = ".",
+    max_age_days: int = DEFAULT_MAX_AGE_DAYS,
+    max_commits_behind: int = DEFAULT_MAX_COMMITS_BEHIND,
+) -> List[str]:
+    """Validate stats.json for internal consistency and freshness.
+
+    Returns a list of human-readable error strings (empty == valid). Checks:
+      1. Merged-PR count contradiction: any two PR counts in the file disagreeing.
+      2. Missing/invalid provenance: git.merged_prs present without a valid
+         merged_prs_source ('gh-api' | 'git-log').
+      3. Zero-filler economics: token/cost ratio fields present while no token
+         ledger is available (0.0-but-present filler that reads as measured).
+      4. Age staleness: generated_at older than max_age_days.
+      5. Commit-lag staleness: recorded total_commits more than
+         max_commits_behind behind the current HEAD (skipped on negative delta,
+         e.g. shallow clones where HEAD sees fewer commits than recorded).
+    """
+    errors: List[str] = []
+
+    # 1. Merged-PR count contradiction
+    counts = _collect_merged_pr_counts(stats_dict)
+    distinct = set(counts.values())
+    if len(distinct) > 1:
+        detail = ", ".join(f"{k}={v}" for k, v in sorted(counts.items()))
+        errors.append(
+            f"Merged-PR count contradiction: {detail}. "
+            "The file must report ONE merged-PR count with ONE definition."
+        )
+
+    # 2. Provenance / source field
+    git = stats_dict.get("git", {})
+    if isinstance(git, dict) and "merged_prs" in git:
+        source = git.get("merged_prs_source")
+        if source not in ("gh-api", "git-log"):
+            errors.append(
+                "Missing/invalid git.merged_prs_source: expected 'gh-api' or 'git-log', "
+                f"got {source!r}. Regenerate via scripts/verify-stats.sh --regenerate."
+            )
+
+    # 3. Zero-filler economics
+    econ = stats_dict.get("economics")
+    if isinstance(econ, dict):
+        ledger_available = econ.get("token_ledger_available")
+        ratio_present = False
+        for block_key, ratio_key in _ECON_RATIO_FIELDS:
+            block = econ.get(block_key)
+            if isinstance(block, dict) and ratio_key in block:
+                ratio_present = True
+                break
+        if ratio_present and ledger_available is not True:
+            errors.append(
+                "Economics zero-filler: token/cost ratio fields are present without an "
+                "available token ledger (token_ledger_available is not true). Omit these "
+                "fields when unmeasured instead of emitting 0.0."
+            )
+
+    # 4. Age staleness
+    generated_at = stats_dict.get("generated_at")
+    if generated_at:
+        try:
+            gen_dt = datetime.fromisoformat(str(generated_at).replace("Z", "+00:00"))
+            if gen_dt.tzinfo is None:
+                gen_dt = gen_dt.replace(tzinfo=timezone.utc)
+            age_days = (datetime.now(timezone.utc) - gen_dt).days
+            if age_days > max_age_days:
+                errors.append(
+                    f"Stale receipts: stats.json generated_at is {age_days} days old "
+                    f"(limit {max_age_days}). Run scripts/verify-stats.sh --regenerate."
+                )
+        except (ValueError, TypeError):
+            errors.append(
+                f"Invalid generated_at timestamp {generated_at!r}. "
+                "Run scripts/verify-stats.sh --regenerate."
+            )
+
+    # 5. Commit-lag staleness
+    recorded_commits = git.get("total_commits") if isinstance(git, dict) else None
+    if isinstance(recorded_commits, int) and repo_root:
+        try:
+            result = subprocess.run(
+                ["git", "rev-list", "--count", "HEAD"],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                check=False,
+                timeout=30,
+            )
+            current = int((result.stdout or "").strip()) if result.returncode == 0 else None
+        except (FileNotFoundError, subprocess.TimeoutExpired, ValueError, Exception):
+            current = None
+        if current is not None:
+            delta = current - recorded_commits
+            if delta > max_commits_behind:
+                errors.append(
+                    f"Stale receipts: stats.json is {delta} commits behind HEAD "
+                    f"(limit {max_commits_behind}). Run scripts/verify-stats.sh --regenerate."
+                )
+
+    return errors
+
+
 class GitStats:
     """Compute statistics from git repository."""
 
@@ -134,6 +283,7 @@ class GitStats:
         """Initialize with repo root path."""
         self.repo_root = Path(repo_root)
         self._merged_prs = None
+        self._merged_prs_source = None
         self._total_commits = None
         self._project_age_days = None
         self._wave_count = None
@@ -161,56 +311,72 @@ class GitStats:
         except FileNotFoundError:
             return ""
 
-    @property
-    def merged_prs(self) -> int:
-        """Count merged PRs using gh API (preferred) or git fallback.
+    def _origin_slug(self) -> Optional[str]:
+        """Parse 'owner/repo' from the origin remote URL (GitHub remotes only).
 
-        Prefers `gh` API: gh api -X GET search/issues -f q="repo:matt82198/aesop is:pr is:merged" --jq .total_count
-        Falls back to git: counts distinct PR numbers from both merge-commit and squash-merge patterns.
+        Returns None when there is no origin remote or it is not a GitHub URL,
+        in which case the gh API path is skipped entirely (offline-reproducible).
         """
-        if self._merged_prs is not None:
-            return self._merged_prs
+        url = self._run_git("remote", "get-url", "origin", check=False)
+        if not url:
+            return None
+        match = re.search(r"github\.com[:/]([^/\s]+)/([^/\s]+?)(?:\.git)?/?$", url.strip())
+        if not match:
+            return None
+        return f"{match.group(1)}/{match.group(2)}"
 
-        # Try gh API first (preferred, authoritative)
-        try:
-            result = subprocess.run(
-                [
-                    "gh",
-                    "api",
-                    "-X",
-                    "GET",
-                    "search/issues",
-                    "-f",
-                    "q=repo:matt82198/aesop is:pr is:merged",
-                    "--jq",
-                    ".total_count"
-                ],
-                cwd=str(self.repo_root),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=False,
-                timeout=10
-            )
-            if result.returncode == 0 and result.stdout:
-                try:
-                    count = int(result.stdout.strip())
-                    self._merged_prs = count
-                    return count
-                except (ValueError, TypeError):
-                    # gh returned non-numeric output, fall through to git
-                    pass
-        except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
-            # gh not found, timeout, or other error — fall through to git
-            pass
+    def _compute_merged_prs(self) -> Tuple[int, str]:
+        """Compute the single merged-PR count and record its source.
+
+        ONE count, ONE definition, with provenance:
+          - source "gh-api": total merged PRs per the GitHub search API
+            (authoritative; requires a GitHub origin remote and a working `gh`).
+          - source "git-log": distinct PR numbers found in commit subjects,
+            union of merge-commit ("Merge pull request #N") and squash-merge
+            ("... (#N)") patterns, deduplicated.
+
+        Whichever path succeeds populates the SAME field; consumers (economics,
+        README) must never recompute their own count.
+        """
+        # Try gh API first (preferred, authoritative) — only when origin is a GitHub repo
+        slug = self._origin_slug()
+        if slug:
+            try:
+                result = subprocess.run(
+                    [
+                        "gh",
+                        "api",
+                        "-X",
+                        "GET",
+                        "search/issues",
+                        "-f",
+                        f"q=repo:{slug} is:pr is:merged",
+                        "--jq",
+                        ".total_count"
+                    ],
+                    cwd=str(self.repo_root),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                    timeout=10
+                )
+                if result.returncode == 0 and result.stdout:
+                    try:
+                        return (int(result.stdout.strip()), "gh-api")
+                    except (ValueError, TypeError):
+                        # gh returned non-numeric output, fall through to git
+                        pass
+            except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+                # gh not found, timeout, or other error — fall through to git
+                pass
 
         # Git fallback: count distinct PR numbers from commit subjects
         try:
             output = self._run_git("log", "--format=%s", check=False)
             if not output:
-                self._merged_prs = 0
-                return 0
+                return (0, "git-log")
 
             # Collect distinct PR numbers from both patterns:
             # 1. "Merge pull request #N" (merge-commit style)
@@ -223,12 +389,25 @@ class GitStats:
             for match in re.finditer(r"\(#(\d+)\)\s*$", output, re.MULTILINE):
                 pr_numbers.add(int(match.group(1)))
 
-            count = len(pr_numbers)
-            self._merged_prs = count
-            return count
+            return (len(pr_numbers), "git-log")
         except Exception:
-            self._merged_prs = 0
-            return 0
+            return (0, "git-log")
+
+    def _merged_prs_resolved(self) -> Tuple[int, str]:
+        """Cached (count, source) pair — both always resolved together."""
+        if self._merged_prs is None:
+            self._merged_prs, self._merged_prs_source = self._compute_merged_prs()
+        return (self._merged_prs, self._merged_prs_source)
+
+    @property
+    def merged_prs(self) -> int:
+        """The single merged-PR count (see _compute_merged_prs for the definition)."""
+        return self._merged_prs_resolved()[0]
+
+    @property
+    def merged_prs_source(self) -> str:
+        """Provenance of merged_prs: 'gh-api' or 'git-log'."""
+        return self._merged_prs_resolved()[1]
 
     @property
     def total_commits(self) -> int:
@@ -730,6 +909,7 @@ class StatsCounter:
         data = {
             "git": {
                 "merged_prs": self.git.merged_prs,
+                "merged_prs_source": self.git.merged_prs_source,
                 "total_commits": self.git.total_commits,
                 "project_age_days": self.git.project_age_days,
                 "wave_count": self.git.wave_count,
@@ -758,6 +938,11 @@ class StatsCounter:
         data["generated_at"] = datetime.now(timezone.utc).isoformat()
         data["loc"] = self.git.lines_of_code
 
+        # Record HEAD sha for provenance / freshness checks (empty repos yield "")
+        head_sha = self.git._run_git("rev-parse", "HEAD", check=False)
+        if head_sha:
+            data["head_sha"] = head_sha
+
         # Add cost economics metrics (requires cost_econ module)
         try:
             from cost_econ import calculate_economics, get_metric_honesty_caveats
@@ -765,10 +950,14 @@ class StatsCounter:
             repo_path = Path(self.git.repo_root)
             state_dir = repo_path / "state"
 
+            # Single-source the merged-PR count: economics consumes the SAME
+            # count and provenance that the git block reports, never recomputing.
             economics = calculate_economics(
                 repo_root=str(repo_path),
                 state_dir=str(state_dir) if state_dir.exists() else None,
-                config_file=None
+                config_file=None,
+                merged_prs=self.git.merged_prs,
+                merged_prs_source=self.git.merged_prs_source,
             )
 
             data["economics"] = economics
@@ -1102,6 +1291,16 @@ def main():
             sys.stderr.write(f"{error_message}\n")
             sys.stderr.flush()
             sys.exit(1)
+
+        # Internal-consistency + freshness validation (fail before README compare).
+        stats_dict = counter.load_stats(str(stats_file))
+        if stats_dict is not None:
+            integrity_errors = validate_stats_integrity(stats_dict, repo_root=args.repo)
+            if integrity_errors:
+                for err in integrity_errors:
+                    sys.stderr.write(f"INTEGRITY: {err}\n")
+                sys.stderr.flush()
+                sys.exit(1)
 
         # Handle match/drift
         if matches:
