@@ -37,13 +37,14 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `cost_projection.py` — Live burn-rate observability; projects end-of-wave spend and fires threshold alerts at 70% and 90% of ceiling; CLI: `--projection [--window N] [--json]` or `--check-alerts --wave N [--json]`; idempotent per wave via flag files under state/
 - `dep_graph.py` — Python module dependency graph generator (Mermaid/DOT/JSON); CLI: `--paths DIR... --root DIR --format mermaid|dot|json --output FILE`; highlights cycles; stdlib-only
 - `defect_escape.py` — Haiku code quality telemetry (fix-forward rate, first-try estimate); CLI: `--repo <path> --since <ISO date> [--json]`
+- `docstring_check.py` — AST docstring coverage checker (missing docstrings on public functions/classes); CLI: [--check] [--json] [--threshold N]; supports # docstring-ok suppression; exit 0=pass/1=findings; stdlib only
 - `doctor.js` — Preflight checklist for adopter onboarding (diagnostic checks: config, hooks, CLAUDE.md, state, heartbeats, git identity, secret-scan; exit 0=all pass, 1=failed)
 - `ensure_state.py` — Scaffold STATE.md and BUILDLOG.md templates (writes via state_store WriteAPI: scaffold emits state_md_written + buildlog events)
-- `eod_sweep.py` — End-of-day safety check (dirty trees, unpushed commits); verdict appended to BUILDLOG.md via state_store WriteAPI (--buildlog filename must be BUILDLOG.md, fail-closed)
+- `eod_sweep.py` — End-of-day safety check (dirty trees, unpushed commits); appends verdict to BUILDLOG.md via WriteAPI (fail-closed)
 - `fleet.js` — One-shot fleet snapshot (JSON: agents, heartbeats, tracker, orchestrator status; Node STDLIB only)
 - `fleet_ledger.py` — Append-only cost ledger with harvest/rotate
 - `fleet_prompt_extractor.py` — Extract and deduplicate Agent/Task spawn prompts
-- `gen_state_md.py` — STATE.md checkpoint generator from event-sourced state store; reads tracker projection via StateAPI read facade; renders markdown with current status header (ISO timestamp), open tracker items by lane, and next steps; CLI: `[--state-root DIR] [--out PATH]`; exit 0=success / 1=malformed store; deterministic + ASCII-safe
+- `gen_state_md.py` — STATE.md checkpoint generator from state store; reads tracker projection via StateAPI; renders status + items + next steps; CLI: `[--state-root DIR] [--out PATH]`; exit 0=success/1=malformed; deterministic + ASCII-safe
 - `git_identity_check.py` — Validate repo git user.name/user.email via --expect-name/--expect-email CLI args OR aesop.config.json identity block; verifies .git/config physically (not config cache)
 - `halt.py` — Kill-switch: writes/reads/clears `.HALT` sentinel (daemons/dispatch check it)
 - `handoff_proof.py` — Team-handoff proof: crash-only resume demo on the real driver/wave_loop.py engine offline (control vs interrupted+resumed runs must reach identical terminal state); outputs docs/HANDOFF-CERTIFICATE.md + state/handoff-proof-*.json
@@ -145,7 +146,6 @@ CLI: `bash tools/agent-forensics.sh <commit>` (print snapshot) | `--diff <commit
 - **Shell**: `bash -n tools/*.sh && shellcheck tools/*.sh` (syntax + linting)
 - **Node**: `node --check tools/*.mjs` (syntax validation)
 - **Full suite**: `python tools/scanner_selftest.py && python tools/power_selftest.py` (mandatory CI gates)
-
 ---
 
 Map of all domains: /CLAUDE.md
