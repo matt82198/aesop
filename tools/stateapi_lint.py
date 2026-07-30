@@ -52,6 +52,7 @@ STATE_FILES_TO_PROTECT = [
 WRITER_ALLOWLIST = [
     "state_store/export.py",
     "state_store/ingest.py",
+    "state_store/materialize.py",  # Canonical materializer: renders all derived views
     "state_store/read_api.py",  # The read API facade itself (reads the state files)
     "state_store/write_api.py",  # The write API facade (reads/writes the projection atomically)
     "ui/collectors.py",  # Some readers also export/flush

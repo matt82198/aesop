@@ -176,6 +176,52 @@ new_violation = Path("state/tracker.json").read_text()
         self.assertEqual(len(stale), 0, "Should have no stale entries after normalization")
         self.assertEqual(len(new), 0, "Should have no new violations after normalization")
 
+    def test_baseline_entry_count_never_exceeds_committed_value(self):
+        """Regression test: baseline entry count must never grow beyond its committed value.
+
+        This enforces the SHRINK-ONLY ratchet property defined in the state-consolidation plan:
+        - .stateapi-baseline.json is a deferred-debt list that should only shrink
+        - New violations MUST go into the WRITER_ALLOWLIST, never into the baseline
+        - Growing the baseline converts the gate into a rubber stamp
+
+        This test reads the committed baseline, runs the linter against the real repo,
+        and asserts that the current violation count does not exceed the baseline count.
+        """
+        from tools.stateapi_lint import find_direct_opens, load_baseline, check_ratchet
+
+        # Read the committed baseline from the repo
+        committed_baseline_file = ROOT / ".stateapi-baseline.json"
+        self.assertTrue(
+            committed_baseline_file.exists(),
+            f"Committed baseline file missing: {committed_baseline_file}"
+        )
+
+        committed_baseline = load_baseline(str(committed_baseline_file))
+        committed_violations = committed_baseline.get("violations", [])
+        committed_count = len(committed_violations)
+
+        # Run the linter against the real repo
+        current_violations = find_direct_opens(str(ROOT))
+        current_count = len(current_violations)
+
+        # Check ratchet: current count MUST NOT exceed committed count
+        is_ok, stale_entries, new_violations = check_ratchet(committed_violations, current_violations)
+
+        # Fail if baseline grew (new violations without being allowlisted)
+        self.assertTrue(
+            current_count <= committed_count,
+            f"Baseline entry count grew! Before: {committed_count}, After: {current_count}. "
+            f"New violations ({len(new_violations)}): {new_violations}. "
+            f"This means writers were baselined instead of allowlisted."
+        )
+
+        # Additional check: if there are no new violations, the ratchet must pass
+        if len(new_violations) == 0:
+            self.assertTrue(
+                is_ok,
+                f"Ratchet should pass when count doesn't grow. Stale: {stale_entries}"
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
