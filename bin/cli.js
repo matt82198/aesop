@@ -11,8 +11,8 @@ const helpFlag = args.includes('--help') || args.includes('-h');
 const forceFlag = args.includes('--force');
 const yesFlag = args.includes('--yes');
 
-// Check for runtime subcommands (doctor, watch, dash, status, fleet, health-score, reproduce)
-const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health-score', 'reproduce'];
+// Check for runtime subcommands (doctor, watch, dash, status, fleet, health, health-score, reproduce)
+const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health', 'health-score', 'reproduce'];
 const isRuntimeCommand = runtimeCommands.includes(args[0]);
 
 if (isRuntimeCommand) {
@@ -22,6 +22,7 @@ if (isRuntimeCommand) {
     'dash': '../tools/dash.js',
     'status': '../tools/status.js',
     'fleet': '../tools/fleet.js',
+    'health': '../tools/health.js',
     'health-score': '../tools/health-score.js',
     'reproduce': '../tools/reproduce.js'
   };

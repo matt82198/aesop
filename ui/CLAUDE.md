@@ -56,13 +56,15 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **wave_telemetry.py** — Wave telemetry: `get_wave_telemetry()` extracts current phase (from `STATE.md`), top blocker (from `AUDIT-BACKLOG.md`), cost metrics (from ledger). Reads state at call time (no cache); degrades gracefully on missing files.
 
-**wave_dispatch.py** — Wave dispatch (live per-agent visibility): `get_wave_dispatch()` reads agent transcripts from `~/.claude/projects/*/memory/agent-*.jsonl`, infers phase (dispatch/thinking/tool-use/stall/done) from transcript tail, estimates tokens from file size (~4.5 bytes per token), and computes activity age from mtime. Returns per-agent rows with phase badge, age, token count, and warnings (inactive >5min, stalled >10min). Degrades to `{available:false}` when no agents found. Polls every 2-3s in Activity view.
+**wave_dispatch.py** — Wave dispatch (per-agent visibility): reads agent transcripts, infers phase (dispatch/thinking/tool-use/stall/done) from tail, estimates tokens from file size, computes activity age from mtime. Returns per-agent rows with phase badge, age, warnings (inactive >5min, stalled >10min). Degrades `{available:false}`. Polled 2-3s.
 
 **wave_failure.py** — Wave PR failure drill-down: `get_wave_failure(pr_number)` shells `gh run view --json jobs` for jobs on PR branch, then `gh api .../jobs/{id}/logs` for failing jobs; extracts ~100-line log tails. Caches ~5s per PR; degrades to `{available:false, error}` when gh missing/un-authed. Override gh binary: `AESOP_GH_BIN` env var.
 
-**demo.py** — Zero-key demo mode. `maybe_activate()` (called by serve.py BEFORE `config.reload()`) fires on `--demo` in argv or `AESOP_DEMO=1`: it seeds a throwaway demo root (heartbeats, tracker.json, orchestrator-status.json, outcomes ledger, `AUDIT-BACKLOG.md`, fabricated agent transcripts) with now-relative timestamps, then points `AESOP_STATE_ROOT` / `AESOP_WATCHDOG_HEARTBEAT` / `AESOP_MONITOR_HEARTBEAT` / `AESOP_TRANSCRIPTS_ROOT` / `AESOP_AUDIT_BACKLOG` at it so every collector reads the snapshot through its normal path (no collector logic forked). The two shell-out collectors read fabricated data directly when `enabled()`: `get_fleet_agents()` (agents.py) → `get_demo_agents()`, `get_wave_prs()` (wave_prs.py) → `get_demo_wave_prs()`. A daemon refresher (~45s) rewrites heartbeats / orchestrator `updated_at` / transcript mtimes so ages always read fresh. `AESOP_ROOT` is NOT moved (WEB_DIST must keep resolving the committed dist). Honesty: handler injects `BANNER_HTML` ("DEMO DATA") after `<body>` and `/api/state` gets a top-level `"demo": true`. No-op in default mode. Optional `AESOP_DEMO_ROOT` pins the demo root (tests).
+**demo.py** — Zero-key demo mode (`--demo` or `AESOP_DEMO=1`). Seeds throwaway state root with fabricated data, redirects all env vars to it; shell-out collectors use `get_demo_agents()`/`get_demo_wave_prs()`. Daemon refresher (~45s) keeps timestamps fresh. `AESOP_ROOT` stays real (dist must resolve). Honesty: BANNER_HTML + `"demo": true` in /api/state. No-op in default mode. Optional `AESOP_DEMO_ROOT` (tests).
 
-**api/__init__.py**, **api/tracker.py**, **api/submit.py**: API handlers for mutations (tracker CRUD, inbox append).
+**bench_panel.py**: Benchmark API routes (`/api/bench`, `/api/bench/compare`). Reads `bench_results_cache` at call time.
+
+**api/__init__.py**, **api/tracker.py**, **api/submit.py**: Mutation handlers (tracker CRUD, inbox append).
 
 ## Frontend (React 18 + Vite + TypeScript)
 
@@ -71,7 +73,8 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 - **App.tsx**: App shell; hash-routed views (/#/, /#/work, /#/activity, /#/cost).
 - **styles/tokens.css** + **global.css**: Design tokens (light/dark palettes, spacing, typography).
 - **views/**: Overview, Work, Activity, Cost, WavePRBoard (with SSE bindings). WavePRBoard polls `/api/wave/prs` every 5s; drills down to FailureDrilldown on click.
-- **components/**: HealthHeader, AgentsPanel, TrackerBoard, Timeline, CostChart, CostAnalyticsPanel, FailureDrilldown, etc.
+- **components/**: HealthHeader, AgentsPanel, TrackerBoard, Timeline, CostChart, CostAnalyticsPanel, FailureDrilldown, BenchmarkPanel, etc.
+  - BenchmarkPanel: Results table (model/accuracy/tokens/latency/cost/timestamp) + model comparison cards; fetches `/api/bench` and `/api/bench/compare`; dark/light theme, responsive grid.
   - CostAnalyticsPanel (wave-29 UX): info-dense operator view with (a) spend per wave (bar chart), (b) model efficiency vs Opus counterfactual, (c) burn rate + end-of-wave projection with ceiling alert; graceful DATA-UNAVAILABLE states when ledger/ceiling missing.
   - FailureDrilldown: drawer showing CI job list + ~100-line log excerpts on expand; fetches `/api/wave/failure?pr=N`.
 - **lib/api.ts**: Typed fetch helpers + CSRF header injection + `/api/session` fallback for dev server.
@@ -98,6 +101,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 - `GET /api/wave/prs` — PR board with CI rollup (cached ~5s; degrades `{available:false}`).
 - `GET /api/wave/telemetry` — Phase + blocker + cost metrics. `GET /api/wave/dispatch` — Per-agent phase visibility (polled 2-3s).
 - `GET /api/wave/failure?pr=N` — CI failure drill-down with log excerpts (cached ~5s).
+- `GET /api/bench` — Latest benchmark results from journal. `GET /api/bench/compare` — Model comparison data.
 - All `/api/wave/*` routes: read-only, call-time reads, polled not SSE; gh-backed honor `AESOP_GH_BIN`.
 - `GET /events` — SSE stream (6 sections, keepalive ~15s). `GET /favicon.ico` — 204.
 

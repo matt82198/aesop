@@ -23,6 +23,7 @@ import wave_gantt
 import wave_audit_tail
 import wave_reasoning_tail
 import wave_context
+import bench_panel
 import api
 import api.tracker
 import api.submit
@@ -257,6 +258,10 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self.serve_api_spec_sharpness()
         elif self.path.startswith("/api/context/files"):
             self.serve_api_file_scope()
+        elif self.path == "/api/bench":
+            self.serve_api_bench()
+        elif self.path == "/api/bench/compare":
+            self.serve_api_bench_compare()
         elif self.path.startswith("/api/tracker"):
             self.serve_tracker()
         elif self.path.startswith("/api/state/events"):
@@ -490,6 +495,48 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             if _is_client_disconnect_error(e):
                 return  # client gone: nothing to send or log
             print(f"[serve_api_cost] Uncaught exception: {e}", file=sys.stderr)
+            try:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
+            except Exception:
+                pass  # best-effort error response; client may be gone
+
+    def serve_api_bench(self):
+        """GET /api/bench — latest benchmark results from the journal."""
+        try:
+            payload = bench_panel.get_bench_results()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
+        except Exception as e:
+            if _is_client_disconnect_error(e):
+                return  # client gone: nothing to send or log
+            print(f"[serve_api_bench] Uncaught exception: {e}", file=sys.stderr)
+            try:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
+            except Exception:
+                pass  # best-effort error response; client may be gone
+
+    def serve_api_bench_compare(self):
+        """GET /api/bench/compare — model comparison summary from benchmark results."""
+        try:
+            payload = bench_panel.get_bench_comparison()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload, default=str).encode('utf-8'))
+        except Exception as e:
+            if _is_client_disconnect_error(e):
+                return  # client gone: nothing to send or log
+            print(f"[serve_api_bench_compare] Uncaught exception: {e}", file=sys.stderr)
             try:
                 self.send_response(500)
                 self.send_header("Content-Type", "application/json; charset=utf-8")

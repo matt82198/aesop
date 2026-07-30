@@ -21,6 +21,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `agent_prompt_hygiene.py` — Gate detecting forbidden patterns in agent/dispatch prompt templates
 - `alert_bridge.py` — Slack/Discord webhook bridge for SECURITY-ALERTS
 - `bench_api_runner.py` — Bench v2+v3 via Anthropic API (BENCH_API_KEY, API-only per bench-no-cli-fallback rule); reuses bench_runner machinery; CLI: `bench_api_runner.py <v2|v3|all> <model...>`
+- `bench_results_cache.py` — Append-only benchmark results journal (state/bench-runs.jsonl); append_result/read_results/get_comparison API with idempotent deduplication by model+timestamp; stdlib-only
 - `bench_runner.py` — Held-out benchmark runner + scorer (Haiku/Sonnet/Opus pluggable)
 - `build_static_dash.py` — Build a static, self-contained snapshot of the dashboard with demo data for GitHub Pages; starts demo server, captures API state, produces _site/ with fetch/EventSource shim; CLI: `--output DIR`
 - `buildlog.py` — Uniform BUILDLOG.md appender (writes via state_store WriteAPI: entry also lands as buildlog_entry event)
@@ -47,7 +48,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `handoff_proof.py` — Team-handoff proof: crash-only resume demo on the real driver/wave_loop.py engine offline (control vs interrupted+resumed runs must reach identical terminal state); outputs docs/HANDOFF-CERTIFICATE.md + state/handoff-proof-*.json
 - `health-score.js` — Readiness score for primed projects (0-100 weighted score: config, git hooks, CLAUDE.md, state writable, daemon heartbeats, git identity, secret-scan runnable)
 - `health_score.py` — Readiness score (0-100) for primed projects; CLI: `--cwd <path> [--json]`; checks: config, hooks, CLAUDE.md, writable, heartbeats, git-identity, secret-scan (weighted scoring)
-- `healthcheck.py` — Fleet health aggregator (heartbeat/alert/orchestrator status)
+- `health.js`, `healthcheck.py` — Fleet health aggregator (heartbeat/alert/orchestrator status); health.js wraps Python
 - `heartbeat.py` — Single-instance loop liveness registry
 - `inbox_drain.py` — Drain UI inbox submissions
 - `incident_report.py` — Incident log generator: mines git history for operational failures (fake-green, ci-drift, test-pollution, flake, conflict, stall, gate-activation, doc-invented); generates docs/INCIDENTS.md table; CLI: `[--repo PATH]` (print) | `--regenerate [--output FILE]` | `--check` (drift exit 1); all output deterministic, idempotent
@@ -84,7 +85,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `subprocess_guard.py` — G6 AST guard for subprocess anti-patterns in tests/ (bare `subprocess.run(['bash', ...])`/`Popen` without explicit `cwd=`, `shell=True`, explicit `cwd=None`, `os.system()`); suppress via `# subprocess-ok` inline comment; CLI: `[--check] [--json] [--paths PATH ...]` (default scan dir: `tests/`); exit 0=clean, 1=findings; stdlib only, ASCII-only output
 - `svg_to_png.mjs` — Rasterize SVG to PNG via @resvg/resvg-js (lazy import error handling)
 - `test_battery.py` — Local union test battery: runs the 4 harnesses (py/node/sh/ui) as parallel subprocesses with per-harness rc capture, stdin closed, logs to temp; parallel mode sets AESOP_TEST_CHILD_TIMEOUT_MS=90000 for node scaffold children; `--serial` fallback, `--skip <h>`, `--json`; exit 0 only when all harnesses green
-- `tracker_autoclose.py` — Tracker zombie-prevention auto-close gate (guardrail G1): closes items whose linked PRs merged or whose ownsFiles shipped on main; CLI: `[--check | --dry-run]`; exit 0=all resolved, 1=items still open
+- `tracker_autoclose.py` — Tracker zombie-prevention auto-close gate (guardrail G1): closes items whose linked PRs merged or whose ownsFiles shipped on main; CLI: `[--check | --dry-run]`; exit 0=all resolved, 1=items still open; timezone-aware UTC timestamps
 - `tracker_guard.py` — Append-only lane journal + zombie-resurrection fail-closed gate; prevents items in terminal lanes (done/rejected) from re-entering active lanes (ranked/proposed/in-progress/accepted); modes: --seed (bootstrap journal), --check (detect violations, exit 1 if found, default), --enforce (revert zombies to terminal lane); CLI: `tracker_guard.py [--seed | --check | --enforce]`; journaled in state/tracker-journal.jsonl with rotation at 5000 lines
 - `transcript_digest.py` — Digest agent-*.jsonl transcripts into compact redacted per-agent briefs (state/ledger/transcripts-brief.jsonl; deterministic, idempotent, strips paths/emails/tokens)
 - `claudemd_lint.py` — Lint the domain CLAUDE.md layer: doc-pointers resolve, cited npm scripts exist, runtime/state artifacts not flagged, domain cross-refs prohibited; 4 checks: DOC-POINTER, TEST-CMD, DOMAIN-CROSS-REF (domain CLAUDE.md must not reference other domain CLAUDE.md with directives; parent-child refs allowed), line-count; --json; root CLAUDE.md exempt from cross-ref check
@@ -146,4 +147,3 @@ CLI: `bash tools/agent-forensics.sh <commit>` (print snapshot) | `--diff <commit
 ---
 
 Map of all domains: /CLAUDE.md
-# trigger
