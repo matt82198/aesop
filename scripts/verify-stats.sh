@@ -8,15 +8,23 @@
 # This script ensures stats.json stays current and consistent with git reality.
 #
 # Implementation: tools/self_stats.py uses:
-#   - git rev-list --count HEAD     → total commit count
-#   - git log --grep="Merge pull request"  → merged PR count
-#   - git log --date=short --diff-filter=A  → project age
-#   - git log --format=%aN | sort -u       → distinct co-authors
-#   - git ls-files | wc -l                 → files tracked
+#   - git rev-list --count HEAD            -> total commit count
+#   - gh API (repo:<origin> is:pr is:merged), fallback distinct PR numbers from
+#     commit subjects (merge + squash patterns) -> merged PR count, source recorded
+#   - git log --reverse --format=%cI       -> project age
+#   - git log --format=%an|%ae + Co-Authored-By trailers -> classified authors
+#   - git ls-files                         -> files tracked
+#
+# --check enforces, beyond README<->stats.json consistency:
+#   * internal consistency: no two PR counts in stats.json may disagree
+#   * honest economics: no 0.0-but-present token/cost filler fields
+#   * provenance: git.merged_prs must carry a source ('gh-api' | 'git-log')
+#   * freshness: stats.json must not lag HEAD by generated_at age or commit count
+#     past practical thresholds (regenerate hint emitted on failure)
 #
 # Usage:
-#   bash scripts/verify-stats.sh          # Check if README matches stats.json
-#   bash scripts/verify-stats.sh --check  # Explicit check mode (exit 0 = match, exit 1 = drift)
+#   bash scripts/verify-stats.sh          # Check (README match + integrity + freshness)
+#   bash scripts/verify-stats.sh --check  # Explicit check mode (exit 0 = pass, exit 1 = fail)
 #   bash scripts/verify-stats.sh --regenerate  # Regenerate stats.json from live git
 #
 
