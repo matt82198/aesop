@@ -1,0 +1,68 @@
+{
+  "meta": {
+    "title": "Non-Claude backend end-to-end recording",
+    "purpose": "Empirical proof that aesop's AgentDriver seam works with a real non-Claude backend (GPT-4o-mini via OpenAI API). Converts the 0.5.0 seat-swap claim from architecturally proven + offline to empirically proven.",
+    "timestamp": "2026-07-30T03:52:05.756344+00:00",
+    "backend": "codex (gpt-4o-mini)",
+    "api": "OpenAI Chat Completions",
+    "live": true
+  },
+  "driver_capabilities": {
+    "name": "codex",
+    "tier": 2,
+    "tool_use_accuracy": 1.0,
+    "parallel_dispatch": false,
+    "worker_filesystem_access": false,
+    "worker_shell_access": false,
+    "structured_output": true,
+    "worktree_isolation": false,
+    "native_cost_tracking": true
+  },
+  "manifest_enrichment": {
+    "model": "gpt-4o-mini",
+    "verificationTier": 2,
+    "repairCap": 2,
+    "requireAdversarialReview": true,
+    "spotCheckFrac": 0.5,
+    "validateAllJson": true
+  },
+  "task": {
+    "slug": "fix-add-function",
+    "description": "Fix a broken add() function (returns a*b instead of a+b)",
+    "owned_files": [
+      "math_ops.py"
+    ],
+    "test_command": "python -m unittest test_math_ops -v"
+  },
+  "result": {
+    "route": "driver",
+    "ok": true,
+    "test_exit": 0,
+    "verified": true,
+    "files_written": [
+      "math_ops.py"
+    ],
+    "worker_id": "w-523399",
+    "error": null,
+    "elapsed_s": 2.22,
+    "independent_verification": true
+  },
+  "cost": {
+    "tokens_spent": 553,
+    "unmetered_dispatches": 0
+  },
+  "fixed_file_content": "def add(a, b):\n    return a + b  # FIXED: now returns the sum\n",
+  "pre_fix_test_exit": 1,
+  "evidence_chain": [
+    "1. Driver constructed with CodexDriver (gpt-4o-mini default)",
+    "2. probe_capabilities() reports tier 2 (honest self-report)",
+    "3. build_manifest_item() enriches with tier + 4 policy knobs",
+    "4. Test confirmed RED before dispatch (exit != 0)",
+    "5. dispatch_item() calls LIVE OpenAI API (gpt-4o-mini)",
+    "6. Model returns structured JSON patch (full-file replacement)",
+    "7. Driver validates JSON schema + ownership + writes file",
+    "8. Orchestrator runs test command (exit code is ground truth)",
+    "9. ok=True ONLY because test exit == 0 (never model say-so)",
+    "10. Independent re-run confirms test still GREEN"
+  ]
+}
