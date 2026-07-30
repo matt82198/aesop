@@ -17,7 +17,9 @@ Runs on `git push` via `.git/hooks/pre-push` (symlink on Unix/macOS/Git Bash; co
 2. `check_branch_policy()` — blocks direct pushes to main/master; exit 1 on violation
 3. `check_secret_scan()` — runs `tools/secret_scan.py --staged`; exit 1 on failure
 4. `check_tracker_guard()` — runs `tools/tracker_guard.py --check` against live runtime state (`AESOP_STATE_ROOT`, default `$AESOP_ROOT/state`); exit 1 (push blocked, `tracker_guard_failure` logged) on zombie-resurrection detection. Wired here rather than CI because tracker.json is git-ignored runtime state a CI checkout never has. Fail-open only when the tool itself is absent (`tracker_guard_skipped_tool_missing` logged) — the hook installs into repos without an aesop checkout.
-5. Policy violations trigger `log_block()` to append audit record (JSON-lines) before exit
+5. `check_g5_claudemd_sync()` — runs `tools/claudemd_sync_gate.py --check` (Guardrail G5); verifies code changes in each domain are accompanied by corresponding domain/CLAUDE.md updates; exit 1 on sync drift (push blocked, `g5_claudemd_sync_failure` logged). Fail-open only if tool is missing (`g5_claudemd_sync_skipped_tool_missing` logged). Wired here to enforce repo contract locally before push (esc-g5-595: prevents missing CLAUDE.md updates).
+6. `check_test_suite_count()` — runs `tools/verify_test_suite_count.py --check`; verifies test suite counts in tests/CLAUDE.md match actual test files on disk; exit 1 on count drift (push blocked, `test_suite_count_failure` logged). Fail-open only if tool is missing (`test_suite_count_skipped_tool_missing` logged). Catches test additions without documentation updates before push.
+7. Policy violations trigger `log_block()` to append audit record (JSON-lines) before exit
 
 **Audit Ledger**: Append-only path: `${AESOP_ROOT:-$HOME/aesop}/state/SECURITY-AUDIT.log` (git-ignored). 
 Schema: `{"seq":N,"prev_hash":"SHA256_OF_PREV_LINE","ts":"2025-07-12T14:32:01Z","repo":"aesop","event":"push_blocked","reason":"secret_scan_failure"|"push_to_protected_branch","user":"alice"}`
