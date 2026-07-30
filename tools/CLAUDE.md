@@ -53,6 +53,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `health.js`, `healthcheck.py` — Fleet health aggregator (heartbeat/alert/orchestrator status); health.js wraps Python
 - `heartbeat.py` — Single-instance loop liveness registry
 - `inbox_drain.py` — Drain UI inbox submissions
+- `init_project.py` — Project initialization scaffolder: creates CLAUDE.md layer (root + first domain), aesop.config.json, state/ dir, .github/workflows/ci.yml, pre-push hook; CLI: `--dir PATH --name NAME [--force]`; exit 0=success, 1=error, 2=usage; stdlib-only
 - `incident_report.py` — Incident log generator: mines git history for operational failures (fake-green, ci-drift, test-pollution, flake, conflict, stall, gate-activation, doc-invented); generates docs/INCIDENTS.md table; CLI: `[--repo PATH]` (print) | `--regenerate [--output FILE]` | `--check` (drift exit 1); all output deterministic, idempotent
 - `latency_report.py` — Wave latency report generator: parses wave journals/bench results/BUILDLOG timestamps into per-wave, per-phase, and percentile timing breakdowns with explicit estimated-vs-measured caveats; CLI: `[--out docs/LATENCY.md]`
 - `launch_tui.py` — Spawn bash TUI script in detached terminal
@@ -143,5 +144,4 @@ CLI: `bash tools/agent-forensics.sh <commit>` (print snapshot) | `--diff <commit
 - **Node**: `node --check tools/*.mjs` (syntax validation)
 - **Full suite**: `python tools/scanner_selftest.py && python tools/power_selftest.py` (mandatory CI gates)
 
----
 Map of all domains: /CLAUDE.md

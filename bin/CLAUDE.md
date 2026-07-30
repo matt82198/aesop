@@ -1,6 +1,6 @@
 # bin/ — CLI scaffolder + runtime commands
 
-**Domain**: Node.js CLI entry point (`bin/cli.js`): scaffolds aesop orchestration template, interactive onboarding wizard, runtime subcommand dispatch (doctor/watch/dash/status/fleet/health-score/reproduce).
+**Domain**: Node.js CLI entry point (`bin/cli.js`): scaffolds aesop orchestration template, interactive onboarding wizard, runtime subcommand dispatch (doctor/watch/dash/status/fleet/health-score/reproduce/init).
 
 ## Universal rules (every domain)
 - Feature branch only, never main; every push gated by `python tools/secret_scan.py --staged` exit 0.
@@ -21,9 +21,11 @@
 - `npx @matt82198/aesop wizard --yes` → uses all defaults, no prompts (CI-safe)
 - Non-TTY input auto-skips prompts
 
-**Runtime commands** (after scaffolding; dispatch pattern in cli.js lines 14–30):
+**Runtime commands** (after scaffolding; dispatch pattern in cli.js):
 ```javascript
-const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health', 'health-score', 'reproduce'];
+const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health', 'health-score', 'reproduce', 'init'];
+// 'init' dispatches to Python: spawnSync('python3', ['tools/init_project.py', '--dir', '.', ...])
+// All others load+run a Node module:
 const commandMap = {
   'doctor': '../tools/doctor.js',   // Preflight check (Node, Python, git, config, dirs, hooks, port)
   'watch': '../tools/watch.js',     // Launch daemon; spawns daemons/run-watchdog.sh
@@ -34,6 +36,12 @@ const commandMap = {
 };
 require(commandMap[args[0]]); // Load + run; returns immediately after
 ```
+
+**Init command** (`npx @matt82198/aesop init`):
+- Scaffolds aesop orchestration into the CURRENT directory (not a new fleet dir)
+- Creates: CLAUDE.md, domain CLAUDE.md for first code dir, aesop.config.json, state/.gitkeep, .github/workflows/ci.yml, pre-push hook
+- Flags: `--name <name>` (project name, auto-detected from git remote), `--force` (overwrite existing files)
+- Delegates to `tools/init_project.py` via spawnSync (python3 with python fallback)
 
 ## Scaffold files (filesToCopy array in cli.js lines 243–260)
 
