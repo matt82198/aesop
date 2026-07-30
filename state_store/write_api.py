@@ -24,8 +24,15 @@ import json
 import os
 import sys
 import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Platform-specific file locking
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 # Ensure tools and state_store modules are importable
 repo_root = Path(__file__).parent.parent
@@ -286,7 +293,205 @@ class WriteAPI:
         # Bypass OCC check with force=True (recovery always bypasses conflict detection)
         self._render_tracker_atomic(store, start_disk_hash=None, force=True)
 
+    # --- Markdown write-path unification (WS4 increment 1) ---
+
+    def write_state_md(self, content: str, actor: str = "api") -> None:
+        """Write STATE.md and append event to event store (unified write path).
+
+        Writes STATE.md atomically, then appends a state_md_written event to the
+        state_markdown stream. Fail-closed: file write must succeed before event is appended.
+        This ordering ensures no orphaned events (safe direction if crash occurs).
+
+        Args:
+            content: The full STATE.md content to write
+            actor: Actor performing the write (default "api")
+
+        Raises:
+            ValueError: If event append fails
+            WriteConflict: If concurrent modification detected or atomic write fails
+        """
+        store = EventStore(self.db_path)
+        state_file = self.state_dir / "STATE.md"
+
+        # CRITICAL: Capture on-disk hash at operation START (before file write)
+        start_disk_hash = None
+        if state_file.exists():
+            try:
+                start_content = state_file.read_text(encoding="utf-8")
+                start_disk_hash = self._compute_content_hash({"content": start_content})
+            except Exception:
+                # Corrupt file at START: treat as conflict (fail-closed)
+                pass
+
+        # Write the file atomically with OCC check (event is only appended on success)
+        self._write_markdown_atomic(state_file, content, start_disk_hash)
+
+        # Now append the event (only on successful file write)
+        try:
+            store.append("state_markdown", "state_md_written", {"content": content}, actor)
+        except Exception as e:
+            raise ValueError(f"Failed to append state_md_written event: {e}") from e
+
+    def append_buildlog(self, line: str, actor: str = "api") -> None:
+        """Append a line to BUILDLOG.md and event to event store (unified write path).
+
+        Appends the line to BUILDLOG.md atomically, then appends a buildlog_entry event
+        to the buildlog stream. Fail-closed: file write must succeed before event is appended.
+        This ordering ensures no orphaned events (safe direction if crash occurs).
+
+        Args:
+            line: The line to append (without newline; newline is added automatically)
+            actor: Actor performing the append (default "api")
+
+        Raises:
+            ValueError: If event append fails
+            WriteConflict: If atomic write fails
+        """
+        store = EventStore(self.db_path)
+        buildlog_file = self.state_dir / "BUILDLOG.md"
+
+        # Ensure buildlog exists first (idempotent)
+        self.ensure_buildlog_exists()
+
+        # CRITICAL: Capture on-disk hash at operation START (before file write)
+        start_disk_hash = None
+        if buildlog_file.exists():
+            try:
+                current_content = buildlog_file.read_text(encoding="utf-8")
+                start_disk_hash = self._compute_content_hash({"content": current_content})
+            except Exception:
+                pass
+
+        # Append to BUILDLOG.md atomically (event is only appended on success)
+        self._append_to_markdown_atomic(buildlog_file, line, start_disk_hash)
+
+        # Now append the event (only on successful file write)
+        try:
+            store.append("buildlog", "buildlog_entry", {"line": line}, actor)
+        except Exception as e:
+            raise ValueError(f"Failed to append buildlog_entry event: {e}") from e
+
+    def ensure_buildlog_exists(self) -> None:
+        """Ensure BUILDLOG.md exists with header. Idempotent.
+
+        If BUILDLOG.md doesn't exist, creates it with a header. Does not append
+        any events to the event store (it's a structural requirement, not a write).
+
+        Returns:
+            None
+        """
+        buildlog_file = self.state_dir / "BUILDLOG.md"
+        if not buildlog_file.exists():
+            header = "# BUILDLOG\n"
+            buildlog_file.write_text(header, encoding="utf-8")
+
+    def rebuild_state_md(self, content: str, actor: str = "api", force: bool = False) -> None:
+        """Rebuild STATE.md from content, optionally bypassing OCC (recovery use case).
+
+        Appends a state_md_rebuilt event to the event store, then writes STATE.md atomically.
+        Fail-closed: event append failure blocks file write.
+
+        Args:
+            content: The full STATE.md content to write
+            actor: Actor performing the rebuild (default "api")
+            force: If True, bypass OCC conflict detection (recovery-only)
+
+        Raises:
+            ValueError: If event append fails
+            WriteConflict: If concurrent modification detected or atomic write fails
+        """
+        store = EventStore(self.db_path)
+        state_file = self.state_dir / "STATE.md"
+        start_disk_hash = None
+
+        if not force and state_file.exists():
+            try:
+                start_content = state_file.read_text(encoding="utf-8")
+                start_disk_hash = self._compute_content_hash({"content": start_content})
+            except Exception:
+                pass
+
+        # Append the event (fail-closed: if this fails, no file write)
+        try:
+            store.append("state_markdown", "state_md_rebuilt", {"content": content}, actor)
+        except Exception as e:
+            raise ValueError(f"Failed to append state_md_rebuilt event: {e}") from e
+
+        # Write with OCC check (unless force=True)
+        self._write_markdown_atomic(state_file, content, start_disk_hash, force=force)
+
     # --- Private helpers ---
+
+    @contextmanager
+    def _file_lock(self, file_path: Path):
+        """Context manager for advisory file lock using a separate lock file (cross-platform).
+
+        Uses a .lock file adjacent to the target file to coordinate access without
+        holding open the target file. This avoids file-in-use issues on Windows.
+
+        On Windows: uses msvcrt.locking on the lock file.
+        On Unix: uses fcntl.flock on the lock file.
+
+        Args:
+            file_path: Path to the file to protect (file may or may not exist)
+
+        Yields:
+            None (lock is acquired and held throughout the context)
+
+        Raises:
+            IOError: If locking fails
+        """
+        lock_file_path = file_path.parent / f".{file_path.name}.lock"
+        fd = None
+
+        try:
+            # Create and open the lock file (create it if it doesn't exist)
+            fd = os.open(
+                str(lock_file_path),
+                os.O_CREAT | os.O_WRONLY | os.O_BINARY if sys.platform == "win32" else os.O_CREAT | os.O_WRONLY,
+                0o666
+            )
+
+            if sys.platform == "win32":
+                # Windows: use msvcrt.locking for advisory lock (exclusive lock)
+                try:
+                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                except OSError:
+                    # Lock failed; sleep briefly and retry
+                    import time
+                    time.sleep(0.01)
+                    try:
+                        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                    except OSError:
+                        # Give up after one retry
+                        raise IOError(f"Failed to acquire lock on {file_path.name}")
+            else:
+                # Unix: use fcntl.flock for advisory lock
+                fcntl.flock(fd, fcntl.LOCK_EX)
+
+            yield
+
+        finally:
+            if fd is not None:
+                try:
+                    if sys.platform == "win32":
+                        # Windows: unlock before closing
+                        try:
+                            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass
+
+                # Try to clean up the lock file (best effort)
+                try:
+                    os.unlink(str(lock_file_path))
+                except Exception:
+                    pass
 
     def _load_tracker_safe(self) -> dict:
         """Load tracker.json, return empty tracker if missing or corrupt.
@@ -343,6 +548,177 @@ class WriteAPI:
         # Normalize to a canonical JSON form for hashing (sorted keys, no whitespace)
         content = json.dumps(tracker_dict, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    def _write_markdown_atomic(
+        self, file_path: Path, content: str, start_disk_hash: str | None = None, force: bool = False
+    ) -> None:
+        """Write a markdown file atomically with OCC conflict detection and file locking.
+
+        Acquires a file lock, performs OCC check, writes content to temp file, then renames
+        atomically. Lock is held for the entire operation to prevent TOCTOU races.
+
+        Args:
+            file_path: Path to the markdown file
+            content: Content to write
+            start_disk_hash: Hash at operation START for OCC baseline
+            force: If True, bypass OCC check (recovery-only)
+
+        Raises:
+            WriteConflict: If concurrent modification detected or atomic write fails
+        """
+        new_hash = self._compute_content_hash({"content": content})
+
+        # Acquire file lock and perform OCC check + atomic write under the lock
+        # This prevents TOCTOU races between OCC check and os.replace
+        with self._file_lock(file_path):
+            # OCC Conflict Detection (unless forcing)
+            if not force and file_path.exists():
+                try:
+                    current_content = file_path.read_text(encoding="utf-8")
+                    disk_hash = self._compute_content_hash({"content": current_content})
+
+                    # Conflict if disk has been modified since operation start
+                    # (and it's not due to our write).
+                    # Case 1: File existed at start (start_disk_hash is not None)
+                    #   Conflict if: disk changed from start AND disk is not our new content
+                    # Case 2: File didn't exist at start (start_disk_hash is None)
+                    #   Conflict if: disk exists now AND disk is not our new content
+                    if start_disk_hash is not None:
+                        # File existed at start; check if it's been modified externally
+                        if disk_hash != start_disk_hash and disk_hash != new_hash:
+                            raise WriteConflict(
+                                expected_hash=start_disk_hash,
+                                actual_hash=disk_hash,
+                                reason=f"Concurrent modification detected in {file_path.name}: "
+                                       f"file changed since operation start ({start_disk_hash[:8]} → {disk_hash[:8]}), "
+                                       f"and new content would be {new_hash[:8]}",
+                            )
+                    # If start_disk_hash was None (file didn't exist), we're creating it,
+                    # so no conflict possible.
+                except WriteConflict:
+                    raise
+                except Exception as e:
+                    # Other read errors: fail-closed
+                    raise WriteConflict(
+                        expected_hash=start_disk_hash,
+                        actual_hash=None,
+                        reason=f"Failed to read {file_path.name} for conflict check: {e}",
+                    ) from e
+
+            # Write atomically via tempfile + os.replace (while holding the lock)
+            try:
+                fd, temp_path = tempfile.mkstemp(
+                    suffix=".md",
+                    prefix=f".{file_path.stem}-",
+                    dir=str(file_path.parent),
+                    text=False,
+                )
+                try:
+                    os.write(fd, content.encode("utf-8"))
+                    os.close(fd)
+                    os.replace(str(temp_path), str(file_path))
+                except Exception:
+                    try:
+                        os.close(fd)
+                    except Exception:
+                        pass
+                    try:
+                        os.unlink(temp_path)
+                    except Exception:
+                        pass
+                    raise
+            except Exception as e:
+                raise WriteConflict(
+                    expected_hash=start_disk_hash,
+                    actual_hash=None,
+                    reason=f"Failed to write {file_path.name} atomically: {e}",
+                ) from e
+
+    def _append_to_markdown_atomic(
+        self, file_path: Path, line: str, start_disk_hash: str | None = None
+    ) -> None:
+        """Append a line to a markdown file atomically with OCC conflict detection and file locking.
+
+        Acquires a file lock, reads current content, appends line, and writes back atomically.
+        Lock is held for the entire operation to prevent TOCTOU races.
+
+        Args:
+            file_path: Path to the markdown file
+            line: Line to append (without newline)
+            start_disk_hash: Hash at operation START for OCC baseline
+
+        Raises:
+            WriteConflict: If concurrent modification detected or atomic write fails
+        """
+        # Acquire file lock and perform read + OCC check + atomic write under the lock
+        # This prevents TOCTOU races between read/check and os.replace
+        with self._file_lock(file_path):
+            # Read current content
+            try:
+                current_content = file_path.read_text(encoding="utf-8") if file_path.exists() else ""
+            except Exception as e:
+                raise WriteConflict(
+                    expected_hash=start_disk_hash,
+                    actual_hash=None,
+                    reason=f"Failed to read {file_path.name}: {e}",
+                ) from e
+
+            # Append line with newline
+            new_content = current_content + line + "\n"
+            new_hash = self._compute_content_hash({"content": new_content})
+
+            # OCC Conflict Detection
+            if file_path.exists():
+                try:
+                    disk_content = file_path.read_text(encoding="utf-8")
+                    disk_hash = self._compute_content_hash({"content": disk_content})
+
+                    # Conflict if file has been modified since operation start
+                    if start_disk_hash is not None:
+                        if disk_hash != start_disk_hash and disk_hash != new_hash:
+                            raise WriteConflict(
+                                expected_hash=start_disk_hash,
+                                actual_hash=disk_hash,
+                                reason=f"Concurrent modification detected in {file_path.name} "
+                                       f"during append: file changed since start ({start_disk_hash[:8]} → {disk_hash[:8]})",
+                            )
+                except WriteConflict:
+                    raise
+                except Exception as e:
+                    raise WriteConflict(
+                        expected_hash=start_disk_hash,
+                        actual_hash=None,
+                        reason=f"Failed to detect conflict in {file_path.name}: {e}",
+                    ) from e
+
+            # Write atomically (while holding the lock)
+            try:
+                fd, temp_path = tempfile.mkstemp(
+                    suffix=".md",
+                    prefix=f".{file_path.stem}-",
+                    dir=str(file_path.parent),
+                    text=False,
+                )
+                try:
+                    os.write(fd, new_content.encode("utf-8"))
+                    os.close(fd)
+                    os.replace(str(temp_path), str(file_path))
+                except Exception:
+                    try:
+                        os.close(fd)
+                    except Exception:
+                        pass
+                    try:
+                        os.unlink(temp_path)
+                    except Exception:
+                        pass
+                    raise
+            except Exception as e:
+                raise WriteConflict(
+                    expected_hash=start_disk_hash,
+                    actual_hash=None,
+                    reason=f"Failed to append to {file_path.name} atomically: {e}",
+                ) from e
 
     def _render_tracker_atomic(
         self, store: EventStore, start_disk_hash: str | None = None, force: bool = False

@@ -58,12 +58,18 @@ WRITER_ALLOWLIST = [
     "tools/cost.py",  # Parses ledger
 ]
 
+# Markdown files that should only be written via the WriteAPI facade
+MARKDOWN_FILES_TO_PROTECT = [
+    "STATE.md",
+    "BUILDLOG.md",
+]
+
 # Directories to scan for violations
 SCAN_DIRS = ["ui", "tools", "state_store"]  # Include state_store to catch internal issues
 
 
 def find_direct_opens(repo_root):
-    """Scan repo for direct opens of protected state files outside the API.
+    """Scan repo for direct opens/writes of protected state files outside the API.
 
     Returns violations keyed by file + pattern-id (not line numbers).
     Pattern-id is the matched pattern index, making the key stable across line edits.
@@ -91,6 +97,15 @@ def find_direct_opens(repo_root):
         (r'state\s*/\s*.*heartbeat', "state-heartbeat"),
     ]
 
+    # Patterns to detect direct writes to markdown control files
+    # These should only be written through WriteAPI
+    write_patterns = [
+        (r'["\']STATE\.md["\']', "state-md-write"),
+        (r'["\']BUILDLOG\.md["\']', "buildlog-md-write"),
+        (r'state\s*/\s*STATE\.md', "state-state-md-write"),
+        (r'state\s*/\s*BUILDLOG\.md', "state-buildlog-md-write"),
+    ]
+
     for scan_dir in SCAN_DIRS:
         scan_path = repo_root / scan_dir
         if not scan_path.exists():
@@ -112,12 +127,15 @@ def find_direct_opens(repo_root):
             except Exception:
                 continue
 
-            # Skip if file imports read_api (it's using the facade correctly)
+            # Skip if file imports read_api or write_api (it's using the facade correctly)
             if "from state_store.read_api import" in content or "import state_store.read_api" in content:
+                continue
+            if "from state_store.write_api import" in content or "import state_store.write_api" in content:
                 continue
 
             # Scan for violations
             for line_num, line in enumerate(content.split("\n"), 1):
+                # Check read violations
                 for pattern, pattern_id in read_patterns:
                     if re.search(pattern, line):
                         # Additional filter: skip comment lines and string literals in docstrings
@@ -132,6 +150,20 @@ def find_direct_opens(repo_root):
                         if violation_key not in violations:
                             violations.append(violation_key)
                         break  # Only report once per line per file
+
+                # Check write violations
+                for pattern, pattern_id in write_patterns:
+                    if re.search(pattern, line):
+                        # Skip comment lines and docstrings
+                        if line.strip().startswith("#"):
+                            continue
+                        if '"""' in line or "'''" in line:
+                            continue
+
+                        violation_key = f"{relative_path.as_posix()}@{pattern_id}"
+                        if violation_key not in violations:
+                            violations.append(violation_key)
+                        break
 
     return sorted(violations)
 
