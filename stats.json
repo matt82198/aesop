@@ -1,18 +1,19 @@
 {
   "git": {
-    "merged_prs": 508,
+    "merged_prs": 511,
     "merged_prs_source": "gh-api",
-    "total_commits": 1380,
+    "total_commits": 1388,
     "project_age_days": 18,
-    "wave_count": 30,
-    "insertions_deletions": 285077,
-    "files_tracked": 918,
-    "distinct_coauthors": 13,
+    "wave_count": 31,
+    "insertions_deletions": 287257,
+    "files_tracked": 920,
+    "distinct_coauthors": 14,
     "authors_human": 1,
-    "model_tiers": 4,
+    "model_tiers": 5,
     "model_tier_names": [
       "Fable 5",
       "Haiku 4.5",
+      "Opus 4.6",
       "Opus 4.8",
       "Opus 5.0"
     ]
@@ -26,15 +27,15 @@
     "cumulative_tokens": null,
     "total_coding_hours": null
   },
-  "generated_at": "2026-07-30T02:52:50.487404+00:00",
-  "loc": 245194,
-  "head_sha": "27da02c6e116ba08bde344df10ca75874a8d249a",
+  "generated_at": "2026-07-30T03:40:20.094765+00:00",
+  "loc": 245749,
+  "head_sha": "81a8bb19902faeb9daae09b81ab0bc8b201d1c93",
   "economics": {
     "token_ledger_available": false,
-    "merged_prs": 508,
+    "merged_prs": 511,
     "merged_prs_source": "gh-api",
-    "lines_of_code": 245194,
-    "wave_count": 30
+    "lines_of_code": 245749,
+    "wave_count": 31
   },
   "economics_caveats": {
     "cost_per_loc": "Cost-per-LOC metric (tokens / lines of code) captures token spend only from fleet ledger (parallel Haiku execution). It does NOT include:\n  - Fable orchestrator main-thread tokens (token tracking on MCP side only)\n  - Manual human review/decision time\n  - Deprecated code or deleted branches\nLimitations:\n  - LOC counts from git ls-files (current HEAD); doesn't reflect deleted branches\n  - Ledger entries are only recorded on successful/failed agent runs\n  - Missing/stale ledger will underestimate costs",
