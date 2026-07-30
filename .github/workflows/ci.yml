@@ -118,6 +118,10 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/claudemd_lint.py --root .
 
+      - name: CLAUDE.md sync gate (Guardrail G5)
+        if: matrix.python-shard == 0 && github.event_name == 'pull_request'
+        run: python tools/claudemd_sync_gate.py --check
+
       - name: CI workflow linter gate (fail-closed)
         if: matrix.python-shard == 0
         run: python tools/ci_workflow_lint.py
