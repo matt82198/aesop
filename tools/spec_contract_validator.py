@@ -19,7 +19,10 @@ at spawn time:
   3. Isolation marker -- a prompt whose text implies file writes (Write(/Edit(/git commit/
      git push/etc.) must carry an explicit isolation instruction such as
      "[ISOLATION: sibling worktree]" (or the equivalent "sibling worktree" phrase).
-  4. Role routing (advisory) -- a typed dispatch (subagent_type=/agentType= given) whose
+  4. Git stash prohibition (G8) -- "git stash" must never appear in dispatch prompts
+     (git stash is shared across all worktrees; agents in parallel worktrees cross-contaminate
+     each other's WIP).
+  5. Role routing (advisory) -- a typed dispatch (subagent_type=/agentType= given) whose
      value isn't "general-purpose" and isn't in the known specialist catalog is flagged;
      the catalog here is a best-effort mirror of the harness's real specialist list, kept
      deliberately small and extended as new specialists are adopted.
@@ -125,6 +128,12 @@ FILE_WRITE_INDICATORS = [
     "writes to disk",
     "commit the change",
     "commit and push",
+]
+
+# Git stash is FORBIDDEN in dispatch prompts because git stash is shared across
+# all worktrees; agents in parallel worktrees cross-contaminate each other's WIP.
+GIT_STASH_PATTERNS = [
+    "git stash",
 ]
 
 # Advisory role-routing catalog: known specialist subagent_type values. "general-purpose" is
@@ -239,6 +248,10 @@ def validate_call(call: Dict[str, Any]) -> List[Dict[str, str]]:
     for phrase in CREDENTIAL_HUNTING_PATTERNS:
         if phrase in lower:
             findings.append({"rule": "credential_hunting", "detail": phrase})
+
+    for pattern in GIT_STASH_PATTERNS:
+        if pattern in lower:
+            findings.append({"rule": "git_stash_forbidden", "detail": pattern})
 
     for m in ENV_VAR_TOKEN_RE.finditer(text):
         token = m.group(0)
