@@ -1,6 +1,6 @@
 {
   "name": "@matt82198/aesop",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Multi-agent orchestration for AI coding agents, designed to survive failure — a plain-file brain, git as the only durable layer, cheap subagent fleets, and guardrails enforced in code.",
   "bin": {
     "aesop": "bin/cli.js"

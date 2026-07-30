@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Version scheme**: Stable releases are `0.x.y`; `0.x.0-beta.N` / `-rc.N` are pre-releases; `0.1.0-wave.N` were internal wave-milestone previews.
 
-## [0.6.1] - 2026-07-31
+## [0.7.0] - 2026-07-31
 
 ### Added
 
