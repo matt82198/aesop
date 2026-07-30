@@ -198,6 +198,16 @@ See [docs/DEMO.md](./docs/DEMO.md) for a walkthrough of one full wave cycle.
 
 The benchmark proves sufficiency for seam-level engineering tasks: across 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence, security spots), Haiku scored **39/39** vs Opus **38/39** at 1/5 the per-token cost of Opus (1/3 of Sonnet — list pricing; cost model in [docs/DISPATCH-MODEL.md](./docs/DISPATCH-MODEL.md)). **Measured on seam-level engineering tasks (code review, severity calibration, local orchestration) — not frontier reasoning or long-horizon planning.** See [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](./bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md). The pre-declared ceiling rule (when ≥2 tiers score ≥92%, the instrument failed to discriminate) trips on this result — both Haiku and Sonnet achieved 39/39, meaning the benchmark maps a *sufficiency floor*, not tier equivalence. Full analysis: [`bench/results/2026-07-26-judgment-v3-ceiling-addendum.md`](./bench/results/2026-07-26-judgment-v3-ceiling-addendum.md) and [`bench/METHODOLOGY.md`](./bench/METHODOLOGY.md).
 
+## Cost Transparency
+
+Token ledger integration is pending (`token_ledger_available: false` in stats.json). What is available:
+
+- **Relative cost:** Hierarchical dispatch (Sonnet supervisors + Haiku workers) measured at **4.3x weighted cost** vs flat Haiku-only dispatch at identical quality. Full A/B dataset with methodology: [docs/ab-cost-dataset.md](./docs/ab-cost-dataset.md).
+- **Per-wave estimate:** ~$0.01-0.02 USD per wave in agent token spend (Haiku-only subagents, per [DISPATCH-MODEL.md](./docs/DISPATCH-MODEL.md)). 31 waves x $0.02 upper bound = ~$0.62 in fleet tokens (excludes orchestrator main-thread tokens, tracked separately).
+- **CI economics:** Wave 1 measured 8.9 CI runs per merged PR (41.9% waste from strict-mode treadmill); structural fixes targeting ~3 runs/PR steady-state. Full breakdown: [docs/RECEIPTS.md](./docs/RECEIPTS.md).
+
+Dollar-precise per-wave token ledger and cost-per-LOC metrics are on the roadmap. The numbers above are the honest current state.
+
 ## Known Limitations
 
 - **Benchmark is curated, not sampled:** The 39-task judgment set trips the pre-declared ceiling rule; it measures a sufficiency floor (Haiku is good enough for this domain), not equivalence or tier ranking. See [`bench/METHODOLOGY.md`](./bench/METHODOLOGY.md) for boundary conditions.
