@@ -97,53 +97,99 @@ def append_journal(evidence_entry, state_root=None):
 
 
 def extract_pr_numbers(text):
-    """Extract PR numbers from text (e.g., 'PR #123' or 'PR 456' or '#789').
+    """Extract PR numbers from text with whole-token matching.
 
-    Returns a list of unique PR numbers as strings.
+    Matches #123 (word boundary required), PR #456, PR 456, pr #789, etc.
+    Returns list of (pr_number_int, matched_text) tuples for traceability.
+
+    Uses word boundaries to prevent #1 from matching inside #594.
     """
     if not text:
         return []
 
-    # Match patterns like #123, PR #456, PR 789
+    # Match patterns with word boundaries to prevent prefix matching:
+    # #123\b ensures #1 doesn't match inside #594
+    # (?:PR|pr)\s+#?(\d+)\b for PR XXX pattern
     patterns = [
-        r"#(\d+)",  # #123
-        r"PR\s+#?(\d+)",  # PR #123 or PR 123
-        r"pr\s+#?(\d+)",  # pr #123 or pr 123
+        (r"#(\d+)\b", "hash"),           # #123 (word boundary)
+        (r"(?:PR|pr)\s+#?(\d+)\b", "pr"),  # PR #123 or PR 123
     ]
 
-    pr_numbers = set()
-    for pattern in patterns:
-        matches = re.findall(pattern, text)
-        pr_numbers.update(matches)
+    pr_refs = []  # List of (number_int, matched_text, pattern_type)
+    for pattern, ptype in patterns:
+        matches = re.finditer(pattern, text)
+        for match in matches:
+            pr_num_str = match.group(1)
+            pr_num_int = int(pr_num_str)
+            pr_refs.append((pr_num_int, match.group(0), ptype))
 
-    return sorted(list(pr_numbers))
+    # Deduplicate by PR number and return sorted
+    unique = {}
+    for num, text, ptype in pr_refs:
+        if num not in unique:
+            unique[num] = (num, text, ptype)
+
+    return sorted(unique.values(), key=lambda x: x[0])
 
 
 def check_pr_merged(pr_number, skip_gh=False):
-    """Check if a PR is MERGED via gh pr view.
+    """Check if a PR is MERGED via gh pr view and get merge timestamp.
 
-    Returns (is_merged: bool, gh_available: bool, error: str or None)
+    Returns (is_merged: bool, merged_at: ISO str or None, gh_available: bool, error: str or None)
     """
     if skip_gh:
-        return False, False, "gh not available or disabled"
+        return False, None, False, "gh not available or disabled"
 
     try:
         result = subprocess.run(
-            ["gh", "pr", "view", str(pr_number), "--json", "state", "--jq", ".state"],
+            ["gh", "pr", "view", str(pr_number), "--json", "state,mergedAt"],
             capture_output=True,
             text=True,
             timeout=5,
         )
         if result.returncode != 0:
-            return False, True, None  # gh works, PR just not merged
-        state = result.stdout.strip()
-        return state == "MERGED", True, None
+            return False, None, True, None  # gh works, PR just not found/not merged
+
+        try:
+            data = json.loads(result.stdout.strip())
+            is_merged = data.get("state") == "MERGED"
+            merged_at = data.get("mergedAt") if is_merged else None
+            return is_merged, merged_at, True, None
+        except json.JSONDecodeError:
+            return False, None, True, f"JSON parse error: {result.stdout}"
+
     except FileNotFoundError:
-        return False, False, "gh not found on PATH"
+        return False, None, False, "gh not found on PATH"
     except subprocess.TimeoutExpired:
-        return False, True, "gh timeout"
+        return False, None, True, "gh timeout"
     except Exception as e:
-        return False, True, str(e)
+        return False, None, True, str(e)
+
+
+def is_causally_valid(item_created_at, pr_merged_at):
+    """Check if PR merge timestamp is after item creation (causality guard).
+
+    Returns (is_valid: bool, explanation: str)
+
+    Fail-closed: missing timestamps cannot pass causality check.
+    """
+    if not item_created_at:
+        return False, "item creation time missing (cannot verify causality)"
+
+    if not pr_merged_at:
+        return False, "PR merge time unavailable (cannot verify causality)"
+
+    try:
+        # Parse ISO format timestamps
+        item_time = datetime.fromisoformat(item_created_at.replace('Z', '+00:00'))
+        pr_time = datetime.fromisoformat(pr_merged_at.replace('Z', '+00:00'))
+
+        if pr_time > item_time:
+            return True, f"merged after creation ({pr_time.date()} > {item_time.date()})"
+        else:
+            return False, f"merged BEFORE creation ({pr_time.date()} <= {item_time.date()})"
+    except (ValueError, AttributeError) as e:
+        return False, f"timestamp parse error: {e}"
 
 
 def check_files_on_main(owns_files, skip_git=False):
@@ -193,6 +239,7 @@ def is_active_status(status):
 def classify_item(item, skip_gh=False, skip_git=False):
     """Classify an item as SHIPPED, OPEN, or AMBIGUOUS.
 
+    Evidence-based with whole-token PR matching, causality guard, and directionality checks.
     Returns (classification, evidence_string).
     """
     item_id = item.get("id", "?")
@@ -201,6 +248,7 @@ def classify_item(item, skip_gh=False, skip_git=False):
     pr_link = item.get("pr_link", "")
     owns_files = item.get("ownsFiles")
     title = item.get("title", "")
+    created_at = item.get("created_at")
 
     # Skip already-done items
     if not is_active_status(status):
@@ -208,20 +256,45 @@ def classify_item(item, skip_gh=False, skip_git=False):
 
     evidence_parts = []
 
-    # Check for merged PR
-    pr_numbers = extract_pr_numbers(pr_link) or extract_pr_numbers(notes) or extract_pr_numbers(title)
+    # Check for merged PR with whole-token matching and causality guard
+    pr_refs_all = []
+
+    # Extract from all fields
+    for text_field in [pr_link, notes, title]:
+        if text_field:
+            refs = extract_pr_numbers(text_field)
+            pr_refs_all.extend(refs)
 
     pr_evidence = None
-    if pr_numbers:
-        for pr_num in pr_numbers:
-            is_merged, gh_ok, error = check_pr_merged(pr_num, skip_gh=skip_gh)
+    if pr_refs_all:
+        # Deduplicate by PR number
+        seen_prs = {}
+        for pr_num, matched_text, ptype in pr_refs_all:
+            if pr_num not in seen_prs:
+                seen_prs[pr_num] = (pr_num, matched_text, ptype)
+
+        for pr_num, matched_text, ptype in sorted(seen_prs.values(), key=lambda x: x[0]):
+            is_merged, merged_at, gh_ok, error = check_pr_merged(pr_num, skip_gh=skip_gh)
+
             if is_merged:
-                pr_evidence = f"PR #{pr_num} merged"
-                evidence_parts.append(pr_evidence)
-                break
+                # Causality guard: PR must merge AFTER item creation
+                causally_valid, causality_detail = is_causally_valid(created_at, merged_at)
+
+                if causally_valid:
+                    # Evidence string with all details
+                    pr_evidence = f"PR #{pr_num} merged ({ptype}-match '{matched_text}', {causality_detail})"
+                    evidence_parts.append(pr_evidence)
+                    break
+                else:
+                    # PR merged before item existed — excluded by causality
+                    evidence_parts.append(
+                        f"PR #{pr_num} excluded by causality ({causality_detail})"
+                    )
             elif not gh_ok and not skip_gh:
-                # gh not available; report it but don't fail
-                evidence_parts.append(f"PR #{pr_num} check skipped (gh unavailable: {error})")
+                # gh not available; report but don't fail
+                evidence_parts.append(
+                    f"PR #{pr_num} check skipped (gh unavailable: {error})"
+                )
 
     # Check for files on main
     files_on_main, git_ok, file_details = check_files_on_main(owns_files, skip_git=skip_git)

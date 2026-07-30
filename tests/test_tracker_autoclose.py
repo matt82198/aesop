@@ -67,11 +67,11 @@ class TestTrackerAutoclose(unittest.TestCase):
         ]
         self._write_tracker(items)
 
-        # Mock gh pr view to return MERGED
+        # Mock gh pr view to return MERGED with valid timestamp
         with patch("tools.tracker_autoclose.subprocess.run") as mock_run:
             mock_proc = Mock()
             mock_proc.returncode = 0
-            mock_proc.stdout = "MERGED"
+            mock_proc.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-30T10:00:00Z"})
             mock_run.return_value = mock_proc
 
             # Act: check mode should detect closable item
@@ -97,11 +97,11 @@ class TestTrackerAutoclose(unittest.TestCase):
         ]
         self._write_tracker(items)
 
-        # Mock gh pr view to return MERGED
+        # Mock gh pr view to return MERGED with valid timestamp
         with patch("tools.tracker_autoclose.subprocess.run") as mock_run:
             mock_proc = Mock()
             mock_proc.returncode = 0
-            mock_proc.stdout = "MERGED"
+            mock_proc.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-30T10:00:00Z"})
             mock_run.return_value = mock_proc
 
             # Act: apply mode should close the item
@@ -198,7 +198,7 @@ class TestTrackerAutoclose(unittest.TestCase):
         with patch("tools.tracker_autoclose.subprocess.run") as mock_run:
             mock_proc = Mock()
             mock_proc.returncode = 0
-            mock_proc.stdout = "MERGED"
+            mock_proc.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-30T10:00:00Z"})
             mock_run.return_value = mock_proc
 
             # Act
@@ -237,7 +237,7 @@ class TestTrackerAutoclose(unittest.TestCase):
         with patch("tools.tracker_autoclose.subprocess.run") as mock_run:
             mock_proc = Mock()
             mock_proc.returncode = 0
-            mock_proc.stdout = "MERGED"
+            mock_proc.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-30T10:00:00Z"})
             mock_run.return_value = mock_proc
 
             # Act
@@ -307,7 +307,7 @@ class TestTrackerAutoclose(unittest.TestCase):
         with patch("tools.tracker_autoclose.subprocess.run") as mock_run:
             mock_proc = Mock()
             mock_proc.returncode = 0
-            mock_proc.stdout = "MERGED"
+            mock_proc.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-30T10:00:00Z"})
             mock_run.return_value = mock_proc
 
             # Capture output
@@ -354,6 +354,172 @@ class TestTrackerAutoclose(unittest.TestCase):
         tracker_path = self.state_dir / "tracker.json"
         updated = json.loads(tracker_path.read_text(encoding="utf-8"))
         self.assertEqual(updated["items"][0]["notes"], "Already complete")
+
+    # ========== REGRESSION TESTS: Evidence matching fixes ==========
+
+    def test_regression_whole_token_pr_matching_no_prefix_match(self):
+        """REGRESSION: PR #1 must NOT match inside #594 (whole-token only).
+
+        This test would fail with old regex r'#(\d+)' which matches #1 as prefix.
+        """
+        items = [
+            {
+                "id": "item_with_594",
+                "title": "Feature work",
+                "status": "proposed",
+                "lane": "proposed",
+                "priority": "P1",
+                "notes": "Implements PR #594",
+                "pr_link": None,
+                "created_at": "2026-07-30T00:00:00Z",
+                "completed_at": None,
+            }
+        ]
+        self._write_tracker(items)
+
+        # Mock gh to return #1 as merged (stale), #594 as merged (current)
+        def mock_subprocess_run(*args, **kwargs):
+            cmd = args[0] if args else []
+            pr_arg = None
+            for arg in cmd:
+                if arg.isdigit():
+                    pr_arg = arg
+                    break
+
+            result = Mock()
+            if pr_arg == "1":
+                # PR #1 merged BEFORE item creation
+                result.returncode = 0
+                result.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-11T10:00:00Z"})
+            elif pr_arg == "594":
+                # PR #594 merged AFTER item creation
+                result.returncode = 0
+                result.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-30T12:00:00Z"})
+            else:
+                result.returncode = 1
+                result.stdout = "{}"
+
+            return result
+
+        with patch("tools.tracker_autoclose.subprocess.run") as mock_run:
+            mock_run.side_effect = mock_subprocess_run
+
+            # Act
+            import io
+            import contextlib
+            f = io.StringIO()
+            with contextlib.redirect_stdout(f):
+                rc = tracker_autoclose.main(["--check", "--json"], state_root=str(self.state_dir))
+
+            output = f.getvalue()
+            result = json.loads(output)
+
+            # Assert: Item should be SHIPPED via #594
+            self.assertEqual(result["shipped"], 1)
+            shipped_item = result["items"]["shipped"][0]
+            self.assertIn("594", shipped_item["evidence"])
+            # #1 should NOT appear (whole-token match prevented prefix matching)
+            self.assertNotIn("PR #1 merged", shipped_item["evidence"])
+
+    def test_regression_causality_guard_pr_before_creation(self):
+        """REGRESSION: PR merged BEFORE item creation excluded by causality guard."""
+        items = [
+            {
+                "id": "zombie_item",
+                "title": "Work created today",
+                "status": "proposed",
+                "lane": "proposed",
+                "priority": "P1",
+                "notes": "See PR #1",
+                "pr_link": None,
+                "created_at": "2026-07-30T08:00:00Z",
+                "completed_at": None,
+            }
+        ]
+        self._write_tracker(items)
+
+        with patch("tools.tracker_autoclose.subprocess.run") as mock_run:
+            # PR #1 merged BEFORE item creation
+            mock_proc = Mock()
+            mock_proc.returncode = 0
+            mock_proc.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-11T10:00:00Z"})
+            mock_run.return_value = mock_proc
+
+            # Act
+            rc = tracker_autoclose.main(["--check"], state_root=str(self.state_dir))
+
+            # Assert: Item NOT closable (causality violated, excluded)
+            self.assertEqual(rc, 0)
+
+    def test_regression_missing_created_at_fails_causality(self):
+        """REGRESSION: Items with missing created_at cannot pass causality check (fail-closed)."""
+        items = [
+            {
+                "id": "missing_timestamp_item",
+                "title": "Item without creation time",
+                "status": "proposed",
+                "lane": "proposed",
+                "priority": "P1",
+                "notes": "See PR #123",
+                "pr_link": None,
+                "created_at": None,  # Missing!
+                "completed_at": None,
+            }
+        ]
+        self._write_tracker(items)
+
+        with patch("tools.tracker_autoclose.subprocess.run") as mock_run:
+            # PR merged recently
+            mock_proc = Mock()
+            mock_proc.returncode = 0
+            mock_proc.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-30T10:00:00Z"})
+            mock_run.return_value = mock_proc
+
+            # Act
+            rc = tracker_autoclose.main(["--check"], state_root=str(self.state_dir))
+
+            # Assert: Item NOT closable (causality check fails on missing created_at)
+            self.assertEqual(rc, 0, "Item excluded due to missing created_at (fail-closed)")
+
+    def test_regression_correct_match_with_valid_causality(self):
+        """Correct whole-token match with valid causality -> SHIPPED."""
+        items = [
+            {
+                "id": "item_with_595",
+                "title": "Windows shard work",
+                "status": "in_progress",
+                "lane": "proposed",
+                "priority": "P1",
+                "notes": "Implemented in PR #595",
+                "pr_link": None,
+                "created_at": "2026-07-30T07:00:00Z",
+                "completed_at": None,
+            }
+        ]
+        self._write_tracker(items)
+
+        with patch("tools.tracker_autoclose.subprocess.run") as mock_run:
+            # PR #595 merged AFTER item creation
+            mock_proc = Mock()
+            mock_proc.returncode = 0
+            mock_proc.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-30T11:30:00Z"})
+            mock_run.return_value = mock_proc
+
+            # Act
+            import io
+            import contextlib
+            f = io.StringIO()
+            with contextlib.redirect_stdout(f):
+                rc = tracker_autoclose.main(["--check", "--json"], state_root=str(self.state_dir))
+
+            output = f.getvalue()
+            result = json.loads(output)
+
+            # Assert: SHIPPED with correct evidence
+            self.assertEqual(result["shipped"], 1)
+            shipped = result["items"]["shipped"][0]
+            self.assertIn("595", shipped["evidence"])
+            self.assertIn("merged after creation", shipped["evidence"])
 
     # ========== Error handling ==========
 
