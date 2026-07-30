@@ -28,6 +28,19 @@ class StateAPI:
         """
         self._store.close()
 
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
     def append(
         self,
         stream: str,

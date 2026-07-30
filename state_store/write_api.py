@@ -119,6 +119,19 @@ class WriteAPI:
                 pass
         self._stores.clear()
 
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
     def tracker_update_status(
         self,
         item_id: str,

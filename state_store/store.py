@@ -174,12 +174,10 @@ class EventStore:
         Safe to call multiple times. After close(), the next operation on any
         thread will lazily open a fresh connection.
         """
-        # Clear the calling thread's reference so it does not reuse a closed conn.
         conn = getattr(self._local, "conn", None)
         if conn is not None:
             self._local.conn = None
 
-        # Close every connection this store ever opened (including other threads').
         with self._all_conns_lock:
             for c in self._all_conns:
                 try:
@@ -187,6 +185,19 @@ class EventStore:
                 except Exception:
                     pass
             self._all_conns.clear()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
 
     def append(
         self,
