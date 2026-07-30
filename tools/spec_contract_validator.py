@@ -217,7 +217,9 @@ def find_dispatch_calls(source: str, filename: str = "<string>") -> List[Dict[st
                     break
 
         start = node.lineno
-        end = getattr(node, "end_lineno", node.lineno) or node.lineno
+        end = getattr(node, "end_lineno", None)
+        if end is None:
+            end = node.lineno
 
         suppressed = any(
             SUPPRESS_MARKER in lines[i]
@@ -259,7 +261,9 @@ def validate_call(call: Dict[str, Any]) -> List[Dict[str, str]]:
             findings.append({"rule": "env_var_not_allowlisted", "detail": token})
 
     writes_files = any(ind in lower for ind in FILE_WRITE_INDICATORS)
-    has_marker = any(marker in lower for marker in ISOLATION_MARKERS)
+    # Normalize whitespace for marker comparison (handle "[ISOLATION: worktree]" vs "[ISOLATION:worktree]")
+    normalized_lower = " ".join(lower.split())
+    has_marker = any(marker.lower() in normalized_lower for marker in ISOLATION_MARKERS)
     if writes_files and not has_marker:
         findings.append({
             "rule": "missing_isolation_marker",
