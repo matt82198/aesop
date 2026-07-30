@@ -56,29 +56,15 @@ def _claim_expired(ev: dict, payload: dict, now: float) -> bool:
         return False
 
 
-def fold_claims(events: list, now: float | None = None) -> dict[str, str]:
-    """Fold a claims stream into the current state of who holds each resource.
+def _active_claim_versions(events: list, now: float | None = None) -> dict[str, tuple[str, int]]:
+    """Extract the active (winning) claim version for each resource.
 
-    Processes claim_requested and claim_released events to determine the winner
-    for each resource. The winner is the lowest-version un-released claim for
-    that resource (first serialized append wins; ties impossible because versions
-    are unique). A claim is valid only if it has NOT been released by a
-    subsequent claim_released event. If an instance releases and then re-claims,
-    the re-claim is the new active claim for that instance.
-
-    TTL enforcement (RS3-W N4): a claim_requested event whose ts + payload
-    ttl is earlier than ``now`` is EXPIRED and ignored -- a crashed instance's
-    claim becomes claimable again after its TTL instead of persisting forever.
-    Legacy events without ts/ttl never expire.
-
-    Args:
-        events: list of event dicts from the claims stream
-                (as returned by EventStore.read('claims'))
-        now: reference time for TTL expiry (default: time.time())
+    This is the core selection logic used by both fold_claims and compact_claims.
+    For each resource, determines the LATEST un-released claim across all instances,
+    then picks the winner as the instance with the LOWEST version among those active claims.
 
     Returns:
-        dict mapping resource_id -> holding_instance_id for all currently
-        held resources. Empty dict if no claims exist or all have been released.
+        dict mapping resource_id -> (instance_id, version) for the active claim of that resource.
     """
     if now is None:
         now = time.time()
@@ -117,8 +103,8 @@ def fold_claims(events: list, now: float | None = None) -> dict[str, str]:
                     releases_by_resource[resource][instance_id] = []
                 releases_by_resource[resource][instance_id].append(version)
 
-    # Second pass: determine current holders
-    holders = {}
+    # Second pass: determine active claim versions per resource
+    active_versions = {}  # resource -> (instance_id, version)
     for resource, claims_dict in claims_by_resource.items():
         # For each instance claiming this resource, find the latest un-released claim
         active_claims = {}
@@ -150,9 +136,39 @@ def fold_claims(events: list, now: float | None = None) -> dict[str, str]:
         # Find the minimum version among active claims (the winner)
         if active_claims:
             winner_instance = min(active_claims.keys(), key=lambda x: active_claims[x])
-            holders[resource] = winner_instance
+            winner_version = active_claims[winner_instance]
+            active_versions[resource] = (winner_instance, winner_version)
 
-    return holders
+    return active_versions
+
+
+def fold_claims(events: list, now: float | None = None) -> dict[str, str]:
+    """Fold a claims stream into the current state of who holds each resource.
+
+    Processes claim_requested and claim_released events to determine the winner
+    for each resource. The winner is the lowest-version un-released claim for
+    that resource (first serialized append wins; ties impossible because versions
+    are unique). A claim is valid only if it has NOT been released by a
+    subsequent claim_released event. If an instance releases and then re-claims,
+    the re-claim is the new active claim for that instance.
+
+    TTL enforcement (RS3-W N4): a claim_requested event whose ts + payload
+    ttl is earlier than ``now`` is EXPIRED and ignored -- a crashed instance's
+    claim becomes claimable again after its TTL instead of persisting forever.
+    Legacy events without ts/ttl never expire.
+
+    Args:
+        events: list of event dicts from the claims stream
+                (as returned by EventStore.read('claims'))
+        now: reference time for TTL expiry (default: time.time())
+
+    Returns:
+        dict mapping resource_id -> holding_instance_id for all currently
+        held resources. Empty dict if no claims exist or all have been released.
+    """
+    active_versions = _active_claim_versions(events, now)
+    # Extract just the instance IDs (drop versions)
+    return {resource: instance_id for resource, (instance_id, _) in active_versions.items()}
 
 
 def try_claim(store, resource: str, instance_id: str, ttl: float = 300.0) -> bool:
@@ -343,7 +359,9 @@ def compact_claims(store) -> bool:
 
     The snapshot stores the original event dicts (type, payload with resource/
     instance_id/ttl, ts, version) so that fold_claims TTL checks remain
-    correct after compaction.
+    correct after compaction. Also stores compacted_through (max_version) to
+    mark the release floor: any claim_released event with version <= max_version
+    is discarded on snapshot load, treating them as released.
 
     Args:
         store: StateAPI or EventStore instance with snapshot support.
@@ -360,33 +378,31 @@ def compact_claims(store) -> bool:
     if not events:
         return False
 
-    # Fold to find current holders
-    holders = fold_claims(events)
-    if not holders:
+    # Use the same selection logic as fold_claims: _active_claim_versions
+    active_versions = _active_claim_versions(events)
+    max_version = max(e.get("version", 0) for e in events)
+
+    if not active_versions:
         # All claims released/expired; snapshot an empty state at current max version
-        max_version = max(e.get("version", 0) for e in events)
-        es.save_snapshot("claims", max_version, {"active_claims": []})
+        es.save_snapshot("claims", max_version, {
+            "active_claims": [],
+            "compacted_through": max_version
+        })
         return True
 
-    # For each held resource, find the winning claim_requested event.
-    # The winner is the instance with the lowest active claim version for
-    # that resource. We need the original event dict to preserve ts/ttl
-    # for correct TTL checks after compaction.
+    # For each held resource, find the original claim_requested event by version.
+    # _active_claim_versions gave us (instance_id, version) for each resource;
+    # now find the actual event dict to preserve ts/ttl for TTL checks.
     active_events = []
-    for resource, winner_id in holders.items():
-        # Find the active (winning) claim_requested event for this holder
+    for resource, (winner_id, winner_version) in active_versions.items():
+        # Find the event with exact version (only one event per version)
         for ev in events:
-            if (
-                ev.get("type") == "claim_requested"
-                and ev.get("payload", {}).get("resource") == resource
-                and ev.get("payload", {}).get("instance_id") == winner_id
-            ):
-                # Check this is the active claim (not released after it)
-                # Simple heuristic: take the last un-released claim from this
-                # instance for this resource, matching fold_claims behavior.
+            if ev.get("version") == winner_version:
                 active_events.append(ev)
-                break  # first match is lowest version (events are version-ordered)
+                break
 
-    max_version = max(e.get("version", 0) for e in events)
-    es.save_snapshot("claims", max_version, {"active_claims": active_events})
+    es.save_snapshot("claims", max_version, {
+        "active_claims": active_events,
+        "compacted_through": max_version
+    })
     return True
