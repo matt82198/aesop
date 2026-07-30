@@ -97,7 +97,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 - **vite.config.ts**: Vite config with API proxy to :8770.
 - **dist/**: Built static files (committed to git; served by Python handler). Content-hashed by Vite.
 
-**testids-in-fixtures pattern** (both Python + React): Test components with `data-testid` attributes. React tests use `getByTestId()` (via `@testing-library/react`). Python tests use fixtures to set testids for integration proofs.
+**testids-in-fixtures pattern** (both Python + React): Test components with `data-testid` attributes. React tests use `getByTestId()` (via `@testing-library/react`). Python tests use fixtures to set testids for integration proofs. Fixtures use repository-agnostic paths (`<REPO>/` placeholders instead of hardcoded personal paths) for portability across repos/machines.
 
 ## API Routes
 
