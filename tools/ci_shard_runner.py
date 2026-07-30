@@ -90,6 +90,23 @@ def load_timing_data(path):
     return {Path(k).stem: v for k, v in raw.items() if isinstance(v, (int, float))}
 
 
+def build_pytest_args(shard_files, timeout=None):
+    """Build pytest command-line args for shard files.
+
+    Args:
+        shard_files: list of test module stems (e.g., ['test_foo', 'test_bar'])
+        timeout: per-test timeout in seconds (int) or None/0 to disable
+
+    Returns:
+        list of command-line args suitable for subprocess.run
+    """
+    cmd = [sys.executable, "-m", "pytest", "-v"]
+    if timeout:
+        cmd.append(f"--timeout={timeout}")
+    cmd.extend(f"tests/{name}.py" for name in shard_files)
+    return cmd
+
+
 def _parse_args(argv):
     """Parse CLI arguments into (shard_id, total_shards, timing_file, emit_timing)."""
     positional = []
@@ -180,6 +197,14 @@ def main():
         sys.exit(1)
 
     print(f"Shard {shard_id}: running {len(shard_files)} tests")
+
+    pytest_timeout = os.environ.get("PYTEST_TIMEOUT")
+    if pytest_timeout is not None:
+        timeout = int(pytest_timeout) if pytest_timeout else 0
+        cmd = build_pytest_args(shard_files, timeout=timeout or None)
+        print(f"  pytest mode: {' '.join(cmd)}")
+        proc = subprocess.run(cmd)
+        sys.exit(proc.returncode)
 
     test_timings = {}
     loader = unittest.TestLoader()
