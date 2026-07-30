@@ -38,6 +38,23 @@ def distribute_shards(test_files, shard_id, total_shards):
     return [test_files[i] for i in range(len(test_files)) if i % total_shards == shard_id]
 
 
+def build_pytest_args(shard_files, timeout=None):
+    """Build pytest command-line args for shard files.
+
+    Args:
+        shard_files: list of test module stems (e.g., ['test_foo', 'test_bar'])
+        timeout: per-test timeout in seconds (int) or None/0 to disable
+
+    Returns:
+        list of command-line args suitable for subprocess.run
+    """
+    cmd = [sys.executable, "-m", "pytest", "-v"]
+    if timeout:
+        cmd.append(f"--timeout={timeout}")
+    cmd.extend(f"tests/{name}.py" for name in shard_files)
+    return cmd
+
+
 def main():
     """Run Python tests for the assigned shard."""
     # Ensure repo root is in sys.path for test imports
@@ -100,6 +117,18 @@ def main():
         sys.exit(1)
 
     print(f"Shard {shard_id}: running {len(shard_files)} tests")
+
+    # When PYTEST_TIMEOUT is set, use pytest subprocess with per-test timeout
+    # (requires pytest-timeout). This lets contention-prone tests fail
+    # individually instead of hanging the whole shard.
+    pytest_timeout = os.environ.get("PYTEST_TIMEOUT")
+    if pytest_timeout is not None:
+        timeout = int(pytest_timeout) if pytest_timeout else 0
+        cmd = build_pytest_args(shard_files, timeout=timeout or None)
+        print(f"  pytest mode: {' '.join(cmd)}")
+        proc = subprocess.run(cmd)
+        sys.exit(proc.returncode)
+
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
     failed_imports = []
@@ -112,7 +141,6 @@ def main():
             failed_imports.append((test_name, str(e)))
             print(f"ERROR: Failed to load {test_name}: {e}", file=sys.stderr)
 
-    # If there were import failures, exit immediately
     if failed_imports:
         print(
             f"\n{len(failed_imports)} test module(s) failed to import:",
@@ -122,7 +150,6 @@ def main():
             print(f"  - {name}: {error}", file=sys.stderr)
         sys.exit(1)
 
-    # If no tests were collected, this is also an error
     if suite.countTestCases() == 0:
         print(
             f"ERROR: No tests were collected for shard {shard_id}",
