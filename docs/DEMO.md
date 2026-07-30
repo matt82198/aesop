@@ -78,21 +78,11 @@ What this does:
 - Installs a git pre-push hook for secret scanning
 - Initializes a git repo in the harness
 
-Expected output:
-```
-✓ Creating ~/demo-fleet...
-✓ Copying scaffold files...
-✓ Generating CLAUDE.md...
-✓ Generating aesop.config.json...
-✓ Installing pre-push hook...
-✓ Initializing git repo...
-
-Next steps:
-  1. cd ~/demo-fleet
-  2. npx @matt82198/aesop doctor  # Verify preflight checks
-  3. /power                        # Prime orchestrator brain
-  4. /buildsystem                  # Run your first wave
-```
+The scaffold will report success and print next steps. Your output will vary depending on your environment, but will confirm:
+- Fleet directory created
+- Configuration files generated
+- Git initialized
+- Pre-push hook installed
 
 ---
 
@@ -104,19 +94,7 @@ Run preflight checks to ensure everything is ready.
 npx @matt82198/aesop doctor
 ```
 
-Expected output:
-```
-[doctor] Checking prerequisites...
-  ✓ Node.js v18.14.0 found
-  ✓ Git v2.42.0 found
-  ✓ Bash v5.1.16 found
-  ✓ Python v3.11.0 found (optional)
-  ✓ aesop.config.json is readable
-  ✓ Pre-push hook is installed and executable
-  ✓ Port 8770 is available (for dashboard)
-
-All checks passed. Ready to start.
-```
+The tool will report which prerequisites are found and their versions. All required tools (Node.js, Git, Bash) will show as available if installation succeeded. Optional tools like Python may be reported as missing, which is fine for the demo.
 
 If you see warnings about missing optional tools (Python, jq), that's OK for this demo. You can install them later.
 
@@ -137,22 +115,12 @@ What `/power` does:
 4. Validates that daemons are healthy (checks heartbeat files)
 5. Reports a health brief
 
-Expected output:
-```
-Orchestrator Brain Loaded
+The skill will report:
+- Configuration files loaded (global rules, fleet config, state)
+- Daemon health status (may show warnings on first run if heartbeat files don't exist yet)
+- Current phase and next steps
 
-✓ Global rules (CLAUDE.md) loaded
-✓ Fleet config (aesop.config.json) loaded
-  - 1 repo configured: my-demo-project
-  - Brain root: ~/.claude
-  - State root: ~/demo-fleet/state
-✓ Fleet daemons: healthy (watchdog heartbeat ~30s old)
-✓ STATE.md initialized: Phase 1, ready for backlog
-
-NEXT STEPS:
-(1) Create a backlog (P1/P2 tasks)
-(2) Run /buildsystem to execute a complete wave cycle
-```
+If you see warnings about missing heartbeat files on first run, this is normal—they'll be created after the watchdog starts.
 
 If you see errors about missing CLAUDE.md or heartbeat files, don't worry—they'll be created on first startup. Re-run `/power` after a few seconds.
 
@@ -199,30 +167,14 @@ What `/buildsystem` does:
 
 You'll see live updates as agents work. Each task runs in isolation (no conflicts).
 
-Expected output:
-```
-Wave 1 / Rank & Assign
-  ✓ Task 1: Add setup documentation (backend-dev)
-  ✓ Task 2: Fix README formatting (docs-agent)
-  ✓ Task 3: Add test scaffold (test-bot)
-→ Dispatching 3 Haiku agents (est. 45–60 min)...
+The orchestrator will:
+1. Rank and assign your backlog tasks to agents
+2. Dispatch parallel Haiku workers (one per task, up to your configured concurrency)
+3. Show live progress as agents work
+4. Report completed PRs, test results, and merge status
+5. Print a summary with duration, cost, and files changed
 
-[Agent 1: backend-dev] Working on Task 1...
-[Agent 2: docs-agent] Working on Task 2...
-[Agent 3: test-bot] Working on Task 3...
-
-Wave 1 / Merge Train
-  ✓ All agents completed
-  ✓ 3 PRs created
-  ✓ All tests passed
-  ✓ Merging to main...
-
-Wave 1 Complete
-  Duration: 47 minutes
-  Cost: 3,200 tokens
-  Files changed: 12
-  NEXT STEPS: Review BUILDLOG.md, run Wave 2 if needed
-```
+Actual output varies based on your backlog size, task complexity, and system performance. Review `state/BUILDLOG.md` for detailed progress and `state/STATE.md` for current phase.
 
 ---
 
