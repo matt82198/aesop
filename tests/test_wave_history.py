@@ -108,14 +108,14 @@ class WaveHistoryTest(unittest.TestCase):
 
         # Wave 1: 3 events
         api.append("wave", "dispatch_started", {"wave_id": "wave-1"})
-        time.sleep(0.01)
+        time.sleep(0.01)  # sleep-ok: ordering yield, not timing assertion
         api.append("wave", "phase_changed", {"wave_id": "wave-1", "phase": "setup"})
-        time.sleep(0.01)
+        time.sleep(0.01)  # sleep-ok: ordering yield, not timing assertion
         api.append("wave", "phase_changed", {"wave_id": "wave-1", "phase": "dispatch"})
 
         # Wave 2: 2 events
         api.append("wave", "dispatch_started", {"wave_id": "wave-2"})
-        time.sleep(0.01)
+        time.sleep(0.01)  # sleep-ok: ordering yield, not timing assertion
         api.append("wave", "phase_changed", {"wave_id": "wave-2", "phase": "audit"})
 
         stdout, stderr, rc = self._run_tool()
