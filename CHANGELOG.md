@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- CI/test hygiene: Fixed workflow actions env vars, added BASH_SOURCE exec guards to all shell scripts, isolated orchestration tests from live conductor3 state, corrected Windows cp1252 encoding in test file opens, fixed race conditions in instance_manager tests.
+- CI/test hygiene: Fixed workflow actions env vars, added BASH_SOURCE exec guards to all shell scripts, isolated orchestration tests from live orchestrator state, corrected Windows cp1252 encoding in test file opens, fixed race conditions in instance_manager tests.
 - Documentation: Fixed cross-file drift, updated domain CLAUDE.md entries, corrected test counts, resolved multi-instance contradictions.
 - Guardrail enforcement: Added missing tool entries, corrected dispatch_lint pattern suppression, fixed benchmark fixture state reversion, corrected arithmetic in sum function test.
 - Workflow: Removed fail-open continue-on-error from cross-OS drift workflow.
