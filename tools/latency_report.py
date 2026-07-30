@@ -52,7 +52,7 @@ def parse_bench_results(source: Path) -> List[Dict[str, Any]]:
         if source.suffix == ".jsonl":
             # Parse JSONL (one JSON object per line)
             try:
-                with open(source, "r") as f:
+                with open(source, "r", encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
                         if line:
@@ -79,7 +79,7 @@ def parse_bench_results(source: Path) -> List[Dict[str, Any]]:
                 pass
         for jsonl_file in sorted(source.glob("*.jsonl")):
             try:
-                with open(jsonl_file, "r") as f:
+                with open(jsonl_file, "r", encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
                         if line:

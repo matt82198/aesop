@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Wave manifest preflight validator.
 
@@ -337,7 +337,7 @@ def check_testcmd_validity(manifest: Dict[str, Any], repo_root: str) -> List[Che
 
 def load_manifest(manifest_path: str) -> Dict[str, Any]:
     """Load wave manifest JSON."""
-    with open(manifest_path, "r") as f:
+    with open(manifest_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 

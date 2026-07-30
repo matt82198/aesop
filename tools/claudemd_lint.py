@@ -196,7 +196,7 @@ def get_package_scripts(repo_root: Path) -> Dict[str, str]:
         if "node_modules" in pkg_path.parts:
             continue
         try:
-            with open(pkg_path) as f:
+            with open(pkg_path, encoding="utf-8") as f:
                 pkg = json.load(f)
             scripts.update(pkg.get("scripts", {}))
         except (json.JSONDecodeError, IOError):

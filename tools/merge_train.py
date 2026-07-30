@@ -279,7 +279,7 @@ def main():
 
     prs = list(args.prs)
     if args.file:
-        with open(args.file) as f:
+        with open(args.file, encoding="utf-8") as f:
             prs.extend(int(line.strip()) for line in f if line.strip().isdigit())
 
     if not prs:

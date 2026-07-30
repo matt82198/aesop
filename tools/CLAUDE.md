@@ -37,6 +37,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `defect_escape.py` — Haiku code quality telemetry (fix-forward rate, first-try estimate); CLI: `--repo <path> --since <ISO date> [--json]`
 - `doctor.js` — Preflight checklist for adopter onboarding (diagnostic checks: config, hooks, CLAUDE.md, state, heartbeats, git identity, secret-scan; exit 0=all pass, 1=failed)
 - `ensure_state.py` — Scaffold STATE.md and BUILDLOG.md templates (writes via state_store WriteAPI: scaffold emits state_md_written + buildlog events)
+- `encoding_lint.py` — Guardrail G10: enforce encoding='utf-8' on file opens; AST-scans for `open()` without encoding=; allows binary modes; suppress via `# encoding-ok`; CLI: `--check` | `--json` | `--paths DIR...`; stdlib-only
 - `eod_sweep.py` — End-of-day safety check (dirty trees, unpushed commits); verdict appended to BUILDLOG.md via state_store WriteAPI (--buildlog filename must be BUILDLOG.md, fail-closed)
 - `fleet.js` — One-shot fleet snapshot (JSON: agents, heartbeats, tracker, orchestrator status; Node STDLIB only)
 - `fleet_ledger.py` — Append-only cost ledger with harvest/rotate
@@ -146,4 +147,3 @@ CLI: `bash tools/agent-forensics.sh <commit>` (print snapshot) | `--diff <commit
 ---
 
 Map of all domains: /CLAUDE.md
-# trigger

@@ -2540,7 +2540,7 @@ Examples:
             print(f"Error: manifest file not found: {args.manifest}", file=sys.stderr)
             return 1
 
-        with open(manifest_path) as f:
+        with open(manifest_path, encoding="utf-8") as f:
             manifest = json.load(f)
     except json.JSONDecodeError as e:
         print(f"Error: invalid JSON in manifest file: {e}", file=sys.stderr)
@@ -2593,7 +2593,7 @@ Examples:
 
     if args.output:
         try:
-            with open(args.output, "w") as f:
+            with open(args.output, "w", encoding="utf-8") as f:
                 f.write(report_json)
             print(f"Report written to {args.output}", file=sys.stderr)
         except Exception as e:

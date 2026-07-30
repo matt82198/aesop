@@ -714,7 +714,7 @@ class SessionTelemetry:
             return
 
         try:
-            with open(self.data_file) as f:
+            with open(self.data_file, encoding="utf-8") as f:
                 self._data = json.load(f)
         except (json.JSONDecodeError, IOError):
             self._data = {}
