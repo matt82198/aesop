@@ -85,7 +85,8 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 - **App.tsx**: App shell; hash-routed views (/#/, /#/work, /#/activity, /#/cost, /#/prs).
 - **styles/tokens.css** + **global.css**: Design tokens (light/dark palettes, spacing, typography).
 - **views/**: Overview, Work, Activity, Cost, WavePRBoard (with SSE bindings). 5 views total: `/#/` (Overview), `/#/work` (Work), `/#/activity` (Activity), `/#/cost` (Cost), `/#/prs` (PR Board). WavePRBoard polls `/api/wave/prs` every 5s; drills down to FailureDrilldown on click.
-- **components/**: HealthHeader, AgentsPanel, TrackerBoard, Timeline, CostChart, CostAnalyticsPanel, FailureDrilldown, BenchmarkPanel, etc.
+- **components/**: HealthHeader (always-visible mission-control status header), AgentsPanel, TrackerBoard, Timeline, CostChart, CostAnalyticsPanel, FailureDrilldown, BenchmarkPanel, etc.
+  - HealthHeader: Mission-control status header (D4, always visible). Three-zone layout: (1) fleet orchestrator phase + agent counts/status breakdown from live agents array, (2) system health (watchdog/monitor/alerts/SSE/data freshness), (3) controls (cost snapshot, theme toggle, manual refresh). Color-coded freshness indicator dot. All metrics bound to real SSE state; nothing invented. Clickable cells jump to corresponding views. No local state beyond focus/hover. Props from App.tsx.
   - BenchmarkPanel: Results table (model/accuracy/tokens/latency/cost/timestamp) + model comparison cards; fetches `/api/bench` and `/api/bench/compare`; dark/light theme, responsive grid.
   - CostAnalyticsPanel (wave-29 UX): info-dense operator view with (a) spend per wave (bar chart), (b) model efficiency vs Opus counterfactual, (c) burn rate + end-of-wave projection with ceiling alert; graceful DATA-UNAVAILABLE states when ledger/ceiling missing.
   - FailureDrilldown: drawer showing CI job list + ~100-line log excerpts on expand; fetches `/api/wave/failure?pr=N`.
