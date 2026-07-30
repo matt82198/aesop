@@ -4,24 +4,29 @@ High-level CLI wrapper around state_store.instance_projection for instance
 registration, discovery, heartbeat, and file claim coordination.
 
 CLI Usage:
-  python tools/instance_manager.py --db <db_path> --register <instance_id> <hostname> <pid>
-  python tools/instance_manager.py --db <db_path> --heartbeat <instance_id>
-  python tools/instance_manager.py --db <db_path> --list
-  python tools/instance_manager.py --db <db_path> --claim <instance_id> <file1> <file2> ...
-  python tools/instance_manager.py --db <db_path> --release <instance_id> <file1> <file2> ...
-  python tools/instance_manager.py --db <db_path> --status <instance_id>
-  python tools/instance_manager.py --db <db_path> --claimed-files <instance_id>
-  python tools/instance_manager.py --db <db_path> --all-claimed
-  python tools/instance_manager.py --db <db_path> --stale <threshold_seconds>
+  python tools/instance_manager.py [--db <db_path>] [--json] register <instance_id> <hostname> <pid>
+  python tools/instance_manager.py [--db <db_path>] [--json] heartbeat <instance_id>
+  python tools/instance_manager.py [--db <db_path>] [--json] list
+  python tools/instance_manager.py [--db <db_path>] [--json] claim <instance_id> <file1> <file2> ...
+  python tools/instance_manager.py [--db <db_path>] [--json] release <instance_id> <file1> <file2> ...
+  python tools/instance_manager.py [--db <db_path>] [--json] status <instance_id>
+  python tools/instance_manager.py [--db <db_path>] [--json] claimed-files <instance_id>
+  python tools/instance_manager.py [--db <db_path>] [--json] all-claimed
+  python tools/instance_manager.py [--db <db_path>] [--json] stale <threshold_seconds>
+
+Environment variables:
+  AESOP_STATE_ROOT: Base directory for state files; db defaults to $AESOP_STATE_ROOT/state.db
 
 Exit codes:
   0 = success
   1 = error or operation failed
+  2 = contract violation (e.g., malformed status response)
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -44,11 +49,42 @@ from state_store.instance_projection import (
 )
 
 
+def resolve_db_path(cli_db_arg: str | None) -> str:
+    """Resolve database path: CLI arg -> AESOP_STATE_ROOT env var -> default.
+
+    Follows core invariant from tools/CLAUDE.md: all state tools fall back to
+    AESOP_STATE_ROOT environment variable before defaulting to ./state.
+
+    Args:
+        cli_db_arg: --db argument (may be None if not provided)
+
+    Returns:
+        Resolved path to SQLite database
+    """
+    if cli_db_arg:
+        return cli_db_arg
+
+    env_root = os.environ.get("AESOP_STATE_ROOT")
+    if env_root:
+        return os.path.join(env_root, "state.db")
+
+    return "./state/state.db"
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Multi-instance orchestration manager"
     )
-    parser.add_argument("--db", required=True, help="Path to state_store SQLite database")
+    parser.add_argument(
+        "--db",
+        default=None,
+        help="Path to state_store SQLite database (default: AESOP_STATE_ROOT/state.db or ./state/state.db)",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output results as JSON (applies to all subcommands)",
+    )
 
     # Commands (mutually exclusive)
     cmd = parser.add_subparsers(dest="command")
@@ -105,8 +141,11 @@ def main():
         parser.print_help()
         return 1
 
+    # Resolve database path
+    db_path = resolve_db_path(args.db)
+
     try:
-        store = StateAPI(args.db)
+        store = StateAPI(db_path)
     except Exception as e:
         print(f"error: failed to open database: {e}", file=sys.stderr)
         return 1
@@ -117,7 +156,10 @@ def main():
             if not success:
                 print(f"error: failed to register instance {args.instance_id}", file=sys.stderr)
                 return 1
-            print(f"registered: {args.instance_id}")
+            if args.json:
+                print(json.dumps({"status": "success", "instance_id": args.instance_id}))
+            else:
+                print(f"registered: {args.instance_id}")
             return 0
 
         elif args.command == "heartbeat":
@@ -125,7 +167,10 @@ def main():
             if not success:
                 print(f"error: failed to send heartbeat for {args.instance_id}", file=sys.stderr)
                 return 1
-            print(f"heartbeat: {args.instance_id}")
+            if args.json:
+                print(json.dumps({"status": "success", "instance_id": args.instance_id}))
+            else:
+                print(f"heartbeat: {args.instance_id}")
             return 0
 
         elif args.command == "list":
@@ -138,7 +183,10 @@ def main():
             if not success:
                 print(f"error: failed to claim files for {args.instance_id}", file=sys.stderr)
                 return 1
-            print(f"claimed {len(args.files)} files: {args.instance_id}")
+            if args.json:
+                print(json.dumps({"status": "success", "instance_id": args.instance_id, "files_claimed": len(args.files)}))
+            else:
+                print(f"claimed {len(args.files)} files: {args.instance_id}")
             return 0
 
         elif args.command == "release":
@@ -146,7 +194,10 @@ def main():
             if not success:
                 print(f"error: failed to release files for {args.instance_id}", file=sys.stderr)
                 return 1
-            print(f"released {len(args.files)} files: {args.instance_id}")
+            if args.json:
+                print(json.dumps({"status": "success", "instance_id": args.instance_id, "files_released": len(args.files)}))
+            else:
+                print(f"released {len(args.files)} files: {args.instance_id}")
             return 0
 
         elif args.command == "status":
@@ -154,7 +205,13 @@ def main():
             if status is None:
                 print(f"error: instance not found: {args.instance_id}", file=sys.stderr)
                 return 1
-            print(json.dumps(status, indent=2))
+            if not isinstance(status, dict):
+                print(f"error: malformed status response (expected dict, got {type(status).__name__})", file=sys.stderr)
+                return 2
+            if args.json:
+                print(json.dumps({"status": status}))
+            else:
+                print(json.dumps(status, indent=2))
             return 0
 
         elif args.command == "claimed-files":
