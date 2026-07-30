@@ -248,7 +248,29 @@ See [docs/DEMO.md](./docs/DEMO.md) for a walkthrough of one full wave cycle.
 
 ## Why Haiku-First Works
 
-The benchmark proves sufficiency for seam-level engineering tasks: across 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence, security spots), Haiku scored **39/39** vs Opus **38/39** at 1/5 the per-token cost of Opus (1/3 of Sonnet — list pricing; cost model in [docs/DISPATCH-MODEL.md](./docs/DISPATCH-MODEL.md)). **Measured on seam-level engineering tasks (code review, severity calibration, local orchestration) — not frontier reasoning or long-horizon planning.** See [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](./bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md). The pre-declared ceiling rule (when ≥2 tiers score ≥92%, the instrument failed to discriminate) trips on this result — both Haiku and Sonnet achieved 39/39, meaning the benchmark maps a *sufficiency floor*, not tier equivalence. Full analysis: [`bench/results/2026-07-26-judgment-v3-ceiling-addendum.md`](./bench/results/2026-07-26-judgment-v3-ceiling-addendum.md) and [`bench/METHODOLOGY.md`](./bench/METHODOLOGY.md).
+**Ceiling verdict:** Both Haiku and Sonnet hit 39/39 (100%), triggering the pre-declared 92% ceiling rule—the benchmark measures a *sufficiency floor*, not tier equivalence. The honest claim is bounded: Haiku is sufficient for seam-level engineering tasks (code review, severity calibration, root-cause analysis, refactor equivalence, security spots), not equivalent to Opus at the absolute frontier.
+
+| Model  | Score    | N                  | Cost (per token) |
+|--------|----------|-------------------|------------------|
+| Haiku  | 39/39    | 39 tasks (v2+v3)  | 1/5 of Opus      |
+| Sonnet | 39/39    | 39 tasks (v2+v3)  | 1/3 of Opus      |
+| Opus   | 38/39    | 39 tasks (v2+v3)  | baseline         |
+
+**Measured on seam-level engineering tasks (code review, severity calibration, local orchestration) — not frontier reasoning or long-horizon planning.** See [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](./bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md). Full analysis: [`bench/results/2026-07-26-judgment-v3-ceiling-addendum.md`](./bench/results/2026-07-26-judgment-v3-ceiling-addendum.md) and [`bench/METHODOLOGY.md`](./bench/METHODOLOGY.md).
+
+### Reproduce the benchmark
+
+To verify independently:
+
+```bash
+# Run the judgment suite (39 tasks: 28 v3 + 11 v2) against all models
+# Requires: BENCH_API_KEY environment variable (Anthropic API key)
+# Expected cost: ~$5 | Checkpoint: bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md
+
+python tools/bench_api_runner.py v3 haiku sonnet opus
+```
+
+See [`bench/README.md`](./bench/README.md) for scoring methodology (exact/regex match against pre-committed ground truth, no model in grading loop) and [`bench/METHODOLOGY.md`](./bench/METHODOLOGY.md) for complete task design and the ceiling rule interpretation.
 
 ## Known Limitations
 
