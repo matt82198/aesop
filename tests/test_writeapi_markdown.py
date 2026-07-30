@@ -342,7 +342,7 @@ class WriteAPIMarkdownTest(unittest.TestCase):
                     start_hash = None
 
                 # Small delay to increase chance of race
-                time.sleep(0.01)
+                time.sleep(0.01)  # sleep-ok
 
                 # Call the atomic write directly with the captured hash
                 api._write_markdown_atomic(state_file, content, start_disk_hash=start_hash)

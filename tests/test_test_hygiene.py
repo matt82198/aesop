@@ -312,6 +312,66 @@ class TestTestHygiene(unittest.TestCase):
             msg += "Fix: use pathlib.Path() + resolve() to normalize, or validate path separators.\n"
             self.fail(msg)
 
+    def test_no_tiny_sleeps_in_tests(self):
+        """Fail if any test uses time.sleep() with values below 0.1 seconds (100ms).
+
+        Rationale: Windows CI runners have ~15ms timer resolution, so sleep values
+        below ~100ms are unreliable for temporal assertions. This check enforces
+        that all timing-sensitive tests use sleep values >= 0.1 seconds.
+
+        Suppression: Add `# sleep-ok` comment on the same line if the sleep is NOT
+        used for temporal assertions (e.g., yield-to-scheduler patterns in races).
+        """
+        tests_dir = Path(__file__).parent
+        violations = []
+
+        for test_file in sorted(tests_dir.glob("test_*.py")):
+            if test_file.name == "test_test_hygiene.py":
+                continue
+
+            try:
+                with open(test_file, "r", encoding="utf-8") as f:
+                    source = f.read()
+                    tree = ast.parse(source, filename=str(test_file))
+            except SyntaxError as e:
+                self.fail(f"Syntax error in {test_file}: {e}")
+
+            lines = source.split('\n')
+            visitor = CallVisitor()
+            visitor.visit(tree)
+
+            # Find time.sleep calls
+            for call_info in visitor.calls:
+                if call_info['function'] == 'time.sleep':
+                    lineno = call_info['lineno']
+                    node = call_info['node']
+
+                    # Check if the line has # sleep-ok suppression
+                    line_text = lines[lineno - 1] if lineno <= len(lines) else ""
+                    if '# sleep-ok' in line_text:
+                        continue
+
+                    # Extract the sleep argument
+                    if node.args and len(node.args) > 0:
+                        arg = node.args[0]
+                        sleep_value = None
+
+                        # Handle numeric literals: Constant (Python 3.8+)
+                        if isinstance(arg, ast.Constant) and isinstance(arg.value, (int, float)):
+                            sleep_value = arg.value
+
+                        if sleep_value is not None and sleep_value < 0.1:
+                            violations.append(
+                                f"{test_file.name}:{lineno} "
+                                f"time.sleep({sleep_value}) below 100ms threshold. "
+                                f"Windows CI timer resolution is ~15ms; values < 0.1s are unreliable. "
+                                f"Use >= 0.1 seconds, or add `# sleep-ok` comment if not for temporal assertions."
+                            )
+
+        if violations:
+            msg = "Found time.sleep() violations (Windows CI timer resolution <100ms):\n"
+            msg += "\n".join(f"  {v}" for v in violations)
+            self.fail(msg)
 
 
 class TestShellIdentityHygiene(unittest.TestCase):
@@ -357,6 +417,7 @@ class TestShellIdentityHygiene(unittest.TestCase):
         if violations:
             self.fail("Unscoped git identity writes in shell tests (live-config "
                       "pollution risk):" + chr(10) + chr(10).join("  " + v for v in violations))
+
 
 class TestRuntimeConfigGuard(unittest.TestCase):
     """Runtime tripwire: detect if any test polluted the real repo's .git/config.

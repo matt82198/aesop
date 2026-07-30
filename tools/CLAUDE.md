@@ -73,6 +73,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `run_shell_tests.sh` — Glob-based shell test runner: discovers and runs all shell tests sequentially via glob patterns (tests/*.test.sh, tests/test_*.sh, tests/test-*.sh, hooks/pre-push-policy.sh --test); fails fast with clear output; CRLF-safe, no line continuations; CLI: `bash tools/run_shell_tests.sh [REPO_ROOT]`; invoked as npm run test:sh in package.json; replaces hand-maintained explicit test chain (kills conflict magnet)
 - `scanner_selftest.py` — Regression harness for secret_scan.py
 - `stateapi_lint.py` — StateAPI migration ratchet: AST-scans for direct state-file reads outside state_store/read_api.py facade; violations keyed file@pattern-id against committed baseline (new violation = exit 1; fixed violation = must shrink baseline); `--update-baseline` regenerates (forbidden in CI)
+- `state_query.py` — Time-travel state query CLI: temporal/stream/version-range/event-type filters over event-sourced SQLite state store; ASCII table (default), --json, --aggregate modes; reuses StateAPI facade + common.py; stdlib-only, fail-closed on missing DB
 - `secret_scan.py` — Pre-push secret/credential detection gate (staged/history/paths)
 - `self_stats.py` — Git-derived metrics counter + README block generator
 - `session_usage_summary.py` — Aggregate token usage across session transcripts

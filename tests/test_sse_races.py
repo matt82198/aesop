@@ -76,7 +76,7 @@ class RaceFixtureCase(unittest.TestCase):
         # Stop any running collector thread
         if hasattr(self, "sse"):
             self.sse._collector_stop_event.set()
-            time.sleep(0.05)  # Allow collector to exit gracefully
+            time.sleep(0.05)  # Allow collector to exit gracefully  # sleep-ok
         shutil.rmtree(self.fixture_root, ignore_errors=True)
 
 
@@ -97,11 +97,11 @@ class TestConcurrentClientRegistration(RaceFixtureCase):
 
         def broadcast_while_registering():
             barrier.wait()
-            time.sleep(0.001)  # Let registrars start
+            time.sleep(0.001)  # Let registrars start  # sleep-ok
             try:
                 for _ in range(5):
                     sse.broadcast_sse("test", '{"msg": "concurrent"}')
-                    time.sleep(0.0001)
+                    time.sleep(0.0001)  # sleep-ok
             except Exception as e:
                 self.fail(f"broadcast_sse raised during concurrent register: {e}")
 
@@ -150,13 +150,13 @@ class TestConcurrentUnregisterAndBroadcast(RaceFixtureCase):
             try:
                 for _ in range(10):
                     sse.broadcast_sse("data", '{"v": 1}')
-                    time.sleep(0.0001)
+                    time.sleep(0.0001)  # sleep-ok
             except Exception as e:
                 errors.append(("broadcast", e))
 
         def unregister2():
             barrier.wait()
-            time.sleep(0.002)
+            time.sleep(0.002)  # sleep-ok
             try:
                 sse.unregister_sse_client(q1)
             except Exception as e:
@@ -202,18 +202,18 @@ class TestConcurrentSnapshotReads(RaceFixtureCase):
                     if snapshot:
                         data = json.loads(snapshot)
                         read_results.append(data)
-                    time.sleep(0.0001)
+                    time.sleep(0.0001)  # sleep-ok
             except Exception as e:
                 errors.append(("read", e))
 
         def update_snapshot():
             barrier.wait()
-            time.sleep(0.0005)
+            time.sleep(0.0005)  # sleep-ok
             try:
                 for i in range(2, 5):
                     with sse._latest_lock:
                         sse._latest_snapshots["data"] = json.dumps({"version": i})
-                    time.sleep(0.0002)
+                    time.sleep(0.0002)  # sleep-ok
             except Exception as e:
                 errors.append(("update", e))
 
@@ -265,7 +265,7 @@ class TestResetStateDuringCollection(RaceFixtureCase):
 
             # Start collector
             sse.start_collector_thread()
-            time.sleep(0.02)  # Let it run a few cycles
+            time.sleep(0.02)  # Let it run a few cycles  # sleep-ok
 
             old_stop_event = sse._collector_stop_event
             sse.reset_state()
@@ -301,7 +301,7 @@ class TestDroppedCountsRaces(RaceFixtureCase):
             try:
                 for i in range(5):
                     sse.broadcast_sse("data", f'{{"msg": "event{i}"}}')
-                    time.sleep(0.0001)
+                    time.sleep(0.0001)  # sleep-ok
             except Exception as e:
                 errors.append((qnum, e))
 
@@ -340,7 +340,7 @@ class TestHeartbeatEmissionRace(RaceFixtureCase):
             try:
                 for i in range(5):
                     sse._maybe_emit("data", {"seq": i}, {})
-                    time.sleep(0.0001)
+                    time.sleep(0.0001)  # sleep-ok
             except Exception as e:
                 errors.append(("sections", e))
 
@@ -350,7 +350,7 @@ class TestHeartbeatEmissionRace(RaceFixtureCase):
                 for i in range(5):
                     heartbeat = json.dumps({"timestamp": int(time.time() * 1000)})
                     sse.broadcast_sse("heartbeat", heartbeat)
-                    time.sleep(0.00015)
+                    time.sleep(0.00015)  # sleep-ok
             except Exception as e:
                 errors.append(("heartbeats", e))
 
@@ -399,7 +399,7 @@ class TestHashGateThreadSafety(RaceFixtureCase):
             try:
                 # Same section name, same snapshot from multiple threads
                 sse._maybe_emit("shared_section", snapshot, last_hashes)
-                time.sleep(0.00005)
+                time.sleep(0.00005)  # sleep-ok
             except Exception as e:
                 self.fail(f"Thread {thread_id} raised: {e}")
 
@@ -439,7 +439,7 @@ class TestHashGateThreadSafety(RaceFixtureCase):
                 for i in range(5):
                     sse._maybe_emit(f"section_a", {"seq": i}, last_hashes)
                     sse._maybe_emit(f"section_b", {"seq": i * 2}, last_hashes)
-                    time.sleep(0.00005)
+                    time.sleep(0.00005)  # sleep-ok
             except Exception as e:
                 self.fail(f"emit_different_sections raised: {e}")
 
@@ -493,7 +493,7 @@ class TestClientQueueFullRaceCondition(RaceFixtureCase):
 
         def unregister_during_broadcast():
             barrier.wait()
-            time.sleep(0.0001)
+            time.sleep(0.0001)  # sleep-ok
             try:
                 sse.unregister_sse_client(q1)
             except Exception as e:

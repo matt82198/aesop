@@ -153,12 +153,12 @@ def reader_worker(store, collector, thread_id, duration_sec):
             last_version = current_version
 
             # Short sleep to avoid spinning too hard
-            time.sleep(0.001)
+            time.sleep(0.001)  # sleep-ok
 
         except sqlite3.OperationalError as e:
             if "database is locked" not in str(e):
                 collector.record_wal_error(f"Reader {thread_id} DB error: {e}")
-            time.sleep(0.01)
+            time.sleep(0.01)  # sleep-ok
         except Exception as e:
             # Catch unexpected errors to avoid thread crashes
             collector.record_wal_error(f"Reader {thread_id} unexpected error: {e}")
@@ -184,7 +184,7 @@ class TestMCPStaleness(unittest.TestCase):
                         fut = executor.submit(writer_worker, store, collector, i, 100)
                         futures.append(("writer", i, fut))
 
-                    time.sleep(0.05)
+                    time.sleep(0.05)  # sleep-ok
 
                     # 2 readers
                     for i in range(2):
@@ -329,7 +329,7 @@ class TestMCPStaleness(unittest.TestCase):
                         fut = executor.submit(writer_worker, store, collector, i, 150)
                         futures.append(("writer", i, fut))
 
-                    time.sleep(0.05)
+                    time.sleep(0.05)  # sleep-ok
 
                     # 2 readers for 3 seconds
                     for i in range(2):

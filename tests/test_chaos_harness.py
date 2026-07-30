@@ -118,7 +118,7 @@ class TestFaultF1_WorkerTermination(ChaosHarnessTestCase):
         # Simulate detection delay (bounded by watchdog threshold)
         watchdog_threshold = 30  # seconds
         detection_time = 2.5  # Simulated detection latency
-        time.sleep(0.01)  # Small sleep to measure elapsed time
+        time.sleep(0.01)  # Small sleep to measure elapsed time  # sleep-ok
 
         detection_end = time.time()
         detected = (detection_end - detection_start) < watchdog_threshold
