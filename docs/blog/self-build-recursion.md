@@ -1,6 +1,6 @@
 # The Self-Build Recursion: Building a Tool with Itself
 
-On July 12, I deployed Aesop—an AI agent orchestration harness—with a hypothesis and no working examples. Eighteen days later, it had merged 514 PRs across 1,429 commits, shipped 248,638 lines of code, and run 31 complete build waves. Every single commit was made by the system itself.
+On July 12, I deployed Aesop—an AI agent orchestration harness—with a hypothesis and no working examples. Eighteen days later, it had merged 520 PRs across 1,433 commits, shipped 250,156 lines of code, and run 31 complete build waves. Every single commit was made by the system itself.
 
 This is the story of building a tool with itself. What that means, what nearly broke, what the numbers actually prove, and what you learn when your own machinery becomes your greatest source of feedback.
 
@@ -175,7 +175,7 @@ cat docs/RECEIPTS.md
 grep -A 10 "zombie-rate" ~/.claude/projects/*/memory/MEMORY.md
 ```
 
-All metrics regenerable. All incidents in git log. If you clone the repo from July 30, you can verify: **514 PRs merged, 1,429 commits, built by Aesop itself.**
+All metrics regenerable. All incidents in git log. If you clone the repo from July 30, you can verify: **520 PRs merged, 1,433 commits, built by Aesop itself.**
 
 ---
 
@@ -183,4 +183,4 @@ All metrics regenerable. All incidents in git log. If you clone the repo from Ju
 - Project start: 2026-07-12
 - Wave 1: 2026-07-29 to 2026-07-30 (63 PRs merged)
 - Convergence complete: 2026-07-22 (commit `157e157`, zero verified defects)
-- Current: 2026-07-30 (514 PRs, 31 waves, 1,429 commits)
+- Current: 2026-07-30 (520 PRs, 31 waves, 1,433 commits)

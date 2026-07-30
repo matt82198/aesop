@@ -14,27 +14,40 @@ import urllib.parse
 import urllib.request
 from typing import Callable, Dict
 
-# Max response size (same as OpenAI transport).
-MAX_RESPONSE_SIZE = 10 * 1024 * 1024
+# Maximum response size (100 KB) to prevent OOM from hostile/broken endpoints.
+MAX_RESPONSE_SIZE = 100 * 1024
 
 
 class _AuthStripRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Redirect handler that strips Authorization header on cross-domain redirects.
+    """Redirect handler that strips sensitive headers on cross-domain redirects.
 
     Defense-in-depth: a Location header pointing to an attacker-controlled domain
-    should not leak the API key. This is the same guard as openai_transport.py.
+    should not leak the API key. Mirrors openai_transport.py's guard, covering
+    x-api-key (Anthropic's auth header) alongside Authorization and api-key.
     """
 
+    _SENSITIVE_HEADERS = {"authorization", "api-key", "x-api-key"}
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        """Override: strip Authorization from cross-domain redirects."""
-        m = urllib.request.AbstractBasicAuthHandler.redirect_request
-        newreq = m(self, req, fp, code, msg, headers, newurl)
+        """Override: strip sensitive headers from cross-domain redirects."""
+        newreq = super().redirect_request(req, fp, code, msg, headers, newurl)
         if newreq:
-            orig_host = urllib.parse.urlparse(req.get_full_url()).netloc
-            new_host = urllib.parse.urlparse(newurl).netloc
-            if orig_host != new_host:
-                if "Authorization" in newreq.headers:
-                    del newreq.headers["Authorization"]
+            orig_parsed = urllib.parse.urlparse(req.get_full_url())
+            new_parsed = urllib.parse.urlparse(newurl)
+            orig_origin = (
+                orig_parsed.scheme,
+                orig_parsed.hostname or "",
+                orig_parsed.port or (443 if orig_parsed.scheme == "https" else 80),
+            )
+            new_origin = (
+                new_parsed.scheme,
+                new_parsed.hostname or "",
+                new_parsed.port or (443 if new_parsed.scheme == "https" else 80),
+            )
+            if orig_origin != new_origin:
+                for header_name in list(newreq.headers.keys()):
+                    if header_name.lower() in self._SENSITIVE_HEADERS:
+                        del newreq.headers[header_name]
         return newreq
 
 
@@ -90,12 +103,16 @@ def make_anthropic_transport(
         opener = urllib.request.build_opener(_AuthStripRedirectHandler)
         try:
             response = opener.open(request, timeout=timeout_s)
-            body = response.read(MAX_RESPONSE_SIZE)
+            body = response.read(MAX_RESPONSE_SIZE + 1)
+            if len(body) > MAX_RESPONSE_SIZE:
+                raise RuntimeError(
+                    f"Anthropic API response exceeded {MAX_RESPONSE_SIZE} bytes"
+                )
             return json.loads(body.decode("utf-8"))
         except urllib.error.HTTPError as exc:
             # Re-raise with the status and response body for debugging.
             try:
-                error_body = exc.read(MAX_RESPONSE_SIZE).decode("utf-8")
+                error_body = exc.read(MAX_RESPONSE_SIZE + 1).decode("utf-8")
             except Exception:
                 error_body = "(could not read error body)"
             raise RuntimeError(

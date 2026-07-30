@@ -171,8 +171,10 @@ class EventStore:
         connections hold file-level locks that prevent ``shutil.rmtree()`` from
         deleting the database file (PermissionError / WinError 32).
 
-        Safe to call multiple times. After close(), the next operation on any
-        thread will lazily open a fresh connection.
+        Safe to call multiple times. After close(), the calling thread's next
+        operation will lazily open a fresh connection. Other threads' cached
+        thread-local references become stale; they should create a new
+        EventStore instance rather than reusing one after close().
         """
         conn = getattr(self._local, "conn", None)
         if conn is not None:
