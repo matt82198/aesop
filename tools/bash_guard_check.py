@@ -72,6 +72,11 @@ def is_executable_command(line: str) -> bool:
     if 'BASH_SOURCE' in stripped and '$0' in stripped:
         return False
 
+    # Skip shell configuration directives (set, shopt, trap, etc.)
+    # These should always run, even when sourced, so they're not "executable logic"
+    if re.match(r'^\s*(set\s+|shopt\s+|trap\s+)', stripped):
+        return False
+
     # Skip structural keywords
     if re.match(r'^\s*(function\s+|\w+\s*\(\s*\)|\s*if\s+|\s*then\s*$|\s*elif\s+|\s*else\s*$|\s*while\s+|\s*until\s+|\s*for\s+|\s*do\s*$|\s*case\s+|\s*in\s*$|\s*{|\s*}\s*$|\s*}\s*&)', stripped):
         return False
