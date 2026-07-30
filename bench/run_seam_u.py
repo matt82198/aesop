@@ -1135,6 +1135,22 @@ def main():
 
     validate_api_keys(list(transports_needed))
 
+    # Check HALT sentinel before starting API calls
+    try:
+        from tools import halt
+    except ImportError:
+        try:
+            import halt
+        except ImportError:
+            halt = None
+
+    if halt:
+        if halt.is_halted():
+            halt_info = halt.get_halt_info()
+            reason = halt_info.get("reason") if halt_info else "(no reason recorded)"
+            print(f"SKIP: HALT sentinel detected — {reason}", file=sys.stderr)
+            sys.exit(0)
+
     # Load checkpoint
     checkpoint_file = Path(args.checkpoint)
     completed = load_checkpoint(checkpoint_file)
@@ -1252,7 +1268,12 @@ def run_single_task(
 
         result["tokens_in"] = usage.get("input_tokens", 0)
         result["tokens_out"] = usage.get("output_tokens", 0)
-        result["cost_usd"] = calculate_cost(tier, usage)
+        cost = calculate_cost(tier, usage)
+        if cost is None:
+            result["cost_usd"] = None
+            result["cost_note"] = f"unknown-model-pricing:{tier}"
+        else:
+            result["cost_usd"] = cost
         result["latency_ms"] = usage.get("latency_ms", 0)
 
         # Probe mode: just record response, don't score
@@ -1299,7 +1320,7 @@ def run_single_task(
     return record_result(result)
 
 
-def calculate_cost(tier: str, usage: Dict[str, Any]) -> float:
+def calculate_cost(tier: str, usage: Dict[str, Any]) -> Optional[float]:
     """
     Calculate cost in USD for a single call.
 
@@ -1315,7 +1336,7 @@ def calculate_cost(tier: str, usage: Dict[str, Any]) -> float:
         usage: Usage dict with input_tokens, output_tokens
 
     Returns:
-        Cost in USD
+        Cost in USD, or None if model tier not found in pricing table
     """
     pricing = {
         "claude-fable-5": (0.30, 1.20),
@@ -1325,7 +1346,13 @@ def calculate_cost(tier: str, usage: Dict[str, Any]) -> float:
         "gpt-4o-mini": (0.15, 0.60),
     }
 
-    in_price, out_price = pricing.get(tier, (0.0, 0.0))
+    price_pair = pricing.get(tier)
+    if price_pair is None:
+        # Unknown model — mark as such rather than silently returning 0.0
+        print(f"WARNING: unknown model pricing for tier '{tier}' — cost marked as UNKNOWN", file=sys.stderr)
+        return None
+
+    in_price, out_price = price_pair
     input_tokens = usage.get("input_tokens", 0)
     output_tokens = usage.get("output_tokens", 0)
 
