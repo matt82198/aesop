@@ -63,6 +63,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `orchestrator_status.py` — Atomic orchestrator status updates
 - `otel_sink.py` — OpenTelemetry tracing integration (spans/metrics emitter for fleet observability)
 - `playwright_common.py` — Shared Playwright harness boilerplate: `free_port()`, `copy_dist()`, `start_server()`, `stop_server()` extracted from verify_*.py to reduce duplication (module for import, not CLI)
+- `port_fidelity_check.py` — Port-fidelity validator: dispatch prompts with port/copy/vendor/migrate must include source-path + marker-assertion + independent-verification requirements; CLI: `--check [--json] [--paths DIR...] [--root DIR]`; stdlib only
 - `portability_check.py` — Shipped-surface gate: scan for hardcoded personal/environment paths (Windows user paths, POSIX home paths, private-machine tokens 'conductor3'/'matt8'); exit 0 clean / 1 with findings; --json output, --root flag for base directory; stdlib only
 - `power_selftest.py` — Health check harness for /power bootstrap
 - `prepublish_scan.py` — Pre-publish full history + staged-changes scan gate
