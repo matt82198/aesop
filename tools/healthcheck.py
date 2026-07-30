@@ -6,7 +6,7 @@ Checks:
 - Heartbeat ages (watchdog, monitor) from config-driven state paths
 - Tracker open-item counts by lane (state/tracker.json)
 - Security-alert count and severity (state/SECURITY-ALERTS.log, if present)
-- Orchestrator status age and phase (state/orchestrator-status.json)
+- Orchestrator status age and phase (via ReadAPI, Inc 2+)
 
 Output: One line `HEALTH: 🟢|🟡|🔴 <reason>` + compact bullet list of non-green contributors.
 
@@ -25,14 +25,19 @@ from pathlib import Path
 from time import time
 
 try:
-    from common import check_heartbeat_staleness
+    from common import check_heartbeat_staleness, get_state_dir
 except ImportError:
-    from tools.common import check_heartbeat_staleness
+    from tools.common import check_heartbeat_staleness, get_state_dir
 
 # Import UI config for state path resolution
 UI_DIR = Path(__file__).parent.parent / "ui"
 if str(UI_DIR) not in sys.path:
     sys.path.insert(0, str(UI_DIR))
+
+# Ensure state_store module is importable
+repo_root = Path(__file__).parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
 
 try:
     import config
@@ -68,8 +73,8 @@ def check_health(json_mode=False):
     if alert_status:
         issues.append(alert_status)
 
-    # 3. Check orchestrator status
-    orch_status = _check_orchestrator_status(config.ORCH_STATUS_FILE)
+    # 3. Check orchestrator status (via ReadAPI, Inc 2+)
+    orch_status = _check_orchestrator_status_api(get_state_dir())
     if orch_status:
         issues.append(orch_status)
 
@@ -168,27 +173,24 @@ def _check_alerts(alerts_file):
         return ("YELLOW", f"alert check error: {e}")
 
 
-def _check_orchestrator_status(status_file):
+def _check_orchestrator_status_api(state_dir):
     """
-    Check orchestrator status age (informational; reports stale status).
+    Check orchestrator status age via ReadAPI (projection-first, Inc 2+).
 
     Returns:
         tuple (severity, message) or None if all OK
     """
-    if not status_file.exists():
-        return None
-
     try:
-        content = status_file.read_text(encoding="utf-8").strip()
-        if not content:
-            return None
+        from state_store.read_api import ReadAPI
 
-        data = json.loads(content)
-        if not isinstance(data, dict):
+        api = ReadAPI(state_dir)
+        status = api.read_orchestrator_status()
+
+        if status is None:
             return None
 
         # Check updated_at age
-        updated_at_str = data.get("updated_at", "")
+        updated_at_str = status.get("updated_at")
         if not updated_at_str:
             return None
 
@@ -213,7 +215,6 @@ def _check_orchestrator_status(status_file):
                 return ("YELLOW", f"orchestrator status stale ({age_seconds}s)")
         except ValueError as e:
             # Log the parse error instead of silently failing
-            import sys
             print(f"WARNING: failed to parse orchestrator updated_at '{updated_at_str}': {e}", file=sys.stderr)
 
         return None

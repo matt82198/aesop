@@ -8,10 +8,13 @@ folds it through the registered projector.
 """
 from __future__ import annotations
 
-from .projections import project_tracker
+from .projections import project_tracker, project_orchestrator_status
 from .store import EventStore, ConcurrencyConflict
 
-_PROJECTORS = {"tracker": project_tracker}
+_PROJECTORS = {
+    "tracker": project_tracker,
+    "orchestrator_status": project_orchestrator_status,
+}
 
 
 class StateAPI:
