@@ -7,20 +7,18 @@ import json
 import subprocess
 import sys
 import tempfile
+import unittest
 from pathlib import Path
-from typing import List, Tuple
 
 
-class TestWorkflowModelLinter:
+class TestWorkflowModelLinter(unittest.TestCase):
     """Test workflow_model_linter.py CLI and core functions."""
 
-    def setup_method(self):
-        """Set up test fixtures."""
+    def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.temp_path = Path(self.temp_dir.name)
 
-    def teardown_method(self):
-        """Clean up temp files."""
+    def tearDown(self):
         self.temp_dir.cleanup()
 
     def run_linter(self, args: List[str]) -> Tuple[int, str, str]:
@@ -229,5 +227,4 @@ const result = await agent("prompt", { model : 'haiku', label: 'test' })
 
 
 if __name__ == '__main__':
-    import pytest
-    pytest.main([__file__, '-v'])
+    unittest.main()
