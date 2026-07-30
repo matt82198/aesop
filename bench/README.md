@@ -460,3 +460,35 @@ Every regex ground truth now includes two validation fields:
 Validation is machine-checked: `tests/test_frontier_slice.py::TestGroundTruthValidation::test_regex_ground_truth_has_exemplar_and_counter` asserts that every exemplar matches and every counter_example fails.
 
 **Offline accuracy with tightened patterns: 55.0% (11/20)** — represents the FakeTransport mock runner's performance against substance-demanding patterns. The mock runner is weak on semantic judgment and multi-step reasoning; this reflects its limited instruction-following, not a ceiling for real models. (P2 gate-2 round-2 fix: broadened ft08 and ft15 synonym alternations to reduce false negatives.)
+
+## Cost & Error Handling
+
+### Unknown Model Pricing
+
+When a model tier is not found in the pricing table, runners (`run_seam_u.py`, `frontier_slice.py`):
+- Log a WARNING to stderr: `unknown model pricing for tier '<tier>' — cost marked as UNKNOWN`
+- Set `cost_usd: null` in results for that task
+- Add `cost_note: "unknown-model-pricing:<tier>"` to results
+- **Never silently report $0.00 cost** (which could hide billing surprises) <!-- metrics-verified: design_policy -->
+
+Fallback pricing estimates (when model not in table) are clearly labeled as `[FALLBACK - model not in pricing table]` in cost estimate output.
+
+### API Errors & Incomplete Runs
+
+When a live API call fails (network error, 401, 429, etc.):
+- The task is recorded with `status: "error"` (not scored)
+- Error tasks are **excluded from accuracy calculation** (not in numerator or denominator)
+- Error details are stored in the results JSON under `error_tasks` array
+- Exit code is 1 if any task had an error (incomplete run)
+- Exit code is 0 only if all tasks completed without errors
+
+This ensures API errors cannot fake-green the accuracy score by returning malformed responses that accidentally match ground truth.
+
+### Cost Ceiling & HALT Gate
+
+Before any live API run, both runners check for the `.HALT` sentinel (tools/halt.py):
+- If HALT is active: the run is skipped with a "SKIP" message to stderr
+- Exit is 0 (clean skip, not a failure)
+- This allows stopping active runs when cost ceiling is breached
+
+The pattern mirrors the repo rule: "missing key = SKIP + report, never hunt, never crash late."

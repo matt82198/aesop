@@ -188,6 +188,51 @@ class TestMergeTrain(unittest.TestCase):
             # PR should stay queued (not skipped)
             self.assertFalse(success)
 
+    def test_flake_retry_run_not_found_error_keeps_queued(self):
+        """Test defect 1 issue: transient error like 'run not found' keeps PR queued (finding #2).
+
+        - PR has FAIL
+        - gh run rerun returns "run not found" error (TOCTOU race after run list)
+        - This is a transient error, not a permanent failure
+        - Keep PR in queue, do NOT consume the retry
+        """
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("merge_train", self.tool_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with patch.object(module, 'pr_state') as mock_pr_state, \
+             patch.object(module, 'gh') as mock_gh:
+
+            def pr_state_side_effect(n):
+                if n == 123:
+                    return {
+                        "state": "OPEN",
+                        "merge": "CLEAN",
+                        "checks": "FAIL",
+                        "title": "test PR",
+                        "headRefName": "feat/test",
+                    }
+                return None
+
+            mock_pr_state.side_effect = pr_state_side_effect
+
+            def gh_side_effect(*args):
+                if "run" in args and "list" in args:
+                    return [{"databaseId": 999, "status": "COMPLETED"}]
+                if "run" in args and "rerun" in args:
+                    # Simulate TOCTOU race: run disappeared between list and rerun
+                    return {"error": "run not found", "rc": 1}
+                return {}
+
+            mock_gh.side_effect = gh_side_effect
+
+            prs = [123]
+            success = module.run_train(prs, max_rounds=1, poll_interval=0)
+
+            # PR should stay queued (not skipped) because "run not found" is transient
+            self.assertFalse(success)
+
     def test_dirty_stays_in_queue(self):
         """Test defect 2: DIRTY PRs stay in queue, re-checked each round.
 
