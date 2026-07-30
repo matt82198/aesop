@@ -43,6 +43,31 @@ Each framework below is good at what it optimizes for. Aesop optimizes for the p
 
 **Proof:** This repo is built entirely by Aesop. Haiku proved sufficient for seam-level judgment tasks (39/39; pre-declared ceiling rule flags limited discrimination — sufficiency floor, not tier equivalence). Frontier reasoning and long-horizon planning are out of scope. Removing the hierarchical supervisor layer cut dispatch cost ~4× at identical graded quality (A/B; topology cancelled, data kept). The loop study isolates the lever behind that recovery: putting the failing repro test in context lifts one-shot hard-task pass rate +16.7pp on its own; the full seated repair loop reaches 77.2% overall (from a 67.8% checkpoint baseline), with the hard-task gain driven by the repro-test-in-context prompt lever rather than repair iteration.
 
+### Architecture Overview
+
+```mermaid
+graph TD
+    O["Orchestrator<br/>(Opus/Fable — main thread)"]
+    H1["Haiku Worker 1<br/>(worktree)"]
+    H2["Haiku Worker 2<br/>(worktree)"]
+    H3["Haiku Worker N<br/>(worktree)"]
+    S["Shared State Layer<br/>(SQLite WAL + git)"]
+    W["Watchdog<br/>(heartbeat + respawn)"]
+
+    O -->|dispatches| H1
+    O -->|dispatches| H2
+    O -->|dispatches| H3
+    H1 -->|commit + push| S
+    H2 -->|commit + push| S
+    H3 -->|commit + push| S
+    S -->|re-read on resume| O
+    W -->|monitors| H1
+    W -->|monitors| H2
+    W -->|monitors| H3
+```
+
+Three layers: the orchestrator (Opus/Fable) stays on the main thread for prompt-cache efficiency; parallel Haiku workers run in isolated worktrees (1/5 the per-token cost of Opus); durable state lives in SQLite WAL + git-committed files (STATE.md, BUILDLOG.md). On crash, the orchestrator re-reads from disk -- no special recovery path. Full diagram: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
+
 ## Why It Matters
 
 Crash recovery is not a special path; it is how the system *always* starts. This design choice eliminates distributed consensus, external state servers, and recovery machinery. The trade-off: you own the git repo as your state layer, and you provide the human-in-the-loop to set goals and vet outbound gates (publishing, releases, history rewrites). The result: crash-only (request-scoped workers over persistent filesystem state) is simpler, faster to debug, and easier to audit than systems with hidden distributed state.
