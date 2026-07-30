@@ -157,7 +157,7 @@ jobs:
         run: python tools/wave_templates.py validate --template all
 
       - name: Run Python tests (shard ${{ matrix.python-shard }}/4)
-        run: python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4
+        run: python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
 
       - name: Build React dashboard (ui/web/)
         run: |
@@ -240,7 +240,7 @@ jobs:
         env:
           PYTHONUTF8: '1'
         shell: bash
-        run: python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4
+        run: python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
 
   windows:
     # Aggregator job: enforces that all windows-shard shards succeeded.
