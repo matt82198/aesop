@@ -43,90 +43,6 @@ Each framework below is good at what it optimizes for. Aesop optimizes for the p
 
 **Proof:** This repo is built entirely by Aesop. Haiku proved sufficient for seam-level judgment tasks (39/39; pre-declared ceiling rule flags limited discrimination — sufficiency floor, not tier equivalence). Frontier reasoning and long-horizon planning are out of scope. Removing the hierarchical supervisor layer cut dispatch cost ~4× at identical graded quality (A/B; topology cancelled, data kept). The loop study isolates the lever behind that recovery: putting the failing repro test in context lifts one-shot hard-task pass rate +16.7pp on its own; the full seated repair loop reaches 77.2% overall (from a 67.8% checkpoint baseline), with the hard-task gain driven by the repro-test-in-context prompt lever rather than repair iteration.
 
-## System Architecture
-
-The Aesop system orchestrates parallel Haiku agents over a durable filesystem state layer, with fail-closed guardrails and live observability. Here's how the pieces connect:
-
-```mermaid
-graph TB
-    Start["Ranked Backlog"]
-    Orch["Orchestrator<br/>(Fable/Opus)<br/>Main Thread"]
-    Fleet["Parallel Haiku Fleet<br/>(5–8 worktree-isolated agents)"]
-    Agent1["Agent 1<br/>(feat branch)"]
-    Agent2["Agent 2<br/>(feat branch)"]
-    AgentN["Agent N<br/>(feat branch)"]
-    
-    Stash["State Store<br/>(SQLite WAL)"]
-    StateFiles["STATE.md +<br/>BUILDLOG.md"]
-    Git["Git<br/>(persisted)"]
-    
-    Watchdog["Watchdog Daemon<br/>(heartbeat +<br/>respawn)"]
-    
-    Gates["Guardrails<br/>● Pre-push secret-scan<br/>● Cost ceiling<br/>● Re-run CI gates"]
-    
-    MergeTrain["Integration Branch<br/>(Merge Train)"]
-    
-    Audit["Closing Audit<br/>(findings,<br/>fleet-ops)"]
-    
-    Monitor["Monitor Daemon<br/>(signals,<br/>observability)"]
-    Dashboard["Dashboard<br/>(live status)"]
-    
-    NextWave["Next Wave<br/>Backlog"]
-    
-    Start -->|Orchestrator reads| Orch
-    Orch -->|Dispatches| Fleet
-    Fleet --> Agent1
-    Fleet --> Agent2
-    Fleet --> AgentN
-    
-    Agent1 -->|commit + push| MergeTrain
-    Agent2 -->|commit + push| MergeTrain
-    AgentN -->|commit + push| MergeTrain
-    
-    Agent1 -->|State updates| Stash
-    Agent2 -->|State updates| Stash
-    AgentN -->|State updates| Stash
-    
-    Watchdog -->|Polls heartbeats| Fleet
-    Watchdog -->|Auto-respawn on stall| Fleet
-    
-    MergeTrain -->|Code review| Orch
-    Gates -->|Blocks unsafe merges| Orch
-    
-    Orch -->|Reviews PRs| MergeTrain
-    Orch -->|Merges green PRs| MergeTrain
-    
-    MergeTrain -->|Integration tests| Stash
-    Stash -->|Persists| StateFiles
-    StateFiles -->|Git-committed| Git
-    
-    Monitor -->|Collects signals| Watchdog
-    Monitor -->|Collects signals| Fleet
-    Monitor -->|Observes| Orch
-    
-    Monitor -->|Feeds| Dashboard
-    StateFiles -->|Feeds| Dashboard
-    Dashboard -->|Displays to| Orch
-    
-    Audit -->|Analyzes results| StateFiles
-    Git -->|Audit reviews| Audit
-    Audit -->|Findings→backlog| NextWave
-```
-
-### Key Components
-
-| Component | Role | Cost |
-| --- | --- | --- |
-| **Orchestrator** | Main thread (Fable/Opus): dispatches agents, reviews PRs, approves merges, conducts audit | ~$0.02/wave |
-| **Haiku Fleet** | Parallel workers (5–8 agents): fix backlog items, run tests, push branches | ~$0.01–0.02/wave |
-| **State Store** | SQLite WAL: event-sourced state, projections for dashboard | Persisted |
-| **Watchdog** | Background daemon: detects stalls, auto-respawns agents, security scans | Async |
-| **Guardrails** | Pre-push secret-scan, cost ceiling, re-run CI gates — all fail-closed | Local checks |
-| **Dashboard** | Live web UI (http://localhost:8770): fleet health, work kanban, activity, cost | SSE-fed |
-| **Monitor** | Background observer: collects health signals, triggers audit inputs | Async |
-
-See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for a detailed walkthrough of each component, durable state model, and scaling characteristics.
-
 ## Why It Matters
 
 Crash recovery is not a special path; it is how the system *always* starts. This design choice eliminates distributed consensus, external state servers, and recovery machinery. The trade-off: you own the git repo as your state layer, and you provide the human-in-the-loop to set goals and vet outbound gates (publishing, releases, history rewrites). The result: crash-only (request-scoped workers over persistent filesystem state) is simpler, faster to debug, and easier to audit than systems with hidden distributed state.
@@ -192,13 +108,14 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 | Metric | Value |
 | --- | --- |
 | Merged PRs | 511 <!-- metrics-verified: self_stats.py (git log) --> |
-| Total Commits | 1388 <!-- metrics-verified: self_stats.py (git log) --> |
+| Total Commits | 1408 <!-- metrics-verified: self_stats.py (git log) --> |
 | Project Age | 18 days <!-- metrics-verified: self_stats.py (git log) --> |
-| Insertions + Deletions | 287,257 <!-- metrics-verified: self_stats.py (git log) --> |
-| Files Tracked | 920 <!-- metrics-verified: self_stats.py (git log) --> |
+| Insertions + Deletions | 288,768 <!-- metrics-verified: self_stats.py (git log) --> |
+| Files Tracked | 922 <!-- metrics-verified: self_stats.py (git log) --> |
 | Authors | 1 human + 5 Claude model tiers <!-- metrics-verified: self_stats.py (git log) --> |
 
 <!-- STATS:END -->
+
 
 
 **Project Timeline:** Aesop is 18 days old, built by 1 human + the fleet. Every number above is regenerable from git history by anyone who clones the repo (`bash scripts/verify-stats.sh --check`); no hidden telemetry.
@@ -249,29 +166,7 @@ See [docs/DEMO.md](./docs/DEMO.md) for a walkthrough of one full wave cycle.
 
 ## Why Haiku-First Works
 
-**Ceiling verdict:** Both Haiku and Sonnet hit 39/39 (100%), triggering the pre-declared 92% ceiling rule—the benchmark measures a *sufficiency floor*, not tier equivalence. The honest claim is bounded: Haiku is sufficient for seam-level engineering tasks (code review, severity calibration, root-cause analysis, refactor equivalence, security spots), not equivalent to Opus at the absolute frontier.
-
-| Model  | Score    | N                  | Cost (per token) |
-|--------|----------|-------------------|------------------|
-| Haiku  | 39/39    | 39 tasks (v2+v3)  | 1/5 of Opus      |
-| Sonnet | 39/39    | 39 tasks (v2+v3)  | 1/3 of Opus      |
-| Opus   | 38/39    | 39 tasks (v2+v3)  | baseline         |
-
-**Measured on seam-level engineering tasks (code review, severity calibration, local orchestration) — not frontier reasoning or long-horizon planning.** See [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](./bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md). Full analysis: [`bench/results/2026-07-26-judgment-v3-ceiling-addendum.md`](./bench/results/2026-07-26-judgment-v3-ceiling-addendum.md) and [`bench/METHODOLOGY.md`](./bench/METHODOLOGY.md).
-
-### Reproduce the benchmark
-
-To verify independently:
-
-```bash
-# Run the judgment suite (39 tasks: 28 v3 + 11 v2) against all models
-# Requires: BENCH_API_KEY environment variable (Anthropic API key)
-# Expected cost: ~$5 | Checkpoint: bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md
-
-python tools/bench_api_runner.py v3 haiku sonnet opus
-```
-
-See [`bench/README.md`](./bench/README.md) for scoring methodology (exact/regex match against pre-committed ground truth, no model in grading loop) and [`bench/METHODOLOGY.md`](./bench/METHODOLOGY.md) for complete task design and the ceiling rule interpretation.
+The benchmark proves sufficiency for seam-level engineering tasks: across 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence, security spots), Haiku scored **39/39** vs Opus **38/39** at 1/5 the per-token cost of Opus (1/3 of Sonnet — list pricing; cost model in [docs/DISPATCH-MODEL.md](./docs/DISPATCH-MODEL.md)). **Measured on seam-level engineering tasks (code review, severity calibration, local orchestration) — not frontier reasoning or long-horizon planning.** See [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](./bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md). The pre-declared ceiling rule (when ≥2 tiers score ≥92%, the instrument failed to discriminate) trips on this result — both Haiku and Sonnet achieved 39/39, meaning the benchmark maps a *sufficiency floor*, not tier equivalence. Full analysis: [`bench/results/2026-07-26-judgment-v3-ceiling-addendum.md`](./bench/results/2026-07-26-judgment-v3-ceiling-addendum.md) and [`bench/METHODOLOGY.md`](./bench/METHODOLOGY.md).
 
 ## Known Limitations
 

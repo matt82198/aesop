@@ -2,6 +2,22 @@
 
 **Purpose**: Local observability dashboard. Python backend serves a React+Vite frontend on a configurable port via Server-Sent Events (realtime updates), with CSRF + session protection and event-sourced state.
 
+## Try it in 30 seconds (no API key)
+
+A fresh scaffold has empty state, so a stranger sees a dead shell. `--demo`
+serves a seeded, self-identifying fleet snapshot instead — no API key, no gh
+auth, no prior runs needed:
+
+```bash
+git clone https://github.com/matt82198/aesop.git && cd aesop
+python ui/serve.py --demo        # then open http://127.0.0.1:8770
+# or via the CLI: npx @matt82198/aesop dash --demo
+```
+
+The page carries a fixed **DEMO DATA** banner and `/api/state` returns
+`"demo": true` — seeded data can never be mistaken for a live fleet (honesty
+is the project's brand). Default mode (no flag) is byte-identical to before.
+
 ## Universal rules (every domain)
 - Feature branch only, never main; every push gated by `python tools/secret_scan.py --staged` exit 0.
 - Tests never pollute cwd or global git config; temp dirs only; dummy secrets are runtime-concatenated, never literal.
@@ -42,6 +58,8 @@
 
 **wave_failure.py** — Wave PR failure drill-down: `get_wave_failure(pr_number)` shells `gh run view --json jobs` for jobs on PR branch, then `gh api .../jobs/{id}/logs` for failing jobs; extracts ~100-line log tails. Caches ~5s per PR; degrades to `{available:false, error}` when gh missing/un-authed. Override gh binary: `AESOP_GH_BIN` env var.
 
+**demo.py** — Zero-key demo mode. `maybe_activate()` (called by serve.py BEFORE `config.reload()`) fires on `--demo` in argv or `AESOP_DEMO=1`: it seeds a throwaway demo root (heartbeats, tracker.json, orchestrator-status.json, outcomes ledger, `AUDIT-BACKLOG.md`, fabricated agent transcripts) with now-relative timestamps, then points `AESOP_STATE_ROOT` / `AESOP_WATCHDOG_HEARTBEAT` / `AESOP_MONITOR_HEARTBEAT` / `AESOP_TRANSCRIPTS_ROOT` / `AESOP_AUDIT_BACKLOG` at it so every collector reads the snapshot through its normal path (no collector logic forked). The two shell-out collectors read fabricated data directly when `enabled()`: `get_fleet_agents()` (agents.py) → `get_demo_agents()`, `get_wave_prs()` (wave_prs.py) → `get_demo_wave_prs()`. A daemon refresher (~45s) rewrites heartbeats / orchestrator `updated_at` / transcript mtimes so ages always read fresh. `AESOP_ROOT` is NOT moved (WEB_DIST must keep resolving the committed dist). Honesty: handler injects `BANNER_HTML` ("DEMO DATA") after `<body>` and `/api/state` gets a top-level `"demo": true`. No-op in default mode. Optional `AESOP_DEMO_ROOT` pins the demo root (tests).
+
 **api/__init__.py**, **api/tracker.py**, **api/submit.py**: API handlers for mutations (tracker CRUD, inbox append).
 
 ## Frontend (React 18 + Vite + TypeScript)
@@ -66,24 +84,18 @@
 ## API Routes (complete list)
 
 **Read-only (no CSRF required)**:
-- `GET /` — Renders `ui/web/dist/index.html` with CSRF token substituted (hard 500 if dist missing).
-- `GET /data` — Dashboard data snapshot: heartbeat, daemon state, repos, events, alerts, messages.
-- `GET /assets/*` — Static files from `ui/web/dist/assets/` (content-hashed, immutable cache headers, path-traversal-safe).
-- `GET /api/state` — Consolidated first-paint snapshot: `{data, backlog, agents, tracker, status, cost}` in one round trip (reuses latest SSE snapshots).
-- `GET /api/session` — Returns `{token}` for Vite dev server; Origin-checked fail-closed (local origins only).
-- `GET /api/cost` — Cost/scorecard summary from `state/ledger/OUTCOMES-LEDGER.md` (per-model, per-day, verdicts, optional pricing).
-- `GET /api/backlog` — Audit backlog parsed into tiers (P0/P1/P2/Needs decision).
-- `GET /api/agents` — Rich fleet agent list with metadata (from Claude transcripts directory).
-- `GET /api/agent?id=<id>` — Agent detail: dispatch prompt + ~40-line secret-redacted transcript tail; id-safety gates reject path-traversal.
-- `GET /api/tracker` — List tracker items; query params: `status`, `priority` (optional filters).
-- `GET /agent?id=<id>` — Agent dispatch prompt (deprecated; use `/api/agent?` instead).
-- `GET /api/wave/prs` — Wave PR board: open PRs (`gh pr list`) + PR-less `feat/*` branches (`git for-each-ref`), each with CI rollup/mergeable/age/top blocker. Cached ~5s; degrades `{available:false, error}`.
-- `GET /api/wave/telemetry` — Wave telemetry: current phase (from `STATE.md`), top blocker (from `AUDIT-BACKLOG.md`), cost metrics. Reads state at call time; degrades on missing files.
-- `GET /api/wave/dispatch` — Wave dispatch (live per-agent phase visibility): per-agent id/phase/age/tokens from transcript analysis. Polled by React Activity view every 2-3s. Degrades `{available:false}` when no active workflow. Reads at call time.
-- `GET /api/wave/failure?pr=N` — Wave PR failure drill-down: CI jobs for latest run on PR branch, with ~100-line log excerpts for failing jobs. Cached ~5s per PR; degrades `{available:false, error}`.
-- *(All `/api/wave/*` routes are read-only, read state at call time, and are polled not SSE; gh-backed routes honor `AESOP_GH_BIN`.)*
-- `GET /events` — Server-Sent Events stream (6 sections: data, backlog, agents, tracker, status, cost). Keepalive every ~15s. Read-only; no CSRF.
-- `GET /favicon.ico` — Returns 204 No Content (no favicon asset shipped with dashboard).
+- `GET /` — Renders `ui/web/dist/index.html` with CSRF token (hard 500 if dist missing).
+- `GET /data` — Dashboard data snapshot. `GET /assets/*` — Static files (content-hashed, immutable cache, path-traversal-safe).
+- `GET /api/state` — First-paint snapshot: `{data, backlog, agents, tracker, status, cost}` in one round trip.
+- `GET /api/session` — Returns `{token}` for Vite dev server (Origin-checked fail-closed, local only).
+- `GET /api/cost` — Cost/scorecard from ledger. `GET /api/backlog` — Audit backlog by tier.
+- `GET /api/agents` — Fleet agent list. `GET /api/agent?id=<id>` — Agent detail (path-traversal-safe).
+- `GET /api/tracker` — Tracker items (optional `status`/`priority` filters).
+- `GET /api/wave/prs` — PR board with CI rollup (cached ~5s; degrades `{available:false}`).
+- `GET /api/wave/telemetry` — Phase + blocker + cost metrics. `GET /api/wave/dispatch` — Per-agent phase visibility (polled 2-3s).
+- `GET /api/wave/failure?pr=N` — CI failure drill-down with log excerpts (cached ~5s).
+- All `/api/wave/*` routes: read-only, call-time reads, polled not SSE; gh-backed honor `AESOP_GH_BIN`.
+- `GET /events` — SSE stream (6 sections, keepalive ~15s). `GET /favicon.ico` — 204.
 
 **Mutations (CSRF-gated)**:
 - `POST /submit` — Append to inbox (X-Aesop-Token + Origin/Referer validation, fail-closed).
@@ -133,6 +145,8 @@ Environment variables override config file, which overrides built-in defaults:
    - `AESOP_TRANSCRIPTS_ROOT` — Claude transcript directory (overrides config `transcripts_root`).
    - `AESOP_UI_COLLECT_INTERVAL` — collector thread poll cadence in seconds (default: 1.0).
    - `AESOP_GH_BIN` — gh CLI binary path (default: `gh` on PATH).
+   - `AESOP_AUDIT_BACKLOG` — override `AUDIT-BACKLOG.md` path (default: `AESOP_ROOT/AUDIT-BACKLOG.md`); used by demo mode.
+   - `AESOP_DEMO` / `AESOP_DEMO_ROOT` — demo mode toggle + optional fixed demo root (see demo.py; normally set by the `--demo` flag).
 
 2. **Config file** (`aesop.config.json`):
    - `state_root` — path to state/ directory.
@@ -179,27 +193,17 @@ npx playwright test
 # Headed mode (debug): npx playwright test --headed
 ```
 
-**Full suite** (from repo root):
-```bash
-npm run test:py && npm run test:node && npm run test:all
-```
+**Full suite**: `npm run test:py && npm run test:node && npm run test:all`
 
 ## Invariants & Gotchas
 
-- **Stdlib-only backend**: No external Python dependencies (requests, flask, etc.). Uses only `http.server`, `json`, `subprocess`, `threading`.
-- **ThreadingHTTPServer required**: SSE model requires one thread per client. Standard HTTPServer (processes) cannot hold SSE connections open.
-- **Collector fail-open**: If collector thread crashes, server continues; realtime updates stop but dashboard accessible.
-- **Token file permissions**: Unix: chmod 0600 (user-only). Windows: respects file permissions via ACLs.
-- **Paths git-ignored**: `state/.ui-session-token` is ephemeral (regenerated if missing), never committed.
-- **Config read at call time**: `import config` + `config.X` on every call; never `from config import X` (breaks test isolation).
-- **Dist always required**: No fallback to legacy template (wave-14 U9); missing dist = hard 500.
-- **Content-hashed assets**: Vite build outputs `assets/` with content hashes in filenames (immutable cache headers).
-- **Vite dev server**: Proxies API to :8770; run `npm run dev` from `ui/web/`.
+- **Stdlib-only backend**: `http.server`, `json`, `subprocess`, `threading` only. ThreadingHTTPServer required (SSE = 1 thread/client).
+- **Collector fail-open**: crash → server stays up, realtime updates stop.
+- **Token**: 0600 (Unix) / ACL (Windows); `state/.ui-session-token` gitignored, regenerated if missing.
+- **Config at call time**: `import config` + `config.X`; never `from config import X` (breaks test isolation).
+- **Dist always required**: missing = hard 500. Vite content-hashed assets. Dev: `npm run dev` from `ui/web/`.
 
-## Dropped (reason)
-- Wave-14 dashboard rewrite plan details (separate docs; use `frontend-design` skill for UX/UI decisions).
-- Legacy HTML template (wave-9 split); only React app (`ui/web/dist/`) now served.
-- Detailed MCP server role (separate domain: `mcp/CLAUDE.md`).
-- State store internals (separate domain: `state_store/CLAUDE.md`).
+## Dropped
+- Wave-14 rewrite plan (separate docs). Legacy template (wave-9). MCP/state_store internals (own domains).
 
 Map of all domains: /CLAUDE.md

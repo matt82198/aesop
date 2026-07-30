@@ -74,6 +74,13 @@ def get_fleet_agents():
     dash-extra.mjs is out of scope here, disambiguate post-hoc: keep the original
     (display-friendly) id as a prefix, but suffix it to guarantee uniqueness.
     """
+    # Zero-key demo mode: the fleet-agent list is the one collector that cannot
+    # be file-seeded (it shells out to node dash-extra.mjs), so serve the
+    # fabricated, now-relative demo roster directly. No-op in default mode.
+    import demo
+    if demo.enabled():
+        return demo.get_demo_agents()
+
     agents = []
     try:
         # Call the working detector (dash-extra.mjs) with --json flag
