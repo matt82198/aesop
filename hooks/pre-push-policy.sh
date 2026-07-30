@@ -564,6 +564,103 @@ check_tracker_guard() {
   return 0
 }
 
+check_claudemd_sync_gate() {
+  # CLAUDE.md synchronization gate (tools/claudemd_sync_gate.py).
+  # Ensures that domain code changes are accompanied by CLAUDE.md updates
+  # in the same commit. Catches drift where code is added without doc updates.
+  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local gate_script="$aesop_root/tools/claudemd_sync_gate.py"
+
+  if [ ! -f "$gate_script" ]; then
+    log_event "claudemd_sync_gate_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; CLAUDE.md sync gate skipped\n' >&2
+    log_event "claudemd_sync_gate_skipped_no_python"
+    return 0
+  fi
+
+  local gate_output
+  gate_output=$("$py_bin" "$gate_script" 2>&1)
+  local gate_exit_code=$?
+
+  if [ $gate_exit_code -ne 0 ]; then
+    if [ -n "$gate_output" ]; then
+      printf '%s\n' "$gate_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
+check_verify_test_suite_count() {
+  # Test suite count verification gate (tools/verify_test_suite_count.py).
+  # Ensures that test suite counts in stats.json remain consistent.
+  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local verify_script="$aesop_root/tools/verify_test_suite_count.py"
+
+  if [ ! -f "$verify_script" ]; then
+    log_event "verify_test_suite_count_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; test suite count gate skipped\n' >&2
+    log_event "verify_test_suite_count_skipped_no_python"
+    return 0
+  fi
+
+  local verify_output
+  verify_output=$("$py_bin" "$verify_script" 2>&1)
+  local verify_exit_code=$?
+
+  if [ $verify_exit_code -ne 0 ]; then
+    if [ -n "$verify_output" ]; then
+      printf '%s\n' "$verify_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
+check_claudemd_lint() {
+  # CLAUDE.md linting gate (tools/claudemd_lint.py).
+  # Verifies CLAUDE.md files adhere to domain-specific rules and contracts.
+  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local lint_script="$aesop_root/tools/claudemd_lint.py"
+
+  if [ ! -f "$lint_script" ]; then
+    log_event "claudemd_lint_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; CLAUDE.md lint gate skipped\n' >&2
+    log_event "claudemd_lint_skipped_no_python"
+    return 0
+  fi
+
+  local lint_output
+  lint_output=$("$py_bin" "$lint_script" 2>&1)
+  local lint_exit_code=$?
+
+  if [ $lint_exit_code -ne 0 ]; then
+    if [ -n "$lint_output" ]; then
+      printf '%s\n' "$lint_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
 log_event() {
   # Finding 1 & 2: Acquire lock before read-modify-append, add seq field, update sidecar
   local event_type="$1"
@@ -1238,6 +1335,24 @@ main() {
   if ! check_tracker_guard; then
     printf 'Error: Tracker zombie-resurrection gate failed. Push blocked.\n' >&2
     log_block "tracker_guard_failure"
+    exit 1
+  fi
+
+  if ! check_claudemd_sync_gate; then
+    printf 'Error: CLAUDE.md sync gate failed. Push blocked.\n' >&2
+    log_block "claudemd_sync_gate_failure"
+    exit 1
+  fi
+
+  if ! check_verify_test_suite_count; then
+    printf 'Error: Test suite count verification failed. Push blocked.\n' >&2
+    log_block "verify_test_suite_count_failure"
+    exit 1
+  fi
+
+  if ! check_claudemd_lint; then
+    printf 'Error: CLAUDE.md linting failed. Push blocked.\n' >&2
+    log_block "claudemd_lint_failure"
     exit 1
   fi
 

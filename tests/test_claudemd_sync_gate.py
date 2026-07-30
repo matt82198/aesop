@@ -353,6 +353,76 @@ class TestClaudeMdSyncGate(unittest.TestCase):
             # Should exit 0 (CLAUDE.md-only changes are OK)
             self.assertEqual(result.returncode, 0, f"stdout: {result.stdout}\nstderr: {result.stderr}")
 
+    def test_multicommit_claudemd_then_code_fails(self):
+        """Multi-commit: commit 1 touches CLAUDE.md, commit 2 adds code without doc update should FAIL.
+
+        This is the regression test for the commit-scope bug where the gate only checked
+        if CLAUDE.md was touched ANYWHERE on the branch, not if the specific code change
+        was accompanied by a doc update.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            bare_repo = tmpdir_path / "origin.git"
+            bare_repo.mkdir(exist_ok=True)
+
+            # Create bare repo to act as origin
+            subprocess.run(["git", "init", "--bare"], cwd=bare_repo, capture_output=True)
+
+            # Initialize working repo
+            subprocess.run(["git", "init"], cwd=tmpdir_path, capture_output=True)
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"],
+                cwd=tmpdir_path,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test User"],
+                cwd=tmpdir_path,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "remote", "add", "origin", str(bare_repo)],
+                cwd=tmpdir_path,
+                capture_output=True,
+            )
+
+            # Create initial commit on main with domain structure
+            tools_dir = tmpdir_path / "tools"
+            tools_dir.mkdir()
+            (tools_dir / "CLAUDE.md").write_text("# Tools domain")
+            (tools_dir / "example.py").write_text("print('hello')")
+            subprocess.run(["git", "add", "tools/"], cwd=tmpdir_path, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "Initial"], cwd=tmpdir_path, capture_output=True)
+            subprocess.run(["git", "branch", "-M", "main"], cwd=tmpdir_path, capture_output=True)
+            subprocess.run(["git", "push", "-u", "origin", "main"], cwd=tmpdir_path, capture_output=True)
+
+            # Create feature branch
+            subprocess.run(["git", "checkout", "-b", "feature/test"], cwd=tmpdir_path, capture_output=True)
+
+            # Commit 1: Update CLAUDE.md only
+            (tools_dir / "CLAUDE.md").write_text("# Tools domain\n## Updated")
+            subprocess.run(["git", "add", "tools/CLAUDE.md"], cwd=tmpdir_path, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "Update docs"], cwd=tmpdir_path, capture_output=True)
+
+            # Commit 2: Add new code WITHOUT updating CLAUDE.md
+            (tools_dir / "new_tool.py").write_text("# New tool\nprint('world')")
+            subprocess.run(["git", "add", "tools/new_tool.py"], cwd=tmpdir_path, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "Add new tool"], cwd=tmpdir_path, capture_output=True)
+
+            # Run gate - should FAIL because commit 2 has code without doc update
+            result = subprocess.run(
+                [sys.executable, "tools/claudemd_sync_gate.py", "--root", str(tmpdir_path)],
+                capture_output=True,
+                text=True,
+                cwd=Path(__file__).parent.parent,
+            )
+
+            # Should exit 1 (drift found)
+            self.assertEqual(result.returncode, 1,
+                           f"Gate should FAIL when code commit lacks doc update. stdout: {result.stdout}\nstderr: {result.stderr}")
+            self.assertIn("DRIFT", result.stdout)
+            self.assertIn("new_tool.py", result.stdout)
+
     def test_json_output_format(self):
         """JSON output should have correct structure."""
         with tempfile.TemporaryDirectory() as tmpdir:
