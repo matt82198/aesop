@@ -89,6 +89,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `tracker_autoclose.py` — Tracker zombie-prevention auto-close gate (guardrail G1): closes items whose linked PRs merged or whose ownsFiles shipped on main; CLI: `[--check | --dry-run]`; exit 0=all resolved, 1=items still open; timezone-aware UTC timestamps
 - `tracker_guard.py` — Append-only lane journal + zombie-resurrection fail-closed gate; prevents items in terminal lanes (done/rejected) from re-entering active lanes (ranked/proposed/in-progress/accepted); modes: --seed (bootstrap journal), --check (detect violations, exit 1 if found, default), --enforce (revert zombies to terminal lane); CLI: `tracker_guard.py [--seed | --check | --enforce]`; journaled in state/tracker-journal.jsonl with rotation at 5000 lines
 - `transcript_digest.py` — Digest agent-*.jsonl transcripts into compact redacted per-agent briefs (state/ledger/transcripts-brief.jsonl; deterministic, idempotent, strips paths/emails/tokens)
+- `file_size_lint.py` — Python file size linter: warns on .py exceeding line/byte thresholds; `# filesize-ok` + ALLOWED_OVERSIZE suppression; CLI: `[--check] [--json] [--max-lines N] [--max-bytes N] [--paths DIR...] [--root DIR]`; exit 0/1/2; stdlib-only
 - `claudemd_lint.py` — Lint the domain CLAUDE.md layer: doc-pointers resolve, cited npm scripts exist, runtime/state artifacts not flagged, domain cross-refs prohibited; 4 checks: DOC-POINTER, TEST-CMD, DOMAIN-CROSS-REF (domain CLAUDE.md must not reference other domain CLAUDE.md with directives; parent-child refs allowed), line-count; --json; root CLAUDE.md exempt from cross-ref check
 - `claudemd_sync_gate.py` — CLAUDE.md synchronization gate (Guardrail G5): for each domain directory with code changes, verifies the corresponding domain/CLAUDE.md was also modified in the same PR; exempts: test-only changes, docs-only, meta files (stats.json, README.md, CHANGELOG.md, package.json, .nvmrc), .github/ (CI), CLAUDE.md-only changes; CLI: `--check` (default, fail-closed) | `--json` | `--base-ref` [BRANCH] (default main); exit 0=synced, 1=drift, 2=error
 - `audit_report.py` — Deterministic markdown audit report aggregator (defect_escape, mutation results, lint/drift findings, ledger verdict rates); --out/--strict/--json inputs from machine outputs only
@@ -137,7 +138,6 @@ Exit: 0=clean, 1=findings, 2=error. Pragma escape (pattern findings only; filena
 ## agent-forensics.sh — Behavior forensics
 
 CLI: `bash tools/agent-forensics.sh <commit>` (print snapshot) | `--diff <commitA> <commitB>` (diff rules/docs)
-
 ## Test commands
 
 - **Python**: `npm run test:py` (= `python -m unittest discover -s tests`); a single module: `python -m unittest tests.test_<name>` (tests live in tests/, not tools/; the repo uses unittest, not pytest)
