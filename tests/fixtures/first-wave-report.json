@@ -1,0 +1,68 @@
+{
+  "tokens": {
+    "buildOut": 100,
+    "verifyOut": 0,
+    "repairOut": 0,
+    "totalOut": 100
+  },
+  "integration": {
+    "green": true
+  },
+  "repairsUsed": 0,
+  "built": [
+    {
+      "slug": "fix-auth-bug",
+      "dispatched": true,
+      "verified": true,
+      "testExit": 0,
+      "repairs": 0,
+      "error": null,
+      "filesWritten": [
+        "auth.py"
+      ],
+      "workerId": "worker-1",
+      "testStdout": "OK",
+      "testStderr": "",
+      "adversarial_review": "deferred"
+    },
+    {
+      "slug": "add-validation",
+      "dispatched": true,
+      "verified": true,
+      "testExit": 0,
+      "repairs": 0,
+      "error": null,
+      "filesWritten": [
+        "validation.py"
+      ],
+      "workerId": "worker-3",
+      "testStdout": "OK",
+      "testStderr": "",
+      "adversarial_review": "deferred"
+    },
+    {
+      "slug": "refactor-db",
+      "dispatched": true,
+      "verified": true,
+      "testExit": 0,
+      "repairs": 0,
+      "error": null,
+      "filesWritten": [
+        "database.py"
+      ],
+      "workerId": "worker-2",
+      "testStdout": "OK",
+      "testStderr": "",
+      "adversarial_review": "deferred"
+    }
+  ],
+  "preflight_ok": true,
+  "aborted": false,
+  "metadata": {
+    "test_name": "test_wave_e2e_first_wave",
+    "description": "First-wave e2e proof: 3-item manifest runs to green",
+    "timestamp": "2026-07-29T00:00:00Z",
+    "fixture_repo": "fixture-repo (git)",
+    "driver": "FakeDriver (Tier 2)"
+  }
+}
