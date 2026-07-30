@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from 'react';
 import { fetchApi } from '../lib/api';
-import type { BenchResult, BenchComparison } from '../lib/types';
+import type { BenchResult } from '../lib/types';
 import { formatTimestamp } from '../lib/format';
 import './BenchmarkPanel.css';
 
