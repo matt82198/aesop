@@ -160,7 +160,7 @@ Usage:
 Commands:
   doctor                  Preflight readiness check (Node.js, Python, git, config, dirs, hook, port)
   watch                   Launch the watchdog daemon (spawns daemons/run-watchdog.sh)
-  dash                    Launch the web dashboard (spawns python3 ui/serve.py or python fallback)
+  dash                    Launch the web dashboard (spawns python3 ui/serve.py or python fallback; add --demo for a seeded zero-key snapshot)
   status                  One-shot fleet status snapshot (heartbeats, dashboard port, git branch)
   fleet                   One-shot fleet snapshot (agents, heartbeats, tracker lanes, orchestrator status)
   reproduce               Offline verification suite (repo: full test suite; installed: self-checks)
@@ -182,6 +182,7 @@ Examples:
   npx @matt82198/aesop doctor                               # Run preflight checks before starting
   npx @matt82198/aesop watch                                # Launch watchdog daemon
   npx @matt82198/aesop dash                                 # Launch web dashboard (default localhost:8770)
+  npx @matt82198/aesop dash --demo                          # Launch dashboard with a seeded zero-key demo snapshot (no API key)
   npx @matt82198/aesop status                               # Show fleet status (heartbeats, port, git)
   npx @matt82198/aesop fleet                                # Show fleet snapshot (JSON agents, heartbeats, tracker, orchestrator)
   npx @matt82198/aesop reproduce                            # Run offline verification suite (full repo tests or installed checks)

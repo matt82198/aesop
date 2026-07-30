@@ -67,7 +67,12 @@ function loadConfig() {
       }
     }
 
-    console.log(`Launching aesop dashboard on http://localhost:${port}\n`);
+    // Zero-key demo mode: `aesop dash --demo` serves a seeded, self-identifying
+    // fleet snapshot so a fresh scaffold isn't a dead shell. Passed straight
+    // through to ui/serve.py, which owns the flag.
+    const demoMode = process.argv.includes('--demo');
+
+    console.log(`Launching aesop dashboard on http://localhost:${port}${demoMode ? ' (DEMO DATA)' : ''}\n`);
 
     // Resolve Python interpreter
     const pythonExe = resolvePythonInterpreter();
@@ -79,7 +84,8 @@ function loadConfig() {
     }
 
     // Spawn the dashboard script with PORT env var set
-    const proc = spawn(pythonExe, [dashScript], {
+    const serveArgs = demoMode ? [dashScript, '--demo'] : [dashScript];
+    const proc = spawn(pythonExe, serveArgs, {
       cwd: CURRENT_DIR,
       stdio: 'inherit',
       env: { ...process.env, PORT: port.toString() },

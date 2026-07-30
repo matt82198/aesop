@@ -208,6 +208,13 @@ def get_wave_prs(force=False):
 
     Cached for _CACHE_TTL_SECONDS so rapid polls don't re-run gh. Never raises.
     """
+    # Zero-key demo mode: gh is never invoked; serve the fabricated PR board
+    # (now-relative timestamps) so strangers see a populated board. No-op in
+    # default mode.
+    import demo
+    if demo.enabled():
+        return demo.get_demo_wave_prs()
+
     now = time.time()
     if not force and _cache["payload"] is not None and now < _cache["expires"]:
         return _cache["payload"]
