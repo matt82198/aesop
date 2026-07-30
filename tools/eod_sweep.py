@@ -19,7 +19,8 @@ Usage: eod_sweep.py [--repos PATHS] [--readonly-repos PATHS] [--fix-push]
   --repos: Colon-separated paths to scan (default: empty; use env var or flag to specify)
   --readonly-repos: Colon-separated paths that should NOT be auto-pushed
   --fix-push: Auto-push unpushed commits in repos where safe
-  --buildlog: Path to BUILDLOG.md (default: AESOP_STATE_ROOT/BUILDLOG.md or ./state/BUILDLOG.md)
+  --buildlog: Path to BUILDLOG.md (default: AESOP_STATE_ROOT/BUILDLOG.md or ./state/BUILDLOG.md);
+              the filename must be BUILDLOG.md (WriteAPI owns the canonical name)
   --timestamp: Timestamp for BUILDLOG entry (format: YYYY-MM-DD HH:MM; omit to exclude timestamp)
 """
 
@@ -27,15 +28,19 @@ import json
 import os
 import subprocess
 import sys
-import os
 from pathlib import Path
 from datetime import datetime
-import time
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 try:
     from common import get_state_dir
 except ImportError:
     from tools.common import get_state_dir
+
+from state_store.write_api import WriteAPI, WriteConflict
 
 
 class Finding:
@@ -235,30 +240,31 @@ def run_secret_scan(repo_path):
 
 
 def append_to_buildlog(buildlog_path, verdict_line, timestamp_str=None):
-    """Append verdict to BUILDLOG.md (append-only).
+    """Append verdict to BUILDLOG.md via the WriteAPI facade (unified write path).
+
+    The facade writes the file atomically (with OCC + file locking, replacing
+    the old manual retry loop) and mirrors the entry as a buildlog_entry event
+    in the event store, so markdown and SQLite state can never drift.
 
     Args:
-        buildlog_path: Path to BUILDLOG.md file.
+        buildlog_path: Path to the BUILDLOG.md file. The filename MUST be
+                       BUILDLOG.md — the facade owns the canonical name; any
+                       other name is refused (fail-closed, never silently
+                       redirected).
         verdict_line: The verdict line to append (e.g., "EOD-SWEEP: SAFE").
         timestamp_str: Optional timestamp string (format: YYYY-MM-DD HH:MM).
                       If None, timestamp is omitted from the entry.
 
     Raises:
-        OSError: If file operations fail (permission denied, locked file, etc.).
+        OSError: If the path is not named BUILDLOG.md or the facade write fails.
     """
-    try:
-        buildlog_path.parent.mkdir(parents=True, exist_ok=True)
-    except OSError as e:
-        # Parent directory creation failed; re-raise with context
-        raise OSError(f"Failed to create parent directory for BUILDLOG: {e}") from e
-
-    # Create header if file doesn't exist
-    try:
-        if not buildlog_path.exists():
-            buildlog_path.write_text("# Build Log (append-only)\n")
-    except OSError as e:
-        # File creation failed; re-raise with context
-        raise OSError(f"Failed to create BUILDLOG file: {e}") from e
+    buildlog_path = Path(buildlog_path)
+    if buildlog_path.name != "BUILDLOG.md":
+        raise OSError(
+            f"--buildlog must point at a file named BUILDLOG.md (got "
+            f"{buildlog_path.name!r}); the unified write path (WriteAPI) "
+            f"owns the canonical name"
+        )
 
     # Build entry line with optional timestamp
     if timestamp_str:
@@ -266,23 +272,13 @@ def append_to_buildlog(buildlog_path, verdict_line, timestamp_str=None):
     else:
         entry_line = f"### {verdict_line}"
 
-    # Append to BUILDLOG with retry logic for Windows file locking
-    max_retries = 3
-    retry_delay = 0.1  # seconds
-    last_error = None
-
-    for attempt in range(max_retries):
-        try:
-            with open(buildlog_path, "a", encoding="utf-8") as f:
-                f.write(entry_line + "\n")
-            return
-        except OSError as e:
-            last_error = e
-            if attempt < max_retries - 1:
-                time.sleep(retry_delay)
-
-    # All retries failed
-    raise OSError(f"Failed to append to BUILDLOG after {max_retries} attempts: {last_error}") from last_error
+    try:
+        api = WriteAPI(buildlog_path.parent)  # creates parent dirs if missing
+        api.ensure_buildlog_exists(header="# Build Log (append-only)\n")
+        api.append_buildlog(entry_line, actor="eod-sweep")
+    except WriteConflict as e:
+        # Preserve this function's OSError contract for callers
+        raise OSError(f"Failed to append to BUILDLOG via WriteAPI: {e}") from e
 
 
 def main():
