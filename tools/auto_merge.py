@@ -129,14 +129,15 @@ def fix_branch(branch):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dry-run', action='store_true')
-    parser.add_argument('--fix', action='store_true',
-                        help='Fix non-green branches by merging main')
+    parser.add_argument('--no-fix', action='store_true',
+                        help='Skip fixing non-green branches (default: fix is ON)')
     parser.add_argument('--loop', action='store_true',
                         help='Loop: fix → wait → merge until done (max 3 rounds)')
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--wait', type=int, default=180,
                         help='Seconds to wait for CI between loop rounds (default 180)')
     args = parser.parse_args()
+    args.fix = not args.no_fix
 
     max_rounds = 3 if args.loop else 1
     all_results = []
