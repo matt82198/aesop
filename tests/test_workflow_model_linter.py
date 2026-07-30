@@ -21,7 +21,7 @@ class TestWorkflowModelLinter(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def run_linter(self, args: List[str]) -> Tuple[int, str, str]:
+    def run_linter(self, args):
         """Run the linter CLI and return (exit_code, stdout, stderr)."""
         cmd = [sys.executable, 'tools/workflow_model_linter.py'] + args
         result = subprocess.run(
