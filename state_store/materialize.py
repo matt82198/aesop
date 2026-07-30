@@ -46,25 +46,31 @@ def materialize_tracker(tracker_projection: dict) -> bytes:
 
 
 def materialize_orchestrator_status(orch_projection: dict | None) -> bytes:
-    """Render orchestrator-status projection to JSON bytes (stub for Inc 2).
+    """Render orchestrator-status projection to JSON bytes (deterministic, idempotent).
+
+    Converts the orchestrator_status projection (from api.project("orchestrator_status"))
+    to JSON with consistent formatting. The view is byte-compatible with the current
+    orchestrator-status.json shape: {"id", "role", "activity", "phase", "updated_at"}.
 
     Args:
         orch_projection: dict from api.project("orchestrator_status"), or None
 
     Returns:
-        bytes: JSON representation (stub for now)
+        bytes: JSON representation with indent=2, newline-terminated
     """
     if orch_projection is None:
         orch_projection = {}
 
-    # Stub: return minimal valid JSON for now
-    stub = {
-        "phase": orch_projection.get("phase", "unknown"),
-        "activity": orch_projection.get("activity", None),
-        "timestamp": orch_projection.get("timestamp", None),
+    # Ensure required fields exist (with defaults matching the projector)
+    view = {
+        "id": orch_projection.get("id", "main"),
+        "role": orch_projection.get("role", "orchestrator"),
+        "activity": orch_projection.get("activity"),
+        "phase": orch_projection.get("phase"),
+        "updated_at": orch_projection.get("updated_at"),
     }
 
-    return json.dumps(stub, indent=2).encode("utf-8") + b"\n"
+    return json.dumps(view, indent=2).encode("utf-8") + b"\n"
 
 
 def materialize_state_md(api, state_dir: Path | str) -> bytes:

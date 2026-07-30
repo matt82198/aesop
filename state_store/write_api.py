@@ -453,6 +453,101 @@ class WriteAPI:
         # Bypass OCC check with force=True (recovery always bypasses conflict detection)
         self._render_tracker_atomic(store, start_disk_hash=None, force=True)
 
+    # --- Orchestrator status write path (Inc 2) ---
+
+    def set_orchestrator_status(
+        self,
+        activity: str | None = None,
+        phase: str | None = None,
+        id: str = "main",
+        role: str = "orchestrator",
+        actor: str = "api",
+    ) -> dict:
+        """Set orchestrator status (activity, phase) in the event store.
+
+        Appends phase_changed and/or activity_changed events to the orchestrator_status stream,
+        then materializes orchestrator-status.json atomically. Fail-closed: event append
+        failure blocks projection write.
+
+        Args:
+            activity: Activity description (optional, e.g., "dispatching wave-8")
+            phase: Phase name (optional, e.g., "execute", "audit")
+            id: Orchestrator ID (default "main")
+            role: Orchestrator role (default "orchestrator")
+            actor: Actor performing the set (default "api")
+
+        Returns:
+            dict: The updated orchestrator status projection
+
+        Raises:
+            ValueError: If event append fails
+            WriteConflict: If projection write fails due to concurrent modification
+        """
+        from datetime import datetime, timezone
+
+        store = self._make_store()
+        now_iso = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        # Append phase_changed event if phase is provided
+        if phase is not None:
+            try:
+                store.append(
+                    "orchestrator_status",
+                    "phase_changed",
+                    {"phase": phase, "timestamp": now_iso, "actor": actor},
+                    actor,
+                )
+            except Exception as e:
+                raise ValueError(f"Failed to append phase_changed event: {e}") from e
+
+        # Append activity_changed event if activity is provided
+        if activity is not None:
+            try:
+                store.append(
+                    "orchestrator_status",
+                    "activity_changed",
+                    {"activity": activity, "timestamp": now_iso, "actor": actor},
+                    actor,
+                )
+            except Exception as e:
+                raise ValueError(f"Failed to append activity_changed event: {e}") from e
+
+        # Materialize the orchestrator-status.json view
+        self._render_orchestrator_status_atomic(store)
+
+        # Return the updated projection
+        return self._project_orchestrator_status(store)
+
+    def clear_orchestrator_status(self, actor: str = "api") -> None:
+        """Clear orchestrator status (set all fields to None).
+
+        Appends a status_cleared event to the orchestrator_status stream,
+        then materializes orchestrator-status.json atomically. Fail-closed:
+        event append failure blocks projection write.
+
+        Args:
+            actor: Actor performing the clear (default "api")
+
+        Raises:
+            ValueError: If event append fails
+            WriteConflict: If projection write fails due to concurrent modification
+        """
+        store = self._make_store()
+
+        # Append status_cleared event
+        try:
+            store.append(
+                "orchestrator_status",
+                "status_cleared",
+                {},
+                actor,
+            )
+        except Exception as e:
+            raise ValueError(f"Failed to append status_cleared event: {e}") from e
+
+        # Materialize the orchestrator-status.json view
+        self._render_orchestrator_status_atomic(store)
+
     # --- Markdown write-path unification (WS4 increment 1) ---
 
     def write_state_md(self, content: str, actor: str = "api") -> None:
@@ -696,6 +791,26 @@ class WriteAPI:
 
         events = store.read("tracker")
         return project_tracker(events)
+
+    def _project_orchestrator_status(self, store: EventStore) -> dict:
+        """Project the orchestrator status from the event log.
+
+        Reads all events from the "orchestrator_status" stream and folds them
+        into the current status using the standard projection rules.
+
+        Args:
+            store: EventStore instance to read events from
+
+        Returns:
+            dict: Orchestrator status projection ({"id", "role", "activity", "phase", "updated_at"})
+        """
+        try:
+            from state_store import project_orchestrator_status
+        except ImportError:
+            from state_store.projections import project_orchestrator_status
+
+        events = store.read("orchestrator_status")
+        return project_orchestrator_status(events)
 
     def _compute_content_hash(self, tracker_dict: dict) -> str:
         """Compute a stable SHA256 hash of the tracker content.
@@ -1001,3 +1116,53 @@ class WriteAPI:
                 actual_hash=None,
                 reason=f"Failed to write tracker.json atomically: {e}",
             ) from e
+
+    def _render_orchestrator_status_atomic(self, store: EventStore) -> None:
+        """Render the orchestrator-status.json projection atomically.
+
+        Projects the event log, writes to a temp file, then renames atomically.
+        Unlike tracker writes, orchestrator_status writes are not fail-closed
+        on view write failure (status updates are fire-and-forget).
+
+        Args:
+            store: EventStore instance to project from
+
+        Raises:
+            Exception: If write fails (logged but not raised to caller)
+        """
+        try:
+            from state_store import materialize_orchestrator_status
+        except ImportError:
+            from state_store.materialize import materialize_orchestrator_status
+
+        try:
+            # Project the current state
+            projection = self._project_orchestrator_status(store)
+            content = materialize_orchestrator_status(projection)
+
+            # Write atomically via tempfile + os.replace
+            status_file = self.state_dir / "orchestrator-status.json"
+            fd, temp_path = tempfile.mkstemp(
+                suffix=".json",
+                prefix=".orch-status-",
+                dir=str(self.state_dir),
+                text=False,
+            )
+            try:
+                os.write(fd, content)
+                os.close(fd)
+                os.replace(str(temp_path), str(status_file))
+            except Exception:
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass
+                try:
+                    os.unlink(temp_path)
+                except Exception:
+                    pass
+                raise
+        except Exception as e:
+            # Orchestrator status view write failures are logged but not raised
+            # (status updates are fire-and-forget; missing view is not fatal)
+            print(f"[WriteAPI] Warning: Failed to render orchestrator-status.json: {e}", file=sys.stderr)

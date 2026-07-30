@@ -100,10 +100,30 @@ Run from repo root:
 
 **Outcome**: Single canonical render path (materialize + WriteAPI), OCC-protected CRUD, deterministic views. Baseline delta: ~0-2 keys (this increment buys safety, not ratchet points).
 
+## Increment 2 (state consolidation, 2026-07-30) — `orchestrator_status` into the store
+
+**Inc 2 moves orchestrator_status into the event store:**
+- **projections.py** — `project_orchestrator_status(events)` folds `phase_changed`, `activity_changed`, `status_cleared`, and historical `meta`/`phase_set` events into byte-compatible orchestrator-status.json shape: `{id, role, activity, phase, updated_at}`.
+- **api.py** — registered `project_orchestrator_status` in `_PROJECTORS` dict (already exported by `__init__.py`).
+- **write_api.py** — `set_orchestrator_status(activity, phase, id, role)` and `clear_orchestrator_status()` append events first, then materialize the view atomically. Fail-closed: event append failure blocks projection write. Uses `_project_orchestrator_status()` and `_render_orchestrator_status_atomic()` helpers.
+- **read_api.py** — `read_orchestrator_status()` reads from projection first (if DB present), falls back to materialized file if DB absent. Preserves fail-open-to-None and future-timestamp-is-stale (`age < -120`) semantics.
+- **materialize.py** — `materialize_orchestrator_status(projection)` renders projection to bytes (indent=2, newline-terminated, deterministic).
+- **tools/orchestrator_status.py** — CLI delegates to WriteAPI (set/clear commands); stdout strings remain byte-identical for shell tests (`[OK] Status updated: ...` and `[OK] Status cleared`).
+- **tools/healthcheck.py** — routed `_check_orchestrator_status` → `_check_orchestrator_status_api` to use ReadAPI (projection-first with file fallback).
+
+**Event types** (appended to `orchestrator_status` stream):
+- `phase_changed`: payload `{phase, timestamp, actor}` (new, Inc 2)
+- `activity_changed`: payload `{activity, timestamp, actor}` (new, Inc 2)
+- `status_cleared`: payload `{}` (new, Inc 2)
+- `meta` / `phase_set`: payload `{phase}` (historical, from reconcile.py --resolve; folded forward)
+
+**Byte-compatibility**: The projection renders byte-identical to the current orchestrator-status.json shape. Views written by `materialize_orchestrator_status()` are deterministic and idempotent.
+
+**Baseline movement**: 2 keys retired (43 → 41). Materialization views (status-json, tracker-json, state-md-write) are legitimately appended to baseline (they write derived caches from projections).
+
 ## Next (cutover, follow-up — NOT this increment)
-**Phase 1 (early)**: Add `orchestrator_status` stream (orchestrator_status → `append("orchestrator_status", "phase_changed", ...)`, read from `project("orchestrator_status")` on recovery).
-**Phase 2 (middle)**: Tracker dual-read (StateAPI for CRUD, export job keeps `tracker.json` rendered).
-**Phase 3 (cutover complete)**: Flip all readers to API; remove git fallback.
-**Phase 4 (optional, contingent on team scale needs)**: Backend swap behind StateAPI (e.g. Postgres). Not scheduled; single-box SQLite is sufficient for current throughput (~100 ev/s real-world vs ~704 ev/s measured ceiling). See `docs/MULTI-INSTANCE-ROADMAP.md` for the decision tree.
+**Phase 1 (middle)**: Tracker dual-read (StateAPI for CRUD, export job keeps `tracker.json` rendered).
+**Phase 2 (cutover complete)**: Flip all readers to API; remove git fallback.
+**Phase 3 (optional, contingent on team scale needs)**: Backend swap behind StateAPI (e.g. Postgres). Not scheduled; single-box SQLite is sufficient for current throughput (~100 ev/s real-world vs ~704 ev/s measured ceiling). See `docs/MULTI-INSTANCE-ROADMAP.md` for the decision tree.
 
 Map of all domains: /CLAUDE.md
