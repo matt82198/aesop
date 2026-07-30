@@ -2,10 +2,10 @@
   "git": {
     "merged_prs": 568,
     "merged_prs_source": "gh-api",
-    "total_commits": 1617,
+    "total_commits": 1619,
     "project_age_days": 19,
     "wave_count": 31,
-    "insertions_deletions": 312175,
+    "insertions_deletions": 312214,
     "files_tracked": 999,
     "distinct_coauthors": 15,
     "authors_human": 1,
@@ -15,7 +15,7 @@
       "Haiku 4.5",
       "Opus 4.6",
       "Opus 4.8",
-      "Opus 5.0"
+      "Opus 5"
     ]
   },
   "telemetry": {
@@ -27,14 +27,14 @@
     "cumulative_tokens": null,
     "total_coding_hours": null
   },
-  "generated_at": "2026-07-30T23:22:47.640838+00:00",
-  "loc": 268225,
-  "head_sha": "92d9ff0eb801b21c6667435e34ee615dc98b36ad",
+  "generated_at": "2026-07-30T23:26:09.583317+00:00",
+  "loc": 268224,
+  "head_sha": "b296b15171995f84a7356b81f72141b177e35d82",
   "economics": {
     "token_ledger_available": false,
     "merged_prs": 568,
     "merged_prs_source": "gh-api",
-    "lines_of_code": 268225,
+    "lines_of_code": 268224,
     "wave_count": 31
   },
   "economics_caveats": {
