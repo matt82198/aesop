@@ -1,6 +1,6 @@
 # ui/ — Web dashboard (self-contained domain guide)
 
-**Purpose**: Local observability dashboard. Python backend serves a React+Vite frontend on a configurable port via Server-Sent Events (realtime updates), with CSRF + session protection and event-sourced state.
+**Purpose**: Local observability dashboard. Python backend serves a React+Vite frontend on a configurable port via Server-Sent Events (realtime updates), with CSRF + session protection and event-sourced state. All file I/O uses explicit `encoding="utf-8"`.
 
 ## Try it in 30 seconds (no API key)
 
@@ -64,6 +64,8 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **bench_panel.py**: Benchmark API routes (`/api/bench`, `/api/bench/compare`). Reads `bench_results_cache` at call time.
 
+**tooling_panel.py** — Tooling dashboard panel: `GET /api/tooling/summary` aggregates results from repo analysis tools (todo_tracker, test_coverage_gaps, dead_code_check, import_cycle_check, encoding_lint). Runs tools via subprocess, caches 60s, gracefully degrades to null for missing tools. `?force=1` bypasses cache.
+
 **api/__init__.py**, **api/tracker.py**, **api/submit.py**: Mutation handlers (tracker CRUD, inbox append).
 
 ## Frontend (React 18 + Vite + TypeScript)
@@ -77,6 +79,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
   - BenchmarkPanel: Results table (model/accuracy/tokens/latency/cost/timestamp) + model comparison cards; fetches `/api/bench` and `/api/bench/compare`; dark/light theme, responsive grid.
   - CostAnalyticsPanel (wave-29 UX): info-dense operator view with (a) spend per wave (bar chart), (b) model efficiency vs Opus counterfactual, (c) burn rate + end-of-wave projection with ceiling alert; graceful DATA-UNAVAILABLE states when ledger/ceiling missing.
   - FailureDrilldown: drawer showing CI job list + ~100-line log excerpts on expand; fetches `/api/wave/failure?pr=N`.
+  - ToolingPanel: compact card grid showing repo tooling health (TODO count, coverage, dead code, import cycles, encoding issues); fetches `/api/tooling/summary`; green/yellow/red severity coding; refresh button; responsive grid.
 - **lib/api.ts**: Typed fetch helpers + CSRF header injection + `/api/session` fallback for dev server.
 - **lib/useSSE.ts**: EventSource hook with reconnect logic, per-section state, connection status.
 - **lib/types.ts**: TypeScript types for all API payloads (backend contract).
@@ -86,129 +89,32 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **testids-in-fixtures pattern** (both Python + React): Test components with `data-testid` attributes. React tests use `getByTestId()` (via `@testing-library/react`). Python tests use fixtures to set testids for integration proofs.
 
-## API Routes (complete list)
+## API Routes
 
-**Read-only (no CSRF required)**:
-- `GET /` — Renders `ui/web/dist/index.html` with CSRF token (hard 500 if dist missing).
-- `GET /data` — Dashboard data snapshot. `GET /assets/*` — Static files (content-hashed, immutable cache, path-traversal-safe).
-- `GET /api/state` — First-paint snapshot: `{data, backlog, agents, tracker, status, cost}` in one round trip.
-- `GET /api/session` — Returns `{token}` for Vite dev server (Origin-checked fail-closed, local only).
-- `GET /api/cost` — Cost/scorecard from ledger. `GET /api/backlog` — Audit backlog by tier.
-- `GET /api/agents` — Fleet agent list. `GET /api/agent?id=<id>` — Agent detail (path-traversal-safe).
-- `GET /api/tracker` — Tracker items (optional `status`/`priority` filters).
-- `GET /api/state/events` — Time-travel query: `?stream=` `?type=` `?after=` `?before=` `?limit=` (max 500). Returns JSON array.
-- `GET /api/state/streams` — Aggregate: `{streams: [{name, count, latest_ts}]}`.
-- `GET /api/wave/prs` — PR board with CI rollup (cached ~5s; degrades `{available:false}`).
-- `GET /api/wave/telemetry` — Phase + blocker + cost metrics. `GET /api/wave/dispatch` — Per-agent phase visibility (polled 2-3s).
-- `GET /api/wave/failure?pr=N` — CI failure drill-down with log excerpts (cached ~5s).
-- `GET /api/bench` — Latest benchmark results from journal. `GET /api/bench/compare` — Model comparison data.
-- All `/api/wave/*` routes: read-only, call-time reads, polled not SSE; gh-backed honor `AESOP_GH_BIN`.
-- `GET /events` — SSE stream (6 sections, keepalive ~15s). `GET /favicon.ico` — 204.
+**Read-only**: `/` (HTML+CSRF), `/data`, `/assets/*`, `/api/state` (first-paint snapshot), `/api/session` (dev token), `/api/cost`, `/api/backlog`, `/api/agents`, `/api/agent?id=`, `/api/tracker` (?status/priority), `/api/state/events` (?stream/type/after/before/limit), `/api/state/streams`, `/api/wave/prs` (CI rollup, 5s cache), `/api/wave/telemetry`, `/api/wave/dispatch` (2-3s poll), `/api/wave/failure?pr=N`, `/api/bench`, `/api/bench/compare`, `/api/tooling/summary` (60s cache, ?force=1), `/events` (SSE, 6 sections, 15s keepalive), `/favicon.ico` (204). All `/api/wave/*` honor `AESOP_GH_BIN`.
 
-**Mutations (CSRF-gated)**:
-- `POST /submit` — Append to inbox (X-Aesop-Token + Origin/Referer validation, fail-closed).
-- `POST /api/tracker` — Create tracker item.
-- `POST /api/tracker/<id>` — Update/delete tracker item (query param: `action=update` or `action=delete`).
+**Mutations (CSRF-gated)**: `POST /submit` (inbox), `POST /api/tracker` (create), `POST /api/tracker/<id>` (?action=update|delete).
 
-## CSRF & Session Protection (Invariants)
+## CSRF & Session Protection
 
-- Token model: Per-session 43-char URL-safe base64 (256 bits), generated at startup, persisted to `state/.ui-session-token` (mode 0600). Persistent across server restarts; regenerated if missing.
-- Validation on `/submit POST`:
-  1. **Origin/Referer check**: if present, must be local (http://127.0.0.1:<port>, http://localhost:<port>, or http://[::1]:<port>).
-  2. **X-Aesop-Token header**: must match `SESSION_TOKEN` exactly.
-  - Both checks fail-closed (missing header = rejection).
-- Local CLI access: tools read token from `state/.ui-session-token` (0600) for `/submit`.
-- Browser clients: token injected into HTML template, sent by JavaScript via `api.ts` helpers.
+43-char URL-safe base64 token, persisted to `state/.ui-session-token` (0600), regenerated if missing. Mutations require Origin/Referer local check + X-Aesop-Token header match (both fail-closed). CLI reads token from file; browser gets it injected into HTML template.
 
-## SSE (Server-Sent Events) Contract
+## SSE Contract
 
-- Realtime streaming via `GET /events` (ThreadingHTTPServer required).
-- Streams JSON frames: `event: <section>` / `data: <json>` (one section per frame).
-- Keepalive comment-line (`: keepalive`) every ~15s (tunable: `SSE_KEEPALIVE_SECONDS`).
-- 6 Sections emitted (only on content change, in this order):
-  1. **data** — heartbeat, daemon state, log tail.
-  2. **backlog** — `AUDIT-BACKLOG.md` parsed into tiers (P0/P1/P2/Needs decision).
-  3. **agents** — fleet agent activity (from Claude transcripts directory).
-  4. **tracker** — tracker items (CRUD mutations reflected realtime).
-  5. **status** — orchestrator phase + activity.
-  6. **cost** — cost/scorecard summary.
-- Background collector thread: daemon polling heartbeats/logs (mtime/fingerprint gates), re-derives SSE sections only on input change, broadcasts only when content-hash differs. Started on first HTTP request via `start_collector_thread()`, single-instance guard `_collector_lock`, wakes every `COLLECTOR_INTERVAL` (default 1.0s, env override: `AESOP_UI_COLLECT_INTERVAL`).
-- If collector thread crashes, server continues serving; realtime updates stop but dashboard remains accessible (fail-open).
+Realtime via `GET /events` (ThreadingHTTPServer required). 6 sections (data/backlog/agents/tracker/status/cost) emitted on content-hash change. Keepalive ~15s. Background collector thread polls every `COLLECTOR_INTERVAL` (1s default), mtime-gated, fail-open on crash.
 
-## State Store Integration (Wave-15)
+## State Store Integration
 
-**Dual-path mutation model** backed by event-sourced SQLite WAL:
-- **Write path**: Mutations append events to `tracker_events.db` (WAL mode) via StateAPI layer (`state_store/api.py`). Each mutation (create/update/delete) produces immutable event.
-- **Read path**: `tracker.json` re-rendered as export (projection) from event log on every read. Export committed to git for checkpoint durability.
-- **Location**: `state/tracker_events.db` (SQLite WAL, never committed). `tracker.json` (rendered export, committed).
-- **Render-failure recovery**: If projection rendering fails, UI falls back to last-known good `tracker.json`; no data loss. Stale renders repaired on next successful mutation (idempotent re-render).
+Dual-path: write via event-sourced SQLite WAL (`state/tracker_events.db`), read via `tracker.json` projection (committed to git). Render-failure recovery: falls back to last-known good export.
 
-## Configuration & Path Precedence
+## Configuration
 
-Environment variables override config file, which overrides built-in defaults:
-1. **Environment variables** (highest priority):
-   - `PORT` — HTTP server port (default: 8770).
-   - `AESOP_ROOT` — aesop installation root (default: `$HOME/aesop`).
-   - `AESOP_STATE_ROOT` — state directory (overrides config `state_root`).
-   - `AESOP_TRANSCRIPTS_ROOT` — Claude transcript directory (overrides config `transcripts_root`).
-   - `AESOP_UI_COLLECT_INTERVAL` — collector thread poll cadence in seconds (default: 1.0).
-   - `AESOP_GH_BIN` — gh CLI binary path (default: `gh` on PATH).
-   - `AESOP_AUDIT_BACKLOG` — override `AUDIT-BACKLOG.md` path (default: `AESOP_ROOT/AUDIT-BACKLOG.md`); used by demo mode.
-   - `AESOP_DEMO` / `AESOP_DEMO_ROOT` — demo mode toggle + optional fixed demo root (see demo.py; normally set by the `--demo` flag).
+Precedence: env vars > `aesop.config.json` > built-in defaults. Key env vars: `PORT` (8770), `AESOP_ROOT`, `AESOP_STATE_ROOT`, `AESOP_TRANSCRIPTS_ROOT`, `AESOP_UI_COLLECT_INTERVAL` (1.0s), `AESOP_GH_BIN`, `AESOP_AUDIT_BACKLOG`, `AESOP_DEMO`/`AESOP_DEMO_ROOT`. Config keys: `state_root`, `transcripts_root`, `aesop_root`, `pricing`.
 
-2. **Config file** (`aesop.config.json`):
-   - `state_root` — path to state/ directory.
-   - `transcripts_root` — path to Claude transcript directory.
-   - `aesop_root` — override derived AESOP_ROOT (tier 3).
-   - `pricing` — optional {model: cost_per_mtok} map for dollar estimates.
+## Build & Test
 
-3. **Built-in defaults** (lowest priority):
-   - `AESOP_ROOT/state` for state directory.
-   - `~/.claude/projects` for transcripts.
+`cd ui/web && npm run build` before serving (dist always required, no fallback). Dev: `npm run dev` (Vite proxies API to :8770). Python tests: `python -m unittest discover -s tests`. React: `cd ui/web && npm test`. Playwright: `npx playwright test`.
 
-## Build & Deployment (Wave-14 U9 rule)
+## Invariants
 
-**dist/ rebuild**: React app must be built (`cd ui/web && npm run build`) BEFORE dist is served. Wave-14 cutover: `ui/web/dist/index.html` is **always required** (no fallback to legacy template). **Orchestrator tail (last agent in fleet) rebuilds dist on every wave close** (before merge to main) so main is always deployable. Dev workflow: run `npm run dev` from `ui/web/` to use Vite dev server (vite.config.ts proxies `/api`, `/events`, `/submit` to :8770).
-
-## Test Commands
-
-**Python backend** (pytest via unittest):
-```bash
-# All UI tests
-python -m unittest discover -s tests
-
-# Specific suite
-python -m unittest tests.test_ui_config -v
-python -m unittest tests.test_ui_handlers -v
-python -m unittest tests.test_wave13_ui_correctness -v
-python -m unittest tests.test_ui_collectors -v
-python -m unittest tests.test_ui_cost -v
-python -m unittest tests.test_ui_hardening -v
-```
-
-**React frontend** (vitest + jsdom):
-```bash
-cd ui/web
-npm test
-# Or filtered: npx vitest run src/components/TrackerBoard.test.tsx
-```
-
-**Integration/browser tests** (playwright, if available):
-```bash
-# From repo root (requires playwright install: npm install @playwright/test)
-npx playwright test
-# Run one test: npx playwright test tests/ui-integration.spec.ts
-# Headed mode (debug): npx playwright test --headed
-```
-
-**Full suite**: `npm run test:py && npm run test:node && npm run test:all`
-
-## Invariants & Gotchas
-
-- **Stdlib-only backend**: `http.server`, `json`, `subprocess`, `threading`. ThreadingHTTPServer required (SSE = 1 thread/client).
-- **Collector fail-open**, **Token** (0600 / ACL; regenerated if missing), **Config** (`import config; config.X`, never `from config import X`), **Dist always required** (hard 500 if missing).
-
-## Dropped
-- Wave-14 rewrite plan, legacy template (wave-9), MCP/state_store internals (own domains).
-
-Map of all domains: /CLAUDE.md
+Stdlib-only backend (ThreadingHTTPServer for SSE). Collector fail-open. Config: `import config; config.X` (never `from config import X`). Dist always required (hard 500 if missing). Map of all domains: /CLAUDE.md

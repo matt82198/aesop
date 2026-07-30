@@ -10,26 +10,6 @@
 # tools/halt.py), every cycle logs "HALTED: <reason>" and skips all work — no
 # backup, no push, no scan — until cleared via `python tools/halt.py --clear`.
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AESOP_ROOT="${AESOP_ROOT:-$(dirname "$SCRIPT_DIR")}"
-MODE="${1:-daemon}"
-LOCK_DIR="$AESOP_ROOT/state/.watchdog-lock"
-LOCK_STALE_THRESHOLD=300
-HALT_SENTINEL="$AESOP_ROOT/state/.HALT"
-
-# Resolve Python interpreter (portable: prefer python3, fallback to python)
-PYTHON_EXE=""
-if command -v python3 >/dev/null 2>&1; then
-  PYTHON_EXE="python3"
-elif command -v python >/dev/null 2>&1; then
-  PYTHON_EXE="python"
-fi
-
-# Resolve conductor3 directory (sibling of AESOP_ROOT); env var override for portability
-CONDUCTOR_ROOT="${CONDUCTOR_ROOT:-$(dirname "$AESOP_ROOT")/conductor3}"
-MONITOR_HB_FILE="$CONDUCTOR_ROOT/monitor/.monitor-heartbeat"
-MONITOR_HB_STALE_THRESHOLD=600
-
 # Atomic lock acquire: mkdir is atomic (POSIX guarantees)
 # Returns 0 if lock acquired, 1 if held by another process, 2 if stale lock reclaimed
 acquire_lock() {
@@ -294,5 +274,25 @@ main() {
 # not when it is sourced (e.g. `source run-watchdog.sh` in a test harness to
 # reuse acquire_lock/release_lock/check_halt without triggering a cycle).
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  AESOP_ROOT="${AESOP_ROOT:-$(dirname "$SCRIPT_DIR")}"
+  MODE="${1:-daemon}"
+  LOCK_DIR="$AESOP_ROOT/state/.watchdog-lock"
+  LOCK_STALE_THRESHOLD=300
+  HALT_SENTINEL="$AESOP_ROOT/state/.HALT"
+
+  # Resolve Python interpreter (portable: prefer python3, fallback to python)
+  PYTHON_EXE=""
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON_EXE="python3"
+  elif command -v python >/dev/null 2>&1; then
+    PYTHON_EXE="python"
+  fi
+
+  # Resolve conductor3 directory (sibling of AESOP_ROOT); env var override for portability
+  CONDUCTOR_ROOT="${CONDUCTOR_ROOT:-$(dirname "$AESOP_ROOT")/conductor3}"
+  MONITOR_HB_FILE="$CONDUCTOR_ROOT/monitor/.monitor-heartbeat"
+  MONITOR_HB_STALE_THRESHOLD=600
+
   main "$@"
 fi

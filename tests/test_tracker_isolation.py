@@ -85,7 +85,7 @@ class TestTrackerIsolation(TrackerIsolationCase):
         # Assert the item was written to the isolated tracker.json
         isolated_tracker = self.state_dir / "tracker.json"
         self.assertTrue(isolated_tracker.exists(), "Item should be written to isolated tracker.json")
-        with open(isolated_tracker) as f:
+        with open(isolated_tracker, encoding='utf-8') as f:
             tracked = json.load(f)
         self.assertEqual(len(tracked["items"]), 1, "Exactly one item should exist in isolated tracker")
         self.assertEqual(tracked["items"][0]["title"], "Isolation Test Item")
@@ -157,14 +157,14 @@ class TestTrackerIsolation(TrackerIsolationCase):
         # Verify all were written to isolated tracker
         isolated_tracker = self.state_dir / "tracker.json"
         self.assertTrue(isolated_tracker.exists())
-        with open(isolated_tracker) as f:
+        with open(isolated_tracker, encoding='utf-8') as f:
             tracked = json.load(f)
         self.assertEqual(len(tracked["items"]), 3, "All three items should be in isolated tracker")
 
         # Verify they don't exist in real repo
         real_tracker = Path.home() / "aesop" / "state" / "tracker.json"
         if real_tracker.exists():
-            with open(real_tracker) as f:
+            with open(real_tracker, encoding='utf-8') as f:
                 real_tracked = json.load(f)
             titles_in_real = [t.get("title") for t in real_tracked.get("items", [])]
             for item in items:
@@ -200,7 +200,7 @@ class TestTrackerIsolation(TrackerIsolationCase):
             # Verify it went to temp_state only
             temp_tracker = temp_state / "tracker.json"
             self.assertTrue(temp_tracker.exists())
-            with open(temp_tracker) as f:
+            with open(temp_tracker, encoding='utf-8') as f:
                 tracked = json.load(f)
             self.assertEqual(len(tracked["items"]), 1)
             self.assertEqual(tracked["items"][0]["title"], "verify_dash simulated item")
@@ -208,7 +208,7 @@ class TestTrackerIsolation(TrackerIsolationCase):
             # Verify it didn't touch the real repo
             real_tracker = Path.home() / "aesop" / "state" / "tracker.json"
             if real_tracker.exists():
-                with open(real_tracker) as f:
+                with open(real_tracker, encoding='utf-8') as f:
                     real_tracked = json.load(f)
                 real_titles = [t.get("title") for t in real_tracked.get("items", [])]
                 self.assertNotIn("verify_dash simulated item", real_titles)

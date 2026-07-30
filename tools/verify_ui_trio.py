@@ -63,7 +63,7 @@ FIXTURES_PATH = Path(__file__).parent / 'verify_ui_trio_fixtures.json'
 def load_fixtures() -> Dict[str, Any]:
     """Load or create test fixtures."""
     if FIXTURES_PATH.exists():
-        with open(FIXTURES_PATH) as f:
+        with open(FIXTURES_PATH, encoding="utf-8") as f:
             return json.load(f)
 
     # Create default fixtures for testing
@@ -78,7 +78,7 @@ def load_fixtures() -> Dict[str, Any]:
         }
     }
 
-    with open(FIXTURES_PATH, 'w') as f:
+    with open(FIXTURES_PATH, 'w', encoding='utf-8') as f:
         json.dump(fixtures, f, indent=2)
 
     return fixtures

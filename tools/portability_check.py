@@ -33,7 +33,7 @@ def read_package_json(root):
     """Read package.json and extract 'files' array."""
     pkg_path = os.path.join(root, 'package.json')
     try:
-        with open(pkg_path, 'r') as f:
+        with open(pkg_path, 'r', encoding='utf-8') as f:
             content = json.load(f)
         return content.get('files', [])
     except (FileNotFoundError, json.JSONDecodeError):

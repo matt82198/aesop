@@ -177,7 +177,7 @@ def is_pidfile_valid_and_recent(pidfile_path, script_path):
         age = time.time() - mtime
         # If pidfile is less than 60 seconds old and bash is running, assume still active
         if age < 60 and check_bash_running(script_path):
-            with open(pidfile_path, "r") as f:
+            with open(pidfile_path, "r", encoding="utf-8") as f:
                 old_pid = f.read().strip()
             return int(old_pid)
 
@@ -278,7 +278,7 @@ def main():
         if pidfile:
             pidfile_path = Path(pidfile)
             pidfile_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(pidfile_path, "w") as f:
+            with open(pidfile_path, "w", encoding="utf-8") as f:
                 f.write(str(new_pid))
 
         print(f"spawned (pid {new_pid})")

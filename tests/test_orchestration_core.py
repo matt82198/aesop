@@ -66,12 +66,15 @@ class HealthcheckCoreTestCase(unittest.TestCase):
         self.state_dir = self.fixture_root / "state"
         self.state_dir.mkdir(parents=True)
         (self.fixture_root / "transcripts").mkdir()
+        (self.fixture_root / "monitor").mkdir()  # For monitor heartbeat path
 
         self._saved_env = {k: os.environ.get(k) for k in ENV_KEYS}
         os.environ["AESOP_ROOT"] = str(self.fixture_root)
         os.environ["AESOP_STATE_ROOT"] = str(self.state_dir)
         os.environ["AESOP_TRANSCRIPTS_ROOT"] = str(self.fixture_root / "transcripts")
         os.environ["AESOP_UI_COLLECT_INTERVAL"] = "0.2"
+        # Override conductor3 location to isolate from live system state
+        os.environ["AESOP_CONDUCTOR3_ROOT"] = str(self.fixture_root)
 
         # Re-import healthcheck fresh per test (matches tests/test_healthcheck.py's
         # own convention) so its module-level `import config` binding exists.

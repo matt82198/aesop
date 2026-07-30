@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """OrchestratorDriver â€” the adjudication seam for orchestrator decision-making.
 
 Mirrors the AgentDriver pattern: allows aesop's orchestrator logic to be

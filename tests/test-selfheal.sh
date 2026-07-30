@@ -206,7 +206,7 @@ echo ""
 echo "=== Test 6: Lock write failure handling (DEFECT 1 fix) ==="
 # Verify that acquire_lock function cleans up on write failure
 # by checking the implementation includes the fail-closed cleanup logic
-test_section=$(sed -n '45,51p' "$REPO_ROOT/daemons/selfheal.sh")
+test_section=$(sed -n '/^acquire_lock/,/^}/p' "$REPO_ROOT/daemons/selfheal.sh")
 if echo "$test_section" | grep -q 'rm -rf' && echo "$test_section" | grep -q 'return 1'; then
   echo "✓ Acquire_lock has fail-closed write error handling (DEFECT 1 fixed)"
   pass_count=$((pass_count + 1))

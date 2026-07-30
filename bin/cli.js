@@ -11,11 +11,42 @@ const helpFlag = args.includes('--help') || args.includes('-h');
 const forceFlag = args.includes('--force');
 const yesFlag = args.includes('--yes');
 
-// Check for runtime subcommands (doctor, watch, dash, status, fleet, health, health-score, reproduce)
-const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health', 'health-score', 'reproduce'];
+// Check for runtime subcommands (doctor, watch, dash, status, fleet, health, health-score, reproduce, init)
+const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health', 'health-score', 'reproduce', 'init'];
 const isRuntimeCommand = runtimeCommands.includes(args[0]);
 
 if (isRuntimeCommand) {
+  // 'init' is handled by a Python tool via spawnSync (scaffolds aesop into the current repo)
+  if (args[0] === 'init') {
+    const { spawnSync } = require('child_process');
+    const initScript = path.join(__dirname, '..', 'tools', 'init_project.py');
+    const initArgs = ['--dir', '.'];
+    // Forward --name and --force flags
+    for (let i = 1; i < args.length; i++) {
+      if (args[i] === '--name' && i + 1 < args.length) {
+        initArgs.push('--name', args[i + 1]);
+        i++;
+      } else if (args[i] === '--force') {
+        initArgs.push('--force');
+      }
+    }
+    const result = spawnSync('python3', [initScript, ...initArgs], {
+      stdio: 'inherit',
+      timeout: 30000
+    });
+    if (result.error) {
+      // Fallback to 'python' if 'python3' is not found
+      const fallback = spawnSync('python', [initScript, ...initArgs], {
+        stdio: 'inherit',
+        timeout: 30000
+      });
+      process.exit(fallback.status || (fallback.error ? 1 : 0));
+    } else {
+      process.exit(result.status || 0);
+    }
+    return;
+  }
+
   const commandMap = {
     'doctor': '../tools/doctor.js',
     'watch': '../tools/watch.js',
@@ -157,8 +188,10 @@ Usage:
   npx @matt82198/aesop status
   npx @matt82198/aesop fleet
   npx @matt82198/aesop reproduce
+  npx @matt82198/aesop init [--name NAME] [--force]
 
 Commands:
+  init                    Initialize aesop orchestration in current repo (CLAUDE.md, config, state, CI, hooks)
   doctor                  Preflight readiness check (Node.js, Python, git, config, dirs, hook, port)
   watch                   Launch the watchdog daemon (spawns daemons/run-watchdog.sh)
   dash                    Launch the web dashboard (spawns python3 ui/serve.py or python fallback; add --demo for a seeded zero-key snapshot)
