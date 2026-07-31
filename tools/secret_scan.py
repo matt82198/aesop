@@ -62,7 +62,10 @@ PATTERNS = {
         0,
     ),
     "slack_token": (r"xox[baprs]-[A-Za-z0-9-]{10,}", 0),
-    "openai_anthropic_key": (r"sk-[A-Za-z0-9_\-]{20,}", 0),
+    # \b prevents matching inside a longer word: "disk-wins-on-any-disagreement"
+    # contains sk- followed by 20+ word chars and was flagged as a live key.
+    # A real key is always preceded by a non-word char (quote, =, space, start).
+    "openai_anthropic_key": (r"\bsk-[A-Za-z0-9_\-]{20,}", 0),
     "generic_secret_assignment": (
         # Unquoted branch requires 8+ contiguous chars from a bare-literal charset
         # (no '.', '(', ')' — real code expressions like `secrets.token_urlsafe(32)`,
