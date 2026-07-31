@@ -164,3 +164,15 @@ New behavior: loads three distinct callout styles with honest messaging, preserv
 - `ModelMixTrendChart.tsx`: "Daily model usage distribution"  
 - `CostAnalyticsPanel.tsx` WaveSpendChart: "Spend per wave"
 Bar segments include `<title>` elements for tooltips. Tests verify presence and correctness.
+
+## SSE Collector Loop Refactoring (wave-32: sse.py complexity reduction)
+
+**Refactored** `ui/sse.py:collector_loop()` from radon F(43) → B(6) via `CollectorSource` abstraction. Each of 9 sources (data, backlog, agents, tracker, status, cost, collector_health + heartbeat) now declares its:
+- File path(s) to monitor
+- Change detection strategy (mtime+size tuple, multi-file mtime, fingerprint, always-update)
+- Snapshot builder function
+- Error tracking (per-source 5-error rolling buffer)
+
+**Implementation**: Base `CollectorSource` class + three detection strategies (`MtimeSizeGatedSource`, `MultiFileMtimeGatedSource`, `FingerprintGatedSource`) + 7 concrete sources. Main loop reduced to 48 lines iterating over source list; all extracted methods grade A-B (≤ 7 cyclomatic). **Behavior preserved**: event names, payload keys, field order, mtime-cache semantics, error handling, emission order all byte-identical (captured SSE streams verified).
+
+**Testing**: AST parse OK, encoding_lint OK, behavioral SSE proof (baseline vs refactored identical payloads), server runs with --demo. No changes to collectors.py, config.py, handlers.py, or React frontend.
