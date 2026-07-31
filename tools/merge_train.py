@@ -20,13 +20,19 @@ import subprocess
 import sys
 import time
 
-# Ensure stdout uses UTF-8 (fixes Windows cp1252 UnicodeEncodeError)
-# Only wrap if sys.stdout.buffer is available (tests may have closed/redirected stdout)
+# Ensure stdout can encode UTF-8 (fixes Windows cp1252 UnicodeEncodeError on PR titles
+# containing characters like U+FEFF).
+#
+# Do NOT wrap sys.stdout in a TextIOWrapper at import time: the wrapper captures the
+# CURRENT sys.stdout.buffer, and a test runner that swaps or closes stdout between tests
+# leaves the wrapper writing to a dead file object -- raising ValueError: I/O operation
+# on closed file from INSIDE the wrapper, before any print-level guard can catch it.
+# reconfigure() mutates the live stream instead of capturing it, and is a no-op when the
+# stream does not support it.
 try:
-    if hasattr(sys.stdout, 'buffer') and not hasattr(sys.stdout, '_test_redirected'):
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 except (ValueError, AttributeError, OSError):
-    # If sys.stdout is closed, buffer unavailable, or already wrapped, skip
     pass
 
 # Custom print function that handles closed stdout gracefully (for test environments)
