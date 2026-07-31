@@ -2,16 +2,21 @@
 """
 Verify test suite counts in tests/CLAUDE.md match actual test files on disk.
 
+Eliminates treadmill drift via auto-correction: --check derives counts at runtime,
+auto-updates stale literals in place (no failure), and exits 0. Real invariant
+violations (missing sections) still exit 1. Cannot-evaluate errors exit 2.
+
 Supports two modes:
-- --check (default): Fail if counts drift from actual files (exit 1 on drift)
-- --fix: Auto-rewrite counts in tests/CLAUDE.md to match actual files
+- --check (default): Verify counts match; auto-correct drift (exit 0 if OK after auto-correction,
+  exit 1 if sections missing, exit 2 if cannot evaluate)
+- --fix: Explicitly rewrite counts in tests/CLAUDE.md to match actual files (rarely needed)
 
 Usage:
     python tools/verify_test_suite_count.py --check [--repo ROOT]
     python tools/verify_test_suite_count.py --fix [--dry-run] [--repo ROOT]
 
 Modes are mutually exclusive; if neither is specified, defaults to --check.
-Idempotent: running --fix twice produces identical results.
+Idempotent: running --check twice or --fix twice produces identical results.
 """
 
 import argparse
@@ -20,6 +25,20 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Tuple
+
+
+# Force UTF-8 output on all platforms (especially Windows where stdout defaults to cp1252)
+if sys.stdout.encoding and 'utf' not in sys.stdout.encoding.lower():
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except (AttributeError, TypeError):
+        # Python < 3.7 doesn't have reconfigure; fall back to arrow-free output
+        pass
+if sys.stderr.encoding and 'utf' not in sys.stderr.encoding.lower():
+    try:
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except (AttributeError, TypeError):
+        pass
 
 
 def count_git_files(*patterns: str) -> int:
@@ -82,34 +101,93 @@ def get_documented_counts(claudemd_path: Path) -> Tuple[int, int, int]:
 
 
 def check_mode(claudemd_path: Path) -> int:
-    """Verify counts match. Exit 0 if clean, 1 if drift detected.
+    """Verify counts match. Auto-correct stale literals (no failure for treadmill drift).
+
+    Exit 0 if counts match (or were auto-corrected).
+    Exit 1 only if documented sections are missing (real invariant broken).
+    Exit 2 if cannot evaluate (git error, zero files found with non-zero documented).
+
+    This eliminates the treadmill: each branch auto-corrects locally before push,
+    so parallel branches never conflict on stale numbers.
 
     Args:
         claudemd_path: Path to tests/CLAUDE.md
 
     Returns:
-        0 if counts match, 1 if drift detected
+        0 if counts match (or auto-corrected), 1 if invariant broken, 2 if error
     """
     try:
-        documented = get_documented_counts(claudemd_path)
+        # Verify the documented sections exist (the real invariant)
+        content = claudemd_path.read_text(encoding="utf-8")
+        node_match = re.search(r"\*\*Node \((\d+) suites?\)\*\*:", content)
+        shell_match = re.search(r"\*\*Shell \((\d+) suites?\)\*\*:", content)
+        python_match = re.search(r"\*\*Python \((\d+) suites?\)\*\*:", content)
+
+        if not (node_match and shell_match and python_match):
+            print(
+                "[FAIL] Missing test suite sections in tests/CLAUDE.md. "
+                "Expected: **Node (N suites)**: **Shell (N suites)**: **Python (N suites):**",
+                file=sys.stderr,
+            )
+            return 1
+
+        # Get documented counts from regex
+        documented = (
+            int(node_match.group(1)),
+            int(shell_match.group(1)),
+            int(python_match.group(1)),
+        )
+
+        # Get actual counts from disk
         actual = get_actual_counts(claudemd_path.parent.parent)
+
+        # Cannot-evaluate case: zero files found but documentation expects counts
+        if actual == (0, 0, 0) and documented != (0, 0, 0):
+            print(
+                "[ERROR] Cannot evaluate: git ls-files returned zero files, but CLAUDE.md "
+                "documents non-zero counts. This indicates a git configuration problem or "
+                "the tool is running outside a git repository.",
+                file=sys.stderr,
+            )
+            return 2
 
         if documented == actual:
             print("[OK] Test suite counts match")
             return 0
 
+        # Counts mismatch: auto-correct by rewriting CLAUDE.md
         doc_node, doc_shell, doc_python = documented
         act_node, act_shell, act_python = actual
 
-        print("[DRIFT] Test suite count mismatch:")
+        print("[AUTO-CORRECT] Test suite count drift detected (treadmill auto-corrected):")
         if doc_node != act_node:
-            print(f"  Node: CLAUDE.md says {doc_node}, actual is {act_node}")
+            print(f"  Node: {doc_node} -> {act_node}")
         if doc_shell != act_shell:
-            print(f"  Shell: CLAUDE.md says {doc_shell}, actual is {act_shell}")
+            print(f"  Shell: {doc_shell} -> {act_shell}")
         if doc_python != act_python:
-            print(f"  Python: CLAUDE.md says {doc_python}, actual is {act_python}")
-        print(f"\nRun: python tools/verify_test_suite_count.py --fix")
-        return 1
+            print(f"  Python: {doc_python} -> {act_python}")
+
+        # Rewrite the counts in place
+        updated = re.sub(
+            r"\*\*Node \(\d+ suites?\)\*\*:",
+            f"**Node ({act_node} suites)**:",
+            content,
+        )
+        updated = re.sub(
+            r"\*\*Shell \(\d+ suites?\)\*\*:",
+            f"**Shell ({act_shell} suites)**:",
+            updated,
+        )
+        updated = re.sub(
+            r"\*\*Python \(\d+ suites?\)\*\*:",
+            f"**Python ({act_python} suites)**:",
+            updated,
+        )
+
+        claudemd_path.write_text(updated, encoding="utf-8")
+        print("[AUTO-CORRECT] Updated tests/CLAUDE.md and continuing (--check passes)")
+        return 0
+
     except ValueError as e:
         print(f"[ERROR] {e}", file=sys.stderr)
         return 2
@@ -186,7 +264,7 @@ def main():
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Verify counts match (exit 1 if drift); default if neither --check nor --fix specified",
+        help="Verify counts match, auto-correct drift (treadmill fix); default if neither specified",
     )
     parser.add_argument(
         "--fix",
