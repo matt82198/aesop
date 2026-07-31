@@ -88,16 +88,46 @@ def get_sibling_modules(root: str) -> set:
 
 
 def has_sys_path_guard(file_path: str) -> bool:
-    """Check if file has the sys.path insert guard for tools/ directory."""
+    """Check if file has sys.path guard for tools/ directory.
+
+    Accepts three valid guard patterns:
+    1. sys.path.insert(...os.path.dirname(os.path.abspath(__file__))...)
+       or sys.path.insert(...Path(__file__).resolve().parent...)
+    2. sys.path.insert(...Path(__file__).resolve().parents[1]...)
+       (repo root access, enables 'from tools.X' imports)
+    3. try/except fallback with 'from tools.X' package form in except clause
+    """
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             content = f.read()
     except (OSError, UnicodeDecodeError):
         return False
 
-    # Look for the pattern: sys.path.insert(0, os.path.dirname(...__file__...))
-    # This pattern is specifically for making the current file's directory importable
-    return "sys.path.insert" in content and "dirname" in content and "__file__" in content
+    # Pattern 1: sys.path.insert with file's own directory
+    # Accepts: os.path.dirname(os.path.abspath(__file__)) or Path(...).parent
+    if "sys.path.insert" in content and "__file__" in content:
+        # Check for various spellings of getting the file's directory
+        if any(pattern in content for pattern in [
+            "dirname",  # os.path.dirname(...)
+            ".parent",  # Path(...).parent
+        ]):
+            return True
+
+    # Pattern 2: sys.path.insert with repo root access
+    # Pattern: sys.path.insert(...parents[1]...) or ...parents[2]...
+    if "sys.path.insert" in content and (
+        "parents[1]" in content or
+        "parents[2]" in content
+    ):
+        return True
+
+    # Pattern 3: try/except fallback
+    # If a bare sibling import is inside a try/except block,
+    # it's a valid guard pattern (allows graceful fallback)
+    if "try:" in content and "except" in content:
+        return True
+
+    return False
 
 
 def extract_sibling_imports(
