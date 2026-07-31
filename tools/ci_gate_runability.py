@@ -250,13 +250,12 @@ def find_file_on_disk(repo_root: str, pattern: str) -> bool:
     if abs_path.exists():
         return True
 
-    # Don't flag missing files in test fixtures (workflows under temp dirs)
-    # Only check actual repo files
-    repo_root_path = Path(repo_root).resolve()
-    if 'AppData' in str(repo_root_path) and 'Temp' in str(repo_root_path):
-        # Temporary test fixture, skip file checks
-        return True
-
+    # This previously returned True whenever repo_root contained both 'AppData' and
+    # 'Temp', to keep test fixtures from reporting missing files. That is a
+    # Windows-only path shape: the exemption fired on Windows and not on Linux, so
+    # these tests passed locally and failed in CI -- and any real repo living under
+    # such a path silently lost file-existence checking altogether. A gate must not
+    # recognise its own test fixtures; fixtures create the files they reference.
     return False
 
 
