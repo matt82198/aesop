@@ -50,29 +50,32 @@ JS_PRAGMA_LINE = "// secretscan: allow-pattern-docs"
 
 
 
-def test_sk_pattern_requires_word_boundary():
-    """sk- must not match inside a longer word, but must still catch real keys.
+class SkPatternWordBoundaryTest(unittest.TestCase):
+    """The sk- key pattern must not match inside a longer word."""
 
-    Regression: the comment word "disk-wins-on-any-disagreement" contains sk-
-    followed by 20+ word chars and was reported as a live openai_anthropic_key,
-    blocking a legitimate commit. Same substring-vs-word-boundary class that made
-    a routing hook inert and broke the metrics-marker regex.
-    """
-    import re
-    import secret_scan
-    pattern, flags = secret_scan.PATTERNS["openai_anthropic_key"]
-    rx = re.compile(pattern, flags)
+    def test_sk_pattern_requires_word_boundary(self):
+        """sk- must not match inside a longer word, but must still catch real keys.
 
-    # Must NOT fire inside a longer word
-    assert not rx.search("disk-wins-on-any-disagreement")
-    assert not rx.search("a disk-based-cache-invalidation-thing")
+        Regression: the comment word "disk-wins-on-any-disagreement" contains sk-
+        followed by 20+ word chars and was reported as a live openai_anthropic_key,
+        blocking a legitimate commit. Same substring-vs-word-boundary class that made
+        a routing hook inert and broke the metrics-marker regex.
+        """
+        import re
+        import secret_scan
+        pattern, flags = secret_scan.PATTERNS["openai_anthropic_key"]
+        rx = re.compile(pattern, flags)
 
-    # Must STILL fire on real key shapes
-    key = "sk-" + "abcdefghij0123456789XYZ"
-    assert rx.search(key)
-    assert rx.search('KEY="%s"' % key)
-    assert rx.search("OPENAI_API_KEY=%s" % key)
-    assert rx.search("(%s)" % key)
+        # Must NOT fire inside a longer word
+        assert not rx.search("disk-wins-on-any-disagreement")
+        assert not rx.search("a disk-based-cache-invalidation-thing")
+
+        # Must STILL fire on real key shapes
+        key = "sk-" + "abcdefghij0123456789XYZ"
+        assert rx.search(key)
+        assert rx.search('KEY="%s"' % key)
+        assert rx.search("OPENAI_API_KEY=%s" % key)
+        assert rx.search("(%s)" % key)
 
 class TestPragmaNotSoftensFatalSecrets(unittest.TestCase):
     """ITEM 1: Pragma should NOT soften fatal secret categories."""
