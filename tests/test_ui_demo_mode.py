@@ -46,7 +46,8 @@ REQUEST_TIMEOUT_SECONDS = 10
 ENV_KEYS = ("AESOP_ROOT", "AESOP_TRANSCRIPTS_ROOT", "AESOP_STATE_ROOT",
             "AESOP_UI_COLLECT_INTERVAL", "PORT", "AESOP_DEMO",
             "AESOP_DEMO_ROOT", "AESOP_AUDIT_BACKLOG",
-            "AESOP_WATCHDOG_HEARTBEAT", "AESOP_MONITOR_HEARTBEAT")
+            "AESOP_WATCHDOG_HEARTBEAT", "AESOP_MONITOR_HEARTBEAT",
+            "AESOP_CONDUCTOR3_ROOT")
 
 
 def _free_port():
@@ -309,6 +310,8 @@ class TestDefaultModeUnaffected(unittest.TestCase):
         self.fixture_root = Path(tempfile.mkdtemp(prefix="aesop-demo-default-"))
         (self.fixture_root / "state").mkdir()
         (self.fixture_root / "transcripts").mkdir()
+        (self.fixture_root / "conductor3" / "state").mkdir(parents=True)
+        (self.fixture_root / "conductor3" / "monitor").mkdir(parents=True)
         dist_dir = self.fixture_root / "ui" / "web" / "dist"
         dist_dir.mkdir(parents=True)
         (dist_dir / "index.html").write_text(DIST_INDEX_HTML, encoding="utf-8")
@@ -322,6 +325,7 @@ class TestDefaultModeUnaffected(unittest.TestCase):
         os.environ["AESOP_ROOT"] = str(self.fixture_root)
         os.environ["AESOP_STATE_ROOT"] = str(self.fixture_root / "state")
         os.environ["AESOP_TRANSCRIPTS_ROOT"] = str(self.fixture_root / "transcripts")
+        os.environ["AESOP_CONDUCTOR3_ROOT"] = str(self.fixture_root / "conductor3")
         os.environ["AESOP_UI_COLLECT_INTERVAL"] = "0.2"
 
         spec = importlib.util.spec_from_file_location(
