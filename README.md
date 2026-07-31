@@ -33,7 +33,7 @@ Aesop does not trust itself. Every agent writes code claiming to be correct, and
 
 A measured design decision, not a feature.
 
-In wave-11, a hierarchical dispatch architecture was built: orchestrator → Sonnet specialists → Haiku fleets. A/B testing measured it as **4.3x weighted cost** (docs/ab-cost-dataset.md) producing **identical quality** (100% test pass, zero repair rounds) on the same fixture. The architecture was cancelled on 2026-07-14. docs/archive/spikes/tiered-cognition/ keeps it for reference; nothing is wired into live settings.
+In wave-11, a hierarchical dispatch architecture was built: orchestrator → Sonnet specialists → Haiku fleets. A/B testing measured it as **4.3x weighted cost** (`docs/ab-cost-dataset.md`) producing **identical quality** (100% test pass <!-- metrics-verified: docs/ab-cost-dataset.md -->, zero repair rounds) on the same fixture. The architecture was cancelled on 2026-07-14. `docs/archive/spikes/tiered-cognition/` keeps it for reference; nothing is wired into live settings.
 
 **The lesson:** flat Haiku-first dispatch is not a limitation—it is the measured optimum for this problem. Architectural changes require A/B proof or they stay off.
 
@@ -41,7 +41,7 @@ In wave-11, a hierarchical dispatch architecture was built: orchestrator → Son
 
 No API keys, no Python, no configuration. Just Node.js >= 18 and git.
 
-`bash
+```bash
 git clone https://github.com/matt82198/aesop.git
 cd aesop
 
@@ -61,7 +61,7 @@ To run the actual multi-agent orchestration loop you need:
 - **Python 3.10+** for guardrails, secret scanning, and the dashboard
 - **Bash 4+** (or Git Bash on Windows) for daemon scripts
 
-`bash
+```bash
 npx @matt82198/aesop my-fleet --name "api" --repos "/path/to/repo"
 cp -r skills/ ~/.claude/skills          # Enable /power and /buildsystem
 `
