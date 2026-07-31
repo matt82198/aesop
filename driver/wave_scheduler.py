@@ -562,6 +562,411 @@ def emit_report(
 
 
 # ========================================================================
+# Phase Functions (extracted from run_wave_scheduler)
+# ========================================================================
+
+def _phase_intake_and_validate(
+    tracker_path: str,
+    max_items: int,
+) -> Tuple[bool, Dict[str, Any]]:
+    """Phase 2-3: Load tracker, validate items, select disjoint subset.
+
+    Returns:
+        (success: bool, result_dict). If success=False, result_dict contains
+        report fields (phase, items_selected, items_skipped, success). If
+        success=True, result_dict contains phase-result fields (selected_items,
+        selected_ids, all_items, intake_hash).
+    """
+    # P6: Read tracker with hash for conflict detection
+    all_items, intake_hash = _read_tracker_with_hash(tracker_path)
+    todo_items = filter_todo_items(all_items)
+
+    # Separate valid from invalid items
+    valid_items = []
+    items_skipped = []
+    for item in todo_items:
+        is_valid, error_reason = _validate_item(item)
+        if is_valid:
+            valid_items.append(item)
+        else:
+            items_skipped.append({"id": item.get("id", "unknown"), "reason": error_reason})
+
+    if not valid_items:
+        return False, {
+            "phase": "intake",
+            "items_selected": [],
+            "items_skipped": items_skipped if items_skipped else None,
+            "success": True,
+        }
+
+    # ====== PHASE 3: DISJOINT SELECTION ======
+    selected_items, skipped_ids = select_disjoint_items(valid_items, max_items)
+
+    if not selected_items:
+        return False, {
+            "phase": "intake",
+            "items_selected": [],
+            "items_skipped": items_skipped if items_skipped else None,
+            "success": True,
+        }
+
+    selected_ids = [item.get("id", "unknown") for item in selected_items]
+    return True, {
+        "selected_items": selected_items,
+        "selected_ids": selected_ids,
+        "all_items": all_items,
+        "intake_hash": intake_hash,
+    }
+
+
+def _phase_build_manifest(
+    selected_items: List[Dict[str, Any]],
+    selected_ids: List[str],
+    driver: AgentDriver,
+) -> Tuple[bool, Dict[str, Any]]:
+    """Phase 4: Build wave manifest from selected items.
+
+    Returns:
+        (success: bool, result_dict). If success=False, result_dict contains
+        report fields (phase, items_selected, error, success). If success=True,
+        result_dict contains phase-result fields (manifest, failed_build_ids, selected_ids).
+    """
+    try:
+        manifest, failed_build_ids = build_wave_manifest(selected_items, driver)
+    except Exception as e:
+        return False, {
+            "phase": "manifest",
+            "items_selected": selected_ids,
+            "error": str(e),
+            "success": False,
+        }
+
+    # Remove failed items from selected_ids
+    updated_ids = [id for id in selected_ids if id not in failed_build_ids]
+
+    return True, {
+        "manifest": manifest,
+        "failed_build_ids": failed_build_ids,
+        "selected_ids": updated_ids,
+    }
+
+
+def _build_items_shipped(
+    wave_result: Dict[str, Any],
+    backend_name: str,
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Build items_shipped list and shipped_slugs from wave_result.
+
+    Returns:
+        (items_shipped, shipped_slugs)
+    """
+    built_by_slug = {
+        b.get("slug"): b for b in (wave_result.get("built") or []) if isinstance(b, dict)
+    }
+    items_shipped = []
+    shipped_slugs = []
+    for slug in wave_result.get("shipped", []) or []:
+        if isinstance(slug, dict):  # tolerate dict-shaped fakes
+            slug = slug.get("slug", "unknown")
+        shipped_slugs.append(slug)
+        b = built_by_slug.get(slug, {})
+        items_shipped.append({
+            "slug": slug,
+            "backend": backend_name,
+            "tier": b.get("verificationTier") if b else None,
+            "verified": b.get("verified", False),
+            "testExit": b.get("testExit"),
+            "buildRecord": bool(b),
+        })
+    return items_shipped, shipped_slugs
+
+
+def _build_blocked_lane_entry(
+    slug: str,
+    reason_by_slug: Dict[str, Any],
+    built_by_slug: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Build one blocked lane entry with quarantine status.
+
+    Returns entry dict with slug, reason, and quarantine info.
+    """
+    entry = {
+        "slug": slug,
+        "reason": reason_by_slug.get(slug)
+        or "orchestrator final_catch verdict: block",
+    }
+    q = (built_by_slug.get(slug) or {}).get("quarantine")
+    if isinstance(q, dict):
+        if q.get("errors"):
+            entry["quarantine"] = "errors"
+            entry["quarantine_errors"] = q["errors"]
+        elif q.get("skipped_reason"):
+            entry["quarantine"] = "skipped"
+            entry["quarantine_skipped_reason"] = q["skipped_reason"]
+        else:
+            entry["quarantine"] = "clean"
+    else:
+        entry["quarantine"] = "unknown"
+    return entry
+
+
+def _build_blocked_lane(
+    review: Dict[str, Any],
+    wave_result: Dict[str, Any],
+) -> Tuple[List[str], List[Dict[str, Any]]]:
+    """Build blocked_slugs and blocked_lane from orchestrator review.
+
+    Returns:
+        (blocked_slugs, blocked_lane)
+    """
+    blocked_slugs = [s for s in (review.get("blocked") or [])]
+    reason_by_slug = {}
+    for d in review.get("blocked_detail") or []:
+        if isinstance(d, dict) and d.get("slug"):
+            reason_by_slug[d["slug"]] = d.get("reason")
+    built_by_slug = {
+        b_.get("slug"): b_
+        for b_ in (wave_result.get("built") or [])
+        if isinstance(b_, dict) and b_.get("slug")
+    }
+    blocked_lane = [
+        _build_blocked_lane_entry(s, reason_by_slug, built_by_slug)
+        for s in blocked_slugs
+    ]
+    return blocked_slugs, blocked_lane
+
+
+def _derive_gate_status(
+    decisions: int,
+    failed_slugs: List[str],
+) -> str:
+    """Derive gate_status from decision counts.
+
+    Returns: "no_decisions" | "degraded" | "active"
+    """
+    if decisions == 0:
+        return "no_decisions"
+    if len(failed_slugs) == decisions:
+        return "degraded"
+    return "active"
+
+
+def _build_orchestrator_gate(
+    review: Dict[str, Any],
+    blocked_slugs: List[str],
+) -> Optional[Dict[str, Any]]:
+    """Build orchestrator_gate summary from review.
+
+    Returns orchestrator_gate dict or None.
+    """
+    if not isinstance(review, dict):
+        return None
+
+    decisions = int(review.get("decisions") or 0)
+    failed_slugs = list(review.get("decision_failed") or [])
+    gate_status = review.get("gate_status") or _derive_gate_status(decisions, failed_slugs)
+
+    return {
+        "seat": review.get("seat"),
+        "model": review.get("model"),
+        "decisions": decisions,
+        "verdict_counts": review.get("verdict_counts") or {},
+        "blocked": blocked_slugs,
+        "decision_failed": failed_slugs,
+        "seat_tokens_spent": review.get("seat_tokens_spent", 0),
+        "status": gate_status,
+    }
+
+
+def _phase_process_wave_result(
+    wave_result: Dict[str, Any],
+    driver: AgentDriver,
+) -> Tuple[List[Dict[str, Any]], List[str], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """Process wave_result to extract items_shipped, shipped_slugs, blocked_lane, orchestrator_gate.
+
+    Returns:
+        (items_shipped, shipped_slugs, blocked_lane, orchestrator_gate)
+    """
+    backend_name = driver.probe_capabilities().name
+    items_shipped, shipped_slugs = _build_items_shipped(wave_result, backend_name)
+
+    # HS-2 BLOCK GATE: extract the orchestrator seat's review
+    review = wave_result.get("orchestrator_review")
+    blocked_slugs = []
+    blocked_lane = []
+    if isinstance(review, dict):
+        blocked_slugs, blocked_lane = _build_blocked_lane(review, wave_result)
+
+    orchestrator_gate = _build_orchestrator_gate(review, blocked_slugs)
+
+    return items_shipped, shipped_slugs, blocked_lane, orchestrator_gate
+
+
+def _phase_update_tracker_and_derive_success(
+    tracker_path: str,
+    wave_id: str,
+    intake_hash: Optional[str],
+    selected_items: List[Dict[str, Any]],
+    shipped_slugs: List[str],
+    blocked_slugs: List[str],
+    items_shipped: List[Dict[str, Any]],
+    wave_result: Dict[str, Any],
+) -> Tuple[bool, bool, bool, Optional[str], Optional[str]]:
+    """Update tracker and derive success metrics.
+
+    Returns:
+        (tracker_update_attempted, tracker_update_error, wave_ok, all_verified, success_overall)
+    """
+    tracker_update_attempted = False
+    tracker_update_error = None
+    tracker_unmapped = []
+
+    if shipped_slugs or blocked_slugs:
+        tracker_update_attempted = True
+        try:
+            slug_to_id = {it.get("slug"): it.get("id") for it in selected_items}
+            shipped_item_ids = []
+            for s_ in shipped_slugs:
+                id_ = slug_to_id.get(s_)
+                if id_:
+                    shipped_item_ids.append(id_)
+                else:
+                    tracker_unmapped.append(s_)
+            blocked_status_by_id = {}
+            for s_ in blocked_slugs:
+                id_ = slug_to_id.get(s_)
+                if id_:
+                    blocked_status_by_id[id_] = "blocked"
+                else:
+                    tracker_unmapped.append(s_)
+            if shipped_item_ids or blocked_status_by_id:
+                success_update, update_error = _write_tracker_status_atomic(
+                    tracker_path,
+                    shipped_item_ids,
+                    "in_progress",
+                    wave_id,
+                    expected_hash=intake_hash,
+                    status_by_id=blocked_status_by_id,
+                )
+                if not success_update:
+                    tracker_update_error = update_error
+            if tracker_unmapped and tracker_update_error is None:
+                tracker_update_error = "unmapped_slugs"
+        except Exception as te:
+            tracker_update_error = f"tracker_update_exception: {te}"
+
+    wave_ok = bool(wave_result.get("preflight_ok")) and not wave_result.get("aborted")
+    all_verified = all(i.get("verified") for i in items_shipped) if items_shipped else True
+
+    return tracker_update_attempted, tracker_update_error, wave_ok, all_verified, tracker_unmapped
+
+
+def _phase_run_wave_and_process(
+    driver: AgentDriver,
+    manifest: Dict[str, Any],
+    state_dir: Path,
+    selected_items: List[Dict[str, Any]],
+    selected_ids: List[str],
+    intake_hash: Optional[str],
+    tracker_path: str,
+    wave_id: str,
+    failed_build_ids: List[str],
+    orchestrator_backend: Optional[Any],
+) -> Dict[str, Any]:
+    """Phase 8: Run wave, process results, update tracker, emit report.
+
+    Returns report dict (or error report dict on exception).
+    """
+    # Initialize tracker outcome tracking for exception envelope (HIGH: must survive crashes)
+    tracker_update_attempted = False
+    tracker_update_error = None
+
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+
+        wave_result = run_wave(
+            driver=driver,
+            manifest=manifest,
+            state_dir=state_dir,
+            git={"expectTopLevel": str(REPO)},
+            resume_journal=True,
+            orchestrator_backend=orchestrator_backend,
+        )
+
+        # Process wave result
+        items_shipped, shipped_slugs, blocked_lane, orchestrator_gate = (
+            _phase_process_wave_result(wave_result, driver)
+        )
+
+        # Update tracker and derive success
+        (
+            tracker_update_attempted,
+            tracker_update_error,
+            wave_ok,
+            all_verified,
+            tracker_unmapped,
+        ) = _phase_update_tracker_and_derive_success(
+            tracker_path,
+            wave_id,
+            intake_hash,
+            selected_items,
+            shipped_slugs,
+            [s for s in (orchestrator_gate["blocked"] if orchestrator_gate else [])],
+            items_shipped,
+            wave_result,
+        )
+
+        # Ship sha comes from the per-repo ship results (no top-level sha key).
+        repo_results = wave_result.get("shipped_repos") or []
+        sha = next((r.get("sha") for r in repo_results if isinstance(r, dict) and r.get("sha")), None)
+        branch = None  # run_wave ships on the current branch; scheduler does not switch branches
+
+        # Extract blocked slugs from orchestrator_gate
+        blocked_slugs = (
+            [s for s in (orchestrator_gate["blocked"] if orchestrator_gate else [])]
+        )
+
+        return emit_report(
+            phase="dispatch",
+            wave_id=wave_id,
+            items_selected=selected_ids,
+            items_shipped=items_shipped,
+            items_failed_build=failed_build_ids if failed_build_ids else None,
+            branch=branch,
+            sha=sha,
+            tracker_update_attempted=tracker_update_attempted,
+            tracker_update_error=tracker_update_error,
+            tracker_unmapped_slugs=tracker_unmapped if tracker_unmapped else None,
+            success=(
+                wave_ok
+                and all_verified
+                and tracker_update_error is None
+                and not blocked_slugs
+            ),
+            merged=False,  # P2c: pilot stops before merge
+            blocked=blocked_lane if orchestrator_gate else None,
+            orchestrator_gate=orchestrator_gate,
+        )
+
+    except Exception as e:
+        # The exception envelope must never hide ship-vs-tracker divergence:
+        # carry whatever tracker outcome was reached before the crash.
+        # tracker_update_attempted and tracker_update_error are initialized
+        # at function start and updated by _phase_update_tracker_and_derive_success,
+        # so they survive exceptions in later phases (report assembly).
+        return emit_report(
+            phase="dispatch",
+            wave_id=wave_id,
+            items_selected=selected_ids,
+            error=str(e),
+            tracker_update_attempted=tracker_update_attempted,
+            tracker_update_error=tracker_update_error,
+            success=False,
+            merged=False,
+        )
+
+
+# ========================================================================
 # Main Orchestrator
 # ========================================================================
 
@@ -633,63 +1038,39 @@ def run_wave_scheduler(
             success=False,
         )
 
-    # ====== PHASE 2: INTAKE + VALIDATION (P1-6, P5) ======
-    # P6: Read tracker with hash for conflict detection
-    all_items, intake_hash = _read_tracker_with_hash(tracker_path)
-    todo_items = filter_todo_items(all_items)
-
-    # Separate valid from invalid items
-    valid_items = []
-    items_skipped = []
-    for item in todo_items:
-        is_valid, error_reason = _validate_item(item)
-        if is_valid:
-            valid_items.append(item)
-        else:
-            items_skipped.append({"id": item.get("id", "unknown"), "reason": error_reason})
-
-    if not valid_items:
+    # ====== PHASE 2-3: INTAKE + VALIDATION + DISJOINT SELECTION ======
+    intake_ok, intake_result = _phase_intake_and_validate(tracker_path, max_items)
+    if not intake_ok:
         return emit_report(
-            phase="intake",
+            phase=intake_result["phase"],
             wave_id=wave_id,
-            items_selected=[],
-            items_skipped=items_skipped if items_skipped else None,
-            success=True,
+            items_selected=intake_result.get("items_selected", []),
+            items_skipped=intake_result.get("items_skipped"),
+            success=intake_result.get("success", False),
         )
 
-    # ====== PHASE 3: DISJOINT SELECTION ======
-    selected_items, skipped_ids = select_disjoint_items(valid_items, max_items)
-
-    if not selected_items:
-        return emit_report(
-            phase="intake",
-            wave_id=wave_id,
-            items_selected=[],
-            items_skipped=items_skipped if items_skipped else None,
-            success=True,
-        )
-
-    selected_ids = [item.get("id", "unknown") for item in selected_items]
+    selected_items = intake_result["selected_items"]
+    selected_ids = intake_result["selected_ids"]
+    intake_hash = intake_result["intake_hash"]
 
     # ====== PHASE 4: MANIFEST BUILD (P1-6) ======
     if driver is None:
         from tests.test_wave_loop import FakeDriver
         driver = FakeDriver()
 
-    try:
-        manifest, failed_build_ids = build_wave_manifest(selected_items, driver)
-    except Exception as e:
+    build_ok, build_result = _phase_build_manifest(selected_items, selected_ids, driver)
+    if not build_ok:
         return emit_report(
-            phase="manifest",
+            phase=build_result["phase"],
             wave_id=wave_id,
-            items_selected=selected_ids,
-            error=str(e),
-            success=False,
+            items_selected=build_result.get("items_selected", []),
+            error=build_result.get("error"),
+            success=build_result.get("success", False),
         )
 
-    # Remove failed items from selected
-    if failed_build_ids:
-        selected_ids = [id for id in selected_ids if id not in failed_build_ids]
+    manifest = build_result["manifest"]
+    failed_build_ids = build_result["failed_build_ids"]
+    selected_ids = build_result["selected_ids"]
 
     # ====== PHASE 5: DRY-RUN CHECK ======
     if dry_run:
@@ -744,203 +1125,18 @@ def run_wave_scheduler(
         )
 
     # ====== PHASE 8: RUN WAVE ======
-    try:
-        state_dir.mkdir(parents=True, exist_ok=True)
-
-        wave_result = run_wave(
-            driver=driver,
-            manifest=manifest,
-            state_dir=state_dir,
-            git={"expectTopLevel": str(REPO)},
-            resume_journal=True,
-            orchestrator_backend=orchestrator_backend,
-        )
-
-        # P2c: verify no merged=True, record merged=false
-        # GATE-1: per-item observability {slug, backend, tier, verified, testExit}.
-        # REAL run_wave shape (live-pilot fix): "shipped" is a list of SLUG
-        # STRINGS; the per-item records live in "built". Join them.
-        backend_name = driver.probe_capabilities().name
-        built_by_slug = {
-            b.get("slug"): b for b in (wave_result.get("built") or []) if isinstance(b, dict)
-        }
-        items_shipped = []
-        shipped_slugs = []
-        for slug in wave_result.get("shipped", []) or []:
-            if isinstance(slug, dict):  # tolerate dict-shaped fakes
-                slug = slug.get("slug", "unknown")
-            shipped_slugs.append(slug)
-            b = built_by_slug.get(slug, {})
-            items_shipped.append({
-                "slug": slug,
-                "backend": backend_name,
-                # tier None = no build record (unknown), never a fabricated 1.
-                "tier": b.get("verificationTier") if b else None,
-                # verified False = NOT PROVEN (conservative), see REPORT-CONTRACT.
-                "verified": b.get("verified", False),
-                "testExit": b.get("testExit"),
-                "buildRecord": bool(b),
-            })
-
-        # HS-2 BLOCK GATE: extract the orchestrator seat's review (present
-        # ONLY when a live seat ran). Blocked items need a TERMINAL tracker
-        # state ("blocked", never left todo -> no rebuild loop) and a durable,
-        # observable lane in the Report.
-        review = wave_result.get("orchestrator_review")
-        blocked_slugs = []
-        blocked_lane = []
-        if isinstance(review, dict):
-            blocked_slugs = [s for s in (review.get("blocked") or [])]
-            reason_by_slug = {}
-            for d in review.get("blocked_detail") or []:
-                if isinstance(d, dict) and d.get("slug"):
-                    reason_by_slug[d["slug"]] = d.get("reason")
-            built_by_slug = {
-                b_.get("slug"): b_
-                for b_ in (wave_result.get("built") or [])
-                if isinstance(b_, dict) and b_.get("slug")
-            }
-            for s in blocked_slugs:
-                entry = {
-                    "slug": s,
-                    "reason": reason_by_slug.get(s)
-                    or "orchestrator final_catch verdict: block",
-                }
-                # QUARANTINE VISIBILITY: a failed quarantine (refused code
-                # still in the tree) must never look like a clean block.
-                q = (built_by_slug.get(s) or {}).get("quarantine")
-                if isinstance(q, dict):
-                    if q.get("errors"):
-                        entry["quarantine"] = "errors"
-                        entry["quarantine_errors"] = q["errors"]
-                    elif q.get("skipped_reason"):
-                        entry["quarantine"] = "skipped"
-                        entry["quarantine_skipped_reason"] = q["skipped_reason"]
-                    else:
-                        entry["quarantine"] = "clean"
-                else:
-                    entry["quarantine"] = "unknown"
-                blocked_lane.append(entry)
-
-        # TRACKER UPDATE FIRST (live-pilot lesson: a crash in Report assembly
-        # must never leave shipped-but-unmarked items). Attempted as soon as
-        # shipped_slugs is known; outcome fields survive into ANY report,
-        # including the exception envelope below. Blocked items are marked in
-        # the SAME atomic write: the tracker terminal state is the durable
-        # block record (the journal entry can be overwritten on resume).
-        tracker_update_attempted = False
-        tracker_update_error = None
-        tracker_unmapped = []
-        if shipped_slugs or blocked_slugs:
-            tracker_update_attempted = True
-            try:
-                slug_to_id = {it.get("slug"): it.get("id") for it in selected_items}
-                shipped_item_ids = []
-                for s_ in shipped_slugs:
-                    id_ = slug_to_id.get(s_)
-                    if id_:
-                        shipped_item_ids.append(id_)
-                    else:
-                        # LOUD, never silent: an unmapped shipped slug means the
-                        # tracker cannot be marked -> double-dispatch risk.
-                        tracker_unmapped.append(s_)
-                blocked_status_by_id = {}
-                for s_ in blocked_slugs:
-                    id_ = slug_to_id.get(s_)
-                    if id_:
-                        blocked_status_by_id[id_] = "blocked"
-                    else:
-                        # Unmapped blocked slug = tracker stays todo = the
-                        # rebuild-and-block loop this fix exists to stop.
-                        tracker_unmapped.append(s_)
-                if shipped_item_ids or blocked_status_by_id:
-                    success_update, update_error = _write_tracker_status_atomic(
-                        tracker_path,
-                        shipped_item_ids,
-                        "in_progress",
-                        wave_id,
-                        expected_hash=intake_hash,  # P6: conflict detection
-                        status_by_id=blocked_status_by_id,
-                    )
-                    if not success_update:
-                        tracker_update_error = update_error
-                if tracker_unmapped and tracker_update_error is None:
-                    tracker_update_error = "unmapped_slugs"
-            except Exception as te:
-                tracker_update_error = f"tracker_update_exception: {te}"
-
-        # Ship sha comes from the per-repo ship results (no top-level sha key).
-        repo_results = wave_result.get("shipped_repos") or []
-        sha = next((r.get("sha") for r in repo_results if isinstance(r, dict) and r.get("sha")), None)
-        branch = None  # run_wave ships on the current branch; scheduler does not switch branches
-
-        # Orchestrator-gate summary for the Report (live seat only): the
-        # operator must be able to SEE the gate's real activity -- including
-        # a silently-neutered seat (every decision DECISION_FAILED).
-        orchestrator_gate = None
-        if isinstance(review, dict):
-            decisions = int(review.get("decisions") or 0)
-            failed_slugs = list(review.get("decision_failed") or [])
-            gate_status = review.get("gate_status")
-            if not gate_status:
-                if decisions == 0:
-                    gate_status = "no_decisions"
-                elif len(failed_slugs) == decisions:
-                    gate_status = "degraded"
-                else:
-                    gate_status = "active"
-            orchestrator_gate = {
-                "seat": review.get("seat"),
-                "model": review.get("model"),
-                "decisions": decisions,
-                "verdict_counts": review.get("verdict_counts") or {},
-                "blocked": blocked_slugs,
-                "decision_failed": failed_slugs,
-                "seat_tokens_spent": review.get("seat_tokens_spent", 0),
-                "status": gate_status,
-            }
-
-        # run_wave has NO top-level "success" key: derive honestly. success
-        # additionally requires EVERY shipped item verified (contract: a
-        # shipped-but-unproven item is not a successful wave) and NO blocked
-        # items (a block is a refused ship, never a silent True).
-        wave_ok = bool(wave_result.get("preflight_ok")) and not wave_result.get("aborted")
-        all_verified = all(i.get("verified") for i in items_shipped) if items_shipped else True
-        return emit_report(
-            phase="dispatch",
-            wave_id=wave_id,
-            items_selected=selected_ids,
-            items_shipped=items_shipped,
-            items_failed_build=failed_build_ids if failed_build_ids else None,
-            branch=branch,
-            sha=sha,
-            tracker_update_attempted=tracker_update_attempted,
-            tracker_update_error=tracker_update_error,
-            tracker_unmapped_slugs=tracker_unmapped if tracker_unmapped else None,
-            success=(
-                wave_ok
-                and all_verified
-                and tracker_update_error is None
-                and not blocked_slugs
-            ),
-            merged=False,  # P2c: pilot stops before merge
-            blocked=blocked_lane if isinstance(review, dict) else None,
-            orchestrator_gate=orchestrator_gate,
-        )
-
-    except Exception as e:
-        # The exception envelope must never hide ship-vs-tracker divergence:
-        # carry whatever tracker outcome was reached before the crash.
-        return emit_report(
-            phase="dispatch",
-            wave_id=wave_id,
-            items_selected=selected_ids,
-            error=str(e),
-            tracker_update_attempted=locals().get("tracker_update_attempted", False),
-            tracker_update_error=locals().get("tracker_update_error"),
-            success=False,
-            merged=False,
-        )
+    return _phase_run_wave_and_process(
+        driver=driver,
+        manifest=manifest,
+        state_dir=state_dir,
+        selected_items=selected_items,
+        selected_ids=selected_ids,
+        intake_hash=intake_hash,
+        tracker_path=tracker_path,
+        wave_id=wave_id,
+        failed_build_ids=failed_build_ids,
+        orchestrator_backend=orchestrator_backend,
+    )
 
 
 # ========================================================================

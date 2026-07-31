@@ -36,18 +36,15 @@ import tempfile
 import time
 from pathlib import Path
 
+# Ensure this tool's own directory (tools/) is importable so the shared
+# playwright harness resolves regardless of cwd or how the file is loaded.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from playwright_common import free_port, copy_dist
+
 REPO = Path(__file__).resolve().parent.parent
 SERVE = REPO / "ui" / "serve.py"
 
 MARKER = "SUBMIT-ENCODING-FIXTURE-MARKER: rebuild the flux capacitor"
-
-
-def free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
 
 
 def build_fixture(root: Path):
@@ -59,11 +56,7 @@ def build_fixture(root: Path):
     (root / "dash").mkdir(exist_ok=True)
 
     # Copy ui/web/dist from the real repo so the server can serve the built React app
-    repo = Path(__file__).resolve().parent.parent
-    real_dist = repo / "ui" / "web" / "dist"
-    if real_dist.is_dir():
-        fixture_dist = root / "ui" / "web" / "dist"
-        shutil.copytree(real_dist, fixture_dist)
+    copy_dist(root, REPO)
 
     (root / "AUDIT-BACKLOG.md").write_text(
         "# Audit backlog — verify_submit_encoding fixture\n\n## Landing log\n- fixture\n",

@@ -373,7 +373,9 @@ class LiveOpusTest(unittest.TestCase):
     def test_opus_st01_apply_and_oracle(self):
         """LIVE TEST: Run opus on st01, apply patch, run oracle."""
         if not self.api_key:
-            self.skipTest("BENCH_API_KEY not set; skipping live opus test")
+            self.skipTest(
+                "BENCH_API_KEY environment variable not set; cannot test live API calls"
+            )
 
         if not self.st01_dir.exists():
             self.skipTest("st01 task not found")
@@ -395,7 +397,12 @@ class LiveOpusTest(unittest.TestCase):
         try:
             response, usage = runner(prompt)
         except RuntimeError as e:
-            if "refused" in str(e).lower():
+            error_str = str(e).lower()
+            if "401" in error_str or "403" in error_str or "unauthorized" in error_str or "forbidden" in error_str:
+                self.skipTest(
+                    "API authentication failed (401/403); BENCH_API_KEY may be invalid or expired"
+                )
+            elif "refused" in error_str:
                 self.skipTest(f"opus refused: {e}")
             else:
                 self.fail(f"opus call failed: {e}")

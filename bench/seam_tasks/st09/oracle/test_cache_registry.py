@@ -95,7 +95,7 @@ def test_cache_consistency_after_load():
     try:
         from app import setup_routes
         setup_routes_result = setup_routes()
-    except:
+    except ImportError:
         pass
 
     # Then load data

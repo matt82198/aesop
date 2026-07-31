@@ -147,6 +147,13 @@ projection without emitting events), an `item_updated` event is emitted so repla
 them. The reconcile skips any item that already carries an explicit `item_updated` event -- that
 item is owned by the log, and overwriting it from a stale projection would revert a real update.
 
+**Refactoring (complexity reduction):** `_ensure_tracker_migrated()` refactored from radon E(39)
+→ C(19) via extraction of `_backfill_missing_items()` (A, cyclomatic 5) and
+`_reconcile_status_updates()` (C, cyclomatic 17). Per-record error handling preserved: one item's
+failure doesn't prevent others from backfilling/reconciling. Behavior byte-identical (invariant
+confirmed: no duplicate backfills, missing items backfilled, stale statuses reconciled, closed
+items not resurrected in projection).
+
 ## Cost view: absent vs empty → three distinct states
 
 **RESOLVED (wave-31 audit findings):**
@@ -164,3 +171,41 @@ New behavior: loads three distinct callout styles with honest messaging, preserv
 - `ModelMixTrendChart.tsx`: "Daily model usage distribution"  
 - `CostAnalyticsPanel.tsx` WaveSpendChart: "Spend per wave"
 Bar segments include `<title>` elements for tooltips. Tests verify presence and correctness.
+
+## SSE Collector Loop Refactoring (wave-32: sse.py complexity reduction)
+
+**Refactored** `ui/sse.py:collector_loop()` from radon F(43) → B(6) via `CollectorSource` abstraction. Each of 9 sources (data, backlog, agents, tracker, status, cost, collector_health + heartbeat) now declares its:
+- File path(s) to monitor
+- Change detection strategy (mtime+size tuple, multi-file mtime, fingerprint, always-update)
+- Snapshot builder function
+- Error tracking (per-source 5-error rolling buffer)
+
+**Implementation**: Base `CollectorSource` class + three detection strategies (`MtimeSizeGatedSource`, `MultiFileMtimeGatedSource`, `FingerprintGatedSource`) + 7 concrete sources. Main loop reduced to 48 lines iterating over source list; all extracted methods grade A-B (≤ 7 cyclomatic). **Behavior preserved**: event names, payload keys, field order, mtime-cache semantics, error handling, emission order all byte-identical (captured SSE streams verified).
+
+**Testing**: AST parse OK, encoding_lint OK, behavioral SSE proof (baseline vs refactored identical payloads), server runs with --demo. No changes to collectors.py, config.py, handlers.py, or React frontend.
+
+## HTTP handler route table (wave-32)
+
+**Refactored `ui/handler.py:do_GET` and `do_POST` from if/elif chains to route table lookup:**
+
+`DashboardHandler` now dispatches requests via two route tables per method:
+- `_GET_EXACT_ROUTES` (dict): 19 exact-match GET paths (checked first).
+- `_GET_PREFIX_ROUTES` (list): 9 prefix-match patterns, order-dependent for precedence preservation.
+- `_POST_EXACT_ROUTES` (dict): 2 exact-match POST paths.
+- `_POST_PREFIX_ROUTES` (list): 1 prefix-match pattern.
+
+`_route_get()` / `_route_post()` matchers: check exact dict first, then prefix list in order; 404 if no match.
+
+**Complexity reduction:**
+- `do_GET`: D(30) → A(2) (if/elif chain eliminated).
+- `do_POST`: A(5) → A(2) (if/elif chain eliminated).
+- `_route_get()` / `_route_post()`: A(4) each (linear scan with early exit).
+
+**Behavior preserved:**
+- All routes resolve to identical handlers with same status/headers/body.
+- Prefix precedence: exact matches before patterns; within patterns, list order matters (first match wins).
+- 404/405 fallthrough unchanged.
+- Security checks (Host-header DNS-rebinding mitigation, path-traversal containment on `/assets/*`, CSRF gating on mutations) untouched.
+- Hard 500 on missing `ui/web/dist` is intentional fail-closed behaviour (preserved).
+
+**Testing:** 24 unit tests PASS (Host header validation, DNS-rebinding defence, route resolution). No regression.

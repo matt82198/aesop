@@ -206,9 +206,96 @@ def _is_valid_host_header(host_header, expected_port):
 class DashboardHandler(http.server.BaseHTTPRequestHandler):
     """HTTP request handler for dashboard."""
 
+    # GET route table: exact matches (order-independent), then startswith patterns
+    # (order-dependent: first match wins to preserve original if/elif precedence).
+    _GET_EXACT_ROUTES = {
+        "/": "serve_html",
+        "/data": "serve_data",
+        "/api/state": "serve_api_state",
+        "/api/session": "serve_api_session",
+        "/api/cost": "serve_api_cost",
+        "/api/wave/prs": "serve_api_wave_prs",
+        "/api/wave/telemetry": "serve_api_wave_telemetry",
+        "/api/wave/dispatch": "serve_api_wave_dispatch",
+        "/api/wave/gantt": "serve_api_wave_gantt",
+        "/api/wave/audit-tail": "serve_api_wave_audit_tail",
+        "/api/wave/reasoning-tail": "serve_api_wave_reasoning_tail",
+        "/api/wave/quality-scorecards": "serve_api_wave_quality_scorecards",
+        "/api/backlog": "serve_backlog",
+        "/api/agents": "serve_agents",
+        "/api/bench": "serve_api_bench",
+        "/api/bench/compare": "serve_api_bench_compare",
+        "/api/state/streams": "serve_api_state_streams",
+        "/events": "serve_events",
+        "/favicon.ico": "serve_favicon",
+    }
+
+    # GET route table: startswith patterns (order matters — first match wins).
+    # Each entry is (prefix, handler_name). Order matches original if/elif chain.
+    _GET_PREFIX_ROUTES = [
+        ("/api/wave/failure", "serve_api_wave_failure"),
+        ("/api/agent?", "serve_api_agent"),
+        ("/api/quality/spec-sharpness", "serve_api_spec_sharpness"),
+        ("/api/context/files", "serve_api_file_scope"),
+        ("/api/tooling/summary", "serve_api_tooling_summary"),
+        ("/api/tracker", "serve_tracker"),
+        ("/api/state/events", "serve_api_state_events_wrapped"),
+        ("/assets/", "serve_asset"),
+        ("/agent?", "serve_agent"),
+    ]
+
+    # POST route table: exact matches (order-independent), then startswith patterns.
+    _POST_EXACT_ROUTES = {
+        "/submit": "handle_submit",
+        "/api/tracker": "handle_tracker_create",
+    }
+
+    # POST route table: startswith patterns (order matters).
+    _POST_PREFIX_ROUTES = [
+        ("/api/tracker/", "handle_tracker_mutate"),
+    ]
+
     def log_message(self, format, *args):
         """Suppress default logging."""
         pass
+
+    def _route_get(self):
+        """Route a GET request to its handler, or 404 if no match found."""
+        # Check exact matches first
+        if self.path in self._GET_EXACT_ROUTES:
+            handler_name = self._GET_EXACT_ROUTES[self.path]
+            handler = getattr(self, handler_name)
+            handler()
+            return
+
+        # Check prefix patterns (order matters for precedence)
+        for prefix, handler_name in self._GET_PREFIX_ROUTES:
+            if self.path.startswith(prefix):
+                handler = getattr(self, handler_name)
+                handler()
+                return
+
+        # No match found
+        self.send_error(404)
+
+    def _route_post(self):
+        """Route a POST request to its handler, or 404 if no match found."""
+        # Check exact matches first
+        if self.path in self._POST_EXACT_ROUTES:
+            handler_name = self._POST_EXACT_ROUTES[self.path]
+            handler = getattr(self, handler_name)
+            handler()
+            return
+
+        # Check prefix patterns (order matters for precedence)
+        for prefix, handler_name in self._POST_PREFIX_ROUTES:
+            if self.path.startswith(prefix):
+                handler = getattr(self, handler_name)
+                handler()
+                return
+
+        # No match found
+        self.send_error(404)
 
     def do_GET(self):
         """Handle GET requests."""
@@ -223,67 +310,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             ).encode('utf-8'))
             return
 
-        if self.path == "/":
-            self.serve_html()
-        elif self.path == "/data":
-            self.serve_data()
-        elif self.path == "/api/state":
-            self.serve_api_state()
-        elif self.path == "/api/session":
-            self.serve_api_session()
-        elif self.path == "/api/cost":
-            self.serve_api_cost()
-        elif self.path == "/api/wave/prs":
-            self.serve_api_wave_prs()
-        elif self.path == "/api/wave/telemetry":
-            self.serve_api_wave_telemetry()
-        elif self.path == "/api/wave/dispatch":
-            self.serve_api_wave_dispatch()
-        elif self.path == "/api/wave/gantt":
-            self.serve_api_wave_gantt()
-        elif self.path == "/api/wave/audit-tail":
-            self.serve_api_wave_audit_tail()
-        elif self.path == "/api/wave/reasoning-tail":
-            self.serve_api_wave_reasoning_tail()
-        elif self.path == "/api/wave/quality-scorecards":
-            self.serve_api_wave_quality_scorecards()
-        elif self.path.startswith("/api/wave/failure"):
-            self.serve_api_wave_failure()
-        elif self.path == "/api/backlog":
-            self.serve_backlog()
-        elif self.path == "/api/agents":
-            self.serve_agents()
-        elif self.path.startswith("/api/agent?"):
-            self.serve_api_agent()
-        elif self.path.startswith("/api/quality/spec-sharpness"):
-            self.serve_api_spec_sharpness()
-        elif self.path.startswith("/api/context/files"):
-            self.serve_api_file_scope()
-        elif self.path == "/api/bench":
-            self.serve_api_bench()
-        elif self.path == "/api/bench/compare":
-            self.serve_api_bench_compare()
-        elif self.path.startswith("/api/tooling/summary"):
-            self.serve_api_tooling_summary()
-        elif self.path.startswith("/api/tracker"):
-            self.serve_tracker()
-        elif self.path.startswith("/api/state/events"):
-            state_query_panel.serve_api_state_events(self)
-        elif self.path == "/api/state/streams":
-            state_query_panel.serve_api_state_streams(self)
-        elif self.path.startswith("/assets/"):
-            self.serve_asset()
-        elif self.path.startswith("/agent?"):
-            self.serve_agent()
-        elif self.path == "/events":
-            self.serve_events()
-        elif self.path == "/favicon.ico":
-            # Browsers auto-request this; answer 204 so it never 404s (keeps the
-            # console clean — the dashboard ships no favicon asset).
-            self.send_response(204)
-            self.end_headers()
-        else:
-            self.send_error(404)
+        self._route_get()
 
     def do_POST(self):
         """Handle POST requests."""
@@ -298,14 +325,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             ).encode('utf-8'))
             return
 
-        if self.path == "/submit":
-            self.handle_submit()
-        elif self.path == "/api/tracker":
-            self.handle_tracker_create()
-        elif self.path.startswith("/api/tracker/"):
-            self.handle_tracker_mutate()
-        else:
-            self.send_error(404)
+        self._route_post()
 
     def serve_html(self):
         """Serve the dashboard HTML.
@@ -1250,6 +1270,19 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             pass
         finally:
             unregister_sse_client(q)
+
+    def serve_api_state_streams(self):
+        """GET /api/state/streams — aggregate state stream view (routed by table)."""
+        state_query_panel.serve_api_state_streams(self)
+
+    def serve_api_state_events_wrapped(self):
+        """GET /api/state/events — temporal state query (routed by table)."""
+        state_query_panel.serve_api_state_events(self)
+
+    def serve_favicon(self):
+        """GET /favicon.ico — 204 No Content (browsers auto-request, no asset)."""
+        self.send_response(204)
+        self.end_headers()
 
     def handle_submit(self):
         """Handle /submit POST with CSRF protection."""
