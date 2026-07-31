@@ -40,6 +40,11 @@ import tempfile
 import time
 from pathlib import Path
 
+# Ensure this tool's own directory (tools/) is importable so the shared
+# playwright harness resolves regardless of cwd or how the file is loaded.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from playwright_common import free_port, copy_dist, start_server, stop_server, filter_real_console_errors
+
 REPO = Path(__file__).resolve().parent.parent
 SERVE = REPO / "ui" / "serve.py"
 
@@ -77,33 +82,6 @@ sys.exit(1)
 """
 
 
-def _real_console_errors(console_errors, failed_urls):
-    """Drop favicon/urlless-resource noise; surface real broken assets."""
-    non_favicon = [u for u in failed_urls if "favicon" not in u.lower()]
-    real = []
-    for e in console_errors:
-        low = e.lower()
-        if "favicon" in low:
-            continue
-        if "failed to load resource" in low and not non_favicon:
-            continue
-        real.append(e)
-    real.extend(f"failed resource: {u}" for u in non_favicon)
-    return real
-
-
-def free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-def copy_dist(root: Path):
-    real_dist = REPO / "ui" / "web" / "dist"
-    if real_dist.is_dir():
-        shutil.copytree(real_dist, root / "ui" / "web" / "dist")
 
 
 def make_fake_gh(bin_dir: Path, script_body: str) -> Path:
@@ -143,7 +121,7 @@ def build_root(gh_script: str):
     (root / "state").mkdir(exist_ok=True)
     (root / "transcripts").mkdir(exist_ok=True)
     (root / "dash").mkdir(exist_ok=True)
-    copy_dist(root)
+    copy_dist(root, REPO)
     (root / "dash" / "dash-extra.mjs").write_text(
         "console.log(JSON.stringify([]));\n", encoding="utf-8")
     gh_path = make_fake_gh(root / "fakebin", gh_script)
@@ -174,14 +152,6 @@ def start_server(root: Path, port: int, gh_path: Path):
             time.sleep(SERVER_BOOT_SLEEP)
     server.kill()
     raise RuntimeError("server never came up")
-
-
-def stop_server(server):
-    server.terminate()
-    try:
-        server.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        server.kill()
 
 
 def _boot(pw, gh_script):
@@ -249,7 +219,7 @@ def run_populated(pw, failures):
             failures.append(f"(f) javascript: href leaked: {e}")
         # (a) console clean
         time.sleep(0.4)
-        real = _real_console_errors(console_errors, failed_urls)
+        real = filter_real_console_errors(console_errors, failed_urls)
         if real:
             failures.append(f"(a) populated console errors: {real[:3]}")
     finally:
@@ -273,7 +243,7 @@ def run_empty(pw, failures):
         except Exception as e:
             failures.append(f"(g) empty state failed: {e}")
         time.sleep(0.4)
-        real = _real_console_errors(console_errors, failed_urls)
+        real = filter_real_console_errors(console_errors, failed_urls)
         if real:
             failures.append(f"(g) empty console errors: {real[:3]}")
     finally:
@@ -295,7 +265,7 @@ def run_unavailable(pw, failures):
         except Exception as e:
             failures.append(f"(h) gh-unavailable state failed: {e}")
         time.sleep(0.4)
-        real = _real_console_errors(console_errors, failed_urls)
+        real = filter_real_console_errors(console_errors, failed_urls)
         if real:
             failures.append(f"(h) unavailable console errors: {real[:3]}")
     finally:
