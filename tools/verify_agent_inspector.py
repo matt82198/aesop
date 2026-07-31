@@ -33,6 +33,11 @@ import tempfile
 import time
 from pathlib import Path
 
+# Ensure this tool's own directory (tools/) is importable so the shared
+# playwright harness resolves regardless of cwd or how the file is loaded.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from playwright_common import free_port, copy_dist, start_server, stop_server, filterfilter_real_console_errors
+
 REPO = Path(__file__).resolve().parent.parent
 SERVE = REPO / "ui" / "serve.py"
 
@@ -71,33 +76,6 @@ DASH_EXTRA_STUB = (
 )
 
 
-def _real_console_errors(console_errors, failed_urls):
-    """Drop favicon/urlless-resource noise; surface real broken assets."""
-    non_favicon = [u for u in failed_urls if "favicon" not in u.lower()]
-    real = []
-    for e in console_errors:
-        low = e.lower()
-        if "favicon" in low:
-            continue
-        if "failed to load resource" in low and not non_favicon:
-            continue
-        real.append(e)
-    real.extend(f"failed resource: {u}" for u in non_favicon)
-    return real
-
-
-def free_port():
-    s = socket.socket()
-    s.bind(("127.0.0.1", 0))
-    port = s.getsockname()[1]
-    s.close()
-    return port
-
-
-def copy_dist(root: Path):
-    real_dist = REPO / "ui" / "web" / "dist"
-    if real_dist.is_dir():
-        shutil.copytree(real_dist, root / "ui" / "web" / "dist")
 
 
 def build_root():
@@ -107,7 +85,7 @@ def build_root():
     transcripts = root / "transcripts"
     transcripts.mkdir(exist_ok=True)
     (root / "dash").mkdir(exist_ok=True)
-    copy_dist(root)
+    copy_dist(root, REPO)
     (root / "dash" / "dash-extra.mjs").write_text(DASH_EXTRA_STUB, encoding="utf-8")
 
     lines = [
@@ -125,43 +103,10 @@ def build_root():
     return root
 
 
-def start_server(root: Path, port: int):
-    state_root = root / "state"
-    real_state = Path.home() / "aesop" / "state"
-    if state_root.resolve() == real_state.resolve():
-        raise RuntimeError("state dir resolved to real repo state (~aesop/state)")
-    env = dict(os.environ,
-               AESOP_ROOT=str(root),
-               AESOP_STATE_ROOT=str(state_root),
-               AESOP_TRANSCRIPTS_ROOT=str(root / "transcripts"),
-               AESOP_WEB_DIST=str(REPO / "ui" / "web" / "dist"),
-               AESOP_PROOF_FIXTURES="1",
-               AESOP_UI_COLLECT_INTERVAL="0.3",
-               PORT=str(port))
-    server = subprocess.Popen([sys.executable, str(SERVE)], env=env,
-                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    for _ in range(SERVER_BOOT_TRIES):
-        try:
-            socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
-            return server
-        except OSError:
-            time.sleep(SERVER_BOOT_SLEEP)
-    server.kill()
-    raise RuntimeError("server never came up")
-
-
-def stop_server(server):
-    server.terminate()
-    try:
-        server.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        server.kill()
-
-
 def run_populated(pw, failures):
     root = build_root()
     port = free_port()
-    server = start_server(root, port)
+    server = start_server(root, port, REPO, SERVE, SERVER_BOOT_TRIES, SERVER_BOOT_SLEEP, "0.3")
     browser = pw.chromium.launch(headless=True)
     page = browser.new_page()
     console_errors, failed_urls = [], []
@@ -242,7 +187,7 @@ def run_populated(pw, failures):
 
         # (a) console clean
         time.sleep(0.4)
-        real = _real_console_errors(console_errors, failed_urls)
+        real = filter_real_console_errors(console_errors, failed_urls)
         if real:
             failures.append(f"(a) console errors: {real[:3]}")
     finally:

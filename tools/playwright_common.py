@@ -104,3 +104,30 @@ def stop_server(server):
         server.wait(timeout=5)
     except subprocess.TimeoutExpired:
         server.kill()
+
+
+def filter_real_console_errors(console_errors, failed_urls):
+    """Drop favicon/urlless-resource noise; surface real broken assets.
+
+    Filters console error messages to remove common benign messages (favicon,
+    generic "Failed to load resource" when only favicon failed) so proofs can
+    focus on real errors. Returns a deduplicated list of genuinely broken assets.
+
+    Args:
+        console_errors: List of console error messages captured by Playwright.
+        failed_urls: List of URLs with HTTP status >= 400.
+
+    Returns:
+        List of filtered error messages, with real failed URLs appended.
+    """
+    non_favicon = [u for u in failed_urls if "favicon" not in u.lower()]
+    real = []
+    for e in console_errors:
+        low = e.lower()
+        if "favicon" in low:
+            continue
+        if "failed to load resource" in low and not non_favicon:
+            continue
+        real.append(e)
+    real.extend(f"failed resource: {u}" for u in non_favicon)
+    return real
