@@ -418,7 +418,7 @@ class TranscriptSampler:
         output_path = Path(self.output_dir) / output_file
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with open(output_path, 'w') as f:
+        with open(output_path, 'w', encoding='utf-8') as f:
             for task in self.tasks:
                 f.write(task.to_json() + '\n')
 

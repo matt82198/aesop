@@ -83,7 +83,7 @@ print(f"Has validation error: {'required field' in output}")
         os.path.dirname(__file__), "temp_prod_test.py"
     )
     try:
-        with open(test_file, "w") as f:
+        with open(test_file, "w", encoding="utf-8") as f:
             f.write(test_script)
 
         result = subprocess.run(
