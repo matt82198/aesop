@@ -147,3 +147,4 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 
 - `encoding_lint.py` -- flags `subprocess.run`/`Popen` calls that pass `text=True`/`universal_newlines=True` without an explicit `encoding=`. Note it scans the WHOLE repo, not only changed files, so a single violation anywhere blocks every push that touches Python.
 - Convention: every subprocess call that decodes output passes `encoding='utf-8'`. Without it Python decodes using the platform default, which on Windows is the ANSI codepage (cp1252); that corrupts non-ASCII tool output and is a known source of Windows-passes/Linux-fails drift.
+- `merge_train.py` forces stdout to UTF-8 at startup to handle non-ASCII PR titles on Windows (U+FEFF BOM in titles caused cp1252 UnicodeEncodeError).
