@@ -18,8 +18,6 @@ import sys
 from pathlib import Path
 from typing import Dict, List
 
-from lint_core import Finding, exit_code
-
 # Known large files that are allowed to exceed thresholds.
 # Key: repo-relative POSIX path, value: {"max_lines": N, "max_bytes": N}
 # Omit a key to use the global default for that dimension.

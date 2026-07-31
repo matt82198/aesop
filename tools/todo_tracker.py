@@ -16,8 +16,6 @@ import os
 import re
 import sys
 
-from lint_core import exit_code
-
 # File extensions to scan
 EXTENSIONS = frozenset([
     '.py', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.sh', '.bash',

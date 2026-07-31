@@ -17,8 +17,6 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from lint_core import exit_code
-
 
 def discover_python_files(roots):
     """Walk directories and yield .py file paths."""

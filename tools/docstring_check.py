@@ -34,8 +34,6 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from lint_core import Finding, exit_code
-
 DEFAULT_SCAN_DIRS = ["tools", "driver", "state_store"]
 
 SUPPRESS_MARKER = "# docstring-ok"
