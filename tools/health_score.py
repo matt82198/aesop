@@ -240,6 +240,7 @@ def _check_git_identity(cwd_path):
             cwd=str(cwd_path),
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=5
         )
         email_result = subprocess.run(
@@ -247,6 +248,7 @@ def _check_git_identity(cwd_path):
             cwd=str(cwd_path),
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=5
         )
 
@@ -279,6 +281,7 @@ def _check_secret_scan_runnable(cwd_path):
             [sys.executable, str(secret_scan), "--help"],
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=5
         )
         if result.returncode == 0 or "usage" in result.stdout.lower():

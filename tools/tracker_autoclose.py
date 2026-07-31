@@ -145,6 +145,7 @@ def check_pr_merged(pr_number, skip_gh=False):
             ["gh", "pr", "view", str(pr_number), "--json", "state,mergedAt"],
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=5,
         )
         if result.returncode != 0:
@@ -214,6 +215,7 @@ def check_files_on_main(owns_files, skip_git=False):
                     ["git", "cat-file", "-e", f"origin/main:{file_path}"],
                     capture_output=True,
                     text=True,
+                    encoding='utf-8',
                     timeout=5,
                 )
                 present = result.returncode == 0

@@ -34,6 +34,7 @@ def run_command(cmd, cwd=None):
             cwd=cwd,
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=10
         )
         return result.returncode, result.stdout, result.stderr

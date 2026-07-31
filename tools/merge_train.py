@@ -34,7 +34,7 @@ RETRIABLE_RERUN_ERRORS = [
 
 def gh(*args: str) -> dict | str:
     cmd = ["gh"] + list(args)
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=60)
     if result.returncode != 0:
         return {"error": result.stderr.strip(), "rc": result.returncode}
     out = result.stdout.strip()
@@ -146,7 +146,7 @@ def retry_ci(n: int, head_ref_name: str) -> bool:
 
 def git(*args: str) -> tuple[bool, str]:
     cmd = ["git"] + list(args)
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=120)
     out = (result.stdout.strip() + "\n" + result.stderr.strip()).strip()
     return (result.returncode == 0, out)
 

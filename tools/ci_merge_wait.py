@@ -51,6 +51,7 @@ def run_gh_command(args):
             args,
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=30,
         )
         if result.returncode != 0:
@@ -258,6 +259,7 @@ def merge_pr(pr_number, merge_method, dry_run=False, head_ref_oid=None):
         merge_cmd,
         capture_output=True,
         text=True,
+        encoding='utf-8',
         timeout=30,
     )
     return result.returncode == 0

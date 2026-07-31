@@ -175,6 +175,7 @@ def main():
             ["git", "ls-files", "tests/test_*.py"],
             capture_output=True,
             text=True,
+            encoding='utf-8',
             check=True,
         )
         tracked_files = result.stdout.strip().split("\n") if result.stdout.strip() else []

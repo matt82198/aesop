@@ -238,6 +238,7 @@ def run_tests(test_module_path: str, work_dir: str, timeout: int = 30) -> Tuple[
             cwd=work_dir,
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=timeout,
             env=env,
         )

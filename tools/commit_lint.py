@@ -90,7 +90,7 @@ def get_commits_from_range(commit_range: str) -> list:
     try:
         result = subprocess.run(
             ["git", "log", "--format=%H%n%B%n---commit-lint-sep---", commit_range],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, encoding='utf-8', timeout=30,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

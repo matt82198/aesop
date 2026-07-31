@@ -59,6 +59,7 @@ def run_server(fixture_root, port, extra_env=None):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding='utf-8',
     )
 
     # Wait for server to be ready (crude: sleep and probe)

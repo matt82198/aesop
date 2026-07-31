@@ -54,7 +54,7 @@ def _get_default_author_email(repo_root: Optional[str] = None) -> Optional[str]:
         cmd += ["-C", str(repo_root)]
     cmd += ["config", "user.email"]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=5)
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
     except Exception:
