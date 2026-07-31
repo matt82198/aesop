@@ -176,3 +176,29 @@ Bar segments include `<title>` elements for tooltips. Tests verify presence and 
 **Implementation**: Base `CollectorSource` class + three detection strategies (`MtimeSizeGatedSource`, `MultiFileMtimeGatedSource`, `FingerprintGatedSource`) + 7 concrete sources. Main loop reduced to 48 lines iterating over source list; all extracted methods grade A-B (≤ 7 cyclomatic). **Behavior preserved**: event names, payload keys, field order, mtime-cache semantics, error handling, emission order all byte-identical (captured SSE streams verified).
 
 **Testing**: AST parse OK, encoding_lint OK, behavioral SSE proof (baseline vs refactored identical payloads), server runs with --demo. No changes to collectors.py, config.py, handlers.py, or React frontend.
+
+## HTTP handler route table (wave-32)
+
+**Refactored `ui/handler.py:do_GET` and `do_POST` from if/elif chains to route table lookup:**
+
+`DashboardHandler` now dispatches requests via two route tables per method:
+- `_GET_EXACT_ROUTES` (dict): 19 exact-match GET paths (checked first).
+- `_GET_PREFIX_ROUTES` (list): 9 prefix-match patterns, order-dependent for precedence preservation.
+- `_POST_EXACT_ROUTES` (dict): 2 exact-match POST paths.
+- `_POST_PREFIX_ROUTES` (list): 1 prefix-match pattern.
+
+`_route_get()` / `_route_post()` matchers: check exact dict first, then prefix list in order; 404 if no match.
+
+**Complexity reduction:**
+- `do_GET`: D(30) → A(2) (if/elif chain eliminated).
+- `do_POST`: A(5) → A(2) (if/elif chain eliminated).
+- `_route_get()` / `_route_post()`: A(4) each (linear scan with early exit).
+
+**Behavior preserved:**
+- All routes resolve to identical handlers with same status/headers/body.
+- Prefix precedence: exact matches before patterns; within patterns, list order matters (first match wins).
+- 404/405 fallthrough unchanged.
+- Security checks (Host-header DNS-rebinding mitigation, path-traversal containment on `/assets/*`, CSRF gating on mutations) untouched.
+- Hard 500 on missing `ui/web/dist` is intentional fail-closed behaviour (preserved).
+
+**Testing:** 24 unit tests PASS (Host header validation, DNS-rebinding defence, route resolution). No regression.
