@@ -147,8 +147,8 @@ class TestStatemdVerifierEscapeRepro(unittest.TestCase):
 
     def test_clean_accurate_state_md(self):
         """
-        Fixture: STATE.md claims are accurate (no conflicts, no unmerged files)
-        Expected: verifier exits 0 with no findings
+        Fixture: STATE.md claims are accurate (has version claim matching repo)
+        Expected: verifier exits 0 with no contradictions
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
@@ -192,9 +192,21 @@ class TestStatemdVerifierEscapeRepro(unittest.TestCase):
                 check=True
             )
 
-            # Create STATE.md with no conflicting claims
+            # Create a tag for version v1.0.0
+            subprocess.run(
+                ["git", "tag", "v1.0.0"],
+                cwd=tmpdir_path,
+                capture_output=True,
+                check=True
+            )
+
+            # Create package.json with matching version
+            pkg_json = tmpdir_path / "package.json"
+            pkg_json.write_text('{"version": "1.0.0"}\n')
+
+            # Create STATE.md with version claim matching the repo
             state_md = tmpdir_path / "STATE.md"
-            state_md.write_text("# Checkpoint\n\nNo conflicts to report.\n")
+            state_md.write_text("# Checkpoint\n\n**Current Version:** v1.0.0\n\nNo conflicts to report.\n")
 
             # Run verifier
             rc, stdout, stderr = state_md_verifier.run_command(
@@ -476,6 +488,90 @@ class TestStatemdVerifierIntegration(unittest.TestCase):
             self.assertIn("pushed", claims)
             # Should have detected the claims
             self.assertGreater(len(claims["resolved"]), 0)
+
+
+    def test_stale_version_contradiction(self):
+        """
+        Test that a STATE.md claiming v0.5.0 is detected as stale when repo is v0.7.0.
+        This is the core bug reported: version claims were not extracted at all.
+        """
+        fixture_path = Path(__file__).parent / "fixtures" / "state_md_stale.md"
+
+        if not fixture_path.exists():
+            self.skipTest(f"Fixture not found: {fixture_path}")
+
+        # Run verifier on the fixture
+        rc, stdout, stderr = state_md_verifier.run_command(
+            [sys.executable, str(tools_path / "state_md_verifier.py"),
+             "--state-md", str(fixture_path), "--json"]
+        )
+
+        # Must exit non-zero (failure) because version is stale
+        self.assertNotEqual(rc, 0,
+            f"Expected non-zero exit for stale STATE.md, got {rc}. stdout: {stdout}")
+
+        # Should have a contradiction in findings
+        try:
+            result = json.loads(stdout)
+            contradiction_count = result.get("contradiction_count", 0)
+            findings = result.get("findings", [])
+            self.assertGreater(contradiction_count, 0,
+                f"Expected contradiction_count > 0 for stale version, got {contradiction_count}")
+
+            # Check that at least one finding mentions version
+            version_findings = [f for f in findings if "version" in f.get("claim", "").lower() or "version" in f.get("detail", "").lower()]
+            self.assertGreater(len(version_findings), 0,
+                f"Expected version-related finding, got findings: {findings}")
+        except json.JSONDecodeError:
+            self.fail(f"Could not parse JSON output: {stdout}")
+
+    def test_current_version_passes(self):
+        """
+        Test that a STATE.md claiming v0.7.0 passes when repo is v0.7.0.
+        """
+        fixture_path = Path(__file__).parent / "fixtures" / "state_md_current.md"
+
+        if not fixture_path.exists():
+            self.skipTest(f"Fixture not found: {fixture_path}")
+
+        # Run verifier on the fixture
+        rc, stdout, stderr = state_md_verifier.run_command(
+            [sys.executable, str(tools_path / "state_md_verifier.py"),
+             "--state-md", str(fixture_path), "--json"]
+        )
+
+        # Must exit 0 (success) for current version
+        self.assertEqual(rc, 0,
+            f"Expected exit 0 for current STATE.md, got {rc}. stdout: {stdout}")
+
+        # Contradiction count should be 0
+        try:
+            result = json.loads(stdout)
+            contradiction_count = result.get("contradiction_count", 0)
+            self.assertEqual(contradiction_count, 0,
+                f"Expected no contradictions for current version, got {contradiction_count}. findings: {result.get('findings', [])}")
+        except json.JSONDecodeError:
+            self.fail(f"Could not parse JSON output: {stdout}")
+
+    def test_zero_claims_fails_closed(self):
+        """
+        Test that a STATE.md with zero verifiable claims exits non-zero (fail-closed).
+        This is the core fail-closed requirement: "nothing to check" must not read as "all good".
+        """
+        fixture_path = Path(__file__).parent / "fixtures" / "state_md_empty.md"
+
+        if not fixture_path.exists():
+            self.skipTest(f"Fixture not found: {fixture_path}")
+
+        # Run verifier on the fixture
+        rc, stdout, stderr = state_md_verifier.run_command(
+            [sys.executable, str(tools_path / "state_md_verifier.py"),
+             "--state-md", str(fixture_path), "--json"]
+        )
+
+        # Must exit non-zero (failure) because there's nothing to verify
+        self.assertNotEqual(rc, 0,
+            f"Expected non-zero exit for STATE.md with zero verifiable claims (fail-closed), got {rc}")
 
 
 if __name__ == "__main__":
