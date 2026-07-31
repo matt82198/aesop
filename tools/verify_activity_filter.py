@@ -45,7 +45,7 @@ from pathlib import Path
 # Ensure this tool's own directory (tools/) is importable so the shared
 # playwright harness resolves regardless of cwd or how the file is loaded.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from playwright_common import free_port, copy_dist, start_server, stop_server, filterfilter_real_console_errors
+from playwright_common import free_port, copy_dist, start_server, stop_server, filter_real_console_errors
 
 REPO = Path(__file__).resolve().parent.parent
 SERVE = REPO / "ui" / "serve.py"
