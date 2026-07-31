@@ -92,59 +92,9 @@ Pre-commit hook running `tools/dispatch_lint.py` on staged files. Blocks commits
 
 ## hook_preflight.py — Interpreter health check
 
-**Purpose**: Verifies that all interpreters required by hooks and daemons are present and executable.
-Detects broken or missing interpreters BEFORE hooks run silently with fail-open behavior.
-A git hook whose interpreter vanishes must not fail silently; this tool makes the failure loud and detectable.
-
-**How it works**:
-1. Scans all files in `hooks/` and `daemons/` directories.
-2. Extracts shebang from each file (first line, pattern: `#!<interpreter>`).
-3. For each interpreter found, attempts to execute it with `--version` to verify it actually works.
-4. Detects wrapper stubs (file exists, is small, but fails to execute).
-5. Fails loudly (exit 1) if any interpreter is missing or broken.
-6. Never exits 0 without checking at least one interpreter (exit 2 if no checks performed).
-
-**Exit codes**:
-- `0`: All required interpreters present and executable.
-- `1`: One or more interpreters missing, broken, or unable to execute.
-- `2`: Unable to perform any checks (e.g., cannot determine hook directory, no files found).
-
-**Installation**: Already in `tools/hook_preflight.py`.
-
-**Usage**:
-```bash
-python tools/hook_preflight.py
-# Checks all hooks in hooks/ and daemons/
-```
-
-**Test Command**: 
-```bash
-python -m pytest tests/test_hook_preflight.py -v
-```
-
-Tests cover:
-- Missing interpreter → non-zero exit
-- Wrapper stub that cannot exec → non-zero exit  
-- All interpreters present → zero exit
-- Zero checks performed → non-zero exit (2, not 0)
-
-**Integration with pre-push-policy.sh**:
-The hook itself includes an early interpreter guard (added after shebang and `set -uo pipefail`):
-```bash
-if ! command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
-  printf 'FATAL: pre-push-policy.sh requires python3 or python on PATH (guardrail G12)\n' >&2
-  printf 'Without Python, secret_scan and other tools cannot run. Push blocked.\n' >&2
-  exit 1
-fi
-```
-
-This guard blocks the push with a clear error message if Python (required by secret_scan.py and other tools) is missing.
-
-**Live failure scenario (wave-incident fix)**:
-- `C:\Program Files\Git\bin\bash.exe` was deleted, leaving a 47KB wrapper stub.
-- Pre-push hook ran silently with fail-open (no stderr, no block), bypassing secret-scan gate for ~10 hours.
-- Git's own error handling did not report this.
-- Fix: hook_preflight.py detects this; early guard in pre-push-policy.sh fails loudly; orchestrator can run preflight before waves.
+Verifies interpreters in hooks/daemons are present and executable. Detects missing/broken interpreters that silently fail.
+Usage: `python tools/hook_preflight.py` — exit 0=all OK, 1=broken interpreter, 2=no checks performed.
+Early guard in pre-push-policy.sh blocks push if Python missing (required for secret_scan.py).
 
 ## Dropped (reason)
 - `docs/HOOK-INSTALL.md` comprehensive guide inlined above (GitHub config, troubleshooting, customization, rotation); refer to that file if org needs full runbook for distribution teams.
