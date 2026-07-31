@@ -2,7 +2,8 @@
 """
 Test suite for verify_test_suite_count tool.
 
-Tests the --check (verify mode) and --fix (auto-rewrite) functionality.
+Tests the --check (auto-correct mode) and --fix (explicit rewrite) functionality,
+plus new fail-closed behavior (missing sections = exit 1, can't-evaluate = exit 2).
 """
 
 import os
@@ -77,8 +78,8 @@ class TestVerifyTestSuiteCount(unittest.TestCase):
             f"Expected --check to pass with actual counts. stderr: {result.stderr}",
         )
 
-    def test_check_mode_fails_when_counts_drift(self):
-        """--check should exit 1 when counts drift from actual files."""
+    def test_check_mode_auto_corrects_drift(self):
+        """--check should auto-correct drift and exit 0 (treadmill fix)."""
         # Corrupt the count in CLAUDE.md
         claudemd_path = self.repo_root / "tests" / "CLAUDE.md"
         content = claudemd_path.read_text()
@@ -105,10 +106,51 @@ class TestVerifyTestSuiteCount(unittest.TestCase):
                 cwd=str(self.repo_root),
                 timeout=30,
             )
-            self.assertNotEqual(
+            # NEW BEHAVIOR: --check auto-corrects and exits 0
+            self.assertEqual(
                 result.returncode,
                 0,
-                f"Expected --check to fail with corrupted counts. stdout: {result.stdout}",
+                f"Expected --check to auto-correct and pass. stderr: {result.stderr}",
+            )
+            # Verify it auto-corrected by reading the file
+            updated_content = Path(tmp_path).read_text()
+            self.assertNotIn("99999", updated_content)
+            self.assertIn("AUTO-CORRECT", result.stdout)
+        finally:
+            os.unlink(tmp_path)
+
+    def test_check_mode_fails_on_missing_sections(self):
+        """--check should exit 1 if documented sections are missing (real invariant)."""
+        # Create CLAUDE.md with missing Python section
+        claudemd_path = self.repo_root / "tests" / "CLAUDE.md"
+        content = claudemd_path.read_text()
+        corrupted = re.sub(
+            r"\*\*Python \(\d+ suites?\)\*\*:",
+            "**Python SECTION REMOVED**:",
+            content
+        )
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".md", delete=False, dir=str(self.repo_root / "tests")
+        ) as tmp:
+            tmp.write(corrupted)
+            tmp.flush()
+            tmp_path = tmp.name
+
+        try:
+            result = subprocess.run(
+                [sys.executable, str(self.repo_root / "tools" / "verify_test_suite_count.py"),
+                 "--check", "--claudemd", tmp_path],
+                capture_output=True,
+                text=True,
+                cwd=str(self.repo_root),
+                timeout=30,
+            )
+            # Real invariant broken: should exit 1
+            self.assertEqual(
+                result.returncode,
+                1,
+                f"Expected exit 1 for missing sections. stdout: {result.stdout}",
             )
         finally:
             os.unlink(tmp_path)
