@@ -7,15 +7,10 @@ import pathlib
 import sys
 from datetime import datetime, timedelta
 
-
-def walk_jsonl(directory):
-    """Recursively find all .jsonl files in a directory."""
-    result = []
-    for root, dirs, files in os.walk(directory):
-        for f in files:
-            if f.endswith(".jsonl"):
-                result.append(os.path.join(root, f))
-    return result
+try:
+    from transcript_reader import walk_jsonl, parse_jsonl_file
+except ImportError:
+    from tools.transcript_reader import walk_jsonl, parse_jsonl_file
 
 
 def main():
@@ -71,19 +66,14 @@ def main():
         except Exception:
             continue
 
-        try:
-            with open(fp, "r", encoding="utf-8") as f:
-                lines = f.read().split("\n")
-        except Exception:
-            continue
+        # Parse JSONL file, skipping malformed lines
+        objs = parse_jsonl_file(fp)
 
         base = os.path.basename(fp)
-        for line in lines:
-            if not line.strip() or ('"Agent"' not in line and '"Task"' not in line):
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
+        for obj in objs:
+            # Quick pre-filter: only process if this line contains Agent or Task
+            # (avoid processing all lines from every file)
+            if not obj or (obj.get("message") is None):
                 continue
 
             content = obj.get("message", {}).get("content")

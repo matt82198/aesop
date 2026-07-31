@@ -5,6 +5,11 @@ import os
 import pathlib
 from datetime import datetime
 
+try:
+    from transcript_reader import walk_jsonl, parse_jsonl_file, parse_timestamp, filter_by_project
+except ImportError:
+    from tools.transcript_reader import walk_jsonl, parse_jsonl_file, parse_timestamp, filter_by_project
+
 
 def fmt_time(ts_ms):
     """Format timestamp in milliseconds to ISO format with Z suffix."""
@@ -45,16 +50,6 @@ def result_text(content):
     return ""
 
 
-def walk_jsonl(directory):
-    """Recursively find all .jsonl files in a directory."""
-    result = []
-    for root, dirs, files in os.walk(directory):
-        for f in files:
-            if f.endswith(".jsonl"):
-                result.append(os.path.join(root, f))
-    return result
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Extract timeline of file changes (Write/Edit/Read) from Claude Code transcripts."
@@ -82,24 +77,12 @@ def main():
     snaps = []  # {rel, ts, size, kind, src, content}
 
     for fp in files:
-        try:
-            with open(fp, "r", encoding="utf-8") as f:
-                lines = f.read().split("\n")
-        except Exception:
-            continue
+        # Parse JSONL file, skipping malformed lines
+        objs = parse_jsonl_file(fp)
 
         base = os.path.basename(fp)
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            ts = 0
-            if obj.get("timestamp"):
-                ts = int(datetime.fromisoformat(obj["timestamp"]).timestamp() * 1000)
+        for obj in objs:
+            ts = parse_timestamp(obj.get("timestamp"))
 
             content = obj.get("message", {}).get("content")
             if not isinstance(content, list):

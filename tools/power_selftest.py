@@ -29,6 +29,11 @@ from pathlib import Path
 from datetime import datetime
 from collections import namedtuple
 
+try:
+    from health_checks import check_watchdog_heartbeat, check_monitor_heartbeat
+except ImportError:
+    from tools.health_checks import check_watchdog_heartbeat, check_monitor_heartbeat
+
 # Force UTF-8 encoding on stdout to prevent UnicodeEncodeError on Windows
 if sys.stdout.encoding != 'utf-8':
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -204,38 +209,38 @@ def check_brain():
 
 
 def check_beats():
-    """Check heartbeats. Returns Check."""
+    """Check heartbeats using shared health_checks module. Returns Check."""
     try:
         heartbeat_results = []
 
-        # Watchdog heartbeat
+        # Watchdog heartbeat (using shared health_checks module)
         try:
-            watchdog_beat = paths['state_root'] / '.watchdog-heartbeat'
-            if watchdog_beat.exists():
-                epoch_time = float(watchdog_beat.read_text().strip())
-                age = datetime.now().timestamp() - epoch_time
-                if age > 300:
-                    heartbeat_results.append(('watchdog', 'stale', int(age)))
-                else:
-                    heartbeat_results.append(('watchdog', 'ok', int(age)))
-            else:
+            is_stale, age, info = check_watchdog_heartbeat(paths['state_root'])
+            if info and "missing" in info.lower():
                 heartbeat_results.append(('watchdog', 'missing', None))
-        except Exception as e:
+            elif is_stale and age > 0:
+                heartbeat_results.append(('watchdog', 'stale', int(age)))
+            elif is_stale and age == 0:
+                # Unreadable or unparseable
+                heartbeat_results.append(('watchdog', 'n/a', None))
+            else:
+                heartbeat_results.append(('watchdog', 'ok', int(age)))
+        except Exception:
             heartbeat_results.append(('watchdog', 'n/a', None))
 
-        # Orchestration monitor heartbeat
+        # Monitor heartbeat (using shared health_checks module)
         try:
-            monitor_beat = paths['state_root'] / '.monitor-heartbeat'
-            if monitor_beat.exists():
-                epoch_time = float(monitor_beat.read_text().strip())
-                age = datetime.now().timestamp() - epoch_time
-                if age > 3600:
-                    heartbeat_results.append(('monitor', 'stale', int(age)))
-                else:
-                    heartbeat_results.append(('monitor', 'ok', int(age)))
-            else:
+            is_stale, age, info = check_monitor_heartbeat(paths['state_root'])
+            if info and "missing" in info.lower():
                 heartbeat_results.append(('monitor', 'missing', None))
-        except Exception as e:
+            elif is_stale and age > 0:
+                heartbeat_results.append(('monitor', 'stale', int(age)))
+            elif is_stale and age == 0:
+                # Unreadable or unparseable
+                heartbeat_results.append(('monitor', 'n/a', None))
+            else:
+                heartbeat_results.append(('monitor', 'ok', int(age)))
+        except Exception:
             heartbeat_results.append(('monitor', 'n/a', None))
 
         # Determine beats status
@@ -253,7 +258,7 @@ def check_beats():
             return Check('beats', 'WARN', details, False)
         else:
             return Check('beats', 'OK', None, False)
-    except Exception as e:
+    except Exception:
         return Check('beats', 'OK', '(n/a)', False)
 
 
