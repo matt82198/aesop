@@ -200,4 +200,4 @@ If you are building a team of autonomous agents, this is the thing to learn: the
 - Convergence log: `docs/convergence-log-wave1.md`
 - Wave metrics: `docs/RECEIPTS.md`
 
-**For the hiring reader:** This document anchors every claim to git, execution logs, and committed test evidence. If you clone the repo, you can verify: run `git log --oneline | wc -l` (1,380 commits), run `bash scripts/verify-stats.sh --check` (508 PRs), run `python tools/verify_test_suite_count.py` (254 test suites across 3 harnesses), run `python tools/health_score.py` (10 readiness checks). The system is not theoretical; it is documented and reproducible.
+**For the hiring reader:** This document anchors every claim to git, execution logs, and committed test evidence. If you clone the repo, you can verify: run `git log --oneline | wc -l` (1,380 commits), run `bash scripts/verify-stats.sh --check` (508 PRs), run `npm test` (254 test suites across 3 harnesses), run `python tools/health_score.py` (10 readiness checks). The system is not theoretical; it is documented and reproducible.
