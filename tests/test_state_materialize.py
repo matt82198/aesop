@@ -323,7 +323,7 @@ class TestConcurrencyRegressionTrackerRender(unittest.TestCase):
         def thread_a_update_status():
             """Simulate WriteAPI.tracker_update_status race."""
             try:
-                time.sleep(0.01)  # Let thread B get ahead slightly
+                time.sleep(0.01)  # sleep-ok: interleaving nudge, not a temporal assertion
                 api = StateAPI(self.db_path)
                 api.append("tracker", "item_updated", {
                     "id": "initial-item",
