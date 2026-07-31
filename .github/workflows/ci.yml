@@ -193,6 +193,14 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/tracker_autoclose.py --check
 
+      - name: Test suite count drift gate
+        if: matrix.python-shard == 0
+        run: python tools/verify_test_suite_count.py --check
+
+      - name: UI trio redaction proof (falsifiability)
+        if: matrix.python-shard == 0
+        run: python tools/verify_ui_trio_redaction_proof.py
+
       - name: Secret scan
         if: matrix.python-shard == 0
         run: python tools/secret_scan.py .
@@ -342,6 +350,9 @@ jobs:
 
       - name: Run UI trio browser proof (verify_ui_trio)
         run: python tools/verify_ui_trio.py
+
+      - name: Run cost panel browser proof (verify_cost_panel)
+        run: python tools/verify_cost_panel.py
 
       - name: Run watchdog GUI tests
         run: bash tests/dash-watchdog-gui.test.sh
