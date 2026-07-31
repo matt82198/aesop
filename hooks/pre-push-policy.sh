@@ -640,6 +640,72 @@ log_block() {
   release_audit_lock "$lock_dir"
 }
 
+check_encoding_lint() {
+  # Guardrail G10 extension: encoding lint for subprocess calls.
+  # Runs tools/encoding_lint.py --check against staged Python files.
+  # Fail-open if tool missing (optional tooling); fail-closed on actual findings.
+  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local lint_script="$aesop_root/tools/encoding_lint.py"
+
+  if [ ! -f "$lint_script" ] || [ ! -x "$lint_script" ]; then
+    log_event "encoding_lint_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; encoding lint skipped\n' >&2
+    log_event "encoding_lint_skipped_no_python"
+    return 0
+  fi
+
+  local lint_output
+  lint_output=$("$py_bin" "$lint_script" --check 2>&1)
+  local lint_exit_code=$?
+
+  if [ $lint_exit_code -ne 0 ]; then
+    if [ -n "$lint_output" ]; then
+      printf '%s\n' "$lint_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
+check_test_coverage() {
+  # Guardrail G2 extension: verify all on-disk test files are run by CI.
+  # Runs tools/verify_test_coverage.py --check to detect orphaned tests.
+  # Fail-open if tool missing (optional tooling); fail-closed on findings.
+  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local coverage_script="$aesop_root/tools/verify_test_coverage.py"
+
+  if [ ! -f "$coverage_script" ] || [ ! -x "$coverage_script" ]; then
+    log_event "test_coverage_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; test coverage check skipped\n' >&2
+    log_event "test_coverage_skipped_no_python"
+    return 0
+  fi
+
+  local coverage_output
+  coverage_output=$("$py_bin" "$coverage_script" --check 2>&1)
+  local coverage_exit_code=$?
+
+  if [ $coverage_exit_code -ne 0 ]; then
+    if [ -n "$coverage_output" ]; then
+      printf '%s\n' "$coverage_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
 run_test_mode() {
   local test_passed=0
   local test_failed=0
@@ -1238,6 +1304,18 @@ main() {
   if ! check_tracker_guard; then
     printf 'Error: Tracker zombie-resurrection gate failed. Push blocked.\n' >&2
     log_block "tracker_guard_failure"
+    exit 1
+  fi
+
+  if ! check_encoding_lint; then
+    printf 'Error: Encoding lint check failed. Push blocked.\n' >&2
+    log_block "encoding_lint_failure"
+    exit 1
+  fi
+
+  if ! check_test_coverage; then
+    printf 'Error: Test coverage check failed. Push blocked.\n' >&2
+    log_block "test_coverage_failure"
     exit 1
   fi
 

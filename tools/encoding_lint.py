@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
-"""Guardrail G10: encoding lint — enforce explicit encoding='utf-8' on file opens.
+"""Guardrail G10: encoding lint — enforce explicit encoding='utf-8' on file opens and subprocess.
 
-Scans Python files for `open()` calls missing explicit `encoding=` parameter.
-Flags: any `open(path)` or `open(path, 'r')` or `open(path, 'w')` WITHOUT `encoding=`.
+Scans Python files for:
+  1. `open()` calls missing explicit `encoding=` parameter
+  2. `subprocess.run/check_output/Popen` calls with text=True or universal_newlines=True
+     without explicit encoding= parameter
+
+Flags:
+  - `open(path)` or `open(path, 'r')` or `open(path, 'w')` WITHOUT `encoding=`
+  - `subprocess.run(..., text=True)` WITHOUT `encoding=`
+  - `subprocess.check_output(..., text=True)` WITHOUT `encoding=`
+  - `subprocess.Popen(..., universal_newlines=True)` WITHOUT `encoding=`
+
 Allows: binary mode (`'rb'`, `'wb'`) — no encoding needed.
 Suppression: `# encoding-ok` inline comment.
 
 This guardrail prevents cp1252/locale-encoding surprises on Windows
-(e.g., tracker.json UnicodeDecodeError).
+(e.g., tracker.json UnicodeDecodeError, subprocess text=True failure).
 
 CLI:
   --check (default, exit 1 on findings)
@@ -109,6 +118,65 @@ class OpenCallVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+def _has_text_flag(node: ast.Call) -> bool:
+    """Check if subprocess call has text=True or universal_newlines=True."""
+    for keyword in node.keywords:
+        if keyword.arg in ('text', 'universal_newlines'):
+            if isinstance(keyword.value, ast.Constant) and keyword.value.value is True:
+                return True
+    return False
+
+
+class SubprocessVisitor(ast.NodeVisitor):
+    """AST visitor that finds subprocess.run/check_output/Popen calls with text=True but no encoding."""
+
+    def __init__(self, source_lines: List[str], filename: Path):
+        self.findings: List[Dict] = []
+        self.source_lines = source_lines
+        self.filename = filename
+
+    def visit_Call(self, node: ast.Call) -> None:
+        """Visit a function call node."""
+        # Check if this is a subprocess.run/check_output/Popen call
+        is_subprocess = False
+        func_name = None
+
+        # Form: subprocess.run(...), subprocess.check_output(...), subprocess.Popen(...)
+        if isinstance(node.func, ast.Attribute):
+            if isinstance(node.func.value, ast.Name) and node.func.value.id == 'subprocess':
+                func_name = node.func.attr
+                if func_name in ('run', 'check_output', 'Popen'):
+                    is_subprocess = True
+
+        if is_subprocess:
+            # Check if already suppressed
+            if _has_suppression_comment(self.source_lines, node.lineno):
+                self.generic_visit(node)
+                return
+
+            # Check if this call has text=True or universal_newlines=True
+            if _has_text_flag(node):
+                # Check if encoding= keyword is present
+                if not _has_encoding_keyword(node):
+                    line_content = (
+                        self.source_lines[node.lineno - 1]
+                        if node.lineno <= len(self.source_lines)
+                        else ""
+                    )
+                    self.findings.append({
+                        'file': str(self.filename),
+                        'line': node.lineno,
+                        'col': node.col_offset,
+                        'message': (
+                            f"subprocess.{func_name}() call with text=True/universal_newlines=True "
+                            f"without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment"
+                        ),
+                        'code': line_content.strip(),
+                    })
+
+        self.generic_visit(node)
+
+
 def scan_file(filepath: Path) -> List[Dict]:
     """Scan a single Python file for encoding issues.
 
@@ -140,10 +208,19 @@ def scan_file(filepath: Path) -> List[Dict]:
         }]
 
     source_lines = source.split('\n')
-    visitor = OpenCallVisitor(source_lines, filepath)
-    visitor.visit(tree)
+    findings = []
 
-    return visitor.findings
+    # Check for open() calls without encoding
+    open_visitor = OpenCallVisitor(source_lines, filepath)
+    open_visitor.visit(tree)
+    findings.extend(open_visitor.findings)
+
+    # Check for subprocess calls with text=True but no encoding
+    subprocess_visitor = SubprocessVisitor(source_lines, filepath)
+    subprocess_visitor.visit(tree)
+    findings.extend(subprocess_visitor.findings)
+
+    return findings
 
 
 def scan_directory(dirpath: Path, repo_root: Optional[Path] = None) -> List[Dict]:
