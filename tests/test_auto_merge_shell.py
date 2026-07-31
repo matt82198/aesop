@@ -60,7 +60,8 @@ class TestAutoMergeTimeout(unittest.TestCase):
 
     def test_run_has_timeout_parameter(self):
         """The run() helper must accept a timeout parameter."""
-        src = os.path.join(os.path.dirname(__file__), '..', 'tools', 'auto_merge.py')
+        # After subprocess_common refactor, run() is in subprocess_common.py
+        src = os.path.join(os.path.dirname(__file__), '..', 'tools', 'subprocess_common.py')
         with open(src, encoding='utf-8') as f:
             content = f.read()
 
@@ -71,16 +72,18 @@ class TestAutoMergeTimeout(unittest.TestCase):
                 continue
             if node.name != 'run':
                 continue
-            # Check that timeout is in parameters (default or otherwise)
+            # Check that timeout is in parameters (positional or keyword-only)
             arg_names = [arg.arg for arg in node.args.args]
-            self.assertIn('timeout', arg_names,
+            kwonly_names = [arg.arg for arg in node.args.kwonlyargs]
+            all_arg_names = arg_names + kwonly_names
+            self.assertIn('timeout', all_arg_names,
                          'run() helper missing timeout parameter')
             return
-        self.fail('Could not find run() function in auto_merge.py')
+        self.fail('Could not find run() function in subprocess_common.py')
 
     def test_run_subprocess_has_timeout(self):
         """The subprocess.run() call inside run() must pass a timeout."""
-        src = os.path.join(os.path.dirname(__file__), '..', 'tools', 'auto_merge.py')
+        src = os.path.join(os.path.dirname(__file__), '..', 'tools', 'subprocess_common.py')
         with open(src, encoding='utf-8') as f:
             content = f.read()
 
@@ -110,10 +113,10 @@ class TestAutoMergeTimeout(unittest.TestCase):
 
     def test_subprocess_timeout_raises_exception(self):
         """Verify that subprocess timeout raises TimeoutExpired."""
-        # Import the run function directly
+        # Import the run function from subprocess_common (post-refactor)
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'tools'))
         try:
-            from auto_merge import run
+            from subprocess_common import run
         finally:
             sys.path.pop(0)
 
@@ -127,7 +130,7 @@ class TestAutoMergeTimeout(unittest.TestCase):
         """Verify TimeoutExpired is not silently caught."""
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'tools'))
         try:
-            from auto_merge import run
+            from subprocess_common import run
         finally:
             sys.path.pop(0)
 
