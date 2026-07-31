@@ -61,6 +61,18 @@ LAST_PUBLISH_FILE = AESOP_STATE_ROOT / '.status-publish-last'
 WATCHDOG_HEARTBEAT = Path('C:/Users/matt8/conductor3/state/.watchdog-heartbeat')
 MONITOR_HEARTBEAT = Path('C:/Users/matt8/conductor3/monitor/.monitor-heartbeat')
 
+# Heartbeat staleness thresholds derived from daemon cadences with headroom.
+# These MUST match the actual scheduled task intervals to avoid false alarms.
+# Watchdog: AesopWatchdogDaemon runs every 5 minutes (300s).
+#   Threshold 900s = 3x cadence (15 min headroom). Beats STALE only if missing >15min.
+# Monitor: AesopRefinementMonitor runs every 60 minutes (3600s).
+#   Threshold 5400s = 1.5x cadence (90 min headroom). Beats STALE only if missing >90min.
+# Config-driven so a future cadence change updates one place instead of chasing false alarms.
+HEARTBEAT_THRESHOLDS = {
+    'watchdog': 900,   # 3x 5-min cadence
+    'monitor': 5400,   # 1.5x 60-min cadence
+}
+
 # Redaction patterns (token-shaped and path-shaped)
 REDACTION_PATTERNS = [
     (r'\bsk-[A-Za-z0-9_-]{20,}\b', '[REDACTED_API_KEY]'),
@@ -175,7 +187,15 @@ def gather_pr_status():
 def gather_heartbeat_status():
     """
     Check heartbeat freshness using MTIME (not content). Returns compact status.
-    Treats "file not found" as ERROR state distinct from stale.
+
+    Three distinct states per source:
+    - FRESH: age < threshold (daemon is running normally)
+    - STALE: age >= threshold (daemon has missed scheduled runs)
+    - ERROR: file missing or unreadable (unable to monitor)
+
+    Thresholds are per-source and derived from daemon cadences:
+    - watchdog (900s = 3x 5-min cadence): FRESH < 15min, STALE >= 15min
+    - monitor (5400s = 1.5x 60-min cadence): FRESH < 90min, STALE >= 90min
     """
     now = datetime.now(timezone.utc)
     statuses = []
@@ -185,12 +205,13 @@ def gather_heartbeat_status():
         mtime = WATCHDOG_HEARTBEAT.stat().st_mtime
         ts = datetime.fromtimestamp(mtime, tz=timezone.utc)
         age = now - ts
-        if age < timedelta(seconds=300):
+        threshold = HEARTBEAT_THRESHOLDS['watchdog']
+        if age < timedelta(seconds=threshold):
             statuses.append(f"watchdog: {age.seconds}s")
         else:
-            statuses.append(f"watchdog: STALE ({age.seconds}s)")
+            statuses.append(f"watchdog: STALE ({age.seconds}s, >{threshold}s)")
     except FileNotFoundError:
-        statuses.append("watchdog: ERROR (file not found)")
+        statuses.append("watchdog: ERROR (missing)")
     except Exception as e:
         statuses.append(f"watchdog: ERROR ({type(e).__name__})")
 
@@ -199,12 +220,13 @@ def gather_heartbeat_status():
         mtime = MONITOR_HEARTBEAT.stat().st_mtime
         ts = datetime.fromtimestamp(mtime, tz=timezone.utc)
         age = now - ts
-        if age < timedelta(seconds=300):
+        threshold = HEARTBEAT_THRESHOLDS['monitor']
+        if age < timedelta(seconds=threshold):
             statuses.append(f"monitor: {age.seconds}s")
         else:
-            statuses.append(f"monitor: STALE ({age.seconds}s)")
+            statuses.append(f"monitor: STALE ({age.seconds}s, >{threshold}s)")
     except FileNotFoundError:
-        statuses.append("monitor: ERROR (file not found)")
+        statuses.append("monitor: ERROR (missing)")
     except Exception as e:
         statuses.append(f"monitor: ERROR ({type(e).__name__})")
 
