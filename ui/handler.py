@@ -449,10 +449,17 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             state = {}
             for name in _STATE_SECTIONS:
                 payload = latest.get(name)
-                if payload is not None:
-                    state[name] = json.loads(payload)
-                else:
-                    state[name] = computers[name]()
+                section = json.loads(payload) if payload is not None else None
+                # A cached section can be a CollectorSource's *default* rather than a
+                # real reading: the "data" source seeds {} and only recomputes when its
+                # watched files change, so a quiet collector leaves an empty payload
+                # cached. That is not None, so the old `is not None` check served {} as
+                # if it were live state -- an empty first paint. Treat an empty section
+                # as "not yet snapshotted" and compute it inline, which is what this
+                # endpoint already documents it does.
+                if not section:
+                    section = computers[name]()
+                state[name] = section
 
             # Zero-key demo mode self-identifies in the payload so the frontend
             # (and any API consumer) can tell seeded data from live state.
