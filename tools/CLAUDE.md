@@ -33,9 +33,9 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `ci_shard_runner.py` — Shard-aware Python test runner (distributes tracked test files across N shards round-robin; spawn-safe with __main__ guard; used by ci and windows-shard jobs)
 - `ci_gate_runability.py` — CI gate-runability validator (Guardrail G2.5): prevents "green can mean never ran" incidents by verifying known suite families (Python unit suites via ci_shard_runner.py, npm test:node, run_shell_tests.sh, playwright, verify_*.py, lint/guard gates) are not silently skipped due to branch protection misconfiguration; checks job/step-level if conditions that exclude PRs, continue-on-error on gates, missing file references; CLI: `[--check] [--json] [--root DIR]`; exit 0=clean/1=findings/2=error; stdlib-only; staged (wire into ci.yml after #596)
 - `ci_workflow_lint.py` — CI workflow linter (YAML parsing, npm ci lockfile checks, test coverage)
-- `cli.py` — CLI base factory (consolidates boilerplate across 89 tools); stdlib-only. Exports: CLIBuilder (fluent argparse factory), OutputFormatter (text/JSON + secret masking), SubprocessError (subprocess failures), run_subprocess (timeout + Windows/Linux clean), resolve_repo_root (args/env/cwd), mask_secrets (pattern→MASKED-<TYPE>), deterministic_json_dumps (sorted keys), exit_code (0/1/2 semantics), standard_main_template (error handling).  See tools/common.py for backward-compatible delegation functions.
+- `cli.py` — CLI base factory; stdlib-only exports: CLIBuilder, OutputFormatter (text/JSON), SubprocessError, run_subprocess, resolve_repo_root, mask_secrets, exit_code (0/1/2). See common.py for delegation.
 - `crossos_drift.py` — Cross-OS CI drift measurement (Windows vs Linux outcome drift from GitHub Actions history; CLI: `--runs N=10 [--json]`; reports pass rates, divergence set, failing test aggregation; exit 3 on auth failure)
-- `commit_lint.py` — Conventional commit message linter (type/scope/length/trailer checks); CLI: `[--message MSG] [--range RANGE] [--json] [--check]`; exit 0=clean/1=violations/2=error; stdlib-only; uses tools/cli.CLIBuilder for argparse
+- `commit_lint.py` — Conventional commit message linter; uses cli.CLIBuilder; CLI: `[--message MSG] [--range RANGE] [--json]`; stdlib-only
 - `dispatch_lint.py` — Dispatch policy linter (merge automation + security rules); detects forbidden patterns (gh pr merge, --admin/--auto/--no-verify/--force, git stash, credential hunting); `# dispatch-ok` suppression; CLI: `[--check] [--fix] [--json] [PATH]`; exit 0=clean/1=violations/2=error
 - `common.py` — Shared utilities (state directory resolution, heartbeat staleness, CLI layer delegation to cli.py)
 - `cost_ceiling.py` — Cost-ceiling checker; trips HALT kill-switch on token limits exceeded
@@ -145,6 +145,5 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - **Python**: `npm run test:py`; **Shell**: `bash -n tools/*.sh && shellcheck tools/*.sh`; **Node**: `node --check tools/*.mjs`
 
 ## Subprocess encoding convention (Guardrail G10)
-
 - `encoding_lint.py` -- flags `subprocess.run`/`Popen` calls that pass `text=True`/`universal_newlines=True` without an explicit `encoding=`. Note it scans the WHOLE repo, not only changed files, so a single violation anywhere blocks every push that touches Python.
 - Convention: every subprocess call that decodes output passes `encoding='utf-8'`. Without it Python decodes using the platform default, which on Windows is the ANSI codepage (cp1252); that corrupts non-ASCII tool output and is a known source of Windows-passes/Linux-fails drift.
