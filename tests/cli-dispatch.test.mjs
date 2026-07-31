@@ -58,6 +58,15 @@ function scriptExists(relPath) {
   return existsSync(join(repoRoot, relPath));
 }
 
+// Scaffolder output can land in the repo root depending on invocation order.
+// An untracked aesop-fleet/ there trips the CLAUDE.md linter and the domain-map
+// drift gate, so clear it after this suite regardless of which test created it.
+after(() => {
+  for (const d of ['aesop-fleet', 'badnamespace']) {
+    rmSync(join(repoRoot, d), { recursive: true, force: true });
+  }
+});
+
 describe('CLI Python dispatch table', () => {
   describe('help and discovery', () => {
     it('shows --help for main aesop command', async () => {
@@ -123,6 +132,11 @@ describe('CLI Python dispatch table', () => {
         assert.notEqual(result.exitCode, 2, 'unknown first arg must fall through to the scaffolder, not error');
       } finally {
         rmSync(tmp, { recursive: true, force: true });
+        // The scaffolder resolves its target relative to the CLI's own location, not cwd,
+        // so it can still land in the repo root. Remove it: an untracked directory here
+        // trips the CLAUDE.md linter and the domain-map drift gate.
+        rmSync(join(repoRoot, 'aesop-fleet'), { recursive: true, force: true });
+        rmSync(join(repoRoot, 'badnamespace'), { recursive: true, force: true });
       }
     });
 

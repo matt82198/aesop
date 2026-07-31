@@ -64,6 +64,34 @@ RUNTIME_PATTERNS = [
 ]
 
 
+
+def _tracked_claudemds(repo_root):
+    """Yield CLAUDE.md paths that are TRACKED IN GIT.
+
+    rglob() walks the filesystem, so untracked scaffolder output (tests create
+    ./aesop-fleet/ in the repo root) was being linted as if it were source -- the
+    gate demanded a 150-line cap and cross-ref purity for a directory that is not
+    part of the repo. A documentation gate must reason about tracked source only.
+
+    Falls back to rglob if git is unavailable, so the tool still works outside a
+    checkout; that is a degraded mode, not the normal path.
+    """
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "*CLAUDE.md"],
+            cwd=str(repo_root), capture_output=True, text=True,
+            encoding="utf-8", timeout=30,
+        )
+        if out.returncode == 0:
+            names = [n.strip() for n in out.stdout.splitlines() if n.strip()]
+            if names:
+                return [repo_root / n for n in names]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return list(_tracked_claudemds(repo_root))
+
+
 def is_runtime_artifact(ref: str) -> bool:
     """Check if a reference is a legitimate runtime artifact."""
     for pattern in RUNTIME_PATTERNS:
@@ -228,7 +256,7 @@ def get_sibling_domains(repo_root: Path, current_claudemd_path: Path) -> set:
     domains = set()
 
     # Find all CLAUDE.md files in the repo
-    for claudemd in repo_root.rglob("CLAUDE.md"):
+    for claudemd in _tracked_claudemds(repo_root):
         parts = claudemd.parts
 
         # Skip node_modules, .git, etc.
@@ -418,7 +446,7 @@ def main():
     claudemd_files = []
 
     # Use rglob to find all CLAUDE.md files at any depth
-    for claudemd_path in repo_root.rglob("CLAUDE.md"):
+    for claudemd_path in _tracked_claudemds(repo_root):
         # Exclude paths in problematic directories
         parts = claudemd_path.parts
         if any(part in {"node_modules", ".git", "dist", ".pytest_cache", "__pycache__"} for part in parts):
