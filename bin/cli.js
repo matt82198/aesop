@@ -11,6 +11,173 @@ const helpFlag = args.includes('--help') || args.includes('-h');
 const forceFlag = args.includes('--force');
 const yesFlag = args.includes('--yes');
 
+// Python dispatch table: namespace -> { verb -> script_path }
+const pythonNamespaces = {
+  lint: {
+    encoding: 'tools/encoding_lint.py',
+    claudemd: 'tools/claudemd_lint.py',
+    commit: 'tools/commit_lint.py',
+    deadcode: 'tools/dead_code_check.py',
+    docstring: 'tools/docstring_check.py',
+    filesize: 'tools/file_size_lint.py',
+    imports: 'tools/import_cycle_check.py',
+    todos: 'tools/todo_tracker.py',
+    bash: 'tools/bash_guard_check.py'
+  },
+  gate: {
+    'secret-scan': 'tools/secret_scan.py',
+    dispatch: 'tools/dispatch_lint.py',
+    'spec-contract': 'tools/spec_contract_validator.py',
+    portability: 'tools/portability_check.py',
+    stateapi: 'tools/stateapi_lint.py',
+    subprocess: 'tools/subprocess_guard.py',
+    watcher: 'tools/watcher_linter.py',
+    metrics: 'tools/metrics_gate.py'
+  },
+  verify: {
+    dashboard: 'tools/verify_dash.py',
+    'activity-filter': 'tools/verify_activity_filter.py',
+    'cost-panel': 'tools/verify_cost_panel.py',
+    'dispatch-panel': 'tools/verify_dispatch_panel.py',
+    'failure-drilldown': 'tools/verify_failure_drilldown.py',
+    prboard: 'tools/verify_prboard.py',
+    scorecards: 'tools/verify_scorecards.py',
+    'submit-encoding': 'tools/verify_submit_encoding.py',
+    'wave-telemetry': 'tools/verify_wave_telemetry.py',
+    'test-coverage': 'tools/verify_test_coverage.py',
+    counts: 'tools/verify_test_suite_count.py'
+  },
+  wave: {
+    preflight: 'tools/wave_preflight.py',
+    'manifest-lint': 'tools/wave_manifest_lint.py',
+    template: 'tools/wave_templates.py',
+    scorecard: 'tools/wave_scorecard.py',
+    resume: 'tools/wave_resume.py'
+  },
+  state: {
+    query: 'tools/state_query.py',
+    rebuild: 'tools/state_rebuild.py',
+    verify: 'tools/state_md_verifier.py',
+    ensure: 'tools/ensure_state.py'
+  },
+  tracker: {
+    autoclose: 'tools/tracker_autoclose.py',
+    guard: 'tools/tracker_guard.py',
+    reconcile: 'tools/tracker_reconcile.py'
+  },
+  cost: {
+    ceiling: 'tools/cost_ceiling.py',
+    projection: 'tools/cost_projection.py',
+    forecast: 'tools/cost_forecast.py',
+    econ: 'tools/cost_econ.py'
+  },
+  bench: {
+    run: 'tools/bench_runner.py',
+    results: 'tools/bench_results_cache.py'
+  },
+  health: {
+    check: 'tools/healthcheck.py',
+    score: 'tools/health_score.py',
+    incidents: 'tools/incident_report.py',
+    stall: 'tools/stall_check.py'
+  },
+  transcript: {
+    timeline: 'tools/transcript_timeline.py',
+    replay: 'tools/transcript_replay.py',
+    digest: 'tools/transcript_digest.py'
+  }
+};
+
+// Helper: resolve Python interpreter (try python3 then python)
+function resolvePythonInterpreter() {
+  for (const interpreter of ['python3', 'python']) {
+    try {
+      // Verify it actually executes and outputs something
+      execSync(`${interpreter} --version`, { stdio: 'pipe', timeout: 2000 });
+      return interpreter;
+    } catch (e) {
+      // This interpreter doesn't work; try next
+    }
+  }
+  return null;
+}
+
+// Check for Python dispatch (namespace pattern; activate for both valid and invalid verbs)
+const isPythonDispatch = args.length >= 1 && pythonNamespaces[args[0]];
+
+if (isPythonDispatch && args.length >= 1) {
+  const namespace = args[0];
+  let verb = args[1];
+
+  // Check for namespace-level --help (no verb, or verb is --help/-h)
+  if (!verb || verb === '--help' || verb === '-h' || args.includes('--help') || args.includes('-h')) {
+    if (args.length === 1 || verb === '--help' || verb === '-h' || (args.length >= 2 && (args[1] === '--help' || args[1] === '-h'))) {
+      const verbs = Object.keys(pythonNamespaces[namespace]);
+      console.log(`aesop ${namespace} — Available verbs:\n`);
+      verbs.forEach(v => {
+        const scriptPath = pythonNamespaces[namespace][v];
+        console.log(`  aesop ${namespace} ${v}`);
+        console.log(`    → ${scriptPath}\n`);
+      });
+      process.exit(0);
+    }
+  }
+
+  // Require verb for Python dispatch
+  if (!verb) {
+    console.error(`Error: Missing verb for namespace 'aesop ${namespace}'`);
+    const validVerbs = Object.keys(pythonNamespaces[namespace]);
+    console.error(`Valid verbs: ${validVerbs.join(', ')}`);
+    console.error(`\nUsage: aesop ${namespace} <verb> [args...]`);
+    console.error(`Help:  aesop ${namespace} --help`);
+    process.exit(2);
+  }
+
+  // Dispatch to Python script if verb is valid
+  if (pythonNamespaces[namespace][verb]) {
+    const scriptPath = path.join(__dirname, '..', pythonNamespaces[namespace][verb]);
+
+    // Verify script exists
+    if (!fs.existsSync(scriptPath)) {
+      console.error(`Error: Script not found at ${scriptPath}`);
+      process.exit(2);
+    }
+
+    // Resolve Python interpreter
+    const pythonInterp = resolvePythonInterpreter();
+    if (!pythonInterp) {
+      console.error('Error: Python interpreter not found. Please install Python 3 or Python.');
+      console.error('Tried: python3, python');
+      process.exit(2);
+    }
+
+    // Collect all remaining args after namespace and verb
+    const scriptArgs = args.slice(2);
+
+    // Spawn Python script with inherited stdio and propagate exit code
+    const { spawnSync } = require('child_process');
+    const result = spawnSync(pythonInterp, [scriptPath, ...scriptArgs], {
+      stdio: 'inherit',
+      timeout: 600000  // 10 min timeout
+    });
+
+    // Propagate exact exit code (0, 1, 2, or error)
+    if (result.error) {
+      console.error(`Error spawning ${pythonInterp}: ${result.error.message}`);
+      process.exit(2);
+    }
+    process.exit(result.status || 0);
+  }
+
+  // Unknown verb in known namespace
+  const validVerbs = Object.keys(pythonNamespaces[namespace]);
+  console.error(`Error: Unknown verb '${verb}' for namespace 'aesop ${namespace}'`);
+  console.error(`Valid verbs: ${validVerbs.join(', ')}`);
+  console.error(`\nUsage: aesop ${namespace} <verb> [args...]`);
+  console.error(`Help:  aesop ${namespace} --help`);
+  process.exit(2);
+}
+
 // Check for runtime subcommands (doctor, watch, dash, status, fleet, health, health-score, reproduce, init)
 const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health', 'health-score', 'reproduce', 'init'];
 const isRuntimeCommand = runtimeCommands.includes(args[0]);
@@ -189,8 +356,9 @@ Usage:
   npx @matt82198/aesop fleet
   npx @matt82198/aesop reproduce
   npx @matt82198/aesop init [--name NAME] [--force]
+  npx @matt82198/aesop <namespace> <verb> [args...]
 
-Commands:
+Commands (Node.js):
   init                    Initialize aesop orchestration in current repo (CLAUDE.md, config, state, CI, hooks)
   doctor                  Preflight readiness check (Node.js, Python, git, config, dirs, hook, port)
   watch                   Launch the watchdog daemon (spawns daemons/run-watchdog.sh)
@@ -199,6 +367,22 @@ Commands:
   fleet                   One-shot fleet snapshot (agents, heartbeats, tracker lanes, orchestrator status)
   reproduce               Offline verification suite (repo: full test suite; installed: self-checks)
   wizard                  Interactive onboarding (prompts for project name, repos, port)
+
+Commands (Python Tools):
+  aesop <namespace> <verb> [args...]
+    Dispatch to Python tools. Available namespaces:
+    - lint              Code quality linters (encoding, claudemd, commit, deadcode, docstring, filesize, imports, todos, bash)
+    - gate              Policy gates (secret-scan, dispatch, spec-contract, portability, stateapi, subprocess, watcher, metrics)
+    - verify            Verification & dashboard (dashboard, activity-filter, cost-panel, dispatch-panel, failure-drilldown, prboard, scorecards, submit-encoding, wave-telemetry, test-coverage, counts)
+    - wave              Wave orchestration (preflight, manifest-lint, template, scorecard, resume)
+    - state             State layer (query, rebuild, verify, ensure)
+    - tracker           Tracker automation (autoclose, guard, reconcile)
+    - cost              Cost analysis (ceiling, projection, forecast, econ)
+    - bench             Model benchmarking (run, results)
+    - health            Fleet health (check, score, incidents, stall)
+    - transcript        Conversation logs (timeline, replay, digest)
+
+    For a namespace's available verbs and script paths, run:  aesop <namespace> --help
 
 Arguments:
   target-dir    Directory to scaffold the template into (default: "aesop-fleet")

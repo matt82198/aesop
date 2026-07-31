@@ -1,6 +1,6 @@
-# bin/ — CLI scaffolder + runtime commands
+# bin/ — CLI scaffolder, runtime commands, and Python dispatch table
 
-**Domain**: Node.js CLI entry point (`bin/cli.js`): scaffolds aesop orchestration template, interactive onboarding wizard, runtime subcommand dispatch (doctor/watch/dash/status/fleet/health-score/reproduce/init).
+**Domain**: Node.js CLI entry point (`bin/cli.js`): scaffolds aesop orchestration template, interactive onboarding wizard, runtime subcommand dispatch (doctor/watch/dash/status/fleet/health-score/reproduce/init), and Python tools dispatch table (lint/gate/verify/wave/state/tracker/cost/bench/health/transcript).
 
 ## Universal rules (every domain)
 - Feature branch only, never main; every push gated by `python tools/secret_scan.py --staged` exit 0.
@@ -43,6 +43,32 @@ require(commandMap[args[0]]); // Load + run; returns immediately after
 - Flags: `--name <name>` (project name, auto-detected from git remote), `--force` (overwrite existing files)
 - Delegates to `tools/init_project.py` via spawnSync (python3 with python fallback)
 
+**Python dispatch table** (`aesop <namespace> <verb> [args...]`):
+- Routes to 113 `tools/*.py` scripts via namespace+verb lookup table (Phase 2: additive, no script moves or renames)
+- Interpreter resolution: tries `python3` then `python`; verifies interpreter is executable; exits 2 if not found
+- Exit codes propagated unchanged: 0 (success), 1 (findings/failure), 2 (usage/could-not-evaluate)
+- All args after verb pass through untouched (flags like `--check`, `--json`, `--fix` preserved)
+- `aesop <namespace> --help` lists that namespace's verbs and their underlying script paths
+
+**Namespaces and verbs** (via `pythonNamespaces` table in cli.js):
+```
+aesop lint      encoding|claudemd|commit|deadcode|docstring|filesize|imports|todos|bash
+aesop gate      secret-scan|dispatch|spec-contract|portability|stateapi|subprocess|watcher|metrics
+aesop verify    dashboard|activity-filter|cost-panel|dispatch-panel|failure-drilldown|prboard|scorecards|submit-encoding|wave-telemetry|test-coverage|counts
+aesop wave      preflight|manifest-lint|template|scorecard|resume
+aesop state     query|rebuild|verify|ensure
+aesop tracker   autoclose|guard|reconcile
+aesop cost      ceiling|projection|forecast|econ
+aesop bench     run|results
+aesop health    check|score|incidents|stall
+aesop transcript timeline|replay|digest
+```
+
+**Hook/CI integration** (unchanged):
+- `hooks/pre-push-policy.sh` and `.github/workflows/*.yml` invoke scripts by absolute path; CLI is parallel, optional front door only
+- All 113 scripts remain in `tools/` with exact same names; no moves, renames, or relocations
+- Direct script invocation works exactly as before; CLI dispatch is additive
+
 ## Scaffold files (filesToCopy array in cli.js lines 243–260)
 
 **Directories copied** (recursive):
@@ -70,12 +96,14 @@ require(commandMap[args[0]]); // Load + run; returns immediately after
 - `npm run test:node` → `node --test --test-timeout=60000 tests/*.test.mjs`
 - Fleet CLI tests: `tests/fleet-cli.test.mjs` — spawns CLI in temp fixture, verifies JSON shape (heartbeats, agents, tracker, orchestrator), graceful degrade, exit 0, no cwd pollution
 - CLI config tests: `tests/cli-config.test.mjs` — scaffold flags (--name, --domains, --repos, --repo-urls), fleet_root auto-set to os.homedir(), config validation, repo URL generation
+- CLI dispatch tests: `tests/cli-dispatch.test.mjs` — Python namespace dispatch routing, verb help, exit code fidelity (0/1/2), interpreter resolution, unknown namespace/verb errors, arg passthrough
 
-**First-hour test suite** (inline in both test files above):
+**First-hour test suite** (inline in test files above):
 - Empty state directory graceful degrade (no state files)
 - Present heartbeat files parsed correctly
 - Invalid/malformed JSON degrades gracefully
 - Process timeouts handled (10s max per invocation)
+- Python dispatch: verifies script paths exist, interpreter found, exit codes propagate, --help works per namespace
 
 **Shell integration** (npm run test:sh): Pre-push hook tests + watchdog tests (separate domains, see hooks/ and daemons/)
 
