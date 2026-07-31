@@ -68,11 +68,17 @@ class MetricsGate:
         """Get lines added in diff. Returns list of (file, line_content)."""
         try:
             # Use git diff to get added lines
+            # Restrict the diff to markdown (the only files this gate scans) so
+            # binary blobs never reach the decoder, and pin the encoding: text=True
+            # alone falls back to the locale codec (cp1252 on Windows) and dies on
+            # any non-cp1252 byte.
             result = subprocess.run(
-                ["git", "diff", self.diff_range, "--unified=0"],
+                ["git", "diff", self.diff_range, "--unified=0", "--", "*.md"],
                 cwd=self.repo_root,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
             if result.returncode == 0:
