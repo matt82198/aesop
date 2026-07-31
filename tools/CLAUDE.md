@@ -116,7 +116,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `dead_code_check.py` — AST-based dead code detector (unused functions/classes/imports)
 - `dep_graph.py` — Dependency graph analyzer for import relationships
 - `docstring_check.py` — AST-based docstring coverage checker for Python modules
-- `encoding_lint.py` — Encoding lint checker for open() calls missing encoding parameter
+- `encoding_lint.py` — Encoding lint: flags `open()` without `encoding=`, and `subprocess.run/check_output/Popen` with `text=True`/`universal_newlines=True` and no `encoding=` (the Windows cp1252 trap that crashed metrics_gate on a binary diff). Ratchets against `.encoding-baseline.json` (`--baseline`, `--update-baseline`) so the existing backlog stays visible without blocking pushes while NEW violations fail closed
 - `dash.js` — Launch the web dashboard (spawns python ui/serve.py with configured port from PORT env var, aesop.config.json, or default 8770)
 - `wave_backlog_analyzer.py` — Pre-wave backlog risk analyzer (per-item risk_level/estimated_retries from git fix-forward history + tracker lanes); warn-level only, --json
 - `wave_templates.py` — Wave-manifest preset generator: instantiate/validate templates/wave-presets/*.json into ready manifests; CLI: `validate [--template saas|data|library|all]` (exits 0=clean / 1=defects per item), `instantiate <preset> --project-name --base-dir [--output FILE]`
