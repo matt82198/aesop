@@ -118,9 +118,12 @@ class ReadAPI:
                 # this docstring promises. Anything writing orchestrator-status.json
                 # directly became invisible the moment a DB existed, even if no
                 # status event had ever been recorded.
+                # Test only the MEANINGFUL fields. "role" and "id" are populated with
+                # defaults even for an empty stream, so including them here made the
+                # check pass on a projection carrying no actual status.
                 if projected and any(
                     projected.get(k) is not None
-                    for k in ("activity", "phase", "role", "updated_at")
+                    for k in ("activity", "phase", "updated_at")
                 ):
                     return projected
             except Exception:
