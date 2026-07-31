@@ -1,11 +1,11 @@
-# ui/ — Web dashboard (self-contained domain guide)
+﻿# ui/ â€” Web dashboard (self-contained domain guide)
 
 **Purpose**: Local observability dashboard. Python backend serves a React+Vite frontend on a configurable port via Server-Sent Events (realtime updates), with CSRF + session protection and event-sourced state. All file I/O uses explicit `encoding="utf-8"`.
 
 ## Try it in 30 seconds (no API key)
 
 A fresh scaffold has empty state, so a stranger sees a dead shell. `--demo`
-serves a seeded, self-identifying fleet snapshot instead — no API key, no gh
+serves a seeded, self-identifying fleet snapshot instead â€” no API key, no gh
 auth, no prior runs needed:
 
 ```bash
@@ -15,7 +15,7 @@ python ui/serve.py --demo        # then open http://127.0.0.1:8770
 ```
 
 The page carries a fixed **DEMO DATA** banner and `/api/state` returns
-`"demo": true` — seeded data can never be mistaken for a live fleet (honesty
+`"demo": true` â€” seeded data can never be mistaken for a live fleet (honesty
 is the project's brand). Default mode (no flag) is byte-identical to before.
 
 ## Universal rules (every domain)
@@ -41,40 +41,40 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **sse.py** (Server-Sent Events): Client registry, bounded broadcast, hash-gated `_maybe_emit()`, background `collector_loop()` thread. `reset_state()` restores per-import collector isolation (cached module across test re-imports). Sections emitted (in order): "data", "backlog", "agents", "tracker", "status", "cost" (wave-14 addition). Keepalive comment-line (`: keepalive`) every ~15s.
 
-**render.py**: Renders `ui/web/dist/index.html` with CSRF token substituted via unique sentinel `__AESOP_CSRF_SENTINEL__` (no `.format()` — Vite build passes it through verbatim). Requires `template_path` parameter; legacy fallback removed.
+**render.py**: Renders `ui/web/dist/index.html` with CSRF token substituted via unique sentinel `__AESOP_CSRF_SENTINEL__` (no `.format()` â€” Vite build passes it through verbatim). Requires `template_path` parameter; legacy fallback removed.
 
 **handler.py** (HTTP routing + GET/POST endpoints):
 - `DashboardHandler` class (extends `http.server.BaseHTTPRequestHandler`).
-- `run_server(host, port, app_handler_fn)` — ThreadingHTTPServer required (SSE holds one connection per client).
+- `run_server(host, port, app_handler_fn)` â€” ThreadingHTTPServer required (SSE holds one connection per client).
 - Reads `config.X` / `csrf.SESSION_TOKEN` at call time.
 
 **cost.py**: Parser for `state/ledger/OUTCOMES-LEDGER.md` (markdown table); returns per-model + per-day aggregates, verdict scorecards, optional dollar estimates (if `aesop.config.json` supplies `pricing` map).
 
-**state_query_panel.py** — Time-travel state query API: `GET /api/state/events` (temporal/stream/type filters) and `GET /api/state/streams` (aggregate view). Wraps `state_store.StateAPI`; gracefully degrades if DB missing.
+**state_query_panel.py** â€” Time-travel state query API: `GET /api/state/events` (temporal/stream/type filters) and `GET /api/state/streams` (aggregate view). Wraps `state_store.StateAPI`; gracefully degrades if DB missing.
 
-**wave_prs.py** — Wave PR board: `get_wave_prs()` gathers open PRs + PR-less `feat/*` branches, rolls CI checks into passing/failing/pending/none, derives top blocker, caches ~5s. Degrades to `{available:false, error}` when gh missing/un-authed. Subprocess reads use `encoding='utf-8', errors='replace'`. Override gh binary: `AESOP_GH_BIN` env var.
+**wave_prs.py** â€” Wave PR board: `get_wave_prs()` gathers open PRs + PR-less `feat/*` branches, rolls CI checks into passing/failing/pending/none, derives top blocker, caches ~5s. Degrades to `{available:false, error}` when gh missing/un-authed. Subprocess reads use `encoding='utf-8', errors='replace'`. Override gh binary: `AESOP_GH_BIN` env var.
 
-**wave_telemetry.py** — Wave telemetry: `get_wave_telemetry()` extracts current phase (from `STATE.md`), top blocker (from `AUDIT-BACKLOG.md`), cost metrics (from ledger). Reads state at call time (no cache); degrades gracefully on missing files.
+**wave_telemetry.py** â€” Wave telemetry: `get_wave_telemetry()` extracts current phase (from `STATE.md`), top blocker (from `AUDIT-BACKLOG.md`), cost metrics (from ledger). Reads state at call time (no cache); degrades gracefully on missing files.
 
-**wave_dispatch.py** — Wave dispatch (per-agent visibility): reads agent transcripts, infers phase (dispatch/thinking/tool-use/stall/done) from tail, estimates tokens from file size, computes activity age from mtime. Returns per-agent rows with phase badge, age, warnings (inactive >5min, stalled >10min). Degrades `{available:false}`. Polled 2-3s.
+**wave_dispatch.py** â€” Wave dispatch (per-agent visibility): reads agent transcripts, infers phase (dispatch/thinking/tool-use/stall/done) from tail, estimates tokens from file size, computes activity age from mtime. Returns per-agent rows with phase badge, age, warnings (inactive >5min, stalled >10min). Degrades `{available:false}`. Polled 2-3s.
 
-**wave_failure.py** — Wave PR failure drill-down: `get_wave_failure(pr_number)` shells `gh run view --json jobs` for jobs on PR branch, then `gh api .../jobs/{id}/logs` for failing jobs; extracts ~100-line log tails. Caches ~5s per PR; degrades to `{available:false, error}` when gh missing/un-authed. Override gh binary: `AESOP_GH_BIN` env var.
+**wave_failure.py** â€” Wave PR failure drill-down: `get_wave_failure(pr_number)` shells `gh run view --json jobs` for jobs on PR branch, then `gh api .../jobs/{id}/logs` for failing jobs; extracts ~100-line log tails. Caches ~5s per PR; degrades to `{available:false, error}` when gh missing/un-authed. Override gh binary: `AESOP_GH_BIN` env var.
 
-**demo.py** — Zero-key demo mode (`--demo` or `AESOP_DEMO=1`). Seeds throwaway state root with fabricated data, redirects all env vars to it; shell-out collectors use `get_demo_agents()`/`get_demo_wave_prs()`. Daemon refresher (~45s) keeps timestamps fresh. `AESOP_ROOT` stays real (dist must resolve). Honesty: BANNER_HTML + `"demo": true` in /api/state. No-op in default mode. Optional `AESOP_DEMO_ROOT` (tests).
+**demo.py** â€” Zero-key demo mode (`--demo` or `AESOP_DEMO=1`). Seeds throwaway state root with fabricated data, redirects all env vars to it; shell-out collectors use `get_demo_agents()`/`get_demo_wave_prs()`. Daemon refresher (~45s) keeps timestamps fresh. `AESOP_ROOT` stays real (dist must resolve). Honesty: BANNER_HTML + `"demo": true` in /api/state. No-op in default mode. Optional `AESOP_DEMO_ROOT` (tests).
 
 **bench_panel.py**: Benchmark API routes (`/api/bench`, `/api/bench/compare`). Reads `bench_results_cache` at call time.
 
-**tooling_panel.py** — Tooling dashboard panel: `GET /api/tooling/summary` aggregates results from repo analysis tools (todo_tracker, test_coverage_gaps, dead_code_check, import_cycle_check, encoding_lint). Runs tools via subprocess, caches 60s, gracefully degrades to null for missing tools. `?force=1` bypasses cache.
+**tooling_panel.py** â€” Tooling dashboard panel: `GET /api/tooling/summary` aggregates results from repo analysis tools (todo_tracker, test_coverage_gaps, dead_code_check, import_cycle_check, encoding_lint). Runs tools via subprocess, caches 60s, gracefully degrades to null for missing tools. `?force=1` bypasses cache.
 
-**quality_scorecard.py** — Quality scorecard API: spec-sharpness and per-wave quality metrics.
+**quality_scorecard.py** â€” Quality scorecard API: spec-sharpness and per-wave quality metrics.
 
-**wave_audit_tail.py** — Wave audit tail: streams recent audit findings for live dashboard display.
+**wave_audit_tail.py** â€” Wave audit tail: streams recent audit findings for live dashboard display.
 
-**wave_gantt.py** — Wave Gantt chart data: per-agent timeline for wave execution visualization.
+**wave_gantt.py** â€” Wave Gantt chart data: per-agent timeline for wave execution visualization.
 
-**wave_reasoning_tail.py** — Wave reasoning tail: streams orchestrator reasoning for live display.
+**wave_reasoning_tail.py** â€” Wave reasoning tail: streams orchestrator reasoning for live display.
 
-**wave_context.py** — Wave context file listing: files touched by wave agents for context display.
+**wave_context.py** â€” Wave context file listing: files touched by wave agents for context display.
 
 **api/__init__.py**, **api/tracker.py**, **api/submit.py**: Mutation handlers (tracker CRUD, inbox append).
 
@@ -118,8 +118,8 @@ Realtime via `GET /events` (ThreadingHTTPServer required). 6 sections (data/back
 
 **Inc 1 consolidation (2026-07-30):**
 - Write: All tracker CRUD routes through `state_store.write_api.WriteAPI`, which appends events to SQLite and renders views atomically via `state_store.materialize`.
-- Read: `load_tracker()` reads the materialized `tracker.json` (git-ignored, gitignored, rebuildable — NOT committed). `tracker.json` is a derived view of the event store, kept current by WriteAPI.
-- Canonical render path: `materialize_tracker()` (one pure function) — all callers use this, not independent render logic.
+- Read: `load_tracker()` reads the materialized `tracker.json` (git-ignored, gitignored, rebuildable â€” NOT committed). `tracker.json` is a derived view of the event store, kept current by WriteAPI.
+- Canonical render path: `materialize_tracker()` (one pure function) â€” all callers use this, not independent render logic.
 - Recovery: `python tools/state_rebuild.py --all` rebuilds views from event store with zero data loss.
 
 ## Configuration
@@ -133,6 +133,20 @@ Precedence: env vars > `aesop.config.json` > built-in defaults. Key env vars: `P
 ## Invariants
 
 Stdlib-only backend (ThreadingHTTPServer for SSE). Collector fail-open. Config: `import config; config.X` (never `from config import X`). Dist always required (hard 500 if missing). Map of all domains: /CLAUDE.md
+
+## Tracker event-log migration (collectors.py)
+
+`_ensure_tracker_migrated()` backfills the event log from an existing `tracker.json`. Two markers:
+`migration_started` claims the attempt, `migration_completed` is written only after a fully
+successful backfill -- skip requires BOTH, so a failed or partial migration retries instead of
+being permanently blocked by a stale claim.
+
+It reconciles in BOTH directions. Items missing from the log are backfilled from disk; and where
+disk holds a status the log never recorded (historical closes were written straight to the
+projection without emitting events), an `item_updated` event is emitted so replay cannot resurrect
+them. The reconcile skips any item that already carries an explicit `item_updated` event -- that
+item is owned by the log, and overwriting it from a stale projection would revert a real update.
+
 ## Cost view: absent vs empty
 
 `Cost.tsx` receives `cost` as a nullable prop. Null means BOTH "the first SSE snapshot has not

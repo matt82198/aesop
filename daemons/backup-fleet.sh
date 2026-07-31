@@ -417,10 +417,15 @@ $real_dir"
   fi
 
   log "=== cycle end ==="
+  # Heartbeat is written HERE, after the cycle actually completed -- not before
+  # main() runs. Written up front, a crash or hang inside main() still left a fresh
+  # timestamp, so selfheal.sh saw a healthy age, never restarted the daemon, and
+  # fleet backups halted silently. A heartbeat must attest to work DONE, not work
+  # attempted. Failure paths deliberately do not write it, so staleness is detected.
+  date +%s > "$HEARTBEAT" 2>/dev/null
   exit 0
 }
 
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
-  date +%s > "$HEARTBEAT" 2>/dev/null
   main "$@"
 fi
