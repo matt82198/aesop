@@ -27,6 +27,14 @@ _cache_time = 0.0
 _CACHE_TTL = 60  # seconds
 
 
+class ToolError(Exception):
+    """Error from tool execution with categorization."""
+    def __init__(self, error_class, message=""):
+        self.error_class = error_class  # "tool-exit-nonzero", "tool-timeout", "parse-error", "file-not-found"
+        self.message = message
+        super().__init__(f"{error_class}: {message}")
+
+
 def _run_tool(tool_name, args=None):
     """Run a tool script and return parsed JSON output, or None if unavailable.
 
@@ -36,6 +44,9 @@ def _run_tool(tool_name, args=None):
 
     Returns:
         Parsed JSON dict/list, or None if tool missing/failed.
+
+    Raises:
+        ToolError: If tool execution fails (with categorized error_class).
     """
     if args is None:
         args = ["--json"]
@@ -53,13 +64,17 @@ def _run_tool(tool_name, args=None):
             cwd=str(config.AESOP_ROOT),
         )
         if result.returncode != 0:
-            return None
+            raise ToolError("tool-exit-nonzero", f"{tool_name} exited with code {result.returncode}")
         output = result.stdout.strip()
         if not output:
             return None
         return json.loads(output)
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError):
-        return None
+    except subprocess.TimeoutExpired as e:
+        raise ToolError("tool-timeout", f"{tool_name} timed out after 30s")
+    except json.JSONDecodeError as e:
+        raise ToolError("parse-error", f"Invalid JSON output from {tool_name}")
+    except OSError as e:
+        raise ToolError("file-not-found", f"Cannot access {tool_name}")
 
 
 def _extract_todo_count(data):
@@ -162,19 +177,33 @@ def _extract_encoding_issues(data):
 
 
 def _scan_tooling():
-    """Run all tooling scans and return aggregated summary dict."""
-    todo_raw = _run_tool("todo_tracker.py")
-    coverage_raw = _run_tool("test_coverage_gaps.py")
-    dead_code_raw = _run_tool("dead_code_check.py")
-    import_cycle_raw = _run_tool("import_cycle_check.py")
-    encoding_raw = _run_tool("encoding_lint.py")
+    """Run all tooling scans and return aggregated summary dict.
+
+    Returns:
+        Dict with metric keys (null if tool unavailable) + scanned_at timestamp.
+        If a tool raises ToolError, logs it and continues (graceful degradation).
+    """
+    results = {}
+
+    for tool_name, key in [
+        ("todo_tracker.py", "todo_raw"),
+        ("test_coverage_gaps.py", "coverage_raw"),
+        ("dead_code_check.py", "dead_code_raw"),
+        ("import_cycle_check.py", "import_cycle_raw"),
+        ("encoding_lint.py", "encoding_raw"),
+    ]:
+        try:
+            results[key] = _run_tool(tool_name)
+        except ToolError as e:
+            print(f"[tooling] {tool_name} error ({e.error_class}): {e.message}", file=sys.stderr, flush=True)
+            results[key] = None
 
     return {
-        "todo_count": _extract_todo_count(todo_raw),
-        "coverage_pct": _extract_coverage(coverage_raw),
-        "dead_code_count": _extract_dead_code(dead_code_raw),
-        "import_cycle_count": _extract_import_cycles(import_cycle_raw),
-        "encoding_issues": _extract_encoding_issues(encoding_raw),
+        "todo_count": _extract_todo_count(results.get("todo_raw")),
+        "coverage_pct": _extract_coverage(results.get("coverage_raw")),
+        "dead_code_count": _extract_dead_code(results.get("dead_code_raw")),
+        "import_cycle_count": _extract_import_cycles(results.get("import_cycle_raw")),
+        "encoding_issues": _extract_encoding_issues(results.get("encoding_raw")),
         "scanned_at": time.time(),
     }
 
@@ -222,6 +251,16 @@ def serve_api_tooling_summary(handler, force=False):
         handler.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
         handler.end_headers()
         handler.wfile.write(json.dumps(payload, default=str).encode("utf-8"))
+    except ToolError as e:
+        # Categorized tool execution error; return safe error class
+        print(f"[serve_api_tooling_summary] Tool error: {e}", file=sys.stderr)
+        try:
+            handler.send_response(500)
+            handler.send_header("Content-Type", "application/json; charset=utf-8")
+            handler.end_headers()
+            handler.wfile.write(json.dumps({"error": e.error_class}).encode("utf-8"))
+        except Exception:
+            pass
     except Exception as e:
         # Import here to avoid circular import at module level
         from handler import _is_client_disconnect_error
@@ -232,6 +271,6 @@ def serve_api_tooling_summary(handler, force=False):
             handler.send_response(500)
             handler.send_header("Content-Type", "application/json; charset=utf-8")
             handler.end_headers()
-            handler.wfile.write(json.dumps({"error": "Internal server error"}).encode("utf-8"))
+            handler.wfile.write(json.dumps({"error": "internal-error"}).encode("utf-8"))
         except Exception:
             pass

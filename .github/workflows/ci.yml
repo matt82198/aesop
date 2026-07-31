@@ -105,6 +105,10 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/verify_test_coverage.py --check
 
+      - name: Test suite count drift gate
+        if: matrix.python-shard == 0
+        run: python tools/verify_test_suite_count.py --check
+
       - name: Run Node.js tests
         run: npm run test:node
 
@@ -157,7 +161,7 @@ jobs:
         run: python tools/wave_templates.py validate --template all
 
       - name: Run Python tests (shard ${{ matrix.python-shard }}/4)
-        run: python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4
+        run: python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
 
       - name: Build React dashboard (ui/web/)
         run: |
@@ -204,9 +208,9 @@ jobs:
     timeout-minutes: 15
     strategy:
       fail-fast: false
-      max-parallel: 2
-      # Serializing shard execution reduces socket/spawn TimeoutError contention on Windows CI runners.
-      # All shards still run (no skips) and the windows aggregator still requires all to pass.
+      max-parallel: 4
+      # Full parallelism with per-test timeout guards (PYTEST_TIMEOUT) — contention-prone tests
+      # fail individually via pytest-timeout instead of hanging the whole shard.
       matrix:
         python-shard: [0, 1, 2, 3]
     steps:
@@ -223,7 +227,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python test dependencies
-        run: pip install pyyaml pytest
+        run: pip install pyyaml pytest pytest-timeout
 
       - name: Set shard-specific temporary directory
         run: |
@@ -239,8 +243,9 @@ jobs:
       - name: Run Python tests (shard ${{ matrix.python-shard }}/4, PYTHONUTF8=1 for Windows encoding)
         env:
           PYTHONUTF8: '1'
+          PYTEST_TIMEOUT: '120'
         shell: bash
-        run: python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4
+        run: python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
 
   windows:
     # Aggregator job: enforces that all windows-shard shards succeeded.

@@ -1,6 +1,30 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+resolve_aesop_root() {
+  # Resolve the repo whose push is being gated -- NOT a hardcoded path.
+  #
+  # This previously defaulted to "$HOME/aesop" (the primary tree). Pushing from
+  # any of the ~40 sibling worktrees therefore ran the PRIMARY tree's copy of
+  # every gate script instead of the branch's own, so a gate fix on a branch
+  # could never take effect for that branch's own push, and gates evaluated
+  # code that was not being pushed.
+  #
+  # A pre-push hook runs with cwd inside the pushing worktree, so the git
+  # toplevel is the correct root. Explicit AESOP_ROOT still wins; the old
+  # hardcoded path remains only as a last-resort fallback.
+  if [ -n "${AESOP_ROOT:-}" ]; then
+    printf '%s\n' "$AESOP_ROOT"
+    return 0
+  fi
+  local top=""
+  if top=$(git rev-parse --show-toplevel 2>/dev/null) && [ -n "$top" ]; then
+    printf '%s\n' "$top"
+    return 0
+  fi
+  printf '%s\n' "$HOME/aesop"
+}
+
 json_escape() {
   # Escape backslashes first, then quotes, then control chars for valid JSON
   # Finding 5: Handle ALL C0 control characters (\x00-\x08, \x0b-\x0c, \x0e-\x1f)
@@ -480,7 +504,8 @@ check_secret_scan() {
     return 0
   fi
 
-  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
   local scan_script="$aesop_root/tools/secret_scan.py"
 
   if [ ! -f "$scan_script" ] || [ ! -x "$scan_script" ]; then
@@ -535,7 +560,8 @@ check_tracker_guard() {
   # to guard -- consistent with the hooks/ key invariant). An actual
   # zombie detection (exit 1 from --check) stays fail-closed and blocks
   # the push. tracker_guard itself exits 0 when tracker.json is absent.
-  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
   local guard_script="$aesop_root/tools/tracker_guard.py"
 
   if [ ! -f "$guard_script" ]; then
@@ -564,10 +590,165 @@ check_tracker_guard() {
   return 0
 }
 
+check_import_resolution() {
+  # Python import resolution validator (guardrail G5).
+  # Parses all staged .py files via AST, extracts import/from-import statements,
+  # resolves each module against repo structure and sys.stdlib_module_names.
+  # Fail-closed (exit 1) if any import cannot resolve.
+  #
+  # Root cause: Agent wrote file with unresolvable import to primary tree
+  # during worktree isolation, bypassing any import-resolution gate.
+  # This guardrail validates all staged .py imports before push.
+  #
+  # Fail-open ONLY for missing optional tool (repo without aesop checkout);
+  # actual resolution failures stay fail-closed.
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local import_check_script="$aesop_root/tools/import_resolution_check.py"
+
+  if [ ! -f "$import_check_script" ]; then
+    log_event "import_check_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; import resolution check skipped\n' >&2
+    log_event "import_check_skipped_no_python"
+    return 0
+  fi
+
+  local check_output
+  check_output=$("$py_bin" "$import_check_script" 2>&1)
+  local check_exit_code=$?
+
+  if [ $check_exit_code -ne 0 ]; then
+    if [ -n "$check_output" ]; then
+      printf '%s\n' "$check_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
+check_claudemd_sync() {
+  # CLAUDE.md synchronization gate (tools/claudemd_sync_gate.py --check).
+  # Ensures code changes are accompanied by domain CLAUDE.md updates.
+  # Runs at push time so authors see drift immediately.
+  #
+  # Fail-open for missing optional tooling; fail-closed for actual drift.
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local sync_script="$aesop_root/tools/claudemd_sync_gate.py"
+
+  if [ ! -f "$sync_script" ] || [ ! -x "$sync_script" ]; then
+    log_event "claudemd_sync_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; CLAUDE.md sync gate skipped\n' >&2
+    log_event "claudemd_sync_skipped_no_python"
+    return 0
+  fi
+
+  local sync_output
+  sync_output=$("$py_bin" "$sync_script" --check 2>&1)
+  local sync_exit_code=$?
+
+  if [ $sync_exit_code -ne 0 ]; then
+    if [ -n "$sync_output" ]; then
+      printf '%s\n' "$sync_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
+check_metrics() {
+  # Metrics verification gate (tools/metrics_gate.py).
+  # Ensures hard numeric claims in markdown are verified with source markers.
+  # Runs at push time so authors see unverified metrics immediately.
+  #
+  # Fail-open for missing optional tooling; fail-closed for unverified metrics.
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local metrics_script="$aesop_root/tools/metrics_gate.py"
+
+  if [ ! -f "$metrics_script" ] || [ ! -x "$metrics_script" ]; then
+    log_event "metrics_gate_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; metrics gate skipped\n' >&2
+    log_event "metrics_gate_skipped_no_python"
+    return 0
+  fi
+
+  local metrics_output
+  metrics_output=$("$py_bin" "$metrics_script" 2>&1)
+  local metrics_exit_code=$?
+
+  if [ $metrics_exit_code -ne 0 ]; then
+    if [ -n "$metrics_output" ]; then
+      printf '%s\n' "$metrics_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
+check_test_suite_count() {
+  # Test suite count drift detection gate (tools/verify_test_suite_count.py --check).
+  # Verifies that test suite counts documented in tests/CLAUDE.md match the actual
+  # number of test files on disk. This gate is wired here (not just in CI) because
+  # CI only runs after push; a local pre-push check catches the drift immediately.
+  #
+  # Fail-open ONLY for missing optional tooling (hook is installed into
+  # repos without an aesop checkout; no aesop install == no verify tool).
+  # An actual drift detection (exit 1 from --check) stays fail-closed and blocks
+  # the push. verify_test_suite_count exits 0 when counts match, 1 on drift.
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local verify_script="$aesop_root/tools/verify_test_suite_count.py"
+
+  if [ ! -f "$verify_script" ]; then
+    log_event "test_suite_count_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; test suite count check skipped\n' >&2
+    log_event "test_suite_count_skipped_no_python"
+    return 0
+  fi
+
+  local verify_output
+  verify_output=$("$py_bin" "$verify_script" --check 2>&1)
+  local verify_exit_code=$?
+
+  if [ $verify_exit_code -ne 0 ]; then
+    if [ -n "$verify_output" ]; then
+      printf '%s\n' "$verify_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
 log_event() {
   # Finding 1 & 2: Acquire lock before read-modify-append, add seq field, update sidecar
   local event_type="$1"
-  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
   local state_dir="$aesop_root/state"
   local audit_log="$state_dir/SECURITY-AUDIT.log"
   local lock_dir="$state_dir/.audit-log-lock"
@@ -605,7 +786,8 @@ log_event() {
 log_block() {
   # Finding 1 & 2: Acquire lock before read-modify-append, add seq field, update sidecar
   local reason="$1"
-  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
   local state_dir="$aesop_root/state"
   local audit_log="$state_dir/SECURITY-AUDIT.log"
   local lock_dir="$state_dir/.audit-log-lock"
@@ -1176,12 +1358,48 @@ refs/heads/feature/test $local_sha refs/heads/main 00000000000000000000000000000
     test_failed=$((test_failed + 1))
   fi
 
+  printf '\n=== Test 17: check_claudemd_sync skipped when tool missing ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_no_claudemd"
+    mkdir -p "$AESOP_ROOT"
+
+    if check_claudemd_sync >/dev/null 2>&1; then
+      printf 'PASS: check_claudemd_sync returns 0 (fail-open) when tool missing\n'
+    else
+      printf 'FAIL: check_claudemd_sync should fail-open when tool missing\n'
+      exit 1
+    fi
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
+  printf '\n=== Test 18: check_metrics skipped when tool missing ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_no_metrics"
+    mkdir -p "$AESOP_ROOT"
+
+    if check_metrics >/dev/null 2>&1; then
+      printf 'PASS: check_metrics returns 0 (fail-open) when tool missing\n'
+    else
+      printf 'FAIL: check_metrics should fail-open when tool missing\n'
+      exit 1
+    fi
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
   printf '\n=== Test Results ===\n'
   printf 'PASSED: %d\n' "$test_passed"
   printf 'FAILED: %d\n' "$test_failed"
 
   if [ "$test_failed" -eq 0 ]; then
-    printf '\nAll 16 tests passed.\n'
+    printf '\nAll 18 tests passed.\n'
     return 0
   else
     printf '\nSome tests failed.\n'
@@ -1235,9 +1453,33 @@ main() {
     exit 1
   fi
 
+  if ! check_import_resolution; then
+    printf 'Error: Python import resolution check failed. Push blocked.\n' >&2
+    log_block "import_check_failure"
+    exit 1
+  fi
+
   if ! check_tracker_guard; then
     printf 'Error: Tracker zombie-resurrection gate failed. Push blocked.\n' >&2
     log_block "tracker_guard_failure"
+    exit 1
+  fi
+
+  if ! check_claudemd_sync; then
+    printf 'Error: CLAUDE.md synchronization gate failed. Push blocked.\n' >&2
+    log_block "claudemd_sync_failure"
+    exit 1
+  fi
+
+  if ! check_metrics; then
+    printf 'Error: Metrics verification gate failed. Push blocked.\n' >&2
+    log_block "metrics_gate_failure"
+    exit 1
+  fi
+
+  if ! check_test_suite_count; then
+    printf 'Error: Test suite count drift detected. Push blocked.\n' >&2
+    log_block "test_suite_count_drift"
     exit 1
   fi
 

@@ -1,19 +1,29 @@
-"""state_store.export — render a projection back into git-tracked JSON.
+"""state_store.export — thin alias to materialize for backward compatibility.
 
-In the DB-source-of-truth design git stops being *read* for state; this job
-renders human-readable, diffable snapshots (e.g. tracker.json) FROM the
-projections for durability and review. The JSON style (indent=2, ascii-escaped)
-matches the existing state/tracker.json so a future cutover produces
-minimal-diff snapshots.
+DEPRECATED (Inc 1): use materialize.materialize_tracker directly.
+
+This module is kept for backward compatibility during the state-consolidation
+transition. All new code should import from state_store.materialize.
+
+The canonical materializer is now state_store.materialize, which is the
+single place all callers use to render views.
 """
 from __future__ import annotations
 
-import json
+from state_store.materialize import materialize_tracker
 
 
 def export_tracker(api, out_path: str) -> None:
-    """Write the tracker projection to ``out_path`` as pretty JSON."""
+    """DEPRECATED: Write the tracker projection to ``out_path`` as pretty JSON.
+
+    This is a thin wrapper around materialize_tracker for backward compatibility.
+    New code should call materialize_tracker directly.
+
+    Args:
+        api: StateAPI instance
+        out_path: Path to write the JSON file
+    """
     projection = api.project("tracker")
-    with open(out_path, "w", encoding="utf-8") as fh:
-        json.dump(projection, fh, indent=2)
-        fh.write("\n")
+    content = materialize_tracker(projection)
+    with open(out_path, "wb") as fh:
+        fh.write(content)

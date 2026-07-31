@@ -20,7 +20,7 @@
       "filesWritten": [
         "auth.py"
       ],
-      "workerId": "worker-3",
+      "workerId": "worker-1",
       "testStdout": "OK",
       "testStderr": "",
       "adversarial_review": "deferred"
@@ -35,7 +35,7 @@
       "filesWritten": [
         "validation.py"
       ],
-      "workerId": "worker-2",
+      "workerId": "worker-3",
       "testStdout": "OK",
       "testStderr": "",
       "adversarial_review": "deferred"
@@ -50,7 +50,7 @@
       "filesWritten": [
         "database.py"
       ],
-      "workerId": "worker-1",
+      "workerId": "worker-2",
       "testStdout": "OK",
       "testStderr": "",
       "adversarial_review": "deferred"

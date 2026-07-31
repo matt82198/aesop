@@ -2,6 +2,14 @@
 
 **What**: MIT-licensed multi-agent orchestration harness for autonomous software development.
 
+## RED CI Escape Detection
+
+RED CI runs (any FAILURE check on main or open PRs) are automatically detected every 20 minutes
+by `~/scripts/detect_red_ci_runs.py`, which runs as part of the orchestrator's idle_tick.
+Detected escapes are queued to `~/.claude/gate-escapes-queue.json`; idle_tick surfaces them as HIGH
+priority; orchestrator's main thread invokes gate-escape-resolver workflow to fix + postmortem + enforce.
+No RED run is missed; deduplication prevents redundant queue entries (keys on run_id).
+
 ## Domain map
 
 - **skills/** — Orchestration skills (/power: priming skill) — read skills/CLAUDE.md

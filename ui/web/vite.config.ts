@@ -1,16 +1,20 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
+// Read API port from environment variable (dev-only; production uses built dist)
+const apiPort = process.env.VITE_API_PORT || '8770';
+const apiTarget = `http://localhost:${apiPort}`;
+
 export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
     proxy: {
-      '/data': 'http://localhost:8770',
-      '/api': 'http://localhost:8770',
-      '/agent': 'http://localhost:8770',
-      '/events': 'http://localhost:8770',
-      '/submit': 'http://localhost:8770',
+      '/data': apiTarget,
+      '/api': apiTarget,
+      '/agent': apiTarget,
+      '/events': apiTarget,
+      '/submit': apiTarget,
     },
   },
   build: {

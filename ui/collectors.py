@@ -416,25 +416,9 @@ def get_agent_lifecycle_events():
 def load_tracker():
     """Load tracker.json, return empty tracker if missing or corrupt.
 
-    Defect 2 fix: Check dirty flag. If render previously failed, the event log
-    and tracker.json may be out of sync. Re-render from projection to self-heal.
+    LOAD-ONLY path: reads the materialized view from disk (cache read).
+    Mutations are handled by WriteAPI which keeps this file in sync.
     """
-    # Check dirty flag (indicates previous render failure)
-    dirty_file = config.STATE_DIR / ".tracker-render-dirty"
-    if dirty_file.exists():
-        try:
-            print("[tracker] Detected previous render failure; recovering...", file=sys.stderr)
-            api = _tracker_api()
-            # Force re-render from projection
-            try:
-                save_tracker(api.project("tracker"))
-                dirty_file.unlink()
-                print("[tracker] Recovery render completed", file=sys.stderr)
-            except Exception as e:
-                print(f"[tracker] Recovery render failed: {e}", file=sys.stderr)
-        except Exception as e:
-            print(f"[tracker] Failed to recover from dirty flag: {e}", file=sys.stderr)
-
     if not config.TRACKER_FILE.exists():
         return {"version": 1, "items": []}
 
@@ -453,24 +437,11 @@ def load_tracker():
             print(f"[tracker] Failed to rename corrupt tracker: {e}", file=sys.stderr)
         return {"version": 1, "items": []}
 
-def save_tracker(tracker):
-    """Save tracker atomically using temp file + os.replace."""
-    config.STATE_DIR.mkdir(parents=True, exist_ok=True)
-    temp_file = config.TRACKER_FILE.with_suffix('.json.tmp')
-    try:
-        with open(temp_file, 'w', encoding='utf-8') as f:
-            json.dump(tracker, f, indent=2)
-        os.replace(str(temp_file), str(config.TRACKER_FILE))
-    except Exception as e:
-        print(f"[tracker] Error saving tracker: {e}", file=sys.stderr)
-        try:
-            temp_file.unlink()
-        except Exception as ue:
-            print(f"[tracker] Failed to unlink temp file: {ue}", file=sys.stderr)
-        raise
-
 def get_tracker_items(status=None, priority=None):
-    """Retrieve tracker items with optional filters."""
+    """Retrieve tracker items with optional filters.
+
+    Reads from the materialized tracker.json (cache read).
+    """
     tracker = load_tracker()
     items = tracker.get("items", [])
 
@@ -481,16 +452,39 @@ def get_tracker_items(status=None, priority=None):
 
     return items
 
-# --- Event-sourced tracker backing (state_store) -----------------------------
-# The event log is the write-authority + audit trail; tracker.json is kept as
-# the rendered export that reads/SSE/UI consume. Each mutation appends an event
-# and re-renders the file (atomic os.replace via save_tracker), replacing the
-# old load->mutate->save read-modify-write that raced under concurrent writers.
+# --- Event-sourced tracker backing (state_store) via unified WriteAPI --------
+# Inc 1: All tracker mutations now route through WriteAPI, which provides:
+# - Atomic event append + projection render (tempfile + os.replace)
+# - OCC (Optimistic Concurrency Control) for write safety
+# - Single canonical materializer (state_store.materialize)
+#
 # The live read path (load_tracker / get_tracker_items / SSE snapshot) is
-# unchanged: it still reads tracker.json, which every write keeps current.
+# unchanged: it reads the materialized tracker.json as a cache. Writes keep
+# it in sync via WriteAPI._render_tracker_atomic.
+
+def _write_api():
+    """Return a WriteAPI for tracker mutations (lazy import; call-time paths)."""
+    try:
+        from state_store.write_api import WriteAPI
+    except ImportError:
+        from pathlib import Path as _Path
+        root = str(_Path(__file__).resolve().parents[1])
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from state_store.write_api import WriteAPI
+    config.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    return WriteAPI(str(config.STATE_DIR))
+
 
 def _tracker_api():
-    """Return a StateAPI over state/tracker_events.db (lazy import; call-time paths)."""
+    """Return a StateAPI over the tracker event log (read/projection side).
+
+    Distinct from _write_api(): callers here need .project(), which WriteAPI does
+    not expose. This helper's definition was lost in the event-store refactor while
+    two call sites in the inbox drain path kept calling it. Both sites sit inside
+    try/except, so the resulting NameError was swallowed and the dedup-against-
+    projection check silently never ran.
+    """
     try:
         from state_store import StateAPI
     except ImportError:
@@ -503,80 +497,155 @@ def _tracker_api():
     return StateAPI(str(config.STATE_DIR / "tracker_events.db"))
 
 
-def _ensure_tracker_migrated(api):
+def _ensure_tracker_migrated(write_api):
     """Backfill the event log from the existing tracker.json once (idempotent).
 
-    Defect 3 fix: Guard migration with a marker event (migration_started with
-    version=1). The first caller to append this marker wins and performs the
-    backfill. Subsequent callers see the marker and skip the backfill. This
-    prevents concurrent callers from polluting the audit log with duplicate
-    item_created events.
+    Adapted for Inc 1: Use StateAPI.append() directly to backfill events.
+    Guard migration with a marker event to prevent concurrent backfill.
+
+    P0 FIX (wave-29): Separate migration_started and migration_completed markers.
+    - migration_started: Claimed at start to guard concurrent backfills.
+    - migration_completed: Written ONLY after backfill fully succeeds.
+    - Skip logic gates on BOTH (migration truly done).
+    - Retry if started exists without completed (stale claim or failed backfill).
+    - Handles already-bricked state (items on disk not in event store).
+    - All exceptions surface; none are swallowed.
     """
-    events = api.get("tracker")
+    from state_store import StateAPI
 
-    # Check for migration marker (first event of type "migration_started")
-    has_migration_marker = any(e.get("type") == "migration_started" and
-                               e.get("payload", {}).get("version") == 1
-                               for e in events)
-    if has_migration_marker:
-        # Migration already completed (or in progress); skip backfill
-        return
+    config.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    api = None
 
-    # Append migration marker first to atomically claim the migration
     try:
-        api.append("tracker", "migration_started", {"version": 1}, "system")
-    except Exception as e:
-        print(f"[tracker] Failed to append migration marker: {e}", file=sys.stderr)
-        return
+        api = StateAPI(str(config.STATE_DIR / "tracker_events.db"))
+        events = api.get("tracker")
 
-    # Now safe to backfill (other callers will see marker and skip)
-    if config.TRACKER_FILE.exists():
-        try:
-            data = json.loads(config.TRACKER_FILE.read_text(encoding='utf-8'))
-        except Exception:
-            data = {"items": []}
-        for item in data.get("items", []):
-            if isinstance(item, dict) and item.get("id"):
+        # Check for completion marker
+        has_migration_completed = any(
+            e.get("type") == "migration_completed" and e.get("payload", {}).get("version") == 1
+            for e in events
+        )
+
+        # If migration is already completed, nothing to do
+        if has_migration_completed:
+            return
+
+        # Check for stale start marker (indicates incomplete or failed migration)
+        has_migration_started = any(
+            e.get("type") == "migration_started" and e.get("payload", {}).get("version") == 1
+            for e in events
+        )
+
+        # If no start marker, claim this migration attempt
+        if not has_migration_started:
+            api.append("tracker", "migration_started", {"version": 1}, "system")
+
+        # At this point, we either just claimed it or we're retrying a stale claim.
+        # Get the set of items currently in the event store.
+        events = api.get("tracker")  # Refresh to get any newly-appended start marker
+        db_item_ids = set(
+            e.get("payload", {}).get("id") for e in events
+            if e.get("type") == "item_created" and e.get("payload", {}).get("id")
+        )
+
+        # Get items from tracker.json
+        items_to_backfill = []
+        disk_items = []
+        if config.TRACKER_FILE.exists():
+            try:
+                data = json.loads(config.TRACKER_FILE.read_text(encoding='utf-8'))
+                disk_items = [
+                    item for item in data.get("items", [])
+                    if isinstance(item, dict) and item.get("id")
+                ]
+                items_to_backfill = [
+                    item for item in disk_items if item.get("id") not in db_item_ids
+                ]
+            except Exception as e:
+                print(f"[tracker] Failed to read tracker.json: {e}", file=sys.stderr)
+                # If we can't read the file, don't fail; just mark migration as done to avoid retry loops
+                api.append("tracker", "migration_completed", {"version": 1}, "system")
+                return
+
+        # Backfill missing items (idempotent: only items not already in DB)
+        backfill_errors = []
+        for item in items_to_backfill:
+            try:
                 api.append("tracker", "item_created", item, "migration")
+            except Exception as e:
+                item_id = item.get("id", "?")
+                error_msg = f"Failed to backfill item {item_id}: {e}"
+                print(f"[tracker] {error_msg}", file=sys.stderr)
+                backfill_errors.append(error_msg)
 
-
-def _tracker_items_by_id(api):
-    return {it["id"]: it for it in api.project("tracker")["items"]}
-
-
-def _render_tracker(api):
-    """Materialize the projection back to tracker.json (atomic).
-
-    Defect 2 fix: Wrap render in try/except. On failure, log loudly and mark
-    a dirty flag so the next read triggers a recovery re-render. This ensures
-    that if the event log has events but tracker.json is stale, the next read
-    self-heals by detecting the mismatch and re-rendering.
-    """
-    try:
-        save_tracker(api.project("tracker"))
-    except Exception as e:
-        print(f"[tracker] CRITICAL: Failed to render tracker after event append: {e}",
-              file=sys.stderr)
-        # Mark dirty flag for recovery on next read
-        dirty_file = config.STATE_DIR / ".tracker-render-dirty"
+        # Second direction -- WITHOUT THIS, MIGRATION LOSES DATA.
+        # Items already in the event log may carry a STALE status there: historical
+        # closes were written straight to tracker.json without emitting events, so
+        # the log never saw them. Rendering the projection from that incomplete log
+        # silently RESURRECTS closed items (observed: 87 of 119 on a real install).
+        # The projection is authoritative for those, so teach the log what disk knows.
         try:
-            dirty_file.write_text(str(time()), encoding='utf-8')
-        except Exception as e2:
-            print(f"[tracker] Failed to write dirty flag: {e2}", file=sys.stderr)
-        raise
+            projected = {
+                i.get("id"): i
+                for i in api.project("tracker").get("items", [])
+                if isinstance(i, dict) and i.get("id")
+            }
+        except Exception as e:
+            print(f"[tracker] Could not project for status reconcile: {e}", file=sys.stderr)
+            projected = {}
+
+        for item in disk_items:
+            item_id = item.get("id")
+            disk_status = item.get("status")
+            if not item_id or not disk_status or item_id not in projected:
+                continue
+            if projected[item_id].get("status") == disk_status:
+                continue
+            try:
+                api.append(
+                    "tracker",
+                    "item_updated",
+                    {"id": item_id, "status": disk_status},
+                    "migration",
+                )
+            except Exception as e:
+                error_msg = f"Failed to reconcile status for {item_id}: {e}"
+                print(f"[tracker] {error_msg}", file=sys.stderr)
+                backfill_errors.append(error_msg)
+
+        # Only mark migration complete if backfill succeeded (no errors).
+        # If there were errors, the next caller will retry.
+        if not backfill_errors:
+            api.append("tracker", "migration_completed", {"version": 1}, "system")
+        else:
+            print(f"[tracker] Migration backfill had {len(backfill_errors)} errors; "
+                  f"will retry on next call", file=sys.stderr)
+
+    except Exception as e:
+        print(f"[tracker] Migration failed: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+
+    finally:
+        if api:
+            try:
+                api.close()
+            except Exception:
+                pass
 
 
 def create_tracker_item(data):
-    """Create a new tracker item (event-sourced; tracker.json re-rendered).
+    """Create a new tracker item (event-sourced via WriteAPI).
 
     Accepts optional acceptanceCriteria: list of {statement, verifiable_by} dicts.
     Authored AC always stored as-is; no derivation happens here (orchestrator handles derivation).
+
+    Uses WriteAPI which provides atomic append + render under OCC protection.
     """
-    api = _tracker_api()
-    _ensure_tracker_migrated(api)
+    write_api = _write_api()
+    _ensure_tracker_migrated(write_api)
 
     item = {
-        "id": secrets.token_hex(6),
         "title": data.get("title", ""),
         "priority": data.get("priority", "P1"),
         "status": data.get("status", "todo"),
@@ -585,8 +654,6 @@ def create_tracker_item(data):
         "tags": data.get("tags", []) if isinstance(data.get("tags"), list) else [],
         "notes": data.get("notes"),
         "pr_link": data.get("pr_link"),
-        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        "completed_at": None
     }
 
     # Add acceptanceCriteria if provided (authored AC, never derived here)
@@ -594,47 +661,49 @@ def create_tracker_item(data):
     if ac is not None and isinstance(ac, list) and len(ac) > 0:
         item["acceptanceCriteria"] = ac
 
-    api.append("tracker", "item_created", item, item["source"])
-    _render_tracker(api)
-    return item
+    result = write_api.tracker_append_item(item, actor=item.get("source", "manual"))
+    write_api.close()
+    return result
 
 def update_tracker_item(item_id, update_data):
-    """Update a tracker item by id (event-sourced).
+    """Update a tracker item by id (event-sourced via WriteAPI).
 
     Accepts optional acceptanceCriteria: list of {statement, verifiable_by} dicts.
     Authored AC always replaces derived (authored wins, no merge).
+
+    Uses WriteAPI which provides atomic append + render under OCC protection.
     """
-    api = _tracker_api()
-    _ensure_tracker_migrated(api)
+    write_api = _write_api()
+    _ensure_tracker_migrated(write_api)
 
-    current = _tracker_items_by_id(api)
-    if item_id not in current:
-        raise Exception(f"404 Item not found: {item_id}")
-
-    patch = {"id": item_id}
+    patch = {}
     for key in ["status", "lane", "priority", "notes", "pr_link", "tags", "acceptanceCriteria"]:
         if key in update_data:
             patch[key] = update_data[key]
 
-    if update_data.get("status") == "done" and not current[item_id].get("completed_at"):
-        patch["completed_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    # Handle completed_at timestamp for status=done
+    if update_data.get("status") == "done":
+        # Read current item to check if already completed
+        current = load_tracker()
+        current_items = {it["id"]: it for it in current.get("items", [])}
+        if item_id in current_items and not current_items[item_id].get("completed_at"):
+            patch["completed_at"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-    api.append("tracker", "item_updated", patch, "api")
-    _render_tracker(api)
-    return _tracker_items_by_id(api)[item_id]
+    result = write_api.tracker_update_item(item_id, patch, actor="api")
+    write_api.close()
+    return result
 
 def delete_tracker_item(item_id):
-    """Soft-delete a tracker item (mark as archived; event-sourced)."""
-    api = _tracker_api()
-    _ensure_tracker_migrated(api)
+    """Soft-delete a tracker item (mark as archived; event-sourced via WriteAPI).
 
-    current = _tracker_items_by_id(api)
-    if item_id not in current:
-        raise Exception(f"404 Item not found: {item_id}")
+    Uses WriteAPI which provides atomic append + render under OCC protection.
+    """
+    write_api = _write_api()
+    _ensure_tracker_migrated(write_api)
 
-    api.append("tracker", "item_archived", {"id": item_id}, "api")
-    _render_tracker(api)
-    return _tracker_items_by_id(api)[item_id]
+    result = write_api.tracker_archive_item(item_id, actor="api")
+    write_api.close()
+    return result
 
 def _snapshot_data():
     """Everything the 'data' SSE section covers (header, repos, events, alerts, messages)."""

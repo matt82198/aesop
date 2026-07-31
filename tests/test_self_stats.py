@@ -944,17 +944,41 @@ class MergedPRsGhAndGitFallbackTest(SelfStatsFixtureCase):
 class AuthorClassificationTest(unittest.TestCase):
     """Test author classification logic."""
 
+    # The human identity is no longer a hardcoded constant: it is resolved at
+    # call time from the analyzed repo's git config, or from AESOP_HUMAN_EMAILS.
+    # Pin it explicitly here so the assertion tests the classification rule
+    # rather than whatever git identity the test host happens to have.
+    HUMAN_EMAIL = "dev@example.org"
+
+    def setUp(self):
+        self._prev_human = os.environ.get("AESOP_HUMAN_EMAILS")
+        os.environ["AESOP_HUMAN_EMAILS"] = self.HUMAN_EMAIL
+
+    def tearDown(self):
+        if self._prev_human is None:
+            os.environ.pop("AESOP_HUMAN_EMAILS", None)
+        else:
+            os.environ["AESOP_HUMAN_EMAILS"] = self._prev_human
+
     def test_classify_human_author(self):
         """Should classify human author by email."""
-        classification, metadata = self_stats.classify_author("Matt Culliton", "matt82198@gmail.com")
+        classification, metadata = self_stats.classify_author("Matt Culliton", self.HUMAN_EMAIL)
         self.assertEqual(classification, "human")
         self.assertIsNone(metadata)
 
     def test_classify_multiple_human_identities_same_email(self):
         """Multiple names with same email should all be human."""
         for name in ["Matt Culliton", "AliceAdmin", "John \"Jack\" Doe"]:
-            classification, metadata = self_stats.classify_author(name, "matt82198@gmail.com")
-            self.assertEqual(classification, "human", f"{name} with matt82198@gmail.com should be human")
+            classification, metadata = self_stats.classify_author(name, self.HUMAN_EMAIL)
+            self.assertEqual(classification, "human", f"{name} with {self.HUMAN_EMAIL} should be human")
+
+    def test_unconfigured_human_email_does_not_classify(self):
+        """With no configured human identity, an unknown email is not human."""
+        os.environ["AESOP_HUMAN_EMAILS"] = ""
+        classification, _ = self_stats.classify_author(
+            "Somebody Else", "somebody@example.net", repo_root=None
+        )
+        self.assertNotEqual(classification, "human")
 
     def test_classify_model_anthropic_email(self):
         """Should classify model authors by noreply@anthropic.com email."""
@@ -962,7 +986,10 @@ class AuthorClassificationTest(unittest.TestCase):
             ("Claude Opus 4.8", "noreply@anthropic.com", "Opus 4.8"),
             ("Claude Haiku 4.5", "noreply@anthropic.com", "Haiku 4.5"),
             ("Claude Fable 5", "noreply@anthropic.com", "Fable 5"),
-            ("Claude Opus 5.0", "noreply@anthropic.com", "Opus 5.0"),
+            # "Opus 5" is the real model name (id: claude-opus-5); "Opus 5.0"
+            # is a spelling variant that normalizes onto it so stats don't split
+            # one model across two tiers.
+            ("Claude Opus 5.0", "noreply@anthropic.com", "Opus 5"),
         ]
         for name, email, expected_tier in test_cases:
             classification, metadata = self_stats.classify_author(name, email)

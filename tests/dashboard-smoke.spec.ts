@@ -88,4 +88,26 @@ test.describe('Mission-Control MVP', () => {
       expect(overflows, `horizontal overflow at ${viewport.width}px`).toBeFalsy();
     }
   });
+
+  test('Data freshness indicator displays with color-coded dot status', async ({ page }) => {
+    // Load the dashboard
+    await page.goto('/#/');
+    await page.waitForLoadState('networkidle');
+
+    // Verify the freshness dot exists
+    const freshnessDiv = page.locator('[data-testid="health-freshness-dot"]');
+    await expect(freshnessDiv).toBeVisible();
+
+    // Verify it has one of the three freshness states
+    const classList = await freshnessDiv.evaluate(el => el.className);
+    const hasFreshnessClass =
+      classList.includes('health-header__freshness-dot--fresh') ||
+      classList.includes('health-header__freshness-dot--aging') ||
+      classList.includes('health-header__freshness-dot--stale');
+    expect(hasFreshnessClass).toBe(true);
+
+    // Verify the dot is rendered as a small circle (accessibility-friendly visual indicator)
+    const isVisible = await freshnessDiv.isVisible();
+    expect(isVisible).toBe(true);
+  });
 });

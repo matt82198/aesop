@@ -154,6 +154,10 @@ export function HealthHeader({
   const dataTimeStr = dataTimestamp ? formatRelativeTime(dataTimestamp) : 'unknown';
   const stalenessAge = isDataStale ? formatAge(Math.floor(Math.max(dataAgeMs, heartbeatAgeMs) / 1000)) : null;
 
+  // Determine freshness status for visual indicator (wave-35 UX improvement)
+  // Green: < 20s, Yellow: 20-60s, Red: > 60s
+  const freshnessDotStatus = isDataStale ? 'stale' : dataAgeMs < 20000 ? 'fresh' : 'aging';
+
   // Determine max severity for alerts color
   let maxAlertSeverity = 'neutral';
   if (alertsCount > 0 && alerts?.lines.length) {
@@ -311,9 +315,12 @@ export function HealthHeader({
               aria-label={`Data as of ${dataTimeStr}${isDataStale ? ` (stale by ${stalenessAge})` : ''}`}
             >
               <span className="health-header__label">Data</span>
-              <span className={`health-header__status ${isDataStale ? 'text-status-warn' : 'text-status-ok'}`}>
-                {dataTimeStr}
-              </span>
+              <div className="health-header__status-row">
+                <span className={`health-header__freshness-dot health-header__freshness-dot--${freshnessDotStatus}`} data-testid="health-freshness-dot" aria-hidden="true" />
+                <span className={`health-header__status ${isDataStale ? 'text-status-warn' : 'text-status-ok'}`}>
+                  {dataTimeStr}
+                </span>
+              </div>
             </span>
             {isDataStale && (
               <div

@@ -52,7 +52,7 @@ class TestFrontierSliceN60(unittest.TestCase):
         # Verify all task IDs match
         assert set(self.tasks.keys()) == set(self.gt.keys()), "Task IDs don't match ground truth IDs"
 
-        print(f"✓ Loaded all {self.n_tasks} tasks and ground truth")
+        print(f"OK: Loaded all {self.n_tasks} tasks and ground truth")
 
     def test_task_ids_sequential(self):
         """Verify task IDs follow the pattern ft01-ftNN (numeric sort)."""
@@ -73,7 +73,7 @@ class TestFrontierSliceN60(unittest.TestCase):
             expected_id = f"ft{i:02d}_"
             assert task_id.startswith(expected_id), f"Position {i}: Expected {expected_id}*, got {task_id}"
 
-        print(f"✓ All {self.n_tasks} task IDs are sequential (ft01 through ft{self.n_tasks:02d})")
+        print(f"OK: All {self.n_tasks} task IDs are sequential (ft01 through ft{self.n_tasks:02d})")
 
     def test_patterns_are_valid(self):
         """Verify each task's ground truth pattern is well-formed."""
@@ -98,7 +98,7 @@ class TestFrontierSliceN60(unittest.TestCase):
             else:
                 raise AssertionError(f"{task_id}: unknown match type: {match_type}")
 
-        print(f"✓ All {self.n_tasks} patterns are well-formed")
+        print(f"OK: All {self.n_tasks} patterns are well-formed")
 
     def test_exemplar_matches(self):
         """Verify exemplar answer MATCHES its pattern."""
@@ -125,7 +125,7 @@ class TestFrontierSliceN60(unittest.TestCase):
             print("\n".join(failures))
             raise AssertionError(f"Found {len(failures)} exemplar matching failures")
 
-        print(f"✓ All {self.n_tasks} exemplars match their patterns")
+        print(f"OK: All {self.n_tasks} exemplars match their patterns")
 
     def test_counter_example_rejects(self):
         """Verify counter_example answer DOES NOT match the pattern."""
@@ -152,7 +152,7 @@ class TestFrontierSliceN60(unittest.TestCase):
             print("\n".join(failures))
             raise AssertionError(f"Found {len(failures)} counter_example rejection failures")
 
-        print(f"✓ All {self.n_tasks} counter_examples are correctly rejected by their patterns")
+        print(f"OK: All {self.n_tasks} counter_examples are correctly rejected by their patterns")
 
     def test_no_duplicate_categories(self):
         """Verify category distribution (optional: just report)."""
@@ -171,7 +171,7 @@ class TestFrontierSliceN60(unittest.TestCase):
             assert "discrimination_rationale" in task, f"{task_id}: missing discrimination_rationale"
             assert len(task["discrimination_rationale"]) > 20, f"{task_id}: rationale too short"
 
-        print(f"✓ All {self.n_tasks} tasks have discrimination rationales")
+        print(f"OK: All {self.n_tasks} tasks have discrimination rationales")
 
 if __name__ == "__main__":
     unittest.main()

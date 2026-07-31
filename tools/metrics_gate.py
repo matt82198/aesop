@@ -51,7 +51,10 @@ class MetricsGate:
     LINE_REFERENCE_PATTERN = re.compile(r'(?:line\s*|:|@)\s*\d+')
 
     # Verification marker pattern
-    VERIFICATION_PATTERN = re.compile(r'<!--\s*metrics-verified:\s*[^-]+\s*-->')
+    # Non-greedy .+? rather than [^-]+ : the old class rejected any source citation
+    # containing a hyphen or dash ("wave-1", "PR-123", "2026-07-31"), which is most
+    # real citations, so valid markers silently failed to register.
+    VERIFICATION_PATTERN = re.compile(r'<!--\s*metrics-verified:\s*.+?-->', re.DOTALL)
 
     def __init__(self, diff_range: str = "origin/main...HEAD"):
         """Initialize with a git diff range.
@@ -68,11 +71,17 @@ class MetricsGate:
         """Get lines added in diff. Returns list of (file, line_content)."""
         try:
             # Use git diff to get added lines
+            # Restrict the diff to markdown (the only files this gate scans) so
+            # binary blobs never reach the decoder, and pin the encoding: text=True
+            # alone falls back to the locale codec (cp1252 on Windows) and dies on
+            # any non-cp1252 byte.
             result = subprocess.run(
-                ["git", "diff", self.diff_range, "--unified=0"],
+                ["git", "diff", self.diff_range, "--unified=0", "--", "*.md"],
                 cwd=self.repo_root,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
             if result.returncode == 0:
@@ -131,6 +140,10 @@ class MetricsGate:
     def find_hard_claims(self, text: str) -> List[str]:
         """Find hard numeric claims in text."""
         claims = []
+        # Strip verification markers before scanning: a citation is evidence, not a
+        # new claim. Without this, sourcing "78.9%" inside the marker itself raises
+        # a fresh unverified-metric finding and the claim can never be satisfied.
+        text = self.VERIFICATION_PATTERN.sub("", text)
         # Find percentages
         claims.extend(self.PERCENTAGE_PATTERN.findall(text))
         # Find multipliers

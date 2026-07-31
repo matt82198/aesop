@@ -35,7 +35,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **csrf.py**: Session-token generation (atomic O_EXCL 0600 mode) + `validate_csrf_request()` (Origin/Referer check + X-Aesop-Token header). `init()` sets `SESSION_TOKEN` (43-char URL-safe base64). Token persisted to `state/.ui-session-token` (readable only by owner).
 
-**collectors.py**: Read-only data collectors (heartbeats, repos, events, alerts, messages, backlog parse), tracker CRUD, and SSE section snapshots. Functions: `_snapshot_data`, `_snapshot_tracker`, `_snapshot_orchestrator_status`, `drain_tracker_inbox`, `get_alerts`, `get_heartbeat_status`, `get_agent_lifecycle_events` (wave-29: agent state transitions from transcript analysis), etc.
+**collectors.py**: Read-only data collectors (heartbeats, repos, events, alerts, messages, backlog parse), tracker CRUD via WriteAPI, and SSE section snapshots. Functions: `_snapshot_data`, `_snapshot_tracker`, `_snapshot_orchestrator_status`, `drain_tracker_inbox`, `get_alerts`, `get_heartbeat_status`, `get_agent_lifecycle_events` (wave-29: agent state transitions from transcript analysis), etc. **Inc 1 (2026-07-30):** Tracker CRUD (`create_tracker_item`, `update_tracker_item`, `delete_tracker_item`) now routes through `state_store.write_api.WriteAPI`, which provides atomic append + render under OCC. Deleted independent `save_tracker()` render path. `load_tracker()` still reads `tracker.json` as a cache.
 
 **agents.py**: Agent transcript reading (`get_fleet_agents`, `extract_agent_dispatch_prompt`, `get_agent_detail`), path-traversal-safe agent-id handling via `_AGENT_ID_FORBIDDEN`.
 
@@ -85,7 +85,8 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 - **App.tsx**: App shell; hash-routed views (/#/, /#/work, /#/activity, /#/cost, /#/prs).
 - **styles/tokens.css** + **global.css**: Design tokens (light/dark palettes, spacing, typography).
 - **views/**: Overview, Work, Activity, Cost, WavePRBoard (with SSE bindings). 5 views total: `/#/` (Overview), `/#/work` (Work), `/#/activity` (Activity), `/#/cost` (Cost), `/#/prs` (PR Board). WavePRBoard polls `/api/wave/prs` every 5s; drills down to FailureDrilldown on click.
-- **components/**: HealthHeader, AgentsPanel, TrackerBoard, Timeline, CostChart, CostAnalyticsPanel, FailureDrilldown, BenchmarkPanel, etc.
+- **components/**: HealthHeader (always-visible mission-control status header), AgentsPanel, TrackerBoard, Timeline, CostChart, CostAnalyticsPanel, FailureDrilldown, BenchmarkPanel, etc.
+  - HealthHeader: Mission-control status header (D4, always visible). Three-zone layout: (1) fleet orchestrator phase + agent counts/status breakdown from live agents array, (2) system health (watchdog/monitor/alerts/SSE/data freshness), (3) controls (cost snapshot, theme toggle, manual refresh). Color-coded freshness indicator dot. All metrics bound to real SSE state; nothing invented. Clickable cells jump to corresponding views. No local state beyond focus/hover. Props from App.tsx.
   - BenchmarkPanel: Results table (model/accuracy/tokens/latency/cost/timestamp) + model comparison cards; fetches `/api/bench` and `/api/bench/compare`; dark/light theme, responsive grid.
   - CostAnalyticsPanel (wave-29 UX): info-dense operator view with (a) spend per wave (bar chart), (b) model efficiency vs Opus counterfactual, (c) burn rate + end-of-wave projection with ceiling alert; graceful DATA-UNAVAILABLE states when ledger/ceiling missing.
   - FailureDrilldown: drawer showing CI job list + ~100-line log excerpts on expand; fetches `/api/wave/failure?pr=N`.
@@ -97,7 +98,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 - **vite.config.ts**: Vite config with API proxy to :8770.
 - **dist/**: Built static files (committed to git; served by Python handler). Content-hashed by Vite.
 
-**testids-in-fixtures pattern** (both Python + React): Test components with `data-testid` attributes. React tests use `getByTestId()` (via `@testing-library/react`). Python tests use fixtures to set testids for integration proofs.
+**testids-in-fixtures pattern** (both Python + React): Test components with `data-testid` attributes. React tests use `getByTestId()` (via `@testing-library/react`). Python tests use fixtures to set testids for integration proofs. Fixtures use repository-agnostic paths (`<REPO>/` placeholders instead of hardcoded personal paths) for portability across repos/machines.
 
 ## API Routes
 
@@ -115,7 +116,11 @@ Realtime via `GET /events` (ThreadingHTTPServer required). 6 sections (data/back
 
 ## State Store Integration
 
-Dual-path: write via event-sourced SQLite WAL (`state/tracker_events.db`), read via `tracker.json` projection (committed to git). Render-failure recovery: falls back to last-known good export.
+**Inc 1 consolidation (2026-07-30):**
+- Write: All tracker CRUD routes through `state_store.write_api.WriteAPI`, which appends events to SQLite and renders views atomically via `state_store.materialize`.
+- Read: `load_tracker()` reads the materialized `tracker.json` (git-ignored, gitignored, rebuildable — NOT committed). `tracker.json` is a derived view of the event store, kept current by WriteAPI.
+- Canonical render path: `materialize_tracker()` (one pure function) — all callers use this, not independent render logic.
+- Recovery: `python tools/state_rebuild.py --all` rebuilds views from event store with zero data loss.
 
 ## Configuration
 
