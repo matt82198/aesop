@@ -479,8 +479,11 @@ def _write_api():
 def _ensure_tracker_migrated(write_api):
     """Backfill the event log from the existing tracker.json once (idempotent).
 
-    Adapted for Inc 1: Use WriteAPI which provides atomic append + render.
+    Adapted for Inc 1: Use StateAPI.append() directly to backfill events.
     Guard migration with a marker event to prevent concurrent backfill.
+
+    Defect fix: Use StateAPI.append() for backfill instead of tracker_append_item()
+    to avoid the duplicate-check that rejects items already in tracker.json.
     """
     # Get current events from DB to check for migration marker
     try:
@@ -506,12 +509,14 @@ def _ensure_tracker_migrated(write_api):
         from state_store import StateAPI
         api = StateAPI(str(config.STATE_DIR / "tracker_events.db"))
         api.append("tracker", "migration_started", {"version": 1}, "system")
-        api.close()
     except Exception as e:
         print(f"[tracker] Failed to append migration marker: {e}", file=sys.stderr)
+        if 'api' in locals():
+            api.close()
         return
 
     # Now safe to backfill (other callers will see marker and skip)
+    # Use StateAPI.append() directly to avoid duplicate checks
     if config.TRACKER_FILE.exists():
         try:
             data = json.loads(config.TRACKER_FILE.read_text(encoding='utf-8'))
@@ -521,9 +526,15 @@ def _ensure_tracker_migrated(write_api):
         for item in data.get("items", []):
             if isinstance(item, dict) and item.get("id"):
                 try:
-                    write_api.tracker_append_item(item, actor="migration")
+                    api.append("tracker", "item_created", item, "migration")
                 except Exception as e:
                     print(f"[tracker] Failed to backfill item {item.get('id')}: {e}", file=sys.stderr)
+
+    # Close the API at the end
+    try:
+        api.close()
+    except Exception:
+        pass
 
 
 def create_tracker_item(data):
