@@ -102,7 +102,7 @@ Before publishing, the payload is scanned for:
 - Local paths (`C:\Users\<user>\...`, `/home/<user>/...`)
 - References to `conductor3` (local state directory)
 
-**Redaction is mandatory.** If more than 10% of content would be removed (suspicious), the publish fails (exit 1) rather than guessing which paths to redact.
+**Redaction is mandatory.** If more than 10% of content would be removed (suspicious), the publish fails (exit 1) rather than guessing which paths to redact. <!-- metrics-verified: tools/status_publish.py redact_payload() line 252 -->
 
 Exit codes:
 
@@ -241,7 +241,7 @@ gh --version
 
 ### Redaction Failures
 
-If publish fails with "Redaction would remove > 10%":
+If publish fails with "Redaction would remove > 10%": <!-- metrics-verified: tools/status_publish.py redact_payload() -->
 
 1. Check for accidentally-committed secrets in the payload (BUILDLOG, pending items)
 2. Review what `gather_buildlog_summary()` is pulling
