@@ -100,3 +100,38 @@ Phases 1-3 shipped. All file I/O uses explicit `encoding="utf-8"`. For orchestra
 **Encoding**: Fixed 2 encoding violations (subprocess.run without encoding parameter) at lines 504 and 564; now 0 violations.
 
 **Metrics**: `_run_wave_inner` CC 141 → 13 (grade F → C). Total extracted functions: 19. Max extracted CC: 17 (still grade C). Test pass rate: 32/32 (100%). <!-- metrics-verified: npm run test:py -- tests/test_wave_loop_rs3.py -v -->
+
+## wave_scheduler.py Refactoring (Complexity Reduction)
+
+**Date**: 2026-07-31
+
+**What**: Decomposed `run_wave_scheduler` function (377 lines, cyclomatic complexity 82, grade F) into 10 specialized phase functions, each with cyclomatic complexity <= 20 (grade C or better). Main function now CC 15, an 82% reduction in complexity. <!-- metrics-verified: radon cc driver/wave_scheduler.py -s -->
+
+**Why**: Reduced complexity improves maintainability, testability, and code comprehension. The monolithic orchestrator mixed manifest loading, driver construction, dispatch, and outcome collection in a single 377-line function. Extraction follows the wave_loop pattern: identify phases, extract with explicit parameters (not closures), preserve all early-return paths exactly.
+
+**How**: Extracted functions organized by phase:
+- **Intake**: `_phase_intake_and_validate(tracker_path, max_items)` — tracker load + validation + disjoint selection (B/8)
+- **Manifest**: `_phase_build_manifest(selected_items, selected_ids, driver)` — manifest construction (A/4)
+- **Wave Execution**: `_phase_run_wave_and_process(...)` — wave execution + result processing + tracker update + report (C/16)
+- **Result Processing**: `_phase_process_wave_result(wave_result, driver)`, `_build_items_shipped`, `_build_blocked_lane`, `_build_blocked_lane_entry`, `_build_orchestrator_gate`, `_derive_gate_status` — result extraction helpers (all A-B grades)
+- **Tracker Update**: `_phase_update_tracker_and_derive_success(...)` — tracker update + conflict detection + success metrics (C/17)
+
+**Safeguards**: All 12 control-flow abort escapes preserved exactly:
+1. gates unavailable → return gate_unavailable report
+2. halt check error → return halt report with error
+3. is_halted (first check) → return halt report with reason
+4. no valid items → return intake report with success=True
+5. no selected items → return intake report with success=True
+6. manifest build error → return manifest report with error
+7. dry_run flag → return manifest report with success=True
+8. ceiling check error → return ceiling report with error
+9. ceiling_exceeded → return ceiling report with reason
+10. final halt check error → return halt report with error
+11. is_halted (final check) → return halt report with reason
+12. wave dispatch exception → return error report with tracker state in envelope
+
+Thread-safety: no locks in wave_scheduler, preserved as-is. Exception envelope carries `tracker_update_attempted` and `tracker_update_error` from nested phases, enabling recovery detection across report assembly crashes. Cost-ceiling check timing preserved (Phase 6, before final dispatch gates). Git operations: none in wave_scheduler, only via wave_loop. Tests: all 35 wave_scheduler tests pass with zero regressions.
+
+**Encoding**: All file I/O uses explicit `encoding="utf-8"`. No encoding violations. <!-- metrics-verified: python tools/encoding_lint.py --check --paths driver/wave_scheduler.py -->
+
+**Metrics**: `run_wave_scheduler` CC 82 → 15 (grade F → C). Total extracted functions: 10. Max extracted CC: 17 (still grade C). Test pass rate: 35/35 (100%). <!-- metrics-verified: python -m radon cc driver/wave_scheduler.py -s -->
