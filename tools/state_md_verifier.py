@@ -7,14 +7,15 @@ Catches cases where the orchestrator's checkpoint overstates progress (e.g., "re
 git status still shows unmerged files).
 
 Claim classes verified:
-  (a) "resolved"/"conflicts resolved"/"clean" -> git status --porcelain (no UU/AA for those paths)
-  (b) "pushed" -> git ls-remote --heads (ref exists on origin)
-  (c) "MERGED" PR -> gh pr view --json state (if gh available, else SKIP)
+  (a) "Current Version: vX.Y.Z" -> git tags + package.json (version matches latest tag and package.json)
+  (b) "resolved"/"conflicts resolved"/"clean" -> git status --porcelain (no UU/AA for those paths)
+  (c) "pushed" -> git ls-remote --heads (ref exists on origin)
+  (d) "MERGED" PR -> gh pr view --json state (if gh available, else SKIP)
 
 Exit codes:
-  0: No contradictions found
+  0: No contradictions found, and at least one verifiable claim was extracted
   1: At least one claim contradicted by disk truth
-  2: Usage error or subprocess failure
+  2: Usage error, subprocess failure, or ZERO verifiable claims extracted (fail-closed)
 """
 
 import argparse
@@ -63,7 +64,8 @@ def parse_state_md(state_md_path):
     claims = {
         "resolved": [],
         "pushed": [],
-        "merged": []
+        "merged": [],
+        "version": []
     }
 
     try:
@@ -82,8 +84,23 @@ def parse_state_md(state_md_path):
     # Pattern: "MERGED" PR
     merged_pattern = r'(MERGED|merged\s+PR)'
 
+    # Pattern: "**Current Version:** vX.Y.Z" (markdown bold)
+    # Note: The closing ** comes before the colon in markdown: "**Current Version:**"
+    version_pattern = r'\*\*Current\s+Version:\*\*\s*(v[\d\.]+)'
+
     for i, line in enumerate(lines, 1):
         lower_line = line.lower()
+
+        # Version claims (match "**Current Version: vX.Y.Z**")
+        version_match = re.search(version_pattern, line)
+        if version_match:
+            version_str = version_match.group(1)  # e.g., "v0.5.0"
+            claims["version"].append({
+                "claim": line.strip(),
+                "line": i,
+                "context": line,
+                "version": version_str
+            })
 
         # Resolved claims
         if re.search(resolved_pattern, lower_line, re.IGNORECASE):
@@ -332,6 +349,83 @@ def verify_merged_claims(claims, git_root):
     return findings
 
 
+def verify_version_claims(claims, git_root):
+    """Verify "Current Version" claims against git tags and package.json.
+
+    Checks:
+      - git describe --tags or latest tag matches the claimed version
+      - package.json version field matches the claimed version
+
+    Returns findings list.
+    """
+    findings = []
+
+    if not claims:
+        return findings
+
+    for claim_info in claims:
+        claim = claim_info["claim"]
+        line = claim_info["line"]
+        claimed_version = claim_info.get("version", "")
+
+        # Read package.json version (if it exists)
+        package_json_path = git_root / "package.json"
+        package_version = None
+        if package_json_path.exists():
+            try:
+                with open(package_json_path, 'r', encoding='utf-8') as f:
+                    pkg_data = json.load(f)
+                    package_version = pkg_data.get("version")
+            except Exception:
+                pass
+
+        # Get latest git tag
+        rc, stdout, stderr = run_command(
+            ["git", "tag", "-l"],
+            cwd=git_root
+        )
+        git_tags = []
+        if rc == 0:
+            git_tags = [tag.strip() for tag in stdout.strip().split('\n') if tag.strip()]
+
+        # Find the latest v-prefixed tag
+        latest_git_version = None
+        if git_tags:
+            v_tags = [t for t in git_tags if t.startswith('v')]
+            if v_tags:
+                # Sort by version number (simple string sort works for v-prefixed semantic versions)
+                v_tags.sort(reverse=True)
+                latest_git_version = v_tags[0]
+
+        # Normalize versions for comparison (remove 'v' prefix)
+        claimed_ver_normalized = claimed_version.lstrip('v') if claimed_version else ""
+        pkg_ver_normalized = package_version.lstrip('v') if package_version else ""
+        git_ver_normalized = latest_git_version.lstrip('v') if latest_git_version else ""
+
+        # Check for contradictions
+        contradictions = []
+
+        if package_version and claimed_ver_normalized != pkg_ver_normalized:
+            contradictions.append(
+                f"Claimed version {claimed_version} but package.json has {package_version}"
+            )
+
+        if latest_git_version and claimed_ver_normalized != git_ver_normalized:
+            contradictions.append(
+                f"Claimed version {claimed_version} but latest git tag is {latest_git_version}"
+            )
+
+        if contradictions:
+            findings.append({
+                "claim": claim,
+                "line": line,
+                "status": "CONTRADICTION",
+                "detail": "; ".join(contradictions)
+            })
+
+    return findings
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Verify STATE.md checkpoint accuracy against git truth"
@@ -392,8 +486,15 @@ def main():
     if claims is None:
         return 2
 
+    # Check if we extracted ANY verifiable claims (fail-closed if zero)
+    total_claims = sum(len(v) for v in claims.values())
+    if total_claims == 0:
+        print("ERROR: STATE.md contains no verifiable claims (no version, resolved, pushed, or merged statements). Cannot verify.", file=sys.stderr)
+        return 2
+
     # Verify claims
     all_findings = []
+    all_findings.extend(verify_version_claims(claims["version"], git_root))
     all_findings.extend(verify_resolved_claims(claims["resolved"], git_root))
     all_findings.extend(verify_pushed_claims(claims["pushed"], git_root))
     all_findings.extend(verify_merged_claims(claims["merged"], git_root))
