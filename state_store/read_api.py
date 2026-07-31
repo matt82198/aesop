@@ -111,7 +111,18 @@ class ReadAPI:
         api = self._get_api()
         if api is not None:
             try:
-                return api.project("orchestrator_status")
+                projected = api.project("orchestrator_status")
+                # Prefer the projection only when the stream actually has content.
+                # This previously returned unconditionally, so an EMPTY stream (all
+                # fields None) shadowed the file entirely -- defeating the fallback
+                # this docstring promises. Anything writing orchestrator-status.json
+                # directly became invisible the moment a DB existed, even if no
+                # status event had ever been recorded.
+                if projected and any(
+                    projected.get(k) is not None
+                    for k in ("activity", "phase", "role", "updated_at")
+                ):
+                    return projected
             except Exception:
                 # Projection read failed; fall through to file fallback
                 pass
