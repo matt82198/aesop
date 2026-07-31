@@ -90,6 +90,12 @@ Pre-commit hook running `tools/dispatch_lint.py` on staged files. Blocks commits
 - `AESOP_ROOT` env var or `$HOME/aesop` fallback; no hardcoded machine paths/usernames
 - Local convenience defense only; real enforcement requires server-side branch protection (GitHub) and centralized audit logs
 
+## hook_preflight.py — Interpreter health check
+
+Verifies interpreters in hooks/daemons are present and executable. Detects missing/broken interpreters that silently fail.
+Usage: `python tools/hook_preflight.py` — exit 0=all OK, 1=broken interpreter, 2=no checks performed.
+Early guard in pre-push-policy.sh blocks push if Python missing (required for secret_scan.py).
+
 ## Dropped (reason)
 - `docs/HOOK-INSTALL.md` comprehensive guide inlined above (GitHub config, troubleshooting, customization, rotation); refer to that file if org needs full runbook for distribution teams.
 - Map of all domains: /CLAUDE.md
