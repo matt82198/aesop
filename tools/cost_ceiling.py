@@ -16,8 +16,11 @@ Spend source: an explicit --spent/spent= figure always wins. Otherwise spend
 is read from the cost ledger (tools/fleet_ledger.py's OUTCOMES-LEDGER.md under
 the resolved state dir): sum of tokens_in + tokens_out across all ledger rows
 within the specified window (or all rows if no window specified).
-Missing/unreadable ledger -> spend of 0 (never trips on a ledger that doesn't
-exist yet).
+A ledger that does not exist yet -> spend of 0 (never trips on a fresh install).
+This is DISTINCT from a ledger that cannot be READ (permission denied, disk full,
+lock contention): that raises, and the error path returns exceeded=True to abort
+the current wave while leaving tripped=False, so a transient I/O fault stops work
+without permanently wedging the fleet. Absent means zero; unreadable means stop.
 
 WINDOW CONTRACT (shared with cost_projection.py):
   Both tools filter ledger rows by the SAME window parameters to ensure
