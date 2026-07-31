@@ -497,11 +497,116 @@ def _tracker_api():
     return StateAPI(str(config.STATE_DIR / "tracker_events.db"))
 
 
+def _backfill_missing_items(api, db_item_ids, disk_items):
+    """Backfill items from tracker.json that are missing from the event log.
+
+    Idempotent: only items not already in DB are appended. Per-record error
+    handling ensures remaining items are backfilled even if one fails.
+
+    Args:
+        api: StateAPI instance for appending events.
+        db_item_ids: set of item IDs already in the event store.
+        disk_items: list of items from tracker.json.
+
+    Returns:
+        list of error messages (empty if all succeeded).
+    """
+    errors = []
+    items_to_backfill = [
+        item for item in disk_items
+        if item.get("id") not in db_item_ids
+    ]
+
+    for item in items_to_backfill:
+        try:
+            api.append("tracker", "item_created", item, "migration")
+        except Exception as e:
+            item_id = item.get("id", "?")
+            error_msg = f"Failed to backfill item {item_id}: {e}"
+            print(f"[tracker] {error_msg}", file=sys.stderr)
+            errors.append(error_msg)
+
+    return errors
+
+
+def _reconcile_status_updates(api, events, disk_items):
+    """Reconcile item statuses: items with stale status on disk get updated events.
+
+    Only trusts disk for items whose status the event log has NEVER recorded.
+    Items with explicit item_updated events in the log are owned by the log and
+    are skipped. This prevents reverting a real update if migration retries.
+
+    Per-record error handling ensures remaining items are reconciled even if
+    one fails.
+
+    Args:
+        api: StateAPI instance for appending events.
+        events: list of events already in the store (used to identify recorded statuses).
+        disk_items: list of items from tracker.json.
+
+    Returns:
+        list of error messages (empty if all succeeded).
+    """
+    errors = []
+
+    # Project current state to get rendered items
+    try:
+        projected = {
+            i.get("id"): i
+            for i in api.project("tracker").get("items", [])
+            if isinstance(i, dict) and i.get("id")
+        }
+    except Exception as e:
+        print(f"[tracker] Could not project for status reconcile: {e}", file=sys.stderr)
+        return errors
+
+    # Build set of items that already have an explicit item_updated in the log
+    status_recorded_ids = set()
+    for ev in events:
+        if ev.get("type") == "item_updated":
+            payload = ev.get("payload") or {}
+            if payload.get("id") and payload.get("status") is not None:
+                status_recorded_ids.add(payload["id"])
+
+    # For each disk item, emit an update event if its status differs from projection
+    # and the log has never recorded a status update for it
+    for item in disk_items:
+        item_id = item.get("id")
+        disk_status = item.get("status")
+
+        # Skip if missing id or status, or not in projection
+        if not item_id or not disk_status or item_id not in projected:
+            continue
+
+        # Skip if log already owns this item's status
+        if item_id in status_recorded_ids:
+            continue
+
+        # Skip if projection status already matches disk
+        if projected[item_id].get("status") == disk_status:
+            continue
+
+        # Emit the update event to reconcile the status
+        try:
+            api.append(
+                "tracker",
+                "item_updated",
+                {"id": item_id, "status": disk_status},
+                "migration",
+            )
+        except Exception as e:
+            error_msg = f"Failed to reconcile status for {item_id}: {e}"
+            print(f"[tracker] {error_msg}", file=sys.stderr)
+            errors.append(error_msg)
+
+    return errors
+
+
 def _ensure_tracker_migrated(write_api):
     """Backfill the event log from the existing tracker.json once (idempotent).
 
     Adapted for Inc 1: Use StateAPI.append() directly to backfill events.
-    Guard migration with a marker event to prevent concurrent backfill.
+    Guard migration with marker events to prevent concurrent backfill.
 
     P0 FIX (wave-29): Separate migration_started and migration_completed markers.
     - migration_started: Claimed at start to guard concurrent backfills.
@@ -510,6 +615,11 @@ def _ensure_tracker_migrated(write_api):
     - Retry if started exists without completed (stale claim or failed backfill).
     - Handles already-bricked state (items on disk not in event store).
     - All exceptions surface; none are swallowed.
+
+    Reconciliation works in both directions:
+    1. Backfill: items missing from the log are added as item_created events.
+    2. Status reconcile: items with stale status on disk get item_updated events
+       (but only if the log never recorded a status for them).
     """
     from state_store import StateAPI
 
@@ -540,16 +650,16 @@ def _ensure_tracker_migrated(write_api):
         if not has_migration_started:
             api.append("tracker", "migration_started", {"version": 1}, "system")
 
-        # At this point, we either just claimed it or we're retrying a stale claim.
-        # Get the set of items currently in the event store.
-        events = api.get("tracker")  # Refresh to get any newly-appended start marker
+        # Refresh events to get any newly-appended start marker
+        events = api.get("tracker")
+
+        # Build set of items currently in the event store
         db_item_ids = set(
             e.get("payload", {}).get("id") for e in events
             if e.get("type") == "item_created" and e.get("payload", {}).get("id")
         )
 
-        # Get items from tracker.json
-        items_to_backfill = []
+        # Load items from tracker.json
         disk_items = []
         if config.TRACKER_FILE.exists():
             try:
@@ -558,84 +668,27 @@ def _ensure_tracker_migrated(write_api):
                     item for item in data.get("items", [])
                     if isinstance(item, dict) and item.get("id")
                 ]
-                items_to_backfill = [
-                    item for item in disk_items if item.get("id") not in db_item_ids
-                ]
             except Exception as e:
                 print(f"[tracker] Failed to read tracker.json: {e}", file=sys.stderr)
                 # If we can't read the file, don't fail; just mark migration as done to avoid retry loops
                 api.append("tracker", "migration_completed", {"version": 1}, "system")
                 return
 
-        # Backfill missing items (idempotent: only items not already in DB)
-        backfill_errors = []
-        for item in items_to_backfill:
-            try:
-                api.append("tracker", "item_created", item, "migration")
-            except Exception as e:
-                item_id = item.get("id", "?")
-                error_msg = f"Failed to backfill item {item_id}: {e}"
-                print(f"[tracker] {error_msg}", file=sys.stderr)
-                backfill_errors.append(error_msg)
+        # Direction 1: Backfill missing items
+        backfill_errors = _backfill_missing_items(api, db_item_ids, disk_items)
 
-        # Second direction -- WITHOUT THIS, MIGRATION LOSES DATA.
-        # Items already in the event log may carry a STALE status there: historical
-        # closes were written straight to tracker.json without emitting events, so
-        # the log never saw them. Rendering the projection from that incomplete log
-        # silently RESURRECTS closed items (observed: 87 of 119 on a real install).
-        # The projection is authoritative for those, so teach the log what disk knows.
-        try:
-            projected = {
-                i.get("id"): i
-                for i in api.project("tracker").get("items", [])
-                if isinstance(i, dict) and i.get("id")
-            }
-        except Exception as e:
-            print(f"[tracker] Could not project for status reconcile: {e}", file=sys.stderr)
-            projected = {}
+        # Direction 2: Reconcile statuses (without this, migration loses data)
+        reconcile_errors = _reconcile_status_updates(api, events, disk_items)
 
-        # Only trust disk for items whose status the event log has NEVER recorded.
-        # Letting disk win on any disagreement is safe only for a true one-shot migration. If
-        # the migration_completed append fails, this whole block re-runs later -- and by
-        # then the log can legitimately hold a NEWER status than tracker.json (a
-        # projection render can fail after its event has landed). Reverting to the disk
-        # status would destroy that update. An item carrying an explicit item_updated
-        # event is owned by the log; only statuses the log has never seen are
-        # backfilled from disk.
-        status_recorded_ids = set()
-        for ev in events:
-            if ev.get("type") == "item_updated":
-                payload = ev.get("payload") or {}
-                if payload.get("id") and payload.get("status") is not None:
-                    status_recorded_ids.add(payload["id"])
+        # Combine all errors
+        all_errors = backfill_errors + reconcile_errors
 
-        for item in disk_items:
-            item_id = item.get("id")
-            disk_status = item.get("status")
-            if not item_id or not disk_status or item_id not in projected:
-                continue
-            if item_id in status_recorded_ids:
-                continue
-            if projected[item_id].get("status") == disk_status:
-                continue
-            try:
-                api.append(
-                    "tracker",
-                    "item_updated",
-                    {"id": item_id, "status": disk_status},
-                    "migration",
-                )
-            except Exception as e:
-                error_msg = f"Failed to reconcile status for {item_id}: {e}"
-                print(f"[tracker] {error_msg}", file=sys.stderr)
-                backfill_errors.append(error_msg)
-
-        # Only mark migration complete if backfill succeeded (no errors).
-        # If there were errors, the next caller will retry.
-        if not backfill_errors:
+        # Only mark migration complete if no errors occurred
+        # If there were errors, the next caller will retry
+        if not all_errors:
             api.append("tracker", "migration_completed", {"version": 1}, "system")
         else:
-            print(f"[tracker] Migration backfill had {len(backfill_errors)} errors; "
+            print(f"[tracker] Migration had {len(all_errors)} errors; "
                   f"will retry on next call", file=sys.stderr)
 
     except Exception as e:

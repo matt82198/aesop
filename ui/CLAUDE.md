@@ -147,6 +147,13 @@ projection without emitting events), an `item_updated` event is emitted so repla
 them. The reconcile skips any item that already carries an explicit `item_updated` event -- that
 item is owned by the log, and overwriting it from a stale projection would revert a real update.
 
+**Refactoring (complexity reduction):** `_ensure_tracker_migrated()` refactored from radon E(39)
+→ C(19) via extraction of `_backfill_missing_items()` (A, cyclomatic 5) and
+`_reconcile_status_updates()` (C, cyclomatic 17). Per-record error handling preserved: one item's
+failure doesn't prevent others from backfilling/reconciling. Behavior byte-identical (invariant
+confirmed: no duplicate backfills, missing items backfilled, stale statuses reconciled, closed
+items not resurrected in projection).
+
 ## Cost view: absent vs empty → three distinct states
 
 **RESOLVED (wave-31 audit findings):**
