@@ -14,11 +14,9 @@ Exit: 0=clean, 1=violations found, 2=error.
 CLI: commit_lint.py [--message MSG] [--range RANGE] [--json] [--check]
 """
 
-import argparse
-import json
 import re
-import subprocess
 import sys
+from tools import cli
 
 ALLOWED_TYPES = frozenset(
     ["feat", "fix", "refactor", "test", "docs", "chore", "ci", "perf", "style", "build"]
@@ -88,20 +86,20 @@ def lint_message(raw: str) -> list:
 def get_commits_from_range(commit_range: str) -> list:
     """Return list of (hash, message) tuples from a git commit range."""
     try:
-        result = subprocess.run(
+        rc, stdout, stderr = cli.run_subprocess(
             ["git", "log", "--format=%H%n%B%n---commit-lint-sep---", commit_range],
             capture_output=True, text=True, encoding='utf-8', timeout=30,
         )
-    except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
+    except cli.SubprocessError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
-        sys.exit(2)
+        return None
 
-    if result.returncode != 0:
-        print(f"ERROR: git log failed: {result.stderr.strip()}", file=sys.stderr)
-        sys.exit(2)
+    if rc != 0:
+        print(f"ERROR: git log failed: {stderr.strip()}", file=sys.stderr)
+        return None
 
     commits = []
-    chunks = result.stdout.split("---commit-lint-sep---")
+    chunks = stdout.split("---commit-lint-sep---")
     for chunk in chunks:
         chunk = chunk.strip()
         if not chunk:
@@ -116,15 +114,8 @@ def get_commits_from_range(commit_range: str) -> list:
     return commits
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Conventional commit message linter")
-    parser.add_argument("--message", "-m", help="Lint a single commit message string")
-    parser.add_argument("--range", "-r", help="Lint commits in a git range (e.g. HEAD~5..HEAD)")
-    parser.add_argument("--json", action="store_true", help="Output results as JSON")
-    parser.add_argument("--check", action="store_true", help="Exit 1 on any violation (CI gate mode)")
-    args = parser.parse_args()
-
-    # Reject unknown flags (argparse handles this, but be explicit about --help)
+def run(args) -> int:
+    """Main lint logic."""
     results = []  # list of {"commit": str|None, "violations": list}
 
     if args.message is not None:
@@ -132,6 +123,8 @@ def main() -> int:
         results.append({"commit": None, "violations": vs})
     elif args.range:
         commits = get_commits_from_range(args.range)
+        if commits is None:
+            return 2
         if not commits:
             print("No commits found in range", file=sys.stderr)
             return 2
@@ -155,7 +148,7 @@ def main() -> int:
 
     if args.json:
         out = {"total_violations": total_violations, "results": results}
-        print(json.dumps(out, indent=2))
+        print(cli.deterministic_json_dumps(out))
     else:
         for r in results:
             prefix = f"[{r['commit']}] " if r["commit"] else ""
@@ -166,9 +159,19 @@ def main() -> int:
                 if prefix:
                     print(f"{prefix}OK")
 
-    if total_violations > 0:
-        return 1
-    return 0
+    return 1 if total_violations > 0 else 0
+
+
+def main() -> int:
+    """CLI entry point."""
+    parser = (cli.CLIBuilder("Conventional commit message linter")
+              .add_argument("--message", "-m", help="Lint a single commit message string")
+              .add_argument("--range", "-r", help="Lint commits in a git range (e.g. HEAD~5..HEAD)")
+              .add_json_mode()
+              .add_argument("--check", action="store_true", help="Exit 1 on any violation (CI gate mode)")
+              .build())
+    args = parser.parse_args()
+    return cli.standard_main_template(args, run)
 
 
 if __name__ == "__main__":
