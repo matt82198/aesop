@@ -137,6 +137,8 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `state_md_verifier.py` — Guardrail #1: STATE.md checkpoint-accuracy verifier; parses STATE.md for falsifiable progress claims ("**Current Version:** vX.Y.Z", "resolved", "pushed", "MERGED") and verifies against on-disk git truth (git tags + package.json for versions, git status --porcelain for unmerged files, git ls-remote --heads for pushed branches, gh pr view for PR states); exit 0=no contradictions + at least one claim verified / 1=contradictions found / 2=error or zero verifiable claims (fail-closed); reports UNVERIFIABLE/SKIP for unparseable/unavailable-tool claims; stdlib-only
 - `agent-forensics.sh` — Incident forensics; behavior reconstruction (read-only git plumbing)
 
+- `toolchain_health.py` — Interpreter/binary availability verifier; detects binaries that exist but cannot execute (like Git for Windows bash.exe wrapping a deleted usr/bin/bash.exe) and stale/missing heartbeat files (watchdog, monitor). CLI: `[--check] [--json] [--max-age SECONDS]` (default threshold 300s); exit 0=all OK, 1=issues found, 2=check error; fail-closed on zero-checks-performed (check infrastructure failure); stdlib only
+
 ## Gates & tests
 
 - `secret_scan.py --staged` — pre-push gate (exit 0=clean/1=findings/2=error; `# secretscan: allow-pattern-docs` pragma)
