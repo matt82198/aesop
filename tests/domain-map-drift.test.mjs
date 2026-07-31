@@ -8,6 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -71,8 +72,20 @@ test('domain-map drift: all code directories have domain-map entries', () => {
     documentedDirs.add(match[1]);
   }
   
-  // Find all top-level directories
-  const entries = fs.readdirSync(PROJECT_ROOT, { withFileTypes: true });
+  // Find all top-level directories that are TRACKED IN GIT.
+  // Reading the filesystem directly made this gate fail on transient test output:
+  // scaffolder tests create ./aesop-fleet/ in the repo root, and the gate then demanded
+  // documentation for a directory that is not part of the source tree. A documentation
+  // drift gate must reason about tracked source, not whatever happens to be on disk.
+  const trackedTop = new Set(
+    execFileSync('git', ['ls-files'], { cwd: PROJECT_ROOT, encoding: 'utf-8' })
+      .split(String.fromCharCode(10))
+      .filter(Boolean)
+      .map((f) => f.split('/')[0])
+  );
+  const entries = fs
+    .readdirSync(PROJECT_ROOT, { withFileTypes: true })
+    .filter((e) => trackedTop.has(e.name));
   
   const failures = [];
   for (const entry of entries) {

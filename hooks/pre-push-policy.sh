@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+if ! command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
+  printf 'FATAL: pre-push-policy.sh requires python3 or python on PATH (guardrail G12: interpreter health check)\n' >&2
+  printf 'Without Python, secret_scan and other tools cannot run. Push blocked.\n' >&2
+  exit 1
+fi
+
 resolve_aesop_root() {
   # Resolve the repo whose push is being gated -- NOT a hardcoded path.
   #

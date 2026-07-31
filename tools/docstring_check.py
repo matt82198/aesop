@@ -276,9 +276,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         sys.stdout.write(format_ascii(result))
 
     # Determine exit code
-    if result["unsuppressed_findings"] > 0:
-        return 1
-    if result["coverage_percent"] < args.threshold:
+    findings_exist = result["unsuppressed_findings"] > 0
+    threshold_failed = result["coverage_percent"] < args.threshold
+    if findings_exist or threshold_failed:
         return 1
     return 0
 

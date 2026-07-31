@@ -17,10 +17,17 @@ Deterministic, stdlib+subprocess(git) only, no network, Windows-safe.
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+
+# Ensure this tool's own directory (tools/) is importable so the shared
+# harness resolves regardless of cwd or how the file is loaded
+# (the import-gate loads tools by path, without tools/ on sys.path).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from subprocess_common import git
 
 
 def run_git(args, repo_path, check=True):
@@ -36,18 +43,19 @@ def run_git(args, repo_path, check=True):
         stdout as string
     """
     try:
-        result = subprocess.run(
-            ["git", "-C", str(repo_path)] + args,
-            capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-            check=check,
-        )
+        result = git(args, cwd=str(repo_path), check=check, timeout=60)
         return result.stdout
     except subprocess.CalledProcessError as e:
         if check:
             raise RuntimeError(
                 f"git command failed: {' '.join(args)}\n"
                 f"stderr: {e.stderr}"
+            )
+        return ""
+    except subprocess.TimeoutExpired:
+        if check:
+            raise RuntimeError(
+                f"git command timed out: {' '.join(args)}"
             )
         return ""
 

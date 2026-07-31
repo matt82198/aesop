@@ -1,31 +1,38 @@
-# aesop 0.5.0 — Open Source, Again
+# aesop 0.7.0 — Guardrails & State Consolidation
 
-**Headline**: MIT open-source relicense removes adoption barriers for team-scale orchestration. Wave latency telemetry + chaos injection harness surface bottlenecks and validate recovery under failure. Evidence audit trail (incident chronicles, handoff certificates, cross-OS drift tracking) gives operators ground truth on fleet health. Dashboard completion with AC authoring, error boundaries, and honest benchmarks.
+**Headline**: Comprehensive guardrail enforcement (11 linters, 8 automated gates) codifies design rules into fail-closed machinery. Multi-instance coordination MVP via lease-based SQLite enables team-scale orchestration. Test suite accountability (254 tests across 3 harnesses) verified by drift-detection gate. State consolidation complete: ReadAPI/WriteAPI facades unify all state readers/writers through one façade.
 
 ## Shipping
 
 ### 5-Bullet Summary
 
-1. **MIT open source**: Aesop relicensed to MIT, removing adoption barriers for team-scale orchestration.
-2. **Wave latency telemetry**: Per-phase execution timelines + agent percentiles surface bottlenecks; chaos injection harness validates recovery under failure.
-3. **Evidence audit trail**: Incident chronicles, handoff certificates, and cross-OS drift snapshots give operators ground truth on fleet health and custody transfers.
-4. **Dashboard completeness**: AC authoring, error boundaries, and corrected heartbeat path finish first-class dashboard support for non-CLI operators.
-5. **Honest benchmarks**: README now separates realistic limitations (small N=39, local-first, ledger-based cost ceiling for Claude driver) from capability claims; supported by held-out measurement.
+1. **Guardrail enforcement suite**: 11 new linters + gates (dispatch_lint, CLAUDE.md sync, workflow model pin, git-stash guard, encoding validator, commit linter, docstring checker, dead-code detector, import-cycle detector, TODO tracker, file-size linter, test-coverage gap finder) eliminate design escape routes through automated fail-closed checking.
+2. **Multi-instance coordination MVP**: Lease-based SQLite claims enable multi-machine orchestration without consensus machinery; atomic check-and-insert prevents split-brain, TOCTOU race resolution via path normalization, tracker migration fixes prevent zombie resurrection.
+3. **Test suite accountability**: 254 tests across 3 harnesses (25 Node + 13 Shell + 216 Python) verified by new drift-detection gate (`verify_test_suite_count.py`); test counts reconciled across README/docs/CLAUDE.md to single source of truth.
+4. **State consolidation complete**: ReadAPI/WriteAPI facades ship; all state I/O routed through unified entry points. StateAPI migration ratchet prevents new direct reads; stateapi_lint enforces compliance via committed baseline.
+5. **Production tooling**: Init-project scaffolder, auto-merge batch tool, cost forecasting, tracker reconciliation (zombie detection), wave-history temporal analyzer, health-score subcommand, dependency graph generator, port-fidelity validator.
 
 ### Everything Else
 
-- Sandboxed test hygiene (isolated temp dirs, pollution guards).
-- Stats verification fail-closed (no CI tree mutation).
-- Adversarial-review phase (opt-in, gated).
-- Append-only lane journal + zombie-resurrection fail-closed gate (`tracker_guard`).
-- /dashboard skill for launching and monitoring the web dashboard.
-- Mission-Control dashboard MVP — status-first HealthHeader, grouped agents, wave progress timeline.
-- Scheduled cross-OS CI monitoring (windows/linux divergence tracking).
-- Wave-templates CI validation gate.
+- Fixture-intent manifest validator (deliberate fixture breakage tracking).
+- Dashboard tooling panel (guardrail/tool metrics summary).
+- Benchmark results cache and display panel.
+- REST API for state-query time-travel (temporal filtering, stream replay).
+- Architecture decision records (ADR-1 through ADR-6).
+- Encoding validation gate (Windows cp1252 trap prevention).
+- Bash exec-guard validator (`bash_guard_check`).
+- Multi-instance: lease-claim split-brain fix, TOCTOU resolution, tracker migration marker/completion separation, acceptanceCriteria preservation on write.
+- CI hardening: workflow action env vars, BASH_SOURCE guards, Windows cp1252 encoding fix, instance_manager race fixes.
+- CI gates: removed fail-open continue-on-error from cross-OS drift, verified gate runability on unknown flags, repaired Windows temp-dir exemption.
+- Documentation: cross-file drift fixes, domain CLAUDE.md updates, test count corrections, multi-instance reconciliation.
 
 ---
 
 ## Prior releases
+
+### aesop 0.6.0 — Credibility & Proof Depth
+
+**Headline**: Hiring roadmap credibility repairs: README hero rewrite with git-verified self-build numbers, stats consistency fix (455→588 PR recount), named comparison table vs competitors, demo mode (zero API key, full dashboard). Proof depth: non-Claude backend live recording (GPT-4o-mini end-to-end), crash-only whitepaper, "How I Built Aesop" narrative, raw cost dataset. EventStore connection pooling + Windows cleanup. Hosted dashboard on GitHub Pages with embedded demo data.
 
 ### aesop 0.4.0 — AI Micro-Kernel: Two Swappable Seats
 

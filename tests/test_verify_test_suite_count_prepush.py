@@ -224,16 +224,17 @@ check_test_suite_count
             text=True,
         )
 
-        # Tool should exit 1 (drift detected)
+        # PR #661: the count is DERIVED at check time, so stale drift is
+        # auto-corrected and the tool exits 0 rather than failing.
         self.assertEqual(
             verify_result.returncode,
-            1,
+            0,
             f"Expected drift to be detected. Output: {verify_result.stderr}",
         )
         self.assertIn(
-            "DRIFT",
+            "AUTO-CORRECT",
             verify_result.stdout,
-            f"Expected DRIFT message in output: {verify_result.stdout}",
+            f"Expected AUTO-CORRECT message in output: {verify_result.stdout}",
         )
 
     def test_drift_node_count_mismatch(self):
@@ -274,7 +275,7 @@ check_test_suite_count
 
         self.assertEqual(
             verify_result.returncode,
-            1,
+            0,
             f"Expected drift in Node count. Output: {verify_result.stderr}",
         )
 
@@ -315,7 +316,7 @@ check_test_suite_count
 
         self.assertEqual(
             verify_result.returncode,
-            1,
+            0,
             f"Expected drift in Shell count. Output: {verify_result.stderr}",
         )
 
@@ -356,7 +357,7 @@ check_test_suite_count
 
         self.assertEqual(
             verify_result.returncode,
-            1,
+            0,
             f"Expected drift in Python count (210 vs 205). Output: {verify_result.stderr}",
         )
 
@@ -401,7 +402,7 @@ check_test_suite_count
 
         self.assertEqual(
             verify_result.returncode,
-            1,
+            0,
             f"Expected drift detection. Output: {verify_result.stderr}",
         )
         # Check that all three drifts are reported

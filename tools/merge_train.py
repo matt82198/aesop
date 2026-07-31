@@ -14,12 +14,40 @@ Usage:
 """
 import argparse
 import functools
+import io
 import json
 import subprocess
 import sys
 import time
 
-print = functools.partial(print, flush=True)
+# Ensure stdout can encode UTF-8 (fixes Windows cp1252 UnicodeEncodeError on PR titles
+# containing characters like U+FEFF).
+#
+# Do NOT wrap sys.stdout in a TextIOWrapper at import time: the wrapper captures the
+# CURRENT sys.stdout.buffer, and a test runner that swaps or closes stdout between tests
+# leaves the wrapper writing to a dead file object -- raising ValueError: I/O operation
+# on closed file from INSIDE the wrapper, before any print-level guard can catch it.
+# reconfigure() mutates the live stream instead of capturing it, and is a no-op when the
+# stream does not support it.
+try:
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+except (ValueError, AttributeError, OSError):
+    pass
+
+# Custom print function that handles closed stdout gracefully (for test environments)
+_builtin_print = print
+def print(*args, **kwargs):
+    """Print with flush=True by default, handles closed stdout gracefully."""
+    kwargs.setdefault('flush', True)
+    try:
+        _builtin_print(*args, **kwargs)
+    except (ValueError, OSError) as e:
+        # Handle case where stdout is closed (test environment)
+        if "closed file" in str(e) or "I/O operation" in str(e):
+            pass  # Silently skip if stdout is closed
+        else:
+            raise
 
 # Transient error patterns from gh run rerun that indicate we should keep the PR queued
 # without consuming a retry (TOCTOU races, workflow state changes, etc.)

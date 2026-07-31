@@ -112,13 +112,14 @@ def get_git_identity(repo_path: str) -> Tuple[Optional[str], Optional[str]]:
             capture_output=True,
             text=True,
             encoding='utf-8',
+            timeout=30,
             check=False,
         )
         if result.returncode == 0:
             name = result.stdout.strip()
             if not name:
                 name = None
-    except (subprocess.SubprocessError, FileNotFoundError):
+    except (subprocess.SubprocessError, FileNotFoundError, subprocess.TimeoutExpired):
         pass
 
     try:
@@ -127,13 +128,14 @@ def get_git_identity(repo_path: str) -> Tuple[Optional[str], Optional[str]]:
             capture_output=True,
             text=True,
             encoding='utf-8',
+            timeout=30,
             check=False,
         )
         if result.returncode == 0:
             email = result.stdout.strip()
             if not email:
                 email = None
-    except (subprocess.SubprocessError, FileNotFoundError):
+    except (subprocess.SubprocessError, FileNotFoundError, subprocess.TimeoutExpired):
         pass
 
     return name, email

@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Version scheme**: Stable releases are `0.x.y`; `0.x.0-beta.N` / `-rc.N` are pre-releases; `0.1.0-wave.N` were internal wave-milestone previews.
 
+## [0.7.1] - 2026-07-31
+
+### Fixed
+
+- **Two fake-green gates.** `state_md_verifier` reported success while extracting ZERO claims -- it had no version-claim pattern at all, so a STATE.md declaring v0.5.0 passed against a repo tagged v0.7.0. `verify_test_suite_count` returned a count of zero instead of erroring when it could not read git (#638, #661).
+- **62 subprocess calls decoded output with the platform default** (cp1252 on Windows), corrupting non-ASCII tool output. All now pass explicit `encoding='utf-8'` (#636).
+- **Test pollution.** A test mutated the committed fixture `first-wave-report.json` on every run (#643); another wrote a fixture epoch into LIVE fleet heartbeats, which masked a real 10-hour daemon outage (#645).
+- `tooling_panel` treated a findings-exit (1) as tool failure, hiding 1,232 dead-code findings and breaking import-cycle and encoding reporting in the UI (#647).
+- Cost view rendered backend failure as "still loading"; chart SVGs gained accessible names (#648).
+- Bare `except:` clauses and unencoded file opens in `bench/` (#651).
+- Merge train crashed with `UnicodeEncodeError` on PR titles containing U+FEFF (#654).
+- Live-API test now skips on a missing or rejected credential instead of failing CI and red-flagging unrelated PRs (#666).
+- **The portability gate was never reaching a verdict.** The State API lint step failed first and short-circuited it, so hardcoded personal paths rode into the remote-access features unnoticed. With the lint step fixed the gate ran and reported 9 new violations, all real (#667).
+- `remote_inbox` hardcoded one GitHub handle as both the polled repository and the sole authorized commenter, so the tool worked for exactly one person (#667).
+- `verify_author` now **fails closed**: an owner that cannot be resolved is a rejection, never a widening of who may issue remote commands (#667).
+- `ci_shard_runner` counted a deliberate module-level `unittest.SkipTest` as an import failure and failed the whole shard; `SkipTest` subclasses `Exception`, so the blanket handler swallowed it (#667).
+- Windows test cleanup no longer fails on `EBUSY` when a scaffolded child process still holds a directory handle (#667).
+
+### Changed
+
+- **Test-suite count is DERIVED at check time** rather than stored in `tests/CLAUDE.md`. The stored literal made parallel branches structurally unable to agree: N branches adding tests produced N conflicting numbers, and every merge re-broke the rest (#661).
+- Complexity reductions, all radon-verified: `_run_wave_inner` **F(141) -> C(13)** (#637), `run_wave_scheduler` **F(82) -> C(15)** (#664), SSE collector loop **F(43) -> B(6)** (#658), tracker reconciliation **E(39) -> C(19)** (#662), `do_GET` **D(30) -> A(2)** with all 27 routes preserved (#663).
+- Browser proofs consolidated onto the existing `playwright_common` helpers; 8 of 10 had independently reinvented them (#652).
+- Four hand-rolled `gh`/`git` subprocess wrappers unified -- **5 scripts that had no subprocess timeout now have one** (#655).
+- Python dependencies pinned to exact/compatible-release; `package.json` deliberately left on caret ranges as a published package (#650).
+- **New configuration.** Fleet state and remote-command identity are no longer assumed from a home-directory layout: `AESOP_FLEET_STATE_DIR` points at wherever a deployment's daemons write state (defaults to the aesop state root), and `AESOP_REMOTE_REPO` (`owner/name`) plus `AESOP_REMOTE_OWNER` control the remote inbox, falling back to the `gh`-resolved remote. Heartbeat freshness now goes through `health_checks`, which fails closed on an unreadable heartbeat rather than reporting a fleet it could not verify (#667).
+
+### Added
+
+- `requirements.txt` / `requirements-dev.txt` (#631).
+- `aesop` CLI dispatch table: 10 namespaces, 53 verbs. Strictly additive -- hooks and CI keep their direct script paths (#653).
+- `toolchain_health` gate detecting broken binaries and stale heartbeats (#641); `hook_preflight` verifying hook interpreters actually execute (#642); `sibling_import_check` guard (#660).
+- `docs/GATES-FIRED.md` -- which guardrails have actually fired, with commit citations, and an honest count of seven fail-open gates (#665).
+- Remote command inbox and status publisher for off-machine observability (#649, #656).
+
+### Known limitations
+
+- **The cost kill-switch is inert.** `cost_ceiling` is wired to four abort checkpoints, but `wave_loop` never writes the ledger, so it evaluates zero spend and cannot fire. The efficiency claim is not substantiable from anything currently on disk.
+- **Seven pre-push gates fail open** when their tool file is missing. This is a deliberate two-tier design (tool missing skips, tool error blocks), documented in `hooks/pre-push-policy.sh`, and under review because binaries have twice been deleted from a development machine.
+- `parse_audit_backlog` remains D(28); `_quarantine_blocked_files` remains D(23).
+
 ## [0.7.0] - 2026-07-31
 
 ### Added

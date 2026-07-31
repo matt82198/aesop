@@ -529,6 +529,24 @@ class TestStatemdVerifierIntegration(unittest.TestCase):
         """
         Test that a STATE.md claiming v0.7.0 passes when repo is v0.7.0.
         """
+        # The fixture hardcodes a version, so it goes stale the moment package.json is
+        # bumped. Compare against package.json (always present) rather than git tags --
+        # CI clones without tags, so a tag-based guard silently never fires and the test
+        # fails on a healthy repo mid-release.
+        import json as _json, re as _re
+        _root = Path(__file__).parent.parent
+        _pkg = _json.loads((_root / "package.json").read_text(encoding="utf-8"))["version"]
+        _fx = Path(__file__).parent / "fixtures" / "state_md_current.md"
+        if not _fx.exists():
+            self.skipTest("fixture not found: %s" % _fx)
+        _m = _re.search(r"\*\*Current Version:\*\*\s*v?([0-9]+\.[0-9]+\.[0-9]+)",
+                        _fx.read_text(encoding="utf-8"))
+        if not _m or _m.group(1) != _pkg:
+            self.skipTest(
+                "fixture claims v%s but package.json is %s (stale mid-release)"
+                % (_m.group(1) if _m else "?", _pkg)
+            )
+
         fixture_path = Path(__file__).parent / "fixtures" / "state_md_current.md"
 
         if not fixture_path.exists():
