@@ -24,6 +24,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `bench_api_runner.py` — Bench v2+v3 via Anthropic API (BENCH_API_KEY, API-only per bench-no-cli-fallback rule); reuses bench_runner machinery; CLI: `bench_api_runner.py <v2|v3|all> <model...>`
 - `bench_results_cache.py` — Append-only benchmark results journal (state/bench-runs.jsonl); idempotent dedup by model+timestamp; stdlib-only
 - `bench_runner.py` — Held-out benchmark runner + scorer (Haiku/Sonnet/Opus pluggable)
+- `branch_merge_conflict_gate.py` — Detects branches with a real textual merge conflict against a base ref via `git merge-tree` (index/working-tree free); default discovery is open PRs (`gh pr list`); `--branches`/`--all-remote-branches` for manual/audit scans; CLI: `[--check] [--json] [--root DIR] [--base REF] [--branches REF...] [--all-remote-branches] [--include-local] [--fetch]`; exit 0=clean/1=findings/2=could-not-evaluate; NOT wired into any hook/CI workflow yet (staged)
 - `fixture_intent_check.py` — Deliberately-broken fixture manifest validator; verifies bench/fixtures-intent.json tracks all intentionally-broken/incomplete fixtures to distinguish benchmarks from regressions; CLI: `[--manifest PATH] [--root DIR] [--json]`; exit 0=valid/1=findings/2=error; stdlib-only
 - `build_static_dash.py` — Build a static, self-contained snapshot of the dashboard with demo data for GitHub Pages; starts demo server, captures API state, produces _site/ with fetch/EventSource shim; CLI: `--output DIR`
 - `buildlog.py` — Uniform BUILDLOG.md appender (writes via state_store WriteAPI: entry also lands as buildlog_entry event)
@@ -67,7 +68,6 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `list_test_suites.py` — Generate live test suite inventory: scans filesystem for test files (tests/*.test.mjs, tests/test_*.py, tests/*.test.sh, tests/test_*.sh, tests/test-*.sh, hooks/pre-push-policy.sh --test) and outputs grouped listing with first-line doc summaries; ASCII-safe, deterministic; CLI: `list_test_suites.py [--repo ROOT]`; used in tests/CLAUDE.md docs and CI coverage gates; replaces hand-maintained suite listings (kills conflict magnet in merge conflicts)
 - `lock.mjs` — Fail-closed atomic lock (exponential backoff + stale-lock detection)
 - `merge_train.py` — Serial or integration-branch merge train: serial mode processes PRs one-at-a-time (update-branch, wait for CI, merge, verify MERGED); integration mode (`-i [BATCH_NAME]`) batches PRs into a local `integrate/<name>` branch, runs CI once, squash-merges, closes superseded PRs
-
 - `metrics_gate.py` — PR gate for hard numeric claims in markdown
 - `multi_dispatch.py` — Multi-instance-aware dispatch wrapper (checks file claims before dispatch, releases on completion)
 - `mutation_test.py` — Test quality harness via mutation testing (apply code mutations, run tests, report survived mutations as test gaps); CLI: `--target <module.py> --test <test_module.py> [--json]`; exit 0 on valid results (advisory), exit 1 when the sandbox baseline fails (results invalid, fail-closed)
