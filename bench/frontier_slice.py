@@ -477,7 +477,7 @@ def main():
         results["error_tasks"] = _error_tasks
         results["error_count"] = len(_error_tasks)
 
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
 
     print(f"Results saved to: {output_path}")
