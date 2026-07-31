@@ -14,6 +14,11 @@ Callers use:
   is_fresh = api.is_orchestrator_status_fresh(threshold_s=300)
   is_fresh = api.check_heartbeat_fresh(".watchdog-heartbeat", 200)
   rows = api.read_ledger_rows()
+
+Projection-first reads (Inc 2+): orchestrator_status reads from the event
+store projection first, falling back to the materialized view if the DB
+is absent. This ensures fresh data when the event store is live while
+maintaining compatibility with legacy file-only setups.
 """
 import json
 import sys
@@ -33,8 +38,14 @@ class ReadAPI:
     """Read-only facade over state surfaces (tracker, orchestrator-status, heartbeats, ledger).
 
     Designed to be swappable: backends can change (git → SQLite → Postgres) without
-    altering call sites. Current implementation reads from filesystem; future may
-    read from SQLite projections or API.
+    altering call sites. Current implementation:
+    - tracker: reads from materialized tracker.json
+    - orchestrator-status (Inc 2+): reads from StateAPI projection, falls back to file
+    - heartbeats: reads from materialized .heartbeat files
+    - ledger: reads from materialized OUTCOMES-LEDGER.md
+
+    Projection-first reads (Inc 2+) ensure fresh data from the event store while
+    maintaining compatibility with legacy file-only setups (DB absent → file fallback).
     """
 
     def __init__(self, state_dir):
@@ -45,6 +56,24 @@ class ReadAPI:
         """
         self.state_dir = Path(state_dir)
         self.state_dir.mkdir(parents=True, exist_ok=True)
+        self._api = None  # Lazy-loaded StateAPI for projection reads
+
+    def _get_api(self):
+        """Lazy-load StateAPI for projection reads.
+
+        Returns:
+            StateAPI instance, or None if the DB is absent or unreadable.
+        """
+        if self._api is None:
+            try:
+                from state_store.api import StateAPI
+                db_path = str(self.state_dir / "tracker_events.db")
+                if Path(db_path).exists():
+                    self._api = StateAPI(db_path)
+            except Exception:
+                # DB absent or unreadable; use file fallback
+                pass
+        return self._api
 
     def read_tracker_snapshot(self):
         """Read the current tracker snapshot.
@@ -67,12 +96,41 @@ class ReadAPI:
             return {}
 
     def read_orchestrator_status(self):
-        """Read orchestrator-status.json if present.
+        """Read orchestrator status (projection-first with file fallback).
+
+        Attempts to read from the event store projection first (if available),
+        falling back to the materialized orchestrator-status.json file if the
+        DB is absent or unreadable. This ensures fresh data when the store is
+        live while maintaining compatibility with legacy file-only setups.
 
         Returns:
-            dict with "updated_at" (required) and optional "phase", "activity" fields,
-            or None if file missing/unreadable.
+            dict with "id", "role", "activity", "phase", "updated_at" fields,
+            or None if both sources are missing/unreadable.
         """
+        # Try projection first (Inc 2+)
+        api = self._get_api()
+        if api is not None:
+            try:
+                projected = api.project("orchestrator_status")
+                # Prefer the projection only when the stream actually has content.
+                # This previously returned unconditionally, so an EMPTY stream (all
+                # fields None) shadowed the file entirely -- defeating the fallback
+                # this docstring promises. Anything writing orchestrator-status.json
+                # directly became invisible the moment a DB existed, even if no
+                # status event had ever been recorded.
+                # Test only the MEANINGFUL fields. "role" and "id" are populated with
+                # defaults even for an empty stream, so including them here made the
+                # check pass on a projection carrying no actual status.
+                if projected and any(
+                    projected.get(k) is not None
+                    for k in ("activity", "phase", "updated_at")
+                ):
+                    return projected
+            except Exception:
+                # Projection read failed; fall through to file fallback
+                pass
+
+        # Fall back to materialized file (legacy/fallback)
         status_file = self.state_dir / "orchestrator-status.json"
         if not status_file.exists():
             return None
@@ -80,9 +138,7 @@ class ReadAPI:
         try:
             content = status_file.read_text(encoding="utf-8")
             data = json.loads(content)
-            # Only require updated_at field for freshness checks;
-            # phase is optional (may not be set when status.json created before phase exists)
-            # Don't validate here—let callers decide what fields are required for their use case
+            # Don't validate here—let callers decide what fields are required
             return data
         except Exception:
             return None

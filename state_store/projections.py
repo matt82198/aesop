@@ -187,3 +187,61 @@ def project_agent_lifecycle(events: list) -> dict:
     # Return as versioned list (ordered by agent_id for determinism)
     agent_list = sorted(agents.values(), key=lambda a: a["id"])
     return {"version": AGENT_LIFECYCLE_VERSION, "agents": agent_list}
+
+
+def project_orchestrator_status(events: list) -> dict:
+    """Project current orchestrator status from orchestrator_status events.
+
+    Folds `phase_changed`, `activity_changed`, `status_cleared`, and historical
+    `meta`/`phase_set` events into the orchestrator-status.json shape:
+    {"id", "role", "activity", "phase", "updated_at"}.
+
+    Event types:
+    - `phase_changed`: payload {"phase": str, "actor": str} (from Inc 2+)
+    - `activity_changed`: payload {"activity": str, "actor": str} (from Inc 2+)
+    - `status_cleared`: payload {} (from Inc 2+)
+    - `meta`/`phase_set`: payload {"phase": str} (historical, from reconcile.py --resolve)
+
+    The view is byte-compatible with the current orchestrator-status.json shape.
+    Unknown event types and missing payloads are ignored (graceful degradation).
+    """
+    status = {
+        "id": "main",
+        "role": "orchestrator",
+        "activity": None,
+        "phase": None,
+        "updated_at": None,
+    }
+
+    for ev in events:
+        etype = ev.get("type")
+        payload = ev.get("payload") or {}
+
+        if etype == "phase_changed":
+            phase = payload.get("phase")
+            if phase:
+                status["phase"] = phase
+                # Update timestamp only if it's not already set or if this is newer
+                if "timestamp" in payload and payload["timestamp"]:
+                    status["updated_at"] = payload["timestamp"]
+
+        elif etype == "activity_changed":
+            activity = payload.get("activity")
+            if activity is not None:
+                status["activity"] = activity
+                if "timestamp" in payload and payload["timestamp"]:
+                    status["updated_at"] = payload["timestamp"]
+
+        elif etype == "status_cleared":
+            # Clear all fields except id/role
+            status["activity"] = None
+            status["phase"] = None
+            status["updated_at"] = None
+
+        elif etype == "meta" or etype == "phase_set":
+            # Historical events from reconcile.py --resolve; fold forward
+            phase = payload.get("phase")
+            if phase:
+                status["phase"] = phase
+
+    return status

@@ -96,6 +96,23 @@ class TestPathReferenceExtraction(unittest.TestCase):
         # Should not include just ".py"
         self.assertNotIn(".py", refs)
 
+    def test_ignore_home_directory_references(self):
+        """Home-dir paths (~/...) are outside the repo and must not be extracted.
+
+        Regression: the pattern did not capture the leading `~/`, so
+        `~/scripts/foo.py` was captured as `scripts/foo.py` and then reported
+        as a phantom repo path even though the file correctly lives in the
+        operator's home script library, not the repo.
+        """
+        refs = extract_path_references("Runs via `~/scripts/detect_red_ci_runs.py` on a timer.")
+        self.assertEqual(refs, [], f"home-dir reference should be filtered, got {refs}")
+
+    def test_home_dir_filter_does_not_hide_repo_paths(self):
+        """A home-dir ref must not suppress a real repo path in the same text."""
+        refs = extract_path_references("`~/scripts/a.py` and `tools/b.py`")
+        self.assertIn("tools/b.py", refs)
+        self.assertNotIn("scripts/a.py", refs)
+
 
 class TestNpmScriptExtraction(unittest.TestCase):
     """Test extraction of npm run commands."""

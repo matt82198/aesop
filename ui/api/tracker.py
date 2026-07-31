@@ -34,7 +34,9 @@ def list_items(status=None, priority=None):
         return 200, items
     except Exception as e:
         import sys
+        import traceback
         print(f"[tracker.list_items] Uncaught exception: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return 500, {"error": "Internal server error"}
 
 
@@ -62,7 +64,9 @@ def create(headers, body_bytes):
         return 400, {"error": "Invalid JSON"}
     except Exception as e:
         import sys
+        import traceback
         print(f"[tracker.create] Uncaught exception: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return 500, {"error": "Internal server error"}
 
 
@@ -93,9 +97,11 @@ def update(item_id, body_bytes):
         return 200, item
     except Exception as e:
         import sys
-        if "404" in str(e):
+        import traceback
+        if "404" in str(e) or "not found" in str(e).lower():
             return 404, {"error": "404 Item not found"}
         print(f"[tracker.update] Uncaught exception: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return 500, {"error": "Internal server error"}
 
 
@@ -118,7 +124,9 @@ def delete(item_id):
         return 200, item
     except Exception as e:
         import sys
-        if "404" in str(e):
+        import traceback
+        if "404" in str(e) or "not found" in str(e).lower():
             return 404, {"error": "404 Item not found"}
         print(f"[tracker.delete] Uncaught exception: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return 500, {"error": "Internal server error"}

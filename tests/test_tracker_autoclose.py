@@ -2,6 +2,7 @@
 """Tests for tracker_autoclose.py — automatic tracker zombie prevention.
 
 Guardrail G1: Auto-close tracked items when linked PRs merge or files ship.
+Tests evidence-based classification: SHIPPED, OPEN, AMBIGUOUS.
 """
 
 import json
@@ -35,17 +36,30 @@ class TestTrackerAutoclose(unittest.TestCase):
         tracker_path.write_text(json.dumps(tracker_data, indent=2), encoding="utf-8")
         return tracker_path
 
-    def test_autoclose_merged_pr(self):
-        """Test auto-close when PR is MERGED."""
-        # Arrange
+    def _read_journal(self):
+        """Read journal entries."""
+        journal_path = self.state_dir / "tracker-journal.jsonl"
+        if not journal_path.exists():
+            return []
+        entries = []
+        for line in journal_path.read_text(encoding="utf-8").strip().split("\n"):
+            if line:
+                entries.append(json.loads(line))
+        return entries
+
+    # ========== ESCAPE REPRO: In-progress item with merged PR evidence -> SHIPPED ==========
+
+    def test_escape_repro_in_progress_merged_pr(self):
+        """ESCAPE REPRO: in-progress item with merged PR -> classified SHIPPED."""
+        # This reproduces the zombie detection that should have caught the 3 real escapes
         items = [
             {
-                "id": "item1",
-                "title": "Feature X",
+                "id": "358af636cdf0",  # Real zombie ID from tracker
+                "title": "Escaped item",
                 "status": "in_progress",
                 "lane": "proposed",
                 "priority": "P1",
-                "notes": "PR: #123",
+                "notes": "Fix: PR #123",
                 "pr_link": None,
                 "created_at": "2026-07-29T00:00:00Z",
                 "completed_at": None,
@@ -53,77 +67,29 @@ class TestTrackerAutoclose(unittest.TestCase):
         ]
         self._write_tracker(items)
 
-        # Mock gh pr view to return MERGED
-        with patch(
-            "tools.tracker_autoclose.subprocess.run"
-        ) as mock_run:
+        # Mock gh pr view to return MERGED with valid timestamp
+        with patch("tools.tracker_autoclose.subprocess.run") as mock_run:
             mock_proc = Mock()
             mock_proc.returncode = 0
-            mock_proc.stdout = "MERGED"  # gh jq returns just the state value
+            mock_proc.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-30T10:00:00Z"})
             mock_run.return_value = mock_proc
 
-            # Act
+            # Act: check mode should detect closable item
             rc = tracker_autoclose.main(["--check"], state_root=str(self.state_dir))
 
-            # Assert
-            self.assertEqual(rc, 0)
-            tracker_path = self.state_dir / "tracker.json"
-            updated_data = json.loads(tracker_path.read_text(encoding="utf-8"))
-            self.assertEqual(updated_data["items"][0]["status"], "done")
-            self.assertIn("RECONCILED", updated_data["items"][0]["notes"])
-            self.assertIn("#123", updated_data["items"][0]["notes"])
+            # Assert: check mode returns 1 (closable items found)
+            self.assertEqual(rc, 1, "Should detect closable item in --check mode")
 
-    def test_dry_run_doesnt_modify(self):
-        """Test --dry-run doesn't modify tracker."""
-        # Arrange
+    def test_escape_repro_apply_closes_zombie(self):
+        """ESCAPE REPRO: --apply closes the zombie and records evidence."""
         items = [
             {
-                "id": "item1",
-                "title": "Feature X",
+                "id": "358af636cdf0",
+                "title": "Escaped item",
                 "status": "in_progress",
                 "lane": "proposed",
                 "priority": "P1",
-                "notes": "PR: #123",
-                "pr_link": None,
-                "created_at": "2026-07-29T00:00:00Z",
-                "completed_at": None,
-            }
-        ]
-        self._write_tracker(items)
-        original_data = json.loads(
-            (self.state_dir / "tracker.json").read_text(encoding="utf-8")
-        )
-
-        # Mock gh pr view to return MERGED
-        with patch(
-            "tools.tracker_autoclose.subprocess.run"
-        ) as mock_run:
-            mock_proc = Mock()
-            mock_proc.returncode = 0
-            mock_proc.stdout = "MERGED"
-            mock_run.return_value = mock_proc
-
-            # Act
-            rc = tracker_autoclose.main(["--dry-run"], state_root=str(self.state_dir))
-
-            # Assert
-            self.assertEqual(rc, 0)
-            tracker_path = self.state_dir / "tracker.json"
-            updated_data = json.loads(tracker_path.read_text(encoding="utf-8"))
-            # File should NOT be modified (still has status in_progress)
-            self.assertEqual(updated_data, original_data)
-
-    def test_check_exits_1_on_unresolved(self):
-        """Test --check exits 1 when items have unmerged PRs."""
-        # Arrange
-        items = [
-            {
-                "id": "item1",
-                "title": "Feature X",
-                "status": "in_progress",
-                "lane": "proposed",
-                "priority": "P1",
-                "notes": "PR: #123",
+                "notes": "Fix: PR #123",
                 "pr_link": None,
                 "created_at": "2026-07-29T00:00:00Z",
                 "completed_at": None,
@@ -131,35 +97,46 @@ class TestTrackerAutoclose(unittest.TestCase):
         ]
         self._write_tracker(items)
 
-        # Mock gh pr view to return OPEN
-        with patch(
-            "tracker_autoclose.subprocess.run"
-        ) as mock_run:
+        # Mock gh pr view to return MERGED with valid timestamp
+        with patch("tools.tracker_autoclose.subprocess.run") as mock_run:
             mock_proc = Mock()
             mock_proc.returncode = 0
-            mock_proc.stdout = "OPEN"
+            mock_proc.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-30T10:00:00Z"})
             mock_run.return_value = mock_proc
 
-            # Act
-            rc = tracker_autoclose.main(["--check"], state_root=str(self.state_dir))
+            # Act: apply mode should close the item
+            rc = tracker_autoclose.main(["--apply"], state_root=str(self.state_dir))
 
-            # Assert
-            self.assertEqual(rc, 1)
+            # Assert: apply succeeds
+            self.assertEqual(rc, 0)
+            # Item should be marked done
+            tracker_path = self.state_dir / "tracker.json"
+            updated = json.loads(tracker_path.read_text(encoding="utf-8"))
+            self.assertEqual(updated["items"][0]["status"], "done")
+            # Evidence should be recorded
+            self.assertIn("RECONCILED", updated["items"][0]["notes"])
+            self.assertIn("#123", updated["items"][0]["notes"])
+            # Journal should have entry
+            journal = self._read_journal()
+            self.assertGreater(len(journal), 0)
+            self.assertEqual(journal[0]["id"], "358af636cdf0")
+            self.assertIn("merged", journal[0]["evidence"])
 
-    def test_check_exits_0_when_clean(self):
-        """Test --check exits 0 when all items are resolved."""
-        # Arrange
+    # ========== Genuinely open item (no evidence) ==========
+
+    def test_open_item_no_evidence(self):
+        """Item with no PR or file evidence -> OPEN."""
         items = [
             {
-                "id": "item1",
-                "title": "Feature X",
-                "status": "done",
-                "lane": "done",
-                "priority": "P1",
-                "notes": "RECONCILED: PR #123 merged",
+                "id": "item2",
+                "title": "Research task",
+                "status": "in_progress",
+                "lane": "proposed",
+                "priority": "P3",
+                "notes": "No PR yet",
                 "pr_link": None,
                 "created_at": "2026-07-29T00:00:00Z",
-                "completed_at": "2026-07-29T01:00:00Z",
+                "completed_at": None,
             }
         ]
         self._write_tracker(items)
@@ -167,16 +144,197 @@ class TestTrackerAutoclose(unittest.TestCase):
         # Act
         rc = tracker_autoclose.main(["--check"], state_root=str(self.state_dir))
 
-        # Assert
-        self.assertEqual(rc, 0)
+        # Assert: check returns 0 (no closable items found)
+        self.assertEqual(rc, 0, "Should not close item with no evidence")
 
-    def test_skip_already_done_items(self):
-        """Test that already-done items are skipped."""
-        # Arrange
+    # ========== AMBIGUOUS case (partial evidence) ==========
+
+    def test_ambiguous_partial_evidence_pr_unavailable(self):
+        """Item with PR reference but gh unavailable -> AMBIGUOUS."""
         items = [
             {
-                "id": "item1",
-                "title": "Feature X",
+                "id": "item3",
+                "title": "Partial evidence item",
+                "status": "in_progress",
+                "lane": "proposed",
+                "priority": "P2",
+                "notes": "See PR #789",
+                "pr_link": None,
+                "created_at": "2026-07-29T00:00:00Z",
+                "completed_at": None,
+            }
+        ]
+        self._write_tracker(items)
+
+        # Mock gh to be unavailable
+        with patch("tools.tracker_autoclose.subprocess.run") as mock_run:
+            mock_run.side_effect = FileNotFoundError("gh not found")
+
+            # Act
+            rc = tracker_autoclose.main(["--check"], state_root=str(self.state_dir))
+
+            # Assert: still returns 0 (ambiguous, not closable)
+            self.assertEqual(rc, 0)
+
+    # ========== --apply records evidence in journal ==========
+
+    def test_apply_records_evidence_in_journal(self):
+        """--apply flag records evidence in tracker-journal.jsonl."""
+        items = [
+            {
+                "id": "item4",
+                "title": "Item with evidence",
+                "status": "proposed",
+                "lane": "proposed",
+                "priority": "P1",
+                "notes": "PR #456",
+                "pr_link": None,
+                "created_at": "2026-07-29T00:00:00Z",
+                "completed_at": None,
+            }
+        ]
+        self._write_tracker(items)
+
+        with patch("tools.tracker_autoclose.subprocess.run") as mock_run:
+            mock_proc = Mock()
+            mock_proc.returncode = 0
+            mock_proc.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-30T10:00:00Z"})
+            mock_run.return_value = mock_proc
+
+            # Act
+            rc = tracker_autoclose.main(["--apply"], state_root=str(self.state_dir))
+
+            # Assert
+            self.assertEqual(rc, 0)
+            journal = self._read_journal()
+            self.assertEqual(len(journal), 1)
+            self.assertEqual(journal[0]["id"], "item4")
+            self.assertEqual(journal[0]["status"], "proposed")
+            self.assertIn("456", journal[0]["evidence"])
+
+    # ========== --check never mutates ==========
+
+    def test_check_never_modifies_tracker(self):
+        """--check mode never modifies tracker.json."""
+        items = [
+            {
+                "id": "item5",
+                "title": "Should not change",
+                "status": "in_progress",
+                "lane": "proposed",
+                "priority": "P1",
+                "notes": "PR #789",
+                "pr_link": None,
+                "created_at": "2026-07-29T00:00:00Z",
+                "completed_at": None,
+            }
+        ]
+        self._write_tracker(items)
+        original = json.loads(
+            (self.state_dir / "tracker.json").read_text(encoding="utf-8")
+        )
+
+        with patch("tools.tracker_autoclose.subprocess.run") as mock_run:
+            mock_proc = Mock()
+            mock_proc.returncode = 0
+            mock_proc.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-30T10:00:00Z"})
+            mock_run.return_value = mock_proc
+
+            # Act
+            tracker_autoclose.main(["--check"], state_root=str(self.state_dir))
+
+            # Assert: file unchanged
+            current = json.loads(
+                (self.state_dir / "tracker.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(original, current, "--check should never modify tracker")
+
+    # ========== gh-absent handling ==========
+
+    def test_gh_absent_skips_pr_check(self):
+        """When gh is not available, PR checks are skipped without error."""
+        items = [
+            {
+                "id": "item6",
+                "title": "Item with PR",
+                "status": "in_progress",
+                "lane": "proposed",
+                "priority": "P2",
+                "notes": "See PR #999",
+                "pr_link": None,
+                "created_at": "2026-07-29T00:00:00Z",
+                "completed_at": None,
+            }
+        ]
+        self._write_tracker(items)
+
+        # Act: skip-gh flag simulates gh unavailable
+        rc = tracker_autoclose.main(["--check", "--skip-gh"], state_root=str(self.state_dir))
+
+        # Assert: returns 0 (no error, just skipped)
+        self.assertEqual(rc, 0)
+
+    # ========== --json output ==========
+
+    def test_json_output_format(self):
+        """--json flag produces valid JSON with structured output."""
+        items = [
+            {
+                "id": "item7",
+                "title": "Item A",
+                "status": "proposed",
+                "lane": "proposed",
+                "priority": "P1",
+                "notes": "PR #111",
+                "pr_link": None,
+                "created_at": "2026-07-29T00:00:00Z",
+                "completed_at": None,
+            },
+            {
+                "id": "item8",
+                "title": "Item B",
+                "status": "in_progress",
+                "lane": "in-progress",
+                "priority": "P2",
+                "notes": "No PR",
+                "pr_link": None,
+                "created_at": "2026-07-29T00:00:00Z",
+                "completed_at": None,
+            },
+        ]
+        self._write_tracker(items)
+
+        with patch("tools.tracker_autoclose.subprocess.run") as mock_run:
+            mock_proc = Mock()
+            mock_proc.returncode = 0
+            mock_proc.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-30T10:00:00Z"})
+            mock_run.return_value = mock_proc
+
+            # Capture output
+            import io
+            import contextlib
+            f = io.StringIO()
+            with contextlib.redirect_stdout(f):
+                rc = tracker_autoclose.main(["--check", "--json"], state_root=str(self.state_dir))
+
+            output = f.getvalue()
+            result = json.loads(output)
+
+            # Assert: result has expected structure
+            self.assertIn("shipped", result)
+            self.assertIn("open", result)
+            self.assertIn("ambiguous", result)
+            self.assertEqual(result["shipped"], 1)  # item7 with PR
+            self.assertEqual(result["open"], 1)      # item8 without PR
+
+    # ========== Already done items are skipped ==========
+
+    def test_skip_already_done_items(self):
+        """Items already in 'done' status are skipped."""
+        items = [
+            {
+                "id": "item9",
+                "title": "Already done",
                 "status": "done",
                 "lane": "done",
                 "priority": "P1",
@@ -193,75 +351,188 @@ class TestTrackerAutoclose(unittest.TestCase):
 
         # Assert
         self.assertEqual(rc, 0)
-        # Verify item was not modified
         tracker_path = self.state_dir / "tracker.json"
-        updated_data = json.loads(tracker_path.read_text(encoding="utf-8"))
-        self.assertEqual(updated_data["items"][0]["status"], "done")
-        self.assertEqual(updated_data["items"][0]["notes"], "Already complete")
+        updated = json.loads(tracker_path.read_text(encoding="utf-8"))
+        self.assertEqual(updated["items"][0]["notes"], "Already complete")
 
-    def test_extract_pr_from_notes(self):
-        """Test PR number extraction from notes field."""
-        # Arrange
+    # ========== REGRESSION TESTS: Evidence matching fixes ==========
+
+    def test_regression_whole_token_pr_matching_no_prefix_match(self):
+        """REGRESSION: PR #1 must NOT match inside #594 (whole-token only).
+
+        This test would fail with old regex r'#(\d+)' which matches #1 as prefix.
+        """
         items = [
             {
-                "id": "item1",
-                "title": "Fix bug",
-                "status": "ranked",
-                "lane": "ranked",
-                "priority": "P2",
-                "notes": "See PR #456 for details",
+                "id": "item_with_594",
+                "title": "Feature work",
+                "status": "proposed",
+                "lane": "proposed",
+                "priority": "P1",
+                "notes": "Implements PR #594",
                 "pr_link": None,
-                "created_at": "2026-07-29T00:00:00Z",
+                "created_at": "2026-07-30T00:00:00Z",
                 "completed_at": None,
             }
         ]
         self._write_tracker(items)
 
-        # Mock gh pr view to return MERGED
-        with patch(
-            "tools.tracker_autoclose.subprocess.run"
-        ) as mock_run:
+        # Mock gh to return #1 as merged (stale), #594 as merged (current)
+        def mock_subprocess_run(*args, **kwargs):
+            cmd = args[0] if args else []
+            pr_arg = None
+            for arg in cmd:
+                if arg.isdigit():
+                    pr_arg = arg
+                    break
+
+            result = Mock()
+            if pr_arg == "1":
+                # PR #1 merged BEFORE item creation
+                result.returncode = 0
+                result.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-11T10:00:00Z"})
+            elif pr_arg == "594":
+                # PR #594 merged AFTER item creation
+                result.returncode = 0
+                result.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-30T12:00:00Z"})
+            else:
+                result.returncode = 1
+                result.stdout = "{}"
+
+            return result
+
+        with patch("tools.tracker_autoclose.subprocess.run") as mock_run:
+            mock_run.side_effect = mock_subprocess_run
+
+            # Act
+            import io
+            import contextlib
+            f = io.StringIO()
+            with contextlib.redirect_stdout(f):
+                rc = tracker_autoclose.main(["--check", "--json"], state_root=str(self.state_dir))
+
+            output = f.getvalue()
+            result = json.loads(output)
+
+            # Assert: Item should be SHIPPED via #594
+            self.assertEqual(result["shipped"], 1)
+            shipped_item = result["items"]["shipped"][0]
+            self.assertIn("594", shipped_item["evidence"])
+            # #1 should NOT appear (whole-token match prevented prefix matching)
+            self.assertNotIn("PR #1 merged", shipped_item["evidence"])
+
+    def test_regression_causality_guard_pr_before_creation(self):
+        """REGRESSION: PR merged BEFORE item creation excluded by causality guard."""
+        items = [
+            {
+                "id": "zombie_item",
+                "title": "Work created today",
+                "status": "proposed",
+                "lane": "proposed",
+                "priority": "P1",
+                "notes": "See PR #1",
+                "pr_link": None,
+                "created_at": "2026-07-30T08:00:00Z",
+                "completed_at": None,
+            }
+        ]
+        self._write_tracker(items)
+
+        with patch("tools.tracker_autoclose.subprocess.run") as mock_run:
+            # PR #1 merged BEFORE item creation
             mock_proc = Mock()
             mock_proc.returncode = 0
-            mock_proc.stdout = "MERGED"
+            mock_proc.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-11T10:00:00Z"})
             mock_run.return_value = mock_proc
 
             # Act
             rc = tracker_autoclose.main(["--check"], state_root=str(self.state_dir))
 
-            # Assert
+            # Assert: Item NOT closable (causality violated, excluded)
             self.assertEqual(rc, 0)
-            # Verify that gh was called with PR 456
-            calls = [str(call) for call in mock_run.call_args_list]
-            self.assertTrue(
-                any("456" in str(call) for call in calls),
-                f"Expected PR 456 to be queried. Calls: {calls}",
-            )
 
-    def test_skip_items_without_pr_reference(self):
-        """Test that items without PR references are skipped."""
-        # Arrange
+    def test_regression_missing_created_at_fails_causality(self):
+        """REGRESSION: Items with missing created_at cannot pass causality check (fail-closed)."""
         items = [
             {
-                "id": "item1",
-                "title": "Research task",
-                "status": "in_progress",
+                "id": "missing_timestamp_item",
+                "title": "Item without creation time",
+                "status": "proposed",
                 "lane": "proposed",
-                "priority": "P3",
-                "notes": "No PR yet",
+                "priority": "P1",
+                "notes": "See PR #123",
                 "pr_link": None,
-                "created_at": "2026-07-29T00:00:00Z",
+                "created_at": None,  # Missing!
                 "completed_at": None,
             }
         ]
         self._write_tracker(items)
 
+        with patch("tools.tracker_autoclose.subprocess.run") as mock_run:
+            # PR merged recently
+            mock_proc = Mock()
+            mock_proc.returncode = 0
+            mock_proc.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-30T10:00:00Z"})
+            mock_run.return_value = mock_proc
+
+            # Act
+            rc = tracker_autoclose.main(["--check"], state_root=str(self.state_dir))
+
+            # Assert: Item NOT closable (causality check fails on missing created_at)
+            self.assertEqual(rc, 0, "Item excluded due to missing created_at (fail-closed)")
+
+    def test_regression_correct_match_with_valid_causality(self):
+        """Correct whole-token match with valid causality -> SHIPPED."""
+        items = [
+            {
+                "id": "item_with_595",
+                "title": "Windows shard work",
+                "status": "in_progress",
+                "lane": "proposed",
+                "priority": "P1",
+                "notes": "Implemented in PR #595",
+                "pr_link": None,
+                "created_at": "2026-07-30T07:00:00Z",
+                "completed_at": None,
+            }
+        ]
+        self._write_tracker(items)
+
+        with patch("tools.tracker_autoclose.subprocess.run") as mock_run:
+            # PR #595 merged AFTER item creation
+            mock_proc = Mock()
+            mock_proc.returncode = 0
+            mock_proc.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-30T11:30:00Z"})
+            mock_run.return_value = mock_proc
+
+            # Act
+            import io
+            import contextlib
+            f = io.StringIO()
+            with contextlib.redirect_stdout(f):
+                rc = tracker_autoclose.main(["--check", "--json"], state_root=str(self.state_dir))
+
+            output = f.getvalue()
+            result = json.loads(output)
+
+            # Assert: SHIPPED with correct evidence
+            self.assertEqual(result["shipped"], 1)
+            shipped = result["items"]["shipped"][0]
+            self.assertIn("595", shipped["evidence"])
+            self.assertIn("merged after creation", shipped["evidence"])
+
+    # ========== Error handling ==========
+
+    def test_unknown_flag_returns_error(self):
+        """Unknown flags return exit code 2."""
+        items = [{"id": "item10", "title": "Test", "status": "done", "lane": "done"}]
+        self._write_tracker(items)
+
         # Act
-        rc = tracker_autoclose.main(["--check"], state_root=str(self.state_dir))
+        rc = tracker_autoclose.main(["--unknown-flag"], state_root=str(self.state_dir))
 
         # Assert
-        # Should exit with 1 (unresolved item)
-        self.assertEqual(rc, 1)
+        self.assertEqual(rc, 2)
 
 
 if __name__ == "__main__":

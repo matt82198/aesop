@@ -35,12 +35,12 @@ Durable substrate moving aesop's coordination/state off git (which cannot scale 
 
 ## Module Layout
 - **read_api.py** — `ReadAPI` facade over state surfaces; read-only. Delegates to existing parsers: tracker snapshot, orchestrator status, heartbeat freshness via `tools/common`, ledger rows via `tools/fleet_ledger`. Never forks logic.
-- **write_api.py** — `WriteAPI(state_dir)` facade for tracker mutations (WS4b: state consolidation write path). Exposes three operations: `tracker_update_status(item_id, new_status, note)`, `tracker_append_item(item_dict)`, and `rebuild_projection(force=False)`. 
-  - **Markdown write path (WS4 inc 1+2)**: `write_state_md(content)`, `append_buildlog(line)`, `ensure_buildlog_exists(header=...)` (idempotent create, never overwrites; `header` lets migrated legacy writers keep their historical header byte-for-byte), `rebuild_state_md(content, force)`. File written atomically first, event (`state_md_written`/`buildlog_entry`) appended only on success. Migrated callers (inc 2): `tools/buildlog.py`, `tools/ensure_state.py`, `tools/eod_sweep.py`.
-  - **tracker_* methods**: Both append events atomically AND update tracker.json projection (tempfile + os.replace). Fail-closed: event append failure blocks projection write.
-  - **OCC (Optimistic Concurrency Control)**: Each instance tracks the last hash it wrote. Before atomic write, detects concurrent modification: if on-disk hash differs from BOTH start-of-operation hash AND computed projection hash, raises `WriteConflict` (fail-closed). Corrupt JSON on disk also raises `WriteConflict` (fail-closed, not fail-open). Baseline hash captured at operation START (before event append) so the check window covers the entire operation.
+- **write_api.py** — `WriteAPI(state_dir)` facade for tracker mutations (state consolidation write path). Exposes tracker CRUD and markdown operations: `tracker_append_item(item_dict)`, `tracker_update_status(item_id, new_status, note)`, `tracker_update_item(item_id, update_data)` (general-purpose patch), `tracker_archive_item(item_id)` (soft-delete), and `rebuild_projection()`. 
+  - **Markdown write path (Inc 1+2)**: `write_state_md(content)`, `append_buildlog(line)`, `ensure_buildlog_exists(header=...)` (idempotent create, never overwrites; `header` lets migrated legacy writers keep their historical header byte-for-byte), `rebuild_state_md(content, force)`. File written atomically first, event (`state_md_written`/`buildlog_entry`) appended only on success. Migrated callers (Inc 2): `tools/buildlog.py`, `tools/ensure_state.py`, `tools/eod_sweep.py`.
+  - **tracker_* methods**: All append events atomically AND render tracker.json projection via `materialize_tracker()` under a file lock (tempfile + os.replace). Fail-closed: event append failure blocks projection write.
+  - **OCC (Optimistic Concurrency Control)**: Detects concurrent modification before atomic write: if on-disk hash differs from both start-of-operation hash and computed projection hash, raises `WriteConflict` (fail-closed). Corrupt JSON on disk also raises `WriteConflict` (fail-closed, not fail-open). Baseline hash captured at operation START (before event append) so the check window covers the entire operation.
   - **ID collision detection**: `tracker_append_item` with explicit id rejects duplicates (raises `ValueError` before appending) to prevent duplicate events for the same logical item.
-  - **Self-healing recovery**: `rebuild_projection(force=True)` force-renders from the event store, bypassing OCC, to recover orphaned events (event in store, missing from projection). Recovery contract: projection is derived from event store, so rebuilding naturally recovers prior events.
+  - **Self-healing recovery**: `rebuild_projection()` force-renders from the event store, bypassing OCC, to recover orphaned events (event in store, missing from projection).
 - **store.py** — `EventStore(db_path)`: append-only SQLite log with thread-local connection pooling. `append(stream, type, payload, actor, expected_version=None)` returns new version or raises `ConcurrencyConflict` on OCC mismatch; `read(stream)` / `read_since(stream, after_version)` / `read_all()` return event rows; `close()` releases the cached connection. Corrupt JSON payloads are skipped with stderr log; snapshot read/write for tail-replay optimization.
 - **__init__.py** — Public exports: `EventStore`, `StateAPI`, `ConcurrencyConflict`, `project_tracker`, `export_tracker`, `ingest_tracker_json`.
 - **projections.py** — `project_tracker(events)`: folds `item_created` / `item_updated` / `item_archived` into the full `tracker.json` shape, preserving first-seen order.
@@ -49,6 +49,7 @@ Durable substrate moving aesop's coordination/state off git (which cannot scale 
 - **ingest.py** — `ingest_tracker_json(api, path)`: backfill one `item_created` per existing item; validates event structure at boundary.
 - **identity.py** — Multi-instance identity: `InstanceID(hostname, pid, nonce)` uniquely tags each Aesop process. Enables distributed leasing and fault detection.
 - **coordination.py** — Lease-by-append claims for multi-writer coordination: `try_claim(store, resource, instance_id, ttl)` / `release` / `current_holder` / `fold_claims` / `compact_claims` via fail-closed event appends. Accepts a StateAPI (`.get`) OR a raw EventStore (`.read`) — RS3-W fix: try_claim previously required `.get()` so every EventStore claim fail-closed to False (dead gate). TTL expiry is ENFORCED at fold time: a claim past `ts + ttl` is ignored/reclaimable (crashed holders cannot hold forever; legacy events without ts/ttl never expire). RS5 F2: a try_claim whose post-append read/fold raises retracts its own claim_requested (best-effort) before returning False — a failed claim attempt never strands a phantom holder for a full TTL. Claims-stream compaction: `compact_claims(store)` snapshots the active claim events for O(tail) reads instead of O(total). Prevents concurrent orchestrators from colliding.
+- **lease_claims.py** — `LeaseStore(db_path)`: atomic file-path leasing for multi-instance coordination on a single box using a dedicated SQLite leases table (not event-sourced, for atomicity + TTL efficiency). API: `claim(paths, instance_id, ttl_seconds)→lease_id` (atomically claims set of paths; raises `LeaseConflict` if any held by another active instance), `renew(lease_id, instance_id, ttl_seconds)` (extends TTL; fails if not holder), `release(lease_id, instance_id)` (releases lease; frees paths for others). Deterministic time injection (clock parameter) enables testing without sleeps. Expiry-steal-on-claim: leases past deadline are reclaimable immediately at claim time (no background thread). All operations fail-closed: exceptions propagate.
 
 ## Invariants
 - **Append-only**: never mutate/delete events; state changes are new events.
@@ -89,10 +90,41 @@ Run from repo root:
 
 **Instance coordination is a prerequisite** for multi-machine orchestration (team-scale single-project development). Used by `tools/instance_manager.py` (CLI) and `tools/multi_dispatch.py` (dispatch guard).
 
+## Increment 1 (state consolidation, 2026-07-30) — canonical materializer + state_rebuild
+
+**Inc 1 consolidates all view rendering to ONE place:**
+- **materialize.py** — canonical pure projector functions for all views (tracker.json, orchestrator-status.json, STATE.md, ledger). Each view is `(projection_dict) -> bytes` (deterministic, idempotent, testable). `materialize_all(api, state_dir)` renders all views atomically under WriteAPI's file lock.
+- **tools/state_rebuild.py** — CLI `--all | --view NAME | --check` for rebuilding and verifying materialized views. `--check` is the CI drift gate (renders to memory, diffs disk, exit 1 on drift).
+- **ui/collectors.py (refactored)** — Deleted independent `save_tracker()` + `.tracker-render-dirty` self-heal. All tracker CRUD now routes through WriteAPI, which calls `materialize_tracker()` under the same lock. `load_tracker()` still reads the materialized tracker.json as a cache; mutations keep it in sync.
+- **export.py (thin alias)** — DEPRECATED; now wraps `materialize_tracker()` for backward compatibility.
+- **DOC DRIFT FIX**: state_store/CLAUDE.md and ui/CLAUDE.md both claimed `tracker.json` is "git-committed" — it is not; corrected to "materialized view, git-ignored, rebuildable" (R2 rule).
+
+**Outcome**: Single canonical render path (materialize + WriteAPI), OCC-protected CRUD, deterministic views. Baseline delta: ~0-2 keys (this increment buys safety, not ratchet points).
+
+## Increment 2 (state consolidation, 2026-07-30) — `orchestrator_status` into the store
+
+**Inc 2 moves orchestrator_status into the event store:**
+- **projections.py** — `project_orchestrator_status(events)` folds `phase_changed`, `activity_changed`, `status_cleared`, and historical `meta`/`phase_set` events into byte-compatible orchestrator-status.json shape: `{id, role, activity, phase, updated_at}`.
+- **api.py** — registered `project_orchestrator_status` in `_PROJECTORS` dict (already exported by `__init__.py`).
+- **write_api.py** — `set_orchestrator_status(activity, phase, id, role)` and `clear_orchestrator_status()` append events first, then materialize the view atomically. Fail-closed: event append failure blocks projection write. Uses `_project_orchestrator_status()` and `_render_orchestrator_status_atomic()` helpers.
+- **read_api.py** — `read_orchestrator_status()` reads from projection first (if DB present), falls back to materialized file if DB absent. Preserves fail-open-to-None and future-timestamp-is-stale (`age < -120`) semantics.
+- **materialize.py** — `materialize_orchestrator_status(projection)` renders projection to bytes (indent=2, newline-terminated, deterministic).
+- **tools/orchestrator_status.py** — CLI delegates to WriteAPI (set/clear commands); stdout strings remain byte-identical for shell tests (`[OK] Status updated: ...` and `[OK] Status cleared`).
+- **tools/healthcheck.py** — routed `_check_orchestrator_status` → `_check_orchestrator_status_api` to use ReadAPI (projection-first with file fallback).
+
+**Event types** (appended to `orchestrator_status` stream):
+- `phase_changed`: payload `{phase, timestamp, actor}` (new, Inc 2)
+- `activity_changed`: payload `{activity, timestamp, actor}` (new, Inc 2)
+- `status_cleared`: payload `{}` (new, Inc 2)
+- `meta` / `phase_set`: payload `{phase}` (historical, from reconcile.py --resolve; folded forward)
+
+**Byte-compatibility**: The projection renders byte-identical to the current orchestrator-status.json shape. Views written by `materialize_orchestrator_status()` are deterministic and idempotent.
+
+**Baseline movement**: 2 keys retired (43 → 41). Materialization views (status-json, tracker-json, state-md-write) are legitimately appended to baseline (they write derived caches from projections).
+
 ## Next (cutover, follow-up — NOT this increment)
-**Phase 1 (early)**: Add `orchestrator_status` stream (orchestrator_status → `append("orchestrator_status", "phase_changed", ...)`, read from `project("orchestrator_status")` on recovery).
-**Phase 2 (middle)**: Tracker dual-read (StateAPI for CRUD, export job keeps `tracker.json` rendered).
-**Phase 3 (cutover complete)**: Flip all readers to API; remove git fallback.
-**Phase 4 (optional, contingent on team scale needs)**: Backend swap behind StateAPI (e.g. Postgres). Not scheduled; single-box SQLite is sufficient for current throughput (~100 ev/s real-world vs ~704 ev/s measured ceiling). See `docs/MULTI-INSTANCE-ROADMAP.md` for the decision tree.
+**Phase 1 (middle)**: Tracker dual-read (StateAPI for CRUD, export job keeps `tracker.json` rendered).
+**Phase 2 (cutover complete)**: Flip all readers to API; remove git fallback.
+**Phase 3 (optional, contingent on team scale needs)**: Backend swap behind StateAPI (e.g. Postgres). Not scheduled; single-box SQLite is sufficient for current throughput (~100 ev/s real-world vs ~704 ev/s measured ceiling). See `docs/MULTI-INSTANCE-ROADMAP.md` for the decision tree.
 
 Map of all domains: /CLAUDE.md

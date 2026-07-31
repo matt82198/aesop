@@ -48,14 +48,23 @@ STATE_FILES_TO_PROTECT = [
     ".orchestrator-heartbeat",
 ]
 
-# File patterns that are WRITERS and allowed to access state files directly
+# Files allowed direct state-file access: the state layer's own implementation
+# (writers and the facade itself), plus tools whose contract is to inspect the
+# literal bytes on disk. Everything else must go through the facade.
 WRITER_ALLOWLIST = [
     "state_store/export.py",
     "state_store/ingest.py",
     "state_store/read_api.py",  # The read API facade itself (reads the state files)
     "state_store/write_api.py",  # The write API facade (reads/writes the projection atomically)
+    "state_store/materialize.py",  # Canonical materializer: the component that PRODUCES
+                                   # tracker.json/STATE.md/status.json from the event log.
+                                   # Same class as export.py/write_api.py; routing it through
+                                   # the read facade would be circular.
     "ui/collectors.py",  # Some readers also export/flush
     "tools/cost.py",  # Parses ledger
+    "tools/state_md_verifier.py",  # Verifies the on-disk STATE.md against git truth; it must
+                                   # read the literal file, since reading the projection
+                                   # instead would defeat the drift check it exists to make.
 ]
 
 # Markdown files that should only be written via the WriteAPI facade
@@ -131,6 +140,11 @@ def find_direct_opens(repo_root):
             if "from state_store.read_api import" in content or "import state_store.read_api" in content:
                 continue
             if "from state_store.write_api import" in content or "import state_store.write_api" in content:
+                continue
+            # StateAPI re-exported from the package root is the same facade; a caller
+            # doing `from state_store import StateAPI` is using it correctly and was
+            # previously misreported as a bypass.
+            if "from state_store import StateAPI" in content or "from state_store import (" in content and "StateAPI" in content:
                 continue
 
             # Scan for violations

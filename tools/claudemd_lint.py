@@ -88,7 +88,11 @@ def extract_path_references(text: str) -> List[str]:
     # Match paths: relative or starting with ./, alphanumeric, /, -, _
     # Also match inline code references like `path/file.md`
     # Note: intentionally NOT matching patterns like "*.test.mjs" (glob)
-    pattern = r"(?:[`'\"])?([a-zA-Z0-9_.][a-zA-Z0-9_./\-]*\.(?:md|py|sh|mjs))(?:[`'\"])?"
+    # The leading `~/` must be part of the capture, otherwise a home-dir
+    # reference like `~/scripts/foo.py` is captured as `scripts/foo.py` and the
+    # home-directory filter below never fires — reporting a phantom repo path
+    # for a file that correctly lives outside the repo.
+    pattern = r"(?:[`'\"])?((?:~/)?[a-zA-Z0-9_.][a-zA-Z0-9_./\-]*\.(?:md|py|sh|mjs))(?:[`'\"])?"
     matches = re.finditer(pattern, text)
     refs = set()
     for match in matches:
