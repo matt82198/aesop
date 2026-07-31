@@ -476,6 +476,27 @@ def _write_api():
     return WriteAPI(str(config.STATE_DIR))
 
 
+def _tracker_api():
+    """Return a StateAPI over the tracker event log (read/projection side).
+
+    Distinct from _write_api(): callers here need .project(), which WriteAPI does
+    not expose. This helper's definition was lost in the event-store refactor while
+    two call sites in the inbox drain path kept calling it. Both sites sit inside
+    try/except, so the resulting NameError was swallowed and the dedup-against-
+    projection check silently never ran.
+    """
+    try:
+        from state_store import StateAPI
+    except ImportError:
+        from pathlib import Path as _Path
+        root = str(_Path(__file__).resolve().parents[1])
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from state_store import StateAPI
+    config.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    return StateAPI(str(config.STATE_DIR / "tracker_events.db"))
+
+
 def _ensure_tracker_migrated(write_api):
     """Backfill the event log from the existing tracker.json once (idempotent).
 

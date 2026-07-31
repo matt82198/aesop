@@ -289,6 +289,14 @@ class WriteAPI:
             "completed_at": None,
         }
 
+        # Preserve caller-supplied optional fields that are not part of the core
+        # schema above. This dict was a fixed field list, so anything else the API
+        # accepted -- notably authored acceptanceCriteria -- was silently dropped on
+        # write: the POST returned 201 and the field simply vanished.
+        for extra in ("acceptanceCriteria",):
+            if item_dict.get(extra) is not None:
+                created_item[extra] = item_dict[extra]
+
         store = self._make_store()
 
         # Append the event (fail-closed: if this fails, no projection write)
