@@ -1,6 +1,30 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
+resolve_aesop_root() {
+  # Resolve the repo whose push is being gated -- NOT a hardcoded path.
+  #
+  # This previously defaulted to "$HOME/aesop" (the primary tree). Pushing from
+  # any of the ~40 sibling worktrees therefore ran the PRIMARY tree's copy of
+  # every gate script instead of the branch's own, so a gate fix on a branch
+  # could never take effect for that branch's own push, and gates evaluated
+  # code that was not being pushed.
+  #
+  # A pre-push hook runs with cwd inside the pushing worktree, so the git
+  # toplevel is the correct root. Explicit AESOP_ROOT still wins; the old
+  # hardcoded path remains only as a last-resort fallback.
+  if [ -n "${AESOP_ROOT:-}" ]; then
+    printf '%s\n' "$AESOP_ROOT"
+    return 0
+  fi
+  local top=""
+  if top=$(git rev-parse --show-toplevel 2>/dev/null) && [ -n "$top" ]; then
+    printf '%s\n' "$top"
+    return 0
+  fi
+  printf '%s\n' "$HOME/aesop"
+}
+
 json_escape() {
   # Escape backslashes first, then quotes, then control chars for valid JSON
   # Finding 5: Handle ALL C0 control characters (\x00-\x08, \x0b-\x0c, \x0e-\x1f)
@@ -480,7 +504,8 @@ check_secret_scan() {
     return 0
   fi
 
-  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
   local scan_script="$aesop_root/tools/secret_scan.py"
 
   if [ ! -f "$scan_script" ] || [ ! -x "$scan_script" ]; then
@@ -535,7 +560,8 @@ check_tracker_guard() {
   # to guard -- consistent with the hooks/ key invariant). An actual
   # zombie detection (exit 1 from --check) stays fail-closed and blocks
   # the push. tracker_guard itself exits 0 when tracker.json is absent.
-  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
   local guard_script="$aesop_root/tools/tracker_guard.py"
 
   if [ ! -f "$guard_script" ]; then
@@ -576,7 +602,8 @@ check_import_resolution() {
   #
   # Fail-open ONLY for missing optional tool (repo without aesop checkout);
   # actual resolution failures stay fail-closed.
-  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
   local import_check_script="$aesop_root/tools/import_resolution_check.py"
 
   if [ ! -f "$import_check_script" ]; then
@@ -611,7 +638,8 @@ check_claudemd_sync() {
   # Runs at push time so authors see drift immediately.
   #
   # Fail-open for missing optional tooling; fail-closed for actual drift.
-  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
   local sync_script="$aesop_root/tools/claudemd_sync_gate.py"
 
   if [ ! -f "$sync_script" ] || [ ! -x "$sync_script" ]; then
@@ -646,7 +674,8 @@ check_metrics() {
   # Runs at push time so authors see unverified metrics immediately.
   #
   # Fail-open for missing optional tooling; fail-closed for unverified metrics.
-  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
   local metrics_script="$aesop_root/tools/metrics_gate.py"
 
   if [ ! -f "$metrics_script" ] || [ ! -x "$metrics_script" ]; then
@@ -685,7 +714,8 @@ check_test_suite_count() {
   # repos without an aesop checkout; no aesop install == no verify tool).
   # An actual drift detection (exit 1 from --check) stays fail-closed and blocks
   # the push. verify_test_suite_count exits 0 when counts match, 1 on drift.
-  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
   local verify_script="$aesop_root/tools/verify_test_suite_count.py"
 
   if [ ! -f "$verify_script" ]; then
@@ -717,7 +747,8 @@ check_test_suite_count() {
 log_event() {
   # Finding 1 & 2: Acquire lock before read-modify-append, add seq field, update sidecar
   local event_type="$1"
-  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
   local state_dir="$aesop_root/state"
   local audit_log="$state_dir/SECURITY-AUDIT.log"
   local lock_dir="$state_dir/.audit-log-lock"
@@ -755,7 +786,8 @@ log_event() {
 log_block() {
   # Finding 1 & 2: Acquire lock before read-modify-append, add seq field, update sidecar
   local reason="$1"
-  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
   local state_dir="$aesop_root/state"
   local audit_log="$state_dir/SECURITY-AUDIT.log"
   local lock_dir="$state_dir/.audit-log-lock"
