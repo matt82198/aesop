@@ -66,7 +66,8 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `launch_tui.py` — Spawn bash TUI script in detached terminal
 - `list_test_suites.py` — Generate live test suite inventory: scans filesystem for test files (tests/*.test.mjs, tests/test_*.py, tests/*.test.sh, tests/test_*.sh, tests/test-*.sh, hooks/pre-push-policy.sh --test) and outputs grouped listing with first-line doc summaries; ASCII-safe, deterministic; CLI: `list_test_suites.py [--repo ROOT]`; used in tests/CLAUDE.md docs and CI coverage gates; replaces hand-maintained suite listings (kills conflict magnet in merge conflicts)
 - `lock.mjs` — Fail-closed atomic lock (exponential backoff + stale-lock detection)
-- `merge_train.py` — Serial merge train: update-branch, wait for CI, merge, verify MERGED state (handles strict-up-to-date treadmill); one-shot merge loop for specific PR queue; use for serial CI-gated merges, optionally batched via integration branch
+- `merge_train.py` — Serial or integration-branch merge train: serial mode processes PRs one-at-a-time (update-branch, wait for CI, merge, verify MERGED); integration mode (`-i [BATCH_NAME]`) batches PRs into a local `integrate/<name>` branch, runs CI once, squash-merges, closes superseded PRs
+
 - `metrics_gate.py` — PR gate for hard numeric claims in markdown
 - `multi_dispatch.py` — Multi-instance-aware dispatch wrapper (checks file claims before dispatch, releases on completion)
 - `mutation_test.py` — Test quality harness via mutation testing (apply code mutations, run tests, report survived mutations as test gaps); CLI: `--target <module.py> --test <test_module.py> [--json]`; exit 0 on valid results (advisory), exit 1 when the sandbox baseline fails (results invalid, fail-closed)

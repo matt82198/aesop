@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
-"""Serial merge train -- update-branch, wait for CI, merge, verify MERGED.
+"""Merge train -- serial or integration-branch batch merge for GitHub PRs.
 
-Handles the strict-up-to-date treadmill: each merge invalidates all others,
-so we loop until all PRs are merged or permanently stuck.
-
-Enhancements:
-- Flake retry: on first FAIL, rerun CI once via gh run rerun --failed (one retry max per PR)
-- DIRTY handling: PRs with conflicts stay in queue, re-checked each round (--skip-dirty restores old behavior)
-- Adaptive poll: use 45s if any pending, else 3x poll (min 45s, max 300s) if all stuck DIRTY/BLOCKED
+Serial mode (default): update-branch, wait for CI, merge one at a time.
+Integration mode (--integration): batch PRs into a single integration branch,
+test once, merge to main, close superseded PRs.
 
 Usage:
-    python tools/merge_train.py 492 493 494 495 497 498 499 500 501 502 503 504 505 507 508 509
+    python tools/merge_train.py 492 493 494          # serial mode
     python tools/merge_train.py --file pr-list.txt   # one number per line
-    python tools/merge_train.py --skip-dirty 492 493  # old behavior: skip DIRTY immediately
+    python tools/merge_train.py --skip-dirty 492 493  # skip DIRTY immediately
+    python tools/merge_train.py -i 492 493 494       # integration-branch mode
+    python tools/merge_train.py --integration my-batch 492 493  # named batch
 """
 import argparse
 import functools
@@ -139,6 +137,201 @@ def retry_ci(n: int, head_ref_name: str) -> bool:
         return False
 
     print(f"  [ok] #{n} CI rerun triggered (run {run_id})")
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Integration-branch mode
+# ---------------------------------------------------------------------------
+
+def git(*args: str) -> tuple[bool, str]:
+    cmd = ["git"] + list(args)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    out = (result.stdout.strip() + "\n" + result.stderr.strip()).strip()
+    return (result.returncode == 0, out)
+
+
+def create_integration_branch(batch_name: str) -> bool:
+    branch = f"integrate/{batch_name}"
+    ok, out = git("fetch", "origin", "main")
+    if not ok:
+        print(f"  [FAIL] fetch origin main: {out[:120]}")
+        return False
+    ok, out = git("checkout", "-B", branch, "origin/main")
+    if not ok:
+        print(f"  [FAIL] checkout {branch}: {out[:120]}")
+        return False
+    print(f"  [ok] created integration branch {branch}")
+    return True
+
+
+def merge_pr_into_integration(n: int) -> bool:
+    raw = gh("pr", "view", str(n), "--json", "headRefOid,headRefName,title")
+    if isinstance(raw, dict) and "error" in raw:
+        print(f"  [FAIL] cannot read PR #{n}: {raw['error'][:120]}")
+        return False
+
+    sha = raw.get("headRefOid", "")
+    title = raw.get("title", "")
+    branch = raw.get("headRefName", "")
+    if not sha:
+        print(f"  [FAIL] PR #{n} has no headRefOid")
+        return False
+
+    ok, _ = git("fetch", "origin", f"{branch}")
+    if not ok:
+        ok, _ = git("fetch", "origin", sha)
+        if not ok:
+            print(f"  [FAIL] cannot fetch PR #{n} ref")
+            return False
+
+    ok, out = git("merge", sha, "--no-edit",
+                  "-m", f"integrate #{n}: {title[:60]}")
+    if not ok:
+        print(f"  [WARN] PR #{n} conflicts -- skipping: {out[:120]}")
+        git("merge", "--abort")
+        return False
+
+    print(f"  [ok] merged #{n} ({title[:40]}) into integration branch")
+    return True
+
+
+def push_integration_branch(branch: str) -> bool:
+    ok, out = git("push", "-u", "origin", branch, "--force-with-lease")
+    if not ok:
+        print(f"  [FAIL] push {branch}: {out[:120]}")
+        return False
+    print(f"  [ok] pushed {branch}")
+    return True
+
+
+def create_integration_pr(branch: str, included_prs: list[int]) -> str:
+    existing = gh("pr", "list", "--head", branch, "--json", "number,url",
+                  "--state", "open")
+    if isinstance(existing, list) and len(existing) > 0:
+        url = existing[0].get("url", f"#{existing[0].get('number', '?')}")
+        print(f"  [ok] reusing existing integration PR: {url}")
+        return url
+
+    pr_list = ", ".join(f"#{n}" for n in included_prs)
+    body = f"Integration batch merging PRs: {pr_list}"
+    result = gh("pr", "create", "--base", "main", "--head", branch,
+                "--title", f"integrate: {branch.split('/')[-1]}",
+                "--body", body)
+    if isinstance(result, dict) and "error" in result:
+        print(f"  [FAIL] create integration PR: {result['error'][:120]}")
+        return ""
+    url = result if isinstance(result, str) else str(result)
+    print(f"  [ok] created integration PR: {url}")
+    return url
+
+
+def wait_for_integration_ci(pr_number: int, poll_interval: int = 45,
+                            max_polls: int = 60) -> bool:
+    for i in range(max_polls):
+        info = pr_state(pr_number)
+        if info["checks"] == "green":
+            print(f"  [ok] integration PR #{pr_number} CI green")
+            return True
+        if info["checks"] == "FAIL":
+            print(f"  [FAIL] integration PR #{pr_number} CI failed")
+            return False
+        if i < max_polls - 1:
+            if poll_interval > 0:
+                time.sleep(poll_interval)
+    print(f"  [FAIL] integration PR #{pr_number} CI timed out after {max_polls} polls")
+    return False
+
+
+def merge_integration_pr(pr_number: int) -> bool:
+    gh("pr", "merge", str(pr_number), "--squash")
+    verify = gh("pr", "view", str(pr_number), "--json", "state", "--jq", ".state")
+    if verify == "MERGED":
+        print(f"  [ok] integration PR #{pr_number} MERGED (verified)")
+        return True
+    print(f"  [FAIL] integration PR #{pr_number} state={verify} -- NOT MERGED")
+    return False
+
+
+def close_superseded_prs(prs: list[int]):
+    for n in prs:
+        result = gh("pr", "close", str(n),
+                     "--comment", "Superseded by integration branch merge")
+        if isinstance(result, dict) and "error" in result:
+            print(f"  [WARN] close #{n}: {result['error'][:80]}")
+        else:
+            print(f"  [ok] closed #{n}")
+
+
+def cleanup_integration_branch(branch: str):
+    git("checkout", "main")
+    git("branch", "-D", branch)
+    git("push", "origin", "--delete", branch)
+    print(f"  [ok] cleaned up {branch}")
+
+
+def run_integration_train(prs: list[int], batch_name: str = "batch-wave",
+                          poll_interval: int = 45, max_polls: int = 60) -> bool:
+    branch = f"integrate/{batch_name}"
+
+    print(f"\nIntegration mode: batching {len(prs)} PRs into {branch}")
+    print(f"PRs: {', '.join(f'#{n}' for n in prs)}")
+
+    if not create_integration_branch(batch_name):
+        return False
+
+    included = []
+    skipped = []
+    for n in prs:
+        if merge_pr_into_integration(n):
+            included.append(n)
+        else:
+            skipped.append(n)
+
+    if not included:
+        print(f"\n[FAIL] No PRs could be merged into integration branch")
+        cleanup_integration_branch(branch)
+        return False
+
+    if skipped:
+        print(f"\n[info] Skipped {len(skipped)} conflicting PRs: "
+              f"{', '.join(f'#{n}' for n in skipped)}")
+
+    if not push_integration_branch(branch):
+        cleanup_integration_branch(branch)
+        return False
+
+    pr_url = create_integration_pr(branch, included)
+    if not pr_url:
+        cleanup_integration_branch(branch)
+        return False
+
+    pr_number = None
+    for part in pr_url.rstrip("/").split("/"):
+        if part.isdigit():
+            pr_number = int(part)
+    if pr_number is None:
+        print(f"  [FAIL] cannot parse PR number from {pr_url}")
+        cleanup_integration_branch(branch)
+        return False
+
+    print(f"\n[waiting] Waiting for CI on integration PR #{pr_number}...")
+    if not wait_for_integration_ci(pr_number, poll_interval=poll_interval,
+                                   max_polls=max_polls):
+        print(f"\n[FAIL] Integration PR CI did not pass")
+        return False
+
+    if not merge_integration_pr(pr_number):
+        return False
+
+    close_superseded_prs(included)
+    cleanup_integration_branch(branch)
+
+    print(f"\n{'='*60}")
+    print(f"DONE -- {len(included)} PRs merged via integration branch")
+    if skipped:
+        print(f"Skipped (conflicts): {', '.join(f'#{n}' for n in skipped)}")
+    print(f"{'='*60}")
     return True
 
 
@@ -280,13 +473,18 @@ def run_train(prs: list[int], max_rounds: int = 50, poll_interval: int = 45,
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Serial merge train for GitHub PRs")
+    parser = argparse.ArgumentParser(
+        description="Serial or integration-branch merge train for GitHub PRs")
     parser.add_argument("prs", nargs="*", type=int, help="PR numbers to merge")
     parser.add_argument("--file", help="File with one PR number per line")
     parser.add_argument("--max-rounds", type=int, default=50)
     parser.add_argument("--poll", type=int, default=45, help="Seconds between CI polls")
     parser.add_argument("--skip-dirty", action="store_true",
                         help="Skip PRs with merge conflicts immediately (old behavior)")
+    parser.add_argument("-i", "--integration", nargs="?", const="batch-wave",
+                        default=None, metavar="BATCH_NAME",
+                        help="Integration-branch mode: batch PRs into a single "
+                             "integration branch (default name: batch-wave)")
     args = parser.parse_args()
 
     prs = list(args.prs)
@@ -297,10 +495,17 @@ def main():
     if not prs:
         parser.error("No PR numbers provided")
 
-    print(f"Merge train: {len(prs)} PRs queued")
-    print(f"Order: {', '.join(f'#{n}' for n in prs)}")
-    success = run_train(prs, max_rounds=args.max_rounds, poll_interval=args.poll,
-                       skip_dirty=args.skip_dirty)
+    if args.integration is not None:
+        print(f"Integration merge train: {len(prs)} PRs queued")
+        print(f"Batch name: {args.integration}")
+        print(f"PRs: {', '.join(f'#{n}' for n in prs)}")
+        success = run_integration_train(
+            prs, batch_name=args.integration, poll_interval=args.poll)
+    else:
+        print(f"Merge train: {len(prs)} PRs queued")
+        print(f"Order: {', '.join(f'#{n}' for n in prs)}")
+        success = run_train(prs, max_rounds=args.max_rounds, poll_interval=args.poll,
+                           skip_dirty=args.skip_dirty)
     sys.exit(0 if success else 1)
 
 
