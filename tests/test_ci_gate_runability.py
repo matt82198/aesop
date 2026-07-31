@@ -14,6 +14,7 @@ import unittest
 import tempfile
 import subprocess
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -33,6 +34,17 @@ class TestCIGateRunability(unittest.TestCase):
 
             workflow_file = workflows_dir / 'test.yml'
             workflow_file.write_text(yaml_content)
+
+            # Create a stub for every tools/*.py this fixture's workflow references,
+            # so the fixture is self-consistent. The tool correctly flags steps that
+            # reference missing files; it previously skipped that check whenever the
+            # repo path looked like a Windows temp dir ('AppData' + 'Temp'), so these
+            # fixtures passed on Windows and failed on Linux. With that Windows-only
+            # exemption removed, a fixture must provide the files it cites.
+            for referenced in set(re.findall(r'tools/[A-Za-z0-9_./-]+\.py', yaml_content)):
+                stub = tmppath / referenced
+                stub.parent.mkdir(parents=True, exist_ok=True)
+                stub.write_text('# test fixture stub\n')
 
             cmd = [
                 sys.executable,

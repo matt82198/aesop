@@ -129,6 +129,13 @@ def _parse_args(argv):
             continue
         elif arg == "--emit-timing":
             emit_timing = True
+        elif arg.startswith("-") and arg != "-":
+            # Unrecognised flags previously fell through into `positional`, so
+            # `--bogus` reported "expected 0 or 2 positional args" -- an error naming
+            # the wrong problem, sending the reader to check shard numbers instead of
+            # their typo.
+            print(f"ERROR: unknown argument: {arg}", file=sys.stderr)
+            sys.exit(2)
         else:
             positional.append(arg)
         i += 1
