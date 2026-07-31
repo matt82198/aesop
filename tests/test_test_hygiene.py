@@ -579,5 +579,108 @@ class TestGitMutationsRequireCwdGuard(unittest.TestCase):
             self.fail(msg)
 
 
+class TestFixtureImmutability(unittest.TestCase):
+    """Runtime guard: fail if any test pollutes committed fixtures.
+
+    Wave-25 hygiene enforcement: tests must NEVER modify files under tests/fixtures/.
+    This is a runtime tripwire that runs AFTER all other tests to catch fixture mutations.
+
+    If this test fails, it means a test wrote to a committed fixture file (e.g., by
+    opening tests/fixtures/first-wave-report.json for writing). The fix: write to a
+    temp directory instead of the committed fixtures directory.
+    """
+
+    def test_git_status_clean_for_fixtures_and_root(self):
+        """Fail if git status shows any modifications to tests/fixtures/ or repo root.
+
+        This tripwire catches a test that directly writes to:
+        - tests/fixtures/** (committed fixture files)
+        - repo root (pollution from pwd changes or stray writes)
+
+        Acceptable changes: temporary files in tempfile.mkdtemp() / TemporaryDirectory
+        (those are outside the repo and cleaned up by their own tearDown).
+
+        Tests must use isolated temp directories for ALL file mutations.
+        """
+        import subprocess
+        import sys
+
+        repo_root = Path(__file__).parent.parent
+
+        try:
+            # Run git status to check for working tree modifications
+            result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=str(repo_root),
+                capture_output=True,
+                encoding='utf-8',
+                timeout=10,
+                check=False,
+            )
+
+            if result.returncode != 0:
+                # Can't run git - fail closed
+                self.fail(
+                    f"git status failed (exit {result.returncode}). "
+                    f"Cannot verify fixture immutability. "
+                    f"stderr: {result.stderr}"
+                )
+
+            status_output = result.stdout
+
+            # Parse git status output and check for modified/new files in risky areas
+            dirty_files = []
+            for line in status_output.strip().split("\n"):
+                if not line.strip():
+                    continue
+
+                # Format: " M path" (modified), "?? path" (untracked), etc.
+                status_code = line[:2]
+                filepath = line[3:] if len(line) > 3 else ""
+
+                if not filepath:
+                    continue
+
+                # Risky patterns: modified or new files in tests/fixtures/ or repo root
+                # but allow safe temp patterns (already cleaned up)
+                if "tests/fixtures/" in filepath:
+                    # tests/fixtures/ should NEVER be modified by tests
+                    dirty_files.append(filepath)
+                elif filepath.count("/") == 0 and filepath not in [
+                    ".gitignore", "pytest_cache", ".pytest_cache"
+                ]:
+                    # Root-level files (excluding known safe patterns)
+                    # Exclude common pytest/cache artifacts
+                    if not filepath.startswith("."):
+                        dirty_files.append(filepath)
+
+            if dirty_files:
+                msg = (
+                    f"VIOLATION: {len(dirty_files)} file(s) modified in committed areas. "
+                    f"Tests must NEVER write to tests/fixtures/ or repo root. "
+                    f"Use tempfile.TemporaryDirectory() or pytest's tmp_path fixture.\n"
+                    f"Dirty files:\n"
+                )
+                for f in dirty_files:
+                    msg += f"  {f}\n"
+                msg += f"\nFull git status:\n{status_output}\n"
+                msg += (
+                    "FIX: Any test that needs to write files must:\n"
+                    "  1. Use tempfile.mkdtemp() / tempfile.TemporaryDirectory()\n"
+                    "  2. Write only to the temp directory\n"
+                    "  3. Clean up in tearDown() / finally\n"
+                    "  4. NEVER write to tests/fixtures/ or repo root\n"
+                )
+                self.fail(msg)
+
+        except subprocess.TimeoutExpired:
+            self.fail("git status command timed out (>10s); cannot verify fixture immutability")
+        except Exception as exc:
+            self.fail(
+                f"Error checking fixture immutability: {exc}. "
+                f"Cannot verify git status; failing closed."
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
