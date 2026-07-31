@@ -3,25 +3,18 @@
 tools.sibling_import_check -- Guardrail: detect bare sibling imports in tools/.
 
 Detects bare sibling imports (e.g., `from lint_core import ...`) in tools/
-modules that lack the sys.path guard. The guard ensures imports work when
-tools are loaded by file path (as in the import-gate tests) without tools/
-on sys.path.
+modules that lack a guard. The guard ensures imports work when tools are
+loaded by file path (as in the import-gate tests) without tools/ on sys.path.
 
-Detects:
-  - Top-level `from X import ...` where X is a tools/ module
-  - Top-level `import X` where X is a tools/ module
-  - Lacks preceding sys.path.insert(0, os.path.dirname(...)) in the file
-
-Ignores:
-  - `from tools.X import ...` (already path-safe, explicit package form)
-  - Stdlib imports (sys, os, json, etc.)
-  - Third-party imports (non-relative, non-local)
-  - Imports in comments or strings
+A sibling import is GUARDED if:
+1. It's inside a try/except block (graceful fallback)
+2. Module-level sys.path.insert(...) precedes all imports
+3. It uses 'from tools.X' (already path-safe)
 
 Exit codes:
-  0 = clean (no bare sibling imports found)
+  0 = clean (no bare unguarded sibling imports found)
   1 = violations found (unguarded sibling imports)
-  2 = usage/scan error
+  2 = usage/scan error (zero files or directory not found)
 
 Usage:
   python tools/sibling_import_check.py [--check] [--json] [--paths PATH...]
@@ -39,13 +32,6 @@ class Finding:
     """Represents a single sibling import violation."""
 
     def __init__(self, file_path: str, module_name: str, line_number: int, import_form: str):
-        """
-        Args:
-            file_path: Path to file with violation
-            module_name: Name of sibling module being imported
-            line_number: Line number of import statement
-            import_form: Type of import (e.g., "from X import", "import X")
-        """
         self.file_path = file_path
         self.module_name = module_name
         self.line_number = line_number
@@ -58,6 +44,83 @@ class Finding:
             "line": self.line_number,
             "form": self.import_form,
         }
+
+
+class SiblingImportAnalyzer(ast.NodeVisitor):
+    """AST visitor to detect bare sibling imports and their guards."""
+
+    def __init__(self, sibling_modules: set):
+        self.sibling_modules = sibling_modules
+        self.unguarded_imports = []
+        self.in_try = False
+        self.has_module_level_sys_path = False
+
+    def visit_Module(self, node: ast.Module):
+        """Check for module-level sys.path.insert statements."""
+        # First pass: check if module has any sys.path.insert at top level
+        for stmt in node.body:
+            if self._is_sys_path_insert(stmt):
+                self.has_module_level_sys_path = True
+                break
+
+        # Second pass: walk the tree for imports
+        self.generic_visit(node)
+
+    def visit_Try(self, node: ast.Try):
+        """Visit try block - imports inside are considered guarded."""
+        old_in_try = self.in_try
+        self.in_try = True
+        self.generic_visit(node)
+        self.in_try = old_in_try
+
+    def visit_ImportFrom(self, node: ast.ImportFrom):
+        """Detect 'from X import' statements."""
+        if node.module and node.module in self.sibling_modules:
+            # It's a sibling module
+            if not node.module.startswith("tools."):
+                # Bare sibling import (not using tools.X form)
+                if not self.in_try and not self.has_module_level_sys_path:
+                    self.unguarded_imports.append(
+                        Finding(
+                            "",  # Will be set by caller
+                            node.module,
+                            node.lineno,
+                            f"from {node.module} import ...",
+                        )
+                    )
+        self.generic_visit(node)
+
+    def visit_Import(self, node: ast.Import):
+        """Detect 'import X' statements."""
+        for alias in node.names:
+            name = alias.name.split(".")[0]  # Get base module name
+            if name in self.sibling_modules:
+                # Bare sibling import
+                if not self.in_try and not self.has_module_level_sys_path:
+                    self.unguarded_imports.append(
+                        Finding(
+                            "",  # Will be set by caller
+                            name,
+                            node.lineno,
+                            f"import {alias.name}",
+                        )
+                    )
+        self.generic_visit(node)
+
+    @staticmethod
+    def _is_sys_path_insert(node):
+        """Check if a statement is a sys.path.insert(...) call."""
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            call = node.value
+            if isinstance(call.func, ast.Attribute):
+                if (isinstance(call.func.value, ast.Attribute) and
+                    isinstance(call.func.value.value, ast.Name)):
+                    # Check for: sys.path.insert
+                    if (call.func.value.value.id == "sys" and
+                        call.func.value.attr == "path" and
+                        call.func.attr == "insert"):
+                        return True
+        return False
 
 
 def find_python_files(root: str) -> List[str]:
@@ -82,100 +145,32 @@ def get_sibling_modules(root: str) -> set:
     modules = set()
     for py_file in tools_dir.glob("*.py"):
         if py_file.is_file():
-            modules.add(py_file.stem)  # Remove .py extension
-
+            modules.add(py_file.stem)
     return modules
 
 
-def has_sys_path_guard(file_path: str) -> bool:
-    """Check if file has sys.path guard for tools/ directory.
-
-    Accepts three valid guard patterns:
-    1. sys.path.insert(...os.path.dirname(os.path.abspath(__file__))...)
-       or sys.path.insert(...Path(__file__).resolve().parent...)
-    2. sys.path.insert(...Path(__file__).resolve().parents[1]...)
-       (repo root access, enables 'from tools.X' imports)
-    3. try/except fallback with 'from tools.X' package form in except clause
-    """
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            content = f.read()
-    except (OSError, UnicodeDecodeError):
-        return False
-
-    # Pattern 1: sys.path.insert with file's own directory
-    # Accepts: os.path.dirname(os.path.abspath(__file__)) or Path(...).parent
-    if "sys.path.insert" in content and "__file__" in content:
-        # Check for various spellings of getting the file's directory
-        if any(pattern in content for pattern in [
-            "dirname",  # os.path.dirname(...)
-            ".parent",  # Path(...).parent
-        ]):
-            return True
-
-    # Pattern 2: sys.path.insert with repo root access
-    # Pattern: sys.path.insert(...parents[1]...) or ...parents[2]...
-    if "sys.path.insert" in content and (
-        "parents[1]" in content or
-        "parents[2]" in content
-    ):
-        return True
-
-    # Pattern 3: try/except fallback
-    # If a bare sibling import is inside a try/except block,
-    # it's a valid guard pattern (allows graceful fallback)
-    if "try:" in content and "except" in content:
-        return True
-
-    return False
-
-
-def extract_sibling_imports(
-    file_path: str, sibling_modules: set, has_guard: bool
-) -> List[Finding]:
-    """Extract bare sibling imports from a Python file."""
+def extract_sibling_imports(file_path: str, sibling_modules: set) -> List[Finding]:
+    """Extract unguarded sibling imports using AST analysis."""
     findings = []
 
     try:
         with open(file_path, encoding="utf-8") as f:
             tree = ast.parse(f.read(), filename=file_path)
     except (SyntaxError, OSError, UnicodeDecodeError):
-        # Can't parse or read file; skip it
         return findings
 
-    # Only flag violations if there's no guard at all
-    if has_guard:
-        return findings
+    analyzer = SiblingImportAnalyzer(sibling_modules)
+    analyzer.visit(tree)
 
-    for node in ast.walk(tree):
-        # Detect: from X import ...
-        if isinstance(node, ast.ImportFrom):
-            if node.module and node.module in sibling_modules:
-                # Check it's not already qualified (from tools.X)
-                if not node.module.startswith("tools."):
-                    findings.append(
-                        Finding(
-                            file_path,
-                            node.module,
-                            node.lineno,
-                            f"from {node.module} import ...",
-                        )
-                    )
+    # Set file path on findings
+    for finding in analyzer.unguarded_imports:
+        finding.file_path = file_path
 
-        # Detect: import X
-        elif isinstance(node, ast.Import):
-            for alias in node.names:
-                name = alias.name.split(".")[0]  # Get base module name
-                if name in sibling_modules:
-                    findings.append(
-                        Finding(file_path, name, node.lineno, f"import {alias.name}")
-                    )
-
-    return findings
+    return analyzer.unguarded_imports
 
 
 def scan_tools_directory(root: str) -> Tuple[List[Finding], int]:
-    """Scan tools/ directory for bare sibling imports.
+    """Scan tools/ directory for bare unguarded sibling imports.
 
     Returns:
         (list of findings, number of files scanned)
@@ -184,13 +179,12 @@ def scan_tools_directory(root: str) -> Tuple[List[Finding], int]:
     sibling_modules = get_sibling_modules(root)
 
     if not files:
-        # No files to scan = nothing found
+        # No files to scan
         return [], 0
 
     all_findings = []
     for file_path in files:
-        has_guard = has_sys_path_guard(file_path)
-        findings = extract_sibling_imports(file_path, sibling_modules, has_guard)
+        findings = extract_sibling_imports(file_path, sibling_modules)
         all_findings.extend(findings)
 
     return all_findings, len(files)
@@ -204,7 +198,7 @@ def format_findings_text(findings: List[Finding]) -> str:
     lines = [f"Sibling import check: {len(findings)} violation(s) found"]
     for finding in findings:
         lines.append(
-            f"  {finding.file_path}:{finding.line_number}: {finding.import_form} (missing sys.path guard)"
+            f"  {finding.file_path}:{finding.line_number}: {finding.import_form}"
         )
     return "\n".join(lines)
 
@@ -212,7 +206,7 @@ def format_findings_text(findings: List[Finding]) -> str:
 def main():
     """CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="Detect bare sibling imports in tools/ without sys.path guard",
+        description="Detect bare sibling imports in tools/ without guards",
         epilog="Exit: 0=clean, 1=violations found, 2=error",
     )
     parser.add_argument(
@@ -240,6 +234,13 @@ def main():
     total_files = 0
 
     for root_path in args.paths:
+        root_path = os.path.abspath(root_path)
+
+        # Handle both directory and file inputs
+        if os.path.isfile(root_path):
+            # If it's a file, get its directory
+            root_path = os.path.dirname(root_path)
+
         if not os.path.isdir(root_path):
             if args.json:
                 print(
