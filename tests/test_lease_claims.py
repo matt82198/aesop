@@ -277,6 +277,84 @@ class TestLeaseStore(unittest.TestCase):
         holder = self.store.get_holder(["file1.txt"])
         self.assertEqual(holder, "instance-1")
 
+    def test_path_separator_normalization_windows_style(self):
+        """Paths with different separators (/ vs \\) are treated as same file."""
+        import os
+        if os.name != 'nt':
+            self.skipTest("Windows-specific test")
+
+        now = 1000.0
+        # Instance 1 claims with forward slash
+        lease_id = self.store.claim(
+            paths=["dir/file.txt"],
+            instance_id="instance-1",
+            ttl_seconds=60.0,
+            clock=lambda: now
+        )
+        self.assertIsNotNone(lease_id)
+
+        # Instance 2 tries to claim with backslash (same logical file) -> should conflict
+        with self.assertRaises(LeaseConflict) as ctx:
+            self.store.claim(
+                paths=["dir\\file.txt"],
+                instance_id="instance-2",
+                ttl_seconds=60.0,
+                clock=lambda: now
+            )
+        self.assertEqual(ctx.exception.conflicting_instance, "instance-1")
+
+    def test_path_case_normalization_windows_style(self):
+        """Paths with different cases are treated as same file on Windows."""
+        import os
+        if os.name != 'nt':
+            self.skipTest("Windows-specific test")
+
+        now = 1000.0
+        # Instance 1 claims README.md
+        lease_id = self.store.claim(
+            paths=["README.md"],
+            instance_id="instance-1",
+            ttl_seconds=60.0,
+            clock=lambda: now
+        )
+        self.assertIsNotNone(lease_id)
+
+        # Instance 2 tries to claim README.MD (same file on Windows) -> should conflict
+        with self.assertRaises(LeaseConflict) as ctx:
+            self.store.claim(
+                paths=["README.MD"],
+                instance_id="instance-2",
+                ttl_seconds=60.0,
+                clock=lambda: now
+            )
+        self.assertEqual(ctx.exception.conflicting_instance, "instance-1")
+
+    def test_path_case_sensitivity_linux_style(self):
+        """On Linux, different cases are different files."""
+        import os
+        if os.name == 'nt':
+            self.skipTest("Linux-specific test")
+
+        now = 1000.0
+        # Instance 1 claims readme.md
+        lease_id_1 = self.store.claim(
+            paths=["readme.md"],
+            instance_id="instance-1",
+            ttl_seconds=60.0,
+            clock=lambda: now
+        )
+        self.assertIsNotNone(lease_id_1)
+
+        # Instance 2 claims README.MD (different file on Linux) -> should succeed
+        lease_id_2 = self.store.claim(
+            paths=["README.MD"],
+            instance_id="instance-2",
+            ttl_seconds=60.0,
+            clock=lambda: now
+        )
+        self.assertIsNotNone(lease_id_2)
+        self.assertNotEqual(lease_id_1, lease_id_2)
+
 
 class TestLeaseStoreIntegration(unittest.TestCase):
     """Integration tests for realistic multi-instance scenarios."""
@@ -354,6 +432,53 @@ class TestLeaseStoreIntegration(unittest.TestCase):
         self.store.release(lease_id_1, "instance-1", clock=lambda: now)
         self.assertIsNone(self.store.get_holder(["file1.txt"], clock=lambda: now))
         self.assertEqual(self.store.get_holder(["file2.txt"], clock=lambda: now), "instance-1")
+
+    def test_renew_expired_lease_fails(self):
+        """Renewing an expired lease should fail (cannot extend a dead lease)."""
+        now = 1000.0
+        lease_id = self.store.claim(
+            paths=["file1.txt"],
+            instance_id="instance-1",
+            ttl_seconds=30.0,
+            clock=lambda: now
+        )
+
+        # Lease expires at now + 30s
+        # At now + 40s, lease is expired
+        now = 1040.0
+
+        # Trying to renew the expired lease should fail
+        with self.assertRaises(ValueError) as ctx:
+            self.store.renew(
+                lease_id=lease_id,
+                instance_id="instance-1",
+                ttl_seconds=60.0,
+                clock=lambda: now
+            )
+        self.assertIn("expired", str(ctx.exception).lower())
+
+    def test_renew_released_lease_fails(self):
+        """Renewing a released lease should fail."""
+        now = 1000.0
+        lease_id = self.store.claim(
+            paths=["file1.txt"],
+            instance_id="instance-1",
+            ttl_seconds=60.0,
+            clock=lambda: now
+        )
+
+        # Release the lease
+        self.store.release(lease_id, "instance-1", clock=lambda: now)
+
+        # Try to renew the released lease -> should fail
+        with self.assertRaises(ValueError) as ctx:
+            self.store.renew(
+                lease_id=lease_id,
+                instance_id="instance-1",
+                ttl_seconds=60.0,
+                clock=lambda: now
+            )
+        self.assertIn("released", str(ctx.exception).lower())
 
 
 if __name__ == "__main__":

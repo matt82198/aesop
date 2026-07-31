@@ -7,16 +7,55 @@ by other instances (steal-on-expiry); expiry check happens at claim time, not vi
 threads. Fails closed: any exception in claim/renew/release propagates; no silent failures.
 
 Deterministic time injection (clock parameter) enables testing without sleeps or mocking.
+
+PLATFORM-SPECIFIC PATH NORMALIZATION:
+  On Windows (os.name == 'nt'): paths are normalized via os.path.normcase() + os.path.normpath()
+    to handle both separator styles (/ vs \\) and case-insensitivity (README.md vs README.MD).
+  On Linux/Unix: paths are normalized via os.path.normpath() only, preserving case sensitivity
+    (README.md and README.MD are legitimately different files). This respects local filesystem
+    semantics while catching separator mismatches (dir/file vs dir/file).
+  Original path strings are preserved in error messages for user clarity.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import sys
 import time
 import uuid
 from typing import Callable, Optional
+
+
+def _normalize_path(path: str) -> str:
+    """Normalize a file path for comparison, respecting platform-specific semantics.
+
+    On Windows (os.name == 'nt'):
+      - Normalize separators (/ and \\ both become the platform separator)
+      - Apply case-folding (case-insensitive filesystem)
+      Result: 'dir/file.txt' and 'dir\\FILE.TXT' compare equal
+
+    On Linux/Unix (os.name != 'nt'):
+      - Normalize separators (standardize to forward slashes)
+      - Preserve case (case-sensitive filesystem)
+      Result: 'dir/file.txt' and 'dir\\file.txt' compare equal (same canonical form)
+      But: 'readme.md' and 'README.MD' remain different
+
+    Args:
+        path: the file path to normalize
+
+    Returns:
+        Canonical form of the path, normalized for filesystem comparison
+    """
+    # Normalize separators and remove redundant slashes
+    normalized = os.path.normpath(path)
+
+    if os.name == 'nt':
+        # Windows: also apply case-folding (case-insensitive filesystem)
+        normalized = os.path.normcase(normalized)
+
+    return normalized
 
 
 class LeaseConflict(Exception):
@@ -101,6 +140,9 @@ class LeaseStore:
         by another instance with an active (non-expired) lease, raises LeaseConflict
         without modifying state. Fails closed: no partial claims.
 
+        Paths are normalized for platform-specific filesystem comparison (separators,
+        case-sensitivity). The original path strings are preserved for error messages.
+
         Args:
             paths: list of file paths to claim
             instance_id: instance identifier requesting the claim
@@ -120,18 +162,21 @@ class LeaseStore:
         now = clock()
         lease_id = str(uuid.uuid4())
 
+        # Normalize paths for storage and conflict checking
+        normalized_paths = [_normalize_path(p) for p in paths]
+
         conn = self._get_conn()
 
         try:
-            # Check for conflicts: any path held by another instance
+            # Check for conflicts: any normalized path held by another instance
             conflict_instance, conflict_paths = self._check_conflicts(
-                paths, instance_id, now, conn
+                normalized_paths, instance_id, now, conn
             )
             if conflict_instance is not None:
                 raise LeaseConflict(conflict_instance, conflict_paths)
 
-            # All paths are available: atomically insert the lease
-            paths_json = json.dumps(sorted(paths), separators=(",", ":"))
+            # All paths are available: atomically insert the lease with normalized paths
+            paths_json = json.dumps(sorted(normalized_paths), separators=(",", ":"))
             conn.execute("BEGIN IMMEDIATE")
             try:
                 conn.execute(
@@ -207,8 +252,9 @@ class LeaseStore:
     ) -> None:
         """Extend a live lease's TTL.
 
-        Only the instance that holds the lease may renew it. Updates the
-        claimed_at timestamp and ttl_seconds to extend the deadline.
+        Only the instance that holds the lease may renew it, and only if the lease
+        is still valid (not expired and not released). Updates the claimed_at timestamp
+        and ttl_seconds to extend the deadline.
 
         Args:
             lease_id: the lease identifier
@@ -217,7 +263,7 @@ class LeaseStore:
             clock: optional callable returning current time (default: time.time)
 
         Raises:
-            ValueError: if instance_id does not hold this lease
+            ValueError: if lease not found, instance_id does not hold it, lease is expired, or lease is released
             Exception: any SQLite error propagates (fail-closed)
         """
         if clock is None:
@@ -229,7 +275,7 @@ class LeaseStore:
         conn.execute("BEGIN IMMEDIATE")
         try:
             row = conn.execute(
-                "SELECT instance_id FROM leases WHERE lease_id = ?",
+                "SELECT instance_id, claimed_at, ttl_seconds, released_at FROM leases WHERE lease_id = ?",
                 (lease_id,),
             ).fetchone()
 
@@ -243,6 +289,18 @@ class LeaseStore:
                 raise ValueError(
                     f"Cannot renew lease held by {holder} from {instance_id}"
                 )
+
+            # Check if lease has been released
+            if row["released_at"] is not None:
+                conn.rollback()
+                raise ValueError(f"Cannot renew released lease {lease_id}")
+
+            # Check if lease has expired
+            claimed_at = row["claimed_at"]
+            ttl = row["ttl_seconds"]
+            if now > claimed_at + ttl:
+                conn.rollback()
+                raise ValueError(f"Cannot renew expired lease {lease_id}")
 
             # Update claimed_at to extend the deadline
             conn.execute(
@@ -322,8 +380,9 @@ class LeaseStore:
         """Return the instance_id currently holding all given paths, or None.
 
         A path is held if there exists an active (non-released, non-expired)
-        lease containing it. If any of the given paths is not held by the same
-        instance, returns None.
+        lease containing it. Paths are normalized for platform-specific comparison
+        (separators, case-sensitivity). If any of the given paths is not held by
+        the same instance, returns None.
 
         Args:
             paths: list of file paths to check
@@ -338,6 +397,8 @@ class LeaseStore:
         if not paths:
             return None
 
+        # Normalize paths for comparison
+        normalized_paths = [_normalize_path(p) for p in paths]
         now = clock()
 
         conn = self._get_conn()
@@ -351,9 +412,9 @@ class LeaseStore:
             """,
         ).fetchall()
 
-        # Find which instance holds each path
+        # Find which instance holds each normalized path
         path_holders = {}
-        for path in paths:
+        for path in normalized_paths:
             path_holders[path] = None
             for row in rows:
                 holder = row["instance_id"]
