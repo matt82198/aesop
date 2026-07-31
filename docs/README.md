@@ -77,7 +77,7 @@ The `/buildsystem` skill runs **one complete iteration of the autonomous deliver
 This is the repeatable loop that runs your delivery cycle indefinitely, with each wave learning from the prior audit. You can run `/buildsystem` once per wave (typically 30 min–2 hours depending on backlog size). See [HOW-THE-LOOP-WORKS.md](HOW-THE-LOOP-WORKS.md) for a concrete walkthrough.
 
 ### Team State & Multi-Instance Design
-**Current Status (0.6.0)**: Single-instance proven, with swappable worker + orchestrator model backends (Claude, Codex, OpenAI-compatible). See [MICROKERNEL.md](MICROKERNEL.md) for the two-seat architecture + a 60-second model-swap quickstart. State is durably checkpointed in git (STATE.md, BUILDLOG.md, tracker.json exports).
+**Current Status (0.7.0)**: Single-instance proven, with swappable worker + orchestrator model backends (Claude, Codex, OpenAI-compatible). See [MICROKERNEL.md](MICROKERNEL.md) for the two-seat architecture + a 60-second model-swap quickstart. State is durably checkpointed in git (STATE.md, BUILDLOG.md, tracker.json exports).
 
 **In Design**: Multi-instance coordination via the state_store substrate. The event-sourced SQLite layer is production-ready (single-box, ~704 ev/s measured ceiling vs ~100 ev/s real-world throughput, thread-local connection pooling, OCC, claims-stream compaction). The StateAPI facade is designed so a future backend swap (e.g. for multi-host coordination) would not touch callers. No backend migration is currently scheduled; single-box SQLite is sufficient for current workloads. See [TEAM-STATE.md](TEAM-STATE.md) for the architecture and [MULTI-INSTANCE-ROADMAP.md](MULTI-INSTANCE-ROADMAP.md) for the decision tree.
 
@@ -126,7 +126,7 @@ Once you've completed the adopter journey, use these for operational reference:
 - **[RECEIPTS.md](RECEIPTS.md)** — Per-wave operational metrics (CI economics, diagnosed bottlenecks, structural fixes applied); transparency on the system building itself
 
 ### Lessons & Case Studies
-- **[autonomous-swe.md](autonomous-swe.md)** — What "autonomous SWE" means here (a fleet running the wave loop under a human who owns the outward gates): the committed evidence behind each claim (held-out benchmark, verified audit, proven kill-switch, reproducible package), the 0.1.0-rc.1 baseline, 0.6.0 evolution (multi-model support), and the limits the project owns
+- **[autonomous-swe.md](autonomous-swe.md)** — What "autonomous SWE" means here (a fleet running the wave loop under a human who owns the outward gates): the committed evidence behind each claim (held-out benchmark, verified audit, proven kill-switch, reproducible package), the 0.1.0-rc.1 baseline, and the limits the project owns
 - **[case-study-portfolio.md](case-study-portfolio.md)** — How Aesop built its own portfolio site; full audit trail and cost breakdown
 - **[SCRIPTS-POLICY.md](SCRIPTS-POLICY.md)** — Local-only execution, shared script library (`~/scripts`), task-local vs. reusable heuristics
 

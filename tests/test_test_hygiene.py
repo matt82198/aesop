@@ -579,95 +579,107 @@ class TestGitMutationsRequireCwdGuard(unittest.TestCase):
             self.fail(msg)
 
 
-class TestHeartbeatFileIsolation(unittest.TestCase):
-    r"""Ensure tests do not write to real conductor3 heartbeat files outside the repo.
+class TestFixtureImmutability(unittest.TestCase):
+    """Runtime guard: fail if any test pollutes committed fixtures.
 
-    Issue: config.py defaults to C:\Users\matt8\conductor3 when AESOP_CONDUCTOR3_ROOT
-    is not set. Tests must ensure this env var points to a fixture directory.
+    Wave-25 hygiene enforcement: tests must NEVER modify files under tests/fixtures/.
+    This is a runtime tripwire that runs AFTER all other tests to catch fixture mutations.
 
-    This guard verifies that the real heartbeat files are not modified during test runs.
+    If this test fails, it means a test wrote to a committed fixture file (e.g., by
+    opening tests/fixtures/first-wave-report.json for writing). The fix: write to a
+    temp directory instead of the committed fixtures directory.
     """
 
-    def test_real_heartbeat_files_unchanged(self):
-        r"""Fail if the real conductor3 heartbeat files were written during tests.
+    def test_git_status_clean_for_fixtures_and_root(self):
+        """Fail if git status shows any modifications to tests/fixtures/ or repo root.
 
-        Real heartbeat files:
-        - C:\Users\matt8\conductor3\state\.watchdog-heartbeat
-        - C:\Users\matt8\conductor3\monitor\.monitor-heartbeat
+        This tripwire catches a test that directly writes to:
+        - tests/fixtures/** (committed fixture files)
+        - repo root (pollution from pwd changes or stray writes)
 
-        These should NEVER be written by tests. If tests need heartbeat files,
-        they must set AESOP_CONDUCTOR3_ROOT to a fixture directory.
+        Acceptable changes: temporary files in tempfile.mkdtemp() / TemporaryDirectory
+        (those are outside the repo and cleaned up by their own tearDown).
+
+        Tests must use isolated temp directories for ALL file mutations.
         """
-        import time
-        from pathlib import Path
+        import subprocess
+        import sys
 
-        real_conductor3_root = Path.home() / "conductor3"
-        watchdog_hb = real_conductor3_root / "state" / ".watchdog-heartbeat"
-        monitor_hb = real_conductor3_root / "monitor" / ".monitor-heartbeat"
+        repo_root = Path(__file__).parent.parent
 
-        # If conductor3 does not exist, skip (test machine without orchestration setup)
-        if not real_conductor3_root.exists():
-            self.skipTest("conductor3 directory does not exist on this machine")
+        try:
+            # Run git status to check for working tree modifications
+            result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=str(repo_root),
+                capture_output=True,
+                encoding='utf-8',
+                timeout=10,
+                check=False,
+            )
 
-        # Snapshot content and mtime before running other tests
-        # (This test runs AFTER all other tests via alphabetical ordering)
-        before_watchdog_content = None
-        before_watchdog_mtime = None
-        before_monitor_content = None
-        before_monitor_mtime = None
-
-        if watchdog_hb.exists():
-            try:
-                before_watchdog_content = watchdog_hb.read_text(encoding="utf-8")
-                before_watchdog_mtime = watchdog_hb.stat().st_mtime
-            except OSError:
-                pass
-
-        if monitor_hb.exists():
-            try:
-                before_monitor_content = monitor_hb.read_text(encoding="utf-8")
-                before_monitor_mtime = monitor_hb.stat().st_mtime
-            except OSError:
-                pass
-
-        # Note: In practice, this test runs AFTER all other tests complete.
-        # We could run the rest of the suite here and then check, but that
-        # would be circular. Instead, rely on pytest/unittest test ordering:
-        # TestHeartbeatFileIsolation (starts with "Test") runs after other tests,
-        # so we can detect changes that occurred during the run.
-
-        # For now, just verify the files exist and log their state.
-        # Actual content/mtime verification would require wrapping the full suite.
-        # This test documents the requirement and provides a hook for CI to detect
-        # heartbeat corruption if it occurs.
-
-        if before_watchdog_content is not None:
-            # Verify content is NOT a test epoch
-            # Test epochs: 1234567890 (Feb 13 2009), 1234567891, etc.
-            # Valid real epochs: > 1600000000 (Sept 13 2020)
-            try:
-                content_int = int(before_watchdog_content.strip())
-                self.assertGreater(
-                    content_int, 1600000000,
-                    f"watchdog heartbeat contains suspiciously old epoch {content_int} "
-                    f"(likely test data from 1234567890 era). "
-                    f"Tests must set AESOP_CONDUCTOR3_ROOT to a fixture directory, "
-                    f"not rely on config.py default."
+            if result.returncode != 0:
+                # Can't run git - fail closed
+                self.fail(
+                    f"git status failed (exit {result.returncode}). "
+                    f"Cannot verify fixture immutability. "
+                    f"stderr: {result.stderr}"
                 )
-            except ValueError:
-                # Content is not a number; that's OK (might be undefined state)
-                pass
 
-        if before_monitor_content is not None:
-            try:
-                content_int = int(before_monitor_content.strip())
-                self.assertGreater(
-                    content_int, 1600000000,
-                    f"monitor heartbeat contains suspiciously old epoch {content_int}. "
-                    f"Tests must set AESOP_CONDUCTOR3_ROOT to a fixture directory."
+            status_output = result.stdout
+
+            # Parse git status output and check for modified/new files in risky areas
+            dirty_files = []
+            for line in status_output.strip().split("\n"):
+                if not line.strip():
+                    continue
+
+                # Format: " M path" (modified), "?? path" (untracked), etc.
+                status_code = line[:2]
+                filepath = line[3:] if len(line) > 3 else ""
+
+                if not filepath:
+                    continue
+
+                # Risky patterns: modified or new files in tests/fixtures/ or repo root
+                # but allow safe temp patterns (already cleaned up)
+                if "tests/fixtures/" in filepath:
+                    # tests/fixtures/ should NEVER be modified by tests
+                    dirty_files.append(filepath)
+                elif filepath.count("/") == 0 and filepath not in [
+                    ".gitignore", "pytest_cache", ".pytest_cache"
+                ]:
+                    # Root-level files (excluding known safe patterns)
+                    # Exclude common pytest/cache artifacts
+                    if not filepath.startswith("."):
+                        dirty_files.append(filepath)
+
+            if dirty_files:
+                msg = (
+                    f"VIOLATION: {len(dirty_files)} file(s) modified in committed areas. "
+                    f"Tests must NEVER write to tests/fixtures/ or repo root. "
+                    f"Use tempfile.TemporaryDirectory() or pytest's tmp_path fixture.\n"
+                    f"Dirty files:\n"
                 )
-            except ValueError:
-                pass
+                for f in dirty_files:
+                    msg += f"  {f}\n"
+                msg += f"\nFull git status:\n{status_output}\n"
+                msg += (
+                    "FIX: Any test that needs to write files must:\n"
+                    "  1. Use tempfile.mkdtemp() / tempfile.TemporaryDirectory()\n"
+                    "  2. Write only to the temp directory\n"
+                    "  3. Clean up in tearDown() / finally\n"
+                    "  4. NEVER write to tests/fixtures/ or repo root\n"
+                )
+                self.fail(msg)
+
+        except subprocess.TimeoutExpired:
+            self.fail("git status command timed out (>10s); cannot verify fixture immutability")
+        except Exception as exc:
+            self.fail(
+                f"Error checking fixture immutability: {exc}. "
+                f"Cannot verify git status; failing closed."
+            )
 
 
 if __name__ == "__main__":
