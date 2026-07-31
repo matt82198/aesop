@@ -103,7 +103,7 @@ class CheckpointManager:
         """Load set of (tier, task_id, repeat) tuples already completed."""
         completed = set()
         if self.path.exists():
-            with open(self.path) as f:
+            with open(self.path, encoding="utf-8") as f:
                 for line in f:
                     if line.strip():
                         obj = json.loads(line)
@@ -115,7 +115,7 @@ class CheckpointManager:
     def append(self, run: FrontierV2Run) -> None:
         """Append completed run to checkpoint (thread-safe)."""
         with self.lock:
-            with open(self.path, "a") as f:
+            with open(self.path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(asdict(run)) + "\n")
 
 
@@ -366,7 +366,7 @@ def invoke_openai_model(
             if isinstance(tool_args, str):
                 try:
                     args_dict = _json.loads(tool_args)
-                except:
+                except json.JSONDecodeError:
                     args_dict = {"answer": tool_args}
             else:
                 args_dict = tool_args

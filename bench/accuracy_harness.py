@@ -467,7 +467,7 @@ class FakeTransport:
                                 owned_files = json_lib.loads(owned_str)
                                 break
                         break
-            except:
+            except json.JSONDecodeError:
                 pass  # Use default fallback
 
         # Response strategy depends on task category (encoded in task_id)
@@ -819,7 +819,7 @@ def main():
         "tasks": [asdict(s) for s in scores],
     }
 
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
 
     print(f"\nResults saved to: {output_path}")
