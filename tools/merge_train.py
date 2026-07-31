@@ -21,9 +21,27 @@ import sys
 import time
 
 # Ensure stdout uses UTF-8 (fixes Windows cp1252 UnicodeEncodeError)
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+# Only wrap if sys.stdout.buffer is available (tests may have closed/redirected stdout)
+try:
+    if hasattr(sys.stdout, 'buffer') and not hasattr(sys.stdout, '_test_redirected'):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+except (ValueError, AttributeError, OSError):
+    # If sys.stdout is closed, buffer unavailable, or already wrapped, skip
+    pass
 
-print = functools.partial(print, flush=True)
+# Custom print function that handles closed stdout gracefully (for test environments)
+_builtin_print = print
+def print(*args, **kwargs):
+    """Print with flush=True by default, handles closed stdout gracefully."""
+    kwargs.setdefault('flush', True)
+    try:
+        _builtin_print(*args, **kwargs)
+    except (ValueError, OSError) as e:
+        # Handle case where stdout is closed (test environment)
+        if "closed file" in str(e) or "I/O operation" in str(e):
+            pass  # Silently skip if stdout is closed
+        else:
+            raise
 
 # Transient error patterns from gh run rerun that indicate we should keep the PR queued
 # without consuming a retry (TOCTOU races, workflow state changes, etc.)
