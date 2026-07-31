@@ -25,10 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Multi-instance coordination: Lease-claim split-brain bug (path normalization), TOCTOU race on atomic check-and-insert, tracker migration marker/completion separation to prevent resurrection of closed items, acceptanceCriteria field preservation on write.
 - CI/test hygiene: Fixed workflow actions env vars, added BASH_SOURCE exec guards to all shell scripts, isolated orchestration tests from live orchestrator state, corrected Windows cp1252 encoding in test file opens, fixed race conditions in instance_manager tests.
+- CI gates: Removed fail-open continue-on-error from cross-OS drift workflow, verified gate runability on unknown CLI flags, repaired Windows temp-dir exemption that silently disabled a gate.
 - Documentation: Fixed cross-file drift, updated domain CLAUDE.md entries, corrected test counts, resolved multi-instance contradictions.
 - Guardrail enforcement: Added missing tool entries, corrected dispatch_lint pattern suppression, fixed benchmark fixture state reversion, corrected arithmetic in sum function test.
-- Workflow: Removed fail-open continue-on-error from cross-OS drift workflow.
 
 ## [0.6.0] - 2026-07-30
 

@@ -80,11 +80,11 @@ Crash recovery is not a special path; it is how the system *always* starts. This
 
 **Live Fleet in Action** — Here's what a multi-agent wave looks like in practice. Watch the orchestrator dispatch parallel agents, the merge train processing PRs, and the final verification gates:
 
-| Initialization | Merge Train Active |
+| Parallel audit lenses | Lens fan-out with model pinning |
 |---|---|
-| ![Orchestrator startup](assets/clips/orchestrator-startup.gif) | ![Merge train dispatch](assets/clips/merge-train-dispatch.gif) |
+| ![Five audit lenses running concurrently; a Correctness lens finds a P1 and the orchestrator spawns a Verify agent to confirm it](assets/clips/parallel-audit-lenses.gif) | ![The fleet fans out 2 to 4 agents; each spawn prints the guardrail pinning the subagent model to haiku](assets/clips/lens-fanout-haiku-pin.gif) |
 
-*Five short clips showing the orchestrator priming, merge train, fleet dispatch, audit closing, and verification gates. See [assets/clips/INDEX.md](assets/clips/INDEX.md) for all five clips and timestamps.*
+*Two clips from a live session, sped up only to remove dead air between terminal repaints. See [assets/clips/INDEX.md](assets/clips/INDEX.md) for timestamps, speed factors, and the beats that were rejected.*
 
 **One-turn wave** — Run a complete build cycle (tests, build, docs, review, merge, audit) end-to-end:
 ```bash
@@ -128,7 +128,7 @@ python tools/secret_scan.py --staged   # Blocks push if leak detected
 ```
 Exits with failure on file-read errors (not silently passing). CI validates every merge.
 
-**Parallel test battery** — Run all four test harnesses concurrently with isolated logs and enforced timeouts (`tools/test_battery.py` — ~5.4 min vs ~10 serial).
+**Parallel test battery** — Run all four test harnesses concurrently with isolated logs and enforced timeouts (`tools/test_battery.py`), reducing wall-clock execution time via parallelism.
 
 **Windows CI green** — Full parity support on Windows-latest GitHub Actions: promoted to a required check after 6 consecutive green main runs.
 
@@ -140,12 +140,12 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 | Metric | Value |
 | --- | --- |
-| Merged PRs | 568 <!-- metrics-verified: self_stats.py (git log) --> |
-| Total Commits | 1682 <!-- metrics-verified: self_stats.py (git log) --> |
+| Merged PRs | 588 <!-- metrics-verified: self_stats.py (git log) --> |
+| Total Commits | 1724 <!-- metrics-verified: self_stats.py (git log) --> |
 | Project Age | 19 days <!-- metrics-verified: self_stats.py (git log) --> |
-| Insertions + Deletions | 321,300 <!-- metrics-verified: self_stats.py (git log) --> |
-| Files Tracked | 1029 <!-- metrics-verified: self_stats.py (git log) --> |
-| Authors | 5 Claude model tiers <!-- metrics-verified: self_stats.py (git log) --> |
+| Insertions + Deletions | 324,360 <!-- metrics-verified: self_stats.py (git log) --> |
+| Files Tracked | 1028 <!-- metrics-verified: self_stats.py (git log) --> |
+| Authors | 1 human + 5 Claude model tiers <!-- metrics-verified: self_stats.py (git log) --> |
 
 <!-- STATS:END -->
 
@@ -166,7 +166,8 @@ Aesop is built entirely by its own `/buildsystem` wave cycle—running parallel 
 
 
 
-**Project Timeline:** Aesop is 18 days old, built by 1 human + the fleet. Every number above is regenerable from git history by anyone who clones the repo (`bash scripts/verify-stats.sh --check`); no hidden telemetry.
+
+**Project Timeline:** Aesop is 19 days old, built by 1 human + the fleet. Every number above is regenerable from git history by anyone who clones the repo (`bash scripts/verify-stats.sh --check`); no hidden telemetry.
 
 ## Quick Try (2 min, no API keys)
 
