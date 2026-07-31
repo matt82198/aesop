@@ -64,7 +64,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **bench_panel.py**: Benchmark API routes (`/api/bench`, `/api/bench/compare`). Reads `bench_results_cache` at call time.
 
-**tooling_panel.py** â€” Tooling dashboard panel: `GET /api/tooling/summary` aggregates results from repo analysis tools (todo_tracker, test_coverage_gaps, dead_code_check, import_cycle_check, encoding_lint). Runs tools via subprocess, caches 60s, gracefully degrades to null for missing tools. `?force=1` bypasses cache.
+**tooling_panel.py** â€” Tooling dashboard panel: `GET /api/tooling/summary` aggregates results from repo analysis tools (todo_tracker, test_coverage_gaps, dead_code_check, import_cycle_check, encoding_lint). Runs tools via subprocess (30s timeout), caches 60s, gracefully degrades to null for missing tools. `?force=1` bypasses cache. **Exit code handling (findings-aware linters):** Some tools signal “findings detected” with exit code 1, not an error — `_is_acceptable_exit_code()` distinguishes: dead_code_check.py, import_cycle_check.py, encoding_lint.py exit with 0 (clean) or 1 (findings found, both valid) or 2+ (error); other tools only accept 0. This allows accurate reporting of findings without masking them as errors.
 
 **quality_scorecard.py** â€” Quality scorecard API: spec-sharpness and per-wave quality metrics.
 
@@ -147,12 +147,20 @@ projection without emitting events), an `item_updated` event is emitted so repla
 them. The reconcile skips any item that already carries an explicit `item_updated` event -- that
 item is owned by the log, and overwriting it from a stale projection would revert a real update.
 
-## Cost view: absent vs empty
+## Cost view: absent vs empty → three distinct states
 
-`Cost.tsx` receives `cost` as a nullable prop. Null means BOTH "the first SSE snapshot has not
-arrived yet" AND "the backend failed" -- the prop cannot distinguish them. It previously rendered a
-"Could not load cost data" error for that ambiguity, so a slow connection showed a failure for a
-healthy system and `CostAnalyticsPanel` never mounted at all (caught by `verify_cost_panel.py` once
-that proof was finally wired into CI). Null now falls back to `EMPTY_COST`, a zeroed CostSummary, so
-the panel always mounts and an inline "no cost data yet" notice covers both the fresh-install and
-still-loading cases. The retry affordance is preserved so a genuine failure stays actionable.
+**RESOLVED (wave-31 audit findings):**
+
+`Cost.tsx` now receives both `cost` prop AND `connectionStatus` to distinguish three states:
+1. **Loading** (`cost=null` and `connectionStatus.status='live'`): shows "Loading cost metrics..." with explanatory hint.
+2. **Error** (`cost=null` and `connectionStatus.status != 'live'`): shows error callout with connection error message + retry button.
+3. **Empty** (`cost` has `total_runs=0`): shows "No cost data yet" with explanation (fresh install case).
+
+Old behavior: null ambiguously covered both loading and error, rendering both as a slow-connection alarm.
+New behavior: loads three distinct callout styles with honest messaging, preserving retry affordance.
+
+**Chart accessibility (FINDING 2):** All SVG charts already had `role="img"` + `aria-label` naming; added tests to verify screen readers can announce chart content:
+- `CostChart.tsx`: "Daily token usage by model"
+- `ModelMixTrendChart.tsx`: "Daily model usage distribution"  
+- `CostAnalyticsPanel.tsx` WaveSpendChart: "Spend per wave"
+Bar segments include `<title>` elements for tooltips. Tests verify presence and correctness.

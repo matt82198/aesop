@@ -9,7 +9,7 @@
  * or if the SSE stream fails to deliver cost metrics.
  */
 
-import type { CostSummary } from '../lib/types';
+import type { CostSummary, SSEConnectionStatus } from '../lib/types';
 import { CostTable } from '../components/CostTable';
 import { CostChart } from '../components/CostChart';
 import { Scorecard } from '../components/Scorecard';
@@ -23,6 +23,7 @@ import './Cost.css';
 
 interface CostProps {
   cost: CostSummary | null;
+  connectionStatus: SSEConnectionStatus;
   onRetry?: () => void;
 }
 
@@ -57,27 +58,33 @@ const EMPTY_COST: CostSummary = {
   model_mix_trend: {},
 };
 
-export function Cost({ cost, onRetry }: CostProps) {
-  // `cost` is null both before the first SSE payload arrives AND on a genuine
-  // backend failure -- the prop cannot tell them apart. Rendering an error for
-  // that ambiguity meant a slow connection showed "Could not load cost data" for
-  // a perfectly healthy system, and the panel never mounted at all. Default to the
-  // empty state: it is correct for a fresh install with no ledger, and it degrades
-  // to "no data yet" rather than a false alarm while loading. The retry affordance
-  // is kept so a real failure is still actionable.
+export function Cost({ cost, connectionStatus, onRetry }: CostProps) {
+  // Distinguish three states:
+  // 1. Loading: cost is null AND connection is live/reconnecting (still waiting for first event)
+  // 2. Error: cost is null AND connection status indicates a problem (reconnecting after error or explicit error)
+  // 3. Loaded but empty: cost is not null (data arrived) but has no runs
+
+  const isLoading = !cost && connectionStatus.status === 'live';
+  const isError = !cost && connectionStatus.status !== 'live';
   const summary: CostSummary = cost ?? EMPTY_COST;
-  const awaitingData = !cost;
 
   return (
     <section className="view-cost" data-testid={TESTIDS.viewCost} aria-label="Cost analytics">
       <h2>Cost Analytics</h2>
 
-      {awaitingData && (
-        <div className="cost-callout cost-callout--info" role="status" data-testid="cost-awaiting">
+      {isLoading && (
+        <div className="cost-callout cost-callout--info" role="status" data-testid="cost-loading">
+          <p>Loading cost metrics...</p>
+          <p className="cost-callout__hint">
+            The first cost snapshot is being fetched from the server.
+          </p>
+        </div>
+      )}
+
+      {isError && (
+        <div className="cost-callout cost-callout--error" role="alert" data-testid="cost-error">
           <p>
-            No cost data yet. This appears on a fresh install with no outcomes ledger, and while
-            the first metrics snapshot is still loading.
-            {onRetry ? ' ' : ''}
+            <strong>Could not load cost data.</strong> {connectionStatus.lastError || 'Connection error.'}
           </p>
           {onRetry && (
             <button type="button" className="cost-error__retry" onClick={onRetry}>
@@ -87,7 +94,17 @@ export function Cost({ cost, onRetry }: CostProps) {
         </div>
       )}
 
-      {!awaitingData && !summary.has_pricing && (
+      {!isLoading && !isError && cost && cost.overall_scorecard.total_runs === 0 && (
+        <div className="cost-callout cost-callout--info" role="status" data-testid="cost-empty">
+          <p>No cost data yet.</p>
+          <p className="cost-callout__hint">
+            This appears on a fresh install with no outcomes ledger. Cost data will appear as agents
+            complete runs.
+          </p>
+        </div>
+      )}
+
+      {cost && !summary.has_pricing && (
         <div className="cost-callout cost-callout--info" role="status">
           <h3>Configure Pricing</h3>
           <p>
