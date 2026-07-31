@@ -166,7 +166,7 @@ class WriteAPI:
         current_items = {item["id"]: item for item in current_tracker.get("items", [])}
 
         if item_id not in current_items:
-            raise ValueError(f"Item not found: {item_id}")
+            raise ValueError(f"404 Item not found: {item_id}")
 
         current_item = current_items[item_id]
 
@@ -348,7 +348,7 @@ class WriteAPI:
         current_items = {item["id"]: item for item in current_tracker.get("items", [])}
 
         if item_id not in current_items:
-            raise ValueError(f"Item not found: {item_id}")
+            raise ValueError(f"404 Item not found: {item_id}")
 
         # Build the update payload (ensure id is present)
         update_payload = {"id": item_id}
@@ -410,7 +410,7 @@ class WriteAPI:
         current_items = {item["id"]: item for item in current_tracker.get("items", [])}
 
         if item_id not in current_items:
-            raise ValueError(f"Item not found: {item_id}")
+            raise ValueError(f"404 Item not found: {item_id}")
 
         # Build the archive payload
         archive_payload = {"id": item_id}
