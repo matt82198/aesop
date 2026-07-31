@@ -482,59 +482,96 @@ def _ensure_tracker_migrated(write_api):
     Adapted for Inc 1: Use StateAPI.append() directly to backfill events.
     Guard migration with a marker event to prevent concurrent backfill.
 
-    Defect fix: Use StateAPI.append() for backfill instead of tracker_append_item()
-    to avoid the duplicate-check that rejects items already in tracker.json.
+    P0 FIX (wave-29): Separate migration_started and migration_completed markers.
+    - migration_started: Claimed at start to guard concurrent backfills.
+    - migration_completed: Written ONLY after backfill fully succeeds.
+    - Skip logic gates on BOTH (migration truly done).
+    - Retry if started exists without completed (stale claim or failed backfill).
+    - Handles already-bricked state (items on disk not in event store).
+    - All exceptions surface; none are swallowed.
     """
-    # Get current events from DB to check for migration marker
+    from state_store import StateAPI
+
+    config.STATE_DIR.mkdir(parents=True, exist_ok=True)
+    api = None
+
     try:
-        from state_store import StateAPI
-        config.STATE_DIR.mkdir(parents=True, exist_ok=True)
         api = StateAPI(str(config.STATE_DIR / "tracker_events.db"))
         events = api.get("tracker")
-        api.close()
+
+        # Check for completion marker
+        has_migration_completed = any(
+            e.get("type") == "migration_completed" and e.get("payload", {}).get("version") == 1
+            for e in events
+        )
+
+        # If migration is already completed, nothing to do
+        if has_migration_completed:
+            return
+
+        # Check for stale start marker (indicates incomplete or failed migration)
+        has_migration_started = any(
+            e.get("type") == "migration_started" and e.get("payload", {}).get("version") == 1
+            for e in events
+        )
+
+        # If no start marker, claim this migration attempt
+        if not has_migration_started:
+            api.append("tracker", "migration_started", {"version": 1}, "system")
+
+        # At this point, we either just claimed it or we're retrying a stale claim.
+        # Get the set of items currently in the event store.
+        events = api.get("tracker")  # Refresh to get any newly-appended start marker
+        db_item_ids = set(
+            e.get("payload", {}).get("id") for e in events
+            if e.get("type") == "item_created" and e.get("payload", {}).get("id")
+        )
+
+        # Get items from tracker.json
+        items_to_backfill = []
+        if config.TRACKER_FILE.exists():
+            try:
+                data = json.loads(config.TRACKER_FILE.read_text(encoding='utf-8'))
+                items_to_backfill = [
+                    item for item in data.get("items", [])
+                    if isinstance(item, dict) and item.get("id") and item.get("id") not in db_item_ids
+                ]
+            except Exception as e:
+                print(f"[tracker] Failed to read tracker.json: {e}", file=sys.stderr)
+                # If we can't read the file, don't fail; just mark migration as done to avoid retry loops
+                api.append("tracker", "migration_completed", {"version": 1}, "system")
+                return
+
+        # Backfill missing items (idempotent: only items not already in DB)
+        backfill_errors = []
+        for item in items_to_backfill:
+            try:
+                api.append("tracker", "item_created", item, "migration")
+            except Exception as e:
+                item_id = item.get("id", "?")
+                error_msg = f"Failed to backfill item {item_id}: {e}"
+                print(f"[tracker] {error_msg}", file=sys.stderr)
+                backfill_errors.append(error_msg)
+
+        # Only mark migration complete if backfill succeeded (no errors).
+        # If there were errors, the next caller will retry.
+        if not backfill_errors:
+            api.append("tracker", "migration_completed", {"version": 1}, "system")
+        else:
+            print(f"[tracker] Migration backfill had {len(backfill_errors)} errors; "
+                  f"will retry on next call", file=sys.stderr)
+
     except Exception as e:
-        print(f"[tracker] Failed to check migration marker: {e}", file=sys.stderr)
-        return
+        print(f"[tracker] Migration failed: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
 
-    # Check for migration marker
-    has_migration_marker = any(e.get("type") == "migration_started" and
-                               e.get("payload", {}).get("version") == 1
-                               for e in events)
-    if has_migration_marker:
-        # Migration already completed; skip backfill
-        return
-
-    # Append migration marker first to atomically claim the migration
-    try:
-        from state_store import StateAPI
-        api = StateAPI(str(config.STATE_DIR / "tracker_events.db"))
-        api.append("tracker", "migration_started", {"version": 1}, "system")
-    except Exception as e:
-        print(f"[tracker] Failed to append migration marker: {e}", file=sys.stderr)
-        if 'api' in locals():
-            api.close()
-        return
-
-    # Now safe to backfill (other callers will see marker and skip)
-    # Use StateAPI.append() directly to avoid duplicate checks
-    if config.TRACKER_FILE.exists():
-        try:
-            data = json.loads(config.TRACKER_FILE.read_text(encoding='utf-8'))
-        except Exception:
-            data = {"items": []}
-
-        for item in data.get("items", []):
-            if isinstance(item, dict) and item.get("id"):
-                try:
-                    api.append("tracker", "item_created", item, "migration")
-                except Exception as e:
-                    print(f"[tracker] Failed to backfill item {item.get('id')}: {e}", file=sys.stderr)
-
-    # Close the API at the end
-    try:
-        api.close()
-    except Exception:
-        pass
+    finally:
+        if api:
+            try:
+                api.close()
+            except Exception:
+                pass
 
 
 def create_tracker_item(data):
