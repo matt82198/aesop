@@ -60,6 +60,7 @@ def gh_run_list(limit: int = 10, branch: str = "main") -> List[Dict]:
             cmd,
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=30,
         )
 
@@ -90,6 +91,7 @@ def gh_jobs_for_run(run_id: str) -> List[Dict]:
             cmd,
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=30,
         )
 
@@ -117,6 +119,7 @@ def gh_job_logs(job_id: str) -> str:
             cmd,
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=60,
         )
 

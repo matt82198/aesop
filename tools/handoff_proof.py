@@ -187,6 +187,7 @@ def _create_fake_driver():
                     shell=shell,
                     capture_output=True,
                     text=True,
+                    encoding='utf-8',
                     timeout=30,
                 )
                 return CommandResult(

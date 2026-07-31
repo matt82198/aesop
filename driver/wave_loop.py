@@ -507,6 +507,7 @@ def _get_owned_files_diff(workdir: str, owned_files: List[str], max_chars: int =
             shell=True,
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=10,
         )
 
@@ -567,6 +568,7 @@ def _run_and_capture_test_output(
             shell=True,
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=timeout_sec,
         )
 

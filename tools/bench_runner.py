@@ -379,6 +379,7 @@ def _make_claude_runner(model_alias: str) -> ModelRunner:
                 ["claude", "-p", prompt, "--model", model_alias, "--output-format", "json"],
                 capture_output=True,
                 text=True,
+                encoding='utf-8',
                 timeout=300,  # 5 minutes per task
             )
             elapsed_ms = (time.time() - start) * 1000

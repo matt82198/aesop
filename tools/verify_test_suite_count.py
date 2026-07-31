@@ -34,6 +34,7 @@ def count_git_files(*patterns: str) -> int:
                 ["git", "ls-files", pattern],
                 capture_output=True,
                 text=True,
+                encoding='utf-8',
                 check=True,
                 timeout=10,
             )

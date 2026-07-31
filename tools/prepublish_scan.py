@@ -31,6 +31,7 @@ def run_secret_scan(mode, repo_path):
             cmd,
             capture_output=True,
             text=True,
+            encoding='utf-8',
             timeout=120
         )
         return result.returncode, result.stdout, result.stderr

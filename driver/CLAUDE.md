@@ -79,3 +79,4 @@ takes a RED stub to green via real test exit 0.
 ## Status
 
 Phases 1-3 shipped. All file I/O uses explicit `encoding="utf-8"`. For orchestrator-backend selection and seat-swap features (HS-1/HS-2), read driver/orchestrator-swap/CLAUDE.md.
+Subprocess calls follow the same rule as file I/O: every `subprocess.run` using `text=True` passes an explicit `encoding='utf-8'`, enforced repo-wide by `tools/encoding_lint.py` (Guardrail G10).

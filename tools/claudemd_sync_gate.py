@@ -114,6 +114,7 @@ def get_git_changed_files(repo_root: Path, base_ref: str = "main") -> Tuple[List
                 ["git", "diff", "--name-only", ref_spec],
                 capture_output=True,
                 text=True,
+                encoding='utf-8',
                 timeout=10,
                 cwd=repo_root,
             )

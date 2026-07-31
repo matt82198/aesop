@@ -32,6 +32,7 @@ def get_staged_py_files():
             ["git", "diff", "--cached", "--name-only"],
             capture_output=True,
             text=True,
+            encoding='utf-8',
             check=True,
             timeout=10,
         )
@@ -53,6 +54,7 @@ def get_staged_file_content(filepath):
             ["git", "show", f":{filepath}"],
             capture_output=True,
             text=True,
+            encoding='utf-8',
             check=True,
             timeout=10,
         )
@@ -265,6 +267,7 @@ def main():
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
+            encoding='utf-8',
             check=True,
             timeout=5,
         )

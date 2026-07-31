@@ -216,6 +216,7 @@ def check_git_history_churn(items: List[Dict[str, Any]], repo_root: str) -> List
             timeout=5,
             check=False,
             text=True,
+            encoding='utf-8',
             cwd=repo_root
         )
     except (subprocess.TimeoutExpired, FileNotFoundError):
@@ -235,6 +236,7 @@ def check_git_history_churn(items: List[Dict[str, Any]], repo_root: str) -> List
             capture_output=True,
             timeout=5,
             text=True,
+            encoding='utf-8',
             check=False
         )
 

@@ -32,6 +32,7 @@ def find_git_tracked_files(pattern):
             ["git", "ls-files", pattern],
             capture_output=True,
             text=True,
+            encoding='utf-8',
             check=True,
         )
         # Normalize paths to forward slashes for consistency
