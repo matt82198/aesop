@@ -1,433 +1,103 @@
-﻿{
-  "findings": [
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\bench_runner.py",
-      "line": 378,
-      "col": 21,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\buildlog.py",
-      "line": 66,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\chaos_harness.py",
-      "line": 323,
-      "col": 13,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\ci_merge_wait.py",
-      "line": 50,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\ci_merge_wait.py",
-      "line": 257,
-      "col": 13,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\ci_shard_runner.py",
-      "line": 174,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\claudemd_drift.py",
-      "line": 240,
-      "col": 21,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\claudemd_sync_gate.py",
-      "line": 113,
-      "col": 21,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\commit_lint.py",
-      "line": 91,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\crossos_drift.py",
-      "line": 59,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\crossos_drift.py",
-      "line": 89,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\crossos_drift.py",
-      "line": 116,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\eod_sweep.py",
-      "line": 67,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\eod_sweep.py",
-      "line": 98,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\eod_sweep.py",
-      "line": 116,
-      "col": 21,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\eod_sweep.py",
-      "line": 157,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\eod_sweep.py",
-      "line": 219,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\eod_sweep.py",
-      "line": 232,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\git_identity_check.py",
-      "line": 110,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\git_identity_check.py",
-      "line": 124,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\handoff_proof.py",
-      "line": 184,
-      "col": 25,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\health_score.py",
-      "line": 238,
-      "col": 22,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "name_result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\health_score.py",
-      "line": 245,
-      "col": 23,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "email_result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\health_score.py",
-      "line": 278,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\import_resolution_check.py",
-      "line": 31,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\import_resolution_check.py",
-      "line": 52,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\import_resolution_check.py",
-      "line": 264,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\incident_report.py",
-      "line": 403,
-      "col": 21,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\init_project.py",
-      "line": 159,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\init_project.py",
-      "line": 184,
-      "col": 21,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\launch_tui.py",
-      "line": 134,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\launch_tui.py",
-      "line": 155,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\merge_train.py",
-      "line": 37,
-      "col": 13,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)"
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\merge_train.py",
-      "line": 149,
-      "col": 13,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)"
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\mutation_test.py",
-      "line": 236,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\power_selftest.py",
-      "line": 170,
-      "col": 24,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "status_output = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\power_selftest.py",
-      "line": 179,
-      "col": 29,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "current_branch = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\power_selftest.py",
-      "line": 186,
-      "col": 23,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "ahead_output = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\power_selftest.py",
-      "line": 303,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\prepublish_scan.py",
-      "line": 30,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\scanner_selftest.py",
-      "line": 30,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\scanner_selftest.py",
-      "line": 41,
-      "col": 21,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\scanner_selftest.py",
-      "line": 306,
-      "col": 16,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "r = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\self_stats.py",
-      "line": 57,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)"
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\tracker_autoclose.py",
-      "line": 144,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\tracker_autoclose.py",
-      "line": 213,
-      "col": 25,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\tracker_reconcile.py",
-      "line": 65,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\tracker_reconcile.py",
-      "line": 89,
-      "col": 21,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\verify_cost_panel.py",
-      "line": 187,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\verify_failure_drilldown.py",
-      "line": 55,
-      "col": 11,
-      "message": "subprocess.Popen() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "proc = subprocess.Popen("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\verify_scorecards.py",
-      "line": 139,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\verify_test_coverage.py",
-      "line": 31,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\verify_test_suite_count.py",
-      "line": 33,
-      "col": 21,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\wave_backlog_analyzer.py",
-      "line": 158,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\wave_backlog_analyzer.py",
-      "line": 190,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\wave_manifest_lint.py",
-      "line": 213,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\wave_manifest_lint.py",
-      "line": 233,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\wave_preflight.py",
-      "line": 211,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\tools\\wave_preflight.py",
-      "line": 236,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\driver\\wave_loop.py",
-      "line": 504,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    },
-    {
-      "file": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10\\driver\\wave_loop.py",
-      "line": 564,
-      "col": 17,
-      "message": "subprocess.run() call with text=True/universal_newlines=True without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment",
-      "code": "result = subprocess.run("
-    }
-  ],
-  "count": 61,
-  "root": "C:\\Users\\matt8\\aesop\\.claude\\worktrees\\agent-a750e68413e3c1d10"
+{
+  "violations": [
+    "tests/test_agent_driver.py@subprocess-run-no-encoding",
+    "tests/test_agent_prompt_hygiene.py@subprocess-run-no-encoding",
+    "tests/test_audit_report.py@subprocess-run-no-encoding",
+    "tests/test_bash_guard_check.py@subprocess-run-no-encoding",
+    "tests/test_bench_runner.py@subprocess-run-no-encoding",
+    "tests/test_chaos_harness.py@open-no-encoding",
+    "tests/test_chaos_harness.py@subprocess-run-no-encoding",
+    "tests/test_ci_gate_runability.py@subprocess-run-no-encoding",
+    "tests/test_ci_merge_wait.py@subprocess-run-no-encoding",
+    "tests/test_claudemd_contract.py@subprocess-run-no-encoding",
+    "tests/test_claudemd_sync_gate.py@subprocess-run-no-encoding",
+    "tests/test_cli_help_hygiene.py@subprocess-run-no-encoding",
+    "tests/test_coding_grader.py@open-no-encoding",
+    "tests/test_commit_lint.py@subprocess-run-no-encoding",
+    "tests/test_cost_ceiling.py@subprocess-run-no-encoding",
+    "tests/test_cost_econ.py@subprocess-run-no-encoding",
+    "tests/test_crossos_drift.py@subprocess-run-no-encoding",
+    "tests/test_dead_code_check.py@subprocess-run-no-encoding",
+    "tests/test_dispatch_lint.py@subprocess-run-no-encoding",
+    "tests/test_docstring_check.py@subprocess-run-no-encoding",
+    "tests/test_encoding_cp1252.py@subprocess-run-no-encoding",
+    "tests/test_encoding_lint.py@subprocess-run-no-encoding",
+    "tests/test_file_size_lint.py@subprocess-run-no-encoding",
+    "tests/test_fleet_ledger_append.py@subprocess-run-no-encoding",
+    "tests/test_fleet_ledger_harvest.py@subprocess-run-no-encoding",
+    "tests/test_fleet_ledger_injection.py@subprocess-run-no-encoding",
+    "tests/test_frontier_eligibility.py@open-no-encoding",
+    "tests/test_frontier_slice.py@open-no-encoding",
+    "tests/test_frontier_slice.py@subprocess-run-no-encoding",
+    "tests/test_halt.py@subprocess-run-no-encoding",
+    "tests/test_handoff_proof.py@open-no-encoding",
+    "tests/test_handoff_proof.py@subprocess-run-no-encoding",
+    "tests/test_hs2_block_gate.py@subprocess-run-no-encoding",
+    "tests/test_import_resolution_check.py@subprocess-run-no-encoding",
+    "tests/test_incident_report.py@open-no-encoding",
+    "tests/test_incident_report.py@subprocess-run-no-encoding",
+    "tests/test_init_project.py@subprocess-run-no-encoding",
+    "tests/test_install_tasks.py@open-no-encoding",
+    "tests/test_install_tasks.py@subprocess-run-no-encoding",
+    "tests/test_instance_manager.py@subprocess-run-no-encoding",
+    "tests/test_list_test_suites.py@subprocess-run-no-encoding",
+    "tests/test_merge_train.py@subprocess-run-no-encoding",
+    "tests/test_metrics_gate.py@subprocess-run-no-encoding",
+    "tests/test_mutation_test.py@subprocess-run-no-encoding",
+    "tests/test_orchestration_core.py@subprocess-run-no-encoding",
+    "tests/test_package_files.py@open-no-encoding",
+    "tests/test_port_fidelity_check.py@subprocess-run-no-encoding",
+    "tests/test_portability_check.py@open-no-encoding",
+    "tests/test_portability_check.py@subprocess-run-no-encoding",
+    "tests/test_rotate_logs.py@open-no-encoding",
+    "tests/test_rotate_logs.py@subprocess-run-no-encoding",
+    "tests/test_seam_s_e2e_oracle.py@subprocess-run-no-encoding",
+    "tests/test_secret_scan.py@subprocess-run-no-encoding",
+    "tests/test_secret_scan_failclosed.py@open-no-encoding",
+    "tests/test_secret_scan_failclosed.py@subprocess-run-no-encoding",
+    "tests/test_self_stats.py@open-no-encoding",
+    "tests/test_self_stats.py@subprocess-run-no-encoding",
+    "tests/test_serve.py@open-no-encoding",
+    "tests/test_spec_contract_validator.py@subprocess-run-no-encoding",
+    "tests/test_state_query.py@subprocess-run-no-encoding",
+    "tests/test_subprocess_guard.py@subprocess-run-no-encoding",
+    "tests/test_symlink_guard.py@subprocess-run-no-encoding",
+    "tests/test_test_coverage_gaps.py@subprocess-run-no-encoding",
+    "tests/test_tests_claudemd_drift.py@subprocess-run-no-encoding",
+    "tests/test_tools_buildlog.py@subprocess-run-no-encoding",
+    "tests/test_tools_ensure_state.py@subprocess-run-no-encoding",
+    "tests/test_tools_eod_sweep.py@subprocess-run-no-encoding",
+    "tests/test_tools_fleet_ledger.py@subprocess-run-no-encoding",
+    "tests/test_tools_heartbeat.py@subprocess-run-no-encoding",
+    "tests/test_tools_importable.py@subprocess-run-no-encoding",
+    "tests/test_tools_inbox_drain.py@subprocess-run-no-encoding",
+    "tests/test_tools_orchestrator_status.py@subprocess-run-no-encoding",
+    "tests/test_tools_power_selftest.py@subprocess-run-no-encoding",
+    "tests/test_tools_prepublish_scan.py@subprocess-run-no-encoding",
+    "tests/test_tools_scanner_selftest.py@subprocess-run-no-encoding",
+    "tests/test_transcript_digest.py@open-no-encoding",
+    "tests/test_traps.py@subprocess-run-no-encoding",
+    "tests/test_ui_config.py@open-no-encoding",
+    "tests/test_verify_test_coverage.py@subprocess-run-no-encoding",
+    "tests/test_verify_test_suite_count.py@subprocess-run-no-encoding",
+    "tests/test_verify_test_suite_count_prepush.py@subprocess-run-no-encoding",
+    "tests/test_watcher_linter.py@subprocess-run-no-encoding",
+    "tests/test_wave_backlog_analyzer.py@subprocess-run-no-encoding",
+    "tests/test_wave_cross_repo_ship.py@subprocess-run-no-encoding",
+    "tests/test_wave_e2e_first_wave.py@open-no-encoding",
+    "tests/test_wave_history.py@subprocess-run-no-encoding",
+    "tests/test_wave_ledger_hook.py@subprocess-run-no-encoding",
+    "tests/test_wave_loop_cli.py@open-no-encoding",
+    "tests/test_wave_loop_cli.py@subprocess-run-no-encoding",
+    "tests/test_wave_loop_rs3.py@subprocess-run-no-encoding",
+    "tests/test_wave_manifest_lint.py@open-no-encoding",
+    "tests/test_wave_manifest_lint.py@subprocess-run-no-encoding",
+    "tests/test_wave_preflight.py@subprocess-run-no-encoding",
+    "tests/test_wave_preflight_p2_defects.py@subprocess-run-no-encoding",
+    "tests/test_wave_resume.py@subprocess-run-no-encoding",
+    "tests/test_wave_scheduler.py@open-no-encoding",
+    "tests/test_wave_scorecard.py@subprocess-run-no-encoding",
+    "tests/test_workflow_model_linter.py@subprocess-run-no-encoding",
+    "tests/test_ws4_writer_migrations.py@subprocess-run-no-encoding"
+  ]
 }

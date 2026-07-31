@@ -20,6 +20,10 @@ from tools.encoding_lint import (  # noqa: E402
     scan_file,
     scan_directory,
     run,
+    violation_key,
+    load_baseline,
+    save_baseline,
+    check_ratchet,
 )
 
 
@@ -336,6 +340,186 @@ class EncodingLintTest(unittest.TestCase):
         self.assertEqual(exit_code, 1)
 
 
+class EncodingLintTestsScopeTest(unittest.TestCase):
+    """tests/ is a scan target: subprocess.run(text=True) in a test harness that
+    spawns a tool under test hits the same Windows cp1252 decode trap as
+    production code (root cause: tests/test_merge_train.py spawning
+    tools/merge_train.py via subprocess.run(text=True) with no encoding=)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo_root = Path(self.tmp.name)
+        for d in ("tools", "tests"):
+            (self.repo_root / d).mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_subprocess_text_true_without_encoding_in_tests_dir_is_flagged(self):
+        """The exact defect class: a test file spawns a tool via subprocess.run
+        with text=True and no encoding=, and is scanned because tests/ is in
+        DEFAULT_SCAN_PATHS."""
+        test_file = self.repo_root / "tests" / "test_some_tool.py"
+        test_file.write_text(
+            "import subprocess\n"
+            "def test_it():\n"
+            "    result = subprocess.run(['tool'], capture_output=True, text=True, timeout=10)\n",
+            encoding="utf-8",
+        )
+
+        exit_code = run(root=self.repo_root)
+        self.assertEqual(exit_code, 1)
+
+        findings = scan_file(test_file)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]['kind'], 'subprocess-run-no-encoding')
+
+    def test_default_scan_includes_tests_directory(self):
+        """DEFAULT_SCAN_PATHS scans tests/ without needing --paths tests."""
+        from tools.encoding_lint import DEFAULT_SCAN_PATHS
+        self.assertIn('tests', DEFAULT_SCAN_PATHS)
+
+
+class EncodingLintBaselineRatchetTest(unittest.TestCase):
+    """Baseline ratchet mode (mirrors tools/stateapi_lint.py conventions)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo_root = Path(self.tmp.name)
+        (self.repo_root / "tools").mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write_violation(self, name="bad.py"):
+        f = self.repo_root / "tools" / name
+        f.write_text('with open("x.txt") as fh:\n    pass\n', encoding="utf-8")
+        return f
+
+    def test_violation_key_is_line_number_independent(self):
+        """Padding the file with blank lines above the call must not change the key."""
+        f = self.repo_root / "tools" / "padded.py"
+        f.write_text(
+            "\n\n\n\n" + 'with open("x.txt") as fh:\n    pass\n',
+            encoding="utf-8",
+        )
+        findings = scan_file(f)
+        self.assertEqual(len(findings), 1)
+        key = violation_key(findings[0], self.repo_root)
+        self.assertEqual(key, "tools/padded.py@open-no-encoding")
+
+    def test_missing_baseline_treated_as_empty_new_violation_fails(self):
+        """No baseline file on disk -> every finding reports as new (fail-closed)."""
+        self._write_violation()
+        exit_code = run(root=self.repo_root, paths=["tools"])
+        self.assertEqual(exit_code, 1)
+
+    def test_update_baseline_then_matches_exactly(self):
+        """--update-baseline captures current findings; re-running then passes."""
+        self._write_violation()
+        baseline_path = self.repo_root / ".encoding-baseline.json"
+
+        update_exit = run(root=self.repo_root, paths=["tools"], update_baseline=True)
+        self.assertEqual(update_exit, 0)
+        self.assertTrue(baseline_path.exists())
+
+        check_exit = run(root=self.repo_root, paths=["tools"])
+        self.assertEqual(check_exit, 0)
+
+    def test_new_violation_not_in_baseline_fails(self):
+        """A NEW finding not present in an existing baseline still fails closed."""
+        self._write_violation("existing.py")
+        run(root=self.repo_root, paths=["tools"], update_baseline=True)
+
+        # Now introduce a second, un-baselined violation.
+        self._write_violation("new_offender.py")
+        exit_code = run(root=self.repo_root, paths=["tools"])
+        self.assertEqual(exit_code, 1)
+
+    def test_stale_baseline_entry_fails_closed(self):
+        """A baseline entry whose violation was fixed must fail until --update-baseline
+        is re-run -- silently accepting a shrunk violation set would hide a future
+        regression re-introducing it under the same key."""
+        f = self._write_violation("fixed_later.py")
+        run(root=self.repo_root, paths=["tools"], update_baseline=True)
+
+        # Fix the violation.
+        f.write_text('with open("x.txt", encoding="utf-8") as fh:\n    pass\n', encoding="utf-8")
+        exit_code = run(root=self.repo_root, paths=["tools"])
+        self.assertEqual(exit_code, 1)
+
+    def test_corrupt_baseline_file_is_could_not_evaluate(self):
+        """A malformed baseline file must fail as COULD NOT EVALUATE (exit 2 via
+        main()'s exception handler), never silently treated as empty."""
+        self._write_violation()
+        baseline_path = self.repo_root / ".encoding-baseline.json"
+        baseline_path.write_text("{not valid json", encoding="utf-8")
+
+        with self.assertRaises(ValueError):
+            run(root=self.repo_root, paths=["tools"])
+
+    def test_check_ratchet_exact_match(self):
+        ok, stale, new = check_ratchet(["a.py@open-no-encoding"], ["a.py@open-no-encoding"])
+        self.assertTrue(ok)
+        self.assertEqual(stale, [])
+        self.assertEqual(new, [])
+
+    def test_check_ratchet_detects_new_and_stale(self):
+        ok, stale, new = check_ratchet(["old.py@open-no-encoding"], ["new.py@open-no-encoding"])
+        self.assertFalse(ok)
+        self.assertEqual(stale, ["old.py@open-no-encoding"])
+        self.assertEqual(new, ["new.py@open-no-encoding"])
+
+    def test_save_and_load_baseline_roundtrip(self):
+        baseline_path = self.repo_root / "custom-baseline.json"
+        save_baseline(baseline_path, ["b.py@open-no-encoding", "a.py@open-no-encoding"])
+        loaded = load_baseline(baseline_path)
+        self.assertEqual(loaded, ["a.py@open-no-encoding", "b.py@open-no-encoding"])
+
+    def test_load_missing_baseline_returns_empty(self):
+        self.assertEqual(load_baseline(self.repo_root / "nope.json"), [])
+
+
+class EncodingLintScannedNothingTest(unittest.TestCase):
+    """The gate must never exit 0 having scanned zero files (repo-wide contract:
+    0=clean, 1=findings, 2=COULD NOT EVALUATE; a gate that passes because it
+    checked nothing is the recurrent defect class this repo tracks hardest)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo_root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_all_requested_paths_missing_exits_2(self):
+        """None of the requested scan directories exist on disk -> exit 2, not 0."""
+        exit_code = run(root=self.repo_root, paths=["nonexistent_dir_a", "nonexistent_dir_b"])
+        self.assertEqual(exit_code, 2)
+
+    def test_default_paths_all_missing_exits_2(self):
+        """Even with defaults (no --paths given), an empty/foreign root scans
+        nothing and must fail closed, not report a false-clean 0."""
+        exit_code = run(root=self.repo_root)
+        self.assertEqual(exit_code, 2)
+
+    def test_cli_zero_input_exits_2(self):
+        """CLI-level proof of the same contract via the real entry point."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "tools" / "encoding_lint.py"),
+                "--root",
+                str(self.repo_root),
+                "--paths",
+                "nonexistent_dir",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 2)
+
+
 class EncodingLintIntegrationTest(unittest.TestCase):
     """Integration tests using subprocess CLI."""
 
@@ -396,6 +580,30 @@ class EncodingLintIntegrationTest(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0)
+
+    def test_cli_corrupt_baseline_exits_2(self):
+        """CLI-level proof: a malformed baseline file surfaces as exit 2 through
+        main()'s exception handler (COULD NOT EVALUATE), never silently exit 0/1."""
+        test_file = self.repo_root / "tools" / "test.py"
+        test_file.write_text('with open("f.txt", encoding="utf-8") as f: pass\n', encoding="utf-8")
+        baseline_path = self.repo_root / "broken-baseline.json"
+        baseline_path.write_text("not json at all", encoding="utf-8")
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "tools" / "encoding_lint.py"),
+                "--root",
+                str(self.repo_root),
+                "--paths",
+                str(self.repo_root / "tools"),
+                "--baseline",
+                str(baseline_path),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 2)
 
     def test_cli_exit_code_findings(self):
         """CLI exit code should be 1 for findings."""
