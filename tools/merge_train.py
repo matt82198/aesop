@@ -14,10 +14,14 @@ Usage:
 """
 import argparse
 import functools
+import io
 import json
 import subprocess
 import sys
 import time
+
+# Ensure stdout uses UTF-8 (fixes Windows cp1252 UnicodeEncodeError)
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
 print = functools.partial(print, flush=True)
 

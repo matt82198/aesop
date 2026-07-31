@@ -153,3 +153,4 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 ## New tools (append-only additions)
 
 - `remote_inbox.py` — Poll GitHub issue comments for remote command dispatch (phone-to-orchestrator, outbound polling only); verifies repo-owner authorship via GitHub API; strict allowlist of 8 skill commands (/runwave, /power, /afk, etc.); idempotent tracking to prevent replay; appends to ~/conductor3/state/ui-inbox.md for orchestrator pickup; posts reply comments for acknowledgment; audit log to ~/conductor3/state/REMOTE-DISPATCH.log; CLI: `--issue N [--dry-run] [--once]`; exit 0=success / 1=gh failure; designed for scheduled task execution (Windows task scheduler calling --once every 5-10 minutes); documented in docs/REMOTE-ACCESS.md
+- `merge_train.py` forces stdout to UTF-8 at startup to handle non-ASCII PR titles on Windows (U+FEFF BOM in titles caused cp1252 UnicodeEncodeError).
