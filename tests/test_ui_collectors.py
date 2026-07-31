@@ -421,6 +421,37 @@ class TestTrackerMigrationP0Fix(unittest.TestCase):
             "migration resurrected a closed item: the projection's status was discarded",
         )
 
+    def test_reconcile_does_not_revert_newer_log_status(self):
+        """A re-run migration must not revert a status the log recorded after it.
+
+        If the migration_completed append fails, the reconcile block runs again. By
+        then the event log can hold a NEWER status than tracker.json (a projection
+        render can fail after its event landed). Reverting to the stale disk status
+        would destroy that update.
+        """
+        from state_store import StateAPI
+
+        db = str(self.temp_path / "tracker_events.db")
+        api = StateAPI(db)
+        api.append("tracker", "item_created",
+                   {"id": "item-1", "title": "Thing", "status": "open"}, "test")
+        # A real, later update lands in the log...
+        api.append("tracker", "item_updated", {"id": "item-1", "status": "closed"}, "user")
+        # ...but the projection render failed, so disk still shows the old status.
+        api.close()
+        self._create_tracker_json([{"id": "item-1", "title": "Thing", "status": "open"}])
+
+        from collectors import _ensure_tracker_migrated, _write_api
+        _ensure_tracker_migrated(_write_api())
+
+        api = StateAPI(db)
+        projected = {i["id"]: i for i in api.project("tracker").get("items", [])}
+        api.close()
+        self.assertEqual(
+            projected["item-1"]["status"], "closed",
+            "reconcile reverted a newer log status to the stale disk value",
+        )
+
     def test_migration_completes_successfully(self):
         """Successful backfill writes completion marker and skips on retry."""
         # Create tracker.json with 3 items

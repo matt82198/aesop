@@ -594,10 +594,27 @@ def _ensure_tracker_migrated(write_api):
             print(f"[tracker] Could not project for status reconcile: {e}", file=sys.stderr)
             projected = {}
 
+        # Only trust disk for items whose status the event log has NEVER recorded.
+        # Letting disk win on any disagreement is safe only for a true one-shot migration. If
+        # the migration_completed append fails, this whole block re-runs later -- and by
+        # then the log can legitimately hold a NEWER status than tracker.json (a
+        # projection render can fail after its event has landed). Reverting to the disk
+        # status would destroy that update. An item carrying an explicit item_updated
+        # event is owned by the log; only statuses the log has never seen are
+        # backfilled from disk.
+        status_recorded_ids = set()
+        for ev in events:
+            if ev.get("type") == "item_updated":
+                payload = ev.get("payload") or {}
+                if payload.get("id") and payload.get("status") is not None:
+                    status_recorded_ids.add(payload["id"])
+
         for item in disk_items:
             item_id = item.get("id")
             disk_status = item.get("status")
             if not item_id or not disk_status or item_id not in projected:
+                continue
+            if item_id in status_recorded_ids:
                 continue
             if projected[item_id].get("status") == disk_status:
                 continue
