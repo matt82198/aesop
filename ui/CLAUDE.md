@@ -133,3 +133,15 @@ Precedence: env vars > `aesop.config.json` > built-in defaults. Key env vars: `P
 ## Invariants
 
 Stdlib-only backend (ThreadingHTTPServer for SSE). Collector fail-open. Config: `import config; config.X` (never `from config import X`). Dist always required (hard 500 if missing). Map of all domains: /CLAUDE.md
+## Tracker event-log migration (collectors.py)
+
+`_ensure_tracker_migrated()` backfills the event log from an existing `tracker.json`. Two markers:
+`migration_started` claims the attempt, `migration_completed` is written only after a fully
+successful backfill -- skip requires BOTH, so a failed or partial migration retries instead of
+being permanently blocked by a stale claim.
+
+It reconciles in BOTH directions. Items missing from the log are backfilled from disk; and where
+disk holds a status the log never recorded (historical closes were written straight to the
+projection without emitting events), an `item_updated` event is emitted so replay cannot resurrect
+them. The reconcile skips any item that already carries an explicit `item_updated` event -- that
+item is owned by the log, and overwriting it from a stale projection would revert a real update.
