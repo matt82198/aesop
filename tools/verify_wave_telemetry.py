@@ -125,7 +125,7 @@ def run_work_proof(pw, failures):
     """Test wave telemetry in Work view."""
     root = build_root()
     port = free_port()
-    server = start_server(root, port)
+    server = start_server(root, port, REPO, SERVE, SERVER_BOOT_TRIES, SERVER_BOOT_SLEEP, "0.3")
 
     browser = pw.chromium.launch(headless=True)
     page = browser.new_page()
