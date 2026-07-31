@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bare `except:` clauses and unencoded file opens in `bench/` (#651).
 - Merge train crashed with `UnicodeEncodeError` on PR titles containing U+FEFF (#654).
 - Live-API test now skips on a missing or rejected credential instead of failing CI and red-flagging unrelated PRs (#666).
+- **The portability gate was never reaching a verdict.** The State API lint step failed first and short-circuited it, so hardcoded personal paths rode into the remote-access features unnoticed. With the lint step fixed the gate ran and reported 9 new violations, all real (#667).
+- `remote_inbox` hardcoded one GitHub handle as both the polled repository and the sole authorized commenter, so the tool worked for exactly one person (#667).
+- `verify_author` now **fails closed**: an owner that cannot be resolved is a rejection, never a widening of who may issue remote commands (#667).
+- `ci_shard_runner` counted a deliberate module-level `unittest.SkipTest` as an import failure and failed the whole shard; `SkipTest` subclasses `Exception`, so the blanket handler swallowed it (#667).
+- Windows test cleanup no longer fails on `EBUSY` when a scaffolded child process still holds a directory handle (#667).
 
 ### Changed
 
@@ -27,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Browser proofs consolidated onto the existing `playwright_common` helpers; 8 of 10 had independently reinvented them (#652).
 - Four hand-rolled `gh`/`git` subprocess wrappers unified -- **5 scripts that had no subprocess timeout now have one** (#655).
 - Python dependencies pinned to exact/compatible-release; `package.json` deliberately left on caret ranges as a published package (#650).
+- **New configuration.** Fleet state and remote-command identity are no longer assumed from a home-directory layout: `AESOP_FLEET_STATE_DIR` points at wherever a deployment's daemons write state (defaults to the aesop state root), and `AESOP_REMOTE_REPO` (`owner/name`) plus `AESOP_REMOTE_OWNER` control the remote inbox, falling back to the `gh`-resolved remote. Heartbeat freshness now goes through `health_checks`, which fails closed on an unreadable heartbeat rather than reporting a fleet it could not verify (#667).
 
 ### Added
 
