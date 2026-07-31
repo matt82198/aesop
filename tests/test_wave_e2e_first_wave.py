@@ -484,7 +484,12 @@ class TestWaveE2EFirstWave(unittest.TestCase):
         self.assertIsInstance(hash1, int)
 
     def test_save_sample_fixture_report(self):
-        """Save a sample fixture report for documentation."""
+        """Verify sample fixture report structure (wave-25 hygiene: no fixture mutations).
+
+        Note: The committed tests/fixtures/first-wave-report.json is read-only for
+        documentation purposes. This test generates a report in a temp directory to
+        verify its structure without polluting the committed fixture.
+        """
         driver = FakeDriver()
 
         # Create a realistic 3-item manifest for documentation.
@@ -539,17 +544,17 @@ class TestWaveE2EFirstWave(unittest.TestCase):
             "driver": "FakeDriver (Tier 2)",
         }
 
-        # Save to tests/fixtures/
-        fixtures_dir = REPO / "tests" / "fixtures"
-        fixtures_dir.mkdir(parents=True, exist_ok=True)
-        report_path = fixtures_dir / "first-wave-report.json"
+        # Write to temp directory (NEVER to committed fixtures).
+        temp_report_dir = Path(self.temp_dir) / "reports"
+        temp_report_dir.mkdir(parents=True, exist_ok=True)
+        temp_report_path = temp_report_dir / "first-wave-report.json"
 
-        with open(report_path, "w") as f:
+        with open(temp_report_path, "w") as f:
             json.dump(report, f, indent=2)
 
         # Verify file exists and is valid JSON.
-        self.assertTrue(report_path.exists(), "Report file should exist")
-        with open(report_path) as f:
+        self.assertTrue(temp_report_path.exists(), "Report file should exist in temp dir")
+        with open(temp_report_path) as f:
             saved_report = json.load(f)
         self.assertIsInstance(saved_report, dict)
         self.assertIn("metadata", saved_report)
