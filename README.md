@@ -80,11 +80,11 @@ Crash recovery is not a special path; it is how the system *always* starts. This
 
 **Live Fleet in Action** — Here's what a multi-agent wave looks like in practice. Watch the orchestrator dispatch parallel agents, the merge train processing PRs, and the final verification gates:
 
-| Initialization | Merge Train Active |
+| Parallel audit lenses | Lens fan-out with model pinning |
 |---|---|
-| ![Orchestrator startup](assets/clips/orchestrator-startup.gif) | ![Merge train dispatch](assets/clips/merge-train-dispatch.gif) |
+| ![Five audit lenses running concurrently; a Correctness lens finds a P1 and the orchestrator spawns a Verify agent to confirm it](assets/clips/parallel-audit-lenses.gif) | ![The fleet fans out 2 to 4 agents; each spawn prints the guardrail pinning the subagent model to haiku](assets/clips/lens-fanout-haiku-pin.gif) |
 
-*Five short clips showing the orchestrator priming, merge train, fleet dispatch, audit closing, and verification gates. See [assets/clips/INDEX.md](assets/clips/INDEX.md) for all five clips and timestamps.*
+*Two clips from a live session, sped up only to remove dead air between terminal repaints. See [assets/clips/INDEX.md](assets/clips/INDEX.md) for timestamps, speed factors, and the beats that were rejected.*
 
 **One-turn wave** — Run a complete build cycle (tests, build, docs, review, merge, audit) end-to-end:
 ```bash
