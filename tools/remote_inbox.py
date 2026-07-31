@@ -177,15 +177,26 @@ def mark_comment_seen(comment_id: int) -> None:
 
 
 def verify_author(comment: Dict[str, Any], owner_login: Optional[str] = None) -> bool:
-    """Verify comment author is repo owner. Check both author_association and login."""
-    if owner_login is None:
-        owner_login = get_repo_owner()
+    """Verify comment author is repo owner. Check both author_association and login.
+
+    Rejects on anything unverifiable, including an owner that cannot be resolved --
+    an unknown owner must never widen who may issue remote commands.
+    """
     author = comment.get("author", {})
     if not author:
         return False
 
     author_login = author.get("login", "")
     author_association = comment.get("authorAssociation", "")
+
+    # Resolve the expected owner only once the comment itself looks well-formed:
+    # this needs network/gh, and a malformed comment is rejectable without it.
+    if owner_login is None:
+        try:
+            owner_login = get_repo_owner()
+        except RuntimeError as e:
+            print(f"ERROR: cannot verify author: {e}", file=sys.stderr)
+            return False
 
     # Must be the owner
     if author_login != owner_login:
