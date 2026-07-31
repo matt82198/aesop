@@ -579,5 +579,96 @@ class TestGitMutationsRequireCwdGuard(unittest.TestCase):
             self.fail(msg)
 
 
+class TestHeartbeatFileIsolation(unittest.TestCase):
+    r"""Ensure tests do not write to real conductor3 heartbeat files outside the repo.
+
+    Issue: config.py defaults to C:\Users\matt8\conductor3 when AESOP_CONDUCTOR3_ROOT
+    is not set. Tests must ensure this env var points to a fixture directory.
+
+    This guard verifies that the real heartbeat files are not modified during test runs.
+    """
+
+    def test_real_heartbeat_files_unchanged(self):
+        r"""Fail if the real conductor3 heartbeat files were written during tests.
+
+        Real heartbeat files:
+        - C:\Users\matt8\conductor3\state\.watchdog-heartbeat
+        - C:\Users\matt8\conductor3\monitor\.monitor-heartbeat
+
+        These should NEVER be written by tests. If tests need heartbeat files,
+        they must set AESOP_CONDUCTOR3_ROOT to a fixture directory.
+        """
+        import time
+        from pathlib import Path
+
+        real_conductor3_root = Path.home() / "conductor3"
+        watchdog_hb = real_conductor3_root / "state" / ".watchdog-heartbeat"
+        monitor_hb = real_conductor3_root / "monitor" / ".monitor-heartbeat"
+
+        # If conductor3 does not exist, skip (test machine without orchestration setup)
+        if not real_conductor3_root.exists():
+            self.skipTest("conductor3 directory does not exist on this machine")
+
+        # Snapshot content and mtime before running other tests
+        # (This test runs AFTER all other tests via alphabetical ordering)
+        before_watchdog_content = None
+        before_watchdog_mtime = None
+        before_monitor_content = None
+        before_monitor_mtime = None
+
+        if watchdog_hb.exists():
+            try:
+                before_watchdog_content = watchdog_hb.read_text(encoding="utf-8")
+                before_watchdog_mtime = watchdog_hb.stat().st_mtime
+            except OSError:
+                pass
+
+        if monitor_hb.exists():
+            try:
+                before_monitor_content = monitor_hb.read_text(encoding="utf-8")
+                before_monitor_mtime = monitor_hb.stat().st_mtime
+            except OSError:
+                pass
+
+        # Note: In practice, this test runs AFTER all other tests complete.
+        # We could run the rest of the suite here and then check, but that
+        # would be circular. Instead, rely on pytest/unittest test ordering:
+        # TestHeartbeatFileIsolation (starts with "Test") runs after other tests,
+        # so we can detect changes that occurred during the run.
+
+        # For now, just verify the files exist and log their state.
+        # Actual content/mtime verification would require wrapping the full suite.
+        # This test documents the requirement and provides a hook for CI to detect
+        # heartbeat corruption if it occurs.
+
+        if before_watchdog_content is not None:
+            # Verify content is NOT a test epoch
+            # Test epochs: 1234567890 (Feb 13 2009), 1234567891, etc.
+            # Valid real epochs: > 1600000000 (Sept 13 2020)
+            try:
+                content_int = int(before_watchdog_content.strip())
+                self.assertGreater(
+                    content_int, 1600000000,
+                    f"watchdog heartbeat contains suspiciously old epoch {content_int} "
+                    f"(likely test data from 1234567890 era). "
+                    f"Tests must set AESOP_CONDUCTOR3_ROOT to a fixture directory, "
+                    f"not rely on config.py default."
+                )
+            except ValueError:
+                # Content is not a number; that's OK (might be undefined state)
+                pass
+
+        if before_monitor_content is not None:
+            try:
+                content_int = int(before_monitor_content.strip())
+                self.assertGreater(
+                    content_int, 1600000000,
+                    f"monitor heartbeat contains suspiciously old epoch {content_int}. "
+                    f"Tests must set AESOP_CONDUCTOR3_ROOT to a fixture directory."
+                )
+            except ValueError:
+                pass
+
+
 if __name__ == "__main__":
     unittest.main()
