@@ -1225,6 +1225,1419 @@ def run_wave(
         claim_ctx.release_all()
 
 
+# ========================================================================
+# _run_wave_inner phase helpers (extracted 2026-07-31 to bring cyclomatic
+# complexity of the monolithic wave loop under control; see
+# driver/CLAUDE.md for the phase contract). Each phase function that can
+# short-circuit the wave returns a bool: True means "abort now, `result`
+# is already populated the same way the inline code used to populate it",
+# False means "continue to the next phase". This mirrors the 19 inline
+# `return result` escapes it replaces, one-for-one.
+# ========================================================================
+
+
+def _preflight_check_duplicate_slugs(items: List[Dict[str, Any]], result: Dict[str, Any]) -> bool:
+    """SLUG-UNIQUENESS PREFLIGHT (RS3-W N7): slugs are the identity key for
+    journal entries, coordination claims, and slug->item lookups. Duplicate
+    slugs silently collide in all three (last-writer-wins journal, claim
+    starvation, wrong item shipped). Reject loudly, before any dispatch.
+
+    Returns:
+        bool: True if the wave must abort now (result populated with
+        abort_reason="duplicate_slugs"), False to continue.
+    """
+    seen_slugs = {}
+    duplicate_slugs = []
+    for item in items:
+        slug = item.get("slug")
+        if slug is None:
+            continue
+        if slug in seen_slugs:
+            duplicate_slugs.append(slug)
+        else:
+            seen_slugs[slug] = True
+    if duplicate_slugs:
+        result["aborted"] = True
+        result["abort_reason"] = "duplicate_slugs"
+        result["duplicate_slugs"] = sorted(set(duplicate_slugs))
+        result["error"] = (
+            "duplicate item slugs in manifest (slugs key the journal, "
+            "coordination claims, and ship lookups): "
+            + ", ".join(sorted(set(duplicate_slugs)))
+        )
+        return True
+    return False
+
+
+def _preflight_load_resume_journal(
+    state_dir: Optional[str], resume_journal: bool, result: Dict[str, Any]
+) -> Tuple[Dict[Tuple[Any, Any], Dict[str, Any]], Dict[str, Any], threading.Lock]:
+    """PHASE 0 (optional): Resume - load journal state and release stale leases.
+
+    Returns:
+        Tuple of (journal_state, resume_stats, resume_stats_lock).
+        resume_stats_lock guards resume_stats from concurrent mutation by
+        the parallel build phase (_build_items_parallel / _dispatch_single_item).
+    """
+    journal_state = {}
+    resume_stats = {"skipped_from_journal": 0, "rebuilt": 0}
+    resume_stats_lock = threading.Lock()
+    if resume_journal and state_dir:
+        journal_state = _load_journal_state(state_dir)
+        _release_stale_leases(state_dir, journal_state)
+        if journal_state:
+            result["resume_stats"] = resume_stats
+    return journal_state, resume_stats, resume_stats_lock
+
+
+def _preflight_resolve_repos(
+    items: List[Dict[str, Any]], git: Optional[Dict[str, str]], result: Dict[str, Any]
+) -> bool:
+    """Explicit-repo preflight: detect mixed manifests and resolve each
+    item's `repo` field to an absolute, validated path (mutates items
+    in-place so downstream phases see a byte-identical resolved cwd).
+
+    Contract:
+      - Pure-legacy manifest (NO item has repo) -> use expectTopLevel default
+      - Fully-explicit manifest (ALL items have repo) -> use explicit repos
+      - Mixed manifest (SOME items have repo) -> REJECT (fail-closed)
+
+    Returns:
+        bool: True if the wave must abort now (result populated with one of
+        abort_reason in {"mixed_repo_manifest", "repo_field_missing_no_default",
+        "invalid_repo_path"}), False to continue.
+    """
+    default_repo = None
+    if git is not None:
+        default_repo = git.get("expectTopLevel")
+
+    if git is not None:
+        items_with_repo = sum(1 for item in items if item.get("repo"))
+        items_without_repo = len(items) - items_with_repo
+
+        if items_with_repo > 0 and items_without_repo > 0:
+            result["aborted"] = True
+            result["abort_reason"] = "mixed_repo_manifest"
+            result["error"] = (
+                "mixed manifest detected: some items have explicit 'repo' field, others don't. "
+                "Manifests must be fully explicit (all items have 'repo') or fully implicit (none have 'repo'). "
+                "To fix: either add 'repo' field to all items or remove it from all items (use expectTopLevel instead)."
+            )
+            result["items_with_repo"] = items_with_repo
+            result["items_without_repo"] = items_without_repo
+            return True
+
+    repo_paths = set()
+
+    for item in items:
+        repo = item.get("repo")
+
+        if not repo:
+            if git is not None:
+                if default_repo:
+                    repo = default_repo
+                else:
+                    result["aborted"] = True
+                    result["abort_reason"] = "repo_field_missing_no_default"
+                    result["error"] = "item requires 'repo' field when git shipping is configured (set expectTopLevel or add repo field)"
+                    result["item_slug"] = item.get("slug", "unknown")
+                    return True
+            else:
+                continue
+
+        try:
+            repo_resolved = _validate_repo_path(repo)
+            repo_paths.add(repo_resolved)
+            item["repo"] = repo_resolved
+        except ValueError as e:
+            result["aborted"] = True
+            result["abort_reason"] = "invalid_repo_path"
+            result["invalid_repo"] = repo
+            result["error"] = str(e)
+            return True
+
+    return False
+
+
+def _preflight_check_ownership(items: List[Dict[str, Any]], result: Dict[str, Any]) -> bool:
+    """Per-repo ownership guard: track ownership within each repo separately.
+
+    Returns:
+        bool: True if the wave must abort now (result populated with
+        abort_reason="ownership_overlap"), False to continue.
+    """
+    repo_owner_map = {}  # repo -> (normalized file -> slug)
+    conflicts = []
+
+    for item in items:
+        slug = item.get("slug", "unknown")
+        owned_files = item.get("ownsFiles", [])
+        repo = item.get("repo", ".")  # Default to cwd if no repo specified
+
+        repo_normalized = str(Path(repo).resolve()).lower()
+
+        if repo_normalized not in repo_owner_map:
+            repo_owner_map[repo_normalized] = {}
+
+        owner_map = repo_owner_map[repo_normalized]
+
+        for f in owned_files:
+            normalized = posixpath.normpath(f.replace("\\", "/")).lower()
+            if normalized in owner_map:
+                conflicts.append(
+                    {
+                        "file": f,
+                        "normalized": normalized,
+                        "repo": repo,
+                        "items": [owner_map[normalized], slug],
+                    }
+                )
+            else:
+                owner_map[normalized] = slug
+
+    if conflicts:
+        result["aborted"] = True
+        result["abort_reason"] = "ownership_overlap"
+        result["conflicts"] = conflicts
+        return True
+    return False
+
+
+def _resolve_verification_policy(
+    driver: AgentDriver, manifest: Dict[str, Any], result: Dict[str, Any]
+) -> Tuple[Dict[str, Any], int, float, bool, int]:
+    """PHASE 2: Resolve verification policy ONCE from the driver's probed capabilities.
+
+    Returns:
+        Tuple of (policy, repair_cap, spot_check_frac, pre_dispatch_repro_enabled,
+        pre_dispatch_repro_timeout).
+    """
+    caps = driver.probe_capabilities()
+    policy = verification_policy(caps)
+    result["policy"] = policy
+
+    repair_cap = policy.get("repair_cap", 1)
+    spot_check_frac = policy.get("spot_check_frac", 0.0)
+
+    # Extract pre-dispatch repro config knobs (latency gate FIX 1).
+    # Default: enabled=True (backward-compatible), timeout=120s.
+    pre_dispatch_repro_enabled = manifest.get("pre_dispatch_repro_enabled", True)
+    pre_dispatch_repro_timeout = manifest.get("pre_dispatch_repro_timeout", 120)
+
+    return policy, repair_cap, spot_check_frac, pre_dispatch_repro_enabled, pre_dispatch_repro_timeout
+
+
+def _check_cost_ceiling(
+    driver: AgentDriver,
+    state_dir: Optional[str],
+    result: Dict[str, Any],
+    abort_reason: str,
+    set_ceiling_field: bool = True,
+) -> bool:
+    """Cost-ceiling gate (fail-closed): abort if spend has tripped the ceiling.
+
+    Shared by the pre-build check (PHASE 3) and the per-round repair check
+    (PHASE 5); each call site passes its own abort_reason so
+    result["abort_reason"] stays distinguishable. set_ceiling_field=False
+    preserves the original repair-round behavior, which (unlike the
+    pre-build check) never wrote result["ceiling"] on a non-exceeded check.
+
+    Returns:
+        bool: True if the wave must abort now (result populated), False to continue.
+    """
+    if cost_ceiling is None or state_dir is None:
+        return False
+
+    ceiling_result = cost_ceiling.check(
+        spent=driver.get_tokens_spent(),
+        trip=True,
+        state_dir=state_dir,
+    )
+    if set_ceiling_field:
+        result["ceiling"] = ceiling_result
+
+    if ceiling_result.get("exceeded", False):
+        result["aborted"] = True
+        result["abort_reason"] = abort_reason
+        return True
+    return False
+
+
+# ------------------------------------------------------------------------
+# PHASE 4: Build (parallel dispatch). `_dispatch_single_item` is the
+# extraction of the former nested `build_item` closure, split further into
+# `_try_resume_from_journal` / `_try_claim_item` / `_dispatch_and_journal`
+# so no single function exceeds cyclomatic 20. All free variables the
+# closure used to capture are now EXPLICIT parameters.
+# ------------------------------------------------------------------------
+
+
+def _try_resume_from_journal(
+    item_index: int,
+    item: Dict[str, Any],
+    slug: str,
+    workdir: str,
+    repo: Optional[str],
+    journal_state: Dict[Tuple[Any, Any], Dict[str, Any]],
+    resume_stats: Dict[str, Any],
+    resume_stats_lock: threading.Lock,
+    driver: AgentDriver,
+) -> Optional[Tuple[int, Dict[str, Any]]]:
+    """RESUME CHECK: if this item is in the journal and verified, skip
+    dispatch and trust-but-verify (re-run its test).
+
+    RS3-W N10: resume-skip requires the journal entry to MATCH the current
+    item's content fingerprint. Entries without a fingerprint (older
+    format) or with a different one (a NEW item reusing a prior wave's
+    slug) are rebuilt -- never silently inherited (fail-closed).
+
+    Returns:
+        Optional[Tuple[int, Dict]]: the (index, result) tuple to return from
+        the build if this item was resumed from the journal, else None to
+        continue the normal build lifecycle.
+    """
+    journal_key = (repo, slug)
+    journal_entry = journal_state.get(journal_key)
+    if not (
+        journal_entry
+        and _should_skip_from_journal(journal_entry)
+        and journal_entry.get("fingerprint") == _item_fingerprint(item)
+    ):
+        return None
+
+    with resume_stats_lock:
+        resume_stats["skipped_from_journal"] += 1
+
+    # RS3-W N3: restore the journaled filesWritten so a resumed verified
+    # item can still SHIP (Phase 7) or be quarantined on a block. Without
+    # this the resumed item verified green but never produced a shipped
+    # record -> tracker stayed todo -> the item was re-selected and
+    # re-verified every wave, forever.
+    journal_files_written = [
+        str(f) for f in (journal_entry.get("filesWritten") or [])
+        if isinstance(f, str) and f
+    ]
+
+    test_cmd = item.get("testCmd", "")
+    if not test_cmd:
+        return (
+            item_index,
+            {
+                "slug": slug,
+                "dispatched": False,
+                "verified": False,
+                "testExit": None,
+                "repairs": 0,
+                "error": "no test command for trust-verify",
+                "filesWritten": [],
+                "skipped_from_journal": True,
+                "trust_verified": False,
+            },
+        )
+
+    try:
+        test_result = driver.run_command(test_cmd, cwd=workdir)
+        if test_result.exit_code == 0:
+            return (
+                item_index,
+                {
+                    "slug": slug,
+                    "dispatched": False,
+                    "verified": True,
+                    "testExit": 0,
+                    "repairs": 0,
+                    "error": None,
+                    "filesWritten": journal_files_written,
+                    "skipped_from_journal": True,
+                    "trust_verified": True,
+                },
+            )
+        with resume_stats_lock:
+            resume_stats["rebuilt"] += 1
+        return (
+            item_index,
+            {
+                "slug": slug,
+                "dispatched": False,
+                "verified": False,
+                "testExit": test_result.exit_code,
+                "repairs": 0,
+                "error": "trust-verify test failed (re-run)",
+                "filesWritten": [],
+                "skipped_from_journal": True,
+                "trust_verified": False,
+            },
+        )
+    except Exception as exc:
+        with resume_stats_lock:
+            resume_stats["rebuilt"] += 1
+        return (
+            item_index,
+            {
+                "slug": slug,
+                "dispatched": False,
+                "verified": False,
+                "testExit": None,
+                "repairs": 0,
+                "error": f"trust-verify exception: {exc}",
+                "filesWritten": [],
+                "skipped_from_journal": True,
+                "trust_verified": False,
+            },
+        )
+
+
+def _try_claim_item(
+    item_index: int,
+    slug: str,
+    claim_ctx: "_ClaimContext",
+    state_dir: Optional[str],
+) -> Optional[Tuple[int, Dict[str, Any]]]:
+    """Try to claim the item if state_dir is given (fail-closed on claim failure).
+
+    RS5 F1/F3: the claim uses the WAVE-level instance id and a ttl sized to
+    the driver's command timeout, and is HELD across the item's full
+    lifecycle (build -> repair -> ship). Release happens exactly once in
+    run_wave's finally, never here.
+
+    Returns:
+        Optional[Tuple[int, Dict]]: the (index, result) tuple to return from
+        the build if the claim could not be acquired (skip this item), else
+        None to proceed with dispatch.
+    """
+    if coordination is None or state_dir is None:
+        return None
+    try:
+        if not claim_ctx.acquire(slug):
+            # Item is claimed by another instance; skip it.
+            return (
+                item_index,
+                {
+                    "slug": slug,
+                    "dispatched": False,
+                    "verified": False,
+                    "testExit": None,
+                    "repairs": 0,
+                    "error": "resource claimed by another instance",
+                    "filesWritten": [],
+                    "claim_skipped": True,
+                },
+            )
+    except Exception as claim_exc:
+        # RS3-W N5: fail-CLOSED means SKIP, not dispatch. Falling through
+        # here dispatched the item WITHOUT holding a claim (two racing
+        # instances both hit the SQLite lock exception and both dispatched
+        # -> double-dispatch). Skip the item and record why; another
+        # instance (or the next wave) retries.
+        return (
+            item_index,
+            {
+                "slug": slug,
+                "dispatched": False,
+                "verified": False,
+                "testExit": None,
+                "repairs": 0,
+                "error": f"claim check failed (fail-closed skip): {claim_exc}",
+                "filesWritten": [],
+                "claim_skipped": True,
+            },
+        )
+    return None
+
+
+def _dispatch_and_journal(
+    item_index: int,
+    item: Dict[str, Any],
+    slug: str,
+    workdir: str,
+    repo: Optional[str],
+    instance_id: str,
+    *,
+    driver: AgentDriver,
+    state_dir: Optional[str],
+    pre_dispatch_repro_enabled: bool,
+    pre_dispatch_repro_timeout: int,
+) -> Tuple[int, Dict[str, Any]]:
+    """Build the manifest item, optionally enrich with pre-dispatch test
+    output, dispatch, and write the journal entry for the outcome.
+
+    Catch-all: any exception -> failed result, never a false green.
+    """
+    try:
+        manifest_item = build_manifest_item(driver, item)
+
+        # INCREMENT 1: Pre-dispatch test enrichment. If the item has a
+        # testCmd, run it once pre-dispatch (bounded timeout). If it FAILS,
+        # capture the failure output and enrich the initial prompt. Strict
+        # no-op when test passes, times out, or is absent (prompt
+        # byte-identical).
+        test_cmd = item.get("testCmd", "")
+        if test_cmd and pre_dispatch_repro_enabled:
+            import time as time_module
+            elapsed_start = time_module.time()
+            pre_dispatch_output, test_passed = _run_and_capture_test_output(
+                workdir, test_cmd, timeout_sec=pre_dispatch_repro_timeout
+            )
+            elapsed_sec = time_module.time() - elapsed_start
+            # Log elapsed time per enriched item (metadata only, no test output).
+            if state_dir:
+                try:
+                    journal_path = Path(state_dir) / "pre_dispatch_enrichment.log"
+                    with open(journal_path, "a", encoding="utf-8") as f:
+                        f.write(f"{slug}: {elapsed_sec:.2f}s\n")
+                except Exception:
+                    # Fail-closed: if logging fails, continue without it
+                    pass
+            # Only enrich if test FAILED and output captured (not empty).
+            if not test_passed and pre_dispatch_output:
+                manifest_item["initialFailedTestOutput"] = pre_dispatch_output
+
+        dispatch_result = dispatch_item(driver, manifest_item, workdir=workdir)
+
+        item_result = {
+            "slug": slug,
+            "dispatched": dispatch_result.get("route") == "driver",
+            "verified": dispatch_result.get("verified", False),
+            "testExit": dispatch_result.get("testExit"),
+            "repairs": 0,
+            "error": dispatch_result.get("error"),
+            "filesWritten": dispatch_result.get("filesWritten", []),
+            "workerId": dispatch_result.get("workerId"),
+            "testStdout": dispatch_result.get("testStdout", ""),
+            "testStderr": dispatch_result.get("testStderr", ""),
+        }
+
+        # Write journal entry for this item's outcome. filesWritten is
+        # persisted so a journal-resumed item can still ship/quarantine
+        # (RS3-W N3); fingerprint binds the entry to this item's content
+        # so a new item reusing the slug is never skipped (RS3-W N10).
+        if state_dir:
+            _write_journal_entry(state_dir, slug, "dispatched", {
+                "verified": item_result["verified"],
+                "testExit": item_result["testExit"],
+                "instance_id": instance_id,
+                "filesWritten": item_result["filesWritten"],
+                "fingerprint": _item_fingerprint(item),
+            }, repo=repo)
+
+        return (item_index, item_result)
+
+    except Exception as exc:
+        if state_dir:
+            _write_journal_entry(state_dir, slug, "failed", {
+                "verified": False,
+                "testExit": None,
+                "instance_id": instance_id,
+                "error": str(exc),
+            }, repo=repo)
+
+        return (
+            item_index,
+            {
+                "slug": slug,
+                "dispatched": False,
+                "verified": False,
+                "testExit": None,
+                "repairs": 0,
+                "error": f"build exception: {exc}",
+                "filesWritten": [],
+            },
+        )
+    # NOTE (RS5 F3): no finally-release here. The claim protects the WHOLE
+    # lifecycle -- Phase 5 repair and Phase 7 ship run under it -- and
+    # run_wave's finally releases it exactly once at the true end.
+
+
+def _dispatch_single_item(
+    item_index: int,
+    item: Dict[str, Any],
+    *,
+    driver: AgentDriver,
+    claim_ctx: "_ClaimContext",
+    state_dir: Optional[str],
+    journal_state: Dict[Tuple[Any, Any], Dict[str, Any]],
+    resume_stats: Dict[str, Any],
+    resume_stats_lock: threading.Lock,
+    pre_dispatch_repro_enabled: bool,
+    pre_dispatch_repro_timeout: int,
+) -> Tuple[int, Dict[str, Any]]:
+    """Build one item and return (index, result_dict).
+
+    Extraction of the former nested `build_item` closure with EXPLICIT
+    parameters -- no captured free variables -- per the constraint that a
+    thread-dispatched item builder must be independently callable/testable.
+    Delegates to _try_resume_from_journal, _try_claim_item, and
+    _dispatch_and_journal in the same order the original closure ran them.
+    """
+    slug = item.get("slug", f"item-{item_index}")
+    workdir = item.get("workDir", ".")
+    repo = item.get("repo")
+
+    # ====================================================================
+    # RESUME CHECK: If in journal and verified, skip dispatch and trust-verify
+    # ====================================================================
+    resumed = _try_resume_from_journal(
+        item_index, item, slug, workdir, repo, journal_state, resume_stats,
+        resume_stats_lock, driver,
+    )
+    if resumed is not None:
+        return resumed
+
+    # ====================================================================
+    # NORMAL BUILD: Not in journal or was marked as failed
+    # ====================================================================
+    with resume_stats_lock:
+        resume_stats["rebuilt"] += 1
+
+    # Try to claim the item if state_dir is given (fail-closed on claim failure).
+    instance_id = claim_ctx.instance_id
+    claim_failure = _try_claim_item(item_index, slug, claim_ctx, state_dir)
+    if claim_failure is not None:
+        return claim_failure
+
+    return _dispatch_and_journal(
+        item_index, item, slug, workdir, repo, instance_id,
+        driver=driver, state_dir=state_dir,
+        pre_dispatch_repro_enabled=pre_dispatch_repro_enabled,
+        pre_dispatch_repro_timeout=pre_dispatch_repro_timeout,
+    )
+
+
+def _build_items_parallel(
+    items: List[Dict[str, Any]],
+    *,
+    driver: AgentDriver,
+    claim_ctx: "_ClaimContext",
+    state_dir: Optional[str],
+    journal_state: Dict[Tuple[Any, Any], Dict[str, Any]],
+    resume_stats: Dict[str, Any],
+    resume_stats_lock: threading.Lock,
+    pre_dispatch_repro_enabled: bool,
+    pre_dispatch_repro_timeout: int,
+) -> Tuple[
+    List[Tuple[int, Dict[str, Any], Dict[str, Any]]],
+    List[Tuple[int, Dict[str, Any], Dict[str, Any]]],
+]:
+    """PHASE 4: Build (PARALLEL with ThreadPoolExecutor).
+
+    Dispatches every item concurrently via _dispatch_single_item, then
+    collects (index, item, item_result) triples. built_items is sorted by
+    index to preserve deterministic ordering (thread completion order is
+    not the same as submission order).
+
+    Returns:
+        Tuple of (built_items, failed_items). failed_items excludes
+        claim-skipped items -- they are NOT repair candidates: repair would
+        dispatch them WITHOUT a claim, the double-dispatch the skip exists
+        to prevent.
+    """
+    built_items = []
+    failed_items = []
+
+    max_workers = min(8, len(items)) if items else 1
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_item = {
+            executor.submit(
+                _dispatch_single_item, i, item,
+                driver=driver, claim_ctx=claim_ctx, state_dir=state_dir,
+                journal_state=journal_state, resume_stats=resume_stats,
+                resume_stats_lock=resume_stats_lock,
+                pre_dispatch_repro_enabled=pre_dispatch_repro_enabled,
+                pre_dispatch_repro_timeout=pre_dispatch_repro_timeout,
+            ): (i, item)
+            for i, item in enumerate(items)
+        }
+        for future in concurrent.futures.as_completed(future_to_item):
+            submitted_index, submitted_item = future_to_item[future]
+            try:
+                item_index, item_result = future.result()
+            except Exception as exc:
+                # RS3-W N7: build_item catches internally, but if the future
+                # STILL raises the item must NEVER silently vanish from both
+                # built and failed_items (it made green vacuously true).
+                # Record an honest failed result for the submitted item.
+                item_index = submitted_index
+                item_result = {
+                    "slug": submitted_item.get("slug", f"item-{submitted_index}"),
+                    "dispatched": False,
+                    "verified": False,
+                    "testExit": None,
+                    "repairs": 0,
+                    "error": f"executor exception: {exc}",
+                    "filesWritten": [],
+                }
+            built_items.append((item_index, items[item_index], item_result))
+
+            if not item_result["verified"] and not item_result.get("claim_skipped"):
+                failed_items.append((item_index, items[item_index], item_result))
+
+    built_items.sort(key=lambda x: x[0])
+    return built_items, failed_items
+
+
+# ------------------------------------------------------------------------
+# PHASE 5: Bounded repair
+# ------------------------------------------------------------------------
+
+
+def _repair_one_round(
+    failed_items: List[Tuple[int, Dict[str, Any], Dict[str, Any]]],
+    driver: AgentDriver,
+    state_dir: Optional[str],
+    claim_ctx: "_ClaimContext",
+) -> List[Tuple[int, Dict[str, Any], Dict[str, Any]]]:
+    """Repair each failed item once. Returns the items still failing
+    afterward (candidates for the next round, or terminal if repair_cap
+    is exhausted).
+    """
+    next_failed = []
+    for item_index, item, item_result in failed_items:
+        slug = item.get("slug", f"item-{item_index}")
+        workdir = item.get("workDir", ".")
+
+        # RS5 F1b FENCE: never repair-dispatch an item whose claim we no
+        # longer hold (ttl lapsed and another instance may have reclaimed
+        # it and be dispatching the same files right now). Terminal honest
+        # abort -- recorded, never silently retried.
+        if not claim_ctx.fence_ok(slug):
+            item_result["error"] = (
+                "claim lost before repair (fenced): not re-dispatched"
+            )
+            item_result["claim_lost"] = True
+            if state_dir:
+                _write_journal_entry(state_dir, slug, "claim_lost", {
+                    "verified": False,
+                    "testExit": item_result.get("testExit"),
+                    "repairs": item_result.get("repairs", 0),
+                    "instance_id": claim_ctx.instance_id,
+                    "error": "claim lost before repair",
+                }, repo=item.get("repo"))
+            continue
+
+        # Build repair prompt: append test output to original prompt.
+        original_prompt = item.get("prompt", "")
+        test_output = f"\n\nTest failed with exit code {item_result['testExit']}.\n"
+        if item_result.get("error"):
+            test_output += f"Error: {item_result['error']}\n"
+        repair_prompt = original_prompt + test_output
+
+        repair_item = dict(item)
+        repair_item["prompt"] = repair_prompt
+
+        # Enrich repair item with lastTestOutput if test output was captured.
+        captured_stdout = item_result.get("testStdout", "")
+        captured_stderr = item_result.get("testStderr", "")
+        if captured_stdout or captured_stderr:
+            last_test_output = _cap_test_output(captured_stdout, captured_stderr)
+            if last_test_output:
+                repair_item["lastTestOutput"] = last_test_output
+
+        # Enrich repair item with ownsFilesDiff (git diff of owned files).
+        owned_files = item.get("ownsFiles", [])
+        if owned_files:
+            owns_files_diff = _get_owned_files_diff(workdir, owned_files)
+            if owns_files_diff:
+                repair_item["ownsFilesDiff"] = owns_files_diff
+
+        try:
+            manifest_item = build_manifest_item(driver, repair_item)
+            dispatch_result = dispatch_item(driver, manifest_item, workdir=workdir)
+
+            item_result["verified"] = dispatch_result.get("verified", False)
+            item_result["testExit"] = dispatch_result.get("testExit")
+            item_result["error"] = dispatch_result.get("error")
+            item_result["filesWritten"] = dispatch_result.get("filesWritten", [])
+            item_result["repairs"] += 1
+
+            if state_dir:
+                repo = item.get("repo")
+                _write_journal_entry(state_dir, slug, "repaired", {
+                    "verified": item_result["verified"],
+                    "testExit": item_result["testExit"],
+                    "repairs": item_result["repairs"],
+                    "filesWritten": item_result["filesWritten"],
+                    "fingerprint": _item_fingerprint(item),
+                }, repo=repo)
+
+            if not item_result["verified"]:
+                next_failed.append((item_index, item, item_result))
+
+        except Exception as exc:
+            item_result["error"] = f"repair exception: {exc}"
+            item_result["repairs"] += 1
+
+            if state_dir:
+                repo = item.get("repo")
+                _write_journal_entry(state_dir, slug, "repair_failed", {
+                    "verified": False,
+                    "testExit": None,
+                    "repairs": item_result["repairs"],
+                    "error": str(exc),
+                }, repo=repo)
+
+            next_failed.append((item_index, item, item_result))
+
+    return next_failed
+
+
+def _repair_failed_items(
+    failed_items: List[Tuple[int, Dict[str, Any], Dict[str, Any]]],
+    repair_cap: int,
+    driver: AgentDriver,
+    state_dir: Optional[str],
+    claim_ctx: "_ClaimContext",
+    result: Dict[str, Any],
+) -> bool:
+    """PHASE 5: Bounded repair loop over up to repair_cap rounds.
+
+    Returns:
+        bool: True if the wave must abort now (cost ceiling tripped in a
+        repair round, result populated with
+        abort_reason="cost_ceiling_exceeded_in_repair"), False to continue.
+    """
+    for _repair_round in range(repair_cap):
+        if not failed_items:
+            break
+
+        if _check_cost_ceiling(
+            driver, state_dir, result, "cost_ceiling_exceeded_in_repair",
+            set_ceiling_field=False,
+        ):
+            return True
+
+        failed_items = _repair_one_round(failed_items, driver, state_dir, claim_ctx)
+
+    return False
+
+
+# ------------------------------------------------------------------------
+# PHASE 5.5: Verify-exact-gate (fake-green detection, INCREMENT 2)
+# ------------------------------------------------------------------------
+
+
+def _verify_exact_gate(
+    items: List[Dict[str, Any]],
+    result: Dict[str, Any],
+    spot_check_frac: float,
+    driver: AgentDriver,
+    state_dir: Optional[str],
+) -> None:
+    """PHASE 5.5: verdict must come from an orchestrator-side re-run of
+    testCmd (exact gate), never from the worker's self-report alone.
+
+    Deterministic sampling applies the spot_check_frac cap: if
+    spot_check_frac=0.10, only 10% of verified items are re-verified
+    (backward-compatible). If worker self-reported success but the gate
+    re-run fails: FAKE-GREEN marker. Mutates result["built"][i] in place;
+    has no return value (matches the original inline block, which never
+    returned early here).
+    """
+    verified_items_list = [
+        (items[i], result["built"][i]) for i in range(len(items))
+        if i < len(result["built"]) and result["built"][i].get("verified", False)
+    ]
+
+    if not (verified_items_list and spot_check_frac > 0):
+        return
+
+    # Deterministic sampling: sort by slug, then take first N.
+    verified_items_list.sort(key=lambda x: x[0].get("slug", ""))
+    num_to_verify = max(1, ceil(len(verified_items_list) * spot_check_frac))
+    items_to_verify = verified_items_list[:num_to_verify]
+
+    for original_item, item_result in items_to_verify:
+        test_cmd = original_item.get("testCmd", "")
+        workdir = original_item.get("workDir", ".")
+        slug = original_item.get("slug", "")
+
+        if not test_cmd:
+            continue
+
+        try:
+            rerun_result = driver.run_command(test_cmd, cwd=workdir)
+            # EXACT GATE VERDICT: only exit 0 = true pass.
+            if rerun_result.exit_code != 0:
+                item_result["verified"] = False
+                item_result["fake_green"] = True
+                item_result["gate_test_exit"] = rerun_result.exit_code
+
+                if state_dir:
+                    repo = original_item.get("repo")
+                    _write_journal_entry(state_dir, slug, "fake_green", {
+                        "verified": False,
+                        "testExit": rerun_result.exit_code,
+                        "gate_rerun": True,
+                        "worker_claimed_verified": True,
+                    }, repo=repo)
+        except Exception as exc:
+            item_result["verified"] = False
+            item_result["gate_exception"] = True
+
+            if state_dir:
+                repo = original_item.get("repo")
+                _write_journal_entry(state_dir, slug, "gate_exception", {
+                    "verified": False,
+                    "error": str(exc),
+                    "gate_rerun": True,
+                }, repo=repo)
+
+
+# ------------------------------------------------------------------------
+# PHASE 5.75: Adversarial review (opt-in via manifest, sampled, repair-routed)
+# ------------------------------------------------------------------------
+
+
+def _resolve_adversarial_review_config(
+    manifest: Dict[str, Any], policy: Dict[str, Any]
+) -> Tuple[bool, float]:
+    """Adversarial review is opt-in: it runs ONLY if explicitly enabled in
+    the manifest. The policy's adversarial_review_sample_frac informs
+    defaults when enabled.
+    """
+    adv_review_config = manifest.get("adversarial_review", {})
+    if isinstance(adv_review_config, dict):
+        enabled = adv_review_config.get("enabled", False)
+        sample_frac = adv_review_config.get(
+            "sample_frac", policy.get("adversarial_review_sample_frac", 0.1)
+        )
+    else:
+        enabled = False
+        sample_frac = policy.get("adversarial_review_sample_frac", 0.1)
+    return enabled, sample_frac
+
+
+def _repair_refuted_item(
+    item_index: int,
+    item: Dict[str, Any],
+    item_result: Dict[str, Any],
+    driver: AgentDriver,
+    state_dir: Optional[str],
+    claim_ctx: "_ClaimContext",
+) -> None:
+    """Re-enter one adversarial-review-refuted item into repair (one more
+    round; bounded by the caller checking repair_cap > 0 first).
+    """
+    slug = item.get("slug", f"item-{item_index}")
+    workdir = item.get("workDir", ".")
+
+    # Verify claim is still held (fence check)
+    if not claim_ctx.fence_ok(slug):
+        item_result["error"] = (
+            "claim lost during adversarial review (fenced): not repaired"
+        )
+        item_result["claim_lost"] = True
+        if state_dir:
+            _write_journal_entry(state_dir, slug, "claim_lost_adv_review", {
+                "verified": False,
+                "repairs": item_result.get("repairs", 0),
+                "instance_id": claim_ctx.instance_id,
+                "error": "claim lost during adversarial review",
+            }, repo=item.get("repo"))
+        return
+
+    # Build repair prompt: append review findings
+    original_prompt = item.get("prompt", "")
+    review_error = item_result.get("review_error", "Issues found by reviewer")
+    repair_prompt = (
+        original_prompt
+        + f"\n\nReviewer found issues: {review_error}\n"
+        + "Please fix the identified issues."
+    )
+
+    repair_item = dict(item)
+    repair_item["prompt"] = repair_prompt
+
+    try:
+        manifest_item = build_manifest_item(driver, repair_item)
+        dispatch_result = dispatch_item(driver, manifest_item, workdir=workdir)
+
+        item_result["verified"] = dispatch_result.get("verified", False)
+        item_result["testExit"] = dispatch_result.get("testExit")
+        item_result["error"] = dispatch_result.get("error")
+        item_result["filesWritten"] = dispatch_result.get("filesWritten", [])
+        item_result["repairs"] = item_result.get("repairs", 0) + 1
+
+        if state_dir:
+            repo = item.get("repo")
+            _write_journal_entry(state_dir, slug, "adversarial_repair", {
+                "verified": item_result["verified"],
+                "testExit": item_result["testExit"],
+                "repairs": item_result["repairs"],
+                "filesWritten": item_result["filesWritten"],
+                "fingerprint": _item_fingerprint(item),
+            }, repo=repo)
+
+    except Exception as exc:
+        item_result["error"] = f"adversarial repair exception: {exc}"
+        item_result["repairs"] = item_result.get("repairs", 0) + 1
+
+        if state_dir:
+            repo = item.get("repo")
+            _write_journal_entry(state_dir, slug, "adversarial_repair_failed", {
+                "verified": False,
+                "repairs": item_result["repairs"],
+                "error": str(exc),
+            }, repo=repo)
+
+
+def _dispatch_adversarial_review_phase(
+    manifest: Dict[str, Any],
+    policy: Dict[str, Any],
+    items: List[Dict[str, Any]],
+    result: Dict[str, Any],
+    driver: AgentDriver,
+    state_dir: Optional[str],
+    claim_ctx: "_ClaimContext",
+    repair_cap: int,
+) -> None:
+    """PHASE 5.75: sample verified items, dispatch an adversarial reviewer
+    for each, and route refutations back into one bounded repair round.
+    Mutates result["built"][i] in place; no return value (matches the
+    original inline block).
+    """
+    adv_review_enabled, adv_review_sample_frac = _resolve_adversarial_review_config(manifest, policy)
+
+    reviewable_items = [
+        (i, items[i], result["built"][i])
+        for i in range(len(items))
+        if i < len(result["built"]) and result["built"][i].get("verified", False)
+    ]
+
+    if adv_review_enabled and reviewable_items and adv_review_sample_frac > 0:
+        # Deterministic sampling: sort by slug, then take first N
+        reviewable_items.sort(key=lambda x: x[1].get("slug", ""))
+        num_to_review = max(1, ceil(len(reviewable_items) * adv_review_sample_frac))
+        items_to_review = reviewable_items[:num_to_review]
+
+        refuted_for_repair = []  # Items that reviewer refuted; re-enter repair
+
+        for item_index, original_item, item_result in items_to_review:
+            refuted = _dispatch_adversarial_review(
+                driver, original_item, item_result, state_dir=state_dir
+            )
+            if refuted:
+                item_result["verified"] = False
+                refuted_for_repair.append((item_index, original_item, item_result))
+
+        if refuted_for_repair and repair_cap > 0:
+            for item_index, item, item_result in refuted_for_repair:
+                _repair_refuted_item(item_index, item, item_result, driver, state_dir, claim_ctx)
+
+    elif adv_review_enabled and reviewable_items:
+        # Enabled but sample_frac = 0: mark all as skipped
+        for item_index, original_item, item_result in reviewable_items:
+            item_result["adversarial_review"] = "skipped_zero_frac"
+
+    elif reviewable_items:
+        # Not enabled: mark all as skipped
+        for item_index, original_item, item_result in reviewable_items:
+            item_result["adversarial_review"] = "skipped_disabled"
+
+
+# ------------------------------------------------------------------------
+# PHASE 6: Orchestrator final catch (HS-2)
+# ------------------------------------------------------------------------
+
+
+def _run_orchestrator_final_catch_phase(
+    orchestrator_backend: Any,
+    items: List[Dict[str, Any]],
+    result: Dict[str, Any],
+    state_dir: Optional[str],
+    driver: AgentDriver,
+) -> bool:
+    """PHASE 6: adversarial review / orchestrator final catch (HS-2).
+
+    If no live seat is configured, the live harness IS the orchestrator and
+    review stays deferred (byte-identical to pre-HS-2 behavior). Otherwise
+    routes a final_catch decision per verified item through the swapped
+    backend, then re-checks the cost ceiling AFTER decisions and BEFORE
+    ship (the seat's own spend counts against the ceiling too).
+
+    Returns:
+        bool: True if the wave must abort now (result populated with
+        abort_reason="cost_ceiling_exceeded_after_decisions"), False to continue.
+    """
+    if not _is_live_orchestrator_backend(orchestrator_backend):
+        # No configured seat: the live harness IS the orchestrator; review
+        # stays deferred to it. Byte-identical to pre-HS-2 behavior.
+        result["adversarial_review"] = "deferred"
+        for item_result in result["built"]:
+            item_result["adversarial_review"] = "deferred"
+        return False
+
+    _orchestrator_final_catch(
+        orchestrator_backend, items, result, state_dir=state_dir,
+        driver=driver,
+    )
+
+    if cost_ceiling is None or state_dir is None:
+        return False
+
+    # RS3-W N1: driver.get_tokens_spent() may be None BY CONTRACT
+    # (ClaudeCodeDriver always; CodexDriver at zero spend). Adding None +
+    # int crashed the flagship "Claude worker + swapped orchestrator seat"
+    # wave AFTER seat decisions, BEFORE ship -- verified work never shipped
+    # and the item looped. With an unmetered driver: count the metered seat
+    # spend when there is any; otherwise pass None so cost_ceiling keeps
+    # its windowed ledger fallback (same contract as the Phase 3 check).
+    driver_spent = driver.get_tokens_spent()
+    seat_spent = _seat_tokens_spent(orchestrator_backend)
+    if driver_spent is None:
+        spent_arg = seat_spent if seat_spent > 0 else None
+    else:
+        spent_arg = driver_spent + seat_spent
+    ceiling_result = cost_ceiling.check(
+        spent=spent_arg,
+        trip=True,
+        state_dir=state_dir,
+    )
+    result["ceiling"] = ceiling_result
+    if ceiling_result.get("exceeded", False):
+        result["aborted"] = True
+        result["abort_reason"] = "cost_ceiling_exceeded_after_decisions"
+        return True
+    return False
+
+
+# ------------------------------------------------------------------------
+# PHASE 7: Per-repo ship (git operations)
+# ------------------------------------------------------------------------
+
+
+def _ship_verify_toplevel_guard(git: Dict[str, str], result: Dict[str, Any]) -> bool:
+    """Verify expectTopLevel guard: MUST be a non-empty string.
+
+    Returns:
+        bool: True if the wave must abort now (result populated with
+        abort_reason="git_toplevel_missing_or_empty"), False to continue.
+    """
+    expect_top_level = git.get("expectTopLevel")
+    if not expect_top_level or not isinstance(expect_top_level, str):
+        result["aborted"] = True
+        result["abort_reason"] = "git_toplevel_missing_or_empty"
+        return True
+    return False
+
+
+def _collect_verified_items_for_ship(
+    items: List[Dict[str, Any]], result: Dict[str, Any], claim_ctx: "_ClaimContext"
+) -> List[Tuple[int, Dict[str, Any], Dict[str, Any]]]:
+    """Only ship items that verified green AND still hold their claim fence.
+
+    RS5 F1b FENCE: an item whose claim lapsed and was reclaimed must NOT
+    ship -- the reclaiming instance may ship its own build of the same
+    slug (double-ship). Items this wave never claimed (journal-resumed,
+    claim-gate disabled) always pass the fence.
+    """
+    slug_to_item = {item.get("slug"): (i, item) for i, item in enumerate(items)}
+
+    verified_items = []
+    for item_result in result["built"]:
+        if not item_result.get("verified", False):
+            continue
+        slug = item_result.get("slug")
+        if slug not in slug_to_item:
+            continue
+        if not claim_ctx.fence_ok(slug):
+            item_result["ship_error"] = (
+                "claim lost before ship (fenced): not shipped"
+            )
+            item_result["claim_lost"] = True
+            continue
+        item_index, original_item = slug_to_item[slug]
+        verified_items.append((item_index, original_item, item_result))
+    return verified_items
+
+
+def _group_items_by_repo(
+    verified_items: List[Tuple[int, Dict[str, Any], Dict[str, Any]]]
+) -> Dict[str, List[Tuple[int, Dict[str, Any], Dict[str, Any]]]]:
+    """Group verified items by their resolved repo. Fail-closed per item:
+    an invalid repo path marks that item's ship_error but doesn't affect
+    other items/repos.
+    """
+    repo_to_items = {}
+    for item_index, original_item, item_result in verified_items:
+        repo = original_item.get("repo", ".")
+        try:
+            repo_resolved = _validate_repo_path(repo)
+        except ValueError:
+            item_result["ship_error"] = f"invalid repo path: {repo}"
+            continue
+
+        if repo_resolved not in repo_to_items:
+            repo_to_items[repo_resolved] = []
+        repo_to_items[repo_resolved].append((item_index, original_item, item_result))
+    return repo_to_items
+
+
+def _ship_check_repo_toplevel(
+    repo_path: str,
+    repo_items: List[Tuple[int, Dict[str, Any], Dict[str, Any]]],
+    driver: AgentDriver,
+) -> Optional[Dict[str, Any]]:
+    """Verify expectTopLevel guard PER REPO: the repo must actually be a git
+    repo whose toplevel equals its own resolved root (not a subdirectory or
+    a symlink escaping it). Mutates ship_error on repo_items when failing.
+
+    Returns:
+        Optional[Dict]: a repo_ship_results entry if this repo's ship must
+        be aborted, else None to proceed.
+    """
+    toplevel_result = driver.run_command(
+        "git rev-parse --show-toplevel",
+        cwd=repo_path
+    )
+    if toplevel_result.exit_code != 0:
+        for _, _, item_result in repo_items:
+            item_result["ship_error"] = "git_toplevel_check_failed"
+        return {
+            "repo": repo_path,
+            "committed": False,
+            "error": "git_toplevel_check_failed",
+            "files_count": len(repo_items),
+        }
+
+    toplevel = toplevel_result.stdout.strip()
+    # Normalize paths for comparison (git may return with / on Windows)
+    toplevel_normalized = str(Path(toplevel).resolve())
+    repo_path_normalized = str(Path(repo_path).resolve())
+
+    if toplevel_normalized != repo_path_normalized:
+        for _, _, item_result in repo_items:
+            item_result["ship_error"] = "git_toplevel_mismatch"
+        return {
+            "repo": repo_path,
+            "committed": False,
+            "error": "git_toplevel_mismatch",
+            "files_count": len(repo_items),
+            "expected_repo_root": repo_path_normalized,
+            "actual_toplevel": toplevel_normalized,
+        }
+    return None
+
+
+def _ship_add_files(
+    repo_path: str,
+    repo_items: List[Tuple[int, Dict[str, Any], Dict[str, Any]]],
+    driver: AgentDriver,
+) -> Tuple[List[str], Optional[Dict[str, Any]]]:
+    """Collect this repo's filesWritten, validate them (VALIDATION P2: must
+    be relative and stay inside the repo root), and `git add` them.
+
+    Returns:
+        Tuple of (files_to_add, error_or_None). error_or_None is a
+        repo_ship_results entry if validation or `git add` failed (already
+        marked ship_error on repo_items), else None.
+    """
+    files_to_add = []
+    for _, _, item_result in repo_items:
+        files_to_add.extend(item_result.get("filesWritten", []))
+
+    if not files_to_add:
+        return files_to_add, None
+
+    invalid_files = []
+    for file_path in files_to_add:
+        try:
+            _validate_file_path(file_path, repo_path)
+        except ValueError as e:
+            invalid_files.append((file_path, str(e)))
+
+    if invalid_files:
+        for _, _, item_result in repo_items:
+            item_result["ship_error"] = f"invalid file paths: {invalid_files}"
+        return files_to_add, {
+            "repo": repo_path,
+            "committed": False,
+            "error": "invalid_file_paths",
+            "files_count": len(repo_items),
+            "invalid_files": invalid_files,
+        }
+
+    # Add files. Escape each filename to prevent shell injection.
+    escaped_files = [_quote_arg(f) for f in files_to_add]
+    add_cmd = "git add " + " ".join(escaped_files)
+    add_result = driver.run_command(add_cmd, cwd=repo_path)
+    if add_result.exit_code != 0:
+        # GIT ADD FAILURE P1: git add may have partially succeeded, leaving
+        # staged residue. Run git reset to clean the index.
+        reset_result = driver.run_command("git reset", cwd=repo_path)
+        unstage_ok = reset_result.exit_code == 0
+
+        for _, _, item_result in repo_items:
+            item_result["ship_error"] = "git_add_failed"
+        return files_to_add, {
+            "repo": repo_path,
+            "committed": False,
+            "error": "git_add_failed",
+            "error_detail": ((add_result.stderr or "") + " | " + (add_result.stdout or ""))[:300],
+            "files_count": len(repo_items),
+            "files_unstaged": unstage_ok,
+            "unstage_error": None if unstage_ok else reset_result.stderr,
+        }
+
+    return files_to_add, None
+
+
+def _ship_commit_and_push(
+    repo_path: str,
+    repo_items: List[Tuple[int, Dict[str, Any], Dict[str, Any]]],
+    driver: AgentDriver,
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Commit and push the already-staged files for one repo.
+
+    Returns:
+        Tuple of (repo_ship_result, shipped_slugs).
+    """
+    shipped_slugs = []
+    commit_msg = f"Wave: {len(repo_items)} items verified"
+    commit_cmd = f"git commit -m {_quote_arg(commit_msg)}"
+    commit_result = driver.run_command(commit_cmd, cwd=repo_path)
+
+    if commit_result.exit_code != 0 and (
+        "nothing to commit"
+        in ((commit_result.stdout or "") + (commit_result.stderr or "")).lower()
+    ):
+        # RS3-W N3: the staged content is ALREADY in HEAD (e.g. a prior run
+        # committed then crashed before the tracker was marked). The item
+        # is verified and its work is committed: emit a terminal shipped
+        # record instead of failing forever on re-commit.
+        for _, _, item_result in repo_items:
+            item_result["ship_no_changes"] = True
+            shipped_slugs.append(item_result["slug"])
+        return {
+            "repo": repo_path,
+            "committed": False,
+            "no_changes": True,
+            "files_count": len(repo_items),
+        }, shipped_slugs
+
+    if commit_result.exit_code != 0:
+        # UNSTAGE P3: Commit failed; run git reset to unstage the files.
+        # This prevents staged-files residue on partial failure.
+        reset_result = driver.run_command("git reset", cwd=repo_path)
+        unstage_ok = reset_result.exit_code == 0
+
+        for _, _, item_result in repo_items:
+            item_result["ship_error"] = "git_commit_failed"
+        return {
+            "repo": repo_path,
+            "committed": False,
+            "error": "git_commit_failed",
+            "error_detail": ((commit_result.stderr or "") + " | " + (commit_result.stdout or ""))[:300],
+            "files_count": len(repo_items),
+            "files_unstaged": unstage_ok,
+            "unstage_error": None if unstage_ok else reset_result.stderr,
+        }, shipped_slugs
+
+    sha_result = driver.run_command("git rev-parse HEAD", cwd=repo_path)
+    commit_sha = sha_result.stdout.strip() if sha_result.exit_code == 0 else None
+
+    push_result = driver.run_command("git push", cwd=repo_path)
+    if push_result.exit_code != 0:
+        for _, _, item_result in repo_items:
+            item_result["ship_warning"] = "git_push_failed"
+            shipped_slugs.append(item_result["slug"])
+        return {
+            "repo": repo_path,
+            "committed": True,
+            "sha": commit_sha,
+            "error": "git_push_failed",
+            "files_count": len(repo_items),
+        }, shipped_slugs
+
+    for _, _, item_result in repo_items:
+        shipped_slugs.append(item_result["slug"])
+    return {
+        "repo": repo_path,
+        "committed": True,
+        "sha": commit_sha,
+        "files_count": len(repo_items),
+    }, shipped_slugs
+
+
+def _ship_one_repo(
+    repo_path: str,
+    repo_items: List[Tuple[int, Dict[str, Any], Dict[str, Any]]],
+    driver: AgentDriver,
+) -> Tuple[Dict[str, Any], List[str]]:
+    """Ship one repo's verified items: per-repo toplevel guard, stage,
+    commit, push -- or an honest no-changes terminal record.
+
+    Returns:
+        Tuple of (repo_ship_result, shipped_slugs).
+    """
+    toplevel_error = _ship_check_repo_toplevel(repo_path, repo_items, driver)
+    if toplevel_error is not None:
+        return toplevel_error, []
+
+    files_to_add, add_error = _ship_add_files(repo_path, repo_items, driver)
+    if add_error is not None:
+        return add_error, []
+
+    if not files_to_add:
+        # RS3-W N3: a VERIFIED item with no files to add must still reach a
+        # TERMINAL shipped record -- otherwise the scheduler never marks
+        # the tracker and the item is re-selected, re-verified, and
+        # "succeeds" every wave, forever (recovery livelock). Nothing to
+        # commit is an honest no-op ship, not a silent drop.
+        shipped_slugs = []
+        for _, _, item_result in repo_items:
+            item_result["ship_no_changes"] = True
+            shipped_slugs.append(item_result["slug"])
+        return {
+            "repo": repo_path,
+            "committed": False,
+            "no_changes": True,
+            "files_count": len(repo_items),
+        }, shipped_slugs
+
+    return _ship_commit_and_push(repo_path, repo_items, driver)
+
+
+def _ship_verified_items_per_repo(
+    git: Dict[str, str],
+    items: List[Dict[str, Any]],
+    result: Dict[str, Any],
+    driver: AgentDriver,
+    claim_ctx: "_ClaimContext",
+) -> bool:
+    """PHASE 7: per-repo ship. Groups verified items by resolved repo and
+    runs the git sequence (add, commit, push) separately for each, with the
+    expectTopLevel guard verified PER REPO before any write.
+
+    Returns:
+        bool: True if the wave must abort now (missing/empty expectTopLevel;
+        result populated), False to continue (ship attempted, or skipped
+        because there was nothing verified to ship).
+    """
+    if _ship_verify_toplevel_guard(git, result):
+        return True
+
+    verified_items = _collect_verified_items_for_ship(items, result, claim_ctx)
+    if not verified_items:
+        return False
+
+    repo_to_items = _group_items_by_repo(verified_items)
+
+    shipped_items = []
+    repo_ship_results = []
+
+    for repo_path, repo_items in repo_to_items.items():
+        repo_result, repo_shipped = _ship_one_repo(repo_path, repo_items, driver)
+        repo_ship_results.append(repo_result)
+        shipped_items.extend(repo_shipped)
+
+    if shipped_items:
+        result["shipped"] = shipped_items
+    if repo_ship_results:
+        result["shipped_repos"] = repo_ship_results
+
+    return False
+
+
 def _run_wave_inner(
     driver: AgentDriver,
     manifest: Dict[str, Any],
@@ -1339,167 +2752,23 @@ def _run_wave_inner(
     # Extract items from manifest.
     items = manifest.get("items", [])
 
-    # SLUG-UNIQUENESS PREFLIGHT (RS3-W N7): slugs are the identity key for
-    # journal entries, coordination claims, and slug->item lookups. Duplicate
-    # slugs silently collide in all three (last-writer-wins journal, claim
-    # starvation, wrong item shipped). Reject loudly, before any dispatch.
-    seen_slugs = {}
-    duplicate_slugs = []
-    for item in items:
-        slug = item.get("slug")
-        if slug is None:
-            continue
-        if slug in seen_slugs:
-            duplicate_slugs.append(slug)
-        else:
-            seen_slugs[slug] = True
-    if duplicate_slugs:
-        result["aborted"] = True
-        result["abort_reason"] = "duplicate_slugs"
-        result["duplicate_slugs"] = sorted(set(duplicate_slugs))
-        result["error"] = (
-            "duplicate item slugs in manifest (slugs key the journal, "
-            "coordination claims, and ship lookups): "
-            + ", ".join(sorted(set(duplicate_slugs)))
-        )
+    # ========================================================================
+    # PHASE 0/1: Preflight (duplicate slugs, resume journal, repo resolution,
+    # ownership guard). Each _preflight_* helper returns True to signal an
+    # abort (result already populated identically to the former inline
+    # `return result` escape it replaces).
+    # ========================================================================
+    if _preflight_check_duplicate_slugs(items, result):
         return result
 
-    # ========================================================================
-    # PHASE 0 (optional): Resume - Load journal state and release stale leases
-    # ========================================================================
-    journal_state = {}
-    resume_stats = {"skipped_from_journal": 0, "rebuilt": 0}
-    resume_stats_lock = threading.Lock()  # Protect resume_stats from concurrent access
-    if resume_journal and state_dir:
-        journal_state = _load_journal_state(state_dir)
-        _release_stale_leases(state_dir, journal_state)
-        if journal_state:
-            result["resume_stats"] = resume_stats
+    journal_state, resume_stats, resume_stats_lock = _preflight_load_resume_journal(
+        state_dir, resume_journal, result
+    )
 
-    # ========================================================================
-    # PHASE 1: Preflight ownership guard (with per-repo validation)
-    # ========================================================================
+    if _preflight_resolve_repos(items, git, result):
+        return result
 
-    # IMPORTANT: When git is configured (ship phase enabled), all items MUST have an
-    # absolute resolved `repo` field after preflight. This ensures manifests behave
-    # identically regardless of process cwd.
-    #
-    # Default for items without explicit `repo`:
-    # - If git config has expectTopLevel, use that (legacy behavior anchor)
-    # - If git config NOT present: no repo validation needed (non-ship-phase wave)
-    # - If git config present but NO expectTopLevel: error (can't default repo for shipping)
-
-    # Determine the default repo from git config (legacy anchor for byte-identical behavior).
-    # Only used when git config is present (i.e., shipping is enabled).
-    default_repo = None
-    if git is not None:
-        default_repo = git.get("expectTopLevel")
-
-    # EXPLICIT-REPO PREFLIGHT: Detect mixed manifests (some items with repo, some without).
-    # Contract:
-    #  - Pure-legacy manifest (NO item has repo) → use expectTopLevel default (backward compat)
-    #  - Fully-explicit manifest (ALL items have repo) → use explicit repos (unchanged)
-    #  - Mixed manifest (SOME items have repo) → REJECT with clear error (fail-closed)
-    #
-    # This ensures:
-    #  1. Legacy manifests continue to work (no breaking change)
-    #  2. Explicit manifests work correctly (no confusion)
-    #  3. Mixed manifests are caught early, preventing subtle bugs
-    if git is not None:
-        # Count items with and without explicit repo field
-        items_with_repo = sum(1 for item in items if item.get("repo"))
-        items_without_repo = len(items) - items_with_repo
-
-        if items_with_repo > 0 and items_without_repo > 0:
-            # Mixed manifest: some items have repo, some don't
-            result["aborted"] = True
-            result["abort_reason"] = "mixed_repo_manifest"
-            result["error"] = (
-                "mixed manifest detected: some items have explicit 'repo' field, others don't. "
-                "Manifests must be fully explicit (all items have 'repo') or fully implicit (none have 'repo'). "
-                "To fix: either add 'repo' field to all items or remove it from all items (use expectTopLevel instead)."
-            )
-            result["items_with_repo"] = items_with_repo
-            result["items_without_repo"] = items_without_repo
-            return result
-
-    # Validate and resolve all repos; populate default for missing items (only if shipping).
-    repo_paths = set()
-
-    for item in items:
-        repo = item.get("repo")
-
-        if not repo:
-            # No explicit repo field.
-            if git is not None:
-                # Ship phase is configured; must have a default (repo field must be missing on ALL items, per mixed check above).
-                if default_repo:
-                    repo = default_repo
-                else:
-                    # Shipping enabled but can't default repo for this item.
-                    result["aborted"] = True
-                    result["abort_reason"] = "repo_field_missing_no_default"
-                    result["error"] = "item requires 'repo' field when git shipping is configured (set expectTopLevel or add repo field)"
-                    result["item_slug"] = item.get("slug", "unknown")
-                    return result
-            else:
-                # No shipping phase; skip repo validation for this item.
-                # This allows backward-compatible non-shipping waves without repo fields.
-                continue
-
-        # Validate and resolve the repo path to absolute.
-        try:
-            repo_resolved = _validate_repo_path(repo)
-            repo_paths.add(repo_resolved)
-            # Update item with resolved path for later use (ensures byte-identical cwd).
-            item["repo"] = repo_resolved
-        except ValueError as e:
-            result["aborted"] = True
-            result["abort_reason"] = "invalid_repo_path"
-            result["invalid_repo"] = repo
-            result["error"] = str(e)
-            return result
-        # Future: also validate is_git_worktree, has_secret_scan_gate
-
-    # Per-repo ownership guard: track ownership within each repo separately.
-    # Structure: {repo: {normalized_file: slug}}
-    repo_owner_map = {}  # repo -> (normalized file -> slug)
-    conflicts = []
-
-    for item in items:
-        slug = item.get("slug", "unknown")
-        owned_files = item.get("ownsFiles", [])
-        repo = item.get("repo", ".")  # Default to cwd if no repo specified
-
-        # Normalize repo path
-        repo_normalized = str(Path(repo).resolve()).lower()
-
-        if repo_normalized not in repo_owner_map:
-            repo_owner_map[repo_normalized] = {}
-
-        owner_map = repo_owner_map[repo_normalized]
-
-        for f in owned_files:
-            # Platform-independent path normalization: handle separators and case uniformly.
-            # Replace all backslashes with forward slashes, normalize with posixpath,
-            # and convert to lowercase for case-insensitive comparison on all platforms.
-            normalized = posixpath.normpath(f.replace("\\", "/")).lower()
-            if normalized in owner_map:
-                conflicts.append(
-                    {
-                        "file": f,
-                        "normalized": normalized,
-                        "repo": repo,
-                        "items": [owner_map[normalized], slug],
-                    }
-                )
-            else:
-                owner_map[normalized] = slug
-
-    if conflicts:
-        result["aborted"] = True
-        result["abort_reason"] = "ownership_overlap"
-        result["conflicts"] = conflicts
+    if _preflight_check_ownership(items, result):
         return result
 
     result["preflight_ok"] = True
@@ -1507,321 +2776,31 @@ def _run_wave_inner(
     # ========================================================================
     # PHASE 2: Resolve verification policy ONCE
     # ========================================================================
-    caps = driver.probe_capabilities()
-    policy = verification_policy(caps)
-    result["policy"] = policy
-
-    repair_cap = policy.get("repair_cap", 1)
-    spot_check_frac = policy.get("spot_check_frac", 0.0)
-    require_adversarial_review = policy.get("require_adversarial_review", False)
-
-    # Extract pre-dispatch repro config knobs (latency gate FIX 1).
-    # Default: enabled=True (backward-compatible), timeout=120s.
-    pre_dispatch_repro_enabled = manifest.get("pre_dispatch_repro_enabled", True)
-    pre_dispatch_repro_timeout = manifest.get("pre_dispatch_repro_timeout", 120)
+    (
+        policy, repair_cap, spot_check_frac,
+        pre_dispatch_repro_enabled, pre_dispatch_repro_timeout,
+    ) = _resolve_verification_policy(driver, manifest, result)
 
     # ========================================================================
     # PHASE 3: Cost-ceiling gate (before build)
     # ========================================================================
-    if cost_ceiling is not None and state_dir is not None:
-        ceiling_result = cost_ceiling.check(
-            spent=driver.get_tokens_spent(),
-            trip=True,
-            state_dir=state_dir,
-        )
-        result["ceiling"] = ceiling_result
-
-        if ceiling_result.get("exceeded", False):
-            result["aborted"] = True
-            result["abort_reason"] = "cost_ceiling_exceeded"
-            return result
+    if _check_cost_ceiling(driver, state_dir, result, "cost_ceiling_exceeded"):
+        return result
 
     # ========================================================================
     # PHASE 4: Build (PARALLEL with ThreadPoolExecutor)
     # ========================================================================
-    # Prepare built items list and track for repair.
-    built_items = []
-    failed_items = []  # (index, item, result) tuples for repair
-
-    def build_item(item_index: int, item: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
-        """Build one item and return (index, result_dict)."""
-        slug = item.get("slug", f"item-{item_index}")
-        workdir = item.get("workDir", ".")
-        repo = item.get("repo")
-
-        # ====================================================================
-        # RESUME CHECK: If in journal and verified, skip dispatch and trust-verify
-        # ====================================================================
-        journal_key = (repo, slug)
-        journal_entry = journal_state.get(journal_key)
-        skipped_from_journal = False
-        # RS3-W N10: resume-skip requires the journal entry to MATCH the
-        # current item's content fingerprint. Entries without a fingerprint
-        # (older format) or with a different one (a NEW item reusing a prior
-        # wave's slug) are rebuilt -- never silently inherited (fail-closed).
-        if journal_entry and _should_skip_from_journal(journal_entry) and (
-            journal_entry.get("fingerprint") == _item_fingerprint(item)
-        ):
-            skipped_from_journal = True
-            with resume_stats_lock:
-                resume_stats["skipped_from_journal"] += 1
-
-            # RS3-W N3: restore the journaled filesWritten so a resumed
-            # verified item can still SHIP (Phase 7) or be quarantined on a
-            # block. Without this the resumed item verified green but never
-            # produced a shipped record -> tracker stayed todo -> the item
-            # was re-selected and re-verified every wave, forever.
-            journal_files_written = [
-                str(f) for f in (journal_entry.get("filesWritten") or [])
-                if isinstance(f, str) and f
-            ]
-
-            # Trust-but-verify: re-run the test for the journaled item
-            test_cmd = item.get("testCmd", "")
-            if test_cmd:
-                try:
-                    test_result = driver.run_command(test_cmd, cwd=workdir)
-                    if test_result.exit_code == 0:
-                        # Test still passes; mark verified.
-                        return (
-                            item_index,
-                            {
-                                "slug": slug,
-                                "dispatched": False,
-                                "verified": True,
-                                "testExit": 0,
-                                "repairs": 0,
-                                "error": None,
-                                "filesWritten": journal_files_written,
-                                "skipped_from_journal": True,
-                                "trust_verified": True,
-                            },
-                        )
-                    else:
-                        # Test failed on re-run; flip to False and mark for rebuild.
-                        with resume_stats_lock:
-                            resume_stats["rebuilt"] += 1
-                        return (
-                            item_index,
-                            {
-                                "slug": slug,
-                                "dispatched": False,
-                                "verified": False,
-                                "testExit": test_result.exit_code,
-                                "repairs": 0,
-                                "error": "trust-verify test failed (re-run)",
-                                "filesWritten": [],
-                                "skipped_from_journal": True,
-                                "trust_verified": False,
-                            },
-                        )
-                except Exception as exc:
-                    # Test re-run failed; flip to False and mark for rebuild.
-                    with resume_stats_lock:
-                        resume_stats["rebuilt"] += 1
-                    return (
-                        item_index,
-                        {
-                            "slug": slug,
-                            "dispatched": False,
-                            "verified": False,
-                            "testExit": None,
-                            "repairs": 0,
-                            "error": f"trust-verify exception: {exc}",
-                            "filesWritten": [],
-                            "skipped_from_journal": True,
-                            "trust_verified": False,
-                        },
-                    )
-            else:
-                # No test command; just mark as skipped but not verified (safe).
-                return (
-                    item_index,
-                    {
-                        "slug": slug,
-                        "dispatched": False,
-                        "verified": False,
-                        "testExit": None,
-                        "repairs": 0,
-                        "error": "no test command for trust-verify",
-                        "filesWritten": [],
-                        "skipped_from_journal": True,
-                        "trust_verified": False,
-                    },
-                )
-
-        # ====================================================================
-        # NORMAL BUILD: Not in journal or was marked as failed
-        # ====================================================================
-        with resume_stats_lock:
-            resume_stats["rebuilt"] += 1
-
-        # Try to claim the item if state_dir is given (fail-closed on claim failure).
-        # RS5 F1/F3: the claim uses the WAVE-level instance id and a ttl
-        # sized to the driver's command timeout (not the 300s default), and
-        # is HELD across the item's full lifecycle (build -> repair -> ship).
-        # Release happens exactly once in run_wave's finally, never here.
-        instance_id = claim_ctx.instance_id
-        if coordination is not None and state_dir is not None:
-            try:
-                if not claim_ctx.acquire(slug):
-                    # Item is claimed by another instance; skip it.
-                    return (
-                        item_index,
-                        {
-                            "slug": slug,
-                            "dispatched": False,
-                            "verified": False,
-                            "testExit": None,
-                            "repairs": 0,
-                            "error": "resource claimed by another instance",
-                            "filesWritten": [],
-                            "claim_skipped": True,
-                        },
-                    )
-            except Exception as claim_exc:
-                # RS3-W N5: fail-CLOSED means SKIP, not dispatch. Falling
-                # through here dispatched the item WITHOUT holding a claim
-                # (two racing instances both hit the SQLite lock exception
-                # and both dispatched -> double-dispatch). Skip the item and
-                # record why; another instance (or the next wave) retries.
-                return (
-                    item_index,
-                    {
-                        "slug": slug,
-                        "dispatched": False,
-                        "verified": False,
-                        "testExit": None,
-                        "repairs": 0,
-                        "error": f"claim check failed (fail-closed skip): {claim_exc}",
-                        "filesWritten": [],
-                        "claim_skipped": True,
-                    },
-                )
-
-        try:
-            # Build the manifest item with policy.
-            manifest_item = build_manifest_item(driver, item)
-
-            # INCREMENT 1: Pre-dispatch test enrichment
-            # If the item has a testCmd, run it once pre-dispatch (bounded timeout).
-            # If it FAILS, capture the failure output and enrich the initial prompt.
-            # Strict no-op when test passes, times out, or is absent (prompt byte-identical).
-            test_cmd = item.get("testCmd", "")
-            if test_cmd and pre_dispatch_repro_enabled:
-                import time as time_module
-                elapsed_start = time_module.time()
-                pre_dispatch_output, test_passed = _run_and_capture_test_output(
-                    workdir, test_cmd, timeout_sec=pre_dispatch_repro_timeout
-                )
-                elapsed_sec = time_module.time() - elapsed_start
-                # Log elapsed time per enriched item (metadata only, no test output).
-                if state_dir:
-                    try:
-                        journal_path = Path(state_dir) / "pre_dispatch_enrichment.log"
-                        with open(journal_path, "a", encoding="utf-8") as f:
-                            f.write(f"{slug}: {elapsed_sec:.2f}s\n")
-                    except Exception:
-                        # Fail-closed: if logging fails, continue without it
-                        pass
-                # Only enrich if test FAILED and output captured (not empty).
-                if not test_passed and pre_dispatch_output:
-                    # Add initialFailedTestOutput to manifest for template enrichment.
-                    manifest_item["initialFailedTestOutput"] = pre_dispatch_output
-
-            # Dispatch the item.
-            dispatch_result = dispatch_item(driver, manifest_item, workdir=workdir)
-
-            item_result = {
-                "slug": slug,
-                "dispatched": dispatch_result.get("route") == "driver",
-                "verified": dispatch_result.get("verified", False),
-                "testExit": dispatch_result.get("testExit"),
-                "repairs": 0,
-                "error": dispatch_result.get("error"),
-                "filesWritten": dispatch_result.get("filesWritten", []),
-                "workerId": dispatch_result.get("workerId"),
-                "testStdout": dispatch_result.get("testStdout", ""),
-                "testStderr": dispatch_result.get("testStderr", ""),
-            }
-
-            # Write journal entry for this item's outcome. filesWritten is
-            # persisted so a journal-resumed item can still ship/quarantine
-            # (RS3-W N3); fingerprint binds the entry to this item's content
-            # so a new item reusing the slug is never skipped (RS3-W N10).
-            if state_dir:
-                _write_journal_entry(state_dir, slug, "dispatched", {
-                    "verified": item_result["verified"],
-                    "testExit": item_result["testExit"],
-                    "instance_id": instance_id,
-                    "filesWritten": item_result["filesWritten"],
-                    "fingerprint": _item_fingerprint(item),
-                }, repo=repo)
-
-            return (item_index, item_result)
-
-        except Exception as exc:
-            # Catch-all: any exception -> failed result, never a false green.
-            if state_dir:
-                _write_journal_entry(state_dir, slug, "failed", {
-                    "verified": False,
-                    "testExit": None,
-                    "instance_id": instance_id,
-                    "error": str(exc),
-                }, repo=repo)
-
-            return (
-                item_index,
-                {
-                    "slug": slug,
-                    "dispatched": False,
-                    "verified": False,
-                    "testExit": None,
-                    "repairs": 0,
-                    "error": f"build exception: {exc}",
-                    "filesWritten": [],
-                },
-            )
-        # NOTE (RS5 F3): no finally-release here. The claim protects the
-        # WHOLE lifecycle -- Phase 5 repair and Phase 7 ship run under it --
-        # and run_wave's finally releases it exactly once at the true end.
-
-    # Run build in parallel.
-    max_workers = min(8, len(items)) if items else 1
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_item = {
-            executor.submit(build_item, i, item): (i, item)
-            for i, item in enumerate(items)
-        }
-        for future in concurrent.futures.as_completed(future_to_item):
-            submitted_index, submitted_item = future_to_item[future]
-            try:
-                item_index, item_result = future.result()
-            except Exception as exc:
-                # RS3-W N7: build_item catches internally, but if the future
-                # STILL raises the item must NEVER silently vanish from both
-                # built and failed_items (it made green vacuously true).
-                # Record an honest failed result for the submitted item.
-                item_index = submitted_index
-                item_result = {
-                    "slug": submitted_item.get("slug", f"item-{submitted_index}"),
-                    "dispatched": False,
-                    "verified": False,
-                    "testExit": None,
-                    "repairs": 0,
-                    "error": f"executor exception: {exc}",
-                    "filesWritten": [],
-                }
-            built_items.append((item_index, items[item_index], item_result))
-
-            # Track failed items for repair. Claim-skipped items are NOT
-            # repair candidates: repair would dispatch them WITHOUT a claim
-            # (the double-dispatch the skip exists to prevent).
-            if not item_result["verified"] and not item_result.get("claim_skipped"):
-                failed_items.append((item_index, items[item_index], item_result))
-
-    # Sort built_items by index to preserve order.
-    built_items.sort(key=lambda x: x[0])
+    built_items, failed_items = _build_items_parallel(
+        items,
+        driver=driver,
+        claim_ctx=claim_ctx,
+        state_dir=state_dir,
+        journal_state=journal_state,
+        resume_stats=resume_stats,
+        resume_stats_lock=resume_stats_lock,
+        pre_dispatch_repro_enabled=pre_dispatch_repro_enabled,
+        pre_dispatch_repro_timeout=pre_dispatch_repro_timeout,
+    )
     result["built"] = [item_result for _, _, item_result in built_items]
 
     # ====================================================================
@@ -1835,600 +2814,33 @@ def _run_wave_inner(
     # ========================================================================
     # PHASE 5: Bounded repair
     # ========================================================================
-    for repair_round in range(repair_cap):
-        if not failed_items:
-            break
-
-        # Cost-ceiling check before repair round.
-        if cost_ceiling is not None and state_dir is not None:
-            ceiling_result = cost_ceiling.check(
-                spent=driver.get_tokens_spent(),
-                trip=True,
-                state_dir=state_dir,
-            )
-            if ceiling_result.get("exceeded", False):
-                result["aborted"] = True
-                result["abort_reason"] = "cost_ceiling_exceeded_in_repair"
-                return result
-
-        # Repair each failed item.
-        next_failed = []
-        for item_index, item, item_result in failed_items:
-            slug = item.get("slug", f"item-{item_index}")
-            workdir = item.get("workDir", ".")
-            test_cmd = item.get("testCmd", "")
-
-            # RS5 F1b FENCE: never repair-dispatch an item whose claim we no
-            # longer hold (ttl lapsed and another instance may have reclaimed
-            # it and be dispatching the same files right now). Terminal
-            # honest abort -- recorded, never silently retried.
-            if not claim_ctx.fence_ok(slug):
-                item_result["error"] = (
-                    "claim lost before repair (fenced): not re-dispatched"
-                )
-                item_result["claim_lost"] = True
-                if state_dir:
-                    _write_journal_entry(state_dir, slug, "claim_lost", {
-                        "verified": False,
-                        "testExit": item_result.get("testExit"),
-                        "repairs": item_result.get("repairs", 0),
-                        "instance_id": claim_ctx.instance_id,
-                        "error": "claim lost before repair",
-                    }, repo=item.get("repo"))
-                continue
-
-            # Build repair prompt: append test output to original prompt.
-            original_prompt = item.get("prompt", "")
-            test_output = f"\n\nTest failed with exit code {item_result['testExit']}.\n"
-            if item_result.get("error"):
-                test_output += f"Error: {item_result['error']}\n"
-            repair_prompt = original_prompt + test_output
-
-            # Create a repair item and enrich with context.
-            repair_item = dict(item)
-            repair_item["prompt"] = repair_prompt
-
-            # Enrich repair item with lastTestOutput if test output was captured.
-            captured_stdout = item_result.get("testStdout", "")
-            captured_stderr = item_result.get("testStderr", "")
-            if captured_stdout or captured_stderr:
-                last_test_output = _cap_test_output(captured_stdout, captured_stderr)
-                if last_test_output:
-                    repair_item["lastTestOutput"] = last_test_output
-
-            # Enrich repair item with ownsFilesDiff (git diff of owned files).
-            owned_files = item.get("ownsFiles", [])
-            if owned_files:
-                owns_files_diff = _get_owned_files_diff(workdir, owned_files)
-                if owns_files_diff:
-                    repair_item["ownsFilesDiff"] = owns_files_diff
-
-            try:
-                # Build the manifest item.
-                manifest_item = build_manifest_item(driver, repair_item)
-
-                # Dispatch the repair.
-                dispatch_result = dispatch_item(driver, manifest_item, workdir=workdir)
-
-                # Update the item result.
-                item_result["verified"] = dispatch_result.get("verified", False)
-                item_result["testExit"] = dispatch_result.get("testExit")
-                item_result["error"] = dispatch_result.get("error")
-                item_result["filesWritten"] = dispatch_result.get("filesWritten", [])
-                item_result["repairs"] += 1
-
-                # Write journal entry for repair outcome (filesWritten +
-                # fingerprint: same resume contract as the dispatch entry).
-                if state_dir:
-                    repo = item.get("repo")
-                    _write_journal_entry(state_dir, slug, "repaired", {
-                        "verified": item_result["verified"],
-                        "testExit": item_result["testExit"],
-                        "repairs": item_result["repairs"],
-                        "filesWritten": item_result["filesWritten"],
-                        "fingerprint": _item_fingerprint(item),
-                    }, repo=repo)
-
-                # If still failed, mark for next round.
-                if not item_result["verified"]:
-                    next_failed.append((item_index, item, item_result))
-
-            except Exception as exc:
-                item_result["error"] = f"repair exception: {exc}"
-                item_result["repairs"] += 1
-
-                # Write journal entry for repair failure.
-                if state_dir:
-                    repo = item.get("repo")
-                    _write_journal_entry(state_dir, slug, "repair_failed", {
-                        "verified": False,
-                        "testExit": None,
-                        "repairs": item_result["repairs"],
-                        "error": str(exc),
-                    }, repo=repo)
-
-                next_failed.append((item_index, item, item_result))
-
-        # Update failed_items for next round.
-        failed_items = next_failed
+    if _repair_failed_items(failed_items, repair_cap, driver, state_dir, claim_ctx, result):
+        return result
 
     # ========================================================================
     # PHASE 5.5: Verify-exact-gate (fake-green detection, INCREMENT 2)
     # ========================================================================
-    # INCREMENT 2 REQUIREMENT: Verdict must come from orchestrator-side re-run
-    # of testCmd (exact gate), never from worker's self-report alone.
-    # Strategy: verify ALL verified items (not just spot-check sample).
-    # If worker self-reported success but gate re-run fails: FAKE-GREEN marker.
-    #
-    # Deterministic sampling applies spot_check_frac cap: if spot_check_frac=0.10,
-    # we verify only 10% of verified items (backward-compatible). This avoids
-    # full re-run cost for every wave. The marker still catches decaying workers.
-    verified_items_list = [
-        (items[i], result["built"][i]) for i in range(len(items))
-        if i < len(result["built"]) and result["built"][i].get("verified", False)
-    ]
-
-    if verified_items_list and spot_check_frac > 0:
-        # Deterministic sampling: sort by slug, then take first N.
-        # Only sample if spot_check_frac > 0; when frac <= 0, skip gate re-runs entirely.
-        verified_items_list.sort(key=lambda x: x[0].get("slug", ""))
-        num_to_verify = max(1, ceil(len(verified_items_list) * spot_check_frac))
-        items_to_verify = verified_items_list[:num_to_verify]
-
-        # Re-run test command for each sampled verified item.
-        for original_item, item_result in items_to_verify:
-            test_cmd = original_item.get("testCmd", "")
-            workdir = original_item.get("workDir", ".")
-            slug = original_item.get("slug", "")
-
-            if test_cmd:
-                try:
-                    rerun_result = driver.run_command(test_cmd, cwd=workdir)
-                    # EXACT GATE VERDICT: only exit 0 = true pass.
-                    if rerun_result.exit_code != 0:
-                        # Gate FAILED but worker reported success → FAKE-GREEN.
-                        item_result["verified"] = False
-                        item_result["fake_green"] = True
-                        item_result["gate_test_exit"] = rerun_result.exit_code
-
-                        # Record fake-green in journal for auditing.
-                        if state_dir:
-                            repo = original_item.get("repo")
-                            _write_journal_entry(state_dir, slug, "fake_green", {
-                                "verified": False,
-                                "testExit": rerun_result.exit_code,
-                                "gate_rerun": True,
-                                "worker_claimed_verified": True,
-                            }, repo=repo)
-                except Exception as exc:
-                    # Gate re-run exception: conservative, flip to False.
-                    item_result["verified"] = False
-                    item_result["gate_exception"] = True
-
-                    if state_dir:
-                        repo = original_item.get("repo")
-                        _write_journal_entry(state_dir, slug, "gate_exception", {
-                            "verified": False,
-                            "error": str(exc),
-                            "gate_rerun": True,
-                        }, repo=repo)
+    _verify_exact_gate(items, result, spot_check_frac, driver, state_dir)
 
     # ========================================================================
     # PHASE 5.75: Adversarial review (opt-in via manifest, sampled, repair-routed)
     # ========================================================================
-    # Adversarial review is opt-in: it runs ONLY if explicitly enabled in the manifest.
-    # The policy's adversarial_review_sample_frac informs defaults when enabled.
-    adv_review_config = manifest.get("adversarial_review", {})
-    if isinstance(adv_review_config, dict):
-        adv_review_enabled = adv_review_config.get("enabled", False)
-        adv_review_sample_frac = adv_review_config.get("sample_frac", policy.get("adversarial_review_sample_frac", 0.1))
-    else:
-        adv_review_enabled = False
-        adv_review_sample_frac = policy.get("adversarial_review_sample_frac", 0.1)
-
-    # Build list of verified items to potentially review
-    reviewable_items = [
-        (i, items[i], result["built"][i])
-        for i in range(len(items))
-        if i < len(result["built"]) and result["built"][i].get("verified", False)
-    ]
-
-    if adv_review_enabled and reviewable_items and adv_review_sample_frac > 0:
-        # Deterministic sampling: sort by slug, then take first N
-        reviewable_items.sort(key=lambda x: x[1].get("slug", ""))
-        num_to_review = max(1, ceil(len(reviewable_items) * adv_review_sample_frac))
-        items_to_review = reviewable_items[:num_to_review]
-
-        refuted_for_repair = []  # Items that reviewer refuted; re-enter repair
-
-        # Dispatch adversarial reviewer for each sampled verified item
-        for item_index, original_item, item_result in items_to_review:
-            refuted = _dispatch_adversarial_review(
-                driver, original_item, item_result, state_dir=state_dir
-            )
-
-            # If refuted, mark for re-entry into repair (not shipping)
-            if refuted:
-                item_result["verified"] = False
-                refuted_for_repair.append((item_index, original_item, item_result))
-
-        # If any items were refuted and repair_cap > 0, re-enter them into repair loop
-        if refuted_for_repair and repair_cap > 0:
-            # Re-enter repair for refuted items (one more round, bounded by repair_cap)
-            for item_index, item, item_result in refuted_for_repair:
-                slug = item.get("slug", f"item-{item_index}")
-                workdir = item.get("workDir", ".")
-                test_cmd = item.get("testCmd", "")
-
-                # Verify claim is still held (fence check)
-                if not claim_ctx.fence_ok(slug):
-                    item_result["error"] = (
-                        "claim lost during adversarial review (fenced): not repaired"
-                    )
-                    item_result["claim_lost"] = True
-                    if state_dir:
-                        _write_journal_entry(state_dir, slug, "claim_lost_adv_review", {
-                            "verified": False,
-                            "repairs": item_result.get("repairs", 0),
-                            "instance_id": claim_ctx.instance_id,
-                            "error": "claim lost during adversarial review",
-                        }, repo=item.get("repo"))
-                    continue
-
-                # Build repair prompt: append review findings
-                original_prompt = item.get("prompt", "")
-                review_error = item_result.get("review_error", "Issues found by reviewer")
-                repair_prompt = (
-                    original_prompt
-                    + f"\n\nReviewer found issues: {review_error}\n"
-                    + "Please fix the identified issues."
-                )
-
-                repair_item = dict(item)
-                repair_item["prompt"] = repair_prompt
-
-                try:
-                    # Build and dispatch repair
-                    manifest_item = build_manifest_item(driver, repair_item)
-                    dispatch_result = dispatch_item(driver, manifest_item, workdir=workdir)
-
-                    # Update result
-                    item_result["verified"] = dispatch_result.get("verified", False)
-                    item_result["testExit"] = dispatch_result.get("testExit")
-                    item_result["error"] = dispatch_result.get("error")
-                    item_result["filesWritten"] = dispatch_result.get("filesWritten", [])
-                    item_result["repairs"] = item_result.get("repairs", 0) + 1
-
-                    if state_dir:
-                        repo = item.get("repo")
-                        _write_journal_entry(state_dir, slug, "adversarial_repair", {
-                            "verified": item_result["verified"],
-                            "testExit": item_result["testExit"],
-                            "repairs": item_result["repairs"],
-                            "filesWritten": item_result["filesWritten"],
-                            "fingerprint": _item_fingerprint(item),
-                        }, repo=repo)
-
-                except Exception as exc:
-                    item_result["error"] = f"adversarial repair exception: {exc}"
-                    item_result["repairs"] = item_result.get("repairs", 0) + 1
-
-                    if state_dir:
-                        repo = item.get("repo")
-                        _write_journal_entry(state_dir, slug, "adversarial_repair_failed", {
-                            "verified": False,
-                            "repairs": item_result["repairs"],
-                            "error": str(exc),
-                        }, repo=repo)
-
-    elif adv_review_enabled and reviewable_items:
-        # Enabled but sample_frac = 0: mark all as skipped
-        for item_index, original_item, item_result in reviewable_items:
-            item_result["adversarial_review"] = "skipped_zero_frac"
-
-    elif reviewable_items:
-        # Not enabled: mark all as skipped
-        for item_index, original_item, item_result in reviewable_items:
-            item_result["adversarial_review"] = "skipped_disabled"
+    _dispatch_adversarial_review_phase(
+        manifest, policy, items, result, driver, state_dir, claim_ctx, repair_cap
+    )
 
     # ========================================================================
     # PHASE 6: Adversarial review / orchestrator final catch (HS-2)
     # ========================================================================
-    if _is_live_orchestrator_backend(orchestrator_backend):
-        # A configured orchestrator seat is LIVE: route a final_catch
-        # decision per verified item through the swapped backend.
-        _orchestrator_final_catch(
-            orchestrator_backend, items, result, state_dir=state_dir,
-            driver=driver,
-        )
-        # HS-2 hardening: the seat's own spend (up to 3 calls/item) counts
-        # against the ceiling too. Re-check AFTER decisions, BEFORE ship,
-        # including metered seat tokens. Runs ONLY on the live-seat path
-        # (no-op default keeps the pre-HS-2 check pattern byte-identical).
-        if cost_ceiling is not None and state_dir is not None:
-            # RS3-W N1: driver.get_tokens_spent() may be None BY CONTRACT
-            # (ClaudeCodeDriver always; CodexDriver at zero spend). Adding
-            # None + int crashed the flagship "Claude worker + swapped
-            # orchestrator seat" wave AFTER seat decisions, BEFORE ship --
-            # verified work never shipped and the item looped. With an
-            # unmetered driver: count the metered seat spend when there is
-            # any; otherwise pass None so cost_ceiling keeps its windowed
-            # ledger fallback (same contract as the Phase 3 check).
-            driver_spent = driver.get_tokens_spent()
-            seat_spent = _seat_tokens_spent(orchestrator_backend)
-            if driver_spent is None:
-                spent_arg = seat_spent if seat_spent > 0 else None
-            else:
-                spent_arg = driver_spent + seat_spent
-            ceiling_result = cost_ceiling.check(
-                spent=spent_arg,
-                trip=True,
-                state_dir=state_dir,
-            )
-            result["ceiling"] = ceiling_result
-            if ceiling_result.get("exceeded", False):
-                result["aborted"] = True
-                result["abort_reason"] = "cost_ceiling_exceeded_after_decisions"
-                return result
-    else:
-        # No configured seat: the live harness IS the orchestrator; review
-        # stays deferred to it. Byte-identical to pre-HS-2 behavior.
-        result["adversarial_review"] = "deferred"
-        for item_result in result["built"]:
-            item_result["adversarial_review"] = "deferred"
+    if _run_orchestrator_final_catch_phase(orchestrator_backend, items, result, state_dir, driver):
+        return result
 
     # ========================================================================
     # PHASE 7: Per-repo ship (git operations, if configured)
     # ========================================================================
     if git is not None:
-        # Verify expectTopLevel guard: MUST be a non-empty string matching actual toplevel.
-        expect_top_level = git.get("expectTopLevel")
-        if not expect_top_level or not isinstance(expect_top_level, str):
-            # Empty or missing expectTopLevel with git config is an error.
-            result["aborted"] = True
-            result["abort_reason"] = "git_toplevel_missing_or_empty"
+        if _ship_verified_items_per_repo(git, items, result, driver, claim_ctx):
             return result
-
-        # Only ship items that verified green.
-        # Build a slug -> original_item mapping for lookup.
-        slug_to_item = {item.get("slug"): (i, item) for i, item in enumerate(items)}
-
-        verified_items = []
-        for item_result in result["built"]:
-            if item_result.get("verified", False):
-                slug = item_result.get("slug")
-                if slug in slug_to_item:
-                    # RS5 F1b FENCE: an item whose claim lapsed and was
-                    # reclaimed must NOT ship -- the reclaiming instance may
-                    # ship its own build of the same slug (double-ship).
-                    # Items this wave never claimed (journal-resumed,
-                    # claim-gate disabled) always pass the fence.
-                    if not claim_ctx.fence_ok(slug):
-                        item_result["ship_error"] = (
-                            "claim lost before ship (fenced): not shipped"
-                        )
-                        item_result["claim_lost"] = True
-                        continue
-                    item_index, original_item = slug_to_item[slug]
-                    verified_items.append((item_index, original_item, item_result))
-
-        if verified_items:
-            # Group verified items by their resolved repo.
-            repo_to_items = {}  # {repo_path: [(item_index, original_item, item_result), ...]}
-            for item_index, original_item, item_result in verified_items:
-                repo = original_item.get("repo", ".")
-                # Resolve and validate repo path.
-                try:
-                    repo_resolved = _validate_repo_path(repo)
-                except ValueError:
-                    # Fail-closed: this repo is invalid, mark as error but continue.
-                    item_result["ship_error"] = f"invalid repo path: {repo}"
-                    continue
-
-                if repo_resolved not in repo_to_items:
-                    repo_to_items[repo_resolved] = []
-                repo_to_items[repo_resolved].append((item_index, original_item, item_result))
-
-            # Ship each repo separately.
-            shipped_items = []
-            repo_ship_results = []  # {repo, committed, sha, files_count, error}
-
-            for repo_path, repo_items in repo_to_items.items():
-                # Verify expectTopLevel guard PER REPO:
-                # Each repo's toplevel must equal the global expectTopLevel OR the repo's own root.
-                # First, verify the repo is actually a git repo with the right toplevel.
-                toplevel_result = driver.run_command(
-                    "git rev-parse --show-toplevel",
-                    cwd=repo_path
-                )
-                if toplevel_result.exit_code != 0:
-                    # This repo's git is broken; abort THIS repo's ship but continue others.
-                    repo_ship_results.append({
-                        "repo": repo_path,
-                        "committed": False,
-                        "error": "git_toplevel_check_failed",
-                        "files_count": len(repo_items),
-                    })
-                    # Mark items from this repo as shipped_error.
-                    for _, _, item_result in repo_items:
-                        item_result["ship_error"] = "git_toplevel_check_failed"
-                    continue
-
-                toplevel = toplevel_result.stdout.strip()
-                # Normalize paths for comparison (git may return with / on Windows)
-                toplevel_normalized = str(Path(toplevel).resolve())
-                repo_path_normalized = str(Path(repo_path).resolve())
-
-                # Per-repo guard: the repo's toplevel must match that repo's own root.
-                # This ensures we're not operating on a subdirectory or symlink escaping.
-                if toplevel_normalized != repo_path_normalized:
-                    # Top-level mismatch; abort THIS repo's ship but continue others.
-                    repo_ship_results.append({
-                        "repo": repo_path,
-                        "committed": False,
-                        "error": "git_toplevel_mismatch",
-                        "files_count": len(repo_items),
-                        "expected_repo_root": repo_path_normalized,
-                        "actual_toplevel": toplevel_normalized,
-                    })
-                    # Mark items from this repo as shipped_error.
-                    for _, _, item_result in repo_items:
-                        item_result["ship_error"] = "git_toplevel_mismatch"
-                    continue
-
-                # Collect files for this repo (repo-relative).
-                files_to_add = []
-                for _, _, item_result in repo_items:
-                    files_to_add.extend(item_result.get("filesWritten", []))
-
-                if files_to_add:
-                    # VALIDATION P2: Validate all filesWritten paths before git operations.
-                    # Ensure they are relative and don't escape the repo root.
-                    invalid_files = []
-                    for file_path in files_to_add:
-                        try:
-                            _validate_file_path(file_path, repo_path)
-                        except ValueError as e:
-                            invalid_files.append((file_path, str(e)))
-
-                    if invalid_files:
-                        # Path validation failed; fail this item explicitly.
-                        repo_ship_results.append({
-                            "repo": repo_path,
-                            "committed": False,
-                            "error": "invalid_file_paths",
-                            "files_count": len(repo_items),
-                            "invalid_files": invalid_files,
-                        })
-                        # Mark items from this repo as shipped_error.
-                        for _, _, item_result in repo_items:
-                            item_result["ship_error"] = f"invalid file paths: {invalid_files}"
-                        continue
-
-                    # Add files. Escape each filename to prevent shell injection.
-                    escaped_files = [_quote_arg(f) for f in files_to_add]
-                    add_cmd = "git add " + " ".join(escaped_files)
-                    add_result = driver.run_command(add_cmd, cwd=repo_path)
-                    if add_result.exit_code != 0:
-                        # GIT ADD FAILURE P1: git add may have partially succeeded,
-                        # leaving staged residue. Run git reset to clean the index.
-                        reset_result = driver.run_command("git reset", cwd=repo_path)
-                        unstage_ok = reset_result.exit_code == 0
-
-                        repo_ship_results.append({
-                            "repo": repo_path,
-                            "committed": False,
-                            "error": "git_add_failed",
-                            # Truncated stderr/stdout for diagnostics (same as commit failure path)
-                            "error_detail": ((add_result.stderr or "") + " | " + (add_result.stdout or ""))[:300],
-                            "files_count": len(repo_items),
-                            "files_unstaged": unstage_ok,
-                            "unstage_error": None if unstage_ok else reset_result.stderr,
-                        })
-                        # Mark items from this repo as shipped_error.
-                        for _, _, item_result in repo_items:
-                            item_result["ship_error"] = "git_add_failed"
-                        continue
-
-                    # Commit. Escape the message to prevent shell injection.
-                    commit_msg = f"Wave: {len(repo_items)} items verified"
-                    commit_cmd = f"git commit -m {_quote_arg(commit_msg)}"
-                    commit_result = driver.run_command(commit_cmd, cwd=repo_path)
-                    if commit_result.exit_code != 0 and (
-                        "nothing to commit"
-                        in ((commit_result.stdout or "") + (commit_result.stderr or "")).lower()
-                    ):
-                        # RS3-W N3: the staged content is ALREADY in HEAD
-                        # (e.g. a prior run committed then crashed before the
-                        # tracker was marked). The item is verified and its
-                        # work is committed: emit a terminal shipped record
-                        # instead of failing forever on re-commit.
-                        repo_ship_results.append({
-                            "repo": repo_path,
-                            "committed": False,
-                            "no_changes": True,
-                            "files_count": len(repo_items),
-                        })
-                        for _, _, item_result in repo_items:
-                            item_result["ship_no_changes"] = True
-                            shipped_items.append(item_result["slug"])
-                        continue
-                    if commit_result.exit_code != 0:
-                        # UNSTAGE P3: Commit failed; run git reset to unstage the files.
-                        # This prevents staged-files residue on partial failure.
-                        reset_result = driver.run_command("git reset", cwd=repo_path)
-                        unstage_ok = reset_result.exit_code == 0
-
-                        repo_ship_results.append({
-                            "repo": repo_path,
-                            "committed": False,
-                            "error": "git_commit_failed",
-                            # Truncated stderr/stdout: a bare label is undiagnosable
-                            # from the Report (identity, hooks, lock contention all
-                            # land here with different remedies).
-                            "error_detail": ((commit_result.stderr or "") + " | " + (commit_result.stdout or ""))[:300],
-                            "files_count": len(repo_items),
-                            "files_unstaged": unstage_ok,
-                            "unstage_error": None if unstage_ok else reset_result.stderr,
-                        })
-                        # Mark items from this repo as shipped_error.
-                        for _, _, item_result in repo_items:
-                            item_result["ship_error"] = "git_commit_failed"
-                        continue
-
-                    # Get the commit SHA.
-                    sha_result = driver.run_command("git rev-parse HEAD", cwd=repo_path)
-                    commit_sha = sha_result.stdout.strip() if sha_result.exit_code == 0 else None
-
-                    # Push.
-                    push_result = driver.run_command("git push", cwd=repo_path)
-                    if push_result.exit_code != 0:
-                        # Push failed; abort THIS repo's push but continue others.
-                        repo_ship_results.append({
-                            "repo": repo_path,
-                            "committed": True,
-                            "sha": commit_sha,
-                            "error": "git_push_failed",
-                            "files_count": len(repo_items),
-                        })
-                        # Mark items from this repo as shipped (commit succeeded even if push failed).
-                        for _, _, item_result in repo_items:
-                            item_result["ship_warning"] = "git_push_failed"
-                            shipped_items.append(item_result["slug"])
-                        continue
-
-                    # Success: record this repo's ship.
-                    repo_ship_results.append({
-                        "repo": repo_path,
-                        "committed": True,
-                        "sha": commit_sha,
-                        "files_count": len(repo_items),
-                    })
-                    # Mark items from this repo as shipped.
-                    for _, _, item_result in repo_items:
-                        shipped_items.append(item_result["slug"])
-                else:
-                    # RS3-W N3: a VERIFIED item with no files to add must
-                    # still reach a TERMINAL shipped record -- otherwise the
-                    # scheduler never marks the tracker and the item is
-                    # re-selected, re-verified, and "succeeds" every wave,
-                    # forever (recovery livelock). Nothing to commit is an
-                    # honest no-op ship, not a silent drop.
-                    repo_ship_results.append({
-                        "repo": repo_path,
-                        "committed": False,
-                        "no_changes": True,
-                        "files_count": len(repo_items),
-                    })
-                    for _, _, item_result in repo_items:
-                        item_result["ship_no_changes"] = True
-                        shipped_items.append(item_result["slug"])
-
-            # Record shipped items and per-repo results.
-            if shipped_items:
-                result["shipped"] = shipped_items
-            if repo_ship_results:
-                result["shipped_repos"] = repo_ship_results
 
     return result
 
