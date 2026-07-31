@@ -170,13 +170,16 @@ class TestFindPythonFiles(unittest.TestCase):
             self.assertNotIn("b.py", basenames)
 
 
+# The lint_core migration changed scan() to return Finding objects instead of dicts.
+# Finding has (file, line, type, message); the symbol name is the last token of message
+# (e.g. "class Dead" / "function dead_fn"). Tests extract it from there.
 class TestScan(unittest.TestCase):
     def test_detects_dead_function(self):
         with tempfile.TemporaryDirectory() as td:
             _write(td, "mod.py",
                    "def used():\n    pass\n\ndef dead():\n    pass\n\nused()\n")
             findings = scan(td)
-            names = [f["name"] for f in findings]
+            names = [f.message.split()[-1] for f in findings]
             self.assertIn("dead", names)
             self.assertNotIn("used", names)
 
@@ -192,7 +195,7 @@ class TestScan(unittest.TestCase):
             _write(td, "mod.py",
                    "class Used:\n    pass\n\nclass Dead:\n    pass\n\nx = Used()\n")
             findings = scan(td)
-            names = [f["name"] for f in findings]
+            names = [f.message.split()[-1] for f in findings]
             self.assertIn("Dead", names)
             self.assertNotIn("Used", names)
 
@@ -201,7 +204,7 @@ class TestScan(unittest.TestCase):
             _write(td, "mod.py",
                    "USED = 1\nDEAD = 2\nprint(USED)\n")
             findings = scan(td)
-            names = [f["name"] for f in findings]
+            names = [f.message.split()[-1] for f in findings]
             self.assertIn("DEAD", names)
             self.assertNotIn("USED", names)
 
@@ -210,7 +213,7 @@ class TestScan(unittest.TestCase):
             _write(td, "lib.py", "def helper():\n    pass\n")
             _write(td, "main.py", "from lib import helper\nhelper()\n")
             findings = scan(td)
-            names = [f["name"] for f in findings]
+            names = [f.message.split()[-1] for f in findings]
             self.assertNotIn("helper", names)
 
     def test_test_file_references_count(self):
@@ -219,7 +222,7 @@ class TestScan(unittest.TestCase):
             _write(td, "mod.py", "def tested():\n    pass\n")
             _write(td, "tests/test_mod.py", "from mod import tested\ntested()\n")
             findings = scan(td)
-            names = [f["name"] for f in findings]
+            names = [f.message.split()[-1] for f in findings]
             # tested() is referenced in tests, so not dead
             self.assertNotIn("tested", names)
 
@@ -228,7 +231,7 @@ class TestScan(unittest.TestCase):
             _write(td, "mod.py",
                    "def legacy():  # dead-code-ok\n    pass\n")
             findings = scan(td)
-            names = [f["name"] for f in findings]
+            names = [f.message.split()[-1] for f in findings]
             self.assertNotIn("legacy", names)
 
     def test_init_reexport_not_dead(self):
@@ -236,7 +239,7 @@ class TestScan(unittest.TestCase):
             _write(td, "pkg/__init__.py", "from .impl import worker\n")
             _write(td, "pkg/impl.py", "def worker():\n    pass\n")
             findings = scan(td)
-            names = [f["name"] for f in findings]
+            names = [f.message.split()[-1] for f in findings]
             self.assertNotIn("worker", names)
 
     def test_syntax_error_skipped(self):

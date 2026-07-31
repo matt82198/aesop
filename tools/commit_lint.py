@@ -14,8 +14,17 @@ Exit: 0=clean, 1=violations found, 2=error.
 CLI: commit_lint.py [--message MSG] [--range RANGE] [--json] [--check]
 """
 
+import os
 import re
 import sys
+
+# `from tools import cli` needs the REPO ROOT on sys.path, not tools/. The import gate
+# (tests/test_tools_importable.py) loads tools by path with neither on sys.path, and the
+# pre-push hook invokes this script directly -- both fail without this guard.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 from tools import cli
 
 ALLOWED_TYPES = frozenset(
