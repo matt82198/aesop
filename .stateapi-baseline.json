@@ -13,8 +13,6 @@
     "tools/health_score.py@monitor-hb",
     "tools/health_score.py@watchdog-hb",
     "tools/heartbeat.py@state-heartbeat",
-    "tools/power_selftest.py@monitor-hb",
-    "tools/power_selftest.py@watchdog-hb",
     "tools/reconcile.py@state-md-write",
     "tools/verify_cost_panel.py@ledger-md",
     "tools/verify_dash.py@ledger-md",

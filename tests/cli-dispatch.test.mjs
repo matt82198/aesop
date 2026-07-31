@@ -61,9 +61,19 @@ function scriptExists(relPath) {
 // Scaffolder output can land in the repo root depending on invocation order.
 // An untracked aesop-fleet/ there trips the CLAUDE.md linter and the domain-map
 // drift gate, so clear it after this suite regardless of which test created it.
+
+/** Remove a path, ignoring EBUSY/ENOTEMPTY races (Windows holds handles briefly). */
+function safeRm(p) {
+  try {
+    rmSync(p, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  } catch {
+    // ignore: cleanup is best-effort and must not fail a test
+  }
+}
+
 after(() => {
   for (const d of ['aesop-fleet', 'badnamespace']) {
-    rmSync(join(repoRoot, d), { recursive: true, force: true });
+    safeRm(join(repoRoot, d));
   }
 });
 
@@ -131,12 +141,13 @@ describe('CLI Python dispatch table', () => {
         const result = await runCli(['badnamespace', 'verb'], tmp);
         assert.notEqual(result.exitCode, 2, 'unknown first arg must fall through to the scaffolder, not error');
       } finally {
-        rmSync(tmp, { recursive: true, force: true });
-        // The scaffolder resolves its target relative to the CLI's own location, not cwd,
-        // so it can still land in the repo root. Remove it: an untracked directory here
-        // trips the CLAUDE.md linter and the domain-map drift gate.
-        rmSync(join(repoRoot, 'aesop-fleet'), { recursive: true, force: true });
-        rmSync(join(repoRoot, 'badnamespace'), { recursive: true, force: true });
+        // Cleanup must never fail the test. On Windows the scaffolder's child process can
+        // still hold a handle when we unlink, giving EBUSY -- which failed this test on the
+        // CI runner while passing locally. Best-effort removal; the after() hook and the
+        // git-tracked-only gates make a leftover directory harmless.
+        safeRm(tmp);
+        safeRm(join(repoRoot, 'aesop-fleet'));
+        safeRm(join(repoRoot, 'badnamespace'));
       }
     });
 

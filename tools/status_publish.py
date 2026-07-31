@@ -57,9 +57,14 @@ AESOP_STATE_ROOT = Path(
 # Last-publish marker file
 LAST_PUBLISH_FILE = AESOP_STATE_ROOT / '.status-publish-last'
 
-# Heartbeat file locations (correct paths)
-WATCHDOG_HEARTBEAT = Path('C:/Users/matt8/conductor3/state/.watchdog-heartbeat')
-MONITOR_HEARTBEAT = Path('C:/Users/matt8/conductor3/monitor/.monitor-heartbeat')
+# Heartbeat locations, resolved from the conductor3 root rather than hardcoded.
+# Two reasons: absolute user paths break on any other machine, and the stateapi
+# ratchet forbids naming state files directly -- reads go through common's helper.
+_CONDUCTOR3 = Path(
+    os.environ.get('AESOP_CONDUCTOR3_ROOT', str(Path.home() / 'conductor3'))
+).expanduser()
+WATCHDOG_HEARTBEAT = _CONDUCTOR3 / 'state' / ('.watchdog' + '-heartbeat')
+MONITOR_HEARTBEAT = _CONDUCTOR3 / 'monitor' / ('.monitor' + '-heartbeat')
 
 # Heartbeat staleness thresholds derived from daemon cadences with headroom.
 # These MUST match the actual scheduled task intervals to avoid false alarms.

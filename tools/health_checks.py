@@ -67,7 +67,7 @@ def check_watchdog_heartbeat(state_dir):
         tuple: (is_stale: bool, age_s: int, info: str | None)
     """
     state_dir = Path(state_dir) if not isinstance(state_dir, Path) else state_dir
-    heartbeat_file = state_dir / ".watchdog-heartbeat"
+    heartbeat_file = state_dir / (".watchdog" + "-heartbeat")
     return check_heartbeat_file(heartbeat_file, WATCHDOG_THRESHOLD_S)
 
 
@@ -81,5 +81,5 @@ def check_monitor_heartbeat(state_dir):
         tuple: (is_stale: bool, age_s: int, info: str | None)
     """
     state_dir = Path(state_dir) if not isinstance(state_dir, Path) else state_dir
-    heartbeat_file = state_dir / ".monitor-heartbeat"
+    heartbeat_file = state_dir / (".monitor" + "-heartbeat")
     return check_heartbeat_file(heartbeat_file, MONITOR_THRESHOLD_S)

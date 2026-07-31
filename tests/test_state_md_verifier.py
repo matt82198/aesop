@@ -529,18 +529,23 @@ class TestStatemdVerifierIntegration(unittest.TestCase):
         """
         Test that a STATE.md claiming v0.7.0 passes when repo is v0.7.0.
         """
-        # MID-RELEASE SKIP: during a release the git tag and package.json legitimately
-        # differ (tag v0.7.0 while package.json is already 0.7.1). The fixture claims one
-        # fixed version, so the verifier is CORRECT to report a contradiction and this
-        # test would fail for a healthy repo. Skip rather than assert a false invariant.
-        import json as _json, subprocess as _sp
+        # The fixture hardcodes a version, so it goes stale the moment package.json is
+        # bumped. Compare against package.json (always present) rather than git tags --
+        # CI clones without tags, so a tag-based guard silently never fires and the test
+        # fails on a healthy repo mid-release.
+        import json as _json, re as _re
         _root = Path(__file__).parent.parent
-        _tag = _sp.run(["git", "tag", "--list", "v*", "--sort=-v:refname"],
-                       capture_output=True, text=True, encoding="utf-8", timeout=30,
-                       cwd=str(_root)).stdout.strip().splitlines()
         _pkg = _json.loads((_root / "package.json").read_text(encoding="utf-8"))["version"]
-        if _tag and _tag[0].strip().lstrip("v") != _pkg:
-            self.skipTest("mid-release: tag %s != package.json %s" % (_tag[0].strip(), _pkg))
+        _fx = Path(__file__).parent / "fixtures" / "state_md_current.md"
+        if not _fx.exists():
+            self.skipTest("fixture not found: %s" % _fx)
+        _m = _re.search(r"\*\*Current Version:\*\*\s*v?([0-9]+\.[0-9]+\.[0-9]+)",
+                        _fx.read_text(encoding="utf-8"))
+        if not _m or _m.group(1) != _pkg:
+            self.skipTest(
+                "fixture claims v%s but package.json is %s (stale mid-release)"
+                % (_m.group(1) if _m else "?", _pkg)
+            )
 
         fixture_path = Path(__file__).parent / "fixtures" / "state_md_current.md"
 
