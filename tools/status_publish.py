@@ -3,25 +3,30 @@ r"""
 Publish a compact fleet-status snapshot to a phone-reachable location.
 
 Gathers high-signal data from existing sources (fleet status, PRs, BUILDLOG, heartbeats,
-pending items) into a small, phone-optimized snapshot. Publishes to a private GitHub
-issue via gh CLI so a phone can read one always-current page without exposing the local
-machine.
+pending items) into a small, phone-optimized snapshot. Publishes to a SECRET GitHub
+gist (private by default) so a phone can read one always-current page without exposing
+the local machine or publishing to a public repo/issue.
 
 Usage:
-    python tools/status_publish.py [--once] [--issue N] [--dry-run] [--comment]
+    python tools/status_publish.py [--once] [--gist-id GIST] [--dry-run]
 
 Options:
     --once              Publish once and exit (default)
-    --issue N           Target GitHub issue N (default from aesop.config.json or 1)
+    --gist-id GIST      Target secret gist ID (default from config, error if missing)
     --dry-run           Print the payload, do not publish
-    --comment           Append as comment instead of updating body
 
 Exit codes:
     0 = success, no changes, or --dry-run completed
-    1 = publish attempt failed (redaction failure, gh error, etc.)
-    2 = error (malformed config, missing state, etc.)
+    1 = publish attempt failed (visibility check failure, redaction failure, gh error)
+    2 = error (malformed config, missing state, missing gist-id, etc.)
 
-Redaction:
+Visibility Enforcement (FAIL-CLOSED):
+    - Queries target gist visibility BEFORE publishing (gh gist view --json)
+    - REFUSES to publish to PUBLIC gists or targets (privacy=false)
+    - Aborts with clear error if target is public
+    - Explicit gist-id required (no default to aesop repo)
+
+Redaction (defense-in-depth):
     - Removes tokens matching: sk-*, ghp-*, pat-*
     - Removes Windows paths containing username: C:\Users\<user>\...
     - Removes POSIX home paths: /home/<user>/...
@@ -44,13 +49,17 @@ import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-# State root (default: ./state)
+# State root (default: ./state or AESOP_STATE_ROOT env var)
 AESOP_STATE_ROOT = Path(
     os.environ.get('AESOP_STATE_ROOT', './state')
 ).expanduser()
 
 # Last-publish marker file
 LAST_PUBLISH_FILE = AESOP_STATE_ROOT / '.status-publish-last'
+
+# Heartbeat file locations (correct paths)
+WATCHDOG_HEARTBEAT = Path('C:/Users/matt8/conductor3/state/.watchdog-heartbeat')
+MONITOR_HEARTBEAT = Path('C:/Users/matt8/conductor3/monitor/.monitor-heartbeat')
 
 # Redaction patterns (token-shaped and path-shaped)
 REDACTION_PATTERNS = [
@@ -93,19 +102,44 @@ def run_command(cmd, timeout=10):
         raise RuntimeError(f"Command not found: {cmd[0]}")
 
 
-def gather_agent_status():
+def check_gist_visibility(gist_id):
     """
-    Gather live agents info from tools/status.js or worktree agents.
+    Query gist visibility via gh. FAIL-CLOSED: refuse public gists.
 
-    Returns compact string (e.g. "3 active · 0 stalled" or "unavailable").
+    Returns: True if gist is private (privacy=true), False if public
+    Raises: RuntimeError if gist is public or query fails
     """
     try:
-        # Try to use status.js if available
+        stdout, rc = run_command(
+            ['gh', 'gist', 'view', gist_id, '--json', 'isPublic'],
+            timeout=10
+        )
+        if rc != 0:
+            raise RuntimeError(f"gh gist view failed (rc {rc}): gist may not exist or not be accessible")
+
+        data = json.loads(stdout) if stdout.strip() else {}
+        is_public = data.get('isPublic', True)  # Default to public if uncertain
+
+        if is_public:
+            raise RuntimeError(
+                f"VISIBILITY CHECK FAILED: gist {gist_id} is PUBLIC. "
+                f"This tool refuses to publish fleet status to public targets. "
+                f"Create a secret gist instead: gh gist create --secret <file>"
+            )
+
+        return True
+    except RuntimeError:
+        raise
+    except Exception as e:
+        raise RuntimeError(f"Gist visibility check error: {e}")
+
+
+def gather_agent_status():
+    """Gather live agents info. Returns compact string."""
+    try:
         stdout, rc = run_command(['node', 'tools/status.js'], timeout=5)
         if rc == 0:
-            # Parse output for agent counts
             lines = stdout.strip().split('\n')
-            # Look for agent-related lines (implementation depends on status.js output)
             return "status reported" if lines else "unknown"
     except Exception:
         pass
@@ -113,13 +147,8 @@ def gather_agent_status():
 
 
 def gather_pr_status():
-    """
-    Gather open PRs and CI status from 'gh pr list'.
-
-    Returns compact string with PR count and any RED runs.
-    """
+    """Gather open PRs and CI status. Returns compact string with RED count."""
     try:
-        # Get open PRs: number, title, state, and if CI is red
         stdout, rc = run_command(
             ['gh', 'pr', 'list', '--state', 'open', '--json', 'number,title,statusCheckRollup'],
             timeout=10
@@ -131,16 +160,10 @@ def gather_pr_status():
         if not prs:
             return "0 open PRs"
 
-        # Count RED vs PASS
-        red_count = 0
-        pass_count = 0
-        for pr in prs:
-            rollup = pr.get('statusCheckRollup', [])
-            if any(c.get('conclusion') == 'FAILURE' for c in rollup):
-                red_count += 1
-            else:
-                pass_count += 1
-
+        red_count = sum(
+            1 for pr in prs
+            if any(c.get('conclusion') == 'FAILURE' for c in pr.get('statusCheckRollup', []))
+        )
         summary = f"{len(prs)} open"
         if red_count > 0:
             summary += f" · {red_count} RED"
@@ -151,19 +174,15 @@ def gather_pr_status():
 
 def gather_heartbeat_status():
     """
-    Check heartbeat freshness (MTIME, not content).
-
-    Returns compact status string.
+    Check heartbeat freshness using MTIME (not content). Returns compact status.
+    Treats "file not found" as ERROR state distinct from stale.
     """
-    watchdog_heartbeat = AESOP_STATE_ROOT / '.watchdog-heartbeat'
-    monitor_heartbeat = AESOP_STATE_ROOT / '.monitor-heartbeat'
-
     now = datetime.now(timezone.utc)
     statuses = []
 
-    # Watchdog
+    # Watchdog heartbeat
     try:
-        mtime = watchdog_heartbeat.stat().st_mtime
+        mtime = WATCHDOG_HEARTBEAT.stat().st_mtime
         ts = datetime.fromtimestamp(mtime, tz=timezone.utc)
         age = now - ts
         if age < timedelta(seconds=300):
@@ -171,11 +190,13 @@ def gather_heartbeat_status():
         else:
             statuses.append(f"watchdog: STALE ({age.seconds}s)")
     except FileNotFoundError:
-        statuses.append("watchdog: missing")
+        statuses.append("watchdog: ERROR (file not found)")
+    except Exception as e:
+        statuses.append(f"watchdog: ERROR ({type(e).__name__})")
 
-    # Monitor
+    # Monitor heartbeat
     try:
-        mtime = monitor_heartbeat.stat().st_mtime
+        mtime = MONITOR_HEARTBEAT.stat().st_mtime
         ts = datetime.fromtimestamp(mtime, tz=timezone.utc)
         age = now - ts
         if age < timedelta(seconds=300):
@@ -183,26 +204,22 @@ def gather_heartbeat_status():
         else:
             statuses.append(f"monitor: STALE ({age.seconds}s)")
     except FileNotFoundError:
-        statuses.append("monitor: missing")
+        statuses.append("monitor: ERROR (file not found)")
+    except Exception as e:
+        statuses.append(f"monitor: ERROR ({type(e).__name__})")
 
     return " · ".join(statuses)
 
 
 def gather_buildlog_summary():
-    """
-    Extract last few lines from BUILDLOG.md or BUILDLOG.archive.
-
-    Returns compact summary (2-3 lines).
-    """
-    buildlog = AESOP_STATE_ROOT.parent / 'BUILDLOG.md'  # conductor3/BUILDLOG.md
+    """Extract last few lines from BUILDLOG.md. Returns compact summary."""
+    buildlog = Path('C:/Users/matt8/conductor3/BUILDLOG.md')
     if not buildlog.exists():
         return "BUILDLOG not found"
 
     try:
         with open(buildlog, encoding='utf-8') as f:
             lines = f.readlines()
-
-        # Return last 3 non-empty lines, reversed (most recent last)
         relevant = [l.strip() for l in lines if l.strip() and not l.startswith('#')][-3:]
         return '\n'.join(relevant) if relevant else "BUILDLOG empty"
     except Exception as e:
@@ -210,11 +227,7 @@ def gather_buildlog_summary():
 
 
 def gather_pending_items():
-    """
-    Get unprocessed inbox items from 'python tools/inbox_drain.py pending'.
-
-    Returns compact list or "none".
-    """
+    """Get unprocessed inbox items. Returns compact count or 'none'."""
     try:
         stdout, rc = run_command(
             ['python', 'tools/inbox_drain.py', 'pending'],
@@ -232,14 +245,7 @@ def redact_payload(text):
     """
     Apply redaction patterns to remove secrets and paths.
 
-    Args:
-        text: String to redact
-
-    Returns:
-        Redacted string
-
-    Raises:
-        RuntimeError if redaction would remove more than 10% of content (suspicious)
+    Raises RuntimeError if redaction would remove more than 10% of content (fail-closed).
     """
     original_len = len(text)
     redacted = text
@@ -248,7 +254,7 @@ def redact_payload(text):
         redacted = re.sub(pattern, replacement, redacted, flags=re.IGNORECASE)
 
     removed_chars = original_len - len(redacted)
-    if removed_chars > original_len * 0.1:  # More than 10% removed
+    if removed_chars > original_len * 0.1:
         raise RuntimeError(
             f"Redaction would remove {removed_chars} chars ({100*removed_chars/original_len:.1f}%): "
             f"likely overly aggressive. Payload suspicious; aborting publish."
@@ -259,8 +265,6 @@ def redact_payload(text):
 
 def build_payload(config):
     """Build the fleet status snapshot payload."""
-    issue_num = config.get('status_publish_issue', 1)
-
     parts = [
         f"# Fleet Status – {datetime.now(timezone.utc).isoformat()}",
         "",
@@ -276,28 +280,26 @@ def build_payload(config):
         "",
         f"## Pending Items: {gather_pending_items()}",
         "",
-        "*Published by status_publish.py*",
+        "*Published by status_publish.py (secret gist)*",
     ]
 
     return '\n'.join(parts)
 
 
-def publish_to_github(payload, issue_num, as_comment=False, dry_run=False):
+def publish_to_gist(payload, gist_id, dry_run=False):
     """
-    Publish payload to GitHub issue via gh.
+    Publish payload to a secret gist via gh.
 
-    Args:
-        payload: The markdown snapshot
-        issue_num: Issue number to publish to
-        as_comment: If True, append as comment; else update body
-        dry_run: If True, print but don't publish
-
-    Returns:
-        True if published (or dry-run), False otherwise
-
-    Raises:
-        RuntimeError on gh error
+    FAIL-CLOSED: queries visibility before publishing.
     """
+    # Step 1: Verify visibility (FAIL-CLOSED)
+    if not dry_run:
+        try:
+            check_gist_visibility(gist_id)
+        except RuntimeError as e:
+            raise RuntimeError(f"Visibility check failed: {e}")
+
+    # Step 2: Redact payload
     try:
         redacted = redact_payload(payload)
     except RuntimeError as e:
@@ -307,10 +309,8 @@ def publish_to_github(payload, issue_num, as_comment=False, dry_run=False):
         print(redacted)
         return True
 
-    # Compute hash for idempotence check
+    # Step 3: Check idempotence
     payload_hash = hashlib.sha256(redacted.encode()).hexdigest()[:8]
-
-    # Check if unchanged
     if LAST_PUBLISH_FILE.exists():
         try:
             with open(LAST_PUBLISH_FILE, encoding='utf-8') as f:
@@ -321,29 +321,27 @@ def publish_to_github(payload, issue_num, as_comment=False, dry_run=False):
         except Exception:
             pass
 
-    # Publish
-    if as_comment:
-        try:
-            stdout, rc = run_command(
-                ['gh', 'issue', 'comment', str(issue_num), '--body', redacted],
-                timeout=15
-            )
-            if rc != 0:
-                raise RuntimeError(f"gh issue comment failed: rc {rc}")
-        except Exception as e:
-            raise RuntimeError(f"Failed to comment: {e}")
-    else:
-        try:
-            stdout, rc = run_command(
-                ['gh', 'issue', 'edit', str(issue_num), '--body', redacted],
-                timeout=15
-            )
-            if rc != 0:
-                raise RuntimeError(f"gh issue edit failed: rc {rc}")
-        except Exception as e:
-            raise RuntimeError(f"Failed to update issue: {e}")
+    # Step 4: Publish via gh gist edit
+    try:
+        # Write payload to temp file for gh to read
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as f:
+            f.write(redacted)
+            temp_file = f.name
 
-    # Record publish
+        try:
+            stdout, rc = run_command(
+                ['gh', 'gist', 'edit', gist_id, temp_file],
+                timeout=15
+            )
+            if rc != 0:
+                raise RuntimeError(f"gh gist edit failed (rc {rc})")
+        finally:
+            os.unlink(temp_file)
+    except Exception as e:
+        raise RuntimeError(f"Failed to update gist: {e}")
+
+    # Step 5: Record publish
     try:
         LAST_PUBLISH_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(LAST_PUBLISH_FILE, 'w', encoding='utf-8') as f:
@@ -361,26 +359,26 @@ def main():
         help='Publish once and exit (default)'
     )
     parser.add_argument(
-        '--issue', type=int, default=None,
-        help='Target GitHub issue number (default from config or 1)'
+        '--gist-id', type=str, default=None,
+        help='Target secret gist ID (REQUIRED; default from config if present)'
     )
     parser.add_argument(
         '--dry-run', action='store_true',
         help='Print payload, do not publish'
     )
-    parser.add_argument(
-        '--comment', action='store_true',
-        help='Append as comment instead of updating body'
-    )
 
     args = parser.parse_args()
 
     config = load_config()
-    issue_num = args.issue or config.get('status_publish_issue', 1)
+    gist_id = args.gist_id or config.get('status_publish_gist_id')
+
+    if not gist_id and not args.dry_run:
+        print("ERROR: --gist-id required (or set status_publish_gist_id in aesop.config.json)", file=sys.stderr)
+        sys.exit(2)
 
     try:
         payload = build_payload(config)
-        publish_to_github(payload, issue_num, as_comment=args.comment, dry_run=args.dry_run)
+        publish_to_gist(payload, gist_id or 'none', dry_run=args.dry_run)
         sys.exit(0)
     except RuntimeError as e:
         print(f"ERROR: {e}", file=sys.stderr)

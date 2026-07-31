@@ -4,7 +4,7 @@ Reach your Aesop fleet status from anywhere — your phone on bad festival wifi,
 
 ## Publishing Snapshots
 
-The `tools/status_publish.py` tool gathers a compact fleet-status snapshot and publishes it to a private GitHub issue. A phone can then read that one page without needing direct access to your machine.
+The `tools/status_publish.py` tool gathers a compact fleet-status snapshot and publishes it to a **secret GitHub gist** (private by default). A phone can then read that one page without needing direct access to your machine or exposing anything publicly.
 
 ### Quick Start
 
@@ -12,7 +12,19 @@ The `tools/status_publish.py` tool gathers a compact fleet-status snapshot and p
 # Print a snapshot (verify the output first)
 python tools/status_publish.py --dry-run
 
-# Publish once to GitHub issue #1 (or configure --issue N)
+# Create a secret gist (one-time setup)
+gh gist create --secret /dev/null
+# Copy the gist ID from the output (example: a1b2c3d4e5f6g7h8)
+
+# Publish once to your secret gist
+python tools/status_publish.py --gist-id a1b2c3d4e5f6g7h8
+
+# Add to aesop.config.json to make it default
+# {
+#   "status_publish_gist_id": "a1b2c3d4e5f6g7h8"
+# }
+
+# Then subsequent calls just need:
 python tools/status_publish.py
 
 # Set it to run automatically on a schedule (see below)
@@ -24,20 +36,33 @@ For reliable, reboot-surviving updates, run status_publish.py as a Windows Sched
 
 #### Setup (PowerShell, Admin)
 
+First, find your Python interpreter path:
+
+```powershell
+(Get-Command python).Source
+# Example output: C:\Python314\python.exe
+```
+
+Then create the task (replace PYTHON_PATH with your output from above):
+
 ```powershell
 # Create a task that runs every 15 minutes
 $TaskName = "AesopStatusPublish"
 $TaskPath = "\Aesop\"
 $WorkDir = "C:\Users\matt8\aesop"
+$PythonPath = "C:\Python314\python.exe"  # UPDATE THIS: use (Get-Command python).Source
 
 # Build the command: call Python with explicit interpreter, working directory, timeout
 $Action = New-ScheduledTaskAction `
-  -Execute "C:\Program Files\Python312\python.exe" `
+  -Execute $PythonPath `
   -Argument "tools\status_publish.py --once" `
   -WorkingDirectory $WorkDir
 
 # Run every 15 minutes, indefinitely
-$Trigger = New-ScheduledTaskTrigger -RepetitionInterval (New-TimeSpan -Minutes 15) -At (Get-Date) -RepetitionDuration (New-TimeSpan -Days 36500)
+$Trigger = New-ScheduledTaskTrigger `
+  -RepetitionInterval (New-TimeSpan -Minutes 15) `
+  -At (Get-Date) `
+  -RepetitionDuration (New-TimeSpan -Days 36500)
 
 # Suppress success output, log to file
 $Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RunOnlyIfNetworkAvailable
@@ -49,11 +74,13 @@ Register-ScheduledTask `
   -Action $Action `
   -Trigger $Trigger `
   -Settings $Settings `
-  -Description "Publish Aesop fleet status snapshot to GitHub every 15 minutes"
+  -Description "Publish Aesop fleet status snapshot to secret gist every 15 minutes"
 
 # Verify
 schtasks /query /tn "Aesop\$TaskName" /v
 ```
+
+**Critical**: Always discover your Python path dynamically with `(Get-Command python).Source`. Do not hardcode paths like `C:\Program Files\Python312\python.exe` — they become silent failures when Python is installed elsewhere.
 
 #### Manage the Task
 
@@ -73,42 +100,48 @@ schtasks /delete /tn "Aesop\AesopStatusPublish" /f
 
 ### Configuration
 
-Add to `aesop.config.json` to customize:
+Add to `aesop.config.json`:
 
 ```json
 {
-  "status_publish_issue": 123,
+  "status_publish_gist_id": "your-secret-gist-id-here",
   "state_root": "/c/Users/matt8/conductor3/state"
 }
 ```
 
-Default: publishes to issue #1 (or change via `--issue N`).
+**Required**: `status_publish_gist_id` (create via `gh gist create --secret /dev/null`)
 
 ### Payload Contents
 
 Each snapshot includes:
 
-- **Live Status**: agents, open PRs with RED CI count, heartbeat freshness (MTIME-based)
-- **Recent Activity**: last 3 lines from BUILDLOG.md
+- **Live Status**: agents, open PRs with RED CI count, heartbeat freshness (MTIME-based, file-not-found is ERROR state)
+- **Recent Activity**: last few lines from BUILDLOG.md
 - **Pending Items**: unprocessed inbox submissions
 
 Total: fits on a phone screen.
 
-### Redaction & Security
+### Visibility & Redaction
 
+**Visibility Check (FAIL-CLOSED)**:
+- Queries gist privacy BEFORE publishing (`gh gist view --json isPublic`)
+- REFUSES to publish to PUBLIC gists (aborts with clear error)
+- Explicit gist-id required (no dangerous defaults)
+
+**Redaction (Defense-in-Depth)**:
 Before publishing, the payload is scanned for:
 
 - API tokens (`sk-*`, `ghp-*`, `pat-*`)
 - Local paths (`C:\Users\<user>\...`, `/home/<user>/...`)
 - References to `conductor3` (local state directory)
 
-**Redaction is mandatory.** If more than 10% of content would be removed (suspicious), the publish fails (exit 1) rather than guessing which paths to redact. <!-- metrics-verified: tools/status_publish.py redact_payload() line 252 -->
+**Redaction failure blocks publishing** (exit 1) rather than guessing which paths to redact. If more than 10% of content would be removed, the publish fails automatically. <!-- metrics-verified: tools/status_publish.py redact_payload() line 252 -->
 
 Exit codes:
 
 - `0` = published successfully or no changes since last publish
-- `1` = publish failed (redaction issue, gh error, timeout)
-- `2` = fatal error (missing state, malformed config, etc.)
+- `1` = publish failed (visibility check, redaction issue, gh error)
+- `2` = fatal error (missing gist-id, malformed config, etc.)
 
 ### Idempotence
 
@@ -122,7 +155,7 @@ Useful for frequent intervals: set up the scheduled task to run every 5 minutes,
 
 For more detailed observability than a snapshot allows, you can reach the full web dashboard (`localhost:8770`) from a remote device using a tunnel or private network.
 
-### Option 1: Tailscale (Recommended)
+### Option 1: Tailscale (RECOMMENDED)
 
 **Why**: Secure private mesh network. Your phone and machine are on the same private network. No public URL, no firewall rules, nothing exposed. Survives network changes.
 
@@ -162,7 +195,9 @@ For more detailed observability than a snapshot allows, you can reach the full w
 
 **Security**: Encrypted end-to-end, private network only. Your phone never sees a public URL.
 
-### Option 2: Cloudflare Tunnel + Access (Identity-Gated)
+---
+
+### Option 2: Cloudflare Tunnel + Access (Identity-Gated Public URL)
 
 If you need more granular access control, Cloudflare Tunnel + Access provides a public URL gated by your Cloudflare account.
 
@@ -170,8 +205,8 @@ If you need more granular access control, Cloudflare Tunnel + Access provides a 
 
 1. **Install Cloudflare Warp** (on machine):
    ```bash
-   # macOS: brew install cloudflare/warp/warp
    # Windows: Download from https://1.1.1.1/
+   # macOS: brew install cloudflare/warp/warp
    # Linux: https://pkg.cloudflareclient.com/
    ```
 
@@ -194,9 +229,11 @@ If you need more granular access control, Cloudflare Tunnel + Access provides a 
 
 **Cost**: Paid (Cloudflare Teams or Warp+). More setup, but explicit identity gating.
 
-**Security**: Public URL (so you need authentication), encrypted tunnel.
+**Security**: Public URL (requires authentication), encrypted tunnel.
 
-### Option 3: ngrok (NOT Recommended for Control Surfaces)
+---
+
+### Option 3: ngrok (NOT RECOMMENDED for Control Surfaces)
 
 ngrok provides a quick public URL via `ngrok http 8770`, but:
 
@@ -211,41 +248,40 @@ Use only if:
 
 ---
 
-## Recommended Setup
+## Recommendation Matrix
 
-**For phone observability on the road:**
+| Scenario | Recommended | Reasoning |
+|----------|-------------|-----------|
+| Private mesh, phone on road | **Tailscale** | No public URL, auto-encryption, hassle-free |
+| Enterprise SSO required | Cloudflare Tunnel + Access | Identity policy control |
+| Quick demo (time-bound) | ngrok | Fastest setup, but acknowledge public exposure |
+| Permanent production | **Tailscale** | Only secure long-term option |
 
-1. Use `status_publish.py` with a scheduled task (15-minute updates to GitHub issue)
-2. Read the snapshot on your phone via GitHub issues (link in your phone's browser history)
-3. For detailed inspection, use Tailscale to reach the full dashboard
-
-**Why this combination:**
-
-- **Snapshots**: lightweight, private GitHub issue, survives without your machine running, no tunnel needed
-- **Full dashboard**: Tailscale provides a private network; no exposing a control surface
+**Bottom line**: Use **Tailscale** for all production use. Use `status_publish.py` for lightweight phone observability on bad WiFi (primary use case). Reserve full dashboard access for Tailscale.
 
 ---
 
 ## Troubleshooting
 
-### `gh` Command Not Found
+### Missing Gist ID
 
-Ensure GitHub CLI is installed:
-```bash
-# Install
-https://cli.github.com/
-
-# Verify
-gh --version
-```
+If publish fails with "gist-id required":
+- Create a secret gist: `gh gist create --secret /dev/null`
+- Copy the ID from the output
+- Pass it as `--gist-id ID` or add to `aesop.config.json`
 
 ### Redaction Failures
 
-If publish fails with "Redaction would remove > 10%": <!-- metrics-verified: tools/status_publish.py redact_payload() -->
+If publish fails with "Redaction would remove > 10%":
+- Check for accidentally-committed secrets in BUILDLOG or pending items
+- Inspect what `gather_buildlog_summary()` is pulling
+- Use `--dry-run` to inspect the payload before publishing
 
-1. Check for accidentally-committed secrets in the payload (BUILDLOG, pending items)
-2. Review what `gather_buildlog_summary()` is pulling
-3. Use `--dry-run` to inspect the payload before publishing
+### Visibility Check Failures
+
+If publish fails with "gist is PUBLIC":
+- Verify your gist is private: `gh gist view <id> --json isPublic`
+- If public, delete it and create a new secret gist: `gh gist create --secret /dev/null`
 
 ### Scheduled Task Not Running
 
@@ -261,9 +297,12 @@ Get-ScheduledTask -TaskName "AesopStatusPublish" | Get-ScheduledTaskInfo
 
 # Re-run manually
 schtasks /run /tn "Aesop\AesopStatusPublish" /v
+
+# Common issue: Python path is wrong
+# Solution: use (Get-Command python).Source to discover the correct path
 ```
 
-### Tailscale DNS/Routing Issues
+### Tailscale Connectivity Issues
 
 ```bash
 # Check your Tailscale status
@@ -281,8 +320,9 @@ tailscale up
 
 ## Security Principles
 
-1. **Snapshots are private GitHub issues** — only accessible to your GitHub account
+1. **Snapshots are private GitHub gists** — only accessible to your GitHub account
 2. **Tailscale is encrypted end-to-end** — traffic never touches the public internet
 3. **No public URLs** — dashboard is never exposed unauthenticated
 4. **Redaction is mandatory** — never publish secrets; failure blocks the publish
 5. **Scheduled tasks are local** — all work runs on your machine, controlled by your OS scheduler
+6. **Visibility check is fail-closed** — refuses public targets before any data is sent

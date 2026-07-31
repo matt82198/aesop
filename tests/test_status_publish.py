@@ -36,7 +36,8 @@ class TestRedaction:
     def test_redact_token_pattern(self):
         """Test that token-like patterns are redacted."""
         # Build GitHub token without literal pattern in source
-        token = "".join([chr(103), chr(104), chr(112), chr(45)]) + "xyzabcdefghijklmnopqrstuvwxyzABCD"
+        # Requires 36+ chars after "ghp-" to match the pattern
+        token = "".join([chr(103), chr(104), chr(112), chr(45)]) + "xyzabcdefghijklmnopqrstuvwxyzABCDEF"  # 36 chars
         text = (
             "This is a fleet status report with access tokens. "
             f"API authentication: {token} is configured. "
