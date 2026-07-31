@@ -55,3 +55,78 @@ jobs:
 
       - name: README stats freshness gate (drift guard)
         run: python tools/self_stats.py --check
+
+  main-full-browser-proofs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Build React dashboard (ui/web/)
+        run: |
+          cd ui/web
+          npm ci
+          npm run build
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('**/package.json') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install npm dependencies (for Playwright TypeScript specs)
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Python Playwright (for Python browser proofs)
+        run: pip install playwright && playwright install chromium
+
+      - name: Run dashboard browser proof (verify_dash)
+        run: python tools/verify_dash.py
+
+      - name: Run submit encoding browser proof (verify_submit_encoding)
+        run: python tools/verify_submit_encoding.py
+
+      - name: Run prboard browser proof (verify_prboard)
+        run: python tools/verify_prboard.py
+
+      - name: Run agent inspector browser proof (verify_agent_inspector)
+        run: python tools/verify_agent_inspector.py
+
+      - name: Run activity filter browser proof (verify_activity_filter)
+        run: python tools/verify_activity_filter.py
+
+      - name: Run failure drilldown browser proof (verify_failure_drilldown)
+        run: python tools/verify_failure_drilldown.py
+
+      - name: Run wave telemetry browser proof (verify_wave_telemetry)
+        run: python tools/verify_wave_telemetry.py
+
+      - name: Run dispatch panel browser proof (verify_dispatch_panel)
+        run: python tools/verify_dispatch_panel.py
+
+      - name: Run scorecards browser proof (verify_scorecards)
+        run: python tools/verify_scorecards.py
+
+      - name: Run UI trio browser proof (verify_ui_trio)
+        run: python tools/verify_ui_trio.py
+
+      - name: Run cost panel browser proof (verify_cost_panel)
+        run: python tools/verify_cost_panel.py
+
+      - name: Run watchdog GUI tests
+        run: bash tests/dash-watchdog-gui.test.sh
