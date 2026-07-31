@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""Aesop UI — SSE client registry + broadcast + background collector loop (wave-9 split)."""
+"""Aesop UI — SSE client registry + broadcast + background collector loop (wave-9 split).
+
+Refactored to use CollectorSource abstraction (wave-32: complexity reduction).
+Each of 9 sources declares its path, change detection, and snapshot builder.
+Main loop iterates over sources; complexity reduced from F(43) to C.
+"""
 import hashlib
 import json
 import queue
 import sys
 import threading
 import time
+from pathlib import Path
 
 import config
 import cost
@@ -137,48 +143,250 @@ def _maybe_emit(name, snapshot, last_hashes):
         _latest_snapshots[name] = payload
     broadcast_sse(name, payload)
 
+
+# === CollectorSource abstraction ===
+
+class CollectorSource:
+    """Base abstraction for a single SSE source.
+
+    Each source declares:
+    - name: event name emitted to SSE
+    - default snapshot: initial cached value
+    Subclasses implement:
+    - should_update(): detect if content changed
+    - build_snapshot(): fetch/build payload
+    """
+
+    def __init__(self, name, default_snapshot):
+        self.name = name
+        self.cached_snapshot = default_snapshot
+        self.error_list = []
+
+    def should_update(self):
+        """Returns True if source content has changed since last check."""
+        raise NotImplementedError
+
+    def build_snapshot(self):
+        """Builds and returns the snapshot object for this source."""
+        raise NotImplementedError
+
+    def emit_if_changed(self, last_hashes):
+        """Check for updates, rebuild if needed, emit via hash gate."""
+        if self.should_update():
+            try:
+                self.cached_snapshot = self.build_snapshot()
+                self._record_success()
+            except Exception as e:
+                self._record_error(e)
+                print(f"[collector] {self.name} snapshot error: {type(e).__name__}: {e}",
+                      file=sys.stderr, flush=True)
+        _maybe_emit(self.name, self.cached_snapshot, last_hashes)
+
+    def _record_error(self, error):
+        """Record an error for health tracking."""
+        error_info = f"{type(error).__name__}:{str(error)[:50]}"
+        if error_info not in self.error_list:
+            self.error_list.append(error_info)
+        if len(self.error_list) > 5:
+            self.error_list.pop(0)
+        with _collector_health_lock:
+            if self.name not in _collector_health["per_source_errors"]:
+                _collector_health["per_source_errors"][self.name] = []
+            health_list = _collector_health["per_source_errors"][self.name]
+            if error_info not in health_list:
+                health_list.append(error_info)
+            if len(health_list) > 5:
+                health_list.pop(0)
+
+    def _record_success(self):
+        """Clear errors for this source."""
+        self.error_list = []
+        with _collector_health_lock:
+            _collector_health["per_source_errors"][self.name] = []
+
+
+class MtimeSizeGatedSource(CollectorSource):
+    """Source that detects changes via (mtime, size) tuple on a single file."""
+
+    def __init__(self, name, default_snapshot, file_path):
+        super().__init__(name, default_snapshot)
+        self.file_path = file_path
+        self.last_mtime = object()  # sentinel
+        self.last_size = object()
+
+    def should_update(self):
+        """Check if file mtime+size changed."""
+        try:
+            stat = self.file_path.stat() if self.file_path.exists() else None
+            mtime = stat.st_mtime if stat else None
+            size = stat.st_size if stat else None
+        except OSError:
+            mtime = None
+            size = None
+
+        if (mtime, size) != (self.last_mtime, self.last_size):
+            self.last_mtime = mtime
+            self.last_size = size
+            return True
+        return False
+
+
+class MultiFileMtimeGatedSource(CollectorSource):
+    """Source that detects changes via (mtime, size) on multiple files."""
+
+    def __init__(self, name, default_snapshot, file_paths):
+        super().__init__(name, default_snapshot)
+        self.file_paths = file_paths
+        self.last_mtimes = {}
+        self.last_sizes = {}
+
+    def should_update(self):
+        """Check if any file mtime+size changed."""
+        changed = False
+        for fpath in self.file_paths:
+            try:
+                stat = fpath.stat() if fpath.exists() else None
+                mtime = stat.st_mtime if stat else None
+                size = stat.st_size if stat else None
+            except OSError:
+                mtime = None
+                size = None
+
+            if (mtime, size) != (self.last_mtimes.get(fpath), self.last_sizes.get(fpath)):
+                self.last_mtimes[fpath] = mtime
+                self.last_sizes[fpath] = size
+                changed = True
+
+        return changed
+
+
+class FingerprintGatedSource(CollectorSource):
+    """Source that detects changes via fingerprint (e.g., content hash)."""
+
+    def __init__(self, name, default_snapshot):
+        super().__init__(name, default_snapshot)
+        self.last_fingerprint = None
+
+    def get_fingerprint(self):
+        """Return current fingerprint; subclass implements."""
+        raise NotImplementedError
+
+    def should_update(self):
+        """Check if fingerprint changed."""
+        fingerprint = self.get_fingerprint()
+        if fingerprint != self.last_fingerprint:
+            self.last_fingerprint = fingerprint
+            return True
+        return False
+
+
+# === Concrete source implementations ===
+
+class DataSource(MultiFileMtimeGatedSource):
+    """Data section: backup log + alerts log (wave-19 gating)."""
+
+    def __init__(self):
+        file_paths = [
+            config.BACKUP_LOG,
+            config.ALERTS_LOG,
+        ]
+        super().__init__("data", {}, [p for p in file_paths if p])
+
+    def build_snapshot(self):
+        return _snapshot_data()
+
+
+class BacklogSource(MtimeSizeGatedSource):
+    """Backlog section: audit backlog file."""
+
+    def __init__(self):
+        super().__init__("backlog", {"tiers": []}, config.AUDIT_BACKLOG_FILE)
+
+    def build_snapshot(self):
+        return parse_audit_backlog()
+
+
+class AgentsSource(FingerprintGatedSource):
+    """Agents section: transcript fingerprint gated."""
+
+    def __init__(self):
+        super().__init__("agents", [])
+
+    def get_fingerprint(self):
+        return _transcripts_fingerprint()
+
+    def build_snapshot(self):
+        agents = get_fleet_agents()
+        return sanitize_agents_for_broadcast(agents)
+
+
+class TrackerSource(MtimeSizeGatedSource):
+    """Tracker section: tracker.json file."""
+
+    def __init__(self):
+        tracker_file = config.STATE_DIR / "tracker.json"
+        super().__init__("tracker", {'items': []}, tracker_file)
+
+    def build_snapshot(self):
+        return _snapshot_tracker()
+
+
+class StatusSource(MtimeSizeGatedSource):
+    """Status section: orchestrator-status.json file."""
+
+    def __init__(self):
+        status_file = config.STATE_DIR / "orchestrator-status.json"
+        super().__init__("status", {'orchestrators': []}, status_file)
+
+    def build_snapshot(self):
+        return _snapshot_orchestrator_status()
+
+
+class CostSource(MtimeSizeGatedSource):
+    """Cost section: ledger file (OUTCOMES-LEDGER.md)."""
+
+    def __init__(self):
+        super().__init__("cost", {}, config.LEDGER_FILE if config.LEDGER_FILE else Path("/dev/null"))
+
+    def build_snapshot(self):
+        return cost.get_cost_summary()
+
+
+class CollectorHealthSource(CollectorSource):
+    """Collector health snapshot: emitted every cycle."""
+
+    def __init__(self):
+        super().__init__("collector_health", {})
+
+    def should_update(self):
+        """Always update; health changes every cycle."""
+        return True
+
+    def build_snapshot(self):
+        with _collector_health_lock:
+            return dict(_collector_health)
+
+
 def collector_loop(stop_event):
-    """Background loop: poll cheap sources, gate expensive ones, broadcast on change."""
-    global _collector_health
+    """Background loop: poll sources, broadcast on change.
+
+    Refactored to use CollectorSource abstraction (wave-32).
+    Complexity reduced from F(43) to C by extracting each source's
+    mtime-caching, snapshot-building, and error handling.
+    """
     last_hashes = {}
-    last_backlog_mtime = object()  # sentinel guaranteed != any real mtime/None
-    last_agents_fingerprint = None
-    cached_backlog_snapshot = {"tiers": []}
-    cached_agents_snapshot = []
-    last_tracker_mtime = object()
-    last_tracker_size = object()
-    last_status_mtime = object()
-    last_status_size = object()
-    last_cost_mtime = object()
-    last_cost_size = object()
-    cached_tracker_snapshot = {'items': []}
-    cached_status_snapshot = {'orchestrators': []}
-    cached_cost_snapshot = {}
-    # Wave-19: Gate data section sources on mtime to avoid expensive reads every tick
-    last_backup_log_mtime = object()  # sentinel
-    last_backup_log_size = object()
-    last_alerts_log_mtime = object()  # sentinel
-    last_alerts_log_size = object()
-    cached_data_snapshot = {}
-    # Wave-20: heartbeat emission to detect collector thread death
     last_heartbeat_time = 0.0
 
-    def _record_error(source_name, error):
-        """Record an error for a source and update collector health."""
-        with _collector_health_lock:
-            if source_name not in _collector_health["per_source_errors"]:
-                _collector_health["per_source_errors"][source_name] = []
-            error_list = _collector_health["per_source_errors"][source_name]
-            error_info = f"{type(error).__name__}:{str(error)[:50]}"
-            if error_info not in error_list:
-                error_list.append(error_info)
-            if len(error_list) > 5:
-                error_list.pop(0)
-
-    def _record_success(source_name):
-        """Clear errors for a source upon successful collection."""
-        with _collector_health_lock:
-            _collector_health["per_source_errors"][source_name] = []
+    # Initialize all sources
+    sources = [
+        DataSource(),
+        BacklogSource(),
+        AgentsSource(),
+        TrackerSource(),
+        StatusSource(),
+        CostSource(),
+        CollectorHealthSource(),
+    ]
 
     while not stop_event.is_set():
         try:
@@ -190,135 +398,23 @@ def collector_loop(stop_event):
                 heartbeat_payload = json.dumps({"timestamp": int(current_time * 1000)}, default=str)
                 broadcast_sse(HEARTBEAT_EVENT_NAME, heartbeat_payload)
 
-            # Wave-19: Gate data section on mtimes+sizes to avoid expensive file reads every tick.
-            # Only regenerate the snapshot if one of the underlying log files changed.
-            try:
-                backup_log_stat = config.BACKUP_LOG.stat() if config.BACKUP_LOG and config.BACKUP_LOG.exists() else None
-                backup_log_mtime = backup_log_stat.st_mtime if backup_log_stat else None
-                backup_log_size = backup_log_stat.st_size if backup_log_stat else None
-            except OSError:
-                backup_log_mtime = None
-                backup_log_size = None
-            try:
-                alerts_log_stat = config.ALERTS_LOG.stat() if config.ALERTS_LOG and config.ALERTS_LOG.exists() else None
-                alerts_log_mtime = alerts_log_stat.st_mtime if alerts_log_stat else None
-                alerts_log_size = alerts_log_stat.st_size if alerts_log_stat else None
-            except OSError:
-                alerts_log_mtime = None
-                alerts_log_size = None
-
-            if ((backup_log_mtime, backup_log_size) != (last_backup_log_mtime, last_backup_log_size) or
-                (alerts_log_mtime, alerts_log_size) != (last_alerts_log_mtime, last_alerts_log_size)):
-                last_backup_log_mtime = backup_log_mtime
-                last_backup_log_size = backup_log_size
-                last_alerts_log_mtime = alerts_log_mtime
-                last_alerts_log_size = alerts_log_size
-                try:
-                    cached_data_snapshot = _snapshot_data()
-                    _record_success('data')
-                except Exception as e:
-                    _record_error('data', e)
-                    print(f"[collector] data snapshot error: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
-
-            _maybe_emit("data", cached_data_snapshot, last_hashes)
-
-            try:
-                backlog_mtime = config.AUDIT_BACKLOG_FILE.stat().st_mtime if config.AUDIT_BACKLOG_FILE.exists() else None
-            except OSError:
-                backlog_mtime = None
-            if backlog_mtime != last_backlog_mtime:
-                last_backlog_mtime = backlog_mtime
-                try:
-                    cached_backlog_snapshot = parse_audit_backlog()
-                    _record_success('backlog')
-                except Exception as e:
-                    _record_error('backlog', e)
-                    print(f"[collector] backlog snapshot error: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
-            _maybe_emit("backlog", cached_backlog_snapshot, last_hashes)
-
-            fingerprint = _transcripts_fingerprint()
-            if fingerprint != last_agents_fingerprint:
-                last_agents_fingerprint = fingerprint
-                try:
-                    agents = get_fleet_agents()
-                    # Wave-19: strip large prompt fields before broadcast
-                    cached_agents_snapshot = sanitize_agents_for_broadcast(agents)
-                    _record_success('agents')
-                except Exception as e:
-                    _record_error('agents', e)
-                    print(f"[collector] agents snapshot error: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
-            _maybe_emit("agents", cached_agents_snapshot, last_hashes)
-
-            # Emit tracker section (mtime+size-gated)
-            try:
-                tracker_stat = (config.STATE_DIR / "tracker.json").stat() if (config.STATE_DIR / "tracker.json").exists() else None
-                tracker_mtime = tracker_stat.st_mtime if tracker_stat else None
-                tracker_size = tracker_stat.st_size if tracker_stat else None
-            except OSError:
-                tracker_mtime = None
-                tracker_size = None
-            if (tracker_mtime, tracker_size) != (last_tracker_mtime, last_tracker_size):
-                last_tracker_mtime = tracker_mtime
-                last_tracker_size = tracker_size
-                try:
-                    cached_tracker_snapshot = _snapshot_tracker()
-                    _record_success('tracker')
-                except Exception as e:
-                    _record_error('tracker', e)
-                    print(f"[collector] tracker snapshot error: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
-            _maybe_emit("tracker", cached_tracker_snapshot, last_hashes)
-
-            # Emit status section (mtime+size-gated)
-            try:
-                status_stat = (config.STATE_DIR / "orchestrator-status.json").stat() if (config.STATE_DIR / "orchestrator-status.json").exists() else None
-                status_mtime = status_stat.st_mtime if status_stat else None
-                status_size = status_stat.st_size if status_stat else None
-            except OSError:
-                status_mtime = None
-                status_size = None
-            if (status_mtime, status_size) != (last_status_mtime, last_status_size):
-                last_status_mtime = status_mtime
-                last_status_size = status_size
-                try:
-                    cached_status_snapshot = _snapshot_orchestrator_status()
-                    _record_success('status')
-                except Exception as e:
-                    _record_error('status', e)
-                    print(f"[collector] status snapshot error: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
-            _maybe_emit("status", cached_status_snapshot, last_hashes)
-
-            # Emit cost section (mtime+size-gated on the outcomes ledger)
-            try:
-                cost_stat = config.LEDGER_FILE.stat() if config.LEDGER_FILE and config.LEDGER_FILE.exists() else None
-                cost_mtime = cost_stat.st_mtime if cost_stat else None
-                cost_size = cost_stat.st_size if cost_stat else None
-            except OSError:
-                cost_mtime = None
-                cost_size = None
-            if (cost_mtime, cost_size) != (last_cost_mtime, last_cost_size):
-                last_cost_mtime = cost_mtime
-                last_cost_size = cost_size
-                try:
-                    cached_cost_snapshot = cost.get_cost_summary()
-                    _record_success('cost')
-                except Exception as e:
-                    _record_error('cost', e)
-                    print(f"[collector] cost snapshot error: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
-            _maybe_emit("cost", cached_cost_snapshot, last_hashes)
+            # Iterate over all sources and emit if changed
+            for source in sources:
+                source.emit_if_changed(last_hashes)
 
             # Emit collector health snapshot
             with _collector_health_lock:
                 _collector_health["last_successful_cycle"] = current_time
-            health_snapshot = dict(_collector_health)
-            _maybe_emit("collector_health", health_snapshot, last_hashes)
 
             # Drain inbox
             try:
                 drain_tracker_inbox()
             except Exception as e:
                 print(f"[collector] Inbox drain error: {e}", file=sys.stderr, flush=True)
+
         except Exception as e:
             print(f"[collector_loop] Exception: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+
         stop_event.wait(config.COLLECTOR_INTERVAL)
 
 def start_collector_thread():
