@@ -220,13 +220,30 @@ def main():
     suite = unittest.TestSuite()
     failed_imports = []
 
+    skipped_modules = []
+
     for test_name in shard_files:
         try:
             module = __import__(f"tests.{test_name}", fromlist=[test_name])
             suite.addTests(loader.loadTestsFromModule(module))
+        except unittest.SkipTest as e:
+            # A module-level raise unittest.SkipTest is a deliberate, self-documenting
+            # skip -- pytest and `unittest discover` both honor it. It subclasses
+            # Exception, so the generic handler below used to record it as an import
+            # FAILURE and fail the shard. Report it as skipped and keep going.
+            skipped_modules.append((test_name, str(e)))
+            print(f"SKIP: {test_name}: {e}", file=sys.stderr)
         except Exception as e:
             failed_imports.append((test_name, str(e)))
             print(f"ERROR: Failed to load {test_name}: {e}", file=sys.stderr)
+
+    if skipped_modules:
+        print(
+            f"\n{len(skipped_modules)} test module(s) skipped at import:",
+            file=sys.stderr,
+        )
+        for name, reason in skipped_modules:
+            print(f"  - {name}: {reason}", file=sys.stderr)
 
     if failed_imports:
         print(
