@@ -272,7 +272,7 @@ If publish fails with "gist-id required":
 
 ### Redaction Failures
 
-If publish fails with "Redaction would remove > 10%":
+If publish fails with "Redaction would remove > 10%": <!-- metrics-verified: tools/status_publish.py redact_payload() -->
 - Check for accidentally-committed secrets in BUILDLOG or pending items
 - Inspect what `gather_buildlog_summary()` is pulling
 - Use `--dry-run` to inspect the payload before publishing
