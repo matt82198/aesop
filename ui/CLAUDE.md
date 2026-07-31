@@ -133,3 +133,12 @@ Precedence: env vars > `aesop.config.json` > built-in defaults. Key env vars: `P
 ## Invariants
 
 Stdlib-only backend (ThreadingHTTPServer for SSE). Collector fail-open. Config: `import config; config.X` (never `from config import X`). Dist always required (hard 500 if missing). Map of all domains: /CLAUDE.md
+## Cost view: absent vs empty
+
+`Cost.tsx` receives `cost` as a nullable prop. Null means BOTH "the first SSE snapshot has not
+arrived yet" AND "the backend failed" -- the prop cannot distinguish them. It previously rendered a
+"Could not load cost data" error for that ambiguity, so a slow connection showed a failure for a
+healthy system and `CostAnalyticsPanel` never mounted at all (caught by `verify_cost_panel.py` once
+that proof was finally wired into CI). Null now falls back to `EMPTY_COST`, a zeroed CostSummary, so
+the panel always mounts and an inline "no cost data yet" notice covers both the fresh-install and
+still-loading cases. The retry affordance is preserved so a genuine failure stays actionable.
