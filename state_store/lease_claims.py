@@ -168,17 +168,19 @@ class LeaseStore:
         conn = self._get_conn()
 
         try:
-            # Check for conflicts: any normalized path held by another instance
-            conflict_instance, conflict_paths = self._check_conflicts(
-                normalized_paths, instance_id, now, conn
-            )
-            if conflict_instance is not None:
-                raise LeaseConflict(conflict_instance, conflict_paths)
-
-            # All paths are available: atomically insert the lease with normalized paths
-            paths_json = json.dumps(sorted(normalized_paths), separators=(",", ":"))
+            # ONE atomic transaction: check conflicts and insert in the same lock
             conn.execute("BEGIN IMMEDIATE")
             try:
+                # Check for conflicts inside the transaction (check holds the lock)
+                conflict_instance, conflict_paths = self._check_conflicts(
+                    normalized_paths, instance_id, now, conn
+                )
+                if conflict_instance is not None:
+                    conn.rollback()
+                    raise LeaseConflict(conflict_instance, conflict_paths)
+
+                # All paths are available: atomically insert the lease with normalized paths
+                paths_json = json.dumps(sorted(normalized_paths), separators=(",", ":"))
                 conn.execute(
                     """
                     INSERT INTO leases
@@ -188,6 +190,9 @@ class LeaseStore:
                     (lease_id, instance_id, paths_json, now, ttl_seconds),
                 )
                 conn.commit()
+            except LeaseConflict:
+                # Re-raise LeaseConflict if it was raised (already rolled back above)
+                raise
             except Exception:
                 conn.rollback()
                 raise
@@ -209,39 +214,36 @@ class LeaseStore:
     ) -> tuple[Optional[str], list[str]]:
         """Check if any path is held by another active instance.
 
+        IMPORTANT: This method assumes the caller holds a write lock (via BEGIN IMMEDIATE).
+        It does NOT manage transactions — caller is responsible for opening and committing.
+        This prevents TOCTOU races where the lock is released between check and write.
+
         Returns (conflicting_instance, conflicting_paths) or (None, []).
         """
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            # Collect all non-released leases
-            rows = conn.execute(
-                """
-                SELECT instance_id, paths, claimed_at, ttl_seconds
-                FROM leases
-                WHERE released_at IS NULL
-                """,
-            ).fetchall()
+        # Collect all non-released leases
+        rows = conn.execute(
+            """
+            SELECT instance_id, paths, claimed_at, ttl_seconds
+            FROM leases
+            WHERE released_at IS NULL
+            """,
+        ).fetchall()
 
-            for path in paths:
-                for row in rows:
-                    holder = row["instance_id"]
-                    claimed_at = row["claimed_at"]
-                    ttl = row["ttl_seconds"]
-                    lease_paths = json.loads(row["paths"])
+        for path in paths:
+            for row in rows:
+                holder = row["instance_id"]
+                claimed_at = row["claimed_at"]
+                ttl = row["ttl_seconds"]
+                lease_paths = json.loads(row["paths"])
 
-                    # Check if path is in this lease and lease is not expired
-                    if path in lease_paths:
-                        if now <= claimed_at + ttl:
-                            # Active lease held by another instance
-                            if holder != instance_id:
-                                conn.rollback()
-                                return holder, lease_paths
-                        # else: lease is expired, continue checking
-            conn.rollback()
-            return None, []
-        except Exception:
-            conn.rollback()
-            raise
+                # Check if path is in this lease and lease is not expired
+                if path in lease_paths:
+                    if now <= claimed_at + ttl:
+                        # Active lease held by another instance
+                        if holder != instance_id:
+                            return holder, lease_paths
+                    # else: lease is expired, continue checking
+        return None, []
 
     def renew(
         self,
