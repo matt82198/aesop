@@ -550,12 +550,16 @@ def _ensure_tracker_migrated(write_api):
 
         # Get items from tracker.json
         items_to_backfill = []
+        disk_items = []
         if config.TRACKER_FILE.exists():
             try:
                 data = json.loads(config.TRACKER_FILE.read_text(encoding='utf-8'))
-                items_to_backfill = [
+                disk_items = [
                     item for item in data.get("items", [])
-                    if isinstance(item, dict) and item.get("id") and item.get("id") not in db_item_ids
+                    if isinstance(item, dict) and item.get("id")
+                ]
+                items_to_backfill = [
+                    item for item in disk_items if item.get("id") not in db_item_ids
                 ]
             except Exception as e:
                 print(f"[tracker] Failed to read tracker.json: {e}", file=sys.stderr)
@@ -571,6 +575,41 @@ def _ensure_tracker_migrated(write_api):
             except Exception as e:
                 item_id = item.get("id", "?")
                 error_msg = f"Failed to backfill item {item_id}: {e}"
+                print(f"[tracker] {error_msg}", file=sys.stderr)
+                backfill_errors.append(error_msg)
+
+        # Second direction -- WITHOUT THIS, MIGRATION LOSES DATA.
+        # Items already in the event log may carry a STALE status there: historical
+        # closes were written straight to tracker.json without emitting events, so
+        # the log never saw them. Rendering the projection from that incomplete log
+        # silently RESURRECTS closed items (observed: 87 of 119 on a real install).
+        # The projection is authoritative for those, so teach the log what disk knows.
+        try:
+            projected = {
+                i.get("id"): i
+                for i in api.project("tracker").get("items", [])
+                if isinstance(i, dict) and i.get("id")
+            }
+        except Exception as e:
+            print(f"[tracker] Could not project for status reconcile: {e}", file=sys.stderr)
+            projected = {}
+
+        for item in disk_items:
+            item_id = item.get("id")
+            disk_status = item.get("status")
+            if not item_id or not disk_status or item_id not in projected:
+                continue
+            if projected[item_id].get("status") == disk_status:
+                continue
+            try:
+                api.append(
+                    "tracker",
+                    "item_updated",
+                    {"id": item_id, "status": disk_status},
+                    "migration",
+                )
+            except Exception as e:
+                error_msg = f"Failed to reconcile status for {item_id}: {e}"
                 print(f"[tracker] {error_msg}", file=sys.stderr)
                 backfill_errors.append(error_msg)
 

@@ -388,6 +388,39 @@ class TestTrackerMigrationP0Fix(unittest.TestCase):
             if e.get("type") in ("migration_started", "migration_completed")
         ]
 
+    def test_migration_does_not_resurrect_closed_items(self):
+        """Migration must not revive items the projection closed but the log never saw.
+
+        Historical closes were written straight to tracker.json without emitting
+        events, so the log never recorded them. Rendering the projection from that
+        incomplete log resurrects those items (observed: 87 of 119 on a real
+        install). The projection is authoritative there, so migration must
+        reconcile BOTH directions, not only backfill missing items.
+        """
+        from state_store import StateAPI
+
+        # Event log knows the item only as CREATED, status 'todo'.
+        api = StateAPI(str(self.temp_path / "tracker_events.db"))
+        api.append("tracker", "item_created",
+                   {"id": "item-1", "title": "Shipped thing", "status": "todo"}, "test")
+        api.close()
+
+        # Disk holds the later truth -- closed -- with no corresponding event.
+        self._create_tracker_json(
+            [{"id": "item-1", "title": "Shipped thing", "status": "closed"}]
+        )
+
+        from collectors import _ensure_tracker_migrated, _write_api
+        _ensure_tracker_migrated(_write_api())
+
+        api = StateAPI(str(self.temp_path / "tracker_events.db"))
+        projected = {i["id"]: i for i in api.project("tracker").get("items", [])}
+        api.close()
+        self.assertEqual(
+            projected["item-1"]["status"], "closed",
+            "migration resurrected a closed item: the projection's status was discarded",
+        )
+
     def test_migration_completes_successfully(self):
         """Successful backfill writes completion marker and skips on retry."""
         # Create tracker.json with 3 items
