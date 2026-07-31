@@ -147,3 +147,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 
 - `encoding_lint.py` -- flags `subprocess.run`/`Popen` calls that pass `text=True`/`universal_newlines=True` without an explicit `encoding=`. Note it scans the WHOLE repo, not only changed files, so a single violation anywhere blocks every push that touches Python.
 - Convention: every subprocess call that decodes output passes `encoding='utf-8'`. Without it Python decodes using the platform default, which on Windows is the ANSI codepage (cp1252); that corrupts non-ASCII tool output and is a known source of Windows-passes/Linux-fails drift.
+
+## New tools (append-only additions)
+
+- `remote_inbox.py` — Poll GitHub issue comments for remote command dispatch (phone-to-orchestrator, outbound polling only); verifies repo-owner authorship via GitHub API; strict allowlist of 8 skill commands (/runwave, /power, /afk, etc.); idempotent tracking to prevent replay; appends to ~/conductor3/state/ui-inbox.md for orchestrator pickup; posts reply comments for acknowledgment; audit log to ~/conductor3/state/REMOTE-DISPATCH.log; CLI: `--issue N [--dry-run] [--once]`; exit 0=success / 1=gh failure; designed for scheduled task execution (Windows task scheduler calling --once every 5-10 minutes); documented in docs/REMOTE-ACCESS.md
