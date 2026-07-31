@@ -52,7 +52,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `git_identity_check.py` — Validate repo git user.name/user.email via --expect-name/--expect-email CLI args OR aesop.config.json identity block; verifies .git/config physically (not config cache)
 - `halt.py` — Kill-switch: writes/reads/clears `.HALT` sentinel (daemons/dispatch check it)
 - `handoff_proof.py` — Team-handoff proof: crash-only resume demo on the real driver/wave_loop.py engine offline (control vs interrupted+resumed runs must reach identical terminal state); outputs docs/HANDOFF-CERTIFICATE.md + state/handoff-proof-*.json
-- `hook_preflight.py` — Interpreter health checker (Guardrail G12): verifies all interpreters required by hooks and daemons are present and executable; detects broken wrappers (e.g. bash stub with missing target); fail-closed (exit 1 if any broken, exit 2 if no checks performed, never exit 0 without checking at least one); CLI: `[--check-file PATH]` (default: check all hooks/ and daemons/); portable (ASCII-only, explicit encoding='utf-8', timeout on subprocess); integrated into pre-push-policy.sh early guard
+- `hook_preflight.py` — Interpreter health checker; verifies hooks/daemons interpreters; stdlib-only
 - `health-score.js` — Readiness score for primed projects (0-100 weighted score: config, git hooks, CLAUDE.md, state writable, daemon heartbeats, git identity, secret-scan runnable)
 - `health_score.py` — Readiness score (0-100) for primed projects; CLI: `--cwd <path> [--json]`; checks: config, hooks, CLAUDE.md, writable, heartbeats, git-identity, secret-scan (weighted scoring)
 - `health.js`, `healthcheck.py` — Fleet health aggregator (heartbeat/alert/orchestrator status); health.js wraps Python
@@ -145,6 +145,5 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - **Python**: `npm run test:py`; **Shell**: `bash -n tools/*.sh && shellcheck tools/*.sh`; **Node**: `node --check tools/*.mjs`
 
 ## Subprocess encoding convention (Guardrail G10)
-
 - `encoding_lint.py` -- flags `subprocess.run`/`Popen` calls that pass `text=True`/`universal_newlines=True` without an explicit `encoding=`. Note it scans the WHOLE repo, not only changed files, so a single violation anywhere blocks every push that touches Python.
 - Convention: every subprocess call that decodes output passes `encoding='utf-8'`. Without it Python decodes using the platform default, which on Windows is the ANSI codepage (cp1252); that corrupts non-ASCII tool output and is a known source of Windows-passes/Linux-fails drift.
