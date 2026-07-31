@@ -147,3 +147,8 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 
 - `encoding_lint.py` -- flags `subprocess.run`/`Popen` calls that pass `text=True`/`universal_newlines=True` without an explicit `encoding=`. Note it scans the WHOLE repo, not only changed files, so a single violation anywhere blocks every push that touches Python.
 - Convention: every subprocess call that decodes output passes `encoding='utf-8'`. Without it Python decodes using the platform default, which on Windows is the ANSI codepage (cp1252); that corrupts non-ASCII tool output and is a known source of Windows-passes/Linux-fails drift.
+
+## Shared utility modules (de-duplication consolidation)
+
+- `transcript_reader.py` — JSONL transcript utilities: `walk_jsonl()` (recursive file discovery), `parse_jsonl_file()` (robust line-by-line JSON parsing with malformed-line skipping), `extract_tool_uses()` (filter tool_use items from Claude message content), `parse_timestamp()` (ISO8601 → milliseconds epoch), `filter_by_project()` (extract relative paths matching project substring). Consolidates triply-duplicated walk_jsonl() implementations and JSON parsing loops from transcript_replay.py, transcript_timeline.py, and fleet_prompt_extractor.py into single source of truth.
+- `health_checks.py` — Heartbeat staleness utilities: `check_heartbeat_file()`, `check_watchdog_heartbeat()`, `check_monitor_heartbeat()`. Wraps `common.check_heartbeat_staleness()` with standard thresholds (watchdog: 300s, monitor: 3600s). Eliminates duplicated inline heartbeat reading from power_selftest.py. Preserves fail-closed contract: absent/unreadable/unparseable heartbeats → STALE (never healthy). Tested with 12 unit test cases including explicit STALE contract validation.
