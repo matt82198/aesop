@@ -22,6 +22,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from subprocess_common import git
+
 
 def run_git(args, repo_path, check=True):
     """
@@ -36,18 +38,19 @@ def run_git(args, repo_path, check=True):
         stdout as string
     """
     try:
-        result = subprocess.run(
-            ["git", "-C", str(repo_path)] + args,
-            capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
-            check=check,
-        )
+        result = git(args, cwd=str(repo_path), check=check, timeout=60)
         return result.stdout
     except subprocess.CalledProcessError as e:
         if check:
             raise RuntimeError(
                 f"git command failed: {' '.join(args)}\n"
                 f"stderr: {e.stderr}"
+            )
+        return ""
+    except subprocess.TimeoutExpired:
+        if check:
+            raise RuntimeError(
+                f"git command timed out: {' '.join(args)}"
             )
         return ""
 
