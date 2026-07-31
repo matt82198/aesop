@@ -509,7 +509,6 @@ def _get_owned_files_diff(workdir: str, owned_files: List[str], max_chars: int =
             text=True,
             encoding='utf-8',
             timeout=10,
-            encoding='utf-8',
         )
 
         if result.returncode != 0:
@@ -571,7 +570,6 @@ def _run_and_capture_test_output(
             text=True,
             encoding='utf-8',
             timeout=timeout_sec,
-            encoding='utf-8',
         )
 
         # Test passed: strict no-op (empty output, don't enrich)
