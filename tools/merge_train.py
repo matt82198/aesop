@@ -14,14 +14,26 @@ Usage:
 """
 import argparse
 import functools
-import io
 import json
 import subprocess
 import sys
 import time
 
-# Ensure stdout uses UTF-8 (fixes Windows cp1252 UnicodeEncodeError)
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+# Ensure stdout uses UTF-8 (fixes Windows cp1252 UnicodeEncodeError).
+# Reconfigure in place rather than wrapping sys.stdout.buffer in a fresh
+# TextIOWrapper: constructing a new wrapper around the same underlying
+# buffer leaves the previous wrapper as the only reference keeping that
+# buffer alive, so when the module is imported/exec'd more than once in
+# the same process (as the test suite does), the old wrapper's GC-triggered
+# close() closes the shared buffer out from under the new one, raising
+# "ValueError: I/O operation on closed file". reconfigure() mutates the
+# existing stream instead, so repeated calls are safe. Not every stdout
+# replacement (e.g. StringIO used by test/CI harnesses) supports it.
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except (ValueError, AttributeError):
+        pass
 
 print = functools.partial(print, flush=True)
 
