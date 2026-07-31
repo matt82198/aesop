@@ -6,6 +6,12 @@ import pathlib
 import sys
 from datetime import datetime
 
+# Ensure this tool's own directory (tools/) is importable so the shared
+# harness resolves regardless of cwd or how the file is loaded
+# (the import-gate loads tools by path, without tools/ on sys.path).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from transcript_reader import walk_jsonl, parse_jsonl_file, parse_timestamp, filter_by_project
+
 
 def apply_edit(text, old_string, new_string, replace_all=False):
     """Apply a single edit to text. Returns updated text or None/undefined."""
@@ -27,16 +33,6 @@ def fmt_time(ts_ms):
     if not ts_ms:
         return "?"
     return datetime.fromtimestamp(ts_ms / 1000).isoformat().replace("T", " ")[:19] + "Z"
-
-
-def walk_jsonl(directory):
-    """Recursively find all .jsonl files in a directory."""
-    result = []
-    for root, dirs, files in os.walk(directory):
-        for f in files:
-            if f.endswith(".jsonl"):
-                result.append(os.path.join(root, f))
-    return result
 
 
 def main():
@@ -79,24 +75,12 @@ def main():
     # Collect Write/Edit/MultiEdit operations
     ops = []  # {rel, ts, tool, input, src}
     for fp in files:
-        try:
-            with open(fp, "r", encoding="utf-8") as f:
-                lines = f.read().split("\n")
-        except Exception:
-            continue
+        # Parse JSONL file, skipping malformed lines
+        objs = parse_jsonl_file(fp)
 
         src = os.path.basename(fp)
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            ts = 0
-            if obj.get("timestamp"):
-                ts = int(datetime.fromisoformat(obj["timestamp"]).timestamp() * 1000)
+        for obj in objs:
+            ts = parse_timestamp(obj.get("timestamp"))
 
             content = obj.get("message", {}).get("content")
             if not isinstance(content, list):
