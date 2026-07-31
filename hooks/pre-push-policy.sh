@@ -586,8 +586,7 @@ check_import_resolution() {
 
   local py_bin=""
   if ! py_bin=$(resolve_py_bin); then
-    printf 'Warning: no python interpreter found; import resolution check skipped
-' >&2
+    printf 'Warning: no python interpreter found; import resolution check skipped\n' >&2
     log_event "import_check_skipped_no_python"
     return 0
   fi
@@ -598,8 +597,7 @@ check_import_resolution() {
 
   if [ $check_exit_code -ne 0 ]; then
     if [ -n "$check_output" ]; then
-      printf '%s
-' "$check_output" >&2
+      printf '%s\n' "$check_output" >&2
     fi
     return 1
   fi
@@ -623,8 +621,7 @@ check_claudemd_sync() {
 
   local py_bin=""
   if ! py_bin=$(resolve_py_bin); then
-    printf 'Warning: no python interpreter found; CLAUDE.md sync gate skipped
-' >&2
+    printf 'Warning: no python interpreter found; CLAUDE.md sync gate skipped\n' >&2
     log_event "claudemd_sync_skipped_no_python"
     return 0
   fi
@@ -635,8 +632,7 @@ check_claudemd_sync() {
 
   if [ $sync_exit_code -ne 0 ]; then
     if [ -n "$sync_output" ]; then
-      printf '%s
-' "$sync_output" >&2
+      printf '%s\n' "$sync_output" >&2
     fi
     return 1
   fi
@@ -660,8 +656,7 @@ check_metrics() {
 
   local py_bin=""
   if ! py_bin=$(resolve_py_bin); then
-    printf 'Warning: no python interpreter found; metrics gate skipped
-' >&2
+    printf 'Warning: no python interpreter found; metrics gate skipped\n' >&2
     log_event "metrics_gate_skipped_no_python"
     return 0
   fi
@@ -672,8 +667,46 @@ check_metrics() {
 
   if [ $metrics_exit_code -ne 0 ]; then
     if [ -n "$metrics_output" ]; then
-      printf '%s
-' "$metrics_output" >&2
+      printf '%s\n' "$metrics_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
+check_test_suite_count() {
+  # Test suite count drift detection gate (tools/verify_test_suite_count.py --check).
+  # Verifies that test suite counts documented in tests/CLAUDE.md match the actual
+  # number of test files on disk. This gate is wired here (not just in CI) because
+  # CI only runs after push; a local pre-push check catches the drift immediately.
+  #
+  # Fail-open ONLY for missing optional tooling (hook is installed into
+  # repos without an aesop checkout; no aesop install == no verify tool).
+  # An actual drift detection (exit 1 from --check) stays fail-closed and blocks
+  # the push. verify_test_suite_count exits 0 when counts match, 1 on drift.
+  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local verify_script="$aesop_root/tools/verify_test_suite_count.py"
+
+  if [ ! -f "$verify_script" ]; then
+    log_event "test_suite_count_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; test suite count check skipped\n' >&2
+    log_event "test_suite_count_skipped_no_python"
+    return 0
+  fi
+
+  local verify_output
+  verify_output=$("$py_bin" "$verify_script" --check 2>&1)
+  local verify_exit_code=$?
+
+  if [ $verify_exit_code -ne 0 ]; then
+    if [ -n "$verify_output" ]; then
+      printf '%s\n' "$verify_output" >&2
     fi
     return 1
   fi
@@ -1409,6 +1442,12 @@ main() {
   if ! check_metrics; then
     printf 'Error: Metrics verification gate failed. Push blocked.\n' >&2
     log_block "metrics_gate_failure"
+    exit 1
+  fi
+
+  if ! check_test_suite_count; then
+    printf 'Error: Test suite count drift detected. Push blocked.\n' >&2
+    log_block "test_suite_count_drift"
     exit 1
   fi
 

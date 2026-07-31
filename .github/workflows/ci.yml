@@ -105,6 +105,10 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/verify_test_coverage.py --check
 
+      - name: Test suite count drift gate
+        if: matrix.python-shard == 0
+        run: python tools/verify_test_suite_count.py --check
+
       - name: Run Node.js tests
         run: npm run test:node
 
