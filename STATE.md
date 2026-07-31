@@ -2,19 +2,23 @@
 
 **What this file is:** The live durable checkpoint that Aesop itself uses during its own `/buildsystem` loop. It records the current system version, architectural decisions, known limitations, and the next milestone. This is not historical archive; it is read by the orchestrator to understand operational state.
 
-**Current Version:** v0.5.0 (released 2026-07-29, live on npm latest). MIT open-source relicense; wave latency telemetry + chaos injection harness; evidence audit trail (incident chronicles, handoff certificates, cross-OS drift); dashboard completion with AC authoring.
+**Current Version:** v0.7.0 (tagged and released on GitHub 2026-07-31). Multi-instance orchestration MVP with lease-based SQLite claims; state-query temporal API with REST access; a guardrail layer that turns prose rules into executable gates (fixture-intent manifest, dispatch lint, CLAUDE.md sync, model-pin lint, git-stash prohibition, encoding validation); auto-merge shell-injection fix.
 
 ## Architectural Thesis
 
 Agent behavior is source code. Rules, memory, hooks, and checkpoints live as versioned, portable, diffable filesystem artifacts in git. This design enables code-review, versioning, and forensic replay of orchestration itself—not just the agents' output.
 
+A corollary the 0.7.0 guardrail work makes explicit: a rule written only as prose is not enforced. Every operating rule that matters is expected to become a hook, gate, or linter that fails closed.
+
 ## Known Limitations
 
-- **Multi-instance coordination is single-box only** (SQLite WAL, file-system-backed claim key). Multi-box deployment requires a shared lease service; not yet implemented.
+- **Multi-instance coordination is single-box only.** The 0.7.0 MVP added lease-based SQLite claims (with split-brain and TOCTOU fixes), but claims remain file-system-backed. Multi-box deployment requires a shared lease service; not yet implemented.
 - **State-layer consolidation in flight** (git + SQLite + STATE.md are currently three sources of truth; scheduled to collapse into SQLite-as-source + git-as-audit-trail).
 - **Benchmark is curated, not sampled** (N=39 judgment tasks, not real-fleet transcripts). Sufficiency is proven; equivalence-to-Opus is not claimed.
+- **Documentation gates verify presence, not truth.** A gate that requires a doc to exist induces agents to write one; green means "a doc exists", not "the doc is accurate". Doc claims still need reading against the code.
 
 ## Next Milestone
 
 **Wave-31+:** State-layer multi-instance lifecycle (crash-orphan recovery, liveness detection, monotonic expiry); unsupervised failure-recovery loop; frontier live-run capability; external-benchmark validation.
 
+**Post-0.7.0 cleanup (in flight):** dependency manifests (`requirements.txt` / `requirements-dev.txt`); reconciliation of three contradictory test-suite counts onto one script with a fail-closed gate; `_run_wave_inner` phase decomposition; README reduction from ~21 KB to ~6 KB; `tools/` CLI-base extraction to retire per-script boilerplate.
