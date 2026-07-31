@@ -17,7 +17,6 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - **lock.mjs is the ONLY lock implementation**: never reimplement locking in `proposals.mjs` or elsewhere; all proposals/state updates must use fail-closed `lock.mjs` with exponential backoff + stale-lock breaking.
 
 ## Tool index (one-liners)
-
 - `agent_prompt_hygiene.py` — Gate detecting forbidden patterns in agent/dispatch prompt templates
 - `alert_bridge.py` — Slack/Discord webhook bridge for SECURITY-ALERTS
 - `bash_guard_check.py` — BASH_SOURCE exec guard validator for shell scripts; detects missing guards in scripts with functions + top-level commands
@@ -100,6 +99,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `svg_to_png.mjs` — Rasterize SVG to PNG via @resvg/resvg-js (lazy import error handling)
 - `test_battery.py` — Local union test battery: runs the 4 harnesses (py/node/sh/ui) as parallel subprocesses with per-harness rc capture, stdin closed, logs to temp; parallel mode sets AESOP_TEST_CHILD_TIMEOUT_MS=90000 for node scaffold children; `--serial` fallback, `--skip <h>`, `--json`; exit 0 only when all harnesses green
 - `test_coverage_gaps.py` — Test coverage gap finder (identifies untested modules)
+- `test_discovery_check.py` — AST guard for test_*.py shapes invisible to `unittest discover` (this repo's actual test runner): bare module-level `test_*()` functions outside any class, and `class Test*` with test_ methods but no base class at all (plain classes with zero inheritance, silently zero-collected). Fast standalone equivalent of `tests/test_no_bare_test_functions.py` for use outside the full suite run. `# discovery-ok` inline suppression on the def/class line. CLI: `[--check] [--json] [--paths PATH...] [--root DIR]` (default scan: `tests/test_*.py`); exit 0=clean/1=findings/2=could-not-evaluate (missing scan target or nothing matched — never collapsed to 0); stdlib-only. Not wired into any hook or CI job yet.
 - `todo_tracker.py` — TODO/FIXME/HACK comment tracker for codebase hygiene
 - `tracker_autoclose.py` — Tracker zombie-prevention auto-close gate: classifies active items as SHIPPED (merged PR or ownsFiles on origin/main), OPEN (no evidence), or AMBIGUOUS (partial evidence); CLI: `[--check | --apply] [--json] [--skip-gh] [--skip-git]`; --check (DRY RUN, exit 0 if no closable items / 1 if closable found); --apply (auto-close + journal); exit 2 on error; reproduces/fixes 79% zombie-rate escapes (items shipped but in-progress) <!-- metrics-verified: wave-1 /afk tracker reconcile — 15 of 19 active items already shipped = 78.9% -->
 
