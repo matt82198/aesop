@@ -2,20 +2,35 @@ import { describe, it, before, after } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
 
-const repoRoot = join(import.meta.url, '../../..').replace('file:///', '').replace(/\\/g, '/').replace(/^(\w:)/, '$1');
+// repoRoot must be derived with fileURLToPath, not string surgery on a URL.
+// tests/ is one level below the repo root -- '../../..' overshot by two.
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const cliPath = join(repoRoot, 'bin', 'cli.js');
+
+
+/**
+ * Routing succeeded if the CLI did not emit its OWN unknown-namespace/verb error.
+ * The child tool may legitimately exit 2 (usage error) for a flag it does not accept --
+ * that still proves dispatch reached it.
+ */
+function assertRouted(result, msg) {
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(!/Unknown (namespace|verb)/i.test(out), msg + ' (CLI reported unknown namespace/verb: ' + out.slice(0, 200) + ')');
+}
 
 /**
  * Run `node bin/cli.js` with given args and capture exit code + output
  */
-function runCli(args) {
+function runCli(args, cwdOverride) {
   return new Promise((resolve) => {
     const proc = spawn('node', [cliPath, ...args], {
-      cwd: repoRoot,
+      cwd: cwdOverride || repoRoot,
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: 10000
     });
@@ -94,10 +109,21 @@ describe('CLI Python dispatch table', () => {
   });
 
   describe('error handling', () => {
-    it('exits 2 on unknown namespace', async () => {
-      const result = await runCli(['badnamespace', 'verb']);
-      assert.equal(result.exitCode, 2);
-      assert.match(result.stderr, /Error: Unknown verb/);
+    it('treats an unknown first arg as a scaffold target (backward compat)', async () => {
+      // `npx @matt82198/aesop [target-dir]` is the ORIGINAL published contract and must
+      // keep working. An unrecognised first argument is a directory name, not an error --
+      // exiting 2 here would break every existing scaffolder invocation.
+      // Exit 2 is reserved for a KNOWN namespace with an unknown verb (next test).
+      // Run in a TEMP cwd: this path genuinely scaffolds a directory, and doing that
+      // inside the repo pollutes the working tree (the domain-map drift gate catches it).
+      const tmp = join(tmpdir(), 'aesop-cli-' + randomBytes(6).toString('hex'));
+      mkdirSync(tmp, { recursive: true });
+      try {
+        const result = await runCli(['badnamespace', 'verb'], tmp);
+        assert.notEqual(result.exitCode, 2, 'unknown first arg must fall through to the scaffolder, not error');
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
     });
 
     it('exits 2 on unknown verb in valid namespace', async () => {
@@ -180,53 +206,53 @@ describe('CLI Python dispatch table', () => {
       // Just verify it attempts to run the script (may error if script needs config)
       const result = await runCli(['lint', 'encoding', '--help']);
       // Script should either succeed or error from script logic, not CLI routing
-      assert(result.exitCode === 0 || result.exitCode !== 2, 'Should route to script (not exit 2)');
+      assertRouted(result, 'Should route to script (not exit 2)');
     });
 
     it('routes gate secret-scan to secret_scan.py', async () => {
       const result = await runCli(['gate', 'secret-scan', '--help']);
       // Verify we're not getting a dispatch error (exit 2)
-      assert(result.exitCode === 0 || result.exitCode !== 2, 'Should route to secret_scan.py');
+      assertRouted(result, 'Should route to secret_scan.py');
     });
 
     it('routes verify dashboard to verify_dash.py', async () => {
       const result = await runCli(['verify', 'dashboard', '--help']);
-      assert(result.exitCode === 0 || result.exitCode !== 2, 'Should route to verify_dash.py');
+      assertRouted(result, 'Should route to verify_dash.py');
     });
 
     it('routes wave preflight to wave_preflight.py', async () => {
       const result = await runCli(['wave', 'preflight', '--help']);
-      assert(result.exitCode === 0 || result.exitCode !== 2, 'Should route to wave_preflight.py');
+      assertRouted(result, 'Should route to wave_preflight.py');
     });
 
     it('routes state query to state_query.py', async () => {
       const result = await runCli(['state', 'query', '--help']);
-      assert(result.exitCode === 0 || result.exitCode !== 2, 'Should route to state_query.py');
+      assertRouted(result, 'Should route to state_query.py');
     });
 
     it('routes tracker autoclose to tracker_autoclose.py', async () => {
       const result = await runCli(['tracker', 'autoclose', '--help']);
-      assert(result.exitCode === 0 || result.exitCode !== 2, 'Should route to tracker_autoclose.py');
+      assertRouted(result, 'Should route to tracker_autoclose.py');
     });
 
     it('routes cost ceiling to cost_ceiling.py', async () => {
       const result = await runCli(['cost', 'ceiling', '--help']);
-      assert(result.exitCode === 0 || result.exitCode !== 2, 'Should route to cost_ceiling.py');
+      assertRouted(result, 'Should route to cost_ceiling.py');
     });
 
     it('routes bench run to bench_runner.py', async () => {
       const result = await runCli(['bench', 'run', '--help']);
-      assert(result.exitCode === 0 || result.exitCode !== 2, 'Should route to bench_runner.py');
+      assertRouted(result, 'Should route to bench_runner.py');
     });
 
     it('routes health check to healthcheck.py', async () => {
       const result = await runCli(['health', 'check', '--help']);
-      assert(result.exitCode === 0 || result.exitCode !== 2, 'Should route to healthcheck.py');
+      assertRouted(result, 'Should route to healthcheck.py');
     });
 
     it('routes transcript timeline to transcript_timeline.py', async () => {
       const result = await runCli(['transcript', 'timeline', '--help']);
-      assert(result.exitCode === 0 || result.exitCode !== 2, 'Should route to transcript_timeline.py');
+      assertRouted(result, 'Should route to transcript_timeline.py');
     });
   });
 
