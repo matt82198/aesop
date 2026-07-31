@@ -73,7 +73,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `mutation_test.py` — Test quality harness via mutation testing (apply code mutations, run tests, report survived mutations as test gaps); CLI: `--target <module.py> --test <test_module.py> [--json]`; exit 0 on valid results (advisory), exit 1 when the sandbox baseline fails (results invalid, fail-closed)
 - `orchestrator_status.py` — Atomic orchestrator status updates
 - `otel_sink.py` — OpenTelemetry tracing integration (spans/metrics emitter for fleet observability)
-- `playwright_common.py` — Shared Playwright harness boilerplate: `free_port()`, `copy_dist()`, `start_server()`, `stop_server()` extracted from verify_*.py to reduce duplication (module for import, not CLI)
+- `playwright_common.py` — Shared Playwright harness boilerplate: `free_port()`, `copy_dist()`, `start_server()`, `stop_server()`, `filter_real_console_errors()` extracted from verify_*.py to reduce duplication (module for import, not CLI); browser proofs import from this module instead of reimplementing
 - `port_fidelity_check.py` — Validates port/copy/vendor/migrate dispatch prompts require source path, source-unique marker, and independent verification
 - `portability_check.py` — Shipped-surface gate: scan for hardcoded personal/environment paths (Windows user paths, POSIX home paths, private-machine tokens 'conductor3'/'matt8'); exit 0 clean / 1 with findings; --json output, --root flag for base directory; stdlib only
 - `power_selftest.py` — Health check harness for /power bootstrap
@@ -136,6 +136,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `watcher_linter.py` — Guardrail G3: watcher/polling anti-pattern linter (mechanizes "no watcher pattern in long runs"); AST-scans tools/monitor/driver/daemons for while-True+sleep loops, watch_/monitor_/poll_-named functions with infinite loops, and subprocess calls inside infinite loops (exempts loops with a break/return/raise/exit -- legitimate bounded poll-until-timeout code is not flagged); string-scans prompt-ish assignments/kwargs/dict-keys for "wait for a monitor/watcher/signal/notification", "poll"/"poll for", "watch for changes" phrasing; suppress via `# watcher-ok` inline comment; CLI: `--check` (default) | `--json` | `--paths DIR...` | `--root DIR`; exit 0=clean/1=findings/2=error; stdlib-only, ASCII output
 - `state_md_verifier.py` — Guardrail #1: STATE.md checkpoint-accuracy verifier; parses STATE.md for falsifiable progress claims ("**Current Version:** vX.Y.Z", "resolved", "pushed", "MERGED") and verifies against on-disk git truth (git tags + package.json for versions, git status --porcelain for unmerged files, git ls-remote --heads for pushed branches, gh pr view for PR states); exit 0=no contradictions + at least one claim verified / 1=contradictions found / 2=error or zero verifiable claims (fail-closed); reports UNVERIFIABLE/SKIP for unparseable/unavailable-tool claims; stdlib-only
 - `agent-forensics.sh` — Incident forensics; behavior reconstruction (read-only git plumbing)
+- `toolchain_health.py` — Binary/heartbeat availability verifier. CLI: `[--check] [--json] [--max-age S]`; stdlib only
 
 ## Gates & tests
 
@@ -144,6 +145,5 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - **Python**: `npm run test:py`; **Shell**: `bash -n tools/*.sh && shellcheck tools/*.sh`; **Node**: `node --check tools/*.mjs`
 
 ## Subprocess encoding convention (Guardrail G10)
-
 - `encoding_lint.py` -- flags `subprocess.run`/`Popen` calls that pass `text=True`/`universal_newlines=True` without an explicit `encoding=`. Note it scans the WHOLE repo, not only changed files, so a single violation anywhere blocks every push that touches Python.
 - Convention: every subprocess call that decodes output passes `encoding='utf-8'`. Without it Python decodes using the platform default, which on Windows is the ANSI codepage (cp1252); that corrupts non-ASCII tool output and is a known source of Windows-passes/Linux-fails drift.
