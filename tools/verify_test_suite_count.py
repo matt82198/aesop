@@ -26,6 +26,8 @@ def count_git_files(*patterns: str) -> int:
     """Count files matching patterns using git ls-files.
 
     Omits untracked files; uses git to ensure we count only tracked files.
+
+    Fail-closed: raises ValueError if git fails or returns no results.
     """
     count = 0
     for pattern in patterns:
@@ -82,13 +84,13 @@ def get_documented_counts(claudemd_path: Path) -> Tuple[int, int, int]:
 
 
 def check_mode(claudemd_path: Path) -> int:
-    """Verify counts match. Exit 0 if clean, 1 if drift detected.
+    """Verify counts match. Exit 0 if clean, 1 if drift detected, 2 if error.
 
     Args:
         claudemd_path: Path to tests/CLAUDE.md
 
     Returns:
-        0 if counts match, 1 if drift detected
+        0 if counts match, 1 if drift detected, 2 if error (fail-closed)
     """
     try:
         documented = get_documented_counts(claudemd_path)
@@ -123,7 +125,7 @@ def fix_mode(claudemd_path: Path, dry_run: bool = False) -> int:
         dry_run: If True, show what would change but don't write
 
     Returns:
-        0 if successful (or dry_run shows what would change), 1 on error
+        0 if successful (or dry_run shows what would change), 2 on error (fail-closed)
     """
     try:
         actual = get_actual_counts(claudemd_path.parent.parent)
@@ -173,7 +175,7 @@ def fix_mode(claudemd_path: Path, dry_run: bool = False) -> int:
         return 0
     except ValueError as e:
         print(f"[ERROR] {e}", file=sys.stderr)
-        return 1
+        return 2
 
 
 def main():
