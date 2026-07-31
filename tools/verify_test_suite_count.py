@@ -27,6 +27,20 @@ from pathlib import Path
 from typing import Tuple
 
 
+# Force UTF-8 output on all platforms (especially Windows where stdout defaults to cp1252)
+if sys.stdout.encoding and 'utf' not in sys.stdout.encoding.lower():
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except (AttributeError, TypeError):
+        # Python < 3.7 doesn't have reconfigure; fall back to arrow-free output
+        pass
+if sys.stderr.encoding and 'utf' not in sys.stderr.encoding.lower():
+    try:
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except (AttributeError, TypeError):
+        pass
+
+
 def count_git_files(*patterns: str) -> int:
     """Count files matching patterns using git ls-files.
 
@@ -91,7 +105,7 @@ def check_mode(claudemd_path: Path) -> int:
 
     Exit 0 if counts match (or were auto-corrected).
     Exit 1 only if documented sections are missing (real invariant broken).
-    Exit 2 if cannot evaluate (git error, zero files found).
+    Exit 2 if cannot evaluate (git error, zero files found with non-zero documented).
 
     This eliminates the treadmill: each branch auto-corrects locally before push,
     so parallel branches never conflict on stale numbers.
@@ -126,6 +140,16 @@ def check_mode(claudemd_path: Path) -> int:
 
         # Get actual counts from disk
         actual = get_actual_counts(claudemd_path.parent.parent)
+
+        # Cannot-evaluate case: zero files found but documentation expects counts
+        if actual == (0, 0, 0) and documented != (0, 0, 0):
+            print(
+                "[ERROR] Cannot evaluate: git ls-files returned zero files, but CLAUDE.md "
+                "documents non-zero counts. This indicates a git configuration problem or "
+                "the tool is running outside a git repository.",
+                file=sys.stderr,
+            )
+            return 2
 
         if documented == actual:
             print("[OK] Test suite counts match")
