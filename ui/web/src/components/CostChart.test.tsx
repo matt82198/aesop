@@ -178,4 +178,34 @@ describe('CostChart', () => {
     const expectedOutputY = inputY - outputHeight;
     expect(outputY).toBeCloseTo(expectedOutputY, 1);
   });
+
+  describe('accessibility', () => {
+    it('SVG has role="img" for semantic meaning', () => {
+      render(<CostChart cost={fixtureCost} />);
+      const container = screen.getByTestId(TESTIDS.costChart);
+      const svg = container.querySelector('svg');
+      expect(svg).toHaveAttribute('role', 'img');
+    });
+
+    it('SVG has aria-label describing the chart', () => {
+      render(<CostChart cost={fixtureCost} />);
+      const container = screen.getByTestId(TESTIDS.costChart);
+      const svg = container.querySelector('svg');
+      expect(svg).toHaveAttribute('aria-label');
+      const label = svg?.getAttribute('aria-label');
+      expect(label).toBeTruthy();
+      expect(label).toMatch(/token|daily|trend/i);
+    });
+
+    it('bar segments have <title> elements for tooltips', () => {
+      render(<CostChart cost={fixtureCost} />);
+      const container = screen.getByTestId(TESTIDS.costChart);
+      const svg = container.querySelector('svg') as SVGElement;
+      const titles = svg.querySelectorAll('rect[data-day] > title');
+      expect(titles.length).toBeGreaterThan(0);
+      // Each bar should have a title
+      const bars = svg.querySelectorAll('rect[data-day]');
+      expect(titles.length).toBe(bars.length);
+    });
+  });
 });

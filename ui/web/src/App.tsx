@@ -140,7 +140,9 @@ export default function App() {
           <Work tracker={sseState.tracker ?? null} backlog={sseState.backlog ?? null} />
         )}
         {route === '#/activity' && <Activity state={sseState} />}
-        {route === '#/cost' && <Cost cost={sseState.cost} onRetry={handleRefresh} />}
+        {route === '#/cost' && (
+          <Cost cost={sseState.cost} connectionStatus={connection} onRetry={handleRefresh} />
+        )}
         {route === '#/prs' && <WavePRBoard />}
       </main>
     </>
