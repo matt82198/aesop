@@ -142,3 +142,8 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `secret_scan.py --staged` — pre-push gate (exit 0=clean/1=findings/2=error; `# secretscan: allow-pattern-docs` pragma)
 - `agent-forensics.sh <commit>` — behavior forensics; `--diff <A> <B>` for rules/docs diff
 - **Python**: `npm run test:py`; **Shell**: `bash -n tools/*.sh && shellcheck tools/*.sh`; **Node**: `node --check tools/*.mjs`
+
+## Subprocess encoding convention (Guardrail G10)
+
+- `encoding_lint.py` -- flags `subprocess.run`/`Popen` calls that pass `text=True`/`universal_newlines=True` without an explicit `encoding=`. Note it scans the WHOLE repo, not only changed files, so a single violation anywhere blocks every push that touches Python.
+- Convention: every subprocess call that decodes output passes `encoding='utf-8'`. Without it Python decodes using the platform default, which on Windows is the ANSI codepage (cp1252); that corrupts non-ASCII tool output and is a known source of Windows-passes/Linux-fails drift.
