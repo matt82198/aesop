@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Two fake-green gates.** `state_md_verifier` reported success while extracting ZERO claims -- it had no version-claim pattern at all, so a STATE.md declaring v0.5.0 passed against a repo tagged v0.7.0. `verify_test_suite_count` returned a count of zero instead of erroring when it could not read git (#638, #661).
 - **62 subprocess calls decoded output with the platform default** (cp1252 on Windows), corrupting non-ASCII tool output. All now pass explicit `encoding='utf-8'` (#636).
-- **Test pollution.** A test mutated the committed fixture `first-wave-report.json` on every run (#643); another wrote a fixture epoch into LIVE `conductor3` heartbeats, which masked a real 10-hour daemon outage (#645).
+- **Test pollution.** A test mutated the committed fixture `first-wave-report.json` on every run (#643); another wrote a fixture epoch into LIVE fleet heartbeats, which masked a real 10-hour daemon outage (#645).
 - `tooling_panel` treated a findings-exit (1) as tool failure, hiding 1,232 dead-code findings and breaking import-cycle and encoding reporting in the UI (#647).
 - Cost view rendered backend failure as "still loading"; chart SVGs gained accessible names (#648).
 - Bare `except:` clauses and unencoded file opens in `bench/` (#651).

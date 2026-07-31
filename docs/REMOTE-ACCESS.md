@@ -6,13 +6,13 @@
 
 ### 1. Create a Control Issue
 
-Create a **public** (or private) GitHub issue in `matt82198/aesop` as a control channel. Example:
+Create a **public** (or private) GitHub issue in `<owner>/aesop` as a control channel. Example:
 
 ```
 Title: [REMOTE] Orchestrator Command Inbox
 Body: 
 This issue is a secure remote control channel for orchestrator dispatch.
-Comments from @matt82198 are automatically polled and queued as commands.
+Comments from @<owner> are automatically polled and queued as commands.
 ```
 
 **Note the issue number** (e.g., issue #999). You will use this in the scheduled task.
@@ -33,13 +33,13 @@ $IssueNumber = 999  # YOUR ISSUE NUMBER HERE
 
 # Command to run (single poll via --once)
 $Command = "C:\Python314\python.exe"
-$Arguments = "C:\Users\matt8\aesop\tools\remote_inbox.py --issue $IssueNumber --once"
+$Arguments = "C:\path\to\aesop\tools\remote_inbox.py --issue $IssueNumber --once"
 
 # Create task trigger (every 5 minutes)
 $Trigger = New-ScheduledTaskTrigger -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 365 * 100) -At (Get-Date) -Once
 
 # Create task action
-$Action = New-ScheduledTaskAction -Execute $Command -Argument $Arguments -WorkingDirectory "C:\Users\matt8\aesop"
+$Action = New-ScheduledTaskAction -Execute $Command -Argument $Arguments -WorkingDirectory "C:\path\to\aesop"
 
 # Create the task
 Register-ScheduledTask -TaskName $TaskName -Trigger $Trigger -Action $Action -Description $TaskDescription -RunLevel Highest -Force
@@ -51,8 +51,8 @@ Or via Task Scheduler GUI:
 3. Trigger: `Repeat every 5 minutes`
 4. Action: Start a program
    - Program: `C:\Python314\python.exe`
-   - Arguments: `C:\Users\matt8\aesop\tools\remote_inbox.py --issue 999 --once`
-   - Start in: `C:\Users\matt8\aesop`
+   - Arguments: `C:\path\to\aesop\tools\remote_inbox.py --issue 999 --once`
+   - Start in: `C:\path\to\aesop`
 
 **Key points**:
 - Use `--once` (single poll per run) — do NOT use `--loop` or continuous polling
@@ -77,7 +77,7 @@ or
 The poller will:
 1. Detect your comment (within 5–10 minutes, depending on task frequency)
 2. Verify you are the repo owner (by author login from GitHub API)
-3. Queue the command to `~/conductor3/state/ui-inbox.md`
+3. Queue the command to `$AESOP_FLEET_STATE_DIR/state/ui-inbox.md`
 4. Post a reply acknowledging the command or explaining rejection
 
 Your orchestrator will pick up the queued command on the next `/power` or session start.
@@ -122,10 +122,10 @@ Examples:
 ### How It Works
 
 1. **Outbound polling only**: The machine opens NO inbound ports. It only makes outbound HTTPS calls to GitHub API via `gh` (already authenticated locally)
-2. **Author verification**: Every comment is checked against the GitHub API response (not comment text). Only comments from `matt82198` are accepted
+2. **Author verification**: Every comment is checked against the GitHub API response (not comment text). Only comments from `<owner>` are accepted
 3. **Strict allowlist**: Only 8 commands are allowed. Anything else becomes a NOTE
-4. **Idempotency**: Comment IDs are tracked in `~conductor3/state/.remote-inbox-seen`. A restart cannot replay an old comment
-5. **Audit log**: Every action (accepted/rejected) is logged to `~/conductor3/state/REMOTE-DISPATCH.log` with timestamp and author
+4. **Idempotency**: Comment IDs are tracked in `~<fleet-state-dir>/state/.remote-inbox-seen`. A restart cannot replay an old comment
+5. **Audit log**: Every action (accepted/rejected) is logged to `$AESOP_FLEET_STATE_DIR/state/REMOTE-DISPATCH.log` with timestamp and author
 
 ### Why Not Listen to Webhooks?
 
@@ -145,7 +145,7 @@ GitHub issues are:
 
 **Cause**: You posted the comment from a different GitHub account.
 
-**Fix**: Post from `matt82198` account, or update `tools/remote_inbox.py` line ~190 to match your owner login.
+**Fix**: Post from `<owner>` account, or update `tools/remote_inbox.py` line ~190 to match your owner login.
 
 ### No reply comment posted
 
@@ -155,7 +155,7 @@ GitHub issues are:
 1. Verify `gh` is installed: `gh --version`
 2. Verify authentication: `gh auth status`
 3. Check scheduled task logs (Event Viewer → Windows Logs → Application)
-4. Check `~/conductor3/state/REMOTE-DISPATCH.log` for error messages
+4. Check `$AESOP_FLEET_STATE_DIR/state/REMOTE-DISPATCH.log` for error messages
 
 ### Command queued but not executed
 
@@ -165,9 +165,9 @@ GitHub issues are:
 
 ### "State directory not found"
 
-**Cause**: `~/conductor3/state/` does not exist.
+**Cause**: `$AESOP_FLEET_STATE_DIR/state/` does not exist.
 
-**Fix**: Ensure `conductor3` is initialized: `mkdir -p ~/conductor3/state`
+**Fix**: Ensure `<fleet-state-dir>` is initialized: `mkdir -p $AESOP_FLEET_STATE_DIR/state`
 
 ## Files & Paths
 
@@ -175,9 +175,9 @@ GitHub issues are:
 |------|---------|
 | `tools/remote_inbox.py` | Poller script (run via scheduled task) |
 | `tests/test_remote_inbox.py` | Comprehensive test suite |
-| `~/conductor3/state/ui-inbox.md` | Command queue (appended by poller, read by orchestrator) |
-| `~/conductor3/state/.remote-inbox-seen` | Seen comment IDs (idempotence tracker) |
-| `~/conductor3/state/REMOTE-DISPATCH.log` | Audit log (all accepted/rejected commands) |
+| `$AESOP_FLEET_STATE_DIR/state/ui-inbox.md` | Command queue (appended by poller, read by orchestrator) |
+| `$AESOP_FLEET_STATE_DIR/state/.remote-inbox-seen` | Seen comment IDs (idempotence tracker) |
+| `$AESOP_FLEET_STATE_DIR/state/REMOTE-DISPATCH.log` | Audit log (all accepted/rejected commands) |
 
 ## Testing
 
@@ -226,11 +226,11 @@ Faster polling = lower latency (commands execute faster) but higher GitHub API u
 ### View Audit Log
 
 ```bash
-tail ~/conductor3/state/REMOTE-DISPATCH.log
+tail $AESOP_FLEET_STATE_DIR/state/REMOTE-DISPATCH.log
 
 # Example output:
-[2026-07-31T12:34:56.123456] ACCEPT     comment=1234567890 author=matt82198 command=/power
-[2026-07-31T12:39:12.654321] ACCEPT     comment=1234567891 author=matt82198 command=NONE         filed as NOTE
+[2026-07-31T12:34:56.123456] ACCEPT     comment=1234567890 author=<owner> command=/power
+[2026-07-31T12:39:12.654321] ACCEPT     comment=1234567891 author=<owner> command=NONE         filed as NOTE
 [2026-07-31T12:44:00.000000] REJECT     comment=1234567892 author=hacker         command=NONE         author not owner
 ```
 

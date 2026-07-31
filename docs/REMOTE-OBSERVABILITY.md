@@ -49,7 +49,7 @@ Then create the task (replace PYTHON_PATH with your output from above):
 # Create a task that runs every 15 minutes
 $TaskName = "AesopStatusPublish"
 $TaskPath = "\Aesop\"
-$WorkDir = "C:\Users\matt8\aesop"
+$WorkDir = "C:\path\to\aesop"
 $PythonPath = "C:\Python314\python.exe"  # UPDATE THIS: use (Get-Command python).Source
 
 # Build the command: call Python with explicit interpreter, working directory, timeout
@@ -105,7 +105,7 @@ Add to `aesop.config.json`:
 ```json
 {
   "status_publish_gist_id": "your-secret-gist-id-here",
-  "state_root": "/c/Users/matt8/conductor3/state"
+  "state_root": "/path/to/<fleet-state-dir>/state"
 }
 ```
 
@@ -133,7 +133,7 @@ Before publishing, the payload is scanned for:
 
 - API tokens (`sk-*`, `ghp-*`, `pat-*`)
 - Local paths (`C:\Users\<user>\...`, `/home/<user>/...`)
-- References to `conductor3` (local state directory)
+- References to `<fleet-state-dir>` (local state directory)
 
 **Redaction failure blocks publishing** (exit 1) rather than guessing which paths to redact. If more than 10% of content would be removed, the publish fails automatically. <!-- metrics-verified: tools/status_publish.py redact_payload() line 252 -->
 

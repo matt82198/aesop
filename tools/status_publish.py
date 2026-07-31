@@ -30,7 +30,7 @@ Redaction (defense-in-depth):
     - Removes tokens matching: sk-*, ghp-*, pat-*
     - Removes Windows paths containing username: C:\Users\<user>\...
     - Removes POSIX home paths: /home/<user>/...
-    - Removes local conductor3 reference
+    - Removes local fleet-state references
     - Redaction failure = exit 1, never publish
 
 Idempotence:
@@ -49,6 +49,14 @@ import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+try:  # dual-path import: runs both as a script and inside the tools package
+    from health_checks import check_watchdog_heartbeat, check_monitor_heartbeat
+except ImportError:  # pragma: no cover - package-context fallback
+    from tools.health_checks import (
+        check_watchdog_heartbeat,
+        check_monitor_heartbeat,
+    )
+
 # State root (default: ./state or AESOP_STATE_ROOT env var)
 AESOP_STATE_ROOT = Path(
     os.environ.get('AESOP_STATE_ROOT', './state')
@@ -57,14 +65,13 @@ AESOP_STATE_ROOT = Path(
 # Last-publish marker file
 LAST_PUBLISH_FILE = AESOP_STATE_ROOT / '.status-publish-last'
 
-# Heartbeat locations, resolved from the conductor3 root rather than hardcoded.
-# Two reasons: absolute user paths break on any other machine, and the stateapi
-# ratchet forbids naming state files directly -- reads go through common's helper.
-_CONDUCTOR3 = Path(
-    os.environ.get('AESOP_CONDUCTOR3_ROOT', str(Path.home() / 'conductor3'))
+# Where the fleet daemons write their heartbeats. Deliberately NOT tied to any
+# operator's private directory layout -- this is a public project, so it defaults to
+# the aesop state root and a deployment points AESOP_FLEET_STATE_DIR wherever its own
+# daemons write. The staleness logic itself lives in health_checks, not here.
+FLEET_STATE_DIR = Path(
+    os.environ.get('AESOP_FLEET_STATE_DIR', str(AESOP_STATE_ROOT))
 ).expanduser()
-WATCHDOG_HEARTBEAT = _CONDUCTOR3 / 'state' / ('.watchdog' + '-heartbeat')
-MONITOR_HEARTBEAT = _CONDUCTOR3 / 'monitor' / ('.monitor' + '-heartbeat')
 
 # Heartbeat staleness thresholds derived from daemon cadences with headroom.
 # These MUST match the actual scheduled task intervals to avoid false alarms.
@@ -205,42 +212,29 @@ def gather_heartbeat_status():
     now = datetime.now(timezone.utc)
     statuses = []
 
-    # Watchdog heartbeat
-    try:
-        mtime = WATCHDOG_HEARTBEAT.stat().st_mtime
-        ts = datetime.fromtimestamp(mtime, tz=timezone.utc)
-        age = now - ts
-        threshold = HEARTBEAT_THRESHOLDS['watchdog']
-        if age < timedelta(seconds=threshold):
-            statuses.append(f"watchdog: {age.seconds}s")
+    # Heartbeat freshness comes from health_checks, which fails closed on a missing
+    # or unreadable file rather than reporting a healthy fleet it could not verify.
+    for label, check in (
+        ('watchdog', check_watchdog_heartbeat),
+        ('monitor', check_monitor_heartbeat),
+    ):
+        try:
+            is_stale, age_s, info = check(FLEET_STATE_DIR)
+        except Exception as e:
+            statuses.append("%s: ERROR (%s)" % (label, type(e).__name__))
+            continue
+        if not is_stale:
+            statuses.append("%s: %ds" % (label, age_s))
         else:
-            statuses.append(f"watchdog: STALE ({age.seconds}s, >{threshold}s)")
-    except FileNotFoundError:
-        statuses.append("watchdog: ERROR (missing)")
-    except Exception as e:
-        statuses.append(f"watchdog: ERROR ({type(e).__name__})")
+            statuses.append("%s: STALE (%s)" % (label, info or ("%ds" % age_s)))
 
-    # Monitor heartbeat
-    try:
-        mtime = MONITOR_HEARTBEAT.stat().st_mtime
-        ts = datetime.fromtimestamp(mtime, tz=timezone.utc)
-        age = now - ts
-        threshold = HEARTBEAT_THRESHOLDS['monitor']
-        if age < timedelta(seconds=threshold):
-            statuses.append(f"monitor: {age.seconds}s")
-        else:
-            statuses.append(f"monitor: STALE ({age.seconds}s, >{threshold}s)")
-    except FileNotFoundError:
-        statuses.append("monitor: ERROR (missing)")
-    except Exception as e:
-        statuses.append(f"monitor: ERROR ({type(e).__name__})")
 
     return " · ".join(statuses)
 
 
 def gather_buildlog_summary():
     """Extract last few lines from BUILDLOG.md. Returns compact summary."""
-    buildlog = Path('C:/Users/matt8/conductor3/BUILDLOG.md')
+    buildlog = FLEET_STATE_DIR / 'BUILDLOG.md'
     if not buildlog.exists():
         return "BUILDLOG not found"
 

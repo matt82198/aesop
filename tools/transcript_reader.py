@@ -139,7 +139,7 @@ def filter_by_project(path_str, project_substr):
                     Normalized to forward slashes.
 
     Example:
-        filter_by_project('C:/Users/matt/aesop/tools/foo.py', 'aesop')
+        filter_by_project('/path/to/aesop/tools/foo.py', 'aesop')
         => 'tools/foo.py'
     """
     path_normalized = path_str.replace("\\", "/")

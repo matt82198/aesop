@@ -2,7 +2,7 @@
 r"""Poll GitHub issue comments for remote command dispatch (phone-to-orchestrator).
 
 **SECURITY: Non-negotiable constraints**
-- Only comments from repo owner (matt82198) are accepted; author verified from API.
+- Only comments from the repo owner are accepted; author verified from the API.
 - Only fixed allowlist of skill invocations are executed: /runwave, /loopwaves,
   /refinesystem, /refactor, /recency, /highvelocity, /afk, /power.
 - Anything else (non-allowlisted commands, free text) is filed as a NOTE, never executed.
@@ -17,9 +17,9 @@ Behavior:
     - Polls the GitHub issue for new comments (outbound only, no inbound ports).
     - Verifies author from gh api (author_association == OWNER or user login matches owner).
     - Extracts commands: `/runwave`, `/power`, etc., or free text.
-    - Appends to ~/conductor3/state/ui-inbox.md in format: "- [ISO-TS] text".
+    - Appends to $AESOP_FLEET_STATE_DIR/ui-inbox.md in format: "- [ISO-TS] text".
     - Posts reply comment to acknowledge (executor command or rejected reason).
-    - Logs all actions (accepted/rejected) to ~/conductor3/state/REMOTE-DISPATCH.log.
+    - Logs all actions (accepted/rejected) to $AESOP_FLEET_STATE_DIR/REMOTE-DISPATCH.log.
     - Tracks last-seen comment ID to prevent replay on restart.
 
 CLI:
@@ -34,7 +34,7 @@ Exit codes:
     2               Usage error (missing --issue, malformed arguments).
 
 Idempotence:
-    - Tracks last-seen comment ID in ~/conductor3/state/.remote-inbox-seen.
+    - Tracks last-seen comment ID in $AESOP_FLEET_STATE_DIR/.remote-inbox-seen.
     - On restart, only new comments (id > last_seen) are processed.
     - Replayed comments are ignored.
 """
@@ -61,11 +61,36 @@ ALLOWED_COMMANDS = {
     "/power",
 }
 
-# Default paths (use env vars or home directories)
-CONDUCTOR3_STATE = Path.home() / "conductor3" / "state"
-INBOX_PATH = CONDUCTOR3_STATE / "ui-inbox.md"
-SEEN_PATH = CONDUCTOR3_STATE / ".remote-inbox-seen"
-LOG_PATH = CONDUCTOR3_STATE / "REMOTE-DISPATCH.log"
+# State location and repo identity are configuration, not constants: this ships in a
+# public project, so nothing here may hardcode one operator's home layout or GitHub
+# handle. AESOP_FLEET_STATE_DIR points at wherever this deployment keeps fleet state;
+# AESOP_REMOTE_REPO ("owner/name") and the repo owner are resolved from git/gh at
+# call time so the tool works for whoever actually runs it.
+FLEET_STATE = Path(
+    os.environ.get("AESOP_FLEET_STATE_DIR", str(Path.cwd() / "state"))
+).expanduser()
+INBOX_PATH = FLEET_STATE / "ui-inbox.md"
+SEEN_PATH = FLEET_STATE / ".remote-inbox-seen"
+LOG_PATH = FLEET_STATE / "REMOTE-DISPATCH.log"
+
+
+def get_repo_slug() -> str:
+    """Return "owner/name" for the repo to poll, from env or the gh-resolved remote."""
+    slug = os.environ.get("AESOP_REMOTE_REPO", "").strip()
+    if slug:
+        return slug
+    rc, stdout, _ = run_gh(["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"])
+    if rc == 0 and stdout.strip():
+        return stdout.strip()
+    raise RuntimeError(
+        "cannot resolve repo: set AESOP_REMOTE_REPO=owner/name or run inside a gh-authenticated repo"
+    )
+
+
+def get_repo_owner() -> str:
+    """Return the login authorized to issue remote commands (repo owner by default)."""
+    owner = os.environ.get("AESOP_REMOTE_OWNER", "").strip()
+    return owner if owner else get_repo_slug().split("/")[0]
 
 
 def run_gh(args: List[str]) -> Tuple[int, str, str]:
@@ -100,8 +125,15 @@ def run_gh(args: List[str]) -> Tuple[int, str, str]:
 
 def get_issue_comments(issue_number: int) -> Optional[List[Dict[str, Any]]]:
     """Fetch comments from GitHub issue via gh api. Return list of comment dicts or None on error."""
+    try:
+        slug = get_repo_slug()
+    except RuntimeError as e:
+        # Contract is "None on error" -- an unresolvable repo is an error, not a crash.
+        print(f"ERROR: {e}", file=sys.stderr)
+        return None
+
     rc, stdout, stderr = run_gh(
-        ["api", f"repos/matt82198/aesop/issues/{issue_number}/comments", "--json", "id,body,author,authorAssociation,createdAt"]
+        ["api", f"repos/{slug}/issues/{issue_number}/comments", "--json", "id,body,author,authorAssociation,createdAt"]
     )
 
     if rc != 0:
@@ -144,8 +176,10 @@ def mark_comment_seen(comment_id: int) -> None:
         print(f"WARNING: Failed to mark comment seen: {e}", file=sys.stderr)
 
 
-def verify_author(comment: Dict[str, Any], owner_login: str = "matt82198") -> bool:
+def verify_author(comment: Dict[str, Any], owner_login: Optional[str] = None) -> bool:
     """Verify comment author is repo owner. Check both author_association and login."""
+    if owner_login is None:
+        owner_login = get_repo_owner()
     author = comment.get("author", {})
     if not author:
         return False
