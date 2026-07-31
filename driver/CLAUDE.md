@@ -99,4 +99,4 @@ Phases 1-3 shipped. All file I/O uses explicit `encoding="utf-8"`. For orchestra
 
 **Encoding**: Fixed 2 encoding violations (subprocess.run without encoding parameter) at lines 504 and 564; now 0 violations.
 
-**Metrics**: `_run_wave_inner` CC 141 → 13 (grade F → C). Total extracted functions: 19. Max extracted CC: 17 (still grade C). Test pass rate: 32/32 (100%). <!-- metrics-verified: pytest tests/test_wave_loop_rs3.py -v -->
+**Metrics**: `_run_wave_inner` CC 141 → 13 (grade F → C). Total extracted functions: 19. Max extracted CC: 17 (still grade C). Test pass rate: 32/32 (100%). <!-- metrics-verified: npm run test:py -- tests/test_wave_loop_rs3.py -v -->
