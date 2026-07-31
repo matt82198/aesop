@@ -97,4 +97,32 @@ describe('ModelMixTrendChart', () => {
 
     expect(screen.getByText(/no model mix data yet/i)).toBeInTheDocument();
   });
+
+  describe('accessibility', () => {
+    it('SVG has role="img" for semantic meaning', () => {
+      render(<ModelMixTrendChart cost={fixtureCost} />);
+      const svg = screen.getByRole('img', { hidden: true });
+      expect(svg).toHaveAttribute('role', 'img');
+    });
+
+    it('SVG has aria-label describing the chart', () => {
+      render(<ModelMixTrendChart cost={fixtureCost} />);
+      const svg = screen.getByRole('img', { hidden: true });
+      expect(svg).toHaveAttribute('aria-label');
+      const label = svg?.getAttribute('aria-label');
+      expect(label).toBeTruthy();
+      expect(label).toMatch(/model|distribution|usage/i);
+    });
+
+    it('bar segments have <title> elements for tooltips', () => {
+      render(<ModelMixTrendChart cost={fixtureCost} />);
+      const titles = Array.from(document.querySelectorAll('.bar-segment title'));
+      expect(titles.length).toBeGreaterThan(0);
+      // Each title should have content describing the data
+      titles.forEach((title) => {
+        expect(title.textContent).toBeTruthy();
+        expect(title.textContent).toMatch(/:/); // Should have date: model percentage format
+      });
+    });
+  });
 });

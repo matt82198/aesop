@@ -53,6 +53,17 @@
   border-left-color: var(--color-status-info);
 }
 
+.cost-callout--error {
+  border-left-color: var(--color-status-error);
+  background: var(--color-status-error-bg);
+}
+
+.cost-callout__hint {
+  margin-top: var(--space-2);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
 /* Layout for the three sections */
 .cost-layout {
   display: grid;
