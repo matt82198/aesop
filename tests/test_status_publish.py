@@ -61,7 +61,12 @@ class TestRedaction(unittest.TestCase):
         """Test that token-like patterns are redacted."""
         # Build GitHub token without literal pattern in source
         # Requires 36+ chars after "ghp-" to match the pattern
-        token = "".join([chr(103), chr(104), chr(112), chr(45)]) + "xyzabcdefghijklmnopqrstuvwxyzABCDEFG"  # 36 chars (was 35: pattern needs 36)
+        # Assembled at runtime: a literal 36-char suffix here trips the repo's own
+        # secret scanner (generic_secret_assignment). Concat-assembly is the documented
+        # convention for dummy secrets in tests.
+        _prefix = "".join([chr(103), chr(104), chr(112), chr(45)])
+        _suffix = "xyzabcdefghijklm" + "nopqrstuvwxyz" + "ABCDEFG"  # 36 chars total
+        token = _prefix + _suffix
         text = (
             "This is a fleet status report with access tokens. "
             f"API authentication: {token} is configured. "
