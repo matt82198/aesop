@@ -553,16 +553,12 @@ class WriteAPI:
         except Exception as e:
             raise ValueError(f"Failed to append status_cleared event: {e}") from e
 
-        # Cleared means ABSENT, so remove the projection rather than rendering a
-        # null-filled one. Consumers (the monitor's orchestrator-idle check) treat
-        # the file's presence as "a status exists"; materializing an empty status
-        # left a fresh mtime that reads as live activity. The status_cleared event
-        # remains in the log, so the audit trail is unaffected.
-        try:
-            (self.state_dir / "orchestrator-status.json").unlink(missing_ok=True)
-        except OSError as e:
-            print(f"[write_api] Failed to remove orchestrator-status.json: {e}",
-                  file=sys.stderr)
+        # Materialize the cleared projection. The API layer keeps event-sourced
+        # semantics: the projection always reflects the log, and a cleared status is
+        # a real state (all fields None) rather than an absent file.
+        # Deleting the file is a CLI-level concern -- see tools/orchestrator_status.py,
+        # where `clear` means "no status exists" for consumers that test presence.
+        self._render_orchestrator_status_atomic(store)
 
     # --- Markdown write-path unification (WS4 increment 1) ---
 

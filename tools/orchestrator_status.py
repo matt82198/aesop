@@ -61,6 +61,12 @@ def clear_status():
     try:
         api = WriteAPI(state_dir)
         api.clear_orchestrator_status(actor="orchestrator_status_cli")
+        # The API renders a cleared projection (all fields None) to stay consistent
+        # with the event log. At the CLI level "clear" must mean NO STATUS EXISTS:
+        # consumers -- notably the monitor's orchestrator-idle check -- test for the
+        # file's presence, and a null-filled file with a fresh mtime reads as live
+        # activity. The status_cleared event preserves the audit trail either way.
+        (state_dir / "orchestrator-status.json").unlink(missing_ok=True)
         # Stdout string must be byte-identical for shell tests
         print("[OK] Status cleared")
     except Exception as e:
