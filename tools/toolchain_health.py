@@ -36,9 +36,17 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
 try:
-    from common import get_state_dir, check_heartbeat_staleness
+    from common import get_state_dir
 except ImportError:
-    from tools.common import get_state_dir, check_heartbeat_staleness
+    from tools.common import get_state_dir
+
+try:
+    from state_store.read_api import StateReadAPI
+except ImportError:
+    try:
+        from ..state_store.read_api import StateReadAPI
+    except (ImportError, ValueError):
+        StateReadAPI = None
 
 
 # Required binaries to check
@@ -55,10 +63,10 @@ REQUIRED_BINARIES = {
     "curl": ["curl"],
 }
 
-# Heartbeat files to monitor
-HEARTBEAT_FILES = {
-    "watchdog": "conductor3/state/.watchdog-heartbeat",
-    "monitor": "conductor3/monitor/.monitor-heartbeat",
+# Heartbeat filenames to monitor (used with StateAPI read facade)
+HEARTBEAT_FILENAMES = {
+    "watchdog": ".watchdog-heartbeat",
+    "monitor": ".monitor-heartbeat",
 }
 
 
@@ -120,61 +128,31 @@ def check_binary(name: str, candidates: List[str]) -> Tuple[bool, Optional[str]]
     return True, None
 
 
-def get_heartbeat_path(relative_path: str) -> Path:
-    """Resolve heartbeat file path.
-
-    Tries to resolve relative to various base directories (git root, cwd, etc).
-
-    Args:
-        relative_path: Relative path like "conductor3/state/.watchdog-heartbeat"
-
-    Returns:
-        Path object (may not exist)
-    """
-    # Try relative to current working directory first
-    path = Path(relative_path)
-    if path.is_absolute():
-        return path
-
-    # If it's relative, try to find it from common base directories
-    candidates = [
-        Path.cwd() / relative_path,  # cwd-relative
-        Path.cwd().parent / relative_path,  # parent of cwd
-        Path.home() / relative_path,  # home-relative
-    ]
-
-    # Return the first that exists, or the cwd-relative version as fallback
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-
-    return Path.cwd() / relative_path
 
 
 def check_heartbeat(
-    name: str, relative_path: str, max_age_seconds: int
+    name: str, filename: str, max_age_seconds: int, state_api=None
 ) -> Tuple[bool, Optional[str]]:
-    """Check if a heartbeat file is fresh.
+    """Check if a heartbeat file is fresh via StateAPI.
 
     Args:
         name: Heartbeat name (for diagnostics)
-        relative_path: Path to heartbeat file
+        filename: Heartbeat filename (e.g., ".watchdog-heartbeat")
         max_age_seconds: Maximum age before considering stale
+        state_api: Optional StateReadAPI instance; if None, check is skipped
 
     Returns:
         (is_ok, message) where is_ok=True means heartbeat is fresh
     """
-    hb_path = get_heartbeat_path(relative_path)
+    if state_api is None:
+        # StateAPI unavailable; skip heartbeat check with advisory message
+        return False, f"Heartbeat {name} check unavailable (StateAPI not loaded)"
 
-    is_stale, age_s, info = check_heartbeat_staleness(hb_path, max_age_seconds)
+    # Use StateAPI facade to check heartbeat freshness
+    is_fresh = state_api.check_heartbeat_fresh(filename, max_age_seconds)
 
-    if is_stale:
-        if age_s == 0:
-            # Missing or unreadable
-            return False, f"Heartbeat {name} is {info.lower()}"
-        else:
-            # Stale but exists
-            return False, f"Heartbeat {name} stale: {age_s}s > {max_age_seconds}s threshold"
+    if not is_fresh:
+        return False, f"Heartbeat {name} stale or missing"
 
     return True, None
 
@@ -192,6 +170,15 @@ def run_checks(json_mode: bool = False, max_age_seconds: int = 300) -> int:
     findings: List[Dict[str, str]] = []
     check_count = 0
 
+    # Initialize StateAPI if available
+    state_api = None
+    if StateReadAPI is not None:
+        try:
+            state_api = StateReadAPI()
+        except Exception:
+            # StateAPI initialization failed; skip heartbeat checks
+            pass
+
     # Phase 1: Check required binaries
     for binary_name, candidates in REQUIRED_BINARIES.items():
         check_count += 1
@@ -205,15 +192,15 @@ def run_checks(json_mode: bool = False, max_age_seconds: int = 300) -> int:
                 }
             )
 
-    # Phase 2: Check heartbeat files
-    for hb_name, hb_path in HEARTBEAT_FILES.items():
+    # Phase 2: Check heartbeat files (via StateAPI facade)
+    for hb_name, hb_filename in HEARTBEAT_FILENAMES.items():
         check_count += 1
-        is_ok, message = check_heartbeat(hb_name, hb_path, max_age_seconds)
+        is_ok, message = check_heartbeat(hb_name, hb_filename, max_age_seconds, state_api)
         if not is_ok:
             findings.append(
                 {
                     "type": "HEARTBEAT_STALE",
-                    "file": hb_path,
+                    "file": hb_filename,
                     "message": message or f"Heartbeat {hb_name} stale",
                 }
             )

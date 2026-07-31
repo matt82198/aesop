@@ -5,24 +5,21 @@ Test suite for toolchain_health.py.
 Tests verify:
   - Broken binaries (exist but cannot execute) are detected as BROKEN
   - Missing binaries are detected as MISSING
-  - Stale heartbeats are reported as STALE
-  - Missing heartbeat files are reported as STALE
+  - Stale heartbeats are reported as STALE when StateAPI unavailable
   - Zero-checks-performed exits non-zero
   - Healthy state exits 0
   - JSON output is valid and structured correctly
 
-All tests use tmp_path fixtures and never modify committed code or git config.
+All tests use fixtures and never modify committed code or git config.
 """
 
 import json
-import subprocess
 import sys
-import tempfile
+import time
+import unittest
 from pathlib import Path
 from unittest import mock
-
-import pytest
-
+import tempfile
 
 # Ensure tools directory is on path
 TOOLS_DIR = Path(__file__).parent.parent / "tools"
@@ -31,7 +28,7 @@ sys.path.insert(0, str(TOOLS_DIR))
 import toolchain_health
 
 
-class TestBinaryChecks:
+class TestBinaryChecks(unittest.TestCase):
     """Tests for binary detection and execution checking."""
 
     def test_missing_binary(self):
@@ -39,27 +36,28 @@ class TestBinaryChecks:
         is_ok, message = toolchain_health.check_binary(
             "nonexistent_binary_xyz", ["nonexistent_xyz_1", "nonexistent_xyz_2"]
         )
-        assert not is_ok
-        assert "not found" in message.lower() or "not available" in message.lower()
+        self.assertFalse(is_ok)
+        self.assertTrue("not found" in message.lower() or "not available" in message.lower())
 
-    def test_broken_binary_exists_but_not_executable(self, tmp_path):
+    def test_broken_binary_exists_but_not_executable(self):
         """Test that a binary that exists but cannot execute is reported as BROKEN.
 
         Simulates the bash.exe scenario: file exists but delegates to deleted
         target, so execution fails.
         """
         # Create a stub that "exists" but fails when executed
-        broken_path = tmp_path / "broken_stub.exe"
-        broken_path.write_text("This is a broken stub that cannot execute")
-        broken_path.chmod(0o644)  # Not executable on Unix, but on Windows...
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            broken_path = Path(tmp_dir) / "broken_stub.exe"
+            broken_path.write_text("This is a broken stub that cannot execute")
+            broken_path.chmod(0o644)  # Not executable on Unix, but on Windows...
 
-        # Mock subprocess.run to simulate exec failure
-        with mock.patch("subprocess.run") as mock_run:
-            mock_run.side_effect = OSError("Cannot execute")
+            # Mock subprocess.run to simulate exec failure
+            with mock.patch("subprocess.run") as mock_run:
+                mock_run.side_effect = OSError("Cannot execute")
 
-            is_ok, message = toolchain_health.check_binary("broken_test", [str(broken_path)])
-            assert not is_ok
-            assert "broken" in message.lower() or "cannot execute" in message.lower()
+                is_ok, message = toolchain_health.check_binary("broken_test", [str(broken_path)])
+                self.assertFalse(is_ok)
+                self.assertTrue("broken" in message.lower() or "cannot execute" in message.lower())
 
     def test_available_binary_returns_ok(self):
         """Test that an available binary (like 'git') is reported as OK."""
@@ -79,64 +77,58 @@ class TestBinaryChecks:
         assert is_ok
 
 
-class TestHeartbeatChecks:
-    """Tests for heartbeat file detection and staleness checking."""
+class TestHeartbeatChecks(unittest.TestCase):
+    """Tests for heartbeat file detection via StateAPI facade."""
 
-    def test_stale_heartbeat_old_file(self, tmp_path):
-        """Test that an old heartbeat file is reported as STALE."""
-        # Create a heartbeat file with an old timestamp
-        hb_file = tmp_path / ".watchdog-heartbeat"
-        old_time = int(time.time()) - 500  # 500 seconds old
-        hb_file.write_text(str(old_time), encoding="utf-8")
+    def test_heartbeat_check_with_stateapi_unavailable(self):
+        """Test that heartbeat check reports unavailable when StateAPI can't load."""
+        # StateAPI is None, so check should report unavailable
+        is_ok, message = toolchain_health.check_heartbeat(
+            "test", ".watchdog-heartbeat", max_age_seconds=300, state_api=None
+        )
+        assert not is_ok
+        assert "unavailable" in message.lower()
 
-        # Mock get_heartbeat_path to return our test file
-        with mock.patch("toolchain_health.get_heartbeat_path") as mock_path:
-            mock_path.return_value = hb_file
+    def test_heartbeat_check_with_stateapi_mock(self):
+        """Test heartbeat check when StateAPI is available and fresh."""
+        # Mock StateAPI that returns fresh heartbeat
+        mock_api = mock.Mock()
+        mock_api.check_heartbeat_fresh.return_value = True
 
-            is_ok, message = toolchain_health.check_heartbeat("test", "dummy", max_age_seconds=300)
-            assert not is_ok
-            assert "stale" in message.lower()
+        is_ok, message = toolchain_health.check_heartbeat(
+            "test", ".watchdog-heartbeat", max_age_seconds=300, state_api=mock_api
+        )
+        assert is_ok
+        assert message is None
 
-    def test_missing_heartbeat_file(self, tmp_path):
-        """Test that a missing heartbeat file is reported as STALE."""
-        missing_path = tmp_path / "nonexistent_heartbeat"
+    def test_heartbeat_check_with_stateapi_stale(self):
+        """Test heartbeat check when StateAPI reports stale."""
+        # Mock StateAPI that returns stale heartbeat
+        mock_api = mock.Mock()
+        mock_api.check_heartbeat_fresh.return_value = False
 
-        with mock.patch("toolchain_health.get_heartbeat_path") as mock_path:
-            mock_path.return_value = missing_path
-
-            is_ok, message = toolchain_health.check_heartbeat("test", "dummy", max_age_seconds=300)
-            assert not is_ok
-            assert "missing" in message.lower() or "stale" in message.lower()
-
-    def test_fresh_heartbeat_file(self, tmp_path):
-        """Test that a fresh heartbeat file passes the check."""
-        hb_file = tmp_path / ".watchdog-heartbeat"
-        recent_time = int(time.time()) - 10  # 10 seconds old (well within 300s threshold)
-        hb_file.write_text(str(recent_time), encoding="utf-8")
-
-        with mock.patch("toolchain_health.get_heartbeat_path") as mock_path:
-            mock_path.return_value = hb_file
-
-            is_ok, message = toolchain_health.check_heartbeat("test", "dummy", max_age_seconds=300)
-            assert is_ok
-            assert message is None
+        is_ok, message = toolchain_health.check_heartbeat(
+            "test", ".watchdog-heartbeat", max_age_seconds=300, state_api=mock_api
+        )
+        assert not is_ok
+        assert "stale" in message.lower() or "missing" in message.lower()
 
 
-class TestHealthyStateAndZeroChecks:
+class TestHealthyStateAndZeroChecks(unittest.TestCase):
     """Tests for full-run scenarios: healthy state, zero checks, exit codes."""
 
     def test_zero_checks_performed_exits_nonzero(self):
         """Test that zero-checks-performed exits with code 2 (error)."""
         # Mock both binary and heartbeat checks to return empty
         with mock.patch("toolchain_health.REQUIRED_BINARIES", {}):
-            with mock.patch("toolchain_health.HEARTBEAT_FILES", {}):
+            with mock.patch("toolchain_health.HEARTBEAT_FILENAMES", {}):
                 exit_code = toolchain_health.run_checks(json_mode=False, max_age_seconds=300)
                 assert exit_code == 2
 
     def test_zero_checks_json_mode(self):
         """Test that zero-checks-performed outputs JSON with ERROR status."""
         with mock.patch("toolchain_health.REQUIRED_BINARIES", {}):
-            with mock.patch("toolchain_health.HEARTBEAT_FILES", {}):
+            with mock.patch("toolchain_health.HEARTBEAT_FILENAMES", {}):
                 with mock.patch("builtins.print") as mock_print:
                     exit_code = toolchain_health.run_checks(json_mode=True, max_age_seconds=300)
                     assert exit_code == 2
@@ -168,7 +160,7 @@ class TestHealthyStateAndZeroChecks:
                 assert exit_code == 1
 
 
-class TestJSONOutput:
+class TestJSONOutput(unittest.TestCase):
     """Tests for JSON output structure and validity."""
 
     def test_json_output_is_valid(self):
@@ -199,42 +191,14 @@ class TestJSONOutput:
                     output_str = mock_print.call_args[0][0]
                     output = json.loads(output_str)
 
-                    # Should have 2 findings (one binary, one heartbeat)
+                    # Should have at least 1 finding
                     assert len(output["findings"]) >= 1
                     finding = output["findings"][0]
                     assert "type" in finding
                     assert "message" in finding
 
 
-class TestHeartbeatPathResolution:
-    """Tests for heartbeat file path resolution."""
-
-    def test_get_heartbeat_path_absolute(self, tmp_path):
-        """Test that absolute paths are returned as-is."""
-        abs_path = tmp_path / "heartbeat"
-        result = toolchain_health.get_heartbeat_path(str(abs_path))
-        assert result == abs_path
-
-    def test_get_heartbeat_path_relative_cwd(self, tmp_path):
-        """Test that relative paths are resolved from cwd."""
-        hb_file = tmp_path / "state" / ".watchdog-heartbeat"
-        hb_file.parent.mkdir(parents=True, exist_ok=True)
-        hb_file.write_text("123456789", encoding="utf-8")
-
-        # Change to tmp_path and resolve relative path
-        import os
-
-        old_cwd = os.getcwd()
-        try:
-            os.chdir(tmp_path)
-            result = toolchain_health.get_heartbeat_path("state/.watchdog-heartbeat")
-            # Should find the file we created
-            assert result.exists() or result.name == ".watchdog-heartbeat"
-        finally:
-            os.chdir(old_cwd)
-
-
-class TestCommandLineArgs:
+class TestCommandLineArgs(unittest.TestCase):
     """Tests for CLI argument parsing and behavior."""
 
     def test_json_flag_produces_json_output(self):
@@ -271,41 +235,5 @@ class TestCommandLineArgs:
                     # Check that check_heartbeat was called with threshold=600
                     calls = mock_hb.call_args_list
                     if calls:
-                        # Last positional arg should be 600
+                        # One of the calls should have 600 in its args
                         assert any(600 in call[0] for call in calls)
-
-
-class TestPortability:
-    """Tests for Windows and POSIX compatibility."""
-
-    def test_encoding_utf8_on_file_read(self, tmp_path):
-        """Test that files are read with explicit UTF-8 encoding."""
-        hb_file = tmp_path / ".watchdog-heartbeat"
-        # Write with explicit UTF-8
-        hb_file.write_text(str(int(time.time())), encoding="utf-8")
-
-        with mock.patch("toolchain_health.get_heartbeat_path") as mock_path:
-            mock_path.return_value = hb_file
-
-            # Should not crash on encoding
-            is_ok, message = toolchain_health.check_heartbeat("test", "dummy", 300)
-            # File is fresh, should pass
-            assert is_ok
-
-    def test_path_handling_windows_and_posix(self):
-        """Test that Path objects work on both Windows and POSIX."""
-        # pathlib.Path should handle both transparently
-        from pathlib import Path as PathlibPath
-
-        # Windows-style path
-        win_path = PathlibPath("C:\\Users\\test\\.heartbeat")
-        # POSIX-style path
-        posix_path = PathlibPath("/home/test/.heartbeat")
-
-        # Both should be Path instances
-        assert isinstance(win_path, PathlibPath)
-        assert isinstance(posix_path, PathlibPath)
-
-
-# Import time for staleness calculations
-import time
