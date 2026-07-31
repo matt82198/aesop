@@ -17,60 +17,34 @@ Exit codes: 0=all merged, 1=some blocked, 2=error
 """
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
 
-
-def run(cmd, check=True, capture=True, timeout=30):
-    """Run a command safely with timeout protection.
-
-    Args:
-        cmd: List of command and arguments (no shell=True).
-        check: If True, raise CalledProcessError on non-zero exit.
-        capture: If True, capture stdout/stderr.
-        timeout: Timeout in seconds (default 30). Raises TimeoutExpired if exceeded.
-
-    Returns:
-        subprocess.CompletedProcess result.
-
-    Raises:
-        subprocess.CalledProcessError: If check=True and returncode != 0.
-        subprocess.TimeoutExpired: If timeout exceeded.
-    """
-    try:
-        r = subprocess.run(
-            cmd, capture_output=capture,
-            text=True, encoding='utf-8', timeout=timeout
-        )
-    except subprocess.TimeoutExpired as e:
-        raise subprocess.TimeoutExpired(
-            cmd=e.cmd,
-            timeout=e.timeout,
-            output=e.stdout,
-            stderr=e.stderr
-        ) from e
-    if check and r.returncode != 0:
-        raise subprocess.CalledProcessError(r.returncode, cmd, r.stdout, r.stderr)
-    return r
+# Ensure this tool's own directory (tools/) is importable so the shared
+# harness resolves regardless of cwd or how the file is loaded
+# (the import-gate loads tools by path, without tools/ on sys.path).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from subprocess_common import gh, git, json_output, run
 
 
 def get_open_prs():
-    r = run(['gh', 'pr', 'list', '--state', 'open', '--limit', '50',
-             '--json', 'number,title,headRefName'])
-    return json.loads(r.stdout)
+    r = gh(['pr', 'list', '--state', 'open', '--limit', '50',
+            '--json', 'number,title,headRefName'])
+    return json_output(r)
 
 
 def check_pr_status(pr_num):
     """Returns (status, detail) where status is 'green', 'red', 'pending', 'conflict'."""
     pr = str(pr_num)
-    r = run(['gh', 'pr', 'view', pr, '--json', 'mergeable', '-q', '.mergeable'],
-            check=False)
+    r = gh(['pr', 'view', pr, '--json', 'mergeable', '-q', '.mergeable'],
+           check=False)
     mergeable = r.stdout.strip()
     if mergeable == 'CONFLICTING':
         return 'conflict', 'merge conflict with main'
 
-    r = run(['gh', 'pr', 'checks', pr, '--json', 'name,bucket,state'], check=False)
+    r = gh(['pr', 'checks', pr, '--json', 'name,bucket,state'], check=False)
     if r.returncode != 0:
         return 'pending', 'checks query failed'
     checks = json.loads(r.stdout)
@@ -92,13 +66,13 @@ def check_pr_status(pr_num):
 
 def merge_pr(pr_num):
     pr = str(pr_num)
-    r = run(['gh', 'pr', 'merge', pr, '--merge'], check=False)
+    r = gh(['pr', 'merge', pr, '--merge'], check=False)
     if r.returncode != 0:
         stderr = r.stderr.strip()
         if 'not mergeable' in stderr:
             return False, 'conflict — needs rebase'
         return False, f'merge failed: {stderr}'
-    r2 = run(['gh', 'pr', 'view', pr, '--json', 'state', '-q', '.state'], check=False)
+    r2 = gh(['pr', 'view', pr, '--json', 'state', '-q', '.state'], check=False)
     state = r2.stdout.strip()
     if state != 'MERGED':
         return False, f'state={state}'
@@ -107,42 +81,42 @@ def merge_pr(pr_num):
 
 def fix_branch(branch):
     """Merge main into branch, fix test counts + CLAUDE.md limits, push."""
-    run(['git', 'fetch', 'origin', 'main'], check=False)
-    r = run(['git', 'fetch', 'origin', branch], check=False)
+    git(['fetch', 'origin', 'main'], check=False)
+    r = git(['fetch', 'origin', branch], check=False)
     if r.returncode != 0:
         return False, f'fetch failed for {branch}'
 
-    run(['git', 'checkout', 'main'], check=False)
-    r = run(['git', 'checkout', branch], check=False)
+    git(['checkout', 'main'], check=False)
+    r = git(['checkout', branch], check=False)
     if r.returncode != 0:
         return False, f'checkout failed for {branch}'
 
-    r = run(['git', 'merge', 'origin/main', '--no-edit'], check=False)
+    r = git(['merge', 'origin/main', '--no-edit'], check=False)
     if r.returncode != 0:
         for f in ['tests/CLAUDE.md', 'tools/CLAUDE.md']:
-            run(['git', 'checkout', '--theirs', f], check=False)
-            run(['git', 'add', f], check=False)
-        r2 = run(['git', '-c', 'core.editor=true', 'merge', '--continue'], check=False)
+            git(['checkout', '--theirs', f], check=False)
+            git(['add', f], check=False)
+        r2 = git(['-c', 'core.editor=true', 'merge', '--continue'], check=False)
         if r2.returncode != 0:
-            run(['git', 'merge', '--abort'], check=False)
-            run(['git', 'checkout', 'main'], check=False)
+            git(['merge', '--abort'], check=False)
+            git(['checkout', 'main'], check=False)
             return False, 'merge conflict unresolvable'
 
-    run([sys.executable, 'tools/verify_test_suite_count.py', '--fix'], check=False)
-    run([sys.executable, 'tools/claudemd_lint.py'], check=False)
+    run([sys.executable, 'tools/verify_test_suite_count.py', '--fix'], check=False, timeout=30)
+    run([sys.executable, 'tools/claudemd_lint.py'], check=False, timeout=30)
 
-    run(['git', 'add', '-A'], check=False)
-    r = run(['git', 'diff', '--cached', '--quiet'], check=False)
+    git(['add', '-A'], check=False)
+    r = git(['diff', '--cached', '--quiet'], check=False)
     if r.returncode != 0:
-        run(['git', 'commit', '-m', 'fix: merge main + resolve conflicts'], check=False)
+        git(['commit', '-m', 'fix: merge main + resolve conflicts'], check=False)
 
-    r = run([sys.executable, 'tools/secret_scan.py', '--staged'], check=False)
+    r = run([sys.executable, 'tools/secret_scan.py', '--staged'], check=False, timeout=30)
     if r.returncode != 0:
-        run(['git', 'checkout', 'main'], check=False)
+        git(['checkout', 'main'], check=False)
         return False, 'secret scan failed'
 
-    r = run(['git', 'push', 'origin', branch], check=False)
-    run(['git', 'checkout', 'main'], check=False)
+    r = git(['push', 'origin', branch], check=False)
+    git(['checkout', 'main'], check=False)
     if r.returncode != 0:
         return False, 'push failed'
     return True, 'fixed + pushed, CI re-triggered'
@@ -188,7 +162,7 @@ def main():
                     round_results.append((num, 'MERGED' if ok else 'FAIL', msg, title))
                     if ok:
                         merged += 1
-                        run(['git', 'pull', 'origin', 'main'], check=False)
+                        git(['pull', 'origin', 'main'], check=False)
 
             elif status in ('red', 'conflict') and (args.fix or args.loop):
                 if args.dry_run:

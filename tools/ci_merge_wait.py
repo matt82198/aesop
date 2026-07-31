@@ -35,25 +35,29 @@ Requires: gh CLI available on PATH (unless --self-test). Gracefully exits with e
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
+
+# Ensure this tool's own directory (tools/) is importable so the shared
+# harness resolves regardless of cwd or how the file is loaded
+# (the import-gate loads tools by path, without tools/ on sys.path).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from subprocess_common import gh, json_output
 
 
 def run_gh_command(args):
     """
     Run gh CLI command; return parsed JSON or None if gh missing/error.
-    Raises subprocess.CalledProcessError on non-zero exit.
+    Uses subprocess_common.gh() for unified timeout and encoding handling.
     N9 FIX: Raises TimeoutExpired on timeout (caller handles transient errors).
     """
     try:
-        result = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            timeout=30,
-        )
+        # Strip 'gh' prefix if present (subprocess_common.gh() adds it)
+        if args and args[0] == 'gh':
+            args = args[1:]
+        result = gh(args, check=False)
         if result.returncode != 0:
             if "not found" in result.stderr or "No such file" in result.stderr:
                 return None
@@ -251,17 +255,11 @@ def merge_pr(pr_number, merge_method, dry_run=False, head_ref_oid=None):
         print(f"[DRY-RUN] Would merge PR #{pr_number} with --{merge_method} --match-head-commit {head_ref_oid}")
         return True
 
-    merge_cmd = ["gh", "pr", "merge", str(pr_number), f"--{merge_method}"]
+    merge_cmd = ["pr", "merge", str(pr_number), f"--{merge_method}"]
     # F5 FIX: Add --match-head-commit to pin merge to the SHA that passed CI
     merge_cmd.extend(["--match-head-commit", head_ref_oid])
 
-    result = subprocess.run(
-        merge_cmd,
-        capture_output=True,
-        text=True,
-        encoding='utf-8',
-        timeout=30,
-    )
+    result = gh(merge_cmd, check=False)
     return result.returncode == 0
 
 

@@ -24,12 +24,19 @@ All output is deterministic: stable ordering, no generated timestamps, idempoten
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
+
+# Ensure this tool's own directory (tools/) is importable so the shared
+# harness resolves regardless of cwd or how the file is loaded
+# (the import-gate loads tools by path, without tools/ on sys.path).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from subprocess_common import git
 
 
 # Incident class taxonomy
@@ -138,17 +145,9 @@ class IncidentParser:
     def _run_git(self, *args, check=True) -> str:
         """Run git command, return stdout."""
         try:
-            result = subprocess.run(
-                ["git"] + list(args),
-                cwd=str(self.repo_root),
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                check=check,
-            )
+            result = git(list(args), cwd=str(self.repo_root), check=check, timeout=60)
             return (result.stdout or "").strip()
-        except FileNotFoundError:
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
             return ""
 
     def _extract_source_ref(self, subject: str, hash_short: str) -> str:
