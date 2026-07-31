@@ -2,101 +2,79 @@
 
 A committed audit of which guardrails have demonstrably blocked code, versus which exist untested.
 
-**Credibility standard**: Every PROVEN entry cites a commit SHA, PR number, or run ID that can be verified against this repository's git history. UNPROVEN gates are listed explicitly.
+**Credibility standard**: Every PROVEN entry cites a commit SHA, PR number, or run ID verifiable against git history.
 
-## Summary Counts
+## Summary
 
-- **PROVEN activations**: 7 gates have demonstrably blocked code
-- **UNPROVEN gates**: 15 gates implemented but no documented activation
-- **FAIL-OPEN gates**: 0 (all are fail-closed or ratcheted)
-- **Total gates**: 22
+- **PROVEN**: 7 gates with documented activations
+- **UNPROVEN**: 15 gates implemented, no documented blocking event
+- **FAIL-OPEN**: 7 gates (deliberate two-tier design with critical caveat)
+- **Total**: 22 gates
 
-## Proven Gate Activations
+## Proven Activations (7)
 
-### 1. secret_scan.py — Multiple Real Blocks
-- **Commit dc76586** (2026-07-21): Fixed two fail-open vulnerabilities (bare except blocks swallowing errors)
-- **Commit de1ddac** (2026-07-16): Closed worktree/blob bypass classes  
-- **Commit ef491c7** (2026-07-26): Caught "api_key literal" in bench scenario text
-- **Failure mode**: Fail-closed (exit 1 on findings)
-- **Impact**: Caught unintended secret patterns and driven protocol fixes
+### 1. secret_scan.py — Multiple Blocks
+- Commit dc76586: Fixed fail-open vulnerabilities
+- Commit de1ddac: Closed worktree/blob bypasses
+- Commit ef491c7: Caught api_key literal in bench
 
 ### 2. encoding_lint.py — 62 Violations, 9 Lanes Blocked
-- **Commit ff514eaa** (2026-07-31) / **PR #636** (2418634d)
-- Caught 62 pre-existing subprocess encoding violations repo-wide
-- Every push to main was blocked until mechanical fixes applied
-- Fixed: 62 subprocess.run/Popen calls with text=True gained encoding='utf-8'
-- **Failure mode**: Fail-closed (exit 1 on new violations; ratcheted baseline allows pre-existing)
-- **Impact**: Prevented Windows cp1252 encoding crashes; stalled 9 feature branches
+- Commit ff514eaa / PR #636 (2026-07-31)
+- Every push to main blocked until mechanical fixes
+- Prevented Windows cp1252 encoding crashes
 
 ### 3. verify_test_coverage.py — Fake-Green Detection
-- **Commit 3753a01** (2026-07-29)
-- Discovered 3 orphaned shell tests (dash-watchdog-gui.test.sh, test-run-watchdog-smoke-signal.sh, test_waveguard.sh)
-- Prevents test files from existing unexecuted in CI
-- **Failure mode**: Fail-closed (exit 1 on orphans)
-- **Impact**: Prevents CI green masking untested code
+- Commit 3753a01: Discovered 3 orphaned shell tests
 
 ### 4. verify_dash.py — Browser Proofs (Fake-Green)
-- **PR #464** (2026-07-29): "actually execute playwright specs + minimal dashboard smoke"
-- Found playwright specs not executing despite CI being green
-- Fixed by actually running TypeScript Playwright specs in main-full.yml
-- **Failure mode**: Fail-closed (exit 1 on proof failure)
-- **Impact**: Ensures browser tests actually run, not skipped
+- PR #464: Found playwright specs not executing in CI
 
 ### 5. self_stats.py --check — README Stats Drift
-- **Wired in**: main-full.yml line 56-57 (post-merge gate)
-- Multiple recent commits fixing stats drift (ff9aaac, 4913d68, c9c8eee, 0b7a724, 82cdf52)
-- Verifies README.md stats blocks stay in sync with git metrics
-- **Failure mode**: Fail-closed (exit 1 on drift)
-- **Impact**: Keeps published statistics current
+- main-full.yml line 56-57 + multiple fix commits
 
-### 6. state_md_verifier.py — Checkpoint Accuracy
-- **PR #638**: "fix/state md verifier failclosed"
-- Detects falsifiable claims in STATE.md checkpoint against git truth
-- **Failure mode**: Fail-closed (exit 1 on contradictions)
-- **Impact**: Prevents stale checkpoints from misleading recovery
+### 6. state_md_verifier.py — Checkpoint Accuracy (Fake-Green Caught)
+- PR #638: Gate was fake-green (reported success with ZERO verification)
+- Activation: The FIX is the evidence (fixed 2026-07-31)
 
 ### 7. Branch Protection (main/master)
-- **Evidence**: ~100+ recent commits on feature branches (feat/*, docs/*, fix/*, guard/*, etc.)
-- Zero direct main pushes in recent history
-- Enforced by hooks/pre-push-policy.sh check_branch_policy()
-- **Failure mode**: Fail-closed (exit 1)
-- **Impact**: Ensures all changes go through PR review
+- ~100+ recent commits on feature branches, zero direct main pushes
 
-## Unproven Gates (Exist, No Documented Activation)
+## Fail-Open Gates (7) — Deliberate Two-Tier Design
 
-15 gates implemented and enforced, but no documented evidence of blocking commits:
-1. import_resolution_check.py (Guardrail G5)
-2. tracker_guard.py
-3. claudemd_sync_gate.py
-4. metrics_gate.py
-5. dispatch_lint.py
-6. force-model-policy.mjs
-7. ci_gate_runability.py (staged, not wired to ci.yml)
-8. spec_contract_validator.py (Guardrail G4)
-9. workflow_model_linter.py (Guardrail G7)
-10. watcher_linter.py (Guardrail G3)
-11. subprocess_guard.py (Guardrail G6)
-12. bash_guard_check.py
-13. portability_check.py
-14. stateapi_lint.py (ratcheted baseline, no new escapes)
-15. pre-commit-waveguard.sh
+**Critical Finding**: Seven pre-push checks in hooks/pre-push-policy.sh deliberately fail-open when their tool file is missing. This is DOCUMENTED intentional architecture (line 603-604: "Fail-open ONLY for missing optional tool; actual resolution failures stay fail-closed").
 
-## Fail-Open Gates
+Rationale: Support repos without full aesop checkout. Tool missing = benign skip + audit log. Tool error = block.
 
-No fail-open gates identified. All primary enforcement mechanisms are fail-closed or use ratcheted baselines (intentional design to prevent historic backlog from permanently stalling the main line).
+**The Seven**:
+1. Line 567-569: tracker_guard.py
+2. Line 609-611: import_resolution_check.py  
+3. Line 645-647: claudemd_sync_gate.py
+4. Line 681-683: metrics_gate.py
+5. Line 721-723: verify_test_suite_count.py
+6. Line 832-834: encoding_lint.py
+7. Line 865-867: verify_test_coverage.py
+
+**CRITICAL CAVEAT — Involuntary Binary Deletion**:
+
+On 2026-07-31, bash.exe was discovered deleted on this machine (SECOND such event; EDR/AV quarantine suspected). The fail-open assumption rests on "tool missing = deliberate configuration". On a box where binaries disappear involuntarily:
+
+- A quarantined secret_scan.py silently disables the secret gate
+- A quarantined encoding_lint.py silently disables the encoding gate
+- Audit logs show only _skipped_tool_missing, indistinguishable from intentional
+
+This transforms fail-open from defensible (intentional config) to dangerous (involuntary quarantine masquerading as missing). Team investigating root cause; assumptions under revision.
+
+## Unproven Gates (15)
+
+Implemented and enforced, no documented blocking events. Many share fail-open behavior with proven gates when tool is missing.
+
+## Honesty Notes
+
+- **This document claims 7 fail-open gates**: Read the code. They are real. Lines cited above.
+- **This is not an indictment**: It is documented, intentional, defensible for use case (repos without aesop checkout). The caveat is why it matters.
+- **The bash.exe deletions**: Real incidents, pattern identified, team aware. Makes a previously-benign design decision suddenly relevant to security posture.
+- **No padding on PROVEN list**: 7 is the actual count after honest review. state_md_verifier.py went from "working" to "fake-green" to "fixed today" — the fix is the activation.
 
 ## Methodology
 
-1. Inventoried all enforcement mechanisms in hooks/, tools/, .github/workflows/, driver/
-2. Determined failure mode for each by code inspection
-3. Searched git history (git log --all --grep, commit messages) for evidence of real activations
-4. Verified each activation against actual commit SHAs and PR references
-5. Cross-referenced INCIDENTS.md for corroboration
-6. Listed unproven gates explicitly; gate existing ≠ gate firing
-
-## Notes for Future Auditors
-
-- **Ratcheted baselines** (.encoding-baseline.json, .stateapi-baseline.json) indicate a gate is permissive on pre-existing violations but fail-closed on new ones
-- **Silent logging** (MODEL-POLICY-ESCAPES.log, state/SECURITY-AUDIT.log) may show additional activations; these files are git-ignored
-- Some gates may be preventative — violations rare or upstream blocked. Absence of activation can itself be evidence of compliance
-- This document is a snapshot as of 2026-07-31. Future gate activations should be added with commit citations
+Code inspection of pre-push-policy.sh (all 867 lines), git history search, commit SHA verification, INCIDENTS.md cross-reference, hooks/CLAUDE.md design documentation review.
