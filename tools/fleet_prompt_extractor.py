@@ -7,10 +7,11 @@ import pathlib
 import sys
 from datetime import datetime, timedelta
 
-try:
-    from transcript_reader import walk_jsonl, parse_jsonl_file
-except ImportError:
-    from tools.transcript_reader import walk_jsonl, parse_jsonl_file
+# Ensure this tool's own directory (tools/) is importable so the shared
+# harness resolves regardless of cwd or how the file is loaded
+# (the import-gate loads tools by path, without tools/ on sys.path).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from transcript_reader import walk_jsonl, parse_jsonl_file
 
 
 def main():

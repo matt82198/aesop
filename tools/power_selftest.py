@@ -22,6 +22,7 @@ Configuration:
 """
 
 import json
+import os
 import subprocess
 import sys
 import io
@@ -29,10 +30,11 @@ from pathlib import Path
 from datetime import datetime
 from collections import namedtuple
 
-try:
-    from health_checks import check_watchdog_heartbeat, check_monitor_heartbeat
-except ImportError:
-    from tools.health_checks import check_watchdog_heartbeat, check_monitor_heartbeat
+# Ensure this tool's own directory (tools/) is importable so the shared
+# harness resolves regardless of cwd or how the file is loaded
+# (the import-gate loads tools by path, without tools/ on sys.path).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from health_checks import check_watchdog_heartbeat, check_monitor_heartbeat
 
 # Force UTF-8 encoding on stdout to prevent UnicodeEncodeError on Windows
 if sys.stdout.encoding != 'utf-8':
