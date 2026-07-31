@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Tests for tools/cli.py — CLI base module."""
 
+import io
+import sys
+import unittest
 import sys
 import json
 import tempfile
@@ -14,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from tools import cli
 
 
-class TestRunSubprocess:
+class TestRunSubprocess(unittest.TestCase):
     """Test tools.cli.run_subprocess()."""
 
     def test_run_subprocess_success(self):
@@ -40,7 +43,7 @@ class TestRunSubprocess:
             cli.run_subprocess(["nonexistent_command_12345"])
 
 
-class TestResolveRepoRoot:
+class TestResolveRepoRoot(unittest.TestCase):
     """Test tools.cli.resolve_repo_root()."""
 
     def test_resolve_from_args_root(self):
@@ -77,7 +80,7 @@ class TestResolveRepoRoot:
         assert result.is_absolute()
 
 
-class TestMaskSecrets:
+class TestMaskSecrets(unittest.TestCase):
     """Test tools.cli.mask_secrets()."""
 
     def test_mask_aws_key(self):
@@ -115,7 +118,7 @@ class TestMaskSecrets:
         assert result == text
 
 
-class TestDeterministicJsonDumps:
+class TestDeterministicJsonDumps(unittest.TestCase):
     """Test tools.cli.deterministic_json_dumps()."""
 
     def test_json_dumps_sorted_keys(self):
@@ -147,7 +150,7 @@ class TestDeterministicJsonDumps:
         assert parsed["emoji"] == "emoji_test"
 
 
-class TestExitCode:
+class TestExitCode(unittest.TestCase):
     """Test tools.cli.exit_code()."""
 
     def test_exit_code_success(self):
@@ -173,43 +176,63 @@ class TestExitCode:
         assert cli.exit_code() == 0
 
 
-class TestOutputFormatter:
+class TestOutputFormatter(unittest.TestCase):
     """Test tools.cli.OutputFormatter class."""
 
-    def test_formatter_text_mode(self, capsys):
+    def test_formatter_text_mode(self):
+        _buf = io.StringIO()
+        _ebuf = io.StringIO()
+        _old, _eold = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = _buf, _ebuf
         """Test OutputFormatter in text mode."""
         fmt = cli.OutputFormatter(json_mode=False)
         fmt.text("Test message", level="INFO")
-        captured = capsys.readouterr()
+        sys.stdout, sys.stderr = _old, _eold
+        captured = type("C", (), {"out": _buf.getvalue(), "err": _ebuf.getvalue()})()
         assert "Test message" in captured.out
 
-    def test_formatter_text_error_level(self, capsys):
+    def test_formatter_text_error_level(self):
+        _buf = io.StringIO()
+        _ebuf = io.StringIO()
+        _old, _eold = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = _buf, _ebuf
         """Test OutputFormatter with ERROR level."""
         fmt = cli.OutputFormatter(json_mode=False)
         fmt.text("Error message", level="ERROR")
-        captured = capsys.readouterr()
+        sys.stdout, sys.stderr = _old, _eold
+        captured = type("C", (), {"out": _buf.getvalue(), "err": _ebuf.getvalue()})()
         assert "ERROR" in captured.err
         assert "Error message" in captured.err
 
-    def test_formatter_json_mode(self, capsys):
+    def test_formatter_json_mode(self):
+        _buf = io.StringIO()
+        _ebuf = io.StringIO()
+        _old, _eold = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = _buf, _ebuf
         """Test OutputFormatter in JSON mode."""
         fmt = cli.OutputFormatter(json_mode=True)
         fmt.text("This should be ignored")
-        captured = capsys.readouterr()
+        sys.stdout, sys.stderr = _old, _eold
+        captured = type("C", (), {"out": _buf.getvalue(), "err": _ebuf.getvalue()})()
         assert "This should be ignored" not in captured.out
 
-    def test_formatter_json_output(self, capsys):
+    def test_formatter_json_output(self):
+        _buf = io.StringIO()
+        _ebuf = io.StringIO()
+        _old, _eold = sys.stdout, sys.stderr
+        sys.stdout, sys.stderr = _buf, _ebuf
         """Test OutputFormatter JSON output."""
         fmt = cli.OutputFormatter(json_mode=True)
         data = {"key": "value", "count": 42}
         fmt.json(data)
-        captured = capsys.readouterr()
+        sys.stdout, sys.stderr = _old, _eold
+        captured = type("C", (), {"out": _buf.getvalue(), "err": _ebuf.getvalue()})()
         parsed = json.loads(captured.out)
         assert parsed["key"] == "value"
         assert parsed["count"] == 42
 
 
-class TestCLIBuilder:
+class TestCLIBuilder(unittest.TestCase):
     """Test tools.cli.CLIBuilder class."""
 
     def test_builder_basic(self):
@@ -263,7 +286,7 @@ class TestCLIBuilder:
         assert args.custom == "value"
 
 
-class TestSubprocessError:
+class TestSubprocessError(unittest.TestCase):
     """Test tools.cli.SubprocessError exception."""
 
     def test_subprocess_error_is_exception(self):

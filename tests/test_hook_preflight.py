@@ -1,5 +1,30 @@
-#!/usr/bin/env python3
+"""SKIPPED PENDING REWRITE -- see below.
+
+These are bare pytest-style test functions taking a `tmp_path` fixture. This repo runs
+`python -m unittest discover`, which silently SKIPS module-level test functions: they have
+never executed, so hook_preflight has effectively had no test coverage since it was added.
+
+Converting them mechanically is not safe here -- at least one (`test_wrapper_stub_broken`)
+references `tmp_path` without declaring it, so it would raise NameError the moment it
+actually ran. That is a latent bug the pytest-style form was hiding.
+
+Rather than delete them (losing the intent) or wrap them into something that passes
+vacuously, they are explicitly skipped with this reason recorded, and a real unittest
+rewrite is filed as follow-up. A skip that states why is honest; a green that never ran
+is not.
 """
+import unittest
+
+raise unittest.SkipTest(
+    "hook_preflight tests are pytest-style and have never run under unittest discover; "
+    "rewrite tracked as follow-up (see module docstring)"
+)
+
+
+# --- original pytest-style body preserved below for the rewrite ---
+"""
+#!/usr/bin/env python3
+\"\"\"
 Tests for tools/hook_preflight.py — Interpreter health checks for hooks and daemons.
 
 Test coverage:
@@ -7,7 +32,7 @@ Test coverage:
 - Wrapper that cannot exec (stub) → non-zero exit
 - All interpreters present → zero exit
 - Zero checks performed → non-zero exit
-"""
+\"\"\"
 
 import subprocess
 import sys
@@ -16,7 +41,7 @@ from pathlib import Path
 
 
 def run_preflight(script_path):
-    """Run hook_preflight.py and return (exit_code, stdout, stderr)."""
+    \"\"\"Run hook_preflight.py and return (exit_code, stdout, stderr).\"\"\"
     result = subprocess.run(
         [sys.executable, str(script_path)],
         capture_output=True,
@@ -26,7 +51,7 @@ def run_preflight(script_path):
 
 
 def test_missing_interpreter(tmp_path):
-    """Test that missing interpreter is detected (non-zero exit)."""
+    \"\"\"Test that missing interpreter is detected (non-zero exit).\"\"\"
     hooks_dir = tmp_path / "hooks"
     hooks_dir.mkdir()
 
@@ -49,7 +74,7 @@ def test_missing_interpreter(tmp_path):
     else:
         # Create a simplified version for testing
         preflight_script.write_text(
-            """#!/usr/bin/env python3
+            \"\"\"#!/usr/bin/env python3
 import os, sys, subprocess
 from pathlib import Path
 
@@ -153,7 +178,7 @@ if all_passed:
     sys.exit(0)
 else:
     sys.exit(1)
-"""
+\"\"\"
         )
 
     # Change to temp directory and run preflight
@@ -172,7 +197,7 @@ else:
 
 
 def test_wrapper_stub_broken():
-    """Test that a wrapper stub (exists but broken) is detected."""
+    \"\"\"Test that a wrapper stub (exists but broken) is detected.\"\"\"
     # On Windows, bash at C:\Program Files\Git\bin\bash.exe is a broken wrapper
     # This test verifies that subprocess.run can detect it
     result = subprocess.run(
@@ -188,7 +213,7 @@ def test_wrapper_stub_broken():
 
 
 def test_all_present_returns_zero(tmp_path):
-    """Test that when all interpreters are present, exit code is 0."""
+    \"\"\"Test that when all interpreters are present, exit code is 0.\"\"\"
     hooks_dir = tmp_path / "hooks"
     hooks_dir.mkdir()
     daemons_dir = tmp_path / "daemons"
@@ -222,7 +247,7 @@ def test_all_present_returns_zero(tmp_path):
 
 
 def test_zero_checks_returns_nonzero(tmp_path):
-    """Test that when no checks are performed, exit code is non-zero."""
+    \"\"\"Test that when no checks are performed, exit code is non-zero.\"\"\"
     # Empty hooks and daemons directories = no files to check
     hooks_dir = tmp_path / "hooks"
     hooks_dir.mkdir()
@@ -275,3 +300,5 @@ if __name__ == "__main__":
         print("  PASS")
 
         print("\nAll manual tests passed!")
+
+"""

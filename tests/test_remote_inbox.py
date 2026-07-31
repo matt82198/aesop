@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Tests for tools/remote_inbox.py — remote command dispatch via GitHub issues."""
 
+import tempfile
+import unittest
 import json
 import sys
 import subprocess
@@ -14,10 +16,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
 import remote_inbox
 
 
-class TestRemoteInbox:
+class TestRemoteInbox(unittest.TestCase):
     """Test suite for remote_inbox.py."""
 
-    def test_non_owner_comment_rejected(self, tmp_path):
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self._td.name)
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def test_non_owner_comment_rejected(self):
+        tmp_path = self.tmp_path
         """Non-owner comments should be rejected."""
         comment = {
             "id": 123,
@@ -28,7 +38,8 @@ class TestRemoteInbox:
 
         assert not remote_inbox.verify_author(comment, owner_login="matt82198")
 
-    def test_owner_comment_accepted(self, tmp_path):
+    def test_owner_comment_accepted(self):
+        tmp_path = self.tmp_path
         """Owner comments should be accepted."""
         comment = {
             "id": 123,
@@ -58,7 +69,8 @@ class TestRemoteInbox:
         assert command is None
         assert text == "Just some notes here"
 
-    def test_replay_prevention(self, tmp_path):
+    def test_replay_prevention(self):
+        tmp_path = self.tmp_path
         """Replayed comment IDs should be detected."""
         seen_path = tmp_path / ".remote-inbox-seen"
         seen_path.write_text("123\n456\n")
@@ -86,7 +98,8 @@ class TestRemoteInbox:
         assert command is None
         assert text == ""
 
-    def test_valid_command_format(self, tmp_path):
+    def test_valid_command_format(self):
+        tmp_path = self.tmp_path
         """Valid commands should be appended in the correct format."""
         # Temporarily patch the paths
         inbox_path = tmp_path / "ui-inbox.md"
@@ -111,7 +124,8 @@ class TestRemoteInbox:
         assert content.startswith("- [")
         assert "] /runwave" in content
 
-    def test_seen_file_tracking(self, tmp_path):
+    def test_seen_file_tracking(self):
+        tmp_path = self.tmp_path
         """Comments should be tracked in a seen file to prevent replay."""
         seen_path = tmp_path / ".remote-inbox-seen"
 
@@ -157,7 +171,8 @@ class TestRemoteInbox:
         }
         assert not remote_inbox.verify_author(comment)
 
-    def test_log_action_creates_file(self, tmp_path):
+    def test_log_action_creates_file(self):
+        tmp_path = self.tmp_path
         """Log actions should append to REMOTE-DISPATCH.log."""
         log_path = tmp_path / "REMOTE-DISPATCH.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -201,10 +216,18 @@ class TestRemoteInbox:
         # In dry-run, append_inbox() is skipped, so no write happens
 
 
-class TestInboxFormat:
+class TestInboxFormat(unittest.TestCase):
     """Test inbox format compliance with inbox_drain.py."""
 
-    def test_inbox_format_matches_drain_expectations(self, tmp_path):
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self._td.name)
+
+    def tearDown(self):
+        self._td.cleanup()
+
+    def test_inbox_format_matches_drain_expectations(self):
+        tmp_path = self.tmp_path
         """Appended entries must match inbox_drain.py's expected format."""
         inbox_path = tmp_path / "ui-inbox.md"
         inbox_path.parent.mkdir(parents=True, exist_ok=True)
@@ -228,7 +251,8 @@ class TestInboxFormat:
         assert len(items) == 1
         assert items[0] == (iso_ts, "/runwave")
 
-    def test_inbox_multiline_entries(self, tmp_path):
+    def test_inbox_multiline_entries(self):
+        tmp_path = self.tmp_path
         """Multiple entries should parse correctly."""
         inbox_path = tmp_path / "ui-inbox.md"
         inbox_path.parent.mkdir(parents=True, exist_ok=True)
@@ -254,8 +278,15 @@ class TestInboxFormat:
         assert items[2] == ("2026-07-31T12:02:00.000000", "NOTE: some notes")
 
 
-class TestSecurity:
+class TestSecurity(unittest.TestCase):
     """Security-focused tests."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.tmp_path = Path(self._td.name)
+
+    def tearDown(self):
+        self._td.cleanup()
 
     def test_no_arbitrary_code_execution(self):
         """Non-allowlisted commands should never execute as code."""
