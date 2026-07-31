@@ -32,7 +32,7 @@ $TaskDescription = "Poll GitHub issue for remote orchestrator commands"
 $IssueNumber = 999  # YOUR ISSUE NUMBER HERE
 
 # Command to run (single poll via --once)
-$Command = "C:\Python312\python.exe"
+$Command = "C:\Python314\python.exe"
 $Arguments = "C:\Users\matt8\aesop\tools\remote_inbox.py --issue $IssueNumber --once"
 
 # Create task trigger (every 5 minutes)
@@ -50,7 +50,7 @@ Or via Task Scheduler GUI:
 2. Create Basic Task → `AesopRemoteInboxPoller`
 3. Trigger: `Repeat every 5 minutes`
 4. Action: Start a program
-   - Program: `C:\Python312\python.exe`
+   - Program: `C:\Python314\python.exe`
    - Arguments: `C:\Users\matt8\aesop\tools\remote_inbox.py --issue 999 --once`
    - Start in: `C:\Users\matt8\aesop`
 
