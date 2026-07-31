@@ -55,6 +55,10 @@ class AgentDetailRoundtripTest(unittest.TestCase):
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+        # setUp called config.reload() to pick up the fixture paths; restoring the env
+        # without reloading leaves the module pointing at the temp dir removed below,
+        # so any later test reading config sees an empty state root. Reload to undo it.
+        config.reload()
         shutil.rmtree(self.fixture_root, ignore_errors=True)
 
     def test_jsonl_agent_transcript_roundtrip(self):
