@@ -35,6 +35,35 @@ class ToolError(Exception):
         super().__init__(f"{error_class}: {message}")
 
 
+def _is_acceptable_exit_code(tool_name, exit_code):
+    """Determine if an exit code is acceptable for a given tool.
+
+    Most tools exit with 0 (success) or 2+ (error). However, some linting/analysis
+    tools use exit code 1 to signal "findings detected" — which is a normal,
+    documented result, not an error. The tool still outputs JSON with the findings.
+
+    Args:
+        tool_name: filename (e.g., "dead_code_check.py")
+        exit_code: the tool's exit code
+
+    Returns:
+        True if the code represents a valid (non-error) result.
+    """
+    # Tools that signal findings with exit code 1 (not an error)
+    findings_tools = {
+        "dead_code_check.py",      # Exit 1 = dead code found
+        "import_cycle_check.py",   # Exit 1 = cycles found
+        "encoding_lint.py",        # Exit 1 = issues found
+    }
+
+    if tool_name in findings_tools:
+        # Exit 0 = clean, Exit 1 = findings found (both OK), Exit 2+ = error
+        return exit_code in (0, 1)
+    else:
+        # Default: only exit 0 is acceptable
+        return exit_code == 0
+
+
 def _run_tool(tool_name, args=None):
     """Run a tool script and return parsed JSON output, or None if unavailable.
 
@@ -63,7 +92,7 @@ def _run_tool(tool_name, args=None):
             errors="replace",
             cwd=str(config.AESOP_ROOT),
         )
-        if result.returncode != 0:
+        if not _is_acceptable_exit_code(tool_name, result.returncode):
             raise ToolError("tool-exit-nonzero", f"{tool_name} exited with code {result.returncode}")
         output = result.stdout.strip()
         if not output:
