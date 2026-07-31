@@ -28,6 +28,8 @@ import os
 import sys
 from pathlib import Path
 
+from lint_core import ASTCache, Finding, exit_code, normalize_path
+
 
 def find_python_files(root, scan_dirs=None):
     """Find all .py files under scan_dirs (or root), excluding tests/ and .git/."""
@@ -68,6 +70,13 @@ def read_file_lines(filepath):
             return f.readlines()
     except (UnicodeDecodeError, OSError):
         return []
+
+
+def _get_ast_cache():
+    """Get or create the shared AST cache."""
+    if not hasattr(_get_ast_cache, '_cache'):
+        _get_ast_cache._cache = ASTCache()
+    return _get_ast_cache._cache
 
 
 def has_suppression(lines, lineno):
@@ -194,7 +203,7 @@ def collect_init_reexports(filepath):
 
 
 def scan(root, scan_dirs=None):
-    """Run the dead code scan. Returns list of dead code findings."""
+    """Run the dead code scan. Returns list of Finding objects."""
     root = os.path.abspath(root)
     py_files = find_python_files(root, scan_dirs)
 
@@ -247,7 +256,14 @@ def scan(root, scan_dirs=None):
         # Skip if re-exported via __init__.py
         if name in init_exports:
             continue
-        findings.append(d)
+        # Convert to Finding object
+        finding = Finding(
+            file=d['rel_file'],
+            line=d['line'],
+            type=d['type'],
+            message=f"{d['type']} {d['name']}"
+        )
+        findings.append(finding)
 
     return findings
 
@@ -302,23 +318,25 @@ def main():
     if args.json:
         output = []
         for f in findings:
+            # Extract type and name from message
+            parts = f.message.split(' ', 1)
             output.append({
-                "name": f["name"],
-                "type": f["type"],
-                "file": f["rel_file"],
-                "line": f["line"],
+                "type": parts[0] if parts else f.type,
+                "name": parts[1] if len(parts) > 1 else "",
+                "file": f.file,
+                "line": f.line,
             })
         print(json.dumps(output, indent=2))
     else:
         if findings:
             print(f"Dead code: {len(findings)} unused definition(s) found\n")
             for f in findings:
-                print(f"  {f['rel_file']}:{f['line']}  {f['type']} {f['name']}")
+                print(f"  {f.file}:{f.line}  {f.message}")
             print()
         else:
             print("No dead code found.")
 
-    return 1 if findings else 0
+    return exit_code(findings)
 
 
 if __name__ == "__main__":

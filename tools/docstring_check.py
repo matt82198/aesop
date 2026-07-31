@@ -34,6 +34,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from lint_core import Finding, exit_code
+
 DEFAULT_SCAN_DIRS = ["tools", "driver", "state_store"]
 
 SUPPRESS_MARKER = "# docstring-ok"
@@ -276,9 +278,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         sys.stdout.write(format_ascii(result))
 
     # Determine exit code
-    if result["unsuppressed_findings"] > 0:
-        return 1
-    if result["coverage_percent"] < args.threshold:
+    findings_exist = result["unsuppressed_findings"] > 0
+    threshold_failed = result["coverage_percent"] < args.threshold
+    if findings_exist or threshold_failed:
         return 1
     return 0
 

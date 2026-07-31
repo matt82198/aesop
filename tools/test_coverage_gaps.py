@@ -25,6 +25,8 @@ import os
 import sys
 from pathlib import Path
 
+from lint_core import exit_code
+
 # Directories containing source .py files to check
 SOURCE_DIRS = [
     "tools",
