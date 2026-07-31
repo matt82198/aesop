@@ -77,11 +77,16 @@ def _tracked_claudemds(repo_root):
     checkout; that is a degraded mode, not the normal path.
     """
     import subprocess
+    # Only consult git when repo_root IS a real checkout. Tests build fixture trees in
+    # temp dirs; invoking git there makes it walk up to an unrelated repo (or block),
+    # which turned each fast unit test into a 30s timeout.
+    if not (repo_root / ".git").exists():
+        return list(repo_root.rglob("CLAUDE.md"))
     try:
         out = subprocess.run(
             ["git", "ls-files", "*CLAUDE.md"],
             cwd=str(repo_root), capture_output=True, text=True,
-            encoding="utf-8", timeout=30,
+            encoding="utf-8", timeout=10,
         )
         if out.returncode == 0:
             names = [n.strip() for n in out.stdout.splitlines() if n.strip()]
