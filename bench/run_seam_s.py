@@ -110,7 +110,7 @@ def load_task(task_dir: Path) -> TaskFixture:
     if not task_json_path.exists():
         raise FileNotFoundError(f"task.json not found in {task_dir}")
 
-    with open(task_json_path) as f:
+    with open(task_json_path, encoding="utf-8") as f:
         task_data = json.load(f)
 
     return TaskFixture(
@@ -388,7 +388,7 @@ def load_checkpoint(checkpoint_path: Path) -> Dict[Tuple[str, str, int, str], Re
     if not checkpoint_path.exists():
         return completed
 
-    with open(checkpoint_path) as f:
+    with open(checkpoint_path, encoding="utf-8") as f:
         for line in f:
             if not line.strip():
                 continue
@@ -402,7 +402,7 @@ def load_checkpoint(checkpoint_path: Path) -> Dict[Tuple[str, str, int, str], Re
 
 def save_result(checkpoint_path: Path, result: Result) -> None:
     """Append one result to the checkpoint file."""
-    with open(checkpoint_path, "a") as f:
+    with open(checkpoint_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(asdict(result)) + "\n")
 
 
