@@ -10,15 +10,42 @@ Agent behavior is source code. Rules, memory, hooks, and checkpoints live as ver
 
 A corollary the 0.7.0 guardrail work makes explicit: a rule written only as prose is not enforced. Every operating rule that matters is expected to become a hook, gate, or linter that fails closed.
 
+The 0.7.1 release added a second corollary: a gate that exists is not a gate that ran. The portability gate sat behind a failing lint step in the same CI job and had never produced a verdict; fixing the earlier step surfaced 9 real violations that had accumulated unseen. Gate *activation* is now its own thing to verify, separately from gate correctness.
+
 ## Known Limitations
 
 - **Multi-instance coordination is single-box only.** The 0.7.0 MVP added lease-based SQLite claims (with split-brain and TOCTOU fixes), but claims remain file-system-backed. Multi-box deployment requires a shared lease service; not yet implemented.
 - **State-layer consolidation in flight** (git + SQLite + STATE.md are currently three sources of truth; scheduled to collapse into SQLite-as-source + git-as-audit-trail).
 - **Benchmark is curated, not sampled** (N=39 judgment tasks, not real-fleet transcripts). Sufficiency is proven; equivalence-to-Opus is not claimed.
+- **`count_git_files` fails OPEN.** `tools/verify_test_suite_count.py` swallows `CalledProcessError`/`TimeoutExpired` per pattern and returns the partial count, so an unreadable git silently under-reports and the drift check passes vacuously. Pre-existing; not introduced by 0.7.1. Coverage for exactly this exists on PR #639 but hardcodes a total of 254 against a real count of 266, so it needs its expectations derived before merging.
 - **Documentation gates verify presence, not truth.** A gate that requires a doc to exist induces agents to write one; green means "a doc exists", not "the doc is accurate". Doc claims still need reading against the code.
 
 ## Next Milestone
 
 **Wave-31+:** State-layer multi-instance lifecycle (crash-orphan recovery, liveness detection, monotonic expiry); unsupervised failure-recovery loop; frontier live-run capability; external-benchmark validation.
 
-**Post-0.7.0 cleanup (in flight):** dependency manifests (`requirements.txt` / `requirements-dev.txt`); reconciliation of three contradictory test-suite counts onto one script with a fail-closed gate; `_run_wave_inner` phase decomposition; README reduction from ~21 KB to ~6 KB; `tools/` CLI-base extraction to retire per-script boilerplate.
+**NEXT STEPS (post-0.7.2, ranked):**
+
+1. **PR #639 — deliberately still open.** Its `tests/test_verify_test_suite_count_failclosed.py`
+   is in neither the 0.7.1 batch nor main. It is real, still-applicable coverage for the
+   fail-open `count_git_files` above. Merging requires deriving its counts instead of storing
+   them (it asserts 254; actual is 266) — the same treadmill #661 removed elsewhere.
+2. **`test_agent_detail_roundtrip` pollutes `test_api_state`.** `config.reload()` in `setUp`
+   with no reload after the env restore in `tearDown` was fixed in #668, but the shard-level
+   failure had a second cause (the `/api/state` empty-default bug, also fixed). Re-verify the
+   pair stays green under `ci_shard_runner` before assuming it is fully closed.
+3. **`test_hook_preflight` has never executed.** It raises a module-level `unittest.SkipTest`
+   with an honest docstring; #667 made the runner report that as SKIPPED rather than an import
+   failure, but the coverage gap is open. A rewrite must also fix the `tmp_path` NameError the
+   pytest-style form was hiding.
+4. **Flaky `test_openai_transport_redirect`** in shard 0 (pytest mode) — failed once, passed on
+   a clean re-run of the same shard, passes in isolation. Characterize before it reds unrelated PRs.
+5. **Carry-over cleanup:** dependency manifests (`requirements.txt` / `requirements-dev.txt`);
+   `_run_wave_inner` phase decomposition; `tools/` CLI-base extraction.
+
+**Release-state note:** `v0.7.1` is tagged at `ec5ea9db` and has **no GitHub release** — that
+commit's CI was red (pre-existing `/api/state` bug). The tag was deliberately NOT moved, since
+retagging a pushed release rewrites published history. `v0.7.2` (`e061f2bd`) is the first tag in
+this line cut *after* main's own CI went green, and is the published Latest release. Consumer-visible
+release history therefore reads 0.7.0 -> 0.7.2; publishing 0.7.1 retroactively is a user decision.
+`npm publish` has NOT been run for either version and remains user-gated.
