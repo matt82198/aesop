@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Version scheme**: Stable releases are `0.x.y`; `0.x.0-beta.N` / `-rc.N` are pre-releases; `0.1.0-wave.N` were internal wave-milestone previews.
 
+## [0.7.2] - 2026-07-31
+
+### Fixed
+
+- **`/api/state` served a collector's empty default instead of real data.** The `"data"` CollectorSource seeds `{}` and is mtime-gated, so a quiet collector leaves that default cached. The endpoint only computed a section inline when the cached payload was `None`, and `{}` is not `None` -- so the dashboard's first paint could show an empty data section (watchdog, monitor, repos, events, alerts and messages all missing). An empty section is now treated as not-yet-snapshotted and computed inline (#668).
+- Test isolation: `test_agent_detail_roundtrip` called `config.reload()` in `setUp` to pick up fixture paths but restored the environment in `tearDown` without reloading, leaving the config module pointing at a temp directory it then deleted (#668).
+
 ## [0.7.1] - 2026-07-31
 
 ### Fixed
