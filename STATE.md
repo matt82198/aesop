@@ -2,7 +2,7 @@
 
 **What this file is:** The live durable checkpoint that Aesop itself uses during its own `/buildsystem` loop. It records the current system version, architectural decisions, known limitations, and the next milestone. This is not historical archive; it is read by the orchestrator to understand operational state.
 
-**Current Version:** v0.7.0 (tagged and released on GitHub 2026-07-31). Multi-instance orchestration MVP with lease-based SQLite claims; state-query temporal API with REST access; a guardrail layer that turns prose rules into executable gates (fixture-intent manifest, dispatch lint, CLAUDE.md sync, model-pin lint, git-stash prohibition, encoding validation); auto-merge shell-injection fix.
+**Current Version:** v0.7.2 (tagged 2026-07-31). 0.7.1 was a hardening release: 12 PRs against gates that reported success without verifying anything, plus the portability work needed for the remote-access features to run outside a single machine (fleet state and remote-command identity are now configuration, not an assumed home layout). 0.7.2 adds one fix on top: `/api/state` served the collector's empty default snapshot instead of computing the section inline, so the dashboard's first paint could show an empty data section.
 
 ## Architectural Thesis
 
