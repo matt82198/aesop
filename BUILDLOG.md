@@ -146,3 +146,51 @@ guard in settings.json - `winget upgrade Git.Git` + SentinelOne exclusion escala
 NEXT-WAVE (ideation panel, unblocked once the train clears): CI gate-activation audit as a committed
 doc, transcript traceability doc, sampled benchmark (N=15-20 real repair tasks), multi-instance
 design doc, tools/lib extraction continuing the CLI-base work.
+
+================================================================================
+2026-08-01 -- RELEASE 0.7.1 + 0.7.2 (main e061f2bd, tag v0.7.2, CI green)
+================================================================================
+
+SHIPPED: 11 of 12 batched PRs via integration branch #667 (merged ec5ea9db), then #668
+(/api/state fix, a87c3966), then #669 (0.7.2 version bump, e061f2bd). GitHub release v0.7.2
+published and marked Latest.
+
+SEVEN DEFECTS FOUND WHILE RELEASING -- none self-reported by the model, all caught by gates:
+- stateapi ratchet: tools/status_publish.py hardcoded absolute user paths to heartbeats.
+- portability gate: 9 new violation keys. tools/remote_inbox.py hardcoded one GitHub handle as
+  BOTH the polled repo and the sole authorized commenter -- the tool worked for one person.
+  docs/REMOTE-ACCESS.md + REMOTE-OBSERVABILITY.md carried personal home paths into public MIT docs.
+- THE GATE HAD NEVER RUN: portability sat behind a failing State API lint step in the same job,
+  so the job exited first. Two masked failures stacked; fixing #1 is what revealed #2.
+- windows EBUSY: scaffolder child process holds a dir handle; test cleanup threw on Windows only.
+- stale fixture guard compared git TAGS, but CI clones without tags -- the guard could never fire.
+- verify_author (self-inflicted): resolved the repo owner before validating the comment, needing
+  gh auth CI does not have. Now checks well-formedness first and FAILS CLOSED on unresolvable owner.
+- ci_shard_runner counted a deliberate module-level unittest.SkipTest as an import FAILURE
+  (SkipTest subclasses Exception). Only surfaced on Linux ci, which lacks pytest-timeout and so
+  falls back to unittest mode.
+
+PRODUCT BUG (not a test artifact): ui/sse.py seeds the "data" CollectorSource with {} and is
+mtime-gated; serve_api_state only computed inline when the cached payload was None, and {} is not
+None -- so /api/state could serve an EMPTY data section on first paint (watchdog, monitor, repos,
+events, alerts, messages all missing). Pre-existing: previous main 62eb2b5a failed the identical
+test. Fixed in #668.
+
+VERIFICATION FAILURE (orchestrator's own): reported main green from a monitor using
+`gh run list --commit`, which is not a real filter -- it returned an empty list and the
+failure-count-over-zero-rows read as a pass. Main was still in_progress and went on to FAIL.
+Same vacuous-green class the release was fixing, self-inflicted in the verification step.
+Memory written: gh-run-list-commit-is-not-a-filter.
+
+PROCESS CORRECTION: v0.7.1 was tagged immediately post-merge and main's CI then went red.
+v0.7.2 was tagged only AFTER main's own CI (CI, main-full, Pages) went green on that commit.
+Tag-after-green is now the sequence.
+
+HELD BACK DELIBERATELY: PR #639 (fail-closed coverage genuinely absent from the batch -- closing
+it would have silently dropped work); npm publish (burns a version permanently, user-gated);
+GitHub release for v0.7.1 (its commit's CI was red).
+
+ALSO PRODUCED: Medium draft "Determinism Is a System Property" -- filesystem-as-hub thesis,
+this release used as the evidence. Artifact (private):
+https://claude.ai/code/artifact/d78c0706-9dcf-4c2f-991d-e84071751441
+NOT published to Medium; outward publishing stays user-gated.
