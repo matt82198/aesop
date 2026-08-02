@@ -39,7 +39,7 @@ def count_git_files(*patterns: str) -> int:
                 timeout=10,
             )
             count += len([line for line in result.stdout.strip().split("\n") if line])
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
             pass
     return count
 
@@ -82,17 +82,27 @@ def get_documented_counts(claudemd_path: Path) -> Tuple[int, int, int]:
 
 
 def check_mode(claudemd_path: Path) -> int:
-    """Verify counts match. Exit 0 if clean, 1 if drift detected.
+    """Verify counts match. Exit 0 if clean, 1 if drift detected, 2 if error.
 
     Args:
         claudemd_path: Path to tests/CLAUDE.md
 
     Returns:
-        0 if counts match, 1 if drift detected
+        0 if counts match, 1 if drift detected, 2 if cannot evaluate (git error or zero files with non-zero documented)
     """
     try:
         documented = get_documented_counts(claudemd_path)
         actual = get_actual_counts(claudemd_path.parent.parent)
+
+        # Cannot-evaluate case: zero files found but documentation expects counts
+        if actual == (0, 0, 0) and documented != (0, 0, 0):
+            print(
+                "[ERROR] Cannot evaluate: git ls-files returned zero files, but CLAUDE.md "
+                "documents non-zero counts. This indicates a git configuration problem or "
+                "the tool is running outside a git repository.",
+                file=sys.stderr,
+            )
+            return 2
 
         if documented == actual:
             print("[OK] Test suite counts match")
