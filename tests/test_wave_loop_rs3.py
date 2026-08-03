@@ -678,7 +678,12 @@ class TestN6QuoteArgWindows(unittest.TestCase):
         script = Path(_MODULE_TMP) / "echo_arg.py"
         script.write_text("import sys\nsys.stdout.write(sys.argv[1])\n")
         cmd = '"%s" "%s" %s' % (sys.executable, script, _quote_arg(s))
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        # The shell IS the subject under test here: this round-trips _quote_arg()
+        # through a real shell to prove the quoting production driver/wave_loop.py
+        # relies on. Removing shell=True would delete the test's entire value.
+        r = subprocess.run(  # subprocess-ok: shell=True is the behaviour under test (see comment above)
+            cmd, shell=True, capture_output=True, text=True, timeout=60
+        )
         self.assertEqual(r.returncode, 0, r.stderr)
         return r.stdout
 

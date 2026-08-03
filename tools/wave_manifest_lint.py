@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Wave manifest preflight validator.
-INDEX: Wave manifest preflight validator: (1) file-ownership disjointness (no overlaps via fnmatch glob matching); (2) ownsFiles path existence (new files flagged as INFO); (3) prompt sanity (non-empty + [ISOLATION: sibling worktree] required + [[ALLOW-NON-HAIKU]] warns unless [[ALLOW-SONNET]]/[[ALLOW-OPUS]]); (4) git history churn (14-day commits >3 = WARN); (5) testCmd validation (on PATH or repo-relative script). CLI: `wave_manifest_lint.py <manifest.json> [--json] [--strict] [--root DIR]`. Exit 0=PASS (warnings OK) / 1=FAIL or (--strict) WARN. ASCII+JSON output
+INDEX: Wave manifest preflight validator: (1) file-ownership disjointness (no overlaps via fnmatch glob matching); (2) ownsFiles path existence (new files flagged as INFO); (3) prompt sanity (non-empty + [ISOLATION: sibling worktree] required + [[ALLOW-NON-HAIKU]] warns unless [[ALLOW-SONNET]]/[[ALLOW-OPUS]]); (4) git history churn (14-day commits >3 = WARN; list-form git argv + cwd=, never a shell string — an interpolated path with a space would silently report a false "no churn"); (5) PER-ITEM testCmd validation (`item["testCmd"]`, the field driver/wave_loop.py + driver/wave_scheduler.py actually read — binary on PATH or repo-relative script; missing per-item testCmd = WARN naming the slug; a top-level `testCmd` is inert and WARNs). CLI: `wave_manifest_lint.py <manifest.json> [--json] [--strict] [--root DIR]`. Exit 0=PASS (warnings OK) / 1=FAIL or (--strict) WARN. ASCII+JSON output
 
 Checks: (1) file-ownership disjointness, (2) path existence,
 (3) prompt sanity, (4) git history churn, (5) testCmd validation.
@@ -205,23 +205,34 @@ def check_prompt_sanity(items: List[Dict[str, Any]]) -> List[Check]:
 
 
 def check_git_history_churn(items: List[Dict[str, Any]], repo_root: str) -> List[Check]:
-    """Check 4: Flag files with recent churn (14-day history) as elevated-retry-risk."""
+    """Check 4: Flag files with recent churn (14-day history) as elevated-retry-risk.
+
+    Invokes git with a list-form argv and ``cwd=repo_root``. It must never
+    build a shell string: an interpolated repo path containing a space (or a
+    Windows backslash) corrupts the command, git never runs, and the check
+    reports a false "no churn" PASS.
+    """
     checks = []
     warnings = []
 
-    # Try to run git log to get recent changes
     try:
         result = subprocess.run(
-            [sys.executable, "-c", "import subprocess; subprocess.run(['git', 'log', '--all', '--since=14.days'], cwd=r'{}', capture_output=True, text=True, timeout=5)".format(repo_root)],
+            [
+                "git", "log", "--all",
+                "--since=14 days ago",
+                "--name-only",
+                "--pretty=format:",
+            ],
+            cwd=repo_root,
             capture_output=True,
-            timeout=5,
-            check=False,
+            timeout=15,
             text=True,
-            encoding='utf-8',
-            cwd=repo_root
+            encoding="utf-8",
+            errors="replace",
+            check=False,
         )
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        # Git not available or repo not initialized - skip check
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        # Git not available, or repo not initialized - skip check
         checks.append(Check(
             "git_history_churn",
             "PASS",
@@ -229,43 +240,24 @@ def check_git_history_churn(items: List[Dict[str, Any]], repo_root: str) -> List
         ))
         return checks
 
-    # Use bash/git directly to query recent changes
-    try:
-        cmd = f"cd {repo_root} && git log --all --since='14 days ago' --name-only --pretty=format: | sort | uniq -c | sort -rn"
-        result = subprocess.run(
-            ["bash", "-c", cmd],
-            capture_output=True,
-            timeout=5,
-            text=True,
-            encoding='utf-8',
-            check=False
-        )
+    # Count commits touching each path (replaces the old `sort | uniq -c`
+    # pipeline, which also required a POSIX shell to be present).
+    changed_files: Dict[str, int] = {}
+    for line in (result.stdout or "").splitlines():
+        name = line.strip()
+        if name:
+            changed_files[name] = changed_files.get(name, 0) + 1
 
-        # Parse git log output to count changes per file
-        changed_files = {}
-        if result.stdout:
-            for line in result.stdout.strip().split("\n"):
-                if line.strip():
-                    parts = line.strip().split(None, 1)
-                    if len(parts) == 2:
-                        count = int(parts[0])
-                        filename = parts[1]
-                        changed_files[filename] = count
-
-        # Check if any item owns high-churn files
-        for item in items:
-            for pattern in item.get("ownsFiles", []):
-                # Check literal pattern
-                if pattern in changed_files and changed_files[pattern] > 3:
-                    warnings.append({
-                        "item": item["slug"],
-                        "file": pattern,
-                        "recent_commits": changed_files[pattern]
-                    })
-
-    except Exception:
-        # Skip if git query fails
-        pass
+    # Check if any item owns high-churn files
+    for item in items:
+        for pattern in item.get("ownsFiles", []):
+            # Check literal pattern
+            if changed_files.get(pattern, 0) > 3:
+                warnings.append({
+                    "item": item.get("slug"),
+                    "file": pattern,
+                    "recent_commits": changed_files[pattern]
+                })
 
     if warnings:
         checks.append(Check(
@@ -284,55 +276,90 @@ def check_git_history_churn(items: List[Dict[str, Any]], repo_root: str) -> List
     return checks
 
 
-def check_testcmd_validity(manifest: Dict[str, Any], repo_root: str) -> List[Check]:
-    """Check 5: Validate testCmd - binary on PATH or repo-relative script exists."""
-    checks = []
-    test_cmd = manifest.get("testCmd", "")
-
-    if not test_cmd:
-        checks.append(Check(
-            "testcmd_validity",
-            "WARN",
-            "No testCmd specified"
-        ))
-        return checks
-
-    # Parse first token (binary name)
+def _testcmd_binary_resolves(test_cmd: str, repo_root: str) -> Tuple[bool, str]:
+    """Resolve the leading binary of a testCmd. Returns (resolved, binary)."""
     tokens = test_cmd.split()
     if not tokens:
+        return False, ""
+    binary = tokens[0]
+
+    # Repo-relative script?
+    if not os.path.isabs(binary):
+        if (Path(repo_root) / binary).exists():
+            return True, binary
+    elif Path(binary).exists():
+        return True, binary
+
+    return bool(shutil.which(binary)), binary
+
+
+def check_testcmd_validity(manifest: Dict[str, Any], repo_root: str) -> List[Check]:
+    """Check 5: Validate PER-ITEM testCmd - binary on PATH or repo-relative script.
+
+    testCmd is a PER-ITEM field: driver/wave_loop.py and driver/wave_scheduler.py
+    both read ``item["testCmd"]`` and nothing reads a top-level ``testCmd``.
+    Validating the top-level key instead made this check warn on every real
+    manifest, which in turn made --strict exit 1 unconditionally.
+    """
+    checks = []
+    items = manifest.get("items", []) or []
+
+    missing: List[str] = []
+    unresolved: List[Dict[str, str]] = []
+    resolved = 0
+
+    for item in items:
+        slug = item.get("slug", "<unnamed>")
+        test_cmd = (item.get("testCmd") or "").strip()
+        if not test_cmd:
+            missing.append(slug)
+            continue
+        ok, binary = _testcmd_binary_resolves(test_cmd, repo_root)
+        if ok:
+            resolved += 1
+        else:
+            unresolved.append({"item": slug, "binary": binary})
+
+    # A top-level testCmd is inert - the engine never reads it. Surfacing it
+    # stops a manifest from looking configured when no item is verifiable.
+    stray_top_level = bool((manifest.get("testCmd") or "").strip())
+
+    if unresolved:
         checks.append(Check(
             "testcmd_validity",
-            "WARN",
-            "testCmd is empty"
+            "FAIL",
+            f"testCmd binary not found for {len(unresolved)} item(s)",
+            {"unresolved": unresolved}
         ))
         return checks
 
-    binary = tokens[0]
+    warn_details: Dict[str, Any] = {}
+    warn_messages: List[str] = []
 
-    # Check if it's a repo-relative script
-    if not binary.startswith("/") and not binary.startswith("C:"):
-        script_path = Path(repo_root) / binary
-        if script_path.exists():
-            checks.append(Check(
-                "testcmd_validity",
-                "PASS",
-                f"testCmd script exists: {binary}"
-            ))
-            return checks
+    if not items:
+        warn_messages.append("manifest has no items")
+    if missing:
+        shown = ", ".join(missing[:5])
+        if len(missing) > 5:
+            shown += ", ..."
+        warn_messages.append(f"{len(missing)} item(s) without testCmd: {shown}")
+        warn_details["missing_testcmd"] = missing
+    if stray_top_level:
+        warn_messages.append("top-level testCmd is ignored (testCmd is per-item)")
+        warn_details["stray_top_level_testcmd"] = manifest.get("testCmd")
 
-    # Check if binary is on PATH
-    found = shutil.which(binary)
-    if found:
+    if warn_messages:
         checks.append(Check(
             "testcmd_validity",
-            "PASS",
-            f"testCmd binary found: {binary}"
+            "WARN",
+            "; ".join(warn_messages),
+            warn_details
         ))
     else:
         checks.append(Check(
             "testcmd_validity",
-            "FAIL",
-            f"testCmd binary not found: {binary}"
+            "PASS",
+            f"{resolved} item testCmd(s) resolve"
         ))
 
     return checks
@@ -400,7 +427,8 @@ def format_ascii_output(checks: List[Check], strict: bool = False) -> Tuple[str,
             # Include key details for warnings
             if check.details:
                 for key, val in check.details.items():
-                    if key in ["overlaps", "new_files", "churn_files", "issues"]:
+                    if key in ["overlaps", "new_files", "churn_files", "issues",
+                               "missing_testcmd", "stray_top_level_testcmd"]:
                         if key == "issues" and isinstance(val, list):
                             for issue in val:
                                 issue_str = f"{issue.get('item')}: {issue.get('issue')}"
