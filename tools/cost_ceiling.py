@@ -46,6 +46,13 @@ CLI:
   python tools/cost_ceiling.py --check --spent N [--period wave|daily] [--window MINUTES]
     Exit 0 if not exceeded (or ceiling unconfigured), exit 1 if exceeded
     (and thus tripped, unless already halted).
+
+READ-ONLY CHECK CONTRACT:
+  --check never mutates the state tree while reading spend. Resolving spend from
+  the ledger must not create <state>/ledger/OUTCOMES-LEDGER.md; header creation
+  lives on fleet_ledger's APPEND path (ensure_ledger_header). The only write a
+  check is ever allowed to make is the .HALT sentinel on a genuine ceiling breach
+  with trip=True.
 """
 
 import argparse
