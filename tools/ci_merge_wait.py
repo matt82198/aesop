@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 ci_merge_wait.py - CI-gated merge helper: wait for PR checks to conclude, then merge.
+INDEX: CI-gated merge helper (polls gh pr view until SUCCESS; fail-closed: empty rollup=PENDING, --expect-checks requires ALL named checks present AND concluded, --allow-no-checks escape hatch); uses subprocess_common.py for gh timeout + encoding; MERGED-state verification gate implicit in merge guard (structurally unreachable unless CI SUCCESS)
 
 Polls gh pr view until all status checks conclude (SUCCESS/FAILURE), then merges ONLY
 if all checks are SUCCESS. The gh pr merge call is STRUCTURALLY UNREACHABLE unless the

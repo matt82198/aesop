@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Validate domain CLAUDE.md files for minimum contract sections.
+INDEX: Domain CLAUDE.md contract validator (purpose statement, key sections, non-empty); fail-closed exit 1 on violation, 2 on usage error
 
 Enforces:
 1. Purpose statement (marked by "What" or equivalent heading)
