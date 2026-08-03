@@ -1,4 +1,5 @@
 """tools.multi_dispatch — Multi-instance-aware dispatch wrapper.
+INDEX: Multi-instance-aware dispatch wrapper; resolves the backend through `multibox_config.build_backend()` (so the hard preflight gate runs before any claim), atomic ClaimBackend.claim() when multibox.enabled=True, legacy advisory check_conflict+claim_files when off; `--config` names aesop.config.json and an unreadable one is fail-closed exit 1 (silently falling back to the advisory path is the exact "flag looked on, coordination was off" failure the gate exists to prevent); exit 1 on ClaimConflict or preflight refusal, no record written
 
 Coordinates dispatch work across multiple instances by:
   1. Checking if files are already claimed by other instances (legacy) or

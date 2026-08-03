@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Falsifiable no-double-grant proof for the shared-filesystem claim log (multibox Inc 6).
+INDEX: Falsifiable no-double-grant proof for the shared-FS claim log (multibox Inc 6); drives `tests/multibox_sim.py` (simulated NFS/SMB visibility at the `os.listdir` boundary, virtual clock, seeded jitter) against `state_store/fs_claim_log.py` as shipped; 4 proofs, all must hold: (1) 200 seeded rounds with delay <= settle -> ZERO double grants, (2) **falsifiability** — the SAME harness with delay > settle DOES double-grant (a safety property that cannot fail proves nothing; without this the gate would pass on a harness that never contends), (3) at least half the sweep rounds must actually contend, so proof 1 is not vacuous, (4) undecorated-tmpdir smoke with a real 0.05s settle. Hermetic (tempdirs, no network, no sleeping outside proof 4); CLI: `--check` (default) | `--json` | `--runs N` | `--help`; ~3.5s; exit 0=proof holds, 1=double grant OR unfalsifiable harness, 2=usage  ||
 
 The CI gate for `state_store/fs_claim_log.py`'s central safety claim: under a
 bounded directory-visibility delay, two instances never both get the same path.

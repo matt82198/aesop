@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Merge train -- serial or integration-branch batch merge for GitHub PRs.
+INDEX: Serial or integration-branch merge train: serial mode processes PRs one-at-a-time (update-branch, wait for CI, merge, verify MERGED); integration mode (`-i [BATCH_NAME]`) batches PRs into a local `integrate/<name>` branch, runs CI once, squash-merges, closes superseded PRs. Check classification is fail-closed via the `GREEN_CONCLUSIONS` allow-list (`SUCCESS`/`NEUTRAL`/`SKIPPED` only) and `check_outcome()`, which reads `conclusion` on CheckRun entries and `state` on legacy StatusContext entries — CANCELLED/TIMED_OUT/ACTION_REQUIRED/unknown are never green. Keep it an allow-list: a deny-list lets COMPLETED-but-not-FAILURE outcomes fall through to a merge
 
 Serial mode (default): update-branch, wait for CI, merge one at a time.
 Integration mode (--integration): batch PRs into a single integration branch,

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Merge-queue advancer -- deterministic, stateless, ONE bounded pass per invocation.
+INDEX: Merge-queue advancer (THE ACTOR): ONE bounded, zero-sleep, idempotent pass per invocation, driven by the 5-min `AesopMergeQueue` task so merging never depends on a live session (measured green->merge dead time 31.75h sessionless vs 9-109s seated). Imports `gh`/`git` from merge_train, never duplicates them, and does its OWN fail-closed check bucketing (CANCELLED/TIMED_OUT/ACTION_REQUIRED/NEUTRAL/null/absent-required-context = NOT green, regardless of what any other tool concludes). Preconditions exit 2: gh auth, `enforce_admins.enabled == true`, required-context set == `EXPECTED_REQUIRED_CHECKS`. Queue = open PRs labeled `merge-queue` ascending (`merge-priority` jumps); greedy file-disjoint admission; batch of 1 merges + verifies `state == MERGED`; batch >1 builds `integrate/q-<epoch>`, opens a `merge-queue-batch` PR and exits for the next pass; members close ONLY after `git merge-base --is-ancestor` proves landing; red batch evicts individually-red members (`queue-rejected`) and dissolves — but DISSOLVING needs positive evidence of failure, not mere absence: `batch_checks_not_yet_created` makes a pass WAIT when no required context has concluded not-green, at least one is simply absent, and the batch PR is younger than `BATCH_CHECK_GRACE_S` (30 min), because GitHub creates check runs asynchronously and the `windows` aggregator appears only after its shards. Absent still never reads GREEN (`required_checks_green` is unchanged, so nothing new can merge); a concluded FAILURE dissolves at any age, an absence past the window dissolves as before, and an unreadable `createdAt` is NOT young — a delay, never an amnesty. Without it, evaluating a seconds-old batch dissolved it, the next pass rebuilt it, and the loop merged nothing (the 2026-08-03 rebatch loop). Batch discovery is label-OR-branch (`list_open_batches`): the `merge-queue-batch` label can silently fail to apply and `gh pr list --label <undefined>` answers `[]` at exit 0, so the `integrate/q-*` branch name is authoritative and an already-open batch is never rebatched (members from the body `Members:` line, falling back to `integrate #N into` commit subjects; absent branch = `batch_branch_missing` row; label failure = create-label-then-retry, else `batch_label_failed`). `worktree_is_safe` checks branch before tree and `git restore`s ONLY paths listed by `generated_paths.py` — the single registry of repo-generated files, never `git stash`, never a blanket checkout — so a gate that rewrites a counted doc (`verify_test_suite_count.py --check` auto-corrects and writes) cannot stall a pass with a dirty tree — `dirty_paths` MATCHES the porcelain XY status field rather than slicing `line[3:]`, because `git()` strips its output and the stripped ` M path` form made every registered path read as an unregistered edit (the 2026-08-03 jam: no batch could be built at all). Before the batch branch is pushed, `regenerate_on_batch` runs the `REGENERATORS` (currently `verify_test_suite_count.py --fix` — the flag is `--fix`; the pre-push hook's own advice string says `--regenerate`, which the tool rejects) and commits ONLY registry paths: every member can be individually green while their union drifts the suite counts, and the pre-push drift gate then fail-closes on a batch the queue can never publish. Not a weakened gate — same generator the gate calls, gate still runs on the pushed branch and in CI, overreach onto an unregistered path commits nothing (`regenerator_overreach` row). Single-instance via the `.merge-queue-lock` DIRECTORY (fail-closed, stale-reclaim at 600s), beating `.merge-queue-heartbeat` (both under the state dir). **`os.mkdir` IS the lock primitive** — it is atomic, so `FileExistsError` means you did NOT get the lock; a stale lock is reclaimed by ONE atomic `os.rename` onto a private name and then VERIFIED against the (pid, timestamp) fingerprint of the lock judged stale, with a live lock taken by mistake renamed straight back. Never rmtree-then-mkdir: those are two steps, and in the window between them another pass could claim and have its FRESH lock deleted by the first — both then believed they held it, the observed #727/#728 double-batch shape. **Batch construction is try/finally**: once `git checkout -B integrate/q-*` runs the SHARED tree is restored to main on EVERY exit path including a raise, and the branch delete moved into that finally (`git branch -D` refuses the current branch). A path that returned without restoring — a failed `gh pr create` was the observed one — stranded the tree, so every later pass died `unsafe_worktree` while the exception dedupe wrote that row once and then went silent. **`subprocess.TimeoutExpired` is contained, never propagated**: the shared transport runs with timeout 60s (gh) / 120s (git), and an unhandled hang escaped as a traceback out of a scheduled task with no ledger row and possibly a stranded tree. Preconditions, the pass body and a `main()` backstop each catch it, write a `subprocess_timeout` row, restore the tree and exit non-zero cleanly; cleanup paths go through `git_safe` so a `finally` can never raise a second time over the real failure. Exceptions append to `state/merge-queue/exceptions.jsonl` as `{ts, pr, kind, detail, run_url}`, deduped on (pr, kind, detail) so re-entry is a true no-op. NEVER `--admin`/`--auto`/force-push/review-thread resolution/model calls. CLI: `--advance [--json] [--repo OWNER/NAME]`; exit 0=pass or lock contention / 1=action failed / 2=precondition
 
 THE ACTOR. Measured problem: green->merge dead time is ~31.75 HOURS when no
 interactive session is running and 9-109 seconds when one is. Merging must not
@@ -51,6 +52,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -84,12 +86,24 @@ REJECT_LABEL = "queue-rejected"
 PASS_BUDGET_S = 45.0
 MAX_QUEUE = 25
 LOCK_STALE_S = 600
+REGEN_TIMEOUT_S = 120
+
+# How long a freshly opened batch PR may still be MISSING a required check
+# context before that absence counts as red. GitHub creates check runs
+# asynchronously after a push, and the `windows` aggregator only appears once
+# its shards exist, so a batch evaluated seconds after `gh pr create` has an
+# incomplete rollup through no fault of its own. Dissolving on that absence is
+# what produced the 2026-08-03 rebatch loop: build -> evaluate too early ->
+# "required check(s) absent from rollup: windows" -> dissolve -> rebatch, over
+# and over, merging nothing. Past this window an absent context is a real
+# missing required check and stays fail-closed.
+BATCH_CHECK_GRACE_S = 1800
 
 LOCK_DIRNAME = ".merge-queue-lock"
 HEARTBEAT_NAME = ".merge-queue-heartbeat"
 
 PR_FIELDS = ("number,title,state,mergeable,mergeStateStatus,statusCheckRollup,"
-             "headRefName,headRefOid,labels,body,url")
+             "headRefName,headRefOid,labels,body,url,createdAt")
 
 # Only these check-run conclusions count as green. SKIPPED is included because
 # that is how GitHub branch protection itself resolves a skipped required job;
@@ -119,6 +133,23 @@ INTEGRATE_COMMIT_RE = re.compile(r"^integrate #(\d+) into ", re.MULTILINE)
 
 BATCH_LABEL_COLOR = "5319e7"
 BATCH_LABEL_DESC = "Integration batch opened by the merge-queue advancer"
+
+# The generators that own the GENERATED_PATHS registry, run on an integration
+# branch before it is pushed so a batch's union cannot fail a drift gate that
+# every member passed individually. Each entry is argv after sys.executable.
+# NOTE: the flag is `--fix`. The pre-push hook's own failure text advises
+# `--regenerate`, which the tool does not accept ("unrecognized arguments") --
+# do not copy that string here.
+REGENERATORS = (
+    ("tools/verify_test_suite_count.py", "--fix"),
+)
+
+# One `git status --porcelain` row: the two-column XY status code (either or
+# both columns may be a space, and `git()` strips a leading one) followed by
+# its separator, then the path. Anchored so a status code is REQUIRED -- a line
+# that does not look like a porcelain row yields no path at all rather than a
+# mis-sliced one.
+_PORCELAIN_ENTRY = re.compile(r"^ ?[MADRCU?!][MADRCU?! ]? (?P<entry>.+)$")
 
 
 # ---------------------------------------------------------------------------
@@ -213,37 +244,115 @@ def beat_heartbeat(path: Path = None) -> Path:
 # Single-instance lock (fail-closed on contention, mkdir-atomic)
 # ---------------------------------------------------------------------------
 
+def _lock_fingerprint(lock_dir: Path) -> tuple:
+    """Identity of whatever lock currently occupies lock_dir.
+
+    (pid, timestamp, mtime_ns), read as raw text. A reclaimer captures this
+    BEFORE taking the directory away and re-reads it AFTER, so it can prove the
+    thing it took is the very lock it judged stale -- and not a fresh lock some
+    other pass created in the meantime.
+    """
+    def _read(name):
+        try:
+            return (lock_dir / name).read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+
+    try:
+        mtime = lock_dir.stat().st_mtime_ns
+    except OSError:
+        mtime = None
+    return (_read("pid"), _read("timestamp"), mtime)
+
+
+def _same_lock(before: tuple, after: tuple) -> bool:
+    """Do two fingerprints describe the same lock?
+
+    pid+timestamp are the identity when the holder wrote them. An unmarked lock
+    (both absent) can only be identified by its directory mtime, so that is the
+    fallback -- a brand-new interloper directory never shares it.
+    """
+    if before[0] is None and before[1] is None:
+        return after[0] is None and after[1] is None and before[2] == after[2]
+    return before[0] == after[0] and before[1] == after[1]
+
+
+def _reclaim_stale_lock(lock_dir: Path, stale_s: int) -> bool:
+    """Take a demonstrably stale lock away, atomically. True iff reclaimed.
+
+    NEVER rmtree-then-mkdir. Those are two steps, and in the window between them
+    another pass could claim the lock and then have its FRESH lock deleted by
+    this one -- both passes then believed they held it, which is exactly the
+    observed double-batch shape (#727/#728). Instead the stale directory is
+    moved aside with a single atomic os.rename onto a name only this process
+    can have chosen: whoever wins that rename is the only process that can go on
+    to claim, because the loser's rename fails with the source already gone.
+
+    The rename is then VERIFIED: if what came away is not the lock this call
+    judged stale, some other pass claimed in between and this one is holding a
+    live lock it must give straight back.
+    """
+    before = _lock_fingerprint(lock_dir)
+
+    age = None
+    if before[1] is not None:
+        try:
+            age = int(time.time()) - int(before[1])
+        except (TypeError, ValueError):
+            age = None
+    # Unreadable/absent timestamp is treated as stale ONLY once the directory
+    # mtime is itself older than the threshold.
+    if age is None:
+        if before[2] is None:
+            return False
+        age = int(time.time() - (before[2] / 1e9))
+    if age < stale_s:
+        return False
+
+    graveyard = lock_dir.parent / ("%s.stale-%d-%d"
+                                   % (lock_dir.name, os.getpid(), time.time_ns()))
+    try:
+        os.rename(lock_dir, graveyard)
+    except OSError:
+        # Someone else won the reclaim (source already moved), or the rename is
+        # not permitted. Either way this pass does not hold the lock.
+        return False
+
+    if not _same_lock(before, _lock_fingerprint(graveyard)):
+        # A live lock was taken away by mistake. Put it back; if a newer lock
+        # already occupies the path, that one is the live holder and this copy
+        # is discarded.
+        try:
+            os.rename(graveyard, lock_dir)
+        except OSError:
+            shutil.rmtree(graveyard, ignore_errors=True)
+        return False
+
+    shutil.rmtree(graveyard, ignore_errors=True)
+    return True
+
+
 def acquire_lock(lock_dir: Path = None, stale_s: int = LOCK_STALE_S) -> bool:
     """Atomically claim the advancer lock. False means another pass holds it.
 
-    Contention is NOT an error: the scheduler fires again in 5 minutes. Only a
-    demonstrably stale lock (older than stale_s) is reclaimed, so a crashed
-    holder cannot wedge the queue forever while a live one is never stolen from.
+    `os.mkdir` IS the lock primitive: it is atomic, and a FileExistsError means
+    this pass did NOT get the lock. Contention is NOT an error -- the scheduler
+    fires again in 5 minutes. Only a demonstrably stale lock is reclaimed (see
+    _reclaim_stale_lock), so a crashed holder cannot wedge the queue forever
+    while a live one is never stolen from.
     """
     lock_dir = Path(lock_dir) if lock_dir else (state_root() / LOCK_DIRNAME)
     lock_dir.parent.mkdir(parents=True, exist_ok=True)
     try:
         os.mkdir(lock_dir)
     except FileExistsError:
-        age = None
-        ts_file = lock_dir / "timestamp"
-        try:
-            age = int(time.time()) - int(ts_file.read_text(encoding="utf-8").strip())
-        except (OSError, ValueError):
-            age = None
-        # Unreadable/absent timestamp is treated as stale ONLY once the
-        # directory mtime is itself older than the threshold.
-        if age is None:
-            try:
-                age = int(time.time() - lock_dir.stat().st_mtime)
-            except OSError:
-                return False
-        if age < stale_s:
+        if not _reclaim_stale_lock(lock_dir, stale_s):
             return False
-        shutil.rmtree(lock_dir, ignore_errors=True)
         try:
             os.mkdir(lock_dir)
         except OSError:
+            # Reclaimed, but another pass claimed the freed path first. It is
+            # the holder; this pass stands down.
             return False
     except OSError:
         return False
@@ -348,6 +457,69 @@ def classify_check(entry: dict) -> tuple:
         return name, ("green" if state == "SUCCESS" else "not_green"), url
     # Unknown shape: no status, no state. Fail closed.
     return name, "not_green", url
+
+
+def missing_required_contexts(rollup, expected=EXPECTED_REQUIRED_CHECKS) -> list:
+    """Required contexts that do not appear in the rollup at all."""
+    seen = set()
+    for entry in (rollup or []):
+        name, _verdict, _url = classify_check(entry)
+        if name:
+            seen.add(name)
+    return [c for c in expected if c not in seen]
+
+
+def concluded_red_contexts(rollup, expected=EXPECTED_REQUIRED_CHECKS) -> list:
+    """Required contexts PRESENT in the rollup that concluded not-green.
+
+    This is positive evidence of failure, as opposed to an absent context,
+    which may only mean GitHub has not created the check run yet.
+    """
+    worst = {}
+    for entry in (rollup or []):
+        name, verdict, _url = classify_check(entry)
+        if not name or name not in expected:
+            continue
+        prior = worst.get(name)
+        if prior is None or _VERDICT_RANK[verdict] > _VERDICT_RANK[prior]:
+            worst[name] = verdict
+    return [c for c in expected if worst.get(c) == "not_green"]
+
+
+def batch_age_s(info: dict, now: float = None) -> float:
+    """Seconds since the batch PR was created; -1.0 when unknown.
+
+    Unknown age is NOT treated as young: an unreadable timestamp must not buy
+    a batch an indefinite grace period.
+    """
+    stamp = (info or {}).get("createdAt") or ""
+    if not stamp:
+        return -1.0
+    try:
+        created = datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return -1.0
+    now = now if now is not None else datetime.now(timezone.utc).timestamp()
+    return now - created.timestamp()
+
+
+def batch_checks_not_yet_created(info: dict, grace_s: int = BATCH_CHECK_GRACE_S,
+                                 now: float = None) -> bool:
+    """True when a batch is red ONLY because its checks do not exist yet.
+
+    Requires ALL of: no required context has actually concluded not-green, at
+    least one is absent, and the PR is younger than the grace window. Any
+    concluded failure, or an age past the window (or unknown), answers False so
+    the batch dissolves exactly as before.
+    """
+    rollup = (info or {}).get("statusCheckRollup")
+    if concluded_red_contexts(rollup):
+        return False
+    if not missing_required_contexts(rollup):
+        return False
+    age = batch_age_s(info, now=now)
+    return 0 <= age < grace_s
 
 
 def required_checks_green(rollup, expected=EXPECTED_REQUIRED_CHECKS) -> tuple:
@@ -631,10 +803,21 @@ def dirty_paths(porcelain: str) -> list:
     Handles the three shapes that matter: ' M path', '?? path', and a rename
     'R  old -> new' (the destination is what is dirty). Quoted paths -- git
     quotes names containing spaces -- are unwrapped.
+
+    The status field is matched, NOT sliced at a fixed column. `git()` strips
+    its output, so a modified-but-unstaged line arrives as 'M path' (one
+    leading space eaten) rather than ' M path'; a `line[3:]` slice then ate the
+    first character of the path and every registered generated file read as an
+    unregistered edit, so `worktree_is_safe` reported 'working tree is dirty'
+    forever and no batch could ever be built. Match the 1-2 char XY code plus
+    its separator instead, which is correct for both the raw and stripped form.
     """
     paths = []
     for line in (porcelain or "").splitlines():
-        entry = line[3:] if len(line) > 3 else ""
+        match = _PORCELAIN_ENTRY.match(line)
+        if not match:
+            continue
+        entry = match.group("entry")
         if " -> " in entry:
             entry = entry.split(" -> ", 1)[1]
         entry = entry.strip()
@@ -643,6 +826,27 @@ def dirty_paths(porcelain: str) -> list:
         if entry:
             paths.append(entry.replace("\\", "/"))
     return paths
+
+
+def run_regenerator(argv, timeout: int = REGEN_TIMEOUT_S) -> tuple:
+    """Run one generator from the repo root. Returns (ok, combined output).
+
+    `sys.executable` (never a bare "python") so the scheduled task's
+    interpreter is the one that runs, and an explicit timeout so a hung
+    generator cannot wedge a pass that must finish inside its budget.
+    """
+    script = _TOOLS_DIR.parent / argv[0]
+    if not script.exists():
+        return False, "missing generator: %s" % argv[0]
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(script)] + list(argv[1:]),
+            cwd=str(_TOOLS_DIR.parent),
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)[:200]
+    return proc.returncode == 0, ((proc.stdout or "") + (proc.stderr or ""))[:400]
 
 
 def restore_generated_paths(paths) -> list:
@@ -659,6 +863,37 @@ def restore_generated_paths(paths) -> list:
         if ok:
             restored.append(path)
     return restored
+
+
+def git_safe(*args) -> tuple:
+    """`git` that never raises. Used only on containment/cleanup paths.
+
+    The shared transport runs subprocess with an explicit timeout (60s for gh,
+    120s for git), so a hung call raises subprocess.TimeoutExpired. On a normal
+    path that is exactly right -- it must not be swallowed. On a cleanup path it
+    is not: a second raise out of a `finally` would replace the real failure and
+    leave the working tree stranded, which is the failure A3 exists to prevent.
+    """
+    try:
+        return git(*args)
+    except subprocess.TimeoutExpired:
+        return False, "timeout: git %s" % " ".join(str(a) for a in args)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)[:200]
+
+
+def restore_worktree_to_main(summary: dict = None) -> bool:
+    """Put the shared working tree back on main. Never raises.
+
+    Called from every containment path. The daemon shares its tree with a human
+    and with its own next pass, so leaving it on an integration branch is a
+    permanent `unsafe_worktree` stall rather than a one-pass hiccup.
+    """
+    ok, out = git_safe("checkout", "main")
+    if not ok and summary is not None:
+        summary.setdefault("actions", []).append(
+            "could not restore the working tree to main: %s" % out[:120])
+    return bool(ok)
 
 
 def worktree_is_safe() -> tuple:
@@ -747,6 +982,60 @@ def apply_batch_label(number: int, summary: dict) -> bool:
     return False
 
 
+def regenerate_on_batch(branch: str, summary: dict) -> list:
+    """Regenerate registered generated files on the integration branch.
+
+    Every member is individually green, but a batch is a tree none of them
+    ever tested: when two members each add a test file, the suite counts in
+    `tests/CLAUDE.md` are correct on both branches and wrong on their union.
+    The pre-push hook runs the drift gate and fail-closes, so the batch push
+    dies with `[DRIFT] Test suite count mismatch` and the queue stalls with an
+    already-built branch it can never publish -- exactly the state that jammed
+    the board on 2026-08-03.
+
+    So the union is regenerated HERE, on the batch branch, before the push.
+    This is not a weakened gate: the generator is the same one the gate calls,
+    the gate still runs on the pushed branch and in CI, and only paths in the
+    GENERATED_PATHS registry are ever committed. A generator that fails leaves
+    the tree untouched and the push fails closed as before.
+
+    Returns the list of regenerated paths (empty when nothing drifted).
+    """
+    for argv in REGENERATORS:
+        run_ok, _ = run_regenerator(argv)
+        if not run_ok:
+            record_exception(0, "regenerator_failed",
+                             "%s failed on %s" % (" ".join(argv), branch))
+
+    ok, out = git("status", "--porcelain")
+    if not ok:
+        return []
+    dirty = dirty_paths(out)
+    if not dirty:
+        return []
+
+    unregistered = [path for path in dirty if path not in GENERATED_PATHS]
+    if unregistered:
+        # A generator touched something it does not own. Do not commit any of
+        # it; restore the registered paths and let the pre-push gate decide.
+        record_exception(0, "regenerator_overreach",
+                         "unregistered path(s) written on %s: %s"
+                         % (branch, ", ".join(sorted(unregistered))[:160]))
+        restore_generated_paths([p for p in dirty if p in GENERATED_PATHS])
+        return []
+
+    for path in dirty:
+        git("add", "--", path)
+    ok, out = git("commit", "-m",
+                  "chore(queue): regenerate %s for %s"
+                  % (", ".join(sorted(dirty)), branch))
+    if not ok:
+        record_exception(0, "git_failed",
+                         "commit regenerated paths on %s: %s" % (branch, out[:200]))
+        return []
+    return sorted(dirty)
+
+
 def build_batch(members: list, summary: dict, epoch: int = None) -> str:
     """Build integrate/q-<epoch> from origin/main and open the batch PR.
 
@@ -774,65 +1063,83 @@ def build_batch(members: list, summary: dict, epoch: int = None) -> str:
         summary["status"] = "error"
         return ""
 
-    included = []
-    for number in members:
-        info = pr_view(number, "headRefOid,headRefName,title")
-        if info is None or not info.get("headRefOid"):
-            record_exception(number, "pr_read_failed",
-                             "no headRefOid while building %s" % branch)
-            continue
-        sha = info["headRefOid"]
-        head_ref = info.get("headRefName", "")
-        if head_ref:
-            git("fetch", "origin", head_ref)
-        else:
-            git("fetch", "origin", sha)
-        ok, out = git("merge", sha, "--no-edit",
-                      "-m", "integrate #%d into %s" % (number, branch))
+    # From here the SHARED working tree is on the integration branch, and every
+    # exit path -- return, error, or raise -- must put it back on main. A path
+    # that did not (a failed `gh pr create` was the observed one) stranded the
+    # tree on integrate/q-*, so every later pass died `unsafe_worktree` while
+    # record_exception's dedupe wrote that row exactly once and then went quiet:
+    # the queue stopped merging and said nothing. try/finally is the only
+    # construct that also holds when a transport call raises (see A7), and the
+    # branch delete has to happen from the finally too, AFTER main is checked
+    # out, because `git branch -D` refuses the branch you are standing on.
+    delete_branch = False
+    try:
+        included = []
+        for number in members:
+            info = pr_view(number, "headRefOid,headRefName,title")
+            if info is None or not info.get("headRefOid"):
+                record_exception(number, "pr_read_failed",
+                                 "no headRefOid while building %s" % branch)
+                continue
+            sha = info["headRefOid"]
+            head_ref = info.get("headRefName", "")
+            if head_ref:
+                git("fetch", "origin", head_ref)
+            else:
+                git("fetch", "origin", sha)
+            ok, out = git("merge", sha, "--no-edit",
+                          "-m", "integrate #%d into %s" % (number, branch))
+            if not ok:
+                git("merge", "--abort")
+                record_exception(number, "member_conflict",
+                                 "conflicts against %s: %s" % (branch, out[:200]))
+                continue
+            included.append(number)
+
+        if len(included) < 2:
+            # Nothing worth batching; drop the branch and let the next pass take
+            # the survivor through the singleton fast path.
+            delete_branch = True
+            summary["actions"].append(
+                "batch %s abandoned (%d clean member(s))" % (branch, len(included)))
+            return ""
+
+        regenerated = regenerate_on_batch(branch, summary)
+        if regenerated:
+            summary["actions"].append(
+                "regenerated %s on %s" % (", ".join(regenerated), branch))
+
+        ok, out = git("push", "-u", "origin", branch)
         if not ok:
-            git("merge", "--abort")
-            record_exception(number, "member_conflict",
-                             "conflicts against %s: %s" % (branch, out[:200]))
-            continue
-        included.append(number)
+            delete_branch = True
+            record_exception(0, "git_failed", "push %s: %s" % (branch, out[:200]))
+            summary["status"] = "error"
+            return ""
 
-    if len(included) < 2:
-        # Nothing worth batching; drop the branch and let the next pass take
-        # the survivor through the singleton fast path.
-        git("checkout", "main")
-        git("branch", "-D", branch)
+        body = ("Merge-queue batch built by tools/merge_queue.py.\n\n"
+                "Members: %s\n\nMembers are closed only after "
+                "`git merge-base --is-ancestor` proves their content landed on main."
+                % ", ".join("#%d" % n for n in included))
+        created = gh("pr", "create", "--base", "main", "--head", branch,
+                     "--title", "merge-queue batch q-%d" % epoch, "--body", body)
+        if _errored(created):
+            record_exception(0, "batch_pr_create_failed",
+                             str(created.get("error", ""))[:200])
+            summary["status"] = "error"
+            return ""
+
+        number = _pr_number_from_url(created if isinstance(created, str) else "")
+        if number:
+            apply_batch_label(number, summary)
+        summary["batch"] = {"branch": branch, "pr": number, "members": included}
         summary["actions"].append(
-            "batch %s abandoned (%d clean member(s))" % (branch, len(included)))
-        return ""
-
-    ok, out = git("push", "-u", "origin", branch)
-    if not ok:
-        git("checkout", "main")
-        git("branch", "-D", branch)
-        record_exception(0, "git_failed", "push %s: %s" % (branch, out[:200]))
-        summary["status"] = "error"
-        return ""
-
-    body = ("Merge-queue batch built by tools/merge_queue.py.\n\n"
-            "Members: %s\n\nMembers are closed only after "
-            "`git merge-base --is-ancestor` proves their content landed on main."
-            % ", ".join("#%d" % n for n in included))
-    created = gh("pr", "create", "--base", "main", "--head", branch,
-                 "--title", "merge-queue batch q-%d" % epoch, "--body", body)
-    if _errored(created):
-        record_exception(0, "batch_pr_create_failed",
-                         str(created.get("error", ""))[:200])
-        summary["status"] = "error"
-        return ""
-
-    number = _pr_number_from_url(created if isinstance(created, str) else "")
-    if number:
-        apply_batch_label(number, summary)
-    summary["batch"] = {"branch": branch, "pr": number, "members": included}
-    summary["actions"].append(
-        "opened batch %s with %s" % (branch, ", ".join("#%d" % n for n in included)))
-    git("checkout", "main")
-    return branch
+            "opened batch %s with %s"
+            % (branch, ", ".join("#%d" % n for n in included)))
+        return branch
+    finally:
+        restore_worktree_to_main()
+        if delete_branch:
+            git_safe("branch", "-D", branch)
 
 
 def _pr_number_from_url(url: str):
@@ -928,6 +1235,19 @@ def handle_batch_pr(batch: dict, summary: dict) -> None:
             git("push", "origin", "--delete", branch)
         return
 
+    # Not green -- but "red" and "its checks do not exist yet" are different
+    # things. GitHub creates check runs asynchronously after `gh pr create`,
+    # and a batch evaluated seconds later has an incomplete rollup through no
+    # fault of its own. Dissolving on that absence is a rebatch loop that
+    # merges nothing (2026-08-03). Wait instead; the next pass re-evaluates,
+    # and past BATCH_CHECK_GRACE_S the absence dissolves the batch as before.
+    if batch_checks_not_yet_created(info):
+        summary["actions"].append(
+            "batch %s: checks not created yet (%s); waiting"
+            % (label, ", ".join(missing_required_contexts(
+                info.get("statusCheckRollup")))))
+        return
+
     # Red batch. Re-read every member's OWN checks, evict the individually-red
     # ones, and dissolve the batch either way. No bisect in this increment.
     red_members = []
@@ -1008,6 +1328,21 @@ def _advance(summary: dict, started: float) -> None:
         build_batch(admitted, summary)
 
 
+def _contain_timeout(exc, summary: dict) -> str:
+    """Record and contain a hung transport call. Returns the detail string."""
+    cmd = getattr(exc, "cmd", None)
+    if isinstance(cmd, (list, tuple)):
+        cmd = " ".join(str(part) for part in cmd)
+    detail = "subprocess timeout after %ss: %s" % (
+        getattr(exc, "timeout", "?"), str(cmd or "unknown command")[:200])
+    record_exception(0, "subprocess_timeout", detail)
+    summary["status"] = "error"
+    summary["detail"] = detail
+    summary.setdefault("actions", []).append("pass aborted: %s" % detail)
+    restore_worktree_to_main(summary)
+    return detail
+
+
 def run_pass(repo: str = DEFAULT_REPO) -> tuple:
     """Execute ONE pass. Returns (exit_code, summary)."""
     started = time.monotonic()
@@ -1022,7 +1357,13 @@ def run_pass(repo: str = DEFAULT_REPO) -> tuple:
         "batch": None,
     }
 
-    ok, detail = preconditions(repo)
+    try:
+        ok, detail = preconditions(repo)
+    except subprocess.TimeoutExpired as exc:
+        # The precondition reads happen before the lock is taken, so they get
+        # the same containment as the pass body: a ledger row, not a traceback.
+        _contain_timeout(exc, summary)
+        return 1, summary
     if not ok:
         record_exception(0, "precondition_failed", detail)
         summary["status"] = "precondition_failed"
@@ -1038,6 +1379,13 @@ def run_pass(repo: str = DEFAULT_REPO) -> tuple:
     try:
         beat_heartbeat()
         _advance(summary, started)
+    except subprocess.TimeoutExpired as exc:
+        # A transport call hung past its timeout. Contain it rather than letting
+        # it escape as a traceback out of a scheduled task nobody is watching:
+        # write the ledger row that says why this pass stopped, put the working
+        # tree back on main so the NEXT pass is not permanently unsafe, and exit
+        # non-zero cleanly.
+        _contain_timeout(exc, summary)
     finally:
         release_lock(lock_dir)
 
@@ -1060,7 +1408,17 @@ def main(argv=None) -> int:
         parser.print_help()
         return 2
 
-    code, summary = run_pass(repo=args.repo)
+    try:
+        code, summary = run_pass(repo=args.repo)
+    except subprocess.TimeoutExpired as exc:
+        # Backstop for a hang OUTSIDE run_pass's own guarded region -- the
+        # precondition reads run before the lock is even taken. Same contract:
+        # a ledger row and a clean non-zero exit, never a traceback.
+        summary = {"ts": utc_now_iso(), "repo": args.repo, "status": "error",
+                   "actions": [], "merged": [], "admitted": [],
+                   "batched_members": [], "batch": None}
+        _contain_timeout(exc, summary)
+        code = 1
     if args.json:
         print(json.dumps(summary, indent=2, sort_keys=False))
     else:

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Merge-pipeline contention telemetry baseline.
+INDEX: D0 telemetry (CI-attempts/fix-rounds/contended-files per merged PR; --since/--until/--append/--json; exit 2=fatal)
 
 Per merged PR via gh api: time-to-merge wall, CI attempts, fix rounds, update-branch
 amplification, contended-file flag, merge route, red rate.

@@ -1,4 +1,7 @@
-"""Extract timeline of file changes from Claude Code transcripts (Write/Edit/Read operations)."""
+"""Extract timeline of file changes from Claude Code transcripts (Write/Edit/Read operations).
+
+INDEX: Extract Write/Edit/Read timeline from transcripts
+"""
 import argparse
 import json
 import os

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Batch auto-merge: fix conflicts, merge green PRs, loop until done.
+INDEX: Batch PR merge tool (fix-by-default: merge main into broken branches + merge green PRs; `--no-fix`/`--loop`/`--dry-run`/`--json`/`--wait`); uses subprocess_common.py for timeouts + encoding; MERGED-state verification gate at lines 101-105; run with `--loop` to continuously merge all green PRs; use merge_train.py for one-shot serial CI-gated queues
 
 One command to clear the PR backlog. No serial merge trains.
 

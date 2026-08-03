@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """tools.multibox_config -- the multibox config block and its hard preflight gate.
+INDEX: the config-consuming seam (Inc 7): parses the `multibox` block with precedence env (`AESOP_MULTIBOX_<KEY>`) > aesop.config.json > `MULTIBOX_DEFAULTS`, rejecting unknown keys, bad types, bools-as-numbers and self-contradictory combinations (shared-fs without shared_dir, shared_dir under transport=local, heartbeat >= lease_ttl) fail-closed; `assert_preflight()` is the HARD startup gate -- enabling multibox refuses unless the DB is on local storage AND (shared-fs only) measured p99 visibility delay < settle_seconds AND measured skew < max_skew_seconds, with any probe exception itself a refusal and every refusal reproducing MOUNT_REMEDIES (NFS nfsvers=4.1,actimeo=1,lookupcache=none / SMB cache=none); `build_backend()` then returns LocalLeaseBackend or FsClaimLog. INERTNESS IS THE CONTRACT: at the shipped default (enabled:false) it returns None before importing state_store.claim_backend, state_store.fs_claim_log or multibox_preflight -- every backend/probe import is deferred into the function body precisely so a fresh interpreter can prove zero multibox code paths were reached.
 
 This is the seam where the multibox increments (0-6) become reachable. It owns
 three things and nothing else:

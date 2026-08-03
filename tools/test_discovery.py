@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Test Command Validator & Auto-Mapper.
+INDEX: Multi-language framework detector; identifies test runners, suggests testCmd pattern with confidence; `--validate` runs read-only checks with 120s timeout; `--json` output; stdlib-only
 
 Scans a target repository, detects test frameworks, and suggests validated testCmd patterns.
 
