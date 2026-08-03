@@ -22,7 +22,8 @@ Runs on `git push` via `.git/hooks/pre-push` (symlink on Unix/macOS/Git Bash; co
 7. `check_metrics()` — runs `tools/metrics_gate.py` to verify hard numeric claims (percentages, multipliers, dollar amounts) in markdown have source verification markers; exit 1 on unverified claims. Fail-open only for missing tool.
 8. `check_encoding_lint()` — runs `tools/encoding_lint.py` with `--baseline .encoding-baseline.json`; flags `subprocess.run/check_output/Popen` with `text=True`/`universal_newlines=True` and no `encoding=` (the Windows cp1252 trap). Ratchets against a committed baseline so the existing backlog does not block pushes while new violations are fail-closed. Fail-open only when the tool or baseline is absent.
 9. `check_test_coverage()` — runs `tools/verify_test_coverage.py --check`; detects test files no CI job runs (the fake-green class). Fail-closed on orphans; fail-open only when the tool is absent.
-10. Policy violations trigger `log_block()` to append audit record (JSON-lines) before exit
+10. `check_claudemd_headroom()` — runs `tools/claudemd_lint.py --headroom --base-ref ${AESOP_HEADROOM_BASE_REF:-origin/main}`; previews the merge and lints the UNION's CLAUDE.md line cap, catching the cascade where a branch passes at 149/150 but merges to 151. Exit 1 (a union busts its cap) is fail-closed; exit 2 (union unreadable — base ref never fetched, shallow clone, un-previewable merge) and a missing tool both fail open, logging `claudemd_headroom_skipped_unreadable`/`_tool_missing`.
+11. Policy violations trigger `log_block()` to append audit record (JSON-lines) before exit
 
 **Audit Ledger**: Append-only path: `${AESOP_ROOT:-$HOME/aesop}/state/SECURITY-AUDIT.log` (git-ignored). 
 Schema: `{"seq":N,"prev_hash":"SHA256_OF_PREV_LINE","ts":"2025-07-12T14:32:01Z","repo":"aesop","event":"push_blocked","reason":"secret_scan_failure"|"push_to_protected_branch","user":"alice"}`
@@ -36,7 +37,7 @@ Schema: `{"seq":N,"prev_hash":"SHA256_OF_PREV_LINE","ts":"2025-07-12T14:32:01Z",
 - Copy (Windows): `cp hooks/pre-push-policy.sh .git/hooks/pre-push` (or PowerShell `Copy-Item`)
 - Auto-installed by scaffold; `npx @matt82198/aesop [dir] --force` to replace existing hook.
 
-**Test Command**: `bash hooks/pre-push-policy.sh --test` — runs 18 validation tests covering: branch policy (blocks main/master, allows feature/*, tag-only, mixed), secret scan (multi-ref, no-starvation), audit log (JSON format, escaping, hash-chain), hash verification, new documentation gates fail-open. Exit 0 = pass; exit 1 = fail.
+**Test Command**: `bash hooks/pre-push-policy.sh --test` — runs 19 validation tests covering: branch policy (blocks main/master, allows feature/*, tag-only, mixed), secret scan (multi-ref, no-starvation), audit log (JSON format, escaping, hash-chain), hash verification, new documentation gates fail-open, CLAUDE.md headroom exit contract (0/1/2). Exit 0 = pass; exit 1 = fail.
 
 **Verify Audit Log**: `bash hooks/pre-push-policy.sh --verify-audit-log` — detects hash-chain breaks and tail truncation via sidecar anchor.
 

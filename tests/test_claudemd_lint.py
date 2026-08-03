@@ -13,6 +13,7 @@ And does NOT flag:
 """
 
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -21,6 +22,8 @@ from pathlib import Path
 # Add tools to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
 
+LINT_SCRIPT = Path(__file__).parent.parent / "tools" / "claudemd_lint.py"
+
 from claudemd_lint import (
     lint_claudemd,
     extract_path_references,
@@ -28,6 +31,10 @@ from claudemd_lint import (
     extract_domain_claude_references,
     is_runtime_artifact,
     get_sibling_domains,
+    check_headroom,
+    compute_union_line_counts,
+    effective_max_lines,
+    HeadroomError,
 )
 
 
@@ -800,6 +807,206 @@ class TestDomainCrossRefCheck(unittest.TestCase):
             cross_ref_findings = [f for f in findings if f["type"] == "domain-cross-ref"]
             self.assertEqual(len(cross_ref_findings), 0,
                 "Parent-child domain references (driver -> driver/orchestrator-swap) should be allowed")
+
+
+class TestHeadroomMergeUnion(unittest.TestCase):
+    """--headroom mode: lint the MERGE UNION with the base ref, not just the branch.
+
+    Gap this closes (GAP4, three cascades in one day): a branch sits at 149/150 and
+    passes the cap, base main independently grew, and the merge result lands at 151 --
+    busting the cap on main with nothing red anywhere on the way in.
+    """
+
+    # Deliberate numbers: branch alone = 149 counted lines (passes a 150 cap),
+    # merge union = 151 (busts it). Counting convention matches lint_claudemd
+    # (content.split("\n")), so a file with N body lines + trailing newline counts N+1.
+    BASE_BODY = 100
+    BRANCH_PREPEND = 48   # -> 148 body lines on the branch  -> counted 149
+    MAIN_APPEND = 2       # -> 102 body lines on main        -> counted 103
+    # union body = 100 + 48 + 2 = 150                        -> counted 151
+
+    def _run_git(self, repo, *args, check=True):
+        res = subprocess.run(
+            ["git", *args],
+            cwd=str(repo),
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        if check and res.returncode != 0:
+            self.fail(f"git {' '.join(args)} failed: {res.stderr or res.stdout}")
+        return res
+
+    def _init_repo(self, repo):
+        """Create an isolated fixture repo (identity scoped to this temp repo only)."""
+        self._run_git(repo, "init", "-q", "-b", "main")
+        self._run_git(repo, "config", "user.email", "fixture@example.invalid")
+        self._run_git(repo, "config", "user.name", "Fixture User")
+
+    def _write_claudemd(self, repo, rel, body_lines, prefix="body"):
+        target = repo / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            "".join(f"{prefix} line {i}\n" for i in range(body_lines)), encoding="utf-8"
+        )
+
+    def _build_cascade_repo(self, tmpdir, branch_prepend=None, main_append=None):
+        """main and a feature branch that each grew independently since the merge base.
+
+        Returns (repo_root, rel_path). Head is left on the feature branch.
+        """
+        branch_prepend = self.BRANCH_PREPEND if branch_prepend is None else branch_prepend
+        main_append = self.MAIN_APPEND if main_append is None else main_append
+        repo = Path(tmpdir)
+        rel = "tools/CLAUDE.md"
+        self._init_repo(repo)
+
+        # Merge base: BASE_BODY lines
+        self._write_claudemd(repo, rel, self.BASE_BODY)
+        self._run_git(repo, "add", "-A")
+        self._run_git(repo, "commit", "-q", "-m", "base")
+
+        base_text = (repo / rel).read_text(encoding="utf-8")
+
+        # Feature branch grows at the TOP
+        self._run_git(repo, "checkout", "-q", "-b", "feature/headroom")
+        added_top = "".join(f"branch line {i}\n" for i in range(branch_prepend))
+        (repo / rel).write_text(added_top + base_text, encoding="utf-8")
+        self._run_git(repo, "add", "-A")
+        self._run_git(repo, "commit", "-q", "-m", "branch grows")
+
+        # main grows independently at the BOTTOM (non-overlapping hunk -> clean merge)
+        self._run_git(repo, "checkout", "-q", "main")
+        added_bottom = "".join(f"main line {i}\n" for i in range(main_append))
+        (repo / rel).write_text(base_text + added_bottom, encoding="utf-8")
+        self._run_git(repo, "add", "-A")
+        self._run_git(repo, "commit", "-q", "-m", "main grows")
+
+        self._run_git(repo, "checkout", "-q", "feature/headroom")
+        return repo, rel
+
+    # --- Fixture 1: branch passes, union busts -> must be caught ---------------
+
+    def test_branch_under_cap_but_union_busts_is_caught(self):
+        """MUST CATCH: branch alone = 149 (passes 150) but merge union = 151."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, rel = self._build_cascade_repo(tmpdir)
+
+            # Precondition: the branch's own file passes the cap outright.
+            branch_lines = len((repo / rel).read_text(encoding="utf-8").split("\n"))
+            self.assertEqual(branch_lines, 149, "fixture drift: branch should be 149 lines")
+            self.assertEqual(
+                lint_claudemd(repo / rel, repo, max_lines=150), [],
+                "fixture drift: branch alone must PASS the working-tree lint",
+            )
+
+            union = compute_union_line_counts(repo, base_ref="main", head_ref="HEAD")
+            self.assertEqual(union[rel], 151, "merge union should be 151 lines")
+
+            findings = check_headroom(repo, base_ref="main", head_ref="HEAD", max_lines=150)
+            self.assertEqual(len(findings), 1, f"expected exactly one finding, got {findings}")
+            self.assertEqual(findings[0]["type"], "headroom-line-count")
+            self.assertIn(rel, findings[0]["message"])
+            self.assertIn("151", findings[0]["message"])
+            self.assertIn("branch alone: 149", findings[0]["message"])
+
+    def test_cli_exit_1_when_union_busts_cap(self):
+        """CLI contract: union busts a cap -> exit 1."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, rel = self._build_cascade_repo(tmpdir)
+            res = subprocess.run(
+                [sys.executable, str(LINT_SCRIPT), "--root", str(repo),
+                 "--headroom", "--base-ref", "main", "--json"],
+                cwd=str(repo), capture_output=True, encoding="utf-8", errors="replace",
+            )
+            self.assertEqual(res.returncode, 1, f"stdout={res.stdout} stderr={res.stderr}")
+            payload = json.loads(res.stdout)
+            self.assertEqual(payload["count"], 1)
+            self.assertEqual(payload["findings"][0]["type"], "headroom-line-count")
+
+    # --- Fixture 2: branch clean, union clean -> exit 0 -----------------------
+
+    def test_union_within_cap_is_clean(self):
+        """Branch clean AND union clean -> no findings."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, rel = self._build_cascade_repo(tmpdir, branch_prepend=10, main_append=2)
+            union = compute_union_line_counts(repo, base_ref="main", head_ref="HEAD")
+            self.assertEqual(union[rel], 113)
+            self.assertEqual(
+                check_headroom(repo, base_ref="main", head_ref="HEAD", max_lines=150), []
+            )
+
+    def test_cli_exit_0_when_union_clean(self):
+        """CLI contract: clean union -> exit 0."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _ = self._build_cascade_repo(tmpdir, branch_prepend=10, main_append=2)
+            res = subprocess.run(
+                [sys.executable, str(LINT_SCRIPT), "--root", str(repo),
+                 "--headroom", "--base-ref", "main"],
+                cwd=str(repo), capture_output=True, encoding="utf-8", errors="replace",
+            )
+            self.assertEqual(res.returncode, 0, f"stdout={res.stdout} stderr={res.stderr}")
+
+    # --- Fixture 3: unreadable -> exit 2 --------------------------------------
+
+    def test_missing_base_ref_raises_headroom_error(self):
+        """An unresolvable base ref is UNREADABLE, not a violation."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _ = self._build_cascade_repo(tmpdir)
+            with self.assertRaises(HeadroomError):
+                check_headroom(repo, base_ref="origin/does-not-exist", head_ref="HEAD")
+
+    def test_non_git_directory_raises_headroom_error(self):
+        """A directory that is not a git repo is UNREADABLE, not a violation."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(HeadroomError):
+                check_headroom(Path(tmpdir), base_ref="main", head_ref="HEAD")
+
+    def test_cli_exit_2_when_unreadable(self):
+        """CLI contract: unreadable merge preview -> exit 2 (distinct from 1)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, _ = self._build_cascade_repo(tmpdir)
+            res = subprocess.run(
+                [sys.executable, str(LINT_SCRIPT), "--root", str(repo),
+                 "--headroom", "--base-ref", "origin/does-not-exist"],
+                cwd=str(repo), capture_output=True, encoding="utf-8", errors="replace",
+            )
+            self.assertEqual(res.returncode, 2, f"stdout={res.stdout} stderr={res.stderr}")
+            self.assertIn("unreadable", res.stderr.lower())
+
+    # --- Cap allowance parity -------------------------------------------------
+
+    def test_headroom_honours_per_file_oversize_allowance(self):
+        """The union check uses the SAME per-file allowance as the working-tree lint."""
+        self.assertEqual(effective_max_lines("ui/CLAUDE.md", 150), 215)
+        self.assertEqual(effective_max_lines("tools/CLAUDE.md", 150), 150)
+
+    def test_three_way_fallback_agrees_with_merge_tree(self):
+        """The old-git fallback (`git merge-file` on blobs) must find the same union.
+
+        `git merge-tree --write-tree` needs git >= 2.38; the fallback is what runs on
+        older hosts, so it is exercised directly rather than left as dead code.
+        """
+        from claudemd_lint import _union_via_merge_tree, _union_via_three_way
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, rel = self._build_cascade_repo(tmpdir)
+            fallback = _union_via_three_way(repo, "main", "HEAD")
+            self.assertEqual(fallback[rel], 151, "fallback must also see the 151-line union")
+            primary = _union_via_merge_tree(repo, "main", "HEAD")
+            if primary is not None:  # skip the comparison on pre-2.38 git
+                self.assertEqual(primary, fallback, "merge-tree and three-way must agree")
+
+    def test_headroom_skips_untracked_working_tree_edits(self):
+        """Headroom reads refs, so an uncommitted local edit does not fake a violation."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo, rel = self._build_cascade_repo(tmpdir, branch_prepend=10, main_append=2)
+            # Blow the file up in the working tree WITHOUT committing it.
+            self._write_claudemd(repo, rel, 400)
+            self.assertEqual(
+                check_headroom(repo, base_ref="main", head_ref="HEAD", max_lines=150), [],
+                "uncommitted edits must not be counted in the merge union",
+            )
 
 
 if __name__ == "__main__":
