@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for tools/merge_train.py serial merge train."""
+import os
 import sys
 import json
 import subprocess
@@ -801,6 +802,99 @@ class TestIntegrationMode(unittest.TestCase):
             ]
             ok = self.module.merge_integration_pr(99)
             self.assertFalse(ok)
+
+
+class TestTransportDecodesUndecodableBytes(unittest.TestCase):
+    """Regression: the merge queue crashed on EVERY pass decoding a 0x97 byte.
+
+    `git()`/`gh()` carried `encoding='utf-8'` with the DEFAULT strict error
+    handler. subprocess decodes captured output in a reader THREAD, so a
+    strict UnicodeDecodeError there kills the thread and never propagates to
+    the caller's frame -- `result.stdout` simply comes back None, and the
+    crash surfaces as `AttributeError: 'NoneType' object has no attribute
+    'strip'` from inside `git()`. That took the scheduled queue down for 24+
+    consecutive passes; the real cause (byte 0x97, the cp1252 em-dash that
+    queued PR titles and branch names are full of) was visible only as a
+    stray thread traceback above the useless AttributeError.
+
+    These are behavioral tests, not inspection: a real subprocess really
+    emits the undecodable byte. `test_strict_decoding_is_what_broke_the_queue`
+    pins the pre-fix behavior so the regression stays PROVEN rather than
+    merely asserted.
+    """
+
+    RAW = b"em\x97dash"
+
+    def setUp(self):
+        self.tool_path = Path(__file__).parent.parent / "tools" / "merge_train.py"
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("merge_train", self.tool_path)
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+
+        # A throwaway repo whose config holds a raw, undecodable byte. git
+        # echoes config values back verbatim without transcoding them, so
+        # `git config --get` is a deterministic source of exactly the byte
+        # that took the queue down. Scoped to a TemporaryDirectory, and the
+        # cwd is restored in tearDown: no cwd or global git-config pollution.
+        self._tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self._tmp.name)
+        subprocess.run(["git", "init", "-q", str(self.repo)],
+                       capture_output=True, timeout=30, check=True)
+        config = self.repo / ".git" / "config"
+        config.write_bytes(config.read_bytes()
+                           + b"[emdash]\n\ttitle = " + self.RAW + b"\n")
+        self._cwd = os.getcwd()
+        os.chdir(self.repo)
+
+    def tearDown(self):
+        os.chdir(self._cwd)
+        self._tmp.cleanup()
+
+    def _strict_probe(self):
+        """The exact pre-fix call shape, for the red half of the proof."""
+        return subprocess.run(
+            ["git", "config", "--get", "emdash.title"],
+            capture_output=True, text=True, encoding="utf-8",  # encoding-ok
+            timeout=60)
+
+    def test_strict_decoding_is_what_broke_the_queue(self):
+        """RED half: without errors=, a SUCCESSFUL call loses stdout entirely."""
+        result = self._strict_probe()
+        self.assertEqual(result.returncode, 0,
+                         "the fixture must produce a successful git call")
+        self.assertIsNone(
+            result.stdout,
+            "strict utf-8 decoding must lose stdout -- if this ever starts "
+            "returning a string, the fixture stopped reproducing the 0x97 "
+            "crash and the green half below proves nothing")
+
+    def test_git_survives_undecodable_byte(self):
+        """GREEN half: git() returns a usable string instead of crashing."""
+        ok, out = self.module.git("config", "--get", "emdash.title")
+        self.assertTrue(ok)
+        self.assertIsInstance(out, str)
+        self.assertIn("dash", out)
+        # 'replace', not 'ignore': the bad byte must stay VISIBLE.
+        self.assertIn("�", out,
+                      "undecodable bytes must surface as U+FFFD, never be "
+                      "silently dropped -- errors='ignore' is forbidden")
+
+    def test_gh_survives_undecodable_byte(self):
+        """gh() carries the same handler, proven on a real decoding call."""
+        seen = {}
+        real_run = subprocess.run
+
+        def spy(cmd, **kwargs):
+            seen.update(kwargs)
+            return real_run(["git", "config", "--get", "emdash.title"], **kwargs)
+
+        with patch.object(self.module.subprocess, "run", spy):
+            out = self.module.gh("pr", "list")
+        self.assertEqual(seen.get("encoding"), "utf-8")
+        self.assertEqual(seen.get("errors"), "replace")
+        self.assertIsInstance(out, str)
+        self.assertIn("�", out)
 
 
 if __name__ == "__main__":

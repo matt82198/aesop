@@ -159,7 +159,7 @@ def detect_project_name(target_dir):
     try:
         result = subprocess.run(
             ["git", "remote", "get-url", "origin"],
-            capture_output=True, text=True, encoding='utf-8', cwd=str(target), timeout=5,
+            capture_output=True, text=True, encoding='utf-8', errors='replace', cwd=str(target), timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
             url = result.stdout.strip()
@@ -184,7 +184,7 @@ def detect_git_identity(target_dir):
         try:
             result = subprocess.run(
                 ["git", "config", key],
-                capture_output=True, text=True, encoding='utf-8', cwd=target, timeout=5,
+                capture_output=True, text=True, encoding='utf-8', errors='replace', cwd=target, timeout=5,
             )
             if result.returncode == 0 and result.stdout.strip():
                 identity[field] = result.stdout.strip()
