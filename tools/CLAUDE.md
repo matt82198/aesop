@@ -58,7 +58,8 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `file_size_lint.py` — Python file size linter (flags oversized modules)
 - `fixture_intent_check.py` — Deliberately-broken fixture manifest validator; verifies bench/fixtures-intent.json tracks all intentionally-broken/incomplete fixtures to distinguish benchmarks from regressions; CLI: `[--manifest PATH] [--root DIR] [--json]`; exit 0=valid/1=findings/2=error; stdlib-only
 - `fleet.js` — One-shot fleet snapshot (JSON: agents, heartbeats, tracker, orchestrator status; Node STDLIB only)
-- `fleet_ledger.py` — Append-only cost ledger with harvest/rotate | `metrics_gate.py` — PR gate for hard numeric claims in markdown
+- `fleet_ledger.py` — Append-only cost ledger with harvest/rotate | `merge_telemetry.py` — D0 telemetry (CI-attempts/fix-rounds/contended-files per merged PR; --since/--until/--append/--json; exit 2=fatal)
+- `metrics_gate.py` — PR gate for hard numeric claims in markdown
 - `fleet_prompt_extractor.py` — Extract and deduplicate Agent/Task spawn prompts
 - `gen_state_md.py` — STATE.md checkpoint generator from event-sourced state store; reads tracker projection via StateAPI read facade; renders markdown with current status header (ISO timestamp), open tracker items by lane, and next steps; CLI: `[--state-root DIR] [--out PATH]`; exit 0=success / 1=malformed store; deterministic + ASCII-safe
 - `git_identity_check.py` — Validate repo git user.name/user.email via --expect-name/--expect-email CLI args OR aesop.config.json identity block; verifies .git/config physically (not config cache); added 30s timeout to git config calls (critical fix: no prior timeout)
@@ -145,5 +146,4 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `secret_scan.py --staged` — pre-push gate (exit 0=clean/1=findings/2=error; `# secretscan: allow-pattern-docs` pragma)
 - `agent-forensics.sh <commit>` — behavior forensics; `--diff <A> <B>` for rules/docs diff
 - **Python**: `npm run test:py`; **Shell**: `bash -n tools/*.sh && shellcheck tools/*.sh`; **Node**: `node --check tools/*.mjs`
-
 - **Subprocess encoding (G10)**: every `subprocess.run`/`Popen` decoding output passes explicit `encoding='utf-8'`; the platform default is cp1252 on Windows and corrupts non-ASCII output. `encoding_lint.py` scans the WHOLE repo, so one violation anywhere blocks every Python-touching push.
