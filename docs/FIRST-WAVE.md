@@ -1,10 +1,193 @@
-# Your First Wave
+# First-Wave Replay Kit: Canonical Walkthrough
 
-**TL;DR**: Run `/power` to prime your orchestrator brain, then `/buildsystem` to run a complete wave cycle. This guide walks you through what to expect.
+This guide walks you through a **complete, verified wave cycle** using the First-Wave Replay Kit—a minimal example you can fork to see how Aesop works end-to-end.
+
+**What you'll see:**
+- A realistic 5-item wave manifest  
+- Parallel dispatch of independent tasks  
+- Testing and verification at each phase  
+- Merge workflow with no conflicts  
+- Honest timing and cost expectations
 
 ---
 
-## Before You Start
+## The Replay Kit
+
+The **First-Wave Replay Kit** lives in `examples/first-wave-baseline/` and contains:
+
+- **wave-manifest.json** — The 5-item wave definition (validates against the real schema)
+- **sample-backlog.md** — Evidence-based writeup of each item  
+- **README.md** — Step-by-step walkthrough with real commands
+
+### Why Use It?
+
+This kit answers: **"How do I structure my first wave?"**
+
+It demonstrates:
+1. ✓ Realistic task scope (5 small, independent items)
+2. ✓ Correct manifest schema (validated by `tools/wave_templates.py`)
+3. ✓ Disjoint file ownership (no conflicts)
+4. ✓ Actual test commands (not mocked examples)
+5. ✓ Honest expected duration (30–70 minutes)
+
+---
+
+## Quick Start: Validate & Inspect
+
+### Step 1: Validate the Manifest
+
+From the aesop repo root:
+
+```bash
+python tools/wave_templates.py validate --template all
+```
+
+Now validate the replay kit manifest:
+
+```bash
+python -c "
+import json, sys
+sys.path.insert(0, 'tools')
+from wave_templates import validate_manifest
+with open('examples/first-wave-baseline/wave-manifest.json') as f:
+    m = json.load(f)
+validate_manifest(m, allow_placeholders=False, require_testcmd=True)
+print('✓ Manifest valid')
+print(f'✓ Items: {len(m[\"items\"])}')
+"
+```
+
+**Expected output:**
+```
+✓ Manifest valid
+✓ Items: 5
+```
+
+### Step 2: Inspect the 5 Items
+
+```bash
+cat examples/first-wave-baseline/wave-manifest.json | jq '.items[] | {slug, files: .ownsFiles}'
+```
+
+**Expected output:**
+```json
+{ "slug": "readme-typo-fix", "files": ["README.md"] }
+{ "slug": "enable-skipped-test", "files": ["tests/test_example.js"] }
+{ "slug": "add-eslint-config", "files": [".eslintrc.json", "package.json"] }
+{ "slug": "fix-doc-links", "files": ["docs/ARCHITECTURE.md", "docs/SETUP.md"] }
+{ "slug": "simplify-util-functions", "files": ["src/utils/helpers.js", "src/utils/helpers.test.js"] }
+```
+
+**Key observation:** All 5 items own **non-overlapping file sets**. This enables:
+- ✓ Parallel dispatch (all 5 can run simultaneously)
+- ✓ No merge conflicts
+- ✓ Sequential merge safety
+
+### Step 3: Read the Backlog
+
+```bash
+cat examples/first-wave-baseline/sample-backlog.md
+```
+
+Shows evidence, complexity, and expected effort for each item.
+
+---
+
+## Wave Cycle Overview
+
+The replay kit demonstrates end-to-end:
+
+```
+┌──────────────────────┐
+│  DISPATCH (30 sec)   │  Orchestrator loads manifest, assigns workers
+│  5 items dispatched  │
+└──────────────────────┘
+         ↓
+┌──────────────────────────────────────────┐
+│  IMPLEMENT (30–60 min, parallel)         │  
+│  Worker 1: Fix typo                      │
+│  Worker 2: Enable test (same time)       │
+│  Worker 3: Add linter config            │
+│  Worker 4: Fix docs                      │
+│  Worker 5: Refactor utils                │
+└──────────────────────────────────────────┘
+         ↓
+┌──────────────────────┐
+│  TEST (2–5 min)      │  All testCmd pass: ✓ ✓ ✓ ✓ ✓
+│  Verify readiness    │
+└──────────────────────┘
+         ↓
+┌──────────────────────┐
+│  MERGE (1–2 min)     │  5 PRs, no conflicts, all merged
+│  Wave closed         │
+└──────────────────────┘
+
+Total: 35–70 minutes
+```
+
+---
+
+## Real-World Adaptation
+
+### Copy the Kit
+
+```bash
+cp examples/first-wave-baseline/wave-manifest.json /path/to/your-repo/wave-manifest.json
+cd /path/to/your-repo
+```
+
+### Customize the 5 Items
+
+Edit the manifest to replace items with your backlog:
+
+```json
+{
+  "items": [
+    {
+      "slug": "your-item",
+      "ownsFiles": ["file1.js"],
+      "prompt": "Your task description",
+      "testCmd": "npm test -- file1.test.js",
+      "workDir": "."
+    },
+    ...
+  ]
+}
+```
+
+### Validate Before Running
+
+```bash
+python tools/wave_templates.py validate your-wave-manifest.json
+```
+
+### Run Your Wave
+
+Use the orchestrator:
+
+```bash
+# Via the skill:
+/buildsystem
+
+# Or directly:
+python driver/wave_loop.py --manifest wave-manifest.json
+```
+
+---
+
+## What Each Item Demonstrates
+
+| Item | Files | Complexity | What It Shows |
+|------|-------|-----------|---------------|
+| readme-typo-fix | 1 | Trivial | Simple single-file fix |
+| enable-skipped-test | 1 | Simple | Re-enable + test pass |
+| add-eslint-config | 2 | Simple | Config + manifest edit |
+| fix-doc-links | 2 | Simple | Cross-file references |
+| simplify-util-functions | 2 | Moderate | Refactor + tests |
+
+---
+
+## Before You Start (Original Guide)
 
 Make sure you've completed:
 
