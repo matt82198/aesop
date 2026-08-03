@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Merge-queue advancer -- deterministic, stateless, ONE bounded pass per invocation.
-INDEX: Merge-queue advancer (THE ACTOR): ONE bounded, zero-sleep, idempotent pass per invocation, driven by the 5-min `AesopMergeQueue` task so merging never depends on a live session (measured green->merge dead time 31.75h sessionless vs 9-109s seated). Imports `gh`/`git` from merge_train, never duplicates them, and does its OWN fail-closed check bucketing (CANCELLED/TIMED_OUT/ACTION_REQUIRED/NEUTRAL/null/absent-required-context = NOT green, regardless of what any other tool concludes). Preconditions exit 2: gh auth, `enforce_admins.enabled == true`, required-context set == `EXPECTED_REQUIRED_CHECKS`. Queue = open PRs labeled `merge-queue` ascending (`merge-priority` jumps); greedy file-disjoint admission; batch of 1 merges + verifies `state == MERGED`; batch >1 builds `integrate/q-<epoch>`, opens a `merge-queue-batch` PR and exits for the next pass; members close ONLY after `git merge-base --is-ancestor` proves landing; red batch evicts individually-red members (`queue-rejected`) and dissolves — but DISSOLVING needs positive evidence of failure, not mere absence: `batch_checks_not_yet_created` makes a pass WAIT when no required context has concluded not-green, at least one is simply absent, and the batch PR is younger than `BATCH_CHECK_GRACE_S` (30 min), because GitHub creates check runs asynchronously and the `windows` aggregator appears only after its shards. Absent still never reads GREEN (`required_checks_green` is unchanged, so nothing new can merge); a concluded FAILURE dissolves at any age, an absence past the window dissolves as before, and an unreadable `createdAt` is NOT young — a delay, never an amnesty. Without it, evaluating a seconds-old batch dissolved it, the next pass rebuilt it, and the loop merged nothing (the 2026-08-03 rebatch loop). Batch discovery is label-OR-branch (`list_open_batches`): the `merge-queue-batch` label can silently fail to apply and `gh pr list --label <undefined>` answers `[]` at exit 0, so the `integrate/q-*` branch name is authoritative and an already-open batch is never rebatched (members from the body `Members:` line, falling back to `integrate #N into` commit subjects; absent branch = `batch_branch_missing` row; label failure = create-label-then-retry, else `batch_label_failed`). `worktree_is_safe` checks branch before tree and `git restore`s ONLY paths listed by `generated_paths.py` — the single registry of repo-generated files, never `git stash`, never a blanket checkout — so a gate that rewrites a counted doc (`verify_test_suite_count.py --check` auto-corrects and writes) cannot stall a pass with a dirty tree — `dirty_paths` MATCHES the porcelain XY status field rather than slicing `line[3:]`, because `git()` strips its output and the stripped ` M path` form made every registered path read as an unregistered edit (the 2026-08-03 jam: no batch could be built at all). Before the batch branch is pushed, `regenerate_on_batch` runs the `REGENERATORS` (currently `verify_test_suite_count.py --fix` — the flag is `--fix`; the pre-push hook's own advice string says `--regenerate`, which the tool rejects) and commits ONLY registry paths: every member can be individually green while their union drifts the suite counts, and the pre-push drift gate then fail-closes on a batch the queue can never publish. Not a weakened gate — same generator the gate calls, gate still runs on the pushed branch and in CI, overreach onto an unregistered path commits nothing (`regenerator_overreach` row). Single-instance via the `.merge-queue-lock` DIRECTORY (fail-closed, stale-reclaim at 600s), beating `.merge-queue-heartbeat` (both under the state dir). **`os.mkdir` IS the lock primitive** — it is atomic, so `FileExistsError` means you did NOT get the lock; a stale lock is reclaimed by ONE atomic `os.rename` onto a private name and then VERIFIED against the (pid, timestamp) fingerprint of the lock judged stale, with a live lock taken by mistake renamed straight back. Never rmtree-then-mkdir: those are two steps, and in the window between them another pass could claim and have its FRESH lock deleted by the first — both then believed they held it, the observed #727/#728 double-batch shape. **Batch construction is try/finally**: once `git checkout -B integrate/q-*` runs the SHARED tree is restored to main on EVERY exit path including a raise, and the branch delete moved into that finally (`git branch -D` refuses the current branch). A path that returned without restoring — a failed `gh pr create` was the observed one — stranded the tree, so every later pass died `unsafe_worktree` while the exception dedupe wrote that row once and then went silent. **`subprocess.TimeoutExpired` is contained, never propagated**: the shared transport runs with timeout 60s (gh) / 120s (git), and an unhandled hang escaped as a traceback out of a scheduled task with no ledger row and possibly a stranded tree. Preconditions, the pass body and a `main()` backstop each catch it, write a `subprocess_timeout` row, restore the tree and exit non-zero cleanly; cleanup paths go through `git_safe` so a `finally` can never raise a second time over the real failure. Exceptions append to `state/merge-queue/exceptions.jsonl` as `{ts, pr, kind, detail, run_url}`, deduped on (pr, kind, detail) so re-entry is a true no-op. NEVER `--admin`/`--auto`/force-push/review-thread resolution/model calls. CLI: `--advance [--json] [--repo OWNER/NAME]`; exit 0=pass or lock contention / 1=action failed / 2=precondition
+INDEX: Merge-queue advancer (THE ACTOR): ONE bounded, zero-sleep, idempotent pass per invocation, driven by the 5-min `AesopMergeQueue` task so merging never depends on a live session (measured green->merge dead time 31.75h sessionless vs 9-109s seated). Imports `gh`/`git` from merge_train, never duplicates them, and does its OWN fail-closed check bucketing (CANCELLED/TIMED_OUT/ACTION_REQUIRED/NEUTRAL/null/absent-required-context = NOT green, regardless of what any other tool concludes). Preconditions exit 2: gh auth, `enforce_admins.enabled == true`, required-context set == `EXPECTED_REQUIRED_CHECKS`. Queue = open PRs labeled `merge-queue` ascending (`merge-priority` jumps); greedy file-disjoint admission; batch of 1 merges + verifies `state == MERGED`; batch >1 builds `integrate/q-<epoch>`, opens a `merge-queue-batch` PR and exits for the next pass; members close ONLY after `git merge-base --is-ancestor` proves landing; red batch evicts individually-red members (`queue-rejected`) and dissolves — but DISSOLVING needs positive evidence of failure, not mere absence: `batch_checks_not_yet_created` makes a pass WAIT when no required context has concluded not-green, at least one is simply absent, and the batch PR is younger than `BATCH_CHECK_GRACE_S` (30 min), because GitHub creates check runs asynchronously and the `windows` aggregator appears only after its shards. Absent still never reads GREEN (`required_checks_green` is unchanged, so nothing new can merge); a concluded FAILURE dissolves at any age, an absence past the window dissolves as before, and an unreadable `createdAt` is NOT young — a delay, never an amnesty. Without it, evaluating a seconds-old batch dissolved it, the next pass rebuilt it, and the loop merged nothing (the 2026-08-03 rebatch loop). Batch discovery is label-OR-branch (`list_open_batches`): the `merge-queue-batch` label can silently fail to apply and `gh pr list --label <undefined>` answers `[]` at exit 0, so the `integrate/q-*` branch name is authoritative and an already-open batch is never rebatched (members from the body `Members:` line, falling back to `integrate #N into` commit subjects; absent branch = `batch_branch_missing` row; label failure = create-label-then-retry, else `batch_label_failed`). `worktree_is_safe` checks branch before tree and `git restore`s ONLY paths listed by `generated_paths.py` — the single registry of repo-generated files, never `git stash`, never a blanket checkout — so a gate that rewrites a counted doc (`verify_test_suite_count.py --check` auto-corrects and writes) cannot stall a pass with a dirty tree — `dirty_paths` MATCHES the porcelain XY status field rather than slicing `line[3:]`, because `git()` strips its output and the stripped ` M path` form made every registered path read as an unregistered edit (the 2026-08-03 jam: no batch could be built at all). Before the batch branch is pushed, `regenerate_on_batch` runs the `REGENERATORS` (currently `verify_test_suite_count.py --fix` — the flag is `--fix`; the pre-push hook's own advice string says `--regenerate`, which the tool rejects) and commits ONLY registry paths: every member can be individually green while their union drifts the suite counts, and the pre-push drift gate then fail-closes on a batch the queue can never publish. Not a weakened gate — same generator the gate calls, gate still runs on the pushed branch and in CI, overreach onto an unregistered path commits nothing (`regenerator_overreach` row). **Q3 bounded bisect**: when all members of a red batch are individually green (the semantic-conflict signal), `build_bisect_batches` splits members in half and builds two `integrate/q-<epoch>-bisect-<gen>-<half>` branches + batch PRs, exiting after push so later passes evaluate them, tracking generation + parent PR via the `parse_bisect_lineage` marker in the PR body; it recurses on red halves until the culprit is isolated to a singleton, and `bisect_is_exhausted` bounds it at ceil(log2 N) rounds (practical: 4) and 8 total batch builds per original batch (generation >= MAX_BISECT_ROUNDS = exhaustion, dissolve with a `bisect_exhausted` row). Single-instance via the `.merge-queue-lock` DIRECTORY (fail-closed, stale-reclaim at 600s), beating `.merge-queue-heartbeat` (both under the state dir). **`os.mkdir` IS the lock primitive** — it is atomic, so `FileExistsError` means you did NOT get the lock; a stale lock is reclaimed by ONE atomic `os.rename` onto a private name and then VERIFIED against the (pid, timestamp) fingerprint of the lock judged stale, with a live lock taken by mistake renamed straight back. Never rmtree-then-mkdir: those are two steps, and in the window between them another pass could claim and have its FRESH lock deleted by the first — both then believed they held it, the observed #727/#728 double-batch shape. **Batch construction is try/finally**: once `git checkout -B integrate/q-*` runs the SHARED tree is restored to main on EVERY exit path including a raise, and the branch delete moved into that finally (`git branch -D` refuses the current branch). A path that returned without restoring — a failed `gh pr create` was the observed one — stranded the tree, so every later pass died `unsafe_worktree` while the exception dedupe wrote that row once and then went silent. **`subprocess.TimeoutExpired` is contained, never propagated**: the shared transport runs with timeout 60s (gh) / 120s (git), and an unhandled hang escaped as a traceback out of a scheduled task with no ledger row and possibly a stranded tree. Preconditions, the pass body and a `main()` backstop each catch it, write a `subprocess_timeout` row, restore the tree and exit non-zero cleanly; cleanup paths go through `git_safe` so a `finally` can never raise a second time over the real failure. Exceptions append to `state/merge-queue/exceptions.jsonl` as `{ts, pr, kind, detail, run_url}`, deduped on (pr, kind, detail) so re-entry is a true no-op. NEVER `--admin`/`--auto`/force-push/review-thread resolution/model calls. CLI: `--advance [--json] [--repo OWNER/NAME]`; exit 0=pass or lock contention / 1=action failed / 2=precondition
 
 THE ACTOR. Measured problem: green->merge dead time is ~31.75 HOURS when no
 interactive session is running and 9-109 seconds when one is. Merging must not
@@ -143,6 +143,19 @@ BATCH_LABEL_DESC = "Integration batch opened by the merge-queue advancer"
 REGENERATORS = (
     ("tools/verify_test_suite_count.py", "--fix"),
 )
+
+# Q3: Bounded bisect for red batches. When all members of a red batch are
+# individually green, split them in half and build two separate integration
+# branches for semantic-conflict isolation. Bounded: max 4 rounds (ceil(log2 N))
+# and 8 total batch builds per original batch. Lineage tracks generation and
+# parent PR number in the batch body.
+BISECT_GENERATION_RE = re.compile(
+    r"<!-- BISECT-LINEAGE:START -->\s*generation:\s*(\d+)\s*parent_pr:\s*(\d+)",
+    re.MULTILINE)
+MAX_BISECT_ROUNDS = 4
+BISECT_LINEAGE_MARKER = ("<!-- BISECT-LINEAGE:START -->\n"
+                         "generation: {gen}\nparent_pr: {parent}\n"
+                         "<!-- BISECT-LINEAGE:END -->")
 
 # One `git status --porcelain` row: the two-column XY status code (either or
 # both columns may be a space, and `git()` strips a leading one) followed by
@@ -1184,6 +1197,143 @@ def dissolve_batch(batch_number: int, branch: str, reason: str) -> None:
         git("push", "origin", "--delete", branch)
 
 
+def parse_bisect_lineage(body: str) -> tuple:
+    """Extract (generation, parent_pr) from batch PR body, or (0, 0) if absent."""
+    if not body:
+        return 0, 0
+    match = BISECT_GENERATION_RE.search(body)
+    if not match:
+        return 0, 0
+    try:
+        gen = int(match.group(1))
+        parent = int(match.group(2))
+        return gen, parent
+    except (ValueError, IndexError):
+        return 0, 0
+
+
+def bisect_is_exhausted(batch_number: int, generation: int) -> bool:
+    """True if this batch's bisect has already spawned MAX_BISECT_ROUNDS.
+
+    A batch of N members can be bisected at most ceil(log2 N) times before
+    narrowing to a singleton. Practical bound: 4 rounds, up to 8 batch builds
+    total. If generation >= MAX_BISECT_ROUNDS the bisect is exhausted.
+    """
+    return generation >= MAX_BISECT_ROUNDS
+
+
+def build_bisect_batches(members: list, parent_pr: int, generation: int,
+                        summary: dict) -> list:
+    """Split members in half and build two integration branches + batch PRs.
+
+    Returns [branch1, branch2] or [] if the build failed. Exits after pushing
+    both branches (next passes evaluate the bisect batches). On any failure
+    records an exception row.
+    """
+    if len(members) < 2:
+        record_exception(0, "bisect_invalid_input",
+                         "bisect with %d member(s) is invalid" % len(members))
+        return []
+
+    safe, why = worktree_is_safe()
+    if not safe:
+        record_exception(parent_pr, "unsafe_worktree",
+                         "cannot build bisect branches: %s" % why)
+        summary["status"] = "error"
+        return []
+
+    epoch = int(time.time())
+    mid = len(members) // 2
+    left_members = members[:mid]
+    right_members = members[mid:]
+    branches_built = []
+
+    for half_idx, half_members in enumerate([left_members, right_members], 1):
+        branch = "integrate/q-%d-bisect-%d-%d" % (epoch, generation, half_idx)
+        ok, out = git("fetch", "origin", "main")
+        if not ok:
+            record_exception(0, "git_failed", "fetch origin main for bisect: %s" % out[:200])
+            summary["status"] = "error"
+            return branches_built
+
+        ok, out = git("checkout", "-B", branch, "origin/main")
+        if not ok:
+            record_exception(0, "git_failed", "checkout bisect %s: %s" % (branch, out[:200]))
+            summary["status"] = "error"
+            return branches_built
+
+        included = []
+        for number in half_members:
+            info = pr_view(number, "headRefOid,headRefName,title")
+            if info is None or not info.get("headRefOid"):
+                record_exception(number, "pr_read_failed",
+                                "no headRefOid while building bisect %s" % branch)
+                continue
+            sha = info["headRefOid"]
+            head_ref = info.get("headRefName", "")
+            if head_ref:
+                git("fetch", "origin", head_ref)
+            else:
+                git("fetch", "origin", sha)
+            ok, out = git("merge", sha, "--no-edit",
+                        "-m", "integrate #%d into %s" % (number, branch))
+            if not ok:
+                git("merge", "--abort")
+                record_exception(number, "member_conflict",
+                                "conflicts in bisect %s: %s" % (branch, out[:200]))
+                continue
+            included.append(number)
+
+        if len(included) < 1:
+            git("checkout", "main")
+            git("branch", "-D", branch)
+            record_exception(0, "bisect_no_survivors",
+                            "bisect %s has no clean members" % branch)
+            continue
+
+        regenerated = regenerate_on_batch(branch, summary)
+        if regenerated:
+            summary["actions"].append(
+                "regenerated %s on %s" % (", ".join(regenerated), branch))
+
+        ok, out = git("push", "-u", "origin", branch)
+        if not ok:
+            git("checkout", "main")
+            git("branch", "-D", branch)
+            record_exception(0, "git_failed", "push bisect %s: %s" % (branch, out[:200]))
+            summary["status"] = "error"
+            continue
+
+        next_gen = generation + 1
+        lineage_marker = BISECT_LINEAGE_MARKER.format(gen=next_gen, parent=parent_pr)
+        body = ("Bisect batch (generation %d of parent #%d).\n\n"
+                "Members: %s\n\n%s\n\n"
+                "Members are closed only after "
+                "`git merge-base --is-ancestor` proves their content landed on main."
+                % (next_gen, parent_pr, ", ".join("#%d" % n for n in included),
+                   lineage_marker))
+        created = gh("pr", "create", "--base", "main", "--head", branch,
+                    "--title", "merge-queue bisect gen-%d q-%d" % (next_gen, epoch),
+                    "--body", body)
+        if _errored(created):
+            record_exception(0, "batch_pr_create_failed",
+                            "bisect PR on %s: %s" % (branch, str(created.get("error", ""))[:200]))
+            summary["status"] = "error"
+            continue
+
+        number = _pr_number_from_url(created if isinstance(created, str) else "")
+        if number:
+            apply_batch_label(number, summary)
+        summary["actions"].append(
+            "opened bisect batch %s (gen %d) with %s" % (branch, next_gen,
+                                                         ", ".join("#%d" % n for n in included)))
+        branches_built.append(branch)
+
+        git("checkout", "main")
+
+    return branches_built
+
+
 def handle_batch_pr(batch: dict, summary: dict) -> None:
     """Evaluate one in-flight batch PR: merge it, or dissolve it. Bounded."""
     number = batch.get("number")
@@ -1249,7 +1399,8 @@ def handle_batch_pr(batch: dict, summary: dict) -> None:
         return
 
     # Red batch. Re-read every member's OWN checks, evict the individually-red
-    # ones, and dissolve the batch either way. No bisect in this increment.
+    # ones. If any member is individually red, dissolve. If NONE are individually
+    # red, this is a semantic conflict signal -- attempt bisect (Q3).
     red_members = []
     for member in members:
         member_info = pr_view(member)
@@ -1265,17 +1416,48 @@ def handle_batch_pr(batch: dict, summary: dict) -> None:
                              "individually red in %s: %s" % (label, m_detail), m_url)
             evict_member(member, m_detail, m_url)
 
-    if not red_members:
+    if red_members:
+        # Some members are individually red; evict them and dissolve the batch.
+        dissolve_batch(number, branch, detail)
+        summary["actions"].append("batch %s dissolved (%d members evicted; %s)"
+                                % (label, len(red_members), detail))
+        summary["status"] = "error"
+        return
+
+    # All members individually green but batch is red = semantic conflict signal.
+    # Attempt bisect (Q3).
+    gen, parent = parse_bisect_lineage(info.get("body", ""))
+    if bisect_is_exhausted(number, gen):
+        # Bisect exhausted; dissolve all members with bisect_exhausted marker.
+        for member in members:
+            record_exception(member, "bisect_exhausted",
+                            "bisect on batch %s reached max rounds; culprit "
+                            "not isolated" % label, run_url)
+            evict_member(member, "bisect exhausted (batch %s)" % label, run_url)
+        dissolve_batch(number, branch, detail)
+        summary["actions"].append("batch %s dissolved (bisect exhausted; %s)"
+                                % (label, detail))
+        summary["status"] = "error"
+        return
+
+    # Bisect not yet exhausted. Build two halves.
+    branches = build_bisect_batches(members, number, gen, summary)
+    if branches:
+        dissolve_batch(number, branch, detail)
+        summary["actions"].append("batch %s bisected into %d branches (gen %d)"
+                                % (label, len(branches), gen + 1))
+    else:
+        # Bisect build failed; dissolve with an error.
         for member in members:
             record_exception(member, "batch_red_dissolved",
-                             "all members individually green but %s was red: %s"
-                             % (label, detail), run_url)
+                            "all members individually green but %s was red: %s"
+                            % (label, detail), run_url)
             evict_member(member, "batch %s red with every member individually "
-                                 "green" % label, run_url)
-
-    dissolve_batch(number, branch, detail)
-    summary["actions"].append("batch %s dissolved (%s)" % (label, detail))
-    summary["status"] = "error"
+                                "green" % label, run_url)
+        dissolve_batch(number, branch, detail)
+        summary["actions"].append("batch %s dissolved (bisect build failed; %s)"
+                                % (label, detail))
+        summary["status"] = "error"
 
 
 # ---------------------------------------------------------------------------
