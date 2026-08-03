@@ -95,9 +95,11 @@ def lint_message(raw: str) -> list:
 def get_commits_from_range(commit_range: str) -> list:
     """Return list of (hash, message) tuples from a git commit range."""
     try:
+        # cli.run_subprocess(cmd, timeout, cwd) already forces capture_output=True,
+        # text=True and encoding='utf-8'; passing them here raises TypeError.
         rc, stdout, stderr = cli.run_subprocess(
             ["git", "log", "--format=%H%n%B%n---commit-lint-sep---", commit_range],
-            capture_output=True, text=True, encoding='utf-8', timeout=30,
+            timeout=30,
         )
     except cli.SubprocessError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
