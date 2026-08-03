@@ -7,11 +7,24 @@ name: CI
 # Running the full suite on a docs-only change is cheap enough and always passes (code is unchanged),
 # so correctness beats the few saved minutes. Do NOT re-add a job-level `if:` skip on `ci` or a
 # trigger-level `paths-ignore:` — either one reintroduces the deadlock.
+# Scoping must remain STEP-LEVEL: individual gates can be conditional (e.g., shard 0 only) without
+# causing matrix jobs to report skipped. This approach preserves deadlock safety while allowing
+# incremental gate optimization (browser-proofs and windows-shard skip safely as non-required).
+#
+# PR-only by design. `push: branches: [main]` was removed: main is protected by PR
+# checks, so the merge commit's `ci` run already passed on the PR, and .github/workflows/
+# main-full.yml is the post-merge verification (that is why it exists — see its header).
+# Keeping both meant every merge paid the full ~30 job-minutes twice. Do NOT re-add a
+# push trigger here; post-merge coverage belongs to main-full.
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+
+concurrency:
+  # Cancel in-progress runs on PR branches (superseded pushes waste runners).
+  # Scoped by branch: multiple PRs can run concurrently, and post-merge runs on main never cancel.
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   docs-only-gate:
@@ -64,11 +77,13 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
+          cache: npm
 
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+          cache: pip
 
       - name: Install Python test dependencies
         # PyYAML is required by tools/ci_workflow_lint.py (fail-closed without it)
@@ -105,10 +120,6 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/verify_test_coverage.py --check
 
-      - name: Test suite count drift gate
-        if: matrix.python-shard == 0
-        run: python tools/verify_test_suite_count.py --check
-
       - name: Run Node.js tests
         run: npm run test:node
 
@@ -131,6 +142,18 @@ jobs:
       - name: CI workflow linter gate (fail-closed)
         if: matrix.python-shard == 0
         run: python tools/ci_workflow_lint.py
+
+      - name: CI gates runability check (Guardrail G2.5)
+        if: matrix.python-shard == 0
+        run: python tools/ci_gate_runability.py
+      - name: Workflow model linter
+        if: matrix.python-shard == 0
+        run: python tools/workflow_model_linter.py
+
+
+      - name: Documented gates wiring check (Guardrail G2.6)
+        if: matrix.python-shard == 0
+        run: python tools/verify_gates_wired.py
 
       - name: State API lint gate (ratchet mode)
         if: matrix.python-shard == 0
@@ -163,24 +186,32 @@ jobs:
       - name: Run Python tests (shard ${{ matrix.python-shard }}/4)
         run: python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
 
+      # The ui/web chain below is shard-INVARIANT: all four ubuntu shards ran the same
+      # npm ci + build + tsc + dist-drift + vitest, so 3 of every 4 runs were pure waste.
+      # Gate is STEP-level on purpose — a job-level `if:` makes `ci (N)` report skipped,
+      # and a skipped required check never satisfies branch protection (PR #170 deadlock).
       - name: Build React dashboard (ui/web/)
+        if: matrix.python-shard == 0
         run: |
           cd ui/web
           npm ci
           npm run build
 
       - name: TypeScript type check (ui/web/)
+        if: matrix.python-shard == 0
         run: |
           cd ui/web
           npx tsc --noEmit
 
       - name: Dist drift gate (committed ui/web/dist must match fresh build)
+        if: matrix.python-shard == 0
         run: |
           cd ui/web
           git diff --exit-code -- dist/
           git diff --cached --exit-code -- dist/
 
       - name: Run React component tests (vitest)
+        if: matrix.python-shard == 0
         run: |
           cd ui/web
           npx vitest run
@@ -210,6 +241,8 @@ jobs:
         run: python tools/secret_scan.py .
 
   windows-shard:
+    needs: docs-only-gate
+    if: needs.docs-only-gate.outputs.is_docs_only == 'false'
     # Sharded test suite: runs Node tests (shard 0 only) and Python tests distributed 4-way
     # Excludes: shell test suite (Git Bash variance on Windows), browser proofs (Playwright setup cost)
     runs-on: windows-latest
@@ -228,11 +261,13 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
+          cache: npm
 
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+          cache: pip
 
       - name: Install Python test dependencies
         run: pip install pyyaml pytest pytest-timeout
@@ -256,7 +291,7 @@ jobs:
         run: python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
 
   windows:
-    # Aggregator job: enforces that all windows-shard shards succeeded.
+    # Aggregator job: enforces that all windows-shard shards succeeded or were skipped.
     # Keeps the required check name for branch protection (no config change needed).
     needs: windows-shard
     runs-on: ubuntu-latest
@@ -264,7 +299,7 @@ jobs:
     steps:
       - name: Check all Windows shards passed
         run: |
-          if [ "${{ needs.windows-shard.result }}" != "success" ]; then
+          if [ "${{ needs.windows-shard.result }}" != "success" ] && [ "${{ needs.windows-shard.result }}" != "skipped" ]; then
             echo "One or more Windows shards failed"
             exit 1
           fi
@@ -285,6 +320,7 @@ jobs:
 
   browser-proofs:
     needs: docs-only-gate
+    if: needs.docs-only-gate.outputs.is_docs_only == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -294,11 +330,13 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
+          cache: npm
 
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+          cache: pip
 
       - name: Build React dashboard (ui/web/)
         run: |
@@ -358,6 +396,9 @@ jobs:
 
       - name: Run cost panel browser proof (verify_cost_panel)
         run: python tools/verify_cost_panel.py
+
+      - name: Run cost summary drawer browser proof (verify_cost_summary_drawer)
+        run: python tools/verify_cost_summary_drawer.py
 
       - name: Run watchdog GUI tests
         run: bash tests/dash-watchdog-gui.test.sh

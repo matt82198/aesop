@@ -9,6 +9,15 @@ Scans Python/JS/MD files for agent dispatch patterns and flags FORBIDDEN pattern
   - `--force` in git context (dangerous history rewrite)
   - `git stash` (shared across worktrees, cross-contamination risk)
   - Credential/key hunting patterns (find.*key, grep.*token, env.*KEY)  # hygiene-ok
+  - Lane-side CI polling (ci_merge_wait, `gh run watch`, merge_train.py,
+    sleep-wrapped `gh pr checks`) -- a lane must never babysit CI
+
+Lane terminal action (what the lane_ci_polling_* rules enforce):
+  push -> open PR -> `gh pr edit <n> --add-label merge-queue` -> exit.
+  Everything after that belongs to the merge-queue advancer
+  (tools/merge_queue.py, 5-minute scheduled task). A lane that polls CI burns an
+  agent for the length of a CI run and re-couples merging to a live session --
+  the exact bottleneck the advancer exists to remove.
 
 Modes:
   dispatch_lint.py --check [PATH]          Exit 1 if violations found
@@ -71,6 +80,27 @@ FORBIDDEN_PATTERNS = {
         "pattern": r"\bgrep\s+.*(?:token|secret|password|api[_-]?key|auth)\b",  # hygiene-ok
         "description": "Credential hunting pattern forbidden",
         "fix": "Specify exact transport and allowed env vars instead",
+    },
+    "lane_ci_polling_merge_wait": {
+        "pattern": r"\bci_merge_wait(?:\.py)?\b",
+        "description": "Lane-side CI polling forbidden; the merge-queue advancer owns the wait",
+        "fix": "End the lane at: gh pr edit <n> --add-label merge-queue, then exit",
+    },
+    "lane_ci_polling_run_watch": {
+        "pattern": r"\bgh\s+run\s+watch\b",
+        "description": "Lane-side CI polling forbidden; the merge-queue advancer owns the wait",
+        "fix": "End the lane at: gh pr edit <n> --add-label merge-queue, then exit",
+    },
+    "lane_ci_polling_merge_train": {
+        "pattern": r"\bmerge_train\.py\b",
+        "description": "Lanes never run a merge train; label the PR merge-queue and exit",
+        "fix": "End the lane at: gh pr edit <n> --add-label merge-queue, then exit",
+    },
+    "lane_ci_polling_sleep_checks": {
+        "pattern": (r"\bsleep\b[^\n]{0,120}?\bgh\s+pr\s+checks\b"
+                    r"|\bgh\s+pr\s+checks\b[^\n]{0,120}?\bsleep\b"),
+        "description": "Sleep-wrapped `gh pr checks` is lane-side CI polling",
+        "fix": "End the lane at: gh pr edit <n> --add-label merge-queue, then exit",
     },
     "env_key_hunting": {
         "pattern": r"\benv\s+.*\b(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)\b",

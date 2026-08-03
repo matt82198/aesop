@@ -210,3 +210,5 @@ Bar segments include `<title>` elements for tooltips. Tests verify presence and 
 - Hard 500 on missing `ui/web/dist` is intentional fail-closed behaviour (preserved).
 
 **Testing:** 24 unit tests PASS (Host header validation, DNS-rebinding defence, route resolution). No regression.
+## CostSummaryDrawer component
+**New:** `ui/web/src/components/CostSummaryDrawer.tsx` — right-edge collapsible drawer (40px collapsed, ~180px expanded) showing spend/rate/model-mix metrics. Bound to SSE `cost`+`connectionStatus` props; handles loading/error/empty/loaded states. Toggle button + panel with `role="status"`, `aria-label` accessibility. 21 unit tests (vitest, all states + keyboard/pricing). Integrated into App.tsx. CSS uses design tokens. Cost.tsx:63 comment fixed (was "live/reconnecting", now "live").
