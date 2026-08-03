@@ -132,6 +132,14 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/ci_workflow_lint.py
 
+      - name: CI gates runability check (Guardrail G2.5)
+        if: matrix.python-shard == 0
+        run: python tools/ci_gate_runability.py
+
+      - name: Documented gates wiring check (Guardrail G2.6)
+        if: matrix.python-shard == 0
+        run: python tools/verify_gates_wired.py
+
       - name: State API lint gate (ratchet mode)
         if: matrix.python-shard == 0
         run: python tools/stateapi_lint.py
