@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// INDEX: Proposal lifecycle manager (list/accept/reject via lock.mjs)
 /**
  * proposals.mjs — Proposal lifecycle management tool
  *

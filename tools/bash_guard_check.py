@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Bash BASH_SOURCE exec guard validator.
+INDEX: BASH_SOURCE exec guard validator for shell scripts; detects missing guards in scripts with functions + top-level commands
 
 Validates that sourceable shell scripts with both function definitions and
 top-level executable commands have BASH_SOURCE exec guards to prevent

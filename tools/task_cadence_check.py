@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Scheduled-task cadence gate: live Task Scheduler state vs install-tasks.ps1.
+INDEX: Scheduled-task cadence gate (GAP7): parses `daemons/install-tasks.ps1` (source of truth) into {task name -> expected repetition minutes} by binding each `Register-DaemonTask` call site's `-TaskName`/`-IntervalMinutes` through param defaults + `${TaskPrefix}` interpolation, then compares against live `schtasks /query /tn <name> /xml` (UTF-16 output decoded by BOM; `<Enabled>` absent means enabled). Catches the escape where the monitor fired HOURLY against a 20-minute SLA while every run exited 0 and every heartbeat read fresh — liveness checks cannot see a wrong *rate*. Windows-only: any other platform prints `SKIPPED-non-windows` and exits 0 so ubuntu CI is unaffected; the real consumer is `power_selftest.py`. CLI: `[--json] [--root DIR] [--install-script PATH]`; exit 0=cadences match/skipped, 1=interval mismatch or missing or disabled task, 2=cannot evaluate (schtasks error/timeout/unparseable XML/unparseable install script) — 2 outranks 1, an unevaluable task is never masked by clean siblings; stdlib-only
 
 Motivating escape: the refinement monitor was firing HOURLY while its SLA (and
 `daemons/install-tasks.ps1`) says every 20 minutes. Every run exited 0, every

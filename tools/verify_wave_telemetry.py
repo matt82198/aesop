@@ -1,4 +1,5 @@
 """Browser-level proof for wave telemetry components.
+INDEX: Browser proof (Playwright): wave telemetry components; exit 0=proven/1=failed, --allow-skip only browserless
 
 Drives the BUILT React app served by `python ui/serve.py` and exercises
 the wave telemetry components:
