@@ -1,6 +1,35 @@
+# aesop 0.7.2 — Bug Fixes & Compliance
+
+**Headline**: Fake-green gate fixes (state_md_verifier pattern, verify_test_suite_count zero-exit), 62 platform-encoding fixes for Windows subprocess output, test pollution elimination, cost-view rendering corrections, merge-train Unicode handling, portability-gate verdict completion, and remote-command identity hardening.
+
+### Key fixes
+- Two fake-green gates fixed: `state_md_verifier` had no version-claim pattern; `verify_test_suite_count` returned 0 instead of erroring (#638, #661).
+- 62 subprocess calls now encode output as UTF-8 explicitly (Windows cp1252 corruption eliminated, #636).
+- Test pollution: fixture mutations on every run (#643) and heartbeat epoch writes (#645) eliminated.
+- `tooling_panel` now correctly surfaces findings-exit (1) as findings, not tool failure (#647).
+- Cost view rendering, chart SVGs, live-API credential handling, merge-train Unicode, portability gate verdict, remote-command identity hardening all fixed.
+
+---
+
+# aesop 0.7.1 — Guardrails & Encoding Hardening
+
+**Headline**: Encoding validation gates (explicit UTF-8 on all subprocess calls, 62 violations fixed), fake-green detection improvements, test isolation enforcement, cost-view rendering fixes, merge-train Unicode robustness, portability-gate completion, remote-command identity hardening (fail-closed owner resolution).
+
+### Key fixes
+- Platform encoding: 62 subprocess calls fixed to pass explicit `encoding='utf-8'` (#636, eliminated Windows cp1252 corruption).
+- Fake-green gates: Fixed `state_md_verifier` (no version-claim pattern) and `verify_test_suite_count` (returned 0 on read failure, #661).
+- Test isolation: Fixture mutations (#643), heartbeat epoch pollution (#645), and other CI hygiene violations fixed.
+- Cost rendering (#648), merge-train Unicode (#654), live-API credential handling (#666), and portability-gate verdict (#667) all repaired.
+- **Test-suite count now derived at check time** rather than stored; eliminates parallel-branch count conflicts (#661).
+
+### Complexity reductions
+- `_run_wave_inner`: F(141) → C(13), `run_wave_scheduler`: F(82) → C(15), SSE collector: F(43) → B(6), tracker reconciliation: E(39) → C(19), `do_GET`: D(30) → A(2).
+
+---
+
 # aesop 0.7.0 — Guardrails & State Consolidation
 
-**Headline**: Comprehensive guardrail enforcement (11 linters, 8 automated gates) codifies design rules into fail-closed machinery. Multi-instance coordination MVP via lease-based SQLite enables team-scale orchestration. Test suite accountability (254 tests across 3 harnesses) verified by drift-detection gate. State consolidation complete: ReadAPI/WriteAPI facades unify all state readers/writers through one façade.
+**Headline**: Comprehensive guardrail enforcement (11 linters, 8 automated gates) codifies design rules into fail-closed machinery. Multi-instance coordination MVP via lease-based SQLite enables team-scale orchestration. Test suite accountability (266 tests across 3 harnesses) verified by drift-detection gate. State consolidation complete: ReadAPI/WriteAPI facades unify all state readers/writers through one façade.
 
 ## Shipping
 
@@ -8,7 +37,7 @@
 
 1. **Guardrail enforcement suite**: 11 new linters + gates (dispatch_lint, CLAUDE.md sync, workflow model pin, git-stash guard, encoding validator, commit linter, docstring checker, dead-code detector, import-cycle detector, TODO tracker, file-size linter, test-coverage gap finder) eliminate design escape routes through automated fail-closed checking.
 2. **Multi-instance coordination MVP**: Lease-based SQLite claims enable multi-machine orchestration without consensus machinery; atomic check-and-insert prevents split-brain, TOCTOU race resolution via path normalization, tracker migration fixes prevent zombie resurrection.
-3. **Test suite accountability**: 254 tests across 3 harnesses (25 Node + 13 Shell + 216 Python) verified by new drift-detection gate (`verify_test_suite_count.py`); test counts reconciled across README/docs/CLAUDE.md to single source of truth.
+3. **Test suite accountability**: 266 tests across 3 harnesses (26 Node + 13 Shell + 227 Python) verified by new drift-detection gate (`verify_test_suite_count.py`); test counts reconciled across README/docs/CLAUDE.md to single source of truth.
 4. **State consolidation complete**: ReadAPI/WriteAPI facades ship; all state I/O routed through unified entry points. StateAPI migration ratchet prevents new direct reads; stateapi_lint enforces compliance via committed baseline.
 5. **Production tooling**: Init-project scaffolder, auto-merge batch tool, cost forecasting, tracker reconciliation (zombie detection), wave-history temporal analyzer, health-score subcommand, dependency graph generator, port-fidelity validator.
 
