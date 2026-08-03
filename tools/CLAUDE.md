@@ -116,6 +116,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `svg_to_png.mjs` — Rasterize SVG to PNG via @resvg/resvg-js (lazy import error handling)
 - `test_battery.py` — Local union test battery: runs the 4 harnesses (py/node/sh/ui) as parallel subprocesses with per-harness rc capture, stdin closed, logs to temp; parallel mode sets AESOP_TEST_CHILD_TIMEOUT_MS=90000 for node scaffold children; `--serial` fallback, `--skip <h>`, `--json`; exit 0 only when all harnesses green
 - `test_coverage_gaps.py` — Test coverage gap finder (identifies untested modules)
+- `test_discovery.py` — Multi-language framework detector; identifies test runners, suggests testCmd pattern with confidence; `--validate` runs read-only checks with 120s timeout; `--json` output; stdlib-only
 - `todo_tracker.py` — TODO/FIXME/HACK comment tracker for codebase hygiene
 - `toolchain_health.py` — Binary/heartbeat availability verifier. CLI: `[--check] [--json] [--max-age S]`; stdlib only
 - `tracker_autoclose.py` — Tracker zombie-prevention auto-close gate: classifies active items as SHIPPED (merged PR or ownsFiles on origin/main), OPEN (no evidence), or AMBIGUOUS (partial evidence); CLI: `[--check | --apply] [--json] [--skip-gh] [--skip-git]`; --check (DRY RUN, exit 0 if no closable items / 1 if closable found); --apply (auto-close + journal); exit 2 on error; reproduces/fixes 79% zombie-rate escapes (items shipped but in-progress) <!-- metrics-verified: wave-1 /afk tracker reconcile — 15 of 19 active items already shipped = 78.9% -->
