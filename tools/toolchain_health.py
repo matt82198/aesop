@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Toolchain health check — verifies interpreter and binary availability.
+INDEX: Binary/heartbeat availability verifier. CLI: `[--check] [--json] [--max-age S]`; stdlib only
 
 Detects:
   - Binaries that exist but cannot execute (e.g., Git for Windows bash.exe

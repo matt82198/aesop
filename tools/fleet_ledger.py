@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 r"""
 Fleet Outcome Ledger — append-only audit trail for dispatched agents.
+INDEX: Append-only cost ledger with harvest/rotate
 
 Subcommands:
   append <timestamp> <agent_type> <model> <duration_sec> <tokens_in> <tokens_out> [verdict] [phase] [wave]

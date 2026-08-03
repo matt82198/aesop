@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """state_query — CLI time-travel state query tool for event-sourced state store.
+INDEX: Time-travel state query CLI: temporal/stream/version-range/event-type filters over event-sourced SQLite state store; ASCII table (default), --json, --aggregate modes; reuses StateAPI facade + common.py; stdlib-only, fail-closed on missing DB
 
 Query the event-sourced state store (SQLite WAL) with temporal and stream filters.
 

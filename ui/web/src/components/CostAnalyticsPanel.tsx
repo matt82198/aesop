@@ -12,6 +12,7 @@
  */
 
 import type { CostSummary } from '../lib/types';
+import { CostForecast } from './CostForecast';
 import { TESTIDS } from '../test/fixtures';
 import './CostAnalyticsPanel.css';
 
@@ -312,6 +313,10 @@ export function CostAnalyticsPanel({ cost, ceilingTokens }: CostAnalyticsPanelPr
         <div className="analytics-section">
           <h4>Burn Rate & Projection</h4>
           <BurnRateProjection data={burnRate} />
+        </div>
+
+        <div className="analytics-section">
+          <CostForecast cost={cost} ceilingTokens={ceilingTokens} />
         </div>
       </div>
     </section>

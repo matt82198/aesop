@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+INDEX: Guardrail G11: RUNTIME lane-liveness enforcement (watcher_linter/dispatch_lint only read prompt TEXT; this catches an agent that accepted a good prompt then went silent). Lane inventory from `git worktree list --porcelain` (primary tree dropped) or `--claims FILE` ({name,path} objects replace discovery; a bare name list filters it, and a claimed name with no worktree is kept as `missing`, never dropped). Evidence = newest FILE mtime under the lane (directory mtimes ignored and `.git`/`node_modules`/`__pycache__`/build dirs skipped, so git bookkeeping cannot forge liveness) OR the matching `agent-<id>.jsonl` mtime obtained by reusing `stall_check.scan_transcripts` (composition, not a rewrite) so a thinking-but-not-yet-writing agent is not falsely stalled. CLI: `--check [--max-silence 900] [--json] [--repo DIR] [--lanes A,B] [--claims FILE] [--transcripts-root DIR]`; exit 0=all fresh / 1=STALLED or MISSING lanes named (the orchestrator's TaskStop+relaunch input) / 2=unreadable input i.e. liveness undetermined — undeterminable never degrades to a pass, and exit 2 outranks exit 1
 Runtime lane-liveness enforcement (Guardrail G11).
 
 Mechanizes the "no watcher pattern in long runs" rule at RUNTIME. tools/
