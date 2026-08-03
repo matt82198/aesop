@@ -1,4 +1,5 @@
 """Browser-level proof for the wave-14 React dashboard (ui/web/dist/).
+INDEX: Browser proof (Playwright): realtime SSE dashboard renders live agent/wave state; exit 0=proven/1=failed, --allow-skip only in truly browserless envs
 
 Drives the BUILT app served by `python ui/serve.py` against fixture fleet state,
 asserting the contract via data-testid hooks only (never CSS internals):

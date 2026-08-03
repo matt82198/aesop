@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// INDEX: Launch the watchdog daemon (spawns bash daemons/run-watchdog.sh with inherited stdio in foreground mode)
 
 /**
  * Aesop watch — Launch the watchdog daemon

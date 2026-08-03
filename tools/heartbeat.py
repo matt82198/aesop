@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Heartbeat registry for fleet-wide liveness monitoring.
+INDEX: Single-instance loop liveness registry
 
 Usage:
   heartbeat.py beat <name> [<status>] [--state-dir DIR] [--brain]
