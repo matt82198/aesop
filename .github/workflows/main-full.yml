@@ -2,7 +2,6 @@ name: main-full
 
 # Purpose: Post-merge full sequential CI run — drift guard vs shard de-collection / flaky luck-passes
 # / skip-path classes. NOT a merge gate (main is already protected by PR checks).
-# Cancels superseded runs to avoid queue backup.
 
 on:
   push:
@@ -10,8 +9,17 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: main-full-${{ github.ref }}
-  cancel-in-progress: true
+  # Group per COMMIT, and never cancel. Every merged commit is its own thing to verify:
+  # this is the post-merge drift net, not a merge gate, so a newer run supersedes
+  # nothing.
+  #
+  # Do NOT group on `github.ref` — for a push to main it is always `refs/heads/main`,
+  # so every merge landed in one group and (with cancel-in-progress: true) killed the
+  # PREVIOUS merge's verification. Measured 2026-08-02: 8 of the last 12 main-full runs
+  # CANCELLED, i.e. the net was off 67% of the time, worst during merge bursts — exactly
+  # when drift is most likely.
+  group: main-full-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   main-full-verify:
