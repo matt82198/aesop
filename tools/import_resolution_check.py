@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Guardrail G5: Python import resolution validator.
+INDEX: Guardrail G5: Python import resolution validator (parses staged .py files via AST, resolves imports against repo structure + stdlib, fail-closed on unresolvable modules); catches isolation escapes where agent writes to primary tree with unresolvable imports; CLI: no args (exit 0=all resolvable/1=unresolvable); logs audit trail to state/IMPORT-AUDIT.log; integrated into pre-push-policy.sh after secret_scan
 
 Parses all staged .py files via AST, extracts import/from-import statements,
 resolves each module against repo structure and sys.stdlib_module_names.

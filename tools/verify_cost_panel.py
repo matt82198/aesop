@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Browser proof for the Cost Analytics Panel component.
+INDEX: Browser proof for the dashboard cost panel (playwright; renders panel and asserts on cost data).
 
 Drives ui/web/dist/ against fixture cost data (ledger + pricing), asserting
 the contract via data-testid hooks:

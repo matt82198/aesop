@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 tools.stateapi_lint — Scanner for direct state file opens outside the API.
+INDEX: StateAPI migration ratchet: AST-scans for direct state-file reads outside state_store/read_api.py facade; violations keyed file@pattern-id against committed baseline (new violation = exit 1; fixed violation = must shrink baseline); `--update-baseline` regenerates (forbidden in CI)
 
 Detects violations of the "reads go through state_store.read_api" rule by scanning
 ui/ and tools/ for direct opens of state files (tracker.json, orchestrator-status.json,

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Regression harness for secret_scan.py — validates scanner behavior across TP/FP cases.
+INDEX: Regression harness for secret_scan.py
 
 Usage: python scanner_selftest.py [--temp-dir DIR]
 

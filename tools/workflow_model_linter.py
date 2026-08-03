@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 tools.workflow_model_linter -- Guardrail G7: model pin enforcement for workflow scripts.
+INDEX: Guardrail G7: workflow model pin linter; AST-scans .js/.mjs files for agent() calls missing explicit model:'haiku' parameter (bypasses PreToolUse hook); suppress via `// model-ok`; CLI: `--check` (default) | `--json` | `--help`; exit 0=clean/1=violations/2=error; stdlib-only
 
 Scans JavaScript workflow scripts (.js/.mjs files) for agent() calls and verifies that
 each call includes an explicit model:'haiku' parameter in its options object.

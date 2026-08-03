@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Wave latency report generator — parses journals and results, outputs timing breakdowns.
+INDEX: Wave latency report generator: parses wave journals/bench results/BUILDLOG timestamps into per-wave, per-phase, and percentile timing breakdowns with explicit estimated-vs-measured caveats; CLI: `[--out docs/LATENCY.md]`
 
 This tool extracts wall-clock latency from:
 1. Wave journal entries (driver/wave_loop.py outputs per-item results with duration_s)
