@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 r"""Drain UI inbox submissions, tracking which have been processed.
+INDEX: Drain UI inbox submissions
 
 Usage:
     python inbox_drain.py pending         # List unprocessed inbox items

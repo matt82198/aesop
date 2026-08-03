@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// INDEX: Preflight checklist for adopter onboarding (diagnostic checks: config, hooks, CLAUDE.md, state, heartbeats, git identity, secret-scan; exit 0=all pass, 1=failed)
 
 /**
  * Aesop doctor — preflight checklist for adopter onboarding

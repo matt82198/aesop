@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Cost Forecasting Tool — Predict spend trends and budget runway.
+INDEX: Cost forecasting tool: weighted-moving-average daily burn rate, predicted monthly spend, days-to-ceiling; reads fleet ledger; CLI: `--ceiling DOLLARS [--ledger PATH] [--json] [--check] [--help]`; stdlib-only, fail-closed on unknown flags
 
 Reads cost data from the fleet ledger (OUTCOMES-LEDGER.md) and produces
 spend forecasts with daily burn rate, predicted monthly spend, and days

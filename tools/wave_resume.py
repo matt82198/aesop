@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Mid-wave recovery: classify completed vs remaining items from workflow journal.
+INDEX: Mid-wave recovery: parse workflow journal.jsonl + worktree to classify items as completed (files written + tests green) vs remaining, enabling resume from last good phase instead of re-run
 
 Given a workflow run's journal.jsonl and its worktree, parses journal to identify
 which items have already COMPLETED (files written + tests green) vs which remain,
