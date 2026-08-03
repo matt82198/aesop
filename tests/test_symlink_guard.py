@@ -88,7 +88,7 @@ class SymlinkGuardBaseTestCase(unittest.TestCase):
         try:
             result = subprocess.run(
                 ["mklink", "/J", str(junction_path), str(target_path)],
-                shell=True,
+                shell=True,  # subprocess-ok: mklink is a cmd.exe builtin (no mklink.exe), so shell=True is mandatory; argv is already a list, bounded, tempdir paths
                 capture_output=True,
                 text=True,
                 timeout=5
@@ -302,7 +302,7 @@ class TestJunctionDetectionOnWindows(unittest.TestCase):
             # Create junction
             result = subprocess.run(
                 ["mklink", "/J", str(junction), str(target)],
-                shell=True,
+                shell=True,  # subprocess-ok: mklink is a cmd.exe builtin (no mklink.exe), so shell=True is mandatory; argv is already a list, bounded, tempdir paths
                 capture_output=True,
                 timeout=5
             )
@@ -334,7 +334,7 @@ class TestJunctionDetectionOnWindows(unittest.TestCase):
             # Create junction
             result = subprocess.run(
                 ["mklink", "/J", str(junction), str(target)],
-                shell=True,
+                shell=True,  # subprocess-ok: mklink is a cmd.exe builtin (no mklink.exe), so shell=True is mandatory; argv is already a list, bounded, tempdir paths
                 capture_output=True,
                 timeout=5
             )
