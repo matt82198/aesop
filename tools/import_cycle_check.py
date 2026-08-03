@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 AST-based Python import cycle detector for internal project modules.
+INDEX: AST-based import cycle detector for Python modules
 
 Scans Python files, extracts import statements via the ast module, builds a
 dependency graph of internal modules, and detects cycles using DFS.

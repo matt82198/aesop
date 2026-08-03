@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+INDEX: Status/conclusion fail-open linter (GAP5): AST-detects functions whose name/params mention status|conclusion|state and whose if/elif chain over >=2 known outcome constants (SUCCESS/FAILURE/CANCELLED/TIMED_OUT/SKIPPED/...) lets an UNRECOGNIZED value land in a non-failure bucket — no terminal `else` falling through to a green/pending value (`no-terminal-else`), a terminal `else` yielding one (`green-default`), or an implicit `return None` (`implicit-none-default`); fall-throughs that raise, `sys.exit(nonzero)`, or are statically unclassifiable are NOT flagged (precision); green vocabulary extensible via `--green-tokens`; suppress a reviewed exception with `# bucket-lint: ok <reason>` on the def/chain/fall-through line (suppressions counted + printed in text and JSON so they stay visible; 3 live in `ci_merge_wait.py`, where "pending" blocks the merge and is therefore the fail-CLOSED bucket); CLI: `[--check] [--json] [--root DIR] [--paths PATH ...]` (default scan dir: `tools/`); exit 0=clean/1=findings/2=error; stdlib-only, ASCII output
 tools.status_bucket_lint -- Detect status/conclusion bucketing that fails OPEN.
 
 Mechanizes a repeating defect class: a helper translates a CI status or

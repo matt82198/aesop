@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Cross-OS drift measurement tool.
+INDEX: Cross-OS CI drift measurement (Windows vs Linux outcome drift from GitHub Actions history; CLI: `--runs N=10 [--json]`; reports pass rates, divergence set, failing test aggregation; exit 3 on auth failure); `job_conclusion()` fails CLOSED — a COMPLETED job whose conclusion is outside (SUCCESS, NEUTRAL, SKIPPED) is FAIL, never PENDING, because PENDING is dropped from the pass-rate denominators (GAP5 fix; pre-fix, GitHub's `startup_failure` silently vanished from drift measurement)
 
 Quantifies Windows-vs-Linux CI outcome drift from GitHub Actions history via gh CLI.
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Conventional commit message linter.
+INDEX: Conventional commit message linter; uses cli.CLIBuilder; CLI: `[--message MSG] [--range RANGE] [--json]`; stdlib-only
 
 Validates commit messages against conventional commits format and project
 conventions:
