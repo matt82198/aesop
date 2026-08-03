@@ -822,5 +822,164 @@ class TestCountLineScanning(unittest.TestCase):
         )
 
 
+class TestRepoRootAndVacuousGuards(unittest.TestCase):
+    """--repo must actually be honored, and a per-family wipeout must fail closed.
+
+    Two P1s from the regression-adversarial lens:
+    1. get_actual_counts() ignored its repo_root argument -- every `git ls-files`
+       ran in the process CWD, so `--repo <empty tree>` silently graded the CWD
+       repo and reported "[OK] counts match".
+    2. The vacuous-zero guard was an AND over all three families, so wiping out a
+       single language (227 Python suites deleted) sailed through and the doc was
+       rewritten to 0 with exit 0.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.aesop_root = Path(__file__).parent.parent
+        cls.tool = cls.aesop_root / "tools" / "verify_test_suite_count.py"
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_root = Path(self.temp_dir.name)
+        self.md = self.temp_root / "fixture-CLAUDE.md"
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _run(self, *args, cwd=None):
+        cmd = [sys.executable, str(self.tool)]
+        cmd.extend(args)
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            cwd=str(cwd or self.aesop_root),
+            timeout=30,
+        )
+
+    def _write_doc(self, node, shell, python):
+        self.md.write_text(
+            "# fixture\n\n"
+            f"**Node ({node} suites)**: node\n\n"
+            f"**Shell ({shell} suites)**: shell\n\n"
+            f"**Python ({python} suites)**: python\n",
+            encoding="utf-8",
+        )
+
+    def _make_repo(self, name, node=0, shell=0, python=0):
+        """Create a git repo with the requested number of test files."""
+        root = self.temp_root / name
+        tests_dir = root / "tests"
+        tests_dir.mkdir(parents=True, exist_ok=True)
+        for i in range(node):
+            (tests_dir / f"node_{i}.test.mjs").write_text("// node\n", encoding="utf-8")
+        for i in range(shell):
+            (tests_dir / f"test_shell_{i}.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+        for i in range(python):
+            (tests_dir / f"test_py_{i}.py").write_text("# python\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-q"], cwd=str(root), capture_output=True, check=False)
+        subprocess.run(["git", "add", "-A"], cwd=str(root), capture_output=True, check=False)
+        return root
+
+    def test_repo_flag_is_honored_not_the_cwd(self):
+        """--repo must derive counts from THAT tree, not the process CWD."""
+        target = self._make_repo("target", node=2, shell=3, python=4)
+        self._write_doc(2, 3, 4)
+
+        # Run from the aesop repo (whose real counts are nothing like 2/3/4).
+        result = self._run("--check", "--repo", str(target), "--claudemd", str(self.md))
+
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"--repo counts should come from the target tree. "
+            f"stdout: {result.stdout} stderr: {result.stderr}",
+        )
+
+    def test_repo_flag_drift_is_detected_against_target_tree(self):
+        """A doc that matches the CWD repo but not --repo must still fail."""
+        target = self._make_repo("target", node=2, shell=3, python=4)
+        self._write_doc(2, 3, 99)
+
+        result = self._run("--check", "--repo", str(target), "--claudemd", str(self.md))
+
+        self.assertEqual(
+            result.returncode,
+            1,
+            f"Drift against the --repo tree must be caught. stdout: {result.stdout}",
+        )
+        self.assertIn("Python", result.stdout)
+
+    def test_non_git_repo_target_fails_closed(self):
+        """--repo pointing at a non-git tree must exit 2, never grade the CWD."""
+        target = self.temp_root / "not-a-repo"
+        (target / "tests").mkdir(parents=True)
+        self._write_doc(26, 13, 227)
+
+        result = self._run("--check", "--repo", str(target), "--claudemd", str(self.md))
+
+        self.assertEqual(
+            result.returncode,
+            2,
+            f"Non-git target must fail closed. stdout: {result.stdout} "
+            f"stderr: {result.stderr}",
+        )
+        self.assertIn("git repository", result.stderr)
+
+    def test_single_family_wipeout_fails_closed(self):
+        """One family collapsing to zero while documented non-zero must exit 2.
+
+        Previously the guard was `actual == (0,0,0)`, so a Python-only wipeout was
+        treated as ordinary drift and auto-blessed.
+        """
+        target = self._make_repo("target", node=2, shell=3, python=0)
+        self._write_doc(2, 3, 227)
+
+        result = self._run("--check", "--repo", str(target), "--claudemd", str(self.md))
+
+        self.assertEqual(
+            result.returncode,
+            2,
+            f"Single-family wipeout must fail closed. stdout: {result.stdout} "
+            f"stderr: {result.stderr}",
+        )
+        self.assertIn("Python", result.stderr)
+
+    def test_single_family_wipeout_is_not_regenerated_away(self):
+        """--regenerate must refuse to rewrite a wiped-out family to 0."""
+        target = self._make_repo("target", node=2, shell=3, python=0)
+        self._write_doc(2, 3, 227)
+        before = self.md.read_bytes()
+
+        result = self._run("--regenerate", "--repo", str(target), "--claudemd", str(self.md))
+
+        self.assertEqual(
+            result.returncode,
+            2,
+            f"--regenerate must refuse a wiped-out family. stdout: {result.stdout}",
+        )
+        self.assertEqual(
+            before,
+            self.md.read_bytes(),
+            "--regenerate must not rewrite the count to 0",
+        )
+
+    def test_deliberate_zero_family_is_accepted(self):
+        """Documenting 0 for a genuinely empty family is the sanctioned escape hatch."""
+        target = self._make_repo("target", node=2, shell=3, python=0)
+        self._write_doc(2, 3, 0)
+
+        result = self._run("--check", "--repo", str(target), "--claudemd", str(self.md))
+
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"A documented zero for an empty family should pass. "
+            f"stdout: {result.stdout} stderr: {result.stderr}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

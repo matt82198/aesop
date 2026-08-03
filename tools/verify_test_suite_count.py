@@ -28,11 +28,20 @@ Count-line scanning is deliberately hardened against format-variant evasion:
 --strict is currently an exact alias for --check; it exists so CI can be wired to
 a main-only strict invocation later without changing the tool's contract again.
 
+Count derivation is always rooted at --repo (default: CWD), never at the process
+CWD when --repo is given and never at the --claudemd file's parent directory. The
+target must be a git work tree, and the vacuous-state guard is PER SUITE FAMILY:
+any one family collapsing to zero while CLAUDE.md documents a non-zero count fails
+closed, because a single-language wipeout is indistinguishable from a broken
+derivation. Deliberate removals are declared by hand-editing that line to 0.
+
 Exit codes:
     0  counts match (check) / regeneration succeeded
-    1  drift, missing label line, duplicated label line, or usage conflict
-    2  cannot evaluate (file missing, unparseable count, or a vacuous zero-file
-       derivation while CLAUDE.md documents non-zero counts -- fail-closed)
+    1  drift, missing label line, duplicated label line, malformed label, or a
+       usage conflict
+    2  cannot evaluate (file missing, target not a git repo, git failure,
+       unparseable count, or a per-family zero-file derivation while CLAUDE.md
+       documents a non-zero count -- fail-closed)
 
 Usage:
     python tools/verify_test_suite_count.py --check [--repo ROOT]
@@ -149,36 +158,87 @@ class StructureError(Exception):
         self.code = code
 
 
-def count_git_files(*patterns: str) -> int:
-    """Count files matching patterns using git ls-files.
+def ensure_git_repo(repo_root: Path) -> None:
+    """Fail closed unless repo_root is inside a git work tree.
 
-    Omits untracked files; uses git to ensure we count only tracked files.
+    Without this, `git ls-files` in a non-repo directory yields zero files, which
+    used to be reported as a legitimate count of zero.
+
+    Raises:
+        StructureError: code 2 when git is unavailable or repo_root is not a repo.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            check=True,
+            timeout=10,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
+            FileNotFoundError, OSError) as exc:
+        raise StructureError(
+            f"[ERROR] Cannot derive test suite counts: {repo_root} is not a git "
+            f"repository (or git is unavailable): {type(exc).__name__}",
+            2,
+        )
+
+    if result.stdout.strip() != "true":
+        raise StructureError(
+            f"[ERROR] Cannot derive test suite counts: {repo_root} is not a git "
+            "repository work tree",
+            2,
+        )
+
+
+def count_git_files(repo_root: Path, *patterns: str) -> int:
+    """Count tracked files matching patterns using git ls-files inside repo_root.
+
+    Omits untracked files; uses git to ensure we count only tracked files. The
+    `cwd` is threaded explicitly so `--repo` actually selects the tree being
+    graded instead of silently grading the process CWD.
+
+    Raises:
+        StructureError: code 2 if git cannot be run for a pattern (a swallowed
+            failure here reads as a count of zero, i.e. fake-green).
     """
     count = 0
     for pattern in patterns:
         try:
             result = subprocess.run(
                 ["git", "ls-files", pattern],
+                cwd=str(repo_root),
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
                 check=True,
                 timeout=10,
             )
-            count += len([line for line in result.stdout.strip().split("\n") if line])
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
-            pass
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
+                FileNotFoundError, OSError) as exc:
+            raise StructureError(
+                f"[ERROR] Cannot derive test suite counts: 'git ls-files {pattern}' "
+                f"failed in {repo_root}: {type(exc).__name__}",
+                2,
+            )
+        count += len([line for line in result.stdout.strip().split("\n") if line])
     return count
 
 
 def get_actual_counts(repo_root: Path) -> Tuple[int, int, int]:
-    """Get actual test suite counts from disk.
+    """Get actual test suite counts from the tree at repo_root.
 
     Returns: (node_count, shell_count, python_count)
     """
-    node_count = count_git_files("tests/*.test.mjs")
-    shell_count = count_git_files("tests/*.test.sh", "tests/test_*.sh", "tests/test-*.sh")
-    python_count = count_git_files("tests/test_*.py")
+    ensure_git_repo(repo_root)
+
+    node_count = count_git_files(repo_root, "tests/*.test.mjs")
+    shell_count = count_git_files(
+        repo_root, "tests/*.test.sh", "tests/test_*.sh", "tests/test-*.sh"
+    )
+    python_count = count_git_files(repo_root, "tests/test_*.py")
 
     return node_count, shell_count, python_count
 
@@ -247,38 +307,55 @@ def extract_documented_counts(content: str) -> Tuple[int, int, int]:
     return tuple(int(resolved[label].group("count")) for label in LABELS)
 
 
-def assert_evaluable(documented: Tuple[int, int, int], actual: Tuple[int, int, int]) -> None:
-    """Fail-closed on a vacuous zero-file derivation (git broken / not a repo).
+def assert_evaluable(
+    documented: Tuple[int, int, int],
+    actual: Tuple[int, int, int],
+    repo_root: Path,
+) -> None:
+    """Fail-closed PER FAMILY on a vacuous zero-file derivation.
+
+    The guard is per-suite-family, not an AND across all three: wiping out a
+    single language (e.g. every Python suite) is just as indistinguishable from a
+    broken derivation as wiping out all of them, and the AND form auto-blessed it.
+
+    Escape hatch for a deliberate removal: hand-edit the line to 0 suites, which
+    makes documented and actual agree and no longer trips this guard.
 
     Raises:
-        StructureError: code 2 when git reports zero files everywhere while
-            CLAUDE.md documents non-zero counts.
+        StructureError: code 2 when a family collapses to zero while CLAUDE.md
+            documents a non-zero count for it.
     """
-    if actual == (0, 0, 0) and documented != (0, 0, 0):
-        raise StructureError(
-            "[ERROR] Cannot evaluate: git ls-files returned zero files, but CLAUDE.md "
-            "documents non-zero counts. This indicates a git configuration problem or "
-            "the tool is running outside a git repository.",
-            2,
-        )
+    for label, doc, act in zip(LABELS, documented, actual):
+        if act == 0 and doc != 0:
+            raise StructureError(
+                f"[ERROR] Cannot evaluate: git ls-files found ZERO {label} test files "
+                f"in {repo_root}, but CLAUDE.md documents {doc}. An entire suite family "
+                "collapsing to zero is indistinguishable from a broken derivation "
+                "(wrong --repo, bad checkout, git failure), so this fails closed rather "
+                "than silently rewriting the count to 0. If the removal really is "
+                f"intentional, hand-edit the line to "
+                f"'{CANONICAL_TEMPLATE.format(label=label, count=0)}' and re-run.",
+                2,
+            )
 
 
-def check_mode(claudemd_path: Path) -> int:
+def check_mode(claudemd_path: Path, repo_root: Path) -> int:
     """READ-ONLY validation of tests/CLAUDE.md suite counts. Never writes.
 
     Args:
-        claudemd_path: Path to tests/CLAUDE.md
+        claudemd_path: Path to the CLAUDE.md whose counts are validated
+        repo_root: Git work tree the counts are derived from
 
     Returns:
-        0 if counts match, 1 if drift / missing / duplicated count lines,
-        2 if the state cannot be evaluated.
+        0 if counts match, 1 if drift / missing / duplicated / malformed count
+        lines, 2 if the state cannot be evaluated.
     """
     content = claudemd_path.read_text(encoding="utf-8")
 
     try:
         documented = extract_documented_counts(content)
-        actual = get_actual_counts(claudemd_path.parent.parent)
-        assert_evaluable(documented, actual)
+        actual = get_actual_counts(repo_root)
+        assert_evaluable(documented, actual, repo_root)
     except StructureError as e:
         print(str(e), file=sys.stderr)
         return e.code
@@ -303,11 +380,12 @@ def check_mode(claudemd_path: Path) -> int:
     return 1
 
 
-def regenerate_mode(claudemd_path: Path, dry_run: bool = False) -> int:
+def regenerate_mode(claudemd_path: Path, repo_root: Path, dry_run: bool = False) -> int:
     """Rewrite counts in tests/CLAUDE.md to match actual files. The only writing mode.
 
     Args:
-        claudemd_path: Path to tests/CLAUDE.md
+        claudemd_path: Path to the CLAUDE.md being rewritten
+        repo_root: Git work tree the counts are derived from
         dry_run: If True, show what would change but don't write
 
     Returns:
@@ -322,9 +400,9 @@ def regenerate_mode(claudemd_path: Path, dry_run: bool = False) -> int:
         # line into a file the gate would reject.
         resolved = validate_structure(content)
         documented = tuple(int(resolved[label].group("count")) for label in LABELS)
-        actual = get_actual_counts(claudemd_path.parent.parent)
+        actual = get_actual_counts(repo_root)
         # Never zero out a real document because git could not be read.
-        assert_evaluable(documented, actual)
+        assert_evaluable(documented, actual, repo_root)
     except StructureError as e:
         print(str(e), file=sys.stderr)
         return e.code
@@ -433,9 +511,14 @@ def main():
     if not read_only and not write:
         read_only = True
 
-    # Determine repo root
+    # Determine repo root. Counts are ALWAYS derived from this tree -- never from
+    # the process CWD and never from the --claudemd file's grandparent directory.
     repo_root = args.repo or Path.cwd()
     repo_root = repo_root.resolve()
+
+    if not repo_root.is_dir():
+        print(f"[ERROR] repo root {repo_root} is not a directory", file=sys.stderr)
+        return 2
 
     # Determine CLAUDE.md path
     if args.claudemd:
@@ -449,8 +532,8 @@ def main():
 
     # Run the selected mode
     if read_only:
-        return check_mode(claudemd_path)
-    return regenerate_mode(claudemd_path, dry_run=args.dry_run)
+        return check_mode(claudemd_path, repo_root)
+    return regenerate_mode(claudemd_path, repo_root, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
