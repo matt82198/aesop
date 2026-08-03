@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Silent-CI-job detector: find workflow jobs that are DEFINED but never EXECUTE.
+INDEX: Silent-CI-job detector: parses one workflow's job/step inventory (name/if/needs/matrix) and accounts it against real run history (`gh run list` + `gh api .../runs/<id>/jobs`, bounded to `--runs` sampled runs) to catch jobs and named steps DEFINED but never EXECUTED (renamed steps, `if:`-false gates, dead `needs:` chains) — the complement to gate-wiring lints, which ask whether a gate is present in YAML rather than whether the YAML job runs. Job-name matching is anchored + matrix-suffix aware so `windows` never absorbs `windows-shard (0)`, and `${{ }}` in a name matches any rendering; step evidence is only counted from green jobs (a failed job truncates its step list). CLI: `[--workflow ci.yml] [--lookback-days 14] [--runs 5] [--root DIR] [--json] [--fixture PATH]` (`--fixture` = offline payloads, hermetic test seam); exit 0=clean / 1=findings / 2=gh-or-parse failure OR zero runs in lookback (fail-closed: no evidence is never a green). Needs PyYAML + gh; NOT yet wired into ci.yml
 
 The failure class this catches is "green can mean never ran": a job (or a named
 step) exists in .github/workflows/<wf>, branch protection is happy, CI is green

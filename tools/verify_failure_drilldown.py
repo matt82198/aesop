@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """End-to-end verification of the wave failure drill-down feature.
+INDEX: Browser proof (Playwright): wave failure drill-down; exit 0=proven/1=failed, --allow-skip only browserless
 
 Sets up a temporary AESOP_ROOT, stubs the gh CLI, starts the dashboard server,
 and exercises the failure drill-down UI + API via Playwright. Verifies:

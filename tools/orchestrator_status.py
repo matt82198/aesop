@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Orchestrator status CLI tool - atomic status updates via event store (Inc 2+).
+INDEX: Atomic orchestrator status updates
 
 Usage:
   python orchestrator_status.py set --activity "dispatching wave-8" --phase audit [--id main --role orchestrator]

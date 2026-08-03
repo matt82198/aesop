@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 CI Gate Runability Validator (Guardrail G2.5)
+INDEX: CI gate-runability validator (Guardrail G2.5): prevents "green can mean never ran" incidents by verifying known suite families (Python unit suites via ci_shard_runner.py, npm test:node, run_shell_tests.sh, playwright, verify_*.py, lint/guard gates) are not silently skipped due to branch protection misconfiguration; checks job/step-level if conditions that exclude PRs, continue-on-error on gates, missing file references; CLI: `[--check] [--json] [--root DIR]`; exit 0=clean/1=findings/2=error; stdlib-only; staged (wire into ci.yml after #596)
 
 Verifies that known CI test suite families can actually run and are not silently skipped
 due to branch protection misconfiguration. Prevents "green can mean never ran" incidents.
