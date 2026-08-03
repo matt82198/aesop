@@ -135,6 +135,10 @@ jobs:
       - name: CI gates runability check (Guardrail G2.5)
         if: matrix.python-shard == 0
         run: python tools/ci_gate_runability.py
+      - name: Workflow model linter
+        if: matrix.python-shard == 0
+        run: python tools/workflow_model_linter.py
+
 
       - name: Documented gates wiring check (Guardrail G2.6)
         if: matrix.python-shard == 0
