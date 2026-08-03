@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// INDEX: Readiness score for primed projects (0-100 weighted score: config, git hooks, CLAUDE.md, state writable, daemon heartbeats, git identity, secret-scan runnable)
 
 /**
  * Aesop health-score — readiness score for primed projects

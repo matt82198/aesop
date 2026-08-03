@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// INDEX: Rasterize SVG to PNG via @resvg/resvg-js (lazy import error handling)
 /**
  * svg_to_png.mjs — Rasterize an SVG file to PNG using @resvg/resvg-js.
  *

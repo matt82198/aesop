@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 r"""
 Append uniform BUILDLOG entries with optional git HEAD reference.
+INDEX: Uniform BUILDLOG.md appender (writes via state_store WriteAPI: entry also lands as buildlog_entry event)
 
 Usage:
     python buildlog.py "<message>" [--state-dir DIR] [--head] [--repo-path PATH]
