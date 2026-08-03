@@ -693,7 +693,7 @@ class TestAncestorGuard(StateIsolatedTestCase):
 class TestBatchEvaluation(StateIsolatedTestCase):
     """Green batch merges then closes; red batch evicts and dissolves."""
 
-    def _batch_pr(self, rollup=None, members="#11, #12"):
+    def _batch_pr(self, rollup=None, members="#11, #12", created_at=None):
         return {
             "number": 900, "state": "OPEN", "mergeable": "MERGEABLE",
             "mergeStateStatus": "CLEAN",
@@ -703,6 +703,9 @@ class TestBatchEvaluation(StateIsolatedTestCase):
             "labels": [{"name": self.module.BATCH_LABEL}],
             "body": "Members: %s\n" % members,
             "url": "https://x/pull/900",
+            # Old enough that the grace window never applies unless a test
+            # deliberately asks for a young batch.
+            "createdAt": created_at or "2020-01-01T00:00:00Z",
         }
 
     def test_green_batch_merges_then_closes_landed_members(self):
@@ -790,6 +793,121 @@ class TestBatchEvaluation(StateIsolatedTestCase):
         self.assertEqual(rows[0]["run_url"], "http://run/batch")
         closes = [c for c in gh_calls if c[:2] == ("pr", "close")]
         self.assertEqual([int(c[2]) for c in closes], [900])
+
+    def _absent_windows_rollup(self):
+        """Every required context present EXCEPT the `windows` aggregator.
+
+        This is the real shape seconds after `gh pr create`: GitHub creates
+        check runs asynchronously and the aggregator only appears once its
+        shards exist.
+        """
+        return [check_run(name) for name in self.module.EXPECTED_REQUIRED_CHECKS
+                if name != "windows"]
+
+    def _young(self, seconds_ago=60):
+        from datetime import datetime, timedelta, timezone as tz
+        return (datetime.now(tz.utc)
+                - timedelta(seconds=seconds_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _view(self, batch, gh_calls):
+        def gh_side_effect(*args):
+            gh_calls.append(args)
+            if args[:2] == ("pr", "view"):
+                number = int(args[2])
+                if number == 900:
+                    return batch
+                return {"number": number, "state": "OPEN",
+                        "statusCheckRollup": green_rollup(self.module)}
+            return {}
+        return gh_side_effect
+
+    def test_young_batch_missing_a_context_waits_instead_of_dissolving(self):
+        """Regression: the 2026-08-03 rebatch loop that merged nothing.
+
+        A batch evaluated seconds after creation is missing `windows` only
+        because the check run does not exist yet. Dissolving on that absence
+        evicts every member and the next pass rebuilds the same batch, forever.
+        """
+        gh_calls = []
+        batch = self._batch_pr(rollup=self._absent_windows_rollup(),
+                               created_at=self._young(60))
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._view(batch, gh_calls)), \
+             patch.object(self.module, "git", return_value=(True, "")):
+            self.module.handle_batch_pr({"number": 900}, summary)
+
+        self.assertEqual(self.exception_rows(), [])
+        self.assertEqual([c for c in gh_calls if c[:2] == ("pr", "close")], [])
+        rejected = [c for c in gh_calls
+                    if c[:2] == ("pr", "edit") and self.module.REJECT_LABEL in c]
+        self.assertEqual(rejected, [])
+        self.assertTrue(any("not created yet" in a for a in summary["actions"]),
+                        summary["actions"])
+
+    def test_old_batch_missing_a_context_still_dissolves(self):
+        """The grace window is a delay, not an amnesty: absence stays red."""
+        gh_calls = []
+        batch = self._batch_pr(rollup=self._absent_windows_rollup(),
+                               created_at="2020-01-01T00:00:00Z")
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._view(batch, gh_calls)), \
+             patch.object(self.module, "git", return_value=(True, "")):
+            self.module.handle_batch_pr({"number": 900}, summary)
+
+        self.assertEqual({r["kind"] for r in self.exception_rows()},
+                         {"batch_red_dissolved"})
+        self.assertEqual([int(c[2]) for c in gh_calls
+                          if c[:2] == ("pr", "close")], [900])
+
+    def test_young_batch_with_a_real_failure_dissolves_immediately(self):
+        """A concluded FAILURE is positive evidence; youth buys it nothing."""
+        gh_calls = []
+        rollup = self._absent_windows_rollup()
+        rollup[0] = check_run(self.module.EXPECTED_REQUIRED_CHECKS[0],
+                              conclusion="FAILURE", url="http://run/batch")
+        batch = self._batch_pr(rollup=rollup, created_at=self._young(5))
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._view(batch, gh_calls)), \
+             patch.object(self.module, "git", return_value=(True, "")):
+            self.module.handle_batch_pr({"number": 900}, summary)
+
+        self.assertEqual({r["kind"] for r in self.exception_rows()},
+                         {"batch_red_dissolved"})
+        self.assertEqual([int(c[2]) for c in gh_calls
+                          if c[:2] == ("pr", "close")], [900])
+
+    def test_young_batch_with_unknown_creation_time_dissolves(self):
+        """An unreadable timestamp must not buy an indefinite grace period."""
+        gh_calls = []
+        batch = self._batch_pr(rollup=self._absent_windows_rollup())
+        batch.pop("createdAt")
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._view(batch, gh_calls)), \
+             patch.object(self.module, "git", return_value=(True, "")):
+            self.module.handle_batch_pr({"number": 900}, summary)
+
+        self.assertEqual({r["kind"] for r in self.exception_rows()},
+                         {"batch_red_dissolved"})
+
+    def test_grace_never_makes_an_incomplete_rollup_mergeable(self):
+        """The waiting path must never merge: absent is still never green."""
+        gh_calls = []
+        batch = self._batch_pr(rollup=self._absent_windows_rollup(),
+                               created_at=self._young(1))
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._view(batch, gh_calls)), \
+             patch.object(self.module, "git", return_value=(True, "")):
+            self.module.handle_batch_pr({"number": 900}, summary)
+        self.assertEqual([c for c in gh_calls if c[:2] == ("pr", "merge")], [])
+        self.assertEqual(summary["merged"], [])
+        # And the underlying verdict is unchanged -- still not green.
+        verdict, _, _ = self.module.required_checks_green(
+            self._absent_windows_rollup())
+        self.assertEqual(verdict, "not_green")
+
+    def test_pr_fields_requests_created_at(self):
+        """The grace check is inert unless createdAt is actually fetched."""
+        self.assertIn("createdAt", self.module.PR_FIELDS)
 
     def test_unparseable_members_is_exception_rowed_not_merged(self):
         """Branch is alive but neither the body nor its commits name members."""
