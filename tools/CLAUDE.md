@@ -31,3 +31,9 @@ generator output (hand-edits are rejected).
 - `agent-forensics.sh <commit>` — incident/behavior forensics, read-only git plumbing; `--diff <A> <B>` for rules/docs diff
 - **Python**: `npm run test:py`; **Shell**: `bash -n tools/*.sh && shellcheck tools/*.sh`; **Node**: `node --check tools/*.mjs`
 - **Subprocess encoding (G10)**: every `subprocess.run`/`Popen` decoding output passes explicit `encoding='utf-8'`; the platform default is cp1252 on Windows and corrupts non-ASCII output. `encoding_lint.py` scans the WHOLE repo, so one violation anywhere blocks every Python-touching push.
+
+## Templates & Adopter Resources
+
+- **templates/aesop-dispatch-template.yml** — Ready-to-fork GitHub Actions dispatch workflow; demonstrates aesop CLI integration in CI/CD pipelines (workflow_dispatch + cron). Includes cost-summary and failure-visibility steps. Verified by test suite: YAML syntax, CLI commands exist, no invented flags, no fabricated outputs. Adopter guide: [docs/ACTIONS-TEMPLATE.md](../docs/ACTIONS-TEMPLATE.md)
+- **templates/wave-presets/*.json** — Wave manifest presets (saas, data, library); consumed by wave_templates.py instantiate CLI
+- **tests/test_actions_template.py** — Test suite for actions template: YAML validity, workflow structure integrity, CLI command verification, flag documentation check, output fabrication detection
