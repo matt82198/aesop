@@ -90,6 +90,10 @@ Run from repo root:
 
 **Instance coordination is a prerequisite** for multi-machine orchestration (team-scale single-project development). Used by `tools/instance_manager.py` (CLI) and `tools/multi_dispatch.py` (dispatch guard).
 
+## Multibox Increment 1 (2026-08-02) — canonical repo-path normalization
+
+**Inc 1 fixes defect (b): `_normalize_path()` was host-platform-dependent, causing heterogeneous-box split-brain.** Two instances (Windows + Linux) would canonicalize the same path differently and both claim it (47c967b P0 recurrence). **New module: paths.py** — `canonical_claim_path(path, repo_root=None, case_policy="platform"|"insensitive"|"sensitive")` -> repo-relative (if repo_root given), forward-slash-only, .. collapsed, NFC-normalized Unicode, case-folded per policy (not os.name). **lease_claims._normalize_path now thin alias** with case_policy="platform" for backward compatibility (all 18 existing tests pass untouched). **Tests**: 22 new in test_state_store_paths.py (four 47c967b regressions through canonical form, heterogeneity guard with monkeypatched os.name, Unicode NFC/NFD equivalence, separator idempotence) + 2 new heterogeneity regressions in test_lease_claims.py. **Invariant**: same path normalizes identically whether running on Windows or Linux (when case_policy specified); default "platform" preserves exact byte-for-byte behavior.
+
 ## Increment 1 (state consolidation, 2026-07-30) — canonical materializer + state_rebuild
 
 **Inc 1 consolidates all view rendering to ONE place:**
