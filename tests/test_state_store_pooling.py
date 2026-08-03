@@ -259,15 +259,22 @@ class CompactClaimsTest(unittest.TestCase):
     def test_compact_preserves_ttl_for_expiry(self):
         """Compacted claims retain original ts/ttl so TTL expiry still works."""
         # Claim with a very short TTL
+        t0 = time.time()
         self.api.append(
             "claims", "claim_requested",
             {"resource": "res1", "instance_id": "inst1", "ttl": 0.1},
             actor="inst1",
         )
 
-        # Verify it's held right now
+        # Verify it is held as of the moment the claim was made.
+        # The reference time is pinned to t0 (captured before the append) rather
+        # than a fresh time.time() call: with a 0.1s TTL, a slow CI runner can
+        # spend >100ms on the append plus the SQLite read below, which would
+        # expire the claim before the assertion and make this test flaky.
+        # Pinning t0 keeps the "held at claim time" assertion deterministic
+        # while leaving the real expiry assertion (after the sleep) intact.
         events = self.api.get("claims")
-        holders = fold_claims(events, now=time.time())
+        holders = fold_claims(events, now=t0)
         self.assertEqual(holders.get("res1"), "inst1")
 
         # Compact

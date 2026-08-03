@@ -58,7 +58,7 @@ def count_git_files(*patterns: str) -> int:
                 timeout=10,
             )
             count += len([line for line in result.stdout.strip().split("\n") if line])
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
             pass
     return count
 

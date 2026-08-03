@@ -208,25 +208,94 @@ class TestVerifyTestSuiteCount(unittest.TestCase):
         )
 
     def test_check_mode_fails_on_zero_files_found(self):
-        """--check should exit 2 when no files found but CLAUDE.md expects counts (cannot evaluate)."""
-        # This simulates running in a non-git directory: git ls-files returns 0 files
-        # but CLAUDE.md still documents non-zero counts.
-        #
-        # We can't easily simulate this without modifying git, but we can verify the
-        # error path by checking the tool's logic: if actual is (0,0,0) and documented
-        # is non-zero, it should exit 2, not try to auto-correct to 0.
+        """--check should exit 2 when no files found but CLAUDE.md expects counts (cannot evaluate).
 
-        # This test is documented but not easily reproducible in isolation without
-        # complex mocking. The contract is enforced by the check_mode() function
-        # which detects actual == (0,0,0) and documented != (0,0,0) and exits 2.
-        # See tools/verify_test_suite_count.py lines 122-128.
-        pass
+        This tests the fail-closed path: if git ls-files returns zero files (actual == (0,0,0))
+        but CLAUDE.md documents non-zero counts, the tool cannot evaluate the state and exits 2.
+        """
+        # Create CLAUDE.md with non-zero documented counts
+        claudemd_path = self.temp_root / "tests" / "CLAUDE.md"
+        content = claudemd_path.read_text()
+        # Ensure CLAUDE.md documents non-zero counts
+        updated = re.sub(
+            r"\*\*Python \(\d+ suites?\)\*\*:",
+            "**Python (5 suites)**:",
+            content,
+        )
+        updated = re.sub(
+            r"\*\*Node \(\d+ suites?\)\*\*:",
+            "**Node (3 suites)**:",
+            updated,
+        )
+        updated = re.sub(
+            r"\*\*Shell \(\d+ suites?\)\*\*:",
+            "**Shell (2 suites)**:",
+            updated,
+        )
+        claudemd_path.write_text(updated)
+
+        # Now remove all test files so git ls-files returns zero
+        tests_dir = self.temp_root / "tests"
+        for f in tests_dir.glob("test_*"):
+            f.unlink()
+
+        # Re-stage (remove from git's view)
+        subprocess.run(
+            ["git", "-C", str(self.temp_root), "add", "-A"],
+            capture_output=True,
+            check=False,
+        )
+
+        # Run --check which should detect cannot-evaluate and exit 2
+        result = self._run_tool("--check")
+
+        # Cannot-evaluate: should exit 2
+        self.assertEqual(
+            result.returncode,
+            2,
+            f"Expected exit 2 for zero files with documented counts. stderr: {result.stderr}",
+        )
+        self.assertIn("[ERROR]", result.stderr, "Should report error on stderr")
+        self.assertIn("Cannot evaluate", result.stderr, "Should mention cannot evaluate")
 
     def test_tool_provides_help(self):
         """Tool should provide --help documentation."""
         result = self._run_tool("--help")
         self.assertEqual(result.returncode, 0)
         self.assertIn("verify", result.stdout.lower())
+
+    def test_check_mode_normal_match_unchanged(self):
+        """--check with matching counts should exit 0 and leave file unchanged."""
+        # First run to get actual counts and auto-correct
+        claudemd_path = self.temp_root / "tests" / "CLAUDE.md"
+        result1 = self._run_tool("--check")
+        self.assertEqual(
+            result1.returncode,
+            0,
+            f"Expected first --check to pass. stderr: {result1.stderr}",
+        )
+
+        # Read the auto-corrected file content
+        original_content = claudemd_path.read_text()
+
+        # Second run should find matching counts and not modify the file
+        result2 = self._run_tool("--check")
+
+        # Should exit 0 with matching counts
+        self.assertEqual(
+            result2.returncode,
+            0,
+            f"Expected --check to pass with matching counts. stderr: {result2.stderr}",
+        )
+        self.assertIn("[OK]", result2.stdout, "Should report OK on second run when counts match")
+
+        # File should be unchanged (not auto-corrected on second run since counts match)
+        final_content = claudemd_path.read_text()
+        self.assertEqual(
+            original_content,
+            final_content,
+            "File should not be modified on second run when counts already match",
+        )
 
 
 if __name__ == "__main__":
