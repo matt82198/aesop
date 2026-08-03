@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 CI Gate Runability Validator (Guardrail G2.5)
-INDEX: CI gate-runability validator (Guardrail G2.5): prevents "green can mean never ran" incidents by verifying known suite families (Python unit suites via ci_shard_runner.py, npm test:node, run_shell_tests.sh, playwright, verify_*.py, lint/guard gates) are not silently skipped due to branch protection misconfiguration; checks job/step-level if conditions that exclude PRs, continue-on-error on gates, missing file references; CLI: `[--check] [--json] [--root DIR]`; exit 0=clean/1=findings/2=error; stdlib-only; staged (wire into ci.yml after #596)
+INDEX: CI gate-runability validator (Guardrail G2.5): prevents "green can mean never ran" incidents by verifying known suite families (Python unit suites via ci_shard_runner.py, npm test:node, run_shell_tests.sh, playwright, verify_*.py, lint/guard gates) are not silently skipped due to branch protection misconfiguration; checks job/step-level if conditions that exclude PRs, continue-on-error on gates, missing file references; CLI: `[--check] [--json] [--root DIR] [--workflows DIR]`; exit 0=clean/1=findings/2=error; stdlib-only; wired as a blocking step in ci.yml. **Verdicts are location-independent**: the result is a pure function of (workflow content, files present under `--root`) and must never branch on the shape of the root path -- a sniff for OS temp-directory name fragments in the root path silently disabled the missing-file check for any runner with a temp-based workspace, and survived in a second copy after the first was deleted. Fixtures create the files they reference; the gate never recognises its own fixtures (regression-guarded by `TestCIGateRunabilityLocationIndependence`, incl. a static no-path-sniffing scan of the source)
 
 Verifies that known CI test suite families can actually run and are not silently skipped
 due to branch protection misconfiguration. Prevents "green can mean never ran" incidents.
@@ -309,12 +309,17 @@ def check_workflow(repo_root: str, workflow_path: str) -> Tuple[int, List[str]]:
                     f"Step '{step_name}' ({suite_family}) has continue-on-error: true"
                 )
 
-            # Check (c): Invoked command/file exists (only for real repos, not test fixtures)
-            # Skip file existence checks for temporary test fixtures
-            repo_root_path = Path(repo_root).resolve()
-            is_temp_fixture = 'AppData' in str(repo_root_path) and 'Temp' in str(repo_root_path)
-
-            if step['run'] and not is_temp_fixture:
+            # Check (c): Invoked command/file exists. Runs unconditionally.
+            # A second copy of the temp-dir exemption lived here: the check ran only
+            # when the repo root did NOT contain both 'AppData' and 'Temp'. Commit
+            # 6afb94ba deleted the copy in find_file_on_disk() but missed this one, so
+            # byte-identical fixtures still produced rc0 under a temp-shaped path and
+            # rc1 outside it. The verdict must be a pure function of (workflow content,
+            # files on disk) and never of where the checkout lives -- otherwise any
+            # runner with a temp-based workspace silently loses this check entirely.
+            # Test fixtures create the files they reference; the gate does not
+            # recognise its own fixtures.
+            if step['run']:
                 commands = extract_run_commands(step['run'])
                 for cmd in commands:
                     if cmd in ['python', 'npm', 'node', 'bash', 'sh', 'git', 'npx', 'echo', 'test', 'if', 'for', 'while']:

@@ -406,6 +406,156 @@ jobs:
         self.assertEqual(exit_code, 0, f"Expected clean lint gate workflow, got: {stdout}\n{stderr}")
 
 
+class TestCIGateRunabilityLocationIndependence(unittest.TestCase):
+    """The gate's verdict must be a pure function of (workflow content, files on disk).
+
+    Regression guard for a fail-open that shipped twice: the tool skipped its
+    file-existence check whenever the repo root path merely *looked* like a Windows
+    temp directory (contained both 'AppData' and 'Temp'). Commit 6afb94ba removed one
+    copy from find_file_on_disk() but a second copy survived in check_workflow(), so
+    byte-identical fixtures still produced rc0 under a temp-shaped path and rc1
+    outside it. Any CI runner whose workspace lives under such a path silently lost
+    file-existence checking entirely.
+    """
+
+    # References a verify_*.py that does not exist -> get_suite_family() matches, so
+    # check (c) runs and must report the missing file.
+    MISSING_FILE_YAML = """
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify absent gate
+        run: python tools/verify_definitely_absent_gate.py --check
+"""
+
+    # Trigger-shaped suffix: contains both 'AppData' and 'Temp' on EVERY platform, so
+    # the old exemption fires on Linux runners too (not just Windows).
+    TEMP_SHAPED_SUFFIX = Path('AppData') / 'Temp' / 'repo'
+    ORDINARY_SUFFIX = Path('ordinary') / 'workspace' / 'repo'
+
+    def _build_fixture(self, root: Path, yaml_content: str, stub_files=()):
+        """Materialize a workflow fixture (plus any stub files) under root."""
+        workflows_dir = root / '.github' / 'workflows'
+        workflows_dir.mkdir(parents=True, exist_ok=True)
+        (workflows_dir / 'test.yml').write_text(yaml_content, encoding='utf-8')
+        for rel in stub_files:
+            stub = root / rel
+            stub.parent.mkdir(parents=True, exist_ok=True)
+            stub.write_text('# test fixture stub\n', encoding='utf-8')
+
+    def _run_at(self, root: Path):
+        """Run the gate against root; returns (exit_code, stdout)."""
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(Path(__file__).parent.parent / 'tools' / 'ci_gate_runability.py'),
+                '--root', str(root),
+            ],
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            cwd=str(Path(__file__).parent.parent),
+        )
+        return (result.returncode, result.stdout)
+
+    def test_missing_file_flagged_under_temp_shaped_root(self):
+        """A missing file reference is flagged even when the root path looks temp-ish.
+
+        Cross-platform repro: the root ends in 'AppData/Temp/repo' on every OS, so the
+        removed exemption would fire on Linux CI as well as Windows.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / self.TEMP_SHAPED_SUFFIX
+            self._build_fixture(root, self.MISSING_FILE_YAML)
+
+            exit_code, stdout = self._run_at(root)
+
+            self.assertEqual(
+                exit_code, 1,
+                "Gate must flag the missing file regardless of where the repo lives; "
+                f"got rc={exit_code} for root {root}\n{stdout}"
+            )
+            self.assertIn('verify_definitely_absent_gate.py', stdout)
+
+    def test_verdict_identical_from_temp_shaped_and_ordinary_roots(self):
+        """Byte-identical fixtures at two locations must produce identical verdicts."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            temp_shaped = Path(tmpdir) / self.TEMP_SHAPED_SUFFIX
+            ordinary = Path(tmpdir) / self.ORDINARY_SUFFIX
+            self._build_fixture(temp_shaped, self.MISSING_FILE_YAML)
+            self._build_fixture(ordinary, self.MISSING_FILE_YAML)
+
+            temp_rc, temp_out = self._run_at(temp_shaped)
+            ordinary_rc, ordinary_out = self._run_at(ordinary)
+
+            self.assertEqual(
+                temp_rc, ordinary_rc,
+                "Verdict depends on the repo's location on disk (fail-open): "
+                f"temp-shaped rc={temp_rc}, ordinary rc={ordinary_rc}\n"
+                f"temp-shaped output:\n{temp_out}\nordinary output:\n{ordinary_out}"
+            )
+            # Findings differ only by the (absolute) workflow path they cite.
+            self.assertEqual(
+                temp_out.count('references missing file'),
+                ordinary_out.count('references missing file'),
+                "Finding counts differ between locations"
+            )
+
+    def test_present_file_is_clean_under_temp_shaped_root(self):
+        """Removing the exemption must not invert into a false positive.
+
+        Same trigger-shaped root, but the referenced file exists -> clean.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / self.TEMP_SHAPED_SUFFIX
+            self._build_fixture(
+                root,
+                self.MISSING_FILE_YAML,
+                stub_files=[Path('tools') / 'verify_definitely_absent_gate.py'],
+            )
+
+            exit_code, stdout = self._run_at(root)
+
+            self.assertEqual(
+                exit_code, 0,
+                f"Fixture provides the file it cites, so the gate must be clean:\n{stdout}"
+            )
+
+    def test_source_has_no_path_shape_sniffing(self):
+        """Static guard: the gate must never branch on the shape of its root path.
+
+        Rules-as-code -- the prose fix was applied once and silently regressed because
+        a second copy survived. This fails on any new copy anywhere in the module.
+        """
+        source = (
+            Path(__file__).parent.parent / 'tools' / 'ci_gate_runability.py'
+        ).read_text(encoding='utf-8')
+
+        code_lines = [
+            (i, line) for i, line in enumerate(source.splitlines(), 1)
+            if not line.lstrip().startswith('#')
+        ]
+        offenders = [
+            f"{i}: {line.strip()}"
+            for i, line in code_lines
+            if 'AppData' in line or 'is_temp_fixture' in line
+        ]
+        self.assertEqual(
+            offenders, [],
+            "ci_gate_runability.py must not special-case temp-shaped repo roots; "
+            "test fixtures create the files they reference instead. Offending lines:\n"
+            + "\n".join(offenders)
+        )
+
+
 class TestCIGateRunabilityRealWorkflow(unittest.TestCase):
     """Test the tool against the real repository's workflows."""
 
