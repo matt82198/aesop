@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Health Score tool — deterministic readiness score for primed projects.
+INDEX: Readiness score (0-100) for primed projects; CLI: `--cwd <path> [--json]`; checks: config, hooks, CLAUDE.md, writable, heartbeats, git-identity, secret-scan (weighted scoring)
 
 Calculates a weighted 0-100 score based on:
 - Config validity (JSON parseable, required fields) — 15 points
