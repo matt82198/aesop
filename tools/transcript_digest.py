@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 transcript_digest.py — Digest agent transcripts into compact briefs.
+INDEX: Digest agent-*.jsonl transcripts into compact redacted per-agent briefs (state/ledger/transcripts-brief.jsonl; deterministic, idempotent, strips paths/emails/tokens)
 
 Reads agent-*.jsonl transcripts from a session subagents directory and appends
 compact ~200-byte per-agent briefs to state/ledger/transcripts-brief.jsonl.

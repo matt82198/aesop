@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Wave preflight validator — check repo readiness before starting a wave.
+INDEX: Wave-open readiness validator: (1) repo-readiness checks (branch/clean-tree/HALT/heartbeats/tracker JSON parse); (2) backlog validation via --tracker (flags: missing ownsFiles, stale file refs, ownership overlaps, ledger aggregate retry rate); (3) --from-stdin mode reads repo roots from stdin to check multiple repos in one run; --json mode + --state-root/AESOP_STATE_ROOT split from --root; warn-level checks never flip exit 1; advisory tool exit 0 for --tracker mode
 
 Validates:
   1. Current repo is on a feature branch (never main/master)

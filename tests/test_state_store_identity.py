@@ -141,57 +141,60 @@ print(f"{stable_id}|{epoch}")
         self.assertEqual(stable_id_1, stable_id_2, "Stable ID should not change across restarts")
         self.assertEqual(epoch_2, epoch_1 + 1, "Epoch should increment on restart")
 
-    def test_corrupt_id_file_fails_open(self):
-        """Verify corrupt/unreadable id file falls back to ephemeral without raising."""
-        from state_store.identity import get_identity_with_epoch
+    def test_corrupt_id_file_fails_closed(self):
+        """Verify corrupt/unreadable id file FAILS CLOSED when prior file existed.
 
-        # Create corrupt identity file
+        This is the NEW behavior (post-fix). Corrupt existing files should raise
+        IdentityCorruptionError to prevent epoch resets on crash recovery.
+        Only FRESH boxes (no prior file) fall back to ephemeral.
+        """
+        from state_store.identity import get_identity_with_epoch, IdentityCorruptionError
+
+        # Create corrupt identity file (simulates torn write)
         id_file = Path(self.state_root) / "instance-id"
         id_file.write_text("{ invalid json }", encoding="utf-8")
 
-        # Should not raise; should fall back to ephemeral form
-        stable_id, epoch = get_identity_with_epoch(self.state_root)
+        # Should raise IdentityCorruptionError (fail-closed)
+        with self.assertRaises(IdentityCorruptionError):
+            get_identity_with_epoch(self.state_root)
 
-        self.assertIsInstance(stable_id, str)
-        self.assertIsInstance(epoch, int)
-        # Ephemeral form should be returned without raising
-        self.assertIn(":", stable_id, "Ephemeral form should be hostname:pid:nonce")
-
-    def test_missing_id_file_fails_open(self):
-        """Verify missing id file falls back to ephemeral without raising."""
+    def test_missing_id_file_fresh_box(self):
+        """Verify missing id file on fresh box creates new identity with epoch=1."""
         from state_store.identity import get_identity_with_epoch
 
-        # Ensure state root exists but id file doesn't
+        # Ensure state root exists but id file doesn't (fresh box scenario)
         Path(self.state_root).mkdir(parents=True, exist_ok=True)
         id_file = Path(self.state_root) / "instance-id"
         if id_file.exists():
             id_file.unlink()
 
-        # Should not raise; should fall back to ephemeral form
+        # Fresh box: should create new identity with epoch=1
         stable_id, epoch = get_identity_with_epoch(self.state_root)
 
         self.assertIsInstance(stable_id, str)
         self.assertIsInstance(epoch, int)
-        # Ephemeral form should be returned
-        self.assertIn(":", stable_id, "Ephemeral form should be hostname:pid:nonce")
+        self.assertEqual(epoch, 1, "Fresh box should have epoch=1")
+        # Should have persisted the identity
+        self.assertTrue(id_file.exists(), "Identity file should have been created")
+        with open(id_file, encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(data["epoch"], 1)
 
-    def test_unwritable_id_file_fails_open(self):
-        """Verify unwritable id file falls back to ephemeral without raising."""
+    def test_read_only_valid_id_file_succeeds(self):
+        """Verify read-only but valid id file can still be read (no write needed on read path)."""
         from state_store.identity import get_identity_with_epoch
 
-        # Create read-only id file
+        # Create read-only id file with valid content
         id_file = Path(self.state_root) / "instance-id"
-        id_file.write_text('{"stable_id": "test:123:abc", "epoch": 1}', encoding="utf-8")
+        id_file.write_text('{"stable_id": "test:123abc", "epoch": 2}', encoding="utf-8")
         id_file.chmod(0o444)  # Read-only
 
         try:
-            # Should not raise; should fall back to ephemeral form when unable to write new epoch
+            # Should succeed because reading a valid file doesn't require write access
             stable_id, epoch = get_identity_with_epoch(self.state_root)
 
-            self.assertIsInstance(stable_id, str)
-            self.assertIsInstance(epoch, int)
-            # Should either use the persisted identity or fall back to ephemeral
-            self.assertIn(":", stable_id, "Identity should contain colons")
+            self.assertEqual(stable_id, "test:123abc", "Should have read the persisted stable_id")
+            self.assertEqual(epoch, 2, "Should have read the persisted epoch")
         finally:
             # Restore permissions for cleanup
             id_file.chmod(0o644)
@@ -237,6 +240,60 @@ print(f"{stable_id}|{epoch}")
 
         # Should return success status
         self.assertIsNotNone(result, "release_own_stale should return a result")
+
+    def test_corrupt_prior_id_file_fails_closed(self):
+        """Verify corrupt/torn-write id file FAILS CLOSED when prior file existed.
+
+        Reproduces the multibox.md Finding 2 attack:
+        1. Fresh start: write instance-id, crash mid-write (simulated by creating partial JSON)
+        2. Restart: file exists but is corrupt (empty/partial JSON)
+        3. Expected: FAIL CLOSED (raise IdentityCorruptionError), NOT silent-reset to ephemeral epoch=1
+
+        This preserves monotonicity: a crashed restart cannot masquerade as epoch=1
+        when a prior epoch was already persisted.
+        """
+        from state_store.identity import get_identity_with_epoch, IdentityCorruptionError
+        import state_store.identity as id_module
+
+        # Simulate a prior persistent identity (crashed write)
+        id_file = Path(self.state_root) / "instance-id"
+        id_file.write_text('', encoding="utf-8")  # Empty file: torn write
+
+        # Clear cache to force re-read
+        id_module._IDENTITY_CACHE.clear()
+
+        # Should raise IdentityCorruptionError (fail-closed), not silently return ephemeral
+        with self.assertRaises(IdentityCorruptionError):
+            get_identity_with_epoch(self.state_root)
+
+    def test_fresh_box_no_prior_file_creates_epoch_1(self):
+        """Verify fresh box (no prior file) correctly creates epoch=1.
+
+        Distinguishes fresh start (no file ever existed) from crash recovery (file exists but corrupt).
+        Fresh starts should always succeed with epoch=1.
+        """
+        from state_store.identity import get_identity_with_epoch
+        import state_store.identity as id_module
+
+        # Ensure no prior file exists
+        id_file = Path(self.state_root) / "instance-id"
+        if id_file.exists():
+            id_file.unlink()
+
+        # Clear cache
+        id_module._IDENTITY_CACHE.clear()
+
+        # Fresh start should succeed and create epoch=1
+        stable_id, epoch = get_identity_with_epoch(self.state_root)
+
+        self.assertIsInstance(stable_id, str)
+        self.assertEqual(epoch, 1, "Fresh box should start with epoch=1")
+        self.assertTrue(id_file.exists(), "Identity file should be created")
+
+        # Verify file was persisted correctly
+        with open(id_file, encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(data["epoch"], 1)
 
 
 class TestIdentityCompat(unittest.TestCase):

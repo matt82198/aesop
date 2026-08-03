@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Docstring coverage checker for Python code.
+INDEX: AST-based docstring coverage checker for Python modules
 
 AST-based tool that scans Python files for missing docstrings on public
 functions and classes. Calculates coverage percentage and can enforce a

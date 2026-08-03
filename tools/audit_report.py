@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Deterministic audit report generator — aggregates machine-generated audit outputs.
+INDEX: Deterministic markdown audit report aggregator (defect_escape, mutation results, lint/drift findings, ledger verdict rates); --out/--strict/--json inputs from machine outputs only
 
 Assembles findings from multiple tools into a single dated markdown audit report:
   - defect_escape.py telemetry (code quality metrics)

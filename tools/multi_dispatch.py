@@ -1,4 +1,5 @@
 """tools.multi_dispatch — Multi-instance-aware dispatch wrapper.
+INDEX: Multi-instance-aware dispatch wrapper (atomic ClaimBackend.claim() when multibox.enabled=True, legacy advisory check_conflict+claim_files when off; --config flag reads aesop.config.json for multibox flag; exit 1 on ClaimConflict, no record written fail-closed)
 
 Coordinates dispatch work across multiple instances by:
   1. Checking if files are already claimed by other instances (legacy) or
