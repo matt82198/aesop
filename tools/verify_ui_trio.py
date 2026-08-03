@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 verify_ui_trio.py — Browser proof covering three UI trio panels:
+INDEX: Browser proof (Playwright): UI trio panels (Gantt Timeline, Audit Tail Stream, Live Reasoning Transparency); exit 0=proven/1=failed, --allow-skip only browserless
 1. Gantt Timeline (agent phase visualization)
 2. Audit Tail Stream (latest audit/verification outcomes)
 3. Live Reasoning Transparency (per-agent reasoning activity)

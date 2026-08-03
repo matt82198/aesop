@@ -141,6 +141,45 @@ This is not a universal solution. The system has explicit boundaries:
 
 ---
 
+## (6) Swappable Model Seats: From Principle to Formalized Micro-Kernel (Increment 5)
+
+The hypothesis' emphasis on "source code, not magic" extends to the orchestrator seat itself. **Aesop's orchestrator is a swappable part**, not the engine. This realization evolved through five increments of incrementally formal proof.
+
+**Increments 0–4a (SHIPPED):**
+
+1. **Increment 0** — Contract extraction: cataloged orchestrator decision types (rank_backlog, adjudicate_findings, review_diff, synthesize_brief, repair_decision, final_catch) and their output schemas (`decisions/*.schema.json`). **Proof**: 6 schema files in `driver/decisions/`.
+
+2. **Increment 1** — OrchestratorDriver seam: abstracted orchestrator backend behind a single interface (`orchestrator_backend.py`: decide_call() → raw text). **Proof**: decision routing works offline; `tests/test_orchestrator_driver.py` passes.
+
+3. **Increment 2** — Shadow mode: ran offline adjudication (real orchestrator decision types, fake test data) and measured cost. **Proof**: `bench/results/` shadow runs (2026-07-23), identical verdict shape.
+
+4. **Increment 3** — Live swap of ONE decision class (adjudicate_finding): two-tier escalation gate (cheap challenger decides; low-confidence / undetermined / disallowed-type calls escalate to incumbent frontier model). Conservative by design — never emits an unconfident verdict as final. **Proof**: `driver/adjudication_gate.py` + **28 passing tests** (`tests/test_adjudication_gate.py`, lines 1–1251), all safety invariants verified.
+
+5. **Increment 4a** — Seated shadow adjudication in a real wave: gave both challenger and incumbent the **actual file-brain context** (STATE.md, BUILDLOG.md, tracker.json, cited code) rather than decontextualized facts. Both models flipped from abstaining (undetermined, ~80% of runs) <!-- metrics-verified: bench/results/hs2-swap-proof-2026-07-25.md -- to confident correct verdicts. **Proof**: `bench/results/hs2-swap-proof-2026-07-25.md` — one bounded live run (worker = gpt-4o-mini, orchestrator = gpt-4o-mini, both arms green, schema-valid verdict on first attempt, invariant Report JSON shape, $2 <!-- metrics-verified: bench/results/hs2-swap-proof-2026-07-25.md --> spend cap verified).
+
+**Increment 5 — Micro-Kernel Formalization (this doc):**
+
+Formalizes the seam as a bounded micro-kernel with 7 documented syscalls (`docs/MICROKERNEL.md`, "Micro-Kernel System Calls" table):
+- `file_brain_read()` — read allowlisted control files (STATE.md, BUILDLOG.md, tracker.json) with manifest audit.
+- `file_brain_write()` — append-only journal writes with fingerprint binding.
+- `dispatch()` — spawn isolated worker with filesystem + shell sandboxing.
+- `verify()` — re-run test to detect fake-green.
+- `run_command()` — orchestrator-side command execution (git, tests).
+- `git()` — stage/commit/push files per repo.
+- `halt()` — abort wave with structured reason.
+
+Each syscall is **grounded in code** (file:line citations to driver source) and bounded in scope (backend tier determines which calls it may make). The evidence that "the seam is real and the boundary holds" rests on:
+- **Offline proof** (`tests/test_hs2_swap_proof.py`): same task on fake backend yields byte-identical Report JSON + state layer; no opt-in keys leak; swapped backend demonstrably decided (call_count assertion).
+- **Live proof** (`bench/results/hs2-swap-proof-2026-07-25.{md,json}`): real task, real worker (gpt-4o-mini), real orchestrator (gpt-4o-mini), both arms green with invariant result shape.
+
+**Why this matters:** The hypothesis claims "agent behavior is source code," and the micro-kernel formalization proves the corollary: **orchestrator behavior is source code too.** Swapping a model is swapping a driver, and the driver is configured in a `.json` file you can read and version-control. The invariants (Report JSON shape, state layer structure) hold regardless of which model is in the seat — measured, not asserted.
+
+**Honest bounds:** The live proof is one task, one model repeat. It proves the *plumbing* (config → seat → real API → verdict → effect), not decision *quality* (the subject of the shadow-adjudication bench line, an ongoing study). Orchestrator decisions outside the wave engine (backlog ranking, PR merges by the live harness) are NOT routed through the seat in the pilot (manual merge). Repair semantics (bounded retry on test failure) are unchanged when you swap a seat.
+
+**Cite:** [`docs/MICROKERNEL.md`](./MICROKERNEL.md) — syscall table and tier coverage; [`tests/test_hs2_swap_proof.py`](../tests/test_hs2_swap_proof.py) — offline proof; [`bench/results/hs2-swap-proof-2026-07-25.md`](../bench/results/hs2-swap-proof-2026-07-25.md) — live proof.
+
+---
+
 ## The Bet
 
 **Simple systems that fail loudly and often outrun complex ones that hide state in databases.**

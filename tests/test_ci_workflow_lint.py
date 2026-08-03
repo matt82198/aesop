@@ -465,5 +465,251 @@ class TestToolsImportable(unittest.TestCase):
         self.assertTrue(callable(ci_workflow_lint.main))
 
 
+class TestCIJobNoJobLevelIf(unittest.TestCase):
+    """Safety test: ci job must never have a job-level if condition (PR #170 deadlock).
+
+    The ci job is REQUIRED under branch protection. If it has a job-level if condition,
+    it can report skipped status, which deadlocks PRs forever (skipped does not satisfy
+    required check). Step-level conditions are safe; job-level conditions are forbidden.
+    """
+
+    REAL_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+    def test_ci_job_has_no_job_level_if(self):
+        """The ci job must not have an if condition at the job level."""
+        ci_path = self.REAL_REPO_ROOT / '.github' / 'workflows' / 'ci.yml'
+        self.assertTrue(ci_path.exists(), f"ci.yml not found at {ci_path}")
+
+        import yaml
+        with open(ci_path, 'r', encoding='utf-8') as f:
+            workflow = yaml.safe_load(f)
+
+        ci_job = workflow['jobs'].get('ci')
+        self.assertIsNotNone(ci_job, "ci job not found in ci.yml")
+
+        # ci job must NOT have an 'if' key at the job level
+        self.assertNotIn('if', ci_job,
+            "ci job has a job-level if condition, which causes PR deadlock (skipped status). "
+            "PR #170 documented this: skipped required checks do not satisfy branch protection. "
+            "Use step-level conditions instead.")
+
+
+class TestWindowsAggregatorHandlesSkipped(unittest.TestCase):
+    """Safety test: windows aggregator must treat skipped as pass.
+
+    The windows-shard job is conditional (skipped on docs-only). The windows aggregator
+    (required check) must handle needs.windows-shard.result == "skipped" and treat it as
+    a pass, otherwise the aggregator fails when windows-shard is skipped.
+    """
+
+    REAL_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+    def test_windows_aggregator_accepts_skipped(self):
+        """The windows aggregator must accept skipped result from windows-shard."""
+        ci_path = self.REAL_REPO_ROOT / '.github' / 'workflows' / 'ci.yml'
+        self.assertTrue(ci_path.exists(), f"ci.yml not found at {ci_path}")
+
+        with open(ci_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # Check that windows aggregator explicitly handles skipped
+        # The check should look for: != "success" AND != "skipped" to fail
+        self.assertIn('needs.windows-shard.result', content,
+            "windows aggregator must reference needs.windows-shard.result")
+
+        # Look for the pattern that accepts both success and skipped
+        self.assertIn('skipped', content.split('windows:')[1].split('ps1-syntax-check:')[0],
+            "windows aggregator must explicitly handle skipped result")
+
+
+class TestVerifyTestSuiteCountOnceInCI(unittest.TestCase):
+    """Safety test: verify_test_suite_count --check appears exactly once in ci job.
+
+    C1 removed the duplicate verify_test_suite_count step (it appeared twice).
+    Must stay exactly once to avoid redundant runs and drift confusion.
+    """
+
+    REAL_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+    def test_verify_test_suite_count_appears_once(self):
+        """verify_test_suite_count --check must appear exactly once in ci.yml."""
+        ci_path = self.REAL_REPO_ROOT / '.github' / 'workflows' / 'ci.yml'
+        self.assertTrue(ci_path.exists(), f"ci.yml not found at {ci_path}")
+
+        with open(ci_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # Count occurrences of the verify_test_suite_count --check command
+        count = content.count('python tools/verify_test_suite_count.py --check')
+
+        self.assertEqual(count, 1,
+            f"verify_test_suite_count --check must appear exactly once in ci.yml, found {count} times. "
+            "Duplicate steps cause redundant runs and confusion about actual drift state.")
+
+
+class TestMainFullConcurrencyNotSelfCancelling(unittest.TestCase):
+    """main-full.yml must never cancel a previous merge's post-merge verification.
+
+    main-full is the POST-MERGE drift guard: it runs the full sequential suite on the
+    merged commit. It triggered on `push: branches: [main]` while grouping concurrency
+    on `github.ref` -- which on a push to main is ALWAYS `refs/heads/main`. Combined
+    with `cancel-in-progress: true`, every merge killed the previous merge's
+    verification run. Measured 2026-08-02: 8 of the last 12 main-full runs CANCELLED,
+    i.e. the post-merge net was off 67% of the time, worst exactly during merge bursts
+    when drift is most likely.
+
+    The group must be per-COMMIT (github.sha / run id), and cancellation must be off.
+    """
+
+    REAL_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+    def _load_main_full(self):
+        import yaml
+        path = self.REAL_REPO_ROOT / '.github' / 'workflows' / 'main-full.yml'
+        self.assertTrue(path.exists(), f"main-full.yml not found at {path}")
+        with open(path, 'r', encoding='utf-8') as f:
+            return yaml.safe_load(f), path.read_text(encoding='utf-8')
+
+    def test_main_full_has_concurrency_block(self):
+        workflow, _ = self._load_main_full()
+        self.assertIn('concurrency', workflow,
+            "main-full.yml must declare a concurrency block")
+
+    def test_main_full_cancel_in_progress_is_false(self):
+        """cancel-in-progress must be false: every merged commit gets verified."""
+        workflow, _ = self._load_main_full()
+        cancel = workflow['concurrency'].get('cancel-in-progress')
+        self.assertIs(cancel, False,
+            "main-full.yml has cancel-in-progress != false. main-full is the post-merge "
+            "drift guard, not a merge gate -- cancelling it means merged commits ship "
+            "unverified. Measured 8/12 runs CANCELLED before this fix.")
+
+    def test_main_full_concurrency_group_is_per_commit(self):
+        """The group key must vary per commit, not be constant on refs/heads/main."""
+        workflow, _ = self._load_main_full()
+        group = str(workflow['concurrency'].get('group', ''))
+        self.assertTrue(
+            'github.sha' in group or 'github.run_id' in group,
+            f"main-full concurrency group {group!r} is not per-commit. Grouping on "
+            "github.ref collapses every push to main into one group, so consecutive "
+            "merges contend for the same slot.")
+
+    def test_main_full_concurrency_group_not_bare_github_ref(self):
+        """Regression pin: the exact pre-fix group must not come back."""
+        workflow, _ = self._load_main_full()
+        group = str(workflow['concurrency'].get('group', ''))
+        self.assertNotIn('github.ref', group,
+            "main-full concurrency group still keys on github.ref, which is always "
+            "refs/heads/main for push-to-main events.")
+
+
+class TestCIDoesNotDuplicateMainFull(unittest.TestCase):
+    """ci.yml must not re-run the full suite on push to main.
+
+    main-full.yml exists precisely because main is already protected by PR checks
+    (its own header comment says so). Leaving `push: branches: [main]` on ci.yml made
+    every merge pay ~30 job-minutes twice -- once via ci, once via main-full -- for
+    a commit whose ci run already passed on the PR.
+    """
+
+    REAL_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+    def _load_ci(self):
+        import yaml
+        path = self.REAL_REPO_ROOT / '.github' / 'workflows' / 'ci.yml'
+        self.assertTrue(path.exists(), f"ci.yml not found at {path}")
+        with open(path, 'r', encoding='utf-8') as f:
+            return yaml.safe_load(f)
+
+    def _triggers(self, workflow):
+        # PyYAML parses the bare key `on:` as the boolean True.
+        return workflow.get('on', workflow.get(True, {}))
+
+    def test_ci_has_no_push_to_main_trigger(self):
+        workflow = self._load_ci()
+        triggers = self._triggers(workflow)
+        push = triggers.get('push')
+        if push is None:
+            return  # no push trigger at all -- correct
+        branches = (push or {}).get('branches', []) or []
+        self.assertNotIn('main', branches,
+            "ci.yml still triggers on push to main, duplicating main-full.yml's full "
+            "run on every merge. main is protected by PR checks; post-merge "
+            "verification is main-full's job.")
+
+    def test_ci_still_triggers_on_pull_request(self):
+        """Removing push must NOT remove the PR trigger -- ci is the required gate."""
+        workflow = self._load_ci()
+        triggers = self._triggers(workflow)
+        self.assertIn('pull_request', triggers,
+            "ci.yml must still run on pull_request -- it is the required merge gate")
+
+    def test_main_full_still_covers_push_to_main(self):
+        """Post-merge coverage must not be lost -- main-full keeps the push trigger."""
+        import yaml
+        path = self.REAL_REPO_ROOT / '.github' / 'workflows' / 'main-full.yml'
+        with open(path, 'r', encoding='utf-8') as f:
+            workflow = yaml.safe_load(f)
+        triggers = workflow.get('on', workflow.get(True, {}))
+        branches = (triggers.get('push') or {}).get('branches', []) or []
+        self.assertIn('main', branches,
+            "main-full.yml must trigger on push to main -- it is the only post-merge net")
+
+
+class TestUIBuildStepsShardScoped(unittest.TestCase):
+    """The ui/web build chain must run once, not identically on all 4 ci shards.
+
+    The React build + tsc + dist-drift + vitest steps are shard-invariant: all four
+    ubuntu shards did the same npm ci + build + type-check + vitest work, ~3x wasted.
+    Gating them is STEP-level on purpose. A JOB-level `if:` on `ci` makes the matrix
+    report `ci (N)` as skipped, and a skipped required check never satisfies branch
+    protection -- PR #170 deadlocked forever that way. Never move this to job level.
+    """
+
+    REAL_REPO_ROOT = Path(__file__).resolve().parent.parent
+    SHARD_ZERO = 'matrix.python-shard == 0'
+
+    # Step names that must carry the shard-0 condition.
+    SHARD_SCOPED_STEPS = [
+        'Build React dashboard (ui/web/)',
+        'TypeScript type check (ui/web/)',
+        'Dist drift gate (committed ui/web/dist must match fresh build)',
+        'Run React component tests (vitest)',
+    ]
+
+    def _ci_job_steps(self):
+        import yaml
+        path = self.REAL_REPO_ROOT / '.github' / 'workflows' / 'ci.yml'
+        with open(path, 'r', encoding='utf-8') as f:
+            workflow = yaml.safe_load(f)
+        ci_job = workflow['jobs'].get('ci')
+        self.assertIsNotNone(ci_job, "ci job not found in ci.yml")
+        return ci_job, {s.get('name'): s for s in ci_job.get('steps', []) if s.get('name')}
+
+    def test_ui_build_steps_are_shard_zero_only(self):
+        _, steps = self._ci_job_steps()
+        for name in self.SHARD_SCOPED_STEPS:
+            with self.subTest(step=name):
+                self.assertIn(name, steps, f"ci step {name!r} not found in ci.yml")
+                condition = str(steps[name].get('if', ''))
+                self.assertIn(self.SHARD_ZERO, condition,
+                    f"ci step {name!r} runs on all 4 shards but is shard-invariant; "
+                    f"gate it with `if: {self.SHARD_ZERO}`.")
+
+    def test_ci_job_has_no_job_level_if_still(self):
+        """Shard scoping must stay step-level (PR #170 deadlock guard)."""
+        ci_job, _ = self._ci_job_steps()
+        self.assertNotIn('if', ci_job,
+            "ci job gained a job-level if condition -- skipped required checks "
+            "deadlock PRs (PR #170). Conditions belong on steps.")
+
+    def test_python_shard_matrix_still_four_way(self):
+        """Sanity: the shard-0 condition only makes sense with a shard matrix."""
+        ci_job, _ = self._ci_job_steps()
+        shards = ci_job.get('strategy', {}).get('matrix', {}).get('python-shard')
+        self.assertEqual(shards, [0, 1, 2, 3],
+            "ci python-shard matrix changed; revisit the shard-0 step conditions")
+
+
 if __name__ == "__main__":
     unittest.main()

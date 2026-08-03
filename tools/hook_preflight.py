@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 hook_preflight.py — Verify that all interpreters required by repo hooks are present and executable.
+INDEX: Interpreter health checker; verifies hooks/daemons interpreters; stdlib-only
 
 Purpose:
   Detects broken or missing interpreters before hooks run silently with fail-open behavior.

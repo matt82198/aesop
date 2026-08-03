@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Guardrail G10: encoding lint — enforce explicit encoding='utf-8' on file opens and subprocess.
+INDEX: Encoding lint: flags `open()` without `encoding=`, and `subprocess.run/check_output/Popen` with `text=True`/`universal_newlines=True` and no `encoding=` (the Windows cp1252 trap that crashed metrics_gate on a binary diff). Ratchets against `.encoding-baseline.json` (`--baseline`, `--update-baseline`) so the existing backlog stays visible without blocking pushes while NEW violations fail closed
 
 Scans Python files for:
   1. `open()` calls missing explicit `encoding=` parameter

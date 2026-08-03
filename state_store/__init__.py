@@ -13,6 +13,7 @@ in state_store/CLAUDE.md.
 """
 from .api import StateAPI
 from .export import export_tracker
+from .identity import IdentityCorruptionError
 from .ingest import ingest_tracker_json
 from .projections import project_tracker, project_agent_lifecycle
 from .store import EventStore, ConcurrencyConflict
@@ -21,6 +22,7 @@ __all__ = [
     "EventStore",
     "StateAPI",
     "ConcurrencyConflict",
+    "IdentityCorruptionError",
     "project_tracker",
     "project_agent_lifecycle",
     "export_tracker",

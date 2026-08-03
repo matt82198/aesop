@@ -7,6 +7,10 @@
 </p>
 
 <p align="center">
+  <video width="400" controls><source src="https://raw.githubusercontent.com/matt82198/aesop/main/assets/clips/lens-fanout-haiku-pin.mp4" type="video/mp4"><img src="https://raw.githubusercontent.com/matt82198/aesop/main/assets/clips/lens-fanout-haiku-pin.gif" alt="Aesop wave opening and audit fleet fanout" width="400"></video>
+</p>
+
+<p align="center">
   <a href="https://github.com/matt82198/aesop/actions/workflows/ci.yml"><img src="https://github.com/matt82198/aesop/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://www.npmjs.com/package/@matt82198/aesop"><img src="https://img.shields.io/npm/v/@matt82198/aesop" alt="npm version"></a>
   <a href="https://www.npmjs.com/package/@matt82198/aesop"><img src="https://img.shields.io/npm/dm/@matt82198/aesop" alt="npm downloads"></a>
@@ -39,19 +43,15 @@ In wave-11, a hierarchical dispatch architecture was built: orchestrator → Son
 
 ## Quick Try (2 min, no API keys)
 
-No API keys, no Python, no configuration. Just Node.js >= 18 and git.
+Just Node.js >= 18 and git. No API keys needed.
 
 ```bash
-git clone https://github.com/matt82198/aesop.git
-cd aesop
+git clone https://github.com/matt82198/aesop.git && cd aesop
+npm install && npm run test:all             # Run full test suite
+npx . --help                                # See CLI
+```
 
-npm install
-npx . --help                  # See CLI
-npx . doctor                  # Readiness check (no keys needed)
-npm run test:all             # Run full test suite
-`
-
-That is enough to explore the CLI, read the docs, and verify the test infrastructure. No API keys are touched.
+Explore the CLI, verify the test infrastructure, and study [examples/first-wave-baseline](./examples/first-wave-baseline) — a replay kit of a complete autonomous wave cycle.
 
 ## Full Setup (LLM orchestration)
 
@@ -64,12 +64,9 @@ To run the actual multi-agent orchestration loop you need:
 ```bash
 npx @matt82198/aesop my-fleet --name "api" --repos "/path/to/repo"
 cp -r skills/ ~/.claude/skills          # Enable /power and /buildsystem
-`
+```
 
-For the complete setup guide, orchestration walkthrough, and multi-instance roadmap, see:
-- **[docs/INSTALL.md](./docs/INSTALL.md)** — Setup and first wave
-- **[docs/HOW-THE-LOOP-WORKS.md](./docs/HOW-THE-LOOP-WORKS.md)** — Concrete walkthrough of one wave cycle
-- **[docs/MICROKERNEL.md](./docs/MICROKERNEL.md)** — Two-seat architecture (worker + orchestrator), model swapping
+See the Learn More section for setup and architecture guides.
 
 ## How It Works
 
@@ -87,9 +84,14 @@ For the complete setup guide, orchestration walkthrough, and multi-instance road
 
 ## Learn More
 
-- **[THE-AESOP-HYPOTHESIS.md](./docs/THE-AESOP-HYPOTHESIS.md)** — Design philosophy, trade-offs, and why crash-only.
-- **[DISPATCH-MODEL.md](./docs/DISPATCH-MODEL.md)** — Cost analysis, Haiku sufficiency, scaling properties.
-- **[CARDINAL-RULES.md](./docs/CARDINAL-RULES.md)** — 10 foundational principles for safe autonomous code.
+- **[docs/INSTALL.md](./docs/INSTALL.md)** — Setup and first wave
+- **[docs/FIRST-WAVE.md](./docs/FIRST-WAVE.md)** — Walkthrough of a complete autonomous wave cycle
+- **[docs/MICROKERNEL.md](./docs/MICROKERNEL.md)** — Two-seat architecture (worker + orchestrator), model swapping
+- **[docs/HOW-THE-LOOP-WORKS.md](./docs/HOW-THE-LOOP-WORKS.md)** — Concrete walkthrough of one wave cycle
+- **[THE-AESOP-HYPOTHESIS.md](./docs/THE-AESOP-HYPOTHESIS.md)** — Design philosophy, trade-offs, and why crash-only
+- **[DISPATCH-MODEL.md](./docs/DISPATCH-MODEL.md)** — Cost analysis, Haiku sufficiency, scaling properties
+- **[docs/how-i-built-aesop.md](./docs/how-i-built-aesop.md)** — Technical narrative of the orchestration design
+- **[CARDINAL-RULES.md](./docs/CARDINAL-RULES.md)** — 10 foundational principles for safe autonomous code
 - **[autonomous-swe.md](./docs/autonomous-swe.md)** — What "autonomous" means and doesn't. Honest limits.
 - **[docs/INCIDENTS.md](./docs/INCIDENTS.md)** — All 41 incidents: fake-green, gate-activation, test-pollution, stalls, conflicts, flakes, CI drift, hallucinations.
 - **[RELEASE-NOTES.md](./RELEASE-NOTES.md)** — Version 0.7.2: bug fixes & compliance, encoding hardening, fake-green gate fixes.

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 secret_scan.py — Pre-push secret/credential detection gate.
+INDEX: Pre-push secret/credential detection gate (staged/history/paths); token patterns are word-boundary anchored (`\bsk-`) so a key-shaped substring inside a longer hyphenated word is not reported as a live key
 
 Modes:
   secret_scan.py --staged [--repo PATH]              Scan git staged files (default repo=cwd)
