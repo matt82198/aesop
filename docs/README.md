@@ -25,7 +25,7 @@ If you're new to Aesop, follow this 4-stage path:
 - Environment variables
 
 ### Stage 3: First Wave
-**[FIRST-WAVE.md](FIRST-WAVE.md)** — Run `/power` then `/buildsystem` end-to-end
+**[FIRST-WAVE.md](FIRST-WAVE.md)** — Run `/power` then `/buildsystem` end-to-end; see **[examples/first-wave-baseline/](../examples/first-wave-baseline/)** for a verified 5-item replay kit you can fork
 
 - What to expect from each phase (rank → dispatch → verify → close)
 - Monitoring (dashboard, TUI, logs)
