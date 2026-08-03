@@ -57,6 +57,30 @@
 11. **The scheduler is the loop**: run-merge-queue.sh has no loop, no sleep and no watcher; it runs one bounded pass and exits. Never add polling here or in tools/merge_queue.py — a scheduled actor that waits is just a session with extra steps.
 12. **The advancer never bypasses a gate**: no `--admin`, no `--auto`, no force-push, no review-thread resolution, no secret-scan tampering, no model calls. It merges only when `enforce_admins` is asserted AND every required check is green under its own fail-closed bucketing; anything else becomes an exception row.
 
+## Cadence verification (Windows)
+
+Heartbeats prove a daemon *ran*; they cannot prove it ran at the right *rate*. The refinement
+monitor once fired hourly against its 20-minute SLA with every cycle exiting 0 and every
+heartbeat fresh at read time -- nothing compared the registered cadence to the defined one.
+
+`tools/task_cadence_check.py` closes that gap: it parses this directory's `install-tasks.ps1`
+as the source of truth (binding each `Register-DaemonTask` call site's `-TaskName` /
+`-IntervalMinutes` through the param defaults and `${TaskPrefix}` interpolation, so expected
+cadences are never hand-copied), then reads live state from `schtasks /query /tn <name> /xml`
+and compares. Exit 1 on interval mismatch, unregistered task, or disabled task; exit 2
+(fail-closed) on any query/parse failure, which outranks exit 1 so an unevaluable task is
+never masked by clean siblings. `<Enabled>` is optional in Task Scheduler XML and its absence
+means enabled; `/xml` output is UTF-16 and is decoded by BOM.
+
+Windows-only by construction: on any other platform it prints a `SKIPPED-non-windows` line and
+exits 0, so ubuntu CI is unaffected. The intended consumer is the local `/power` self-test
+(`power_selftest.py`), which should invoke it alongside the existing heartbeat-staleness
+checks. Run it manually after any `install-tasks.ps1` change or after a reboot:
+`python tools/task_cadence_check.py [--json]`.
+
+Its tests (`tests/test_task_cadence_check.py`) are fixture-driven and never shell out to
+`schtasks` -- the query function is injectable -- so the suite runs identically on both OSes.
+
 ## Testing
 
 **Run all daemons tests** (hermetic, uses mktemp fixtures):
