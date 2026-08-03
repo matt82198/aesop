@@ -210,34 +210,5 @@ Bar segments include `<title>` elements for tooltips. Tests verify presence and 
 - Hard 500 on missing `ui/web/dist` is intentional fail-closed behaviour (preserved).
 
 **Testing:** 24 unit tests PASS (Host header validation, DNS-rebinding defence, route resolution). No regression.
-
-## CostSummaryDrawer component (wave-33 UI standup)
-
-**New:** `ui/web/src/components/CostSummaryDrawer.tsx` — persistent collapsible drawer on right edge showing spend overview.
-
-**Design:**
-- Fixed position on right edge, default COLLAPSED (toggle rail only, ~40px wide). Expanded: ~180px width.
-- Renders three metrics: (1) total spend/$tokens, (2) spend rate (daily avg), (3) compact model-mix breakdown.
-- Bound to same SSE source as Cost view (no polling); observes `cost` prop and `connectionStatus`.
-- Handles three state transitions (same as Cost.tsx):
-  1. **Loading** (`cost=null`, `connectionStatus.status='live'`): shows spinner + "Loading..." label.
-  2. **Error** (`cost=null`, `connectionStatus.status !== 'live'`): shows error icon + error message.
-  3. **Empty** (`total_runs=0`): shows "No data yet" hint.
-  4. **Loaded** (`total_runs>0`): renders spend/rate/model-mix metrics.
-
-**Accessibility:**
-- Toggle button: `<button>` with `aria-label` (changes based on expanded state).
-- Panel: `role="status"` for screen reader announcements of state changes.
-- Drawer: `aria-label="Cost summary drawer"`.
-- Model-mix: compact bar chart using CSS gradients, no images.
-
-**Testing:**
-- 21 new unit tests (vitest + React Testing Library): toggle states, all four data states, keyboard interaction (Enter/Space), pricing-dependent display, aria attributes.
-- All 498 tests PASS (21 new + 477 existing).
-
-**Integration:**
-- Imported and rendered in `App.tsx` below HealthHeader, before nav/main.
-- Props bound to App-level `sseState.cost` and `connection`.
-- **CSS imports:** `CostSummaryDrawer.css` uses design tokens (`--color-*`, `--font-*`, `--spacing-*`). No hardcoded colors.
-
-**Comment fix:** Cost.tsx:63 comment corrected (was "live/reconnecting"; is now "live" per actual logic on line 67).
+## CostSummaryDrawer component
+**New:** `ui/web/src/components/CostSummaryDrawer.tsx` — right-edge collapsible drawer (40px collapsed, ~180px expanded) showing spend/rate/model-mix metrics. Bound to SSE `cost`+`connectionStatus` props; handles loading/error/empty/loaded states. Toggle button + panel with `role="status"`, `aria-label` accessibility. 21 unit tests (vitest, all states + keyboard/pricing). Integrated into App.tsx. CSS uses design tokens. Cost.tsx:63 comment fixed (was "live/reconnecting", now "live").
