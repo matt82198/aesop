@@ -13,8 +13,9 @@
 - **run-watchdog.sh**: Daemon supervisor (1.7K); spawns backup-fleet.sh every 150s with atomic lockfile guard, maintains heartbeat, logs to FLEET-BACKUP.log, posts security alerts via alert_bridge.py (opt-in). Traps INT/TERM cleanly. **BASH_SOURCE exec-guard**: all path/env variables declared INSIDE the guard (sourcing exposes only functions like acquire_lock/release_lock, not env side effects).
 - **backup-fleet.sh**: Core backup worker (5K); discovers repos (~/.*, ~/*, ~/dev/*), stashes uncommitted work to backup/* branches, pushes unpushed commits, scans tracked/untracked files for secrets. Blocks push if secret-scan fails. **Set -u pipefail** at top; heartbeat is written at the END of a completed cycle, never before main() runs -- a heartbeat must attest to work DONE. Written up front, a crash inside main() still left a fresh timestamp, so selfheal.sh saw a healthy age and never restarted the daemon while backups silently halted. Failure paths deliberately skip the write so staleness is detectable.
 - **selfheal.sh**: Self-healing supervisor; monitors heartbeats of run-watchdog.sh and the sibling monitor daemon (CONDUCTOR_ROOT-resolved). On each cycle (~60s), detects stale heartbeats (>600s age) and restarts dead daemons. Single-instance guarded via atomic mkdir. Never kills anything with fresh heartbeat (idempotent). Logs to state/SELFHEAL.log. **BASH_SOURCE exec-guard**: all path/env variables inside guard. CRLF-safe. Supports `--once` mode for testing.
+- **run-merge-queue.sh**: Merge-queue advancer runner (~140 lines). NOT a daemon and NOT a loop: one invocation runs exactly ONE bounded pass of `tools/merge_queue.py --advance`, and the 5-minute `AesopMergeQueue` Scheduled Task IS the loop. Deliberate -- merging must not depend on a live interactive session (measured green->merge dead time ~31.75 HOURS sessionless vs 9-109 seconds seated). Zero `sleep` calls, zero polling. Checks `.HALT` first (halted = log + exit 0, no work), `cd`s to `$AESOP_ROOT` because `gh` resolves the repo from cwd, exports `AESOP_STATE_ROOT`, appends to state/MERGE-QUEUE.log, and propagates the tool's exit code. **BASH_SOURCE exec-guard**: every path/env variable declared INSIDE the guard, so sourcing exposes only resolve_python/log_line/check_halt.
 - **run-hidden.vbs**: Windows VBScript launcher (~30 lines); rebuilds quoted command line from WScript.Arguments and runs via WScript.Shell.Run with window style 0 (hidden). Used by install-tasks.ps1 to launch bash commands from Scheduled Tasks without console flash.
-- **install-tasks.ps1**: Windows task installer (PowerShell 5.1, ~170 lines); idempotent registration of watchdog/monitor Scheduled Tasks with hidden wscript launcher. Params: BashExe, WatchdogCommand, MonitorCommand, intervals, TaskPrefix, -DryRun, -Uninstall. Actions: wscript.exe //B //Nologo run-hidden.vbs <bash-exe> -lc <cmd>; Trigger: once per interval (default 5m/20m) repeating 10y; Settings: Hidden, IgnoreNew, 1h timeout, StartWhenAvailable.
+- **install-tasks.ps1**: Windows task installer (PowerShell 5.1, ~215 lines); idempotent registration of watchdog/monitor/merge-queue Scheduled Tasks with hidden wscript launcher. Params: BashExe, WatchdogCommand, MonitorCommand, MergeQueueCommand, intervals, TaskPrefix, -DryRun, -Uninstall, -EnableAuditLog, -EnableMergeQueue. Actions: wscript.exe //B //Nologo run-hidden.vbs <bash-exe> -lc <cmd>; Trigger: once per interval (default 5m watchdog / 20m monitor / 5m merge-queue) repeating 10y; Settings: Hidden, IgnoreNew, 1h timeout, StartWhenAvailable. **AesopMergeQueue is OPT-IN** (`-EnableMergeQueue`, or an explicit `-MergeQueueCommand`): it merges to main with no interactive session, so it is never switched on as a side effect of running the installer. `-Uninstall` always removes all three.
 
 ## State files & contracts (git-ignored)
 
@@ -26,6 +27,10 @@
 - `$AESOP_ROOT/state/SELFHEAL.log`: Append-only; self-healing cycle start/end, stale heartbeat detection, daemon restart actions (dry-run or real).
 - `$AESOP_ROOT/state/SECURITY-ALERTS.log`: Append-only security alerts (read by alert_bridge.py for Slack/Discord webhooks).
 - `$AESOP_ROOT/state/.alert-bridge-cursor`: Line number of last sent alert (idempotent dispatch).
+- `$AESOP_ROOT/state/.merge-queue-lock/`: Atomic lockfile dir for run-merge-queue.sh's advancer pass (owned by tools/merge_queue.py, not the shell). Contains `timestamp` + `pid`; fail-closed on contention (a held lock means the scheduler just retries in 5 minutes), reclaimed only past 600s.
+- `$AESOP_ROOT/state/.merge-queue-heartbeat`: Unix epoch seconds; beaten once per advancer pass.
+- `$AESOP_ROOT/state/merge-queue/exceptions.jsonl`: Append-only advancer exception ledger; one JSON object per line, `{ts, pr, kind, detail, run_url}`, deduped on (pr, kind, detail) so a re-entrant pass appends nothing.
+- `$AESOP_ROOT/state/MERGE-QUEUE.log`: Append-only; per-pass START/END markers and the advancer's stdout.
 - `$AESOP_ROOT/state/.HALT`: Kill-switch sentinel (JSON {reason}); checked at cycle start; any cycle halted logs "HALTED: <reason>" and skips all work until cleared.
 
 ## Environment variables
@@ -34,6 +39,8 @@
 - `CONDUCTOR_ROOT` (default: sibling of AESOP_ROOT): Conductor3 root; if unset or missing, monitor-related operations skip gracefully (portability).
 - `AESOP_WATCHDOG_CYCLE_CMD`: Override backup-fleet.sh invocation (test override); if set, runs as `bash -c "$AESOP_WATCHDOG_CYCLE_CMD"`.
 - `AESOP_SELFHEAL_SKIP_RESTART`: If set, selfheal.sh detects stale heartbeats and logs dry-run actions instead of actually restarting daemons (test-only flag).
+- `AESOP_STATE_ROOT` (default: `$AESOP_ROOT/state`): State directory; exported by run-merge-queue.sh so the advancer's lock/heartbeat/ledger land with the rest of state.
+- `AESOP_MERGE_QUEUE_CMD`: Override the `tools/merge_queue.py --advance` invocation (test override); if set, runs as `bash -c "$AESOP_MERGE_QUEUE_CMD"`.
 
 ## Invariants & Style
 
@@ -47,6 +54,8 @@
 8. **Cycle cadence**: 150s for watchdog backup cycles; 60s for selfheal healing cycles.
 9. **Selfheal safety**: Never kills/restarts a daemon with a fresh heartbeat (idempotent). Monitors both local (watchdog) and conductor3 (monitor) heartbeats from aesop state/. Restarts via documented launch command (bash run-watchdog.sh / bash run-monitor.sh) in background.
 10. **Windows: tasks must be registered via install-tasks.ps1** (hidden wscript launcher) — never raw bash.exe actions (visible console window flashes every interval).
+11. **The scheduler is the loop**: run-merge-queue.sh has no loop, no sleep and no watcher; it runs one bounded pass and exits. Never add polling here or in tools/merge_queue.py — a scheduled actor that waits is just a session with extra steps.
+12. **The advancer never bypasses a gate**: no `--admin`, no `--auto`, no force-push, no review-thread resolution, no secret-scan tampering, no model calls. It merges only when `enforce_admins` is asserted AND every required check is green under its own fail-closed bucketing; anything else becomes an exception row.
 
 ## Cadence verification (Windows)
 
