@@ -461,6 +461,8 @@ class TestBatchConstruction(StateIsolatedTestCase):
                     return (False, "CONFLICT (content): Merge conflict in a.py")
             if args[0] == "status":
                 return (True, "")
+            if args[0] == "rev-parse":
+                return (True, "main")
             return (True, "")
         return side_effect
 
@@ -538,13 +540,76 @@ class TestBatchConstruction(StateIsolatedTestCase):
             git_calls.append(args)
             if args[0] == "status":
                 return (True, " M tools/x.py")
+            if args[0] == "rev-parse":
+                return (True, "main")
             return (True, "")
 
         with patch.object(self.module, "gh", side_effect=self._batch_gh(gh_calls)), \
              patch.object(self.module, "git", side_effect=dirty_git):
             branch = self.module.build_batch([11, 12], summary, epoch=1700000000)
         self.assertEqual(branch, "")
-        self.assertEqual([r["kind"] for r in self.exception_rows()], ["dirty_worktree"])
+        rows = self.exception_rows()
+        self.assertEqual([r["kind"] for r in rows], ["unsafe_worktree"])
+        self.assertIn("dirty", rows[0]["detail"])
+        self.assertEqual([c for c in git_calls if c[0] == "checkout"], [])
+
+    def test_wrong_branch_refuses_to_build(self):
+        """The daemon must never yank a human's checked-out branch."""
+        gh_calls, git_calls = [], []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+
+        def other_branch_git(*args):
+            git_calls.append(args)
+            if args[0] == "status":
+                return (True, "")
+            if args[0] == "rev-parse":
+                return (True, "feat/someones-work")
+            return (True, "")
+
+        with patch.object(self.module, "gh", side_effect=self._batch_gh(gh_calls)), \
+             patch.object(self.module, "git", side_effect=other_branch_git):
+            branch = self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertEqual(branch, "")
+        rows = self.exception_rows()
+        self.assertEqual([r["kind"] for r in rows], ["unsafe_worktree"])
+        self.assertIn("feat/someones-work", rows[0]["detail"])
+        self.assertEqual([c for c in git_calls if c[0] == "checkout"], [])
+
+    def test_unreadable_git_state_refuses_to_build(self):
+        """Fail-closed: if git state cannot be read, do not build."""
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._batch_gh([])), \
+             patch.object(self.module, "git", return_value=(False, "fatal")):
+            branch = self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertEqual(branch, "")
+        self.assertEqual([r["kind"] for r in self.exception_rows()],
+                         ["unsafe_worktree"])
+
+    def test_singleton_path_never_touches_the_working_tree(self):
+        """The common case is pure API -- no git, so no tree hazard at all."""
+        git_calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+
+        def gh_side_effect(*args):
+            if args[:2] == ("pr", "view") and "--jq" in args:
+                return "MERGED"
+            if args[:2] == ("pr", "view"):
+                return {"number": 77, "state": "OPEN", "mergeable": "MERGEABLE",
+                        "mergeStateStatus": "CLEAN",
+                        "statusCheckRollup": green_rollup(self.module),
+                        "headRefName": "feat/x", "headRefOid": "sha77",
+                        "labels": [], "body": "", "url": "https://x/pull/77"}
+            return ""
+
+        def tracking_git(*args):
+            git_calls.append(args)
+            return (True, "")
+
+        with patch.object(self.module, "gh", side_effect=gh_side_effect), \
+             patch.object(self.module, "git", side_effect=tracking_git):
+            ok = self.module.advance_singleton(77, summary)
+        self.assertTrue(ok)
+        self.assertEqual(git_calls, [], "singleton merge must not invoke git")
 
 
 class TestAncestorGuard(StateIsolatedTestCase):

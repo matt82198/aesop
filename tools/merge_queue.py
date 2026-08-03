@@ -95,6 +95,12 @@ PR_FIELDS = ("number,title,state,mergeable,mergeStateStatus,statusCheckRollup,"
 # excluding it would deadlock every legitimately-skipped required check.
 # Everything else -- FAILURE, CANCELLED, TIMED_OUT, ACTION_REQUIRED, STALE,
 # STARTUP_FAILURE, NEUTRAL, null, or an unrecognised value -- is NOT green.
+#
+# This is intentionally STRICTER than merge_train.GREEN_CONCLUSIONS, which also
+# admits NEUTRAL. The two are deliberately not shared: this daemon merges with
+# nobody watching, so its green-check owns its own definition of green and errs
+# toward doing nothing. A daemon that does nothing costs one 5-minute tick; a
+# daemon that merges on a wrong green costs a bad commit on main.
 GREEN_CONCLUSIONS = frozenset({"SUCCESS", "SKIPPED"})
 
 _VERDICT_RANK = {"green": 0, "pending": 1, "not_green": 2}
@@ -520,10 +526,28 @@ def advance_singleton(number: int, summary: dict) -> bool:
 # Batch construction (>1 admitted) -- build, push, open PR, EXIT
 # ---------------------------------------------------------------------------
 
-def worktree_is_clean() -> bool:
-    """A dirty tree cannot host an integration branch build."""
+def worktree_is_safe() -> tuple:
+    """May this process build an integration branch in the working tree?
+
+    The singleton fast path is pure GitHub API and never touches the working
+    tree. Batch construction does (`git checkout -B`), and this daemon runs
+    unattended in a tree a human may also be using -- so it refuses unless the
+    tree is BOTH clean AND already on main. Otherwise a 5-minute timer could
+    silently yank someone's checked-out branch out from under them, or build a
+    batch on top of an unrelated base. Fail-closed: unknown state = unsafe.
+    """
     ok, out = git("status", "--porcelain")
-    return ok and not out.strip()
+    if not ok:
+        return False, "cannot read git status"
+    if out.strip():
+        return False, "working tree is dirty"
+    ok, branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    if not ok:
+        return False, "cannot read current branch"
+    branch = branch.strip()
+    if branch != "main":
+        return False, "working tree is on '%s', not main" % branch
+    return True, "working tree is clean and on main"
 
 
 def build_batch(members: list, summary: dict, epoch: int = None) -> str:
@@ -532,9 +556,10 @@ def build_batch(members: list, summary: dict, epoch: int = None) -> str:
     A member that conflicts is dropped (exception row) and the rest continue.
     Returns the batch branch name, or "" if no batch was opened.
     """
-    if not worktree_is_clean():
-        record_exception(0, "dirty_worktree",
-                         "cannot build an integration branch in a dirty tree")
+    safe, why = worktree_is_safe()
+    if not safe:
+        record_exception(0, "unsafe_worktree",
+                         "cannot build an integration branch: %s" % why)
         summary["status"] = "error"
         return ""
 
