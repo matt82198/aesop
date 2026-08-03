@@ -645,6 +645,198 @@ class TestBatchConstruction(StateIsolatedTestCase):
         self.assertEqual(git_calls, [], "singleton merge must not invoke git")
 
 
+class TestWorktreeAlwaysRestored(StateIsolatedTestCase):
+    """A3: every exit path out of build_batch puts the shared tree back on main.
+
+    build_batch does `git checkout -B integrate/q-<epoch>` in a working tree
+    the scheduled task shares with a human. A failure that returned without
+    restoring main left the tree on the integration branch forever, so every
+    later pass died `unsafe_worktree` -- and record_exception's dedupe meant
+    the row was written once and then silenced. The queue stops merging and
+    says nothing.
+    """
+
+    def _git(self, calls, fail_on=None):
+        """git fake on a clean tree; `fail_on` names one failing subcommand."""
+        def side_effect(*args):
+            calls.append(args)
+            if fail_on and args[0] == fail_on:
+                return (False, "simulated %s failure" % fail_on)
+            if args[0] == "status":
+                return (True, "")
+            if args[0] == "rev-parse":
+                return (True, "main")
+            return (True, "")
+        return side_effect
+
+    def _gh(self, create_fails=False):
+        def side_effect(*args):
+            if args[:2] == ("pr", "edit"):
+                return ""
+            if args[:2] == ("pr", "view"):
+                number = int(args[2])
+                return {"headRefOid": "sha%d" % number,
+                        "headRefName": "feat/%d" % number,
+                        "title": "pr %d" % number,
+                        "labels": [{"name": self.module.BATCH_LABEL}]}
+            if args[:2] == ("pr", "create"):
+                if create_fails:
+                    return {"error": "GraphQL: was submitted too quickly"}
+                return "https://github.com/o/r/pull/900"
+            return {}
+        return side_effect
+
+    def assertRestoredToMain(self, git_calls):
+        restores = [c for c in git_calls if c[0] == "checkout" and "-B" not in c]
+        self.assertTrue(
+            restores and restores[-1][:2] == ("checkout", "main"),
+            "working tree was left on the integration branch; git calls: %s"
+            % (git_calls,))
+
+    def test_pr_create_failure_restores_main(self):
+        """The observed strand: `gh pr create` errors and the tree never returns."""
+        git_calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._gh(create_fails=True)), \
+             patch.object(self.module, "git", side_effect=self._git(git_calls)):
+            branch = self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertEqual(branch, "")
+        self.assertEqual(summary["status"], "error")
+        self.assertEqual([r["kind"] for r in self.exception_rows()],
+                         ["batch_pr_create_failed"])
+        self.assertRestoredToMain(git_calls)
+
+    def test_push_failure_restores_main(self):
+        git_calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._gh()), \
+             patch.object(self.module, "git",
+                          side_effect=self._git(git_calls, fail_on="push")):
+            branch = self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertEqual(branch, "")
+        self.assertRestoredToMain(git_calls)
+        self.assertTrue([c for c in git_calls if c[0] == "branch" and "-D" in c],
+                        "the unpushed integration branch must be deleted")
+
+    def test_success_restores_main(self):
+        git_calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._gh()), \
+             patch.object(self.module, "git", side_effect=self._git(git_calls)):
+            branch = self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertEqual(branch, "integrate/q-1700000000")
+        self.assertRestoredToMain(git_calls)
+
+    def test_unexpected_exception_still_restores_main(self):
+        """Even a raise out of the middle of batch construction restores main."""
+        git_calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+
+        def exploding_gh(*args):
+            if args[:2] == ("pr", "view"):
+                raise subprocess.TimeoutExpired(cmd=["gh", "pr", "view"], timeout=60)
+            return {}
+
+        with patch.object(self.module, "gh", side_effect=exploding_gh), \
+             patch.object(self.module, "git", side_effect=self._git(git_calls)):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertRestoredToMain(git_calls)
+
+
+class TestTimeoutContainment(StateIsolatedTestCase):
+    """A7: a hung transport call is contained, not a traceback.
+
+    merge_train.gh/git run subprocess with timeout=60/120 and no handler
+    anywhere in merge_queue, so a hung gh or git raised TimeoutExpired straight
+    out of run_pass/main: no exception row (the ledger shows nothing at all),
+    a possibly stranded working tree, and a scheduled task whose only record is
+    a Python traceback nobody reads.
+    """
+
+    def _preconditions_ok(self, then):
+        """gh fake: preconditions pass, then `then(*args)` handles the rest."""
+        contexts = list(self.module.EXPECTED_REQUIRED_CHECKS)
+
+        def side_effect(*args):
+            if args[:2] == ("auth", "status"):
+                return ""
+            if "--jq" in args and ".enforce_admins.enabled" in args:
+                return True
+            if "--jq" in args and ".required_status_checks.contexts" in args:
+                return contexts
+            return then(*args)
+        return side_effect
+
+    def test_timeout_writes_an_exception_row_and_exits_nonzero(self):
+        def hang(*args):
+            raise subprocess.TimeoutExpired(cmd=["gh"] + list(args), timeout=60)
+
+        with patch.object(self.module, "gh",
+                          side_effect=self._preconditions_ok(hang)), \
+             patch.object(self.module, "git", return_value=(True, "")):
+            code, summary = self.module.run_pass(repo="o/r")
+        self.assertEqual(code, 1)
+        self.assertEqual(summary["status"], "error")
+        rows = self.exception_rows()
+        self.assertEqual([r["kind"] for r in rows], ["subprocess_timeout"])
+        self.assertIn("timeout", rows[0]["detail"].lower())
+
+    def test_timeout_restores_the_working_tree(self):
+        git_calls = []
+
+        def hang(*args):
+            raise subprocess.TimeoutExpired(cmd=["gh"] + list(args), timeout=60)
+
+        def tracking_git(*args):
+            git_calls.append(args)
+            return (True, "")
+
+        with patch.object(self.module, "gh",
+                          side_effect=self._preconditions_ok(hang)), \
+             patch.object(self.module, "git", side_effect=tracking_git):
+            self.module.run_pass(repo="o/r")
+        self.assertIn(("checkout", "main"), git_calls,
+                      "a timed-out pass must not leave the tree off main")
+
+    def test_timeout_releases_the_lock(self):
+        def hang(*args):
+            raise subprocess.TimeoutExpired(cmd=["gh"] + list(args), timeout=60)
+
+        with patch.object(self.module, "gh",
+                          side_effect=self._preconditions_ok(hang)), \
+             patch.object(self.module, "git", return_value=(True, "")):
+            self.module.run_pass(repo="o/r")
+        self.assertFalse((self.state_root / self.module.LOCK_DIRNAME).exists())
+
+    def test_a_timeout_during_restore_is_swallowed(self):
+        """The containment path itself must never raise a second time."""
+        def hang(*args):
+            raise subprocess.TimeoutExpired(cmd=["gh"] + list(args), timeout=60)
+
+        def hanging_git(*args):
+            raise subprocess.TimeoutExpired(cmd=["git"] + list(args), timeout=120)
+
+        with patch.object(self.module, "gh",
+                          side_effect=self._preconditions_ok(hang)), \
+             patch.object(self.module, "git", side_effect=hanging_git):
+            code, summary = self.module.run_pass(repo="o/r")
+        self.assertEqual(code, 1)
+        self.assertEqual(summary["status"], "error")
+
+    def test_main_contains_a_timeout_from_preconditions(self):
+        """A hang before the lock is taken exits nonzero, not by traceback."""
+        def hang(*args):
+            raise subprocess.TimeoutExpired(cmd=["gh"] + list(args), timeout=60)
+
+        with patch.object(self.module, "gh", side_effect=hang), \
+             patch.object(self.module, "git", return_value=(True, "")):
+            code = self.module.main(["--advance", "--repo", "o/r"])
+        self.assertEqual(code, 1)
+        self.assertEqual([r["kind"] for r in self.exception_rows()],
+                         ["subprocess_timeout"])
+
+
 class TestAncestorGuard(StateIsolatedTestCase):
     """A member is closed only after its content provably landed on main."""
 
@@ -1109,6 +1301,89 @@ class TestLock(StateIsolatedTestCase):
         (lock / "pid").write_text("999999", encoding="utf-8")
         self.module.release_lock(lock)
         self.assertTrue(lock.exists())
+
+    def test_two_reclaimers_cannot_both_win(self):
+        """A2: interleaved stale reclaim must produce exactly ONE lock holder.
+
+        The old sequence was `shutil.rmtree(stale)` then `os.mkdir()`. Those are
+        two steps, so pass B could reclaim and claim in the window between A's
+        rmtree decision and A's rmtree call -- and then A's rmtree deleted B's
+        brand-new FRESH lock and A claimed it too. Two advancers then ran
+        concurrently against the same queue, which is the observed #727/#728
+        double-batch shape.
+
+        The interleave is forced deterministically rather than raced: B runs to
+        completion from inside the exact instant A is about to take the stale
+        lock away, which is the only window the bug lives in.
+        """
+        module = self.module
+        lock = self.state_root / module.LOCK_DIRNAME
+        lock.mkdir(parents=True)
+        (lock / "timestamp").write_text("1", encoding="utf-8")  # epoch 1 = ancient
+        (lock / "pid").write_text("999999", encoding="utf-8")
+
+        results = []
+        state = {"reentered": False}
+        real_rmtree, real_rename = module.shutil.rmtree, module.os.rename
+
+        def reenter_once():
+            if state["reentered"]:
+                return
+            state["reentered"] = True
+            results.append(module.acquire_lock(lock, stale_s=60))
+
+        def rmtree_hook(path, *a, **kw):
+            if str(path).startswith(str(lock)):
+                reenter_once()
+            return real_rmtree(path, *a, **kw)
+
+        def rename_hook(src, dst, *a, **kw):
+            if str(src) == str(lock):
+                reenter_once()
+            return real_rename(src, dst, *a, **kw)
+
+        with patch.object(module.shutil, "rmtree", side_effect=rmtree_hook), \
+             patch.object(module.os, "rename", side_effect=rename_hook):
+            results.append(module.acquire_lock(lock, stale_s=60))
+
+        self.assertTrue(state["reentered"], "the interleave never happened")
+        self.assertEqual(
+            results.count(True), 1,
+            "exactly one pass may hold the advancer lock, got %s" % (results,))
+
+    def test_reclaim_never_deletes_a_fresh_lock(self):
+        """After an interleaved reclaim the surviving lock is a live one."""
+        module = self.module
+        lock = self.state_root / module.LOCK_DIRNAME
+        lock.mkdir(parents=True)
+        (lock / "timestamp").write_text("1", encoding="utf-8")
+        (lock / "pid").write_text("999999", encoding="utf-8")
+
+        state = {"reentered": False}
+        real_rename = module.os.rename
+
+        def rename_hook(src, dst, *a, **kw):
+            if str(src) == str(lock) and not state["reentered"]:
+                state["reentered"] = True
+                module.acquire_lock(lock, stale_s=60)
+            return real_rename(src, dst, *a, **kw)
+
+        with patch.object(module.os, "rename", side_effect=rename_hook):
+            module.acquire_lock(lock, stale_s=60)
+
+        self.assertTrue(lock.exists(), "the winner's lock was deleted")
+        self.assertTrue((lock / "pid").exists(), "the surviving lock has no owner")
+
+    def test_no_stale_graveyard_directories_are_left_behind(self):
+        """Reclaim must not litter the state dir with orphaned lock copies."""
+        module = self.module
+        lock = self.state_root / module.LOCK_DIRNAME
+        lock.mkdir(parents=True)
+        (lock / "timestamp").write_text("1", encoding="utf-8")
+        self.assertTrue(module.acquire_lock(lock, stale_s=60))
+        siblings = [p.name for p in self.state_root.iterdir()
+                    if p.is_dir() and p.name != module.LOCK_DIRNAME]
+        self.assertEqual(siblings, [], "reclaim left %s behind" % siblings)
 
     def test_lock_contention_exits_cleanly(self):
         lock = self.state_root / self.module.LOCK_DIRNAME
