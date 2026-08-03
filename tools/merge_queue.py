@@ -67,6 +67,7 @@ if str(_TOOLS_DIR) not in sys.path:
 # an unlanded symbol, so the guard is defined locally over the shared `git`.)
 from merge_train import gh, git  # noqa: E402
 from common import get_state_dir  # noqa: E402
+from generated_paths import GENERATED_PATHS  # noqa: E402
 
 DEFAULT_REPO = "matt82198/aesop"
 
@@ -106,6 +107,18 @@ GREEN_CONCLUSIONS = frozenset({"SUCCESS", "SKIPPED"})
 _VERDICT_RANK = {"green": 0, "pending": 1, "not_green": 2}
 
 MEMBERS_RE = re.compile(r"^Members:\s*(.+)$", re.MULTILINE)
+
+# The integration-branch name is minted by build_batch() and is therefore the
+# ONE piece of batch state that cannot silently fail to be written. See
+# list_open_batches() for why that matters.
+BATCH_BRANCH_RE = re.compile(r"^integrate/q-\d+$")
+
+# Subject line build_batch() gives every member merge, and the fallback member
+# source for a batch opened before the body contract existed.
+INTEGRATE_COMMIT_RE = re.compile(r"^integrate #(\d+) into ", re.MULTILINE)
+
+BATCH_LABEL_COLOR = "5319e7"
+BATCH_LABEL_DESC = "Integration batch opened by the merge-queue advancer"
 
 
 # ---------------------------------------------------------------------------
@@ -431,6 +444,50 @@ def partition_disjoint(entries: list) -> list:
     return admitted
 
 
+def list_open_prs() -> list:
+    """Every open PR, unfiltered. Used for label-independent batch discovery."""
+    raw = gh("pr", "list", "--state", "open", "--limit", str(MAX_QUEUE * 4),
+             "--json", "number,title,labels,body,headRefName")
+    if _errored(raw) or not isinstance(raw, list):
+        return []
+    return raw
+
+
+def is_batch_branch(head_ref: str) -> bool:
+    """True for a branch this module minted for an integration batch."""
+    return bool(BATCH_BRANCH_RE.match(str(head_ref or "").strip()))
+
+
+def list_open_batches() -> list:
+    """Every OPEN batch PR, found by label OR by integration-branch name.
+
+    Discovery must not rest on the label alone. Measured 2026-08-02: the
+    `merge-queue-batch` label did not exist in the repository, so the
+    `gh pr edit --add-label` at batch creation failed silently and
+    `gh pr list --label merge-queue-batch` answered `[]` with EXIT 0 on every
+    later pass. Two passes therefore each opened a fresh batch (#727, #728) over
+    the same seven members. `gh` reporting "no such label" as an empty result
+    rather than an error makes the label a read that can be quietly wrong.
+
+    The branch name cannot be wrong the same way: build_batch() creates
+    `integrate/q-<epoch>` and pushes it BEFORE the PR exists, so an open PR on
+    such a branch IS a batch whatever its labels say. The label stays as the
+    cheap path and a human-visible marker; the branch is the guarantee.
+
+    Deduplicated on PR number, label-sourced rows first.
+    """
+    found = {}
+    for pr in list_queue(BATCH_LABEL):
+        number = pr.get("number")
+        if number:
+            found[number] = pr
+    for pr in list_open_prs():
+        number = pr.get("number")
+        if number and number not in found and is_batch_branch(pr.get("headRefName", "")):
+            found[number] = pr
+    return list(found.values())
+
+
 def parse_members(body: str) -> list:
     """Extract batch member PR numbers from the batch PR body 'Members:' line."""
     if not body:
@@ -439,6 +496,48 @@ def parse_members(body: str) -> list:
     if not match:
         return []
     return [int(n) for n in re.findall(r"#(\d+)", match.group(1))]
+
+
+def remote_branch_exists(branch: str) -> bool:
+    """True only if `branch` provably still exists on origin. Fail-closed."""
+    if not branch:
+        return False
+    ok, out = git("ls-remote", "--heads", "origin", branch)
+    return bool(ok and (out or "").strip())
+
+
+def members_from_branch(branch: str) -> list:
+    """Member numbers read off the batch branch's own merge commits.
+
+    The fallback for a batch opened before the body 'Members:' contract, and the
+    reason batch construction writes that subject line at all. Order-preserving
+    and deduplicated; an unreadable branch yields [] and the caller fails closed.
+    """
+    if not branch:
+        return []
+    git("fetch", "origin", branch)
+    ok, out = git("log", "--pretty=%s", "origin/main..origin/%s" % branch)
+    if not ok:
+        return []
+    members, seen = [], set()
+    for raw in INTEGRATE_COMMIT_RE.findall(out or ""):
+        number = int(raw)
+        if number not in seen:
+            seen.add(number)
+            members.append(number)
+    return members
+
+
+def resolve_batch_members(batch: dict) -> list:
+    """Member set of one batch PR: body first, branch commits as the fallback.
+
+    A parseable body costs no git call at all, which keeps the common path pure
+    API. Only a pre-contract batch pays for the branch read.
+    """
+    members = parse_members((batch or {}).get("body") or "")
+    if members:
+        return members
+    return members_from_branch((batch or {}).get("headRefName", ""))
 
 
 # ---------------------------------------------------------------------------
@@ -526,28 +625,126 @@ def advance_singleton(number: int, summary: dict) -> bool:
 # Batch construction (>1 admitted) -- build, push, open PR, EXIT
 # ---------------------------------------------------------------------------
 
+def dirty_paths(porcelain: str) -> list:
+    """Repo-relative paths from `git status --porcelain` output.
+
+    Handles the three shapes that matter: ' M path', '?? path', and a rename
+    'R  old -> new' (the destination is what is dirty). Quoted paths -- git
+    quotes names containing spaces -- are unwrapped.
+    """
+    paths = []
+    for line in (porcelain or "").splitlines():
+        entry = line[3:] if len(line) > 3 else ""
+        if " -> " in entry:
+            entry = entry.split(" -> ", 1)[1]
+        entry = entry.strip()
+        if len(entry) >= 2 and entry[0] == '"' and entry[-1] == '"':
+            entry = entry[1:-1]
+        if entry:
+            paths.append(entry.replace("\\", "/"))
+    return paths
+
+
+def restore_generated_paths(paths) -> list:
+    """`git restore` the named generated files, one path at a time.
+
+    Deliberately NOT `git stash` (the stash stack is shared across worktrees, so
+    stashing here would silently swallow another lane's work in progress) and
+    deliberately NOT a blanket `git checkout .`. Only paths the caller has
+    already proven to be in the GENERATED_PATHS registry ever reach this.
+    """
+    restored = []
+    for path in paths:
+        ok, _ = git("restore", "--", path)
+        if ok:
+            restored.append(path)
+    return restored
+
+
 def worktree_is_safe() -> tuple:
     """May this process build an integration branch in the working tree?
 
     The singleton fast path is pure GitHub API and never touches the working
     tree. Batch construction does (`git checkout -B`), and this daemon runs
     unattended in a tree a human may also be using -- so it refuses unless the
-    tree is BOTH clean AND already on main. Otherwise a 5-minute timer could
-    silently yank someone's checked-out branch out from under them, or build a
-    batch on top of an unrelated base. Fail-closed: unknown state = unsafe.
+    tree is BOTH on main AND clean. Otherwise a 5-minute timer could silently
+    yank someone's checked-out branch out from under them, or build a batch on
+    top of an unrelated base. Fail-closed: unknown state = unsafe.
+
+    The branch is checked FIRST so that a tree someone else has checked out is
+    rejected before this function would modify anything in it.
+
+    Generated-file tolerance: `tools/verify_test_suite_count.py --check`
+    auto-corrects the count lines in tests/CLAUDE.md and WRITES the file, so a
+    gate run in the scheduled task's project root left the tree dirty and
+    stalled the next pass over output the repo itself generates. Such paths are
+    restored by name -- but only when EVERY dirty path is a registered generated
+    file. One unregistered edit poisons the whole tree and nothing is touched.
     """
-    ok, out = git("status", "--porcelain")
-    if not ok:
-        return False, "cannot read git status"
-    if out.strip():
-        return False, "working tree is dirty"
     ok, branch = git("rev-parse", "--abbrev-ref", "HEAD")
     if not ok:
         return False, "cannot read current branch"
     branch = branch.strip()
     if branch != "main":
         return False, "working tree is on '%s', not main" % branch
-    return True, "working tree is clean and on main"
+
+    ok, out = git("status", "--porcelain")
+    if not ok:
+        return False, "cannot read git status"
+    if not out.strip():
+        return True, "working tree is clean and on main"
+
+    dirty = dirty_paths(out)
+    if not dirty or any(path not in GENERATED_PATHS for path in dirty):
+        return False, "working tree is dirty"
+
+    restored = restore_generated_paths(dirty)
+    ok, out = git("status", "--porcelain")
+    if not ok:
+        return False, "cannot read git status"
+    if out.strip():
+        # Restore did not clean it (e.g. the path was untracked, which
+        # `git restore` cannot undo). Refuse exactly as before.
+        return False, "working tree is dirty"
+    return True, ("working tree is on main; restored generated file(s): %s"
+                  % ", ".join(restored))
+
+
+def pr_has_label(number: int, label: str) -> bool:
+    """Read back a PR's labels. Any read failure answers False (fail-closed)."""
+    info = pr_view(number, "labels")
+    if info is None:
+        return False
+    return label in label_names(info)
+
+
+def apply_batch_label(number: int, summary: dict) -> bool:
+    """Label the batch PR and PROVE it stuck; create the label if it is missing.
+
+    `gh pr edit --add-label` against a label the repository does not define
+    fails, and build_batch used to ignore the result -- which is exactly how
+    #727 ended up with an empty label set and became invisible to every
+    subsequent pass. So: apply, read back, and if it did not stick create the
+    label once and retry. A still-unlabelled batch is an exception row, never a
+    silent success. (Discovery no longer DEPENDS on the label -- see
+    list_open_batches -- but a batch a human cannot see in the label filter is
+    still a defect worth surfacing.)
+    """
+    gh("pr", "edit", str(number), "--add-label", BATCH_LABEL)
+    if pr_has_label(number, BATCH_LABEL):
+        return True
+
+    gh("label", "create", BATCH_LABEL,
+       "--description", BATCH_LABEL_DESC, "--color", BATCH_LABEL_COLOR)
+    gh("pr", "edit", str(number), "--add-label", BATCH_LABEL)
+    if pr_has_label(number, BATCH_LABEL):
+        summary["actions"].append("created missing '%s' label" % BATCH_LABEL)
+        return True
+
+    record_exception(number, "batch_label_failed",
+                     "could not apply '%s'; the batch is discoverable by its "
+                     "integrate/q-* branch but not by label filter" % BATCH_LABEL)
+    return False
 
 
 def build_batch(members: list, summary: dict, epoch: int = None) -> str:
@@ -630,7 +827,7 @@ def build_batch(members: list, summary: dict, epoch: int = None) -> str:
 
     number = _pr_number_from_url(created if isinstance(created, str) else "")
     if number:
-        gh("pr", "edit", str(number), "--add-label", BATCH_LABEL)
+        apply_batch_label(number, summary)
     summary["batch"] = {"branch": branch, "pr": number, "members": included}
     summary["actions"].append(
         "opened batch %s with %s" % (branch, ", ".join("#%d" % n for n in included)))
@@ -689,12 +886,22 @@ def handle_batch_pr(batch: dict, summary: dict) -> None:
         summary["status"] = "error"
         return
 
-    members = parse_members(info.get("body", ""))
+    members = resolve_batch_members(info)
     branch = info.get("headRefName", "")
     label = "#%d (%s)" % (number, branch or "batch")
     if not members:
-        record_exception(number, "batch_members_unparseable",
-                         "batch PR body has no parseable 'Members:' line")
+        # Neither the body nor the branch commits name members. Distinguish a
+        # STALE batch (branch already deleted -- nothing to merge or dissolve,
+        # just report it) from a live batch whose provenance is unreadable.
+        # Either way this pass merges nothing and rebatches nothing: returning
+        # here leaves the batch open, so _advance's queue stays suppressed.
+        if branch and not remote_branch_exists(branch):
+            record_exception(number, "batch_branch_missing",
+                             "batch %s has no branch on origin; stale batch PR "
+                             "left open for a human" % label)
+        else:
+            record_exception(number, "batch_members_unparseable",
+                             "batch PR body has no parseable 'Members:' line")
         summary["status"] = "error"
         return
 
@@ -756,14 +963,28 @@ def handle_batch_pr(batch: dict, summary: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def _advance(summary: dict, started: float) -> None:
-    """One bounded advance. Batches first; a queue never races an in-flight batch."""
-    batches = order_queue(list_queue(BATCH_LABEL))
+    """One bounded advance. Batches first; a queue never races an in-flight batch.
+
+    Every open batch's members are resolved BEFORE any queue work so that a PR
+    already folded into an in-flight batch can never be batched a second time.
+    While any batch is open the pass evaluates it and stops -- that early return
+    is the primary guard; the member exclusion below is the backstop for a
+    batch that is open but not the one being evaluated.
+    """
+    batches = order_queue(list_open_batches())
+    batched_members = set()
+    for batch in batches:
+        batched_members.update(resolve_batch_members(batch))
+    summary["batched_members"] = sorted(batched_members)
+
     if batches:
         handle_batch_pr(batches[0], summary)
         return
 
     queue = [pr for pr in order_queue(list_queue(QUEUE_LABEL))
-             if BATCH_LABEL not in label_names(pr)][:MAX_QUEUE]
+             if BATCH_LABEL not in label_names(pr)
+             and pr.get("number") not in batched_members
+             and not is_batch_branch(pr.get("headRefName", ""))][:MAX_QUEUE]
     if not queue:
         summary["actions"].append("queue empty")
         return
@@ -797,6 +1018,7 @@ def run_pass(repo: str = DEFAULT_REPO) -> tuple:
         "actions": [],
         "merged": [],
         "admitted": [],
+        "batched_members": [],
         "batch": None,
     }
 
