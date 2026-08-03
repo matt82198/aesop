@@ -297,6 +297,82 @@ class TestVerifyTestSuiteCount(unittest.TestCase):
             "File should not be modified on second run when counts already match",
         )
 
+    def test_check_mode_detects_duplicated_python_count_line(self):
+        """--check should exit 1 when detecting duplicated Python count lines."""
+        claudemd_path = self.temp_root / "tests" / "CLAUDE.md"
+        content = claudemd_path.read_text()
+
+        # Inject a duplicated Python count line with proper pattern
+        # Format: **Python (N suites)**: (note the closing ** before the colon)
+        duplicated = re.sub(
+            r"(\*\*Python \(\d+ suites?\)\*\*:)",
+            r"\1\n\n... some text ...\n\n**Python (2 suites)**:",
+            content,
+            count=1,
+        )
+        claudemd_path.write_text(duplicated)
+
+        # Run --check which should detect the duplicate and exit 1
+        result = self._run_tool("--check")
+
+        self.assertEqual(
+            result.returncode,
+            1,
+            f"Expected exit 1 for duplicated Python count line. stderr: {result.stderr}",
+        )
+        self.assertIn("duplicated", result.stderr.lower(), "Should mention duplicated lines")
+        self.assertIn("Python", result.stderr, "Should name the duplicated line type")
+
+    def test_check_mode_detects_duplicated_node_count_line(self):
+        """--check should exit 1 when detecting duplicated Node count lines."""
+        claudemd_path = self.temp_root / "tests" / "CLAUDE.md"
+        content = claudemd_path.read_text()
+
+        # Inject a duplicated Node count line with proper pattern
+        duplicated = re.sub(
+            r"(\*\*Node \(\d+ suites?\)\*\*:)",
+            r"\1\n\n... some text ...\n\n**Node (2 suites)**:",
+            content,
+            count=1,
+        )
+        claudemd_path.write_text(duplicated)
+
+        # Run --check which should detect the duplicate and exit 1
+        result = self._run_tool("--check")
+
+        self.assertEqual(
+            result.returncode,
+            1,
+            f"Expected exit 1 for duplicated Node count line. stderr: {result.stderr}",
+        )
+        self.assertIn("duplicated", result.stderr.lower(), "Should mention duplicated lines")
+        self.assertIn("Node", result.stderr, "Should name the duplicated line type")
+
+    def test_check_mode_detects_duplicated_shell_count_line(self):
+        """--check should exit 1 when detecting duplicated Shell count lines."""
+        claudemd_path = self.temp_root / "tests" / "CLAUDE.md"
+        content = claudemd_path.read_text()
+
+        # Inject a duplicated Shell count line with proper pattern
+        duplicated = re.sub(
+            r"(\*\*Shell \(\d+ suites?\)\*\*:)",
+            r"\1\n\n... some text ...\n\n**Shell (1 suites)**:",
+            content,
+            count=1,
+        )
+        claudemd_path.write_text(duplicated)
+
+        # Run --check which should detect the duplicate and exit 1
+        result = self._run_tool("--check")
+
+        self.assertEqual(
+            result.returncode,
+            1,
+            f"Expected exit 1 for duplicated Shell count line. stderr: {result.stderr}",
+        )
+        self.assertIn("duplicated", result.stderr.lower(), "Should mention duplicated lines")
+        self.assertIn("Shell", result.stderr, "Should name the duplicated line type")
+
 
 if __name__ == "__main__":
     unittest.main()

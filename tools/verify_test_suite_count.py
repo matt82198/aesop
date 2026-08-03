@@ -104,7 +104,7 @@ def check_mode(claudemd_path: Path) -> int:
     """Verify counts match. Auto-correct stale literals (no failure for treadmill drift).
 
     Exit 0 if counts match (or were auto-corrected).
-    Exit 1 only if documented sections are missing (real invariant broken).
+    Exit 1 only if documented sections are missing or duplicated (real invariant broken).
     Exit 2 if cannot evaluate (git error, zero files found with non-zero documented).
 
     This eliminates the treadmill: each branch auto-corrects locally before push,
@@ -119,23 +119,63 @@ def check_mode(claudemd_path: Path) -> int:
     try:
         # Verify the documented sections exist (the real invariant)
         content = claudemd_path.read_text(encoding="utf-8")
-        node_match = re.search(r"\*\*Node \((\d+) suites?\)\*\*:", content)
-        shell_match = re.search(r"\*\*Shell \((\d+) suites?\)\*\*:", content)
-        python_match = re.search(r"\*\*Python \((\d+) suites?\)\*\*:", content)
 
-        if not (node_match and shell_match and python_match):
+        # Check for exactly-one occurrence of each suite-type count line (fail-closed on duplicates)
+        node_matches = re.findall(r"\*\*Node \((\d+) suites?\)\*\*:", content)
+        shell_matches = re.findall(r"\*\*Shell \((\d+) suites?\)\*\*:", content)
+        python_matches = re.findall(r"\*\*Python \((\d+) suites?\)\*\*:", content)
+
+        # Fail-closed: detect missing or duplicated lines
+        if len(node_matches) == 0:
             print(
-                "[FAIL] Missing test suite sections in tests/CLAUDE.md. "
-                "Expected: **Node (N suites)**: **Shell (N suites)**: **Python (N suites):**",
+                "[FAIL] Missing Node test suite section in tests/CLAUDE.md. "
+                "Expected: **Node (N suites):**",
+                file=sys.stderr,
+            )
+            return 1
+        if len(node_matches) > 1:
+            print(
+                f"[FAIL] Found {len(node_matches)} duplicated **Node (N suites):** count lines in tests/CLAUDE.md. "
+                "Only one is allowed.",
                 file=sys.stderr,
             )
             return 1
 
-        # Get documented counts from regex
+        if len(shell_matches) == 0:
+            print(
+                "[FAIL] Missing Shell test suite section in tests/CLAUDE.md. "
+                "Expected: **Shell (N suites):**",
+                file=sys.stderr,
+            )
+            return 1
+        if len(shell_matches) > 1:
+            print(
+                f"[FAIL] Found {len(shell_matches)} duplicated **Shell (N suites):** count lines in tests/CLAUDE.md. "
+                "Only one is allowed.",
+                file=sys.stderr,
+            )
+            return 1
+
+        if len(python_matches) == 0:
+            print(
+                "[FAIL] Missing Python test suite section in tests/CLAUDE.md. "
+                "Expected: **Python (N suites):**",
+                file=sys.stderr,
+            )
+            return 1
+        if len(python_matches) > 1:
+            print(
+                f"[FAIL] Found {len(python_matches)} duplicated **Python (N suites):** count lines in tests/CLAUDE.md. "
+                "Only one is allowed.",
+                file=sys.stderr,
+            )
+            return 1
+
+        # Get documented counts from findall results (guaranteed exactly-one match each)
         documented = (
-            int(node_match.group(1)),
-            int(shell_match.group(1)),
-            int(python_match.group(1)),
+            int(node_matches[0]),
+            int(shell_matches[0]),
+            int(python_matches[0]),
         )
 
         # Get actual counts from disk
