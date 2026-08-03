@@ -6,11 +6,13 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 # Add state_store to path for import
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from state_store.lease_claims import LeaseStore, LeaseConflict
+from state_store.paths import canonical_claim_path
 
 
 class TestLeaseStore(unittest.TestCase):
@@ -550,6 +552,63 @@ class TestLeaseStoreIntegration(unittest.TestCase):
                 clock=lambda: now
             )
         self.assertIn("released", str(ctx.exception).lower())
+
+
+class TestLeaseClaimsHeterogeneityGuard(unittest.TestCase):
+    """Heterogeneity regression: paths normalize identically across platforms (multibox Inc 1).
+
+    When two boxes (Windows + Linux) share coordination state, the same path must
+    canonicalize identically on both platforms. This test monkeypatches os.name
+    to verify that canonical_claim_path (via _normalize_path) produces identical
+    results regardless of the platform running the code.
+    """
+
+    def test_heterogeneity_guard_47c967b_separator_multiplatform(self):
+        """REGRESSION: Separator normalization is host-independent.
+
+        Two boxes should canonicalize 'dir/file' and 'dir\\file' identically.
+        """
+        path_forward = "dir/file.txt"
+        path_backslash = "dir\\file.txt"
+
+        # Canonicalize as if running on Windows
+        with mock.patch("os.name", "nt"):
+            result_nt_forward = canonical_claim_path(path_forward, case_policy="insensitive")
+            result_nt_backslash = canonical_claim_path(path_backslash, case_policy="insensitive")
+
+        # Canonicalize as if running on POSIX
+        with mock.patch("os.name", "posix"):
+            result_posix_forward = canonical_claim_path(path_forward, case_policy="insensitive")
+            result_posix_backslash = canonical_claim_path(path_backslash, case_policy="insensitive")
+
+        # All four variants should match
+        self.assertEqual(result_nt_forward, result_nt_backslash)
+        self.assertEqual(result_posix_forward, result_posix_backslash)
+        self.assertEqual(result_nt_forward, result_posix_forward)
+
+    def test_heterogeneity_guard_47c967b_case_multiplatform(self):
+        """REGRESSION: Case normalization is host-independent under insensitive policy.
+
+        Two boxes should canonicalize 'README.md' and 'README.MD' identically
+        when using case_policy='insensitive'.
+        """
+        path_lower = "README.md"
+        path_upper = "README.MD"
+
+        # Canonicalize as if running on Windows
+        with mock.patch("os.name", "nt"):
+            result_nt_lower = canonical_claim_path(path_lower, case_policy="insensitive")
+            result_nt_upper = canonical_claim_path(path_upper, case_policy="insensitive")
+
+        # Canonicalize as if running on POSIX
+        with mock.patch("os.name", "posix"):
+            result_posix_lower = canonical_claim_path(path_lower, case_policy="insensitive")
+            result_posix_upper = canonical_claim_path(path_upper, case_policy="insensitive")
+
+        # All four variants should match
+        self.assertEqual(result_nt_lower, result_nt_upper)
+        self.assertEqual(result_posix_lower, result_posix_upper)
+        self.assertEqual(result_nt_lower, result_posix_lower)
 
 
 if __name__ == "__main__":
