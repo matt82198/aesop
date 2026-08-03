@@ -51,6 +51,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -84,6 +85,7 @@ REJECT_LABEL = "queue-rejected"
 PASS_BUDGET_S = 45.0
 MAX_QUEUE = 25
 LOCK_STALE_S = 600
+REGEN_TIMEOUT_S = 120
 
 LOCK_DIRNAME = ".merge-queue-lock"
 HEARTBEAT_NAME = ".merge-queue-heartbeat"
@@ -119,6 +121,23 @@ INTEGRATE_COMMIT_RE = re.compile(r"^integrate #(\d+) into ", re.MULTILINE)
 
 BATCH_LABEL_COLOR = "5319e7"
 BATCH_LABEL_DESC = "Integration batch opened by the merge-queue advancer"
+
+# The generators that own the GENERATED_PATHS registry, run on an integration
+# branch before it is pushed so a batch's union cannot fail a drift gate that
+# every member passed individually. Each entry is argv after sys.executable.
+# NOTE: the flag is `--fix`. The pre-push hook's own failure text advises
+# `--regenerate`, which the tool does not accept ("unrecognized arguments") --
+# do not copy that string here.
+REGENERATORS = (
+    ("tools/verify_test_suite_count.py", "--fix"),
+)
+
+# One `git status --porcelain` row: the two-column XY status code (either or
+# both columns may be a space, and `git()` strips a leading one) followed by
+# its separator, then the path. Anchored so a status code is REQUIRED -- a line
+# that does not look like a porcelain row yields no path at all rather than a
+# mis-sliced one.
+_PORCELAIN_ENTRY = re.compile(r"^ ?[MADRCU?!][MADRCU?! ]? (?P<entry>.+)$")
 
 
 # ---------------------------------------------------------------------------
@@ -631,10 +650,21 @@ def dirty_paths(porcelain: str) -> list:
     Handles the three shapes that matter: ' M path', '?? path', and a rename
     'R  old -> new' (the destination is what is dirty). Quoted paths -- git
     quotes names containing spaces -- are unwrapped.
+
+    The status field is matched, NOT sliced at a fixed column. `git()` strips
+    its output, so a modified-but-unstaged line arrives as 'M path' (one
+    leading space eaten) rather than ' M path'; a `line[3:]` slice then ate the
+    first character of the path and every registered generated file read as an
+    unregistered edit, so `worktree_is_safe` reported 'working tree is dirty'
+    forever and no batch could ever be built. Match the 1-2 char XY code plus
+    its separator instead, which is correct for both the raw and stripped form.
     """
     paths = []
     for line in (porcelain or "").splitlines():
-        entry = line[3:] if len(line) > 3 else ""
+        match = _PORCELAIN_ENTRY.match(line)
+        if not match:
+            continue
+        entry = match.group("entry")
         if " -> " in entry:
             entry = entry.split(" -> ", 1)[1]
         entry = entry.strip()
@@ -643,6 +673,27 @@ def dirty_paths(porcelain: str) -> list:
         if entry:
             paths.append(entry.replace("\\", "/"))
     return paths
+
+
+def run_regenerator(argv, timeout: int = REGEN_TIMEOUT_S) -> tuple:
+    """Run one generator from the repo root. Returns (ok, combined output).
+
+    `sys.executable` (never a bare "python") so the scheduled task's
+    interpreter is the one that runs, and an explicit timeout so a hung
+    generator cannot wedge a pass that must finish inside its budget.
+    """
+    script = _TOOLS_DIR.parent / argv[0]
+    if not script.exists():
+        return False, "missing generator: %s" % argv[0]
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(script)] + list(argv[1:]),
+            cwd=str(_TOOLS_DIR.parent),
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)[:200]
+    return proc.returncode == 0, ((proc.stdout or "") + (proc.stderr or ""))[:400]
 
 
 def restore_generated_paths(paths) -> list:
@@ -747,6 +798,60 @@ def apply_batch_label(number: int, summary: dict) -> bool:
     return False
 
 
+def regenerate_on_batch(branch: str, summary: dict) -> list:
+    """Regenerate registered generated files on the integration branch.
+
+    Every member is individually green, but a batch is a tree none of them
+    ever tested: when two members each add a test file, the suite counts in
+    `tests/CLAUDE.md` are correct on both branches and wrong on their union.
+    The pre-push hook runs the drift gate and fail-closes, so the batch push
+    dies with `[DRIFT] Test suite count mismatch` and the queue stalls with an
+    already-built branch it can never publish -- exactly the state that jammed
+    the board on 2026-08-03.
+
+    So the union is regenerated HERE, on the batch branch, before the push.
+    This is not a weakened gate: the generator is the same one the gate calls,
+    the gate still runs on the pushed branch and in CI, and only paths in the
+    GENERATED_PATHS registry are ever committed. A generator that fails leaves
+    the tree untouched and the push fails closed as before.
+
+    Returns the list of regenerated paths (empty when nothing drifted).
+    """
+    for argv in REGENERATORS:
+        run_ok, _ = run_regenerator(argv)
+        if not run_ok:
+            record_exception(0, "regenerator_failed",
+                             "%s failed on %s" % (" ".join(argv), branch))
+
+    ok, out = git("status", "--porcelain")
+    if not ok:
+        return []
+    dirty = dirty_paths(out)
+    if not dirty:
+        return []
+
+    unregistered = [path for path in dirty if path not in GENERATED_PATHS]
+    if unregistered:
+        # A generator touched something it does not own. Do not commit any of
+        # it; restore the registered paths and let the pre-push gate decide.
+        record_exception(0, "regenerator_overreach",
+                         "unregistered path(s) written on %s: %s"
+                         % (branch, ", ".join(sorted(unregistered))[:160]))
+        restore_generated_paths([p for p in dirty if p in GENERATED_PATHS])
+        return []
+
+    for path in dirty:
+        git("add", "--", path)
+    ok, out = git("commit", "-m",
+                  "chore(queue): regenerate %s for %s"
+                  % (", ".join(sorted(dirty)), branch))
+    if not ok:
+        record_exception(0, "git_failed",
+                         "commit regenerated paths on %s: %s" % (branch, out[:200]))
+        return []
+    return sorted(dirty)
+
+
 def build_batch(members: list, summary: dict, epoch: int = None) -> str:
     """Build integrate/q-<epoch> from origin/main and open the batch PR.
 
@@ -804,6 +909,11 @@ def build_batch(members: list, summary: dict, epoch: int = None) -> str:
         summary["actions"].append(
             "batch %s abandoned (%d clean member(s))" % (branch, len(included)))
         return ""
+
+    regenerated = regenerate_on_batch(branch, summary)
+    if regenerated:
+        summary["actions"].append(
+            "regenerated %s on %s" % (", ".join(regenerated), branch))
 
     ok, out = git("push", "-u", "origin", branch)
     if not ok:
