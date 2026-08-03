@@ -92,7 +92,7 @@ For the complete setup guide, orchestration walkthrough, and multi-instance road
 - **[CARDINAL-RULES.md](./docs/CARDINAL-RULES.md)** — 10 foundational principles for safe autonomous code.
 - **[autonomous-swe.md](./docs/autonomous-swe.md)** — What "autonomous" means and doesn't. Honest limits.
 - **[docs/INCIDENTS.md](./docs/INCIDENTS.md)** — All 41 incidents: fake-green, gate-activation, test-pollution, stalls, conflicts, flakes, CI drift, hallucinations.
-- **[RELEASE-NOTES.md](./RELEASE-NOTES.md)** — Version 0.7.0: hardened gates, multi-instance roadmap.
+- **[RELEASE-NOTES.md](./RELEASE-NOTES.md)** — Version 0.7.2: bug fixes & compliance, encoding hardening, fake-green gate fixes.
 
 ## Contributing
 
