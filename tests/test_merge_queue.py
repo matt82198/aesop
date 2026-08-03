@@ -77,6 +77,14 @@ class StateIsolatedTestCase(unittest.TestCase):
         self.state_root.mkdir(parents=True, exist_ok=True)
         self._prev_state_root = os.environ.get("AESOP_STATE_ROOT")
         os.environ["AESOP_STATE_ROOT"] = str(self.state_root)
+        # No unit test may shell out. `run_regenerator` is the module's only
+        # subprocess call; it is stubbed green here so build_batch tests
+        # exercise batch construction, not this repo's real generators. Tests
+        # that care about regeneration re-patch it with their own behaviour.
+        self._regen_patch = patch.object(self.module, "run_regenerator",
+                                         return_value=(True, ""))
+        self._regen_patch.start()
+        self.addCleanup(self._regen_patch.stop)
 
     def tearDown(self):
         if self._prev_state_root is None:
@@ -637,6 +645,198 @@ class TestBatchConstruction(StateIsolatedTestCase):
         self.assertEqual(git_calls, [], "singleton merge must not invoke git")
 
 
+class TestWorktreeAlwaysRestored(StateIsolatedTestCase):
+    """A3: every exit path out of build_batch puts the shared tree back on main.
+
+    build_batch does `git checkout -B integrate/q-<epoch>` in a working tree
+    the scheduled task shares with a human. A failure that returned without
+    restoring main left the tree on the integration branch forever, so every
+    later pass died `unsafe_worktree` -- and record_exception's dedupe meant
+    the row was written once and then silenced. The queue stops merging and
+    says nothing.
+    """
+
+    def _git(self, calls, fail_on=None):
+        """git fake on a clean tree; `fail_on` names one failing subcommand."""
+        def side_effect(*args):
+            calls.append(args)
+            if fail_on and args[0] == fail_on:
+                return (False, "simulated %s failure" % fail_on)
+            if args[0] == "status":
+                return (True, "")
+            if args[0] == "rev-parse":
+                return (True, "main")
+            return (True, "")
+        return side_effect
+
+    def _gh(self, create_fails=False):
+        def side_effect(*args):
+            if args[:2] == ("pr", "edit"):
+                return ""
+            if args[:2] == ("pr", "view"):
+                number = int(args[2])
+                return {"headRefOid": "sha%d" % number,
+                        "headRefName": "feat/%d" % number,
+                        "title": "pr %d" % number,
+                        "labels": [{"name": self.module.BATCH_LABEL}]}
+            if args[:2] == ("pr", "create"):
+                if create_fails:
+                    return {"error": "GraphQL: was submitted too quickly"}
+                return "https://github.com/o/r/pull/900"
+            return {}
+        return side_effect
+
+    def assertRestoredToMain(self, git_calls):
+        restores = [c for c in git_calls if c[0] == "checkout" and "-B" not in c]
+        self.assertTrue(
+            restores and restores[-1][:2] == ("checkout", "main"),
+            "working tree was left on the integration branch; git calls: %s"
+            % (git_calls,))
+
+    def test_pr_create_failure_restores_main(self):
+        """The observed strand: `gh pr create` errors and the tree never returns."""
+        git_calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._gh(create_fails=True)), \
+             patch.object(self.module, "git", side_effect=self._git(git_calls)):
+            branch = self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertEqual(branch, "")
+        self.assertEqual(summary["status"], "error")
+        self.assertEqual([r["kind"] for r in self.exception_rows()],
+                         ["batch_pr_create_failed"])
+        self.assertRestoredToMain(git_calls)
+
+    def test_push_failure_restores_main(self):
+        git_calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._gh()), \
+             patch.object(self.module, "git",
+                          side_effect=self._git(git_calls, fail_on="push")):
+            branch = self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertEqual(branch, "")
+        self.assertRestoredToMain(git_calls)
+        self.assertTrue([c for c in git_calls if c[0] == "branch" and "-D" in c],
+                        "the unpushed integration branch must be deleted")
+
+    def test_success_restores_main(self):
+        git_calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._gh()), \
+             patch.object(self.module, "git", side_effect=self._git(git_calls)):
+            branch = self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertEqual(branch, "integrate/q-1700000000")
+        self.assertRestoredToMain(git_calls)
+
+    def test_unexpected_exception_still_restores_main(self):
+        """Even a raise out of the middle of batch construction restores main."""
+        git_calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+
+        def exploding_gh(*args):
+            if args[:2] == ("pr", "view"):
+                raise subprocess.TimeoutExpired(cmd=["gh", "pr", "view"], timeout=60)
+            return {}
+
+        with patch.object(self.module, "gh", side_effect=exploding_gh), \
+             patch.object(self.module, "git", side_effect=self._git(git_calls)):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertRestoredToMain(git_calls)
+
+
+class TestTimeoutContainment(StateIsolatedTestCase):
+    """A7: a hung transport call is contained, not a traceback.
+
+    merge_train.gh/git run subprocess with timeout=60/120 and no handler
+    anywhere in merge_queue, so a hung gh or git raised TimeoutExpired straight
+    out of run_pass/main: no exception row (the ledger shows nothing at all),
+    a possibly stranded working tree, and a scheduled task whose only record is
+    a Python traceback nobody reads.
+    """
+
+    def _preconditions_ok(self, then):
+        """gh fake: preconditions pass, then `then(*args)` handles the rest."""
+        contexts = list(self.module.EXPECTED_REQUIRED_CHECKS)
+
+        def side_effect(*args):
+            if args[:2] == ("auth", "status"):
+                return ""
+            if "--jq" in args and ".enforce_admins.enabled" in args:
+                return True
+            if "--jq" in args and ".required_status_checks.contexts" in args:
+                return contexts
+            return then(*args)
+        return side_effect
+
+    def test_timeout_writes_an_exception_row_and_exits_nonzero(self):
+        def hang(*args):
+            raise subprocess.TimeoutExpired(cmd=["gh"] + list(args), timeout=60)
+
+        with patch.object(self.module, "gh",
+                          side_effect=self._preconditions_ok(hang)), \
+             patch.object(self.module, "git", return_value=(True, "")):
+            code, summary = self.module.run_pass(repo="o/r")
+        self.assertEqual(code, 1)
+        self.assertEqual(summary["status"], "error")
+        rows = self.exception_rows()
+        self.assertEqual([r["kind"] for r in rows], ["subprocess_timeout"])
+        self.assertIn("timeout", rows[0]["detail"].lower())
+
+    def test_timeout_restores_the_working_tree(self):
+        git_calls = []
+
+        def hang(*args):
+            raise subprocess.TimeoutExpired(cmd=["gh"] + list(args), timeout=60)
+
+        def tracking_git(*args):
+            git_calls.append(args)
+            return (True, "")
+
+        with patch.object(self.module, "gh",
+                          side_effect=self._preconditions_ok(hang)), \
+             patch.object(self.module, "git", side_effect=tracking_git):
+            self.module.run_pass(repo="o/r")
+        self.assertIn(("checkout", "main"), git_calls,
+                      "a timed-out pass must not leave the tree off main")
+
+    def test_timeout_releases_the_lock(self):
+        def hang(*args):
+            raise subprocess.TimeoutExpired(cmd=["gh"] + list(args), timeout=60)
+
+        with patch.object(self.module, "gh",
+                          side_effect=self._preconditions_ok(hang)), \
+             patch.object(self.module, "git", return_value=(True, "")):
+            self.module.run_pass(repo="o/r")
+        self.assertFalse((self.state_root / self.module.LOCK_DIRNAME).exists())
+
+    def test_a_timeout_during_restore_is_swallowed(self):
+        """The containment path itself must never raise a second time."""
+        def hang(*args):
+            raise subprocess.TimeoutExpired(cmd=["gh"] + list(args), timeout=60)
+
+        def hanging_git(*args):
+            raise subprocess.TimeoutExpired(cmd=["git"] + list(args), timeout=120)
+
+        with patch.object(self.module, "gh",
+                          side_effect=self._preconditions_ok(hang)), \
+             patch.object(self.module, "git", side_effect=hanging_git):
+            code, summary = self.module.run_pass(repo="o/r")
+        self.assertEqual(code, 1)
+        self.assertEqual(summary["status"], "error")
+
+    def test_main_contains_a_timeout_from_preconditions(self):
+        """A hang before the lock is taken exits nonzero, not by traceback."""
+        def hang(*args):
+            raise subprocess.TimeoutExpired(cmd=["gh"] + list(args), timeout=60)
+
+        with patch.object(self.module, "gh", side_effect=hang), \
+             patch.object(self.module, "git", return_value=(True, "")):
+            code = self.module.main(["--advance", "--repo", "o/r"])
+        self.assertEqual(code, 1)
+        self.assertEqual([r["kind"] for r in self.exception_rows()],
+                         ["subprocess_timeout"])
+
+
 class TestAncestorGuard(StateIsolatedTestCase):
     """A member is closed only after its content provably landed on main."""
 
@@ -685,7 +885,7 @@ class TestAncestorGuard(StateIsolatedTestCase):
 class TestBatchEvaluation(StateIsolatedTestCase):
     """Green batch merges then closes; red batch evicts and dissolves."""
 
-    def _batch_pr(self, rollup=None, members="#11, #12"):
+    def _batch_pr(self, rollup=None, members="#11, #12", created_at=None):
         return {
             "number": 900, "state": "OPEN", "mergeable": "MERGEABLE",
             "mergeStateStatus": "CLEAN",
@@ -695,6 +895,9 @@ class TestBatchEvaluation(StateIsolatedTestCase):
             "labels": [{"name": self.module.BATCH_LABEL}],
             "body": "Members: %s\n" % members,
             "url": "https://x/pull/900",
+            # Old enough that the grace window never applies unless a test
+            # deliberately asks for a young batch.
+            "createdAt": created_at or "2020-01-01T00:00:00Z",
         }
 
     def test_green_batch_merges_then_closes_landed_members(self):
@@ -782,6 +985,121 @@ class TestBatchEvaluation(StateIsolatedTestCase):
         self.assertEqual(rows[0]["run_url"], "http://run/batch")
         closes = [c for c in gh_calls if c[:2] == ("pr", "close")]
         self.assertEqual([int(c[2]) for c in closes], [900])
+
+    def _absent_windows_rollup(self):
+        """Every required context present EXCEPT the `windows` aggregator.
+
+        This is the real shape seconds after `gh pr create`: GitHub creates
+        check runs asynchronously and the aggregator only appears once its
+        shards exist.
+        """
+        return [check_run(name) for name in self.module.EXPECTED_REQUIRED_CHECKS
+                if name != "windows"]
+
+    def _young(self, seconds_ago=60):
+        from datetime import datetime, timedelta, timezone as tz
+        return (datetime.now(tz.utc)
+                - timedelta(seconds=seconds_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _view(self, batch, gh_calls):
+        def gh_side_effect(*args):
+            gh_calls.append(args)
+            if args[:2] == ("pr", "view"):
+                number = int(args[2])
+                if number == 900:
+                    return batch
+                return {"number": number, "state": "OPEN",
+                        "statusCheckRollup": green_rollup(self.module)}
+            return {}
+        return gh_side_effect
+
+    def test_young_batch_missing_a_context_waits_instead_of_dissolving(self):
+        """Regression: the 2026-08-03 rebatch loop that merged nothing.
+
+        A batch evaluated seconds after creation is missing `windows` only
+        because the check run does not exist yet. Dissolving on that absence
+        evicts every member and the next pass rebuilds the same batch, forever.
+        """
+        gh_calls = []
+        batch = self._batch_pr(rollup=self._absent_windows_rollup(),
+                               created_at=self._young(60))
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._view(batch, gh_calls)), \
+             patch.object(self.module, "git", return_value=(True, "")):
+            self.module.handle_batch_pr({"number": 900}, summary)
+
+        self.assertEqual(self.exception_rows(), [])
+        self.assertEqual([c for c in gh_calls if c[:2] == ("pr", "close")], [])
+        rejected = [c for c in gh_calls
+                    if c[:2] == ("pr", "edit") and self.module.REJECT_LABEL in c]
+        self.assertEqual(rejected, [])
+        self.assertTrue(any("not created yet" in a for a in summary["actions"]),
+                        summary["actions"])
+
+    def test_old_batch_missing_a_context_still_dissolves(self):
+        """The grace window is a delay, not an amnesty: absence stays red."""
+        gh_calls = []
+        batch = self._batch_pr(rollup=self._absent_windows_rollup(),
+                               created_at="2020-01-01T00:00:00Z")
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._view(batch, gh_calls)), \
+             patch.object(self.module, "git", return_value=(True, "")):
+            self.module.handle_batch_pr({"number": 900}, summary)
+
+        self.assertEqual({r["kind"] for r in self.exception_rows()},
+                         {"batch_red_dissolved"})
+        self.assertEqual([int(c[2]) for c in gh_calls
+                          if c[:2] == ("pr", "close")], [900])
+
+    def test_young_batch_with_a_real_failure_dissolves_immediately(self):
+        """A concluded FAILURE is positive evidence; youth buys it nothing."""
+        gh_calls = []
+        rollup = self._absent_windows_rollup()
+        rollup[0] = check_run(self.module.EXPECTED_REQUIRED_CHECKS[0],
+                              conclusion="FAILURE", url="http://run/batch")
+        batch = self._batch_pr(rollup=rollup, created_at=self._young(5))
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._view(batch, gh_calls)), \
+             patch.object(self.module, "git", return_value=(True, "")):
+            self.module.handle_batch_pr({"number": 900}, summary)
+
+        self.assertEqual({r["kind"] for r in self.exception_rows()},
+                         {"batch_red_dissolved"})
+        self.assertEqual([int(c[2]) for c in gh_calls
+                          if c[:2] == ("pr", "close")], [900])
+
+    def test_young_batch_with_unknown_creation_time_dissolves(self):
+        """An unreadable timestamp must not buy an indefinite grace period."""
+        gh_calls = []
+        batch = self._batch_pr(rollup=self._absent_windows_rollup())
+        batch.pop("createdAt")
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._view(batch, gh_calls)), \
+             patch.object(self.module, "git", return_value=(True, "")):
+            self.module.handle_batch_pr({"number": 900}, summary)
+
+        self.assertEqual({r["kind"] for r in self.exception_rows()},
+                         {"batch_red_dissolved"})
+
+    def test_grace_never_makes_an_incomplete_rollup_mergeable(self):
+        """The waiting path must never merge: absent is still never green."""
+        gh_calls = []
+        batch = self._batch_pr(rollup=self._absent_windows_rollup(),
+                               created_at=self._young(1))
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._view(batch, gh_calls)), \
+             patch.object(self.module, "git", return_value=(True, "")):
+            self.module.handle_batch_pr({"number": 900}, summary)
+        self.assertEqual([c for c in gh_calls if c[:2] == ("pr", "merge")], [])
+        self.assertEqual(summary["merged"], [])
+        # And the underlying verdict is unchanged -- still not green.
+        verdict, _, _ = self.module.required_checks_green(
+            self._absent_windows_rollup())
+        self.assertEqual(verdict, "not_green")
+
+    def test_pr_fields_requests_created_at(self):
+        """The grace check is inert unless createdAt is actually fetched."""
+        self.assertIn("createdAt", self.module.PR_FIELDS)
 
     def test_unparseable_members_is_exception_rowed_not_merged(self):
         """Branch is alive but neither the body nor its commits name members."""
@@ -905,6 +1223,89 @@ class TestLock(StateIsolatedTestCase):
         (lock / "pid").write_text("999999", encoding="utf-8")
         self.module.release_lock(lock)
         self.assertTrue(lock.exists())
+
+    def test_two_reclaimers_cannot_both_win(self):
+        """A2: interleaved stale reclaim must produce exactly ONE lock holder.
+
+        The old sequence was `shutil.rmtree(stale)` then `os.mkdir()`. Those are
+        two steps, so pass B could reclaim and claim in the window between A's
+        rmtree decision and A's rmtree call -- and then A's rmtree deleted B's
+        brand-new FRESH lock and A claimed it too. Two advancers then ran
+        concurrently against the same queue, which is the observed #727/#728
+        double-batch shape.
+
+        The interleave is forced deterministically rather than raced: B runs to
+        completion from inside the exact instant A is about to take the stale
+        lock away, which is the only window the bug lives in.
+        """
+        module = self.module
+        lock = self.state_root / module.LOCK_DIRNAME
+        lock.mkdir(parents=True)
+        (lock / "timestamp").write_text("1", encoding="utf-8")  # epoch 1 = ancient
+        (lock / "pid").write_text("999999", encoding="utf-8")
+
+        results = []
+        state = {"reentered": False}
+        real_rmtree, real_rename = module.shutil.rmtree, module.os.rename
+
+        def reenter_once():
+            if state["reentered"]:
+                return
+            state["reentered"] = True
+            results.append(module.acquire_lock(lock, stale_s=60))
+
+        def rmtree_hook(path, *a, **kw):
+            if str(path).startswith(str(lock)):
+                reenter_once()
+            return real_rmtree(path, *a, **kw)
+
+        def rename_hook(src, dst, *a, **kw):
+            if str(src) == str(lock):
+                reenter_once()
+            return real_rename(src, dst, *a, **kw)
+
+        with patch.object(module.shutil, "rmtree", side_effect=rmtree_hook), \
+             patch.object(module.os, "rename", side_effect=rename_hook):
+            results.append(module.acquire_lock(lock, stale_s=60))
+
+        self.assertTrue(state["reentered"], "the interleave never happened")
+        self.assertEqual(
+            results.count(True), 1,
+            "exactly one pass may hold the advancer lock, got %s" % (results,))
+
+    def test_reclaim_never_deletes_a_fresh_lock(self):
+        """After an interleaved reclaim the surviving lock is a live one."""
+        module = self.module
+        lock = self.state_root / module.LOCK_DIRNAME
+        lock.mkdir(parents=True)
+        (lock / "timestamp").write_text("1", encoding="utf-8")
+        (lock / "pid").write_text("999999", encoding="utf-8")
+
+        state = {"reentered": False}
+        real_rename = module.os.rename
+
+        def rename_hook(src, dst, *a, **kw):
+            if str(src) == str(lock) and not state["reentered"]:
+                state["reentered"] = True
+                module.acquire_lock(lock, stale_s=60)
+            return real_rename(src, dst, *a, **kw)
+
+        with patch.object(module.os, "rename", side_effect=rename_hook):
+            module.acquire_lock(lock, stale_s=60)
+
+        self.assertTrue(lock.exists(), "the winner's lock was deleted")
+        self.assertTrue((lock / "pid").exists(), "the surviving lock has no owner")
+
+    def test_no_stale_graveyard_directories_are_left_behind(self):
+        """Reclaim must not litter the state dir with orphaned lock copies."""
+        module = self.module
+        lock = self.state_root / module.LOCK_DIRNAME
+        lock.mkdir(parents=True)
+        (lock / "timestamp").write_text("1", encoding="utf-8")
+        self.assertTrue(module.acquire_lock(lock, stale_s=60))
+        siblings = [p.name for p in self.state_root.iterdir()
+                    if p.is_dir() and p.name != module.LOCK_DIRNAME]
+        self.assertEqual(siblings, [], "reclaim left %s behind" % siblings)
 
     def test_lock_contention_exits_cleanly(self):
         lock = self.state_root / self.module.LOCK_DIRNAME
@@ -1493,6 +1894,44 @@ class TestGeneratedFileTolerance(StateIsolatedTestCase):
         self.assertEqual(parse('?? "sp ace.py"'), ["sp ace.py"])
         self.assertEqual(parse(""), [])
 
+    def test_status_parsing_survives_the_stripped_leading_column(self):
+        """`git()` strips output, so ' M path' arrives as 'M path'.
+
+        Regression: dirty_paths sliced line[3:], which on the stripped form ate
+        the first character of the path ('ests/CLAUDE.md'). Every registered
+        generated file then read as an unregistered edit, worktree_is_safe
+        answered 'working tree is dirty' forever, and no batch could ever be
+        built -- the 2026-08-03 board jam.
+        """
+        parse = self.module.dirty_paths
+        for stripped, raw in (("M tests/CLAUDE.md", " M tests/CLAUDE.md"),
+                              ("D gone.txt", " D gone.txt"),
+                              ("A x.py", " A x.py")):
+            self.assertEqual(parse(stripped), parse(raw))
+        self.assertEqual(parse("M tests/CLAUDE.md"), ["tests/CLAUDE.md"])
+        self.assertEqual(parse("MM tests/CLAUDE.md"), ["tests/CLAUDE.md"])
+        self.assertEqual(parse("UU conflict.py"), ["conflict.py"])
+        # A line that is not a porcelain row yields nothing, never a mis-slice.
+        self.assertEqual(parse("not a porcelain line"), [])
+
+    def test_worktree_is_safe_tolerates_a_stripped_generated_path(self):
+        """The end-to-end effect of the slice bug: a batch is buildable again."""
+        def fake_git(*args):
+            if args[0] == "rev-parse":
+                return (True, "main")
+            if args[0] == "status":
+                # Post-restore status is clean; pre-restore is the stripped form.
+                return (True, "" if fake_git.restored else "M tests/CLAUDE.md")
+            if args[0] == "restore":
+                fake_git.restored = True
+                return (True, "")
+            return (True, "")
+        fake_git.restored = False
+        with patch.object(self.module, "git", side_effect=fake_git):
+            safe, why = self.module.worktree_is_safe()
+        self.assertTrue(safe, why)
+        self.assertTrue(fake_git.restored)
+
     def test_generated_registry_is_shared_not_duplicated(self):
         """tools/generated_paths.py is the single registry; nothing re-lists."""
         registry = load_generated_paths()
@@ -1504,6 +1943,129 @@ class TestGeneratedFileTolerance(StateIsolatedTestCase):
         source = TOOL_PATH.read_text(encoding="utf-8")
         self.assertNotIn('"stash"', source)
         self.assertNotIn("'stash'", source)
+
+
+class TestBatchRegeneration(StateIsolatedTestCase):
+    """A batch's union must not fail a drift gate every member passed.
+
+    Two members can each add a test file: the suite counts in tests/CLAUDE.md
+    are right on both branches and wrong on their union, so the pre-push hook
+    fail-closes with '[DRIFT] Test suite count mismatch' and the queue stalls
+    holding a branch it can never publish. The generators run on the batch
+    branch, before the push, and only registry paths are ever committed.
+    """
+
+    def _git(self, calls, status_after_regen=""):
+        """The tree is clean at the safety check and drifts only once members
+        have been merged -- which is exactly when a batch's union diverges."""
+        state = {"merged": False}
+
+        def side_effect(*args):
+            calls.append(args)
+            if args[0] == "merge" and "--abort" not in args:
+                state["merged"] = True
+            if args[0] == "status":
+                return (True, status_after_regen if state["merged"] else "")
+            if args[0] == "rev-parse":
+                return (True, "main")
+            if args[0] == "commit":
+                state["merged"] = False  # committing cleans the tree
+            return (True, "")
+        return side_effect
+
+    def _gh(self):
+        def side_effect(*args, **kwargs):
+            if args[:2] == ("pr", "view"):
+                number = int(args[2])
+                return {"headRefOid": "sha%d" % number,
+                        "headRefName": "feat/%d" % number,
+                        "title": "pr %d" % number,
+                        "labels": [{"name": "merge-queue-batch"}]}
+            if args[:2] == ("pr", "create"):
+                return "https://github.com/o/r/pull/900"
+            return {}
+        return side_effect
+
+    def test_drifted_counts_are_regenerated_and_committed_before_push(self):
+        calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._gh()), \
+             patch.object(self.module, "git",
+                          side_effect=self._git(calls, "M tests/CLAUDE.md")), \
+             patch.object(self.module, "run_regenerator", return_value=(True, "")):
+            branch = self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertEqual(branch, "integrate/q-1700000000")
+        verbs = [c[0] for c in calls]
+        self.assertIn("commit", verbs)
+        self.assertIn("push", verbs)
+        # The regenerated file is committed BEFORE the branch is pushed.
+        self.assertLess(verbs.index("commit"), verbs.index("push"))
+        self.assertTrue(any(c[0] == "add" and "tests/CLAUDE.md" in c
+                            for c in calls), calls)
+        self.assertTrue(any("regenerated" in a for a in summary["actions"]),
+                        summary["actions"])
+
+    def test_clean_tree_after_regeneration_commits_nothing(self):
+        calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._gh()), \
+             patch.object(self.module, "git", side_effect=self._git(calls, "")), \
+             patch.object(self.module, "run_regenerator", return_value=(True, "")):
+            self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertNotIn("commit", [c[0] for c in calls])
+
+    def test_regenerator_overreach_commits_nothing(self):
+        """A generator writing an unregistered path must not be committed."""
+        calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._gh()), \
+             patch.object(self.module, "git",
+                          side_effect=self._git(calls, "M tests/CLAUDE.md\nM src/app.py")), \
+             patch.object(self.module, "run_regenerator", return_value=(True, "")):
+            self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertNotIn("commit", [c[0] for c in calls])
+        kinds = [r["kind"] for r in self.exception_rows()]
+        self.assertIn("regenerator_overreach", kinds)
+
+    def test_regenerator_failure_is_rowed_and_does_not_commit(self):
+        calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._gh()), \
+             patch.object(self.module, "git", side_effect=self._git(calls, "")), \
+             patch.object(self.module, "run_regenerator",
+                          return_value=(False, "boom")):
+            self.module.build_batch([11, 12], summary, epoch=1700000000)
+        kinds = [r["kind"] for r in self.exception_rows()]
+        self.assertIn("regenerator_failed", kinds)
+        self.assertNotIn("commit", [c[0] for c in calls])
+
+    def test_every_regenerator_exists_and_accepts_its_flags(self):
+        """Really invoke each generator: an unknown flag must not ship.
+
+        The pre-push hook's failure text advises `--regenerate`, which the tool
+        rejects with 'unrecognized arguments'. A registry naming a flag the
+        script does not accept would fail silently on every batch, so the flag
+        is proven against the real argument parser here, not assumed.
+        """
+        import subprocess
+        for argv in self.module.REGENERATORS:
+            script = TOOL_PATH.parent.parent / argv[0]
+            self.assertTrue(script.exists(), "missing generator: %s" % argv[0])
+            proc = subprocess.run(
+                [sys.executable, str(script), "--help"],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=60)
+            self.assertEqual(proc.returncode, 0, proc.stderr[:300])
+            for flag in argv[1:]:
+                self.assertIn(flag, proc.stdout,
+                              "%s does not accept %s" % (argv[0], flag))
+
+    def test_run_regenerator_uses_sys_executable_with_encoding(self):
+        source = TOOL_PATH.read_text(encoding="utf-8")
+        marker = source.split("def run_regenerator", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("sys.executable", marker)
+        self.assertIn('encoding="utf-8"', marker)
+        self.assertIn("timeout=", marker)
 
 
 class TestForbiddenOperations(unittest.TestCase):

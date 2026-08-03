@@ -10,8 +10,8 @@ drifted from documented (205) but was not caught by the local pre-push hook
 because verify_test_suite_count.py was not wired into hooks/pre-push-policy.sh.
 """
 
-import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -177,10 +177,11 @@ check_test_suite_count
         verify_script = aesop_root / "tools" / "verify_test_suite_count.py"
 
         result = subprocess.run(
-            ["python", str(verify_script), "--check"],
+            [sys.executable, str(verify_script), "--check"],
             cwd=str(self.repo_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
         )
 
         # Tool should exit 0 (counts match)
@@ -218,23 +219,30 @@ check_test_suite_count
         verify_script = aesop_root / "tools" / "verify_test_suite_count.py"
 
         verify_result = subprocess.run(
-            ["python", str(verify_script), "--check"],
+            [sys.executable, str(verify_script), "--check"],
             cwd=str(self.repo_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
         )
 
-        # PR #661: the count is DERIVED at check time, so stale drift is
-        # auto-corrected and the tool exits 0 rather than failing.
+        # A1 gate-fix: --check is READ-ONLY and fails closed on drift.
+        # (PR #661 briefly made this exit 0 by auto-correcting the file in place,
+        # which meant this escape class could never fail CI again.)
         self.assertEqual(
             verify_result.returncode,
-            0,
-            f"Expected drift to be detected. Output: {verify_result.stderr}",
+            1,
+            f"Expected drift to block (exit 1). Output: {verify_result.stdout}",
         )
         self.assertIn(
-            "AUTO-CORRECT",
+            "[DRIFT]",
             verify_result.stdout,
-            f"Expected AUTO-CORRECT message in output: {verify_result.stdout}",
+            f"Expected drift report in output: {verify_result.stdout}",
+        )
+        self.assertIn(
+            "205",
+            (tests_dir / "CLAUDE.md").read_text(encoding="utf-8"),
+            "--check must leave the stale documented count in place (read-only)",
         )
 
     def test_drift_node_count_mismatch(self):
@@ -267,17 +275,19 @@ check_test_suite_count
         verify_script = aesop_root / "tools" / "verify_test_suite_count.py"
 
         verify_result = subprocess.run(
-            ["python", str(verify_script), "--check"],
+            [sys.executable, str(verify_script), "--check"],
             cwd=str(self.repo_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
         )
 
         self.assertEqual(
             verify_result.returncode,
-            0,
-            f"Expected drift in Node count. Output: {verify_result.stderr}",
+            1,
+            f"Expected drift in Node count to fail closed. Output: {verify_result.stdout}",
         )
+        self.assertIn("Node:", verify_result.stdout)
 
     def test_drift_shell_count_mismatch(self):
         """Test drift detection: documented shell count differs from actual."""
@@ -308,17 +318,19 @@ check_test_suite_count
         verify_script = aesop_root / "tools" / "verify_test_suite_count.py"
 
         verify_result = subprocess.run(
-            ["python", str(verify_script), "--check"],
+            [sys.executable, str(verify_script), "--check"],
             cwd=str(self.repo_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
         )
 
         self.assertEqual(
             verify_result.returncode,
-            0,
-            f"Expected drift in Shell count. Output: {verify_result.stderr}",
+            1,
+            f"Expected drift in Shell count to fail closed. Output: {verify_result.stdout}",
         )
+        self.assertIn("Shell:", verify_result.stdout)
 
     def test_drift_python_count_mismatch(self):
         """Test drift detection: documented python count differs from actual."""
@@ -349,17 +361,20 @@ check_test_suite_count
         verify_script = aesop_root / "tools" / "verify_test_suite_count.py"
 
         verify_result = subprocess.run(
-            ["python", str(verify_script), "--check"],
+            [sys.executable, str(verify_script), "--check"],
             cwd=str(self.repo_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
         )
 
         self.assertEqual(
             verify_result.returncode,
-            0,
-            f"Expected drift in Python count (210 vs 205). Output: {verify_result.stderr}",
+            1,
+            f"Expected drift in Python count (210 vs 205) to fail closed. "
+            f"Output: {verify_result.stdout}",
         )
+        self.assertIn("Python:", verify_result.stdout)
 
     def test_multiple_drift_detection(self):
         """Test that multiple drifts are all detected and reported."""
@@ -394,21 +409,28 @@ check_test_suite_count
         verify_script = aesop_root / "tools" / "verify_test_suite_count.py"
 
         verify_result = subprocess.run(
-            ["python", str(verify_script), "--check"],
+            [sys.executable, str(verify_script), "--check"],
             cwd=str(self.repo_root),
             capture_output=True,
             text=True,
+            encoding="utf-8",
         )
 
         self.assertEqual(
             verify_result.returncode,
-            0,
-            f"Expected drift detection. Output: {verify_result.stderr}",
+            1,
+            f"Expected drift detection to fail closed. Output: {verify_result.stdout}",
         )
         # Check that all three drifts are reported
         self.assertIn("Node:", verify_result.stdout)
         self.assertIn("Shell:", verify_result.stdout)
         self.assertIn("Python:", verify_result.stdout)
+        # And that nothing was rewritten
+        self.assertIn(
+            "**Node (4 suites)**",
+            (tests_dir / "CLAUDE.md").read_text(encoding="utf-8"),
+            "--check must not rewrite documented counts",
+        )
 
 
 if __name__ == "__main__":

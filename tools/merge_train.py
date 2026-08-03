@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Merge train -- integration-batch or serial merge for GitHub PRs.
+"""Merge train -- integration-batch (default) or serial merge for GitHub PRs.
+INDEX: Merge train (debottleneck B1): integration mode is the DEFAULT — batches PRs into an `integrate/<batch-name>` branch, runs CI once, squash-merges, closes superseded PRs with ancestor verification (B1.3 correctness guard blocks unlanded content). B1.1: auto-named batches, --dry-run trials, --serial escape hatch. B1.2: stacked PR chains (baseRefName graph). B1.4: enforce_admins runtime check. B1.5: no update_branch in integration (FLAG 1 APPROVED); serial --rebase-behind flag. B1.6: regeneration hook stub (A1/A2/A3 generators). Serial mode (legacy `--serial`) processes PRs one-at-a-time with update-branch on --rebase-behind. Check classification is fail-closed via the `GREEN_CONCLUSIONS` allow-list (`SUCCESS`/`NEUTRAL`/`SKIPPED` only) and `check_outcome()`, which reads `conclusion` on CheckRun entries and `state` on legacy StatusContext entries — CANCELLED/TIMED_OUT/ACTION_REQUIRED/unknown are never green. Keep it an allow-list: a deny-list lets COMPLETED-but-not-FAILURE outcomes fall through to a merge. All modes: MERGED state verification mandatory; no --admin/--auto emitted
 
 Integration mode (DEFAULT): batch PRs into a single integration branch,
 test once, merge to main, close superseded PRs; handles stacked PRs and chains.

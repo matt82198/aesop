@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 power_selftest.py — Health check harness for /power bootstrap.
+INDEX: Health check harness for /power bootstrap
 Validates hooks, brain state, heartbeats, decisions, and scanner regression.
 Exit 0 if OK/DEGRADED, 1 if FAIL. Prints one summary line + bullets for non-OK items.
 

@@ -397,5 +397,47 @@ class TestClaudeMdSyncGate(unittest.TestCase):
             self.assertIn("summary", output)
 
 
+class TestDomainDocSurfaces(unittest.TestCase):
+    """tools/INDEX.md is a documentation surface, not code (regression for #751).
+
+    #751 moved the per-tool index out of tools/CLAUDE.md into the generated
+    tools/INDEX.md. A tool change accompanied by an INDEX.md update is a
+    documented change; before this, the gate saw only CLAUDE.md and reported
+    drift, which blocked every tool-touching PR from pushing.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
+        import claudemd_sync_gate
+
+        cls.gate = claudemd_sync_gate
+
+    def test_index_md_is_a_domain_doc(self):
+        self.assertTrue(self.gate.is_domain_doc("tools/INDEX.md"))
+        self.assertTrue(self.gate.is_domain_doc("tools/CLAUDE.md"))
+        self.assertTrue(self.gate.is_domain_doc("tools\\INDEX.md"))
+
+    def test_code_is_not_a_domain_doc(self):
+        self.assertFalse(self.gate.is_domain_doc("tools/rotate_logs.py"))
+        # Matched on basename, so a lookalike filename is still code.
+        self.assertFalse(self.gate.is_domain_doc("tools/MY_INDEX.md"))
+
+    def test_index_md_satisfies_sync_requirement(self):
+        """Tool code + regenerated INDEX.md must NOT read as drift."""
+        classified = {"tools": ["tools/rotate_logs.py", "tools/INDEX.md"]}
+        findings, code = self.gate.check_domain_claudemd_sync(Path("."), classified)
+        self.assertEqual(findings, [])
+        self.assertEqual(code, 0)
+
+    def test_undocumented_tool_change_still_fails_closed(self):
+        """The gate must not be weakened: a bare code change is still drift."""
+        classified = {"tools": ["tools/rotate_logs.py"]}
+        findings, code = self.gate.check_domain_claudemd_sync(Path("."), classified)
+        self.assertEqual(code, 1)
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["changed_files"], ["tools/rotate_logs.py"])
+
+
 if __name__ == "__main__":
     unittest.main()
