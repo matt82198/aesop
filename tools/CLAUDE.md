@@ -17,7 +17,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - **lock.mjs is the ONLY lock implementation**: never reimplement locking in `proposals.mjs` or elsewhere; all proposals/state updates must use fail-closed `lock.mjs` with exponential backoff + stale-lock breaking.
 ## Tool index (one-liners)
 
-- `agent_prompt_hygiene.py` — Gate detecting forbidden patterns in agent/dispatch prompt templates
+- `agent-forensics.sh` — Incident forensics; behavior reconstruction (read-only git plumbing) | `agent_prompt_hygiene.py` — Gate detecting forbidden patterns in agent/dispatch prompts
 - `alert_bridge.py` — Slack/Discord webhook bridge for SECURITY-ALERTS
 - `audit_report.py` — Deterministic markdown audit report aggregator (defect_escape, mutation results, lint/drift findings, ledger verdict rates); --out/--strict/--json inputs from machine outputs only
 - `auto_merge.py` — Batch PR merge tool (fix-by-default: merge main into broken branches + merge green PRs; `--no-fix`/`--loop`/`--dry-run`/`--json`/`--wait`); uses subprocess_common.py for timeouts + encoding; MERGED-state verification gate at lines 101-105; run with `--loop` to continuously merge all green PRs; use merge_train.py for one-shot serial CI-gated queues
