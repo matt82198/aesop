@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 r"""
 Publish a compact fleet-status snapshot to a phone-reachable location.
+INDEX: Publish compact fleet-status snapshot to SECRET GitHub gist (phone-reachable, no local/public exposure); FAIL-CLOSED visibility check (refuses public gists); gathers agents/PRs/heartbeats (MTIME-based, file-not-found is ERROR state)/BUILDLOG/pending items; redacts secrets/paths/private-machine tokens; idempotent (skips unchanged); CLI: `[--once] [--gist-id GIST] [--dry-run]` (gist-id required or in config); exit 0=success, 1=publish failed (visibility/redaction/gh error), 2=fatal error (missing gist-id etc.)
 
 Gathers high-signal data from existing sources (fleet status, PRs, BUILDLOG, heartbeats,
 pending items) into a small, phone-optimized snapshot. Publishes to a SECRET GitHub

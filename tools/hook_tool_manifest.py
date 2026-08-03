@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+INDEX: Hook tool-existence manifest gate: parses `hooks/pre-push-policy.sh` for the tool paths it dispatches to (a `tools/<file>` reached through an interpolated root var, which is what excludes bare-path prose mentions in comments and `cat >` fixture writes in `run_test_mode`) and asserts each exists and is non-empty (whitespace-only counts as EMPTY: it satisfies the hook's `[ -f ]` test and runs as a no-op gate). Closes the fail-open hole: 7 of the hook's 8 tool call sites `return 0` + log `<gate>_skipped_tool_missing` when the tool is absent, so deleting/renaming/truncating a gate script silently disarms it — only `secret_scan.py` fails closed. Read-only w.r.t. the hook; deliberately does NOT change the hook's own fail-open semantics, which are correct for the foreign repos the hook also installs into. CLI: `[--root DIR] [--hook PATH] [--json] [--list]`; exit 0=all present/1=missing or empty/2=error. Zero parsed references is exit 2, never 0 — a parser that matches nothing would report the same vacuous green this gate exists to catch. Guards 8 tools today; stdlib-only
 Hook tool-existence manifest gate.
 
 hooks/pre-push-policy.sh dispatches to a set of gate scripts under

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Browser proof for the CostSummaryDrawer component.
+INDEX: Playwright proof for CostSummaryDrawer: toggle, metrics, aria-hidden, populated/empty phases; both exit 0=proven/1=failed, `[--allow-skip]`.
 
 Drives ui/web/dist/ against fixture cost data (ledger + pricing), asserting
 the drawer contract via data-testid hooks:
