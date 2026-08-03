@@ -109,6 +109,17 @@ Tests document **actual gaps** found in rounds of refactoring/audit:
 - **Concurrency-safe**: Tests use file locks (proposals.mjs, collect-signals.mjs) to prevent races.
 - **Self-test mode**: Hooks & tools (pre-push-policy.sh, reconstitute.sh, tools/secret_scan.py) include `--test` flag for inline validation.
 
+## Guardrail G2.6: test_verify_gates_wired
+
+Tests for tools/verify_gates_wired.py (Guardrail G2.6), the documented-gates-are-wired guardrail:
+- All documented gates wired: exit 0 when every CI gate in CLAUDE.md is invoked in ci.yml
+- Unwired gate detection: exit 1 when documented gates are missing from CI workflow
+- verify_*.py mandatory gates: capture tools listed in "verify_*.py are mandatory CI gates" section
+- Guardrail gate capture: capture tools marked with "(Guardrail Gx)" except pre-push-only gates
+- Pre-push-only exclusion: skip gates documented with 'pre-push' but not 'CI' (not CI gates)
+- Missing files fail-closed: return error (exit 1/2) if CLAUDE.md files unreadable/absent
+- Fixture isolation: temp test structure with mock CLAUDE.md + ci.yml files, no side effects
+
 ---
 
 **Historical note**: The exhaustive per-file suite listings and dropped-reason changelogs below this line were removed to eliminate the conflict-magnet in PR merges (every test-adding PR conflicted with every other). Suite discovery is now deterministic and automated via `python tools/list_test_suites.py` and `bash tools/run_shell_tests.sh`. Counts in the headers above are gate-verified by `python tools/verify_test_suite_count.py --check` (CI blocking gate).

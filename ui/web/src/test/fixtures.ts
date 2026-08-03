@@ -136,6 +136,15 @@ export const TESTIDS = {
   modelMixChart: 'model-mix-chart',
   costAnalyticsPanel: 'cost-analytics-panel',
   waveAgentBreakdown: 'wave-agent-breakdown',
+  costSummaryDrawer: 'cost-summary-drawer',
+  costSummaryDrawerToggle: 'cost-summary-drawer-toggle',
+  costSummaryDrawerPanel: 'cost-summary-drawer-panel',
+  costSummaryTotal: 'cost-summary-total',
+  costSummaryRate: 'cost-summary-rate',
+  costSummaryModelMix: 'cost-summary-model-mix',
+  costSummaryLoading: 'cost-summary-loading',
+  costSummaryError: 'cost-summary-error',
+  costSummaryEmpty: 'cost-summary-empty',
 
   // PR Board view
   viewPRBoard: 'view-prboard',

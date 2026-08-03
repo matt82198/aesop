@@ -2,12 +2,15 @@ param(
     [string]$BashExe = 'C:\Program Files\Git\bin\bash.exe',
     [string]$WatchdogCommand = '',
     [string]$MonitorCommand = '',
+    [string]$MergeQueueCommand = '',
     [int]$WatchdogIntervalMinutes = 5,
     [int]$MonitorIntervalMinutes = 20,
+    [int]$MergeQueueIntervalMinutes = 5,
     [string]$TaskPrefix = 'Aesop',
     [switch]$Uninstall,
     [switch]$DryRun,
-    [switch]$EnableAuditLog
+    [switch]$EnableAuditLog,
+    [switch]$EnableMergeQueue
 )
 
 # Enable strict error handling
@@ -178,6 +181,10 @@ function Main {
         Write-Error "MonitorCommand contains double quotes, which are not allowed (vbs launcher contract violation)."
         exit 1
     }
+    if ($MergeQueueCommand -like '*"*') {
+        Write-Error "MergeQueueCommand contains double quotes, which are not allowed (vbs launcher contract violation)."
+        exit 1
+    }
 
     # PATH VALIDATION: Only enforce file existence checks if not in DryRun mode
     # In DryRun, downgrade to warnings so preview works on machines without Git Bash
@@ -204,7 +211,8 @@ function Main {
     if ($Uninstall) {
         $watchdog_ok = Unregister-DaemonTask -TaskName "${TaskPrefix}WatchdogDaemon" -AesopRoot $aesopRoot
         $monitor_ok = Unregister-DaemonTask -TaskName "${TaskPrefix}RefinementMonitor" -AesopRoot $aesopRoot
-        if (-not $watchdog_ok -or -not $monitor_ok) {
+        $mergequeue_ok = Unregister-DaemonTask -TaskName "${TaskPrefix}MergeQueue" -AesopRoot $aesopRoot
+        if (-not $watchdog_ok -or -not $monitor_ok -or -not $mergequeue_ok) {
             exit 1
         }
         exit 0
@@ -240,6 +248,34 @@ function Main {
             -TaskName $monitorTaskName `
             -Command $MonitorCommand `
             -IntervalMinutes $MonitorIntervalMinutes `
+            -RunHiddenVbs $runHiddenVbs `
+            -BashExe $BashExe `
+            -AesopRoot $aesopRoot
+    }
+
+    # Register the merge-queue advancer. OPT-IN: this task merges to main with
+    # no interactive session, so it is never switched on as a side effect of
+    # running the installer. Pass -EnableMergeQueue (derives the command) or
+    # -MergeQueueCommand (explicit).
+    if ($EnableMergeQueue -or $MergeQueueCommand) {
+        if (-not $MergeQueueCommand) {
+            $posixRootMq = ConvertTo-PosixPath $aesopRoot
+
+            # Same apostrophe guard as the watchdog derivation: an apostrophe in
+            # the path would break the single-quoted bash command.
+            if ($posixRootMq -like "*'*") {
+                Write-Error "Repository path contains apostrophe, which would break the derived command: $posixRootMq`nPass -MergeQueueCommand explicitly."
+                exit 1
+            }
+
+            $MergeQueueCommand = "bash '$posixRootMq/daemons/run-merge-queue.sh' --once >> '$posixRootMq/state/cron-merge-queue.log' 2>&1"
+        }
+
+        $mergeQueueTaskName = "${TaskPrefix}MergeQueue"
+        Register-DaemonTask `
+            -TaskName $mergeQueueTaskName `
+            -Command $MergeQueueCommand `
+            -IntervalMinutes $MergeQueueIntervalMinutes `
             -RunHiddenVbs $runHiddenVbs `
             -BashExe $BashExe `
             -AesopRoot $aesopRoot
