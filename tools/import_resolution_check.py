@@ -153,13 +153,292 @@ def get_stdlib_modules():
         return set()
 
 
-def resolve_module(module_name, repo_modules, stdlib_modules, repo_root=None):
+class _Unresolvable(Exception):
+    """Raised when an AST node is not a literal, __file__-derived path."""
+
+
+def _dotted_name(node):
+    """Render an ast.Attribute/ast.Name chain as a dotted string, or None."""
+    parts = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name):
+        return None
+    parts.append(node.id)
+    return ".".join(reversed(parts))
+
+
+def _eval_path_node(node, env, file_path, depth=0):
+    """
+    Conservatively evaluate an AST node to (Path, uses_file).
+
+    Only literal path algebra rooted in ``__file__`` is understood:
+    ``__file__``, ``Path(...)``, ``str(...)``, ``.parent``, ``.resolve()``,
+    ``p / "literal"``, ``os.path.dirname/join/abspath/realpath/normpath``,
+    and names already bound to such an expression.
+
+    Anything dynamic (function calls, os.environ lookups, f-strings,
+    subscripts) raises _Unresolvable so those sys.path targets keep failing.
+    """
+    if depth > 24:
+        raise _Unresolvable()
+
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, str):
+            return Path(node.value), False
+        raise _Unresolvable()
+
+    if isinstance(node, ast.Name):
+        if node.id == "__file__":
+            return file_path, True
+        bound = env.get(node.id)
+        if bound is None:
+            raise _Unresolvable()
+        return bound
+
+    if isinstance(node, ast.Attribute):
+        if node.attr == "parent":
+            base, uses_file = _eval_path_node(node.value, env, file_path, depth + 1)
+            return base.parent, uses_file
+        raise _Unresolvable()
+
+    # Path(...).parents[N] -- N literal, applied as N successive .parent steps.
+    if isinstance(node, ast.Subscript):
+        value = node.value
+        index = node.slice
+        if (
+            isinstance(value, ast.Attribute)
+            and value.attr == "parents"
+            and isinstance(index, ast.Constant)
+            and isinstance(index.value, int)
+            and not isinstance(index.value, bool)
+            and 0 <= index.value <= 32
+        ):
+            base, uses_file = _eval_path_node(value.value, env, file_path, depth + 1)
+            for _ in range(index.value + 1):
+                base = base.parent
+            return base, uses_file
+        raise _Unresolvable()
+
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        left, left_file = _eval_path_node(node.left, env, file_path, depth + 1)
+        right, right_file = _eval_path_node(node.right, env, file_path, depth + 1)
+        return left / right, left_file or right_file
+
+    if isinstance(node, ast.Call):
+        return _eval_path_call(node, env, file_path, depth)
+
+    raise _Unresolvable()
+
+
+def _eval_path_call(node, env, file_path, depth):
+    """Evaluate the small set of path-producing calls the sanctioned idiom uses."""
+    if node.keywords:
+        raise _Unresolvable()
+
+    func = node.func
+
+    # Method form: <expr>.resolve() / .absolute() / .joinpath(...)
+    if isinstance(func, ast.Attribute) and func.attr in ("resolve", "absolute", "joinpath"):
+        base, uses_file = _eval_path_node(func.value, env, file_path, depth + 1)
+        if func.attr in ("resolve", "absolute"):
+            if node.args:
+                raise _Unresolvable()
+            return base, uses_file
+        for arg in node.args:
+            part, part_file = _eval_path_node(arg, env, file_path, depth + 1)
+            base = base / part
+            uses_file = uses_file or part_file
+        return base, uses_file
+
+    # __import__("pathlib").Path(...) -- inline-import spelling of Path().
+    if (
+        isinstance(func, ast.Attribute)
+        and func.attr == "Path"
+        and isinstance(func.value, ast.Call)
+        and isinstance(func.value.func, ast.Name)
+        and func.value.func.id == "__import__"
+        and len(func.value.args) == 1
+        and isinstance(func.value.args[0], ast.Constant)
+        and func.value.args[0].value == "pathlib"
+        and len(node.args) == 1
+    ):
+        return _eval_path_node(node.args[0], env, file_path, depth + 1)
+
+    name = _dotted_name(func)
+    if name is None:
+        raise _Unresolvable()
+
+    if name in ("str", "Path", "pathlib.Path", "PurePath", "os.fspath"):
+        if len(node.args) != 1:
+            raise _Unresolvable()
+        return _eval_path_node(node.args[0], env, file_path, depth + 1)
+
+    if name in ("os.path.abspath", "os.path.realpath", "os.path.normpath"):
+        if len(node.args) != 1:
+            raise _Unresolvable()
+        return _eval_path_node(node.args[0], env, file_path, depth + 1)
+
+    if name == "os.path.dirname":
+        if len(node.args) != 1:
+            raise _Unresolvable()
+        base, uses_file = _eval_path_node(node.args[0], env, file_path, depth + 1)
+        return base.parent, uses_file
+
+    if name == "os.path.join":
+        if not node.args:
+            raise _Unresolvable()
+        base, uses_file = _eval_path_node(node.args[0], env, file_path, depth + 1)
+        for arg in node.args[1:]:
+            part, part_file = _eval_path_node(arg, env, file_path, depth + 1)
+            base = base / part
+            uses_file = uses_file or part_file
+        return base, uses_file
+
+    raise _Unresolvable()
+
+
+def _build_path_env(tree, file_path):
+    """
+    Bind module names to literal __file__-derived paths, in source order.
+
+    A name assigned more than once with differing values is poisoned to None
+    (ambiguous) so a later dynamic rebind cannot smuggle a path through.
+    """
+    env = {}
+    assignments = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    assignments.append((node.lineno, target.id, node.value))
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name) and node.value is not None:
+                assignments.append((node.lineno, node.target.id, node.value))
+
+    for _lineno, name, value in sorted(assignments, key=lambda item: item[0]):
+        try:
+            resolved = _eval_path_node(value, env, file_path)
+        except _Unresolvable:
+            resolved = None
+        if name in env and env[name] != resolved:
+            env[name] = None
+        else:
+            env[name] = resolved
+    return env
+
+
+def _syspath_mutation_arg(node):
+    """Return the path argument of a sys.path.insert/append call, else None."""
+    func = node.func
+    if not isinstance(func, ast.Attribute):
+        return None
+    if _dotted_name(func) not in ("sys.path.insert", "sys.path.append"):
+        return None
+    if func.attr == "insert":
+        return node.args[1] if len(node.args) >= 2 else None
+    return node.args[0] if node.args else None
+
+
+def _iter_syspath_targets(tree, env, file_path):
+    """
+    Yield (arg_node, env) for every sys.path.insert/append in the module.
+
+    `for _p in (DIR_A, DIR_B): sys.path.insert(0, str(_p))` is expanded once
+    per element of the literal tuple/list, with the loop name bound. Loops over
+    anything but a literal sequence are left unbound, so their targets stay
+    unresolvable.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            target = _syspath_mutation_arg(node)
+            if target is not None:
+                yield target, env
+            continue
+        if not isinstance(node, ast.For):
+            continue
+        if not isinstance(node.target, ast.Name) or not isinstance(node.iter, (ast.Tuple, ast.List)):
+            continue
+        for element in node.iter.elts:
+            try:
+                bound = _eval_path_node(element, env, file_path)
+            except _Unresolvable:
+                continue
+            loop_env = dict(env)
+            loop_env[node.target.id] = bound
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Call):
+                    target = _syspath_mutation_arg(inner)
+                    if target is not None:
+                        yield target, loop_env
+
+
+def sys_path_dirs_for_file(repo_root, filepath, content):
+    """
+    Directories this file adds to sys.path via the sanctioned repo idiom.
+
+    Returns the absolute, in-repo, on-disk directories named by
+    ``sys.path.insert/append`` calls whose target is a literal path derived
+    from ``__file__``. Dynamic targets, non-__file__ literals and paths that
+    escape the repo are deliberately omitted -- imports behind those stay
+    unresolvable, so this is a resolution rule, not an exemption.
+    """
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return []
+
+    repo_path = Path(repo_root).resolve()
+    file_path = Path(os.path.normpath(str(repo_path / filepath)))
+    env = _build_path_env(tree, file_path)
+
+    dirs = []
+    for target, target_env in _iter_syspath_targets(tree, env, file_path):
+        try:
+            value, uses_file = _eval_path_node(target, target_env, file_path)
+        except _Unresolvable:
+            continue
+        if not uses_file:
+            continue
+        resolved = Path(os.path.normpath(str(value)))
+        if not resolved.is_absolute():
+            continue
+        try:
+            resolved.relative_to(repo_path)
+        except ValueError:
+            continue
+        if resolved.is_dir() and resolved not in dirs:
+            dirs.append(resolved)
+    return dirs
+
+
+def _module_exists_under(directory, module_name):
+    """Is module_name importable from `directory` as a real file on disk?"""
+    parts = module_name.split(".")
+    if any(not part.isidentifier() for part in parts):
+        return False
+    candidate = Path(directory) / Path(*parts)
+    if candidate.with_suffix(".py").is_file():
+        return True
+    if (candidate / "__init__.py").is_file():
+        return True
+    # PEP 420 namespace package: a real directory that holds Python modules.
+    if candidate.is_dir() and any(candidate.glob("*.py")):
+        return True
+    return False
+
+
+def resolve_module(module_name, repo_modules, stdlib_modules, repo_root=None, extra_dirs=()):
     """
     Check if a module is resolvable.
-    Returns: (is_resolvable, resolution_type) where resolution_type is 'repo', 'stdlib', or 'unknown'.
+    Returns: (is_resolvable, resolution_type) where resolution_type is
+    'repo', 'stdlib', 'syspath', or 'unknown'.
 
     For repo modules, checks full path by traversing directory structure.
     For stdlib, checks only top-level (stdlib doesn't have full paths pre-built).
+    `extra_dirs` are directories the file itself placed on sys.path via the
+    sanctioned __file__-derived idiom; each import is also checked against them.
     """
     top_level = module_name.split(".")[0]
 
@@ -183,6 +462,11 @@ def resolve_module(module_name, repo_modules, stdlib_modules, repo_root=None):
         package_path = Path(repo_root) / Path(*parts) / "__init__.py"
         if package_path.exists():
             return True, "repo"
+
+    # Directories the file itself put on sys.path via the sanctioned idiom.
+    for extra in extra_dirs:
+        if _module_exists_under(extra, module_name):
+            return True, "syspath"
 
     # Unknown module: not resolvable
     return False, "unknown"
@@ -216,9 +500,10 @@ def check_imports(repo_root):
             continue
 
         imports = extract_imports(filepath, content)
+        extra_dirs = sys_path_dirs_for_file(repo_root, filepath, content)
         for module_name, import_type, lineno in imports:
             resolvable, resolution_type = resolve_module(
-                module_name, repo_modules, stdlib_modules, repo_root
+                module_name, repo_modules, stdlib_modules, repo_root, extra_dirs=extra_dirs
             )
 
             if not resolvable:
