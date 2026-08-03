@@ -1,6 +1,7 @@
 import { describe, it, before, after } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,6 +13,12 @@ import { dirname } from 'node:path';
 // tests/ is one level below the repo root -- '../../..' overshot by two.
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const cliPath = join(repoRoot, 'bin', 'cli.js');
+
+// bin/cli.js exports its pure helpers when required as a module (require.main !== module)
+// instead of running the scaffolder. This is the seam that makes the exit-code propagator
+// unit-testable without spawning a killable grandchild.
+const requireCjs = createRequire(import.meta.url);
+const { exitCodeFromSpawnResult } = requireCjs(cliPath);
 
 
 /**
@@ -75,6 +82,56 @@ after(() => {
   for (const d of ['aesop-fleet', 'badnamespace']) {
     safeRm(join(repoRoot, d));
   }
+});
+
+// The exit-code propagator is shared by EVERY `aesop <namespace> <verb>` dispatch
+// (~50 gate/lint/verify subcommands, including `gate secret-scan`). If it reports 0 for a
+// child that never completed, a signal-killed security gate is indistinguishable from a
+// passing one -- a fail-OPEN gate. It must fail CLOSED.
+describe('exit-code propagator (fail-closed)', () => {
+  it('is exported for testing', () => {
+    assert.equal(typeof exitCodeFromSpawnResult, 'function');
+  });
+
+  it('propagates real exit codes unchanged', () => {
+    assert.equal(exitCodeFromSpawnResult({ status: 0, signal: null }), 0);
+    assert.equal(exitCodeFromSpawnResult({ status: 1, signal: null }), 1);
+    assert.equal(exitCodeFromSpawnResult({ status: 2, signal: null }), 2);
+    assert.equal(exitCodeFromSpawnResult({ status: 42, signal: null }), 42);
+  });
+
+  it('exits NONZERO when the child was killed by a signal (status null, no error)', () => {
+    // spawnSync sets status:null / signal:'SIGTERM' / error:undefined on signal-kill.
+    // `result.status || 0` collapses that to 0 -- reporting SUCCESS for a killed gate.
+    const rc = exitCodeFromSpawnResult({ status: null, signal: 'SIGTERM', error: undefined });
+    assert.notEqual(rc, 0, 'signal-killed child must not report success');
+    assert.equal(rc, 2);
+  });
+
+  it('exits NONZERO on SIGKILL and on an undefined status', () => {
+    assert.equal(exitCodeFromSpawnResult({ status: null, signal: 'SIGKILL' }), 2);
+    assert.equal(exitCodeFromSpawnResult({ status: undefined, signal: null }), 2);
+  });
+
+  it('exits 2 when spawn itself errored', () => {
+    assert.equal(exitCodeFromSpawnResult({ status: null, error: new Error('ENOENT') }), 2);
+    // An error alongside a status must still fail closed.
+    assert.equal(exitCodeFromSpawnResult({ status: 0, error: new Error('ETIMEDOUT') }), 2);
+  });
+
+  it('the {status:null, error:undefined} fixture matches real signal-kill behaviour', function () {
+    // Prove the fixture is not invented: a self-SIGTERMing child really does yield
+    // status null with no error. Windows maps signals onto TerminateProcess, so the
+    // observable shape differs there -- assert only where the semantics hold.
+    if (process.platform === 'win32') return;
+    const real = spawnSync(process.execPath, ['-e', 'process.kill(process.pid, "SIGTERM")'], {
+      stdio: 'ignore',
+      timeout: 10000
+    });
+    assert.equal(real.status, null, 'signal-killed child should report status null');
+    assert.equal(real.error, undefined, 'signal-kill sets no spawn error');
+    assert.equal(exitCodeFromSpawnResult(real), 2);
+  });
 });
 
 describe('CLI Python dispatch table', () => {

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// INDEX: Launch the web dashboard (spawns python ui/serve.py with configured port from PORT env var, aesop.config.json, or default 8770)
 
 /**
  * Aesop dash — Launch the web dashboard

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Exhaustive gate inventory: every gate tool must have at least one invoker.
+INDEX: Exhaustive gate-invoker inventory (complements the marker-driven `verify_gates_wired.py`, which only sees gates tagged in CLAUDE.md prose). Axis 1: enumerates `tools/{*_lint,*_check,*_gate,verify_*}.py` via git ls-files; each must resolve to >=1 invoker (CI workflow run line, `hooks/*.sh`, `bin/cli.js`, npm script, one-hop first-party import/subprocess, or a `tools/gate-inventory-allowlist.json` entry carrying a >=12-char reason); tests/ and docs are deliberately NOT invokers. Axis 2: every `check_*()` documented in the hooks domain doc's pre-push section must have a real word-boundary CALL SITE (not merely a definition) in `hooks/pre-push-policy.sh`. CLI: `--check [--json] [--root DIR] [--allowlist PATH]`; exit 0=clean/1=findings/2=error (fail-closed on unreadable inputs, empty inventory, or an axis-2 section documenting zero checks). Not yet wired into ci.yml; at origin/main it reports 4 real orphans (`sibling_import_check`, `git_identity_check`, `fixture_intent_check`, `port_fidelity_check`) left deliberately unallowlisted
 
 Complements tools/verify_gates_wired.py. That tool is MARKER-DRIVEN: it discovers
 gates only from lines in tools/CLAUDE.md and tests/CLAUDE.md that carry the literal

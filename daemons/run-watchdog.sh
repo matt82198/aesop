@@ -141,11 +141,25 @@ check_monitor_staleness() {
 }
 
 # Kill switch check (wave-26 safety brake). Returns 0 (bash true) and logs
-# "HALTED: <reason>" if $AESOP_ROOT/state/.HALT exists; returns 1 otherwise.
+# "HALTED: <reason>" if a .HALT sentinel exists; returns 1 otherwise.
 # Never runs backup/push/scan work when halted — caller must skip the cycle.
+#
+# The sentinel is looked for in EVERY location tools/halt.py may have written
+# it: $AESOP_STATE_ROOT/.HALT first (halt.py resolves AESOP_STATE_ROOT ahead of
+# everything else) then $AESOP_ROOT/state/.HALT. Reading only the latter meant
+# a human running `halt.py set` under a non-default AESOP_STATE_ROOT wrote a
+# sentinel this daemon never read — the abort silently did nothing.
 check_halt() {
   local log_file="$1"
-  if [ ! -f "$HALT_SENTINEL" ]; then
+  local sentinel=""
+  local candidate
+  for candidate in "$HALT_SENTINEL" "$HALT_SENTINEL_LEGACY"; do
+    if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+      sentinel="$candidate"
+      break
+    fi
+  done
+  if [ -z "$sentinel" ]; then
     return 1
   fi
 
@@ -162,7 +176,7 @@ try:
         print(r)
 except Exception:
     pass
-' "$HALT_SENTINEL" 2>/dev/null)
+' "$sentinel" 2>/dev/null)
     if [ -n "$parsed" ]; then
       reason="$parsed"
     fi
@@ -279,7 +293,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   MODE="${1:-daemon}"
   LOCK_DIR="$AESOP_ROOT/state/.watchdog-lock"
   LOCK_STALE_THRESHOLD=300
-  HALT_SENTINEL="$AESOP_ROOT/state/.HALT"
+  # Kill-switch read locations, in tools/halt.py's own write precedence order.
+  HALT_SENTINEL="${AESOP_STATE_ROOT:-$AESOP_ROOT/state}/.HALT"
+  HALT_SENTINEL_LEGACY="$AESOP_ROOT/state/.HALT"
 
   # Resolve Python interpreter (portable: prefer python3, fallback to python)
   PYTHON_EXE=""
