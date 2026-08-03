@@ -137,11 +137,21 @@ BATCH_LABEL_DESC = "Integration batch opened by the merge-queue advancer"
 # The generators that own the GENERATED_PATHS registry, run on an integration
 # branch before it is pushed so a batch's union cannot fail a drift gate that
 # every member passed individually. Each entry is argv after sys.executable.
-# NOTE: the flag is `--fix`. The pre-push hook's own failure text advises
-# `--regenerate`, which the tool does not accept ("unrecognized arguments") --
-# do not copy that string here.
+# EVERY path in GENERATED_PATHS needs an entry here. Registration alone only
+# lets a pass RESTORE a drifted generated file in the shared tree; rebuilding it
+# on the integration branch -- where a union drifts -- takes a regenerator. A
+# registered path with no regenerator still wedges the queue.
+#   verify_test_suite_count.py -> the suite-count lines in the CLAUDE.md docs.
+#     NOTE: the flag is `--fix`. The pre-push hook's own failure text advises
+#     `--regenerate`, which the tool does not accept ("unrecognized
+#     arguments") -- do not copy that string here.
+#   gen_tool_index.py -> tools/INDEX.md. Two members that each add a tool with
+#     its own `INDEX:` line are both byte-identical alone and drifted on their
+#     union, so the byte-identity gate fail-closes on a branch no member ever
+#     tested. Here that flag really is `--regenerate`.
 REGENERATORS = (
     ("tools/verify_test_suite_count.py", "--fix"),
+    ("tools/gen_tool_index.py", "--regenerate"),
 )
 
 # One `git status --porcelain` row: the two-column XY status code (either or
