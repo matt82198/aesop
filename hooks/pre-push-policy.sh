@@ -894,6 +894,79 @@ check_test_coverage() {
   return 0
 }
 
+check_generated_paths() {
+  # Generated-path registry gate (tools/generated_paths.py --check).
+  # Machine-generated files have exactly ONE legitimate writer -- their
+  # generator. A hand edit is silently reverted on the next regeneration AND
+  # collides with every concurrent lane that regenerates the same file, which
+  # is the contended-file conflict class this gate exists to kill.
+  #
+  # Reads the pushed ref tuples from stdin (same capture main() feeds every
+  # other stdin consumer), turns each range into its changed-path list, and
+  # hands the union to the registry. Paths go over stdin, not argv, so a large
+  # diff cannot blow the command-line length limit.
+  #
+  # Escape hatch: AESOP_ALLOW_GENERATED=1 (honored inside the tool) is the
+  # DESIGNED writer path for generators/daemon regeneration pushes, not a
+  # weakening -- an ordinary push never sets it.
+  #
+  # Fail-open ONLY for missing optional tooling / no python (the hook installs
+  # into repos without an aesop checkout). Malformed or unparseable stdin is
+  # already fail-closed by check_secret_scan, which runs first; here it simply
+  # means there is no diff to classify.
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local gen_script="$aesop_root/tools/generated_paths.py"
+
+  if [ ! -f "$gen_script" ]; then
+    log_event "generated_paths_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; generated-path gate skipped\n' >&2
+    log_event "generated_paths_skipped_no_python"
+    return 0
+  fi
+
+  local commit_ranges
+  commit_ranges=$(get_commit_range)
+  local range_exit_code=$?
+  if [ $range_exit_code -ne 0 ] || [ -z "$commit_ranges" ]; then
+    # Delete-only / empty / malformed: no content diff to classify here.
+    return 0
+  fi
+
+  local changed=""
+  local range
+  while IFS= read -r range || [ -n "$range" ]; do
+    [ -z "$range" ] && continue
+    local range_paths
+    range_paths=$(git diff --name-only "$range" 2>/dev/null)
+    if [ -n "$range_paths" ]; then
+      changed="${changed}${range_paths}"$'\n'
+    fi
+  done <<< "$commit_ranges"
+
+  if [ -z "$(printf '%s' "$changed" | tr -d '[:space:]')" ]; then
+    return 0
+  fi
+
+  local gen_output
+  gen_output=$(printf '%s\n' "$changed" | "$py_bin" "$gen_script" --check 2>&1)
+  local gen_exit_code=$?
+
+  if [ $gen_exit_code -ne 0 ]; then
+    if [ -n "$gen_output" ]; then
+      printf '%s\n' "$gen_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
 run_test_mode() {
   local test_passed=0
   local test_failed=0
@@ -1466,12 +1539,105 @@ refs/heads/feature/test $local_sha refs/heads/main 00000000000000000000000000000
     test_failed=$((test_failed + 1))
   fi
 
+  printf '\n=== Test 19: check_generated_paths skipped when tool missing ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_no_genpaths"
+    mkdir -p "$AESOP_ROOT"
+
+    if printf '' | check_generated_paths >/dev/null 2>&1; then
+      printf 'PASS: check_generated_paths returns 0 (fail-open) when tool missing\n'
+    else
+      printf 'FAIL: check_generated_paths should fail-open when tool missing\n'
+      exit 1
+    fi
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
+  printf '\n=== Test 20: check_generated_paths blocks a registered generated path ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_genpaths"
+    mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+    # Stand-in registry tool: exits 1 iff tools/INDEX.md appears on stdin. The
+    # real tool is exercised by tests/test_generated_paths.py; this proves the
+    # HOOK collects the diff and propagates the tool's exit code.
+    cat > "$AESOP_ROOT/tools/generated_paths.py" <<'GENPATHS'
+#!/usr/bin/env python3
+import sys
+paths = sys.stdin.read().split()
+sys.exit(1 if "tools/INDEX.md" in paths else 0)
+GENPATHS
+
+    REPO="$tmpdir/genpaths_repo"
+    mkdir -p "$REPO/tools"
+    cd "$REPO" || exit 1
+    git init -q
+    git config user.email "test@example.com"
+    git config user.name "Test User"
+    printf 'seed\n' > seed.txt
+    git add seed.txt
+    git commit -q -m "base"
+    base_sha=$(git rev-parse HEAD)
+    printf 'generated\n' > tools/INDEX.md
+    git add tools/INDEX.md
+    git commit -q -m "hand-edit a generated file"
+    head_sha=$(git rev-parse HEAD)
+
+    tuple="refs/heads/feature/x $head_sha refs/heads/feature/x $base_sha"
+    if printf '%s\n' "$tuple" | check_generated_paths >/dev/null 2>&1; then
+      printf 'FAIL: should have blocked a push touching a registered generated path\n'
+      exit 1
+    fi
+    printf 'PASS: push touching a registered generated path blocked\n'
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
+  printf '\n=== Test 21: check_generated_paths passes on ordinary paths ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_genpaths"
+
+    REPO="$tmpdir/genpaths_repo_clean"
+    mkdir -p "$REPO/tools"
+    cd "$REPO" || exit 1
+    git init -q
+    git config user.email "test@example.com"
+    git config user.name "Test User"
+    printf 'seed\n' > seed.txt
+    git add seed.txt
+    git commit -q -m "base"
+    base_sha=$(git rev-parse HEAD)
+    printf 'authored\n' > tools/regular_tool.py
+    git add tools/regular_tool.py
+    git commit -q -m "ordinary change"
+    head_sha=$(git rev-parse HEAD)
+
+    tuple="refs/heads/feature/y $head_sha refs/heads/feature/y $base_sha"
+    if printf '%s\n' "$tuple" | check_generated_paths >/dev/null 2>&1; then
+      printf 'PASS: ordinary push allowed through the generated-path gate\n'
+    else
+      printf 'FAIL: ordinary push should not be blocked\n'
+      exit 1
+    fi
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
   printf '\n=== Test Results ===\n'
   printf 'PASSED: %d\n' "$test_passed"
   printf 'FAILED: %d\n' "$test_failed"
 
   if [ "$test_failed" -eq 0 ]; then
-    printf '\nAll 18 tests passed.\n'
+    printf '\nAll 21 tests passed.\n'
     return 0
   else
     printf '\nSome tests failed.\n'
@@ -1564,6 +1730,12 @@ main() {
   if ! check_test_coverage; then
     printf 'Error: Test coverage check failed. Push blocked.\n' >&2
     log_block "test_coverage_failure"
+    exit 1
+  fi
+
+  if ! check_generated_paths <<< "$prepush_stdin"; then
+    printf 'Error: Push touches a machine-generated path. Push blocked.\n' >&2
+    log_block "generated_path_hand_edit"
     exit 1
   fi
 
