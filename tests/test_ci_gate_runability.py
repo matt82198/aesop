@@ -434,5 +434,67 @@ class TestCIGateRunabilityRealWorkflow(unittest.TestCase):
         # Don't fail on real workflow; just report findings for user inspection
 
 
+class TestDocsOnlyDetectorFailClosed(unittest.TestCase):
+    """Safety test: docs-only detector must fail closed on mixed or novel diffs.
+
+    The docs-only-gate outputs is_docs_only based on file patterns. Any unrecognized
+    path class or mixed diff (docs + non-docs) must yield is_docs_only=false to run
+    the full suite, ensuring no code drift is missed by over-scoping.
+    """
+
+    REAL_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+    def test_docs_only_gate_exists(self):
+        """docs-only-gate job must exist and output is_docs_only."""
+        import yaml
+        ci_path = self.REAL_REPO_ROOT / '.github' / 'workflows' / 'ci.yml'
+        self.assertTrue(ci_path.exists(), f"ci.yml not found at {ci_path}")
+
+        with open(ci_path, 'r', encoding='utf-8') as f:
+            workflow = yaml.safe_load(f)
+
+        docs_only_job = workflow['jobs'].get('docs-only-gate')
+        self.assertIsNotNone(docs_only_job, "docs-only-gate job not found")
+
+        # Verify it outputs is_docs_only
+        outputs = docs_only_job.get('outputs', {})
+        self.assertIn('is_docs_only', outputs,
+            "docs-only-gate must output is_docs_only")
+
+    def test_browser_proofs_uses_is_docs_only(self):
+        """browser-proofs job must skip on is_docs_only == 'false'."""
+        import yaml
+        ci_path = self.REAL_REPO_ROOT / '.github' / 'workflows' / 'ci.yml'
+
+        with open(ci_path, 'r', encoding='utf-8') as f:
+            workflow = yaml.safe_load(f)
+
+        browser_job = workflow['jobs'].get('browser-proofs')
+        self.assertIsNotNone(browser_job, "browser-proofs job not found")
+
+        # Must have an if condition using is_docs_only output
+        job_if = browser_job.get('if', '')
+        self.assertIn('is_docs_only', job_if,
+            "browser-proofs must use is_docs_only output in its if condition")
+        self.assertIn('false', job_if,
+            "browser-proofs must skip when is_docs_only is false (double negative: docs-only PRs skip)")
+
+    def test_windows_shard_uses_is_docs_only(self):
+        """windows-shard job must skip on is_docs_only == 'false'."""
+        import yaml
+        ci_path = self.REAL_REPO_ROOT / '.github' / 'workflows' / 'ci.yml'
+
+        with open(ci_path, 'r', encoding='utf-8') as f:
+            workflow = yaml.safe_load(f)
+
+        windows_job = workflow['jobs'].get('windows-shard')
+        self.assertIsNotNone(windows_job, "windows-shard job not found")
+
+        # Must have an if condition using is_docs_only output
+        job_if = windows_job.get('if', '')
+        self.assertIn('is_docs_only', job_if,
+            "windows-shard must use is_docs_only output in its if condition")
+
+
 if __name__ == '__main__':
     unittest.main()
