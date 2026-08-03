@@ -388,7 +388,22 @@ class GuardrailGateWiringTest(unittest.TestCase):
         "python tools/subprocess_guard.py --check --baseline .subprocess-guard-baseline.json",
         "python tools/agent_prompt_hygiene.py .",
         "python tools/portability_check.py --root . --baseline .portability-baseline.json",
+        # Orphan sweep (gate inventory, PR #709): these three shipped with unit
+        # tests but were invoked by NOTHING -- tools that grade nothing.
+        "python tools/sibling_import_check.py --check",
+        "python tools/fixture_intent_check.py --root .",
+        "python tools/port_fidelity_check.py --check --root .",
     ]
+
+    # git_identity_check.py is deliberately NOT in the list above. Its subject is a
+    # managed target repo's *local* git identity; a GitHub Actions checkout sets only
+    # a --global identity, so the tool reports mismatch on every CI run (verified:
+    # exit 1, "user.name mismatch: expected '...' but git has 'None'"). Wiring it as a
+    # CI gate would be permanently red; wiring it with --mode warn or
+    # continue-on-error would be the decoration this class exists to prevent. It stays
+    # unwired until it has a real enforcement point (an aesop-managed repo), tracked
+    # rather than softened.
+    DELIBERATELY_UNWIRED = ["git_identity_check.py"]
 
     def _read(self, relative):
         path = self.REAL_REPO_ROOT / relative
@@ -422,6 +437,83 @@ class GuardrailGateWiringTest(unittest.TestCase):
                     )
                     found = True
             self.assertTrue(found, "Gate invocation missing from ci.yml: %s" % invocation)
+
+    # Steps added by the orphan sweep, with the invocation each must carry.
+    ORPHAN_SWEEP_STEPS = {
+        "Sibling import guard (tools/ sys.path discipline)":
+            "python tools/sibling_import_check.py --check",
+        "Deliberately-broken fixture manifest gate":
+            "python tools/fixture_intent_check.py --root .",
+        "Port-task fidelity gate":
+            "python tools/port_fidelity_check.py --check --root .",
+    }
+
+    def _ci_steps_by_name(self):
+        import yaml
+        path = self.REAL_REPO_ROOT / ".github" / "workflows" / "ci.yml"
+        with open(path, "r", encoding="utf-8") as handle:
+            workflow = yaml.safe_load(handle)
+        ci_job = workflow["jobs"].get("ci")
+        self.assertIsNotNone(ci_job, "ci job not found in ci.yml")
+        return {s.get("name"): s for s in ci_job.get("steps", []) if s.get("name")}
+
+    def test_orphan_sweep_steps_exist_with_expected_invocations(self):
+        """Each newly-wired orphan gate is a named step running its check command."""
+        steps = self._ci_steps_by_name()
+        for name, invocation in self.ORPHAN_SWEEP_STEPS.items():
+            with self.subTest(step=name):
+                self.assertIn(name, steps, "ci step %r missing from ci.yml" % name)
+                self.assertEqual(
+                    str(steps[name].get("run", "")).strip(), invocation,
+                    "ci step %r must run exactly %r" % (name, invocation),
+                )
+
+    def test_orphan_sweep_steps_are_real_enforcement(self):
+        """Shard-0 scoped (they are shard-invariant) and never continue-on-error.
+
+        continue-on-error would turn the gate back into decoration -- the exact
+        failure mode the orphan sweep was fixing.
+        """
+        steps = self._ci_steps_by_name()
+        for name in self.ORPHAN_SWEEP_STEPS:
+            with self.subTest(step=name):
+                step = steps[name]
+                self.assertIn(
+                    "matrix.python-shard == 0", str(step.get("if", "")),
+                    "ci step %r is shard-invariant; gate it on shard 0" % name,
+                )
+                self.assertNotIn(
+                    "continue-on-error", step,
+                    "ci step %r must fail the build, not continue-on-error" % name,
+                )
+
+    def test_orphan_inventory_fully_accounted_for(self):
+        """Every tool in the PR #709 orphan inventory is wired or explicitly excepted.
+
+        Guards against a fourth orphan quietly reappearing: each of the four tools
+        must be either invoked in ci.yml or named in DELIBERATELY_UNWIRED with the
+        reason recorded above.
+        """
+        ci_yml = self._read(".github/workflows/ci.yml")
+        inventory = [
+            "sibling_import_check.py",
+            "git_identity_check.py",
+            "fixture_intent_check.py",
+            "port_fidelity_check.py",
+        ]
+        for tool in inventory:
+            with self.subTest(tool=tool):
+                wired = ("python tools/%s" % tool) in ci_yml
+                excepted = tool in self.DELIBERATELY_UNWIRED
+                self.assertTrue(
+                    wired or excepted,
+                    "%s is neither wired into ci.yml nor listed in "
+                    "DELIBERATELY_UNWIRED with a recorded reason" % tool,
+                )
+                self.assertFalse(
+                    wired and excepted,
+                    "%s is both wired and listed as deliberately unwired" % tool,
+                )
 
     def test_pre_push_hook_invokes_tracker_guard(self):
         """tracker_guard --check is wired into the pre-push policy hook."""
