@@ -1,0 +1,212 @@
+# GitHub Actions Workflow: Aesop Multi-Agent Orchestration Dispatch
+#
+# READY-TO-FORK TEMPLATE
+# ─────────────────────────────────────────────────────────────────────────────
+# This workflow demonstrates how to integrate aesop into your CI/CD pipeline
+# for multi-agent autonomous software development tasks.
+#
+# 1. Copy this file to your repo: .github/workflows/aesop-dispatch.yml
+# 2. Customize the env section (AESOP_COST_CEILING, model tier, etc.)
+# 3. Replace `repository: matt82198/aesop` with your fork/version if applicable
+# 4. Trigger manually via GitHub UI (Actions > Aesop Dispatch > Run workflow)
+#    or set a schedule (see cron examples below)
+#
+# NOTE: This template invokes orchestration subcommands that exist in aesop
+# (verified at test time via bin/cli.js --help output). Customize the 'Orchestration'
+# step for your specific use case (doctor, wave preflight, status, etc.).
+#
+# GITHUB_TOKEN caveat: This token does NOT trigger subsequent workflow runs
+# (GitHub Actions guards against infinite loops). Any workflow that creates
+# commits, pushes to a branch, or opens PRs will NOT re-trigger CI on that
+# push. Document this when using the cost-summary comment feature.
+
+name: Aesop Dispatch
+
+'on':
+  # Manual trigger: GitHub UI → Actions tab → this workflow → "Run workflow"
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: 'Orchestration operation to run'
+        required: true
+        default: 'doctor'
+        type: choice
+        options:
+          - 'doctor'           # Preflight readiness check
+          - 'status'           # One-shot fleet status snapshot
+          - 'fleet'            # One-shot fleet snapshot (JSON)
+          - 'reproduce'        # Offline verification suite
+          - 'wave preflight'   # Wave readiness validator
+          - 'wave scorecard'   # Wave quality scorecard
+
+  # Optional: Schedule a weekly preflight check (UTC timezone)
+  # Customize the cron expression per your needs (e.g., daily, hourly)
+  # schedule:
+  #   - cron: '0 9 * * 1'  # Every Monday at 9am UTC
+
+env:
+  # Cost ceiling: orchestration will halt if token costs exceed this
+  # (advisory only; set to 0 to disable)
+  AESOP_COST_CEILING: '50'
+
+  # Concurrency limit: number of parallel agents
+  # Customize per your project's resource constraints
+  AESOP_CONCURRENCY: '4'
+
+  # Model tier for orchestrator seat
+  # Valid values: 'haiku', 'sonnet', 'opus' (or leave unset for config default)
+  # AESOP_ORCHESTRATOR_MODEL: 'haiku'
+
+jobs:
+  orchestration:
+    name: Run Aesop Orchestration
+    runs-on: ubuntu-latest
+
+    permissions:
+      # Required for creating issues on failure (failure-visibility step)
+      issues: write
+      # Required for posting PR comments (cost-summary step)
+      pull-requests: write
+      # Required for GITHUB_TOKEN auth to aesop API calls
+      contents: read
+
+    steps:
+      # 1. Checkout the repository
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for orchestration tools
+
+      # 2. Set up Node.js (required for aesop CLI)
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # 3. Set up Python (required for orchestration tools: state_store, tracker, etc.)
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      # 4. Install aesop and run the orchestration command
+      #
+      # The operation input is passed from workflow_dispatch (manual trigger).
+      # Customize this step for your specific orchestration needs:
+      #
+      # Examples:
+      #   - npx aesop@latest doctor
+      #   - npx aesop@latest wave preflight
+      #   - npx aesop@latest status --json
+      #   - npx aesop@latest reproduce
+      #
+      # NOTE: All invoked commands must exist in bin/cli.js (verified in test suite)
+      - name: Orchestration
+        id: orchestration
+        run: |
+          # Use workflow_dispatch input if present, else default to 'doctor'
+          OPERATION="${{ github.event.inputs.operation || 'doctor' }}"
+          echo "Running aesop: $OPERATION"
+
+          # Invoke aesop (install latest from npm, run the command)
+          npx aesop@latest $OPERATION || EXIT_CODE=$?
+          exit ${EXIT_CODE:-0}
+        env:
+          # Pass cost ceiling and concurrency to orchestration tools
+          AESOP_COST_CEILING: ${{ env.AESOP_COST_CEILING }}
+          AESOP_CONCURRENCY: ${{ env.AESOP_CONCURRENCY }}
+          # Uncomment to override orchestrator model (if supported by config)
+          # AESOP_ORCHESTRATOR_MODEL: ${{ env.AESOP_ORCHESTRATOR_MODEL }}
+
+      # 5. Cost summary: Post a comment to the PR with token usage and cost estimate
+      #
+      # This step runs only if the orchestration step succeeds.
+      # It demonstrates how to post workflow feedback back to PRs via GITHUB_TOKEN.
+      #
+      # CAVEAT: PRs created or updated via GITHUB_TOKEN in GitHub Actions do NOT
+      # trigger subsequent workflow runs (by design, to prevent infinite loops).
+      # Document this when automating cost tracking or PR comments.
+      - name: Cost Summary
+        if: success() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            // Look for cost ledger or token usage log (customize path per your setup)
+            // Example: state/fleet-ledger.jsonl or state/cost-summary.json
+            let costSummary = 'No cost summary available (customize this step to parse your ledger)';
+
+            try {
+              // Customize this to read your actual cost log
+              const ledgerPath = path.join(process.env.GITHUB_WORKSPACE, 'state', 'fleet-ledger.jsonl');
+              if (fs.existsSync(ledgerPath)) {
+                // Parse your ledger format and generate summary
+                costSummary = 'Cost ledger found; customize this step to extract + format results';
+              }
+            } catch (e) {
+              // Graceful degrade if ledger is missing
+            }
+
+            // Post the summary as a PR comment
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## Aesop Orchestration Summary\n\n${costSummary}\n\n*Generated by workflow: ${context.workflow}*`
+            });
+
+      # 6. Failure visibility: Create or update a GitHub issue on failure
+      #
+      # This step demonstrates how to surface orchestration failures as issues.
+      # It runs only if the orchestration step fails.
+      #
+      # Customize the issue title, labels, and body per your project's triage process.
+      - name: Create Failure Issue
+        if: failure() && steps.orchestration.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = '[Aesop] Orchestration Failure';
+            const labels = ['aesop', 'orchestration', 'failure'];
+            const body = `
+              Aesop orchestration failed in workflow run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}
+
+              **Operation**: ${{ github.event.inputs.operation || 'doctor' }}
+              **Branch**: ${{ github.ref }}
+              **Commit**: ${{ github.sha }}
+
+              See the workflow log for details.
+            `;
+
+            // Check if an issue already exists (customize this query per your needs)
+            const existingIssues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: labels.join(','),
+              per_page: 10
+            });
+
+            if (existingIssues.data.length === 0) {
+              // Create a new issue
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: labels
+              });
+            } else {
+              // Update the most recent open issue (optional: customize to comment instead)
+              const issue = existingIssues.data[0];
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: body  // Replace body; alternatively, use createComment() to add a comment
+              });
+            }

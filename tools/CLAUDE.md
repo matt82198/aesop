@@ -142,6 +142,13 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `wave_templates.py` — Wave-manifest preset generator: instantiate/validate templates/wave-presets/*.json into ready manifests; CLI: `validate [--template saas|data|library|all]` (exits 0=clean / 1=defects per item), `instantiate <preset> --project-name --base-dir [--output FILE]`
 - `workflow_model_linter.py` — Guardrail G7: workflow model pin linter; AST-scans .js/.mjs files for agent() calls missing explicit model:'haiku' parameter (bypasses PreToolUse hook); suppress via `// model-ok`; CLI: `--check` (default) | `--json` | `--help`; exit 0=clean/1=violations/2=error; stdlib-only
 - `verify_gates_wired.py` — Guardrail G2.6: gates-wired enforcer (prevents "documented-gate-not-wired" escapes); parses CLAUDE.md for "(Guardrail Gx)" + "verify_*.py are mandatory CI gates"; asserts each gate is invoked in .github/workflows/*.yml; fail-closed on missing files; exit 0=wired/1=unwired/2=error; stdlib-only
+
+## Templates & Adopter Resources
+
+- **templates/aesop-dispatch-template.yml** — Ready-to-fork GitHub Actions dispatch workflow; demonstrates aesop CLI integration in CI/CD pipelines (workflow_dispatch + cron). Includes cost-summary and failure-visibility steps. Verified by test suite: YAML syntax, CLI commands exist, no invented flags, no fabricated outputs. Adopter guide: [docs/ACTIONS-TEMPLATE.md](../docs/ACTIONS-TEMPLATE.md)
+- **templates/wave-presets/*.json** — Wave manifest presets (saas, data, library); consumed by wave_templates.py instantiate CLI
+- **tests/test_actions_template.py** — Test suite for actions template: YAML validity, workflow structure integrity, CLI command verification, flag documentation check, output fabrication detection
+
 ## Gates & tests
 - `secret_scan.py --staged` — pre-push gate (exit 0=clean/1=findings/2=error; `# secretscan: allow-pattern-docs` pragma)
 - `agent-forensics.sh <commit>` — incident/behavior forensics, read-only git plumbing; `--diff <A> <B>` for rules/docs diff
