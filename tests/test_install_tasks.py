@@ -880,6 +880,28 @@ class TestInstallTasks(unittest.TestCase):
             "Should NOT register AesopDefaultScopeTestRefinementMonitor without -MonitorCommand",
         )
 
+    def _register_throwaway_task(self, task_name, command):
+        """
+        Register a REAL scheduled task under a disposable name so the divergence /
+        idempotency branches are exercised against a live CIM action object.
+
+        `command` must not contain quote characters: it is embedded in a PowerShell
+        single-quoted string, and the installer only substring-matches it.
+        Never used against the real Aesop* daemon tasks.
+        """
+        assert '"' not in command and "'" not in command, "fixture command must be quote-free"
+        register = (
+            "$a = New-ScheduledTaskAction -Execute 'wscript.exe' "
+            f"-Argument '//B //Nologo x.vbs bash.exe -lc {command}'; "
+            "$t = New-ScheduledTaskTrigger -Once -At (Get-Date); "
+            f"Register-ScheduledTask -TaskName '{task_name}' -Action $a -Trigger $t -Force "
+            "| Out-Null"
+        )
+        subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", register],
+            capture_output=True, text=True, timeout=60, check=True,
+        )
+
     def test_divergent_path_warning_and_skip(self):
         """
         Test that if a task exists with a DIFFERENT action path, script warns and skips it.
@@ -896,43 +918,142 @@ class TestInstallTasks(unittest.TestCase):
            - Output names the task, the existing path, and the would-be-new path
            - Task is NOT actually re-registered in DryRun
         """
-        # In DryRun mode, we can't actually register tasks, so we test the output logic
-        # by crafting a scenario where the script would detect divergence if the task existed.
-        # For now, we test the warning message presence in output when conditions would
-        # trigger a divergence detection.
+        # This test registers a REAL throwaway task under a disposable prefix, so the
+        # divergence branch is genuinely exercised against a live CIM action object.
+        # It never touches AesopWatchdogDaemon / AesopMergeQueue / AesopRefinementMonitor.
+        prefix = "AesopDivergeTest"
+        task_name = prefix + "WatchdogDaemon"
+        old_command = "bash /c/old/tree/daemons/run-watchdog.sh --once"
+        self._register_throwaway_task(task_name, old_command)
 
-        # Note: Full test requires live task registration, which is out of scope for this
-        # automated test (we can't modify the live system's tasks). The implementation
-        # should include the logic to check existing task paths; this test verifies
-        # the behavior is described in output when -DryRun is used.
+        try:
+            result = subprocess.run(
+                [
+                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-File", str(self.script_path),
+                    "-DryRun", "-TaskPrefix", prefix,
+                ],
+                cwd=str(self.worktree_root),
+                capture_output=True, text=True, timeout=60,
+            )
+            out = result.stdout + result.stderr
 
-        # Placeholder: run DryRun and verify no errors
-        cmd = [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(self.script_path),
-            "-DryRun",
-            "-TaskPrefix",
-            "AesopDivergentTest",
-        ]
+            self.assertEqual(
+                result.returncode, 0,
+                f"Divergence must be non-fatal, got {result.returncode}\n{out}",
+            )
+            # LOUD warning naming the task
+            self.assertIn("DIFFERENT action path", out, f"missing divergence warning:\n{out}")
+            self.assertIn(task_name, out, f"warning must name the task:\n{out}")
+            # Regression guard: the EXISTING path must actually be reported. Reading the
+            # wrong CIM property ('Argument' vs 'Arguments') silently printed an empty
+            # value here and made every task look divergent forever.
+            self.assertIn(
+                old_command, out,
+                f"existing action path must be reported, not empty:\n{out}",
+            )
+            self.assertIn("NOT re-registering", out, f"must skip, not repoint:\n{out}")
 
-        result = subprocess.run(
-            cmd,
-            cwd=str(self.worktree_root),
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
+            # The live task must be untouched
+            verify = subprocess.run(
+                [
+                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                    f"(Get-ScheduledTask -TaskName '{task_name}').Actions[0].Arguments",
+                ],
+                capture_output=True, text=True, timeout=60,
+            )
+            self.assertIn(
+                old_command, verify.stdout.replace("\n", " "),
+                "existing task was silently repointed",
+            )
+        finally:
+            subprocess.run(
+                [
+                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                    f"Unregister-ScheduledTask -TaskName '{task_name}' -Confirm:$false "
+                    "-ErrorAction SilentlyContinue",
+                ],
+                capture_output=True, text=True, timeout=60,
+            )
 
-        # Should succeed (divergence handling should be non-fatal)
-        self.assertEqual(
-            result.returncode,
-            0,
-            f"Script should handle divergence gracefully, got {result.returncode}\nStderr: {result.stderr}",
-        )
+    def test_idempotent_same_path_is_noop(self):
+        """
+        Test that an existing task with the SAME action path is a quiet idempotent no-op.
+
+        This is the branch that the 'Argument' vs 'Arguments' bug made unreachable: with
+        the wrong property the comparison always failed, so a matching task was reported
+        as divergent and the installer could never refresh anything.
+        """
+        prefix = "AesopIdemTest"
+        task_name = prefix + "WatchdogDaemon"
+        command = "bash /c/idem/tree/daemons/run-watchdog.sh --once"
+        self._register_throwaway_task(task_name, command)
+
+        try:
+            result = subprocess.run(
+                [
+                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-File", str(self.script_path),
+                    "-DryRun", "-TaskPrefix", prefix,
+                    "-WatchdogCommand", command,
+                ],
+                cwd=str(self.worktree_root),
+                capture_output=True, text=True, timeout=60,
+            )
+            out = result.stdout + result.stderr
+            self.assertEqual(result.returncode, 0, f"expected success:\n{out}")
+            self.assertIn("idempotent", out, f"same path must be a quiet no-op:\n{out}")
+            self.assertNotIn(
+                "DIFFERENT action path", out,
+                f"matching path must NOT be reported as divergent:\n{out}",
+            )
+        finally:
+            subprocess.run(
+                [
+                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                    f"Unregister-ScheduledTask -TaskName '{task_name}' -Confirm:$false "
+                    "-ErrorAction SilentlyContinue",
+                ],
+                capture_output=True, text=True, timeout=60,
+            )
+
+    def test_force_overrides_divergent_skip(self):
+        """
+        Test that -Force actually overrides the divergent-path skip.
+
+        The warning tells the operator to 'pass -Force', so -Force must work; it was
+        declared as a parameter but never referenced, making the escape hatch dead code.
+        """
+        prefix = "AesopForceTest"
+        task_name = prefix + "WatchdogDaemon"
+        self._register_throwaway_task(task_name, "bash /c/old/x.sh --once")
+
+        try:
+            result = subprocess.run(
+                [
+                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-File", str(self.script_path),
+                    "-DryRun", "-Force", "-TaskPrefix", prefix,
+                ],
+                cwd=str(self.worktree_root),
+                capture_output=True, text=True, timeout=60,
+            )
+            out = result.stdout + result.stderr
+            self.assertEqual(result.returncode, 0, f"expected success:\n{out}")
+            self.assertNotIn(
+                "NOT re-registering", out,
+                f"-Force must bypass the divergent skip:\n{out}",
+            )
+            self.assertIn("DRYRUN", out, f"-Force must proceed to registration:\n{out}")
+        finally:
+            subprocess.run(
+                [
+                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                    f"Unregister-ScheduledTask -TaskName '{task_name}' -Confirm:$false "
+                    "-ErrorAction SilentlyContinue",
+                ],
+                capture_output=True, text=True, timeout=60,
+            )
 
     def test_enable_all_flag_registers_all_tasks(self):
         """

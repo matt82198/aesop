@@ -48,11 +48,12 @@ function Get-TaskActionPath {
     try {
         $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
         if ($task) {
-            # Get the first action's Execute path (e.g., "wscript.exe")
+            # Return the action's Arguments (plural -- the CIM property name).
+            # Execute is always "wscript.exe" for every aesop task, so it can never
+            # distinguish one worktree from another; the worktree path lives in Arguments.
             $action = $task.Actions[0]
             if ($action) {
-                # Return the combined command: Execute + Arguments
-                return $action.Execute
+                return $action.Arguments
             }
         }
         return $null
@@ -127,15 +128,18 @@ function Register-DaemonTask {
     # Check if task already exists
     $existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 
-    if ($existingTask) {
+    if ($existingTask -and -not $Force) {
         # Task exists. Check if it has the same action path.
         # For idempotency, we compare the bash command (not the full wscript invocation).
         # If the path differs, warn and skip (don't re-register).
+        # NOTE: the CIM action object exposes 'Arguments' (plural). Reading 'Argument'
+        # (the New-ScheduledTaskAction *parameter* name) yields $null, which would make
+        # every existing task look divergent and render the idempotent branch unreachable.
 
         # Extract the command from existing task's action
         $existingAction = $existingTask.Actions[0]
         if ($existingAction) {
-            $existingArgument = $existingAction.Argument
+            $existingArgument = $existingAction.Arguments
 
             # Check if our desired command is already in the arguments
             # The format is: //B //Nologo "<path>" "<bashexe>" -lc "<command>"
