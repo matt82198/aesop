@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Cost ceiling guard — trips tools/halt.py's kill switch when fleet spend
+INDEX: Cost-ceiling checker; trips HALT kill-switch on token limits exceeded. `--check` is READ-ONLY: resolving spend never materializes the outcomes ledger under the state dir; the only write a check may make is the `.HALT` sentinel on a genuine breach with `trip=True`
 (tokens) meets or exceeds a configured ceiling.
 
 Why: wave-26 critique — autonomy expanded to self-merging portfolio PRs on

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 r"""
 Fleet Outcome Ledger — append-only audit trail for dispatched agents.
+INDEX: Append-only cost ledger with harvest/rotate. `ensure_ledger_header()` is WRITE-PATH-ONLY (called from `append_ledger_line`/`harvest`/`rotate`); readers (`parse_ledger_rows`, `summary`) never create the ledger file or its directory and return empty on a missing ledger
 
 Subcommands:
   append <timestamp> <agent_type> <model> <duration_sec> <tokens_in> <tokens_out> [verdict] [phase] [wave]

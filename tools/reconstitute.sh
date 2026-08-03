@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# INDEX: Clone/fetch repos from config with security validation
 set -euo pipefail
 
 # Reconstitute.sh: Clone or fetch repos from config/file
