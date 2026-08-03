@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """CLAUDE.md synchronization gate — ensures code changes are accompanied by domain CLAUDE.md updates.
+INDEX: CLAUDE.md synchronization gate (Guardrail G5): for each domain directory with code changes, verifies the corresponding domain/CLAUDE.md was also modified in the same PR; exempts: test-only changes, docs-only, meta files (stats.json, README.md, CHANGELOG.md, package.json, .nvmrc), .github/ (CI), CLAUDE.md-only changes; CLI: `--check` (default, fail-closed) | `--json` | `--base-ref` [BRANCH] (default main); exit 0=synced, 1=drift, 2=error
 
 For each domain directory (state_store/, tools/, ui/, driver/, etc.) with code changes,
 verifies that the corresponding domain/CLAUDE.md was also modified in the same commit/PR.

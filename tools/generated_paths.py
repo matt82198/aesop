@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """The single registry of files this repository GENERATES rather than authors.
+INDEX: The single registry of files this repository GENERATES rather than authors -- tracked paths a committed gate rewrites deterministically (suite-count lines, normalised CLAUDE.md docs); unattended automation (merge_queue worktree-safety, regeneration hook) may `git restore` them individually by name but never `git stash`
 
 A generated path is one that some deterministic gate rewrites from ground truth
 whenever it runs, so an uncommitted modification to it carries no information a

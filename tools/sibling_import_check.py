@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 tools.sibling_import_check -- Guardrail: detect bare sibling imports in tools/.
+INDEX: Guardrail: detect bare sibling imports in tools/ without sys.path guard (prevents third recurrence of import-gate failures when tools load each other by file path); detects `from X import ...` / `import X` where X is a tools/ module, skips guarded imports and `from tools.X` form; CLI: `[--check] [--json] [--paths PATH...]`; exit 0=clean/1=violations/2=error; stdlib-only; found 29 latent violations on origin/main (unguarded imports in alert_bridge, buildlog, cost_*, fleet_ledger, halt, health_*, heartbeat, orchestrator_status, tracker_*, wave_*, verify_ui_trio, self_stats)
 
 Detects bare sibling imports (e.g., `from lint_core import ...`) in tools/
 modules that lack a guard. The guard ensures imports work when tools are
