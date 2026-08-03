@@ -61,13 +61,6 @@ RUN_LIST_FIELDS = "databaseId,createdAt,status,conclusion,headBranch,event"
 # A job/step conclusion that proves the body actually ran.
 EXECUTED_CONCLUSIONS = {"success", "failure", "cancelled", "timed_out", "action_required"}
 
-FINDING_KINDS = (
-    "JOB_DEAD_CONDITION",
-    "JOB_DEAD_NEEDS_CHAIN",
-    "JOB_NEVER_EXECUTED_UNCONDITIONAL",
-    "STEP_NEVER_EXECUTED",
-)
-
 _EXPR = re.compile(r"\$\{\{.*?\}\}")
 
 
