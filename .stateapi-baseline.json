@@ -16,6 +16,7 @@
     "tools/reconcile.py@state-md-write",
     "tools/status_publish.py@buildlog-md-write",
     "tools/verify_cost_panel.py@ledger-md",
+    "tools/verify_cost_summary_drawer.py@ledger-md",
     "tools/verify_dash.py@ledger-md",
     "tools/verify_dash.py@status-json",
     "tools/verify_dash.py@tracker-json",
