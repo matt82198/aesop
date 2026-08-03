@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Generate a live inventory of all test suites by scanning the filesystem.
+INDEX: Generate live test suite inventory: scans filesystem for test files (tests/*.test.mjs, tests/test_*.py, tests/*.test.sh, tests/test_*.sh, tests/test-*.sh, hooks/pre-push-policy.sh --test) and outputs grouped listing with first-line doc summaries; ASCII-safe, deterministic; CLI: `list_test_suites.py [--repo ROOT]`; used in tests/CLAUDE.md docs and CI coverage gates; replaces hand-maintained suite listings (kills conflict magnet in merge conflicts)
 
 Discovers test files from:
 - tests/*.test.mjs (Node.js)

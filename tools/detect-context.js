@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// INDEX: Detect execution context (repo checkout vs installed package) for CLI path resolution
 
 /**
  * detectContext — Identify whether aesop is running in repo or installed mode.

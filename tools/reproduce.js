@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// INDEX: Offline verification suite (mirrors reproduce.yml; REPO/INSTALLED modes; exit 0=pass; exact-match doctor pre-init classification)
 
 /**
  * Aesop reproduce — offline verification suite
