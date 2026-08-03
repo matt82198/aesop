@@ -359,5 +359,8 @@ jobs:
       - name: Run cost panel browser proof (verify_cost_panel)
         run: python tools/verify_cost_panel.py
 
+      - name: Run cost summary drawer browser proof (verify_cost_summary_drawer)
+        run: python tools/verify_cost_summary_drawer.py
+
       - name: Run watchdog GUI tests
         run: bash tests/dash-watchdog-gui.test.sh
