@@ -1,4 +1,5 @@
 """Browser-level proof for the Activity view agent status filter.
+INDEX: Browser proof (Playwright): Activity-view agent status filter; exit 0=proven/1=failed, --allow-skip only browserless
 
 Drives the BUILT React app served by `python ui/serve.py` and exercises the
 client-side status filter on the Activity view — filter button clicks, agent

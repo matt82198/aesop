@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Shared heartbeat and health-check utilities.
+INDEX: Heartbeat staleness utilities: `check_heartbeat_file()`, `check_watchdog_heartbeat()`, `check_monitor_heartbeat()`. Wraps `common.check_heartbeat_staleness()` with standard thresholds (watchdog: 300s, monitor: 3600s). Eliminates duplicated inline heartbeat reading from power_selftest.py. Preserves fail-closed contract: absent/unreadable/unparseable heartbeats → STALE (never healthy). Tested with 16 unit test cases including explicit STALE contract validation. **The `.watchdog-heartbeat` / `.monitor-heartbeat` filenames MUST stay contiguous string literals**: these are file-level reads the `state_store.read_api` facade cannot serve (`check_heartbeat_fresh()` returns only a bool, while callers need the full `(is_stale, age_s, info)` triple), so the two `stateapi_lint` violations they produce are recorded honestly in `.stateapi-baseline.json`. Splitting them into concatenated fragments to dodge the lint falsifies the ratchet and is blocked by `TestNoLintEvasion`. Widening the facade to return the triple is the filed follow-up.
 
 Consolidates duplicated heartbeat staleness checking logic from health_score.py,
 healthcheck.py, and power_selftest.py into a single reusable module.

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Tracker zombie detection and reconciliation tool.
+INDEX: Tracker zombie reconciliation tool (detects shipped-but-open items)
 
 Scans the tracker for zombies — items marked open/in_progress whose linked PRs
 have already merged or whose item ID / title keywords appear in merged commits.

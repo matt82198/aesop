@@ -17,6 +17,7 @@
     "tools/heartbeat.py@state-heartbeat",
     "tools/reconcile.py@state-md-write",
     "tools/status_publish.py@buildlog-md-write",
+    "tools/verify_cost_forecast.py@ledger-md",
     "tools/verify_cost_panel.py@ledger-md",
     "tools/verify_cost_summary_drawer.py@ledger-md",
     "tools/verify_dash.py@ledger-md",

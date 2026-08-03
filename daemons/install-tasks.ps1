@@ -2,12 +2,17 @@ param(
     [string]$BashExe = 'C:\Program Files\Git\bin\bash.exe',
     [string]$WatchdogCommand = '',
     [string]$MonitorCommand = '',
+    [string]$MergeQueueCommand = '',
     [int]$WatchdogIntervalMinutes = 5,
     [int]$MonitorIntervalMinutes = 20,
+    [int]$MergeQueueIntervalMinutes = 5,
     [string]$TaskPrefix = 'Aesop',
     [switch]$Uninstall,
     [switch]$DryRun,
-    [switch]$EnableAuditLog
+    [switch]$EnableAuditLog,
+    [switch]$EnableMergeQueue,
+    [switch]$All,
+    [switch]$Force
 )
 
 # Enable strict error handling
@@ -33,6 +38,42 @@ function Get-WorktreeRoot {
     $daemonsDir = $PSScriptRoot
     $aesopRoot = Split-Path -Parent $daemonsDir
     return $aesopRoot
+}
+
+function Get-TaskActionPath {
+    param(
+        [string]$TaskName
+    )
+
+    try {
+        $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        if ($task) {
+            # Return the action's Arguments (plural -- the CIM property name).
+            # Execute is always "wscript.exe" for every aesop task, so it can never
+            # distinguish one worktree from another; the worktree path lives in Arguments.
+            $action = $task.Actions[0]
+            if ($action) {
+                return $action.Arguments
+            }
+        }
+        return $null
+    }
+    catch {
+        return $null
+    }
+}
+
+function Build-TaskAction {
+    param(
+        [string]$RunHiddenVbs,
+        [string]$BashExe,
+        [string]$Command
+    )
+
+    # Build the action: wscript.exe //B //Nologo "path\to\run-hidden.vbs" "<bash>" -lc "<command>"
+    return New-ScheduledTaskAction `
+        -Execute 'wscript.exe' `
+        -Argument "//B //Nologo ""$RunHiddenVbs"" ""$BashExe"" -lc ""$Command"""
 }
 
 function Append-AuditLog {
@@ -84,10 +125,43 @@ function Register-DaemonTask {
         [string]$AesopRoot
     )
 
-    # Build the action: wscript.exe //B //Nologo "path\to\run-hidden.vbs" "<bash>" -lc "<command>"
-    $action = New-ScheduledTaskAction `
-        -Execute 'wscript.exe' `
-        -Argument "//B //Nologo ""$RunHiddenVbs"" ""$BashExe"" -lc ""$Command"""
+    # Check if task already exists
+    $existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+
+    if ($existingTask -and -not $Force) {
+        # Task exists. Check if it has the same action path.
+        # For idempotency, we compare the bash command (not the full wscript invocation).
+        # If the path differs, warn and skip (don't re-register).
+        # NOTE: the CIM action object exposes 'Arguments' (plural). Reading 'Argument'
+        # (the New-ScheduledTaskAction *parameter* name) yields $null, which would make
+        # every existing task look divergent and render the idempotent branch unreachable.
+
+        # Extract the command from existing task's action
+        $existingAction = $existingTask.Actions[0]
+        if ($existingAction) {
+            $existingArgument = $existingAction.Arguments
+
+            # Check if our desired command is already in the arguments
+            # The format is: //B //Nologo "<path>" "<bashexe>" -lc "<command>"
+            if ($existingArgument -match [regex]::Escape($Command)) {
+                # Existing task has the same command; idempotent
+                Write-Host "Task already exists with same action: $TaskName (idempotent)"
+                Append-AuditLog -AesopRoot $AesopRoot -Action 'register' -TaskName $TaskName -Outcome 'idempotent'
+                return
+            } else {
+                # Existing task has a different action path; warn and skip
+                Write-Host "WARNING: Task '$TaskName' already exists with a DIFFERENT action path." -ForegroundColor Yellow
+                Write-Host "  Existing path in action: $existingArgument" -ForegroundColor Yellow
+                Write-Host "  This invocation would have used: $Command" -ForegroundColor Yellow
+                Write-Host "  NOT re-registering. If you want to force overwrite, pass -Force." -ForegroundColor Yellow
+                Append-AuditLog -AesopRoot $AesopRoot -Action 'register' -TaskName $TaskName -Outcome 'divergent-skipped'
+                return
+            }
+        }
+    }
+
+    # Task doesn't exist, or force-overwrite was requested; proceed with registration
+    $action = Build-TaskAction -RunHiddenVbs $RunHiddenVbs -BashExe $BashExe -Command $Command
 
     # Build the trigger: Once, starting in 1 minute, repeating every N minutes for 10 years
     $startTime = (Get-Date).AddMinutes(1)
@@ -111,7 +185,7 @@ function Register-DaemonTask {
         Append-AuditLog -AesopRoot $AesopRoot -Action 'register' -TaskName $TaskName -Outcome 'dryrun'
     }
     else {
-        # Register the task (force overwrite if exists)
+        # Register the task (force overwrite if -Force is passed, or if task didn't exist)
         try {
             Register-ScheduledTask `
                 -TaskName $TaskName `
@@ -178,6 +252,10 @@ function Main {
         Write-Error "MonitorCommand contains double quotes, which are not allowed (vbs launcher contract violation)."
         exit 1
     }
+    if ($MergeQueueCommand -like '*"*') {
+        Write-Error "MergeQueueCommand contains double quotes, which are not allowed (vbs launcher contract violation)."
+        exit 1
+    }
 
     # PATH VALIDATION: Only enforce file existence checks if not in DryRun mode
     # In DryRun, downgrade to warnings so preview works on machines without Git Bash
@@ -204,14 +282,41 @@ function Main {
     if ($Uninstall) {
         $watchdog_ok = Unregister-DaemonTask -TaskName "${TaskPrefix}WatchdogDaemon" -AesopRoot $aesopRoot
         $monitor_ok = Unregister-DaemonTask -TaskName "${TaskPrefix}RefinementMonitor" -AesopRoot $aesopRoot
-        if (-not $watchdog_ok -or -not $monitor_ok) {
+        $mergequeue_ok = Unregister-DaemonTask -TaskName "${TaskPrefix}MergeQueue" -AesopRoot $aesopRoot
+        if (-not $watchdog_ok -or -not $monitor_ok -or -not $mergequeue_ok) {
             exit 1
         }
         exit 0
     }
 
-    # Derive default commands if not provided
-    if (-not $WatchdogCommand) {
+    # Determine which tasks should be managed in this invocation (scoping).
+    # Default: manage watchdog only.
+    # If -All: manage all three tasks.
+    # If -EnableMergeQueue and/or -MonitorCommand: manage only those.
+    # Requirement: "-EnableMergeQueue registers ONLY AesopMergeQueue, nothing else"
+
+    $manageTasks = @()
+
+    if ($All) {
+        # -All: manage all three tasks
+        $manageTasks = @('watchdog', 'monitor', 'mergequeue')
+    }
+    elseif ($EnableMergeQueue -or $MonitorCommand) {
+        # If any scoping flags are passed, only manage those
+        if ($EnableMergeQueue) {
+            $manageTasks += 'mergequeue'
+        }
+        if ($MonitorCommand) {
+            $manageTasks += 'monitor'
+        }
+    }
+    else {
+        # Default (no scoping flags): manage watchdog only
+        $manageTasks = @('watchdog')
+    }
+
+    # Derive default commands if not provided (for tasks being managed)
+    if ($manageTasks -contains 'watchdog' -and -not $WatchdogCommand) {
         $posixRoot = ConvertTo-PosixPath $aesopRoot
 
         # P2: Detect apostrophe in derived path (breaks bash syntax if not escaped)
@@ -223,23 +328,55 @@ function Main {
         $WatchdogCommand = "bash '$posixRoot/daemons/run-watchdog.sh' --once >> '$posixRoot/state/cron-watchdog.log' 2>&1"
     }
 
-    # Register watchdog task
-    $watchdogTaskName = "${TaskPrefix}WatchdogDaemon"
-    Register-DaemonTask `
-        -TaskName $watchdogTaskName `
-        -Command $WatchdogCommand `
-        -IntervalMinutes $WatchdogIntervalMinutes `
-        -RunHiddenVbs $runHiddenVbs `
-        -BashExe $BashExe `
-        -AesopRoot $aesopRoot
-
-    # Register monitor task if command provided
-    if ($MonitorCommand) {
-        $monitorTaskName = "${TaskPrefix}RefinementMonitor"
+    # Register watchdog task if in scope
+    if ($manageTasks -contains 'watchdog') {
+        $watchdogTaskName = "${TaskPrefix}WatchdogDaemon"
         Register-DaemonTask `
-            -TaskName $monitorTaskName `
-            -Command $MonitorCommand `
-            -IntervalMinutes $MonitorIntervalMinutes `
+            -TaskName $watchdogTaskName `
+            -Command $WatchdogCommand `
+            -IntervalMinutes $WatchdogIntervalMinutes `
+            -RunHiddenVbs $runHiddenVbs `
+            -BashExe $BashExe `
+            -AesopRoot $aesopRoot
+    }
+
+    # Register monitor task if in scope and command provided
+    if ($manageTasks -contains 'monitor') {
+        if ($MonitorCommand) {
+            $monitorTaskName = "${TaskPrefix}RefinementMonitor"
+            Register-DaemonTask `
+                -TaskName $monitorTaskName `
+                -Command $MonitorCommand `
+                -IntervalMinutes $MonitorIntervalMinutes `
+                -RunHiddenVbs $runHiddenVbs `
+                -BashExe $BashExe `
+                -AesopRoot $aesopRoot
+        }
+    }
+
+    # Register the merge-queue task if in scope. OPT-IN: this task merges to main with
+    # no interactive session, so it is never switched on as a side effect of
+    # running the installer. Pass -EnableMergeQueue (derives the command) or
+    # -MergeQueueCommand (explicit).
+    if ($manageTasks -contains 'mergequeue') {
+        if (-not $MergeQueueCommand) {
+            $posixRootMq = ConvertTo-PosixPath $aesopRoot
+
+            # Same apostrophe guard as the watchdog derivation: an apostrophe in
+            # the path would break the single-quoted bash command.
+            if ($posixRootMq -like "*'*") {
+                Write-Error "Repository path contains apostrophe, which would break the derived command: $posixRootMq`nPass -MergeQueueCommand explicitly."
+                exit 1
+            }
+
+            $MergeQueueCommand = "bash '$posixRootMq/daemons/run-merge-queue.sh' --once >> '$posixRootMq/state/cron-merge-queue.log' 2>&1"
+        }
+
+        $mergeQueueTaskName = "${TaskPrefix}MergeQueue"
+        Register-DaemonTask `
+            -TaskName $mergeQueueTaskName `
+            -Command $MergeQueueCommand `
+            -IntervalMinutes $MergeQueueIntervalMinutes `
             -RunHiddenVbs $runHiddenVbs `
             -BashExe $BashExe `
             -AesopRoot $aesopRoot

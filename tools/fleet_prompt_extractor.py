@@ -1,4 +1,7 @@
-"""Extract NEW fleet spawn prompts (Agent/Task) for review cycle with deduplication."""
+"""Extract NEW fleet spawn prompts (Agent/Task) for review cycle with deduplication.
+
+INDEX: Extract and deduplicate Agent/Task spawn prompts
+"""
 import argparse
 import hashlib
 import json

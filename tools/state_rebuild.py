@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """state_rebuild — CLI tool for rebuilding and verifying materialized views.
+INDEX: Rebuild and verify materialized state views (tracker.json, STATE.md) from event store; CI gate via --check mode detects drift
 
 Rebuilds state files (tracker.json, STATE.md, etc.) from the event store.
 Also provides a --check mode for CI gates to detect drift.

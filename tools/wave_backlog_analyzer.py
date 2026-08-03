@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Wave backlog risk analyzer — assess risk for backlog items pre-wave.
+INDEX: Pre-wave backlog risk analyzer (per-item risk_level/estimated_retries from git fix-forward history + tracker lanes); warn-level only, --json
 
 Analyzes tracker backlog items and correlates with git history to compute
 per-item risk assessments. Uses deterministic heuristics only:

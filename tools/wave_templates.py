@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Wave template manager: load and instantiate preset manifests for common project types.
+INDEX: Wave-manifest preset generator: instantiate/validate templates/wave-presets/*.json into ready manifests; CLI: `validate [--template saas|data|library|all]` (exits 0=clean / 1=defects per item), `instantiate <preset> --project-name --base-dir [--output FILE]`
 
 Provides reusable wave-manifest scaffolds for bootstrapping first waves:
   - SaaS: API + frontend + ops (typical 3-tier)
