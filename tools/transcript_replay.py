@@ -1,4 +1,7 @@
-"""Replay post-commit edits/writes from Claude Code transcripts to recover uncommitted work."""
+"""Replay post-commit edits/writes from Claude Code transcripts to recover uncommitted work.
+
+INDEX: Replay post-commit edits from transcripts to recover work
+"""
 import argparse
 import json
 import os

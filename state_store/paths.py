@@ -16,8 +16,8 @@ Key invariants:
 from __future__ import annotations
 
 import os
+import posixpath
 import unicodedata
-from pathlib import Path
 from typing import Optional, Literal
 
 
@@ -55,29 +55,26 @@ def canonical_claim_path(
         # Empty path normalizes to current directory
         return "."
 
-    # Step 1: Convert to Path object for robust normalization
-    p = Path(path)
+    # Step 1: Fold separators to forward slashes BEFORE any collapsing.
+    # This must not go through pathlib.Path or os.path, both of which are
+    # platform-flavoured: on Linux they treat "\" as an ordinary filename
+    # character, so a Windows-style path would survive uncollapsed and two
+    # boxes would derive different canonical forms for the same file.
+    # posixpath is used unconditionally so the result is host-independent.
+    normalized_str = str(path).replace("\\", "/")
 
     # Step 2: Make relative to repo_root if provided
     if repo_root:
-        try:
-            # Try to make relative to repo_root
-            repo = Path(repo_root)
-            p = p.relative_to(repo)
-        except (ValueError, TypeError):
-            # If not relative to repo_root, use as-is
-            pass
+        root = posixpath.normpath(str(repo_root).replace("\\", "/")).rstrip("/")
+        candidate = posixpath.normpath(normalized_str)
+        if root and root != "." and candidate.startswith(root + "/"):
+            normalized_str = candidate[len(root) + 1:]
+        else:
+            # Not under repo_root: use as-is
+            normalized_str = candidate
 
-    # Step 3: Normalize separators and redundant components via Path
-    # Path.as_posix() converts backslashes to forward slashes
-    # But we need to collapse .. and . first
-    normalized_str = str(p)
-
-    # On Windows, Path might produce backslashes; convert to forward slashes
-    # Use os.path.normpath first to collapse . and ..
-    normalized_str = os.path.normpath(normalized_str)
-    # Then convert backslashes to forward slashes
-    normalized_str = normalized_str.replace("\\", "/")
+    # Step 3: Collapse redundant separators plus . and .. components
+    normalized_str = posixpath.normpath(normalized_str)
 
     # Step 4: Remove trailing slashes
     normalized_str = normalized_str.rstrip("/")

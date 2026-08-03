@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Shared heartbeat and health-check utilities.
+INDEX: Heartbeat staleness utilities: `check_heartbeat_file()`, `check_watchdog_heartbeat()`, `check_monitor_heartbeat()`. Wraps `common.check_heartbeat_staleness()` with standard thresholds (watchdog: 300s, monitor: 3600s). Eliminates duplicated inline heartbeat reading from power_selftest.py. Preserves fail-closed contract: absent/unreadable/unparseable heartbeats → STALE (never healthy). Tested with 12 unit test cases including explicit STALE contract validation.
 
 Consolidates duplicated heartbeat staleness checking logic from health_score.py,
 healthcheck.py, and power_selftest.py into a single reusable module.

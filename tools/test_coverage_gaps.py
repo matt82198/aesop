@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Test coverage gap finder: identifies Python source files with no corresponding test file.
+INDEX: Test coverage gap finder (identifies untested modules)
 
 Scans source directories (tools/, ui/, driver/, state_store/, bench/, monitor/, scan/,
 mcp/, hooks/) for .py files and checks whether a corresponding test_*.py file exists

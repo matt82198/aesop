@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """CLAUDE.md synchronization gate — ensures code changes are accompanied by domain CLAUDE.md updates.
+INDEX: CLAUDE.md synchronization gate (Guardrail G5): for each domain directory with code changes, verifies a domain documentation surface was also modified in the same PR. The surfaces are `CLAUDE.md` and `INDEX.md` — the latter because #751 moved the per-tool index out of tools/CLAUDE.md into the generated tools/INDEX.md (the inline list was the top merge-queue conflict surface), so a tool change accompanied by an INDEX.md change is a documented change and must not read as drift. Exempts: test-only changes, docs-only, meta files (stats.json, README.md, CHANGELOG.md, package.json, .nvmrc), .github/ (CI), documentation-only changes; CLI: `--check` (default, fail-closed) | `--json` | `--base-ref` [BRANCH] (default main); exit 0=synced, 1=drift, 2=error
 
 For each domain directory (state_store/, tools/, ui/, driver/, etc.) with code changes,
 verifies that the corresponding domain/CLAUDE.md was also modified in the same commit/PR.
@@ -9,7 +10,12 @@ Exemptions:
 - Changes only in docs/ (documentation)
 - Changes only to meta files (stats.json, README.md, CHANGELOG.md, package.json, .nvmrc)
 - Changes only to .github/ (CI config)
-- Changes within a domain that are ONLY to the CLAUDE.md itself
+- Changes within a domain that are ONLY to its documentation (CLAUDE.md, INDEX.md)
+
+Domain documentation surfaces: a domain normally documents itself through its
+CLAUDE.md. tools/ additionally documents each tool through the generated
+tools/INDEX.md, built from the tools' own `INDEX:` header lines (see
+tools/gen_tool_index.py). Either file satisfies the sync requirement.
 
 Exit: 0=all synced, 1=drift found, 2=error
 Supports: --check (default), --json output, --help
@@ -59,6 +65,17 @@ KNOWN_DOMAINS = {
     "tools",
     "ui",
 }
+
+
+# Documentation surfaces that satisfy a domain's "you changed code, document it"
+# requirement. CLAUDE.md is the universal one; tools/INDEX.md is the generated
+# per-tool index that PR #751 split out of tools/CLAUDE.md.
+DOMAIN_DOC_FILES = ("CLAUDE.md", "INDEX.md")
+
+
+def is_domain_doc(path: str) -> bool:
+    """True if the path is a domain documentation surface, not code."""
+    return path.replace("\\", "/").split("/")[-1] in DOMAIN_DOC_FILES
 
 
 def is_exempted_path(path: str) -> bool:
@@ -180,14 +197,20 @@ def check_domain_claudemd_sync(repo_root: Path, classified: Dict[str, List[str]]
         if domain.startswith("_"):
             continue
 
-        # Separate CLAUDE.md changes from code changes
-        claudemd_changed = any(f.endswith("CLAUDE.md") for f in files)
+        # Separate domain-documentation changes from code changes.
+        # A domain documents itself through its CLAUDE.md, but tools/ also
+        # documents each tool through the generated tools/INDEX.md (PR #751
+        # moved the per-tool index there, out of tools/CLAUDE.md, because the
+        # inline list was the top merge-queue conflict surface). A tool change
+        # accompanied by an INDEX.md change IS a documented change -- the
+        # generated file only moves when the tool's own INDEX: line moves.
+        doc_changed = any(is_domain_doc(f) for f in files)
 
-        # Filter out CLAUDE.md from code changes
-        code_changes = [f for f in files if not f.endswith("CLAUDE.md")]
+        # Filter out domain documentation from code changes
+        code_changes = [f for f in files if not is_domain_doc(f)]
 
-        # If there are code changes but no CLAUDE.md update, flag it
-        if code_changes and not claudemd_changed:
+        # If there are code changes but no documentation update, flag it
+        if code_changes and not doc_changed:
             findings.append({
                 "domain": domain,
                 "issue": "code changes without CLAUDE.md update",
