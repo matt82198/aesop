@@ -10,9 +10,13 @@ name: CI
 # Scoping must remain STEP-LEVEL: individual gates can be conditional (e.g., shard 0 only) without
 # causing matrix jobs to report skipped. This approach preserves deadlock safety while allowing
 # incremental gate optimization (browser-proofs and windows-shard skip safely as non-required).
+#
+# PR-only by design. `push: branches: [main]` was removed: main is protected by PR
+# checks, so the merge commit's `ci` run already passed on the PR, and .github/workflows/
+# main-full.yml is the post-merge verification (that is why it exists — see its header).
+# Keeping both meant every merge paid the full ~30 job-minutes twice. Do NOT re-add a
+# push trigger here; post-merge coverage belongs to main-full.
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 
@@ -182,24 +186,32 @@ jobs:
       - name: Run Python tests (shard ${{ matrix.python-shard }}/4)
         run: python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
 
+      # The ui/web chain below is shard-INVARIANT: all four ubuntu shards ran the same
+      # npm ci + build + tsc + dist-drift + vitest, so 3 of every 4 runs were pure waste.
+      # Gate is STEP-level on purpose — a job-level `if:` makes `ci (N)` report skipped,
+      # and a skipped required check never satisfies branch protection (PR #170 deadlock).
       - name: Build React dashboard (ui/web/)
+        if: matrix.python-shard == 0
         run: |
           cd ui/web
           npm ci
           npm run build
 
       - name: TypeScript type check (ui/web/)
+        if: matrix.python-shard == 0
         run: |
           cd ui/web
           npx tsc --noEmit
 
       - name: Dist drift gate (committed ui/web/dist must match fresh build)
+        if: matrix.python-shard == 0
         run: |
           cd ui/web
           git diff --exit-code -- dist/
           git diff --cached --exit-code -- dist/
 
       - name: Run React component tests (vitest)
+        if: matrix.python-shard == 0
         run: |
           cd ui/web
           npx vitest run
