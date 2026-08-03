@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# INDEX: Incident forensics; behavior reconstruction (read-only git plumbing)
 # agent-forensics.sh — incident forensics tool
 # Reconstruct agent behavior as of a commit using git plumbing.
 # Usage:

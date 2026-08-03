@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Common utilities shared across tools.
+INDEX: Shared utilities (state directory resolution, heartbeat staleness, CLI layer delegation to cli.py)
 
 Functions (state layer):
   get_state_dir() -> Path

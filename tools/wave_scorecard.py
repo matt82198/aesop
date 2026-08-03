@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Wave Quality Scorecard Generator — deterministic metrics from telemetry.
+INDEX: Wave quality scorecard generator (deterministic metrics from on-disk telemetry); computes items dispatched/succeeded, repair rounds, first-try-green rate, tokens + cost by phase/model, agent success by type, retry frequency; CLI: `[--json|--md] [--waves N] [--state-root PATH]` (default ASCII); emits n/a for missing sources; hermetic, stdlib-only
 
 Generates quality scorecards answering "how healthy are our waves?" from on-disk telemetry.
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 STATE.md checkpoint-accuracy verifier (guardrail #1).
+INDEX: Guardrail #1: STATE.md checkpoint-accuracy verifier; parses STATE.md for falsifiable progress claims ("**Current Version:** vX.Y.Z", "resolved", "pushed", "MERGED") and verifies against on-disk git truth (git tags + package.json for versions, git status --porcelain for unmerged files, git ls-remote --heads for pushed branches, gh pr view for PR states); exit 0=no contradictions + at least one claim verified / 1=contradictions found / 2=error or zero verifiable claims (fail-closed); reports UNVERIFIABLE/SKIP for unparseable/unavailable-tool claims; stdlib-only
 
 Parses STATE.md for falsifiable progress claims and verifies each against on-disk git truth.
 Catches cases where the orchestrator's checkpoint overstates progress (e.g., "resolved" while

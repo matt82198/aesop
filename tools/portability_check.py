@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Portability gate: scan shipped surface for hardcoded personal/environment paths.
+INDEX: Shipped-surface gate: scan for hardcoded personal/environment paths (Windows user paths, POSIX home paths, private-machine project and home-dir tokens); exit 0 clean / 1 with findings; --json output, --root flag for base directory; stdlib only
 
 Detects absolute Windows user paths (C:\\Users\\<name> / C:/Users/<name>),
 POSIX home paths (/home/<name>, /Users/<name>), and private-machine tokens

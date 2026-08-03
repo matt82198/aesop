@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 r"""
 Wave Ledger Hook — orchestrator wrapper to append per-wave telemetry to OUTCOMES-LEDGER.md.
+INDEX: Orchestrator-tail CLI wrapper to append per-wave telemetry to OUTCOMES-LEDGER.md (idempotent phase appends; validates timestamp for markdown table safety)
 
 Orchestrator-tail command to write build/verify/repair phase outcomes from a workflow report
 into the aesop ledger, closing the 'ledger empty, all telemetry reconstructed from transcripts'
