@@ -91,16 +91,18 @@ Get all current file claims by instance from multi-instance coordination layer.
 **Output**: `{ absent: bool, reason?: string, by_instance: { instance_id: [file_path, ...], ... } }`.
 **Design**: Spawns `mcp/instances-claims.py` helper which reads from state_store via `state_store.instance_projection.get_all_claimed_files()`. Returns a map of instance ID to list of claimed file paths (absolute paths). Only includes instances with active claims (empty claim sets omitted). Missing state_store returns `absent: true`.
 
-### fleet_multibox_summary (NEW — Wave-???)
-Dashboard-ready summary of multi-instance status.
+### fleet_multibox_summary
+Dashboard-ready summary of multi-instance status, including the ACTIVE coordination backend.
 **Input**: `{}` (no args).
-**Output**: `{ absent: bool, instance_count: int, active_count: int, stale_count: int, claim_count: int }`.
-**Design**: Spawns `mcp/instances-claims.py` helper which aggregates `fleet_instances` + `fleet_claims` data. Suitable for a dashboard header or status tile. Counts:
+**Output**: `{ absent: bool, instance_count: int, active_count: int, stale_count: int, claim_count: int, backend: {...} }`.
+**Design**: Spawns `mcp/instances-claims.py --config <root>/aesop.config.json`, which aggregates `fleet_instances` + `fleet_claims` and resolves `backend` through the SAME seam the dispatch path uses (`tools/multibox_config.load_multibox_config`, precedence env > config > default) — so the tile cannot advertise a coordination mode the fleet is not actually in. Counts:
   - `instance_count`: total registered instances (active + stale + failed)
   - `active_count`: instances with recent heartbeats (< 300s)
   - `stale_count`: instances with old heartbeats (>= 300s) or failed
   - `claim_count`: total file claims across all instances
-Missing state_store returns all zeros with `absent: true`.
+  - `backend`: `{ kind, enabled, transport, shared_dir, settle_seconds, lease_ttl_seconds, error }`
+**backend.kind is a four-valued honesty ladder, and the last two values are NOT interchangeable**: `local-lease` (multibox on, atomic SQLite leases) | `fs-claim-log` (multibox on, shared-FS append log) | `advisory` (config RESOLVED and multibox is off — claims are a projection feed, not mutual exclusion) | `unknown` (config NOT resolved: helper missing, spawn failed, JSON unparseable, or state_store absent). `advisory` is a positive claim about the fleet; `unknown` is an admission we did not observe one. A config that will not read or parse degrades to `unknown` with `error` set inside the helper, and a helper that never ran degrades to `unknown` in the server — a read-only surface must never invent a coordination guarantee.
+Missing state_store returns all zeros with `absent: true` and `backend.kind: 'unknown'`.
 
 ## Core Invariants
 

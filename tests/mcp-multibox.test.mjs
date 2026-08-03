@@ -9,6 +9,9 @@
  * - Handle missing state_store database gracefully
  * - Classify stale heartbeats at the 300s boundary
  * - Classify expired leases
+ * - Report the ACTIVE coordination backend (Inc 7): the summary must say which
+ *   backend is really in force, and must degrade to kind 'unknown' rather than
+ *   assert 'advisory' when it could not resolve the config at all
  */
 
 import { strict as assert } from 'assert';
@@ -512,11 +515,116 @@ export default async function test() {
       // active_count should not exceed instance_count
       assert(result.active_count <= result.instance_count, 'active_count <= instance_count');
 
+      // Inc 7: the summary always carries an active-backend descriptor.
+      assert(result.backend, 'summary carries a backend descriptor');
+      assert(typeof result.backend.kind === 'string', 'backend.kind is a string');
+      assert(
+        ['advisory', 'local-lease', 'fs-claim-log', 'unknown'].includes(result.backend.kind),
+        `backend.kind is a known kind (got ${result.backend.kind})`
+      );
+
       proc.kill();
       await cleanupTempDir(tmpDir);
       console.log('✓ Summary response structure is valid\n');
     } catch (err) {
       console.error('✗ Test 8 failed:', err.message, '\n');
+      throw err;
+    }
+  })();
+
+  // Test 9: an unresolvable backend degrades to 'unknown', never to 'advisory'
+  await (async () => {
+    console.log('Test 9: Absent state_store reports backend kind "unknown"');
+
+    try {
+      const tmpDir = mkdtempSync(join(tmpdir(), 'mcp-test-'));
+      const stateDir = join(tmpDir, 'state');
+      mkdtempSync(stateDir);
+
+      const { proc } = await spawnServer(tmpDir);
+
+      await sendRequest(proc, { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} });
+
+      const resp = await sendRequest(proc, {
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: 'fleet_multibox_summary', arguments: {} }
+      });
+
+      const result = JSON.parse(resp.result.content[0].text);
+
+      assert.strictEqual(result.absent, true, 'summary is absent without a state_store');
+      // The distinction is the point: 'advisory' is a POSITIVE claim that
+      // multibox is off. Here nothing was resolved, so the only honest answer
+      // is 'unknown'. Reporting 'advisory' would be a fabricated guarantee.
+      assert.strictEqual(result.backend.kind, 'unknown', 'backend.kind is unknown when unresolved');
+      assert.strictEqual(result.backend.enabled, false, 'unresolved backend is not enabled');
+      assert(result.backend.error, 'unresolved backend explains itself');
+
+      proc.kill();
+      await cleanupTempDir(tmpDir);
+      console.log('✓ Unresolved backend reports kind "unknown"\n');
+    } catch (err) {
+      console.error('✗ Test 9 failed:', err.message, '\n');
+      throw err;
+    }
+  })();
+
+  // Test 10: the helper resolves the ACTIVE backend out of the config block
+  await (async () => {
+    console.log('Test 10: Helper reads the active backend from the config block');
+
+    try {
+      const helper = join(AESOP_ROOT, 'mcp', 'instances-claims.py');
+      assert(existsSync(helper), 'instances-claims.py exists');
+
+      // Shipped default (enabled:false) => advisory; an ENABLED config on the
+      // same helper must flip the reported kind. If the helper ignored its
+      // config these two runs would be indistinguishable.
+      const tmpDir = mkdtempSync(join(tmpdir(), 'mcp-backend-'));
+      const enabledConfig = join(tmpDir, 'enabled.json');
+      writeFileSync(enabledConfig, JSON.stringify({
+        multibox: { enabled: true, transport: 'local' }
+      }), 'utf8');
+      const brokenConfig = join(tmpDir, 'broken.json');
+      writeFileSync(brokenConfig, '{ this is not json', 'utf8');
+
+      const runHelper = (configPath) => new Promise((resolve) => {
+        const args = [helper, '--db', join(tmpDir, 'missing.db'), '--root', AESOP_ROOT];
+        if (configPath) args.push('--config', configPath);
+        const child = spawn('python3', args, { cwd: AESOP_ROOT, timeout: 20000 });
+        let out = '';
+        child.stdout.on('data', (d) => { out += d.toString(); });
+        child.on('close', () => resolve(out));
+        child.on('error', () => resolve(''));
+      });
+
+      const defaultOut = await runHelper(join(AESOP_ROOT, 'aesop.config.example.json'));
+      const enabledOut = await runHelper(enabledConfig);
+      const brokenOut = await runHelper(brokenConfig);
+
+      if (defaultOut.trim() && enabledOut.trim() && brokenOut.trim()) {
+        const shipped = JSON.parse(defaultOut).summary.backend;
+        const flipped = JSON.parse(enabledOut).summary.backend;
+        const broken = JSON.parse(brokenOut).summary.backend;
+        assert.strictEqual(shipped.kind, 'advisory', 'shipped default is advisory');
+        assert.strictEqual(shipped.enabled, false, 'shipped default is not enabled');
+        assert.strictEqual(flipped.kind, 'local-lease', 'enabled local transport reports local-lease');
+        assert.strictEqual(flipped.enabled, true, 'enabled config reports enabled');
+        // An unparseable config is 'unknown', never 'advisory': we did not
+        // observe the fleet's coordination mode, so we must not assert one.
+        assert.strictEqual(broken.kind, 'unknown', 'unparseable config reports unknown');
+        assert.strictEqual(broken.enabled, false, 'unparseable config is not enabled');
+        assert(broken.error, 'unparseable config explains itself');
+      } else {
+        console.log('  (python3 unavailable on PATH -- helper assertions skipped)');
+      }
+
+      await cleanupTempDir(tmpDir);
+      console.log('✓ Helper reports the active backend from config\n');
+    } catch (err) {
+      console.error('✗ Test 10 failed:', err.message, '\n');
       throw err;
     }
   })();

@@ -1,6 +1,6 @@
 # Multibox Coordination Design — Lease-by-Append Over Shared Filesystems
 
-**Status**: Phase 0.5 MVP (Increments 0-7, distributed-ledger team-state synchronization)
+**Status**: Phase 0.5 MVP **complete** — all increments 0-7 implemented. The status table in section 5 names the shipping PR behind each one. Multibox remains OFF by default (`multibox.enabled: false`); Increment 7 makes turning it on possible and gates it on a measured environment.
 
 **Problem**: How do 3-5 Aesop instances on separate machines safely share coordination state without Postgres, without consensus protocols, and without network locking?
 
@@ -160,6 +160,26 @@ All increments:
 - File-scoped (no side effects outside their domain)
 - Are inert behind `multibox.enabled=false` (default) until Increment 7
 
+### Status
+
+Every row below was checked against `gh pr view` and against the files on disk
+on 2026-08-03. "Implemented" means the named artefacts exist and their suites
+run — not that a design section was written.
+
+| Inc | What it delivers | Shipping PR | PR state | Key artefacts |
+|---|---|---|---|---|
+| 0 | Preflight probe + network-FS guard | #699 | open (in the Inc 7 stack) | `tools/multibox_preflight.py`, `tests/test_multibox_preflight.py` |
+| 1 | Host-independent canonical claim paths | #684 | merged | `state_store/paths.py`, `tests/test_state_store_paths.py` |
+| 2 | ClaimBackend seam + atomic dispatch claim | #685 | merged | `state_store/claim_backend.py`, `tests/test_claim_backend.py` |
+| 3 | Durable instance identity + epoch fencing | #686 | merged | `state_store/identity.py`, `tests/test_state_store_identity.py` |
+| 4a | FsClaimLog: shared-FS lease-by-append | #697 | open (in the Inc 7 stack) | `state_store/fs_claim_log.py`, `tests/test_fs_claim_log.py` |
+| 4b | Durability, clock-skew bounds, GC | #722 | open (in the Inc 7 stack) | `state_store/fs_claim_log.py`, `tests/test_fs_claim_log_durability.py` |
+| 5 | Stale-primary failover + fencing generations | #735 | open (in the Inc 7 stack) | `state_store/failover.py`, `tests/test_failover.py` |
+| 6 | Simulated-multibox CI harness | #738 | open (in the Inc 7 stack) | `tests/multibox_sim.py`, `tests/test_multibox_integration.py`, `tools/verify_multibox.py` |
+| 7 | Config block, hard preflight gate, docs, MCP, CI | this PR | open | `tools/multibox_config.py`, `tests/test_multibox_config.py`, `aesop.config.example.json` |
+
+This design doc itself shipped as PR #687 (merged).
+
 ### Increment 0 — Multibox Preflight Probe + Network-FS Guard
 
 **Files**: `tools/multibox_preflight.py` (new), `tests/test_multibox_preflight.py` (new)
@@ -173,15 +193,15 @@ All increments:
 
 **Tests**: /proc/mounts fixtures, ctypes Windows shim, tmpdir probes (delay ~0, hermetic).
 
-**Flag**: Advisory-only; hard gate in Increment 7.
+**Flag**: Advisory-only on its own; Increment 7 promotes it to the hard startup gate.
 
-**Status**: Designed, not yet built.
+**Status**: Implemented (PR #699, open). `run_preflight()` returns exactly the three findings the Increment 7 gate consumes: `DB-ON-NETWORK-FS`, `VISIBILITY-DELAY-EXCEEDS-SETTLE`, `CLOCK-SKEW-EXCEEDS-BOUND`.
 
 ---
 
 ### Increment 1 — Canonical Repo-Path Normalization (PR #684)
 
-**Status**: In development (PR #684 open).
+**Status**: Implemented; merged 2026-08-03.
 
 **Files**: `state_store/paths.py` (new), edits to `state_store/lease_claims.py`, `tests/test_state_store_paths.py` (new)
 
@@ -207,13 +227,13 @@ All increments:
 
 **Flag**: None; tier-L default preserves behavior exactly.
 
-**Status**: Designed, not yet built.
+**Status**: Implemented (PR #684, merged). `state_store/paths.py` ships `canonical_claim_path()`; `lease_claims._normalize_path` delegates to it, so canonicalisation is decided by config rather than by `os.name`.
 
 ---
 
 ### Increment 2 — ClaimBackend Seam + Atomic Claim on Dispatch Path (PR #685)
 
-**Status**: In development (PR #685 open).
+**Status**: Implemented; merged 2026-08-03.
 
 **Files**: `state_store/claim_backend.py` (new: protocol + `LocalLeaseBackend` adapter), edits to `tools/multi_dispatch.py`, `tests/test_claim_backend.py` (new), `tests/test_multi_dispatch_claim.py` (new)
 
@@ -231,13 +251,13 @@ All increments:
 
 **Flag**: `multibox.enabled` selects atomic path; default off.
 
-**Status**: Designed, not yet built.
+**Status**: Implemented (PR #685, merged). The `ClaimBackend` protocol and `LocalLeaseBackend` ship in `state_store/claim_backend.py`; the contract suite in `tests/test_claim_backend.py` is reused verbatim by Increment 4a.
 
 ---
 
 ### Increment 3 — Durable Instance Identity + Epoch/Fencing Heartbeat (PR #686)
 
-**Status**: In development (PR #686 open).
+**Status**: Implemented; merged 2026-08-03.
 
 **Files**: `state_store/identity.py` (new), edits to `tools/instance_manager.py`, `tests/test_state_store_identity.py` (new)
 
@@ -257,7 +277,7 @@ All increments:
 
 **Flag**: Persisted identity always (strict improvement); epoch-fencing consumed under flag only.
 
-**Status**: Designed, not yet built.
+**Status**: Implemented (PR #686, merged). `state_store/identity.py` ships `get_identity_with_epoch()` and `release_own_stale()`; a restarted instance can fence its own prior claims instead of waiting out the TTL.
 
 ---
 
@@ -283,7 +303,7 @@ All increments:
 
 **Flag**: Reachable only when `multibox.transport == "shared-fs"`.
 
-**Status**: Designed, not yet built.
+**Status**: Implemented (PR #697, open). `state_store/fs_claim_log.py` ships `fold_fs_claims()` — a pure function over a list of dicts, so the whole decision surface is testable without a filesystem or a clock — and `FsClaimLog`, which satisfies the Increment 2 contract suite unmodified.
 
 ---
 
@@ -302,7 +322,7 @@ All increments:
 - Truncated-JSON fixture fail-closed
 - GC idempotence + never-delete-live (including skewed-clock case)
 
-**Status**: Designed, not yet built.
+**Status**: Implemented (PR #722, open). Durable append (fsync file, then fsync the parent directory), skew-widened lease deadlines, and a GC that never deletes a record it cannot prove expired.
 
 ---
 
@@ -321,7 +341,7 @@ All increments:
 
 **Flag**: `multibox.enabled`; tier L untouched.
 
-**Status**: Designed, not yet built.
+**Status**: Implemented (PR #735, open). `state_store/failover.py` ships `elect_primary()` with monotonic fencing generations: a partitioned primary that returns is rejected, not merged back in.
 
 ---
 
@@ -348,13 +368,13 @@ Real NFS/SMB differs from local tmpdir in exactly three observable ways — dela
 
 Seeded, deterministic, no network; runs under `npm run test:py`; `verify_multibox.py` = exit-0/1 CI proof.
 
-**Status**: Designed, not yet built.
+**Status**: Implemented (PR #738, open). `tools/verify_multibox.py` runs as a CI gate on shard 0 and proves four things, all of which must hold: no double grant over 200 seeded rounds; falsifiability (the same harness with delay > settle DOES double-grant); non-vacuous contention; and a real-filesystem smoke run.
 
 ---
 
 ### Increment 7 — Flag Flip, Config, Docs, Wiring
 
-**Files**: `aesop.config.example.json` (config block), `state_store/CLAUDE.md` (updated), `tools/CLAUDE.md` (updated), `tests/CLAUDE.md` (updated), `docs/TEAM-STATE.md` (updated), `mcp/server.mjs`, `tests/mcp-multibox.test.mjs`
+**Files**: `tools/multibox_config.py` (new: the config-consuming seam), `tests/test_multibox_config.py` (new), `aesop.config.example.json` (config block), `tools/multi_dispatch.py` (calls the seam), `mcp/instances-claims.py` + `mcp/server.mjs` + `tests/mcp-multibox.test.mjs` (active-backend reporting), `.github/workflows/ci.yml` (`verify_multibox.py` as a shard-0 gate), `docs/MULTI-INSTANCE-ROADMAP.md`, `docs/TEAM-STATE.md`, `docs/design/MULTIBOX-DESIGN.md`, `state_store/CLAUDE.md`, `tools/CLAUDE.md`, `tests/CLAUDE.md`, `mcp/CLAUDE.md`
 
 **Functionality**:
 - **Config block**: 
@@ -390,7 +410,7 @@ Seeded, deterministic, no network; runs under `npm run test:py`; `verify_multibo
 - MCP tests for shared-fs backend
 - All metadata gates (CLAUDE.md drift, test suite count) green
 
-**Status**: Designed, not yet built.
+**Status**: Implemented (this PR). `tools/multibox_config.py` is the config-consuming seam: it parses the block (env > config > default), runs the hard preflight gate, and selects the backend. At the shipped default it returns `None` before importing a single coordination module, so "inert when disabled" is observable from outside the process rather than merely asserted.
 
 ---
 
