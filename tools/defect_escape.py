@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Defect escape telemetry — Haiku code quality measurement.
+INDEX: Haiku code quality telemetry (fix-forward rate, first-try estimate); CLI: `--repo <path> --since <ISO date> [--json]`; uses subprocess_common.git() with 60s timeout (critical fix: no prior timeout)
 
 Turns 'is Haiku producing good code' from assertion into a measured number.
 

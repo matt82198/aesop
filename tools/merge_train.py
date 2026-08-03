@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Merge train -- serial or integration-branch batch merge for GitHub PRs.
+INDEX: Serial or integration-branch merge train: serial mode processes PRs one-at-a-time (update-branch, wait for CI, merge, verify MERGED); integration mode (`-i [BATCH_NAME]`) batches PRs into a local `integrate/<name>` branch, runs CI once, squash-merges, closes superseded PRs. Check classification is fail-closed via the `GREEN_CONCLUSIONS` allow-list (`SUCCESS`/`NEUTRAL`/`SKIPPED` only) and `check_outcome()`, which reads `conclusion` on CheckRun entries and `state` on legacy StatusContext entries — CANCELLED/TIMED_OUT/ACTION_REQUIRED/unknown are never green. Keep it an allow-list: a deny-list lets COMPLETED-but-not-FAILURE outcomes fall through to a merge
 
 Serial mode (default): update-branch, wait for CI, merge one at a time.
 Integration mode (--integration): batch PRs into a single integration branch,
@@ -59,6 +60,13 @@ RETRIABLE_RERUN_ERRORS = [
     "workflow completed",
 ]
 
+# The ONLY check outcomes that count as green. This is an allow-list, deliberately:
+# a CANCELLED / TIMED_OUT / ACTION_REQUIRED / STALE / STARTUP_FAILURE check is
+# "COMPLETED" and is not "FAILURE", so a deny-list lets it fall through to a merge.
+# Recorded lesson: fail-closed on CANCELLED/unknown states. tools/auto_merge.py
+# buckets the same way (bucket == 'cancel' is red there).
+GREEN_CONCLUSIONS = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
+
 
 def gh(*args: str) -> dict | str:
     cmd = ["gh"] + list(args)
@@ -72,6 +80,38 @@ def gh(*args: str) -> dict | str:
         return out
 
 
+def check_outcome(c: dict) -> str:
+    """Classify one statusCheckRollup entry as 'pending' | 'green' | 'bad'.
+
+    FAIL-CLOSED by construction: this is an ALLOW-LIST. Only an explicitly-green
+    terminal outcome returns 'green'; every other value -- including ones GitHub
+    may add in the future -- returns 'bad'. Never invert this into a deny-list.
+
+    Two entry shapes come back from `gh pr view --json statusCheckRollup`:
+      * CheckRun (GitHub Actions)  -- has `status` + `conclusion`
+      * StatusContext (legacy commit status) -- has `state`
+    Reading `state` off a CheckRun always yields None, which is why the previous
+    FAILURE predicate never fired for any Actions check.
+    """
+    typename = c.get("__typename")
+    is_check_run = typename == "CheckRun" or "conclusion" in c or "status" in c
+
+    if is_check_run:
+        if (c.get("status") or "").upper() != "COMPLETED":
+            return "pending"
+        conclusion = (c.get("conclusion") or "").upper()
+        return "green" if conclusion in GREEN_CONCLUSIONS else "bad"
+
+    if typename == "StatusContext" or "state" in c:
+        state = (c.get("state") or "").upper()
+        if state in ("PENDING", "EXPECTED"):
+            return "pending"
+        return "green" if state in GREEN_CONCLUSIONS else "bad"
+
+    # Unrecognised shape: never green.
+    return "pending"
+
+
 def pr_state(n: int) -> dict:
     raw = gh("pr", "view", str(n), "--json",
              "state,mergeStateStatus,statusCheckRollup,title,headRefName")
@@ -79,15 +119,14 @@ def pr_state(n: int) -> dict:
         return {"state": "ERROR", "merge": "UNKNOWN", "checks": "unknown",
                 "title": f"(error: {raw['error'][:80]})", "headRefName": ""}
     checks_list = raw.get("statusCheckRollup") or []
-    pending = sum(1 for c in checks_list if c.get("status") != "COMPLETED")
-    failing = sum(1 for c in checks_list
-                  if c.get("status") == "COMPLETED" and c.get("state") == "FAILURE")
-    if pending > 0:
-        ci = "pending"
-    elif failing > 0:
-        ci = "FAIL"
-    elif len(checks_list) == 0:
+    outcomes = [check_outcome(c) for c in checks_list]
+    if not checks_list:
         ci = "none"
+    elif "pending" in outcomes:
+        ci = "pending"
+    elif "bad" in outcomes:
+        # CANCELLED / TIMED_OUT / ACTION_REQUIRED / FAILURE / unknown -- NOT mergeable.
+        ci = "FAIL"
     else:
         ci = "green"
     return {

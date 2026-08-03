@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """gen_state_md — Generate STATE.md checkpoint from event-sourced state store.
+INDEX: STATE.md checkpoint generator from event-sourced state store; reads tracker projection via StateAPI read facade; renders markdown with current status header (ISO timestamp), open tracker items by lane, and next steps; CLI: `[--state-root DIR] [--out PATH]`; exit 0=success / 1=malformed store; deterministic + ASCII-safe
 
 Renders a durable checkpoint markdown file (sections: CURRENT status header with ISO
 timestamp, open tracker items by lane, recent events/waves summary, NEXT STEPS from

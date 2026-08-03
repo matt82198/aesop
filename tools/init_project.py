@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Project initialization scaffolder for aesop.
+INDEX: Project scaffolder (`aesop init`): creates CLAUDE.md, config, state dir, CI template, pre-push hook
 
 When a user runs `npx @matt82198/aesop init` in a new repo, this tool
 scaffolds the aesop orchestration layer:

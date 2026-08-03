@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Tracker zombie-resurrection prevention gate.
+INDEX: Append-only lane journal + zombie-resurrection fail-closed gate; prevents items in terminal lanes (done/rejected) from re-entering active lanes (ranked/proposed/in-progress/accepted); modes: --seed (bootstrap journal), --check (detect violations, exit 1 if found, default), --enforce (revert zombies to terminal lane); CLI: `tracker_guard.py [--seed | --check | --enforce]`; journaled in state/tracker-journal.jsonl with rotation at 5000 lines
 
 Maintains an append-only lane journal (state/tracker-journal.jsonl) to enforce
 the ZOMBIE RULE: items that reach a terminal lane (done/rejected) may NEVER

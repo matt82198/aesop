@@ -60,7 +60,7 @@ const EMPTY_COST: CostSummary = {
 
 export function Cost({ cost, connectionStatus, onRetry }: CostProps) {
   // Distinguish three states:
-  // 1. Loading: cost is null AND connection is live/reconnecting (still waiting for first event)
+  // 1. Loading: cost is null AND connection is live (still waiting for first event)
   // 2. Error: cost is null AND connection status indicates a problem (reconnecting after error or explicit error)
   // 3. Loaded but empty: cost is not null (data arrived) but has no runs
 
