@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Batch auto-merge: fix conflicts, merge green PRs, loop until done.
-INDEX: Batch PR merge tool (fix-by-default: merge main into broken branches + merge green PRs; `--no-fix`/`--loop`/`--dry-run`/`--json`/`--wait`); uses subprocess_common.py for timeouts + encoding; MERGED-state verification gate at lines 101-105; run with `--loop` to continuously merge all green PRs; use merge_train.py for one-shot serial CI-gated queues
+INDEX: Batch PR merge tool (fix-by-default: merge main into broken branches + merge green PRs; `--no-fix`/`--loop`/`--dry-run`/`--json`/`--wait`); uses subprocess_common.py for timeouts + encoding; MERGED-state verification gate at lines 101-105; run with `--loop` to continuously merge all green PRs; use merge_train.py for one-shot serial CI-gated queues. `fix_branch()` auto-resolves merge conflicts by taking `--theirs` ONLY over paths listed by `generated_paths.py` -- the single registry of repo-generated files. It imports that module and calls `generated_paths()` at CALL time rather than re-typing the list, because a copy silently drifts the moment a path is registered: this tool held its own two-entry copy while PR #757 was adding `tools/INDEX.md` to the registry, and a batch conflicting on that path would have gone unresolved here. Never `git stash` (the stash stack is shared across worktrees) and never a blanket `git checkout .`; resolution stays path-by-path and registry-bounded, so an unregistered conflicted file still aborts the merge rather than being discarded. Enforced by `tests/test_auto_merge_registry.py`, which injects a sentinel into the registry and asserts this tool acts on it, plus an AST source scan failing any module under `tools/` that re-types the registry as a literal collection
 
 One command to clear the PR backlog. No serial merge trains.
 
@@ -27,6 +27,11 @@ import time
 # harness resolves regardless of cwd or how the file is loaded
 # (the import-gate loads tools by path, without tools/ on sys.path).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Imported as a MODULE rather than `from generated_paths import
+# GENERATED_PATHS`: the registry is then read at CALL time, so this tool
+# tracks whatever tools/generated_paths.py currently holds instead of
+# freezing a copy of it at import.
+import generated_paths  # noqa: E402
 from subprocess_common import gh, git, json_output, run
 
 
@@ -94,7 +99,12 @@ def fix_branch(branch):
 
     r = git(['merge', 'origin/main', '--no-edit'], check=False)
     if r.returncode != 0:
-        for f in ['tests/CLAUDE.md', 'tools/CLAUDE.md']:
+        # Resolve conflicts ONLY over registered generated files -- paths a
+        # committed gate deterministically rewrites, so taking "theirs" and
+        # regenerating loses nothing a human authored. Read live from the
+        # registry so a path added there (e.g. tools/INDEX.md) is handled
+        # here without this list ever being edited again.
+        for f in generated_paths.generated_paths():
             git(['checkout', '--theirs', f], check=False)
             git(['add', f], check=False)
         r2 = git(['-c', 'core.editor=true', 'merge', '--continue'], check=False)
