@@ -27,9 +27,14 @@ import time
 import uuid
 from typing import Callable, Optional
 
+from state_store.paths import canonical_claim_path
+
 
 def _normalize_path(path: str) -> str:
     """Normalize a file path for comparison, respecting platform-specific semantics.
+
+    DEPRECATED: This is now a thin alias to canonical_claim_path() with case_policy="platform"
+    for backward compatibility. New code should use canonical_claim_path() directly.
 
     On Windows (os.name == 'nt'):
       - Normalize separators (/ and \\ both become the platform separator)
@@ -48,14 +53,8 @@ def _normalize_path(path: str) -> str:
     Returns:
         Canonical form of the path, normalized for filesystem comparison
     """
-    # Normalize separators and remove redundant slashes
-    normalized = os.path.normpath(path)
-
-    if os.name == 'nt':
-        # Windows: also apply case-folding (case-insensitive filesystem)
-        normalized = os.path.normcase(normalized)
-
-    return normalized
+    # Delegate to canonical_claim_path with case_policy="platform" for backward compatibility
+    return canonical_claim_path(path, case_policy="platform")
 
 
 class LeaseConflict(Exception):
