@@ -75,14 +75,7 @@ Defect escape stats (first-try-green rate, fix-forward rate) if available.
 Get active and stale instances with heartbeat age for multi-instance coordination.
 **Input**: `{}` (no args).
 **Output**: `{ absent: bool, reason?: string, instances: [{ id, hostname, pid, status, registered_at, last_heartbeat, heartbeat_age_seconds, stale: bool }], stale_threshold_seconds: int }`.
-**Design**: Spawns `mcp/instances-claims.py` helper which reads from state_store SQLite via `state_store.instance_projection.list_active_instances()` and `detect_stale_instances()`. Instances are sorted by registration time. Each instance includes:
-  - `id`: unique instance identifier
-  - `hostname`: machine hostname
-  - `pid`: orchestrator process ID
-  - `status`: "active" or "stale" or "failed"
-  - `registered_at`, `last_heartbeat`: Unix epoch timestamps (seconds)
-  - `heartbeat_age_seconds`: seconds since last heartbeat (bucket-aligned for privacy)
-  - `stale`: boolean flag (true if age > 300s)
+**Design**: Spawns `mcp/instances-claims.py` helper which reads from state_store SQLite via `state_store.instance_projection.list_active_instances()` and `detect_stale_instances()`. Instances are sorted by registration time. Each instance includes: `id` unique instance identifier | `hostname` machine hostname | `pid` orchestrator process ID | `status` "active"/"stale"/"failed" | `registered_at`, `last_heartbeat` Unix epoch timestamps (seconds) | `heartbeat_age_seconds` seconds since last heartbeat (bucket-aligned for privacy) | `stale` boolean flag (true if age > 300s).
 Stale instances are those whose last heartbeat exceeds `stale_threshold_seconds` (300s). Missing state_store database returns `absent: true` with explanation.
 
 ### fleet_claims (NEW — Wave-???)
@@ -95,11 +88,7 @@ Get all current file claims by instance from multi-instance coordination layer.
 Dashboard-ready summary of multi-instance status.
 **Input**: `{}` (no args).
 **Output**: `{ absent: bool, instance_count: int, active_count: int, stale_count: int, claim_count: int }`.
-**Design**: Spawns `mcp/instances-claims.py` helper which aggregates `fleet_instances` + `fleet_claims` data. Suitable for a dashboard header or status tile. Counts:
-  - `instance_count`: total registered instances (active + stale + failed)
-  - `active_count`: instances with recent heartbeats (< 300s)
-  - `stale_count`: instances with old heartbeats (>= 300s) or failed
-  - `claim_count`: total file claims across all instances
+**Design**: Spawns `mcp/instances-claims.py` helper which aggregates `fleet_instances` + `fleet_claims` data. Suitable for a dashboard header or status tile. Counts: `instance_count` total registered instances (active + stale + failed) | `active_count` instances with recent heartbeats (< 300s) | `stale_count` instances with old heartbeats (>= 300s) or failed | `claim_count` total file claims across all instances.
 Missing state_store returns all zeros with `absent: true`.
 
 ### ci_job_status (NEW)
@@ -107,11 +96,7 @@ Query GitHub Actions run history for a CI job: status, conclusion, duration, fla
 **Input**: `{ job_name: string, branch?: string, lookback_days?: int }` (job_name required).
 **Output**: `{ runs: [{status, conclusion, started_at, duration_s, event}...], never_executed: bool, avg_duration_s: number, failure_rate: number, flake_signal: number }`.
 **Error**: `{ error: string, runs: [] }` (structured error, no crash).
-**Design**: Spawns `gh run list` subprocess with branch and history lookback; no shell:true, with 10s timeout. Parses JSON from gh. Test mode via TEST_GH_MOCK_DATA env var for unit testing. Returns:
-  - `never_executed: true` if no runs found
-  - `failure_rate`: ratio of failures to total runs
-  - `flake_signal`: count of pass/fail alternations (alternation index)
-  - On error (gh missing/auth/network): returns structured error, never crashes
+**Design**: Spawns `gh run list` subprocess with branch and history lookback; no shell:true, with 10s timeout. Parses JSON from gh. Test mode via TEST_GH_MOCK_DATA env var for unit testing. Returns: `never_executed: true` if no runs found | `failure_rate` ratio of failures to total runs | `flake_signal` count of pass/fail alternations (alternation index) | on error (gh missing/auth/network) returns structured error, never crashes.
 
 ## Core Invariants
 
