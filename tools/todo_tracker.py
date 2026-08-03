@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """TODO/FIXME/HACK/XXX comment tracker.
+INDEX: TODO/FIXME/HACK comment tracker for codebase hygiene
 
 Scans Python, JavaScript, TypeScript, and shell files for tagged comments
 (TODO, FIXME, HACK, XXX). Extracts comment text, file path, line number,

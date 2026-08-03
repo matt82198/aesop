@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Shadow adjudication wave runner.
+INDEX: Orchestrator-swap shadow wave: replays the ground-truth adjudication corpus (driver/decisions/shadow/) through OrchestratorDriver.decide() on a challenger backend; blind (labels never reach prompts), 40-call cap, scorecard + success-bar to bench/results/; --offline FakeTransport for tests; --live builds the seat from aesop.config.json seats.orchestrator (--model/--config override; hosted seats need their api_key_env, is_local none)
 
 Replays a corpus of ground-truth-labeled adjudication decisions through
 the OrchestratorDriver seam using a configurable challenger backend

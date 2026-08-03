@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Browser proof for the QueuePanel component.
+INDEX: Playwright proof for QueuePanel (Q5 merge-queue operator): depth/batch/age/exceptions, toggle, populated/empty phases; all exit 0=proven/1=failed, `[--allow-skip]`.
 
 Drives ui/web/dist/ against fixture queue data (exceptions.jsonl + heartbeat),
 asserting the panel contract via data-testid hooks:
