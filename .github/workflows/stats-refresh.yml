@@ -14,10 +14,19 @@ permissions:
 env:
   # ONE long-lived branch, not one per day. Every run replaces its content, so
   # refreshes coalesce into a single open PR instead of accumulating an orphan
-  # branch per night (chore/stats-refresh-2026-07-30..08-02 are the fossils of
+  # branch per night (chore/stats-refresh-2026-07-30..08-03 are the fossils of
   # the date-suffixed scheme; leave them for a janitor pass).
   STATS_BRANCH: chore/stats-refresh
   FAILURE_ISSUE_TITLE: 'CI: stats-refresh workflow is failing'
+
+# NOTE ON QUOTING: tests/test_traps.py::TestCIDriftTrap lexes these files line by
+# line and rejects any non-comment line holding an odd number of double quotes.
+# It knows nothing of YAML block scalars, shell continuations or heredocs, so a
+# perfectly valid multi-line shell string still trips it. Keep every line's
+# double quotes balanced: no double-quoted string spanning lines, no backslash
+# continuation splitting one, multi-line text via unquoted heredocs, and jq
+# filters in single quotes reading titles through jq's env.* rather than nesting
+# escaped quotes.
 
 jobs:
   refresh-stats:
@@ -58,7 +67,8 @@ jobs:
           # Learn the remote tip (if any) so the push below can take a real lease.
           git fetch --no-tags origin "+refs/heads/${STATS_BRANCH}:refs/remotes/origin/${STATS_BRANCH}" || true
           # Point the branch at the freshly-regenerated main tree; -B keeps the
-          # working-tree changes made by the regenerate step above.
+          # working-tree changes made by the regenerate step above, where
+          # switching to an existing branch would abort on the dirty stats.json.
           git checkout -B "${STATS_BRANCH}"
           git add README.md stats.json
           git commit -m "chore(stats): scheduled refresh" -m "Co-Authored-By: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
@@ -67,10 +77,10 @@ jobs:
         if: steps.check.outputs.changed == 'true'
         run: |
           set -eu
-          # --force-with-lease with no remote-tracking ref is rejected as "stale
-          # info", so compute the lease explicitly: leased force when the branch
+          # --force-with-lease with no remote-tracking ref is rejected as stale
+          # info, so compute the lease explicitly: leased force when the branch
           # already exists, plain create when it does not.
-          LEASE="$(git rev-parse --verify --quiet "refs/remotes/origin/${STATS_BRANCH}" || true)"
+          LEASE=$(git rev-parse --verify --quiet "refs/remotes/origin/${STATS_BRANCH}" || true)
           if [ -n "$LEASE" ]; then
             git push --force-with-lease="refs/heads/${STATS_BRANCH}:${LEASE}" origin "HEAD:refs/heads/${STATS_BRANCH}"
           else
@@ -84,38 +94,37 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -eu
-          BODY="Automated stats refresh from the scheduled stats-refresh workflow.
+          BODY_FILE=$RUNNER_TEMP/stats-pr-body.md
+          cat > $BODY_FILE <<EOF
+          Automated stats refresh from the scheduled stats-refresh workflow.
 
           README.md and stats.json regenerated from current git state via
-          'bash scripts/verify-stats.sh --regenerate'.
+          bash scripts/verify-stats.sh --regenerate
 
-          This branch coalesces: every scheduled run force-updates ${STATS_BRANCH},
-          so there is exactly one open stats PR at a time.
+          This branch coalesces: every scheduled run force-updates
+          ${STATS_BRANCH}, so there is exactly one open stats PR at a time.
 
-          Run: ${RUN_URL}"
+          Run: ${RUN_URL}
+          EOF
 
-          PR_URL="$(gh pr list --state open --head "${STATS_BRANCH}" --json url -q '.[0].url' || true)"
+          PR_URL=$(gh pr list --state open --head "${STATS_BRANCH}" --json url -q '.[0].url' || true)
           if [ -n "$PR_URL" ]; then
-            gh pr edit "$PR_URL" --body "$BODY"
+            gh pr edit "$PR_URL" --body-file $BODY_FILE
             echo "Updated existing PR: $PR_URL"
           else
-            PR_URL="$(gh pr create \
-              --title "chore(stats): scheduled refresh" \
-              --body "$BODY" \
-              --head "${STATS_BRANCH}" \
-              --base main)"
+            PR_URL=$(gh pr create --title 'chore(stats): scheduled refresh' --body-file $BODY_FILE --head "${STATS_BRANCH}" --base main)
             echo "Created PR: $PR_URL"
           fi
 
           # Labels are cosmetic and MUST NOT be load-bearing. Passing --label to
-          # 'gh pr create' made them load-bearing: gh resolves labels BEFORE it
-          # opens the PR, so a missing 'chore' label failed the whole job and no
+          # gh pr create made them load-bearing: gh resolves labels BEFORE it
+          # opens the PR, so a missing chore label failed the whole job and no
           # PR was ever created (2026-07-30..08-02, four silent nights).
           # Attach them after the fact, best-effort.
-          gh pr edit "$PR_URL" --add-label chore || echo "note: could not add label 'chore' (non-fatal)"
+          gh pr edit "$PR_URL" --add-label chore || echo 'note: could not add label chore (non-fatal)'
           # merge-queue hands the refresh to the merge-queue advancer daemon so a
           # routine stats bump does not need a human on high-velocity days.
-          gh pr edit "$PR_URL" --add-label merge-queue || echo "note: could not add label 'merge-queue' (non-fatal)"
+          gh pr edit "$PR_URL" --add-label merge-queue || echo 'note: could not add label merge-queue (non-fatal)'
 
       # --- failure visibility -------------------------------------------------
       # Nothing watches a scheduled workflow's conclusion, so this job failed on
@@ -132,9 +141,8 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -eu
-          NUM="$(gh issue list --state open --limit 100 --json number,title \
-            -q "[.[] | select(.title == \"${FAILURE_ISSUE_TITLE}\") | .number][0]" || true)"
-          if [ -n "$NUM" ] && [ "$NUM" != "null" ]; then
+          NUM=$(gh issue list --state open --limit 100 --json number,title -q '[.[] | select(.title == env.FAILURE_ISSUE_TITLE) | .number][0]' || true)
+          if [ -n "$NUM" ] && [ "$NUM" != null ]; then
             gh issue close "$NUM" --comment "stats-refresh is green again: ${RUN_URL}"
           fi
 
@@ -145,17 +153,19 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -eu
-          NUM="$(gh issue list --state open --limit 100 --json number,title \
-            -q "[.[] | select(.title == \"${FAILURE_ISSUE_TITLE}\") | .number][0]" || true)"
-          if [ -n "$NUM" ] && [ "$NUM" != "null" ]; then
-            gh issue comment "$NUM" --body "Failed again: ${RUN_URL}"
-          else
-            gh issue create \
-              --title "${FAILURE_ISSUE_TITLE}" \
-              --body "The scheduled stats-refresh workflow failed.
+          BODY_FILE=$RUNNER_TEMP/stats-failure-issue.md
+          cat > $BODY_FILE <<EOF
+          The scheduled stats-refresh workflow failed.
 
           Until it is fixed, stats.json goes stale and the stats freshness gate
           red-lines every open PR in the repo.
 
-          Failing run: ${RUN_URL}"
+          Failing run: ${RUN_URL}
+          EOF
+
+          NUM=$(gh issue list --state open --limit 100 --json number,title -q '[.[] | select(.title == env.FAILURE_ISSUE_TITLE) | .number][0]' || true)
+          if [ -n "$NUM" ] && [ "$NUM" != null ]; then
+            gh issue comment "$NUM" --body "Failed again: ${RUN_URL}"
+          else
+            gh issue create --title "${FAILURE_ISSUE_TITLE}" --body-file $BODY_FILE
           fi
