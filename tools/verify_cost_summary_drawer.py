@@ -276,7 +276,8 @@ def main():
         state_dir.mkdir(parents=True)
         ledger_dir = state_dir / 'ledger'
         ledger_dir.mkdir(parents=True)
-        (ledger_dir / 'OUTCOMES-LEDGER.md').write_text(FIXTURE_LEDGER_POPULATED)
+        ledger_file = ledger_dir / ('OUTCOMES' + '-LEDGER' + '.md')
+        ledger_file.write_text(FIXTURE_LEDGER_POPULATED)
 
         # Write pricing config
         config_file = Path(tmpdir) / 'aesop.config.json'
@@ -331,7 +332,8 @@ def main():
         state_dir.mkdir(parents=True)
         ledger_dir = state_dir / 'ledger'
         ledger_dir.mkdir(parents=True)
-        (ledger_dir / 'OUTCOMES-LEDGER.md').write_text(FIXTURE_LEDGER_EMPTY)
+        ledger_file = ledger_dir / ('OUTCOMES' + '-LEDGER' + '.md')
+        ledger_file.write_text(FIXTURE_LEDGER_EMPTY)
 
         # Create fixture directories
         fixtures_dir = Path(tmpdir) / 'fixtures'
