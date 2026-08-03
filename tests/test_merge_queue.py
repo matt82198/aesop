@@ -77,6 +77,14 @@ class StateIsolatedTestCase(unittest.TestCase):
         self.state_root.mkdir(parents=True, exist_ok=True)
         self._prev_state_root = os.environ.get("AESOP_STATE_ROOT")
         os.environ["AESOP_STATE_ROOT"] = str(self.state_root)
+        # No unit test may shell out. `run_regenerator` is the module's only
+        # subprocess call; it is stubbed green here so build_batch tests
+        # exercise batch construction, not this repo's real generators. Tests
+        # that care about regeneration re-patch it with their own behaviour.
+        self._regen_patch = patch.object(self.module, "run_regenerator",
+                                         return_value=(True, ""))
+        self._regen_patch.start()
+        self.addCleanup(self._regen_patch.stop)
 
     def tearDown(self):
         if self._prev_state_root is None:
@@ -1493,6 +1501,44 @@ class TestGeneratedFileTolerance(StateIsolatedTestCase):
         self.assertEqual(parse('?? "sp ace.py"'), ["sp ace.py"])
         self.assertEqual(parse(""), [])
 
+    def test_status_parsing_survives_the_stripped_leading_column(self):
+        """`git()` strips output, so ' M path' arrives as 'M path'.
+
+        Regression: dirty_paths sliced line[3:], which on the stripped form ate
+        the first character of the path ('ests/CLAUDE.md'). Every registered
+        generated file then read as an unregistered edit, worktree_is_safe
+        answered 'working tree is dirty' forever, and no batch could ever be
+        built -- the 2026-08-03 board jam.
+        """
+        parse = self.module.dirty_paths
+        for stripped, raw in (("M tests/CLAUDE.md", " M tests/CLAUDE.md"),
+                              ("D gone.txt", " D gone.txt"),
+                              ("A x.py", " A x.py")):
+            self.assertEqual(parse(stripped), parse(raw))
+        self.assertEqual(parse("M tests/CLAUDE.md"), ["tests/CLAUDE.md"])
+        self.assertEqual(parse("MM tests/CLAUDE.md"), ["tests/CLAUDE.md"])
+        self.assertEqual(parse("UU conflict.py"), ["conflict.py"])
+        # A line that is not a porcelain row yields nothing, never a mis-slice.
+        self.assertEqual(parse("not a porcelain line"), [])
+
+    def test_worktree_is_safe_tolerates_a_stripped_generated_path(self):
+        """The end-to-end effect of the slice bug: a batch is buildable again."""
+        def fake_git(*args):
+            if args[0] == "rev-parse":
+                return (True, "main")
+            if args[0] == "status":
+                # Post-restore status is clean; pre-restore is the stripped form.
+                return (True, "" if fake_git.restored else "M tests/CLAUDE.md")
+            if args[0] == "restore":
+                fake_git.restored = True
+                return (True, "")
+            return (True, "")
+        fake_git.restored = False
+        with patch.object(self.module, "git", side_effect=fake_git):
+            safe, why = self.module.worktree_is_safe()
+        self.assertTrue(safe, why)
+        self.assertTrue(fake_git.restored)
+
     def test_generated_registry_is_shared_not_duplicated(self):
         """tools/generated_paths.py is the single registry; nothing re-lists."""
         registry = load_generated_paths()
@@ -1504,6 +1550,129 @@ class TestGeneratedFileTolerance(StateIsolatedTestCase):
         source = TOOL_PATH.read_text(encoding="utf-8")
         self.assertNotIn('"stash"', source)
         self.assertNotIn("'stash'", source)
+
+
+class TestBatchRegeneration(StateIsolatedTestCase):
+    """A batch's union must not fail a drift gate every member passed.
+
+    Two members can each add a test file: the suite counts in tests/CLAUDE.md
+    are right on both branches and wrong on their union, so the pre-push hook
+    fail-closes with '[DRIFT] Test suite count mismatch' and the queue stalls
+    holding a branch it can never publish. The generators run on the batch
+    branch, before the push, and only registry paths are ever committed.
+    """
+
+    def _git(self, calls, status_after_regen=""):
+        """The tree is clean at the safety check and drifts only once members
+        have been merged -- which is exactly when a batch's union diverges."""
+        state = {"merged": False}
+
+        def side_effect(*args):
+            calls.append(args)
+            if args[0] == "merge" and "--abort" not in args:
+                state["merged"] = True
+            if args[0] == "status":
+                return (True, status_after_regen if state["merged"] else "")
+            if args[0] == "rev-parse":
+                return (True, "main")
+            if args[0] == "commit":
+                state["merged"] = False  # committing cleans the tree
+            return (True, "")
+        return side_effect
+
+    def _gh(self):
+        def side_effect(*args, **kwargs):
+            if args[:2] == ("pr", "view"):
+                number = int(args[2])
+                return {"headRefOid": "sha%d" % number,
+                        "headRefName": "feat/%d" % number,
+                        "title": "pr %d" % number,
+                        "labels": [{"name": "merge-queue-batch"}]}
+            if args[:2] == ("pr", "create"):
+                return "https://github.com/o/r/pull/900"
+            return {}
+        return side_effect
+
+    def test_drifted_counts_are_regenerated_and_committed_before_push(self):
+        calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._gh()), \
+             patch.object(self.module, "git",
+                          side_effect=self._git(calls, "M tests/CLAUDE.md")), \
+             patch.object(self.module, "run_regenerator", return_value=(True, "")):
+            branch = self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertEqual(branch, "integrate/q-1700000000")
+        verbs = [c[0] for c in calls]
+        self.assertIn("commit", verbs)
+        self.assertIn("push", verbs)
+        # The regenerated file is committed BEFORE the branch is pushed.
+        self.assertLess(verbs.index("commit"), verbs.index("push"))
+        self.assertTrue(any(c[0] == "add" and "tests/CLAUDE.md" in c
+                            for c in calls), calls)
+        self.assertTrue(any("regenerated" in a for a in summary["actions"]),
+                        summary["actions"])
+
+    def test_clean_tree_after_regeneration_commits_nothing(self):
+        calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._gh()), \
+             patch.object(self.module, "git", side_effect=self._git(calls, "")), \
+             patch.object(self.module, "run_regenerator", return_value=(True, "")):
+            self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertNotIn("commit", [c[0] for c in calls])
+
+    def test_regenerator_overreach_commits_nothing(self):
+        """A generator writing an unregistered path must not be committed."""
+        calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._gh()), \
+             patch.object(self.module, "git",
+                          side_effect=self._git(calls, "M tests/CLAUDE.md\nM src/app.py")), \
+             patch.object(self.module, "run_regenerator", return_value=(True, "")):
+            self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertNotIn("commit", [c[0] for c in calls])
+        kinds = [r["kind"] for r in self.exception_rows()]
+        self.assertIn("regenerator_overreach", kinds)
+
+    def test_regenerator_failure_is_rowed_and_does_not_commit(self):
+        calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._gh()), \
+             patch.object(self.module, "git", side_effect=self._git(calls, "")), \
+             patch.object(self.module, "run_regenerator",
+                          return_value=(False, "boom")):
+            self.module.build_batch([11, 12], summary, epoch=1700000000)
+        kinds = [r["kind"] for r in self.exception_rows()]
+        self.assertIn("regenerator_failed", kinds)
+        self.assertNotIn("commit", [c[0] for c in calls])
+
+    def test_every_regenerator_exists_and_accepts_its_flags(self):
+        """Really invoke each generator: an unknown flag must not ship.
+
+        The pre-push hook's failure text advises `--regenerate`, which the tool
+        rejects with 'unrecognized arguments'. A registry naming a flag the
+        script does not accept would fail silently on every batch, so the flag
+        is proven against the real argument parser here, not assumed.
+        """
+        import subprocess
+        for argv in self.module.REGENERATORS:
+            script = TOOL_PATH.parent.parent / argv[0]
+            self.assertTrue(script.exists(), "missing generator: %s" % argv[0])
+            proc = subprocess.run(
+                [sys.executable, str(script), "--help"],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=60)
+            self.assertEqual(proc.returncode, 0, proc.stderr[:300])
+            for flag in argv[1:]:
+                self.assertIn(flag, proc.stdout,
+                              "%s does not accept %s" % (argv[0], flag))
+
+    def test_run_regenerator_uses_sys_executable_with_encoding(self):
+        source = TOOL_PATH.read_text(encoding="utf-8")
+        marker = source.split("def run_regenerator", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("sys.executable", marker)
+        self.assertIn('encoding="utf-8"', marker)
+        self.assertIn("timeout=", marker)
 
 
 class TestForbiddenOperations(unittest.TestCase):
