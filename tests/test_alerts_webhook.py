@@ -408,5 +408,78 @@ class DiscordPayloadTests(AlertsWebhookFixtureCase):
             self.assertTrue(has_content)
 
 
+class HeartbeatFacadeTests(AlertsWebhookFixtureCase):
+    """The orchestrator heartbeat must be read through the StateAPI read facade.
+
+    Regression guard for the stateapi_lint ratchet: this tool must never open
+    .orchestrator-heartbeat directly, and must honour the facade's fail-closed
+    contract (missing/unreadable heartbeat => stalled).
+    """
+
+    def test_heartbeat_read_goes_through_read_api_facade(self):
+        """read_heartbeat_stalled delegates to ReadAPI.check_heartbeat_fresh."""
+        fake_api = MagicMock()
+        fake_api.check_heartbeat_fresh.return_value = True
+
+        with patch.object(alerts_webhook, "ReadAPI", return_value=fake_api) as ctor:
+            stalled = alerts_webhook.read_heartbeat_stalled(self.state_dir, 300)
+
+        self.assertFalse(stalled)  # fresh => not stalled
+        ctor.assert_called_once_with(self.state_dir)
+        fake_api.check_heartbeat_fresh.assert_called_once_with(
+            alerts_webhook.ORCHESTRATOR_HEARTBEAT, 300
+        )
+
+    def test_fresh_heartbeat_reports_active(self):
+        """A recent heartbeat reports as active, not stalled."""
+        self.write_heartbeat(age_seconds=10)
+        self.assertFalse(alerts_webhook.read_heartbeat_stalled(self.state_dir, 300))
+
+    def test_stale_heartbeat_reports_stalled(self):
+        """A heartbeat past the threshold reports as stalled."""
+        self.write_heartbeat(age_seconds=400)
+        self.assertTrue(alerts_webhook.read_heartbeat_stalled(self.state_dir, 300))
+
+    def test_missing_heartbeat_is_fail_closed_stalled(self):
+        """Missing heartbeat is stalled (facade contract), not silently 'active'."""
+        # No heartbeat written.
+        self.assertTrue(alerts_webhook.read_heartbeat_stalled(self.state_dir, 300))
+
+        payload = alerts_webhook.compose_payload({"style": "slack"}, self.state_dir)
+        self.assertIn("stalled", json.dumps(payload).lower())
+
+    def test_facade_unavailable_reports_unknown_and_still_composes(self):
+        """Without the facade the status is unknown; the tool still fails open."""
+        with patch.object(alerts_webhook, "ReadAPI", None):
+            self.assertIsNone(alerts_webhook.read_heartbeat_stalled(self.state_dir, 300))
+
+            slack = alerts_webhook.compose_payload({"style": "slack"}, self.state_dir)
+            discord = alerts_webhook.compose_payload({"style": "discord"}, self.state_dir)
+
+        self.assertIn("unknown", json.dumps(slack).lower())
+        self.assertIn("unknown", json.dumps(discord).lower())
+
+    def test_facade_error_reports_unknown_not_crash(self):
+        """A facade exception degrades to unknown rather than crashing the alert."""
+        with patch.object(alerts_webhook, "ReadAPI", side_effect=RuntimeError("boom")):
+            self.assertIsNone(alerts_webhook.read_heartbeat_stalled(self.state_dir, 300))
+
+    def test_no_direct_heartbeat_open_in_source(self):
+        """The tool source must not open the heartbeat file itself."""
+        source = Path(alerts_webhook.__file__).read_text(encoding="utf-8")
+        for line in source.split("\n"):
+            stripped = line.strip()
+            if "orchestrator-heartbeat" not in stripped:
+                continue
+            # The only permitted occurrence is the identifier handed to the facade.
+            self.assertTrue(
+                stripped.startswith("ORCHESTRATOR_HEARTBEAT =")
+                or stripped.startswith("#"),
+                f"Unexpected heartbeat path usage: {stripped}",
+            )
+            self.assertNotIn("open(", stripped)
+            self.assertNotIn("read_text", stripped)
+
+
 if __name__ == "__main__":
     unittest.main()

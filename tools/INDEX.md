@@ -8,7 +8,7 @@ listed by adding an `INDEX: <one-liner>` line to its module docstring/header.
 - `agent-forensics.sh` -- Incident forensics; behavior reconstruction (read-only git plumbing)
 - `agent_prompt_hygiene.py` -- Gate detecting forbidden patterns in agent/dispatch prompts
 - `alert_bridge.py` -- Slack/Discord webhook bridge for SECURITY-ALERTS
-- `alerts_webhook.py` -- Stateless fleet status webhook (heartbeat/merge-queue/exceptions to Slack/Discord); CLI: `[--config PATH] [--dry-run]`; fail-open on missing config/network errors
+- `alerts_webhook.py` -- Stateless fleet status webhook (heartbeat/merge-queue/exceptions to Slack/Discord); reads orchestrator heartbeat freshness through the state_store.read_api ReadAPI facade (never opens the heartbeat file directly); CLI: `[--config PATH] [--dry-run]`; fail-open on missing config/network errors
 - `audit_report.py` -- Deterministic markdown audit report aggregator (defect_escape, mutation results, lint/drift findings, ledger verdict rates); --out/--strict/--json inputs from machine outputs only
 - `auto_merge.py` -- Batch PR merge tool (fix-by-default: merge main into broken branches + merge green PRs; `--no-fix`/`--loop`/`--dry-run`/`--json`/`--wait`); uses subprocess_common.py for timeouts + encoding; MERGED-state verification gate at lines 101-105; run with `--loop` to continuously merge all green PRs; use merge_train.py for one-shot serial CI-gated queues
 - `bash_guard_check.py` -- BASH_SOURCE exec guard validator for shell scripts; detects missing guards in scripts with functions + top-level commands

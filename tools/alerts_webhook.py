@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-INDEX: Stateless fleet status webhook (heartbeat/merge-queue/exceptions to Slack/Discord); CLI: `[--config PATH] [--dry-run]`; fail-open on missing config/network errors
+INDEX: Stateless fleet status webhook (heartbeat/merge-queue/exceptions to Slack/Discord); reads orchestrator heartbeat freshness through the state_store.read_api ReadAPI facade (never opens the heartbeat file directly); CLI: `[--config PATH] [--dry-run]`; fail-open on missing config/network errors
 Aesop Alerts Webhook — Stateless Slack/Discord webhook for fleet status.
 
 One-shot tool: reads on-disk signals (heartbeats, merge-queue, exceptions),
@@ -19,29 +19,47 @@ Modes:
 
 Behavior:
 - Reads on-disk signals only: heartbeats, merge-queue/state.json, exceptions.jsonl
+- Orchestrator heartbeat freshness comes from the sanctioned StateAPI read facade
+  (state_store.read_api.ReadAPI.check_heartbeat_fresh), never a direct file open.
+  The facade is fail-closed by contract: a missing or unreadable heartbeat reports
+  as stalled. If the facade cannot be imported, heartbeat status reports "unknown"
+  and the tool still sends the rest of the payload (fail-open).
 - Skips gh commands silently if unavailable (never credential-hunt)
 - Composes Slack blocks or Discord embeds
 - POSTs with 10s timeout; network errors warn and exit 0
 - --dry-run prints payload JSON to stdout, never POSTs
 - No config or webhook_url = exit 0 with skip line to stderr
 
-Stdlib-only (json, urllib, pathlib, time, sys, subprocess, os).
+Stdlib-only (json, urllib, pathlib, sys, subprocess, os) plus the state_store read facade.
 """
 
 import json
 import os
 import sys
-import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 import subprocess
 
+# Repo root on sys.path so the state_store package resolves when this tool is
+# loaded by file path (tools/ on sys.path) as well as via `python tools/...`.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+try:
+    from state_store.read_api import ReadAPI
+except Exception:  # pragma: no cover - facade unavailable in stripped installs
+    ReadAPI = None
+
 # Encoding: UTF-8 (all file I/O and network)
 DEFAULT_ENCODING = "utf-8"
 DEFAULT_TIMEOUT_S = 10
 DEFAULT_HEARTBEAT_THRESHOLD_S = 300
+
+# Heartbeat identifier passed TO the read facade (the facade owns the file access).
+ORCHESTRATOR_HEARTBEAT = ".orchestrator-heartbeat"
 
 
 # ==============================================================================
@@ -86,18 +104,30 @@ def get_state_root(config):
 # ==============================================================================
 
 
-def read_heartbeat_age(state_dir):
-    """Read orchestrator heartbeat age in seconds, or None if missing."""
-    hb_file = state_dir / ".orchestrator-heartbeat"
-    if not hb_file.exists():
+def read_heartbeat_stalled(state_dir, threshold_s=DEFAULT_HEARTBEAT_THRESHOLD_S):
+    """Report orchestrator heartbeat staleness via the StateAPI read facade.
+
+    The heartbeat file is never opened here; the read goes through
+    state_store.read_api.ReadAPI.check_heartbeat_fresh, which owns the file
+    access and the staleness contract (missing/unreadable/clock-skewed => stale).
+
+    Args:
+        state_dir: Path to the state directory.
+        threshold_s: Age in seconds at or beyond which the heartbeat is stalled.
+
+    Returns:
+        True  if the orchestrator heartbeat is stalled (or missing),
+        False if it is fresh,
+        None  if the read facade is unavailable (status unknown; fail-open).
+    """
+    if ReadAPI is None:
         return None
 
     try:
-        timestamp_str = hb_file.read_text(encoding=DEFAULT_ENCODING).strip()
-        timestamp = float(timestamp_str)
-        age = time.time() - timestamp
-        return max(0, age)
+        api = ReadAPI(state_dir)
+        return not api.check_heartbeat_fresh(ORCHESTRATOR_HEARTBEAT, threshold_s)
     except Exception:
+        # Facade error: report unknown rather than crashing the alert path.
         return None
 
 
@@ -165,32 +195,31 @@ def compose_payload(alerts_config, state_dir):
     """Compose status payload for Slack or Discord."""
     state_dir = Path(state_dir)
 
-    # Read signals
-    hb_age = read_heartbeat_age(state_dir)
+    # Staleness threshold drives the facade query
+    threshold = alerts_config.get(
+        "heartbeat_stall_threshold_s", DEFAULT_HEARTBEAT_THRESHOLD_S
+    )
+
+    # Read signals (heartbeat via the StateAPI facade; True/False/None)
+    stalled = read_heartbeat_stalled(state_dir, threshold)
     exceptions = read_exceptions_tail(state_dir)
     queue_state = read_merge_queue_state(state_dir)
     open_prs = count_open_prs_gh()
 
-    # Determine staleness warning
-    threshold = alerts_config.get(
-        "heartbeat_stall_threshold_s", DEFAULT_HEARTBEAT_THRESHOLD_S
-    )
-    stalled = hb_age is not None and hb_age > threshold
-
     # Payload format
     style = alerts_config.get("style", "slack").lower()
     if style == "discord":
-        return compose_discord_payload(
-            hb_age, stalled, exceptions, queue_state, open_prs
-        )
+        return compose_discord_payload(stalled, exceptions, queue_state, open_prs)
     else:
-        return compose_slack_payload(
-            hb_age, stalled, exceptions, queue_state, open_prs
-        )
+        return compose_slack_payload(stalled, exceptions, queue_state, open_prs)
 
 
-def compose_slack_payload(hb_age, stalled, exceptions, queue_state, open_prs):
-    """Compose Slack message with blocks."""
+def compose_slack_payload(stalled, exceptions, queue_state, open_prs):
+    """Compose Slack message with blocks.
+
+    Args:
+        stalled: True (heartbeat stalled/missing), False (fresh), or None (unknown).
+    """
     blocks = []
 
     # Header
@@ -207,10 +236,12 @@ def compose_slack_payload(hb_age, stalled, exceptions, queue_state, open_prs):
 
     # Main status section
     status_text = "Fleet Status Report\n"
-    if stalled:
-        status_text += f"⚠️ Orchestrator stalled (heartbeat age: {int(hb_age)}s)\n"
+    if stalled is None:
+        status_text += "? Orchestrator heartbeat unknown (state read facade unavailable)\n"
+    elif stalled:
+        status_text += "⚠️ Orchestrator stalled (heartbeat stale or missing)\n"
     else:
-        status_text += f"✓ Orchestrator active (heartbeat age: {int(hb_age) if hb_age else 'unknown'}s)\n"
+        status_text += "✓ Orchestrator active (heartbeat fresh)\n"
 
     if exceptions:
         status_text += f"⚠️ Recent exceptions: {len(exceptions)}\n"
@@ -251,17 +282,29 @@ def compose_slack_payload(hb_age, stalled, exceptions, queue_state, open_prs):
     return {"blocks": blocks}
 
 
-def compose_discord_payload(hb_age, stalled, exceptions, queue_state, open_prs):
-    """Compose Discord message with embeds."""
+def compose_discord_payload(stalled, exceptions, queue_state, open_prs):
+    """Compose Discord message with embeds.
+
+    Args:
+        stalled: True (heartbeat stalled/missing), False (fresh), or None (unknown).
+    """
     embeds = []
 
-    # Status embed
-    color = 16711680 if stalled else 65280  # Red if stalled, green otherwise
-    status_text = ""
-    if stalled:
-        status_text += f"⚠️ Orchestrator stalled (age: {int(hb_age)}s)\n"
+    # Status embed: red if stalled, grey if unknown, green if fresh
+    if stalled is None:
+        color = 9807270
+    elif stalled:
+        color = 16711680
     else:
-        status_text += f"✓ Orchestrator active (age: {int(hb_age) if hb_age else '?'}s)\n"
+        color = 65280
+
+    status_text = ""
+    if stalled is None:
+        status_text += "? Orchestrator heartbeat unknown (state read facade unavailable)\n"
+    elif stalled:
+        status_text += "⚠️ Orchestrator stalled (heartbeat stale or missing)\n"
+    else:
+        status_text += "✓ Orchestrator active (heartbeat fresh)\n"
 
     if exceptions:
         status_text += f"Exceptions: {len(exceptions)} recent\n"
