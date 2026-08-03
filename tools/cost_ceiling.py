@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Cost ceiling guard — trips tools/halt.py's kill switch when fleet spend
+INDEX: Cost-ceiling checker; trips HALT kill-switch on token limits exceeded
 (tokens) meets or exceeds a configured ceiling.
 
 Why: wave-26 critique — autonomy expanded to self-merging portfolio PRs on

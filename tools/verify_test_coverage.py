@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Guardrail G2: CI gate that verifies all on-disk test files are run by some CI job.
+INDEX: Guardrail G2: CI gate that verifies all on-disk test files are run by some CI job (prevents fake-green: test files existing but never executed). Discovers: Python (git ls-files tests/test_*.py), Node (tests/*.test.mjs via npm test:node glob), Shell (explicit bash commands in package.json test:sh), Playwright (testMatch pattern in playwright.config.ts). CLI: `--check` (exit 1 if orphans found; CI gate) | `--fix` (suggest how to add orphans) | `--help`; hermetic, stdlib-only; exit 0=all covered, 1=orphans found, 2=error
 
 This tool prevents the "fake-green" bug class: test files that exist on disk but no
 CI job/script runs them, making tests appear to pass when they never execute.

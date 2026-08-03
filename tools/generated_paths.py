@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Registry of repo paths whose content is MACHINE-GENERATED.
+INDEX: The single home for BOTH generated-path registries, which answer different questions and must not be conflated. (1) `REGISTRY` + `is_generated(path) -> dict | None` + the `--list`/`--check` CLI: fully machine-generated files with exactly one legitimate writer (`state/ledger/*.jsonl`, `tools/INDEX.md`, `tests/SUITE-COUNTS.md`); `hooks/pre-push-policy.sh check_generated_paths()` rejects a push that hand-edits one, and `AESOP_ALLOW_GENERATED=1` is the DESIGNED writer path (generator / merge-train regeneration / daemon push), not a weakening. Matching is lexical segment-wise fnmatch, so a path may be declared before its generator lands. (2) `GENERATED_PATHS` + `generated_paths()`: the narrower AUTOMATION-RESTORABLE tuple (`tests/CLAUDE.md`, `tools/CLAUDE.md`) -- documents a committed gate rewrites deterministically, so unattended automation (`merge_queue.worktree_is_safe`, `regenerate_on_batch`) may `git restore` them individually BY NAME, never `git stash` and never a blanket checkout. These files carry hand-authored prose as well as generated lines, so they are deliberately NOT in `REGISTRY`: editing them is legitimate and must never be blocked at push.
 
 A generated file has exactly one legitimate writer: its generator. When a human
 or an agent hand-edits one, two things go wrong at once -- the edit is silently
@@ -9,7 +10,24 @@ module is the single declared list of those paths, plus the gate that keeps them
 out of ordinary pushes.
 
 API:
-    is_generated(path) -> dict | None   the matching registry entry, or None
+    is_generated(path) -> dict | None   the matching REGISTRY entry, or None
+    GENERATED_PATHS / generated_paths() the automation-restorable tuple (below)
+
+TWO REGISTRIES, TWO QUESTIONS -- do not conflate them:
+
+  REGISTRY / is_generated()  "is this file fully machine-written?"
+      Every byte comes from a generator, so a hand edit is both lost on the next
+      regeneration and a guaranteed conflict with every concurrent lane. The
+      pre-push gate REJECTS a push that touches one of these.
+
+  GENERATED_PATHS / generated_paths()  "may unattended automation `git restore`
+      this file if it turns up dirty?"
+      A broader, weaker property. These documents are partly hand-authored prose
+      and partly gate-rewritten lines (the suite-count lines in tests/CLAUDE.md,
+      the normalisation claudemd_lint.py applies), so a dirty copy in a shared
+      worktree carries no information a human put there and merge_queue may
+      restore it BY NAME. Editing them is legitimate, so they are NOT in
+      REGISTRY and are never blocked at push.
 
 CLI:
     generated_paths.py --list [--json]        show the registry
@@ -61,6 +79,35 @@ REGISTRY: List[Dict[str, str]] = [
         "why": "generated SUITE-COUNTS marker block (test suite counts by family)",
     },
 ]
+
+# ---------------------------------------------------------------------------
+# The automation-restorable registry (the SECOND question -- see module docstring).
+# ---------------------------------------------------------------------------
+# Ordered, ASCII, repo-root-relative POSIX paths. Membership -- all three hold:
+#   1. A committed tool in this repo rewrites the file deterministically
+#      (`tools/verify_test_suite_count.py` rewrites the `**<Lang> (N suites):**`
+#      count lines; `tools/claudemd_lint.py` normalises the same documents).
+#   2. The rewrite is reproducible: re-running the gate restores the same bytes,
+#      so discarding the working-tree copy loses nothing recoverable.
+#   3. The file is TRACKED. An untracked file is never restorable and is never
+#      treated as generated, no matter its path.
+# Consumers must restore these individually and by name (`git restore -- <path>`).
+# `git stash` is forbidden repo-wide: the stash stack is shared across worktrees,
+# so a stash in one lane silently eats another lane's work in progress. A blanket
+# `git checkout .` is equally forbidden -- it is not targeted.
+GENERATED_PATHS = (
+    "tests/CLAUDE.md",
+    "tools/CLAUDE.md",
+)
+
+
+def generated_paths() -> tuple:
+    """The automation-restorable registry as an immutable tuple.
+
+    Callers must not mutate it. This is NOT the machine-generated REGISTRY the
+    pre-push gate enforces; see the module docstring for the distinction.
+    """
+    return GENERATED_PATHS
 
 
 def normalize(path: str) -> str:

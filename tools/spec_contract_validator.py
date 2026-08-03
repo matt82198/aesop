@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 tools.spec_contract_validator -- Guardrail G4: spec-contract validator for agent dispatch calls.
+INDEX: Guardrail G4: AST-scans agent-dispatch call sites (`agent(`/`Agent(`/`Task(`/`subagent_type=`/`agentType=`) in driver/*.py, monitor/*.py, tools/*.py for forbidden bypass flags (admin/auto/force/no-verify), credential-hunting + env-var allowlist violations, missing isolation marker on file-writing prompts, and advisory role-routing (unknown specialist types); `# contract-ok` inline comment suppresses a call site; CLI: `--check` (default) | `--json` | `--paths DIR_OR_FILE...` | `--root PATH`; stdlib only, ASCII output; exit 0=clean/1=findings/2=error
 
 AST-scans Python source for agent-dispatch call sites -- calls named `agent(...)` /
 `Agent(...)` / `Task(...)`, or any call carrying a `subagent_type=`/`agentType=` keyword

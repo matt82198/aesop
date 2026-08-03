@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Typed JSON list-union merge driver for ratchet/baseline files.
+INDEX: Typed JSON list-union git merge driver for `*-baseline.json` ratchets (registered in `.gitattributes` as `merge=aesop-json-union`); signature `ANCESTOR OURS THEIRS` = git's `%O %A %B`, result written to `%A`; merges a bare string array OR an object holding exactly one string array (`{"violations": [...]}`), result = `sorted(set(ours) | set(theirs))` — which IS the ancestor-deletion rule (dropped by BOTH sides stays deleted, by ONE side stays kept); count-map baselines and every parse/shape failure exit 1 so git falls back to a normal conflict; `--stdout`/`--quiet`; exit 0=merged/1=refused/2=usage. ONE-TIME PER CLONE (see docs/INSTALL.md): `git config merge.aesop-json-union.name "union-and-sort JSON string lists"` and `git config merge.aesop-json-union.driver "python tools/json_list_merge.py %O %A %B"`
 
 Kills the "two lanes both appended to the same ratchet file" conflict class.
 Callable two ways with the SAME positional signature:
