@@ -2,21 +2,46 @@
 """
 Verify test suite counts in tests/CLAUDE.md match actual test files on disk.
 
-Eliminates treadmill drift via auto-correction: --check derives counts at runtime,
-auto-updates stale literals in place (no failure), and exits 0. Real invariant
-violations (missing sections) still exit 1. Cannot-evaluate errors exit 2.
+Read-only validation vs. regeneration are strictly separated:
 
-Supports two modes:
-- --check (default): Verify counts match; auto-correct drift (exit 0 if OK after auto-correction,
-  exit 1 if sections missing, exit 2 if cannot evaluate)
-- --fix: Explicitly rewrite counts in tests/CLAUDE.md to match actual files (rarely needed)
+- --check (default) / --strict: READ-ONLY validation. Never writes anything.
+  Verifies the three suite-count label lines are present exactly once each, that
+  their counts parse as integers, and that they match the counts derived from
+  `git ls-files`. Any mismatch is a FAILURE with a "run --regenerate" hint.
+- --regenerate (alias: --fix) [--dry-run]: the ONLY writing mode. Rewrites the
+  documented counts in tests/CLAUDE.md to match the files on disk, in the
+  canonical `**<Label> (N suites)**:` form, one line per label.
+
+Count-line scanning is deliberately hardened against format-variant evasion:
+
+- Line-anchored and tolerant of spacing and colon placement, so `**Python (N
+  suites)** :` and `**Python (N suites):**` are recognized as count lines and
+  cannot slip past the exactly-one assertion.
+- Labels must be exactly `Node`/`Shell`/`Python` in ASCII. A count-line-shaped
+  line carrying a look-alike label (e.g. a Cyrillic `o`) is reported as MALFORMED
+  rather than being silently invisible.
+- Fenced code blocks (``` / ~~~) and HTML comments are masked out before matching,
+  so a documented format example is never a duplicate AND never satisfies the
+  exactly-one requirement on its own. The writing mode rewrites only the real
+  line, never a fenced example.
+
+--strict is currently an exact alias for --check; it exists so CI can be wired to
+a main-only strict invocation later without changing the tool's contract again.
+
+Exit codes:
+    0  counts match (check) / regeneration succeeded
+    1  drift, missing label line, duplicated label line, or usage conflict
+    2  cannot evaluate (file missing, unparseable count, or a vacuous zero-file
+       derivation while CLAUDE.md documents non-zero counts -- fail-closed)
 
 Usage:
     python tools/verify_test_suite_count.py --check [--repo ROOT]
-    python tools/verify_test_suite_count.py --fix [--dry-run] [--repo ROOT]
+    python tools/verify_test_suite_count.py --strict [--repo ROOT]
+    python tools/verify_test_suite_count.py --regenerate [--dry-run] [--repo ROOT]
 
-Modes are mutually exclusive; if neither is specified, defaults to --check.
-Idempotent: running --check twice or --fix twice produces identical results.
+Read-only and writing modes are mutually exclusive; if neither is specified,
+defaults to --check. Idempotent: running --regenerate twice produces identical
+results, and --check never changes the tree at all.
 """
 
 import argparse
@@ -39,6 +64,89 @@ if sys.stderr.encoding and 'utf' not in sys.stderr.encoding.lower():
         sys.stderr.reconfigure(encoding='utf-8', errors='replace')
     except (AttributeError, TypeError):
         pass
+
+
+# The three suite labels, in validation/reporting order. ASCII only, deliberately:
+# a label containing a Unicode homoglyph must be reported as MALFORMED rather than
+# silently skipped (the U+043E Cyrillic-o evasion).
+LABELS = ("Node", "Shell", "Python")
+
+# Canonical count line, e.g. `**Python (227 suites)**:`
+CANONICAL_TEMPLATE = "**{label} ({count} suites)**:"
+
+# Tolerant count-line matcher. Anchored to the start of a line, and accepting the
+# two colon placements seen in the wild (`...**:` and `...:**`) plus incidental
+# whitespace, so a format variant is still recognized as a count line instead of
+# slipping past the exactly-one assertion.
+COUNT_LINE_RE = re.compile(
+    r"(?m)^[ \t]*"
+    r"(?P<core>\*\*\s*(?P<label>" + "|".join(LABELS) + r")\s*"
+    r"\(\s*(?P<count>\d+)\s+suites?\s*\)\s*"
+    r"(?:\*\*\s*:|:\s*\*\*))"
+)
+
+# Loose matcher used only to flag lines that LOOK like count lines but whose label
+# is not one of the exact ASCII labels above (homoglyphs, typos, renamed sections).
+SUSPECT_LINE_RE = re.compile(
+    r"(?m)^[ \t]*\*\*\s*(?P<label>[^(*\n]+?)\s*\(\s*\d+\s+suites?\s*\)\s*(?:\*\*\s*:|:\s*\*\*)"
+)
+
+# Regions that are documentation ABOUT count lines, not count lines themselves.
+FENCE_RE = re.compile(r"(?ms)^[ \t]*(?P<fence>```|~~~).*?^[ \t]*(?P=fence)[ \t]*$")
+HTML_COMMENT_RE = re.compile(r"(?s)<!--.*?-->")
+
+REGENERATE_HINT = "Run: python tools/verify_test_suite_count.py --regenerate"
+
+
+def mask_non_content(content: str) -> str:
+    """Blank out fenced code blocks and HTML comments, preserving every offset.
+
+    Masked characters become spaces (newlines kept) so match spans found against
+    the masked text address the identical positions in the original text. This
+    makes fenced format examples and commented-out lines invisible to the scanner
+    in BOTH directions: they never count as duplicates, and they can never satisfy
+    the exactly-one requirement on their own.
+    """
+    chars = list(content)
+
+    for regex in (FENCE_RE, HTML_COMMENT_RE):
+        for match in regex.finditer(content):
+            for i in range(match.start(), match.end()):
+                if chars[i] != "\n":
+                    chars[i] = " "
+
+    return "".join(chars)
+
+
+def find_count_lines(content: str):
+    """Return {label: [match, ...]} for real (unmasked) count lines.
+
+    Match spans are valid against the ORIGINAL content string.
+    """
+    masked = mask_non_content(content)
+    found = {label: [] for label in LABELS}
+    for match in COUNT_LINE_RE.finditer(masked):
+        found[match.group("label")].append(match)
+    return found
+
+
+def find_suspect_labels(content: str):
+    """Return count-line-shaped lines whose label is not an exact ASCII label."""
+    masked = mask_non_content(content)
+    suspects = []
+    for match in SUSPECT_LINE_RE.finditer(masked):
+        label = match.group("label").strip()
+        if label not in LABELS:
+            suspects.append(label)
+    return suspects
+
+
+class StructureError(Exception):
+    """A tests/CLAUDE.md structural problem, carrying the process exit code."""
+
+    def __init__(self, message: str, code: int = 1):
+        super().__init__(message)
+        self.code = code
 
 
 def count_git_files(*patterns: str) -> int:
@@ -75,223 +183,187 @@ def get_actual_counts(repo_root: Path) -> Tuple[int, int, int]:
     return node_count, shell_count, python_count
 
 
-def get_documented_counts(claudemd_path: Path) -> Tuple[int, int, int]:
-    """Extract documented counts from tests/CLAUDE.md.
+def validate_structure(content: str):
+    """Validate structure and return {label: match} for the single real count line each.
 
-    Returns: (node_count, shell_count, python_count) or raises ValueError if not found.
+    Fail-closed on a count-line-shaped line with a non-ASCII/unknown label
+    (MALFORMED), on a missing OR duplicated count line for any suite type
+    (exactly-one assertion), and on a count literal that will not parse.
+
+    Raises:
+        StructureError: code 1 for malformed/missing/duplicated lines, code 2 for
+            unparseable count literals.
     """
-    content = claudemd_path.read_text(encoding="utf-8")
-
-    # Match "**<Type> (N suites?)**:" patterns
-    node_match = re.search(r"\*\*Node \((\d+) suites?\)\*\*:", content)
-    shell_match = re.search(r"\*\*Shell \((\d+) suites?\)\*\*:", content)
-    python_match = re.search(r"\*\*Python \((\d+) suites?\)\*\*:", content)
-
-    if not (node_match and shell_match and python_match):
-        raise ValueError(
-            "Could not find one or more test suite count lines in tests/CLAUDE.md. "
-            "Expected: **Node (N suites)**: **Shell (N suites)**: **Python (N suites):**"
+    suspects = find_suspect_labels(content)
+    if suspects:
+        rendered = ", ".join(repr(s) for s in sorted(set(suspects)))
+        raise StructureError(
+            f"[FAIL] MALFORMED suite count line(s) in tests/CLAUDE.md: unrecognized "
+            f"label(s) {rendered}. Labels must be exactly one of "
+            f"{', '.join(LABELS)} (ASCII); a look-alike character makes the count "
+            f"line invisible to this gate. Expected: "
+            f"{CANONICAL_TEMPLATE.format(label='Python', count='N')}",
+            1,
         )
 
-    return (
-        int(node_match.group(1)),
-        int(shell_match.group(1)),
-        int(python_match.group(1)),
-    )
+    found = find_count_lines(content)
+    resolved = {}
+
+    for label in LABELS:
+        matches = found[label]
+
+        if len(matches) == 0:
+            raise StructureError(
+                f"[FAIL] Missing {label} test suite section in tests/CLAUDE.md. "
+                f"Expected: {CANONICAL_TEMPLATE.format(label=label, count='N')} "
+                "(count lines inside a ``` fence or an HTML comment do not count)",
+                1,
+            )
+        if len(matches) > 1:
+            raise StructureError(
+                f"[FAIL] Found {len(matches)} duplicated "
+                f"{CANONICAL_TEMPLATE.format(label=label, count='N')} "
+                "count lines in tests/CLAUDE.md. Only one is allowed.",
+                1,
+            )
+
+        try:
+            int(matches[0].group("count"))
+        except ValueError:
+            raise StructureError(
+                f"[ERROR] {label} suite count in tests/CLAUDE.md is not a parseable "
+                f"integer: {matches[0].group('count')!r}",
+                2,
+            )
+
+        resolved[label] = matches[0]
+
+    return resolved
+
+
+def extract_documented_counts(content: str) -> Tuple[int, int, int]:
+    """Validate structure and return the documented (node, shell, python) counts."""
+    resolved = validate_structure(content)
+    return tuple(int(resolved[label].group("count")) for label in LABELS)
+
+
+def assert_evaluable(documented: Tuple[int, int, int], actual: Tuple[int, int, int]) -> None:
+    """Fail-closed on a vacuous zero-file derivation (git broken / not a repo).
+
+    Raises:
+        StructureError: code 2 when git reports zero files everywhere while
+            CLAUDE.md documents non-zero counts.
+    """
+    if actual == (0, 0, 0) and documented != (0, 0, 0):
+        raise StructureError(
+            "[ERROR] Cannot evaluate: git ls-files returned zero files, but CLAUDE.md "
+            "documents non-zero counts. This indicates a git configuration problem or "
+            "the tool is running outside a git repository.",
+            2,
+        )
 
 
 def check_mode(claudemd_path: Path) -> int:
-    """Verify counts match. Auto-correct stale literals (no failure for treadmill drift).
-
-    Exit 0 if counts match (or were auto-corrected).
-    Exit 1 only if documented sections are missing or duplicated (real invariant broken).
-    Exit 2 if cannot evaluate (git error, zero files found with non-zero documented).
-
-    This eliminates the treadmill: each branch auto-corrects locally before push,
-    so parallel branches never conflict on stale numbers.
+    """READ-ONLY validation of tests/CLAUDE.md suite counts. Never writes.
 
     Args:
         claudemd_path: Path to tests/CLAUDE.md
 
     Returns:
-        0 if counts match (or auto-corrected), 1 if invariant broken, 2 if error
+        0 if counts match, 1 if drift / missing / duplicated count lines,
+        2 if the state cannot be evaluated.
     """
+    content = claudemd_path.read_text(encoding="utf-8")
+
     try:
-        # Verify the documented sections exist (the real invariant)
-        content = claudemd_path.read_text(encoding="utf-8")
-
-        # Check for exactly-one occurrence of each suite-type count line (fail-closed on duplicates)
-        node_matches = re.findall(r"\*\*Node \((\d+) suites?\)\*\*:", content)
-        shell_matches = re.findall(r"\*\*Shell \((\d+) suites?\)\*\*:", content)
-        python_matches = re.findall(r"\*\*Python \((\d+) suites?\)\*\*:", content)
-
-        # Fail-closed: detect missing or duplicated lines
-        if len(node_matches) == 0:
-            print(
-                "[FAIL] Missing Node test suite section in tests/CLAUDE.md. "
-                "Expected: **Node (N suites):**",
-                file=sys.stderr,
-            )
-            return 1
-        if len(node_matches) > 1:
-            print(
-                f"[FAIL] Found {len(node_matches)} duplicated **Node (N suites):** count lines in tests/CLAUDE.md. "
-                "Only one is allowed.",
-                file=sys.stderr,
-            )
-            return 1
-
-        if len(shell_matches) == 0:
-            print(
-                "[FAIL] Missing Shell test suite section in tests/CLAUDE.md. "
-                "Expected: **Shell (N suites):**",
-                file=sys.stderr,
-            )
-            return 1
-        if len(shell_matches) > 1:
-            print(
-                f"[FAIL] Found {len(shell_matches)} duplicated **Shell (N suites):** count lines in tests/CLAUDE.md. "
-                "Only one is allowed.",
-                file=sys.stderr,
-            )
-            return 1
-
-        if len(python_matches) == 0:
-            print(
-                "[FAIL] Missing Python test suite section in tests/CLAUDE.md. "
-                "Expected: **Python (N suites):**",
-                file=sys.stderr,
-            )
-            return 1
-        if len(python_matches) > 1:
-            print(
-                f"[FAIL] Found {len(python_matches)} duplicated **Python (N suites):** count lines in tests/CLAUDE.md. "
-                "Only one is allowed.",
-                file=sys.stderr,
-            )
-            return 1
-
-        # Get documented counts from findall results (guaranteed exactly-one match each)
-        documented = (
-            int(node_matches[0]),
-            int(shell_matches[0]),
-            int(python_matches[0]),
-        )
-
-        # Get actual counts from disk
+        documented = extract_documented_counts(content)
         actual = get_actual_counts(claudemd_path.parent.parent)
+        assert_evaluable(documented, actual)
+    except StructureError as e:
+        print(str(e), file=sys.stderr)
+        return e.code
 
-        # Cannot-evaluate case: zero files found but documentation expects counts
-        if actual == (0, 0, 0) and documented != (0, 0, 0):
-            print(
-                "[ERROR] Cannot evaluate: git ls-files returned zero files, but CLAUDE.md "
-                "documents non-zero counts. This indicates a git configuration problem or "
-                "the tool is running outside a git repository.",
-                file=sys.stderr,
-            )
-            return 2
-
-        if documented == actual:
-            print("[OK] Test suite counts match")
-            return 0
-
-        # Counts mismatch: auto-correct by rewriting CLAUDE.md
-        doc_node, doc_shell, doc_python = documented
-        act_node, act_shell, act_python = actual
-
-        print("[AUTO-CORRECT] Test suite count drift detected (treadmill auto-corrected):")
-        if doc_node != act_node:
-            print(f"  Node: {doc_node} -> {act_node}")
-        if doc_shell != act_shell:
-            print(f"  Shell: {doc_shell} -> {act_shell}")
-        if doc_python != act_python:
-            print(f"  Python: {doc_python} -> {act_python}")
-
-        # Rewrite the counts in place
-        updated = re.sub(
-            r"\*\*Node \(\d+ suites?\)\*\*:",
-            f"**Node ({act_node} suites)**:",
-            content,
-        )
-        updated = re.sub(
-            r"\*\*Shell \(\d+ suites?\)\*\*:",
-            f"**Shell ({act_shell} suites)**:",
-            updated,
-        )
-        updated = re.sub(
-            r"\*\*Python \(\d+ suites?\)\*\*:",
-            f"**Python ({act_python} suites)**:",
-            updated,
-        )
-
-        claudemd_path.write_text(updated, encoding="utf-8")
-        print("[AUTO-CORRECT] Updated tests/CLAUDE.md and continuing (--check passes)")
+    if documented == actual:
+        print("[OK] Test suite counts match")
         return 0
 
-    except ValueError as e:
-        print(f"[ERROR] {e}", file=sys.stderr)
-        return 2
+    doc_node, doc_shell, doc_python = documented
+    act_node, act_shell, act_python = actual
+
+    print("[DRIFT] Test suite count mismatch in tests/CLAUDE.md:")
+    if doc_node != act_node:
+        print(f"  Node: CLAUDE.md says {doc_node}, actual is {act_node}")
+    if doc_shell != act_shell:
+        print(f"  Shell: CLAUDE.md says {doc_shell}, actual is {act_shell}")
+    if doc_python != act_python:
+        print(f"  Python: CLAUDE.md says {doc_python}, actual is {act_python}")
+    print("")
+    print(REGENERATE_HINT)
+    print("Then commit the updated tests/CLAUDE.md with your change.")
+    return 1
 
 
-def fix_mode(claudemd_path: Path, dry_run: bool = False) -> int:
-    """Auto-rewrite counts in tests/CLAUDE.md to match actual files.
+def regenerate_mode(claudemd_path: Path, dry_run: bool = False) -> int:
+    """Rewrite counts in tests/CLAUDE.md to match actual files. The only writing mode.
 
     Args:
         claudemd_path: Path to tests/CLAUDE.md
         dry_run: If True, show what would change but don't write
 
     Returns:
-        0 if successful (or dry_run shows what would change), 1 on error
+        0 if successful (or dry_run shows what would change), 1 on structural
+        error, 2 if the state cannot be evaluated.
     """
+    content = claudemd_path.read_text(encoding="utf-8")
+
     try:
+        # Same exactly-one assertion as --check: a structurally invalid document is
+        # never rewritten, so this path can no longer launder a duplicated count
+        # line into a file the gate would reject.
+        resolved = validate_structure(content)
+        documented = tuple(int(resolved[label].group("count")) for label in LABELS)
         actual = get_actual_counts(claudemd_path.parent.parent)
-        act_node, act_shell, act_python = actual
+        # Never zero out a real document because git could not be read.
+        assert_evaluable(documented, actual)
+    except StructureError as e:
+        print(str(e), file=sys.stderr)
+        return e.code
 
-        content = claudemd_path.read_text(encoding="utf-8")
-        original_content = content
+    by_label = dict(zip(LABELS, actual))
 
-        # Rewrite count patterns
-        content = re.sub(
-            r"\*\*Node \(\d+ suites?\)\*\*:",
-            f"**Node ({act_node} suites)**:",
-            content,
-        )
-        content = re.sub(
-            r"\*\*Shell \(\d+ suites?\)\*\*:",
-            f"**Shell ({act_shell} suites)**:",
-            content,
-        )
-        content = re.sub(
-            r"\*\*Python \(\d+ suites?\)\*\*:",
-            f"**Python ({act_python} suites)**:",
-            content,
-        )
+    # Rewrite exactly the one real count line per label, by span, in reverse order
+    # so earlier offsets stay valid. Fenced examples and commented-out lines were
+    # masked out of the scan and are therefore never touched.
+    updated = content
+    for match in sorted(resolved.values(), key=lambda m: m.start("core"), reverse=True):
+        label = match.group("label")
+        replacement = CANONICAL_TEMPLATE.format(label=label, count=by_label[label])
+        start, end = match.span("core")
+        updated = updated[:start] + replacement + updated[end:]
 
-        if content == original_content:
-            print("[OK] Counts already match, no changes needed")
-            return 0
-
-        if dry_run:
-            print(f"[DRY-RUN] Would update counts:")
-            print(f"  Node: {re.search(r'Node \((\d+)', original_content).group(1)} → {act_node}")
-            print(f"  Shell: {re.search(r'Shell \((\d+)', original_content).group(1)} → {act_shell}")
-            print(f"  Python: {re.search(r'Python \((\d+)', original_content).group(1)} → {act_python}")
-            print()
-            print("Run without --dry-run to apply changes.")
-            return 0
-
-        # Write the updated content
-        claudemd_path.write_text(content, encoding="utf-8")
-
-        doc_node, doc_shell, doc_python = get_documented_counts(claudemd_path)
-        print(f"[FIXED] Updated tests/CLAUDE.md:")
-        print(f"  Node: {doc_node} suites")
-        print(f"  Shell: {doc_shell} suites")
-        print(f"  Python: {doc_python} suites")
+    if updated == content:
+        print("[OK] Counts already match, no changes needed")
         return 0
-    except ValueError as e:
-        print(f"[ERROR] {e}", file=sys.stderr)
-        return 1
+
+    doc_node, doc_shell, doc_python = documented
+    act_node, act_shell, act_python = actual
+
+    if dry_run:
+        print("[DRY-RUN] Would update counts:")
+        print(f"  Node: {doc_node} -> {act_node}")
+        print(f"  Shell: {doc_shell} -> {act_shell}")
+        print(f"  Python: {doc_python} -> {act_python}")
+        print("")
+        print("Run without --dry-run to apply changes.")
+        return 0
+
+    claudemd_path.write_text(updated, encoding="utf-8")
+
+    print("[REGENERATED] Updated tests/CLAUDE.md:")
+    print(f"  Node: {act_node} suites")
+    print(f"  Shell: {act_shell} suites")
+    print(f"  Python: {act_python} suites")
+    return 0
 
 
 def main():
@@ -304,17 +376,27 @@ def main():
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Verify counts match, auto-correct drift (treadmill fix); default if neither specified",
+        help="Read-only: verify counts match; exit 1 on drift. Never writes. Default mode.",
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Alias for --check (reserved for future main-only CI wiring)",
+    )
+    parser.add_argument(
+        "--regenerate",
+        action="store_true",
+        help="Rewrite counts in tests/CLAUDE.md to match actual files (the only writing mode)",
     )
     parser.add_argument(
         "--fix",
         action="store_true",
-        help="Auto-rewrite counts to match actual files",
+        help="Deprecated alias for --regenerate",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="With --fix: show what would change but don't write (implies --fix)",
+        help="With --regenerate: show what would change but don't write (implies --regenerate)",
     )
     parser.add_argument(
         "--claudemd",
@@ -331,18 +413,25 @@ def main():
 
     args = parser.parse_args()
 
+    read_only = args.check or args.strict
+    write = args.regenerate or args.fix
+
     # Validate mutually exclusive modes
-    if args.check and args.fix:
-        print("[ERROR] --check and --fix are mutually exclusive", file=sys.stderr)
+    if read_only and write:
+        print(
+            "[ERROR] read-only mode (--check/--strict) and writing mode "
+            "(--regenerate/--fix) are mutually exclusive",
+            file=sys.stderr,
+        )
         return 1
 
-    # --dry-run implies --fix
-    if args.dry_run and not args.fix:
-        args.fix = True
+    # --dry-run implies the writing mode
+    if args.dry_run and not write:
+        write = True
 
-    # Default to --check if neither specified
-    if not args.check and not args.fix:
-        args.check = True
+    # Default to read-only if neither specified
+    if not read_only and not write:
+        read_only = True
 
     # Determine repo root
     repo_root = args.repo or Path.cwd()
@@ -359,10 +448,9 @@ def main():
         return 2
 
     # Run the selected mode
-    if args.check:
+    if read_only:
         return check_mode(claudemd_path)
-    else:
-        return fix_mode(claudemd_path, dry_run=args.dry_run)
+    return regenerate_mode(claudemd_path, dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

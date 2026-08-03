@@ -22,6 +22,8 @@ Run: `npm run test:py` or `python -m unittest discover -s tests`
 
 **Live suite inventory**: Run `python tools/list_test_suites.py` for a detailed grouped listing with first-line summaries.
 
+**Counts are gate-verified, never auto-corrected**: `python tools/verify_test_suite_count.py --check` is READ-ONLY — it fails the pre-push hook and CI when the counts above drift, and it never rewrites this file. When your lane adds or removes a test suite, run `python tools/verify_test_suite_count.py --regenerate` and commit the updated counts in the same PR.
+
 ### Phase 2 AgentDriver Codex Tests (test_codex_driver_e2e.py)
 - **Offline tests** (all run in CI, no OPENAI_API_KEY needed):
   - Happy path: FakeTransport returns valid schema → file written, ok=True, tokens_spent tracked.
