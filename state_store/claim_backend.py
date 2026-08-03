@@ -149,6 +149,12 @@ class LocalLeaseBackend(ClaimBackend):
 def get_backend(db_path: str, config: Optional[dict] = None) -> Optional[ClaimBackend]:
     """Get a ClaimBackend instance based on config.
 
+    Low-level selector over an already-parsed config dict. The WIRED seam is
+    ``tools.multibox_config.build_backend``, which additionally applies
+    env > config > default precedence, runs the hard startup preflight, and can
+    return the shared-filesystem ``FsClaimLog``. Use that from anything that
+    starts up; this stays for callers that already hold a settings dict.
+
     Args:
         db_path: path to SQLite database file
         config: configuration dict with multibox.enabled key

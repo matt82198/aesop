@@ -236,6 +236,14 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/verify_ui_trio_redaction_proof.py
 
+      # Multibox no-double-grant proof. Also FALSIFIABLE: the same harness with
+      # visibility delay > settle MUST double-grant, so a green here means the
+      # settle window is load-bearing rather than that the harness never
+      # contended. Hermetic (tempdirs, seeded, no network), ~3s.
+      - name: Multibox claim-log proof (no double grant + falsifiability)
+        if: matrix.python-shard == 0
+        run: python tools/verify_multibox.py --check
+
       - name: Secret scan
         if: matrix.python-shard == 0
         run: python tools/secret_scan.py .

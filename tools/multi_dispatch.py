@@ -9,10 +9,18 @@ Coordinates dispatch work across multiple instances by:
 Ensures no two instances work on the same files simultaneously (fail-closed:
 if we cannot claim files or release them, we do not proceed).
 
-When multibox.enabled=False (default): uses legacy advisory claim_files path
-(instance_projection), which has TOCTOU window but maintains backward compatibility.
+The multibox block is resolved by tools.multibox_config.build_backend
+(precedence: env > aesop.config.json > default).
 
-When multibox.enabled=True: uses atomic ClaimBackend.claim() to fix TOCTOU race.
+When multibox.enabled=False (default): uses legacy advisory claim_files path
+(instance_projection), which has TOCTOU window but maintains backward
+compatibility. No multibox module is imported and no probe runs.
+
+When multibox.enabled=True: the HARD startup preflight runs first and refuses
+to proceed unless the event-store DB is on local storage and the share's
+measured visibility delay and clock skew are inside the configured bounds.
+Only then does dispatch use atomic ClaimBackend.claim() to fix the TOCTOU race.
+A refused preflight exits 1 with the documented mount remedies -- fail-closed.
 
 Exit codes:
   0 = dispatch succeeded
@@ -32,8 +40,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from state_store import StateAPI
-from state_store.claim_backend import ClaimConflict, get_backend
+from state_store.claim_backend import ClaimConflict
 from state_store.identity import get_instance_id
+from tools.multibox_config import (
+    MultiboxConfigError,
+    MultiboxPreflightRefused,
+    build_backend,
+)
 from state_store.instance_projection import (
     claim_files,
     release_files,
@@ -106,7 +119,10 @@ def main():
         print(f"error: failed to open database: {e}", file=sys.stderr)
         return 1
 
-    # Load config for multibox flag
+    # Load config for the multibox block. An explicitly named config that
+    # cannot be read is fail-closed: silently continuing on the advisory path
+    # would be exactly the "flag looked on, coordination was off" failure the
+    # hard gate exists to prevent.
     config = {}
     if args.config:
         try:
@@ -115,9 +131,20 @@ def main():
             with open(args.config, encoding="utf-8") as f:
                 config = json.load(f)
         except Exception as e:
-            print(f"warning: failed to load config: {e}", file=sys.stderr)
+            print(f"error: failed to load config {args.config}: {e}",
+                  file=sys.stderr)
+            return 1
 
-    backend = get_backend(args.db, config)
+    # build_backend parses the multibox block (env > config > default) and, when
+    # multibox is enabled, runs the HARD startup preflight before handing back a
+    # backend. At the shipped default it returns None without importing or
+    # touching anything, so the legacy advisory path below is byte-for-byte
+    # unchanged.
+    try:
+        backend = build_backend(args.db, config, repo_root=str(ROOT))
+    except (MultiboxConfigError, MultiboxPreflightRefused) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
     lease_id = None
 
     try:
