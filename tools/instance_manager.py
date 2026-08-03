@@ -1,4 +1,5 @@
 """tools.instance_manager — Multi-instance orchestration manager.
+INDEX: Multi-instance coordination CLI (register/heartbeat/list/claim/release/status); respects AESOP_STATE_ROOT env var for db path; --json flag for JSON output on all subcommands; validates status response is dict (exit 2 on contract violation)
 
 High-level CLI wrapper around state_store.instance_projection for instance
 registration, discovery, heartbeat, and file claim coordination.

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Wave History Summarizer — per-wave summaries from event store.
+INDEX: Wave history CLI for per-wave event store analysis (guardrail G1): closes items whose linked PRs merged or whose ownsFiles shipped on main; CLI: `[--check | --dry-run]`; exit 0=all resolved, 1=items still open; timezone-aware UTC timestamps
 
 Reads the event-sourced state store to produce per-wave summaries showing:
 - Wave start/end timestamps

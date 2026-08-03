@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Log rotation utility: archive oldest log lines when exceeding size/line thresholds.
+INDEX: Log rotation utility (size/line thresholds). Reads and rewrites the live log in BINARY, so the byte extent it consumed is exact and line endings are never silently translated. External O_APPEND writers (the shell daemons' `>>` / `tee -a`) do not take the advisory lock, so appends past that extent are detected by size comparison, read back at their byte offset, and folded into the retained content; the check repeats up to `PRESERVE_ATTEMPTS` until the size stops moving and the last one runs immediately before the truncate. Detecting appends by diffing LINE counts is wrong (an unterminated final line swallows the append) and leaving a full file re-read between the check and the truncate is what produced the observed `250 != 260` data loss — do not reintroduce either. The race is narrowed, not closed: an append between the final size check and the truncate is still lost, and only writer-side locking can fix that
 
 Rotates log files by moving the oldest content to an archive file when the original
 exceeds configured thresholds (--max-lines or --max-bytes). Preserves newest lines

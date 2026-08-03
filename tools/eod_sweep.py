@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 eod_sweep.py — End-of-day safety check for repository health.
+INDEX: End-of-day safety check (dirty trees, unpushed commits); verdict appended to BUILDLOG.md via state_store WriteAPI (--buildlog filename must be BUILDLOG.md, fail-closed)
 
 Verifies git repositories are safe (no data loss risk):
 - Working tree clean/dirty

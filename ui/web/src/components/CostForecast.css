@@ -1,0 +1,172 @@
+.cost-forecast {
+  padding: 16px;
+  border-radius: 6px;
+  background: var(--color-surface-secondary);
+  border: 1px solid var(--color-border);
+}
+
+.cost-forecast h4 {
+  margin: 0 0 12px 0;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.forecast-chart {
+  width: 100%;
+  max-width: 400px;
+  height: 200px;
+  margin-bottom: 16px;
+}
+
+.forecast-chart .trend-line {
+  stroke: var(--color-accent);
+  stroke-width: 2;
+  fill: none;
+}
+
+.forecast-chart .projected-point {
+  fill: var(--color-accent);
+  stroke: var(--color-background);
+  stroke-width: 2;
+}
+
+.forecast-chart .confidence-band-70 {
+  stroke: var(--color-warning);
+  stroke-width: 1.5;
+  stroke-dasharray: 4, 2;
+  fill: none;
+  opacity: 0.6;
+}
+
+.forecast-chart .confidence-band-90 {
+  stroke: var(--color-alert);
+  stroke-width: 1.5;
+  stroke-dasharray: 4, 2;
+  fill: none;
+  opacity: 0.5;
+}
+
+.forecast-chart .ceiling-line {
+  stroke: var(--color-critical);
+  stroke-width: 2;
+  stroke-dasharray: 8, 3;
+  fill: none;
+}
+
+.forecast-chart .grid-line {
+  stroke: var(--color-border);
+  stroke-width: 0.5;
+  opacity: 0.3;
+}
+
+.forecast-chart .axis {
+  stroke: var(--color-text-secondary);
+  stroke-width: 1;
+}
+
+.forecast-chart .axis-label {
+  font-size: 0.75rem;
+  fill: var(--color-text-secondary);
+}
+
+.forecast-metrics {
+  padding: 12px;
+  background: var(--color-surface-tertiary);
+  border-radius: 4px;
+  font-size: 0.9rem;
+  margin-bottom: 12px;
+}
+
+.metric-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  margin-bottom: 4px;
+}
+
+.metric-row:last-of-type {
+  margin-bottom: 0;
+}
+
+.metric-label {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+
+.metric-value {
+  color: var(--color-text-primary);
+  font-family: monospace;
+  font-weight: 600;
+}
+
+.metric-value.alert {
+  color: var(--color-critical);
+  font-weight: 700;
+}
+
+.metric-row.alert {
+  background: var(--color-alert-subtle);
+  padding: 8px;
+  border-radius: 3px;
+  margin: 8px 0;
+}
+
+.metric-row.alert .metric-label {
+  color: var(--color-critical);
+}
+
+.metric-row.safe {
+  background: var(--color-success-subtle);
+  padding: 8px;
+  border-radius: 3px;
+  margin: 8px 0;
+}
+
+.metric-row.safe .metric-label {
+  color: var(--color-success);
+}
+
+.forecast-note {
+  font-size: 0.8rem;
+  color: var(--color-text-tertiary);
+  margin: 8px 0 0 0;
+  line-height: 1.4;
+}
+
+.forecast-unavailable {
+  padding: 12px;
+  background: var(--color-surface-tertiary);
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+  font-size: 0.9rem;
+}
+
+.forecast-unavailable p {
+  margin: 0;
+}
+
+.forecast-callout {
+  padding: 8px 12px;
+  background: var(--color-info-subtle);
+  border-left: 3px solid var(--color-info);
+  border-radius: 2px;
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+}
+
+.forecast-callout p {
+  margin: 0;
+}
+
+/* Dark mode overrides */
+@media (prefers-color-scheme: dark) {
+  .cost-forecast {
+    background: var(--color-surface-secondary);
+  }
+
+  .forecast-metrics {
+    background: var(--color-surface-tertiary);
+  }
+}
