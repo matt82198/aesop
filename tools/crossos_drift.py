@@ -180,9 +180,17 @@ def classify_job(job: Dict) -> Tuple[str, Optional[str]]:
 def job_conclusion(job: Dict) -> str:
     """Extract job conclusion as PASS or FAIL or PENDING.
 
-    Return "PASS" if status=COMPLETED and conclusion=SUCCESS.
-    Return "FAIL" if any failure-like conclusion.
-    Return "PENDING" if not yet complete.
+    Return "PENDING" only while the job has not COMPLETED.
+    Return "PASS" for the non-blocking conclusions (SUCCESS/NEUTRAL/SKIPPED).
+    Return "FAIL" for every other conclusion of a COMPLETED job.
+
+    Fails CLOSED on unknown conclusions. A COMPLETED job whose conclusion is
+    outside the green list -- FAILURE, TIMED_OUT, CANCELLED, ACTION_REQUIRED,
+    STALE, GitHub's STARTUP_FAILURE, an empty conclusion, or any token GitHub
+    adds later -- counts as a failure. It must never fall through to PENDING:
+    PENDING is excluded from the pass-rate denominators in main(), so an
+    unrecognized outcome would silently vanish from drift measurement instead
+    of counting against it.
     """
     status = job.get("status", "").upper()
     conclusion = job.get("conclusion", "").upper()
@@ -192,10 +200,8 @@ def job_conclusion(job: Dict) -> str:
 
     if conclusion in ("SUCCESS", "NEUTRAL", "SKIPPED"):
         return "PASS"
-    elif conclusion in ("FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STALE"):
-        return "FAIL"
 
-    return "PENDING"
+    return "FAIL"
 
 
 def analyze_run(run_id: str) -> Tuple[Optional[str], Optional[str]]:

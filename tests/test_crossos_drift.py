@@ -294,5 +294,51 @@ class TestCrossOsDrift(unittest.TestCase):
         # Tool should work with subprocess, json, argparse from stdlib
 
 
+class TestJobConclusionFailsClosed(unittest.TestCase):
+    """Regression: a COMPLETED job with an unrecognized conclusion is a FAILURE.
+
+    Fail-open repro (GAP5): job_conclusion() used to fall through to "PENDING"
+    for any conclusion outside its hardcoded lists. PENDING is dropped from the
+    pass-rate denominators (analyze_run / main), so an unknown conclusion --
+    including GitHub's real `startup_failure` -- silently vanished from drift
+    measurement instead of counting against it.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        tool_path = Path(__file__).parent.parent / "tools" / "crossos_drift.py"
+        spec = importlib.util.spec_from_file_location("crossos_drift", tool_path)
+        cls.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.module)
+
+    def test_startup_failure_conclusion_is_fail(self):
+        job = {"status": "completed", "conclusion": "startup_failure"}
+        self.assertEqual(self.module.job_conclusion(job), "FAIL")
+
+    def test_unknown_future_conclusion_is_fail(self):
+        job = {"status": "completed", "conclusion": "some_new_github_token"}
+        self.assertEqual(self.module.job_conclusion(job), "FAIL")
+
+    def test_missing_conclusion_on_completed_job_is_fail(self):
+        job = {"status": "completed"}
+        self.assertEqual(self.module.job_conclusion(job), "FAIL")
+
+    def test_known_green_conclusions_still_pass(self):
+        for conclusion in ("success", "neutral", "skipped"):
+            job = {"status": "completed", "conclusion": conclusion}
+            self.assertEqual(self.module.job_conclusion(job), "PASS", conclusion)
+
+    def test_known_red_conclusions_still_fail(self):
+        for conclusion in ("failure", "timed_out", "cancelled", "action_required", "stale"):
+            job = {"status": "completed", "conclusion": conclusion}
+            self.assertEqual(self.module.job_conclusion(job), "FAIL", conclusion)
+
+    def test_incomplete_job_is_still_pending(self):
+        for status in ("queued", "in_progress", "waiting"):
+            job = {"status": status, "conclusion": ""}
+            self.assertEqual(self.module.job_conclusion(job), "PENDING", status)
+
+
 if __name__ == "__main__":
     unittest.main()
