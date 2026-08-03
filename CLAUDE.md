@@ -31,7 +31,12 @@ No RED run is missed; deduplication prevents redundant queue entries (keys on ru
 - **docs/** — Architecture guides, tutorials, setup — read docs/
 - **assets/** — Logo, branding, media
 - **state/** — Runtime durable checkpoints (git-ignored)
+- **examples/** — Reference implementations and adopter walkthrough kits — read examples/first-wave-baseline/README.md
 - **scripts/** — Repo maintenance wrappers (stats verification) — see § scripts/ below
+
+## examples/
+
+Adopter reference implementations and verified baseline walkthroughs. Artifacts here demonstrate the aesop product end-to-end: canonical wave cycles, manifest schema compliance, and realistic onboarding flows. **Invariants:** (1) All manifests validate against `tools/wave_templates.py` schema; (2) No personal paths, secrets, or invented CLI flags; (3) All claimed commands must be verifiable from `bin/cli.js --help` or repo tools; (4) README files include honest timing, cost, and prerequisites.
 
 ## scripts/
 

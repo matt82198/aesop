@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -942,6 +943,208 @@ class TestMultiboxStalenessSummary(_FailoverFixture):
         self.assertEqual(
             multibox_staleness_summary(now=1000.0)["stale_threshold_seconds"], 300.0
         )
+
+
+# ---------------------------------------------------------------------------
+# Prior-epoch reclamation: Inc 5 falls back to TTL expiry
+# ---------------------------------------------------------------------------
+
+def _unguarded_release_own_stale_callers(sources: dict) -> list:
+    """Names in ``{name: source}`` that CALL ``release_own_stale`` unguarded.
+
+    Pure, so it can be falsified against synthetic source (below) rather than only
+    run over the tree. "Guarded" means the calling module also names
+    ``NotImplementedError`` -- the stub raises it, and a caller that does not
+    handle it will die on startup. A ``def``/``import`` line is not a call.
+    """
+    call = re.compile(r"(?<![\w.])release_own_stale\s*\(")
+    unguarded = []
+    for name, source in sources.items():
+        calls = [
+            line for line in source.splitlines()
+            if call.search(line) and not line.lstrip().startswith(("def ", "async def "))
+        ]
+        if calls and "NotImplementedError" not in source:
+            unguarded.append(name)
+    return sorted(unguarded)
+
+
+class TestUnguardedCallDetector(unittest.TestCase):
+    """The detector above, falsified both ways.
+
+    Without these cells the tree scan that follows would be a vacuous green: a
+    detector that finds nothing is indistinguishable from a tree with nothing in it.
+    """
+
+    def test_a_bare_call_is_detected(self):
+        source = "def start(root, sid, prior):\n    return release_own_stale(root, sid, prior)\n"
+        self.assertEqual(_unguarded_release_own_stale_callers({"m": source}), ["m"])
+
+    def test_a_call_that_falls_back_to_ttl_is_not_detected(self):
+        source = (
+            "def start(root, sid, prior):\n"
+            "    try:\n"
+            "        reclaimed = release_own_stale(root, sid, prior)\n"
+            "    except NotImplementedError:\n"
+            "        log('no proactive reclamation; prior claims expire on TTL')\n"
+            "        reclaimed = False\n"
+            "    return reclaimed\n"
+        )
+        self.assertEqual(_unguarded_release_own_stale_callers({"m": source}), [])
+
+    def test_the_definition_line_is_not_a_call(self):
+        source = "def release_own_stale(state_root, stable_id, prior_epochs):\n    return True\n"
+        self.assertEqual(_unguarded_release_own_stale_callers({"m": source}), [])
+
+
+class TestPriorEpochReclamationFallsBackToTtl(_FailoverFixture):
+    """Inc 5 does NOT proactively reclaim a prior incarnation's claims.
+
+    ``identity.release_own_stale`` is a stub. It used to return an unconditional
+    ``True`` while doing nothing -- worse than absent, because a caller believed
+    reclamation had happened -- and now raises ``NotImplementedError`` instead
+    (PR #754). Inc 5's reclamation mechanism is, and stays, TTL expiry at fold
+    time (``fold_fs_claims`` expires at ``ttl + max_skew``), so every Inc 5 path
+    must behave identically under BOTH shapes and under an absent symbol.
+
+    These cells pin that: startup completes, a prior epoch's holdings are released
+    by their TTL and not before, and nothing anywhere reports that reclamation ran.
+    """
+
+    #: Every shape ``release_own_stale`` can present. ``None`` = symbol absent.
+    RECLAIM_STUBS = {
+        "raises NotImplementedError (PR #754)": "raise",
+        "returns False": False,
+        "returns the old misleading True": True,
+        "absent from the module": None,
+    }
+
+    def install_stub(self, shape):
+        """Swap ``identity.release_own_stale`` for ``shape``, restored on cleanup."""
+        import state_store.identity as identity
+
+        sentinel = object()
+        original = getattr(identity, "release_own_stale", sentinel)
+
+        def restore():
+            if original is sentinel:
+                if hasattr(identity, "release_own_stale"):
+                    delattr(identity, "release_own_stale")
+            else:
+                identity.release_own_stale = original
+
+        self.addCleanup(restore)
+
+        if shape is None:
+            if hasattr(identity, "release_own_stale"):
+                delattr(identity, "release_own_stale")
+            return
+
+        def stub(*_args, **_kwargs):
+            if shape == "raise":
+                raise NotImplementedError(
+                    "release_own_stale is not implemented: prior-epoch claim "
+                    "reclamation requires the Inc 5 lease-backend coordination."
+                )
+            return shape
+
+        identity.release_own_stale = stub
+
+    def test_no_inc5_module_calls_release_own_stale_unguarded(self):
+        """A future call site must handle the raise, or this goes red.
+
+        identity.py is skipped: it DEFINES the function (and, post-#754, raises).
+        """
+        package = Path(_REPO_ROOT) / "state_store"
+        sources = {
+            path.name: path.read_text(encoding="utf-8")
+            for path in sorted(package.glob("*.py"))
+            if path.name != "identity.py"
+        }
+        self.assertTrue(sources, "state_store package sources not found")
+        self.assertIn("failover.py", sources)
+        self.assertEqual(_unguarded_release_own_stale_callers(sources), [])
+
+    def test_startup_completes_under_every_stub_shape(self):
+        """Election, takeover, fencing and the summary all run regardless."""
+        for label, shape in self.RECLAIM_STUBS.items():
+            with self.subTest(release_own_stale=label):
+                self.install_stub(shape)
+                self.clock = _Clock(1000.0)
+                claims = str(Path(self.temp_dir.name) / label.replace(" ", "_")[:20])
+                prior = FsClaimLog(
+                    claims, clock=self.clock, settle_seconds=0.0, max_skew_seconds=0.0,
+                    case_policy="insensitive", epoch=1,
+                )
+                self.backends.append(prior)
+                self.assertEqual(
+                    elect_primary(prior, instance_id="box-1", epoch=1, ttl_seconds=30.0),
+                    ("box-1", 1),
+                )
+
+                self.clock.advance(100)  # box-1 crashed; its lock lapsed on TTL
+                restarted = FsClaimLog(
+                    claims, clock=self.clock, settle_seconds=0.0, max_skew_seconds=0.0,
+                    case_policy="insensitive", epoch=2,
+                )
+                self.backends.append(restarted)
+                state = elect_primary_state(
+                    restarted, instance_id="box-1", epoch=2, ttl_seconds=30.0
+                )
+                self.assertEqual((state.instance_id, state.holder_generation), ("box-1", 2))
+                self.assertEqual(state.epoch, 2)
+                # And the observability surface still renders.
+                summary = multibox_staleness_summary(backend=restarted)
+                self.assertEqual(summary["primary"]["instance_id"], "box-1")
+                self.assertEqual(summary["generation"], 2)
+
+    def test_prior_epoch_lock_is_not_actively_reclaimed_before_its_ttl(self):
+        """The falsifiable half: before the TTL, the restart gets NOTHING.
+
+        If proactive reclamation were happening, the restarted incarnation would
+        take the lock immediately at generation 2. It does not: the prior epoch's
+        record is still live, so the fold keeps reporting epoch 1 / generation 1.
+        """
+        self.install_stub("raise")
+        prior = self.make_backend(epoch=1)
+        elect_primary(prior, instance_id="box-1", epoch=1, ttl_seconds=30.0)
+
+        self.clock.advance(10)  # crash + restart well inside the TTL
+        restarted = self.make_backend(epoch=2)
+        state = elect_primary_state(
+            restarted, instance_id="box-1", epoch=2, ttl_seconds=30.0
+        )
+        self.assertEqual(state.holder_generation, 1)
+        self.assertEqual(state.epoch, 1, "prior incarnation still holds the lock")
+
+        self.clock.advance(100)  # ... and only the TTL frees it
+        after = elect_primary_state(
+            restarted, instance_id="box-1", epoch=2, ttl_seconds=30.0
+        )
+        self.assertEqual((after.holder_generation, after.epoch), (2, 2))
+
+    def test_prior_epoch_file_claims_are_released_by_ttl_not_by_reclamation(self):
+        """Same story for ordinary file claims, which is the case that matters."""
+        self.install_stub("raise")
+        prior = self.make_backend(epoch=1)
+        prior.claim(["src/alpha.py"], "box-1", 30.0)
+
+        restarted = self.make_backend(epoch=2)
+        with self.assertRaises(ClaimConflict):
+            restarted.claim(["src/alpha.py"], "box-1", 30.0)
+
+        self.clock.advance(100)  # TTL expiry -- the fallback, and the only path
+        lease = restarted.claim(["src/alpha.py"], "box-1", 30.0)
+        self.assertIsNotNone(lease)
+
+    def test_nothing_reports_that_reclamation_happened(self):
+        """No Inc 5 surface may claim a prior epoch was actively released."""
+        self.install_stub("raise")
+        backend = self.make_backend(epoch=2)
+        elect_primary(backend, instance_id="box-1", epoch=2, ttl_seconds=30.0)
+        summary = multibox_staleness_summary(backend=backend)
+        self.assertNotIn("reclaimed", json.dumps(summary))
+        self.assertNotIn("released", json.dumps(summary))
 
 
 class TestPrimaryStateDataclass(unittest.TestCase):

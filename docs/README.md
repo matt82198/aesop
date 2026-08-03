@@ -25,7 +25,7 @@ If you're new to Aesop, follow this 4-stage path:
 - Environment variables
 
 ### Stage 3: First Wave
-**[FIRST-WAVE.md](FIRST-WAVE.md)** — Run `/power` then `/buildsystem` end-to-end
+**[FIRST-WAVE.md](FIRST-WAVE.md)** — Run `/power` then `/buildsystem` end-to-end; see **[examples/first-wave-baseline/](../examples/first-wave-baseline/)** for a verified 5-item replay kit you can fork
 
 - What to expect from each phase (rank → dispatch → verify → close)
 - Monitoring (dashboard, TUI, logs)
@@ -93,6 +93,9 @@ Once you've completed the adopter journey, use these for operational reference:
 
 ### Design Philosophy
 - **[WHY-CRASH-ONLY.md](WHY-CRASH-ONLY.md)** — Crash-only vs. distributed consensus for agent fleets: why crash-only fits LLM workers, measured recovery lift (67.8% → 77.2%), MTTR 0.0s–0.5s across fault classes, when it works and when it breaks
+
+### System Design: Distributed Coordination
+- **[design/MULTIBOX-DESIGN.md](design/MULTIBOX-DESIGN.md)** — Lease-by-append coordination over shared filesystems (NFS/SMB): the WAL-over-network verdict, settle-window protocol, fencing with monotonic generation, and the Phase 0.5 MVP roadmap (Increments 0–7)
 
 ### Dispatch & Cost
 - **[DISPATCH-MODEL.md](DISPATCH-MODEL.md)** — Haiku-first subagent dispatch, cost analysis, patterns (fan-out, sequential, hierarchical)

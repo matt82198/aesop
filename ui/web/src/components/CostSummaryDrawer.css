@@ -1,0 +1,245 @@
+/**
+ * CostSummaryDrawer styles — persistent collapsible drawer on right edge.
+ * Collapsed: ~40px toggle rail. Expanded: ~180px with metrics.
+ * Responsive, theme-aware, keyboard-accessible.
+ */
+
+.cost-summary-drawer {
+  position: fixed;
+  right: 0;
+  top: 60px; /* Below HealthHeader */
+  bottom: 0;
+  display: flex;
+  flex-direction: row;
+  background: var(--color-bg-secondary);
+  border-left: 1px solid var(--color-border);
+  z-index: 999;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-sm);
+}
+
+/* Toggle button (always visible) */
+.cost-summary-drawer__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  min-width: 40px;
+  background: var(--color-bg-tertiary);
+  border: none;
+  border-left: 1px solid var(--color-border);
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-md);
+  font-weight: bold;
+  padding: 0;
+  transition: color 0.2s ease, background-color 0.2s ease;
+  flex-shrink: 0;
+}
+
+.cost-summary-drawer__toggle:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}
+
+.cost-summary-drawer__toggle:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+
+.cost-summary-drawer__toggle-icon {
+  display: block;
+  line-height: 1;
+}
+
+/* Panel (collapsible) */
+.cost-summary-drawer__panel {
+  flex: 1;
+  min-width: 160px;
+  max-width: 200px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--spacing-md);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s ease, visibility 0.3s ease;
+  pointer-events: none;
+  background: var(--color-bg-secondary);
+}
+
+.cost-summary-drawer--expanded .cost-summary-drawer__panel {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+/* Metrics layout */
+.cost-summary__metric {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-md);
+  padding-bottom: var(--spacing-md);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.cost-summary__metric:last-of-type {
+  border-bottom: none;
+}
+
+.cost-summary__metric-label {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-text-secondary);
+}
+
+.cost-summary__metric-value {
+  font-size: var(--font-size-lg);
+  font-weight: 700;
+  color: var(--color-text-primary);
+  font-family: var(--font-family-mono);
+  word-break: break-word;
+}
+
+/* State messages (loading, error, empty) */
+.cost-summary__state {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  padding: var(--spacing-sm);
+  text-align: center;
+}
+
+.cost-summary__state--error {
+  color: var(--color-error);
+}
+
+.cost-summary__label {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.cost-summary__message {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin: 0;
+  word-wrap: break-word;
+  hyphens: auto;
+}
+
+.cost-summary__hint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  margin: 0;
+  font-style: italic;
+}
+
+/* Loading spinner */
+.cost-summary__spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--color-bg-tertiary);
+  border-top-color: var(--color-text-secondary);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  margin: var(--spacing-sm) auto 0;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Model breakdown */
+.cost-summary__breakdown {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  margin-top: var(--spacing-md);
+  padding-top: var(--spacing-md);
+  border-top: 1px solid var(--color-border);
+}
+
+.cost-summary__breakdown-label {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-text-secondary);
+}
+
+.cost-summary__model-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.cost-summary__model-row {
+  display: flex;
+  gap: var(--spacing-xs);
+  align-items: center;
+  font-size: var(--font-size-xs);
+}
+
+.cost-summary__model-name {
+  min-width: 30px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  font-family: var(--font-family-mono);
+}
+
+.cost-summary__model-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--color-bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.cost-summary__model-fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-accent-primary), var(--color-accent-secondary));
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+/* Scrollbar styling for the panel */
+.cost-summary-drawer__panel::-webkit-scrollbar {
+  width: 4px;
+}
+
+.cost-summary-drawer__panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.cost-summary-drawer__panel::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 2px;
+}
+
+.cost-summary-drawer__panel::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-secondary);
+}
+
+/* Dark theme tweaks (if needed) */
+@media (prefers-color-scheme: dark) {
+  .cost-summary-drawer__toggle:hover {
+    background: var(--color-bg-hover);
+  }
+}
+
+/* Responsive: hide drawer on very small screens */
+@media (max-width: 480px) {
+  .cost-summary-drawer {
+    display: none;
+  }
+}

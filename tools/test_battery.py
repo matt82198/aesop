@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """test_battery.py -- run the local union test battery, parallel by default.
+INDEX: Local union test battery: runs the 4 harnesses (py/node/sh/ui) as parallel subprocesses with per-harness rc capture, stdin closed, logs to temp; parallel mode sets AESOP_TEST_CHILD_TIMEOUT_MS=90000 for node scaffold children; `--serial` fallback, `--skip <h>`, `--json`; exit 0 only when all harnesses green
 
 Runs the four harnesses (python unittest discover, node --test, shell suites,
 ui vitest+tsc) as concurrent subprocesses with per-harness rc capture, stdin

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 CI workflow linter: static analysis of .github/workflows/*.yml
+INDEX: CI workflow linter (YAML parsing, npm ci lockfile checks, test coverage)
 
 Checks:
   1. YAML parses cleanly

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 NO-UNVERIFIED-METRICS gate: scan git diff for hard numeric claims in *.md files
+INDEX: PR gate for hard numeric claims in markdown
 that lack source verification.
 
 A hard numeric claim is:

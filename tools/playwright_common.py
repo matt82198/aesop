@@ -1,4 +1,5 @@
 """Shared Playwright harness boilerplate for verify_*.py tools.
+INDEX: Shared Playwright harness boilerplate: `free_port()`, `copy_dist()`, `start_server()`, `stop_server()`, `filter_real_console_errors()` extracted from verify_*.py to reduce duplication (module for import, not CLI); browser proofs import from this module instead of reimplementing
 
 Extracted common functions used by verify_dash.py and verify_dispatch_panel.py:
   - free_port(): Find an available local port
