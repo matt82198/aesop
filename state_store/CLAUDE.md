@@ -94,6 +94,12 @@ Run from repo root:
 
 **Inc 1 fixes defect (b): `_normalize_path()` was host-platform-dependent, causing heterogeneous-box split-brain.** Two instances (Windows + Linux) would canonicalize the same path differently and both claim it (47c967b P0 recurrence). **New module: paths.py** — `canonical_claim_path(path, repo_root=None, case_policy="platform"|"insensitive"|"sensitive")` -> repo-relative (if repo_root given), forward-slash-only, .. collapsed, NFC-normalized Unicode, case-folded per policy (not os.name). **lease_claims._normalize_path now thin alias** with case_policy="platform" for backward compatibility (all 18 existing tests pass untouched). **Tests**: 22 new in test_state_store_paths.py (four 47c967b regressions through canonical form, heterogeneity guard with monkeypatched os.name, Unicode NFC/NFD equivalence, separator idempotence) + 2 new heterogeneity regressions in test_lease_claims.py. **Invariant**: same path normalizes identically whether running on Windows or Linux (when case_policy specified); default "platform" preserves exact byte-for-byte behavior.
 
+## Multibox Increment 2 (2026-08-02) — atomic dispatch claims seam (TOCTOU fix)
+
+**Inc 2 fixes defect (a): multi_dispatch TOCTOU (time-of-check to time-of-use) race.** check_conflict() + claim_files() were separate ops with no lock; concurrent claims on same path both succeeded. **New module: claim_backend.py** — `ClaimBackend` protocol (claim/renew/release/holder) + `LocalLeaseBackend` adapter over LeaseStore (atomicity inherited via BEGIN IMMEDIATE). **get_backend(config)** returns LocalLeaseBackend if multibox.enabled=True, else None (advisory path). **tools/multi_dispatch.py updated**: calls backend.claim() atomically when flag on (exit 1 on ClaimConflict, no record written), keeps legacy check_conflict+claim_files byte-for-byte when flag off. **instance_projection.claim_files() docstring**: marked advisory-only (projection/dashboard feed, not mutual exclusion). **Tests**: 10 new in test_multi_dispatch_claim.py (TOCTOU concurrent-claims race, conflict-no-record-written, flag-off legacy path) + 22-test contract suite in test_claim_backend.py (reusable by Inc 4a FsClaimLog). **Invariant**: exactly one concurrent claimant succeeds; loser gets ClaimConflict with fail-closed record.
+
+
+
 ## Increment 1 (state consolidation, 2026-07-30) — canonical materializer + state_rebuild
 
 **Inc 1 consolidates all view rendering to ONE place:**
