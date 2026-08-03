@@ -102,6 +102,17 @@ Dashboard-ready summary of multi-instance status.
   - `claim_count`: total file claims across all instances
 Missing state_store returns all zeros with `absent: true`.
 
+### ci_job_status (NEW)
+Query GitHub Actions run history for a CI job: status, conclusion, duration, flake signal.
+**Input**: `{ job_name: string, branch?: string, lookback_days?: int }` (job_name required).
+**Output**: `{ runs: [{status, conclusion, started_at, duration_s, event}...], never_executed: bool, avg_duration_s: number, failure_rate: number, flake_signal: number }`.
+**Error**: `{ error: string, runs: [] }` (structured error, no crash).
+**Design**: Spawns `gh run list` subprocess with branch and history lookback; no shell:true, with 10s timeout. Parses JSON from gh. Test mode via TEST_GH_MOCK_DATA env var for unit testing. Returns:
+  - `never_executed: true` if no runs found
+  - `failure_rate`: ratio of failures to total runs
+  - `flake_signal`: count of pass/fail alternations (alternation index)
+  - On error (gh missing/auth/network): returns structured error, never crashes
+
 ## Core Invariants
 
 1. **Strictly read-only** — all tools are read-only; zero state mutations, zero file writes (except dash-extra.mjs invocation, which is sandboxed with timeout).
@@ -130,9 +141,14 @@ Server registers these tools for `tools/list` and `tools/call`:
 - `fleet_instances` (0 args) — **NEW: active/stale instances with heartbeat**
 - `fleet_claims` (0 args) — **NEW: file claims by instance**
 - `fleet_multibox_summary` (0 args) — **NEW: dashboard summary**
+- `ci_job_status` (1 required arg: `job_name`, 2 optional: `branch` default "main", `lookback_days` default 30) — **NEW: GitHub Actions run history**
 
 ## Testing
 
-**Test file**: `tests/mcp-fleet.test.mjs` — Spawns server over stdio, drives JSON-RPC initialize + tools/list/call round-trips, validates read-only behavior.
+**Test files**:
+- `tests/mcp-fleet.test.mjs` — Spawns server over stdio, drives JSON-RPC initialize + tools/list/call round-trips, validates read-only behavior (11 test cases).
+- `tests/mcp-ci-status.test.mjs` — Tests ci_job_status tool with mocked gh subprocess: normal history, empty history (never_executed), gh failure → structured error (4 test cases).
+
+Run: `npm run test:node` or `node --test tests/mcp*.test.mjs`.
 
 See `/CLAUDE.md` for domain map.
