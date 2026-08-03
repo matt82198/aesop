@@ -40,7 +40,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `cli.py` — CLI base factory; stdlib-only exports: CLIBuilder, OutputFormatter (text/JSON), SubprocessError, run_subprocess, resolve_repo_root, mask_secrets, exit_code (0/1/2). See common.py for delegation.
 - `commit_lint.py` — Conventional commit message linter; uses cli.CLIBuilder; CLI: `[--message MSG] [--range RANGE] [--json]`; stdlib-only
 - `common.py` — Shared utilities (state directory resolution, heartbeat staleness, CLI layer delegation to cli.py)
-- `cost_ceiling.py` — Cost-ceiling checker; trips HALT kill-switch on token limits exceeded
+- `cost_ceiling.py` — Cost-ceiling checker; trips HALT kill-switch on token limits exceeded. `--check` is READ-ONLY: resolving spend never materializes the outcomes ledger under the state dir; the only write a check may make is the `.HALT` sentinel on a genuine breach with `trip=True`
 - `cost_econ.py` — Cost economics metrics (cost-per-LOC, per-merged-PR, per-wave/backlog-item) from stats.json + fleet ledger; shares ui/cost.py pricing; honesty caveats documented in output
 - `cost_forecast.py` — Cost forecasting tool: weighted-moving-average daily burn rate, predicted monthly spend, days-to-ceiling; reads fleet ledger; CLI: `--ceiling DOLLARS [--ledger PATH] [--json] [--check] [--help]`; stdlib-only, fail-closed on unknown flags
 - `cost_projection.py` — Live burn-rate observability; projects end-of-wave spend and fires threshold alerts at 70% and 90% of ceiling; CLI: `--projection [--window N] [--json]` or `--check-alerts --wave N [--json]`; idempotent per wave via flag files under state/
@@ -58,7 +58,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `file_size_lint.py` — Python file size linter (flags oversized modules)
 - `fixture_intent_check.py` — Deliberately-broken fixture manifest validator; verifies bench/fixtures-intent.json tracks all intentionally-broken/incomplete fixtures to distinguish benchmarks from regressions; CLI: `[--manifest PATH] [--root DIR] [--json]`; exit 0=valid/1=findings/2=error; stdlib-only
 - `fleet.js` — One-shot fleet snapshot (JSON: agents, heartbeats, tracker, orchestrator status; Node STDLIB only)
-- `fleet_ledger.py` — Append-only cost ledger with harvest/rotate | `metrics_gate.py` — PR gate for hard numeric claims in markdown
+- `fleet_ledger.py` — Append-only cost ledger with harvest/rotate. `ensure_ledger_header()` is WRITE-PATH-ONLY (called from `append_ledger_line`/`harvest`/`rotate`); readers (`parse_ledger_rows`, `summary`) never create the ledger file or its directory and return empty on a missing ledger | `metrics_gate.py` — PR gate for hard numeric claims in markdown
 - `fleet_prompt_extractor.py` — Extract and deduplicate Agent/Task spawn prompts
 - `gen_state_md.py` — STATE.md checkpoint generator from event-sourced state store; reads tracker projection via StateAPI read facade; renders markdown with current status header (ISO timestamp), open tracker items by lane, and next steps; CLI: `[--state-root DIR] [--out PATH]`; exit 0=success / 1=malformed store; deterministic + ASCII-safe
 - `git_identity_check.py` — Validate repo git user.name/user.email via --expect-name/--expect-email CLI args OR aesop.config.json identity block; verifies .git/config physically (not config cache); added 30s timeout to git config calls (critical fix: no prior timeout)
