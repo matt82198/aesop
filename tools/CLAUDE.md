@@ -141,7 +141,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `wave_scorecard.py` — Wave quality scorecard generator (deterministic metrics from on-disk telemetry); computes items dispatched/succeeded, repair rounds, first-try-green rate, tokens + cost by phase/model, agent success by type, retry frequency; CLI: `[--json|--md] [--waves N] [--state-root PATH]` (default ASCII); emits n/a for missing sources; hermetic, stdlib-only
 - `wave_templates.py` — Wave-manifest preset generator: instantiate/validate templates/wave-presets/*.json into ready manifests; CLI: `validate [--template saas|data|library|all]` (exits 0=clean / 1=defects per item), `instantiate <preset> --project-name --base-dir [--output FILE]`
 - `workflow_model_linter.py` — Guardrail G7: workflow model pin linter; AST-scans .js/.mjs files for agent() calls missing explicit model:'haiku' parameter (bypasses PreToolUse hook); suppress via `// model-ok`; CLI: `--check` (default) | `--json` | `--help`; exit 0=clean/1=violations/2=error; stdlib-only
-
+- `verify_gates_wired.py` — Guardrail G2.6: gates-wired enforcer (prevents "documented-gate-not-wired" escapes); parses CLAUDE.md for "(Guardrail Gx)" + "verify_*.py are mandatory CI gates"; asserts each gate is invoked in .github/workflows/*.yml; fail-closed on missing files; exit 0=wired/1=unwired/2=error; stdlib-only
 ## Gates & tests
 - `secret_scan.py --staged` — pre-push gate (exit 0=clean/1=findings/2=error; `# secretscan: allow-pattern-docs` pragma)
 - `agent-forensics.sh <commit>` — behavior forensics; `--diff <A> <B>` for rules/docs diff
