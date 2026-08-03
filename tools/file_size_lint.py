@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Python file size linter — warns on .py files exceeding size thresholds.
+INDEX: Python file size linter (flags oversized modules)
 
 Scans all .py files in the repo (or specified directories) and reports files
 exceeding configurable line count and byte size thresholds.

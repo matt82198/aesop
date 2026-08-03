@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Conventional commit message linter.
+INDEX: Conventional commit message linter; uses cli.CLIBuilder; CLI: `[--message MSG] [--range RANGE] [--json] [--check]`; exit 0=clean / 1=violations / 2=error; stdlib-only. `--range` shells out through `cli.run_subprocess(cmd, timeout, cwd)`, which already forces `capture_output`/`text`/`encoding='utf-8'` — re-passing those kwargs is a TypeError that `cli.standard_main_template` turns into a bare exit 2. Reachable only as `aesop lint commit`; not wired into CI or any git hook
 
 Validates commit messages against conventional commits format and project
 conventions:

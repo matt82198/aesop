@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Aesop Alert Bridge — Slack/Discord webhook integration for fleet alerts.
+INDEX: Slack/Discord webhook bridge for SECURITY-ALERTS
 
 Bridges SECURITY-ALERTS.log and watchdog heartbeat stalls to Slack/Discord webhooks.
 Modes:
