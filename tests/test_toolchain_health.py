@@ -13,7 +13,9 @@ Tests verify:
 All tests use fixtures and never modify committed code or git config.
 """
 
+import ast
 import json
+import os
 import sys
 import time
 import unittest
@@ -22,10 +24,105 @@ from unittest import mock
 import tempfile
 
 # Ensure tools directory is on path
-TOOLS_DIR = Path(__file__).parent.parent / "tools"
+REPO_ROOT = Path(__file__).parent.parent
+TOOLS_DIR = REPO_ROOT / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import toolchain_health
+
+TOOLCHAIN_SOURCE = TOOLS_DIR / "toolchain_health.py"
+
+_STATE_TMP = None
+_PRIOR_STATE_ROOT = None
+
+
+def setUpModule():
+    """Point AESOP_STATE_ROOT at a temp dir.
+
+    run_checks() now builds a real ReadAPI, which mkdirs its state directory;
+    without this the suite would create ./state in whatever cwd it runs from.
+    """
+    global _STATE_TMP, _PRIOR_STATE_ROOT
+    _PRIOR_STATE_ROOT = os.environ.get("AESOP_STATE_ROOT")
+    _STATE_TMP = tempfile.TemporaryDirectory()
+    os.environ["AESOP_STATE_ROOT"] = _STATE_TMP.name
+
+
+def tearDownModule():
+    global _STATE_TMP, _PRIOR_STATE_ROOT
+    if _PRIOR_STATE_ROOT is None:
+        os.environ.pop("AESOP_STATE_ROOT", None)
+    else:
+        os.environ["AESOP_STATE_ROOT"] = _PRIOR_STATE_ROOT
+    if _STATE_TMP is not None:
+        _STATE_TMP.cleanup()
+        _STATE_TMP = None
+
+
+class TestStateAPIImportIsLive(unittest.TestCase):
+    """The heartbeat checks must actually RUN, not silently fall back to skipped.
+
+    Regression for the dead-check escape: toolchain_health imported
+    `StateReadAPI` from state_store.read_api, but the class there is `ReadAPI`.
+    The import therefore raised on every run and fell into the
+    `= None` fallback, so both heartbeat checks were permanently reported as
+    "unavailable" rather than being evaluated.
+    """
+
+    def test_imported_state_store_symbols_exist(self):
+        """Every name imported from state_store.read_api must exist in it."""
+        import state_store.read_api as read_api_mod
+
+        tree = ast.parse(TOOLCHAIN_SOURCE.read_text(encoding="utf-8"))
+        imported = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "state_store.read_api":
+                imported.extend(alias.name for alias in node.names)
+
+        self.assertTrue(
+            imported,
+            "toolchain_health must import the StateAPI read facade from state_store.read_api",
+        )
+        for name in imported:
+            self.assertTrue(
+                hasattr(read_api_mod, name),
+                "toolchain_health imports '%s' from state_store.read_api, but that "
+                "module defines no such symbol -- the import raises and the "
+                "heartbeat checks are silently skipped" % name,
+            )
+
+    def test_facade_is_bound_not_none(self):
+        """The module global must be the real facade class, not the None fallback."""
+        from state_store.read_api import ReadAPI as FacadeReadAPI
+
+        self.assertIsNotNone(
+            toolchain_health.ReadAPI,
+            "ReadAPI fell back to None: the heartbeat checks are dead",
+        )
+        self.assertIs(toolchain_health.ReadAPI, FacadeReadAPI)
+
+    def test_run_checks_passes_a_live_state_api_to_heartbeat(self):
+        """run_checks must hand check_heartbeat a real facade instance."""
+        with mock.patch("toolchain_health.check_binary") as mock_binary:
+            with mock.patch("toolchain_health.check_heartbeat") as mock_hb:
+                mock_binary.return_value = (True, None)
+                mock_hb.return_value = (True, None)
+
+                toolchain_health.run_checks(json_mode=False, max_age_seconds=300)
+
+        self.assertTrue(mock_hb.call_args_list, "no heartbeat check ran at all")
+        for call in mock_hb.call_args_list:
+            state_api = call[0][3] if len(call[0]) > 3 else call[1].get("state_api")
+            self.assertIsNotNone(
+                state_api,
+                "check_heartbeat received state_api=None: the check is skipped, not live",
+            )
+
+    def test_facade_exposes_the_method_the_check_calls(self):
+        """check_heartbeat_fresh must exist on the facade with a usable signature."""
+        self.assertTrue(hasattr(toolchain_health.ReadAPI, "check_heartbeat_fresh"))
 
 
 class TestBinaryChecks(unittest.TestCase):

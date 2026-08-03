@@ -19,10 +19,48 @@ from pathlib import Path
 from unittest import mock
 
 # Ensure tools directory is on path
-TOOLS_DIR = Path(__file__).parent.parent / "tools"
+REPO_ROOT = Path(__file__).parent.parent
+TOOLS_DIR = REPO_ROOT / "tools"
 sys.path.insert(0, str(TOOLS_DIR))
 
 import sibling_import_check
+
+
+class TestRepoToolsTreeIsClean(unittest.TestCase):
+    """Acceptance + regression: the REAL tools/ tree must satisfy the guardrail.
+
+    The gate sat red on main with three unguarded sibling imports in
+    merge_queue.py, which kept unrelated PRs red. This locks the clean state in
+    so a regression is caught by the suite and not only by the pre-push gate.
+    """
+
+    def test_repo_tools_directory_has_no_unguarded_sibling_imports(self):
+        findings, file_count = sibling_import_check.scan_tools_directory(str(REPO_ROOT))
+        self.assertGreater(file_count, 0, "scanned zero files -- the check did not run")
+        self.assertEqual(
+            [],
+            ["%s:%d %s" % (f.file_path, f.line_number, f.import_form) for f in findings],
+            "tools/ has unguarded sibling imports; add the sanctioned "
+            "module-level sys.path.insert(...) guard (see merge_queue.py)",
+        )
+
+    def test_merge_queue_transport_imports_are_guarded(self):
+        """merge_queue.py imports gh/git/common/generated_paths as bare siblings.
+
+        They are legitimate and must read as GUARDED via the module-level
+        sys.path.insert; the conditional `if ... not in sys.path` variant is
+        invisible to the checker and is what produced the three violations.
+        """
+        siblings = sibling_import_check.get_sibling_modules(str(REPO_ROOT))
+        self.assertIn("merge_train", siblings)
+        findings = sibling_import_check.extract_sibling_imports(
+            str(TOOLS_DIR / "merge_queue.py"), siblings
+        )
+        self.assertEqual(
+            [],
+            [f.import_form for f in findings],
+            "merge_queue.py sibling imports are not recognized as guarded",
+        )
 
 
 class TestDetectUnguardedImports(unittest.TestCase):
