@@ -598,16 +598,23 @@ check_tracker_guard() {
 
 check_import_resolution() {
   # Python import resolution validator (guardrail G5).
-  # Parses all staged .py files via AST, extracts import/from-import statements,
-  # resolves each module against repo structure and sys.stdlib_module_names.
-  # Fail-closed (exit 1) if any import cannot resolve.
+  # AST-parses the pushed .py files, resolves each import against repo
+  # structure and sys.stdlib_module_names. Fail-closed if any cannot resolve.
   #
-  # Root cause: Agent wrote file with unresolvable import to primary tree
-  # during worktree isolation, bypassing any import-resolution gate.
-  # This guardrail validates all staged .py imports before push.
+  # VACUITY FIX (guard/g5-import-check-actually-runs): this used to invoke the
+  # tool with NO arguments, so it evaluated `git diff --cached`. A pre-push hook
+  # runs AFTER the commit -- the index is EMPTY -- so the gate printed "No
+  # staged Python files found" and exited 0 on EVERY normal push. It had never
+  # actually run. It now evaluates the files ACTUALLY BEING PUSHED.
+  #
+  # The file-list mechanism is REUSED, not reinvented: get_commit_range()
+  # already parses git pre-push stdin into one "remote-sha..local-sha" range per
+  # ref tuple, and check_secret_scan() already consumes it exactly this way
+  # (multi-ref loop, rc=2 delete-only, rc=3 empty-stdin, rc=1 malformed =>
+  # fail-closed). Same parser, same loop shape, same semantics.
   #
   # Fail-open ONLY for missing optional tool (repo without aesop checkout);
-  # actual resolution failures stay fail-closed.
+  # actual resolution failures and malformed stdin stay fail-closed.
   local aesop_root
   aesop_root=$(resolve_aesop_root)
   local import_check_script="$aesop_root/tools/import_resolution_check.py"
@@ -624,18 +631,47 @@ check_import_resolution() {
     return 0
   fi
 
-  local check_output
-  check_output=$("$py_bin" "$import_check_script" 2>&1)
-  local check_exit_code=$?
+  local commit_ranges
+  commit_ranges=$(get_commit_range)
+  local parse_exit_code=$?
 
-  if [ $check_exit_code -ne 0 ]; then
-    if [ -n "$check_output" ]; then
-      printf '%s\n' "$check_output" >&2
-    fi
+  if [ $parse_exit_code -eq 2 ]; then
+    # Delete-only push: no content pushed, nothing to check.
+    log_event "import_check_skipped_delete_only_push"
+    return 0
+  fi
+
+  if [ $parse_exit_code -eq 3 ]; then
+    # Empty stdin: no tuples at all (e.g. up-to-date push), nothing to check.
+    log_event "import_check_skipped_empty_stdin"
+    return 0
+  fi
+
+  if [ $parse_exit_code -ne 0 ] || [ -z "$commit_ranges" ]; then
+    # Malformed stdin: fail-CLOSED (never silently degrade to "no files").
+    log_block "import_check_stdin_parse_failed"
+    printf 'Error: Could not parse pre-push stdin for commit range (import resolution check)\n' >&2
     return 1
   fi
 
-  return 0
+  local overall_exit_code=0
+  local range
+  while IFS= read -r range || [ -n "$range" ]; do
+    [ -z "$range" ] && continue
+
+    local check_output
+    check_output=$("$py_bin" "$import_check_script" --range "$range" 2>&1)
+    local check_exit_code=$?
+
+    if [ $check_exit_code -ne 0 ]; then
+      if [ -n "$check_output" ]; then
+        printf '%s\n' "$check_output" >&2
+      fi
+      overall_exit_code=$check_exit_code
+    fi
+  done <<< "$commit_ranges"
+
+  return $overall_exit_code
 }
 
 check_claudemd_sync() {
@@ -1525,7 +1561,10 @@ main() {
     exit 1
   fi
 
-  if ! check_import_resolution; then
+  # Feed the SAME captured stdin: this gate reads the pushed ref range via
+  # get_commit_range(), exactly like check_secret_scan above. Calling it without
+  # stdin is what made it vacuously green (empty index at push time).
+  if ! check_import_resolution <<< "$prepush_stdin"; then
     printf 'Error: Python import resolution check failed. Push blocked.\n' >&2
     log_block "import_check_failure"
     exit 1
