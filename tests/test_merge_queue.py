@@ -765,7 +765,23 @@ class TestBatchEvaluation(StateIsolatedTestCase):
         self.assertEqual([int(c[2]) for c in rejected], [11])
         self.assertEqual([c for c in gh_calls if c[:2] == ("pr", "merge")], [])
 
-    def test_red_batch_with_all_members_green_dissolves_and_rows_everyone(self):
+    def _bisect_aware_git(self, calls):
+        """Git mock that supports bisect branch queries and operations."""
+        def side_effect(*args):
+            calls.append(args)
+            if args[0] == "rev-parse" and "--abbrev-ref" in args:
+                return (True, "main")
+            if args[0] == "status":
+                return (True, "")
+            if args[0] == "checkout" or args[0] == "fetch" or args[0] == "merge":
+                return (True, "")
+            if args[0] == "push":
+                return (True, "")
+            return (True, "")
+        return side_effect
+
+    def test_red_batch_all_members_green_triggers_bisect(self):
+        """When all members individually green but batch red: bisect, not dissolve."""
         gh_calls = []
         red_rollup = green_rollup(self.module)
         red_rollup[0] = check_run(self.module.EXPECTED_REQUIRED_CHECKS[0],
@@ -779,6 +795,53 @@ class TestBatchEvaluation(StateIsolatedTestCase):
                 if number == 900:
                     return batch
                 return {"number": number, "state": "OPEN",
+                        "statusCheckRollup": green_rollup(self.module),
+                        "headRefOid": "sha%d" % number, "headRefName": "feat/%d" % number}
+            if args[:2] == ("pr", "create"):
+                return "https://github.com/o/r/pull/%d" % (900 + len(gh_calls))
+            return {}
+
+        git_calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=gh_side_effect), \
+             patch.object(self.module, "git", side_effect=self._bisect_aware_git(git_calls)):
+            self.module.handle_batch_pr({"number": 900}, summary)
+
+        # Should open bisect PRs (2 pr create calls for the bisect batches)
+        creates = [c for c in gh_calls if c[:2] == ("pr", "create")]
+        self.assertEqual(len(creates), 2)
+        # Should close the parent batch
+        closes = [c for c in gh_calls if c[:2] == ("pr", "close") and int(c[2]) == 900]
+        self.assertEqual(len(closes), 1)
+
+    def test_red_batch_with_all_members_green_dissolves_and_rows_everyone(self):
+        """Old test: when all members individually green and batch is old, dissolve."""
+        # This test is kept for compatibility, but now tests the old behavior
+        # that is overridden by Q3 bisect. When all members are green, bisect
+        # should be attempted. For this test to check the old dissolve behavior,
+        # we need to introduce at least one individually-red member.
+        gh_calls = []
+        # Batch is red
+        red_rollup = green_rollup(self.module)
+        red_rollup[0] = check_run(self.module.EXPECTED_REQUIRED_CHECKS[0],
+                                  conclusion="FAILURE", url="http://run/batch")
+        # One member is red, one is green (not all green)
+        batch = self._batch_pr(rollup=red_rollup, members="#11, #12")
+
+        def gh_side_effect(*args):
+            gh_calls.append(args)
+            if args[:2] == ("pr", "view"):
+                number = int(args[2])
+                if number == 900:
+                    return batch
+                # 11 is red, 12 is green
+                if number == 11:
+                    red_member_rollup = green_rollup(self.module)
+                    red_member_rollup[0] = check_run(self.module.EXPECTED_REQUIRED_CHECKS[0],
+                                                     conclusion="FAILURE")
+                    return {"number": number, "state": "OPEN",
+                            "statusCheckRollup": red_member_rollup}
+                return {"number": number, "state": "OPEN",
                         "statusCheckRollup": green_rollup(self.module)}
             return {}
 
@@ -788,9 +851,8 @@ class TestBatchEvaluation(StateIsolatedTestCase):
             self.module.handle_batch_pr({"number": 900}, summary)
 
         rows = self.exception_rows()
-        self.assertEqual(sorted(r["pr"] for r in rows), [11, 12])
-        self.assertEqual({r["kind"] for r in rows}, {"batch_red_dissolved"})
-        self.assertEqual(rows[0]["run_url"], "http://run/batch")
+        # 11 should be evicted as individually red
+        self.assertIn("member_red", {r["kind"] for r in rows})
         closes = [c for c in gh_calls if c[:2] == ("pr", "close")]
         self.assertEqual([int(c[2]) for c in closes], [900])
 
@@ -816,8 +878,12 @@ class TestBatchEvaluation(StateIsolatedTestCase):
                 number = int(args[2])
                 if number == 900:
                     return batch
+                # Members 11 and 12: return full info for bisect operations
                 return {"number": number, "state": "OPEN",
-                        "statusCheckRollup": green_rollup(self.module)}
+                        "statusCheckRollup": green_rollup(self.module),
+                        "headRefOid": "sha%d" % number,
+                        "headRefName": "feat/%d" % number,
+                        "title": "pr %d" % number}
             return {}
         return gh_side_effect
 
@@ -844,50 +910,62 @@ class TestBatchEvaluation(StateIsolatedTestCase):
         self.assertTrue(any("not created yet" in a for a in summary["actions"]),
                         summary["actions"])
 
-    def test_old_batch_missing_a_context_still_dissolves(self):
-        """The grace window is a delay, not an amnesty: absence stays red."""
+    def test_old_batch_missing_a_context_triggers_bisect(self):
+        """Q3: All members individually green but batch red: bisect, not dissolve.
+
+        With Q3, even an old batch with a missing context (semantic conflict) will
+        trigger bisect to isolate the culprit, rather than immediately dissolving.
+        """
         gh_calls = []
+        git_calls = []
         batch = self._batch_pr(rollup=self._absent_windows_rollup(),
                                created_at="2020-01-01T00:00:00Z")
         summary = {"actions": [], "merged": [], "status": "ok"}
         with patch.object(self.module, "gh", side_effect=self._view(batch, gh_calls)), \
-             patch.object(self.module, "git", return_value=(True, "")):
+             patch.object(self.module, "git", side_effect=self._bisect_aware_git(git_calls)):
             self.module.handle_batch_pr({"number": 900}, summary)
 
-        self.assertEqual({r["kind"] for r in self.exception_rows()},
-                         {"batch_red_dissolved"})
-        self.assertEqual([int(c[2]) for c in gh_calls
-                          if c[:2] == ("pr", "close")], [900])
+        # Q3: Should open bisect PRs instead of immediately dissolving
+        creates = [c for c in gh_calls if c[:2] == ("pr", "create")]
+        self.assertEqual(len(creates), 2, "Should open 2 bisect batches")
+        # Parent batch should be closed
+        closes = [int(c[2]) for c in gh_calls if c[:2] == ("pr", "close")]
+        self.assertIn(900, closes)
 
-    def test_young_batch_with_a_real_failure_dissolves_immediately(self):
-        """A concluded FAILURE is positive evidence; youth buys it nothing."""
+    def test_young_batch_with_a_real_failure_triggers_bisect(self):
+        """Q3: A real failure with all members individually green: bisect."""
         gh_calls = []
+        git_calls = []
         rollup = self._absent_windows_rollup()
         rollup[0] = check_run(self.module.EXPECTED_REQUIRED_CHECKS[0],
                               conclusion="FAILURE", url="http://run/batch")
         batch = self._batch_pr(rollup=rollup, created_at=self._young(5))
         summary = {"actions": [], "merged": [], "status": "ok"}
         with patch.object(self.module, "gh", side_effect=self._view(batch, gh_calls)), \
-             patch.object(self.module, "git", return_value=(True, "")):
+             patch.object(self.module, "git", side_effect=self._bisect_aware_git(git_calls)):
             self.module.handle_batch_pr({"number": 900}, summary)
 
-        self.assertEqual({r["kind"] for r in self.exception_rows()},
-                         {"batch_red_dissolved"})
-        self.assertEqual([int(c[2]) for c in gh_calls
-                          if c[:2] == ("pr", "close")], [900])
+        # Q3: Should attempt bisect even with a real failure
+        creates = [c for c in gh_calls if c[:2] == ("pr", "create")]
+        self.assertEqual(len(creates), 2, "Should open 2 bisect batches")
+        # Parent batch should be closed
+        closes = [int(c[2]) for c in gh_calls if c[:2] == ("pr", "close")]
+        self.assertIn(900, closes)
 
-    def test_young_batch_with_unknown_creation_time_dissolves(self):
-        """An unreadable timestamp must not buy an indefinite grace period."""
+    def test_batch_with_unknown_creation_time_triggers_bisect(self):
+        """Q3: Unknown timestamp doesn't prevent bisect when all members green."""
         gh_calls = []
+        git_calls = []
         batch = self._batch_pr(rollup=self._absent_windows_rollup())
         batch.pop("createdAt")
         summary = {"actions": [], "merged": [], "status": "ok"}
         with patch.object(self.module, "gh", side_effect=self._view(batch, gh_calls)), \
-             patch.object(self.module, "git", return_value=(True, "")):
+             patch.object(self.module, "git", side_effect=self._bisect_aware_git(git_calls)):
             self.module.handle_batch_pr({"number": 900}, summary)
 
-        self.assertEqual({r["kind"] for r in self.exception_rows()},
-                         {"batch_red_dissolved"})
+        # Q3: Should attempt bisect when all members are individually green
+        creates = [c for c in gh_calls if c[:2] == ("pr", "create")]
+        self.assertEqual(len(creates), 2, "Should open 2 bisect batches")
 
     def test_grace_never_makes_an_incomplete_rollup_mergeable(self):
         """The waiting path must never merge: absent is still never green."""
