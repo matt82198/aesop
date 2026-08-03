@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 OpenTelemetry tracing integration for aesop.
+INDEX: OpenTelemetry tracing integration (spans/metrics emitter for fleet observability)
 
 Maps aesop observability data (fleet heartbeats, agent lifecycle events,
 gate activations) onto OTel spans/metrics, emitting OTLP to a configurable

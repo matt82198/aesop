@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 launch_tui.py — Open a bash TUI script in its own terminal window.
+INDEX: Spawn bash TUI script in detached terminal
 
 Usage:
   python launch_tui.py --script <path-to-bash-script> [--title <window-title>] [--pidfile <path>]

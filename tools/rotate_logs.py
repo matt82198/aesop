@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Log rotation utility: archive oldest log lines when exceeding size/line thresholds.
+INDEX: Log rotation utility (size/line thresholds)
 
 Rotates log files by moving the oldest content to an archive file when the original
 exceeds configured thresholds (--max-lines or --max-bytes). Preserves newest lines

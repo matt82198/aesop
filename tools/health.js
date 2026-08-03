@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// INDEX: Fleet health aggregator (heartbeat/alert/orchestrator status); health.js wraps Python
 
 /**
  * Aesop health — Fleet health aggregator

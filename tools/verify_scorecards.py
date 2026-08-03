@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Browser proof for the wave quality scorecards component.
+INDEX: Browser proof (Playwright): wave quality scorecards panel; exit 0=proven/1=failed, --allow-skip only browserless
 
 Drives ui/web/dist/ against fixture ledger state, asserting the contract
 via data-testid hooks (never CSS internals):

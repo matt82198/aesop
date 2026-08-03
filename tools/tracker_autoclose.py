@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Tracker automatic zombie prevention and auto-close gate.
+INDEX: Tracker zombie-prevention auto-close gate: classifies active items as SHIPPED (merged PR or ownsFiles on origin/main), OPEN (no evidence), or AMBIGUOUS (partial evidence); CLI: `[--check | --apply] [--json] [--skip-gh] [--skip-git]`; --check (DRY RUN, exit 0 if no closable items / 1 if closable found); --apply (auto-close + journal); exit 2 on error; reproduces/fixes 79% zombie-rate escapes (items shipped but in-progress) <!-- metrics-verified: wave-1 /afk tracker reconcile — 15 of 19 active items already shipped = 78.9% -->
 
 Guardrail G1: Automatically closes tracker items when evidence shows they shipped:
 1. Linked PRs merge (checks via gh pr view <number> --json state)
