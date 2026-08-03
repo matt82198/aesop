@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Verify test suite counts in tests/CLAUDE.md match actual test files on disk.
-INDEX: Test suite count drift gate with a strict read-only/write split. `--check` (default) and its reserved alias `--strict` are READ-ONLY validation and NEVER write: they assert each of the three `**<Label> (N suites)**:` count lines is present exactly once (missing or >1 match = fail-closed exit 1 naming the line), that the counts parse as integers, and that they match the `git ls-files` derivation — a mismatch is exit 1 with a "run --regenerate" hint. Scanning is hardened against format-variant evasion: line-anchored and tolerant of spacing/colon placement (`**X (N suites)** :` and `**X (N suites):**` both count), labels restricted to the exact ASCII `Node`/`Shell`/`Python` so a homoglyph label is reported MALFORMED instead of being invisible, and fenced code blocks (```/~~~) plus HTML comments masked out before matching so a documented format example is neither a duplicate nor a substitute for the real line. Counts are always derived from `--repo` (default CWD) with `cwd` threaded into every `git ls-files` call — previously `--repo` was accepted and ignored, so pointing it at an empty tree graded the CWD repo and reported `[OK] counts match`. Fail-closed exit 2 when the target is not a git work tree, when a `git ls-files` call fails, and PER SUITE FAMILY when any one family derives to zero while CLAUDE.md documents a non-zero count (the old AND-over-all-three form auto-blessed a single-language wipeout); a deliberate removal is declared by hand-editing that line to `0 suites`. `--regenerate [--dry-run]` (deprecated alias `--fix`, still used by `auto_merge.py`) is the ONLY writing mode; it applies the SAME exactly-one assertion before writing (so it can no longer launder a duplicated count line into a green tree), rewrites by match span in the canonical form (never a fenced example), and carries the same vacuous-zero guard so a broken git can never zero out the doc. `--repo`/`--claudemd` overrides; idempotent; exit 0=clean/regenerated, 1=drift or invariant-broken, 2=cannot-evaluate. Runs as a pre-push gate via `hooks/pre-push-policy.sh` AND as a blocking CI step in `.github/workflows/ci.yml` (`--check`). Adding or removing a test suite therefore requires running `--regenerate` and committing tests/CLAUDE.md in the same PR
+INDEX: Test suite count drift gate with a strict read-only/write split. `--check` (default) and its reserved alias `--strict` are READ-ONLY validation and NEVER write: they assert each of the three `**<Label> (N suites)**:` count lines is present exactly once (missing or >1 match = fail-closed exit 1 naming the line), that the counts parse as integers, and that they match the `git ls-files` derivation — a mismatch is exit 1 with a "run --regenerate" hint. Scanning is hardened against format-variant evasion: line-anchored and tolerant of spacing/colon placement (`**X (N suites)** :` and `**X (N suites):**` both count), labels restricted to the exact ASCII `Node`/`Shell`/`Python` so a homoglyph label is reported MALFORMED instead of being invisible, and fenced code blocks (```/~~~) plus HTML comments masked out before matching so a documented format example is neither a duplicate nor a substitute for the real line. Counts are always derived from `--repo` (default CWD) with `cwd` threaded into every `git ls-files` call — previously `--repo` was accepted and ignored, so pointing it at an empty tree graded the CWD repo and reported `[OK] counts match`. Fail-closed exit 2 when the target is not a git work tree, when a `git ls-files` call fails, and PER SUITE FAMILY when any one family derives to zero while CLAUDE.md documents a non-zero count (the old AND-over-all-three form auto-blessed a single-language wipeout); a deliberate removal is declared by hand-editing that line to `0 suites`. `--regenerate [--dry-run]` (deprecated alias `--fix`, still used by `auto_merge.py`) is the ONLY writing mode; it applies the SAME exactly-one assertion before writing (so it can no longer launder a duplicated count line into a green tree), rewrites by match span in the canonical form (never a fenced example), and carries the same vacuous-zero guard so a broken git can never zero out the doc. Counts are derived per UNIQUE path: `git ls-files` lists an unmerged path once per index stage (1=base/2=ours/3=theirs), so a conflicted `tests/test_*.py` used to be counted two or three times and a mid-merge `--regenerate` wrote that inflated number into tests/CLAUDE.md (it bit the conflict sweep on PRs #710/#711); the same shape also double counted a file matched by two shell globs (`tests/test_x.test.sh` matches both `tests/*.test.sh` and `tests/test_*.sh`). `list_git_files()` collects paths into a set in Python rather than relying on `git ls-files --deduplicate` (git >= 2.31), which keeps it correct on any git AND fixes the cross-pattern case. A merge in progress (`MERGE_HEAD` set) is a loud stderr `[WARN]`, deliberately NOT a refusal: conflict resolution is exactly when counts drift and exactly when the sweep needs `--regenerate`, so the tool stays usable while making the half-resolved tree impossible to miss. `--repo`/`--claudemd` overrides; idempotent; exit 0=clean/regenerated, 1=drift or invariant-broken, 2=cannot-evaluate. Runs as a pre-push gate via `hooks/pre-push-policy.sh` AND as a blocking CI step in `.github/workflows/ci.yml` (`--check`). Adding or removing a test suite therefore requires running `--regenerate` and committing tests/CLAUDE.md in the same PR
 
 Read-only validation vs. regeneration are strictly separated:
 
@@ -28,6 +28,25 @@ Count-line scanning is deliberately hardened against format-variant evasion:
 
 --strict is currently an exact alias for --check; it exists so CI can be wired to
 a main-only strict invocation later without changing the tool's contract again.
+
+Count derivation counts UNIQUE PATHS, never raw `git ls-files` output lines:
+
+- An unmerged path is listed by `git ls-files` once per index stage (1=base,
+  2=ours, 3=theirs). Mid-merge, one conflicted `tests/test_*.py` was therefore
+  counted two or three times and `--regenerate` wrote the inflated number into
+  tests/CLAUDE.md; only the pre-push gate caught it.
+- The shell family is derived from three globs, and one path can match two of them
+  (`tests/test_x.test.sh` matches `tests/*.test.sh` AND `tests/test_*.sh`).
+
+Both are fixed by collecting paths into a set in Python (`list_git_files`), which
+is portable to any git version and, unlike `git ls-files --deduplicate` (git >=
+2.31), also covers the cross-pattern case.
+
+An in-progress merge (MERGE_HEAD set) emits a loud non-fatal `[WARN]` on stderr in
+BOTH modes rather than refusing to run. Refusing would break the workflow that
+needs this tool most -- conflict resolution is precisely when counts drift and when
+the sweep must regenerate -- while the real hazard was a SILENT wrong number, which
+the per-unique-path derivation removes. Fail-closed guards are unchanged.
 
 Count derivation is always rooted at --repo (default: CWD), never at the process
 CWD when --repo is given and never at the --claudemd file's parent directory. The
@@ -194,8 +213,67 @@ def ensure_git_repo(repo_root: Path) -> None:
         )
 
 
-def count_git_files(repo_root: Path, *patterns: str) -> int:
-    """Count tracked files matching patterns using git ls-files inside repo_root.
+def merge_in_progress(repo_root: Path) -> bool:
+    """True when repo_root has an in-progress merge (MERGE_HEAD resolvable).
+
+    Advisory only: a merge is the state in which the index carries multiple stages
+    per conflicted path, so it is the state that used to inflate the counts. It is
+    NOT a refusal condition -- see warn_if_merge_in_progress().
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            check=False,
+            timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        # Never let an advisory probe break the gate; ensure_git_repo() already
+        # fails closed on a genuinely unusable git.
+        return False
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def warn_if_merge_in_progress(repo_root: Path) -> None:
+    """Emit a loud, non-fatal warning when counts are derived mid-merge.
+
+    Deliberately a WARNING and not a refusal. Conflict resolution is exactly when
+    suite counts drift and exactly when the sweep needs --regenerate, so refusing
+    would break the workflow that needs this tool most. What must never happen is
+    a SILENT wrong number: list_git_files() makes the derivation correct (one count
+    per unique path) and this makes the half-resolved tree visible to the operator.
+    """
+    if not merge_in_progress(repo_root):
+        return
+    print(
+        f"[WARN] A merge is in progress in {repo_root} (MERGE_HEAD is set). Suite "
+        "counts are derived per UNIQUE path, so unmerged index stages are not "
+        "double counted -- but the tree is only half resolved, so files the merge "
+        "has yet to add or delete are not reflected yet. Re-run this gate after "
+        "the merge concludes.",
+        file=sys.stderr,
+    )
+
+
+def list_git_files(repo_root: Path, *patterns: str) -> set:
+    """Return the SET of tracked paths matching any pattern, inside repo_root.
+
+    Deduplication is load-bearing, not cosmetic, for two reasons:
+
+    1. `git ls-files <pattern>` lists an UNMERGED path once per index stage
+       (1=base, 2=ours, 3=theirs). During an in-progress merge a single conflicted
+       `tests/test_*.py` was counted two or three times, which is how a mid-merge
+       --regenerate wrote an inflated suite count into tests/CLAUDE.md.
+    2. The shell family is derived from three globs and one path can match two of
+       them (`tests/test_x.test.sh` matches `tests/*.test.sh` AND `tests/test_*.sh`),
+       which double counted it across patterns.
+
+    Deduplicating in Python rather than relying on `git ls-files --deduplicate`
+    (git >= 2.31) keeps this correct on every git the project might be built with,
+    and is the only form that also fixes the cross-pattern case above.
 
     Omits untracked files; uses git to ensure we count only tracked files. The
     `cwd` is threaded explicitly so `--repo` actually selects the tree being
@@ -205,7 +283,7 @@ def count_git_files(repo_root: Path, *patterns: str) -> int:
         StructureError: code 2 if git cannot be run for a pattern (a swallowed
             failure here reads as a count of zero, i.e. fake-green).
     """
-    count = 0
+    paths = set()
     for pattern in patterns:
         try:
             result = subprocess.run(
@@ -224,8 +302,17 @@ def count_git_files(repo_root: Path, *patterns: str) -> int:
                 f"failed in {repo_root}: {type(exc).__name__}",
                 2,
             )
-        count += len([line for line in result.stdout.strip().split("\n") if line])
-    return count
+        # splitlines(), not strip().split("\n"): a path is only ever mangled by
+        # stripping, and git quotes any path that could contain a newline.
+        for line in result.stdout.splitlines():
+            if line:
+                paths.add(line)
+    return paths
+
+
+def count_git_files(repo_root: Path, *patterns: str) -> int:
+    """Count UNIQUE tracked files matching patterns using git ls-files."""
+    return len(list_git_files(repo_root, *patterns))
 
 
 def get_actual_counts(repo_root: Path) -> Tuple[int, int, int]:
@@ -234,6 +321,7 @@ def get_actual_counts(repo_root: Path) -> Tuple[int, int, int]:
     Returns: (node_count, shell_count, python_count)
     """
     ensure_git_repo(repo_root)
+    warn_if_merge_in_progress(repo_root)
 
     node_count = count_git_files(repo_root, "tests/*.test.mjs")
     shell_count = count_git_files(
