@@ -111,7 +111,6 @@ Tests document **actual gaps** found in rounds of refactoring/audit:
 
 ## Guardrail G2.6: test_verify_gates_wired
 
-**Python (228 suites)**: Discovered dynamically from `tests/test_verify_gates_wired.py`.
 Tests for tools/verify_gates_wired.py (Guardrail G2.6), the documented-gates-are-wired guardrail:
 - All documented gates wired: exit 0 when every CI gate in CLAUDE.md is invoked in ci.yml
 - Unwired gate detection: exit 1 when documented gates are missing from CI workflow
