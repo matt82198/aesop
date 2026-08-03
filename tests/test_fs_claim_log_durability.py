@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import sys
 import tempfile
 import unittest
@@ -649,6 +650,59 @@ class TestCompactGc(unittest.TestCase):
         self.assertEqual(self.log.compact(), 1)
         self.log.renew(lease_id, "inst-1", ttl_seconds=10_000.0)
         self.assertEqual(self.log.holder(["live.txt"]), "inst-1")
+
+    def test_compact_never_changes_the_fold_over_randomized_histories(self):
+        """Seeded property sweep of the never-delete-live invariant.
+
+        The table-driven cases above each pin one hazard; this sweeps 200
+        randomized claim/renew/release/advance histories across the whole
+        settle x max_skew x ttl x retain space and asserts the single property
+        that subsumes them: compaction is invisible to the fold. Seeded, so a
+        failure is exactly reproducible.
+        """
+        rng = random.Random(20260802)
+        for trial in range(200):
+            with tempfile.TemporaryDirectory() as td:
+                now = [1000.0]
+                log = FsClaimLog(
+                    str(Path(td) / "claims"),
+                    clock=lambda: now[0],
+                    sleep=lambda _s: None,
+                    settle_seconds=rng.choice([0.0, 1.0, 5.0]),
+                    max_skew_seconds=rng.choice([0.0, 2.0, 10.0]),
+                )
+                leases = []
+                for i in range(rng.randint(1, 4)):
+                    try:
+                        leases.append((
+                            log.claim([f"p{i}.txt"], f"inst-{i}",
+                                      ttl_seconds=rng.choice([10.0, 60.0, 300.0])),
+                            f"inst-{i}",
+                        ))
+                    except Exception:
+                        pass
+                    now[0] += rng.uniform(0.0, 40.0)
+                for lease_id, inst in leases:
+                    if rng.random() < 0.3:
+                        try:
+                            log.renew(lease_id, inst, ttl_seconds=60.0)
+                        except Exception:
+                            pass
+                    if rng.random() < 0.3:
+                        try:
+                            log.release(lease_id, inst)
+                        except Exception:
+                            pass
+                    now[0] += rng.uniform(0.0, 30.0)
+
+                skew = log.max_skew_seconds
+                before = fold_fs_claims(log._read_records(), now=now[0],
+                                        max_skew=skew)
+                log.compact(retain_seconds=rng.choice([0.0, 5.0]))
+                after = fold_fs_claims(log._read_records(), now=now[0],
+                                       max_skew=skew)
+                self.assertEqual(before, after, f"compaction changed the fold "
+                                                f"on trial {trial}")
 
     def test_compact_tolerates_a_concurrently_removed_file(self):
         """Two instances may compact at once; a lost race is not an error."""
