@@ -94,12 +94,9 @@ CHECK_TIMEOUT_S = 120
 # Delete an entry the moment its fix merges; the resulting "unexpected success"
 # is the designed signal that the tool is now enforceable.
 KNOWN_OFFENDERS = {
-    "verify_test_suite_count.py": (
-        "--check auto-corrects stale counts in tests/CLAUDE.md in place (its own "
-        "docstring: 'derives counts at runtime, auto-updates stale literals in "
-        "place ... and exits 0'). Fix in flight on branch "
-        "guard/count-check-no-write; remove this entry when that merges."
-    ),
+    # verify_test_suite_count.py was a known offender until guard/count-check-no-write
+    # merged into main. Its --check/--strict modes are now strictly read-only, so the
+    # entry is deleted (per the rule above) and the tool is enforced like any other.
     "cost_ceiling.py": (
         "--check reaches read_ledger_total_tokens -> fleet_ledger.parse_ledger_rows() "
         "-> ensure_ledger_header(), which mkdirs and writes "
