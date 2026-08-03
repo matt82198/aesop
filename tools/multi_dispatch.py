@@ -1,13 +1,18 @@
 """tools.multi_dispatch — Multi-instance-aware dispatch wrapper.
 
 Coordinates dispatch work across multiple instances by:
-  1. Checking if files are already claimed by other instances
-  2. Claiming files for this instance
-  3. Executing the dispatch
-  4. Releasing files when complete
+  1. Checking if files are already claimed by other instances (legacy) or
+     atomically claiming files via ClaimBackend (when multibox.enabled=True)
+  2. Executing the dispatch
+  3. Releasing files when complete
 
 Ensures no two instances work on the same files simultaneously (fail-closed:
 if we cannot claim files or release them, we do not proceed).
+
+When multibox.enabled=False (default): uses legacy advisory claim_files path
+(instance_projection), which has TOCTOU window but maintains backward compatibility.
+
+When multibox.enabled=True: uses atomic ClaimBackend.claim() to fix TOCTOU race.
 
 Exit codes:
   0 = dispatch succeeded
@@ -27,6 +32,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from state_store import StateAPI
+from state_store.claim_backend import ClaimConflict, get_backend
 from state_store.identity import get_instance_id
 from state_store.instance_projection import (
     claim_files,
@@ -78,6 +84,10 @@ def main():
         help="Dispatch timeout in seconds (default 300)",
     )
     parser.add_argument(
+        "--config",
+        help="Path to aesop.config.json (for multibox.enabled flag)",
+    )
+    parser.add_argument(
         "dispatch_cmd", nargs=argparse.REMAINDER, help="Dispatch command to run"
     )
 
@@ -96,22 +106,50 @@ def main():
         print(f"error: failed to open database: {e}", file=sys.stderr)
         return 1
 
+    # Load config for multibox flag
+    config = {}
+    if args.config:
+        try:
+            import json
+
+            with open(args.config, encoding="utf-8") as f:
+                config = json.load(f)
+        except Exception as e:
+            print(f"warning: failed to load config: {e}", file=sys.stderr)
+
+    backend = get_backend(args.db, config)
+    lease_id = None
+
     try:
-        # Check for conflicts
-        conflicting_instance = check_conflict(store, args.files, instance_id)
-        if conflicting_instance:
-            print(
-                f"error: files are claimed by {conflicting_instance}",
-                file=sys.stderr,
-            )
-            return 1
+        # Atomic claim if multibox enabled, else advisory claim
+        if backend is not None:
+            # Multibox enabled: use atomic ClaimBackend.claim()
+            try:
+                lease_id = backend.claim(args.files, instance_id, ttl_seconds=300)
+                print(f"claimed {len(args.files)} files (atomic)", file=sys.stderr)
+            except ClaimConflict as e:
+                print(
+                    f"error: files are claimed by {e.conflicting_instance}",
+                    file=sys.stderr,
+                )
+                return 1
+        else:
+            # Multibox disabled (default): use legacy advisory path
+            # Check for conflicts (advisory, has TOCTOU window)
+            conflicting_instance = check_conflict(store, args.files, instance_id)
+            if conflicting_instance:
+                print(
+                    f"error: files are claimed by {conflicting_instance}",
+                    file=sys.stderr,
+                )
+                return 1
 
-        # Claim files
-        if not claim_files(store, instance_id, args.files):
-            print(f"error: failed to claim files", file=sys.stderr)
-            return 1
+            # Claim files (advisory)
+            if not claim_files(store, instance_id, args.files):
+                print(f"error: failed to claim files", file=sys.stderr)
+                return 1
 
-        print(f"claimed {len(args.files)} files", file=sys.stderr)
+            print(f"claimed {len(args.files)} files (advisory)", file=sys.stderr)
 
         try:
             # Execute dispatch command
@@ -129,11 +167,21 @@ def main():
             dispatch_success = False
 
         # Release files (even if dispatch failed)
-        if not release_files(store, instance_id, args.files):
-            print(f"error: failed to release files", file=sys.stderr)
-            return 1
+        if backend is not None and lease_id is not None:
+            # Atomic release
+            try:
+                backend.release(lease_id, instance_id)
+                print(f"released {len(args.files)} files (atomic)", file=sys.stderr)
+            except Exception as e:
+                print(f"error: failed to release files: {e}", file=sys.stderr)
+                return 1
+        else:
+            # Advisory release
+            if not release_files(store, instance_id, args.files):
+                print(f"error: failed to release files", file=sys.stderr)
+                return 1
 
-        print(f"released {len(args.files)} files", file=sys.stderr)
+            print(f"released {len(args.files)} files (advisory)", file=sys.stderr)
 
         if not dispatch_success:
             return 2
@@ -144,6 +192,11 @@ def main():
         print(f"error: {e}", file=sys.stderr)
         return 1
     finally:
+        try:
+            if backend is not None:
+                backend.close()
+        except Exception:
+            pass
         try:
             store.close()
         except Exception:
