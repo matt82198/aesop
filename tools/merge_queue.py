@@ -87,11 +87,22 @@ MAX_QUEUE = 25
 LOCK_STALE_S = 600
 REGEN_TIMEOUT_S = 120
 
+# How long a freshly opened batch PR may still be MISSING a required check
+# context before that absence counts as red. GitHub creates check runs
+# asynchronously after a push, and the `windows` aggregator only appears once
+# its shards exist, so a batch evaluated seconds after `gh pr create` has an
+# incomplete rollup through no fault of its own. Dissolving on that absence is
+# what produced the 2026-08-03 rebatch loop: build -> evaluate too early ->
+# "required check(s) absent from rollup: windows" -> dissolve -> rebatch, over
+# and over, merging nothing. Past this window an absent context is a real
+# missing required check and stays fail-closed.
+BATCH_CHECK_GRACE_S = 1800
+
 LOCK_DIRNAME = ".merge-queue-lock"
 HEARTBEAT_NAME = ".merge-queue-heartbeat"
 
 PR_FIELDS = ("number,title,state,mergeable,mergeStateStatus,statusCheckRollup,"
-             "headRefName,headRefOid,labels,body,url")
+             "headRefName,headRefOid,labels,body,url,createdAt")
 
 # Only these check-run conclusions count as green. SKIPPED is included because
 # that is how GitHub branch protection itself resolves a skipped required job;
@@ -367,6 +378,69 @@ def classify_check(entry: dict) -> tuple:
         return name, ("green" if state == "SUCCESS" else "not_green"), url
     # Unknown shape: no status, no state. Fail closed.
     return name, "not_green", url
+
+
+def missing_required_contexts(rollup, expected=EXPECTED_REQUIRED_CHECKS) -> list:
+    """Required contexts that do not appear in the rollup at all."""
+    seen = set()
+    for entry in (rollup or []):
+        name, _verdict, _url = classify_check(entry)
+        if name:
+            seen.add(name)
+    return [c for c in expected if c not in seen]
+
+
+def concluded_red_contexts(rollup, expected=EXPECTED_REQUIRED_CHECKS) -> list:
+    """Required contexts PRESENT in the rollup that concluded not-green.
+
+    This is positive evidence of failure, as opposed to an absent context,
+    which may only mean GitHub has not created the check run yet.
+    """
+    worst = {}
+    for entry in (rollup or []):
+        name, verdict, _url = classify_check(entry)
+        if not name or name not in expected:
+            continue
+        prior = worst.get(name)
+        if prior is None or _VERDICT_RANK[verdict] > _VERDICT_RANK[prior]:
+            worst[name] = verdict
+    return [c for c in expected if worst.get(c) == "not_green"]
+
+
+def batch_age_s(info: dict, now: float = None) -> float:
+    """Seconds since the batch PR was created; -1.0 when unknown.
+
+    Unknown age is NOT treated as young: an unreadable timestamp must not buy
+    a batch an indefinite grace period.
+    """
+    stamp = (info or {}).get("createdAt") or ""
+    if not stamp:
+        return -1.0
+    try:
+        created = datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return -1.0
+    now = now if now is not None else datetime.now(timezone.utc).timestamp()
+    return now - created.timestamp()
+
+
+def batch_checks_not_yet_created(info: dict, grace_s: int = BATCH_CHECK_GRACE_S,
+                                 now: float = None) -> bool:
+    """True when a batch is red ONLY because its checks do not exist yet.
+
+    Requires ALL of: no required context has actually concluded not-green, at
+    least one is absent, and the PR is younger than the grace window. Any
+    concluded failure, or an age past the window (or unknown), answers False so
+    the batch dissolves exactly as before.
+    """
+    rollup = (info or {}).get("statusCheckRollup")
+    if concluded_red_contexts(rollup):
+        return False
+    if not missing_required_contexts(rollup):
+        return False
+    age = batch_age_s(info, now=now)
+    return 0 <= age < grace_s
 
 
 def required_checks_green(rollup, expected=EXPECTED_REQUIRED_CHECKS) -> tuple:
@@ -1036,6 +1110,19 @@ def handle_batch_pr(batch: dict, summary: dict) -> None:
         close_landed_members(members, label, summary)
         if branch:
             git("push", "origin", "--delete", branch)
+        return
+
+    # Not green -- but "red" and "its checks do not exist yet" are different
+    # things. GitHub creates check runs asynchronously after `gh pr create`,
+    # and a batch evaluated seconds later has an incomplete rollup through no
+    # fault of its own. Dissolving on that absence is a rebatch loop that
+    # merges nothing (2026-08-03). Wait instead; the next pass re-evaluates,
+    # and past BATCH_CHECK_GRACE_S the absence dissolves the batch as before.
+    if batch_checks_not_yet_created(info):
+        summary["actions"].append(
+            "batch %s: checks not created yet (%s); waiting"
+            % (label, ", ".join(missing_required_contexts(
+                info.get("statusCheckRollup")))))
         return
 
     # Red batch. Re-read every member's OWN checks, evict the individually-red
