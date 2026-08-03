@@ -465,5 +465,87 @@ class TestToolsImportable(unittest.TestCase):
         self.assertTrue(callable(ci_workflow_lint.main))
 
 
+class TestCIJobNoJobLevelIf(unittest.TestCase):
+    """Safety test: ci job must never have a job-level if condition (PR #170 deadlock).
+
+    The ci job is REQUIRED under branch protection. If it has a job-level if condition,
+    it can report skipped status, which deadlocks PRs forever (skipped does not satisfy
+    required check). Step-level conditions are safe; job-level conditions are forbidden.
+    """
+
+    REAL_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+    def test_ci_job_has_no_job_level_if(self):
+        """The ci job must not have an if condition at the job level."""
+        ci_path = self.REAL_REPO_ROOT / '.github' / 'workflows' / 'ci.yml'
+        self.assertTrue(ci_path.exists(), f"ci.yml not found at {ci_path}")
+
+        import yaml
+        with open(ci_path, 'r', encoding='utf-8') as f:
+            workflow = yaml.safe_load(f)
+
+        ci_job = workflow['jobs'].get('ci')
+        self.assertIsNotNone(ci_job, "ci job not found in ci.yml")
+
+        # ci job must NOT have an 'if' key at the job level
+        self.assertNotIn('if', ci_job,
+            "ci job has a job-level if condition, which causes PR deadlock (skipped status). "
+            "PR #170 documented this: skipped required checks do not satisfy branch protection. "
+            "Use step-level conditions instead.")
+
+
+class TestWindowsAggregatorHandlesSkipped(unittest.TestCase):
+    """Safety test: windows aggregator must treat skipped as pass.
+
+    The windows-shard job is conditional (skipped on docs-only). The windows aggregator
+    (required check) must handle needs.windows-shard.result == "skipped" and treat it as
+    a pass, otherwise the aggregator fails when windows-shard is skipped.
+    """
+
+    REAL_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+    def test_windows_aggregator_accepts_skipped(self):
+        """The windows aggregator must accept skipped result from windows-shard."""
+        ci_path = self.REAL_REPO_ROOT / '.github' / 'workflows' / 'ci.yml'
+        self.assertTrue(ci_path.exists(), f"ci.yml not found at {ci_path}")
+
+        with open(ci_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # Check that windows aggregator explicitly handles skipped
+        # The check should look for: != "success" AND != "skipped" to fail
+        self.assertIn('needs.windows-shard.result', content,
+            "windows aggregator must reference needs.windows-shard.result")
+
+        # Look for the pattern that accepts both success and skipped
+        self.assertIn('skipped', content.split('windows:')[1].split('ps1-syntax-check:')[0],
+            "windows aggregator must explicitly handle skipped result")
+
+
+class TestVerifyTestSuiteCountOnceInCI(unittest.TestCase):
+    """Safety test: verify_test_suite_count --check appears exactly once in ci job.
+
+    C1 removed the duplicate verify_test_suite_count step (it appeared twice).
+    Must stay exactly once to avoid redundant runs and drift confusion.
+    """
+
+    REAL_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+    def test_verify_test_suite_count_appears_once(self):
+        """verify_test_suite_count --check must appear exactly once in ci.yml."""
+        ci_path = self.REAL_REPO_ROOT / '.github' / 'workflows' / 'ci.yml'
+        self.assertTrue(ci_path.exists(), f"ci.yml not found at {ci_path}")
+
+        with open(ci_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # Count occurrences of the verify_test_suite_count --check command
+        count = content.count('python tools/verify_test_suite_count.py --check')
+
+        self.assertEqual(count, 1,
+            f"verify_test_suite_count --check must appear exactly once in ci.yml, found {count} times. "
+            "Duplicate steps cause redundant runs and confusion about actual drift state.")
+
+
 if __name__ == "__main__":
     unittest.main()
