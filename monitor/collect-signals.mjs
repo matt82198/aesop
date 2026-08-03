@@ -680,7 +680,24 @@ function checkMainCiStatus() {
 }
 
 // 12) Agent stall detection
-// Calls tools/stall_check.py --json with bounded timeout; fails gracefully with NOT-AVAILABLE signal
+// Calls tools/stall_check.py --json with a bounded timeout.
+// FAIL-CLOSED (GAP 3): an error running the check is NOT silence and NOT a
+// clean bill of health. Every failure path emits state:'UNKNOWN' with
+// degraded:true and count:null so no consumer can read a broken check as
+// "0 stalls". Only a check that actually ran yields state 'OK'/'STALLED'.
+function degradedStallSignal(reason) {
+  return {
+    available: false,
+    state: 'UNKNOWN',
+    degraded: true,
+    count: null,
+    total: null,
+    reason,
+    summary: `UNKNOWN (stall check did not run): ${reason}`,
+    stalls: [],
+  };
+}
+
 function checkAgentStalls() {
   let stallCheckPy = path.join(path.dirname(MON), 'tools', 'stall_check.py');
 
@@ -698,36 +715,56 @@ function checkAgentStalls() {
   }
 
   if (!fs.existsSync(stallCheckPy)) {
-    // stall_check.py not available; return NOT-AVAILABLE signal
-    return { available: false, count: 0, summary: 'Tool not found', stalls: [] };
+    return degradedStallSignal('stall_check.py not found');
   }
 
   try {
-    // Invoke stall_check.py with 5-second timeout (bounded, fail-open)
+    // Invoke stall_check.py with a bounded timeout (fail-closed on any failure)
     const result = spawnSync('python', [stallCheckPy, '--json'], {
       encoding: 'utf8',
       timeout: 5000,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    if (result.status !== 0 || result.error) {
-      // Tool execution failed; return NOT-AVAILABLE signal
-      return { available: false, count: 0, summary: 'Tool execution failed', stalls: [] };
+    if (result.error) {
+      const spawnReason = result.error.code === 'ETIMEDOUT'
+        ? 'stall_check.py timed out after 5000ms'
+        : `stall_check.py could not be spawned: ${result.error.message}`;
+      return degradedStallSignal(spawnReason);
+    }
+    if (result.signal) {
+      return degradedStallSignal(`stall_check.py killed by signal ${result.signal}`);
+    }
+    if (result.status !== 0) {
+      const stderrTail = (result.stderr || '').trim().split('\n').slice(-1)[0] || '';
+      return degradedStallSignal(
+        `stall_check.py exited ${result.status}${stderrTail ? `: ${stderrTail}` : ''}`);
     }
 
-    const stalls = JSON.parse(result.stdout || '[]');
+    let stalls;
+    try {
+      stalls = JSON.parse(result.stdout || '');
+    } catch (parseErr) {
+      return degradedStallSignal(`stall_check.py output was not JSON: ${parseErr.message}`);
+    }
+    if (!Array.isArray(stalls)) {
+      return degradedStallSignal('stall_check.py output was not a JSON array');
+    }
+
     const stalledCount = stalls.filter(s => s.verdict && ['stale', 'dead'].includes(s.verdict)).length;
 
     return {
       available: true,
+      state: stalledCount > 0 ? 'STALLED' : 'OK',
+      degraded: false,
       count: stalledCount,
       total: stalls.length,
+      reason: '',
       summary: stalledCount > 0 ? `${stalledCount} agent(s) stalled` : 'No stalls detected',
       stalls: stalls,
     };
   } catch (e) {
-    // Parse error or other exception; return NOT-AVAILABLE signal
-    return { available: false, count: 0, summary: `Error: ${e.message}`, stalls: [] };
+    return degradedStallSignal(`unexpected error: ${e.message}`);
   }
 }
 
@@ -1070,7 +1107,9 @@ brief.push('');
 
 brief.push('## Agent stalls');
 if (!agentStalls.available) {
-  brief.push(`NOT-AVAILABLE: ${agentStalls.summary}`);
+  // Fail-closed: a check that did not run is a warning, never a quiet skip.
+  brief.push(`🚨 **UNKNOWN — stall detection DEGRADED**: ${agentStalls.reason || agentStalls.summary}`);
+  brief.push('  Liveness is undetermined; treat as unverified, not as "no stalls".');
 } else if (agentStalls.count === 0) {
   brief.push('✓ No agent stalls detected.');
 } else {
