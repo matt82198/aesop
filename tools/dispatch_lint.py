@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Dispatch linter — enforces merge automation and security rules for agent prompts.
+INDEX: Dispatch policy linter (merge automation + security + lane-contract rules); detects forbidden patterns (gh pr merge, --admin/--auto/--no-verify/--force, git stash, credential hunting) and lane-side CI polling (`ci_merge_wait`, `gh run watch`, `merge_train.py`, sleep-wrapped `gh pr checks`) in dispatch prompts. **Lane terminal action it enforces**: a lane ends at push -> open PR -> `gh pr edit <n> --add-label merge-queue` -> exit, and NEVER waits on CI, because `merge_queue.py` owns every wait after the label. `# dispatch-ok` suppression; CLI: `[--check] [--fix] [--json] [PATH]`; exit 0=clean/1=violations/2=error
 
 Scans Python/JS/MD files for agent dispatch patterns and flags FORBIDDEN patterns:
   - `gh pr merge` (must use tools/auto_merge.py instead)

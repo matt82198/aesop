@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+INDEX: Stateless fleet status webhook (heartbeat/merge-queue/exceptions to Slack/Discord); CLI: `[--config PATH] [--dry-run]`; fail-open on missing config/network errors
 Aesop Alerts Webhook — Stateless Slack/Discord webhook for fleet status.
 
 One-shot tool: reads on-disk signals (heartbeats, merge-queue, exceptions),

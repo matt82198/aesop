@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Falsifiability proof: Verify that verify_ui_trio.py detects redaction leaks.
+INDEX: Offline falsifiability proof: verify that transcript redaction detects leaks (POSIX paths, Windows paths, sk- tokens) when unredacted; exit 0=proof passes / 1=proof failed
 
 This proof demonstrates that:
 1. The proof CAN detect /Users/ (uppercase POSIX) paths when unredacted
