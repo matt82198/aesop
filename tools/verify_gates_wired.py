@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Verify that all documented CI gates in CLAUDE.md files are wired into CI workflows.
+INDEX: Guardrail G2.6: gates-wired enforcer (prevents "documented-gate-not-wired" escapes); parses CLAUDE.md for "(Guardrail Gx)" + "verify_*.py are mandatory CI gates"; asserts each gate is invoked in .github/workflows/*.yml; fail-closed on missing files; exit 0=wired/1=unwired/2=error; stdlib-only
 
 This guardrail detects the "documented-gate-not-wired" class by parsing CI gate
 inventory from tools/CLAUDE.md and tests/CLAUDE.md, then asserting each named

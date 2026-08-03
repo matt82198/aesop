@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 tools.dead_code_check -- AST-based Python dead code detector.
+INDEX: AST-based dead code detector (unused functions/classes/imports)
 
 Finds unused functions, classes, and module-level variables across the
 codebase by collecting all definitions (Phase 1), then all references
