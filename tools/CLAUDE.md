@@ -18,7 +18,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 ## Tool index (one-liners)
 
 - `agent-forensics.sh` — Incident forensics; behavior reconstruction (read-only git plumbing) | `agent_prompt_hygiene.py` — Gate detecting forbidden patterns in agent/dispatch prompts
-- `alert_bridge.py` — Slack/Discord webhook bridge for SECURITY-ALERTS
+- `alert_bridge.py` — Slack/Discord webhook bridge for SECURITY-ALERTS | `dep_graph.py` — Dependency graph analyzer for import relationships
 - `audit_report.py` — Deterministic markdown audit report aggregator (defect_escape, mutation results, lint/drift findings, ledger verdict rates); --out/--strict/--json inputs from machine outputs only
 - `auto_merge.py` — Batch PR merge tool (fix-by-default: merge main into broken branches + merge green PRs; `--no-fix`/`--loop`/`--dry-run`/`--json`/`--wait`); uses subprocess_common.py for timeouts + encoding; MERGED-state verification gate at lines 101-105; run with `--loop` to continuously merge all green PRs; use merge_train.py for one-shot serial CI-gated queues
 - `bash_guard_check.py` — BASH_SOURCE exec guard validator for shell scripts; detects missing guards in scripts with functions + top-level commands
@@ -47,7 +47,6 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `dash.js` — Launch the web dashboard (spawns python ui/serve.py with configured port from PORT env var, aesop.config.json, or default 8770)
 - `dead_code_check.py` — AST-based dead code detector (unused functions/classes/imports)
 - `defect_escape.py` — Haiku code quality telemetry (fix-forward rate, first-try estimate); CLI: `--repo <path> --since <ISO date> [--json]`; uses subprocess_common.git() with 60s timeout (critical fix: no prior timeout)
-- `dep_graph.py` — Dependency graph analyzer for import relationships
 - `dispatch_lint.py` — Dispatch policy linter (merge automation + security + lane-contract rules); detects forbidden patterns (gh pr merge, --admin/--auto/--no-verify/--force, git stash, credential hunting) and lane-side CI polling (`ci_merge_wait`, `gh run watch`, `merge_train.py`, sleep-wrapped `gh pr checks`) in dispatch prompts. **Lane terminal action it enforces**: a lane ends at push -> open PR -> `gh pr edit <n> --add-label merge-queue` -> exit, and NEVER waits on CI, because `merge_queue.py` owns every wait after the label. `# dispatch-ok` suppression; CLI: `[--check] [--fix] [--json] [PATH]`; exit 0=clean/1=violations/2=error
 - `docstring_check.py` — AST-based docstring coverage checker for Python modules
 - `doctor.js` — Preflight checklist for adopter onboarding (diagnostic checks: config, hooks, CLAUDE.md, state, heartbeats, git identity, secret-scan; exit 0=all pass, 1=failed)
