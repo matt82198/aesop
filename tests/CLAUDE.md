@@ -8,7 +8,7 @@
 
 ## Test Suite Map & Run Commands
 
-**Shell (14 suites)**: Discovered dynamically from `tests/*.test.sh`, `tests/test_*.sh`, `tests/test-*.sh` plus `hooks/pre-push-policy.sh --test`.
+**Shell (15 suites)**: Discovered dynamically from `tests/*.test.sh`, `tests/test_*.sh`, `tests/test-*.sh` plus `hooks/pre-push-policy.sh --test`.
 Organized by component: backup/recovery, watchdog daemon, git hooks, state reconciliation, UI, daemon self-healing, wave enforcement, test runners.
 Run: `bash tools/run_shell_tests.sh` or `npm run test:sh`
 
