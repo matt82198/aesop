@@ -15,11 +15,13 @@ Usage:
 """
 import argparse
 import functools
+import importlib.util
 import io
 import json
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 # Ensure stdout can encode UTF-8 (fixes Windows cp1252 UnicodeEncodeError on PR titles
 # containing characters like U+FEFF).
@@ -50,6 +52,30 @@ def print(*args, **kwargs):
         else:
             raise
 
+# Import halt.py with FAIL CLOSED on import failure
+try:
+    from halt import is_halted, get_halt_info
+except ImportError:
+    try:
+        # Fallback for when called from tools/ directory or via importlib
+        # Try to locate halt.py relative to this file's directory
+        this_dir = Path(__file__).parent
+        halt_py = this_dir / "halt.py"
+        if halt_py.exists():
+            spec = importlib.util.spec_from_file_location("halt", halt_py)
+            if spec and spec.loader:
+                halt_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(halt_module)
+                is_halted = halt_module.is_halted
+                get_halt_info = halt_module.get_halt_info
+            else:
+                raise ImportError("Could not load halt.py spec")
+        else:
+            raise ImportError("halt.py not found")
+    except ImportError as e:
+        print(f"[FATAL] halt.py not found or unimportable -- merge_train refuses to run", file=sys.stderr)
+        sys.exit(2)
+
 # Transient error patterns from gh run rerun that indicate we should keep the PR queued
 # without consuming a retry (TOCTOU races, workflow state changes, etc.)
 RETRIABLE_RERUN_ERRORS = [
@@ -66,6 +92,26 @@ RETRIABLE_RERUN_ERRORS = [
 # Recorded lesson: fail-closed on CANCELLED/unknown states. tools/auto_merge.py
 # buckets the same way (bucket == 'cancel' is red there).
 GREEN_CONCLUSIONS = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
+
+
+def _check_halt(context=""):
+    """Check if halt is set. If so, print reason and exit with code 1.
+
+    Args:
+        context: Description of when this check occurs (for log clarity)
+
+    Returns:
+        None if not halted; otherwise exits with code 1.
+    """
+    if is_halted():
+        info = get_halt_info()
+        reason = info.get("reason", "(unknown)") if info else "(unknown)"
+        timestamp = info.get("timestamp", "") if info else ""
+        msg = f"HALTED: {reason}"
+        if timestamp:
+            msg += f" (since {timestamp})"
+        print(f"[HALT{context}] {msg}", file=sys.stderr)
+        sys.exit(1)
 
 
 def gh(*args: str) -> dict | str:
@@ -360,6 +406,9 @@ def cleanup_integration_branch(branch: str):
 
 def run_integration_train(prs: list[int], batch_name: str = "batch-wave",
                           poll_interval: int = 45, max_polls: int = 60) -> bool:
+    # Check halt BEFORE starting the integration train
+    _check_halt(" [run_integration_train entry]")
+
     branch = f"integrate/{batch_name}"
 
     print(f"\nIntegration mode: batching {len(prs)} PRs into {branch}")
@@ -409,6 +458,8 @@ def run_integration_train(prs: list[int], batch_name: str = "batch-wave",
         print(f"\n[FAIL] Integration PR CI did not pass")
         return False
 
+    # Re-check halt before merging integration PR (kill-switch enforcement)
+    _check_halt(" [before integration merge]")
     if not merge_integration_pr(pr_number):
         return False
 
@@ -425,6 +476,9 @@ def run_integration_train(prs: list[int], batch_name: str = "batch-wave",
 
 def run_train(prs: list[int], max_rounds: int = 50, poll_interval: int = 45,
               skip_dirty: bool = False):
+    # Check halt BEFORE starting the merge train
+    _check_halt(" [run_train entry]")
+
     merged = []
     skipped = []
     retried = {}  # Track PR -> retry count (max 1)
@@ -500,6 +554,8 @@ def run_train(prs: list[int], max_rounds: int = 50, poll_interval: int = 45,
                 continue
 
             if info["merge"] == "CLEAN" and info["checks"] == "green":
+                # Re-check halt before merging (kill-switch enforcement)
+                _check_halt(" [before merge]")
                 if merge_pr(n):
                     merged.append(n)
                     progress_this_round = True
