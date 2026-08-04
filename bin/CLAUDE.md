@@ -83,6 +83,13 @@ aesop transcript timeline|replay|digest
 
 **npm package.json `files` array** (lines 9–36): If adding new dirs/files to `filesToCopy`, add to `files` array so npm publish includes them.
 
+## Worktree support (git worktree .git files)
+
+- **Worktree .git handling**: In git worktrees, `.git` is a FILE (not directory) containing `gitdir: <path>`. 
+- **Real git dir resolution**: `resolveRealGitDir()` detects worktree `.git` files and uses `git rev-parse --git-common-dir` to find the actual git directory. Fallback: parse gitdir pointer manually from `.git` file.
+- **Hook installation paths**: `installPrePushHook()` and `installPreCommitWaveguard()` use resolved git dir to install hooks in the common git directory (not worktree), preventing ENOTDIR crashes.
+- **Security**: symlink checks on `.git` and hooks directories preserved throughout resolution.
+
 ## Invariants
 
 - **Idempotent on empty targets**: Fails if `targetDir` exists and is non-empty (except `.git`, aesop scaffolded dirs). Safe to retry.
@@ -90,6 +97,7 @@ aesop transcript timeline|replay|digest
 - **Portable paths**: No machine-specific paths; `path.join()` + `__dirname` handle cross-platform resolution. Config uses `~` form (`~/.claude`, `~/scripts`) expanded at load time.
 - **Async wizard**: Main execution is async IIFE to support readline prompts.
 - **Non-destructive**: Never overwrites existing `aesop.config.json` without user confirmation.
+- **Worktree-safe**: Scaffolding works correctly when cwd is a git worktree (absolute paths + resolved git dirs).
 
 ## Test commands
 

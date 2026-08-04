@@ -15,6 +15,14 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - **Fragment-assembled secrets in tests**: `scanner_selftest.py` concatenates dummy secrets at runtime so pattern text never appears contiguously (self-scan invariant).
 - **verify_*.py are mandatory CI gates**: `verify_dash.py`, `verify_submit_encoding.py`, `verify_activity_filter.py`, `verify_agent_inspector.py`, `verify_prboard.py`, `verify_failure_drilldown.py`, `verify_wave_telemetry.py`, `verify_dispatch_panel.py`, `verify_scorecards.py`, `verify_ui_trio.py`, `verify_cost_panel.py`, etc. are required pre-push gates; use `--allow-skip` only in truly browserless environments (CI must run all).
 - **lock.mjs is the ONLY lock implementation**: never reimplement locking in `proposals.mjs` or elsewhere; all proposals/state updates must use fail-closed `lock.mjs` with exponential backoff + stale-lock breaking.
+- **Merge-queue daemon (merge_queue.py) self-heals on crash**: when a pass crashes mid-batch and leaves the shared worktree checked out on an `integrate/q-*` branch, the next pass detects this in `worktree_is_safe()` and automatically reparks to main before proceeding. No manual intervention needed; stalled passes recover transparently.
+
+## init_project.py — Worktree support
+
+- **Worktree .git handling**: `resolve_real_git_dir()` detects when `.git` is a FILE (worktree case) and uses `git rev-parse --git-common-dir` to locate the actual git directory.
+- **Fallback git dir resolution**: Manual parsing of `.git` file's `gitdir:` pointer if git command fails.
+- **Hook installation**: `install_pre_push_hook()` uses resolved git dir to place hooks in the common directory (not worktree), preventing ENOTDIR errors in worktree scenarios.
+- **Security**: symlink checks preserved throughout resolution.
 
 ## Tool index
 
