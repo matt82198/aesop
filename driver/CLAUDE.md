@@ -20,10 +20,12 @@
   construct-time validate_base_url; key waiver only via loopback-validated is_local.
 - **verification_policy.py** — Maps verification tier -> orchestrator tuning (validate_all_json, spot_check_frac, repair_cap, require_adversarial_review).
 - **wave_loop.py** — the wave ENGINE: preflight ownership guard, parallel build,
-  bounded repair, per-repo batched git ship, recovery journal. Supports optional
-  orchestrator_backend for live-seat swap (see driver/orchestrator-swap/). RS3-W + RS5
-  claim lifecycle: fail-CLOSED gate, fingerprint-bound journal, deterministic claim state.
-  Tests: test_wave_loop_rs3.
+  bounded repair, per-repo batched git ship, recovery journal. Halt kill-switch checks
+  at all phase boundaries (PHASE 3/5/5.75/6/7) mirror cost-ceiling pattern, abort cleanly
+  when _check_halt() detects sentinel. Supports optional orchestrator_backend for
+  live-seat swap (see driver/orchestrator-swap/). RS3-W + RS5 claim lifecycle: fail-CLOSED
+  gate, fingerprint-bound journal, deterministic claim state. Tests: test_wave_loop_rs3,
+  test_wave_loop_halt_enforcement.
 - **wave_bridge.py** — Phase 3: bridges AgentDriver backends to wave manifest items
   (build_manifest_item / dispatch_item; green ONLY from test exit code, see below).
 - **anthropic_driver.py** — Anthropic Messages API driver for bench seam (direct HTTP, no SDK).
