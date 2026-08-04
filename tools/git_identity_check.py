@@ -112,7 +112,7 @@ def get_git_identity(repo_path: str) -> Tuple[Optional[str], Optional[str]]:
             ["git", "-C", repo_path, "config", "--local", "user.name"],
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=30,
             check=False,
         )
@@ -128,7 +128,7 @@ def get_git_identity(repo_path: str) -> Tuple[Optional[str], Optional[str]]:
             ["git", "-C", repo_path, "config", "--local", "user.email"],
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=30,
             check=False,
         )
