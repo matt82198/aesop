@@ -868,7 +868,8 @@ check_encoding_lint() {
   # Guardrail G10 extension: encoding lint for subprocess calls.
   # Runs tools/encoding_lint.py --check against staged Python files.
   # Fail-open if tool missing (optional tooling); fail-closed on actual findings.
-  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
   local lint_script="$aesop_root/tools/encoding_lint.py"
 
   if [ ! -f "$lint_script" ] || [ ! -x "$lint_script" ]; then
@@ -901,7 +902,8 @@ check_test_coverage() {
   # Guardrail G2 extension: verify all on-disk test files are run by CI.
   # Runs tools/verify_test_coverage.py --check to detect orphaned tests.
   # Fail-open if tool missing (optional tooling); fail-closed on findings.
-  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
   local coverage_script="$aesop_root/tools/verify_test_coverage.py"
 
   if [ ! -f "$coverage_script" ] || [ ! -x "$coverage_script" ]; then
@@ -1522,7 +1524,9 @@ main() {
   fi
 
   if [ "${1:-}" = "--verify-audit-log" ]; then
-    local audit_log="${2:-${AESOP_ROOT:-$HOME/aesop}/state/SECURITY-AUDIT.log}"
+    local aesop_root
+    aesop_root=$(resolve_aesop_root)
+    local audit_log="${2:-$aesop_root/state/SECURITY-AUDIT.log}"
     verify_audit_log "$audit_log"
     exit $?
   fi
