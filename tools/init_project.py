@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Project initialization scaffolder for aesop.
-INDEX: Project scaffolder (`aesop init`): creates CLAUDE.md, config, state dir, CI template, pre-push hook
+INDEX: Project scaffolder (`aesop init`): creates CLAUDE.md, config, state dir, CI template, pre-push hook, and copies secret_scan.py
 
 When a user runs `npx @matt82198/aesop init` in a new repo, this tool
 scaffolds the aesop orchestration layer:
@@ -11,8 +11,9 @@ scaffolds the aesop orchestration layer:
 3. aesop.config.json with sensible defaults
 4. state/ directory with .gitkeep
 5. .github/workflows/ci.yml minimal CI template
-6. Git pre-push hook (secret scan via aesop's hook)
-7. Prints a "Getting Started" summary
+6. tools/secret_scan.py (copied from aesop repo, fail-closed gate)
+7. Git pre-push hook (secret scan gate with fail-closed logic)
+8. Prints a "Getting Started" summary
 
 CLI: python tools/init_project.py [--dir PATH] [--name PROJECT_NAME] [--force]
 Exit: 0=success, 1=error, 2=usage error
@@ -127,7 +128,7 @@ if [ "$current_branch" = "main" ] || [ "$current_branch" = "master" ]; then
   exit 1
 fi
 
-# Secret scan gate
+# Secret scan gate (fail-closed: exit 1 if script is missing)
 scan_script="$repo_root/tools/secret_scan.py"
 if [ -f "$scan_script" ]; then
   python3 "$scan_script" --staged --repo "$repo_root"
@@ -136,6 +137,11 @@ if [ -f "$scan_script" ]; then
     echo "ERROR: Secret scan found issues. Push blocked."
     exit 1
   fi
+else
+  echo "ERROR: Secret scan script not found at $scan_script"
+  echo "The pre-push hook cannot run. Push blocked."
+  echo "This is likely a setup error: tools/secret_scan.py must be present in the repo."
+  exit 1
 fi
 
 exit 0
@@ -284,6 +290,47 @@ def resolve_real_git_dir(target_dir):
         return None
 
 
+def copy_secret_scan_script(target_dir):
+    """
+    Copy tools/secret_scan.py from the aesop repo into the target repo's tools/ dir.
+    Skips if already present.
+
+    Returns: (success: bool, message: str)
+    """
+    target = Path(target_dir).resolve()
+    target_tools_dir = target / "tools"
+    target_scan_path = target_tools_dir / "secret_scan.py"
+
+    # Find the source secret_scan.py (in the aesop repo)
+    try:
+        aesop_repo_root = Path(__file__).parent.parent.resolve()
+        source_scan_path = aesop_repo_root / "tools" / "secret_scan.py"
+
+        if not source_scan_path.is_file():
+            return False, f"source secret_scan.py not found at {source_scan_path}"
+
+        # Skip if already exists
+        if target_scan_path.exists():
+            return False, "already exists"
+
+        # Create target tools directory
+        target_tools_dir.mkdir(parents=True, exist_ok=True)
+
+        # Copy the file
+        source_content = source_scan_path.read_text(encoding="utf-8")
+        target_scan_path.write_text(source_content, encoding="utf-8")
+
+        # Make executable (no-op on Windows, matters on POSIX)
+        try:
+            target_scan_path.chmod(target_scan_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        except OSError:
+            pass
+
+        return True, "copied"
+    except Exception as e:
+        return False, f"failed to copy: {e}"
+
+
 def install_pre_push_hook(target_dir, force=False):
     """Install the pre-push hook into .git/hooks/."""
     target = Path(target_dir).resolve()
@@ -408,7 +455,14 @@ def init_project(target_dir, project_name=None, force=False):
     else:
         files_skipped.append(".github/workflows/ci.yml")
 
-    # 6. Install git pre-push hook
+    # 6. Copy secret_scan.py to tools/
+    scan_ok, scan_status = copy_secret_scan_script(str(target))
+    if scan_ok:
+        files_created.append("tools/secret_scan.py")
+    else:
+        files_skipped.append(f"tools/secret_scan.py ({scan_status})")
+
+    # 7. Install git pre-push hook
     hook_ok, hook_status = install_pre_push_hook(str(target), force=force)
     if hook_ok:
         files_created.append(".git/hooks/pre-push")
