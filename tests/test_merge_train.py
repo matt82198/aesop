@@ -859,15 +859,37 @@ class TestTransportDecodesUndecodableBytes(unittest.TestCase):
             timeout=60)
 
     def test_strict_decoding_is_what_broke_the_queue(self):
-        """RED half: without errors=, a SUCCESSFUL call loses stdout entirely."""
-        result = self._strict_probe()
+        """RED half: without errors=, the call cannot yield usable stdout.
+
+        The SAME defect surfaces two different ways, and the platform picks
+        which one -- so asserting either single shape makes this test a
+        Windows-only or Linux-only proof:
+
+          * Windows: `capture_output` drains both pipes with reader THREADS.
+            The UnicodeDecodeError is raised inside a thread, never reaches
+            this frame, and `result.stdout` silently comes back None. That
+            None is what killed the queue -- the caller's next `.strip()`
+            died with a misleading AttributeError.
+          * POSIX: `communicate()` decodes on the CALLING thread, so the
+            UnicodeDecodeError propagates out of `subprocess.run` directly.
+
+        Both are the same bug (strict decoding of one 0x97 byte) and both are
+        unusable output, which is exactly what the assertion below pins. What
+        must NEVER happen is a plain decoded string: that would mean the
+        fixture stopped reproducing the crash and the green half proves
+        nothing.
+        """
+        try:
+            result = self._strict_probe()
+        except UnicodeDecodeError:
+            return  # POSIX shape: raised on the calling thread. Proof holds.
         self.assertEqual(result.returncode, 0,
                          "the fixture must produce a successful git call")
         self.assertIsNone(
             result.stdout,
-            "strict utf-8 decoding must lose stdout -- if this ever starts "
-            "returning a string, the fixture stopped reproducing the 0x97 "
-            "crash and the green half below proves nothing")
+            "strict utf-8 decoding must lose stdout (or raise) -- if this "
+            "ever starts returning a string, the fixture stopped reproducing "
+            "the 0x97 crash and the green half below proves nothing")
 
     def test_git_survives_undecodable_byte(self):
         """GREEN half: git() returns a usable string instead of crashing."""
