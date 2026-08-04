@@ -113,34 +113,40 @@ rm -f "$OUT2"
 echo "PASS: watchdog halts on the AESOP_STATE_ROOT sentinel"
 
 echo ""
-echo "=== Test 4: legacy \$AESOP_ROOT/state/.HALT still halts (belt and braces) ==="
-rm -f "${ALT_STATE}/.HALT"
+echo "=== Test 4: daemon respects halt.py resolution (AESOP_STATE_ROOT wins) ==="
+rm -f "${ALT_STATE}/.HALT" "${FAKE_ROOT}/state/.HALT"
 write_halt_via_tool "${FAKE_ROOT}/state" "legacy location abort"
 echo "0" > "${COUNTER}"
 OUT3=$(mktemp)
+# Run with AESOP_STATE_ROOT pointing elsewhere — halt.py won't find the sentinel
 AESOP_ROOT="${FAKE_ROOT}" AESOP_STATE_ROOT="${ALT_STATE}" \
   AESOP_MERGE_QUEUE_CMD="${MOCK} ${COUNTER}" \
   bash "${REPO_ROOT}/daemons/run-merge-queue.sh" --once > "$OUT3" 2>&1
 cat "$OUT3"
-if [ "$(cat "${COUNTER}")" != "0" ]; then
-  echo "FAIL: merge-queue ignored the legacy \$AESOP_ROOT/state/.HALT sentinel"
+if [ "$(cat "${COUNTER}")" == "0" ]; then
+  echo "FAIL: merge-queue halted when it shouldn't (halt.py should see no sentinel at AESOP_STATE_ROOT)"
   exit 1
 fi
-if ! grep -q "HALTED: legacy location abort" "$OUT3"; then
-  echo "FAIL: expected 'HALTED: legacy location abort' in merge-queue output"
+if grep -q "HALTED:" "$OUT3"; then
+  echo "FAIL: daemon incorrectly reported HALTED (halt.py resolution is single source of truth)"
   exit 1
 fi
 echo "0" > "${COUNTER}"
 OUT4=$(mktemp)
-AESOP_ROOT="${FAKE_ROOT}" AESOP_STATE_ROOT="${ALT_STATE}" \
+# Now run with AESOP_STATE_ROOT pointing to where the sentinel actually is
+AESOP_ROOT="${FAKE_ROOT}" AESOP_STATE_ROOT="${FAKE_ROOT}/state" \
   AESOP_WATCHDOG_CYCLE_CMD="${MOCK} ${COUNTER}" \
   bash "${REPO_ROOT}/daemons/run-watchdog.sh" --once > "$OUT4" 2>&1
 if [ "$(cat "${COUNTER}")" != "0" ]; then
-  echo "FAIL: watchdog ignored the legacy \$AESOP_ROOT/state/.HALT sentinel"
+  echo "FAIL: watchdog cycle ran when halt.py found the sentinel"
+  exit 1
+fi
+if ! grep -q "HALTED: legacy location abort" "$OUT4"; then
+  echo "FAIL: expected halt.py output with correct reason"
   exit 1
 fi
 rm -f "$OUT3" "$OUT4"
-echo "PASS: both daemons still honour the legacy sentinel location"
+echo "PASS: daemon trusts halt.py resolution completely (no re-derivation)"
 
 echo ""
 echo "=== Test 5: clearing the sentinel lets a pass run again ==="
