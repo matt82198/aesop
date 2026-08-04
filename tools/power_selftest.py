@@ -177,7 +177,7 @@ def check_brain():
         # Get status
         status_output = subprocess.run(
             ['git', '-C', str(brain_path), 'status', '--porcelain'],
-            capture_output=True, text=True, encoding='utf-8', timeout=5
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5
         ).stdout.strip()
 
         status_lines = [l for l in status_output.split('\n') if l]
@@ -186,14 +186,14 @@ def check_brain():
         try:
             current_branch = subprocess.run(
                 ['git', '-C', str(brain_path), 'rev-parse', '--abbrev-ref', 'HEAD'],
-                capture_output=True, text=True, encoding='utf-8', timeout=5
+                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5
             ).stdout.strip()
         except:
             current_branch = 'HEAD'
 
         ahead_output = subprocess.run(
             ['git', '-C', str(brain_path), 'rev-list', '--left-only', '--count', f'{current_branch}@{{u}}...{current_branch}'],
-            capture_output=True, text=True, encoding='utf-8', timeout=5
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5
         ).stdout.strip()
 
         try:
@@ -310,7 +310,7 @@ def check_scanner():
 
         result = subprocess.run(
             [sys.executable, str(scanner_path), '--staged'],
-            capture_output=True, text=True, encoding='utf-8', timeout=30,
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30,
             cwd=str(paths['aesop_root'])
         )
 

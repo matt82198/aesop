@@ -69,8 +69,22 @@ GREEN_CONCLUSIONS = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
 
 
 def gh(*args: str) -> dict | str:
+    """Run one `gh` call and return parsed JSON, raw text, or an {"error": ...} dict.
+
+    `errors='replace'` is load-bearing, not decoration. With `encoding='utf-8'`
+    and the default strict handler, a single undecodable byte in the transport's
+    output (a cp1252 em-dash, 0x97, is the common one -- PR titles and branch
+    names carry them) raises UnicodeDecodeError inside subprocess's reader
+    THREAD. That exception never reaches this frame: it kills the thread,
+    `result.stdout` comes back None, and the next `.strip()` dies with a
+    misleading AttributeError. That is exactly how the merge queue crashed on
+    every pass for 24+ consecutive runs. Replace, never 'ignore': a corrupted
+    byte must stay visible as U+FFFD rather than silently vanishing from a
+    branch name we are about to act on.
+    """
     cmd = ["gh"] + list(args)
-    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=60)
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8',
+                            errors='replace', timeout=60)
     if result.returncode != 0:
         return {"error": result.stderr.strip(), "rc": result.returncode}
     out = result.stdout.strip()
@@ -212,8 +226,15 @@ def retry_ci(n: int, head_ref_name: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def git(*args: str) -> tuple[bool, str]:
+    """Run one `git` call, returning (ok, combined stdout+stderr).
+
+    See `gh()` for why `errors='replace'` is mandatory here: git emits raw
+    bytes from refs, config and commit messages without transcoding them, so
+    strict UTF-8 decoding is a live crash, not a theoretical one.
+    """
     cmd = ["git"] + list(args)
-    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120)
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8',
+                            errors='replace', timeout=120)
     out = (result.stdout.strip() + "\n" + result.stderr.strip()).strip()
     return (result.returncode == 0, out)
 
