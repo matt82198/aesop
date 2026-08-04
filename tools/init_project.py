@@ -254,6 +254,7 @@ def resolve_real_git_dir(target_dir):
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
+                errors="replace",
                 cwd=str(target),
                 timeout=5,
             )
