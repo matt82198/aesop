@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """state_rebuild — CLI tool for rebuilding and verifying materialized views.
+INDEX: Rebuild and verify materialized state views (tracker.json, STATE.md) from event store; CI gate via --check mode detects drift; --all compacts claims snapshots for O(n) tail-replay
 
 Rebuilds state files (tracker.json, STATE.md, etc.) from the event store.
-Also provides a --check mode for CI gates to detect drift.
+Also provides a --check mode for CI gates to detect drift. The --all mode also
+compacts the claims stream snapshot for faster tail-replay reads on future
+dispatches (O(n) instead of O(n²) claim scan on every dispatch).
 
 Usage:
   python tools/state_rebuild.py --all [--state-root DIR]
@@ -31,6 +34,7 @@ from state_store.materialize import (
     materialize_state_md,
     materialize_ledger,
 )
+from state_store.coordination import compact_claims
 
 
 def main():
@@ -92,7 +96,7 @@ def main():
 
 
 def _rebuild_all(api, state_dir: Path) -> int:
-    """Rebuild all views from the event store."""
+    """Rebuild all views from the event store and compact snapshots."""
     views_to_rebuild = [
         ("tracker", _rebuild_tracker),
         ("state-md", _rebuild_state_md),
@@ -108,6 +112,14 @@ def _rebuild_all(api, state_dir: Path) -> int:
         except Exception as e:
             print(f"[rebuild] {view_name}: FAILED ({e})", file=sys.stderr)
             success = False
+
+    # Compact snapshots for faster tail-replay on next reads
+    try:
+        compact_claims(api)
+        print("[rebuild] claims: compacted for tail-replay", file=sys.stdout)
+    except Exception as e:
+        # Compaction is optional; failure doesn't block the rebuild
+        print(f"[rebuild] claims: compaction skipped ({e})", file=sys.stdout)
 
     return 0 if success else 1
 

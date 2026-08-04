@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 tools.subprocess_guard -- AST guard for subprocess anti-patterns in tests/.
+INDEX: G6 AST guard for subprocess anti-patterns in tests/ (bare `subprocess.run(['bash', ...])`/`Popen` without explicit `cwd=`, `shell=True`, explicit `cwd=None`, `os.system()`); suppress via `# subprocess-ok` inline comment; CLI: `[--check] [--json] [--paths PATH ...]` (default scan dir: `tests/`); exit 0=clean, 1=findings; stdlib only, ASCII-only output
 
 Extends the test-hygiene framework (tests/test_test_hygiene.py) with a
 dedicated, reusable scanner for subprocess brittleness patterns that have

@@ -1,4 +1,5 @@
 """Browser-level proof that /submit's inbox-file bootstrap writes valid UTF-8
+INDEX: Browser proof (Playwright): /submit UTF-8 inbox bootstrap; exit 0=proven/1=failed, --allow-skip only browserless
 (ui/serve.py, handle_submit / INBOX_FILE header write).
 
 Bug: when state/ui-inbox.md doesn't exist yet, the header used to be written
