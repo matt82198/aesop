@@ -122,10 +122,14 @@ class TestHaltEnforcement(unittest.TestCase):
 
     def setUp(self):
         self.state_dir = tempfile.mkdtemp(prefix="halt-test-state-")
+        # Save original halt module for restore in tearDown
+        self.original_halt = wave_loop.halt
 
     def tearDown(self):
         if os.path.exists(self.state_dir):
             shutil.rmtree(self.state_dir, ignore_errors=True)
+        # Restore original halt module
+        wave_loop.halt = self.original_halt
 
     def test_halt_before_build(self):
         """Halt sentinel before build aborts with correct reason."""
@@ -289,6 +293,88 @@ class TestHaltEnforcement(unittest.TestCase):
         self.assertFalse(result2.get("aborted"))
         # Should have built items
         self.assertTrue(len(result2.get("built", [])) > 0)
+
+    def test_halt_module_unavailable_fails_closed(self):
+        """Wave refuses to run when halt module is unavailable (fail-closed).
+
+        Simulate ImportError by monkeypatching halt to None. The wave should
+        refuse to start with abort_reason="halt_module_unavailable" rather than
+        silently proceeding unguarded.
+        """
+        # Simulate halt module import failure
+        wave_loop.halt = None
+
+        manifest = {
+            "items": [
+                {
+                    "slug": "item-1",
+                    "prompt": "test prompt",
+                    "testCmd": "exit 0",
+                    "ownsFiles": ["file1.py"],
+                }
+            ]
+        }
+
+        driver = FakeDriver()
+
+        # Wave should refuse to start
+        result = run_wave(
+            manifest=manifest,
+            driver=driver,
+            state_dir=self.state_dir,
+            git=None,
+            orchestrator_backend=None,
+        )
+
+        # Verify the wave aborted at entry with halt unavailable reason
+        self.assertTrue(result.get("aborted"))
+        self.assertEqual(result.get("abort_reason"), "halt_module_unavailable")
+        self.assertIn("halt module unavailable", result.get("error", ""))
+        # Should not have built any items (failed before preflight)
+        self.assertEqual(len(result.get("built", [])), 0)
+
+    def test_halt_available_but_state_dir_none_warns_but_proceeds(self):
+        """With state_dir=None, halt is available but enforcement is off (warns).
+
+        This is legitimate for tests/dry-run. The wave should warn prominently
+        but proceed (skipping halt checks due to no coordination directory).
+        """
+        # halt module is available (original), state_dir is None
+        manifest = {
+            "items": [
+                {
+                    "slug": "item-1",
+                    "prompt": "test prompt",
+                    "testCmd": "exit 0",
+                    "ownsFiles": ["file1.py"],
+                }
+            ]
+        }
+
+        driver = FakeDriver()
+
+        # Capture stderr to check for warning
+        import io
+        from contextlib import redirect_stderr
+
+        stderr_capture = io.StringIO()
+        with redirect_stderr(stderr_capture):
+            result = run_wave(
+                manifest=manifest,
+                driver=driver,
+                state_dir=None,  # Legitimate case: no coordination
+                git=None,
+                orchestrator_backend=None,
+            )
+
+        # Wave should proceed normally (no halt check aborts)
+        self.assertFalse(result.get("aborted"))
+        # Should have built items
+        self.assertTrue(len(result.get("built", [])) > 0)
+
+        # Check that warning was logged
+        stderr_text = stderr_capture.getvalue()
+        self.assertIn("halt enforcement disabled", stderr_text.lower())
 
 
 class TestHaltAPI(unittest.TestCase):

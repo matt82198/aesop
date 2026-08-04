@@ -1472,12 +1472,45 @@ def _check_cost_ceiling(
     return False
 
 
+def _validate_halt_available(state_dir: Optional[str]) -> None:
+    """Validate halt module is available at wave entry (fail-closed).
+
+    The halt kill-switch is a mandatory safety gate. If the halt module is
+    unavailable (import failed, rename, packaging change), the wave MUST refuse
+    to start with a clear error rather than silently proceeding unguarded.
+
+    If state_dir is None, log a warning (legitimate for tests/dry-run) but allow.
+
+    Raises:
+        RuntimeError: if halt module is unavailable
+    """
+    if halt is None:
+        raise RuntimeError(
+            "FATAL: halt module unavailable (import failed). "
+            "The kill-switch safety gate is mandatory and cannot be disabled. "
+            "Check for ImportError, module rename, or packaging issues."
+        )
+
+    if state_dir is None:
+        # Legitimate case: tests, dry-run, or harness without coordination.
+        # Warn prominently so operators know halt enforcement is OFF.
+        print(
+            "[HALT] WARNING: state_dir is None; halt enforcement disabled. "
+            "This is legitimate for tests/dry-run, but in production coordination "
+            "must be enabled. Set state_dir or AESOP_STATE_ROOT.",
+            file=sys.stderr,
+        )
+
+
 def _check_halt(
     state_dir: Optional[str],
     result: Dict[str, Any],
     abort_reason: str,
 ) -> bool:
     """Halt-kill-switch gate (fail-closed): abort if HALT sentinel exists.
+
+    PRECONDITION: _validate_halt_available() must be called at wave entry.
+    This function assumes the halt module is available.
 
     Mirrors _check_cost_ceiling's pattern: check at phase boundaries for
     graceful abort. Checkpoint whatever the wave loop already checkpoints,
@@ -1491,8 +1524,16 @@ def _check_halt(
     Returns:
         bool: True if the wave must abort now (result populated), False to continue.
     """
-    if halt is None or state_dir is None:
+    # state_dir None is legitimate (tests/dry-run); skip checks.
+    if state_dir is None:
         return False
+
+    if halt is None:
+        # This should not happen if _validate_halt_available was called.
+        # Fail-closed: treat as if halted to prevent silent bypass.
+        result["aborted"] = True
+        result["abort_reason"] = f"{abort_reason} (halt module unavailable - fail-closed)"
+        return True
 
     if halt.is_halted(state_dir):
         halt_info = halt.get_halt_info(state_dir)
@@ -2785,6 +2826,20 @@ def _run_wave_inner(
         "policy": None,
         "resume_stats": None,
     }
+
+    # ========================================================================
+    # HALT VALIDATION (fail-closed at wave entry)
+    # ========================================================================
+    # The halt kill-switch is a mandatory safety gate. Ensure it's available
+    # before proceeding.
+    try:
+        _validate_halt_available(state_dir)
+    except RuntimeError as e:
+        result["aborted"] = True
+        result["abort_reason"] = "halt_module_unavailable"
+        result["error"] = str(e)
+        result["preflight_ok"] = False
+        return result
 
     # Ensure the state directory exists up-front: claims (EventStore) and
     # the journal both live under it. Without this, a fresh state_dir made
