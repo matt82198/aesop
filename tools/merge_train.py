@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Merge train -- serial or integration-branch batch merge for GitHub PRs.
+INDEX: Serial or integration-branch merge train: serial mode processes PRs one-at-a-time (update-branch, wait for CI, merge, verify MERGED); integration mode (`-i [BATCH_NAME]`) batches PRs into a local `integrate/<name>` branch, runs CI once, squash-merges, closes superseded PRs. Check classification is fail-closed via the `GREEN_CONCLUSIONS` allow-list (`SUCCESS`/`NEUTRAL`/`SKIPPED` only) and `check_outcome()`, which reads `conclusion` on CheckRun entries and `state` on legacy StatusContext entries — CANCELLED/TIMED_OUT/ACTION_REQUIRED/unknown are never green. Keep it an allow-list: a deny-list lets COMPLETED-but-not-FAILURE outcomes fall through to a merge
 
 Serial mode (default): update-branch, wait for CI, merge one at a time.
 Integration mode (--integration): batch PRs into a single integration branch,
@@ -68,8 +69,22 @@ GREEN_CONCLUSIONS = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
 
 
 def gh(*args: str) -> dict | str:
+    """Run one `gh` call and return parsed JSON, raw text, or an {"error": ...} dict.
+
+    `errors='replace'` is load-bearing, not decoration. With `encoding='utf-8'`
+    and the default strict handler, a single undecodable byte in the transport's
+    output (a cp1252 em-dash, 0x97, is the common one -- PR titles and branch
+    names carry them) raises UnicodeDecodeError inside subprocess's reader
+    THREAD. That exception never reaches this frame: it kills the thread,
+    `result.stdout` comes back None, and the next `.strip()` dies with a
+    misleading AttributeError. That is exactly how the merge queue crashed on
+    every pass for 24+ consecutive runs. Replace, never 'ignore': a corrupted
+    byte must stay visible as U+FFFD rather than silently vanishing from a
+    branch name we are about to act on.
+    """
     cmd = ["gh"] + list(args)
-    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=60)
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8',
+                            errors='replace', timeout=60)
     if result.returncode != 0:
         return {"error": result.stderr.strip(), "rc": result.returncode}
     out = result.stdout.strip()
@@ -211,8 +226,15 @@ def retry_ci(n: int, head_ref_name: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def git(*args: str) -> tuple[bool, str]:
+    """Run one `git` call, returning (ok, combined stdout+stderr).
+
+    See `gh()` for why `errors='replace'` is mandatory here: git emits raw
+    bytes from refs, config and commit messages without transcoding them, so
+    strict UTF-8 decoding is a live crash, not a theoretical one.
+    """
     cmd = ["git"] + list(args)
-    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=120)
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8',
+                            errors='replace', timeout=120)
     out = (result.stdout.strip() + "\n" + result.stderr.strip()).strip()
     return (result.returncode == 0, out)
 

@@ -802,5 +802,102 @@ class TestDomainCrossRefCheck(unittest.TestCase):
                 "Parent-child domain references (driver -> driver/orchestrator-swap) should be allowed")
 
 
+class TestGeneratedSentinel(unittest.TestCase):
+    """A2: generated-file sentinel exemption + byte-identity + authored-sentinel."""
+
+    def _pkg(self, repo_root):
+        (repo_root / "package.json").write_text(
+            json.dumps({"scripts": {"test:py": "python -m unittest"}}))
+
+    def test_sentinel_on_authored_claudemd_is_finding(self):
+        """A CLAUDE.md carrying the GENERATED-BY sentinel is a finding (authored)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            self._pkg(repo_root)
+            dom = repo_root / "d"
+            dom.mkdir()
+            (dom / "CLAUDE.md").write_text(
+                "# D\n\n<!-- GENERATED-BY: tools/gen_tool_index.py -->\ncontent\n")
+            findings = lint_claudemd(dom / "CLAUDE.md", repo_root)
+            self.assertTrue(
+                any(f["type"] == "sentinel-on-authored" for f in findings),
+                "authored CLAUDE.md with sentinel should be flagged")
+
+    def test_sentinel_exempts_line_count_cap(self):
+        """A sentinel-bearing file is exempt from the line-count cap."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            self._pkg(repo_root)
+            dom = repo_root / "d"
+            dom.mkdir()
+            big = ["# D", "<!-- GENERATED-BY: tools/gen_tool_index.py -->"] + \
+                  ["line %d" % i for i in range(300)]
+            (dom / "CLAUDE.md").write_text("\n".join(big))
+            findings = lint_claudemd(dom / "CLAUDE.md", repo_root, max_lines=150)
+            self.assertFalse(
+                any(f["type"] == "line-count" for f in findings),
+                "sentinel file must be exempt from the cap")
+
+    def test_cap_still_fires_on_authored_200_liner(self):
+        """Cap STILL fires on a normal (no-sentinel) 200-line CLAUDE.md."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            self._pkg(repo_root)
+            dom = repo_root / "d"
+            dom.mkdir()
+            (dom / "CLAUDE.md").write_text(
+                "\n".join(["# D"] + ["line %d" % i for i in range(200)]))
+            findings = lint_claudemd(dom / "CLAUDE.md", repo_root, max_lines=150)
+            self.assertTrue(
+                any(f["type"] == "line-count" for f in findings),
+                "authored 200-liner must still be capped")
+
+    def test_ui_215_allowance_preserved(self):
+        """ui/CLAUDE.md keeps its documented 215-line allowance."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            self._pkg(repo_root)
+            ui = repo_root / "ui"
+            ui.mkdir()
+            (ui / "CLAUDE.md").write_text(
+                "\n".join(["# ui"] + ["line %d" % i for i in range(210)]))
+            findings = lint_claudemd(ui / "CLAUDE.md", repo_root, max_lines=150)
+            self.assertFalse(
+                any(f["type"] == "line-count" for f in findings),
+                "ui/CLAUDE.md 215 allowance should hold at 211 lines")
+
+    def test_byte_identity_clean_then_drift(self):
+        """check_generated_files: clean generated file OK; hand-edit -> drift finding."""
+        from claudemd_lint import check_generated_files
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            gen = repo_root / "gen_fake.py"
+            gen.write_text(
+                "#!/usr/bin/env python3\n"
+                "import sys\n"
+                "from pathlib import Path\n"
+                "EXPECTED = '<!-- GENERATED-BY: gen_fake.py -->\\nX\\n<!-- END-GENERATED -->\\n'\n"
+                "p = Path('out.md')\n"
+                "if '--regenerate' in sys.argv:\n"
+                "    p.write_text(EXPECTED, encoding='utf-8', newline='\\n'); sys.exit(0)\n"
+                "sys.exit(0 if p.read_text(encoding='utf-8') == EXPECTED else 1)\n",
+                encoding="utf-8", newline="\n")
+            out = repo_root / "out.md"
+            out.write_text(
+                "<!-- GENERATED-BY: gen_fake.py -->\nX\n<!-- END-GENERATED -->\n",
+                encoding="utf-8", newline="\n")
+            # clean
+            self.assertEqual(
+                [f for f in check_generated_files(repo_root)
+                 if f["type"] == "generated-drift"], [])
+            # hand-edit -> drift
+            out.write_text(
+                "<!-- GENERATED-BY: gen_fake.py -->\nTAMPERED\n<!-- END-GENERATED -->\n",
+                encoding="utf-8", newline="\n")
+            drift = [f for f in check_generated_files(repo_root)
+                     if f["type"] == "generated-drift"]
+            self.assertEqual(len(drift), 1, "hand-edited generated file must drift")
+
+
 if __name__ == "__main__":
     unittest.main()

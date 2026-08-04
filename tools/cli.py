@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 CLI Base — Unified command-line interface factory for tools.
+INDEX: CLI base factory; stdlib-only exports: CLIBuilder, OutputFormatter (text/JSON), SubprocessError, run_subprocess, resolve_repo_root, mask_secrets, exit_code (0/1/2). See common.py for delegation.
 
 Consolidates common boilerplate across 89 tools:
   - argparse setup (--check, --json, --root, --repo, --help)
@@ -73,7 +74,7 @@ def run_subprocess(
             cmd,
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=timeout,
             cwd=cwd,
         )

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Sum token usage across a session's main thread and subagent transcripts.
+INDEX: Aggregate token usage across session transcripts
 
 Usage:
   python sum_session_tokens.py <session_dir> [<main_transcript>]

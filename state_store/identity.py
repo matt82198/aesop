@@ -7,7 +7,9 @@ Implements durable instance identity: hostname:pid:nonce (ephemeral) or stable_i
 - Durable form (get_identity_with_epoch): (stable_id, epoch) persisted to $AESOP_STATE_ROOT/instance-id.
   Epoch is a monotonic boot counter; restart increments it. Used for claim fencing in multibox.
 
-Fail-open on IDENTITY: corrupt/missing/unwritable id file falls back to ephemeral without raising.
+Fail-open on IDENTITY creation: missing/unwritable id file on FRESH box falls back to ephemeral.
+Fail-closed on corruption: if id file EXISTED but is corrupt (torn write), raises IdentityCorruptionError.
+The distinction preserves epoch monotonicity: a stale crashed instance cannot claim epoch=1 after a restart.
 
 Stdlib only: socket, os, random, string, json, pathlib.
 """
@@ -20,6 +22,12 @@ import socket
 import string
 from pathlib import Path
 from typing import Optional
+
+
+class IdentityCorruptionError(Exception):
+    """Raised when persisted identity file is corrupt and recovery is impossible."""
+
+    pass
 
 
 # Cached instance_id (ephemeral form), computed once per process
@@ -54,7 +62,10 @@ def get_identity_with_epoch(state_root: Optional[str] = None) -> tuple[str, int]
     Stable ID is derived from hostname and a unique nonce, persisted across restarts.
     Epoch is a monotonic boot counter; each simulated restart should increment it.
 
-    Fail-open: corrupt/missing/unwritable id file falls back to ephemeral form without raising.
+    Fail-closed on corruption: if id file existed but is corrupt (torn write), raises
+    IdentityCorruptionError. This preserves epoch monotonicity for fencing (Inc 4+).
+    Fail-open on CREATION: missing state_root or unwritable directory falls back to
+    ephemeral form for fresh boxes.
 
     Args:
         state_root: Base directory for persisted identity file. Defaults to AESOP_STATE_ROOT
@@ -62,6 +73,10 @@ def get_identity_with_epoch(state_root: Optional[str] = None) -> tuple[str, int]
 
     Returns:
         Tuple of (stable_id, epoch) where epoch is >= 1.
+
+    Raises:
+        IdentityCorruptionError: If id file existed but is corrupt (torn/partial JSON).
+                                 This is fail-closed to prevent epoch resets on restart.
     """
     if state_root is None:
         state_root = os.environ.get("AESOP_STATE_ROOT", "./state")
@@ -74,10 +89,15 @@ def get_identity_with_epoch(state_root: Optional[str] = None) -> tuple[str, int]
         stable_id, epoch = _init_identity_file(state_root)
         _IDENTITY_CACHE[state_root] = (stable_id, epoch)
         return stable_id, epoch
-    except Exception:
-        # Fail-open: fall back to ephemeral form without raising
+    except IdentityCorruptionError:
+        # Fail-closed: corrupt file when prior file existed is a hard error.
+        # Caller must handle (e.g., manual recovery, abort startup).
+        raise
+    except (OSError, IOError):
+        # Fail-open: unwritable directory on FRESH box (no prior file) falls back
+        # to ephemeral form. This allows solo mode to boot even if state root is
+        # unwritable (e.g., permissions, filesystem error on a fresh box).
         ephemeral_id = _derive_instance_id()
-        # Use epoch 1 for ephemeral (not persisted)
         _IDENTITY_CACHE[state_root] = (ephemeral_id, 1)
         return ephemeral_id, 1
 
@@ -85,8 +105,10 @@ def get_identity_with_epoch(state_root: Optional[str] = None) -> tuple[str, int]
 def _init_identity_file(state_root: str) -> tuple[str, int]:
     """Initialize or load persisted identity file.
 
-    Creates $state_root/instance-id if it doesn't exist, or loads it if present.
-    Increments epoch on each fresh initialization (simulated restart).
+    Distinguishes fresh box (no prior file) from crash recovery (corrupt file):
+    - If file doesn't exist: creates it with epoch=1 (fresh box)
+    - If file exists but is corrupt: raises IdentityCorruptionError (fail-closed)
+    - If file exists and is valid: loads and returns the persisted identity
 
     Args:
         state_root: Directory for persisted identity file.
@@ -95,33 +117,51 @@ def _init_identity_file(state_root: str) -> tuple[str, int]:
         Tuple of (stable_id, epoch).
 
     Raises:
-        Exception: If file I/O fails beyond recovery (handled by caller with fail-open).
+        IdentityCorruptionError: If file exists but is corrupt (JSON parse error, missing keys).
+                                 This preserves epoch monotonicity for multibox fencing.
+        OSError: If directory creation fails (caller falls back to ephemeral on fresh box).
     """
     id_path = Path(state_root) / "instance-id"
     Path(state_root).mkdir(parents=True, exist_ok=True)
 
     if id_path.exists():
-        # Load existing identity
+        # File EXISTS: load it (strict fail-closed on corruption)
         try:
             with open(id_path, encoding="utf-8") as f:
-                data = json.load(f)
-            stable_id = data["stable_id"]
-            epoch = data["epoch"]
+                content = f.read()
+            if not content or not content.strip():
+                # Empty or whitespace-only file: torn write during persist
+                raise IdentityCorruptionError(
+                    f"Identity file {id_path} is empty; corrupted during prior write. "
+                    "Restart refused to preserve epoch monotonicity. "
+                    "Manual recovery: remove {id_path} and restart."
+                )
+            data = json.loads(content)
+            stable_id = data.get("stable_id")
+            epoch = data.get("epoch")
+            if not stable_id or epoch is None:
+                raise IdentityCorruptionError(
+                    f"Identity file {id_path} missing required keys (stable_id, epoch). "
+                    "Corrupted or incompatible format. "
+                    "Manual recovery: remove {id_path} and restart."
+                )
             return stable_id, epoch
-        except (json.JSONDecodeError, KeyError):
-            # Corrupt file; fall back to ephemeral
-            raise RuntimeError("Corrupt identity file")
+        except json.JSONDecodeError as e:
+            # JSON parse error: torn/partial write during prior persist
+            raise IdentityCorruptionError(
+                f"Identity file {id_path} has invalid JSON: {e}. "
+                "Corrupted during prior write. "
+                "Manual recovery: remove {id_path} and restart."
+            )
     else:
-        # Create new persistent identity
+        # File DOES NOT EXIST: fresh box, create new identity with epoch=1
         stable_id = _derive_stable_id()
         epoch = 1
         data = {"stable_id": stable_id, "epoch": epoch}
-        try:
-            with open(id_path, "w", encoding="utf-8") as f:
-                json.dump(data, f)
-        except OSError:
-            # Unwritable; fall back to ephemeral
-            raise RuntimeError("Unable to write identity file")
+        # Write may fail (unwritable directory), but we let OSError propagate
+        # to caller which catches it and falls back to ephemeral (fail-open for fresh boxes)
+        with open(id_path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
         return stable_id, epoch
 
 

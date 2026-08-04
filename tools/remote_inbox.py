@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 r"""Poll GitHub issue comments for remote command dispatch (phone-to-orchestrator).
+INDEX: Poll GitHub issue comments for remote command dispatch (phone-to-orchestrator, outbound polling only); verifies repo-owner authorship via GitHub API; strict allowlist of 8 skill commands (/runwave, /power, /afk, etc.); idempotent tracking to prevent replay; appends to the orchestrator state inbox (state/ui-inbox.md) for pickup; posts reply comments for acknowledgment; audit log to state/REMOTE-DISPATCH.log; CLI: `--issue N [--dry-run] [--once]`; exit 0=success / 1=gh failure; designed for scheduled task execution (Windows task scheduler calling --once every 5-10 minutes); documented in docs/REMOTE-ACCESS.md
 
 **SECURITY: Non-negotiable constraints**
 - Only comments from the repo owner are accepted; author verified from the API.
@@ -101,7 +102,7 @@ def run_gh(args: List[str]) -> Tuple[int, str, str]:
             capture_output=True,
             text=False,  # We'll decode ourselves
             timeout=30,
-            encoding=None,
+            encoding=None, errors='replace',
         )
         # Decode as UTF-8, fallback to latin-1
         try:

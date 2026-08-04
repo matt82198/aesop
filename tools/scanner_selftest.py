@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Regression harness for secret_scan.py — validates scanner behavior across TP/FP cases.
+INDEX: Regression harness for secret_scan.py
 
 Usage: python scanner_selftest.py [--temp-dir DIR]
 
@@ -31,7 +32,7 @@ def run_test(name, file_content, filename, expected_exit, expected_keyword):
             [sys.executable, scanner_path, str(test_file)],
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=10
         )
     except subprocess.TimeoutExpired:
@@ -43,7 +44,7 @@ def run_test(name, file_content, filename, expected_exit, expected_keyword):
                 [sys.executable, scanner_path, str(test_file)],
                 capture_output=True,
                 text=True,
-                encoding='utf-8',
+                encoding='utf-8', errors='replace',
                 timeout=10
             )
         except Exception as e:
@@ -307,7 +308,7 @@ def main():
         try:
             r = subprocess.run(
                 [sys.executable, str(scanner_path), str(scanner_path)],
-                capture_output=True, text=True, encoding='utf-8', timeout=10,
+                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10,
             )
             self_ok = (r.returncode == 0 and "CLEAN" in r.stdout
                        and "ALLOWED-DOC" not in r.stdout)

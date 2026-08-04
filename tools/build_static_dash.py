@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Build a static, self-contained snapshot of the Aesop dashboard with demo data.
+INDEX: Build a static, self-contained snapshot of the dashboard with demo data for GitHub Pages; starts demo server, captures API state, produces _site/ with fetch/EventSource shim; CLI: `--output DIR`
 
 Produces a deployable directory (_site/) suitable for GitHub Pages:
   - Starts the dashboard server in --demo mode on an ephemeral port

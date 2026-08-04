@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 reconcile.py — drift detection between STATE.md (git) and state_store (SQLite).
+INDEX: Detect/resolve drift (git STATE.md vs. state_store projection; git-authoritative; --resolve appends to SQLite only, never rewrites git-side state)
 
 ## Why this exists
 

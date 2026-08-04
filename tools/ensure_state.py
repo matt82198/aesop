@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Scaffold durable checkpointing directories for project orchestration.
+INDEX: Scaffold STATE.md and BUILDLOG.md templates (writes via state_store WriteAPI: scaffold emits state_md_written + buildlog events)
 
 Usage: ensure_state.py --state-dir DIR
 

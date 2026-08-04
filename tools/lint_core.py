@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Shared core for Python linting and verification gates.
+INDEX: Shared linting core (file discovery, AST cache, ratchet baseline, exit-code contract, finding schema); used by 6+ gate scripts; provides Finding class, discover_files(), ASTCache, RatchetBaseline, format_findings_text/json(), exit_code() helpers; all stdlib-only; exit 0=clean/1=findings/2=could-not-evaluate
 
 Extracts common patterns used across 27 gate/linter scripts:
   - File discovery (path walking with glob matching)
