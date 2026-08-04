@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """CLAUDE.md linter — dogfoods the scope-min invariant.
+INDEX: Lint the domain CLAUDE.md layer: doc-pointers resolve, cited npm scripts exist, runtime/state artifacts not flagged, domain cross-refs prohibited; 4 checks: DOC-POINTER, TEST-CMD, DOMAIN-CROSS-REF (domain CLAUDE.md must not reference other domain CLAUDE.md with directives; parent-child refs allowed), line-count; --json; root CLAUDE.md exempt from cross-ref check
 
 For each */CLAUDE.md in a repo:
 1. DOC-POINTER check — every referenced path ending .md/.py/.sh/.mjs that looks like a
@@ -21,6 +22,11 @@ import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
+
+# Generated-file sentinel: files carrying this marker are produced by a generator
+# (captured in group 1) and must be byte-identical to `python <generator> --check`.
+# Authored CLAUDE.md files must NOT carry it; generated files are cap-exempt.
+GENERATED_SENTINEL_RE = re.compile(r"<!--\s*GENERATED-BY:\s*(\S+)\s*-->")
 
 # Runtime artifact allowlist — these are correctly absent from the tree
 RUNTIME_ARTIFACTS = {
@@ -86,7 +92,7 @@ def _tracked_claudemds(repo_root):
         out = subprocess.run(
             ["git", "ls-files", "*CLAUDE.md"],
             cwd=str(repo_root), capture_output=True, text=True,
-            encoding="utf-8", timeout=10,
+            encoding="utf-8", errors="replace", timeout=10,
         )
         if out.returncode == 0:
             names = [n.strip() for n in out.stdout.splitlines() if n.strip()]
@@ -308,16 +314,30 @@ def lint_claudemd(
         }]
 
     lines = content.split("\n")
+    rel = str(claudemd_path.relative_to(repo_root)).replace("\\", "/")
+
+    # Generated-file sentinel: a CLAUDE.md is an AUTHORED file, so it must NEVER
+    # carry the generated-file sentinel (that marks a machine-generated file whose
+    # bytes must equal its generator's output — an authored doc claiming to be
+    # generated is a finding). Sentinel-bearing files are also exempt from the
+    # line-count cap (they can be arbitrarily long, e.g. tools/INDEX.md).
+    has_sentinel = bool(GENERATED_SENTINEL_RE.search(content))
+    if has_sentinel:
+        findings.append({
+            "type": "sentinel-on-authored",
+            "line": "?",
+            "message": f"{rel}: authored CLAUDE.md carries a "
+                       f"'<!-- GENERATED-BY: -->' sentinel; only generated files may.",
+        })
 
     # Per-file oversize allowance: ui/CLAUDE.md is the documented dense-domain
     # exception (lossless-verified, probe-passed at ~197 lines). Mirrors the same
     # allowance in ~/scripts/compliance_check.py so the two gates agree.
     ALLOWED_OVERSIZE = {"ui/CLAUDE.md": 215}  # grew with bench_panel + BenchmarkPanel additions
-    rel = str(claudemd_path.relative_to(repo_root)).replace("\\", "/")
     effective_max = ALLOWED_OVERSIZE.get(rel, max_lines)
 
-    # Check line count
-    if len(lines) > effective_max:
+    # Check line count (sentinel-bearing generated files are exempt from the cap)
+    if not has_sentinel and len(lines) > effective_max:
         findings.append({
             "type": "line-count",
             "line": str(len(lines)),
@@ -414,6 +434,68 @@ def lint_claudemd(
     return findings
 
 
+def check_generated_files(repo_root: Path) -> List[Dict[str, str]]:
+    """Verify every generated file is byte-identical to its generator's output.
+
+    Discovers markdown files carrying the `<!-- GENERATED-BY: <gen> -->` sentinel
+    and runs `python <gen> --check`; a nonzero-exit drift (return code 1) is a
+    finding. Return code 2 (generator could not evaluate, e.g. not a git tree) is
+    treated as skip so this never false-fails in a non-repo checkout. CLAUDE.md
+    files are handled by the authored-sentinel check in lint_claudemd().
+    """
+    import subprocess
+
+    findings: List[Dict[str, str]] = []
+    skip_dirs = {"node_modules", ".git", "dist", ".pytest_cache", "__pycache__"}
+    for md_path in repo_root.rglob("*.md"):
+        if any(part in skip_dirs for part in md_path.parts):
+            continue
+        if md_path.name == "CLAUDE.md":
+            continue
+        try:
+            content = md_path.read_text(encoding="utf-8")
+        except (IOError, UnicodeDecodeError):
+            continue
+        m = GENERATED_SENTINEL_RE.search(content)
+        if not m:
+            continue
+        rel = str(md_path.relative_to(repo_root)).replace("\\", "/")
+        gen_rel = m.group(1)
+        gen_path = repo_root / gen_rel
+        if not gen_path.exists():
+            findings.append({
+                "type": "generated-missing-generator",
+                "line": "?",
+                "message": f"{rel}: sentinel names generator '{gen_rel}' which does not exist",
+            })
+            continue
+        try:
+            res = subprocess.run(
+                [sys.executable, str(gen_path), "--check"],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                encoding="utf-8", errors="replace",
+                timeout=120,
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            findings.append({
+                "type": "generated-check-error",
+                "line": "?",
+                "message": f"{rel}: could not run generator '{gen_rel}' --check: {e}",
+            })
+            continue
+        if res.returncode == 1:
+            findings.append({
+                "type": "generated-drift",
+                "line": "?",
+                "message": f"{rel}: not byte-identical to '{gen_rel}' output "
+                           f"(hand-edit?); run: python {gen_rel} --regenerate",
+            })
+        # return code 2 = generator could not evaluate -> skip (avoid false fail)
+    return findings
+
+
 def main():
     """Main entry point."""
     import argparse
@@ -466,6 +548,9 @@ def main():
     for claudemd_path in claudemd_files:
         findings = lint_claudemd(claudemd_path, repo_root, args.max_lines)
         all_findings.extend(findings)
+
+    # Verify generated files (e.g. tools/INDEX.md) are byte-identical to output.
+    all_findings.extend(check_generated_files(repo_root))
 
     if args.json:
         output = {

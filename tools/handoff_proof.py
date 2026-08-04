@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Team-handoff proof: crash-only resume with REAL wave engine.
+INDEX: Team-handoff proof: crash-only resume demo on the real driver/wave_loop.py engine offline (control vs interrupted+resumed runs must reach identical terminal state); outputs docs/HANDOFF-CERTIFICATE.md + state/handoff-proof-*.json
 
 This script demonstrates durable wave continuity across operators
 using the ACTUAL driver/wave_loop.py engine offline (no API keys).
@@ -187,7 +188,7 @@ def _create_fake_driver():
                     shell=shell,
                     capture_output=True,
                     text=True,
-                    encoding='utf-8',
+                    encoding='utf-8', errors='replace',
                     timeout=30,
                 )
                 return CommandResult(

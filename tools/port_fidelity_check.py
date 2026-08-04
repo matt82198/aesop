@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 tools.port_fidelity_check -- Port-task fidelity checker for dispatch prompts.
+INDEX: Validates port/copy/vendor/migrate dispatch prompts require source path, source-unique marker, and independent verification
 
 Validates that "port"/"copy"/"vendor"/"migrate" dispatch prompts include source-marker
 assertions and independent verification requirements. When an agent is asked to "port file X",

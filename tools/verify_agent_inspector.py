@@ -1,4 +1,5 @@
 """Browser-level proof for the Agent Inspector drawer (ui/web/dist/ + /api/agent).
+INDEX: Browser proof (Playwright): Agent Inspector drawer (/api/agent?id=); exit 0=proven/1=failed, --allow-skip only browserless
 
 Drives the BUILT React app served by `python ui/serve.py` and exercises the
 whole vertical slice of the inspector in a real Chromium via Playwright:
