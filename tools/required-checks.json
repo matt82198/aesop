@@ -1,0 +1,28 @@
+{
+  "_comment": "Declared intent: the CI checks that MUST be in main's branch-protection required set. tools/required_checks_gate.py fails on drift in either direction (declared-but-unenforced = a gate that never blocks; enforced-but-undeclared = a gate nobody reviewed). Edit this file only alongside an intentional branch-protection change.",
+  "repo": "matt82198/aesop",
+  "branch": "main",
+  "required_contexts": [
+    "ci (0)",
+    "ci (1)",
+    "ci (2)",
+    "ci (3)",
+    "windows"
+  ],
+  "notes": {
+    "ci (0..3)": "The 4-way python shard matrix from .github/workflows/ci.yml. All four shards gate; a shard missing here would let its slice of the suite fail silently.",
+    "windows": "The Windows aggregator job. Never rename it -- the required-check context is matched by name, so a rename silently drops the gate."
+  },
+  "snapshot": {
+    "captured": "2026-08-02",
+    "source": "gh api repos/matt82198/aesop/branches/main/protection",
+    "strict": false,
+    "contexts": [
+      "ci (0)",
+      "ci (1)",
+      "ci (2)",
+      "ci (3)",
+      "windows"
+    ]
+  }
+}
