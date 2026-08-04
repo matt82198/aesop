@@ -12,7 +12,7 @@
 Organized by component: backup/recovery, watchdog daemon, git hooks, state reconciliation, UI, daemon self-healing, wave enforcement, test runners.
 Run: `bash tools/run_shell_tests.sh` or `npm run test:sh`
 
-**Node (26 suites)**: Discovered dynamically from `tests/*.test.mjs`.
+**Node (27 suites)**: Discovered dynamically from `tests/*.test.mjs`.
 Organized by category: CLI scaffolding, config management, signal collection, drift detection, dashboard UI, fleet/MCP APIs, test templating, orchestration core.
 Run: `npm run test:node` or `node --test --test-force-exit --test-timeout=60000 tests/*.test.mjs`
 
