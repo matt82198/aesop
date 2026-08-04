@@ -116,7 +116,7 @@ def run_command(cmd, timeout=10):
             cmd,
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=timeout,
             shell=False
         )
