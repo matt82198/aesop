@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 bench_api_runner.py — Run bench v2+v3 via Anthropic API (not CLI).
+INDEX: Bench v2+v3 via Anthropic API (BENCH_API_KEY, API-only per bench-no-cli-fallback rule); reuses bench_runner machinery; CLI: `bench_api_runner.py <v2|v3|all> <model...>`
 
 Per user rule (bench-no-cli-fallback): benchmarks run API-only to avoid CLI
 subscription burn. BENCH_API_KEY must be set in the user environment.

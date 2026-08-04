@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Python module dependency graph generator (Mermaid/DOT/JSON output).
+INDEX: Dependency graph analyzer for import relationships
 
 Scans Python files, extracts import relationships via ast, builds a directed
 graph of internal module dependencies, and outputs in the requested format.

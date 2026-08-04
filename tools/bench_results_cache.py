@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 bench_results_cache.py — Benchmark results journal (append-only).
+INDEX: Append-only benchmark results journal (state/bench-runs.jsonl); idempotent dedup by model+timestamp; stdlib-only
 
 Stores benchmark run results in an append-only JSONL file (state/bench-runs.jsonl)
 for the dashboard to display. Each record is a complete run result (model, accuracy,

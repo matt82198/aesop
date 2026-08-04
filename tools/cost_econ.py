@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Cost economics metrics for aesop.
+INDEX: Cost economics metrics (cost-per-LOC, per-merged-PR, per-wave/backlog-item) from stats.json + fleet ledger; shares ui/cost.py pricing; honesty caveats documented in output
 
 Computes unit cost metrics derived from git stats, fleet ledger tokens, and optional pricing.
 
