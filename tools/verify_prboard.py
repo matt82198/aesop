@@ -1,4 +1,5 @@
 """Browser-level proof for the Wave PR Board view (ui/web/dist/ + /api/wave/prs).
+INDEX: Browser proof (Playwright): Wave PR Board (/api/wave/prs); exit 0=proven/1=failed, --allow-skip only browserless
 
 Drives the BUILT React app served by `python ui/serve.py` and exercises the
 full stack of the PR board — route wiring, component mount, the real

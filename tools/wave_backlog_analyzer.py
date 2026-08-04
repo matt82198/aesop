@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Wave backlog risk analyzer — assess risk for backlog items pre-wave.
+INDEX: Pre-wave backlog risk analyzer (per-item risk_level/estimated_retries from git fix-forward history + tracker lanes); warn-level only, --json
 
 Analyzes tracker backlog items and correlates with git history to compute
 per-item risk assessments. Uses deterministic heuristics only:
@@ -159,7 +160,7 @@ def get_commits_since(repo_path, days=30):
             ["git", "-C", str(repo_path), "log", "--all", f"--since={since_date}", "--format=%H%n%s%n--END--"],
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=10,
         )
         if result.returncode != 0:
@@ -192,7 +193,7 @@ def get_files_changed_in_commit(repo_path, commit_hash):
             ["git", "-C", str(repo_path), "show", "--name-only", "--format=", commit_hash],
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=5,
         )
         if result.returncode == 0:

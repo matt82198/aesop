@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Shared subprocess wrapper for gh and git CLI commands.
+INDEX: Unified subprocess wrapper (gh/git CLI commands with explicit timeouts ~30s/~60s, UTF-8 encoding, no shell=True, timeout vs non-zero-exit distinction); exports: `run()`, `gh()`, `git()`, `json_output()`; used by auto_merge, ci_merge_wait, defect_escape, incident_report; stdlib-only
 
 Provides unified timeout, encoding, and error handling across all subprocess calls.
 Never uses shell=True; always uses explicit argument lists.
@@ -82,7 +83,7 @@ def run(
             cmd,
             capture_output=capture,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=timeout,
             check=False,  # We handle errors ourselves
         )
@@ -180,7 +181,7 @@ def git(
             cmd,
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=timeout,
             cwd=cwd,
             check=False,  # We handle errors ourselves

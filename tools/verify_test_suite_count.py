@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Verify test suite counts in tests/CLAUDE.md match actual test files on disk.
+INDEX: Test suite count drift gate with a strict read-only/write split. `--check` (default) and its reserved alias `--strict` are READ-ONLY validation and NEVER write: they assert each of the three `**<Label> (N suites)**:` count lines is present exactly once (missing or >1 match = fail-closed exit 1 naming the line), that the counts parse as integers, and that they match the `git ls-files` derivation — a mismatch is exit 1 with a "run --regenerate" hint. Scanning is hardened against format-variant evasion: line-anchored and tolerant of spacing/colon placement (`**X (N suites)** :` and `**X (N suites):**` both count), labels restricted to the exact ASCII `Node`/`Shell`/`Python` so a homoglyph label is reported MALFORMED instead of being invisible, and fenced code blocks (```/~~~) plus HTML comments masked out before matching so a documented format example is neither a duplicate nor a substitute for the real line. Counts are always derived from `--repo` (default CWD) with `cwd` threaded into every `git ls-files` call — previously `--repo` was accepted and ignored, so pointing it at an empty tree graded the CWD repo and reported `[OK] counts match`. Fail-closed exit 2 when the target is not a git work tree, when a `git ls-files` call fails, and PER SUITE FAMILY when any one family derives to zero while CLAUDE.md documents a non-zero count (the old AND-over-all-three form auto-blessed a single-language wipeout); a deliberate removal is declared by hand-editing that line to `0 suites`. `--regenerate [--dry-run]` (deprecated alias `--fix`, still used by `auto_merge.py`) is the ONLY writing mode; it applies the SAME exactly-one assertion before writing (so it can no longer launder a duplicated count line into a green tree), rewrites by match span in the canonical form (never a fenced example), and carries the same vacuous-zero guard so a broken git can never zero out the doc. `--repo`/`--claudemd` overrides; idempotent; exit 0=clean/regenerated, 1=drift or invariant-broken, 2=cannot-evaluate. Runs as a pre-push gate via `hooks/pre-push-policy.sh` AND as a blocking CI step in `.github/workflows/ci.yml` (`--check`). Adding or removing a test suite therefore requires running `--regenerate` and committing tests/CLAUDE.md in the same PR
 
 Read-only validation vs. regeneration are strictly separated:
 
@@ -174,6 +175,7 @@ def ensure_git_repo(repo_root: Path) -> None:
             capture_output=True,
             text=True,
             encoding='utf-8',
+            errors='replace',
             check=True,
             timeout=10,
         )
@@ -213,6 +215,7 @@ def count_git_files(repo_root: Path, *patterns: str) -> int:
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
+                errors='replace',
                 check=True,
                 timeout=10,
             )

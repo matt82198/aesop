@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 secret_scan.py — Pre-push secret/credential detection gate.
+INDEX: Pre-push secret/credential detection gate (staged/history/paths); token patterns are word-boundary anchored (`\bsk-`) so a key-shaped substring inside a longer hyphenated word is not reported as a live key
 
 Modes:
   secret_scan.py --staged [--repo PATH]              Scan git staged files (default repo=cwd)
@@ -532,7 +533,7 @@ def get_staged_files(repo_path):
             cwd=repo_path,
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=10,
         )
     except Exception as e:
@@ -560,7 +561,7 @@ def get_range_files(repo_path, commit_range):
             cwd=repo_path,
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=10,
         )
     except Exception as e:
@@ -638,14 +639,14 @@ def _git_committable_set(dir_path):
     try:
         top = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            cwd=str(dir_path), capture_output=True, text=True, encoding='utf-8', timeout=10,
+            cwd=str(dir_path), capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10,
         )
         if top.returncode != 0:
             return None
         toplevel = Path(top.stdout.strip())
         listing = subprocess.run(
             ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-            cwd=str(toplevel), capture_output=True, text=True, encoding='utf-8', timeout=60,
+            cwd=str(toplevel), capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=60,
         )
         if listing.returncode != 0:
             return None

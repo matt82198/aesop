@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Fixture intent manifest validator.
+INDEX: Deliberately-broken fixture manifest validator; verifies bench/fixtures-intent.json tracks all intentionally-broken/incomplete fixtures to distinguish benchmarks from regressions; CLI: `[--manifest PATH] [--root DIR] [--json]`; exit 0=valid/1=findings/2=error; stdlib-only
 
 Verifies that deliberately-broken or intentionally-incomplete fixtures are
 tracked in bench/fixtures-intent.json and remain identifiable from actual

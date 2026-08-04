@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Browser proof for the CostForecast component.
+INDEX: Playwright proof for CostForecast: trend chart, metrics panel, ceiling alerts, populated/empty phases (5-day ledger / <2d data)
 
 Drives ui/web/dist/ against fixture cost data (ledger with daily totals),
 asserting the forecast contract via data-testid hooks:
@@ -197,7 +198,7 @@ asyncio.run(test())
             [sys.executable, '-c', test_script],
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=30,
             env={**os.environ, 'AESOP_STATE_ROOT': str(state_dir)}
         )

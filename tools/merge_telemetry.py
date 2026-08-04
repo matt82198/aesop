@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Merge-pipeline contention telemetry baseline.
+INDEX: D0 telemetry (CI-attempts/fix-rounds/contended-files per merged PR; --since/--until/--append/--json; exit 2=fatal)
 
 Per merged PR via gh api: time-to-merge wall, CI attempts, fix rounds, update-branch
 amplification, contended-file flag, merge route, red rate.
@@ -54,7 +55,7 @@ def gh(*args: str) -> dict | str | list:
             cmd,
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=120
         )
     except FileNotFoundError:
@@ -157,7 +158,7 @@ def get_merge_commits_on_head(pr_head_oid: str, pr_base_oid: str) -> int:
             cmd,
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=10,
             cwd=Path.cwd()
         )
@@ -181,7 +182,7 @@ def get_merge_commits_on_head(pr_head_oid: str, pr_base_oid: str) -> int:
                 cmd_subj,
                 capture_output=True,
                 text=True,
-                encoding='utf-8',
+                encoding='utf-8', errors='replace',
                 timeout=5,
                 cwd=Path.cwd()
             )

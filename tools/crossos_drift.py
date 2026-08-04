@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Cross-OS drift measurement tool.
+INDEX: Cross-OS CI drift measurement (Windows vs Linux outcome drift from GitHub Actions history; CLI: `--runs N=10 [--json]`; reports pass rates, divergence set, failing test aggregation; exit 3 on auth failure)
 
 Quantifies Windows-vs-Linux CI outcome drift from GitHub Actions history via gh CLI.
 
@@ -60,7 +61,7 @@ def gh_run_list(limit: int = 10, branch: str = "main") -> List[Dict]:
             cmd,
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=30,
         )
 
@@ -91,7 +92,7 @@ def gh_jobs_for_run(run_id: str) -> List[Dict]:
             cmd,
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=30,
         )
 
@@ -119,7 +120,7 @@ def gh_job_logs(job_id: str) -> str:
             cmd,
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=60,
         )
 
