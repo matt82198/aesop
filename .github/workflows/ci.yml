@@ -183,6 +183,18 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/wave_templates.py validate --template all
 
+      - name: Sibling import guard (tools/ sys.path discipline)
+        if: matrix.python-shard == 0
+        run: python tools/sibling_import_check.py --check
+
+      - name: Deliberately-broken fixture manifest gate
+        if: matrix.python-shard == 0
+        run: python tools/fixture_intent_check.py --root .
+
+      - name: Port-task fidelity gate
+        if: matrix.python-shard == 0
+        run: python tools/port_fidelity_check.py --check --root .
+
       - name: Run Python tests (shard ${{ matrix.python-shard }}/4)
         run: python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
 
