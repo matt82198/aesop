@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Incident log generator: mines committed record for operational failures.
+INDEX: Incident log generator: mines git history for operational failures (fake-green, ci-drift, test-pollution, flake, conflict, stall, gate-activation, doc-invented); generates docs/INCIDENTS.md table; CLI: `[--repo PATH]` (print) | `--regenerate [--output FILE]` | `--check` (drift exit 1); uses subprocess_common.git() with 60s timeout (critical fix: no prior timeout); all output deterministic, idempotent
 
 Parses git history (commit messages, BUILDLOG, CHANGELOG, PR titles) and
 extracts failure events classified by type (fake-green, ci-drift, test-pollution,
@@ -404,7 +405,7 @@ class IncidentChecker:
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
-                encoding='utf-8',
+                encoding='utf-8', errors='replace',
                 check=False
             )
             return result.stdout.strip() == "true"

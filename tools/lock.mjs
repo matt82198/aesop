@@ -1,3 +1,4 @@
+// INDEX: Fail-closed atomic lock (exponential backoff + stale-lock detection)
 /**
  * lock.mjs — Fail-closed atomic lock acquisition for PROPOSALS.md
  *
