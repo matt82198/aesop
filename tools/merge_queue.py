@@ -57,6 +57,7 @@ Exit codes: 0 = pass completed (incl. no-op / lock contention),
             2 = precondition or usage failure.
 """
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -79,6 +80,30 @@ if str(_TOOLS_DIR) not in sys.path:
 from merge_train import gh, git  # noqa: E402
 from common import get_state_dir  # noqa: E402
 from generated_paths import GENERATED_PATHS  # noqa: E402
+
+# Import halt.py with FAIL CLOSED on import failure
+try:
+    from halt import is_halted, get_halt_info
+except ImportError:
+    try:
+        # Fallback for when called from tools/ directory or via importlib
+        import importlib.util
+        this_dir = Path(__file__).parent
+        halt_py = this_dir / "halt.py"
+        if halt_py.exists():
+            spec = importlib.util.spec_from_file_location("halt", halt_py)
+            if spec and spec.loader:
+                halt_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(halt_module)
+                is_halted = halt_module.is_halted
+                get_halt_info = halt_module.get_halt_info
+            else:
+                raise ImportError("Could not load halt.py spec")
+        else:
+            raise ImportError("halt.py not found")
+    except ImportError:
+        print("[FATAL] halt.py not found or unimportable -- merge_queue refuses to run", file=sys.stderr)
+        sys.exit(2)
 
 DEFAULT_REPO = "matt82198/aesop"
 
@@ -265,6 +290,22 @@ def record_exception(pr, kind: str, detail: str, run_url: str = "") -> dict:
     with open(path, "a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, sort_keys=False) + "\n")
     return row
+
+
+def _check_halt_and_record(summary: dict = None) -> bool:
+    """Check if halt is set. If halted, record exception row and return True.
+
+    This function matches merge_queue's exception-row convention. Returns True if halted
+    (so caller can exit early), False if not halted.
+    """
+    if is_halted():
+        info = get_halt_info()
+        reason = info.get("reason", "(unknown)") if info else "(unknown)"
+        record_exception(0, "halted", reason)
+        if summary:
+            summary["status"] = "halted"
+        return True
+    return False
 
 
 def base_branch() -> str:
@@ -924,6 +965,10 @@ def advance_singleton(number: int, summary: dict) -> bool:
             % (number, mergeable, merge_state))
         return False
 
+    # Re-check halt immediately before merging (kill-switch enforcement)
+    if _check_halt_and_record(summary):
+        return False
+
     ok, detail = merge_and_verify(number)
     if ok:
         summary["merged"].append(number)
@@ -1410,6 +1455,9 @@ def handle_batch_pr(batch: dict, summary: dict) -> None:
             record_exception(number, "conversation_blocked",
                              "batch %s green but mergeStateStatus=BLOCKED" % label)
             return
+        # Re-check halt immediately before merging (kill-switch enforcement)
+        if _check_halt_and_record(summary):
+            return
         ok, merge_detail = merge_and_verify(number)
         if not ok:
             record_exception(number, "merge_verify_failed", merge_detail)
@@ -1556,6 +1604,10 @@ def run_pass(repo: str = DEFAULT_REPO) -> tuple:
         "batched_members": [],
         "batch": None,
     }
+
+    # Check halt kill-switch BEFORE preconditions (fail-closed, early exit)
+    if _check_halt_and_record(summary):
+        return 1, summary
 
     try:
         ok, detail = preconditions(repo)
