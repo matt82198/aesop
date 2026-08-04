@@ -94,8 +94,6 @@ main() {
 
   mkdir -p "$AESOP_STATE_ROOT" 2>/dev/null || true
 
-  HALT_PY_PATH="$AESOP_ROOT/tools/halt.py"
-
   if check_halt "$LOG_FILE" "$HALT_PY_PATH"; then
     printf 'MERGE-QUEUE: HALTED\n'
     exit 0
@@ -137,6 +135,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   AESOP_ROOT="${AESOP_ROOT:-$(dirname "$SCRIPT_DIR")}"
   AESOP_STATE_ROOT="${AESOP_STATE_ROOT:-$AESOP_ROOT/state}"
   export AESOP_STATE_ROOT
+  # Resolve halt.py from the repo (daemons/ is in same AESOP_ROOT as tools/)
+  HALT_PY_PATH="$(dirname "$SCRIPT_DIR")/tools/halt.py"
   MODE="${1:---once}"
   LOG_FILE="$AESOP_STATE_ROOT/MERGE-QUEUE.log"
   PYTHON_EXE="$(resolve_python)"
