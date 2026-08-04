@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Guardrail G10: encoding lint — enforce explicit encoding='utf-8' on file opens and subprocess.
-INDEX: Encoding lint: flags `open()` without `encoding=`, and `subprocess.run/check_output/Popen` with `text=True`/`universal_newlines=True` and no `encoding=` (the Windows cp1252 trap that crashed metrics_gate on a binary diff). Ratchets against `.encoding-baseline.json` (`--baseline`, `--update-baseline`) so the existing backlog stays visible without blocking pushes while NEW violations fail closed
+"""Guardrail G10: encoding lint — enforce explicit encoding='utf-8' with error handlers on file opens and subprocess.
+INDEX: Encoding lint: flags `open()` without `encoding=`, and `subprocess.run/check_output/Popen` with `text=True`/`universal_newlines=True` and no `encoding=` (the Windows cp1252 trap that crashed metrics_gate on a binary diff). Also flags subprocess calls with `encoding=` but no `errors=` handler (crashes on non-UTF-8 bytes like em-dash 0x97). Ratchets against `.encoding-baseline.json` (`--baseline`, `--update-baseline`) so the existing backlog stays visible without blocking pushes while NEW violations fail closed
 
 Scans Python files for:
   1. `open()` calls missing explicit `encoding=` parameter
   2. `subprocess.run/check_output/Popen` calls with text=True or universal_newlines=True
      without explicit encoding= parameter
+  3. `subprocess.run/check_output/Popen` calls with `encoding=` but no `errors=` handler
 
 Flags:
   - `open(path)` or `open(path, 'r')` or `open(path, 'w')` WITHOUT `encoding=`
   - `subprocess.run(..., text=True)` WITHOUT `encoding=`
   - `subprocess.check_output(..., text=True)` WITHOUT `encoding=`
   - `subprocess.Popen(..., universal_newlines=True)` WITHOUT `encoding=`
+  - `subprocess.run(..., encoding='utf-8')` WITHOUT `errors=` (crashes on non-UTF-8 bytes)
 
 Allows: binary mode (`'rb'`, `'wb'`) — no encoding needed.
 Suppression: `# encoding-ok` inline comment.
@@ -128,8 +130,16 @@ def _has_text_flag(node: ast.Call) -> bool:
     return False
 
 
+def _has_errors_keyword(node: ast.Call) -> bool:
+    """Check if a call node has an `errors=` keyword argument."""
+    for keyword in node.keywords:
+        if keyword.arg == 'errors':
+            return True
+    return False
+
+
 class SubprocessVisitor(ast.NodeVisitor):
-    """AST visitor that finds subprocess.run/check_output/Popen calls with text=True but no encoding."""
+    """AST visitor that finds subprocess.run/check_output/Popen calls with encoding issues."""
 
     def __init__(self, source_lines: List[str], filename: Path):
         self.findings: List[Dict] = []
@@ -155,15 +165,16 @@ class SubprocessVisitor(ast.NodeVisitor):
                 self.generic_visit(node)
                 return
 
+            line_content = (
+                self.source_lines[node.lineno - 1]
+                if node.lineno <= len(self.source_lines)
+                else ""
+            )
+
             # Check if this call has text=True or universal_newlines=True
             if _has_text_flag(node):
                 # Check if encoding= keyword is present
                 if not _has_encoding_keyword(node):
-                    line_content = (
-                        self.source_lines[node.lineno - 1]
-                        if node.lineno <= len(self.source_lines)
-                        else ""
-                    )
                     self.findings.append({
                         'file': str(self.filename),
                         'line': node.lineno,
@@ -174,6 +185,20 @@ class SubprocessVisitor(ast.NodeVisitor):
                         ),
                         'code': line_content.strip(),
                     })
+
+            # Check if encoding= is present WITHOUT errors= (crash on non-UTF-8 bytes)
+            if _has_encoding_keyword(node) and not _has_errors_keyword(node):
+                self.findings.append({
+                    'file': str(self.filename),
+                    'line': node.lineno,
+                    'col': node.col_offset,
+                    'message': (
+                        f"subprocess.{func_name}() call with encoding= parameter "
+                        f"must also have errors= handler to prevent crashes on non-UTF-8 bytes; "
+                        f"use errors='replace' or add # encoding-ok comment"
+                    ),
+                    'code': line_content.strip(),
+                })
 
         self.generic_visit(node)
 

@@ -925,11 +925,28 @@ def worktree_is_safe() -> tuple:
     stalled the next pass over output the repo itself generates. Such paths are
     restored by name -- but only when EVERY dirty path is a registered generated
     file. One unregistered edit poisons the whole tree and nothing is touched.
+
+    Self-healing: if the tree is on an integrate/q-* branch with a clean tree
+    (leftover from a crashed pass), repark it to main automatically.
     """
     ok, branch = git("rev-parse", "--abbrev-ref", "HEAD")
     if not ok:
         return False, "cannot read current branch"
     branch = branch.strip()
+
+    # Self-heal: if on an integrate/q-* branch with a clean tree, repark to main
+    if BATCH_BRANCH_RE.match(branch):
+        ok, out = git("status", "--porcelain")
+        if ok and not out.strip():
+            # Tree is on integrate/q-* and clean; restore it to main
+            ok, _ = git_safe("checkout", "main")
+            if ok:
+                return True, "self-healed: reparked from %s to main (was clean)" % branch
+            else:
+                return False, "working tree is on '%s' (crashed from previous pass) and cannot repark to main" % branch
+        else:
+            return False, "working tree is on '%s' (crashed from previous pass) and is dirty" % branch
+
     if branch != "main":
         return False, "working tree is on '%s', not main" % branch
 
