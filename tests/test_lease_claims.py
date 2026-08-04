@@ -1,5 +1,6 @@
 """Tests for state_store.lease_claims — multi-instance file-scope leasing."""
 
+import os
 import sqlite3
 import sys
 import tempfile
@@ -11,7 +12,14 @@ from unittest import mock
 # Add state_store to path for import
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from state_store.lease_claims import LeaseStore, LeaseConflict
+from state_store.lease_claims import (
+    CLAIM_CASE_POLICY_ENV,
+    DEFAULT_CASE_POLICY,
+    LeaseStore,
+    LeaseConflict,
+    _normalize_path,
+    resolve_case_policy,
+)
 from state_store.paths import canonical_claim_path
 
 
@@ -331,14 +339,18 @@ class TestLeaseStore(unittest.TestCase):
             )
         self.assertEqual(ctx.exception.conflicting_instance, "instance-1")
 
-    def test_path_case_sensitivity_linux_style(self):
-        """On Linux, different cases are different files."""
-        import os
-        if os.name == 'nt':
-            self.skipTest("Linux-specific test")
+    def test_path_case_default_policy_over_collides_on_every_host(self):
+        """Deep-scan B1: the DEFAULT claim keyspace is host-independent.
 
+        This test previously asserted Linux-specific case-sensitivity, which is
+        exactly the host-dependent keyspace that let a Windows instance and a Linux
+        instance both claim the same file. The default policy is now 'insensitive'
+        on every host: it over-collides (safe), never under-collides.
+
+        Case-sensitive single-box semantics remain available by opting in, see
+        TestClaimCasePolicyResolution.test_lease_store_honours_explicit_sensitive_policy.
+        """
         now = 1000.0
-        # Instance 1 claims readme.md
         lease_id_1 = self.store.claim(
             paths=["readme.md"],
             instance_id="instance-1",
@@ -347,15 +359,14 @@ class TestLeaseStore(unittest.TestCase):
         )
         self.assertIsNotNone(lease_id_1)
 
-        # Instance 2 claims README.MD (different file on Linux) -> should succeed
-        lease_id_2 = self.store.claim(
-            paths=["README.MD"],
-            instance_id="instance-2",
-            ttl_seconds=60.0,
-            clock=lambda: now
-        )
-        self.assertIsNotNone(lease_id_2)
-        self.assertNotEqual(lease_id_1, lease_id_2)
+        with self.assertRaises(LeaseConflict) as ctx:
+            self.store.claim(
+                paths=["README.MD"],
+                instance_id="instance-2",
+                ttl_seconds=60.0,
+                clock=lambda: now
+            )
+        self.assertEqual(ctx.exception.conflicting_instance, "instance-1")
 
     def test_toctou_race_regression(self):
         """REGRESSION TEST: Deterministic TOCTOU race reproducer.
@@ -555,60 +566,196 @@ class TestLeaseStoreIntegration(unittest.TestCase):
 
 
 class TestLeaseClaimsHeterogeneityGuard(unittest.TestCase):
-    """Heterogeneity regression: paths normalize identically across platforms (multibox Inc 1).
+    """Heterogeneity regression: the PRODUCTION claim-key path is host-independent.
 
-    When two boxes (Windows + Linux) share coordination state, the same path must
-    canonicalize identically on both platforms. This test monkeypatches os.name
-    to verify that canonical_claim_path (via _normalize_path) produces identical
-    results regardless of the platform running the code.
+    Deep-scan B1/B2. The prior version of this guard called ``canonical_claim_path``
+    directly with ``case_policy="insensitive"`` — a value production never passed —
+    and never touched ``_normalize_path`` at all, so it stayed green even though
+    LeaseStore keyed 'tools/Runner.py' as 'tools/runner.py' on Windows and
+    'tools/Runner.py' on Linux (split-brain: both instances claim the same file).
+
+    Every test here exercises the REAL production entry point that LeaseStore uses
+    (``_normalize_path`` / ``LeaseStore.claim``), so mutating ``_normalize_path`` to
+    the identity function fails the suite.
     """
 
-    def test_heterogeneity_guard_47c967b_separator_multiplatform(self):
-        """REGRESSION: Separator normalization is host-independent.
+    def test_normalize_path_is_not_the_identity_function(self):
+        """MUTATION GUARD: _normalize_path must actually transform its input.
 
-        Two boxes should canonicalize 'dir/file' and 'dir\\file' identically.
+        If _normalize_path is replaced by `lambda p: p`, this fails. The old guard
+        survived that mutation because it never called _normalize_path.
         """
+        self.assertEqual(_normalize_path("dir\\file.txt"), "dir/file.txt")
+        self.assertEqual(_normalize_path("dir/./sub/../file.txt"), "dir/file.txt")
+
+    def test_normalize_path_separator_host_independent(self):
+        """REGRESSION B1: _normalize_path folds separators identically on nt and posix."""
         path_forward = "dir/file.txt"
         path_backslash = "dir\\file.txt"
 
-        # Canonicalize as if running on Windows
         with mock.patch("os.name", "nt"):
-            result_nt_forward = canonical_claim_path(path_forward, case_policy="insensitive")
-            result_nt_backslash = canonical_claim_path(path_backslash, case_policy="insensitive")
+            nt_forward = _normalize_path(path_forward)
+            nt_backslash = _normalize_path(path_backslash)
 
-        # Canonicalize as if running on POSIX
         with mock.patch("os.name", "posix"):
-            result_posix_forward = canonical_claim_path(path_forward, case_policy="insensitive")
-            result_posix_backslash = canonical_claim_path(path_backslash, case_policy="insensitive")
+            posix_forward = _normalize_path(path_forward)
+            posix_backslash = _normalize_path(path_backslash)
 
-        # All four variants should match
-        self.assertEqual(result_nt_forward, result_nt_backslash)
-        self.assertEqual(result_posix_forward, result_posix_backslash)
-        self.assertEqual(result_nt_forward, result_posix_forward)
+        self.assertEqual(nt_forward, nt_backslash)
+        self.assertEqual(posix_forward, posix_backslash)
+        self.assertEqual(nt_forward, posix_forward)
 
-    def test_heterogeneity_guard_47c967b_case_multiplatform(self):
-        """REGRESSION: Case normalization is host-independent under insensitive policy.
+    def test_normalize_path_case_host_independent(self):
+        """REGRESSION B1: _normalize_path yields the SAME key on nt and posix.
 
-        Two boxes should canonicalize 'README.md' and 'README.MD' identically
-        when using case_policy='insensitive'.
+        This is the finding: with case_policy='platform' the production key was
+        'tools/runner.py' on Windows and 'tools/Runner.py' on Linux.
         """
-        path_lower = "README.md"
-        path_upper = "README.MD"
+        mixed = "tools/Runner.py"
 
-        # Canonicalize as if running on Windows
         with mock.patch("os.name", "nt"):
-            result_nt_lower = canonical_claim_path(path_lower, case_policy="insensitive")
-            result_nt_upper = canonical_claim_path(path_upper, case_policy="insensitive")
-
-        # Canonicalize as if running on POSIX
+            nt_key = _normalize_path(mixed)
         with mock.patch("os.name", "posix"):
-            result_posix_lower = canonical_claim_path(path_lower, case_policy="insensitive")
-            result_posix_upper = canonical_claim_path(path_upper, case_policy="insensitive")
+            posix_key = _normalize_path(mixed)
 
-        # All four variants should match
-        self.assertEqual(result_nt_lower, result_nt_upper)
-        self.assertEqual(result_posix_lower, result_posix_upper)
-        self.assertEqual(result_nt_lower, result_posix_lower)
+        self.assertEqual(
+            nt_key,
+            posix_key,
+            "Claim key must not depend on the host OS: a Windows instance and a Linux "
+            "instance would otherwise both claim the same file (split-brain).",
+        )
+
+    def test_normalize_path_case_variants_collide_by_default(self):
+        """Default policy over-collides (safe): README.md and README.MD share one key."""
+        with mock.patch("os.name", "posix"):
+            self.assertEqual(_normalize_path("README.md"), _normalize_path("README.MD"))
+
+    def test_claim_conflicts_across_heterogeneous_hosts(self):
+        """END-TO-END B1: a Windows-hosted claim blocks a Linux-hosted claim of the same file.
+
+        This is the split-brain reproducer at the LeaseStore level, not the helper level.
+        """
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        store = LeaseStore(str(Path(temp_dir.name) / "hetero.db"))
+        self.addCleanup(store.close)
+
+        now = 1000.0
+
+        # Instance 1 runs on Windows and claims the file.
+        with mock.patch("os.name", "nt"):
+            store.claim(
+                paths=["tools/Runner.py"],
+                instance_id="win-instance",
+                ttl_seconds=60.0,
+                clock=lambda: now,
+            )
+
+        # Instance 2 runs on Linux against the SAME shared coordination db.
+        with mock.patch("os.name", "posix"):
+            with self.assertRaises(LeaseConflict) as ctx:
+                store.claim(
+                    paths=["tools/Runner.py"],
+                    instance_id="linux-instance",
+                    ttl_seconds=60.0,
+                    clock=lambda: now,
+                )
+        self.assertEqual(ctx.exception.conflicting_instance, "win-instance")
+
+    def test_get_holder_across_heterogeneous_hosts(self):
+        """END-TO-END B1: get_holder resolves the same key from either host."""
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        store = LeaseStore(str(Path(temp_dir.name) / "hetero_holder.db"))
+        self.addCleanup(store.close)
+
+        now = 1000.0
+        with mock.patch("os.name", "nt"):
+            store.claim(
+                paths=["docs/README.md"],
+                instance_id="win-instance",
+                ttl_seconds=60.0,
+                clock=lambda: now,
+            )
+
+        with mock.patch("os.name", "posix"):
+            holder = store.get_holder(["docs/README.md"], clock=lambda: now)
+
+        self.assertEqual(holder, "win-instance")
+
+
+class TestClaimCasePolicyResolution(unittest.TestCase):
+    """Case policy is configuration, not a property of the host OS (deep-scan B1)."""
+
+    def setUp(self):
+        self._saved = os.environ.get(CLAIM_CASE_POLICY_ENV)
+        os.environ.pop(CLAIM_CASE_POLICY_ENV, None)
+
+    def tearDown(self):
+        os.environ.pop(CLAIM_CASE_POLICY_ENV, None)
+        if self._saved is not None:
+            os.environ[CLAIM_CASE_POLICY_ENV] = self._saved
+
+    def test_default_is_host_independent_insensitive(self):
+        """Default must be the safe over-colliding policy, not 'platform'."""
+        self.assertEqual(resolve_case_policy(), DEFAULT_CASE_POLICY)
+        self.assertEqual(DEFAULT_CASE_POLICY, "insensitive")
+
+    def test_config_overrides_default(self):
+        config = {"multibox": {"case_policy": "sensitive"}}
+        self.assertEqual(resolve_case_policy(config), "sensitive")
+
+    def test_env_overrides_default(self):
+        os.environ[CLAIM_CASE_POLICY_ENV] = "sensitive"
+        self.assertEqual(resolve_case_policy(), "sensitive")
+
+    def test_config_beats_env(self):
+        os.environ[CLAIM_CASE_POLICY_ENV] = "sensitive"
+        config = {"multibox": {"case_policy": "insensitive"}}
+        self.assertEqual(resolve_case_policy(config), "insensitive")
+
+    def test_invalid_policy_fails_closed(self):
+        """An unknown policy must raise, never silently fall back to a different keyspace."""
+        with self.assertRaises(ValueError):
+            resolve_case_policy({"multibox": {"case_policy": "bogus"}})
+        os.environ[CLAIM_CASE_POLICY_ENV] = "bogus"
+        with self.assertRaises(ValueError):
+            resolve_case_policy()
+
+    def test_lease_store_honours_explicit_sensitive_policy(self):
+        """Local single-box case-sensitive semantics remain available via config."""
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        store = LeaseStore(
+            str(Path(temp_dir.name) / "sensitive.db"), case_policy="sensitive"
+        )
+        self.addCleanup(store.close)
+
+        now = 1000.0
+        lease_1 = store.claim(
+            paths=["readme.md"], instance_id="i1", ttl_seconds=60.0, clock=lambda: now
+        )
+        # Under 'sensitive', README.MD is a DIFFERENT file: no conflict.
+        lease_2 = store.claim(
+            paths=["README.MD"], instance_id="i2", ttl_seconds=60.0, clock=lambda: now
+        )
+        self.assertNotEqual(lease_1, lease_2)
+
+    def test_lease_store_rejects_invalid_policy(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        with self.assertRaises(ValueError):
+            LeaseStore(str(Path(temp_dir.name) / "bad.db"), case_policy="bogus")
+
+    def test_lease_store_accepts_config_dict(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        store = LeaseStore(
+            str(Path(temp_dir.name) / "cfg.db"),
+            config={"multibox": {"case_policy": "sensitive"}},
+        )
+        self.addCleanup(store.close)
+        self.assertEqual(store.case_policy, "sensitive")
 
 
 if __name__ == "__main__":
