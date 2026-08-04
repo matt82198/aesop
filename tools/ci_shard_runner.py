@@ -176,7 +176,7 @@ def main():
             ["git", "ls-files", "tests/test_*.py"],
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=60,
             check=True,
         )
