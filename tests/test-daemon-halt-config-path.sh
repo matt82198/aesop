@@ -10,7 +10,8 @@ set -e
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_ID="$$-$(date +%s)"
-TMP_BASE="/c/Users/matt8/AppData/Local/Temp"
+# Use platform-portable temp directory (TMPDIR env var, or system default)
+TMP_BASE="${TMPDIR:-/tmp}"
 TEST_STATE_1="${TMP_BASE}/halt-state-env-${TEST_ID}"
 TEST_STATE_2="${TMP_BASE}/halt-state-cfg-${TEST_ID}"
 CYCLE_COUNTER="${TMP_BASE}/halt-counter-${TEST_ID}"
