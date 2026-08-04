@@ -325,7 +325,7 @@ def fault_f5_red_test(sandbox: Path) -> Dict[str, Any]:
         [sys.executable, str(test_file)],
         capture_output=True,
         text=True,
-        encoding='utf-8',
+        encoding='utf-8', errors='replace',
         timeout=5
     )
 

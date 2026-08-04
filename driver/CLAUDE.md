@@ -134,4 +134,6 @@ Thread-safety: no locks in wave_scheduler, preserved as-is. Exception envelope c
 
 **Encoding**: All file I/O uses explicit `encoding="utf-8"`. No encoding violations. <!-- metrics-verified: python tools/encoding_lint.py --check --paths driver/wave_scheduler.py -->
 
+**Subprocess decoding (G10)**: every `subprocess.*` call in this domain that decodes output — `wave_loop.py`'s git/gh shell-outs — passes BOTH `encoding="utf-8"` AND `errors="replace"`. The encoding alone is only half the rule: strict UTF-8 decoding of one undecodable byte (0x97, the cp1252 em-dash, is the common one in branch names and PR titles) raises inside subprocess's reader THREAD, never reaches the caller, and silently leaves `stdout` as `None` so the next `.strip()` dies with a meaningless `AttributeError`. That crashed the merge queue on 24+ consecutive scheduled passes. `errors="ignore"` is forbidden — a corrupted byte must stay visible as U+FFFD, not vanish from a ref name the loop is about to act on. Enforced by `tools/encoding_lint.py`, which fail-closes repo-wide in the pre-push hook.
+
 **Metrics**: `run_wave_scheduler` CC 82 → 15 (grade F → C). Total extracted functions: 10. Max extracted CC: 17 (still grade C). Test pass rate: 35/35 (100%). <!-- metrics-verified: python -m radon cc driver/wave_scheduler.py -s -->

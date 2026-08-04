@@ -214,7 +214,7 @@ def get_current_branch(root_dir):
             cwd=root_dir,
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=5,
         )
         if result.returncode == 0:
@@ -240,7 +240,7 @@ def is_working_tree_clean(root_dir):
             cwd=root_dir,
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=5,
         )
         if result.returncode == 0:
