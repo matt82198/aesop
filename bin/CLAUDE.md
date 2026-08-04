@@ -47,6 +47,7 @@ require(commandMap[args[0]]); // Load + run; returns immediately after
 - Routes to 113 `tools/*.py` scripts via namespace+verb lookup table (Phase 2: additive, no script moves or renames)
 - Interpreter resolution: tries `python3` then `python`; verifies interpreter is executable; exits 2 if not found
 - Exit codes propagated unchanged: 0 (success), 1 (findings/failure), 2 (usage/could-not-evaluate)
+- **Fail-closed propagator**: all spawnSync dispatches (namespaces + `init` and its python fallback) route through `exitCodeFromSpawnResult(result)` — numeric `status` verbatim, but `result.error` or a non-numeric `status` (null = signal-killed, undefined = unknown) exits **2**. Never `result.status || 0`: null collapses to 0, so a SIGTERM/SIGKILL/CI-cancelled `aesop gate secret-scan` reported a passing gate. Requiring `bin/cli.js` as a module (`require.main !== module`) exports the helper instead of running the CLI.
 - All args after verb pass through untouched (flags like `--check`, `--json`, `--fix` preserved)
 - `aesop <namespace> --help` lists that namespace's verbs and their underlying script paths
 
@@ -82,6 +83,13 @@ aesop transcript timeline|replay|digest
 
 **npm package.json `files` array** (lines 9–36): If adding new dirs/files to `filesToCopy`, add to `files` array so npm publish includes them.
 
+## Worktree support (git worktree .git files)
+
+- **Worktree .git handling**: In git worktrees, `.git` is a FILE (not directory) containing `gitdir: <path>`. 
+- **Real git dir resolution**: `resolveRealGitDir()` detects worktree `.git` files and uses `git rev-parse --git-common-dir` to find the actual git directory. Fallback: parse gitdir pointer manually from `.git` file.
+- **Hook installation paths**: `installPrePushHook()` and `installPreCommitWaveguard()` use resolved git dir to install hooks in the common git directory (not worktree), preventing ENOTDIR crashes.
+- **Security**: symlink checks on `.git` and hooks directories preserved throughout resolution.
+
 ## Invariants
 
 - **Idempotent on empty targets**: Fails if `targetDir` exists and is non-empty (except `.git`, aesop scaffolded dirs). Safe to retry.
@@ -89,6 +97,7 @@ aesop transcript timeline|replay|digest
 - **Portable paths**: No machine-specific paths; `path.join()` + `__dirname` handle cross-platform resolution. Config uses `~` form (`~/.claude`, `~/scripts`) expanded at load time.
 - **Async wizard**: Main execution is async IIFE to support readline prompts.
 - **Non-destructive**: Never overwrites existing `aesop.config.json` without user confirmation.
+- **Worktree-safe**: Scaffolding works correctly when cwd is a git worktree (absolute paths + resolved git dirs).
 
 ## Test commands
 
@@ -96,7 +105,7 @@ aesop transcript timeline|replay|digest
 - `npm run test:node` → `node --test --test-timeout=60000 tests/*.test.mjs`
 - Fleet CLI tests: `tests/fleet-cli.test.mjs` — spawns CLI in temp fixture, verifies JSON shape (heartbeats, agents, tracker, orchestrator), graceful degrade, exit 0, no cwd pollution
 - CLI config tests: `tests/cli-config.test.mjs` — scaffold flags (--name, --domains, --repos, --repo-urls), fleet_root auto-set to os.homedir(), config validation, repo URL generation
-- CLI dispatch tests: `tests/cli-dispatch.test.mjs` — Python namespace dispatch routing, verb help, exit code fidelity (0/1/2), interpreter resolution, unknown namespace/verb errors, arg passthrough
+- CLI dispatch tests: `tests/cli-dispatch.test.mjs` — Python namespace dispatch routing, verb help, exit code fidelity (0/1/2), fail-closed propagator (signal-kill / null status / spawn error → 2, cross-checked against a real self-SIGTERM child on POSIX), interpreter resolution, unknown namespace/verb errors, arg passthrough
 
 **First-hour test suite** (inline in test files above):
 - Empty state directory graceful degrade (no state files)

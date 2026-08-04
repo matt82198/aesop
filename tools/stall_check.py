@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Automated silent-hang detection for agent transcripts.
+INDEX: Automated agent transcript stall detector; optional --active-from flag refines STALLED verdict to require both stale mtime AND active task file; --emit-recovery emits JSON advisories; --recovery-dir writes recovery-<agent>.json files (idempotent)
 
 Usage:
   stall_check.py [--transcripts-root DIR] [--threshold-seconds SEC] [--json] [--exit-nonzero-on-stall]

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# INDEX: Glob-based shell test runner: discovers and runs all shell tests sequentially via glob patterns (tests/*.test.sh, tests/test_*.sh, tests/test-*.sh, hooks/pre-push-policy.sh --test); fails fast with clear output; CRLF-safe, no line continuations; CLI: `bash tools/run_shell_tests.sh [REPO_ROOT]`; invoked as npm run test:sh in package.json; replaces hand-maintained explicit test chain (kills conflict magnet)
 set -uo pipefail
 
 # Glob-based shell test runner — discovers and runs all shell tests sequentially.

@@ -121,18 +121,23 @@ test('domain-map drift: all code directories have domain-map entries', () => {
   }
 });
 
-test('tools FILES drift: all tools/*.{py,mjs,sh} files documented in tools/CLAUDE.md', () => {
-  const toolsClaudeMdPath = path.join(PROJECT_ROOT, 'tools', 'CLAUDE.md');
-  assert.ok(fs.existsSync(toolsClaudeMdPath), `tools/CLAUDE.md must exist at ${toolsClaudeMdPath}`);
+test('tools index drift: all tools/*.{py,mjs,sh} files documented in tools/INDEX.md', () => {
+  // The per-tool one-liner index was extracted out of tools/CLAUDE.md into the
+  // generated tools/INDEX.md (A2 of the merge-pipeline debottleneck) to kill the
+  // merge-queue conflict surface. tools/gen_tool_index.py fails closed on any tool
+  // missing its INDEX: line, and claudemd_lint.py enforces byte-identity; this test
+  // is the Node-side tripwire that every tool still appears in the generated index.
+  const indexPath = path.join(PROJECT_ROOT, 'tools', 'INDEX.md');
+  assert.ok(fs.existsSync(indexPath), `tools/INDEX.md must exist at ${indexPath} (run: python tools/gen_tool_index.py --regenerate)`);
 
-  const toolsClaudeMdContent = fs.readFileSync(toolsClaudeMdPath, 'utf8');
+  const indexContent = fs.readFileSync(indexPath, 'utf8');
 
   // Extract backtick-quoted filenames: `filename.ext`
   const filesRegex = /`([a-zA-Z0-9_-]+\.(py|mjs|sh))`/g;
   const documentedFiles = new Set();
 
   let match;
-  while ((match = filesRegex.exec(toolsClaudeMdContent)) !== null) {
+  while ((match = filesRegex.exec(indexContent)) !== null) {
     documentedFiles.add(match[1]);
   }
 
@@ -151,8 +156,9 @@ test('tools FILES drift: all tools/*.{py,mjs,sh} files documented in tools/CLAUD
 
   if (failures.length > 0) {
     throw new Error(
-      `tools/*.{py,mjs,sh} files missing from tools/CLAUDE.md FILES section:\n${failures.join('\n')}\n` +
-      `Add these to the "## FILES" section in tools/CLAUDE.md with a one-line purpose.`
+      `tools/*.{py,mjs,sh} files missing from tools/INDEX.md:\n${failures.join('\n')}\n` +
+      `Add an "INDEX: <one-line purpose>" line to each file's module docstring/header, ` +
+      `then run: python tools/gen_tool_index.py --regenerate`
     );
   }
 });

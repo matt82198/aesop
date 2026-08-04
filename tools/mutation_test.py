@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Mutation testing tool — measures whether a module's tests actually catch bugs.
+INDEX: Test quality harness via mutation testing (apply code mutations, run tests, report survived mutations as test gaps); CLI: `--target <module.py> --test <test_module.py> [--json]`; exit 0 on valid results (advisory), exit 1 when the sandbox baseline fails (results invalid, fail-closed)
 
 This tool applies small source-code mutations (copy, never mutate original) to
 a target module and runs its test suite against each mutation. Tests that pass
@@ -238,7 +239,7 @@ def run_tests(test_module_path: str, work_dir: str, timeout: int = 30) -> Tuple[
             cwd=work_dir,
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=timeout,
             env=env,
         )

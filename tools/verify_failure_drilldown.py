@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """End-to-end verification of the wave failure drill-down feature.
+INDEX: Browser proof (Playwright): wave failure drill-down; exit 0=proven/1=failed, --allow-skip only browserless
 
 Sets up a temporary AESOP_ROOT, stubs the gh CLI, starts the dashboard server,
 and exercises the failure drill-down UI + API via Playwright. Verifies:
@@ -59,7 +60,7 @@ def run_server(fixture_root, port, extra_env=None):
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        encoding='utf-8',
+        encoding='utf-8', errors='replace',
     )
 
     # Wait for server to be ready (crude: sleep and probe)

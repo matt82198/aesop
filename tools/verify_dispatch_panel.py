@@ -1,4 +1,5 @@
 """Browser-level proof for the DispatchPanel component (ui/web/dist/ + /api/wave/dispatch).
+INDEX: Browser proof (Playwright): DispatchPanel (ui/web/dist/ + /api/wave/dispatch); exit 0=proven/1=failed, --allow-skip only browserless
 
 Drives the BUILT React app served by `python ui/serve.py` and exercises the
 full stack of the dispatch panel — route wiring, component mount, the real

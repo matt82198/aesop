@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 bench_runner.py — Held-out benchmark scorer for fleet subagent capability claims.
+INDEX: Held-out benchmark runner + scorer (Haiku/Sonnet/Opus pluggable)
 
 Wave-26 context: an external critique observed that the claim "Haiku is sufficient
 for fleet subagent work" was unmeasured and, where it *was* measured at all, was
@@ -379,7 +380,7 @@ def _make_claude_runner(model_alias: str) -> ModelRunner:
                 ["claude", "-p", prompt, "--model", model_alias, "--output-format", "json"],
                 capture_output=True,
                 text=True,
-                encoding='utf-8',
+                encoding='utf-8', errors='replace',
                 timeout=300,  # 5 minutes per task
             )
             elapsed_ms = (time.time() - start) * 1000

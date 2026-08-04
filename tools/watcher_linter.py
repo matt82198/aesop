@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 tools.watcher_linter -- Detect watcher/polling anti-patterns (Guardrail G3).
+INDEX: Guardrail G3: watcher/polling anti-pattern linter (mechanizes "no watcher pattern in long runs"); AST-scans tools/monitor/driver/daemons for while-True+sleep loops, watch_/monitor_/poll_-named functions with infinite loops, and subprocess calls inside infinite loops (exempts loops with a break/return/raise/exit -- legitimate bounded poll-until-timeout code is not flagged); string-scans prompt-ish assignments/kwargs/dict-keys for "wait for a monitor/watcher/signal/notification", "poll"/"poll for", "watch for changes" phrasing; suppress via `# watcher-ok` inline comment; CLI: `--check` (default) | `--json` | `--paths DIR...` | `--root DIR`; exit 0=clean/1=findings/2=error; stdlib-only, ASCII output
 
 Mechanizes the "no watcher pattern in long runs" memory: long-running agents
 must never detach into a stall-prone wait-loop that spawns work and then sits

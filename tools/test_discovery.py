@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Test Command Validator & Auto-Mapper.
+INDEX: Multi-language framework detector; identifies test runners, suggests testCmd pattern with confidence; `--validate` runs read-only checks with 120s timeout; `--json` output; stdlib-only
 
 Scans a target repository, detects test frameworks, and suggests validated testCmd patterns.
 
@@ -254,7 +255,7 @@ def validate_testcmd(testcmd: str, repo_path: Path, timeout_sec: int = 120) -> D
             cwd=str(repo_path),
             capture_output=True,
             text=True,
-            encoding="utf-8",
+            encoding="utf-8", errors="replace",
             timeout=timeout_sec,
         )
         elapsed = time.time() - start
