@@ -187,7 +187,7 @@ BATCH_LABEL_DESC = "Integration batch opened by the merge-queue advancer"
 #     union, so the byte-identity gate fail-closes on a branch no member ever
 #     tested. Here that flag really is `--regenerate`.
 REGENERATORS = (
-    ("tools/verify_test_suite_count.py", "--fix"),
+    ("tools/gen_suite_counts.py", "--regenerate"),
     ("tools/gen_tool_index.py", "--regenerate"),
 )
 

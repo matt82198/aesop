@@ -52,6 +52,7 @@ place; new consumers import it rather than re-typing it.
 # Ordered, ASCII, repo-root-relative POSIX paths.
 GENERATED_PATHS = (
     "tests/CLAUDE.md",
+    "tests/SUITE-COUNTS.json",
     "tools/CLAUDE.md",
     "tools/INDEX.md",
 )
