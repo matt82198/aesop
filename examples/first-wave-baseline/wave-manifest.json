@@ -1,0 +1,56 @@
+{
+  "name": "Aesop First Wave Replay Kit",
+  "description": "A verified baseline example wave demonstrating the full cycle: dispatch, implementation, testing, and merge",
+  "wave_id": "wave-first-baseline",
+  "wave_description": "Canonical first-wave walkthrough for adopters",
+  "items": [
+    {
+      "slug": "readme-typo-fix",
+      "ownsFiles": [
+        "README.md"
+      ],
+      "prompt": "[ISOLATION: sibling worktree] Fix the typo in README.md where 'orchestration' is misspelled as 'orchestraion'. Verify the file has exactly one instance and replace it. This is a simple one-line fix to demonstrate a trivial dispatch cycle.",
+      "testCmd": "grep -q 'orchestration' README.md && ! grep -q 'orchestraion' README.md && echo 'Fix verified'",
+      "workDir": "."
+    },
+    {
+      "slug": "enable-skipped-test",
+      "ownsFiles": [
+        "tests/test_example.js"
+      ],
+      "prompt": "[ISOLATION: sibling worktree] In tests/test_example.js, find the test marked with .skip (e.g., 'it.skip(...)') and remove the .skip so the test actually runs. Include a comment explaining why it was re-enabled. The test command asserts that no .skip marker remains AND that the suite passes, so leaving the skip in place will fail the gate.",
+      "testCmd": "! grep -qE 'it\\.skip|test\\.skip|describe\\.skip|xit\\(' tests/test_example.js && npm test -- tests/test_example.js",
+      "workDir": "."
+    },
+    {
+      "slug": "add-eslint-config",
+      "ownsFiles": [
+        ".eslintrc.json",
+        "package.json"
+      ],
+      "prompt": "[ISOLATION: sibling worktree] Create or update .eslintrc.json with a basic ESLint configuration for the project (use airbnb or standard preset). Update package.json to add a 'lint' script that runs eslint on src/ and tests/. The test command runs 'npm run lint' for real, so the configuration must be valid and the codebase must actually lint clean.",
+      "testCmd": "test -f .eslintrc.json && node -e 'const s=require(\"./package.json\").scripts||{}; process.exit(s.lint?0:1)' && npm run lint",
+      "workDir": "."
+    },
+    {
+      "slug": "fix-doc-links",
+      "ownsFiles": [
+        "docs/ARCHITECTURE.md",
+        "docs/SETUP.md"
+      ],
+      "prompt": "[ISOLATION: sibling worktree] Review docs/ARCHITECTURE.md and docs/SETUP.md for broken relative links. Fix any link that points to a non-existent file or uses an incorrect path. The test command resolves every relative markdown link in both files against the filesystem and fails listing each unresolved target, so every link must actually resolve.",
+      "testCmd": "node -e 'const fs=require(\"fs\"),p=require(\"path\");let bad=[];for(const f of [\"docs/ARCHITECTURE.md\",\"docs/SETUP.md\"]){const d=p.dirname(f);for(const m of fs.readFileSync(f,\"utf8\").matchAll(/\\]\\(([^)]+)\\)/g)){const t=m[1].trim().split(\"#\")[0];if(!t||/^[a-zA-Z]+:/.test(t))continue;if(!fs.existsSync(p.join(d,t)))bad.push(f+\" -> \"+t);}}if(bad.length){console.error(\"Broken links: \"+bad.join(\", \"));process.exit(1);}console.log(\"All relative doc links resolve\");'",
+      "workDir": "."
+    },
+    {
+      "slug": "simplify-util-functions",
+      "ownsFiles": [
+        "src/utils/helpers.js",
+        "src/utils/helpers.test.js"
+      ],
+      "prompt": "[ISOLATION: sibling worktree] In src/utils/helpers.js, refactor two or more utility functions to reduce duplication or improve readability (e.g., consolidate similar functions, extract common logic, improve naming). Update src/utils/helpers.test.js so the refactored functions are still covered. You MUST add a comment line starting with 'Refactor goal:' to src/utils/helpers.js explaining what the refactor achieved -- the test command requires that marker and a green test run.",
+      "testCmd": "grep -q 'Refactor goal:' src/utils/helpers.js && npm test -- src/utils/helpers.test.js",
+      "workDir": "."
+    }
+  ]
+}

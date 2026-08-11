@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 git_identity_check.py — Validate a repo's effective git user.name/user.email.
+INDEX: Validate repo git user.name/user.email via --expect-name/--expect-email CLI args OR aesop.config.json identity block; verifies .git/config physically (not config cache); added 30s timeout to git config calls (critical fix: no prior timeout)
 
 Validates that a repository's git user identity matches expected values. Can read
 expected values from CLI args (--expect-name/--expect-email) or from an 'identity'
@@ -111,7 +112,7 @@ def get_git_identity(repo_path: str) -> Tuple[Optional[str], Optional[str]]:
             ["git", "-C", repo_path, "config", "--local", "user.name"],
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=30,
             check=False,
         )
@@ -127,7 +128,7 @@ def get_git_identity(repo_path: str) -> Tuple[Optional[str], Optional[str]]:
             ["git", "-C", repo_path, "config", "--local", "user.email"],
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=30,
             check=False,
         )

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Fleet kill switch — a .HALT sentinel file that daemons/run-watchdog.sh (and any
+INDEX: Kill-switch: writes/reads/clears `.HALT` sentinel (daemons/dispatch check it)
 other cardinal-rule-abiding loop) must check every cycle and refuse to do work
 while it exists.
 

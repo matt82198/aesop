@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Cost Projection & Threshold Alerting — Live burn-rate observability for Aesop.
+INDEX: Live burn-rate observability; projects end-of-wave spend and fires threshold alerts at the 70- and 90-percent ceiling thresholds; CLI: `--projection [--window N] [--json]` or `--check-alerts --wave N [--json]`; idempotent per wave via flag files under state/
 
 Calculates burn rate (tokens/min) from recent ledger entries, projects end-of-wave
 spend, and fires threshold alerts at 70% and 90% of the configured cost ceiling.

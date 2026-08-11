@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 power_selftest.py — Health check harness for /power bootstrap.
+INDEX: Health check harness for /power bootstrap. Hook detection unions BOTH settings scopes Claude Code merges (`brain_root/settings{,.local}.json` and `<repo>/.claude/settings{,.local}.json`) — a project-scoped hook is live, so reading only the user scope reported it missing. Requires PreToolUse `Agent|Task` only (`force-model-policy.mjs` is the sole Claude Code hook aesop ships; the former PostToolUse `Write|Edit|NotebookEdit` requirement matched no shipped hook and failed every clean install). `$CLAUDE_PROJECT_DIR` in a hook command is expanded against the repo root before the file-existence check; a path still holding a variable is skipped, not reported missing
 Validates hooks, brain state, heartbeats, decisions, and scanner regression.
 Exit 0 if OK/DEGRADED, 1 if FAIL. Prints one summary line + bullets for non-OK items.
 
@@ -189,7 +190,7 @@ def check_brain():
         # Get status
         status_output = subprocess.run(
             ['git', '-C', str(brain_path), 'status', '--porcelain'],
-            capture_output=True, text=True, encoding='utf-8', timeout=5
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5
         ).stdout.strip()
 
         status_lines = [l for l in status_output.split('\n') if l]
@@ -198,14 +199,14 @@ def check_brain():
         try:
             current_branch = subprocess.run(
                 ['git', '-C', str(brain_path), 'rev-parse', '--abbrev-ref', 'HEAD'],
-                capture_output=True, text=True, encoding='utf-8', timeout=5
+                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5
             ).stdout.strip()
         except:
             current_branch = 'HEAD'
 
         ahead_output = subprocess.run(
             ['git', '-C', str(brain_path), 'rev-list', '--left-only', '--count', f'{current_branch}@{{u}}...{current_branch}'],
-            capture_output=True, text=True, encoding='utf-8', timeout=5
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5
         ).stdout.strip()
 
         try:
@@ -322,7 +323,7 @@ def check_scanner():
 
         result = subprocess.run(
             [sys.executable, str(scanner_path), '--staged'],
-            capture_output=True, text=True, encoding='utf-8', timeout=30,
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30,
             cwd=str(paths['aesop_root'])
         )
 

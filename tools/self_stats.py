@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Self-building stats counter for aesop README.
+INDEX: Git-derived metrics counter + README block generator; author email dynamically fetched from git config (not hardcoded) for repo portability. `extract_model_tier(model_name)` normalizes a model display name: strips a leading `Claude ` prefix, removes parenthetical context hints (e.g. `(1M context)`), and rewrites two known variants (`Opus 5.0` -> `Opus 5`, `Haiku 4` -> `Haiku 4.5`); any other name is returned unchanged. Called by `classify_author()` to label model-authored commits with a tier.
 
 Computes git-derived metrics (verifiable by anyone who clones) and reads session telemetry
 from docs/self-stats-data.json. All hard metrics in output carry verification markers.
@@ -54,7 +55,7 @@ def _get_default_author_email(repo_root: Optional[str] = None) -> Optional[str]:
         cmd += ["-C", str(repo_root)]
     cmd += ["config", "user.email"]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=5)
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5)
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
     except Exception:

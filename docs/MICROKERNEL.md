@@ -439,6 +439,36 @@ always offline-safe.
 
 ---
 
+## Micro-Kernel System Calls (Increment 5)
+
+A seated orchestrator backend invokes these operations through the wave loop's
+internal protocol. Each syscall has bounded scope (backend tier determines which
+calls it may make) and is grounded in code.
+
+| Syscall | Signature | Semantics | Backend Tier(s) | Code Source |
+|---------|-----------|-----------|-----------------|-------------|
+| `file_brain_read` | `ContextPack build_context_pack(decision_type: str, sources: Dict[str, str\|None], repo_root: str\|None, conductor_root: str\|None, size_cap: int = 32768, evidence: Dict[str, str]\|None = None, evidence_cap: int = 4096) -> ContextPack` | Read allowlisted control files (STATE.md, BUILDLOG.md, tracker.json, MEMORY.md, explicit briefs); returns size-bounded deterministic snapshot with manifest of included/truncated sources. Raises ContextPackViolation if path violates allowlist. | Orchestrator (all tiers) | driver/context_pack.py:113–273 |
+| `file_brain_write` | `None journal_append(entry_key: str, entry: Dict[str, Any]) -> None` | Append-only write to recovery journal (state/recovery_journal.ndjson); entry is atomically written with fingerprint binding; idempotent (reused key=no-op). Internal to wave_loop phase 1–6. | Orchestrator (phase controller only) | driver/wave_loop.py:1648–1750 |
+| `dispatch` | `WorkerResult dispatch_worker(request: WorkerRequest) -> WorkerResult` | Spawn one isolated worker: read owned_files (nested in owned_paths validation), execute prompt against request.model, write result.filesWritten to disk, return WorkerResult with verdict + stdout + testExit. Max one worker per item. | Worker seat (AgentDriver); orchestrator dispatches via wave, not directly | driver/agent_driver.py:169–200 (ABC); driver/wave_loop.py:1751–1850 |
+| `verify` | `bool verify_exact_gate(item_slug: str, test_cmd: str, workdir: str, retries: int = 1) -> bool` | Re-run test on already-built code to detect fake-green (claimed verified but test actually fails). Return True iff test exit code == 0 for all retries; flip item.verified = False on any failure. | Orchestrator (phase 5.5) | driver/wave_loop.py:2018–2120 |
+| `run_command` | `CommandResult run_command(command: str, cwd: str\|None = None, shell: str\|None = None) -> CommandResult` | ORCHESTRATOR-side command execution: tests, git, verification (distinct from worker shell). Returns {exit_code, stdout, stderr}. Every backend must support. | Orchestrator, all phases | driver/agent_driver.py:143–168 (ABC); implementations: claudecode_driver.py, codex_driver.py, openai_compatible_driver.py |
+| `git` | `int git_op(op: 'add'\|'commit'\|'push', repo_path: str, files: List[str] = [], msg: str = '') -> CommandResult` | Stage/commit/push files per repo (phase 7): `git add <files>`, `git commit -m <msg>`, `git push`. Each repo gets one commit. Fail-safe: add partial success still aborts that repo; commit/push errors recorded in Report.repo_ship_results. | Orchestrator (phase 7, when git config present) | driver/wave_loop.py:1548–1620 |
+| `gh` | `int gh_pr_merge(pr_url: str, strategy: 'merge'\|'squash'\|'rebase' = 'merge') -> CommandResult` | *Placeholder for future*: merge PR at given URL using `gh pr merge`. Not currently wired to wave loop (manual merge in pilot). Included for protocol completeness. | Orchestrator (future phase) | Not yet implemented |
+| `halt` | `Dict halt(abort_reason: str, error: str = '', result_update: Dict[str, Any] = {}) -> Dict[str, Any]` | Abort the wave immediately with structured reason (cost_ceiling_exceeded, mixed_repo_manifest, ownership_overlap, invalid_repo_path, repo_field_missing_no_default, claim_lost, escalation_unresolved, etc.). Updates Report JSON, returns early from run_wave(). Phase 0–6 gates invoke this; phase 7 (ship) cannot halt mid-repo without losing atomicity. | Orchestrator (all phases) | driver/wave_loop.py:1187–1400 (phases 1–3 checks), 825–900 (phase 6 block gate) |
+
+**Tier Coverage:**
+- **Tier 1** (low-risk, verified backend): file_brain_read, dispatch, run_command.
+- **Tier 2** (standard, unverified hosted model): all above + verify, git.
+- **Tier 3** (local small model): all above + gh (placeholder for future).
+- **Tier 4** (weakest, most checking): all above; all gates re-run, full adversarial review.
+
+**Invariants:**
+- All syscalls are **side-effect-bound**: file_brain_read is read-only (with content manifest audit); file_brain_write is append-only (with fingerprint binding); dispatch is idempotent (journal prevents double-dispatch); verify is idempotent (test re-run only); run_command exits at first error (bounded retry in phases, never infinite loops); git is atomic per-repo (one commit per repo, push once); halt is terminal (wave returns immediately).
+- **Cardinal Rule 4 (file-brain reads)** is **encoded in code**: context_pack.py's `_is_allowed_path()` (line 65–89) rejects paths outside repo_root or conductor_root with ContextPackViolation; build_context_pack's manifest proves what was read.
+- **Fail-safe degradation**: if a syscall fails (backend error, timeout, git conflict), the wave records it honestly (Report.error, per-item record) and degrades to today's behavior (escalate verdict, ship to branch, merge manual). No fabricated verdict, no silent loss.
+
+---
+
 ## See also
 
 - [docs/INSTALL.md](INSTALL.md) — "Using Non-Claude Backends" section: setup

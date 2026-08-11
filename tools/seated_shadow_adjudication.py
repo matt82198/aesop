@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Seated shadow adjudication — redo over the wired seam (increment 4a).
+INDEX: Seated variant of the shadow wave (increment 4a): builds context packs from the REAL file brain (STATE.md/tracker) + real cited repo code, routes through the completed OrchestratorDriver.decide() seam; frontier-first + early-abort; measures whether real seated context changes adjudication vs the decontextualized ladder; --offline/--live (seat from seats.orchestrator; --model/--config override), --repeat N, per-model results to bench/results/
 
 Runs the adjudication corpus through OrchestratorDriver.decide() using REAL
 context packs (file brain + cited evidence) on a challenger backend, N>=3 times

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Toolchain health check — verifies interpreter and binary availability.
+INDEX: Binary/heartbeat availability verifier. CLI: `[--check] [--json] [--max-age S]`; stdlib only
 
 Detects:
   - Binaries that exist but cannot execute (e.g., Git for Windows bash.exe
@@ -86,7 +87,7 @@ def find_binary(name: str, candidates: List[str]) -> Optional[Path]:
                 [candidate, "--version"],
                 capture_output=True,
                 timeout=5,
-                encoding="utf-8",
+                encoding="utf-8", errors="replace",
             )
             # Successful execution means it's available
             if result.returncode == 0:

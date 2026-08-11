@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """CLAUDE.md semantic drift detector.
+INDEX: Semantic drift detector: CLAUDE.md claims vs disk reality (missing refs, unmapped dirs, dead map entries, absent CLI flags); exit 1 on drift; --json
 
 Detects semantic drift between documentation claims and disk reality:
 1. Files/commands referenced in domain CLAUDE.md that don't exist
@@ -241,7 +242,7 @@ def check_cli_flags(cli_specs: Dict[str, Set[str]], repo_root: Path) -> List[Dic
                 [str(tool_path), "--help"],
                 capture_output=True,
                 text=True,
-                encoding='utf-8',
+                encoding='utf-8', errors='replace',
                 timeout=5,
             )
             help_text = result.stdout + result.stderr
