@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Browser proof for the Cost Analytics Panel component.
+INDEX: Browser proof for the dashboard cost panel (playwright; renders panel and asserts on cost data).
 
 Drives ui/web/dist/ against fixture cost data (ledger + pricing), asserting
 the contract via data-testid hooks:
@@ -188,7 +189,7 @@ asyncio.run(test())
             [sys.executable, '-c', test_script],
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=30,
             env={**os.environ, 'AESOP_STATE_ROOT': str(state_dir)}
         )

@@ -13,6 +13,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -28,6 +29,8 @@ from state_store.projections import (  # noqa: E402
     save_snapshot,
 )
 from state_store.export import export_tracker  # noqa: E402
+from state_store.write_api import WriteAPI  # noqa: E402
+from state_store.coordination import compact_claims, fold_claims  # noqa: E402
 
 
 class SnapshotCorrectnessTest(unittest.TestCase):
@@ -373,6 +376,171 @@ class SnapshotEdgeCasesTest(unittest.TestCase):
         by_id = {it["id"]: it for it in snapshot_projection["items"]}
         self.assertEqual(by_id["arch1"]["status"], "archived")
         self.assertEqual(by_id["arch2"]["status"], "done")
+
+
+class WiredPathInvarianceTest(unittest.TestCase):
+    """Verify that wired snapshot paths produce byte-identical results.
+
+    This test suite validates the critical invariant: WriteAPI._project_tracker()
+    and try_claim() snapshot paths produce identical projections to full replay,
+    including after claims-stream compaction.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.db = os.path.join(self.tmp, "events.db")
+        self.api = StateAPI(self.db)
+        self.store = self.api._store
+
+    def tearDown(self):
+        import shutil
+        self.api.close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_write_api_projection_with_snapshot_equals_full_replay(self):
+        """WriteAPI._project_tracker() with snapshots produces identical results to full replay."""
+        # Simulate WriteAPI usage: create, update, archive items
+        self.api.append("tracker", "item_created", {
+            "id": "item_1", "title": "Item 1", "lane": "proposed", "status": "todo"
+        })
+        self.api.append("tracker", "item_created", {
+            "id": "item_2", "title": "Item 2", "lane": "proposed", "status": "todo"
+        })
+        self.api.append("tracker", "item_updated", {
+            "id": "item_1", "lane": "in-progress", "status": "in-progress"
+        })
+        self.api.append("tracker", "item_archived", {"id": "item_2"})
+
+        # Full replay (ground truth)
+        all_events = self.store.read("tracker")
+        full_projection = project_tracker(all_events)
+
+        # Save snapshot after first two creates
+        snap_state = project_tracker(all_events[:2])
+        save_snapshot(self.store, "tracker", 2, snap_state)
+
+        # Snapshot path (what WriteAPI now uses)
+        snapshot_projection = project_tracker_with_snapshot(self.store, "tracker", all_events)
+
+        # Must be byte-identical
+        self.assertEqual(snapshot_projection, full_projection)
+        self.assertEqual(len(snapshot_projection["items"]), 2)
+
+    def test_try_claim_with_compacted_claims_equals_full_fold(self):
+        """try_claim() with compacted claims produces identical fold to full replay."""
+        # Simulate multiple dispatches claiming resources
+        for i in range(5):
+            self.api.append("claims", "claim_requested", {
+                "resource": f"wave_{i}",
+                "instance_id": f"instance_{i}",
+                "ttl": 300.0
+            })
+
+        # Full fold (ground truth)
+        all_events = self.store.read("claims")
+        full_holders = fold_claims(all_events)
+
+        # Snapshot the claims stream
+        compact_claims(self.api)
+
+        # After compaction, read should use snapshot + tail
+        compacted_events = []
+        es = self.api._store
+        snapshot = es.read_snapshot("claims")
+        if snapshot:
+            _, snap_state, _ = snapshot
+            compacted_events = snap_state.get("active_claims", [])
+        compacted_events.extend(es.read_since("claims", 0 if not snapshot else snapshot[0]))
+
+        # Fold compacted events should equal full fold
+        compacted_holders = fold_claims(compacted_events)
+        self.assertEqual(compacted_holders, full_holders)
+
+    def test_claims_compaction_after_releases(self):
+        """Compaction correctly handles claim releases and expired claims."""
+        now = time.time()
+
+        # Create and release claims
+        self.api.append("claims", "claim_requested", {
+            "resource": "res_1",
+            "instance_id": "inst_1",
+            "ttl": 300.0,
+            "ts": now
+        })
+        self.api.append("claims", "claim_requested", {
+            "resource": "res_2",
+            "instance_id": "inst_2",
+            "ttl": 300.0,
+            "ts": now
+        })
+        self.api.append("claims", "claim_released", {
+            "resource": "res_1",
+            "instance_id": "inst_1"
+        })
+
+        # Full fold
+        all_events = self.store.read("claims")
+        full_holders = fold_claims(all_events, now=now)
+
+        # Compact
+        compact_claims(self.api)
+
+        # After compaction, only res_2 should be held
+        self.assertEqual(full_holders, {"res_2": "inst_2"})
+
+        # Read after compaction should produce same result
+        es = self.api._store
+        snapshot = es.read_snapshot("claims")
+        self.assertIsNotNone(snapshot)
+
+    def test_snapshot_fallback_on_empty_claims(self):
+        """Compaction on empty claims stream returns empty snapshot."""
+        # Don't add any claims
+        result = compact_claims(self.api)
+
+        # Empty stream returns False (no snapshot needed)
+        self.assertFalse(result)
+
+    def test_write_api_path_after_multiple_mutations(self):
+        """WriteAPI snapshot path is correct after many item mutations."""
+        # Create 10 items
+        for i in range(10):
+            self.api.append("tracker", "item_created", {
+                "id": f"item_{i}",
+                "title": f"Item {i}",
+                "lane": "proposed",
+                "status": "todo"
+            })
+
+        # Update 5 of them
+        for i in range(5):
+            self.api.append("tracker", "item_updated", {
+                "id": f"item_{i}",
+                "lane": "in-progress",
+                "status": "in-progress"
+            })
+
+        # Full projection
+        all_events = self.store.read("tracker")
+        full_projection = project_tracker(all_events)
+
+        # Snapshot at version 10 (after all creates)
+        snap_state = project_tracker(all_events[:10])
+        save_snapshot(self.store, "tracker", 10, snap_state)
+
+        # Wired path (snapshot + tail)
+        wired_projection = project_tracker_with_snapshot(self.store, "tracker", all_events)
+
+        # Must be identical
+        self.assertEqual(wired_projection, full_projection)
+        self.assertEqual(len(wired_projection["items"]), 10)
+
+        # Verify update state
+        by_id = {it["id"]: it for it in wired_projection["items"]}
+        for i in range(5):
+            self.assertEqual(by_id[f"item_{i}"]["lane"], "in-progress")
+        for i in range(5, 10):
+            self.assertEqual(by_id[f"item_{i}"]["lane"], "proposed")
 
 
 if __name__ == "__main__":

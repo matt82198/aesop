@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Shared JSONL transcript reading utilities.
+INDEX: JSONL transcript utilities: `walk_jsonl()` (recursive file discovery), `parse_jsonl_file()` (robust line-by-line JSON parsing with malformed-line skipping), `extract_tool_uses()` (filter tool_use items from Claude message content), `parse_timestamp()` (ISO8601 → milliseconds epoch), `filter_by_project()` (extract relative paths matching project substring). Consolidates triply-duplicated walk_jsonl() implementations and JSON parsing loops from transcript_replay.py, transcript_timeline.py, and fleet_prompt_extractor.py into single source of truth.
 
 Consolidates duplicated walk_jsonl(), JSON parsing, timestamp parsing, and project
 filtering logic from transcript_replay.py, transcript_timeline.py, and

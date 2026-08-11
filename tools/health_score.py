@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Health Score tool — deterministic readiness score for primed projects.
+INDEX: Readiness score (0-100) for primed projects; CLI: `--cwd <path> [--json]`; checks: config, hooks, CLAUDE.md, writable, heartbeats, git-identity, secret-scan (weighted scoring)
 
 Calculates a weighted 0-100 score based on:
 - Config validity (JSON parseable, required fields) — 15 points
@@ -240,7 +241,7 @@ def _check_git_identity(cwd_path):
             cwd=str(cwd_path),
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=5
         )
         email_result = subprocess.run(
@@ -248,7 +249,7 @@ def _check_git_identity(cwd_path):
             cwd=str(cwd_path),
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=5
         )
 
@@ -281,7 +282,7 @@ def _check_secret_scan_runnable(cwd_path):
             [sys.executable, str(secret_scan), "--help"],
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=5
         )
         if result.returncode == 0 or "usage" in result.stdout.lower():

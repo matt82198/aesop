@@ -1207,6 +1207,73 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+printf '\n=== Test P1-Worktree: Checkers use resolve_aesop_root, not hardcoded paths ===\n'
+(
+  # This test verifies the fix for the audit finding: check_encoding_lint and
+  # check_test_coverage now call resolve_aesop_root() instead of hardcoding
+  # ${AESOP_ROOT:-$HOME/aesop}, so they run the worktree's copy of the checker
+  # tools, not the primary tree's copy.
+  #
+  # Worktree scenario:
+  # 1. Primary tree has encoding_lint.py that always exits 0
+  # 2. Worktree has encoding_lint.py that exits 1 (gate violation)
+  # 3. Push from worktree should use worktree's checker and fail
+  # 4. Without the fix, it would use primary tree's checker and pass
+  #
+  # We can't easily create actual worktrees in the test, but we CAN verify
+  # that the functions call resolve_aesop_root() by checking the script itself.
+
+  # Extract the check_encoding_lint function and verify it uses resolve_aesop_root()
+  encoding_lint_fn=$(sed -n '/^check_encoding_lint()/,/^}/p' "$HOOK_SCRIPT")
+
+  # The function should contain a call to resolve_aesop_root, not a hardcoded path
+  if printf '%s' "$encoding_lint_fn" | grep -q 'aesop_root=\$(resolve_aesop_root)'; then
+    printf 'PASS: check_encoding_lint calls resolve_aesop_root()\n'
+  else
+    printf 'FAIL: check_encoding_lint does not call resolve_aesop_root()\n'
+    exit 1
+  fi
+
+  # The function should NOT contain a hardcoded ${AESOP_ROOT:-$HOME/aesop} assignment
+  # in its local variable (resolve_aesop_root itself may reference AESOP_ROOT, but
+  # the check_encoding_lint function should not hardcode it)
+  if printf '%s' "$encoding_lint_fn" | grep 'local aesop_root' | grep -q 'AESOP_ROOT'; then
+    printf 'FAIL: check_encoding_lint still hardcodes AESOP_ROOT in local assignment\n'
+    exit 1
+  fi
+
+  # Extract the check_test_coverage function and verify it uses resolve_aesop_root()
+  test_coverage_fn=$(sed -n '/^check_test_coverage()/,/^}/p' "$HOOK_SCRIPT")
+
+  if printf '%s' "$test_coverage_fn" | grep -q 'aesop_root=\$(resolve_aesop_root)'; then
+    printf 'PASS: check_test_coverage calls resolve_aesop_root()\n'
+  else
+    printf 'FAIL: check_test_coverage does not call resolve_aesop_root()\n'
+    exit 1
+  fi
+
+  # The function should NOT contain a hardcoded ${AESOP_ROOT:-$HOME/aesop} assignment
+  if printf '%s' "$test_coverage_fn" | grep 'local aesop_root' | grep -q 'AESOP_ROOT'; then
+    printf 'FAIL: check_test_coverage still hardcodes AESOP_ROOT in local assignment\n'
+    exit 1
+  fi
+
+  # Verify no other check functions have this pattern (grep for hardcoded patterns)
+  # Count functions that have "local aesop_root" followed by hardcoding on same/next line
+  hardcoded_count=$(grep -A1 'local aesop_root' "$HOOK_SCRIPT" | grep '${AESOP_ROOT:-' | wc -l)
+  if [ "$hardcoded_count" -gt 0 ]; then
+    printf 'FAIL: Found %d other instances of hardcoded AESOP_ROOT in local aesop_root assignments\n' "$hardcoded_count"
+    exit 1
+  fi
+
+  printf 'PASS: No hardcoded AESOP_ROOT paths found in check functions\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Test Summary ===\n'
 printf 'Tests PASSED: %d\n' "$test_passed"
 printf 'Tests FAILED: %d\n' "$test_failed"

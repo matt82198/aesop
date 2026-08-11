@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for tools/merge_train.py serial merge train."""
+import os
 import sys
 import json
 import subprocess
@@ -621,8 +622,14 @@ class TestIntegrationMode(unittest.TestCase):
             self.assertIn("99", url)
 
     def test_close_superseded_prs(self):
-        with patch.object(self.module, 'gh') as mock_gh:
-            mock_gh.return_value = ""
+        with patch.object(self.module, 'gh') as mock_gh, \
+             patch.object(self.module, 'git') as mock_git:
+            def gh_side_effect(*args):
+                if "view" in args:
+                    return {"headRefOid": "abc123", "title": "test"}
+                return ""
+            mock_gh.side_effect = gh_side_effect
+            mock_git.return_value = (True, "")  # is_ancestor returns True
             self.module.close_superseded_prs([10, 11, 12])
             close_calls = [c for c in mock_gh.call_args_list
                            if "pr" in c[0] and "close" in c[0]]
@@ -641,21 +648,25 @@ class TestIntegrationMode(unittest.TestCase):
 
     def test_run_integration_train_happy_path(self):
         m = self.module
-        with patch.object(m, 'create_integration_branch') as mock_create, \
+        with patch.object(m, 'check_enforce_admins') as mock_enforce, \
+             patch.object(m, 'create_integration_branch') as mock_create, \
              patch.object(m, 'merge_pr_into_integration') as mock_merge_pr, \
              patch.object(m, 'push_integration_branch') as mock_push, \
              patch.object(m, 'create_integration_pr') as mock_create_pr, \
              patch.object(m, 'wait_for_integration_ci') as mock_wait, \
              patch.object(m, 'merge_integration_pr') as mock_merge_int, \
+             patch.object(m, 'run_regenerators') as mock_regen, \
              patch.object(m, 'close_superseded_prs') as mock_close, \
              patch.object(m, 'cleanup_integration_branch') as mock_cleanup:
 
+            mock_enforce.return_value = True
             mock_create.return_value = True
             mock_merge_pr.return_value = True
             mock_push.return_value = True
             mock_create_pr.return_value = "https://github.com/org/repo/pull/99"
             mock_wait.return_value = True
             mock_merge_int.return_value = True
+            mock_regen.return_value = True
 
             result = m.run_integration_train([10, 11, 12], "batch-wave")
             self.assertTrue(result)
@@ -671,21 +682,25 @@ class TestIntegrationMode(unittest.TestCase):
 
     def test_run_integration_train_skips_conflicting_prs(self):
         m = self.module
-        with patch.object(m, 'create_integration_branch') as mock_create, \
+        with patch.object(m, 'check_enforce_admins') as mock_enforce, \
+             patch.object(m, 'create_integration_branch') as mock_create, \
              patch.object(m, 'merge_pr_into_integration') as mock_merge_pr, \
              patch.object(m, 'push_integration_branch') as mock_push, \
              patch.object(m, 'create_integration_pr') as mock_create_pr, \
              patch.object(m, 'wait_for_integration_ci') as mock_wait, \
              patch.object(m, 'merge_integration_pr') as mock_merge_int, \
+             patch.object(m, 'run_regenerators') as mock_regen, \
              patch.object(m, 'close_superseded_prs') as mock_close, \
              patch.object(m, 'cleanup_integration_branch') as mock_cleanup:
 
+            mock_enforce.return_value = True
             mock_create.return_value = True
             mock_merge_pr.side_effect = [True, False, True]
             mock_push.return_value = True
             mock_create_pr.return_value = "https://github.com/org/repo/pull/99"
             mock_wait.return_value = True
             mock_merge_int.return_value = True
+            mock_regen.return_value = True
 
             result = m.run_integration_train([10, 11, 12], "batch-wave")
             self.assertTrue(result)
@@ -693,10 +708,12 @@ class TestIntegrationMode(unittest.TestCase):
 
     def test_run_integration_train_all_conflict_aborts(self):
         m = self.module
-        with patch.object(m, 'create_integration_branch') as mock_create, \
+        with patch.object(m, 'check_enforce_admins') as mock_enforce, \
+             patch.object(m, 'create_integration_branch') as mock_create, \
              patch.object(m, 'merge_pr_into_integration') as mock_merge_pr, \
              patch.object(m, 'cleanup_integration_branch') as mock_cleanup:
 
+            mock_enforce.return_value = True
             mock_create.return_value = True
             mock_merge_pr.return_value = False
 
@@ -801,6 +818,175 @@ class TestIntegrationMode(unittest.TestCase):
             ]
             ok = self.module.merge_integration_pr(99)
             self.assertFalse(ok)
+
+    def test_b13_ancestor_check_blocks_bogus_close(self):
+        """TDD-FIRST test for B1.3: verify ancestor before close_superseded_prs.
+
+        BUG: A partially-applied integration can close a PR whose content never landed.
+        Example: PR #42 merged into integration but integration PR merge failed.
+        Content of #42 never reached main, but close_superseded_prs(42) still closes it.
+
+        FIX: Before closing, verify `git merge-base --is-ancestor <headRefOid> origin/main`.
+        If check fails, report loudly and DO NOT close that PR.
+        """
+        m = self.module
+        with patch.object(m, 'gh') as mock_gh, \
+             patch.object(m, 'git') as mock_git:
+
+            # PR info: headRefOid is abc123, but it's NOT an ancestor of origin/main
+            # (it was merged into integration, but integration PR never reached main)
+            def gh_side_effect(*args):
+                if "pr" in args and "view" in args:
+                    # Reading PR info to get headRefOid
+                    return {
+                        "headRefOid": "abc123",
+                        "headRefName": "feat/unlanded",
+                        "title": "Unlanded feature",
+                    }
+                if "pr" in args and "close" in args:
+                    return ""
+                return {}
+
+            def git_side_effect(*args):
+                if "merge-base" in args and "--is-ancestor" in args:
+                    # abc123 is NOT an ancestor of origin/main
+                    return (False, "merge-base check failed")
+                return (True, "")
+
+            mock_gh.side_effect = gh_side_effect
+            mock_git.side_effect = git_side_effect
+
+            # Should NOT close PR 42 because content never landed
+            m.close_superseded_prs([42])
+
+            # Verify that ancestor check was called
+            ancestor_checks = [c for c in mock_git.call_args_list
+                              if "merge-base" in c[0] and "--is-ancestor" in c[0]]
+
+            self.assertTrue(len(ancestor_checks) > 0,
+                          "Should check ancestor before closing")
+
+            # Verify close was NOT called (because ancestor check failed)
+            close_calls = [c for c in mock_gh.call_args_list
+                          if "pr" in c[0] and "close" in c[0]]
+
+            self.assertEqual(len(close_calls), 0,
+                           "Should NOT close PR if content not ancestor of origin/main")
+
+
+class TestTransportDecodesUndecodableBytes(unittest.TestCase):
+    """Regression: the merge queue crashed on EVERY pass decoding a 0x97 byte.
+
+    `git()`/`gh()` carried `encoding='utf-8'` with the DEFAULT strict error
+    handler. subprocess decodes captured output in a reader THREAD, so a
+    strict UnicodeDecodeError there kills the thread and never propagates to
+    the caller's frame -- `result.stdout` simply comes back None, and the
+    crash surfaces as `AttributeError: 'NoneType' object has no attribute
+    'strip'` from inside `git()`. That took the scheduled queue down for 24+
+    consecutive passes; the real cause (byte 0x97, the cp1252 em-dash that
+    queued PR titles and branch names are full of) was visible only as a
+    stray thread traceback above the useless AttributeError.
+
+    These are behavioral tests, not inspection: a real subprocess really
+    emits the undecodable byte. `test_strict_decoding_is_what_broke_the_queue`
+    pins the pre-fix behavior so the regression stays PROVEN rather than
+    merely asserted.
+    """
+
+    RAW = b"em\x97dash"
+
+    def setUp(self):
+        self.tool_path = Path(__file__).parent.parent / "tools" / "merge_train.py"
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("merge_train", self.tool_path)
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+
+        # A throwaway repo whose config holds a raw, undecodable byte. git
+        # echoes config values back verbatim without transcoding them, so
+        # `git config --get` is a deterministic source of exactly the byte
+        # that took the queue down. Scoped to a TemporaryDirectory, and the
+        # cwd is restored in tearDown: no cwd or global git-config pollution.
+        self._tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self._tmp.name)
+        subprocess.run(["git", "init", "-q", str(self.repo)],
+                       capture_output=True, timeout=30, check=True)
+        config = self.repo / ".git" / "config"
+        config.write_bytes(config.read_bytes()
+                           + b"[emdash]\n\ttitle = " + self.RAW + b"\n")
+        self._cwd = os.getcwd()
+        os.chdir(self.repo)
+
+    def tearDown(self):
+        os.chdir(self._cwd)
+        self._tmp.cleanup()
+
+    def _strict_probe(self):
+        """The exact pre-fix call shape, for the red half of the proof."""
+        return subprocess.run(
+            ["git", "config", "--get", "emdash.title"],
+            capture_output=True, text=True, encoding="utf-8",  # encoding-ok
+            timeout=60)
+
+    def test_strict_decoding_is_what_broke_the_queue(self):
+        """RED half: without errors=, the call cannot yield usable stdout.
+
+        The SAME defect surfaces two different ways, and the platform picks
+        which one -- so asserting either single shape makes this test a
+        Windows-only or Linux-only proof:
+
+          * Windows: `capture_output` drains both pipes with reader THREADS.
+            The UnicodeDecodeError is raised inside a thread, never reaches
+            this frame, and `result.stdout` silently comes back None. That
+            None is what killed the queue -- the caller's next `.strip()`
+            died with a misleading AttributeError.
+          * POSIX: `communicate()` decodes on the CALLING thread, so the
+            UnicodeDecodeError propagates out of `subprocess.run` directly.
+
+        Both are the same bug (strict decoding of one 0x97 byte) and both are
+        unusable output, which is exactly what the assertion below pins. What
+        must NEVER happen is a plain decoded string: that would mean the
+        fixture stopped reproducing the crash and the green half proves
+        nothing.
+        """
+        try:
+            result = self._strict_probe()
+        except UnicodeDecodeError:
+            return  # POSIX shape: raised on the calling thread. Proof holds.
+        self.assertEqual(result.returncode, 0,
+                         "the fixture must produce a successful git call")
+        self.assertIsNone(
+            result.stdout,
+            "strict utf-8 decoding must lose stdout (or raise) -- if this "
+            "ever starts returning a string, the fixture stopped reproducing "
+            "the 0x97 crash and the green half below proves nothing")
+
+    def test_git_survives_undecodable_byte(self):
+        """GREEN half: git() returns a usable string instead of crashing."""
+        ok, out = self.module.git("config", "--get", "emdash.title")
+        self.assertTrue(ok)
+        self.assertIsInstance(out, str)
+        self.assertIn("dash", out)
+        # 'replace', not 'ignore': the bad byte must stay VISIBLE.
+        self.assertIn("�", out,
+                      "undecodable bytes must surface as U+FFFD, never be "
+                      "silently dropped -- errors='ignore' is forbidden")
+
+    def test_gh_survives_undecodable_byte(self):
+        """gh() carries the same handler, proven on a real decoding call."""
+        seen = {}
+        real_run = subprocess.run
+
+        def spy(cmd, **kwargs):
+            seen.update(kwargs)
+            return real_run(["git", "config", "--get", "emdash.title"], **kwargs)
+
+        with patch.object(self.module.subprocess, "run", spy):
+            out = self.module.gh("pr", "list")
+        self.assertEqual(seen.get("encoding"), "utf-8")
+        self.assertEqual(seen.get("errors"), "replace")
+        self.assertIsInstance(out, str)
+        self.assertIn("�", out)
 
 
 if __name__ == "__main__":

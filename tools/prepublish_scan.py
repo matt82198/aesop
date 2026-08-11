@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 prepublish_scan.py — Pre-publish gate for public repos: scans full git history + staged changes.
+INDEX: Pre-publish full history + staged-changes scan gate
 
 Usage:
   prepublish_scan.py [--repo PATH]  Scan full history and staged changes before publishing
@@ -31,7 +32,7 @@ def run_secret_scan(mode, repo_path):
             cmd,
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=120
         )
         return result.returncode, result.stdout, result.stderr

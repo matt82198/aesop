@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Gate detecting forbidden patterns in agent/dispatch prompt templates.
+INDEX: Gate detecting forbidden patterns in agent/dispatch prompts
 
 Scans skill files and dispatch template files for patterns that could
 lead to unsafe behavior:

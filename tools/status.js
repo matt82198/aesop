@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// INDEX: One-shot fleet status snapshot (watchdog/monitor heartbeat age, dashboard port reachability, git branch and working tree state)
 
 /**
  * Aesop status — One-shot fleet status snapshot

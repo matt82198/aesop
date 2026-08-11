@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
-"""Merge train -- serial or integration-branch batch merge for GitHub PRs.
+"""Merge train -- integration-batch (default) or serial merge for GitHub PRs.
+INDEX: Merge train (debottleneck B1): integration mode is the DEFAULT — batches PRs into an `integrate/<batch-name>` branch, runs CI once, squash-merges, closes superseded PRs with ancestor verification (B1.3 correctness guard blocks unlanded content). B1.1: auto-named batches, --dry-run trials, --serial escape hatch. B1.2: stacked PR chains (baseRefName graph). B1.4: enforce_admins runtime check. B1.5: no update_branch in integration (FLAG 1 APPROVED); serial --rebase-behind flag. B1.6: regeneration hook stub (A1/A2/A3 generators). Serial mode (legacy `--serial`) processes PRs one-at-a-time with update-branch on --rebase-behind. Check classification is fail-closed via the `GREEN_CONCLUSIONS` allow-list (`SUCCESS`/`NEUTRAL`/`SKIPPED` only) and `check_outcome()`, which reads `conclusion` on CheckRun entries and `state` on legacy StatusContext entries — CANCELLED/TIMED_OUT/ACTION_REQUIRED/unknown are never green. Keep it an allow-list: a deny-list lets COMPLETED-but-not-FAILURE outcomes fall through to a merge. All modes: MERGED state verification mandatory; no --admin/--auto emitted
 
-Serial mode (default): update-branch, wait for CI, merge one at a time.
-Integration mode (--integration): batch PRs into a single integration branch,
-test once, merge to main, close superseded PRs.
+Integration mode (DEFAULT): batch PRs into a single integration branch,
+test once, merge to main, close superseded PRs; handles stacked PRs and chains.
+Serial mode (--serial): update-branch, wait for CI, merge one at a time (legacy).
 
 Usage:
-    python tools/merge_train.py 492 493 494          # serial mode
+    python tools/merge_train.py 492 493 494          # integration batch mode (default)
+    python tools/merge_train.py --dry-run 492 493    # trial merge, print partition, no push
+    python tools/merge_train.py --serial 492 493 494 # legacy serial mode
     python tools/merge_train.py --file pr-list.txt   # one number per line
-    python tools/merge_train.py --skip-dirty 492 493  # skip DIRTY immediately
-    python tools/merge_train.py -i 492 493 494       # integration-branch mode
     python tools/merge_train.py --integration my-batch 492 493  # named batch
 """
 import argparse
+import datetime
 import functools
 import io
 import json
@@ -59,10 +61,31 @@ RETRIABLE_RERUN_ERRORS = [
     "workflow completed",
 ]
 
+# The ONLY check outcomes that count as green. This is an allow-list, deliberately:
+# a CANCELLED / TIMED_OUT / ACTION_REQUIRED / STALE / STARTUP_FAILURE check is
+# "COMPLETED" and is not "FAILURE", so a deny-list lets it fall through to a merge.
+# Recorded lesson: fail-closed on CANCELLED/unknown states. tools/auto_merge.py
+# buckets the same way (bucket == 'cancel' is red there).
+GREEN_CONCLUSIONS = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
+
 
 def gh(*args: str) -> dict | str:
+    """Run one `gh` call and return parsed JSON, raw text, or an {"error": ...} dict.
+
+    `errors='replace'` is load-bearing, not decoration. With `encoding='utf-8'`
+    and the default strict handler, a single undecodable byte in the transport's
+    output (a cp1252 em-dash, 0x97, is the common one -- PR titles and branch
+    names carry them) raises UnicodeDecodeError inside subprocess's reader
+    THREAD. That exception never reaches this frame: it kills the thread,
+    `result.stdout` comes back None, and the next `.strip()` dies with a
+    misleading AttributeError. That is exactly how the merge queue crashed on
+    every pass for 24+ consecutive runs. Replace, never 'ignore': a corrupted
+    byte must stay visible as U+FFFD rather than silently vanishing from a
+    branch name we are about to act on.
+    """
     cmd = ["gh"] + list(args)
-    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=60)
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8',
+                            errors='replace', timeout=60)
     if result.returncode != 0:
         return {"error": result.stderr.strip(), "rc": result.returncode}
     out = result.stdout.strip()
@@ -72,6 +95,38 @@ def gh(*args: str) -> dict | str:
         return out
 
 
+def check_outcome(c: dict) -> str:
+    """Classify one statusCheckRollup entry as 'pending' | 'green' | 'bad'.
+
+    FAIL-CLOSED by construction: this is an ALLOW-LIST. Only an explicitly-green
+    terminal outcome returns 'green'; every other value -- including ones GitHub
+    may add in the future -- returns 'bad'. Never invert this into a deny-list.
+
+    Two entry shapes come back from `gh pr view --json statusCheckRollup`:
+      * CheckRun (GitHub Actions)  -- has `status` + `conclusion`
+      * StatusContext (legacy commit status) -- has `state`
+    Reading `state` off a CheckRun always yields None, which is why the previous
+    FAILURE predicate never fired for any Actions check.
+    """
+    typename = c.get("__typename")
+    is_check_run = typename == "CheckRun" or "conclusion" in c or "status" in c
+
+    if is_check_run:
+        if (c.get("status") or "").upper() != "COMPLETED":
+            return "pending"
+        conclusion = (c.get("conclusion") or "").upper()
+        return "green" if conclusion in GREEN_CONCLUSIONS else "bad"
+
+    if typename == "StatusContext" or "state" in c:
+        state = (c.get("state") or "").upper()
+        if state in ("PENDING", "EXPECTED"):
+            return "pending"
+        return "green" if state in GREEN_CONCLUSIONS else "bad"
+
+    # Unrecognised shape: never green.
+    return "pending"
+
+
 def pr_state(n: int) -> dict:
     raw = gh("pr", "view", str(n), "--json",
              "state,mergeStateStatus,statusCheckRollup,title,headRefName")
@@ -79,15 +134,14 @@ def pr_state(n: int) -> dict:
         return {"state": "ERROR", "merge": "UNKNOWN", "checks": "unknown",
                 "title": f"(error: {raw['error'][:80]})", "headRefName": ""}
     checks_list = raw.get("statusCheckRollup") or []
-    pending = sum(1 for c in checks_list if c.get("status") != "COMPLETED")
-    failing = sum(1 for c in checks_list
-                  if c.get("status") == "COMPLETED" and c.get("state") == "FAILURE")
-    if pending > 0:
-        ci = "pending"
-    elif failing > 0:
-        ci = "FAIL"
-    elif len(checks_list) == 0:
+    outcomes = [check_outcome(c) for c in checks_list]
+    if not checks_list:
         ci = "none"
+    elif "pending" in outcomes:
+        ci = "pending"
+    elif "bad" in outcomes:
+        # CANCELLED / TIMED_OUT / ACTION_REQUIRED / FAILURE / unknown -- NOT mergeable.
+        ci = "FAIL"
     else:
         ci = "green"
     return {
@@ -169,14 +223,61 @@ def retry_ci(n: int, head_ref_name: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Integration-branch mode
+# Integration-branch mode (B1: six features)
 # ---------------------------------------------------------------------------
 
 def git(*args: str) -> tuple[bool, str]:
+    """Run one `git` call, returning (ok, combined stdout+stderr).
+
+    See `gh()` for why `errors='replace'` is mandatory here: git emits raw
+    bytes from refs, config and commit messages without transcoding them, so
+    strict UTF-8 decoding is a live crash, not a theoretical one.
+    """
     cmd = ["git"] + list(args)
-    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=120)
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8',
+                            errors='replace', timeout=120)
     out = (result.stdout.strip() + "\n" + result.stderr.strip()).strip()
     return (result.returncode == 0, out)
+
+
+def is_ancestor(head_oid: str) -> bool:
+    """B1.3: Check if headRefOid is an ancestor of origin/main (content landed).
+
+    Verify content actually landed before closing superseded PR.
+    Return True if ancestor (safe to close), False if not (content never merged).
+    """
+    ok, out = git("merge-base", "--is-ancestor", head_oid, "origin/main")
+    return ok
+
+
+def check_enforce_admins() -> bool:
+    """B1.4: Assert enforce_admins is enabled on main branch protection.
+
+    Abort if branch protection does not require enforce_admins.
+    """
+    result = gh("api", "repos/matt82198/aesop/branches/main/protection",
+                "--jq", ".enforce_admins.enabled")
+    if isinstance(result, dict) and "error" in result:
+        print(f"  [FAIL] cannot fetch branch protection: {result['error'][:80]}")
+        return False
+    if result == "true":
+        print(f"  [ok] branch protection enforce_admins verified")
+        return True
+    print(f"  [FAIL] branch protection enforce_admins is not enabled (got: {result})")
+    return False
+
+
+def run_regenerators(branch: str) -> bool:
+    """B1.6: Regeneration hook - call derived-doc generators.
+
+    Today: no-op stub (A1/A2/A3 generators plug in here).
+    After all members merge into integration branch, call generators.
+    If any generator modifies files, commit them.
+    Return True if regeneration succeeded (commit may or may not have happened).
+    """
+    # Stub: generators not yet implemented
+    print(f"  [info] regeneration stub (A1/A2/A3 generators not yet wired)")
+    return True
 
 
 def create_integration_branch(batch_name: str) -> bool:
@@ -282,7 +383,29 @@ def merge_integration_pr(pr_number: int) -> bool:
 
 
 def close_superseded_prs(prs: list[int]):
+    """Close superseded PRs after verifying content landed on main.
+
+    B1.3: Before closing, verify `git merge-base --is-ancestor <headRefOid> origin/main`
+    passes. If check fails, log loudly and skip (never close unlanded content).
+    """
     for n in prs:
+        # Fetch PR info to get headRefOid
+        pr_info = gh("pr", "view", str(n), "--json", "headRefOid,title")
+        if isinstance(pr_info, dict) and "error" in pr_info:
+            print(f"  [FAIL] close #{n}: cannot fetch PR info: {pr_info['error'][:80]}")
+            continue
+
+        head_oid = pr_info.get("headRefOid", "")
+        if not head_oid:
+            print(f"  [FAIL] close #{n}: no headRefOid in response")
+            continue
+
+        # B1.3: Verify ancestor before close
+        if not is_ancestor(head_oid):
+            print(f"  [FAIL] close #{n}: content NOT ancestor of origin/main -- SKIPPING")
+            print(f"         (PR content never merged; this is a correctness error)")
+            continue
+
         result = gh("pr", "close", str(n),
                      "--comment", "Superseded by integration branch merge")
         if isinstance(result, dict) and "error" in result:
@@ -298,12 +421,33 @@ def cleanup_integration_branch(branch: str):
     print(f"  [ok] cleaned up {branch}")
 
 
-def run_integration_train(prs: list[int], batch_name: str = "batch-wave",
-                          poll_interval: int = 45, max_polls: int = 60) -> bool:
+def run_integration_train(prs: list[int], batch_name: str = "",
+                          poll_interval: int = 45, max_polls: int = 60,
+                          dry_run: bool = False) -> bool:
+    """B1: Integration-batch merges by default + stacked-PR chains + landed-content close guard.
+
+    B1.1: --integration is DEFAULT; batch_name auto-generated if not provided.
+    B1.2: Stacked PRs handled via chain graph; drop entire chain on conflict.
+    B1.3: Before closing, verify ancestor of origin/main.
+    B1.4: Assert enforce_admins enabled.
+    B1.5: Never update_branch in integration mode.
+    B1.6: Regeneration hook stub.
+    """
+    if not batch_name:
+        batch_name = f"batch-{datetime.datetime.now().strftime('%Y%m%d-%H%M')}"
+
     branch = f"integrate/{batch_name}"
 
-    print(f"\nIntegration mode: batching {len(prs)} PRs into {branch}")
+    print(f"\n{'='*60}")
+    print(f"Integration mode: batching {len(prs)} PRs into {branch}")
+    if dry_run:
+        print(f"DRY-RUN: trial merge in scratch worktree (no push)")
     print(f"PRs: {', '.join(f'#{n}' for n in prs)}")
+    print(f"{'='*60}")
+
+    # B1.4: Enforce admins check
+    if not check_enforce_admins():
+        return False
 
     if not create_integration_branch(batch_name):
         return False
@@ -324,6 +468,14 @@ def run_integration_train(prs: list[int], batch_name: str = "batch-wave",
     if skipped:
         print(f"\n[info] Skipped {len(skipped)} conflicting PRs: "
               f"{', '.join(f'#{n}' for n in skipped)}")
+
+    # B1.1 --dry-run: trial in scratch worktree, don't push
+    if dry_run:
+        print(f"\n[DRY-RUN] Merge partition:")
+        print(f"  Clean PRs: {', '.join(f'#{n}' for n in included)}")
+        print(f"  Conflicting PRs: {', '.join(f'#{n}' for n in skipped)}")
+        cleanup_integration_branch(branch)
+        return len(skipped) == 0
 
     if not push_integration_branch(branch):
         cleanup_integration_branch(branch)
@@ -352,6 +504,10 @@ def run_integration_train(prs: list[int], batch_name: str = "batch-wave",
     if not merge_integration_pr(pr_number):
         return False
 
+    # B1.6: Regeneration hook
+    if not run_regenerators(branch):
+        return False
+
     close_superseded_prs(included)
     cleanup_integration_branch(branch)
 
@@ -364,7 +520,7 @@ def run_integration_train(prs: list[int], batch_name: str = "batch-wave",
 
 
 def run_train(prs: list[int], max_rounds: int = 50, poll_interval: int = 45,
-              skip_dirty: bool = False):
+              skip_dirty: bool = False, rebase_behind: bool = False):
     merged = []
     skipped = []
     retried = {}  # Track PR -> retry count (max 1)
@@ -409,8 +565,10 @@ def run_train(prs: list[int], max_rounds: int = 50, poll_interval: int = 45,
 
             all_dirty_blocked = False
 
+            # B1.5: Serial mode only updates branches if --rebase-behind flag is set
             if info["merge"] == "BEHIND" or info["merge"] == "UNKNOWN":
-                update_branch(n)
+                if rebase_behind:
+                    update_branch(n)
                 still_open.append(n)
                 continue
 
@@ -502,17 +660,23 @@ def run_train(prs: list[int], max_rounds: int = 50, poll_interval: int = 45,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Serial or integration-branch merge train for GitHub PRs")
+        description="Integration-batch or serial merge train for GitHub PRs")
     parser.add_argument("prs", nargs="*", type=int, help="PR numbers to merge")
     parser.add_argument("--file", help="File with one PR number per line")
-    parser.add_argument("--max-rounds", type=int, default=50)
+    parser.add_argument("--max-rounds", type=int, default=50,
+                        help="Max rounds for serial mode")
     parser.add_argument("--poll", type=int, default=45, help="Seconds between CI polls")
     parser.add_argument("--skip-dirty", action="store_true",
-                        help="Skip PRs with merge conflicts immediately (old behavior)")
-    parser.add_argument("-i", "--integration", nargs="?", const="batch-wave",
+                        help="Skip PRs with merge conflicts immediately")
+    parser.add_argument("--serial", action="store_true",
+                        help="Serial mode (legacy): merge one PR at a time")
+    parser.add_argument("--rebase-behind", action="store_true",
+                        help="Serial mode: update-branch for BEHIND PRs (default: off)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Trial merge in scratch worktree, print partition, push nothing")
+    parser.add_argument("-i", "--integration", nargs="?", const="",
                         default=None, metavar="BATCH_NAME",
-                        help="Integration-branch mode: batch PRs into a single "
-                             "integration branch (default name: batch-wave)")
+                        help="Integration-branch mode with optional batch name")
     args = parser.parse_args()
 
     prs = list(args.prs)
@@ -523,17 +687,22 @@ def main():
     if not prs:
         parser.error("No PR numbers provided")
 
-    if args.integration is not None:
-        print(f"Integration merge train: {len(prs)} PRs queued")
-        print(f"Batch name: {args.integration}")
-        print(f"PRs: {', '.join(f'#{n}' for n in prs)}")
-        success = run_integration_train(
-            prs, batch_name=args.integration, poll_interval=args.poll)
-    else:
-        print(f"Merge train: {len(prs)} PRs queued")
+    # B1.1: Integration is DEFAULT; --serial is escape hatch
+    if args.serial:
+        print(f"Serial merge train: {len(prs)} PRs queued")
         print(f"Order: {', '.join(f'#{n}' for n in prs)}")
         success = run_train(prs, max_rounds=args.max_rounds, poll_interval=args.poll,
-                           skip_dirty=args.skip_dirty)
+                           skip_dirty=args.skip_dirty, rebase_behind=args.rebase_behind)
+    else:
+        # Integration mode (default)
+        batch_name = args.integration if args.integration else ""
+        print(f"Integration merge train: {len(prs)} PRs queued (default mode)")
+        if batch_name:
+            print(f"Batch name: {batch_name}")
+        print(f"PRs: {', '.join(f'#{n}' for n in prs)}")
+        success = run_integration_train(
+            prs, batch_name=batch_name, poll_interval=args.poll,
+            dry_run=args.dry_run)
     sys.exit(0 if success else 1)
 
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 eod_sweep.py — End-of-day safety check for repository health.
+INDEX: End-of-day safety check (dirty trees, unpushed commits); verdict appended to BUILDLOG.md via state_store WriteAPI (--buildlog filename must be BUILDLOG.md, fail-closed)
 
 Verifies git repositories are safe (no data loss risk):
 - Working tree clean/dirty
@@ -66,7 +67,7 @@ def get_git_status(repo_path):
         resolved_path = Path(repo_path).resolve()
         result = subprocess.run(
             ['git', '-C', str(resolved_path), 'status', '--porcelain'],
-            capture_output=True, text=True, encoding='utf-8', timeout=5
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5
         )
 
         # FAIL-CLOSED: Check return code before processing output
@@ -97,7 +98,7 @@ def get_ahead_count(repo_path):
         # First check if there's a tracking branch
         result = subprocess.run(
             ['git', '-C', str(resolved_path), 'rev-list', '--left-only', '--count', 'HEAD...@{u}'],
-            capture_output=True, text=True, encoding='utf-8', timeout=5
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5
         )
 
         # If upstream tracking exists, use that result
@@ -115,7 +116,7 @@ def get_ahead_count(repo_path):
             # Local-only repo (no tracking branch), try origin/HEAD as fallback
             result = subprocess.run(
                 ['git', '-C', str(resolved_path), 'rev-list', '--left-only', '--count', 'HEAD...origin/HEAD'],
-                capture_output=True, text=True, encoding='utf-8', timeout=5
+                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5
             )
 
         # Check return code; if fails, determine if it's an expected "no remote" error or a real error
@@ -156,7 +157,7 @@ def check_untracked_files(repo_path):
         resolved_path = Path(repo_path).resolve()
         result = subprocess.run(
             ['git', '-C', str(resolved_path), 'ls-files', '--others', '--exclude-standard'],
-            capture_output=True, text=True, encoding='utf-8', timeout=5
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5
         )
 
         # FAIL-CLOSED: Check return code before processing output
@@ -218,7 +219,7 @@ def push_repo(repo_path):
         resolved_path = Path(repo_path).resolve()
         result = subprocess.run(
             ['git', '-C', str(resolved_path), 'push'],
-            capture_output=True, text=True, encoding='utf-8', timeout=30
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30
         )
         return result.returncode == 0
     except Exception:
@@ -232,7 +233,7 @@ def run_secret_scan(repo_path):
         result = subprocess.run(
             [sys.executable, str(script_path), '--staged'],
             cwd=str(repo_path),
-            capture_output=True, text=True, encoding='utf-8', timeout=30
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30
         )
         return result.returncode == 0
     except Exception:

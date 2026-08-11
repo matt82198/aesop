@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Healthcheck tool — Aggregates fleet health signals.
+INDEX: Fleet health aggregator (heartbeat/alert/orchestrator status); health.js wraps Python
 
 Checks:
 - Heartbeat ages (watchdog, monitor) from config-driven state paths
