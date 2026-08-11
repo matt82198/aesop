@@ -49,7 +49,7 @@ npm install
 npx . --help                  # See CLI
 npx . doctor                  # Readiness check (no keys needed)
 npm run test:all             # Run full test suite
-`
+```
 
 That is enough to explore the CLI, read the docs, and verify the test infrastructure. No API keys are touched.
 
@@ -63,8 +63,17 @@ To run the actual multi-agent orchestration loop you need:
 
 ```bash
 npx @matt82198/aesop my-fleet --name "api" --repos "/path/to/repo"
-cp -r skills/ ~/.claude/skills          # Enable /power and /buildsystem
-`
+cd my-fleet
+
+# Enable /power, /buildsystem, /fleet, /dashboard, /healthcheck.
+# Claude Code only discovers skills under ~/.claude/skills/ (or a project's
+# .claude/skills/) — the scaffolded skills/ directory is not scanned on its own.
+mkdir -p ~/.claude/skills
+cp -r skills/*/ ~/.claude/skills/
+
+# Verify, then restart Claude Code (skills are enumerated at startup):
+ls ~/.claude/skills/power/SKILL.md
+```
 
 For the complete setup guide, orchestration walkthrough, and multi-instance roadmap, see:
 - **[docs/INSTALL.md](./docs/INSTALL.md)** — Setup and first wave

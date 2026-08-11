@@ -161,38 +161,39 @@ function checkRepoURLs() {
   }
 }
 
-// Check if ~/.claude/skills/power/SKILL.md and ~/.claude/skills/buildsystem/SKILL.md exist (WARN only)
+// Check if ~/.claude/skills/power/SKILL.md and ~/.claude/skills/buildsystem/SKILL.md exist.
+// Claude Code only discovers skills under ~/.claude/skills/ (or a project's .claude/skills/);
+// the scaffolded ./skills/ directory is never scanned, so an uncopied skill is an unusable one.
+// Fail-closed: the orchestrator cannot run without these, so a green doctor must mean installed.
 function checkSkillsFiles() {
   const homeDir = os.homedir();
-  const powerSkill = path.join(homeDir, '.claude', 'skills', 'power', 'SKILL.md');
-  const buildsystemSkill = path.join(homeDir, '.claude', 'skills', 'buildsystem', 'SKILL.md');
+  const skillsDir = path.join(homeDir, '.claude', 'skills');
+  const powerSkill = path.join(skillsDir, 'power', 'SKILL.md');
+  const buildsystemSkill = path.join(skillsDir, 'buildsystem', 'SKILL.md');
 
   const powerExists = fs.existsSync(powerSkill);
   const buildsystemExists = fs.existsSync(buildsystemSkill);
 
-  // Skills are required but we WARN, not FAIL, to allow doctor to proceed on partial setup
-  if (!powerExists && !buildsystemExists) {
-    return {
-      passed: true,  // WARN, not fail
-      hint: `⚠ Skills not found at ~/.claude/skills/. Required before running orchestrator. Copy: cp -r ~/.claude/skills/ here`
-    };
+  if (powerExists && buildsystemExists) {
+    return { passed: true, hint: 'Both skills present' };
   }
 
-  if (!powerExists) {
-    return {
-      passed: true,  // WARN, not fail
-      hint: `⚠ power/SKILL.md not found at ${powerSkill}. Required before running orchestrator.`
-    };
-  }
+  // Point at the scaffolded source only when it is actually there — otherwise the
+  // hint would name a path the user does not have.
+  const sourceDir = path.join(CURRENT_DIR, 'skills');
+  const installHint = fs.existsSync(sourceDir)
+    ? `Install: mkdir -p "${skillsDir}" && cp -r "${sourceDir}"/*/ "${skillsDir}"/`
+    : `Install: copy the scaffolded skills/*/ directories into "${skillsDir}"`;
+  const restartHint = 'Then restart Claude Code — skills are enumerated at startup.';
 
-  if (!buildsystemExists) {
-    return {
-      passed: true,  // WARN, not fail
-      hint: `⚠ buildsystem/SKILL.md not found at ${buildsystemSkill}. Required before running orchestrator.`
-    };
-  }
+  const missing = [];
+  if (!powerExists) missing.push('power');
+  if (!buildsystemExists) missing.push('buildsystem');
 
-  return { passed: true, hint: 'Both skills present' };
+  return {
+    passed: false,
+    hint: `Missing skill(s): ${missing.join(', ')} — not found under ${skillsDir}. ${installHint}. ${restartHint}`
+  };
 }
 
 // Check required directories exist
