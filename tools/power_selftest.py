@@ -91,73 +91,86 @@ config = load_config()
 paths = resolve_paths(config)
 
 
+# Claude Code merges hook settings from the user scope (~/.claude) and the
+# project scope (<repo>/.claude), each with an optional .local override. A hook
+# registered in ANY of them is live, so the check reads all four and unions them
+# -- reading only the user scope reported a correctly-registered project hook as
+# missing.
+SETTINGS_FILENAMES = ('settings.json', 'settings.local.json')
+
+
+def _iter_settings_paths():
+    """Yield every settings file Claude Code would merge, user scope first."""
+    for root in (paths['brain_root'], paths['aesop_root'] / '.claude'):
+        for name in SETTINGS_FILENAMES:
+            yield root / name
+
+
+def _hook_command_path(cmd, aesop_root):
+    """Extract the script path from a hook command, or None if not checkable.
+
+    Hook commands are shell strings: the script may be quoted and may reference
+    $CLAUDE_PROJECT_DIR, which Claude Code expands at run time. Treating an
+    unexpanded variable as a missing file is a false alarm, so anything still
+    holding a variable after substitution is skipped rather than reported.
+    """
+    for raw in cmd.split():
+        part = raw.strip('"\'')
+        if not part.endswith(('.mjs', '.js', '.py', '.sh')):
+            continue
+        expanded = part.replace('${CLAUDE_PROJECT_DIR}', str(aesop_root))
+        expanded = expanded.replace('$CLAUDE_PROJECT_DIR', str(aesop_root))
+        if '$' in expanded:
+            return None
+        return expanded
+    return None
+
+
 def check_hooks():
     """Check hooks configuration. Returns Check."""
     try:
-        settings_path = paths['brain_root'] / 'settings.json'
-        if not settings_path.exists():
-            return Check('hooks', 'OK', '(n/a)', False)
-
-        with open(settings_path, encoding="utf-8") as f:
-            settings = json.load(f)
-
-        hooks = settings.get('hooks', {})
-        pre_tool_entries = hooks.get('PreToolUse', [])
-        post_tool_entries = hooks.get('PostToolUse', [])
-
-        # Check for required matchers in PreToolUse and PostToolUse arrays
+        aesop_root = paths['aesop_root']
         pre_matchers = set()
-        post_matchers = set()
         all_commands = []
+        found_any = False
 
-        for entry in pre_tool_entries if isinstance(pre_tool_entries, list) else []:
-            if isinstance(entry, dict):
+        for settings_path in _iter_settings_paths():
+            if not settings_path.exists():
+                continue
+            found_any = True
+            with open(settings_path, encoding="utf-8") as f:
+                settings = json.load(f)
+
+            hooks = settings.get('hooks', {})
+            entries = hooks.get('PreToolUse', [])
+            for entry in entries if isinstance(entries, list) else []:
+                if not isinstance(entry, dict):
+                    continue
                 matcher = entry.get('matcher', '')
                 if matcher:
                     pre_matchers.update(matcher.split('|'))
-                hook_list = entry.get('hooks', [])
-                for hook in hook_list:
-                    if isinstance(hook, dict):
-                        cmd = hook.get('command', '')
-                        if cmd:
-                            all_commands.append(cmd)
+                for hook in entry.get('hooks', []):
+                    if isinstance(hook, dict) and hook.get('command'):
+                        all_commands.append(hook['command'])
 
-        for entry in post_tool_entries if isinstance(post_tool_entries, list) else []:
-            if isinstance(entry, dict):
-                matcher = entry.get('matcher', '')
-                if matcher:
-                    post_matchers.update(matcher.split('|'))
-                hook_list = entry.get('hooks', [])
-                for hook in hook_list:
-                    if isinstance(hook, dict):
-                        cmd = hook.get('command', '')
-                        if cmd:
-                            all_commands.append(cmd)
+        if not found_any:
+            return Check('hooks', 'OK', '(n/a)', False)
 
-        # Check required matchers
+        # Only PreToolUse Agent|Task is required: force-model-policy.mjs is the
+        # one Claude Code hook aesop ships. A PostToolUse requirement used to
+        # live here too, but no such hook exists in the repo, so every clean
+        # install failed this check for a hook it had no way to register.
         required_pre = {'Agent', 'Task'}
-        required_post = {'Write', 'Edit', 'NotebookEdit'}
-
-        pre_ok = required_pre.issubset(pre_matchers)
-        post_ok = required_post.issubset(post_matchers)
+        missing_pre = required_pre - pre_matchers
 
         missing_files = []
         for cmd in all_commands:
-            parts = cmd.split()
-            if parts:
-                for part in parts:
-                    if part.endswith(('.mjs', '.js', '.py', '.sh')):
-                        if not Path(part).exists():
-                            missing_files.append(part)
-                        break
+            resolved = _hook_command_path(cmd, aesop_root)
+            if resolved and not Path(resolved).exists():
+                missing_files.append(resolved)
 
-        if not (pre_ok and post_ok):
-            missing = []
-            if not pre_ok:
-                missing.append(f"PreToolUse: {required_pre - pre_matchers}")
-            if not post_ok:
-                missing.append(f"PostToolUse: {required_post - post_matchers}")
-            return Check('hooks', 'FAIL', f'missing matchers: {"; ".join(missing)}', True)
+        if missing_pre:
+            return Check('hooks', 'FAIL', f'missing matchers: PreToolUse: {missing_pre}', True)
         elif missing_files:
             return Check('hooks', 'FAIL', f'missing files: {missing_files}', True)
         else:
