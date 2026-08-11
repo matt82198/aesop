@@ -62,18 +62,19 @@ To run the actual multi-agent orchestration loop you need:
 - **Bash 4+** (or Git Bash on Windows) for daemon scripts
 
 ```bash
-npx @matt82198/aesop my-fleet --name "api" --repos "/path/to/repo"
+# Scaffolds the fleet AND installs /power, /buildsystem, /fleet, /dashboard,
+# /healthcheck into ~/.claude/skills/ — the only path Claude Code scans.
+# Add --install-deps to also run npm install and pip install -r requirements.txt.
+npx @matt82198/aesop my-fleet --name "api" --repos "/path/to/repo" --install-deps
 cd my-fleet
 
-# Enable /power, /buildsystem, /fleet, /dashboard, /healthcheck.
-# Claude Code only discovers skills under ~/.claude/skills/ (or a project's
-# .claude/skills/) — the scaffolded skills/ directory is not scanned on its own.
-mkdir -p ~/.claude/skills
-cp -r skills/*/ ~/.claude/skills/
-
-# Verify, then restart Claude Code (skills are enumerated at startup):
-ls ~/.claude/skills/power/SKILL.md
+# Restart Claude Code — skills are enumerated at startup.
+npx . doctor                  # Confirms skills, hooks, config, and interpreters
 ```
+
+Existing skills of yours are never clobbered: an installed skill that differs
+from the shipped one is preserved and reported, and `--force` overwrites it.
+Use `--no-skills` to scaffold without touching `~/.claude/`.
 
 For the complete setup guide, orchestration walkthrough, and multi-instance roadmap, see:
 - **[docs/INSTALL.md](./docs/INSTALL.md)** — Setup and first wave

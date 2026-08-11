@@ -10,6 +10,8 @@ const args = process.argv.slice(2);
 const helpFlag = args.includes('--help') || args.includes('-h');
 const forceFlag = args.includes('--force');
 const yesFlag = args.includes('--yes');
+const noSkillsFlag = args.includes('--no-skills');
+const installDepsFlag = args.includes('--install-deps');
 
 // Python dispatch table: namespace -> { verb -> script_path }
 const pythonNamespaces = {
@@ -389,8 +391,10 @@ Arguments:
 
 Options:
   --help, -h              Show this help message
-  --force                 Replace any existing .git/hooks/pre-push during scaffold
+  --force                 Replace any existing .git/hooks/pre-push and overwrite installed skills
   --yes                   Skip interactive prompts, use defaults (CI-safe)
+  --no-skills             Do not install skills into ~/.claude/skills/ (scaffold only)
+  --install-deps          Run npm install and pip install -r requirements.txt in the target
   --name <name>           Project name (for headless scaffolding; generates CLAUDE.md + aesop.config.json)
   --domains <list>        Comma-separated domain list (e.g., "api,worker,monitoring")
   --repos <paths>         Comma-separated repo paths (e.g., "/path/to/repo1,/path/to/repo2")
@@ -487,7 +491,11 @@ if (fs.existsSync(targetDir)) {
     'CHANGELOG.md',
     'CLAUDE-TEMPLATE.md',
     'CLAUDE.md',
-    'MEMORY-SEED.md'
+    'MEMORY-SEED.md',
+    // Scaffolded dependency manifests; without these, re-scaffolding a target
+    // aborts because its own output looks like an unexpected file.
+    'requirements.txt',
+    'requirements-dev.txt'
   ];
   const allowedItems = new Set([...aesopDirs, ...aesopFiles]);
 
@@ -541,7 +549,11 @@ const filesToCopy = [
   'README.md',
   'LICENSE',
   'CHANGELOG.md',
-  'CLAUDE-TEMPLATE.md'
+  'CLAUDE-TEMPLATE.md',
+  // Shipped so a scaffolded fleet can install its own Python dependencies
+  // (--install-deps); without these the target has no dependency manifest.
+  'requirements.txt',
+  'requirements-dev.txt'
 ];
 
 let copiedCount = 0;
@@ -562,6 +574,136 @@ function copyRecursive(src, dest) {
     fs.copyFileSync(src, dest);
     copiedCount++;
   }
+}
+
+// Install the scaffolded skills into the only directory Claude Code scans.
+// A skill left in ./skills/ is never discovered, so scaffolding without this
+// step produces a fleet whose orchestrator cannot be invoked. Idempotent:
+// identical skills are left alone, divergent ones are preserved unless --force.
+function installSkills(targetDir, { force = false, skip = false } = {}) {
+  if (skip) {
+    console.log('- Skipped skill installation (--no-skills)');
+    return { installed: [], skipped: [], diverged: [] };
+  }
+
+  const sourceDir = path.join(targetDir, 'skills');
+  if (!fs.existsSync(sourceDir)) {
+    return { installed: [], skipped: [], diverged: [] };
+  }
+
+  // AESOP_SKILLS_HOME redirects the install target so tests never write to the
+  // real ~/.claude (test-hygiene rule: no global state outside temp dirs).
+  const skillsHome = process.env.AESOP_SKILLS_HOME
+    || path.join(os.homedir(), '.claude', 'skills');
+
+  // Refuse to follow a symlinked skills dir (same guard as the pre-push hook install)
+  try {
+    if (fs.existsSync(skillsHome) && fs.lstatSync(skillsHome).isSymbolicLink()) {
+      console.warn('⚠ Warning: ~/.claude/skills is a symlink (security risk); skipping skill installation');
+      return { installed: [], skipped: [], diverged: [] };
+    }
+  } catch (e) {
+    // lstat failed; proceed
+  }
+
+  const names = fs.readdirSync(sourceDir).filter(name => {
+    try {
+      return fs.statSync(path.join(sourceDir, name)).isDirectory();
+    } catch (e) {
+      return false;
+    }
+  });
+  if (names.length === 0) {
+    return { installed: [], skipped: [], diverged: [] };
+  }
+
+  fs.mkdirSync(skillsHome, { recursive: true });
+
+  const installed = [];
+  const skipped = [];
+  const diverged = [];
+
+  names.forEach(name => {
+    const from = path.join(sourceDir, name);
+    const to = path.join(skillsHome, name);
+    const fromSkill = path.join(from, 'SKILL.md');
+    const toSkill = path.join(to, 'SKILL.md');
+
+    if (fs.existsSync(toSkill) && !force) {
+      const same = fs.existsSync(fromSkill)
+        && fs.readFileSync(fromSkill, 'utf8') === fs.readFileSync(toSkill, 'utf8');
+      if (same) {
+        skipped.push(name);
+      } else {
+        diverged.push(name);
+      }
+      return;
+    }
+
+    copyRecursive(from, to);
+    installed.push(name);
+  });
+
+  if (installed.length > 0) {
+    console.log(`✓ Installed ${installed.length} skill(s) to ${skillsHome}: ${installed.join(', ')}`);
+  }
+  if (skipped.length > 0) {
+    console.log(`✓ ${skipped.length} skill(s) already installed and identical: ${skipped.join(', ')}`);
+  }
+  if (diverged.length > 0) {
+    console.warn(`⚠ Kept your existing version of: ${diverged.join(', ')} (use --force to overwrite)`);
+  }
+  if (installed.length > 0) {
+    console.log('  Restart Claude Code to pick them up — skills are enumerated at startup.');
+  }
+
+  return { installed, skipped, diverged };
+}
+
+// Install Node and Python dependencies into the scaffolded fleet. Opt-in:
+// scaffolding must stay offline-safe, so this only runs behind --install-deps.
+function installDependencies(targetDir, { enabled = false } = {}) {
+  if (!enabled) {
+    return { ran: [] };
+  }
+
+  const { spawnSync } = require('child_process');
+  const ran = [];
+
+  const pkgJson = path.join(targetDir, 'package.json');
+  if (fs.existsSync(pkgJson)) {
+    console.log('→ Installing Node dependencies (npm install)...');
+    const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    const res = spawnSync(npmCmd, ['install'], { cwd: targetDir, stdio: 'inherit' });
+    if (res.status === 0) {
+      console.log('✓ Node dependencies installed');
+      ran.push('npm');
+    } else {
+      console.warn('⚠ npm install failed; install Node dependencies manually');
+    }
+  }
+
+  const requirements = path.join(targetDir, 'requirements.txt');
+  if (fs.existsSync(requirements)) {
+    const python = resolvePythonInterpreter();
+    if (!python) {
+      console.warn('⚠ No Python interpreter found; skipping Python dependencies');
+    } else {
+      console.log('→ Installing Python dependencies (pip install -r requirements.txt)...');
+      const res = spawnSync(python, ['-m', 'pip', 'install', '-r', requirements], {
+        cwd: targetDir,
+        stdio: 'inherit'
+      });
+      if (res.status === 0) {
+        console.log('✓ Python dependencies installed');
+        ran.push('pip');
+      } else {
+        console.warn('⚠ pip install failed; install Python dependencies manually');
+      }
+    }
+  }
+
+  return { ran };
 }
 
 function generateDomainText(domainsStr) {
@@ -695,10 +837,8 @@ async function printNextStepsAndWatchdog(rl, targetDir, configPath, port) {
   console.log('2. Set real repository URLs in aesop.config.json:');
   console.log('     Edit aesop.config.json — replace placeholder URLs (https://github.com/user/...) with actual repo URLs');
   console.log('');
-  console.log('3. Set up orchestration skills:');
-  console.log('     mkdir -p ~/.claude/skills && cp -r skills/*/ ~/.claude/skills/');
-  console.log('     Scaffolded ./skills/ is not scanned by Claude Code; the copy is required.');
-  console.log('     Then restart Claude Code; skills are enumerated at startup.');
+  console.log('3. Orchestration skills were installed to ~/.claude/skills/ automatically:');
+  console.log('     Restart Claude Code to pick them up; skills are enumerated at startup.');
   console.log('');
   console.log('4. Run preflight checks:');
   console.log('     aesop doctor  (or: npx @matt82198/aesop doctor)');
@@ -1156,6 +1296,10 @@ if (!isRuntimeCommand) {
     // Install the pre-commit waveguard hook (only works if .git exists)
     installPreCommitWaveguard(finalTargetDir, templateRoot);
 
+    // Install skills where Claude Code can actually find them, and (opt-in) deps
+    installSkills(finalTargetDir, { force: forceFlag, skip: noSkillsFlag });
+    installDependencies(finalTargetDir, { enabled: installDepsFlag });
+
     console.log(`\n✅ Scaffolded aesop template into "${finalTargetDir}" (${copiedCount} files)`);
 
     if (wizardMode && wizardRl) {
@@ -1173,10 +1317,9 @@ if (!isRuntimeCommand) {
       console.log('2. Set real repository URLs in aesop.config.json:');
       console.log('     Edit aesop.config.json — replace placeholder URLs (https://github.com/user/...) with actual repo URLs');
       console.log('');
-      console.log('3. Install the skills (required for orchestration):');
-      console.log('     mkdir -p ~/.claude/skills && cp -r skills/*/ ~/.claude/skills/');
-      console.log('     Claude Code only scans ~/.claude/skills/ — the scaffolded skills/ dir is not enough.');
-      console.log('     Then restart Claude Code; skills are enumerated at startup.');
+      console.log('3. Skills were installed to ~/.claude/skills/ automatically (see above):');
+      console.log('     Restart Claude Code to pick them up — skills are enumerated at startup.');
+      console.log('     Re-run with --no-skills to skip, or --force to overwrite your own versions.');
       console.log('');
       console.log('4. Run preflight checks:');
       console.log('     aesop doctor  (or: npx @matt82198/aesop doctor)');
@@ -1203,10 +1346,9 @@ if (!isRuntimeCommand) {
       console.log('2. Set real repository URLs in aesop.config.json:');
       console.log('     Edit aesop.config.json — replace placeholder URLs (https://github.com/user/...) with actual repo URLs');
       console.log('');
-      console.log('3. Install the skills (required for orchestration):');
-      console.log('     mkdir -p ~/.claude/skills && cp -r skills/*/ ~/.claude/skills/');
-      console.log('     Claude Code only scans ~/.claude/skills/ — the scaffolded skills/ dir is not enough.');
-      console.log('     Then restart Claude Code; skills are enumerated at startup.');
+      console.log('3. Skills were installed to ~/.claude/skills/ automatically (see above):');
+      console.log('     Restart Claude Code to pick them up — skills are enumerated at startup.');
+      console.log('     Re-run with --no-skills to skip, or --force to overwrite your own versions.');
       console.log('');
       console.log('4. Run preflight checks:');
       console.log('     aesop doctor  (or: npx @matt82198/aesop doctor)');
@@ -1234,10 +1376,9 @@ if (!isRuntimeCommand) {
       console.log('     Edit CLAUDE-TEMPLATE.md and save as CLAUDE.md');
       console.log('     Update domains, team, and project details');
       console.log('');
-      console.log('3. Install the skills (required for orchestration):');
-      console.log('     mkdir -p ~/.claude/skills && cp -r skills/*/ ~/.claude/skills/');
-      console.log('     Claude Code only scans ~/.claude/skills/ — the scaffolded skills/ dir is not enough.');
-      console.log('     Then restart Claude Code; skills are enumerated at startup.');
+      console.log('3. Skills were installed to ~/.claude/skills/ automatically (see above):');
+      console.log('     Restart Claude Code to pick them up — skills are enumerated at startup.');
+      console.log('     Re-run with --no-skills to skip, or --force to overwrite your own versions.');
       console.log('');
       console.log('4. Run preflight checks:');
       console.log('     aesop doctor  (or: npx @matt82198/aesop doctor)');
