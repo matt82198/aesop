@@ -6,6 +6,35 @@ const os = require('os');
 const readline = require('readline');
 const { execSync } = require('child_process');
 
+/**
+ * Translate a spawnSync result into the exit code this CLI should propagate.
+ *
+ * FAIL CLOSED. spawnSync reports `status: null` (with `error` undefined) whenever the
+ * child was terminated by a signal rather than exiting on its own -- SIGTERM/SIGKILL from
+ * an operator, an OOM killer, or a CI job cancellation. The previous `result.status || 0`
+ * collapsed that null to 0, so a signal-killed child reported SUCCESS. Every
+ * `aesop <namespace> <verb>` dispatch shares this propagator, so a killed
+ * `aesop gate secret-scan` looked like a passing secret gate.
+ *
+ * A child that never ran to completion produced no verdict; the only safe verdict is
+ * failure. Real exit codes (including 0) are propagated verbatim.
+ *
+ * @param {{status?: number|null, signal?: string|null, error?: Error}} result spawnSync result
+ * @returns {number} exit code to propagate (2 when the outcome is unknown)
+ */
+function exitCodeFromSpawnResult(result) {
+  if (!result) return 2;
+  if (result.error) return 2;
+  if (typeof result.status !== 'number') return 2;  // null => signal-killed, undefined => unknown
+  return result.status;
+}
+
+// When required as a module (tests), export the pure helpers instead of running the CLI.
+if (require.main !== module) {
+  module.exports = { exitCodeFromSpawnResult };
+  return;
+}
+
 const args = process.argv.slice(2);
 const helpFlag = args.includes('--help') || args.includes('-h');
 const forceFlag = args.includes('--force');
@@ -163,12 +192,16 @@ if (isPythonDispatch && args.length >= 1) {
       timeout: 600000  // 10 min timeout
     });
 
-    // Propagate exact exit code (0, 1, 2, or error)
+    // Propagate exact exit code (0, 1, 2, ...); fail closed on error or signal-kill
     if (result.error) {
       console.error(`Error spawning ${pythonInterp}: ${result.error.message}`);
       process.exit(2);
     }
-    process.exit(result.status || 0);
+    if (result.signal || typeof result.status !== 'number') {
+      console.error(`Error: ${pythonInterp} ${scriptPath} was terminated by ${result.signal || 'an unknown signal'} without producing an exit code.`);
+      console.error('Treating this as a FAILURE (a command that never completed cannot report success).');
+    }
+    process.exit(exitCodeFromSpawnResult(result));
   }
 
   // Unknown verb in known namespace
@@ -209,9 +242,9 @@ if (isRuntimeCommand) {
         stdio: 'inherit',
         timeout: 30000
       });
-      process.exit(fallback.status || (fallback.error ? 1 : 0));
+      process.exit(exitCodeFromSpawnResult(fallback));
     } else {
-      process.exit(result.status || 0);
+      process.exit(exitCodeFromSpawnResult(result));
     }
     return;
   }
@@ -342,6 +375,66 @@ function getFlag(flagName) {
     return args[idx + 1];
   }
   return null;
+}
+
+// Resolve real git directory, handling worktree case
+// In a worktree, .git is a FILE containing 'gitdir: <path>'; return the common git dir.
+// Returns the actual git directory path, or null if resolution fails.
+function resolveRealGitDir(targetDir) {
+  const gitDirPath = path.join(targetDir, '.git');
+
+  // Check if .git exists at all
+  if (!fs.existsSync(gitDirPath)) {
+    return null;
+  }
+
+  // Check if .git is a file (worktree case)
+  try {
+    const stat = fs.statSync(gitDirPath);
+    if (stat.isFile()) {
+      // Worktree case: .git is a file pointing to the real git dir
+      // Use git rev-parse --git-common-dir to get the actual hooks directory
+      try {
+        const commonDir = execSync('git rev-parse --git-common-dir', {
+          cwd: targetDir,
+          stdio: 'pipe',
+          timeout: 5000,
+          encoding: 'utf8'
+        }).trim();
+
+        if (commonDir) {
+          // Resolve relative paths (git may return .git or relative paths)
+          return path.resolve(targetDir, commonDir);
+        }
+      } catch (e) {
+        // git command failed; fall back to parsing the gitdir pointer manually
+        try {
+          const content = fs.readFileSync(gitDirPath, 'utf8');
+          const match = content.match(/^gitdir:\s*(.+)$/m);
+          if (match && match[1]) {
+            let gitdirPath = match[1].trim();
+            // If gitdir is relative, resolve it relative to targetDir
+            if (!path.isAbsolute(gitdirPath)) {
+              gitdirPath = path.join(targetDir, gitdirPath);
+            }
+            return gitdirPath;
+          }
+        } catch (e2) {
+          // Failed to read/parse .git file
+        }
+      }
+      return null;
+    } else if (stat.isDirectory()) {
+      // Regular git directory case
+      return gitDirPath;
+    } else {
+      // .git exists but is neither a file nor a directory (symlink/other)
+      return null;
+    }
+  } catch (e) {
+    // stat failed
+    return null;
+  }
 }
 
 if (helpFlag) {
@@ -907,18 +1000,18 @@ function initializeGitRepo(targetDir, noGitFlag = false) {
 
 function installPreCommitWaveguard(targetDir, templateRoot) {
   // Install the pre-commit waveguard hook to prevent commits during a wave
-  // Try to locate .git directory
-  const gitDir = path.join(targetDir, '.git');
-  if (!fs.existsSync(gitDir)) {
-    // No git repo, skip hook installation silently
+  // Resolve real git directory (handles worktree case where .git is a file)
+  const gitDir = resolveRealGitDir(targetDir);
+  if (!gitDir) {
+    // No git repo or resolution failed, skip hook installation silently
     return;
   }
 
-  // SECURITY: Check if .git itself is a symlink/junction (refuse to follow it outside targetDir)
+  // SECURITY: Check if resolved gitDir is a symlink/junction (refuse to follow it outside targetDir)
   try {
     const gitDirLstat = fs.lstatSync(gitDir);
     if (gitDirLstat.isSymbolicLink()) {
-      console.warn('⚠ Warning: .git is a symlink (security risk)');
+      console.warn('⚠ Warning: git directory is a symlink (security risk)');
       console.warn('  Skipping pre-commit hook installation. Please remove the symlink and re-run scaffold.');
       return;
     }
@@ -929,14 +1022,20 @@ function installPreCommitWaveguard(targetDir, templateRoot) {
   // Ensure hooks directory exists
   const gitHooksDir = path.join(gitDir, 'hooks');
   if (!fs.existsSync(gitHooksDir)) {
-    fs.mkdirSync(gitHooksDir, { recursive: true });
+    try {
+      fs.mkdirSync(gitHooksDir, { recursive: true });
+    } catch (e) {
+      console.warn(`⚠ Warning: Failed to create hooks directory at ${gitHooksDir}`);
+      console.warn(`  ${e.message}`);
+      return;
+    }
   }
 
   // SECURITY: Check if gitHooksDir is a symlink (refuse to install through symlinked dir)
   try {
     const hooksLstat = fs.lstatSync(gitHooksDir);
     if (hooksLstat.isSymbolicLink()) {
-      console.warn('⚠ Warning: .git/hooks directory is a symlink (security risk)');
+      console.warn('⚠ Warning: hooks directory is a symlink (security risk)');
       console.warn('  Skipping pre-commit hook installation. Please remove the symlink and re-run scaffold.');
       return;
     }
@@ -1033,20 +1132,20 @@ exit 0
 }
 
 function installPrePushHook(targetDir, templateRoot) {
-  // Try to locate .git directory
-  const gitDir = path.join(targetDir, '.git');
-  if (!fs.existsSync(gitDir)) {
-    // No git repo, skip hook installation silently
+  // Resolve real git directory (handles worktree case where .git is a file)
+  const gitDir = resolveRealGitDir(targetDir);
+  if (!gitDir) {
+    // No git repo or resolution failed, skip hook installation silently
     return;
   }
 
-  // SECURITY: Check if .git itself is a symlink/junction (refuse to follow it outside
-  // targetDir). This mirrors the gitHooksDir/hookDest checks below — .git is one path
-  // component higher and must be validated before anything derived from it is trusted.
+  // SECURITY: Check if resolved gitDir is a symlink/junction (refuse to follow it outside
+  // targetDir). This mirrors the gitHooksDir/hookDest checks below — git dir must be
+  // validated before anything derived from it is trusted.
   try {
     const gitDirLstat = fs.lstatSync(gitDir);
     if (gitDirLstat.isSymbolicLink()) {
-      console.warn('⚠ Warning: .git is a symlink (security risk)');
+      console.warn('⚠ Warning: git directory is a symlink (security risk)');
       console.warn('  Skipping hook installation. Please remove the symlink and re-run scaffold.');
       return;
     }
@@ -1057,14 +1156,20 @@ function installPrePushHook(targetDir, templateRoot) {
   // Ensure hooks directory exists
   const gitHooksDir = path.join(gitDir, 'hooks');
   if (!fs.existsSync(gitHooksDir)) {
-    fs.mkdirSync(gitHooksDir, { recursive: true });
+    try {
+      fs.mkdirSync(gitHooksDir, { recursive: true });
+    } catch (e) {
+      console.warn(`⚠ Warning: Failed to create hooks directory at ${gitHooksDir}`);
+      console.warn(`  ${e.message}`);
+      return;
+    }
   }
 
   // SECURITY: Check if gitHooksDir is a symlink (refuse to install through symlinked dir)
   try {
     const hooksLstat = fs.lstatSync(gitHooksDir);
     if (hooksLstat.isSymbolicLink()) {
-      console.warn('⚠ Warning: .git/hooks directory is a symlink (security risk)');
+      console.warn('⚠ Warning: hooks directory is a symlink (security risk)');
       console.warn('  Skipping hook installation. Please remove the symlink and re-run scaffold.');
       return;
     }

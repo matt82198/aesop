@@ -2,6 +2,7 @@
 # secretscan: allow-pattern-docs
 """
 Chaos-wave resilience harness: offline deterministic fault injection and recovery measurement.
+INDEX: Chaos-wave resilience harness: offline deterministic fault injection (worker kill, checkpoint corruption, planted secret, heartbeat stall, forced red test) with detection/recovery measurement; CLI: `--offline [--state-root DIR] [--output REPORT.md] [--json REPORT.json]`
 
 Usage:
   python tools/chaos_harness.py --offline [--state-root DIR] [--output REPORT.md] [--json REPORT.json]
@@ -324,7 +325,7 @@ def fault_f5_red_test(sandbox: Path) -> Dict[str, Any]:
         [sys.executable, str(test_file)],
         capture_output=True,
         text=True,
-        encoding='utf-8',
+        encoding='utf-8', errors='replace',
         timeout=5
     )
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Shard-aware Python test runner for CI.
+INDEX: Shard-aware Python test runner (distributes tracked test files across N shards round-robin; spawn-safe with __main__ guard; used by ci and windows-shard jobs); added 60s timeout to git ls-files call (critical fix: no prior timeout)
 
 Distributes tracked test files across N shards using round-robin or
 timing-aware greedy bin-packing (when --timing-file is supplied).
@@ -175,7 +176,7 @@ def main():
             ["git", "ls-files", "tests/test_*.py"],
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=60,
             check=True,
         )

@@ -20,10 +20,12 @@
   construct-time validate_base_url; key waiver only via loopback-validated is_local.
 - **verification_policy.py** — Maps verification tier -> orchestrator tuning (validate_all_json, spot_check_frac, repair_cap, require_adversarial_review).
 - **wave_loop.py** — the wave ENGINE: preflight ownership guard, parallel build,
-  bounded repair, per-repo batched git ship, recovery journal. Supports optional
-  orchestrator_backend for live-seat swap (see driver/orchestrator-swap/). RS3-W + RS5
-  claim lifecycle: fail-CLOSED gate, fingerprint-bound journal, deterministic claim state.
-  Tests: test_wave_loop_rs3.
+  bounded repair, per-repo batched git ship, recovery journal. Halt kill-switch checks
+  at all phase boundaries (PHASE 3/5/5.75/6/7) mirror cost-ceiling pattern, abort cleanly
+  when _check_halt() detects sentinel. Supports optional orchestrator_backend for
+  live-seat swap (see driver/orchestrator-swap/). RS3-W + RS5 claim lifecycle: fail-CLOSED
+  gate, fingerprint-bound journal, deterministic claim state. Tests: test_wave_loop_rs3,
+  test_wave_loop_halt_enforcement.
 - **wave_bridge.py** — Phase 3: bridges AgentDriver backends to wave manifest items
   (build_manifest_item / dispatch_item; green ONLY from test exit code, see below).
 - **anthropic_driver.py** — Anthropic Messages API driver for bench seam (direct HTTP, no SDK).
@@ -133,5 +135,7 @@ Phases 1-3 shipped. All file I/O uses explicit `encoding="utf-8"`. For orchestra
 Thread-safety: no locks in wave_scheduler, preserved as-is. Exception envelope carries `tracker_update_attempted` and `tracker_update_error` from nested phases, enabling recovery detection across report assembly crashes. Cost-ceiling check timing preserved (Phase 6, before final dispatch gates). Git operations: none in wave_scheduler, only via wave_loop. Tests: all 35 wave_scheduler tests pass with zero regressions.
 
 **Encoding**: All file I/O uses explicit `encoding="utf-8"`. No encoding violations. <!-- metrics-verified: python tools/encoding_lint.py --check --paths driver/wave_scheduler.py -->
+
+**Subprocess decoding (G10)**: every `subprocess.*` call in this domain that decodes output — `wave_loop.py`'s git/gh shell-outs — passes BOTH `encoding="utf-8"` AND `errors="replace"`. The encoding alone is only half the rule: strict UTF-8 decoding of one undecodable byte (0x97, the cp1252 em-dash, is the common one in branch names and PR titles) raises inside subprocess's reader THREAD, never reaches the caller, and silently leaves `stdout` as `None` so the next `.strip()` dies with a meaningless `AttributeError`. That crashed the merge queue on 24+ consecutive scheduled passes. `errors="ignore"` is forbidden — a corrupted byte must stay visible as U+FFFD, not vanish from a ref name the loop is about to act on. Enforced by `tools/encoding_lint.py`, which fail-closes repo-wide in the pre-push hook.
 
 **Metrics**: `run_wave_scheduler` CC 82 → 15 (grade F → C). Total extracted functions: 10. Max extracted CC: 17 (still grade C). Test pass rate: 35/35 (100%). <!-- metrics-verified: python -m radon cc driver/wave_scheduler.py -s -->

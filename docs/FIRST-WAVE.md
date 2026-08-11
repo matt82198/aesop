@@ -1,10 +1,263 @@
-# Your First Wave
+# First-Wave Replay Kit: Canonical Walkthrough
 
-**TL;DR**: Run `/power` to prime your orchestrator brain, then `/buildsystem` to run a complete wave cycle. This guide walks you through what to expect.
+This guide walks you through a **complete, verified wave cycle** using the First-Wave Replay Kit—a minimal example you can fork to see how Aesop works end-to-end.
+
+**What you'll see:**
+- A realistic 5-item wave manifest  
+- Parallel dispatch of independent tasks  
+- Testing and verification at each phase  
+- Merge workflow with no conflicts  
+- Honest timing and cost expectations
 
 ---
 
-## Before You Start
+## The Replay Kit
+
+The **First-Wave Replay Kit** lives in `examples/first-wave-baseline/` and contains:
+
+- **wave-manifest.json** — The 5-item wave definition (validates against the real schema)
+- **sample-backlog.md** — Evidence-based writeup of each item  
+- **README.md** — Step-by-step walkthrough with real commands
+
+### Why Use It?
+
+This kit answers: **"How do I structure my first wave?"**
+
+It demonstrates:
+1. Realistic task scope (5 small, independent items)
+2. Correct manifest schema — proven by `wave_templates.validate_manifest`
+3. Disjoint file ownership — proven by `tools/wave_manifest_lint.py`
+4. Fail-closed test commands — proven by `examples/first-wave-baseline/verify-testcmds.sh`
+5. Duration figures labelled as estimates, because no real run was timed to produce them
+
+---
+
+## Quick Start: Validate & Inspect
+
+### Step 1: Validate the Manifest
+
+The tool that validates a manifest **file** is `tools/wave_manifest_lint.py`. From the aesop repo
+root:
+
+```bash
+python tools/wave_manifest_lint.py examples/first-wave-baseline/wave-manifest.json
+```
+
+Real output (captured 2026-08-02, exit code `0`):
+
+```
+PASS: ownership_disjointness: No file ownership overlaps
+INFO: path_existence: 5 new file(s)
+PASS: prompt_sanity: All prompts valid
+PASS: git_history_churn: No high-churn files detected
+WARN: testcmd_validity: No testCmd specified
+```
+
+That last `WARN` is expected and is a linter quirk, not a manifest defect: the check reads a
+*top-level* `testCmd`, while the wave engine reads a per-item `testCmd`. Every item in this kit
+has one. (Consequently `--strict`, which promotes warnings to failures, exits `1` here.)
+
+> **Do not** run `python tools/wave_templates.py validate <path>`. `validate` takes
+> `--template {saas,data,library,all}` and accepts no file argument; handing it a path exits `2`
+> with `wave_templates.py: error: unrecognized arguments: <path>`. To validate the built-in
+> presets, the correct form is `python tools/wave_templates.py validate --template all`.
+
+To run the same schema check the wave engine performs:
+
+```bash
+python -c "
+import json, sys
+sys.path.insert(0, 'tools')
+from wave_templates import validate_manifest
+with open('examples/first-wave-baseline/wave-manifest.json') as f:
+    validate_manifest(json.load(f), allow_placeholders=False, require_testcmd=True)
+print('Manifest is valid')
+"
+```
+
+Real output — one line, exit code `0`:
+
+```
+Manifest is valid
+```
+
+`validate_manifest` raises on failure and returns `None` on success. It does not print item
+counts or per-slug summaries; if you want those, see Step 2.
+
+### Step 2: Inspect the 5 Items
+
+```bash
+python -c "
+import json
+m = json.load(open('examples/first-wave-baseline/wave-manifest.json'))
+for i in m['items']:
+    print(f\"{i['slug']}: {', '.join(i['ownsFiles'])}\")
+"
+```
+
+Real output:
+
+```
+readme-typo-fix: README.md
+enable-skipped-test: tests/test_example.js
+add-eslint-config: .eslintrc.json, package.json
+fix-doc-links: docs/ARCHITECTURE.md, docs/SETUP.md
+simplify-util-functions: src/utils/helpers.js, src/utils/helpers.test.js
+```
+
+**Key observation:** All 5 items own **non-overlapping file sets**, which is what enables parallel
+dispatch and conflict-free sequential merge. You do not have to take that on trust — it is the
+`PASS: ownership_disjointness` line from Step 1.
+
+### Step 2b: Confirm the Gates Are Real
+
+A wave is only as honest as its `testCmd`s. A command like
+`test -f docs/ARCHITECTURE.md && echo 'Doc files present'` passes whether or not the work was
+done — it would bless an empty PR. The kit ships a script that proves its own gates fail when the
+work is missing:
+
+```bash
+bash examples/first-wave-baseline/verify-testcmds.sh
+```
+
+Real output (exit code `0`):
+
+```
+########## PRE-WORK: nothing implemented -- every gate must FAIL ##########
+  readme-typo-fix            exit=1   OK   (fails as required)
+  enable-skipped-test        exit=1   OK   (fails as required)
+  add-eslint-config          exit=1   OK   (fails as required)
+  fix-doc-links              exit=1   OK   (fails as required)
+  simplify-util-functions    exit=1   OK   (fails as required)
+
+########## POST-WORK: all 5 items implemented -- every gate must PASS ##########
+  readme-typo-fix            exit=0   OK   (passes as required)
+  enable-skipped-test        exit=0   OK   (passes as required)
+  add-eslint-config          exit=0   OK   (passes as required)
+  fix-doc-links              exit=0   OK   (passes as required)
+  simplify-util-functions    exit=0   OK   (passes as required)
+
+RESULT: all 5 testCmds are fail-closed.
+```
+
+Requires `node` 18+, `npm`, `python`, and network access (it installs `eslint@8` so the
+`add-eslint-config` gate runs the real linter). Apply the same test to your own manifests.
+
+### Step 3: Read the Backlog
+
+```bash
+cat examples/first-wave-baseline/sample-backlog.md
+```
+
+Shows evidence, complexity, and expected effort for each item.
+
+---
+
+## Wave Cycle Overview
+
+The replay kit demonstrates end-to-end (durations below are **planning estimates, not timings from
+a measured run**):
+
+```
+┌──────────────────────┐
+│  DISPATCH            │  Orchestrator loads manifest, assigns workers
+│  5 items dispatched  │
+└──────────────────────┘
+         ↓
+┌──────────────────────────────────────────┐
+│  IMPLEMENT (parallel; dominant term)     │
+│  Worker 1: Fix typo                      │
+│  Worker 2: Enable test (same time)       │
+│  Worker 3: Add linter config             │
+│  Worker 4: Fix docs                      │
+│  Worker 5: Refactor utils                │
+└──────────────────────────────────────────┘
+         ↓
+┌──────────────────────┐
+│  TEST                │  Each item's testCmd must exit 0
+│  Verify readiness    │  (all 5 verified fail-closed — see Step 2b)
+└──────────────────────┘
+         ↓
+┌──────────────────────┐
+│  MERGE               │  5 branches, disjoint files, no conflicts
+│  Wave closed         │
+└──────────────────────┘
+```
+
+---
+
+## Real-World Adaptation
+
+### Copy the Kit
+
+```bash
+cp examples/first-wave-baseline/wave-manifest.json /path/to/your-repo/wave-manifest.json
+cd /path/to/your-repo
+```
+
+### Customize the 5 Items
+
+Edit the manifest to replace items with your backlog:
+
+```json
+{
+  "items": [
+    {
+      "slug": "your-item",
+      "ownsFiles": ["file1.js"],
+      "prompt": "Your task description",
+      "testCmd": "npm test -- file1.test.js",
+      "workDir": "."
+    },
+    ...
+  ]
+}
+```
+
+### Validate Before Running
+
+```bash
+python tools/wave_manifest_lint.py your-wave-manifest.json
+```
+
+(Again: `wave_templates.py validate` is for the built-in presets and takes `--template`, not a
+file path. Passing it a path exits `2`.)
+
+Then confirm your own `testCmd`s are fail-closed — each one must exit non-zero *before* the work
+is done, or it is measuring nothing. `examples/first-wave-baseline/verify-testcmds.sh` shows the
+pattern.
+
+### Run Your Wave
+
+Use the orchestrator:
+
+```bash
+# Via the skill:
+/buildsystem
+
+# Or directly:
+python driver/wave_loop.py --manifest wave-manifest.json
+```
+
+---
+
+## What Each Item Demonstrates
+
+| Item | Files | Complexity | What its gate actually asserts |
+|------|-------|-----------|---------------|
+| readme-typo-fix | 1 | Trivial | Correct spelling present AND typo absent |
+| enable-skipped-test | 1 | Simple | No `.skip` marker remains AND the suite passes |
+| add-eslint-config | 2 | Simple | Config exists, `lint` script declared, `npm run lint` exits 0 |
+| fix-doc-links | 2 | Simple | Every relative markdown link resolves on disk |
+| simplify-util-functions | 2 | Moderate | `Refactor goal:` marker present AND tests green |
+
+The last row is the one honest caveat in this kit: a marker plus a green suite proves the worker
+touched the file and broke nothing. It cannot prove the refactor was an improvement — that
+judgement is not mechanizable and is left to review rather than faked by a passing command.
+
+---
+
+## Before You Start (Original Guide)
 
 Make sure you've completed:
 

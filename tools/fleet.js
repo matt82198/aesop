@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// INDEX: One-shot fleet snapshot (JSON: agents, heartbeats, tracker, orchestrator status; Node STDLIB only)
 
 /**
  * Aesop fleet — One-shot fleet snapshot

@@ -17,6 +17,7 @@ import { Work } from './views/Work';
 import Activity from './views/Activity';
 import { Cost } from './views/Cost';
 import { WavePRBoard } from './views/WavePRBoard';
+import { CostSummaryDrawer } from './components/CostSummaryDrawer';
 
 const THEME_STORAGE_KEY = 'aesop-theme';
 type Theme = 'light' | 'dark' | null; // null = follow OS preference
@@ -120,6 +121,7 @@ export default function App() {
         onThemeToggle={toggle}
         onRefresh={handleRefresh}
       />
+      <CostSummaryDrawer cost={sseState.cost ?? null} connectionStatus={connection} />
       <nav className="app-nav" aria-label="Views">
         {NAV_ITEMS.map(({ hash, label }) => (
           <a key={hash} href={hash} aria-current={route === hash ? 'page' : undefined} className="app-nav__link">

@@ -1,3 +1,54 @@
+# aesop 0.7.2 — Dashboard state-cache fix
+
+A small, single-fix patch release. `git log v0.7.1..v0.7.2` is four commits: one
+substantive change (#668), its merge, the release-metadata commit, and its merge.
+
+**Headline**: `/api/state` could serve a collector's empty default snapshot as though it
+were live state, so the dashboard's first paint could come up blank.
+
+### The fix (#668)
+- `ui/sse.py` seeded the `data` `CollectorSource` with a default snapshot of `{}`. That
+  source is mtime-gated, so while its watched files were unchanged the collector kept
+  serving the cached default. `serve_api_state` only computed a section inline when the
+  cached payload was `None` — and `{}` is not `None` — so the endpoint returned an empty
+  `data` section (watchdog, monitor, repos, events, alerts, messages all missing) whenever
+  the collector had not yet observed a file change. An empty section is now treated as
+  "not yet snapshotted" and computed inline.
+- Also in #668: `test_agent_detail_roundtrip` called `config.reload()` in `setUp` to pick up
+  fixture paths but restored the environment in `tearDown` without reloading, leaving the
+  config module pointing at a temp directory it then deleted.
+- This was a live main-CI failure (`ci (3)`: `AssertionError: 'watchdog' not found in {}`),
+  pre-existing rather than a test-ordering artifact. Verified against the real gate
+  (`tools/ci_shard_runner.py`): shard 3 exit 1 → exit 0, shards 0/1/2 exit 0.
+
+### Release mechanics
+- `release: 0.7.2` (a00deb7f) — version bump in `package.json`, `CHANGELOG.md` entry,
+  `STATE.md` sync. No code change.
+
+---
+
+# aesop 0.7.1 — Guardrails & Encoding Hardening
+
+**Headline**: Encoding validation gates (explicit UTF-8 on all subprocess calls, 62 violations fixed), fake-green detection improvements, test isolation enforcement, cost-view rendering fixes, merge-train Unicode robustness, portability-gate completion, remote-command identity hardening (fail-closed owner resolution).
+
+### Key fixes
+- Platform encoding: 62 subprocess calls fixed to pass explicit `encoding='utf-8'` (#636, eliminated Windows cp1252 corruption).
+- Fake-green gates: Fixed `state_md_verifier` (no version-claim pattern) and `verify_test_suite_count` (returned 0 on read failure, #661).
+- Test isolation: Fixture mutations (#643), heartbeat epoch pollution (#645), and other CI hygiene violations fixed.
+- Cost view loading/empty/error states + chart a11y (#648); live-API test skips on auth
+  rejection instead of failing CI (#666).
+- Merge-train UTF-8 stdout, so non-ASCII PR titles no longer crash the train (c6e465bf —
+  PR #654 was closed; the change shipped inside the 0.7.1 integration batch #667).
+- Portability gate reached a verdict for the first time and caught 9 real violations —
+  `remote_inbox.py` had hardcoded one GitHub handle as both the polled repo and the sole
+  authorized commenter, so the tool worked for exactly one person (502ccfaf, via #667).
+- **Test-suite count now derived at check time** rather than stored; eliminates parallel-branch count conflicts (#661).
+
+### Complexity reductions
+- `_run_wave_inner`: F(141) → C(13) (#637), `run_wave_scheduler`: F(82) → C(15) (#664), SSE collector: F(43) → B(6) (#658), tracker reconciliation: E(39) → C(19) (#662), `do_GET`: D(30) → A(2) (#663).
+
+---
+
 # aesop 0.7.0 — Guardrails & State Consolidation
 
 **Headline**: Comprehensive guardrail enforcement (11 linters, 8 automated gates) codifies design rules into fail-closed machinery. Multi-instance coordination MVP via lease-based SQLite enables team-scale orchestration. Test suite accountability (254 tests across 3 harnesses) verified by drift-detection gate. State consolidation complete: ReadAPI/WriteAPI facades unify all state readers/writers through one façade.
@@ -8,7 +59,7 @@
 
 1. **Guardrail enforcement suite**: 11 new linters + gates (dispatch_lint, CLAUDE.md sync, workflow model pin, git-stash guard, encoding validator, commit linter, docstring checker, dead-code detector, import-cycle detector, TODO tracker, file-size linter, test-coverage gap finder) eliminate design escape routes through automated fail-closed checking.
 2. **Multi-instance coordination MVP**: Lease-based SQLite claims enable multi-machine orchestration without consensus machinery; atomic check-and-insert prevents split-brain, TOCTOU race resolution via path normalization, tracker migration fixes prevent zombie resurrection.
-3. **Test suite accountability**: 254 tests across 3 harnesses (25 Node + 13 Shell + 216 Python) verified by new drift-detection gate (`verify_test_suite_count.py`); test counts reconciled across README/docs/CLAUDE.md to single source of truth.
+3. **Test suite accountability**: 254 tests across 3 harnesses (25 Node + 13 Shell + 216 Python) verified by new drift-detection gate (`verify_test_suite_count.py`); test counts reconciled across README/docs/CLAUDE.md to single source of truth. *[count as of the v0.7.0 tag; suite has since grown — see current README]*
 4. **State consolidation complete**: ReadAPI/WriteAPI facades ship; all state I/O routed through unified entry points. StateAPI migration ratchet prevents new direct reads; stateapi_lint enforces compliance via committed baseline.
 5. **Production tooling**: Init-project scaffolder, auto-merge batch tool, cost forecasting, tracker reconciliation (zombie detection), wave-history temporal analyzer, health-score subcommand, dependency graph generator, port-fidelity validator.
 

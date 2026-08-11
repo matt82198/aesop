@@ -90,8 +90,13 @@ def heartbeat(store, instance_id: str) -> bool:
 def claim_files(store, instance_id: str, file_paths: list[str]) -> bool:
     """Claim ownership of a set of files for this instance to work on.
 
-    Appends a file_claim_requested event. Other instances should skip files
-    already claimed. Fail-closed: if claim fails, returns False.
+    ADVISORY ONLY: appends a file_claim_requested event without atomicity.
+    This function is for projection/dashboard tracking, NOT mutual exclusion.
+    For atomic coordinated claiming, use state_store.claim_backend.ClaimBackend
+    (Inc 2 multibox fix; enabled via multibox.enabled config flag).
+
+    Other instances should skip files already claimed. Fail-closed: if claim
+    fails, returns False.
 
     Args:
         store: StateAPI or EventStore instance
