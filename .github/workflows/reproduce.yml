@@ -29,7 +29,10 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python test dependencies
-        run: pip install pyyaml
+        # pytest is a hard import for several tracked test modules (test_cli_base,
+        # test_status_publish, ...). Omitting it made the full-suite discover step
+        # below fail on "No module named 'pytest'". Matches ci.yml / main-full.yml.
+        run: pip install pyyaml pytest
 
       - name: Configure git (required for hook installation tests)
         run: |
@@ -99,14 +102,28 @@ jobs:
           loader = unittest.TestLoader()
           suite = unittest.TestSuite()
           failed_imports = []
+          skipped_modules = []
 
           for test_name in test_files:
               try:
                   module = __import__(f'tests.{test_name}', fromlist=[test_name])
                   suite.addTests(loader.loadTestsFromModule(module))
+              except unittest.SkipTest as e:
+                  # A module-level `raise unittest.SkipTest` is a deliberate,
+                  # self-documenting skip that both pytest and `unittest discover`
+                  # honor. It subclasses Exception, so the generic handler below
+                  # recorded it as an import FAILURE and reddened the whole run.
+                  # Mirrors the same fix in tools/ci_shard_runner.py.
+                  skipped_modules.append((test_name, str(e)))
+                  print(f"SKIP: {test_name}: {e}")
               except Exception as e:
                   failed_imports.append((test_name, str(e)))
                   print(f"ERROR: Failed to load {test_name}: {e}")
+
+          if skipped_modules:
+              print(f"\n{len(skipped_modules)} test module(s) skipped at import:")
+              for name, reason in skipped_modules:
+                  print(f"  - {name}: {reason}")
 
           # If there were import failures, exit immediately
           if failed_imports:

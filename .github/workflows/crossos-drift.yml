@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  # crossos_drift.py shells out to `gh run list` to read Actions history.
+  actions: read
 
 jobs:
   crossos-drift:
@@ -21,14 +23,23 @@ jobs:
           python-version: '3.11'
 
       - name: Run cross-OS drift analysis with exit-code handling
+        env:
+          # `gh` is unauthenticated by default inside Actions; without this the very
+          # first `gh run list` fails and the whole snapshot exits 2.
+          GH_TOKEN: ${{ github.token }}
         run: |
+          # NOTE: this step runs under `bash -e`. A bare `cmd > file` followed by
+          # `exit=$?` can never observe a non-zero code -- `-e` kills the step first,
+          # which made the exit-3 auth fall-through below unreachable. Capturing via
+          # `|| exit=$?` keeps the command exempt from `-e` so the handling can run.
+
           # Run JSON output
-          python tools/crossos_drift.py --runs 20 --json > docs/CROSSOS-DRIFT.json
-          json_exit=$?
+          json_exit=0
+          python tools/crossos_drift.py --runs 20 --json > docs/CROSSOS-DRIFT.json || json_exit=$?
 
           # Run Markdown output
-          python tools/crossos_drift.py --runs 20 > docs/CROSSOS-DRIFT.md
-          md_exit=$?
+          md_exit=0
+          python tools/crossos_drift.py --runs 20 > docs/CROSSOS-DRIFT.md || md_exit=$?
 
           # Handle exit codes:
           # Exit 3 = auth failure (skip commit, exit 0 to not fail scheduled run)
