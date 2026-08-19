@@ -85,7 +85,7 @@ listed by adding an `INDEX: <one-liner>` line to its module docstring/header.
 - `playwright_common.py` -- Shared Playwright harness boilerplate: `free_port()`, `copy_dist()`, `start_server()`, `stop_server()`, `filter_real_console_errors()` extracted from verify_*.py to reduce duplication (module for import, not CLI); browser proofs import from this module instead of reimplementing
 - `port_fidelity_check.py` -- Validates port/copy/vendor/migrate dispatch prompts require source path, source-unique marker, and independent verification
 - `portability_check.py` -- Shipped-surface gate: scan for hardcoded personal/environment paths (Windows user paths, POSIX home paths, private-machine project and home-dir tokens); exit 0 clean / 1 with findings; --json output, --root flag for base directory; stdlib only
-- `power_selftest.py` -- Health check harness for /power bootstrap
+- `power_selftest.py` -- Health check harness for /power bootstrap (now includes guardrail: trigger-layer)
 - `prepublish_scan.py` -- Pre-publish full history + staged-changes scan gate
 - `proposals.mjs` -- Proposal lifecycle manager (list/accept/reject via lock.mjs)
 - `reconcile.py` -- Detect/resolve drift (git STATE.md vs. state_store projection; git-authoritative; --resolve appends to SQLite only, never rewrites git-side state)

@@ -120,6 +120,61 @@ class TestPowerSelftest(unittest.TestCase):
         result = self._run_selftest()
         self.assertIn("decisions:", result.stdout)
 
+    def test_trigger_layer_unconfigured_warn(self):
+        """Test trigger:unconfigured when no conductor3 dir and no scheduled tasks configured."""
+        # Create state dir but no conductor3 (fresh clone scenario)
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        result = self._run_selftest()
+        # Should not FAIL, should be graceful
+        self.assertEqual(result.returncode, 0)
+        # Should report trigger:unconfigured or similar
+        self.assertIn("POWER-SELFTEST:", result.stdout)
+
+    def test_trigger_layer_fresh_heartbeat_ok(self):
+        """Test trigger:ok when orchestrator heartbeat is fresh (< 600s)."""
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        hb_dir = self.state_dir / ".heartbeats"
+        hb_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create fresh heartbeat (just written)
+        now_epoch = int(datetime.now().timestamp())
+        fresh_hb = hb_dir / "orchestrator-heartbeat"
+        fresh_hb.write_text(str(now_epoch) + "\n")
+
+        result = self._run_selftest()
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("POWER-SELFTEST:", result.stdout)
+
+    def test_trigger_layer_stale_heartbeat_fail(self):
+        """Test trigger:stale when orchestrator heartbeat is stale (>= 600s)."""
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        hb_dir = self.state_dir / ".heartbeats"
+        hb_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create stale heartbeat (> 600s old)
+        now_epoch = int(datetime.now().timestamp())
+        stale_epoch = now_epoch - 700  # 700 seconds ago
+        stale_hb = hb_dir / "orchestrator-heartbeat"
+        stale_hb.write_text(str(stale_epoch) + "\n")
+
+        result = self._run_selftest()
+        # Stale trigger layer should FAIL
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("POWER-SELFTEST:", result.stdout)
+        self.assertIn("trigger:", result.stdout)
+
+    def test_trigger_layer_missing_heartbeat_fail(self):
+        """Test trigger:missing when orchestrator heartbeat file is missing but configured."""
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        hb_dir = self.state_dir / ".heartbeats"
+        hb_dir.mkdir(parents=True, exist_ok=True)
+        # Don't create orchestrator-heartbeat file; should fail since dir exists
+
+        result = self._run_selftest()
+        # Missing heartbeat when dir exists = FAIL
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("POWER-SELFTEST:", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

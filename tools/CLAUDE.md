@@ -17,6 +17,15 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - **lock.mjs is the ONLY lock implementation**: never reimplement locking in `proposals.mjs` or elsewhere; all proposals/state updates must use fail-closed `lock.mjs` with exponential backoff + stale-lock breaking.
 - **Merge-queue daemon (merge_queue.py) self-heals on crash**: when a pass crashes mid-batch and leaves the shared worktree checked out on an `integrate/q-*` branch, the next pass detects this in `worktree_is_safe()` and automatically reparks to main before proceeding. No manual intervention needed; stalled passes recover transparently.
 
+## power_selftest.py — Trigger-layer guardrail (Guardrail: half-restored-box detection)
+
+- **check_trigger_layer()**: Detects half-restored boxes (missing scheduled tasks/watchdog/heartbeats).
+- **Three-phase validation**: (1) Orchestrator heartbeat staleness (600s threshold, FAIL-CLOSED); (2) Watchdog heartbeat staleness (300s per config); (3) Windows scheduled tasks (Aesop\AesopHeartbeat, Aesop\AesopIdleTick) health check.
+- **Graceful degradation**: Fresh clones with no heartbeat directory report `trigger:unconfigured` (WARN, not FAIL). Prevents silent drift rot where STATE.md goes unnoticed for 100+ PRs (proven incident class).
+- **Heartbeat location**: `state_root/.heartbeats/orchestrator-heartbeat` (same directory as watchdog-heartbeat, monitor-heartbeat).
+- **Exit codes**: FAIL (exit 1) for missing/stale heartbeats when configured; WARN (exit 0) for unconfigured; OK (exit 0) when fresh.
+- **Test coverage**: 4 test cases in `tests/test_tools_power_selftest.py`: unconfigured scenario, fresh heartbeat, stale heartbeat, missing heartbeat.
+
 ## init_project.py — Worktree support
 
 - **Worktree .git handling**: `resolve_real_git_dir()` detects when `.git` is a FILE (worktree case) and uses `git rev-parse --git-common-dir` to locate the actual git directory.
