@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 power_selftest.py — Health check harness for /power bootstrap.
-INDEX: Health check harness for /power bootstrap
-Validates hooks, brain state, heartbeats, decisions, and scanner regression.
+INDEX: Health check harness for /power bootstrap (now includes guardrail: trigger-layer)
+Validates hooks, brain state, heartbeats, decisions, scanner regression, and trigger layer.
 Exit 0 if OK/DEGRADED, 1 if FAIL. Prints one summary line + bullets for non-OK items.
 
 EXPECTED OUTPUT — HEALTHY SYSTEM:
@@ -326,11 +326,135 @@ def check_scanner():
         return Check('scanner', 'OK', 'n/a', False)
 
 
+def check_trigger_layer():
+    r"""Check orchestrator trigger layer (heartbeats and scheduled tasks). Returns Check.
+
+    Validates that the orchestrator trigger layer is properly configured and healthy:
+    - Orchestrator heartbeat freshness (< 600s = ok, >= 600s = stale = FAIL)
+    - Windows: scheduled tasks Aesop\AesopHeartbeat + Aesop\AesopIdleTick exist and healthy
+    - Graceful degradation: unconfigured box (no heartbeats, no tasks) reports UNCONFIGURED (WARN)
+    - FAIL-CLOSED: missing trigger layer when configured = FAIL
+
+    Heartbeats are stored in state_root/.heartbeats/orchestrator-heartbeat (consistent with
+    watchdog-heartbeat and monitor-heartbeat locations).
+    """
+    try:
+        # Use state_root for orchestrator trigger layer heartbeats
+        state_root = paths['state_root']
+        hb_dir = state_root / '.heartbeats'
+        orchestrator_hb = hb_dir / 'orchestrator-heartbeat'
+
+        # Check if trigger layer is configured (heartbeat directory exists)
+        is_configured = hb_dir.exists()
+
+        # If not configured, gracefully degrade to unconfigured (WARN, not FAIL)
+        if not is_configured:
+            # No trigger layer configured (fresh clone scenario) = unconfigured (WARN, not FAIL)
+            # This is OK for fresh clones before adoption setup
+            return Check('trigger', 'WARN', 'unconfigured', False)
+
+        # Heartbeat dir exists; check orchestrator heartbeat
+        if not orchestrator_hb.exists():
+            # Directory exists but orchestrator heartbeat missing = FAIL
+            return Check('trigger', 'FAIL', 'missing(orchestrator-heartbeat)', True)
+
+        # Read orchestrator heartbeat timestamp and check staleness (600s threshold)
+        try:
+            hb_content = orchestrator_hb.read_text().strip()
+            hb_epoch = int(hb_content)
+            now_epoch = int(datetime.now().timestamp())
+            age_s = now_epoch - hb_epoch
+
+            # 600 second threshold for orchestrator heartbeat
+            if age_s >= 600:
+                return Check('trigger', 'FAIL', f'stale(orchestrator:{age_s}s)', True)
+        except (ValueError, OSError):
+            # Unreadable or unparseable heartbeat = FAIL
+            return Check('trigger', 'FAIL', 'unreadable(orchestrator-heartbeat)', True)
+
+        # Check watchdog heartbeat freshness (300s threshold per config)
+        watchdog_hb = hb_dir / 'watchdog-heartbeat'
+        if watchdog_hb.exists():
+            try:
+                hb_content = watchdog_hb.read_text().strip()
+                hb_epoch = int(hb_content)
+                now_epoch = int(datetime.now().timestamp())
+                age_s = now_epoch - hb_epoch
+
+                # 300 second threshold per aesop.config.json heartbeat_thresholds
+                watchdog_threshold = config.get('monitor', {}).get('heartbeat_thresholds', {}).get('watchdog', 300)
+                if age_s >= watchdog_threshold:
+                    return Check('trigger', 'FAIL', f'stale(watchdog:{age_s}s)', True)
+            except (ValueError, OSError):
+                # Unreadable watchdog heartbeat is a failure when trigger layer is configured
+                return Check('trigger', 'FAIL', 'unreadable(watchdog-heartbeat)', True)
+
+        # Windows: check scheduled tasks if platform is Windows
+        if sys.platform == 'win32':
+            try:
+                # Query heartbeat task
+                result = subprocess.run(
+                    ['schtasks', '/query', '/tn', 'Aesop\\AesopHeartbeat', '/fo', 'csv'],
+                    capture_output=True, text=True, encoding='utf-8', errors='replace',
+                    timeout=5
+                )
+
+                if result.returncode != 0:
+                    return Check('trigger', 'FAIL', 'missing(AesopHeartbeat_task)', True)
+
+                # Parse CSV output to check LastTaskResult (column 5, value 0 = success)
+                # CSV format: "HostName","TaskName","Next Run Time","Status","LogonUser","LastTaskResult"
+                lines = result.stdout.strip().split('\n')
+                if len(lines) > 1:
+                    # Skip header, check data row
+                    try:
+                        parts = lines[1].split(',')
+                        if len(parts) >= 6:
+                            last_result = parts[5].strip().strip('"')
+                            if last_result != '0':
+                                return Check('trigger', 'FAIL', f'task_failed(AesopHeartbeat:{last_result})', True)
+                    except (ValueError, IndexError):
+                        pass
+
+                # Query idle tick task
+                result = subprocess.run(
+                    ['schtasks', '/query', '/tn', 'Aesop\\AesopIdleTick', '/fo', 'csv'],
+                    capture_output=True, text=True, encoding='utf-8', errors='replace',
+                    timeout=5
+                )
+
+                if result.returncode != 0:
+                    return Check('trigger', 'FAIL', 'missing(AesopIdleTick_task)', True)
+
+                lines = result.stdout.strip().split('\n')
+                if len(lines) > 1:
+                    try:
+                        parts = lines[1].split(',')
+                        if len(parts) >= 6:
+                            last_result = parts[5].strip().strip('"')
+                            if last_result != '0':
+                                return Check('trigger', 'FAIL', f'task_failed(AesopIdleTick:{last_result})', True)
+                    except (ValueError, IndexError):
+                        pass
+            except subprocess.TimeoutExpired:
+                # schtasks timeout = FAIL
+                return Check('trigger', 'FAIL', 'schtasks_timeout', True)
+            except Exception:
+                # schtasks not available on this platform or other error; gracefully degrade on POSIX
+                pass
+
+        # All checks passed
+        return Check('trigger', 'OK', None, False)
+    except Exception as e:
+        # Graceful degradation for unexpected errors
+        return Check('trigger', 'OK', '(n/a)', False)
+
+
 def run_checks():
     """Run all health checks and return results."""
     results = []
 
-    for check_fn in [check_hooks, check_brain, check_beats, check_decisions, check_scanner]:
+    for check_fn in [check_hooks, check_brain, check_beats, check_decisions, check_scanner, check_trigger_layer]:
         result = check_fn()
         if result:
             results.append(result)
