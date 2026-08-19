@@ -115,13 +115,11 @@ jobs:
           if [ -n "${existing}" ]; then
             echo "Rolling PR #${existing} already open; branch updated"
           else
+            BODY_FILE=$(mktemp)
+            printf 'Automated weekly cross-OS drift snapshot (docs/CROSSOS-DRIFT.json + .md).\n\nBranch `%s` is force-pushed each week with a single commit rebased on current main; if this PR sits unmerged it simply rolls forward to the newest snapshot.\n\nIf required checks show as expected-but-not-running, the run was made with the default Actions token (see TOKEN NOTE in crossos-drift.yml): set the `DRIFT_PR_TOKEN` repo secret, or nudge the branch as a real user.\n' "${BRANCH}" > "$BODY_FILE"
             gh pr create \
               --head "${BRANCH}" \
               --base main \
               --title "chore(ci): weekly cross-OS drift snapshot" \
-              --body "Automated weekly cross-OS drift snapshot (docs/CROSSOS-DRIFT.json + .md).
-
-          Branch \`${BRANCH}\` is force-pushed each week with a single commit rebased on current main; if this PR sits unmerged it simply rolls forward to the newest snapshot.
-
-          If required checks show as expected-but-not-running, the run was made with the default Actions token (see TOKEN NOTE in crossos-drift.yml): set the \`DRIFT_PR_TOKEN\` repo secret, or nudge the branch as a real user."
+              --body-file "$BODY_FILE"
           fi
