@@ -1,3 +1,59 @@
+# UNRELEASED
+
+**Headline**: Merge-pipeline debottlenecking (queued batch advancer, contention telemetry, stacked-PR deconfliction), multibox coordination MVP (durable identity, lease-by-append claims, shared-FS backend), CI repair (red-workflow fixes, weekly drift snapshot via rolling PR), guardrail hardenings (Q0 concurrency gate, G5 import-check, merge-queue discipline), skills-loader fail-closed upgrades (tool INDEX registration, secret-scan provisioning).
+
+## Shipping
+
+### Merge-pipeline & queue hardening (Q0–Q2)
+- **Merge-queue advancer daemon (Q1+Q2)**: deterministic 5-minute actor replaced ad-hoc pulse CI; restores batch construction under contention, recognizes existing batches (no duplication), enforces that base is default branch (#713, #761). Merge-pipeline telemetry (#692) quantifies contention surface; stacked-PR chains + landed-content close guard (#693) debottleneck B1 integration pathways. Encoding crash on em-dash output fixed (#764); timeout/worktree failure containment hardened (#753).
+- **Q0 concurrency gate**: Fixed inversion that could report CANCELLED falsely; gates now fail-closed on signal-kill (#725, #695).
+
+### Multibox coordination MVP (durable identity, lease-by-append claims)
+- **Durable instance identity + epoch fencing** (#686): Host-independent canonical paths, atomic dispatch claims seam (#685), identity-epoch corruption guard (#749). **Shared-FS lease backend** (#697): FsClaimLog append-only over shared filesystems enables multi-machine orchestration without consensus. Design documented (#687).
+
+### Guardrail hardenings
+- **G5 import-check**: Now actually evaluates pushed range instead of vacuous pass (#760).
+- **Silent-job detector**: Guardrail tool identifies defined-but-never-executed CI jobs (#698).
+- **Tool-index registration**: INDEX.md registered as generated path, counted in CLAUDE.md sync gate (#751, #752, #757).
+- **Merge-queue discipline**: Refuse PRs whose base is not default branch; atomic lock + kill switch restored (#761, #753).
+
+### Skills-loader & init-project fail-closed
+- **Init-project secret-scan provisioning**: Copies secret_scan.py, hook fails closed on missing script (#769).
+- **Cost-ceiling gate**: `--check` now read-only, prevents accidental header creation (#717).
+- **Test-suite count gate**: Rejects vacuous zero-file state, detects duplicated assertions (#674, #679).
+
+### CI repair & observability
+- **Red-workflow fixes**: Repaired two scheduled workflows on main (#787). Weekly drift-snapshot now publishes via rolling PR instead of protected-branch push (#790).
+- **Stats-refresh job**: Fixed job, restored visibility (#716).
+
+### Docs & examples
+- **Multibox design documented** (#687). **Micro-kernel formalization** — syscall table, hypothesis summary (#681). **First-wave replay kit** — verified baseline for adoption (#682, #702).
+- **RELEASE-NOTES/README honesty pass**: Historical counts restored, 0.7.2 delta verified, hiring claims audit-backed (#696, #688, #678).
+
+### Performance & UX
+- **Snapshot/tail-replay optimization**: Wired into hot paths (#768).
+- **Cost trend forecast**: Persistent drawer with ceiling projection (#691).
+
+### Complexity reductions
+- **Merge-queue daemon**: Replaced pulse CI; deterministic actor instead of polling.
+- **Tool INDEX**: Extracted into generated INDEX.md, collapses merge-contention surface.
+
+### Integration batches
+- **2026-08-03 integration batch**: Test-discovery validator, multibox Inc 1–3, docs sync, design formalization (#690).
+
+---
+
+## Honest residuals
+
+**Open test characterization:**
+- `test_openai_transport_redirect` remains flaky in shard 0; no characterization yet.
+- `test_hook_preflight` is wired but does not execute; full rewrite needed to fix `tmp_path` NameError and add coverage.
+- `test_agent_detail_roundtrip` fix landed (#668); re-verification under ci_shard_runner context still pending.
+
+(Per wave-1 reconciliation audit: 3 open items from STATE.md NEXT STEPS; all impact-per-effort estimates LOW–MEDIUM; prioritize `test_openai_transport_redirect` for quick unblocking.)
+
+---
+
 # aesop 0.7.2 — Dashboard state-cache fix
 
 A small, single-fix patch release. `git log v0.7.1..v0.7.2` is four commits: one
