@@ -141,52 +141,44 @@ check_monitor_staleness() {
 }
 
 # Kill switch check (wave-26 safety brake). Returns 0 (bash true) and logs
-# "HALTED: <reason>" if a .HALT sentinel exists; returns 1 otherwise.
+# "HALTED: <reason>" if halt sentinel exists; returns 1 otherwise.
 # Never runs backup/push/scan work when halted — caller must skip the cycle.
 #
-# The sentinel is looked for in EVERY location tools/halt.py may have written
-# it: $AESOP_STATE_ROOT/.HALT first (halt.py resolves AESOP_STATE_ROOT ahead of
-# everything else) then $AESOP_ROOT/state/.HALT. Reading only the latter meant
-# a human running `halt.py set` under a non-default AESOP_STATE_ROOT wrote a
-# sentinel this daemon never read — the abort silently did nothing.
+# CRITICAL: Always query python tools/halt.py --status as the single source
+# of truth. This respects all halt.py resolution precedence (AESOP_STATE_ROOT env >
+# aesop.config.json state_root > default). Bash never re-derives the sentinel path
+# — doing so creates drift when state_root is overridden.
 check_halt() {
   local log_file="$1"
-  local sentinel=""
-  local candidate
-  for candidate in "$HALT_SENTINEL" "$HALT_SENTINEL_LEGACY"; do
-    if [ -n "$candidate" ] && [ -f "$candidate" ]; then
-      sentinel="$candidate"
-      break
-    fi
-  done
-  if [ -z "$sentinel" ]; then
+  local halt_py="${2:-${HALT_PY_PATH}}"
+
+  if [ -z "$PYTHON_EXE" ] || [ -z "$halt_py" ]; then
     return 1
   fi
 
-  local reason="halted (reason unavailable)"
-  if [ -n "$PYTHON_EXE" ]; then
-    local parsed
-    parsed=$("$PYTHON_EXE" -c '
-import json, sys
-try:
-    with open(sys.argv[1], encoding="utf-8") as f:
-        data = json.load(f)
-    r = data.get("reason")
-    if r:
-        print(r)
-except Exception:
-    pass
-' "$sentinel" 2>/dev/null)
-    if [ -n "$parsed" ]; then
-      reason="$parsed"
+  # Query halt.py for halt status; exit code tells us: 1=halted, 0=not halted
+  local halt_output
+  halt_output=$("$PYTHON_EXE" "$halt_py" --status 2>&1)
+  local halt_exit=$?
+
+  if [ $halt_exit -eq 1 ]; then
+    # Halted: extract reason from output
+    # halt.py outputs: "HALTED: <reason> (since <timestamp>)"
+    local reason
+    reason=$(echo "$halt_output" | sed 's/^HALTED: //' | sed 's/ (since.*$//')
+    if [ -z "$reason" ]; then
+      reason="$halt_output"
     fi
+
+    echo "HALTED: $reason"
+    if [ -n "$log_file" ]; then
+      echo "[$(date '+%F %T')] HALTED: $reason" >> "$log_file"
+    fi
+    return 0
   fi
 
-  echo "HALTED: $reason"
-  if [ -n "$log_file" ]; then
-    echo "[$(date '+%F %T')] HALTED: $reason" >> "$log_file"
-  fi
-  return 0
+  # Not halted (exit 0 from halt.py)
+  return 1
 }
 
 # Main execution — guarded below so sourcing this file (e.g. from tests, to
@@ -293,9 +285,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   MODE="${1:-daemon}"
   LOCK_DIR="$AESOP_ROOT/state/.watchdog-lock"
   LOCK_STALE_THRESHOLD=300
-  # Kill-switch read locations, in tools/halt.py's own write precedence order.
-  HALT_SENTINEL="${AESOP_STATE_ROOT:-$AESOP_ROOT/state}/.HALT"
-  HALT_SENTINEL_LEGACY="$AESOP_ROOT/state/.HALT"
+  # Resolve halt.py from the repo (daemons/ is in same AESOP_ROOT as tools/)
+  HALT_PY_PATH="$(dirname "$SCRIPT_DIR")/tools/halt.py"
 
   # Resolve Python interpreter (portable: prefer python3, fallback to python)
   PYTHON_EXE=""

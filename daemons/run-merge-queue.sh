@@ -15,14 +15,11 @@
 #   AESOP_MERGE_QUEUE_CMD  override the advancer invocation (test hook)
 #
 # Kill switch: if a .HALT sentinel exists, the pass logs "HALTED: <reason>" and
-# does no work at all until the sentinel is cleared. The sentinel is looked for
-# in EVERY location tools/halt.py may have written it -- $AESOP_STATE_ROOT/.HALT
-# first (halt.py's own precedence: AESOP_STATE_ROOT > config state_root >
-# ./state) and $AESOP_ROOT/state/.HALT second. Checking only the latter, as this
-# script once did, meant that any AESOP_STATE_ROOT other than $AESOP_ROOT/state
-# made halt.py write a sentinel this daemon never read: `halt.py --status` said
-# HALTED while the queue kept merging to main unattended. One resolution, two
-# read locations, so a human abort can never be silently ignored.
+# does no work at all until the sentinel is cleared. Detection delegates to
+# `python tools/halt.py --status` as the single source of truth, respecting
+# all resolution precedence (AESOP_STATE_ROOT env > aesop.config.json state_root
+# > default). Bash never re-derives the sentinel path, eliminating drift from
+# configuration overrides.
 #
 # Exit codes: 0 = pass completed / halted / lock contention, 1 = an action in
 # the pass failed, 2 = precondition failure (see tools/merge_queue.py).
@@ -49,58 +46,37 @@ log_line() {
   fi
 }
 
-# Kill-switch check. Returns 0 (bash true) and logs when halted, 1 otherwise.
+# Kill-switch check using halt.py as single source of truth.
+# Returns 0 (bash true) and logs when halted, 1 otherwise.
+# halt.py --status exit code: 1=halted, 0=not halted.
 check_halt() {
-  local sentinel="$1"
-  local log_file="$2"
-  local python_exe="$3"
-  if [ ! -f "$sentinel" ]; then
+  local log_file="$1"
+  local halt_py="${2:-${HALT_PY_PATH}}"
+
+  if [ -z "$PYTHON_EXE" ] || [ -z "$halt_py" ]; then
     return 1
   fi
-  local reason="halted (reason unavailable)"
-  if [ -n "$python_exe" ]; then
-    local parsed
-    parsed=$("$python_exe" -c '
-import json, sys
-try:
-    with open(sys.argv[1], encoding="utf-8") as f:
-        data = json.load(f)
-    r = data.get("reason")
-    if r:
-        print(r)
-except Exception:
-    pass
-' "$sentinel" 2>/dev/null)
-    if [ -n "$parsed" ]; then
-      reason="$parsed"
-    fi
-  fi
-  printf 'HALTED: %s\n' "$reason"
-  log_line "$log_file" "HALTED: $reason"
-  return 0
-}
 
-# Kill-switch check across every candidate sentinel location. Returns 0 (bash
-# true) on the FIRST sentinel found, so a single halt is logged exactly once
-# even when both locations resolve to the same path.
-check_halt_any() {
-  local log_file="$1"
-  local python_exe="$2"
-  shift 2
-  local candidate
-  local seen=""
-  for candidate in "$@"; do
-    if [ -z "$candidate" ]; then
-      continue
+  # Query halt.py for halt status; exit code tells us: 1=halted, 0=not halted
+  local halt_output
+  halt_output=$("$PYTHON_EXE" "$halt_py" --status 2>&1)
+  local halt_exit=$?
+
+  if [ $halt_exit -eq 1 ]; then
+    # Halted: extract reason from output
+    # halt.py outputs: "HALTED: <reason> (since <timestamp>)"
+    local reason
+    reason=$(echo "$halt_output" | sed 's/^HALTED: //' | sed 's/ (since.*$//')
+    if [ -z "$reason" ]; then
+      reason="$halt_output"
     fi
-    case " $seen " in
-      *" $candidate "*) continue ;;
-    esac
-    seen="$seen $candidate"
-    if check_halt "$candidate" "$log_file" "$python_exe"; then
-      return 0
-    fi
-  done
+
+    printf 'HALTED: %s\n' "$reason"
+    log_line "$log_file" "HALTED: $reason"
+    return 0
+  fi
+
+  # Not halted (exit 0 from halt.py)
   return 1
 }
 
@@ -118,7 +94,7 @@ main() {
 
   mkdir -p "$AESOP_STATE_ROOT" 2>/dev/null || true
 
-  if check_halt_any "$LOG_FILE" "$PYTHON_EXE" "$HALT_SENTINEL" "$HALT_SENTINEL_LEGACY"; then
+  if check_halt "$LOG_FILE" "$HALT_PY_PATH"; then
     printf 'MERGE-QUEUE: HALTED\n'
     exit 0
   fi
@@ -159,12 +135,10 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   AESOP_ROOT="${AESOP_ROOT:-$(dirname "$SCRIPT_DIR")}"
   AESOP_STATE_ROOT="${AESOP_STATE_ROOT:-$AESOP_ROOT/state}"
   export AESOP_STATE_ROOT
+  # Resolve halt.py from the repo (daemons/ is in same AESOP_ROOT as tools/)
+  HALT_PY_PATH="$(dirname "$SCRIPT_DIR")/tools/halt.py"
   MODE="${1:---once}"
   LOG_FILE="$AESOP_STATE_ROOT/MERGE-QUEUE.log"
-  # The sentinel tools/halt.py actually writes (AESOP_STATE_ROOT wins there too),
-  # plus the historical $AESOP_ROOT/state location as a belt-and-braces read.
-  HALT_SENTINEL="$AESOP_STATE_ROOT/.HALT"
-  HALT_SENTINEL_LEGACY="$AESOP_ROOT/state/.HALT"
   PYTHON_EXE="$(resolve_python)"
 
   # gh resolves the repository from the working directory, so the pass must run
