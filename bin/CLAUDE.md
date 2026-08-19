@@ -76,13 +76,31 @@ aesop transcript timeline|replay|digest
 `daemons/`, `dash/`, `monitor/`, `tools/`, `ui/`, `docs/`, `state_store/`, `skills/`, `mcp/`, `scan/`, `hooks/`, `driver/`
 
 **Files copied**:
-`aesop.config.example.json`, `README.md`, `LICENSE`, `CHANGELOG.md`, `CLAUDE-TEMPLATE.md`
+`aesop.config.example.json`, `README.md`, `LICENSE`, `CHANGELOG.md`, `CLAUDE-TEMPLATE.md`, `requirements.txt`, `requirements-dev.txt`
 
 **NOT copied**:
 `aesop.config.json` (user must `cp aesop.config.example.json` and edit), `state/` (runtime durable state, git-ignored), `.git/`, `node_modules/`, build artifacts
 
 **npm package.json `files` array** (lines 9–36): If adding new dirs/files to `filesToCopy`, add to `files` array so npm publish includes them.
 
+## Skill + dependency installation
+
+Scaffolding installs skills itself; it does not print instructions and hope.
+Claude Code only discovers skills under `~/.claude/skills/` (or a project's
+`.claude/skills/`), so a skill left in the scaffolded `./skills/` is
+undiscoverable and the orchestrator cannot be invoked.
+
+- `installSkills(targetDir, {force, skip})` — copies each `skills/*/` into the
+  skills home. **Idempotent**: a skill whose `SKILL.md` matches byte-for-byte is
+  reported as already-installed; one that DIFFERS is preserved and warned about
+  (stderr), never silently overwritten. `--force` overwrites; `--no-skills` skips.
+  Refuses to follow a symlinked skills home (same guard as the pre-push install).
+- `AESOP_SKILLS_HOME` — redirects the install target. Tests MUST set it; writing
+  to the real `~/.claude` violates the no-global-state test rule.
+- `installDependencies(targetDir, {enabled})` — `--install-deps` only, so
+  scaffolding stays offline-safe. Runs `npm install` when the target has a
+  `package.json` and `pip install -r requirements.txt` when it has one; both
+  degrade to a warning on failure rather than aborting the scaffold.
 ## Worktree support (git worktree .git files)
 
 - **Worktree .git handling**: In git worktrees, `.git` is a FILE (not directory) containing `gitdir: <path>`. 
@@ -93,6 +111,7 @@ aesop transcript timeline|replay|digest
 ## Invariants
 
 - **Idempotent on empty targets**: Fails if `targetDir` exists and is non-empty (except `.git`, aesop scaffolded dirs). Safe to retry.
+- **Skill install never clobbers**: a divergent installed skill survives scaffold unless `--force`.
 - **Symlink guard**: Rejects symlinks in target dir (lstat check, not stat); prevents escaping targetDir during copy.
 - **Portable paths**: No machine-specific paths; `path.join()` + `__dirname` handle cross-platform resolution. Config uses `~` form (`~/.claude`, `~/scripts`) expanded at load time.
 - **Async wizard**: Main execution is async IIFE to support readline prompts.
@@ -106,6 +125,7 @@ aesop transcript timeline|replay|digest
 - Fleet CLI tests: `tests/fleet-cli.test.mjs` — spawns CLI in temp fixture, verifies JSON shape (heartbeats, agents, tracker, orchestrator), graceful degrade, exit 0, no cwd pollution
 - CLI config tests: `tests/cli-config.test.mjs` — scaffold flags (--name, --domains, --repos, --repo-urls), fleet_root auto-set to os.homedir(), config validation, repo URL generation
 - CLI dispatch tests: `tests/cli-dispatch.test.mjs` — Python namespace dispatch routing, verb help, exit code fidelity (0/1/2), fail-closed propagator (signal-kill / null status / spawn error → 2, cross-checked against a real self-SIGTERM child on POSIX), interpreter resolution, unknown namespace/verb errors, arg passthrough
+- Skill install tests: `tests/cli-skills-install.test.mjs` — skills land in the skills home, `--no-skills` opts out, re-scaffold is idempotent, a modified skill survives without `--force` and is replaced with it, dependency manifests ship, real `~/.claude` untouched (all via `AESOP_SKILLS_HOME`)
 
 **First-hour test suite** (inline in test files above):
 - Empty state directory graceful degrade (no state files)
