@@ -22,6 +22,13 @@ Empty-state phase (separate boot, empty ledger):
   (k) expanded panel shows "No data yet" message
   (l) console remains clean
 
+Falsifiability contract: EVERY claim enumerated above is an `assert`, so a
+violation propagates to a non-zero exit. Nothing here is print-only -- a
+`print("[PASS] ...")` line always sits AFTER the assert that earns it. Breaking
+any one of the assertions locally must turn the run red; if a claim cannot be
+asserted it must be deleted from this docstring rather than downgraded to a
+[WARN]/[INFO] print.
+
 Run: python tools/verify_cost_summary_drawer.py            (exit 0 = proven, 1 = failed)
      python tools/verify_cost_summary_drawer.py --allow-skip (exit 0 = proven or skipped, 1 = failed)
 
@@ -85,10 +92,17 @@ def find_free_port():
     return port
 
 
-def wait_for_server(port, timeout=30):
-    """Wait for the server to be ready."""
+def wait_for_server(port, timeout=30, proc=None):
+    """Wait for the server to be ready.
+
+    If `proc` exits before the port opens, stop waiting immediately and report
+    the failure instead of burning the whole timeout on a dead server.
+    """
     start = time.time()
     while time.time() - start < timeout:
+        if proc is not None and proc.poll() is not None:
+            print(f"[FAIL] Server exited early with code {proc.returncode}", file=sys.stderr)
+            return False
         try:
             with socket.create_connection(('127.0.0.1', port), timeout=1):
                 return True
@@ -104,7 +118,21 @@ def run_playwright_test(port, test_name, state_dir):
     """
     test_script = f'''
 import asyncio
+import re
 from playwright.async_api import async_playwright
+
+# Console messages dropped as known, non-actionable noise. Kept as an explicit
+# allowlist of FULL-STRING regexes -- the previous substring filter ("warning" or
+# "deprecated" anywhere in the text) silently swallowed real failures such as
+# "Uncaught TypeError: warning banner is undefined".
+CONSOLE_ALLOWLIST = [
+    re.compile(r'^Download the React DevTools.*', re.I),
+]
+
+
+def is_benign(text):
+    return any(rx.match(text) for rx in CONSOLE_ALLOWLIST)
+
 
 async def test():
     async with async_playwright() as p:
@@ -112,111 +140,141 @@ async def test():
         context = await browser.new_context()
         page = await context.new_page()
 
-        # Capture console messages
+        # Capture console errors/warnings and failed responses. Both are ASSERTED
+        # below; neither is print-only.
         console_errors = []
+        bad_responses = []
+
         def on_console(msg):
-            if msg.type in ('error', 'warn'):
-                # Filter out benign warnings
-                text = msg.text.lower()
-                if 'warning' in text or 'deprecated' in text:
-                    pass  # Skip benign warnings
-                else:
-                    console_errors.append(f"{{msg.type}}: {{msg.text}}")
+            if msg.type in ('error', 'warning', 'warn') and not is_benign(msg.text):
+                console_errors.append(f"{{msg.type}}: {{msg.text}}")
+
+        def on_response(resp):
+            if resp.status >= 400:
+                bad_responses.append(f"{{resp.status}} {{resp.url}}")
+
+        def on_pageerror(exc):
+            console_errors.append(f"pageerror: {{exc}}")
 
         page.on('console', on_console)
-
-        # Load the dashboard
-        await page.goto('http://127.0.0.1:{port}/', wait_until='domcontentloaded')
+        page.on('response', on_response)
+        page.on('pageerror', on_pageerror)
 
         # {test_name}
         try:
-            # Test 1: GET /api/cost returns valid CostSummary
-            response = await page.goto('http://127.0.0.1:{port}/api/cost')
+            # Load the dashboard once and stay on it, so every console message
+            # and response below belongs to the app under test.
+            await page.goto('http://127.0.0.1:{port}/#/', wait_until='domcontentloaded')
+
+            # Test 1: GET /api/cost returns valid CostSummary. Fetched out-of-band
+            # so the app page is never navigated away from.
+            response = await context.request.get('http://127.0.0.1:{port}/api/cost')
             assert response.status == 200, f"GET /api/cost failed: {{response.status}}"
             json_data = await response.json()
-            assert 'models' in json_data, "Missing 'models' in CostSummary"
-            assert 'daily_totals' in json_data, "Missing 'daily_totals' in CostSummary"
-            assert 'overall_scorecard' in json_data, "Missing 'overall_scorecard' in CostSummary"
-            assert 'has_pricing' in json_data, "Missing 'has_pricing' in CostSummary"
+            for key in ('models', 'daily_totals', 'overall_scorecard', 'has_pricing'):
+                assert key in json_data, f"Missing '{{key}}' in CostSummary"
             print("[PASS] GET /api/cost returns valid CostSummary")
 
-            # Test 2: Navigate to overview (drawer always visible)
-            await page.goto('http://127.0.0.1:{port}/#/')
+            # Test 2: drawer renders on the overview (auto-waiting, not an
+            # instantaneous is_visible() snapshot).
             drawer = page.locator('[data-testid="cost-summary-drawer"]')
-            is_visible = await drawer.is_visible()
-            assert is_visible, "CostSummaryDrawer not visible"
+            await drawer.wait_for(state='visible', timeout=15000)
             print("[PASS] CostSummaryDrawer rendered and visible on overview")
 
             # Test 3: Toggle button exists with aria-label
             toggle = page.locator('[data-testid="cost-summary-drawer-toggle"]')
-            is_visible = await toggle.is_visible()
-            assert is_visible, "Toggle button not visible"
+            await toggle.wait_for(state='visible', timeout=15000)
             aria_label = await toggle.get_attribute('aria-label')
             assert aria_label, "Toggle button missing aria-label"
             print(f"[PASS] Toggle button exists with aria-label: '{{aria_label}}'")
 
-            # Test 4: Panel exists with role="status"
+            # Test 4: Panel exists with role="status" and starts collapsed
             panel = page.locator('[data-testid="cost-summary-drawer-panel"]')
-            is_visible = await panel.is_visible(timeout=1000)
-            assert not is_visible, "Panel should start hidden (aria-hidden=true)"
+            await panel.wait_for(state='attached', timeout=15000)
             role = await panel.get_attribute('role')
             assert role == 'status', f"Panel role should be 'status', got '{{role}}'"
-            print("[PASS] Panel exists with role='status' (initially hidden)")
+            start_hidden = await panel.get_attribute('aria-hidden')
+            assert start_hidden == 'true', f"Panel should start collapsed, aria-hidden='{{start_hidden}}'"
+            assert not await panel.is_visible(), "Collapsed panel must not be visible"
+            print("[PASS] Panel exists with role='status' (initially collapsed)")
 
             # Test 5: Toggle expands panel
             await toggle.click()
-            await page.wait_for_timeout(300)  # Wait for animation
-            is_hidden = await panel.get_attribute('aria-hidden')
-            assert is_hidden == 'false', f"Panel aria-hidden should be 'false' after toggle, got '{{is_hidden}}'"
+            expanded = await panel.get_attribute('aria-hidden')
+            assert expanded == 'false', f"Panel aria-hidden should be 'false' after toggle, got '{{expanded}}'"
             print("[PASS] Toggle expands panel (aria-hidden='false')")
 
             # Test 6: For populated state, check metrics
             if "{test_name}" == "populated":
-                models_count = len(json_data.get('models', {{}}))
-                if models_count > 0:
-                    print(f"[PASS] Models aggregated: {{models_count}} model(s)")
+                assert len(json_data.get('models', {{}})) > 0, "Populated ledger produced no models"
+                assert len(json_data.get('daily_totals', {{}})) > 0, "Populated ledger produced no daily totals"
+                print(f"[PASS] Ledger aggregated: {{len(json_data['models'])}} model(s), "
+                      f"{{len(json_data['daily_totals'])}} day(s)")
 
-                daily_count = len(json_data.get('daily_totals', {{}}))
-                if daily_count > 0:
-                    print(f"[PASS] Daily totals: {{daily_count}} day(s)")
-
-                # Check total spend metric is visible
+                # Total spend metric. wait_for covers the window between mount and
+                # the first SSE cost payload (the drawer is in its connection state
+                # until then).
                 total = page.locator('[data-testid="cost-summary-total"]')
-                text = await total.inner_text()
+                await total.wait_for(state='visible', timeout=15000)
+                text = (await total.inner_text()).strip()
                 assert text, "Total spend metric missing or empty"
-                print(f"[PASS] Total spend metric visible: {{text}}")
+                print(f"[PASS] Total spend metric visible: {{text!r}}")
 
-                # Check spend rate metric is visible
+                # Spend rate metric
                 rate = page.locator('[data-testid="cost-summary-rate"]')
-                text = await rate.inner_text()
+                await rate.wait_for(state='visible', timeout=15000)
+                text = (await rate.inner_text()).strip()
                 assert text, "Spend rate metric missing or empty"
-                print(f"[PASS] Spend rate metric visible: {{text}}")
+                print(f"[PASS] Spend rate metric visible: {{text!r}}")
+
+                # Model-mix shares must be real proportions: each in (0, 100] and
+                # summing to no more than 100. The pre-fix denominator (all-time
+                # model tokens / latest-day tokens x model count) routinely
+                # exceeded 100% per model and saturated every bar.
+                rows = page.locator('[data-testid="cost-summary-model-row"]')
+                row_count = await rows.count()
+                assert row_count > 0, "Model-mix breakdown rendered no rows"
+                shares = []
+                for i in range(row_count):
+                    label = (await rows.nth(i).inner_text()).strip()
+                    m = re.search(r'([0-9]+(?:\\.[0-9]+)?)%', label)
+                    assert m, f"Model row {{i}} has no percentage: {{label!r}}"
+                    shares.append(float(m.group(1)))
+                for pct in shares:
+                    assert 0 < pct <= 100, f"Model share out of range: {{pct}}% (shares={{shares}})"
+                assert sum(shares) <= 100.5, f"Model shares sum above 100%: {{shares}}"
+                print(f"[PASS] Model-mix shares are real proportions: {{shares}} (sum={{sum(shares):.1f}}%)")
 
             # Test 7: For empty state, check graceful degradation
             elif "{test_name}" == "empty":
-                assert json_data.get('has_pricing') is False or len(json_data.get('models', {{}})) == 0
-                # Check for empty state message
+                # Non-vacuous: an empty ledger must produce zero models AND zero
+                # runs. (The old `has_pricing is False or len(models) == 0` was an
+                # `or` whose second disjunct was trivially true.)
+                assert json_data.get('models') == {{}}, f"Empty ledger produced models: {{json_data.get('models')}}"
+                assert json_data['overall_scorecard']['total_runs'] == 0, \\
+                    f"Empty ledger produced runs: {{json_data['overall_scorecard']['total_runs']}}"
+
+                # Empty-state message must actually appear in the expanded panel.
                 empty_msg = page.locator('[data-testid="cost-summary-empty"]')
-                # Empty message only shows when expanded
-                is_visible = await empty_msg.is_visible()
-                if is_visible:
-                    print("[PASS] Empty state message visible")
-                else:
-                    print("[INFO] Empty state message not yet visible (may need to wait)")
+                await empty_msg.wait_for(state='visible', timeout=15000)
+                text = (await empty_msg.inner_text()).strip()
+                assert 'No data yet' in text, f"Empty state message wrong: {{text!r}}"
+                print(f"[PASS] Empty state message visible: {{text.splitlines()[0]!r}}")
 
             # Test 8: Toggle collapses panel
             await toggle.click()
-            await page.wait_for_timeout(300)  # Wait for animation
-            is_hidden = await panel.get_attribute('aria-hidden')
-            assert is_hidden == 'true', f"Panel aria-hidden should be 'true' after second toggle, got '{{is_hidden}}'"
+            collapsed = await panel.get_attribute('aria-hidden')
+            assert collapsed == 'true', f"Panel aria-hidden should be 'true' after second toggle, got '{{collapsed}}'"
+            await panel.wait_for(state='hidden', timeout=5000)
             print("[PASS] Toggle collapses panel (aria-hidden='true')")
 
-            # Test 9: No fatal console errors
-            if console_errors:
-                error_text = "\\n".join(console_errors[:3])
-                print(f"[WARN] Console messages: {{error_text}}")
-            else:
-                print("[PASS] Console clean (no errors)")
+            # Test 9: console clean + no 4xx/5xx responses. ASSERTED, not printed.
+            assert not console_errors, \\
+                "Console not clean: " + " | ".join(console_errors[:5])
+            print("[PASS] Console clean (no errors or warnings)")
+            assert not bad_responses, \\
+                "Failed HTTP responses: " + " | ".join(bad_responses[:5])
+            print("[PASS] No 4xx/5xx responses")
 
             print(f"[PASS] Test passed: {test_name}")
         except AssertionError as e:
@@ -237,7 +295,9 @@ asyncio.run(test())
             env={**os.environ, 'AESOP_STATE_ROOT': str(state_dir)}
         )
         print(result.stdout)
-        if result.stderr and 'warning' not in result.stderr.lower():
+        # Always surface stderr. The old `'warning' not in stderr` guard hid the
+        # traceback of any failure whose message happened to contain "warning".
+        if result.stderr:
             print(result.stderr, file=sys.stderr)
         return result.returncode == 0
     except subprocess.TimeoutExpired:
@@ -311,7 +371,7 @@ def main():
         )
 
         try:
-            if not wait_for_server(port):
+            if not wait_for_server(port, proc=proc):
                 print("[FAIL] Server failed to start", file=sys.stderr)
                 return 1
 
@@ -351,6 +411,10 @@ def main():
         env['AESOP_PROOF_FIXTURES'] = '1'
         env['AESOP_UI_COLLECT_INTERVAL'] = '0.1'
         env['AESOP_TRANSCRIPTS_ROOT'] = str(transcripts_dir)
+        # Hermetic: without this the empty phase inherits the ambient config root
+        # and can read the developer's real aesop.config.json pricing, so the
+        # phase would not be testing a known state.
+        env['AESOP_CONFIG_ROOT'] = str(tmpdir)
 
         proc = subprocess.Popen(
             [sys.executable, str(SERVE)],
@@ -360,7 +424,7 @@ def main():
         )
 
         try:
-            if not wait_for_server(port):
+            if not wait_for_server(port, proc=proc):
                 print("[FAIL] Server failed to start", file=sys.stderr)
                 return 1
 

@@ -142,8 +142,10 @@ export const TESTIDS = {
   costSummaryTotal: 'cost-summary-total',
   costSummaryRate: 'cost-summary-rate',
   costSummaryModelMix: 'cost-summary-model-mix',
+  costSummaryModelRow: 'cost-summary-model-row',
   costSummaryLoading: 'cost-summary-loading',
   costSummaryError: 'cost-summary-error',
+  costSummaryStale: 'cost-summary-stale',
   costSummaryEmpty: 'cost-summary-empty',
 
   // PR Board view
