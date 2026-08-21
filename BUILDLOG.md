@@ -194,3 +194,24 @@ ALSO PRODUCED: Medium draft "Determinism Is a System Property" -- filesystem-as-
 this release used as the evidence. Artifact (private):
 https://claude.ai/code/artifact/d78c0706-9dcf-4c2f-991d-e84071751441
 NOT published to Medium; outward publishing stays user-gated.
+
+## 2026-08-20 — session checkpoint (box-restore completion + shutdown)
+
+MACHINERY RESTORED TO GREEN: POWER-SELFTEST went FAIL->OK this session. Root causes: \Aesop\
+scheduled tasks existed but Disabled (heartbeats stale); matt8->Mattt hardcoded paths in
+collect-signals.mjs, power_selftest.py:294, scanner_selftest.py:71 (fixed, committed, pushed —
+conductor3 30335df/4c7e8f9, claude-scripts c0a63a9); AesopWatchdogDaemon registered per-user
+(no admin needed), 5-min cadence. Monitor cycle 467-469 ran clean; proposal #24 items 1-4 DONE,
+item 5 (charter path edits) still user-gated. ~/.claude git-checkout conversion still pending.
+
+AESOP CODE UNTOUCHED this session (branch guard/trigger-layer-selftest, no PR; sibling #793 open).
+Session work was wow-workspace: cmc-work PR #17 (keybind choice-node fix, #18 folded in) ->
+upstream CMC #55 (MERGEABLE/CLEAN); BRPD fork PRs #1-#3 -> upstream BRPD #1-#3. Ledger in
+~/Desktop/wow/STATE.md.
+
+SHUTDOWN (user order): aesop processes killed + \Aesop\* scheduled tasks disabled after this
+checkpoint. Re-enable via schtasks /change /enable + /power next session.
+
+GOTCHA (memorialized in aesop-dev-box-provisioning): GCM intermittently demands an invisible
+interactive prompt — git push/LFS pre-push/credential fill hang silently for minutes.
+GCM_INTERACTIVE=never GIT_TERMINAL_PROMPT=0 resolves from cache; lookup flaps, retry once.
