@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Shared heartbeat and health-check utilities.
-INDEX: Heartbeat staleness utilities: `check_heartbeat_file()`, `check_watchdog_heartbeat()`, `check_monitor_heartbeat()`. Wraps `common.check_heartbeat_staleness()` with standard thresholds (watchdog: 300s, monitor: 3600s). Eliminates duplicated inline heartbeat reading from power_selftest.py. Preserves fail-closed contract: absent/unreadable/unparseable heartbeats → STALE (never healthy). Tested with 12 unit test cases including explicit STALE contract validation.
+INDEX: Heartbeat staleness utilities: `check_heartbeat_file()`, `check_watchdog_heartbeat()`, `check_monitor_heartbeat()`. Wraps `common.check_heartbeat_staleness()` with standard thresholds (watchdog: 300s, monitor: 3600s). Eliminates duplicated inline heartbeat reading from power_selftest.py. Preserves fail-closed contract: absent/unreadable/unparseable heartbeats → STALE (never healthy). Tested with 16 unit test cases including explicit STALE contract validation. **The `.watchdog-heartbeat` / `.monitor-heartbeat` filenames MUST stay contiguous string literals**: these are file-level reads the `state_store.read_api` facade cannot serve (`check_heartbeat_fresh()` returns only a bool, while callers need the full `(is_stale, age_s, info)` triple), so the two `stateapi_lint` violations they produce are recorded honestly in `.stateapi-baseline.json`. Splitting them into concatenated fragments to dodge the lint falsifies the ratchet and is blocked by `TestNoLintEvasion`. Widening the facade to return the triple is the filed follow-up.
 
 Consolidates duplicated heartbeat staleness checking logic from health_score.py,
 healthcheck.py, and power_selftest.py into a single reusable module.
@@ -14,6 +14,17 @@ NOTE: This module wraps common.check_heartbeat_staleness() for consistent
 behavior across all callers. The underlying function preserves the critical
 contract: unreadable/absent/unparseable heartbeat content => STALE (never healthy).
 
+STATE API NOTE: the two heartbeat filenames below are deliberate literals, and the
+two resulting stateapi_lint violations are recorded honestly in
+.stateapi-baseline.json. They are NOT routed through state_store.read_api because
+ReadAPI.check_heartbeat_fresh() returns only a bool, while every caller of this
+module (tools/status_publish.py, tools/power_selftest.py) needs the full
+(is_stale, age_s, info) triple to distinguish "missing" from "stale" from
+"unreadable" in its report. Widening the facade to return the triple is the real
+fix and is filed as a follow-up; until then these stay file-level reads.
+Do NOT split these literals to dodge the lint -- that falsifies the ratchet.
+See tests/test_health_checks.py::TestNoLintEvasion.
+
 Functions:
   check_heartbeat_file(heartbeat_path, threshold_s) -> tuple[bool, int, str | None]
     Check if a heartbeat file is stale (wraps common.check_heartbeat_staleness).
@@ -25,12 +36,19 @@ Functions:
     Check monitor heartbeat freshness (3600s threshold).
 """
 
+import sys
 from pathlib import Path
 
-try:
-    from common import check_heartbeat_staleness
-except ImportError:
-    from tools.common import check_heartbeat_staleness
+# Ensure the repo root is importable so `tools.common` resolves whether the
+# caller put tools/ or the repo root on sys.path. Mirrors the same bootstrap in
+# state_store/read_api.py. The previous `try: from common ... except ImportError:`
+# form worked at runtime but was not statically resolvable, so
+# tools/import_resolution_check.py could not verify it.
+repo_root = Path(__file__).resolve().parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
+
+from tools.common import check_heartbeat_staleness
 
 
 # Standard heartbeat thresholds (consistent across all three health scripts)
@@ -68,7 +86,7 @@ def check_watchdog_heartbeat(state_dir):
         tuple: (is_stale: bool, age_s: int, info: str | None)
     """
     state_dir = Path(state_dir) if not isinstance(state_dir, Path) else state_dir
-    heartbeat_file = state_dir / (".watchdog" + "-heartbeat")
+    heartbeat_file = state_dir / ".watchdog-heartbeat"
     return check_heartbeat_file(heartbeat_file, WATCHDOG_THRESHOLD_S)
 
 
@@ -82,5 +100,5 @@ def check_monitor_heartbeat(state_dir):
         tuple: (is_stale: bool, age_s: int, info: str | None)
     """
     state_dir = Path(state_dir) if not isinstance(state_dir, Path) else state_dir
-    heartbeat_file = state_dir / (".monitor" + "-heartbeat")
+    heartbeat_file = state_dir / ".monitor-heartbeat"
     return check_heartbeat_file(heartbeat_file, MONITOR_THRESHOLD_S)
