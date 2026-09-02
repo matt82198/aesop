@@ -222,6 +222,7 @@ asyncio.run(test())
             capture_output=True,
             text=True,
             encoding='utf-8',
+            errors='replace',
             timeout=30,
             env={**os.environ, 'AESOP_STATE_ROOT': str(state_dir)}
         )
