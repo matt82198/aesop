@@ -30,6 +30,24 @@ UI_PATH = Path(__file__).parent.parent / "ui"
 ENV_KEYS = ("AESOP_ROOT", "AESOP_TRANSCRIPTS_ROOT", "AESOP_STATE_ROOT",
             "AESOP_UI_COLLECT_INTERVAL", "PORT")
 
+# Socket budget for one request against the fixture server.
+#
+# This is not a latency assertion -- nothing in this file measures performance.
+# It exists so a genuinely wedged server fails with a local, readable error
+# instead of hanging until pytest's 120s per-test kill.
+#
+# It used to be 5s, which sat inside the ordinary noise band of the Windows CI
+# runner. Measured in windows-shard 0 of CI job 91574576558: this file's tests
+# normally complete in ~0.51s end to end, but the runner went through a latency
+# excursion during which consecutive tests in one class took 4.05s, 3.03s and
+# 1.52s -- all passing -- and the next one spent the full 5s blocked inside
+# getresponse() and failed. The request had been written and simply was not
+# answered in time. A *passing* neighbour consuming 81% of the budget means the
+# budget was wrong, not the server. 30s clears the observed excursion by a wide
+# margin and still fails long before the pytest timeout, so a truly hung server
+# is still caught here rather than by the harness.
+REQUEST_TIMEOUT_S = 30
+
 
 def load_serve(fixture_root, extra_env=None):
     """Import a fresh serve module instance bound to a fixture AESOP_ROOT."""
@@ -82,7 +100,8 @@ class CSRFHttpsTestCase(unittest.TestCase):
             shutil.rmtree(self.fixture_root, ignore_errors=True)
 
     def _conn(self):
-        return http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        return http.client.HTTPConnection("127.0.0.1", self.port,
+                                          timeout=REQUEST_TIMEOUT_S)
 
     def _request(self, method, path, body=None, headers=None):
         # Retry transient Windows socket aborts (WSAECONNABORTED / reset) that can
@@ -94,6 +113,18 @@ class CSRFHttpsTestCase(unittest.TestCase):
                 con.request(method, path, body=body, headers=headers or {})
                 resp = con.getresponse()
                 return resp.status, resp.read()
+            except TimeoutError as e:
+                # Deliberately not retried: the request may already have been
+                # applied, and these are mutating endpoints. Re-raise with the
+                # diagnosis attached so a recurrence is classifiable on sight
+                # rather than surfacing as a bare "TimeoutError: timed out"
+                # halfway down a socket traceback.
+                raise AssertionError(
+                    f"{method} {path}: the request was written to the fixture "
+                    f"server on 127.0.0.1:{self.port} but no response arrived "
+                    f"within {REQUEST_TIMEOUT_S}s. This is a wedged or starved "
+                    f"server, not a CSRF verdict -- see REQUEST_TIMEOUT_S."
+                ) from e
             except (ConnectionAbortedError, ConnectionResetError,
                     http.client.RemoteDisconnected) as e:
                 last = e
@@ -102,7 +133,15 @@ class CSRFHttpsTestCase(unittest.TestCase):
                     time.sleep(0.1)
                 continue
             finally:
-                con.close()
+                # Closing the client socket must never change the outcome. This
+                # finally runs on the way out of a successful `return` too, and
+                # on Windows close() can raise WSAECONNABORTED against a peer
+                # that already went away -- which would discard a response we
+                # had already read and escape the retry loop entirely.
+                try:
+                    con.close()
+                except OSError:
+                    pass
         raise last
 
     def _post(self, path, body, headers=None):

@@ -1,13 +1,60 @@
-"""Tests for tools/commit_lint.py — conventional commit message linter."""
+"""Tests for tools/commit_lint.py -- conventional commit message linter."""
 import json
+import os
+import pathlib
 import subprocess
 import sys
+import tempfile
 import unittest
 
 
 # Import the lint function directly
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent / "tools"))
 from commit_lint import lint_message  # noqa: E402
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+COMMIT_LINT = str(REPO_ROOT / "tools" / "commit_lint.py")
+
+
+def _git(repo, *args):
+    """Run git in the fixture repo; never touches global/user git config."""
+    result = subprocess.run(
+        ["git"] + list(args),
+        cwd=repo, capture_output=True, text=True, encoding="utf-8", timeout=30,
+    )
+    if result.returncode != 0:
+        raise AssertionError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
+    return result.stdout
+
+
+def _make_fixture_repo(repo, messages):
+    """Create an isolated git repo in `repo` with one commit per message.
+
+    All config is repo-local (never --global), hooks are pointed at an empty
+    directory, and signing is disabled so the fixture is environment-independent.
+    """
+    os.makedirs(repo, exist_ok=True)
+    hooks_dir = os.path.join(repo, ".empty-hooks")
+    os.makedirs(hooks_dir, exist_ok=True)
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.name", "Fixture Author")
+    _git(repo, "config", "user.email", "fixture@example.invalid")
+    _git(repo, "config", "commit.gpgsign", "false")
+    _git(repo, "config", "core.hooksPath", hooks_dir)
+    for i, msg in enumerate(messages):
+        path = os.path.join(repo, f"file{i}.txt")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(f"content {i}\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-q", "-m", msg)
+
+
+def _run_lint(repo, *args):
+    """Invoke commit_lint.py as a subprocess against the fixture repo."""
+    return subprocess.run(
+        [sys.executable, COMMIT_LINT] + list(args),
+        cwd=repo, capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
 
 
 class TestCommitLint(unittest.TestCase):
@@ -152,6 +199,78 @@ class TestCommitLint(unittest.TestCase):
             violations.extend(r["violations"])
         rules = [v["rule"] for v in violations]
         self.assertIn("empty-message", rules, f"Expected empty-message violation (not stdin read), got: {rules}")
+
+
+class TestCommitLintRange(unittest.TestCase):
+    """--range must actually run git and actually gate (regression: crash on main).
+
+    The caller passed capture_output/text/encoding to cli.run_subprocess(), whose
+    signature is (cmd, timeout, cwd). The TypeError was swallowed by
+    cli.standard_main_template's blanket `except Exception` and surfaced as exit 2,
+    so --range never linted anything.
+    """
+
+    def test_range_does_not_crash_on_fixture_repo(self):
+        """--range over a real 2-commit repo runs git instead of raising TypeError."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = os.path.join(tmp, "fixture")
+            _make_fixture_repo(repo, ["feat: add the first thing", "fix: correct the second thing"])
+            result = _run_lint(repo, "--range", "HEAD~1..HEAD")
+            self.assertNotIn(
+                "unexpected keyword argument", result.stderr,
+                f"--range crashed inside run_subprocess: {result.stderr.strip()}",
+            )
+            self.assertNotEqual(
+                2, result.returncode,
+                f"--range exited 2 (error), not a lint verdict. stderr: {result.stderr.strip()}",
+            )
+
+    def test_range_clean_exits_zero(self):
+        """A range of well-formed commits exits 0."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = os.path.join(tmp, "fixture")
+            _make_fixture_repo(repo, ["feat: add the first thing", "fix: correct the second thing"])
+            result = _run_lint(repo, "--range", "HEAD~1..HEAD")
+            self.assertEqual(
+                0, result.returncode,
+                f"Expected clean range to exit 0. stdout: {result.stdout} stderr: {result.stderr}",
+            )
+
+    def test_range_malformed_commit_exits_one(self):
+        """A range containing a malformed commit message exits 1 (the gate gates)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = os.path.join(tmp, "fixture")
+            _make_fixture_repo(repo, ["feat: add the first thing", "totally not conventional"])
+            result = _run_lint(repo, "--range", "HEAD~1..HEAD")
+            self.assertEqual(
+                1, result.returncode,
+                f"Expected exit 1 for malformed commit. stdout: {result.stdout} stderr: {result.stderr}",
+            )
+            self.assertIn("subject-format", result.stdout)
+
+    def test_range_json_reports_commit_shas(self):
+        """--range --json emits one result per commit, keyed by short sha."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = os.path.join(tmp, "fixture")
+            _make_fixture_repo(
+                repo,
+                ["chore: seed the repo", "feat: add the first thing", "fix: correct the second thing"],
+            )
+            result = _run_lint(repo, "--range", "HEAD~2..HEAD", "--json")
+            self.assertEqual(0, result.returncode, f"stderr: {result.stderr}")
+            data = json.loads(result.stdout)
+            self.assertEqual(0, data["total_violations"])
+            self.assertEqual(2, len(data["results"]))
+            for entry in data["results"]:
+                self.assertIsNotNone(entry["commit"])
+
+    def test_range_bad_ref_exits_two(self):
+        """An unresolvable range is a real error (exit 2), distinct from a lint failure."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = os.path.join(tmp, "fixture")
+            _make_fixture_repo(repo, ["feat: add the first thing"])
+            result = _run_lint(repo, "--range", "no-such-ref..HEAD")
+            self.assertEqual(2, result.returncode, f"stdout: {result.stdout} stderr: {result.stderr}")
 
 
 if __name__ == "__main__":
