@@ -60,7 +60,7 @@ def reload():
     global WATCHDOG_HEARTBEAT, MONITOR_HEARTBEAT, REPOS_JSON, BACKUP_LOG
     global ALERTS_LOG, INBOX_FILE, AUDIT_BACKLOG_FILE
     global UI_SESSION_TOKEN_FILE, TRACKER_FILE, ORCH_STATUS_FILE
-    global WEB_DIST, LEDGER_FILE
+    global WEB_DIST, LEDGER_FILE, QUEUE_STATE_DIR
     global COLLECTOR_INTERVAL, SSE_KEEPALIVE_SECONDS, SSE_MAX_CLIENTS, SSE_QUEUE_MAXSIZE, SSE_WRITE_TIMEOUT
     global WATCHDOG_HEARTBEAT_AVAILABILITY, MONITOR_HEARTBEAT_AVAILABILITY
 
@@ -159,6 +159,12 @@ def reload():
     # LEDGER_FILE: outcomes ledger parsed by ui/cost.py; sse.py mtime-gates on it.
     LEDGER_FILE = STATE_DIR / "ledger" / "OUTCOMES-LEDGER.md"
 
+    # QUEUE_STATE_DIR: merge-queue operator data (exceptions.jsonl + heartbeat).
+    # Env AESOP_QUEUE_STATE overrides default (allows pointing to QUEUE worktree state).
+    QUEUE_STATE_DIR = Path(
+        os.getenv("AESOP_QUEUE_STATE", str(STATE_DIR / "merge-queue"))
+    ).expanduser()
+
     # Collector and SSE configuration
     COLLECTOR_INTERVAL = float(os.getenv("AESOP_UI_COLLECT_INTERVAL", "1.0"))
     SSE_KEEPALIVE_SECONDS = 15
@@ -192,6 +198,7 @@ TRACKER_FILE = STATE_DIR / "tracker.json"
 ORCH_STATUS_FILE = STATE_DIR / "orchestrator-status.json"
 WEB_DIST = AESOP_ROOT / "ui" / "web" / "dist"
 LEDGER_FILE = STATE_DIR / "ledger" / "OUTCOMES-LEDGER.md"
+QUEUE_STATE_DIR = STATE_DIR / "merge-queue"
 COLLECTOR_INTERVAL = 1.0
 SSE_KEEPALIVE_SECONDS = 15
 SSE_MAX_CLIENTS = 100

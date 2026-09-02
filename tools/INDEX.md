@@ -128,12 +128,13 @@ listed by adding an `INDEX: <one-liner>` line to its module docstring/header.
 - `verify_agent_inspector.py` -- Browser proof (Playwright): Agent Inspector drawer (/api/agent?id=); exit 0=proven/1=failed, --allow-skip only browserless
 - `verify_cost_forecast.py` -- Playwright proof for CostForecast: trend chart, metrics panel, ceiling alerts, populated/empty phases (5-day ledger / <2d data)
 - `verify_cost_panel.py` -- Browser proof for the dashboard cost panel (playwright; renders panel and asserts on cost data).
-- `verify_cost_summary_drawer.py` -- Playwright proof for CostSummaryDrawer: toggle, metrics, aria-hidden, populated/empty phases; both exit 0=proven/1=failed, `[--allow-skip]`.
+- `verify_cost_summary_drawer.py` -- Playwright proof for CostSummaryDrawer: toggle, metrics, aria-hidden, populated/empty phases
 - `verify_dash.py` -- Browser proof (Playwright): realtime SSE dashboard renders live agent/wave state; exit 0=proven/1=failed, --allow-skip only in truly browserless envs
 - `verify_dispatch_panel.py` -- Browser proof (Playwright): DispatchPanel (ui/web/dist/ + /api/wave/dispatch); exit 0=proven/1=failed, --allow-skip only browserless
 - `verify_failure_drilldown.py` -- Browser proof (Playwright): wave failure drill-down; exit 0=proven/1=failed, --allow-skip only browserless
 - `verify_gates_wired.py` -- Guardrail G2.6: gates-wired enforcer (prevents "documented-gate-not-wired" escapes); parses CLAUDE.md for "(Guardrail Gx)" + "verify_*.py are mandatory CI gates"; asserts each gate is invoked in .github/workflows/*.yml; fail-closed on missing files; exit 0=wired/1=unwired/2=error; stdlib-only
 - `verify_prboard.py` -- Browser proof (Playwright): Wave PR Board (/api/wave/prs); exit 0=proven/1=failed, --allow-skip only browserless
+- `verify_queue_panel.py` -- Playwright proof for QueuePanel (Q5 merge-queue operator): depth/batch/age/exceptions, toggle, populated/empty phases; all exit 0=proven/1=failed, `[--allow-skip]`.
 - `verify_scorecards.py` -- Browser proof (Playwright): wave quality scorecards panel; exit 0=proven/1=failed, --allow-skip only browserless
 - `verify_submit_encoding.py` -- Browser proof (Playwright): /submit UTF-8 inbox bootstrap; exit 0=proven/1=failed, --allow-skip only browserless
 - `verify_test_coverage.py` -- Guardrail G2: CI gate that verifies all on-disk test files are run by some CI job (prevents fake-green: test files existing but never executed). Discovers: Python (git ls-files tests/test_*.py), Node (tests/*.test.mjs via npm test:node glob), Shell (explicit bash commands in package.json test:sh), Playwright (testMatch pattern in playwright.config.ts). CLI: `--check` (exit 1 if orphans found; CI gate) | `--fix` (suggest how to add orphans) | `--help`; hermetic, stdlib-only; exit 0=all covered, 1=orphans found, 2=error
