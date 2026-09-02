@@ -16,6 +16,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - **verify_*.py are mandatory CI gates**: `verify_dash.py`, `verify_submit_encoding.py`, `verify_activity_filter.py`, `verify_agent_inspector.py`, `verify_prboard.py`, `verify_failure_drilldown.py`, `verify_wave_telemetry.py`, `verify_dispatch_panel.py`, `verify_scorecards.py`, `verify_ui_trio.py`, `verify_cost_panel.py`, etc. are required pre-push gates; use `--allow-skip` only in truly browserless environments (CI must run all).
 - **lock.mjs is the ONLY lock implementation**: never reimplement locking in `proposals.mjs` or elsewhere; all proposals/state updates must use fail-closed `lock.mjs` with exponential backoff + stale-lock breaking.
 - **Merge-queue daemon (merge_queue.py) self-heals on crash**: when a pass crashes mid-batch and leaves the shared worktree checked out on an `integrate/q-*` branch, the next pass detects this in `worktree_is_safe()` and automatically reparks to main before proceeding. No manual intervention needed; stalled passes recover transparently.
+- **Merge train B1.4 enforce_admins check**: `check_enforce_admins()` in merge_train.py accepts both Python bool `True` (from parsed JSON) and string `"true"` (case-insensitive, stripped). Mirrors merge_queue.py's pattern to handle gh() returning parsed JSON, not raw strings.
 
 ## init_project.py — Worktree support
 
