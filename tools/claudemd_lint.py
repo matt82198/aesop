@@ -92,7 +92,7 @@ def _tracked_claudemds(repo_root):
         out = subprocess.run(
             ["git", "ls-files", "*CLAUDE.md"],
             cwd=str(repo_root), capture_output=True, text=True,
-            encoding="utf-8", timeout=10,
+            encoding="utf-8", errors="replace", timeout=10,
         )
         if out.returncode == 0:
             names = [n.strip() for n in out.stdout.splitlines() if n.strip()]
@@ -475,7 +475,7 @@ def check_generated_files(repo_root: Path) -> List[Dict[str, str]]:
                 cwd=str(repo_root),
                 capture_output=True,
                 text=True,
-                encoding="utf-8",
+                encoding="utf-8", errors="replace",
                 timeout=120,
             )
         except (OSError, subprocess.TimeoutExpired) as e:
