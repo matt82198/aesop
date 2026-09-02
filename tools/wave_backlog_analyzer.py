@@ -160,7 +160,7 @@ def get_commits_since(repo_path, days=30):
             ["git", "-C", str(repo_path), "log", "--all", f"--since={since_date}", "--format=%H%n%s%n--END--"],
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=10,
         )
         if result.returncode != 0:
@@ -193,7 +193,7 @@ def get_files_changed_in_commit(repo_path, commit_hash):
             ["git", "-C", str(repo_path), "show", "--name-only", "--format=", commit_hash],
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=5,
         )
         if result.returncode == 0:

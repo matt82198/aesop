@@ -1,23 +1,32 @@
 #!/usr/bin/env python3
-"""Guardrail G10: encoding lint — enforce explicit encoding='utf-8' on file opens and subprocess.
-INDEX: Encoding lint: flags `open()` without `encoding=`, and `subprocess.run/check_output/Popen` with `text=True`/`universal_newlines=True` and no `encoding=` (the Windows cp1252 trap that crashed metrics_gate on a binary diff). Ratchets against `.encoding-baseline.json` (`--baseline`, `--update-baseline`) so the existing backlog stays visible without blocking pushes while NEW violations fail closed
+"""Guardrail G10: encoding lint — explicit encoding AND an explicit error handler.
+INDEX: Encoding lint: flags `open()` without `encoding=`; `subprocess.run/check_output/Popen` with `text=True`/`universal_newlines=True` and no `encoding=` (the Windows cp1252 trap that crashed metrics_gate on a binary diff); and `subprocess.*` that sets `encoding=` without a safe `errors=` handler (strict decoding of one 0x97 byte killed the reader thread and crashed the merge queue on 24+ consecutive passes)
 
 Scans Python files for:
   1. `open()` calls missing explicit `encoding=` parameter
   2. `subprocess.run/check_output/Popen` calls with text=True or universal_newlines=True
      without explicit encoding= parameter
+  3. `subprocess.run/check_output/Popen` calls that set `encoding=` but no (or an
+     unsafe) `errors=` handler
 
 Flags:
   - `open(path)` or `open(path, 'r')` or `open(path, 'w')` WITHOUT `encoding=`
   - `subprocess.run(..., text=True)` WITHOUT `encoding=`
   - `subprocess.check_output(..., text=True)` WITHOUT `encoding=`
   - `subprocess.Popen(..., universal_newlines=True)` WITHOUT `encoding=`
+  - `subprocess.run(..., encoding='utf-8')` WITHOUT `errors=`, or with
+    `errors='ignore'` / `errors='strict'`
 
 Allows: binary mode (`'rb'`, `'wb'`) — no encoding needed.
 Suppression: `# encoding-ok` inline comment.
 
 This guardrail prevents cp1252/locale-encoding surprises on Windows
-(e.g., tracker.json UnicodeDecodeError, subprocess text=True failure).
+(e.g., tracker.json UnicodeDecodeError, subprocess text=True failure) AND the
+strict-decoding crash class: `encoding='utf-8'` with the default strict handler
+raises UnicodeDecodeError inside subprocess's reader THREAD, which never
+propagates to the caller — stdout comes back None and the caller dies on a
+misleading `.strip()` AttributeError. Requiring `encoding=` without requiring
+`errors=` is why this lint passed while the merge queue was hard down.
 
 CLI:
   --check (default, exit 1 on findings)
@@ -128,8 +137,41 @@ def _has_text_flag(node: ast.Call) -> bool:
     return False
 
 
+# Error handlers a decoding subprocess call may declare. 'replace' is the
+# house default because it keeps an undecodable byte VISIBLE as U+FFFD.
+# 'ignore' is deliberately absent: it deletes the byte, so a corrupted branch
+# name or PR title silently becomes a different, plausible-looking string that
+# the caller then acts on. 'backslashreplace' and 'surrogateescape' are allowed
+# because both are lossless and reversible.
+ALLOWED_SUBPROCESS_ERROR_HANDLERS = frozenset({
+    'replace', 'backslashreplace', 'surrogateescape',
+})
+
+
+def _errors_keyword(node: ast.Call):
+    """Return the `errors=` keyword node, or None when the call omits it."""
+    for keyword in node.keywords:
+        if keyword.arg == 'errors':
+            return keyword
+    return None
+
+
 class SubprocessVisitor(ast.NodeVisitor):
-    """AST visitor that finds subprocess.run/check_output/Popen calls with text=True but no encoding."""
+    """Finds subprocess.run/check_output/Popen decoding calls that are unsafe.
+
+    Two distinct findings, both of which have crashed production here:
+
+    1. `text=True` with no `encoding=` -- the process inherits the Windows
+       cp1252 locale and dies on any non-ASCII byte.
+    2. `encoding=` with no (or a lossy) `errors=` -- strict UTF-8 decoding.
+       This is the gap that let the merge queue crash on 24+ consecutive
+       passes while this very lint reported clean: git emitted a cp1252
+       em-dash (0x97), the decode raised UnicodeDecodeError inside
+       subprocess's reader THREAD, `result.stdout` came back None, and the
+       caller's `.strip()` died with a misleading AttributeError. Guardrail
+       G10 mandated the encoding but not the handler, so the rule was prose
+       the linter did not enforce.
+    """
 
     def __init__(self, source_lines: List[str], filename: Path):
         self.findings: List[Dict] = []
@@ -155,25 +197,59 @@ class SubprocessVisitor(ast.NodeVisitor):
                 self.generic_visit(node)
                 return
 
-            # Check if this call has text=True or universal_newlines=True
-            if _has_text_flag(node):
-                # Check if encoding= keyword is present
-                if not _has_encoding_keyword(node):
-                    line_content = (
-                        self.source_lines[node.lineno - 1]
-                        if node.lineno <= len(self.source_lines)
-                        else ""
-                    )
+            line_content = (
+                self.source_lines[node.lineno - 1]
+                if node.lineno <= len(self.source_lines)
+                else ""
+            )
+            has_encoding = _has_encoding_keyword(node)
+
+            # (1) text=True with no encoding= -- inherits the cp1252 locale.
+            if _has_text_flag(node) and not has_encoding:
+                self.findings.append({
+                    'file': str(self.filename),
+                    'line': node.lineno,
+                    'col': node.col_offset,
+                    'message': (
+                        f"subprocess.{func_name}() call with text=True/universal_newlines=True "
+                        f"without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment"
+                    ),
+                    'code': line_content.strip(),
+                })
+
+            # (2) encoding= with no (or a lossy) errors= -- strict decoding.
+            # `encoding=` alone makes this a DECODING call regardless of whether
+            # text= was also spelled out, so this check keys off encoding=.
+            if has_encoding:
+                errors_kw = _errors_keyword(node)
+                if errors_kw is None:
                     self.findings.append({
                         'file': str(self.filename),
                         'line': node.lineno,
                         'col': node.col_offset,
                         'message': (
-                            f"subprocess.{func_name}() call with text=True/universal_newlines=True "
-                            f"without encoding= parameter; use encoding='utf-8' or add # encoding-ok comment"
+                            f"subprocess.{func_name}() call sets encoding= but not errors=; "
+                            f"strict decoding kills subprocess's reader thread on one bad byte "
+                            f"and leaves stdout None. Use errors='replace' (or an explicit "
+                            f"{sorted(ALLOWED_SUBPROCESS_ERROR_HANDLERS)}), never 'ignore'"
                         ),
                         'code': line_content.strip(),
                     })
+                elif isinstance(errors_kw.value, ast.Constant):
+                    handler = errors_kw.value.value
+                    if handler not in ALLOWED_SUBPROCESS_ERROR_HANDLERS:
+                        self.findings.append({
+                            'file': str(self.filename),
+                            'line': node.lineno,
+                            'col': node.col_offset,
+                            'message': (
+                                f"subprocess.{func_name}() uses errors={handler!r}; "
+                                f"undecodable bytes must stay visible. Allowed: "
+                                f"{sorted(ALLOWED_SUBPROCESS_ERROR_HANDLERS)} "
+                                f"('ignore' and 'strict' are rejected on purpose)"
+                            ),
+                            'code': line_content.strip(),
+                        })
 
         self.generic_visit(node)
 

@@ -3,10 +3,7 @@ import os
 import subprocess
 import sys
 import tempfile
-import threading
-import time
 import unittest
-from datetime import datetime
 from pathlib import Path
 
 
@@ -286,75 +283,164 @@ class TestRotateLogs(unittest.TestCase):
         total_lines = remaining_lines + archived_lines
         self.assertEqual(total_lines, 20)
 
-    def test_concurrent_append_no_data_loss(self):
-        """Test that concurrent appends during rotation don't lose data.
-
-        This test simulates the race condition from the original bug:
-        1. Rotation is triggered (reads file, holds lock)
-        2. Another thread attempts to append while rotation computes
-        3. Rotation releases lock and returns
-        4. Appended lines should not be lost
-
-        The atomic locking in the fix prevents lines written to the file
-        from being discarded by the rotation's truncate+rewrite sequence.
-        """
-        logfile = os.path.join(self.temp_dir, "test.log")
-
-        # Create initial log with 250 lines to trigger rotation
-        with open(logfile, 'w') as f:
-            for i in range(1, 251):
+    def _append_external(self, logfile, start, end):
+        """Append lines [start, end) the way a non-locking external writer would."""
+        with open(logfile, 'a', encoding='utf-8') as f:
+            for i in range(start, end):
                 f.write(f"line {i}\n")
 
-        # Count initial lines
-        initial_lines = self._count_lines(logfile)
-        self.assertEqual(initial_lines, 250)
-
-        # Append lines while rotation happens
-        def append_concurrent():
-            # Give rotation a moment to start
-            time.sleep(0.05)  # sleep-ok
-            # Append 10 lines to the log
-            with open(logfile, 'a') as f:
-                for i in range(251, 261):
-                    f.write(f"line {i}\n")
-
-        # Run rotation and concurrent append in separate threads
-        rotate_thread = threading.Thread(
-            target=lambda: self._run_rotate(logfile, ["--max-lines", "200"])
-        )
-        append_thread = threading.Thread(target=append_concurrent)
-
-        # Start both threads (order doesn't matter due to locking)
-        rotate_thread.start()
-        append_thread.start()
-
-        rotate_thread.join(timeout=5)
-        append_thread.join(timeout=5)
-
-        # Verify no lines were lost
-        # After rotation: ~100 lines kept (half of 250)
-        # Plus the 10 lines appended: should have ~110 lines
-        final_lines = self._count_lines(logfile)
-        archive_dir = os.path.join(self.temp_dir, "archive")
-        archived_lines = 0
+    def _collect_all_lines(self, logfile, archive_dir):
+        """Return (live_lines, archived_lines) as lists of stripped strings."""
+        with open(logfile, 'r', encoding='utf-8') as f:
+            live = [ln.rstrip("\n") for ln in f]
+        archived = []
         if os.path.exists(archive_dir):
-            archive_files = os.listdir(archive_dir)
-            for archive_file in archive_files:
-                archived_lines += self._count_lines(os.path.join(archive_dir, archive_file))
+            for name in sorted(os.listdir(archive_dir)):
+                with open(os.path.join(archive_dir, name), 'r', encoding='utf-8') as f:
+                    archived.extend(ln.rstrip("\n") for ln in f)
+        return live, archived
 
-        # Total should be 260 (250 original + 10 appended)
-        total_lines = final_lines + archived_lines
+    def test_concurrent_append_no_data_loss(self):
+        """External appends landing during rotation are preserved, not truncated away.
+
+        Deterministic replacement for a thread+sleep version of this test that was
+        a coin flip: it started the rotation subprocess and an appender thread and
+        hoped the append landed inside the rotation window. Whether it did depended
+        on interpreter startup latency, so on a loaded CI runner it intermittently
+        reported `250 != 260` -- a real defect, but one this test only observed by
+        luck.
+
+        Here both appends are injected at exact points in the rotation, with no
+        threads and no sleeps:
+
+          batch 1 lands while the archive file is being written (the window the
+                  rotation has always claimed to cover), and
+          batch 2 lands after the rotation has already observed the file size once
+                  (the window that used to be a full file re-read wide, and the
+                  one the reported flake was falling into).
+
+        Both must survive: archive + live == every line ever written, in order.
+        """
+        logfile = os.path.join(self.temp_dir, "test.log")
+        archive_dir = os.path.join(self.temp_dir, "archive")
+
+        with open(logfile, 'w', encoding='utf-8') as f:
+            for i in range(1, 251):
+                f.write(f"line {i}\n")
+        self.assertEqual(self._count_lines(logfile), 250)
+
+        sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
+        import rotate_logs
+
+        original_write_lines = rotate_logs.write_lines
+        fired = {'archive_write': False, 'size_check': False}
+        case = self
+
+        def write_lines_then_append(filepath, lines):
+            """Batch 1: append while the archive is being written."""
+            result = original_write_lines(filepath, lines)
+            if not fired['archive_write']:
+                fired['archive_write'] = True
+                case._append_external(logfile, 251, 261)
+            return result
+
+        class OsShimAppendingAfterFirstSizeCheck:
+            """Batch 2: append *after* rotation has read the size once.
+
+            Delegates everything to the real os module; the only interception is
+            fstat, which appends immediately after returning the first size it is
+            asked for. The rotation therefore holds a size that is already stale
+            and must re-check before truncating.
+            """
+
+            def __getattr__(self, name):
+                return getattr(os, name)
+
+            def fstat(self, fd):
+                st = os.fstat(fd)
+                if not fired['size_check']:
+                    fired['size_check'] = True
+                    case._append_external(logfile, 261, 271)
+                return st
+
+        rotate_logs.write_lines = write_lines_then_append
+        rotate_logs.os = OsShimAppendingAfterFirstSizeCheck()
+        try:
+            rc = rotate_logs.rotate_log(
+                logfile, max_lines=200, max_bytes=20480,
+                archive_dir=archive_dir, check_only=False
+            )
+        finally:
+            rotate_logs.write_lines = original_write_lines
+            rotate_logs.os = os
+
+        self.assertEqual(rc, 0, "Rotation should succeed")
+        self.assertTrue(fired['archive_write'], "batch 1 injection never fired")
+        self.assertTrue(fired['size_check'], "batch 2 injection never fired")
+
+        live, archived = self._collect_all_lines(logfile, archive_dir)
+        expected = [f"line {i}" for i in range(1, 271)]
         self.assertEqual(
-            total_lines, 260,
-            f"Race condition: expected 260 total lines, got {total_lines} "
-            f"(live={final_lines}, archived={archived_lines}). "
-            f"This indicates concurrent writes were lost during rotation."
+            archived + live, expected,
+            f"Concurrent appends were lost or reordered during rotation: got "
+            f"{len(archived)} archived + {len(live)} live = "
+            f"{len(archived) + len(live)} lines, expected {len(expected)}."
         )
+        # The appends arrived after the split point, so they belong to the live file.
+        self.assertEqual(live[-1], "line 270")
 
-        # Verify newest appended lines are in live file
-        with open(logfile, 'r') as f:
-            content = f.read()
-        self.assertIn("line 260", content, "Newest appended line should be in live file")
+    def test_append_preserved_when_last_line_has_no_newline(self):
+        """A trailing line without a newline must not swallow a concurrent append.
+
+        Detecting external appends by diffing line counts is wrong whenever the
+        last consumed line is unterminated: the appended text concatenates onto
+        that line, so the count grows by fewer lines than were actually written
+        and the surplus is destroyed by the truncate. Byte-offset detection has
+        no such blind spot.
+        """
+        logfile = os.path.join(self.temp_dir, "test.log")
+        archive_dir = os.path.join(self.temp_dir, "archive")
+
+        with open(logfile, 'w', encoding='utf-8') as f:
+            for i in range(1, 250):
+                f.write(f"line {i}\n")
+            f.write("line 250")  # deliberately unterminated
+
+        sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
+        import rotate_logs
+
+        original_write_lines = rotate_logs.write_lines
+        fired = {'done': False}
+
+        def write_lines_then_append(filepath, lines):
+            result = original_write_lines(filepath, lines)
+            if not fired['done']:
+                fired['done'] = True
+                with open(logfile, 'a', encoding='utf-8') as f:
+                    f.write("\n")  # terminate line 250
+                    for i in range(251, 261):
+                        f.write(f"line {i}\n")
+            return result
+
+        rotate_logs.write_lines = write_lines_then_append
+        try:
+            rc = rotate_logs.rotate_log(
+                logfile, max_lines=200, max_bytes=20480,
+                archive_dir=archive_dir, check_only=False
+            )
+        finally:
+            rotate_logs.write_lines = original_write_lines
+
+        self.assertEqual(rc, 0, "Rotation should succeed")
+        self.assertTrue(fired['done'], "injection never fired")
+
+        live, archived = self._collect_all_lines(logfile, archive_dir)
+        expected = [f"line {i}" for i in range(1, 261)]
+        self.assertEqual(
+            archived + live, expected,
+            f"Append after an unterminated final line was lost: got "
+            f"{len(archived) + len(live)} lines, expected {len(expected)}."
+        )
 
     def test_external_append_during_rotation(self):
         """Test that external O_APPEND writes between read and truncate aren't lost.

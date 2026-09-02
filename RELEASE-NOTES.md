@@ -1,13 +1,85 @@
-# aesop 0.7.2 — Bug Fixes & Compliance
+# UNRELEASED
 
-**Headline**: Fake-green gate fixes (state_md_verifier pattern, verify_test_suite_count zero-exit), 62 platform-encoding fixes for Windows subprocess output, test pollution elimination, cost-view rendering corrections, merge-train Unicode handling, portability-gate verdict completion, and remote-command identity hardening.
+**Headline**: Merge-pipeline debottlenecking (queued batch advancer, contention telemetry, stacked-PR deconfliction), multibox coordination MVP (durable identity, lease-by-append claims, shared-FS backend), CI repair (red-workflow fixes, weekly drift snapshot via rolling PR), guardrail hardenings (Q0 concurrency gate, G5 import-check, merge-queue discipline), skills-loader fail-closed upgrades (tool INDEX registration, secret-scan provisioning).
 
-### Key fixes
-- Two fake-green gates fixed: `state_md_verifier` had no version-claim pattern; `verify_test_suite_count` returned 0 instead of erroring (#638, #661).
-- 62 subprocess calls now encode output as UTF-8 explicitly (Windows cp1252 corruption eliminated, #636).
-- Test pollution: fixture mutations on every run (#643) and heartbeat epoch writes (#645) eliminated.
-- `tooling_panel` now correctly surfaces findings-exit (1) as findings, not tool failure (#647).
-- Cost view rendering, chart SVGs, live-API credential handling, merge-train Unicode, portability gate verdict, remote-command identity hardening all fixed.
+## Shipping
+
+### Merge-pipeline & queue hardening (Q0–Q2)
+- **Merge-queue advancer daemon (Q1+Q2)**: deterministic 5-minute actor replaced ad-hoc pulse CI; restores batch construction under contention, recognizes existing batches (no duplication), enforces that base is default branch (#713, #761). Merge-pipeline telemetry (#692) quantifies contention surface; stacked-PR chains + landed-content close guard (#693) debottleneck B1 integration pathways. Encoding crash on em-dash output fixed (#764); timeout/worktree failure containment hardened (#753).
+- **Q0 concurrency gate**: Fixed inversion that could report CANCELLED falsely; gates now fail-closed on signal-kill (#725, #695).
+
+### Multibox coordination MVP (durable identity, lease-by-append claims)
+- **Durable instance identity + epoch fencing** (#686): Host-independent canonical paths, atomic dispatch claims seam (#685), identity-epoch corruption guard (#749). **Shared-FS lease backend** (#697): FsClaimLog append-only over shared filesystems enables multi-machine orchestration without consensus. Design documented (#687).
+
+### Guardrail hardenings
+- **G5 import-check**: Now actually evaluates pushed range instead of vacuous pass (#760).
+- **Silent-job detector**: Guardrail tool identifies defined-but-never-executed CI jobs (#698).
+- **Tool-index registration**: INDEX.md registered as generated path, counted in CLAUDE.md sync gate (#751, #752, #757).
+- **Merge-queue discipline**: Refuse PRs whose base is not default branch; atomic lock + kill switch restored (#761, #753).
+
+### Skills-loader & init-project fail-closed
+- **Init-project secret-scan provisioning**: Copies secret_scan.py, hook fails closed on missing script (#769).
+- **Cost-ceiling gate**: `--check` now read-only, prevents accidental header creation (#717).
+- **Test-suite count gate**: Rejects vacuous zero-file state, detects duplicated assertions (#674, #679).
+
+### CI repair & observability
+- **Red-workflow fixes**: Repaired two scheduled workflows on main (#787). Weekly drift-snapshot now publishes via rolling PR instead of protected-branch push (#790).
+- **Stats-refresh job**: Fixed job, restored visibility (#716).
+
+### Docs & examples
+- **Multibox design documented** (#687). **Micro-kernel formalization** — syscall table, hypothesis summary (#681). **First-wave replay kit** — verified baseline for adoption (#682, #702).
+- **RELEASE-NOTES/README honesty pass**: Historical counts restored, 0.7.2 delta verified, hiring claims audit-backed (#696, #688, #678).
+
+### Performance & UX
+- **Snapshot/tail-replay optimization**: Wired into hot paths (#768).
+- **Cost trend forecast**: Persistent drawer with ceiling projection (#691).
+
+### Complexity reductions
+- **Merge-queue daemon**: Replaced pulse CI; deterministic actor instead of polling.
+- **Tool INDEX**: Extracted into generated INDEX.md, collapses merge-contention surface.
+
+### Integration batches
+- **2026-08-03 integration batch**: Test-discovery validator, multibox Inc 1–3, docs sync, design formalization (#690).
+
+---
+
+## Honest residuals
+
+**Open test characterization:**
+- `test_openai_transport_redirect` remains flaky in shard 0; no characterization yet.
+- `test_hook_preflight` is wired but does not execute; full rewrite needed to fix `tmp_path` NameError and add coverage.
+- `test_agent_detail_roundtrip` fix landed (#668); re-verification under ci_shard_runner context still pending.
+
+(Per wave-1 reconciliation audit: 3 open items from STATE.md NEXT STEPS; all impact-per-effort estimates LOW–MEDIUM; prioritize `test_openai_transport_redirect` for quick unblocking.)
+
+---
+
+# aesop 0.7.2 — Dashboard state-cache fix
+
+A small, single-fix patch release. `git log v0.7.1..v0.7.2` is four commits: one
+substantive change (#668), its merge, the release-metadata commit, and its merge.
+
+**Headline**: `/api/state` could serve a collector's empty default snapshot as though it
+were live state, so the dashboard's first paint could come up blank.
+
+### The fix (#668)
+- `ui/sse.py` seeded the `data` `CollectorSource` with a default snapshot of `{}`. That
+  source is mtime-gated, so while its watched files were unchanged the collector kept
+  serving the cached default. `serve_api_state` only computed a section inline when the
+  cached payload was `None` — and `{}` is not `None` — so the endpoint returned an empty
+  `data` section (watchdog, monitor, repos, events, alerts, messages all missing) whenever
+  the collector had not yet observed a file change. An empty section is now treated as
+  "not yet snapshotted" and computed inline.
+- Also in #668: `test_agent_detail_roundtrip` called `config.reload()` in `setUp` to pick up
+  fixture paths but restored the environment in `tearDown` without reloading, leaving the
+  config module pointing at a temp directory it then deleted.
+- This was a live main-CI failure (`ci (3)`: `AssertionError: 'watchdog' not found in {}`),
+  pre-existing rather than a test-ordering artifact. Verified against the real gate
+  (`tools/ci_shard_runner.py`): shard 3 exit 1 → exit 0, shards 0/1/2 exit 0.
+
+### Release mechanics
+- `release: 0.7.2` (a00deb7f) — version bump in `package.json`, `CHANGELOG.md` entry,
+  `STATE.md` sync. No code change.
 
 ---
 
@@ -19,17 +91,23 @@
 - Platform encoding: 62 subprocess calls fixed to pass explicit `encoding='utf-8'` (#636, eliminated Windows cp1252 corruption).
 - Fake-green gates: Fixed `state_md_verifier` (no version-claim pattern) and `verify_test_suite_count` (returned 0 on read failure, #661).
 - Test isolation: Fixture mutations (#643), heartbeat epoch pollution (#645), and other CI hygiene violations fixed.
-- Cost rendering (#648), merge-train Unicode (#654), live-API credential handling (#666), and portability-gate verdict (#667) all repaired.
+- Cost view loading/empty/error states + chart a11y (#648); live-API test skips on auth
+  rejection instead of failing CI (#666).
+- Merge-train UTF-8 stdout, so non-ASCII PR titles no longer crash the train (c6e465bf —
+  PR #654 was closed; the change shipped inside the 0.7.1 integration batch #667).
+- Portability gate reached a verdict for the first time and caught 9 real violations —
+  `remote_inbox.py` had hardcoded one GitHub handle as both the polled repo and the sole
+  authorized commenter, so the tool worked for exactly one person (502ccfaf, via #667).
 - **Test-suite count now derived at check time** rather than stored; eliminates parallel-branch count conflicts (#661).
 
 ### Complexity reductions
-- `_run_wave_inner`: F(141) → C(13), `run_wave_scheduler`: F(82) → C(15), SSE collector: F(43) → B(6), tracker reconciliation: E(39) → C(19), `do_GET`: D(30) → A(2).
+- `_run_wave_inner`: F(141) → C(13) (#637), `run_wave_scheduler`: F(82) → C(15) (#664), SSE collector: F(43) → B(6) (#658), tracker reconciliation: E(39) → C(19) (#662), `do_GET`: D(30) → A(2) (#663).
 
 ---
 
 # aesop 0.7.0 — Guardrails & State Consolidation
 
-**Headline**: Comprehensive guardrail enforcement (11 linters, 8 automated gates) codifies design rules into fail-closed machinery. Multi-instance coordination MVP via lease-based SQLite enables team-scale orchestration. Test suite accountability (266 tests across 3 harnesses) verified by drift-detection gate. State consolidation complete: ReadAPI/WriteAPI facades unify all state readers/writers through one façade.
+**Headline**: Comprehensive guardrail enforcement (11 linters, 8 automated gates) codifies design rules into fail-closed machinery. Multi-instance coordination MVP via lease-based SQLite enables team-scale orchestration. Test suite accountability (254 tests across 3 harnesses) verified by drift-detection gate. State consolidation complete: ReadAPI/WriteAPI facades unify all state readers/writers through one façade.
 
 ## Shipping
 
@@ -37,7 +115,7 @@
 
 1. **Guardrail enforcement suite**: 11 new linters + gates (dispatch_lint, CLAUDE.md sync, workflow model pin, git-stash guard, encoding validator, commit linter, docstring checker, dead-code detector, import-cycle detector, TODO tracker, file-size linter, test-coverage gap finder) eliminate design escape routes through automated fail-closed checking.
 2. **Multi-instance coordination MVP**: Lease-based SQLite claims enable multi-machine orchestration without consensus machinery; atomic check-and-insert prevents split-brain, TOCTOU race resolution via path normalization, tracker migration fixes prevent zombie resurrection.
-3. **Test suite accountability**: 266 tests across 3 harnesses (26 Node + 13 Shell + 227 Python) verified by new drift-detection gate (`verify_test_suite_count.py`); test counts reconciled across README/docs/CLAUDE.md to single source of truth.
+3. **Test suite accountability**: 254 tests across 3 harnesses (25 Node + 13 Shell + 216 Python) verified by new drift-detection gate (`verify_test_suite_count.py`); test counts reconciled across README/docs/CLAUDE.md to single source of truth. *[count as of the v0.7.0 tag; suite has since grown — see current README]*
 4. **State consolidation complete**: ReadAPI/WriteAPI facades ship; all state I/O routed through unified entry points. StateAPI migration ratchet prevents new direct reads; stateapi_lint enforces compliance via committed baseline.
 5. **Production tooling**: Init-project scaffolder, auto-merge batch tool, cost forecasting, tracker reconciliation (zombie detection), wave-history temporal analyzer, health-score subcommand, dependency graph generator, port-fidelity validator.
 

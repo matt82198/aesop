@@ -109,7 +109,7 @@ def is_interpreter_available(interpreter_name):
             [interpreter_name] + check_args,
             capture_output=True,
             timeout=2,
-            encoding="utf-8",
+            encoding="utf-8", errors="replace",
         )
         if result.returncode == 0:
             return True, None
