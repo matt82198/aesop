@@ -1,11 +1,12 @@
 Cross-OS CI Drift Report
 ============================================================
-Runs analyzed: 20
+Runs analyzed: 19
 
 Pass Rates:
-  Ubuntu:  100.00% (20/20 runs)
-  Windows:  95.00% (19/20 runs)
+  Ubuntu:   89.47% (17/19 runs)
+  Windows:  89.47% (17/19 runs)
 
-Divergences (ubuntu PASS + windows FAIL): 1
-  30465679570
+Divergences (ubuntu PASS + windows FAIL): 2
+  30777111064
+  30645938331
 
