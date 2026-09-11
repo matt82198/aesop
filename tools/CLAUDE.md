@@ -57,6 +57,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `eod_sweep.py` — End-of-day safety check (dirty trees, unpushed commits); verdict appended to BUILDLOG.md via state_store WriteAPI (--buildlog filename must be BUILDLOG.md, fail-closed)
 - `file_size_lint.py` — Python file size linter (flags oversized modules)
 - `fixture_intent_check.py` — Deliberately-broken fixture manifest validator; verifies bench/fixtures-intent.json tracks all intentionally-broken/incomplete fixtures to distinguish benchmarks from regressions; CLI: `[--manifest PATH] [--root DIR] [--json]`; exit 0=valid/1=findings/2=error; stdlib-only
+- `gen_tool_index.py` — Tool-index builder; walks tools/, extracts `INDEX:` lines, emits tools/INDEX.md; modes `--check` / `--regenerate` / `--json`; fail-closed if tool lacks INDEX:
 - `fleet.js` — One-shot fleet snapshot (JSON: agents, heartbeats, tracker, orchestrator status; Node STDLIB only)
 - `fleet_ledger.py` — Append-only cost ledger with harvest/rotate | `metrics_gate.py` — PR gate for hard numeric claims in markdown
 - `fleet_prompt_extractor.py` — Extract and deduplicate Agent/Task spawn prompts
@@ -145,5 +146,4 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `secret_scan.py --staged` — pre-push gate (exit 0=clean/1=findings/2=error; `# secretscan: allow-pattern-docs` pragma)
 - `agent-forensics.sh <commit>` — behavior forensics; `--diff <A> <B>` for rules/docs diff
 - **Python**: `npm run test:py`; **Shell**: `bash -n tools/*.sh && shellcheck tools/*.sh`; **Node**: `node --check tools/*.mjs`
-
 - **Subprocess encoding (G10)**: every `subprocess.run`/`Popen` decoding output passes explicit `encoding='utf-8'`; the platform default is cp1252 on Windows and corrupts non-ASCII output. `encoding_lint.py` scans the WHOLE repo, so one violation anywhere blocks every Python-touching push.

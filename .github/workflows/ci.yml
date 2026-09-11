@@ -139,6 +139,10 @@ jobs:
         if: matrix.python-shard == 0 && github.event_name == 'pull_request'
         run: python tools/claudemd_sync_gate.py --check
 
+      - name: Tool index sync gate
+        if: matrix.python-shard == 0
+        run: python tools/gen_tool_index.py --check
+
       - name: CI workflow linter gate (fail-closed)
         if: matrix.python-shard == 0
         run: python tools/ci_workflow_lint.py
