@@ -2,7 +2,7 @@
 
 **What this file is:** The live durable checkpoint that Aesop itself uses during its own `/buildsystem` loop. It records the current system version, architectural decisions, known limitations, and the next milestone. This is not historical archive; it is read by the orchestrator to understand operational state.
 
-**Current Version:** v0.8.0 (release candidate 2026-09-11; tag pending).
+**Current Version:** v0.8.0 released 2026-09-11 (tag 1d8bcede). HEAD: 2a661c12 (2026-09-11 17:48:01); 25 commits since v0.8.0.
 
 ## Architectural Thesis
 
