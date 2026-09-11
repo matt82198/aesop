@@ -5,14 +5,19 @@ INDEX: Batch PR merge tool (fix-by-default: merge main into broken branches + me
 One command to clear the PR backlog. No serial merge trains.
 
 Modes:
-  (default)        Merge green PRs AND fix non-green branches (merge main,
-                   resolve test counts, push to re-trigger CI)
+  python tools/auto_merge.py <n> [<n>...]  Merge specific PR(s) by number
+  python tools/auto_merge.py --all          Merge all green PRs (board-wide mode)
+
+Options:
   --no-fix         Only merge green PRs, skip fixing broken branches
-  --loop           Fix + merge in a loop until all PRs are merged or stuck
+  --loop           Fix + merge in a loop until done (max 3 rounds)
   --dry-run        Show plan without acting
+  --json           JSON output
 
 Usage:
-    python tools/auto_merge.py [--no-fix] [--loop] [--dry-run] [--json]
+    python tools/auto_merge.py 806           Merge PR #806
+    python tools/auto_merge.py 806 807 809   Merge PRs #806, #807, #809
+    python tools/auto_merge.py --all         Merge all open green PRs
 
 Exit codes: 0=all merged, 1=some blocked, 2=error
 """
@@ -125,6 +130,10 @@ def fix_branch(branch):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('pr_numbers', nargs='*', type=int,
+                        help='PR number(s) to merge (required unless --all is given)')
+    parser.add_argument('--all', action='store_true',
+                        help='Merge all open green PRs (board-wide mode)')
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--no-fix', action='store_true',
                         help='Skip fixing non-green branches (default: fix is ON)')
@@ -134,6 +143,13 @@ def main():
     parser.add_argument('--wait', type=int, default=180,
                         help='Seconds to wait for CI between loop rounds (default 180)')
     args = parser.parse_args()
+
+    # Fail-closed: require explicit PR number(s) or --all flag
+    if not args.pr_numbers and not args.all:
+        print('auto_merge.py: error: must specify PR number(s) or use --all flag', file=sys.stderr)
+        print('Usage: auto_merge.py <n> [<n>...] or auto_merge.py --all', file=sys.stderr)
+        sys.exit(2)
+
     args.fix = not args.no_fix
 
     max_rounds = 3 if args.loop else 1
@@ -145,12 +161,20 @@ def main():
             print('No open PRs.')
             break
 
-        prs.sort(key=lambda p: p['number'])
+        # Filter PRs based on mode
+        if args.all:
+            # Board-wide mode: process all open PRs
+            target_prs = prs
+        else:
+            # Scoped mode: only process specified PRs
+            target_prs = [pr for pr in prs if pr['number'] in args.pr_numbers]
+
+        target_prs.sort(key=lambda p: p['number'])
         round_results = []
         merged = 0
         fixed = 0
 
-        for pr in prs:
+        for pr in target_prs:
             num, title, branch = pr['number'], pr['title'], pr['headRefName']
             status, detail = check_pr_status(num)
 
@@ -183,14 +207,15 @@ def main():
                 print(f'\n=== Round {round_num} ===')
             for num, action, detail, title in round_results:
                 print(f'  #{num} [{action}] {detail}  — {title}')
-            print(f'  Merged: {merged}, Fixed: {fixed}, Remaining: {len(prs) - merged}')
+            print(f'  Merged: {merged}, Fixed: {fixed}, Remaining: {len(target_prs) - merged}')
 
         all_results.extend(round_results)
 
-        remaining = get_open_prs()
+        # For scoped mode, check if all target PRs are done
+        remaining = target_prs if not args.all else get_open_prs()
         if not remaining:
             if not args.json:
-                print('\nAll PRs merged!')
+                print('\nAll targeted PRs merged!')
             break
 
         if args.loop and round_num < max_rounds and fixed > 0:
@@ -204,7 +229,10 @@ def main():
             for r in all_results
         ], indent=2))
 
-    remaining = get_open_prs()
+    if args.all:
+        remaining = get_open_prs()
+    else:
+        remaining = [pr for pr in get_open_prs() if pr['number'] in args.pr_numbers]
     return 0 if not remaining else 1
 
 

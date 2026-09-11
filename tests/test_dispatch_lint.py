@@ -322,7 +322,7 @@ git stash  # BAD
         content = """Agent()
 # Example: gh pr merge 123 (deprecated, use auto_merge.py instead)
 def good_merge():
-    python tools/auto_merge.py -u 123
+    python tools/auto_merge.py 123
 """
         violations = find_violations(Path("test.py"), content)
         # Should have 0 violations because the pattern is only in a comment
@@ -333,7 +333,7 @@ def good_merge():
         content = """Agent()
 # See GH PR MERGE logic in the old system
 def good_merge():
-    python tools/auto_merge.py -u 123
+    python tools/auto_merge.py 123
 """
         violations = find_violations(Path("test.py"), content)
         # Should have 0 violations because the pattern is only in a comment
@@ -351,6 +351,91 @@ def bad_merge():
         self.assertEqual(len(violations), 1)
         self.assertEqual(violations[0]["pattern"], "gh_pr_merge")
         self.assertEqual(violations[0]["line"], 3)
+
+    def test_detects_auto_merge_bare(self):
+        """Detects bare 'auto_merge.py' without PR numbers or --all."""
+        content = """
+        Agent()
+        def dispatch_merge():
+            python tools/auto_merge.py
+        """
+        violations = find_violations(Path("test.py"), content)
+        self.assertTrue(any(v["pattern"] == "auto_merge_bare_invocation" for v in violations))
+
+    def test_detects_auto_merge_with_flags_only(self):
+        """Detects 'auto_merge.py' with only flags (no PR numbers, no --all)."""
+        content = """
+        Agent()
+        python tools/auto_merge.py --json
+        """
+        violations = find_violations(Path("test.py"), content)
+        self.assertTrue(any(v["pattern"] == "auto_merge_bare_invocation" for v in violations))
+
+    def test_detects_auto_merge_loop_no_pr(self):
+        """Detects 'auto_merge.py --loop' without PR numbers or --all."""
+        content = """
+        Agent()
+        python tools/auto_merge.py --loop --no-fix
+        """
+        violations = find_violations(Path("test.py"), content)
+        self.assertTrue(any(v["pattern"] == "auto_merge_bare_invocation" for v in violations))
+
+    def test_allows_auto_merge_with_pr_number(self):
+        """Allows 'auto_merge.py' with PR number."""
+        content = """
+        Agent()
+        python tools/auto_merge.py 806
+        """
+        violations = find_violations(Path("test.py"), content)
+        self.assertFalse(any(v["pattern"] == "auto_merge_bare_invocation" for v in violations))
+
+    def test_allows_auto_merge_with_multiple_pr_numbers(self):
+        """Allows 'auto_merge.py' with multiple PR numbers."""
+        content = """
+        Agent()
+        python tools/auto_merge.py 806 807 809
+        """
+        violations = find_violations(Path("test.py"), content)
+        self.assertFalse(any(v["pattern"] == "auto_merge_bare_invocation" for v in violations))
+
+    def test_allows_auto_merge_with_all_flag(self):
+        """Allows 'auto_merge.py --all' flag."""
+        content = """
+        Agent()
+        python tools/auto_merge.py --all
+        """
+        violations = find_violations(Path("test.py"), content)
+        self.assertFalse(any(v["pattern"] == "auto_merge_bare_invocation" for v in violations))
+
+    def test_allows_auto_merge_all_with_flags(self):
+        """Allows 'auto_merge.py --all' with other flags."""
+        content = """
+        Agent()
+        python tools/auto_merge.py --all --json --loop
+        """
+        violations = find_violations(Path("test.py"), content)
+        self.assertFalse(any(v["pattern"] == "auto_merge_bare_invocation" for v in violations))
+
+    def test_allows_auto_merge_pr_with_flags(self):
+        """Allows 'auto_merge.py' with PR number and flags."""
+        content = """
+        Agent()
+        python tools/auto_merge.py 806 --loop --no-fix
+        """
+        violations = find_violations(Path("test.py"), content)
+        self.assertFalse(any(v["pattern"] == "auto_merge_bare_invocation" for v in violations))
+
+    def test_auto_merge_comment_only_ignored(self):
+        """'auto_merge.py' reference in comment-only context is ignored."""
+        content = """
+        Agent()
+        # Example: python tools/auto_merge.py
+        # This is just documentation, not an actual invocation
+        python tools/auto_merge.py 806
+        """
+        violations = find_violations(Path("test.py"), content)
+        # Should only check the actual invocation, which has a PR number
+        self.assertFalse(any(v["pattern"] == "auto_merge_bare_invocation" for v in violations))
 
 
 if __name__ == "__main__":
