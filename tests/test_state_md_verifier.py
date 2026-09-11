@@ -284,8 +284,8 @@ class TestStatemdVerifierEscapeRepro(unittest.TestCase):
 
     def test_gh_absent_path_skipped(self):
         """
-        Fixture: STATE.md has "MERGED" claim but gh CLI unavailable
-        Expected: verifier SKIPs this claim, does not fail-open
+        Fixture: STATE.md has "MERGED" claim but gh CLI unavailable (or fails)
+        Expected: verifier handles gracefully (SKIP if gh absent, or ERROR if gh available but fails)
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
@@ -320,15 +320,19 @@ class TestStatemdVerifierEscapeRepro(unittest.TestCase):
                 cwd=tmpdir_path
             )
 
-            # Should exit 0 (SKIP is not a contradiction)
-            self.assertEqual(rc, 0, f"Expected exit 0. Got {rc}. stderr: {stderr}")
+            # Should exit 0 or 2 depending on whether gh is available
+            # If gh is available: tries to verify, gets error (no remote), exits 2
+            # If gh is not available: skips verification, exits 0
+            self.assertIn(rc, [0, 2], f"Expected exit 0 or 2. Got {rc}. stderr: {stderr}")
 
-            # Check for SKIP status
+            # Check findings
             try:
                 result = json.loads(stdout)
                 skip_count = result.get("skip_count", 0)
-                # Skip count may be 0 if the claim wasn't detected at all, which is ok
-                # Main point is we don't hit an error
+                error_count = result.get("error_count", 0)
+                # Either we skipped (skip_count > 0) or we errored (error_count > 0)
+                self.assertGreater(skip_count + error_count, 0,
+                    "Expected SKIP or ERROR findings")
             except json.JSONDecodeError:
                 pass
 
@@ -590,6 +594,231 @@ class TestStatemdVerifierIntegration(unittest.TestCase):
         # Must exit non-zero (failure) because there's nothing to verify
         self.assertNotEqual(rc, 0,
             f"Expected non-zero exit for STATE.md with zero verifiable claims (fail-closed), got {rc}")
+
+
+class TestStatemdFreshness(unittest.TestCase):
+    """Test STATE.md freshness gate (Guardrail #5)."""
+
+    def test_freshness_current_head_claim_fresh(self):
+        """
+        Fixture: STATE.md claims current HEAD <recent-sha>, repo HEAD is that sha or nearby.
+        Expected: verifier exits 0 (fresh enough).
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+
+            # Initialize git repo
+            subprocess.run(
+                ["git", "init"],
+                cwd=tmpdir_path,
+                capture_output=True,
+                check=True
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"],
+                cwd=tmpdir_path,
+                capture_output=True,
+                check=True
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test User"],
+                cwd=tmpdir_path,
+                capture_output=True,
+                check=True
+            )
+
+            # Create initial commit
+            test_file = tmpdir_path / "test.txt"
+            test_file.write_text("base\n")
+            subprocess.run(
+                ["git", "add", "."],
+                cwd=tmpdir_path,
+                capture_output=True,
+                check=True
+            )
+            subprocess.run(
+                ["git", "commit", "-m", "Initial"],
+                cwd=tmpdir_path,
+                capture_output=True,
+                check=True
+            )
+
+            # Get current HEAD sha
+            rc, head_sha, _ = state_md_verifier.run_command(
+                ["git", "rev-parse", "HEAD"],
+                cwd=tmpdir_path
+            )
+            self.assertEqual(rc, 0, "Failed to get HEAD sha")
+            head_sha = head_sha.strip()
+
+            # Create STATE.md claiming current HEAD matches
+            state_md = tmpdir_path / "STATE.md"
+            state_md.write_text(f"# Checkpoint\n\n**Current Version:** v1.0.0 (current HEAD {head_sha}).\n")
+
+            # Run verifier
+            rc, stdout, stderr = state_md_verifier.run_command(
+                [sys.executable, str(tools_path / "state_md_verifier.py"),
+                 "--state-md", str(state_md)],
+                cwd=tmpdir_path
+            )
+
+            # Should exit 0 (no freshness contradiction)
+            self.assertEqual(rc, 0,
+                f"Expected exit 0 for fresh STATE.md. Got {rc}.\nstdout: {stdout}\nstderr: {stderr}")
+
+    def test_freshness_stale_by_51_commits(self):
+        """
+        Fixture: STATE.md claims HEAD at a commit 51 commits back; HEAD is 51 commits ahead.
+        Expected: verifier flags as CONTRADICTION and exits 1 (stale, >50 limit).
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+
+            # Initialize git repo
+            subprocess.run(
+                ["git", "init"],
+                cwd=tmpdir_path,
+                capture_output=True,
+                check=True
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"],
+                cwd=tmpdir_path,
+                capture_output=True,
+                check=True
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test User"],
+                cwd=tmpdir_path,
+                capture_output=True,
+                check=True
+            )
+
+            # Create first commit
+            test_file = tmpdir_path / "file0.txt"
+            test_file.write_text("content 0\n")
+            subprocess.run(
+                ["git", "add", "."],
+                cwd=tmpdir_path,
+                capture_output=True,
+                check=True
+            )
+            subprocess.run(
+                ["git", "commit", "-m", "Initial"],
+                cwd=tmpdir_path,
+                capture_output=True,
+                check=True
+            )
+
+            # Get current HEAD (baseline)
+            rc, baseline_head, _ = state_md_verifier.run_command(
+                ["git", "rev-parse", "HEAD"],
+                cwd=tmpdir_path
+            )
+            baseline_head = baseline_head.strip()
+
+            # Create 52 more commits to move HEAD ahead by 52
+            for i in range(1, 53):
+                test_file = tmpdir_path / f"file{i}.txt"
+                test_file.write_text(f"content {i}\n")
+                subprocess.run(
+                    ["git", "add", "."],
+                    cwd=tmpdir_path,
+                    capture_output=True,
+                    check=True
+                )
+                subprocess.run(
+                    ["git", "commit", "-m", f"Commit {i}"],
+                    cwd=tmpdir_path,
+                    capture_output=True,
+                    check=True
+                )
+
+            # Now HEAD is 52 commits ahead of baseline_head
+            # STATE.md claims baseline_head (which is >50 commits behind current HEAD)
+            state_md = tmpdir_path / "STATE.md"
+            state_md.write_text(f"# Checkpoint\n\n**Current Version:** v1.0.0 (current HEAD {baseline_head}).\n")
+
+            # Run verifier
+            rc, stdout, stderr = state_md_verifier.run_command(
+                [sys.executable, str(tools_path / "state_md_verifier.py"),
+                 "--state-md", str(state_md)],
+                cwd=tmpdir_path
+            )
+
+            # Should exit 1 (stale)
+            self.assertEqual(rc, 1,
+                f"Expected exit 1 for stale STATE.md (51+ commits). Got {rc}.\nstdout: {stdout}")
+            self.assertIn("stale", stdout.lower(),
+                f"Expected 'stale' in output. stdout: {stdout}")
+
+    def test_freshness_missing_sha(self):
+        """
+        Fixture: STATE.md has valid-format but non-existent current HEAD sha.
+        Expected: verifier fails closed with ERROR message about SHA not found.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+
+            # Initialize git repo
+            subprocess.run(
+                ["git", "init"],
+                cwd=tmpdir_path,
+                capture_output=True,
+                check=True
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"],
+                cwd=tmpdir_path,
+                capture_output=True,
+                check=True
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test User"],
+                cwd=tmpdir_path,
+                capture_output=True,
+                check=True
+            )
+
+            # Create a commit
+            test_file = tmpdir_path / "test.txt"
+            test_file.write_text("base\n")
+            subprocess.run(
+                ["git", "add", "."],
+                cwd=tmpdir_path,
+                capture_output=True,
+                check=True
+            )
+            subprocess.run(
+                ["git", "commit", "-m", "Initial"],
+                cwd=tmpdir_path,
+                capture_output=True,
+                check=True
+            )
+
+            # Create STATE.md with a valid-format but non-existent SHA (7 hex digits)
+            nonexistent_sha = "1234567"  # valid format but doesn't exist
+            state_md = tmpdir_path / "STATE.md"
+            state_md.write_text(f"# Checkpoint\n\n**Current Version:** v1.0.0 (current HEAD {nonexistent_sha}).\n")
+
+            # Run verifier with JSON output
+            rc, stdout, stderr = state_md_verifier.run_command(
+                [sys.executable, str(tools_path / "state_md_verifier.py"),
+                 "--state-md", str(state_md), "--json"],
+                cwd=tmpdir_path
+            )
+
+            # Should exit 2 (fail-closed) because SHA doesn't exist
+            self.assertEqual(rc, 2,
+                f"Expected exit 2 for unknown SHA (fail-closed). Got {rc}.")
+            # Should have an error message
+            try:
+                result = json.loads(stdout)
+                error_count = result.get("error_count", 0)
+                self.assertGreater(error_count, 0,
+                    f"Expected ERROR findings for unknown SHA")
+            except json.JSONDecodeError:
+                self.fail(f"Could not parse JSON output: {stdout}")
 
 
 if __name__ == "__main__":
