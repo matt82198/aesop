@@ -46,6 +46,8 @@ Thin CRLF-safe shell wrappers for repo maintenance. Currently: `verify-stats.sh`
 
 Workers read exactly ONE domain CLAUDE.md; this file is navigation only.
 
+- **LANE-CONTRACT.md** — injected into every dispatch by the lane-contract hook; read it before writing code.
+
 ## Setup for development
 
 See docs/ for full setup, architecture, and usage guides.
