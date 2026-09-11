@@ -1,0 +1,47 @@
+name: examples
+
+# Purpose: Verify example manifests validate and example test commands are fail-closed
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - examples/**
+      - tools/wave_templates.py
+  push:
+    branches: [main]
+    paths:
+      - examples/**
+      - tools/wave_templates.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  examples-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Validate wave manifest
+        run: python tools/wave_manifest_lint.py examples/first-wave-baseline/wave-manifest.json
+
+      - name: Verify test commands are fail-closed
+        run: bash examples/first-wave-baseline/verify-testcmds.sh
