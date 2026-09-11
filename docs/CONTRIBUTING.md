@@ -1,6 +1,6 @@
 # Contributing to Aesop
 
-Aesop is **MIT-licensed** under the [MIT License](../LICENSE). Contributions via pull request are warmly welcome.
+Aesop is licensed under the [PolyForm Noncommercial License 1.0.0](../LICENSE) as of this version (versions ≤0.7.0 remain MIT). Contributions via pull request are warmly welcome.
 
 ## Contribution Policy
 
@@ -65,7 +65,7 @@ Co-Authored-By: Bob <bob@example.com>"
 
 ## License & DCO
 
-By proposing changes, you affirm that you own or have the right to contribute your work and agree to license it under the MIT License. See [LICENSE](../LICENSE) for the full terms.
+By proposing changes, you affirm that you own or have the right to contribute your work and agree to license it under the PolyForm Noncommercial License 1.0.0. See [LICENSE](../LICENSE) for the full terms.
 
 ## Questions?
 
