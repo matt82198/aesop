@@ -164,7 +164,7 @@ ARM A and ARM B both completed in a single Workflow call = one orchestrator turn
 
 ## License & Citation
 
-This dataset is part of Aesop (MIT license). If you cite these numbers in external venues (press, research, hiring), please:
+This dataset is part of Aesop (PolyForm Noncommercial License 1.0.0 as of this version; versions ≤0.7.0 remain MIT). If you cite these numbers in external venues (press, research, hiring), please:
 1. Cite both the raw *and* weighted cost figures (not just one)
 2. State the caveats (n=1 fixture, Haiku-solvable only, output-tokens-only)
 3. Link back to this document as the canonical source

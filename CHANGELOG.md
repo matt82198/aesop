@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Version scheme**: Stable releases are `0.x.y`; `0.x.0-beta.N` / `-rc.N` are pre-releases; `0.1.0-wave.N` were internal wave-milestone previews.
 
+## [Unreleased]
+
+### Changed
+
+- **Relicensed to PolyForm Noncommercial 1.0.0.** Per owner directive (Matt Culliton, sole copyright holder), Aesop moves from MIT to the PolyForm Noncommercial License 1.0.0: free for personal, research, and noncommercial use; commercial use requires a separate agreement. Versions 0.7.0 and earlier remain available under MIT — the relicense is not retroactive.
+
 ## [0.7.2] - 2026-07-31
 
 ### Fixed
