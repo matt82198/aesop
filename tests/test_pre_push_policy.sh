@@ -961,6 +961,17 @@ sys.exit(0)
 SCANNER
   chmod +x "$AESOP_ROOT/tools/secret_scan.py"
 
+  # Stub the remaining gate scripts. A tools/ directory holding only
+  # secret_scan.py is a PARTIAL aesop install, and the gates now fail closed on
+  # that (a missing gate script in a repo that has tools/ used to be silently
+  # skipped -- the escape this fixture must not re-create). These stubs keep the
+  # fixture focused on main()'s stdin handling instead of gate behavior.
+  for gate_stub in tracker_guard import_resolution_check claudemd_sync_gate \
+                   metrics_gate verify_test_suite_count encoding_lint \
+                   verify_test_coverage; do
+    printf 'import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/$gate_stub.py"
+  done
+
   # Test 1: Piped empty stdin (simulates up-to-date push with no ref tuples)
   # main() should allow (rc=0) — this is the #289 legitimate case.
   # HEAD-INDEPENDENCE: check_branch_policy's empty-stdin fallback inspects the

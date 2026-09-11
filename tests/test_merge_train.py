@@ -496,6 +496,71 @@ class TestMergeTrain(unittest.TestCase):
             self.fail("Help output contains non-ASCII characters")
 
 
+class TestCheckEnforceAdmins(unittest.TestCase):
+    """Tests for check_enforce_admins() - B1.4 branch protection gate."""
+
+    def setUp(self):
+        self.tool_path = Path(__file__).parent.parent / "tools" / "merge_train.py"
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("merge_train", self.tool_path)
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+
+    def test_enforce_admins_with_python_bool_true(self):
+        """RED-FIRST: gh() returns Python bool True, not string 'true'.
+
+        When gh() parses JSON, enforce_admins.enabled comes back as Python True,
+        not the string "true". The current check `if result == "true":` fails to
+        catch this and always prints FAIL even on correctly protected repos.
+        """
+        with patch.object(self.module, 'gh') as mock_gh:
+            mock_gh.return_value = True  # Python bool, as gh() returns from json.loads
+            result = self.module.check_enforce_admins()
+            self.assertTrue(result, "Should pass when gh() returns Python bool True")
+
+    def test_enforce_admins_with_python_bool_false(self):
+        """gh() returns Python bool False when enforce_admins is disabled."""
+        with patch.object(self.module, 'gh') as mock_gh:
+            mock_gh.return_value = False  # Python bool False
+            result = self.module.check_enforce_admins()
+            self.assertFalse(result, "Should fail when gh() returns Python bool False")
+
+    def test_enforce_admins_with_string_true(self):
+        """Backward compatibility: handle string 'true' (case-insensitive, stripped)."""
+        with patch.object(self.module, 'gh') as mock_gh:
+            mock_gh.return_value = "true"
+            result = self.module.check_enforce_admins()
+            self.assertTrue(result, "Should pass when gh() returns string 'true'")
+
+    def test_enforce_admins_with_string_false(self):
+        """Handle string 'false'."""
+        with patch.object(self.module, 'gh') as mock_gh:
+            mock_gh.return_value = "false"
+            result = self.module.check_enforce_admins()
+            self.assertFalse(result, "Should fail when gh() returns string 'false'")
+
+    def test_enforce_admins_with_error_dict(self):
+        """gh() returns error dict when the API call fails."""
+        with patch.object(self.module, 'gh') as mock_gh:
+            mock_gh.return_value = {"error": "not found"}
+            result = self.module.check_enforce_admins()
+            self.assertFalse(result, "Should fail when gh() returns error dict")
+
+    def test_enforce_admins_with_string_true_uppercase(self):
+        """Case-insensitive string comparison."""
+        with patch.object(self.module, 'gh') as mock_gh:
+            mock_gh.return_value = "TRUE"
+            result = self.module.check_enforce_admins()
+            self.assertTrue(result, "Should pass with uppercase TRUE")
+
+    def test_enforce_admins_with_string_true_whitespace(self):
+        """Strings should be stripped before comparison."""
+        with patch.object(self.module, 'gh') as mock_gh:
+            mock_gh.return_value = "  true  "
+            result = self.module.check_enforce_admins()
+            self.assertTrue(result, "Should pass with whitespace-padded 'true'")
+
+
 class TestIntegrationMode(unittest.TestCase):
     """Tests for --integration batch merge mode."""
 

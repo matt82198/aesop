@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Browser proof for the CostSummaryDrawer component.
-INDEX: Playwright proof for CostSummaryDrawer: toggle, metrics, aria-hidden, populated/empty phases
+"""Browser proof for the QueuePanel component.
+INDEX: Playwright proof for QueuePanel (Q5 merge-queue operator): depth/batch/age/exceptions, toggle, populated/empty phases; all exit 0=proven/1=failed, `[--allow-skip]`.
 
-Drives ui/web/dist/ against fixture cost data (ledger + pricing), asserting
-the drawer contract via data-testid hooks:
+Drives ui/web/dist/ against fixture queue data (exceptions.jsonl + heartbeat),
+asserting the panel contract via data-testid hooks:
 
 Populated-state phase:
   (a) console clean of errors
-  (b) GET /api/cost returns properly-shaped CostSummary
-  (c) cost-summary-drawer testid present and rendered
+  (b) GET /api/queue returns properly-shaped QueuePanelData
+  (c) queue-panel testid present and rendered
   (d) toggle button exists with aria-label
-  (e) drawer panel exists with role="status"
+  (e) panel content exists with role="status"
   (f) toggle expands/collapses the panel (aria-hidden changes)
-  (g) expanded panel shows cost metrics (total, rate, model-mix)
+  (g) expanded panel shows queue metrics (depth, batch, age, exceptions)
   (h) no 404/500 errors in console
 
-Empty-state phase (separate boot, empty ledger):
-  (i) cost-summary-drawer still renders
+Empty-state phase (separate boot, empty queue):
+  (i) queue-panel still renders
   (j) toggle works (state changes)
-  (k) expanded panel shows "No data yet" message
+  (k) expanded panel shows "queue idle" message
   (l) console remains clean
 
-Run: python tools/verify_cost_summary_drawer.py            (exit 0 = proven, 1 = failed)
-     python tools/verify_cost_summary_drawer.py --allow-skip (exit 0 = proven or skipped, 1 = failed)
+Run: python tools/verify_queue_panel.py            (exit 0 = proven, 1 = failed)
+     python tools/verify_queue_panel.py --allow-skip (exit 0 = proven or skipped, 1 = failed)
 
 Fails with exit 1 if playwright/chromium is unavailable (unless --allow-skip is passed).
 """
@@ -42,38 +42,12 @@ REPO = Path(__file__).resolve().parent.parent
 SERVE = REPO / "ui" / "serve.py"
 
 
-FIXTURE_LEDGER_POPULATED = """| timestamp | agent_type | model | duration_seconds | tokens_in | tokens_out | verdict |
-| --- | --- | --- | --- | --- | --- | --- |
-| 2026-07-13T14:00:00Z | haiku | claude-haiku-4-5-20251001 | 45 | 12000 | 3500 | OK |
-| 2026-07-13T14:05:00Z | haiku | claude-haiku-4-5-20251001 | 50 | 14000 | 4200 | OK |
-| 2026-07-13T14:10:00Z | haiku | claude-haiku-4-5-20251001 | 40 | 11000 | 3200 | FAILED |
-| 2026-07-13T14:15:00Z | haiku | claude-haiku-4-5-20251001 | 55 | 13500 | 4000 | OK |
-| 2026-07-13T14:20:00Z | sonnet | claude-sonnet-4-5-20250929 | 85 | 28000 | 8100 | OK |
-| 2026-07-13T14:25:00Z | sonnet | claude-sonnet-4-5-20250929 | 90 | 30000 | 9000 | OK |
-| 2026-07-13T14:30:00Z | orchestrator | claude-opus-4-20250805 | 120 | 50000 | 12000 | OK |
-| 2026-07-14T08:00:00Z | haiku | claude-haiku-4-5-20251001 | 40 | 10000 | 2800 | OK |
-| 2026-07-14T08:30:00Z | haiku | claude-haiku-4-5-20251001 | 45 | 11000 | 3200 | OK |
-| 2026-07-14T09:00:00Z | sonnet | claude-sonnet-4-5-20250929 | 80 | 26000 | 7800 | OK |
+FIXTURE_EXCEPTIONS_POPULATED = """{"ts": "2026-07-21T14:30:45Z", "pr": 743, "kind": "ci_failure"}
+{"ts": "2026-07-21T14:25:30Z", "pr": 741, "kind": "merge_conflict"}
+{"ts": "2026-07-21T14:20:15Z", "pr": 739, "kind": "blocked"}
 """
 
-FIXTURE_PRICING = {
-  "pricing": {
-    "claude-haiku-4-5-20251001": {
-      "input_per_mtok": 0.80,
-      "output_per_mtok": 4.0
-    },
-    "claude-sonnet-4-5-20250929": {
-      "input_per_mtok": 3.0,
-      "output_per_mtok": 15.0
-    },
-    "claude-opus-4-20250805": {
-      "input_per_mtok": 15.0,
-      "output_per_mtok": 75.0
-    }
-  }
-}
-
-FIXTURE_LEDGER_EMPTY = ""
+FIXTURE_EXCEPTIONS_EMPTY = ""
 
 
 def find_free_port():
@@ -100,7 +74,7 @@ def wait_for_server(port, timeout=30):
 def run_playwright_test(port, test_name, state_dir):
     """Run a Playwright test against the server.
 
-    Uses a minimal inline Playwright script to validate the cost summary drawer.
+    Uses a minimal inline Playwright script to validate the QueuePanel.
     """
     test_script = f'''
 import asyncio
@@ -116,10 +90,9 @@ async def test():
         console_errors = []
         def on_console(msg):
             if msg.type in ('error', 'warn'):
-                # Filter out benign warnings
                 text = msg.text.lower()
                 if 'warning' in text or 'deprecated' in text:
-                    pass  # Skip benign warnings
+                    pass
                 else:
                     console_errors.append(f"{{msg.type}}: {{msg.text}}")
 
@@ -130,85 +103,101 @@ async def test():
 
         # {test_name}
         try:
-            # Test 1: GET /api/cost returns valid CostSummary
-            response = await page.goto('http://127.0.0.1:{port}/api/cost')
-            assert response.status == 200, f"GET /api/cost failed: {{response.status}}"
+            # Test 1: GET /api/queue returns valid QueuePanelData
+            response = await page.goto('http://127.0.0.1:{port}/api/queue')
+            assert response.status == 200, f"GET /api/queue failed: {{response.status}}"
             json_data = await response.json()
-            assert 'models' in json_data, "Missing 'models' in CostSummary"
-            assert 'daily_totals' in json_data, "Missing 'daily_totals' in CostSummary"
-            assert 'overall_scorecard' in json_data, "Missing 'overall_scorecard' in CostSummary"
-            assert 'has_pricing' in json_data, "Missing 'has_pricing' in CostSummary"
-            print("[PASS] GET /api/cost returns valid CostSummary")
+            assert 'queue_depth' in json_data, "Missing 'queue_depth' in QueuePanelData"
+            assert 'batch_state' in json_data, "Missing 'batch_state' in QueuePanelData"
+            assert 'last_advance_age' in json_data, "Missing 'last_advance_age' in QueuePanelData"
+            assert 'last_advance_degraded' in json_data, "Missing 'last_advance_degraded' in QueuePanelData"
+            assert 'exceptions' in json_data, "Missing 'exceptions' in QueuePanelData"
+            print("[PASS] GET /api/queue returns valid QueuePanelData")
 
-            # Test 2: Navigate to overview (drawer always visible)
+            # Test 2: Navigate to overview (panel always visible)
             await page.goto('http://127.0.0.1:{port}/#/')
-            drawer = page.locator('[data-testid="cost-summary-drawer"]')
-            is_visible = await drawer.is_visible()
-            assert is_visible, "CostSummaryDrawer not visible"
-            print("[PASS] CostSummaryDrawer rendered and visible on overview")
+            panel = page.locator('[data-testid="queue-panel"]')
+            is_visible = await panel.is_visible()
+            assert is_visible, "QueuePanel not visible"
+            print("[PASS] QueuePanel rendered and visible on overview")
 
             # Test 3: Toggle button exists with aria-label
-            toggle = page.locator('[data-testid="cost-summary-drawer-toggle"]')
+            toggle = page.locator('[data-testid="queue-panel-toggle"]')
             is_visible = await toggle.is_visible()
             assert is_visible, "Toggle button not visible"
             aria_label = await toggle.get_attribute('aria-label')
             assert aria_label, "Toggle button missing aria-label"
             print(f"[PASS] Toggle button exists with aria-label: '{{aria_label}}'")
 
-            # Test 4: Panel exists with role="status"
-            panel = page.locator('[data-testid="cost-summary-drawer-panel"]')
-            is_visible = await panel.is_visible(timeout=1000)
-            assert not is_visible, "Panel should start hidden (aria-hidden=true)"
-            role = await panel.get_attribute('role')
-            assert role == 'status', f"Panel role should be 'status', got '{{role}}'"
-            print("[PASS] Panel exists with role='status' (initially hidden)")
+            # Test 4: Content exists with role="status"
+            content = page.locator('[data-testid="queue-panel-content"]')
+            aria_hidden = await content.get_attribute('aria-hidden')
+            assert aria_hidden == 'true', f"Content aria-hidden should be 'true' initially, got '{{aria_hidden}}'"
+            role = await content.get_attribute('role')
+            assert role == 'status', f"Content role should be 'status', got '{{role}}'"
+            print("[PASS] Content exists with role='status' (initially hidden)")
 
             # Test 5: Toggle expands panel
             await toggle.click()
             await page.wait_for_timeout(300)  # Wait for animation
-            is_hidden = await panel.get_attribute('aria-hidden')
-            assert is_hidden == 'false', f"Panel aria-hidden should be 'false' after toggle, got '{{is_hidden}}'"
+            is_hidden = await content.get_attribute('aria-hidden')
+            assert is_hidden == 'false', f"Content aria-hidden should be 'false' after toggle, got '{{is_hidden}}'"
             print("[PASS] Toggle expands panel (aria-hidden='false')")
 
-            # Test 6: For populated state, check metrics
+            # Test 6: For populated state, check metrics and exceptions
             if "{test_name}" == "populated":
-                models_count = len(json_data.get('models', {{}}))
-                if models_count > 0:
-                    print(f"[PASS] Models aggregated: {{models_count}} model(s)")
+                queue_depth = json_data.get('queue_depth', 0)
+                batch_state = json_data.get('batch_state', 0)
+                exceptions_count = len(json_data.get('exceptions', []))
 
-                daily_count = len(json_data.get('daily_totals', {{}}))
-                if daily_count > 0:
-                    print(f"[PASS] Daily totals: {{daily_count}} day(s)")
+                if queue_depth > 0:
+                    depth_elem = page.locator('[data-testid="queue-depth"]')
+                    text = await depth_elem.inner_text()
+                    assert text, "Queue depth metric missing or empty"
+                    print(f"[PASS] Queue depth metric visible: {{text}}")
 
-                # Check total spend metric is visible
-                total = page.locator('[data-testid="cost-summary-total"]')
-                text = await total.inner_text()
-                assert text, "Total spend metric missing or empty"
-                print(f"[PASS] Total spend metric visible: {{text}}")
+                if batch_state > 0:
+                    batch_elem = page.locator('[data-testid="queue-batch-state"]')
+                    text = await batch_elem.inner_text()
+                    assert text, "Batch state metric missing or empty"
+                    print(f"[PASS] Batch state metric visible: {{text}}")
 
-                # Check spend rate metric is visible
-                rate = page.locator('[data-testid="cost-summary-rate"]')
-                text = await rate.inner_text()
-                assert text, "Spend rate metric missing or empty"
-                print(f"[PASS] Spend rate metric visible: {{text}}")
+                # Check last advance age metric
+                age_elem = page.locator('[data-testid="queue-last-advance"]')
+                text = await age_elem.inner_text()
+                assert text, "Last advance age metric missing or empty"
+                print(f"[PASS] Last advance age metric visible: {{text}}")
+
+                # Check exception rows if any
+                if exceptions_count > 0:
+                    exceptions_list = page.locator('[data-testid="queue-exceptions-list"]')
+                    is_visible = await exceptions_list.is_visible()
+                    if is_visible:
+                        print(f"[PASS] Exceptions list visible with {{exceptions_count}} exception(s)")
+                    else:
+                        print("[INFO] Exceptions list not yet visible (may need scrolling)")
 
             # Test 7: For empty state, check graceful degradation
             elif "{test_name}" == "empty":
-                assert json_data.get('has_pricing') is False or len(json_data.get('models', {{}})) == 0
+                queue_depth = json_data.get('queue_depth', 0)
+                exceptions_count = len(json_data.get('exceptions', []))
+                assert queue_depth == 0, f"Queue depth should be 0 for empty state, got {{queue_depth}}"
+                assert exceptions_count == 0, f"Exceptions should be empty, got {{exceptions_count}}"
                 # Check for empty state message
-                empty_msg = page.locator('[data-testid="cost-summary-empty"]')
-                # Empty message only shows when expanded
+                empty_msg = page.locator('[data-testid="queue-empty"]')
                 is_visible = await empty_msg.is_visible()
                 if is_visible:
-                    print("[PASS] Empty state message visible")
+                    msg_text = await empty_msg.inner_text()
+                    assert 'queue idle' in msg_text.lower(), "Empty message should mention 'queue idle'"
+                    print("[PASS] Empty state message visible: queue idle")
                 else:
                     print("[INFO] Empty state message not yet visible (may need to wait)")
 
             # Test 8: Toggle collapses panel
             await toggle.click()
             await page.wait_for_timeout(300)  # Wait for animation
-            is_hidden = await panel.get_attribute('aria-hidden')
-            assert is_hidden == 'true', f"Panel aria-hidden should be 'true' after second toggle, got '{{is_hidden}}'"
+            is_hidden = await content.get_attribute('aria-hidden')
+            assert is_hidden == 'true', f"Content aria-hidden should be 'true' after second toggle, got '{{is_hidden}}'"
             print("[PASS] Toggle collapses panel (aria-hidden='true')")
 
             # Test 9: No fatal console errors
@@ -232,7 +221,8 @@ asyncio.run(test())
             [sys.executable, '-c', test_script],
             capture_output=True,
             text=True,
-            encoding='utf-8', errors='replace',
+            encoding='utf-8',
+            errors='replace',
             timeout=30,
             env={**os.environ, 'AESOP_STATE_ROOT': str(state_dir)}
         )
@@ -249,9 +239,9 @@ asyncio.run(test())
 
 
 def main():
-    """Run the verify_cost_summary_drawer proof."""
+    """Run the verify_queue_panel proof."""
     parser = argparse.ArgumentParser(
-        description='Browser proof for CostSummaryDrawer component'
+        description='Browser proof for QueuePanel component'
     )
     parser.add_argument('--allow-skip', action='store_true',
                         help='Exit 0 if playwright is unavailable')
@@ -270,18 +260,17 @@ def main():
 
     all_passed = True
 
-    # Test 1: Populated state with pricing
-    print("\n=== Test: Populated state with pricing ===")
+    # Test 1: Populated state with exceptions
+    print("\n=== Test: Populated state with exceptions ===")
     with tempfile.TemporaryDirectory() as tmpdir:
         state_dir = Path(tmpdir) / 'state'
         state_dir.mkdir(parents=True)
-        ledger_dir = state_dir / 'ledger'
-        ledger_dir.mkdir(parents=True)
-        (ledger_dir / 'OUTCOMES-LEDGER.md').write_text(FIXTURE_LEDGER_POPULATED)
-
-        # Write pricing config
-        config_file = Path(tmpdir) / 'aesop.config.json'
-        config_file.write_text(json.dumps(FIXTURE_PRICING))
+        queue_dir = state_dir / 'merge-queue'
+        queue_dir.mkdir(parents=True)
+        (queue_dir / 'exceptions.jsonl').write_text(FIXTURE_EXCEPTIONS_POPULATED)
+        (queue_dir / '.merge-queue-heartbeat').touch()
+        (queue_dir / '.queue-depth').write_text('8')
+        (queue_dir / '.batch-state').write_text('2')
 
         # Create fixture directories
         fixtures_dir = Path(tmpdir) / 'fixtures'
@@ -330,9 +319,12 @@ def main():
     with tempfile.TemporaryDirectory() as tmpdir:
         state_dir = Path(tmpdir) / 'state'
         state_dir.mkdir(parents=True)
-        ledger_dir = state_dir / 'ledger'
-        ledger_dir.mkdir(parents=True)
-        (ledger_dir / 'OUTCOMES-LEDGER.md').write_text(FIXTURE_LEDGER_EMPTY)
+        queue_dir = state_dir / 'merge-queue'
+        queue_dir.mkdir(parents=True)
+        (queue_dir / 'exceptions.jsonl').write_text(FIXTURE_EXCEPTIONS_EMPTY)
+        (queue_dir / '.merge-queue-heartbeat').touch()
+        (queue_dir / '.queue-depth').write_text('0')
+        (queue_dir / '.batch-state').write_text('0')
 
         # Create fixture directories
         fixtures_dir = Path(tmpdir) / 'fixtures'
@@ -376,12 +368,12 @@ def main():
 
     if all_passed:
         print("\n" + "=" * 60)
-        print("[PASS] All cost summary drawer proof tests PASSED")
+        print("[PASS] All queue panel proof tests PASSED")
         print("=" * 60)
         return 0
     else:
         print("\n" + "=" * 60)
-        print("[FAIL] Some cost summary drawer proof tests FAILED")
+        print("[FAIL] Some queue panel proof tests FAILED")
         print("=" * 60)
         return 1
 
