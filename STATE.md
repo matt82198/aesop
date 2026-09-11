@@ -2,7 +2,7 @@
 
 **What this file is:** The live durable checkpoint that Aesop itself uses during its own `/buildsystem` loop. It records the current system version, architectural decisions, known limitations, and the next milestone. This is not historical archive; it is read by the orchestrator to understand operational state.
 
-**Current Version:** v0.7.2 (tagged 2026-07-31, current HEAD 620294cd 2026-08-02). 0.7.1 was a hardening release: 12 PRs against gates that reported success without verifying anything, plus the portability work needed for the remote-access features to run outside a single machine (fleet state and remote-command identity are now configuration, not an assumed home layout). 0.7.2 adds one fix on top: `/api/state` served the collector's empty default snapshot instead of computing the section inline, so the dashboard's first paint could show an empty data section. Post-tag (2026-08-02): 6 merges (#671–675, #678–679) harden gate activation verification, update documentation to reflect 266 tests (vs. 254 in 0.7.1), remove dead scripts, and wire gate-runability enforcement (in-flight: #676 cost-drawer UI, #677 gate-runability hardening).
+**Current Version:** v0.8.0 (release candidate 2026-09-11; tag pending).
 
 ## Architectural Thesis
 
@@ -17,8 +17,9 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 - **Multi-instance coordination is single-box only.** The 0.7.0 MVP added lease-based SQLite claims (with split-brain and TOCTOU fixes), but claims remain file-system-backed. Multi-box deployment requires a shared lease service; not yet implemented.
 - **State-layer consolidation in flight** (git + SQLite + STATE.md are currently three sources of truth; scheduled to collapse into SQLite-as-source + git-as-audit-trail).
 - **Benchmark is curated, not sampled** (N=39 judgment tasks, not real-fleet transcripts). Sufficiency is proven; equivalence-to-Opus is not claimed.
-- **`count_git_files` fail-closed as of #674.** `tools/verify_test_suite_count.py` now detects and exits non-zero if git fails; gate-derived test count is 266 (not 254; see #678 documentation update). Vacuous-green risk eliminated.
 - **Documentation gates verify presence, not truth.** A gate that requires a doc to exist induces agents to write one; green means "a doc exists", not "the doc is accurate". Doc claims still need reading against the code.
+- **Trigger-layer and box-restore fragility.** Orchestrator-startup recovery (scheduled tasks, conductor3 state clone) is now gated by scheduled-task execution (#787 fix pending in weekly drift PR #790). If scheduled tasks do not fire, trigger layer never runs state updates. Guardrail check proposed (power_selftest trigger-layer check).
+- **STATE.md checkpoint staleness.** Live checkpoint was 110+ PRs stale (v0.7.2 era → 2026-08-18 main). Freshness gate proposed; this regeneration sets baseline (2026-08-19).
 
 ## Next Milestone
 
@@ -26,29 +27,23 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 **NEXT STEPS (post-0.7.2, ranked):**
 
-1. **Cost-summary drawer UI** (tail PR in review). Persistent cost drawer; merged tail gate-hardening
-   work (#671–675, #678–679) unblocks final integration and test.
-2. **Gate-runability enforcement** (tail PR in review). ci_gate_runability wired + documented-gates-are-wired
-   guardrail; completes gate-activation verification story from #674–679 shard.
-3. **Coverage fix for count-gate** (deliberately open, requires derivation). 
-   Real coverage for count-gate fail-closed (as of #674); merging requires deriving test-count 
-   expectations instead of hardcoding.
-4. **`test_agent_detail_roundtrip` pollutes `test_api_state`.** `config.reload()` in `setUp`
-   with no reload after the env restore in `tearDown` was fixed in #668, but the shard-level
-   failure had a second cause (the `/api/state` empty-default bug, also fixed in 0.7.2). Re-verify the
-   pair stays green under `ci_shard_runner` before assuming it is fully closed.
-5. **`test_hook_preflight` has never executed.** It raises a module-level `unittest.SkipTest`
-   with an honest docstring; #667 made the runner report that as SKIPPED rather than an import
-   failure, but the coverage gap is open. A rewrite must also fix the `tmp_path` NameError the
-   pytest-style form was hiding.
-6. **Flaky `test_openai_transport_redirect`** in shard 0 (pytest mode) — failed once, passed on
-   a clean re-run of the same shard, passes in isolation. Characterize before it reds unrelated PRs.
-7. **Carry-over cleanup:** dependency manifests (`requirements.txt` / `requirements-dev.txt`);
-   `_run_wave_inner` phase decomposition; `tools/` CLI-base extraction.
+1. **Flaky `test_openai_transport_redirect` characterization** (SHIPPED PR #808). Root cause: unsynchronized access to class-level mutable state in handler threads + unnecessary server creation. Fix: add threading.Lock, protect setUp/do_POST state access, remove server2, proof test passes 10x in isolation + 47/47 with other modules. All CI gates pass (shard 0 now stable).
 
-**Release-state note:** `v0.7.1` is tagged at `ec5ea9db` and has **no GitHub release** — that
-commit's CI was red (pre-existing `/api/state` bug). The tag was deliberately NOT moved, since
-retagging a pushed release rewrites published history. `v0.7.2` (`e061f2bd`) is the first tag in
-this line cut *after* main's own CI went green, and is the published Latest release. Consumer-visible
-release history therefore reads 0.7.0 -> 0.7.2; publishing 0.7.1 retroactively is a user decision.
-`npm publish` has NOT been run for either version and remains user-gated.
+2. **Trigger-layer selftest check in power_selftest** (GUARDRAIL #1). Verify scheduled-task execution path during POWER-SELFTEST (fail-closed if conductor3 not cloned or tasks not registered). Addresses fragility noted in Known Limitations.
+
+3. **`test_hook_preflight` rewrite** (IN-REVIEW). Test raised module-level `unittest.SkipTest` (#667 wired it as SKIPPED); coverage gap remains. Full rewrite needed to fix `tmp_path` NameError and make test executable. Medium effort; medium impact (test-suite completeness).
+
+4. **`test_agent_detail_roundtrip` pollution re-verify under ci_shard_runner** (IN-REVIEW). Fix landed in #668 (`/api/state` served real data, not empty default); config.reload() wired in setUp (#667). Re-verification under shard-runner conditions needed before fully closed. Medium effort; medium impact (integration-test stability).
+
+5. **STATE.md freshness gate** (GUARDRAIL #2). Detect stale checkpoints by parsing Current Version claim and comparing committed-at date vs. HEAD date. Gate should fail if STATE.md's claimed version significantly lags behind HEAD (e.g., >50 commits). Prevents future staleness escapes.
+
+6. **Portability path scan (box-restore / trigger-layer absolutization)** (REFACTOR). Ensure all scripts invoked by scheduled tasks use absolute paths (AESOP_HOME or durable ~/scripts location). Validates guardrail proposal from refinesystem R1. Medium effort; medium impact (multi-box readiness).
+   Evidence from 2026-09-10 half-restore incident: settings hooks pointed at wrong profile, scheduled-task StartBoundary in past prevented first run, packed-refs/pack loss on restore. Guardrail tracked in PR #793.
+
+7. **Dead-baseline liveness check** (GUARDRAIL #3). Verify that unused test baselines (e.g., .encoding-baseline.json if no encoding tests) do not accumulate. Proposed in refinesystem R1 (lens6, deferred). Low effort; low impact (hygiene).
+
+8. **Stats-refresh PR jam** (USER DECISION). PR #774 (stats-refresh) conflicted with main; PR #781 (keeper stats) in flight. User consent needed: merge #781 + close #774, or resolve conflicts and rebase batch. ~110 unreleased PRs since v0.7.2; release-cadence decision also pending.
+
+**Release-state note:** `v0.7.1` is tagged at `ec5ea9db` and has **no GitHub release** — that commit's CI was red (pre-existing `/api/state` bug). The tag was deliberately NOT moved, since retagging a pushed release rewrites published history. `v0.7.2` is published on npm (Latest, MIT license) and GitHub (Release v0.7.2 Latest). Consumer-visible release history therefore reads 0.7.0 -> 0.7.2; publishing 0.7.1 retroactively is a user decision. `v0.7.1` remains tag-only on git. Current unreleased commits: 219 since v0.7.2 tag (as of 2026-09-11, HEAD 07732210).
+
+**Licensing:** Aesop v0.7.2 and earlier npm artifacts (v0.7.0, v0.7.1, v0.7.2) are MIT-licensed (permissive, commercial use allowed). PR #799 (merged 2026-09-11) relicensed main and HEAD to PolyForm Noncommercial 1.0.0 (research/indie OK, no commercial use). Version v0.7.0 and earlier on npm remain MIT forever.

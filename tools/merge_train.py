@@ -260,7 +260,7 @@ def check_enforce_admins() -> bool:
     if isinstance(result, dict) and "error" in result:
         print(f"  [FAIL] cannot fetch branch protection: {result['error'][:80]}")
         return False
-    if result == "true":
+    if result is True or (isinstance(result, str) and result.strip().lower() == "true"):
         print(f"  [ok] branch protection enforce_admins verified")
         return True
     print(f"  [FAIL] branch protection enforce_admins is not enabled (got: {result})")

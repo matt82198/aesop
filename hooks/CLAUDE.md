@@ -37,7 +37,17 @@ Schema: `{"seq":N,"prev_hash":"SHA256_OF_PREV_LINE","ts":"2025-07-12T14:32:01Z",
 - Copy (Windows): `cp hooks/pre-push-policy.sh .git/hooks/pre-push` (or PowerShell `Copy-Item`)
 - Auto-installed by scaffold; `npx @matt82198/aesop [dir] --force` to replace existing hook.
 
-**Test Command**: `bash hooks/pre-push-policy.sh --test` — runs 18 validation tests covering: branch policy (blocks main/master, allows feature/*, tag-only, mixed), secret scan (multi-ref, no-starvation), audit log (JSON format, escaping, hash-chain), hash verification, new documentation gates fail-open. Exit 0 = pass; exit 1 = fail.
+**Test Command**: `bash hooks/pre-push-policy.sh --test` — runs 22 validation tests covering: branch policy (blocks main/master, allows feature/*, tag-only, mixed), secret scan (multi-ref, no-starvation), audit log (JSON format, escaping, hash-chain), hash verification, documentation gates skipping when there is no aesop checkout (17-18), and the same gates failing CLOSED when `tools/` exists but their script is missing, plus a non-executable gate script still running (19-22). Exit 0 = pass; exit 1 = fail.
+
+### Gate tool resolution (fail-closed)
+
+`gate_tool_status()` classifies a missing gate script into `ok` / `skip` / `missing`:
+
+- **skip** — `$aesop_root/tools` does not exist at all: no aesop checkout, nothing to gate. Logs `<gate>_skipped_no_aesop_tools`, returns 0. This is the adopter case the fail-open was for.
+- **missing** — `tools/` exists but this gate's script does not. **Blocks the push** (`<gate>_tool_missing`). Previously every absence was treated as `skip`, so deleting, renaming, or failing to ship one gate script silently disabled it in the repo that owns it — a green push that verified nothing.
+- Interpreter absence is likewise fail-closed (`<gate>_no_python`); the top-of-file guard already hard-requires Python, so a fail-open branch there was dead code that only looked like a safety valve.
+- **Executability is not required.** Gates run as `"$py_bin" "$script"`, so the exec bit is irrelevant; demanding `-x` turned any checkout without exec bits into a silently ungated one.
+- `check_encoding_lint` and `check_test_coverage` now resolve their root via `resolve_aesop_root()`. They still used the hardcoded `${AESOP_ROOT:-$HOME/aesop}` fallback, which ran the primary tree's script when pushing from a worktree and skipped the gate outright on any machine without `~/aesop`.
 
 **Verify Audit Log**: `bash hooks/pre-push-policy.sh --verify-audit-log` — detects hash-chain breaks and tail truncation via sidecar anchor.
 
@@ -87,7 +97,7 @@ Pre-commit hook running `tools/dispatch_lint.py` on staged files. Blocks commits
 ## Key Invariants
 - Bash required (explicit shebang), CRLF-safe
 - Tolerate git pre-push stdin (ref list: `<local-ref> <local-oid> <remote-ref> <remote-oid>` per line) + optional args without crashing
-- Fail-open for missing optional tooling (secret_scan.py absent → allow); fail-closed for policy checks (branch, marker, model)
+- Fail-closed for policy checks (branch, marker, model) AND for any gate whose script is missing from an existing `tools/`; skip only when there is no aesop checkout at all (see § Gate tool resolution). `secret_scan.py` absent is already fail-closed (FATAL, push denied)
 - `AESOP_ROOT` env var or `$HOME/aesop` fallback; no hardcoded machine paths/usernames
 - Local convenience defense only; real enforcement requires server-side branch protection (GitHub) and centralized audit logs
 

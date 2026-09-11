@@ -1,5 +1,18 @@
 name: Weekly Cross-OS Drift Snapshot
 
+# PUBLISH DESIGN (rolling auto-PR): main is protected (PRs + required checks), so this
+# workflow must NOT `git push` to main — that fails with GH006, which is exactly the red
+# this design replaces. Instead it force-pushes a single snapshot commit (rebased on the
+# current main) to the fixed branch `ci/crossos-drift` and opens a PR if one isn't already
+# open. The branch is force-pushed each week, so an unmerged PR simply rolls forward to the
+# newest snapshot — never a conflict, never more than one PR.
+#
+# TOKEN NOTE: pushes/PRs made with the default `github.token` do not trigger `pull_request`
+# workflows (GitHub's recursion guard), so the auto-PR's required `ci` checks would sit
+# "expected" until a human nudges the branch. Set the repo secret DRIFT_PR_TOKEN (fine-grained
+# PAT: contents+pull-requests write) to make CI trigger automatically; without it the PR still
+# opens and a manual re-push/close-reopen by a real user starts the checks.
+
 on:
   schedule:
     - cron: '0 9 * * 1'  # Every Monday at 09:00 UTC
@@ -7,6 +20,8 @@ on:
 
 permissions:
   contents: write
+  # Needed to open/inspect the rolling snapshot PR via `gh`.
+  pull-requests: write
   # crossos_drift.py shells out to `gh run list` to read Actions history.
   actions: read
 
@@ -16,6 +31,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          # Persisted credentials are used by the push below. Prefer the PAT (see TOKEN
+          # NOTE above) so the snapshot PR triggers CI; fall back to the default token.
+          token: ${{ secrets.DRIFT_PR_TOKEN || github.token }}
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -74,12 +93,33 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Commit and push if changed
+      - name: Publish snapshot via rolling PR if changed
+        env:
+          GH_TOKEN: ${{ secrets.DRIFT_PR_TOKEN || github.token }}
         run: |
+          BRANCH=ci/crossos-drift
+
           git add docs/CROSSOS-DRIFT.json docs/CROSSOS-DRIFT.md
-          if ! git diff --staged --quiet; then
-            git commit -m "chore(ci): weekly cross-OS drift snapshot"
-            git push
-          else
+          if git diff --staged --quiet; then
             echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "chore(ci): weekly cross-OS drift snapshot"
+
+          # Single rolling commit on top of current main; force-push replaces last week's
+          # snapshot if its PR was never merged (see PUBLISH DESIGN header).
+          git push --force origin "HEAD:refs/heads/${BRANCH}"
+
+          existing=$(gh pr list --head "${BRANCH}" --state open --json number -q '.[0].number')
+          if [ -n "${existing}" ]; then
+            echo "Rolling PR #${existing} already open; branch updated"
+          else
+            BODY_FILE=$(mktemp)
+            printf 'Automated weekly cross-OS drift snapshot (docs/CROSSOS-DRIFT.json + .md).\n\nBranch `%s` is force-pushed each week with a single commit rebased on current main; if this PR sits unmerged it simply rolls forward to the newest snapshot.\n\nIf required checks show as expected-but-not-running, the run was made with the default Actions token (see TOKEN NOTE in crossos-drift.yml): set the `DRIFT_PR_TOKEN` repo secret, or nudge the branch as a real user.\n' "${BRANCH}" > "$BODY_FILE"
+            gh pr create \
+              --head "${BRANCH}" \
+              --base main \
+              --title "chore(ci): weekly cross-OS drift snapshot" \
+              --body-file "$BODY_FILE"
           fi

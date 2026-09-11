@@ -14,9 +14,9 @@ import unittest
 from pathlib import Path
 
 import sys
-sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from health_checks import (
+from tools.health_checks import (
     check_heartbeat_file,
     check_watchdog_heartbeat,
     check_monitor_heartbeat,
@@ -210,6 +210,64 @@ class TestHeartbeatStaleContract(unittest.TestCase):
             is_stale, age, info = check_heartbeat_file(hb_file, threshold_s=1)
 
             self.assertTrue(is_stale, "Empty heartbeat must be STALE")
+
+
+class TestNoLintEvasion(unittest.TestCase):
+    """Regression guard: heartbeat filenames must stay literal in the source.
+
+    Commit 16b3f8e3 split ".watchdog-heartbeat" into (".watchdog" + "-heartbeat")
+    so stateapi_lint's pattern match would not see it, then ratcheted the baseline
+    down on the strength of the hidden violations. The filenames must appear as
+    contiguous string literals so the lint can count them honestly; the two
+    resulting violations are recorded in .stateapi-baseline.json instead.
+    """
+
+    SOURCE = Path(__file__).parent.parent / "tools" / "health_checks.py"
+
+    def _source(self):
+        return self.SOURCE.read_text(encoding="utf-8")
+
+    def test_watchdog_heartbeat_name_is_literal(self):
+        """.watchdog-heartbeat appears as one contiguous literal."""
+        self.assertIn(
+            '".watchdog-heartbeat"',
+            self._source(),
+            "watchdog heartbeat filename must be a literal, not concat-assembled",
+        )
+
+    def test_monitor_heartbeat_name_is_literal(self):
+        """.monitor-heartbeat appears as one contiguous literal."""
+        self.assertIn(
+            '".monitor-heartbeat"',
+            self._source(),
+            "monitor heartbeat filename must be a literal, not concat-assembled",
+        )
+
+    def test_no_concatenated_heartbeat_fragments(self):
+        """No string-concat assembly of any heartbeat filename."""
+        source = self._source()
+        for fragment in ('" + "-heartbeat"', "' + '-heartbeat'",
+                         '"-heartbeat" +', "'-heartbeat' +",
+                         '"heartbeat" +', '" + "heartbeat"'):
+            self.assertNotIn(
+                fragment,
+                source,
+                "concat-assembled heartbeat filename (lint evasion): %r" % fragment,
+            )
+
+    def test_violations_are_in_stateapi_baseline(self):
+        """Both heartbeat reads are honestly recorded in the ratchet baseline."""
+        import json
+
+        baseline_file = Path(__file__).parent.parent / ".stateapi-baseline.json"
+        violations = json.loads(baseline_file.read_text(encoding="utf-8"))["violations"]
+        for key in ("tools/health_checks.py@watchdog-hb",
+                    "tools/health_checks.py@monitor-hb"):
+            self.assertIn(
+                key,
+                violations,
+                "baseline must record the real violation, not hide it: %s" % key,
+            )
 
 
 if __name__ == "__main__":

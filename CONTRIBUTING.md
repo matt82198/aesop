@@ -4,7 +4,7 @@ Thank you for your interest in Aesop! Your feedback, questions, and bug reports 
 
 ## A note on the license
 
-Aesop is **MIT-licensed** under the [MIT License](./LICENSE). This means contributions via pull requests are warmly welcome.
+Aesop is licensed under the [PolyForm Noncommercial License 1.0.0](./LICENSE) as of this version (versions ≤0.7.0 remain MIT). This means contributions via pull requests are warmly welcome.
 
 What that means in practice:
 

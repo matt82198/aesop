@@ -1,6 +1,6 @@
 # Aesop — Project CLAUDE.md
 
-**What**: MIT-licensed multi-agent orchestration harness for autonomous software development.
+**What**: PolyForm Noncommercial 1.0.0-licensed multi-agent orchestration harness for autonomous software development (versions ≤0.7.0 remain MIT).
 
 ## RED CI Escape Detection
 
@@ -45,6 +45,8 @@ Thin CRLF-safe shell wrappers for repo maintenance. Currently: `verify-stats.sh`
 ## Dispatch rule
 
 Workers read exactly ONE domain CLAUDE.md; this file is navigation only.
+
+- **LANE-CONTRACT.md** — injected into every dispatch by the lane-contract hook; read it before writing code.
 
 ## Setup for development
 

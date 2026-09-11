@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Log rotation utility: archive oldest log lines when exceeding size/line thresholds.
-INDEX: Log rotation utility (size/line thresholds)
+INDEX: Log rotation utility (size/line thresholds). Reads and rewrites the live log in BINARY, so the byte extent it consumed is exact and line endings are never silently translated. External O_APPEND writers (the shell daemons' `>>` / `tee -a`) do not take the advisory lock, so appends past that extent are detected by size comparison, read back at their byte offset, and folded into the retained content; the check repeats up to `PRESERVE_ATTEMPTS` until the size stops moving and the last one runs immediately before the truncate. Detecting appends by diffing LINE counts is wrong (an unterminated final line swallows the append) and leaving a full file re-read between the check and the truncate is what produced the observed `250 != 260` data loss — do not reintroduce either. The race is narrowed, not closed: an append between the final size check and the truncate is still lost, and only writer-side locking can fix that
 
 Rotates log files by moving the oldest content to an archive file when the original
 exceeds configured thresholds (--max-lines or --max-bytes). Preserves newest lines
@@ -62,10 +62,21 @@ def read_lines(filepath):
 
 
 def write_lines(filepath, lines):
-    """Write lines to file."""
+    """Write lines to file.
+
+    Accepts either a list of ``str`` lines (written as UTF-8 text) or a list of
+    ``bytes`` lines (written verbatim). rotate_log() operates on bytes so that
+    archived content is byte-identical to what was read, but the str form is
+    kept for callers/tests that pass text.
+    """
+    binary = bool(lines) and isinstance(lines[0], bytes)
     try:
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.writelines(lines)
+        if binary:
+            with open(filepath, 'wb') as f:
+                f.writelines(lines)
+        else:
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.writelines(lines)
     except IOError as e:
         raise IOError(f"Failed to write {filepath}: {e}")
 
@@ -98,6 +109,12 @@ def release_lock(fd):
             pass
 
 
+# How many times rotate_log() re-checks the file size for late external appends
+# before it commits the truncate+rewrite. Bounded so a log under continuous
+# append pressure still completes rather than spinning forever.
+PRESERVE_ATTEMPTS = 5
+
+
 def needs_rotation(filepath, max_lines, max_bytes):
     """Check if file exceeds any threshold."""
     current_lines = count_lines(filepath)
@@ -119,13 +136,19 @@ def rotate_log(logfile, max_lines, max_bytes, archive_dir, check_only=False):
     or tee -a) that do NOT take the lock are NOT protected by this mechanism.
 
     To prevent data loss from non-locking O_APPEND writers:
-    - Lines appended between readlines() and truncate() are detected via file size
-      comparison and re-read after truncate+write to prevent loss.
-    - This guarantees atomicity: archive + original == original content.
+    - Bytes appended past the extent this rotation consumed are detected by
+      comparing the live file size against that extent, read back at the exact
+      byte offset, and folded into the retained content before the truncate.
+    - The size check is repeated (bounded by PRESERVE_ATTEMPTS) until the file
+      stops growing, and the last check is the operation immediately preceding
+      the truncate, so the unprotected window is a single seek rather than a
+      full file re-read.
 
-    NOTE: The advisory lock serializes rotations against each other, but race
-    conditions with non-locking O_APPEND writers remain possible. For complete
-    safety, all writers (including external processes) must cooperate on locking.
+    NOTE: This narrows but cannot close the race: an append landing between the
+    final size observation and the truncate is still lost, because no portable
+    primitive makes "check size, then truncate" atomic against a writer that
+    declines to take the lock. For complete safety, all writers (including
+    external processes) must cooperate on locking.
 
     Args:
         logfile: Path to log file to rotate.
@@ -163,21 +186,29 @@ def rotate_log(logfile, max_lines, max_bytes, archive_dir, check_only=False):
               file=sys.stderr)
         return 1
 
-    # Perform rotation with exclusive lock to prevent concurrent write races
+    # Perform rotation with exclusive lock to prevent concurrent write races.
+    # Binary mode is deliberate: it makes the byte offset of everything we have
+    # consumed exact, which is what the external-append preservation below keys
+    # off. Text mode's newline translation would desynchronise character counts
+    # from on-disk byte offsets (CRLF on Windows) and silently rewrite the line
+    # endings of every log it touches.
     try:
-        with open(str(logfile), 'r+', encoding='utf-8') as f:
+        with open(str(logfile), 'rb+') as f:
             # Acquire exclusive lock to guard read-compute-write sequence
             acquire_lock(f.fileno())
             try:
-                # Read all lines while locked
-                lines = f.readlines()
+                # Read all bytes while locked; `consumed` is the exact on-disk
+                # extent this rotation is responsible for.
+                data = f.read()
+                consumed = len(data)
+                lines = data.splitlines(keepends=True)
 
                 if not lines:
                     return 0
 
                 # Determine split point based on which threshold was exceeded
                 current_lines = len(lines)
-                current_bytes = sum(len(line.encode('utf-8')) for line in lines)
+                current_bytes = consumed
 
                 keep_count = current_lines // 2  # Default: keep ~half
 
@@ -191,7 +222,7 @@ def rotate_log(logfile, max_lines, max_bytes, archive_dir, check_only=False):
                     bytes_keep_count = 0
                     # Count from newest (end) backward
                     for i in range(len(lines) - 1, -1, -1):
-                        line_bytes = len(lines[i].encode('utf-8'))
+                        line_bytes = len(lines[i])
                         if cumulative_bytes + line_bytes <= max_bytes:
                             cumulative_bytes += line_bytes
                             bytes_keep_count += 1
@@ -226,35 +257,52 @@ def rotate_log(logfile, max_lines, max_bytes, archive_dir, check_only=False):
                     return 1
 
                 # MITIGATION for external O_APPEND writers:
-                # Before truncating, check if the file has grown since we initially read it.
-                # If external (non-locking) O_APPEND writers added content while we were
-                # computing, re-read and preserve those appends.
-                original_line_count = len(lines)
-
-                # Rewind to start and re-count lines to detect external appends
-                f.seek(0)
-                current_line_count = sum(1 for _ in f)
-
-                if current_line_count > original_line_count:
-                    # External appends occurred! Re-read the appended lines
-                    lines_appended = current_line_count - original_line_count
-
-                    # Re-read from line position (start of appended lines)
-                    f.seek(0)
-                    all_current_lines = f.readlines()
-
-                    # Extract only the new lines (the appended ones)
-                    external_lines = all_current_lines[-lines_appended:]
-                    if external_lines:
-                        remaining_lines.extend(external_lines)
+                # Writing the archive takes time, and non-locking writers (>> and
+                # tee -a in the shell daemons) can append during it. Anything past
+                # `consumed` is such an append and must survive the truncate.
+                #
+                # Two properties matter here, and the previous line-counting
+                # implementation had neither:
+                #
+                # 1. Byte offsets, not line counts. Diffing line counts loses data
+                #    whenever the last consumed line has no trailing newline: the
+                #    append concatenates onto it, the line count does not grow by
+                #    the number of appended lines, and the surplus is destroyed.
+                #    Reading the delta at a byte offset is exact in every case.
+                #
+                # 2. The check must sit immediately before the truncate. The old
+                #    code re-read the whole file to count lines and only then
+                #    truncated, so an append landing after that scan was lost --
+                #    a window as wide as a full file read. Here the only work
+                #    between the last size observation and the truncate is a
+                #    single seek, and the observation is repeated until the size
+                #    stops moving, so appends arriving mid-preservation are also
+                #    caught.
+                for _ in range(PRESERVE_ATTEMPTS):
+                    grown = os.fstat(f.fileno()).st_size
+                    if grown <= consumed:
+                        break
+                    f.seek(consumed)
+                    external = f.read(grown - consumed)
+                    if not external:
+                        break
+                    remaining_lines.extend(external.splitlines(keepends=True))
+                    consumed = grown
 
                 # Atomically truncate and write remaining lines back to original
                 # while still holding the lock
                 f.seek(0)
                 f.truncate()
-                f.writelines(remaining_lines)
+                f.write(b"".join(remaining_lines))
 
             finally:
+                # Rewind before unlocking: msvcrt.locking() unlocks the byte range
+                # at the *current* position, so releasing from the write position
+                # would target a region we never locked.
+                try:
+                    f.seek(0)
+                except (OSError, ValueError):
+                    pass
                 # Release lock after all writes complete
                 release_lock(f.fileno())
 
