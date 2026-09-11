@@ -2,7 +2,7 @@
 
 **What this file is:** The live durable checkpoint that Aesop itself uses during its own `/buildsystem` loop. It records the current system version, architectural decisions, known limitations, and the next milestone. This is not historical archive; it is read by the orchestrator to understand operational state.
 
-**Current Version:** v0.7.2 (tagged 2026-07-31, current HEAD e5e6e22 2026-08-18, PR #787 main). 0.7.1 was a hardening release: 12 PRs against gates that reported success without verifying anything, plus the portability work needed for the remote-access features to run outside a single machine (fleet state and remote-command identity are now configuration, not an assumed home layout). 0.7.2 adds one fix on top: `/api/state` served the collector's empty default snapshot instead of computing the section inline, so the dashboard's first paint could show an empty data section. Post-tag (2026-08-02 to 2026-08-18): 201 commits (approx. 110+ merged PRs) harden CI gates, repair scheduled workflows, wire trigger-layer recovery, add multi-instance coordination safeguards, and consolidate tools infrastructure. Key merges: #676 (cost-drawer UI), #677 (gate-runability enforcement), #661/674/679 (count-gate coverage fixes), CI-hardening bundles (#780/#772/#750/#690), and scheduled-workflow repairs (#787 main-reds fix, pre-flight).
+**Current Version:** v0.8.0 (release candidate 2026-09-11; tag pending).
 
 ## Architectural Thesis
 
@@ -38,9 +38,12 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 5. **STATE.md freshness gate** (GUARDRAIL #2). Detect stale checkpoints by parsing Current Version claim and comparing committed-at date vs. HEAD date. Gate should fail if STATE.md's claimed version significantly lags behind HEAD (e.g., >50 commits). Prevents future staleness escapes.
 
 6. **Portability path scan (box-restore / trigger-layer absolutization)** (REFACTOR). Ensure all scripts invoked by scheduled tasks use absolute paths (AESOP_HOME or durable ~/scripts location). Validates guardrail proposal from refinesystem R1. Medium effort; medium impact (multi-box readiness).
+   Evidence from 2026-09-10 half-restore incident: settings hooks pointed at wrong profile, scheduled-task StartBoundary in past prevented first run, packed-refs/pack loss on restore. Guardrail tracked in PR #793.
 
 7. **Dead-baseline liveness check** (GUARDRAIL #3). Verify that unused test baselines (e.g., .encoding-baseline.json if no encoding tests) do not accumulate. Proposed in refinesystem R1 (lens6, deferred). Low effort; low impact (hygiene).
 
 8. **Stats-refresh PR jam** (USER DECISION). PR #774 (stats-refresh) conflicted with main; PR #781 (keeper stats) in flight. User consent needed: merge #781 + close #774, or resolve conflicts and rebase batch. ~110 unreleased PRs since v0.7.2; release-cadence decision also pending.
 
-**Release-state note:** `v0.7.1` is tagged at `ec5ea9db` and has **no GitHub release** — that commit's CI was red (pre-existing `/api/state` bug). The tag was deliberately NOT moved, since retagging a pushed release rewrites published history. `v0.7.2` (`e061f2bd`) is the first tag in this line cut *after* main's own CI went green, and is the published Latest release. Consumer-visible release history therefore reads 0.7.0 -> 0.7.2; publishing 0.7.1 retroactively is a user decision. Current unreleased commits: 201 since v0.7.2 tag (as of 2026-08-18, HEAD e5e6e22). `npm publish` has NOT been run for either version and remains user-gated.
+**Release-state note:** `v0.7.1` is tagged at `ec5ea9db` and has **no GitHub release** — that commit's CI was red (pre-existing `/api/state` bug). The tag was deliberately NOT moved, since retagging a pushed release rewrites published history. `v0.7.2` is published on npm (Latest, MIT license) and GitHub (Release v0.7.2 Latest). Consumer-visible release history therefore reads 0.7.0 -> 0.7.2; publishing 0.7.1 retroactively is a user decision. `v0.7.1` remains tag-only on git. Current unreleased commits: 219 since v0.7.2 tag (as of 2026-09-11, HEAD 07732210).
+
+**Licensing:** Aesop v0.7.2 and earlier npm artifacts (v0.7.0, v0.7.1, v0.7.2) are MIT-licensed (permissive, commercial use allowed). PR #799 (merged 2026-09-11) relicensed main and HEAD to PolyForm Noncommercial 1.0.0 (research/indie OK, no commercial use). Version v0.7.0 and earlier on npm remain MIT forever.

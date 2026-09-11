@@ -1,6 +1,6 @@
 # Aesop — Project CLAUDE.md
 
-**What**: MIT-licensed multi-agent orchestration harness for autonomous software development.
+**What**: PolyForm Noncommercial 1.0.0-licensed multi-agent orchestration harness for autonomous software development (versions ≤0.7.0 remain MIT).
 
 ## RED CI Escape Detection
 

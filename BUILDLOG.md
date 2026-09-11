@@ -194,3 +194,18 @@ ALSO PRODUCED: Medium draft "Determinism Is a System Property" -- filesystem-as-
 this release used as the evidence. Artifact (private):
 https://claude.ai/code/artifact/d78c0706-9dcf-4c2f-991d-e84071751441
 NOT published to Medium; outward publishing stays user-gated.
+
+---
+
+## 2026-09-11 Documentation Currency Update
+
+**Summary:** Refreshed STATE.md with current HEAD, commit counts, npm publication status, and relicense info.
+
+- Confirmed npm v0.7.2 published (MIT license for that version).
+- Updated HEAD from e5e6e22 (2026-08-18) to 07732210 (2026-09-11); commit count 201→219.
+- Added PR #799 relicense context (PolyForm Noncommercial 1.0.0 on main; versions ≤0.7.0 remain MIT).
+- Corrected Release-state note: v0.7.2 is published on npm (Latest) and GitHub; v0.7.1 remains tag-only.
+- Added Licensing section clarifying version/platform MIT vs PolyForm split.
+- Appended 2026-09-10 box-restore incident evidence to NEXT STEPS #6 with PR #793 guardrail reference.
+- Portfolio recency PRs #86–#88 shipped; box-restore repair confirmed.
+
