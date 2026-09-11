@@ -30,28 +30,34 @@ from driver import openai_transport
 
 
 class _TestHTTPHandler(http.server.BaseHTTPRequestHandler):
-    """Local HTTP server handler that can serve responses and track requests."""
+    """Local HTTP server handler that can serve responses and track requests.
+
+    Uses a class-level lock to synchronize access to shared state across
+    multiple handler instances (which may run in parallel threads).
+    """
 
     # Class variables to track request/response behavior across requests.
+    # Protected by _state_lock to prevent race conditions.
     request_log = []
     responses = {}  # path -> (status, body, headers)
+    _state_lock = threading.Lock()
 
     def do_POST(self):
         """Handle POST requests; support redirects and track headers."""
-        # Record the request and its headers.
-        self.request_log.append({
-            "method": "POST",
-            "path": self.path,
-            "headers": dict(self.headers),
-        })
+        # Record the request and its headers, protected by lock.
+        with _TestHTTPHandler._state_lock:
+            _TestHTTPHandler.request_log.append({
+                "method": "POST",
+                "path": self.path,
+                "headers": dict(self.headers),
+            })
+            # Look up the response for this path.
+            if self.path in _TestHTTPHandler.responses:
+                status, body, response_headers = _TestHTTPHandler.responses[self.path]
+            else:
+                status, body, response_headers = 404, b"Not Found", {}
 
-        # Look up the response for this path.
-        if self.path in self.responses:
-            status, body, response_headers = self.responses[self.path]
-        else:
-            status, body, response_headers = 404, b"Not Found", {}
-
-        # Send response.
+        # Send response outside the lock to avoid holding it during I/O.
         self.send_response(status)
         for header_name, header_value in response_headers.items():
             self.send_header(header_name, header_value)
@@ -105,78 +111,46 @@ class TestRedirectSecurity(unittest.TestCase):
         """Stop the server."""
         cls.server.shutdown()
         cls.server.server_close()
+        # Wait for server thread to finish (bounded wait).
+        cls.server_thread.join(timeout=5.0)
 
     def setUp(self):
-        """Clear request log and response map before each test."""
-        _TestHTTPHandler.request_log = []
-        _TestHTTPHandler.responses = {}
+        """Clear request log and response map before each test, with thread-safe access."""
+        with _TestHTTPHandler._state_lock:
+            _TestHTTPHandler.request_log = []
+            _TestHTTPHandler.responses = {}
 
     def test_cross_origin_redirect_strips_auth(self):
         """Verify Authorization header is stripped on cross-origin redirect.
 
-        Setup:
-          1. Request to http://localhost:PORT_A/chat/completions
-          2. Server returns 302 redirect to http://127.0.0.1:PORT_B/redirected
-          3. The redirect target (different origin) should NOT receive Authorization
-
-        For this test, we use two separate server addresses to simulate different origins.
-        Since we only have one server socket, we'll use the same port but different
-        hostnames (localhost vs 127.0.0.1) which urllib treats as different origins.
+        This test verifies the redirect handler's ability to strip auth headers
+        when detecting a cross-origin redirect (different scheme, host, or port).
+        The test uses simulated URLs (no actual network calls needed).
         """
-        # Create a second server on a different port (different origin).
-        server2 = socketserver.ThreadingTCPServer(("127.0.0.1", 0), _TestHTTPHandler)
-        server2.daemon_threads = True
-        host2, port2 = server2.server_address
-        base_url2 = f"http://{host2}:{port2}"
+        # Simulate a request to one origin.
+        req = urllib.request.Request(
+            "http://127.0.0.1:1234/chat/completions",
+            data=b"{}",
+            headers={
+                "Authorization": "Bearer dummy_key_do_not_scan",
+                "Content-Type": "application/json",
+            },
+        )
 
-        server2_thread = threading.Thread(target=server2.serve_forever)
-        server2_thread.daemon = True
-        server2_thread.start()
+        # Simulate a cross-origin redirect (different port).
+        handler = openai_transport._AuthStripRedirectHandler()
+        new_url = "http://127.0.0.1:5678/redirected"
+        redirected_req = handler.redirect_request(
+            req, None, 302, "Found", {}, new_url
+        )
 
-        try:
-            # Configure server1 to redirect to server2 (different port = different origin).
-            _TestHTTPHandler.responses["/chat/completions"] = (
-                302,
-                b"Redirecting...",
-                {"Location": f"{base_url2}/redirected"},
-            )
-
-            # Configure server2 to return a valid response at the redirect target.
-            _TestHTTPHandler.responses["/redirected"] = (
-                200,
-                json.dumps({"choices": [{"message": {"content": "test"}}]}),
-                {"Content-Type": "application/json"},
-            )
-
-            # Make the request with Authorization header.
-            # We'll call the redirect handler directly to isolate the behavior.
-            req = urllib.request.Request(
-                f"{self.base_url}/chat/completions",
-                data=b"{}",
-                headers={
-                    "Authorization": "Bearer dummy_key_do_not_scan",
-                    "Content-Type": "application/json",
-                },
-            )
-
-            # Simulate a cross-origin redirect using the handler directly.
-            handler = openai_transport._AuthStripRedirectHandler()
-            new_url = f"{base_url2}/redirected"
-            redirected_req = handler.redirect_request(
-                req, None, 302, "Found", {}, new_url
-            )
-
-            # Verify Authorization header was stripped in the redirected request.
-            self.assertIsNotNone(redirected_req, "Redirect request should be created")
-            auth_header = redirected_req.headers.get("Authorization")
-            self.assertIsNone(
-                auth_header,
-                "Authorization header should be stripped on cross-origin redirect"
-            )
-
-        finally:
-            server2.shutdown()
-            server2.server_close()
+        # Verify Authorization header was stripped in the redirected request.
+        self.assertIsNotNone(redirected_req, "Redirect request should be created")
+        auth_header = redirected_req.headers.get("Authorization")
+        self.assertIsNone(
+            auth_header,
+            "Authorization header should be stripped on cross-origin redirect"
+        )
 
     def test_same_origin_redirect_preserves_auth(self):
         """Verify Authorization header is preserved on same-origin redirect.
