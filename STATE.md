@@ -2,7 +2,7 @@
 
 **What this file is:** The live durable checkpoint that Aesop itself uses during its own `/buildsystem` loop. It records the current system version, architectural decisions, known limitations, and the next milestone. This is not historical archive; it is read by the orchestrator to understand operational state.
 
-**Current Version:** v0.7.2 (tagged 2026-07-31, published on npm with MIT license, current HEAD 07732210 2026-09-11). 0.7.1 was a hardening release: 12 PRs against gates that reported success without verifying anything, plus the portability work needed for the remote-access features to run outside a single machine (fleet state and remote-command identity are now configuration, not an assumed home layout). 0.7.2 adds one fix on top: `/api/state` served the collector's empty default snapshot instead of computing the section inline, so the dashboard's first paint could show an empty data section. Post-tag (2026-08-02 to 2026-09-11): 219 commits (approx. 120+ merged PRs) harden CI gates, repair scheduled workflows, wire trigger-layer recovery, add multi-instance coordination safeguards, consolidate tools infrastructure, ship portfolio recency lane (PRs #86–#88), and execute relicense to PolyForm Noncommercial 1.0.0 (PR #799 merged 2026-09-11; versions ≤0.7.0 remain MIT). Key merges: #676 (cost-drawer UI), #677 (gate-runability enforcement), #661/674/679 (count-gate coverage fixes), CI-hardening bundles (#780/#772/#750/#690), scheduled-workflow repairs (#787 main-reds fix, pre-flight), and portfolio recency (#86–#88).
+**Current Version:** v0.8.0 (release candidate 2026-09-11; tag pending).
 
 ## Architectural Thesis
 
