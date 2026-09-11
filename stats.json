@@ -1,17 +1,18 @@
 {
   "git": {
-    "merged_prs": 514,
+    "merged_prs": 551,
     "merged_prs_source": "git-log",
-    "total_commits": 1949,
-    "project_age_days": 22,
+    "total_commits": 2095,
+    "project_age_days": 59,
     "wave_count": 31,
-    "insertions_deletions": 349784,
-    "files_tracked": 1072,
-    "distinct_coauthors": 15,
+    "insertions_deletions": 371818,
+    "files_tracked": 1102,
+    "distinct_coauthors": 18,
     "authors_human": 0,
-    "model_tiers": 5,
+    "model_tiers": 6,
     "model_tier_names": [
       "Fable 5",
+      "Fable 5.1",
       "Haiku 4.5",
       "Opus 4.6",
       "Opus 4.8",
@@ -27,14 +28,14 @@
     "cumulative_tokens": null,
     "total_coding_hours": null
   },
-  "generated_at": "2026-08-03T03:08:05.442275+00:00",
-  "loc": 324756,
-  "head_sha": "52772da33bb655faa984b05a4d738268869edb8f",
+  "generated_at": "2026-09-09T07:15:36.765640+00:00",
+  "loc": 343009,
+  "head_sha": "c6df7b6ffa6ee7fff6aa7ba8fd054b2b9af22b56",
   "economics": {
     "token_ledger_available": false,
-    "merged_prs": 514,
+    "merged_prs": 551,
     "merged_prs_source": "git-log",
-    "lines_of_code": 324756,
+    "lines_of_code": 343009,
     "wave_count": 31
   },
   "economics_caveats": {
