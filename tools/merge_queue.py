@@ -1066,7 +1066,6 @@ def worktree_is_safe() -> tuple:
     if not ok:
         return False, "cannot read current branch"
     branch = branch.strip()
-    trunk = base_branch()
 
     # Self-heal: if on an integrate/q-* branch with a clean tree, repark to trunk
     if BATCH_BRANCH_RE.match(branch):
