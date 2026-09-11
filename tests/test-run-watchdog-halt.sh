@@ -30,12 +30,12 @@ EOFMOCK
 chmod +x "${MOCK_CYCLE}"
 
 echo "=== Test 1: --once mode no-ops when .HALT sentinel present ==="
-cat > "${TEST_STATE_DIR}/.HALT" << 'EOFHALT'
-{"reason": "manual stop for wave audit", "timestamp": "2026-07-16T00:00:00Z"}
-EOFHALT
+# Use halt.py to set the halt (single source of truth)
+AESOP_STATE_ROOT="${TEST_STATE_DIR}" python3 "${REPO_ROOT}/tools/halt.py" set "manual stop for wave audit" > /dev/null 2>&1
 
 OUT1=$(mktemp)
 AESOP_ROOT="${AESOP_ROOT}" \
+  AESOP_STATE_ROOT="${TEST_STATE_DIR}" \
   AESOP_WATCHDOG_CYCLE_CMD="${MOCK_CYCLE} ${CYCLE_COUNTER}" \
   bash "${REPO_ROOT}/daemons/run-watchdog.sh" --once > "$OUT1" 2>&1
 EXIT1=$?
@@ -83,11 +83,13 @@ echo "PASS: lock released after halted run"
 
 echo ""
 echo "=== Test 3: clearing the sentinel lets the cycle run again ==="
-rm -f "${TEST_STATE_DIR}/.HALT"
+# Use halt.py to clear (single source of truth)
+AESOP_STATE_ROOT="${TEST_STATE_DIR}" python3 "${REPO_ROOT}/tools/halt.py" --clear > /dev/null 2>&1
 echo "0" > "${CYCLE_COUNTER}"
 
 OUT2=$(mktemp)
 AESOP_ROOT="${AESOP_ROOT}" \
+  AESOP_STATE_ROOT="${TEST_STATE_DIR}" \
   AESOP_WATCHDOG_CYCLE_CMD="${MOCK_CYCLE} ${CYCLE_COUNTER}" \
   bash "${REPO_ROOT}/daemons/run-watchdog.sh" --once > "$OUT2" 2>&1
 EXIT2=$?
