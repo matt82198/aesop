@@ -57,6 +57,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `eod_sweep.py` — End-of-day safety check (dirty trees, unpushed commits); verdict appended to BUILDLOG.md via state_store WriteAPI (--buildlog filename must be BUILDLOG.md, fail-closed)
 - `file_size_lint.py` — Python file size linter (flags oversized modules)
 - `fixture_intent_check.py` — Deliberately-broken fixture manifest validator; verifies bench/fixtures-intent.json tracks all intentionally-broken/incomplete fixtures to distinguish benchmarks from regressions; CLI: `[--manifest PATH] [--root DIR] [--json]`; exit 0=valid/1=findings/2=error; stdlib-only
+- `gen_tool_index.py` — Generated tool-index builder; walks `git ls-files tools/`, extracts each tool's `INDEX:` docstring/header line, emits sorted tools/INDEX.md between GENERATED-BY markers; modes `--check` (byte-compare, exit 1 + regenerate hint) / `--regenerate` / `--json`; a scanned tool with NO `INDEX:` line FAILS CLOSED (exit 1) so a new tool cannot land undocumented; deterministic + ASCII-safe; stdlib-only.
 - `fleet.js` — One-shot fleet snapshot (JSON: agents, heartbeats, tracker, orchestrator status; Node STDLIB only)
 - `fleet_ledger.py` — Append-only cost ledger with harvest/rotate | `metrics_gate.py` — PR gate for hard numeric claims in markdown
 - `fleet_prompt_extractor.py` — Extract and deduplicate Agent/Task spawn prompts
