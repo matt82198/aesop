@@ -53,39 +53,27 @@ class TestGitIntegrityCheck(unittest.TestCase):
             ["git", "init"],
             cwd=repo_path,
             capture_output=True,
-            text=True,
+            encoding='utf-8',
             check=True,
         )
 
-        # Configure user
-        subprocess.run(
-            ["git", "config", "user.email", "test@test.local"],
-            cwd=repo_path,
-            capture_output=True,
-            check=True,
-        )
-        subprocess.run(
-            ["git", "config", "user.name", "Test User"],
-            cwd=repo_path,
-            capture_output=True,
-            check=True,
-        )
-
-        # Create initial commit
+        # Create initial commit with identity in temp repo
         test_file = os.path.join(repo_path, "test.txt")
         with open(test_file, "w") as f:
             f.write("test content\n")
 
         subprocess.run(
-            ["git", "add", "test.txt"],
-            cwd=repo_path,
+            ["git", "-C", repo_path, "add", "test.txt"],
             capture_output=True,
+            encoding='utf-8',
             check=True,
         )
+        # Use -c flags to set identity directly on the commit command
         subprocess.run(
-            ["git", "commit", "-m", "Initial commit"],
-            cwd=repo_path,
+            ["git", "-C", repo_path, "-c", "user.email=test@test.local",
+             "-c", "user.name=Test User", "commit", "-m", "Initial commit"],
             capture_output=True,
+            encoding='utf-8',
             check=True,
         )
 
