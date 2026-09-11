@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Guardrail G8: git repository integrity check** — detects pack/ref corruption, dangling objects; fail-closed pre-push gate (#806).
+- **CI workflow for examples validation** — automated examples test suite (#805).
+- **Guardrail G5 import-check hardening** — actual pushed-range evaluation, no vacuous passes (#760 follow-up, #806).
+- **Guardrail: auto_merge.py fail-closed PR scoping** — rejects mismatched merge bases (#811).
+- **Lane contract formalization** — standing LANE-CONTRACT.md for post-release documentation discipline (#810).
+
+### Fixed
+- **Test suite count sync** — updated CLAUDE.md after test_git_integrity_check.py added (#812).
+- **Flaky test_openai_transport_redirect** — characterized in shard 0, fix and isolation (#808).
+- **gen_tool_index.py gate integration** — wired --check into pre-push and CI (#807).
+
 ## [0.8.0] - 2026-09-11
 
 ### Changed
