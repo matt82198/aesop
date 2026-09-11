@@ -148,6 +148,64 @@ class TestCeilingLedgerSpend(CostCeilingTestCase):
         self.assertFalse(result["exceeded"])
 
 
+class TestCheckModeIsReadOnly(CostCeilingTestCase):
+    """A --check / check() call must NEVER mutate the state tree.
+
+    Escape this reproduces: cost_ceiling.check() -> read_ledger_total_tokens()
+    -> fleet_ledger.parse_ledger_rows() -> ensure_ledger_header(), which CREATED
+    <state>/ledger/OUTCOMES-LEDGER.md on a fresh tree just by asking "how much
+    have we spent?". Check modes are read-only by contract; header creation
+    belongs on the APPEND path only.
+    """
+
+    def _state_snapshot(self):
+        return sorted(str(p.relative_to(self.state_dir)) for p in self.state_dir.rglob("*"))
+
+    def test_check_api_creates_no_ledger_file(self):
+        before = self._state_snapshot()
+        result = self.cost_ceiling.check(period="wave", config={"limits": {"max_wave_tokens": 1000}})
+        self.assertEqual(result["spent"], 0)
+        self.assertFalse(result["exceeded"])
+        self.assertFalse((self.state_dir / "ledger" / "OUTCOMES-LEDGER.md").exists(),
+                         "check() created the ledger file — check mode must be read-only")
+        self.assertFalse((self.state_dir / "ledger").exists(),
+                         "check() created the ledger directory — check mode must be read-only")
+        self.assertEqual(before, self._state_snapshot(), "check() mutated the state tree")
+
+    def test_check_daily_period_creates_no_ledger_file(self):
+        before = self._state_snapshot()
+        result = self.cost_ceiling.check(period="daily", config={"limits": {"max_daily_tokens": 1000}})
+        self.assertEqual(result["spent"], 0)
+        self.assertEqual(before, self._state_snapshot(), "check(period='daily') mutated the state tree")
+
+    def test_check_windowed_creates_no_ledger_file(self):
+        before = self._state_snapshot()
+        self.cost_ceiling.check(period="wave", window_minutes=30,
+                                config={"limits": {"max_wave_tokens": 1000}})
+        self.assertEqual(before, self._state_snapshot(), "windowed check() mutated the state tree")
+
+    def test_cli_check_creates_no_ledger_file(self):
+        """The exact meta-gate reproduction: `cost_ceiling.py --check` on a fresh tree."""
+        config_path = self.fixture_root / "aesop.config.json"
+        config_path.write_text(json.dumps({"limits": {"max_wave_tokens": 1000}}), encoding="utf-8")
+        before = self._state_snapshot()
+        env = os.environ.copy()
+        result = subprocess.run(
+            [sys.executable, str(COST_CEILING_PY), "--check"],
+            capture_output=True, text=True, encoding="utf-8", env=env, cwd=str(self.fixture_root),
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((self.state_dir / "ledger" / "OUTCOMES-LEDGER.md").exists(),
+                         "CLI --check created the ledger file — check mode must be read-only")
+        self.assertEqual(before, self._state_snapshot(), "CLI --check mutated the state tree")
+
+    def test_check_still_reads_an_existing_ledger(self):
+        """Read-only must not mean blind: an existing ledger is still summed."""
+        self._write_ledger([(100, 200), (50, 150)])
+        result = self.cost_ceiling.check(period="wave", config={"limits": {"max_wave_tokens": 1000}})
+        self.assertEqual(result["spent"], 500)
+
+
 class TestCeilingCLI(CostCeilingTestCase):
     def _run_cli(self, *args):
         env = os.environ.copy()

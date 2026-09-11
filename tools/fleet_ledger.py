@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 r"""
 Fleet Outcome Ledger — append-only audit trail for dispatched agents.
-INDEX: Append-only cost ledger with harvest/rotate
+INDEX: Append-only cost ledger with harvest/rotate. `ensure_ledger_header()` is WRITE-PATH-ONLY (called from `append_ledger_line`/`harvest`/`rotate`); readers (`parse_ledger_rows`, `summary`) never create the ledger file or its directory and return empty on a missing ledger
 
 Subcommands:
   append <timestamp> <agent_type> <model> <duration_sec> <tokens_in> <tokens_out> [verdict] [phase] [wave]
@@ -54,7 +54,12 @@ def get_ledger_paths():
 
 
 def ensure_ledger_header():
-    """Ensure ledger file exists with markdown table header."""
+    """Ensure ledger file exists with markdown table header.
+
+    WRITE PATH ONLY. Call this from append/harvest/rotate -- never from a reader.
+    Readers (parse_ledger_rows, summary) stay side-effect free so that every
+    downstream `--check` mode remains read-only on a fresh tree.
+    """
     ledger_file, _, ledger_dir = get_ledger_paths()
     if not ledger_file.exists():
         ledger_dir.mkdir(parents=True, exist_ok=True)
@@ -446,9 +451,17 @@ def parse_ledger_rows():
         tokens_in, tokens_out, verdict, phase, wave (wave as int or None)
 
     Returns empty list if ledger doesn't exist or is unreadable.
+
+    READ-ONLY: this function must never create the ledger file or its directory.
+    Header creation lives on the APPEND path (ensure_ledger_header, called from
+    append_ledger_line/harvest/rotate). A reader that materialized the ledger
+    turned every downstream `--check` mode (cost_ceiling, cost_projection, the
+    state_store read facade) into a writer on a fresh tree.
     """
-    ensure_ledger_header()
     ledger_file, _, _ = get_ledger_paths()
+
+    if not ledger_file.exists():
+        return []
 
     try:
         lines = ledger_file.read_text(encoding='utf-8').split('\n')

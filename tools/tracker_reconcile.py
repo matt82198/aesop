@@ -65,7 +65,7 @@ def _check_pr_merged(pr_number):
     try:
         result = subprocess.run(
             ["gh", "pr", "view", str(pr_number), "--json", "state", "--jq", ".state"],
-            capture_output=True, text=True, encoding='utf-8', timeout=10,
+            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10,
         )
         return result.returncode == 0 and result.stdout.strip() == "MERGED"
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
@@ -89,7 +89,7 @@ def _check_git_evidence(item_id, title, repo_dir):
         try:
             result = subprocess.run(
                 ["git", "log", "--oneline", "--all", "-1", "--grep", query],
-                capture_output=True, text=True, encoding='utf-8', timeout=10,
+                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10,
                 cwd=str(repo_dir),
             )
             line = result.stdout.strip()

@@ -87,7 +87,7 @@ def find_binary(name: str, candidates: List[str]) -> Optional[Path]:
                 [candidate, "--version"],
                 capture_output=True,
                 timeout=5,
-                encoding="utf-8",
+                encoding="utf-8", errors="replace",
             )
             # Successful execution means it's available
             if result.returncode == 0:

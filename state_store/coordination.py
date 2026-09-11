@@ -190,8 +190,10 @@ def try_claim(store, resource: str, instance_id: str, ttl: float = 300.0) -> boo
             actor=instance_id,
         )
 
-        # Re-read claims stream and fold to see current state
-        events = _read_claim_events(store)
+        # Re-read claims stream (using snapshot + tail-replay when available)
+        # and fold to see current state. This avoids full-stream replay on
+        # every parallel-lane dispatch (O(n) instead of O(n²) per dispatch).
+        events = _read_claims_compacted(store)
         claims = fold_claims(events)
 
         # Check if we won

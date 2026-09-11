@@ -10,6 +10,8 @@
     "tools/cost_econ.py@ledger-md",
     "tools/cost_forecast.py@ledger-md",
     "tools/fleet_ledger.py@ledger-md",
+    "tools/health_checks.py@monitor-hb",
+    "tools/health_checks.py@watchdog-hb",
     "tools/health_score.py@monitor-hb",
     "tools/health_score.py@watchdog-hb",
     "tools/heartbeat.py@state-heartbeat",

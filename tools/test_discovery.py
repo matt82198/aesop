@@ -255,7 +255,7 @@ def validate_testcmd(testcmd: str, repo_path: Path, timeout_sec: int = 120) -> D
             cwd=str(repo_path),
             capture_output=True,
             text=True,
-            encoding="utf-8",
+            encoding="utf-8", errors="replace",
             timeout=timeout_sec,
         )
         elapsed = time.time() - start

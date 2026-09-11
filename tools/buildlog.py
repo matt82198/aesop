@@ -69,7 +69,7 @@ def get_git_head(repo_path):
             cwd=repo_path,
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():

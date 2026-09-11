@@ -17,6 +17,7 @@
  *   fleet_instances      - active instances + stale, with heartbeat age
  *   fleet_claims         - current file claims by instance
  *   fleet_multibox_summary - dashboard summary (instance/claim counts, stale count)
+ *   ci_job_status        - GitHub Actions run history query (status, duration, flake signal)
  *
  * All tools are read-only; no state mutations, no file writes.
  *
@@ -679,6 +680,170 @@ function getFleetVerifyStats() {
 }
 
 /**
+ * ci_job_status: Query GitHub Actions run history for a job
+ * Spawns `gh run list` via child_process; mocks via TEST_GH_MOCK_DATA env var for testing.
+ * Returns: { runs: [{status, conclusion, started_at, duration_s, event}...], never_executed, avg_duration_s, failure_rate, flake_signal }
+ * On error: { error: string, runs: [] }
+ */
+async function getCIJobStatus(args) {
+  const { job_name, branch = 'main', lookback_days = 30 } = args;
+
+  const result = {
+    runs: [],
+    never_executed: false,
+    avg_duration_s: 0,
+    failure_rate: 0,
+    flake_signal: 0
+  };
+
+  // Test mode: mock gh output from environment variable
+  if (process.env.TEST_GH_MOCK_DATA) {
+    try {
+      const mockConfig = JSON.parse(process.env.TEST_GH_MOCK_DATA);
+      if (mockConfig.failureMode) {
+        return {
+          error: 'gh command failed: authentication failed or repository not found',
+          runs: []
+        };
+      }
+      if (mockConfig.mockData && mockConfig.mockData.length > 0) {
+        const runs = mockConfig.mockData.map((run) => ({
+          status: run.status,
+          conclusion: run.conclusion,
+          started_at: run.started_at,
+          duration_s: Math.round(run.duration_ms / 1000),
+          event: run.event || 'push'
+        }));
+        result.runs = runs;
+        result.never_executed = false;
+
+        // Calculate avg duration
+        const totalDuration = runs.reduce((sum, r) => sum + r.duration_s, 0);
+        result.avg_duration_s = Math.round(totalDuration / runs.length);
+
+        // Calculate failure rate
+        const failureCount = runs.filter((r) => r.conclusion === 'failure').length;
+        result.failure_rate = failureCount / runs.length;
+
+        // Calculate flake signal (alternations between pass and fail)
+        let flakeCount = 0;
+        for (let i = 1; i < runs.length; i++) {
+          const current = runs[i].conclusion;
+          const previous = runs[i - 1].conclusion;
+          if ((current === 'success' && previous === 'failure') || (current === 'failure' && previous === 'success')) {
+            flakeCount++;
+          }
+        }
+        result.flake_signal = flakeCount;
+
+        return result;
+      }
+      // Empty mock data = never executed
+      result.never_executed = true;
+      return result;
+    } catch (e) {
+      return {
+        error: `Failed to parse test mock data: ${e.message}`,
+        runs: []
+      };
+    }
+  }
+
+  // Production: use gh CLI to query GitHub Actions
+  return new Promise((resolve) => {
+    try {
+      // Build gh command: gh run list --branch <branch> --limit <limit> --json status,conclusion,startedAt,durationSeconds,eventName
+      const proc = spawn('gh', [
+        'run', 'list',
+        '--branch', branch,
+        '--limit', Math.max(100, lookback_days * 3), // Rough estimate: ~3 runs per day
+        '--json', 'status,conclusion,startedAt,durationSeconds,eventName'
+      ], {
+        timeout: 10000
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      proc.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      proc.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      proc.on('close', (code) => {
+        if (code === 0 && stdout.trim()) {
+          try {
+            const runs = JSON.parse(stdout);
+            if (Array.isArray(runs) && runs.length > 0) {
+              // Transform gh output to our format
+              const transformed = runs.map((run) => ({
+                status: run.status,
+                conclusion: run.conclusion,
+                started_at: run.startedAt,
+                duration_s: run.durationSeconds || 0,
+                event: run.eventName || 'unknown'
+              }));
+
+              result.runs = transformed;
+              result.never_executed = false;
+
+              // Calculate avg duration
+              const totalDuration = transformed.reduce((sum, r) => sum + (r.duration_s || 0), 0);
+              result.avg_duration_s = Math.round(totalDuration / transformed.length);
+
+              // Calculate failure rate
+              const failureCount = transformed.filter((r) => r.conclusion === 'failure').length;
+              result.failure_rate = failureCount / transformed.length;
+
+              // Calculate flake signal
+              let flakeCount = 0;
+              for (let i = 1; i < transformed.length; i++) {
+                const current = transformed[i].conclusion;
+                const previous = transformed[i - 1].conclusion;
+                if ((current === 'success' && previous === 'failure') || (current === 'failure' && previous === 'success')) {
+                  flakeCount++;
+                }
+              }
+              result.flake_signal = flakeCount;
+
+              resolve(result);
+            } else {
+              result.never_executed = true;
+              resolve(result);
+            }
+          } catch (e) {
+            resolve({
+              error: `Failed to parse gh output: ${e.message}`,
+              runs: []
+            });
+          }
+        } else {
+          resolve({
+            error: `gh command failed with code ${code}: ${stderr || 'unknown error'}`,
+            runs: []
+          });
+        }
+      });
+
+      proc.on('error', (err) => {
+        resolve({
+          error: `Failed to spawn gh process: ${err.message}`,
+          runs: []
+        });
+      });
+    } catch (e) {
+      resolve({
+        error: `Unexpected error: ${e.message}`,
+        runs: []
+      });
+    }
+  });
+}
+
+/**
  * fleet_instances: Get active instances and stale instances with heartbeat info
  * Spawns instances-claims.py helper to read from state_store
  */
@@ -1051,6 +1216,30 @@ const TOOLS = [
       type: 'object',
       properties: {}
     }
+  },
+  {
+    name: 'ci_job_status',
+    description: 'Query GitHub Actions run history for a CI job: status, conclusion, duration, flake signal',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        job_name: {
+          type: 'string',
+          description: 'GitHub Actions job name to query'
+        },
+        branch: {
+          type: 'string',
+          description: 'Git branch to query (default: "main")',
+          default: 'main'
+        },
+        lookback_days: {
+          type: 'integer',
+          description: 'Number of days to look back in history (default: 30)',
+          default: 30
+        }
+      },
+      required: ['job_name']
+    }
   }
 ];
 
@@ -1115,6 +1304,9 @@ async function handleToolCall(requestId, params) {
         break;
       case 'fleet_multibox_summary':
         result = await getFleetMultiboxSummary();
+        break;
+      case 'ci_job_status':
+        result = await getCIJobStatus(args);
         break;
       default:
         mcp.writeError(requestId, -32601, `Unknown tool: ${name}`);

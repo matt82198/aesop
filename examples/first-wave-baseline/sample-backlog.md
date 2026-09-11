@@ -28,7 +28,7 @@ A test in the suite is marked with `.skip`, which means it was temporarily disab
 
 **Expected Effort:** 3–5 minutes  
 **Risk:** Low; validates existing functionality  
-**Test:** `npm test tests/test_example.js` passes
+**Gate:** no `.skip` marker remains in tests/test_example.js AND `npm test -- tests/test_example.js` passes. Fails pre-work (the skip is still there), passes post-work.
 
 ---
 
@@ -43,7 +43,7 @@ Set up ESLint for the project. Create a `.eslintrc.json` file with a sensible ba
 
 **Expected Effort:** 5–10 minutes  
 **Risk:** Low; adds infrastructure, no business logic changes  
-**Test:** `.eslintrc.json` exists, `npm run lint` runs cleanly
+**Gate:** `.eslintrc.json` exists AND `package.json` declares a `lint` script AND `npm run lint` exits 0. It runs the real linter rather than grepping package.json for the string `lint`, which would already match `eslint` in devDependencies.
 
 ---
 
@@ -58,7 +58,7 @@ Review the documentation files for broken links and incorrect cross-references. 
 
 **Expected Effort:** 5–15 minutes  
 **Risk:** Very low; documentation-only, no code impact  
-**Test:** All internal links validate; `test -f docs/ARCHITECTURE.md && test -f docs/SETUP.md`
+**Gate:** every relative markdown link in both files is resolved against the filesystem; unresolved targets are listed and the gate exits 1. A mere `test -f` on the two files would pass without anyone fixing a link.
 
 ---
 
@@ -78,14 +78,15 @@ Update the corresponding test file (`src/utils/helpers.test.js`) to verify all r
 
 **Expected Effort:** 10–20 minutes  
 **Risk:** Low; existing tests validate correctness  
-**Test:** `npm test src/utils/helpers.test.js` passes with all assertions
+**Gate:** src/utils/helpers.js contains a `Refactor goal:` comment AND `npm test -- src/utils/helpers.test.js` passes. Honest limitation: this proves the file was touched and the tests are green; it cannot judge whether the refactor actually improved the code. That stays a human review call.
 
 ---
 
 ## Wave Characteristics
 
 - **Total Items:** 5
-- **Disjointness:** All file sets are non-overlapping (verified by manifest validator)
+- **Disjointness:** All file sets are non-overlapping (proven by `python tools/wave_manifest_lint.py` -> `PASS: ownership_disjointness`)
+- **Gate honesty:** all 5 testCmds verified fail-closed by `verify-testcmds.sh` (fail pre-work, pass post-work)
 - **Parallelizability:** All 5 can be worked on simultaneously by different workers
 - **Complexity Spread:**
   - Trivial: Item 1 (typo)

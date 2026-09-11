@@ -98,7 +98,7 @@ def _should_interrupt_at_phase(phase: str) -> bool:
         return True
     return False
 
-# Try to import cost_ceiling and coordination (optional, for safety gates).
+# Try to import cost_ceiling, halt, and coordination (optional, for safety gates).
 try:
     import sys
     TOOLS_DIR = REPO / "tools"
@@ -107,6 +107,15 @@ try:
     import cost_ceiling
 except ImportError:
     cost_ceiling = None
+
+try:
+    import sys
+    TOOLS_DIR = REPO / "tools"
+    if str(TOOLS_DIR) not in sys.path:
+        sys.path.insert(0, str(TOOLS_DIR))
+    import halt
+except ImportError:
+    halt = None
 
 try:
     STATE_STORE_DIR = REPO / "state_store"
@@ -507,7 +516,7 @@ def _get_owned_files_diff(workdir: str, owned_files: List[str], max_chars: int =
             shell=True,
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=10,
         )
 
@@ -568,7 +577,7 @@ def _run_and_capture_test_output(
             shell=True,
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=timeout_sec,
         )
 
@@ -1463,6 +1472,80 @@ def _check_cost_ceiling(
     return False
 
 
+def _validate_halt_available(state_dir: Optional[str]) -> None:
+    """Validate halt module is available at wave entry (fail-closed).
+
+    The halt kill-switch is a mandatory safety gate. If the halt module is
+    unavailable (import failed, rename, packaging change), the wave MUST refuse
+    to start with a clear error rather than silently proceeding unguarded.
+
+    If state_dir is None, log a warning (legitimate for tests/dry-run) but allow.
+
+    Raises:
+        RuntimeError: if halt module is unavailable
+    """
+    if halt is None:
+        raise RuntimeError(
+            "FATAL: halt module unavailable (import failed). "
+            "The kill-switch safety gate is mandatory and cannot be disabled. "
+            "Check for ImportError, module rename, or packaging issues."
+        )
+
+    if state_dir is None:
+        # Legitimate case: tests, dry-run, or harness without coordination.
+        # Warn prominently so operators know halt enforcement is OFF.
+        print(
+            "[HALT] WARNING: state_dir is None; halt enforcement disabled. "
+            "This is legitimate for tests/dry-run, but in production coordination "
+            "must be enabled. Set state_dir or AESOP_STATE_ROOT.",
+            file=sys.stderr,
+        )
+
+
+def _check_halt(
+    state_dir: Optional[str],
+    result: Dict[str, Any],
+    abort_reason: str,
+) -> bool:
+    """Halt-kill-switch gate (fail-closed): abort if HALT sentinel exists.
+
+    PRECONDITION: _validate_halt_available() must be called at wave entry.
+    This function assumes the halt module is available.
+
+    Mirrors _check_cost_ceiling's pattern: check at phase boundaries for
+    graceful abort. Checkpoint whatever the wave loop already checkpoints,
+    then abort without shipping.
+
+    Args:
+        state_dir: state directory for halt check (AESOP_STATE_ROOT)
+        result: result dict to populate on abort
+        abort_reason: reason string for result["abort_reason"]
+
+    Returns:
+        bool: True if the wave must abort now (result populated), False to continue.
+    """
+    # state_dir None is legitimate (tests/dry-run); skip checks.
+    if state_dir is None:
+        return False
+
+    if halt is None:
+        # This should not happen if _validate_halt_available was called.
+        # Fail-closed: treat as if halted to prevent silent bypass.
+        result["aborted"] = True
+        result["abort_reason"] = f"{abort_reason} (halt module unavailable - fail-closed)"
+        return True
+
+    if halt.is_halted(state_dir):
+        halt_info = halt.get_halt_info(state_dir)
+        result["aborted"] = True
+        result["abort_reason"] = abort_reason
+        if halt_info:
+            result["halt_reason"] = halt_info.get("reason")
+            result["halt_timestamp"] = halt_info.get("timestamp")
+        return True
+    return False
+
+
 # ------------------------------------------------------------------------
 # PHASE 4: Build (parallel dispatch). `_dispatch_single_item` is the
 # extraction of the former nested `build_item` closure, split further into
@@ -2005,6 +2088,9 @@ def _repair_failed_items(
         ):
             return True
 
+        if _check_halt(state_dir, result, "halt_in_repair"):
+            return True
+
         failed_items = _repair_one_round(failed_items, driver, state_dir, claim_ctx)
 
     return False
@@ -2270,6 +2356,10 @@ def _run_orchestrator_final_catch_phase(
         orchestrator_backend, items, result, state_dir=state_dir,
         driver=driver,
     )
+
+    # Check halt kill-switch after orchestrator decisions but before cost ceiling
+    if _check_halt(state_dir, result, "halt_after_orchestrator_decisions"):
+        return True
 
     if cost_ceiling is None or state_dir is None:
         return False
@@ -2737,6 +2827,20 @@ def _run_wave_inner(
         "resume_stats": None,
     }
 
+    # ========================================================================
+    # HALT VALIDATION (fail-closed at wave entry)
+    # ========================================================================
+    # The halt kill-switch is a mandatory safety gate. Ensure it's available
+    # before proceeding.
+    try:
+        _validate_halt_available(state_dir)
+    except RuntimeError as e:
+        result["aborted"] = True
+        result["abort_reason"] = "halt_module_unavailable"
+        result["error"] = str(e)
+        result["preflight_ok"] = False
+        return result
+
     # Ensure the state directory exists up-front: claims (EventStore) and
     # the journal both live under it. Without this, a fresh state_dir made
     # EventStore construction raise inside the claim block -- which is a
@@ -2787,6 +2891,10 @@ def _run_wave_inner(
     if _check_cost_ceiling(driver, state_dir, result, "cost_ceiling_exceeded"):
         return result
 
+    # Check halt kill-switch after cost ceiling (same phase boundary)
+    if _check_halt(state_dir, result, "halt_before_build"):
+        return result
+
     # ========================================================================
     # PHASE 4: Build (PARALLEL with ThreadPoolExecutor)
     # ========================================================================
@@ -2822,6 +2930,10 @@ def _run_wave_inner(
     # ========================================================================
     _verify_exact_gate(items, result, spot_check_frac, driver, state_dir)
 
+    # Check halt kill-switch before adversarial review
+    if _check_halt(state_dir, result, "halt_before_adversarial_review"):
+        return result
+
     # ========================================================================
     # PHASE 5.75: Adversarial review (opt-in via manifest, sampled, repair-routed)
     # ========================================================================
@@ -2829,10 +2941,18 @@ def _run_wave_inner(
         manifest, policy, items, result, driver, state_dir, claim_ctx, repair_cap
     )
 
+    # Check halt kill-switch before orchestrator final-catch
+    if _check_halt(state_dir, result, "halt_before_final_catch"):
+        return result
+
     # ========================================================================
     # PHASE 6: Adversarial review / orchestrator final catch (HS-2)
     # ========================================================================
     if _run_orchestrator_final_catch_phase(orchestrator_backend, items, result, state_dir, driver):
+        return result
+
+    # Check halt kill-switch before ship
+    if _check_halt(state_dir, result, "halt_before_ship"):
         return result
 
     # ========================================================================

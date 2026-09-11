@@ -218,11 +218,11 @@ async function runTests() {
     console.log('Test 2: tools/list...');
     const listResp = await client.request('tools/list', {});
 
-    if (listResp.result && Array.isArray(listResp.result.tools) && listResp.result.tools.length === 11) {
+    if (listResp.result && Array.isArray(listResp.result.tools) && listResp.result.tools.length === 12) {
       const toolNames = listResp.result.tools.map(t => t.name).sort();
-      const expected = ['fleet_agents', 'fleet_budget', 'fleet_claims', 'fleet_cost', 'fleet_cost_by_wave', 'fleet_cost_trend', 'fleet_instances', 'fleet_multibox_summary', 'fleet_status', 'fleet_tracker', 'fleet_verify_stats'];
+      const expected = ['ci_job_status', 'fleet_agents', 'fleet_budget', 'fleet_claims', 'fleet_cost', 'fleet_cost_by_wave', 'fleet_cost_trend', 'fleet_instances', 'fleet_multibox_summary', 'fleet_status', 'fleet_tracker', 'fleet_verify_stats'];
       if (JSON.stringify(toolNames) === JSON.stringify(expected)) {
-        console.log(`✓ tools/list succeeded, found 11 tools: ${toolNames.join(', ')}\n`);
+        console.log(`✓ tools/list succeeded, found 12 tools: ${toolNames.join(', ')}\n`);
         testsPassed++;
       } else {
         console.log(`✗ Unexpected tools: ${toolNames.join(', ')}\n`);

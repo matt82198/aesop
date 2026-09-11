@@ -418,5 +418,109 @@ class EncodingLintIntegrationTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
 
 
+class SubprocessErrorHandlerTest(unittest.TestCase):
+    """G10 second half: `encoding=` alone is not enough on a subprocess call.
+
+    The merge queue crashed on 24+ consecutive scheduled passes while THIS
+    lint reported clean, because the rule only ever required `encoding=`.
+    Strict decoding of a cp1252 em-dash (0x97) killed subprocess's reader
+    thread, `stdout` became None, and the caller died on `.strip()`. A rule a
+    linter does not enforce is how that shipped, so the handler is now part
+    of the rule.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo_root = Path(self.tmp.name)
+        (self.repo_root / "tools").mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _scan(self, source: str):
+        test_file = self.repo_root / "tools" / "sample.py"
+        test_file.write_text("import subprocess\n" + source, encoding="utf-8")
+        return scan_file(test_file)
+
+    def test_encoding_without_errors_is_flagged(self):
+        """The exact shape that took the queue down must now fail the lint."""
+        findings = self._scan(
+            "subprocess.run(['git', 'log'], capture_output=True, "
+            "text=True, encoding='utf-8', timeout=60)\n"
+        )
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("errors=", findings[0]["message"])
+
+    def test_errors_replace_passes(self):
+        findings = self._scan(
+            "subprocess.run(['git', 'log'], capture_output=True, text=True, "
+            "encoding='utf-8', errors='replace', timeout=60)\n"
+        )
+        self.assertEqual(findings, [])
+
+    def test_errors_ignore_is_rejected(self):
+        """'ignore' DELETES the bad byte; a corrupted ref must stay visible."""
+        findings = self._scan(
+            "subprocess.run(['git', 'log'], capture_output=True, text=True, "
+            "encoding='utf-8', errors='ignore')\n"
+        )
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("ignore", findings[0]["message"])
+
+    def test_errors_strict_is_rejected(self):
+        """Spelling the unsafe default out loud does not make it safe."""
+        findings = self._scan(
+            "subprocess.run(['git', 'log'], capture_output=True, text=True, "
+            "encoding='utf-8', errors='strict')\n"
+        )
+        self.assertEqual(len(findings), 1, findings)
+
+    def test_lossless_handlers_pass(self):
+        for handler in ("backslashreplace", "surrogateescape"):
+            with self.subTest(handler=handler):
+                findings = self._scan(
+                    "subprocess.run(['git'], text=True, encoding='utf-8', "
+                    "errors=%r)\n" % handler
+                )
+                self.assertEqual(findings, [])
+
+    def test_popen_and_check_output_covered(self):
+        for fn in ("Popen", "check_output"):
+            with self.subTest(fn=fn):
+                findings = self._scan(
+                    "subprocess.%s(['git'], text=True, encoding='utf-8')\n" % fn
+                )
+                self.assertEqual(len(findings), 1, findings)
+                self.assertIn("errors=", findings[0]["message"])
+
+    def test_suppression_comment_still_honoured(self):
+        findings = self._scan(
+            "subprocess.run(['git'], text=True, encoding='utf-8')  "
+            "# encoding-ok\n"
+        )
+        self.assertEqual(findings, [])
+
+    def test_open_calls_are_not_subject_to_the_handler_rule(self):
+        """G10's handler requirement is scoped to subprocess, not open()."""
+        findings = self._scan("open('f.txt', encoding='utf-8').read()\n")
+        self.assertEqual(findings, [])
+
+    def test_repo_is_clean_under_the_extended_rule(self):
+        """The whole repo must satisfy the new rule, not just the queue path.
+
+        The pre-push hook runs this lint over the WHOLE repo and fail-closes
+        on any finding, so a rule the repo does not satisfy would block every
+        Python-touching push. This asserts the sweep was actually completed
+        rather than deferred.
+        """
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "tools" / "encoding_lint.py"), "--check",
+             "--root", str(ROOT)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=300,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
 if __name__ == '__main__':
     unittest.main()

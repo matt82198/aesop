@@ -405,7 +405,7 @@ class IncidentChecker:
                 cwd=str(self.repo_root),
                 capture_output=True,
                 text=True,
-                encoding='utf-8',
+                encoding='utf-8', errors='replace',
                 check=False
             )
             return result.stdout.strip() == "true"
