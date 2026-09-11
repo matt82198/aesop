@@ -137,7 +137,7 @@ def main():
     # If --repos-json provided, read repos from JSON file
     if repos_json_file and os.path.isfile(repos_json_file):
         try:
-            with open(repos_json_file, "r") as f:
+            with open(repos_json_file, "r", encoding="utf-8") as f:
                 repos_data = json.load(f)
                 for repo_obj in repos_data:
                     if isinstance(repo_obj, dict) and "repo" in repo_obj:
