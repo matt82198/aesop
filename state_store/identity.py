@@ -5,10 +5,16 @@ Implements durable instance identity: hostname:pid:nonce (ephemeral) or stable_i
 
 - Ephemeral form (get_instance_id): hostname:pid:nonce; cached within process.
 - Durable form (get_identity_with_epoch): (stable_id, epoch) persisted to $AESOP_STATE_ROOT/instance-id.
-  Epoch is a monotonic boot counter; restart increments it. Used for claim fencing in multibox.
+  Epoch is a monotonic boot counter; ACQUIRING the identity increments and persists it
+  (atomic read-modify-write), so each process/boot gets a strictly higher fencing token
+  than every prior boot on that state root. Within one process the value is cached, so
+  repeated calls return the same epoch. Used for claim fencing in multibox.
 
 Fail-open on IDENTITY creation: missing/unwritable id file on FRESH box falls back to ephemeral.
-Fail-closed on corruption: if id file EXISTED but is corrupt (torn write), raises IdentityCorruptionError.
+Fail-closed on corruption: if id file EXISTED but is corrupt (torn write, missing keys, or a
+non-integer epoch), raises IdentityCorruptionError.
+Fail-closed on persist failure: if the bumped epoch cannot be written, raises EpochPersistError
+(a subclass of IdentityCorruptionError) rather than handing back a reused epoch.
 The distinction preserves epoch monotonicity: a stale crashed instance cannot claim epoch=1 after a restart.
 
 Stdlib only: socket, os, random, string, json, pathlib.
@@ -26,6 +32,17 @@ from typing import Optional
 
 class IdentityCorruptionError(Exception):
     """Raised when persisted identity file is corrupt and recovery is impossible."""
+
+    pass
+
+
+class EpochPersistError(IdentityCorruptionError):
+    """Raised when a bumped epoch cannot be durably persisted.
+
+    Subclasses IdentityCorruptionError so existing fail-closed handlers keep working.
+    Fail-closed on purpose: returning the un-bumped epoch would hand a restarting
+    instance the SAME fencing token its pre-crash self may still be using.
+    """
 
     pass
 
@@ -102,24 +119,58 @@ def get_identity_with_epoch(state_root: Optional[str] = None) -> tuple[str, int]
         return ephemeral_id, 1
 
 
+def _write_identity_atomic(id_path: Path, data: dict) -> None:
+    """Persist the identity file atomically (temp file in the same dir + os.replace).
+
+    A torn write here is what `_init_identity_file` fails closed on at the next boot,
+    so the write itself must never be able to leave a partial file behind.
+
+    Raises:
+        OSError: if the temp write, flush, or replace fails.
+    """
+    tmp_path = id_path.with_name(id_path.name + f".tmp.{os.getpid()}")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, id_path)
+    except BaseException:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
 def _init_identity_file(state_root: str) -> tuple[str, int]:
-    """Initialize or load persisted identity file.
+    """Initialize or load persisted identity, INCREMENTING the epoch on acquisition.
+
+    Epoch is a monotonic boot counter used as the multibox fencing token. Acquiring an
+    identity is what advances it — before deep-scan B3 nothing in the repo ever
+    incremented it, so `get_identity_with_epoch` returned 1 forever and a post-crash
+    instance was indistinguishable from its pre-crash self.
 
     Distinguishes fresh box (no prior file) from crash recovery (corrupt file):
     - If file doesn't exist: creates it with epoch=1 (fresh box)
     - If file exists but is corrupt: raises IdentityCorruptionError (fail-closed)
-    - If file exists and is valid: loads and returns the persisted identity
+    - If file exists and is valid: atomically read-modify-writes epoch -> epoch + 1
+      and returns the NEW epoch
 
     Args:
         state_root: Directory for persisted identity file.
 
     Returns:
-        Tuple of (stable_id, epoch).
+        Tuple of (stable_id, epoch), where epoch is the freshly acquired value.
 
     Raises:
-        IdentityCorruptionError: If file exists but is corrupt (JSON parse error, missing keys).
-                                 This preserves epoch monotonicity for multibox fencing.
-        OSError: If directory creation fails (caller falls back to ephemeral on fresh box).
+        IdentityCorruptionError: If file exists but is corrupt (JSON parse error, missing
+                                 keys, non-integer epoch). Preserves epoch monotonicity.
+        EpochPersistError: If the bumped epoch cannot be durably written. Fail-closed:
+                           reusing an epoch would defeat fencing.
+        OSError: If directory creation or FRESH-box creation fails (caller falls back to
+                 ephemeral only for the fresh-box case).
     """
     id_path = Path(state_root) / "instance-id"
     Path(state_root).mkdir(parents=True, exist_ok=True)
@@ -134,7 +185,7 @@ def _init_identity_file(state_root: str) -> tuple[str, int]:
                 raise IdentityCorruptionError(
                     f"Identity file {id_path} is empty; corrupted during prior write. "
                     "Restart refused to preserve epoch monotonicity. "
-                    "Manual recovery: remove {id_path} and restart."
+                    f"Manual recovery: remove {id_path} and restart."
                 )
             data = json.loads(content)
             stable_id = data.get("stable_id")
@@ -143,16 +194,42 @@ def _init_identity_file(state_root: str) -> tuple[str, int]:
                 raise IdentityCorruptionError(
                     f"Identity file {id_path} missing required keys (stable_id, epoch). "
                     "Corrupted or incompatible format. "
-                    "Manual recovery: remove {id_path} and restart."
+                    f"Manual recovery: remove {id_path} and restart."
                 )
-            return stable_id, epoch
         except json.JSONDecodeError as e:
             # JSON parse error: torn/partial write during prior persist
             raise IdentityCorruptionError(
                 f"Identity file {id_path} has invalid JSON: {e}. "
                 "Corrupted during prior write. "
-                "Manual recovery: remove {id_path} and restart."
+                f"Manual recovery: remove {id_path} and restart."
             )
+
+        # An epoch we cannot increment monotonically is corrupt, not merely odd.
+        # bool is an int subclass, so exclude it explicitly.
+        if isinstance(epoch, bool) or not isinstance(epoch, int):
+            raise IdentityCorruptionError(
+                f"Identity file {id_path} has non-integer epoch {epoch!r}; "
+                "epoch monotonicity cannot be preserved. "
+                f"Manual recovery: remove {id_path} and restart."
+            )
+        if epoch < 1:
+            raise IdentityCorruptionError(
+                f"Identity file {id_path} has epoch {epoch} < 1; "
+                f"Manual recovery: remove {id_path} and restart."
+            )
+
+        # ACQUISITION: bump the fencing token and persist BEFORE returning it, so a
+        # crash right after this point can never hand out the same epoch twice.
+        new_epoch = epoch + 1
+        try:
+            _write_identity_atomic(id_path, {"stable_id": stable_id, "epoch": new_epoch})
+        except OSError as e:
+            raise EpochPersistError(
+                f"Could not persist incremented epoch {new_epoch} to {id_path}: {e}. "
+                "Refusing to start: reusing epoch "
+                f"{epoch} would let this instance masquerade as its pre-crash self."
+            )
+        return stable_id, new_epoch
     else:
         # File DOES NOT EXIST: fresh box, create new identity with epoch=1
         stable_id = _derive_stable_id()
@@ -160,8 +237,7 @@ def _init_identity_file(state_root: str) -> tuple[str, int]:
         data = {"stable_id": stable_id, "epoch": epoch}
         # Write may fail (unwritable directory), but we let OSError propagate
         # to caller which catches it and falls back to ephemeral (fail-open for fresh boxes)
-        with open(id_path, "w", encoding="utf-8") as f:
-            json.dump(data, f)
+        _write_identity_atomic(id_path, data)
         return stable_id, epoch
 
 
@@ -183,10 +259,18 @@ def _derive_stable_id() -> str:
 
 
 def release_own_stale(state_root: str, stable_id: str, prior_epochs: list[int]) -> bool:
-    """Release (reclaim) own claims from prior epochs on startup.
+    """Release (reclaim) own claims from prior epochs on startup. NOT YET IMPLEMENTED.
 
-    Coordinated with the lease backend (Inc 4+) to immediately reclaim claims
-    from a restarted instance's prior epochs, avoiding TTL wait time.
+    Intended behaviour (Inc 5, when lease-backend coordination is wired): immediately
+    reclaim claims still held under a restarted instance's prior epochs, so a restart
+    does not have to wait out the full lease TTL.
+
+    Deep-scan B3: this previously returned an unconditional ``True`` while doing nothing.
+    That is worse than absent — a caller that trusted the return value believed prior
+    claims had been reclaimed and would proceed to write files its pre-crash self still
+    holds a live lease on. It now fails loudly instead. Callers that merely want
+    best-effort reclamation should catch NotImplementedError and fall back to waiting
+    out the TTL, which is the behaviour the stub was silently providing anyway.
 
     Args:
         state_root: Base directory for state.
@@ -194,8 +278,14 @@ def release_own_stale(state_root: str, stable_id: str, prior_epochs: list[int]) 
         prior_epochs: List of epoch numbers to reclaim.
 
     Returns:
-        True if all prior epochs were released (or none existed).
+        Never returns; declared bool for the eventual Inc 5 signature.
+
+    Raises:
+        NotImplementedError: always, until lease-backend coordination lands.
     """
-    # TODO: Implement in Inc 5 when lease backend coordination is wired.
-    # For now, this is a no-op placeholder to satisfy the API contract.
-    return True
+    raise NotImplementedError(
+        "release_own_stale is not implemented: prior-epoch claim reclamation requires "
+        "the lease-backend coordination landing in multibox Inc 5. Until then, prior "
+        "claims are reclaimed by TTL expiry. This raises rather than returning True so "
+        "no caller can believe reclamation happened when it did not."
+    )
