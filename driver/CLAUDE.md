@@ -34,6 +34,7 @@
 - **context_pack.py** — Context-pack assembly for orchestrator decisions (allowlist-only reads).
 - **wave_scheduler.py** — Wave-manifest scheduler: builds worker driver from config, dispatches wave items.
 - **decisions/** — Decision type schema registry (sibling lane owns schemas; absent = optional).
+  Test corpora (corpus-*.jsonl) use profile-agnostic paths in evidence/examples (~/aesop, testuser, not hardcoded machine-specific paths) to support multi-profile shared checkouts.
 - **../tests/** — test_agent_driver (contract), test_codex_driver_e2e (offline + gated
   live), test_wave_bridge, test_orchestrator_driver, test_adjudication_gate,
   test_hs2_swap_proof, test_hs2_block_gate, test_wave_loop_rs3 (round-2 robustness:

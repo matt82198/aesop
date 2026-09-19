@@ -7,6 +7,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - Tests never pollute cwd or global git config; temp dirs only; dummy secrets are runtime-concatenated, never literal.
 - In worktrees use ABSOLUTE paths under the worktree for every write.
 - Domain docs stay minimal-but-complete; update this file in the same PR as code it describes.
+- **Profile-agnostic paths**: redaction and path-handling code must genericize over Windows profile names (use `[A-Za-z0-9_]+` regex, not hardcoded names) so checkout works across shared boxes; test fixtures use neutral placeholders (~/example, testuser, not machine-specific paths).
 
 ## Core invariants
 
