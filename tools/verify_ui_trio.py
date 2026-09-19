@@ -161,9 +161,9 @@ def verify_redaction_patterns_consistency() -> None:
     # Token assembled at runtime to avoid pattern detection by scanners
     sk_probe = "sk" + "-" + "proj_1a2b3c4d5e6f7g8h9i0j"
     canonical_probes = {
-        'windows_path': ('C:\\Users\\matt8\\aesop', '[PATH]'),
-        'posix_path_uppercase': ('/Users/matt8/aesop', '[PATH]'),  # Uppercase /Users
-        'posix_path_lowercase': ('/c/Users/matt8/aesop', '[PATH]'),  # Lowercase home
+        'windows_path': ('C:\\Users\\testuser\\aesop', '[PATH]'),
+        'posix_path_uppercase': ('/Users/testuser/aesop', '[PATH]'),  # Uppercase /Users
+        'posix_path_lowercase': ('/c/Users/testuser/aesop', '[PATH]'),  # Lowercase home
         'email': ('user@example.com', '[EMAIL]'),
         'sk_token': (sk_probe, '[REDACTED]'),  # 20+ chars after sk-
     }
@@ -338,7 +338,7 @@ def main():
             "messages": [
                 {
                     "type": "text",
-                    "text": "Testing redaction of paths like C:\\Users\\matt8\\aesop and /c/Users/matt8/aesop"
+                    "text": "Testing redaction of paths like ~/aesop and ~/aesop"
                 },
                 {
                     "type": "text",
