@@ -5,7 +5,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 ## Universal rules (every domain)
 - Feature branch only, never main; every push gated by `python tools/secret_scan.py --staged` exit 0.
 - Tests never pollute cwd or global git config; temp dirs only; dummy secrets are runtime-concatenated, never literal.
-- In worktrees use ABSOLUTE paths under the worktree for every write.
+- In worktrees use ABSOLUTE paths under the worktree for every write; redaction and path-handling code must genericize over Windows profile names (use `[A-Za-z0-9_]+` regex, not hardcoded) so checkout works across shared boxes.
 - Domain docs stay minimal-but-complete; update this file in the same PR as code it describes.
 
 ## Core invariants
