@@ -41,7 +41,9 @@
     "CLAUDE-TEMPLATE.md",
     "README.md",
     "LICENSE",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "requirements.txt",
+    "requirements-dev.txt"
   ],
   "engines": {
     "node": ">=18"
