@@ -107,13 +107,16 @@ class LocalLeaseBackend(ClaimBackend):
     already proven to be atomic (6311288b fixed TOCTOU at this level).
     """
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, config: Optional[dict] = None):
         """Initialize with a LeaseStore.
 
         Args:
             db_path: path to SQLite database file
+            config: optional aesop config dict. ``multibox.case_policy`` selects the
+                    claim-path case policy; omitting it uses the host-independent
+                    default (see state_store.lease_claims).
         """
-        self._store = LeaseStore(db_path)
+        self._store = LeaseStore(db_path, config=config)
 
     def claim(
         self, paths: list[str], instance_id: str, ttl_seconds: float
@@ -165,6 +168,7 @@ def get_backend(db_path: str, config: Optional[dict] = None) -> Optional[ClaimBa
     enabled = multibox_config.get("enabled", False)
 
     if enabled:
-        return LocalLeaseBackend(db_path)
+        # Pass config through so multibox.case_policy reaches the claim keyspace.
+        return LocalLeaseBackend(db_path, config=config)
     else:
         return None

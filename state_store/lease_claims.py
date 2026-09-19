@@ -8,12 +8,30 @@ threads. Fails closed: any exception in claim/renew/release propagates; no silen
 
 Deterministic time injection (clock parameter) enables testing without sleeps or mocking.
 
-PLATFORM-SPECIFIC PATH NORMALIZATION:
-  On Windows (os.name == 'nt'): paths are normalized via os.path.normcase() + os.path.normpath()
-    to handle both separator styles (/ vs \\) and case-insensitivity (README.md vs README.MD).
-  On Linux/Unix: paths are normalized via os.path.normpath() only, preserving case sensitivity
-    (README.md and README.MD are legitimately different files). This respects local filesystem
-    semantics while catching separator mismatches (dir/file vs dir/file).
+HOST-INDEPENDENT PATH NORMALIZATION (deep-scan B1, 2026-08-03):
+  Claim keys are derived by `state_store.paths.canonical_claim_path` under a CONFIGURED
+  case policy, never under a policy inferred from the host OS.
+
+  Previously the key was computed with case_policy="platform", which case-folds when
+  os.name == 'nt' and preserves case otherwise. Two instances sharing one coordination
+  database therefore derived DIFFERENT keys for the same file — 'tools/Runner.py' keyed
+  as 'tools/runner.py' on Windows and 'tools/Runner.py' on Linux — so `_check_conflicts`
+  (an exact-match lookup) missed and BOTH instances were granted the claim. Split-brain.
+
+  Policy resolution order (see `resolve_case_policy`):
+    1. explicit `case_policy=` argument
+    2. `config["multibox"]["case_policy"]`
+    3. `AESOP_CLAIM_CASE_POLICY` environment variable
+    4. DEFAULT_CASE_POLICY ("insensitive")
+
+  The default is "insensitive" — deliberately the OVER-colliding choice. A claim keyspace
+  may safely collide two distinct files (the loser waits); it may never fail to collide two
+  names for the SAME file (both instances write it). "insensitive" is also the only policy
+  that is identical on every host, which is the property the multibox plan requires.
+  Deployments that need case-sensitive single-box semantics opt in explicitly with
+  `LeaseStore(db, case_policy="sensitive")`. An unrecognized policy raises ValueError
+  (fail-closed) rather than silently selecting a different keyspace.
+
   Original path strings are preserved in error messages for user clarity.
 """
 
@@ -30,31 +48,81 @@ from typing import Callable, Optional
 from state_store.paths import canonical_claim_path
 
 
-def _normalize_path(path: str) -> str:
-    """Normalize a file path for comparison, respecting platform-specific semantics.
+# Environment variable overriding the claim-path case policy.
+CLAIM_CASE_POLICY_ENV = "AESOP_CLAIM_CASE_POLICY"
 
-    DEPRECATED: This is now a thin alias to canonical_claim_path() with case_policy="platform"
-    for backward compatibility. New code should use canonical_claim_path() directly.
+# Host-independent default. See the module docstring for why over-collision is the
+# safe direction and why "platform" is not an acceptable default.
+DEFAULT_CASE_POLICY = "insensitive"
 
-    On Windows (os.name == 'nt'):
-      - Normalize separators (/ and \\ both become the platform separator)
-      - Apply case-folding (case-insensitive filesystem)
-      Result: 'dir/file.txt' and 'dir\\FILE.TXT' compare equal
+# Policies accepted by state_store.paths.canonical_claim_path.
+VALID_CASE_POLICIES = ("platform", "insensitive", "sensitive")
 
-    On Linux/Unix (os.name != 'nt'):
-      - Normalize separators (standardize to forward slashes)
-      - Preserve case (case-sensitive filesystem)
-      Result: 'dir/file.txt' and 'dir\\file.txt' compare equal (same canonical form)
-      But: 'readme.md' and 'README.MD' remain different
+
+def _validate_case_policy(policy: str, source: str) -> str:
+    """Return ``policy`` if recognized, else raise ValueError (fail-closed).
+
+    A silent fallback here would change the claim keyspace without anyone noticing,
+    which is the same class of bug as B1 itself.
+    """
+    if policy not in VALID_CASE_POLICIES:
+        raise ValueError(
+            f"Invalid claim case_policy {policy!r} from {source}. "
+            f"Expected one of {VALID_CASE_POLICIES}."
+        )
+    return policy
+
+
+def resolve_case_policy(config: Optional[dict] = None) -> str:
+    """Resolve the claim-path case policy from config, then env, then the default.
 
     Args:
-        path: the file path to normalize
+        config: optional aesop config dict; read at ``config["multibox"]["case_policy"]``.
 
     Returns:
-        Canonical form of the path, normalized for filesystem comparison
+        One of VALID_CASE_POLICIES.
+
+    Raises:
+        ValueError: if a configured or environment-supplied policy is unrecognized.
     """
-    # Delegate to canonical_claim_path with case_policy="platform" for backward compatibility
-    return canonical_claim_path(path, case_policy="platform")
+    if config:
+        multibox = config.get("multibox") or {}
+        configured = multibox.get("case_policy")
+        if configured is not None:
+            return _validate_case_policy(configured, "config multibox.case_policy")
+
+    from_env = os.environ.get(CLAIM_CASE_POLICY_ENV)
+    if from_env:
+        return _validate_case_policy(from_env, f"${CLAIM_CASE_POLICY_ENV}")
+
+    return DEFAULT_CASE_POLICY
+
+
+def _normalize_path(path: str, case_policy: Optional[str] = None) -> str:
+    """Normalize a file path into a claim key. HOST-INDEPENDENT by default.
+
+    This is the single normalization entry point LeaseStore uses for both storage and
+    conflict checking, so any guard test that wants to prove the keyspace is
+    host-independent must call THIS (not canonical_claim_path with a policy production
+    never passes — that was deep-scan finding B2).
+
+    Args:
+        path: the file path to normalize.
+        case_policy: explicit policy; when None it is resolved at call time via
+                     ``resolve_case_policy()`` (config/env/default).
+
+    Returns:
+        Canonical claim key: forward slashes, no '.'/'..' components, NFC-normalized,
+        case-folded per the resolved policy.
+
+    Raises:
+        ValueError: if the resolved policy is unrecognized (fail-closed).
+    """
+    if case_policy is None:
+        case_policy = resolve_case_policy()
+    else:
+        case_policy = _validate_case_policy(case_policy, "case_policy argument")
+    return canonical_claim_path(path, case_policy=case_policy)
 
 
 class LeaseConflict(Exception):
@@ -70,15 +138,40 @@ class LeaseConflict(Exception):
 class LeaseStore:
     """Atomic file-scope lease store using SQLite with deterministic time injection."""
 
-    def __init__(self, db_path: str):
+    def __init__(
+        self,
+        db_path: str,
+        case_policy: Optional[str] = None,
+        config: Optional[dict] = None,
+    ):
         """Initialize lease store with SQLite database.
 
         Args:
             db_path: path to SQLite database file
+            case_policy: explicit claim-path case policy (one of VALID_CASE_POLICIES).
+                         When None and no ``config`` is given, the policy is resolved at
+                         call time so environment changes are picked up without restart.
+            config: optional aesop config dict; ``multibox.case_policy`` is read once here.
+
+        Raises:
+            ValueError: if an unrecognized case policy is supplied (fail-closed).
         """
         self.db_path = db_path
+        if case_policy is not None:
+            self.case_policy: Optional[str] = _validate_case_policy(
+                case_policy, "LeaseStore(case_policy=...)"
+            )
+        elif config is not None:
+            self.case_policy = resolve_case_policy(config)
+        else:
+            # Deferred: resolved per call by _normalize_path (call-time config reads).
+            self.case_policy = None
         self._conn: Optional[sqlite3.Connection] = None
         self._init_schema()
+
+    def _key(self, path: str) -> str:
+        """Derive this store's claim key for ``path`` under its configured policy."""
+        return _normalize_path(path, self.case_policy)
 
     def _get_conn(self) -> sqlite3.Connection:
         """Get or create thread-local SQLite connection."""
@@ -162,7 +255,7 @@ class LeaseStore:
         lease_id = str(uuid.uuid4())
 
         # Normalize paths for storage and conflict checking
-        normalized_paths = [_normalize_path(p) for p in paths]
+        normalized_paths = [self._key(p) for p in paths]
 
         conn = self._get_conn()
 
@@ -399,7 +492,7 @@ class LeaseStore:
             return None
 
         # Normalize paths for comparison
-        normalized_paths = [_normalize_path(p) for p in paths]
+        normalized_paths = [self._key(p) for p in paths]
         now = clock()
 
         conn = self._get_conn()

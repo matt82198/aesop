@@ -14,6 +14,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 class TestIdentityPersistence(unittest.TestCase):
@@ -112,34 +113,115 @@ print(f"{stable_id}|{epoch}")
         self.assertEqual(
             stable_id_1, stable_id_2, "Stable ID should be identical across processes sharing state root"
         )
-        self.assertEqual(epoch_1, epoch_2, "Epoch should be identical across processes on first read")
+        # Deep-scan B3: this previously asserted the epochs were EQUAL, which is the bug
+        # stated as a requirement — if two live processes share a fencing token, the token
+        # fences nothing. The stable_id is what persists across processes; the epoch is
+        # what distinguishes them.
+        self.assertEqual(
+            epoch_2,
+            epoch_1 + 1,
+            "Each acquiring process must get a strictly higher epoch (fencing token)",
+        )
 
     def test_epoch_monotonicity_across_simulated_restarts(self):
-        """Verify epoch increments on simulated restarts."""
-        from state_store.identity import get_identity_with_epoch, _init_identity_file
+        """Verify epoch increments on simulated restarts — WITHOUT the test doing the bump.
+
+        Deep-scan B3: the prior version of this test hand-edited the epoch in the
+        identity file and then asserted the file it had just written. Production
+        never incremented anything, so `get_identity_with_epoch` returned 1 forever
+        and epoch could not distinguish a pre-crash from a post-crash instance.
+        """
+        from state_store.identity import get_identity_with_epoch
+        import state_store.identity as id_module
 
         # First "boot"
         stable_id_1, epoch_1 = get_identity_with_epoch(self.state_root)
 
-        # Simulate restart by clearing process cache
-        import state_store.identity as id_module
-
-        id_module._IDENTITY_CACHE.clear()
-
-        # Second "boot" — manually bump epoch to simulate restart
-        id_file = Path(self.state_root) / "instance-id"
-        with open(id_file, encoding="utf-8") as f:
-            data = json.load(f)
-        data["epoch"] = data["epoch"] + 1
-        with open(id_file, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-
-        # Clear cache again and read
+        # Simulate restart: clear the per-process cache ONLY. Production must do
+        # the incrementing; the test must not touch the identity file.
         id_module._IDENTITY_CACHE.clear()
         stable_id_2, epoch_2 = get_identity_with_epoch(self.state_root)
 
         self.assertEqual(stable_id_1, stable_id_2, "Stable ID should not change across restarts")
         self.assertEqual(epoch_2, epoch_1 + 1, "Epoch should increment on restart")
+
+    def test_epoch_strictly_increases_over_many_restarts(self):
+        """Deep-scan B3: epoch is a real monotonic boot counter, not a constant 1."""
+        from state_store.identity import get_identity_with_epoch
+        import state_store.identity as id_module
+
+        seen = []
+        stable_ids = set()
+        for _ in range(5):
+            id_module._IDENTITY_CACHE.clear()
+            stable_id, epoch = get_identity_with_epoch(self.state_root)
+            seen.append(epoch)
+            stable_ids.add(stable_id)
+
+        self.assertEqual(seen, [1, 2, 3, 4, 5], f"Epoch must strictly increase, got {seen}")
+        self.assertEqual(len(stable_ids), 1, "Stable ID must not change across restarts")
+
+    def test_epoch_is_cached_within_a_single_process(self):
+        """Epoch must NOT increment on every call — only on acquisition (per process)."""
+        from state_store.identity import get_identity_with_epoch
+
+        _, epoch_1 = get_identity_with_epoch(self.state_root)
+        _, epoch_2 = get_identity_with_epoch(self.state_root)
+        _, epoch_3 = get_identity_with_epoch(self.state_root)
+
+        self.assertEqual(epoch_1, epoch_2)
+        self.assertEqual(epoch_2, epoch_3)
+
+    def test_incremented_epoch_is_persisted_to_disk(self):
+        """The bumped epoch must be durable, or the next boot reuses a live epoch."""
+        from state_store.identity import get_identity_with_epoch
+        import state_store.identity as id_module
+
+        get_identity_with_epoch(self.state_root)
+        id_module._IDENTITY_CACHE.clear()
+        _, epoch = get_identity_with_epoch(self.state_root)
+
+        id_file = Path(self.state_root) / "instance-id"
+        with open(id_file, encoding="utf-8") as f:
+            data = json.load(f)
+        self.assertEqual(data["epoch"], epoch, "On-disk epoch must match the returned epoch")
+        self.assertEqual(data["epoch"], 2)
+
+    def test_epoch_persist_failure_fails_closed(self):
+        """If the bumped epoch cannot be persisted, startup must FAIL, not reuse the epoch.
+
+        Silently returning the un-bumped epoch would hand a restarted instance the
+        same fencing token its pre-crash self is still using.
+        """
+        from state_store.identity import get_identity_with_epoch, EpochPersistError
+        import state_store.identity as id_module
+
+        get_identity_with_epoch(self.state_root)
+        id_module._IDENTITY_CACHE.clear()
+
+        with mock.patch.object(
+            id_module, "_write_identity_atomic", side_effect=OSError("disk full")
+        ):
+            with self.assertRaises(EpochPersistError):
+                get_identity_with_epoch(self.state_root)
+
+    def test_epoch_persist_error_is_an_identity_corruption_error(self):
+        """EpochPersistError subclasses IdentityCorruptionError (fail-closed callers keep working)."""
+        from state_store.identity import EpochPersistError, IdentityCorruptionError
+
+        self.assertTrue(issubclass(EpochPersistError, IdentityCorruptionError))
+
+    def test_non_integer_epoch_fails_closed(self):
+        """A non-integer epoch cannot be incremented monotonically: fail closed."""
+        from state_store.identity import get_identity_with_epoch, IdentityCorruptionError
+        import state_store.identity as id_module
+
+        id_file = Path(self.state_root) / "instance-id"
+        id_file.write_text('{"stable_id": "host:abc", "epoch": "two"}', encoding="utf-8")
+        id_module._IDENTITY_CACHE.clear()
+
+        with self.assertRaises(IdentityCorruptionError):
+            get_identity_with_epoch(self.state_root)
 
     def test_corrupt_id_file_fails_closed(self):
         """Verify corrupt/unreadable id file FAILS CLOSED when prior file existed.
@@ -180,24 +262,27 @@ print(f"{stable_id}|{epoch}")
             data = json.load(f)
         self.assertEqual(data["epoch"], 1)
 
-    def test_read_only_valid_id_file_succeeds(self):
-        """Verify read-only but valid id file can still be read (no write needed on read path)."""
+    def test_existing_id_file_is_loaded_and_bumped(self):
+        """A valid existing identity file is loaded, and its epoch is bumped on acquisition.
+
+        Replaces test_read_only_valid_id_file_succeeds, whose premise ("no write is
+        needed on the read path") is exactly what deep-scan B3 identified as the bug:
+        an acquisition that never writes can never advance the fencing token. The
+        write-failure branch is covered deterministically by
+        test_epoch_persist_failure_fails_closed (chmod-based coverage is unreliable:
+        it is a no-op for root on Linux CI).
+        """
         from state_store.identity import get_identity_with_epoch
 
-        # Create read-only id file with valid content
         id_file = Path(self.state_root) / "instance-id"
         id_file.write_text('{"stable_id": "test:123abc", "epoch": 2}', encoding="utf-8")
-        id_file.chmod(0o444)  # Read-only
 
-        try:
-            # Should succeed because reading a valid file doesn't require write access
-            stable_id, epoch = get_identity_with_epoch(self.state_root)
+        stable_id, epoch = get_identity_with_epoch(self.state_root)
 
-            self.assertEqual(stable_id, "test:123abc", "Should have read the persisted stable_id")
-            self.assertEqual(epoch, 2, "Should have read the persisted epoch")
-        finally:
-            # Restore permissions for cleanup
-            id_file.chmod(0o644)
+        self.assertEqual(stable_id, "test:123abc", "Should have read the persisted stable_id")
+        self.assertEqual(epoch, 3, "Acquisition must bump the persisted epoch 2 -> 3")
+        with open(id_file, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["epoch"], 3)
 
     def test_aesop_state_root_env_var_respected(self):
         """Verify AESOP_STATE_ROOT environment variable is respected."""
@@ -223,23 +308,28 @@ print(f"{stable_id}|{epoch}")
         parts = instance_id.split(":")
         self.assertEqual(len(parts), 3, f"Instance ID should have 3 parts (hostname:pid:nonce), got {instance_id}")
 
-    def test_release_own_stale_clears_prior_epochs(self):
-        """Verify release_own_stale() function releases claims from prior epochs."""
+    def test_release_own_stale_raises_not_implemented(self):
+        """Deep-scan B3: the reclamation stub must not claim success it never performed.
+
+        release_own_stale() previously returned an unconditional True while doing
+        nothing, so a caller that trusted it believed prior-epoch claims had been
+        reclaimed and would proceed to write files still leased by its pre-crash
+        self. Until the lease-backend coordination lands (Inc 5), it fails loudly.
+        """
         from state_store.identity import get_identity_with_epoch, release_own_stale
 
-        # Get current identity
         stable_id, current_epoch = get_identity_with_epoch(self.state_root)
 
-        # Simulate prior epochs by tracking them
-        prior_epochs = [current_epoch - 2, current_epoch - 1]
+        with self.assertRaises(NotImplementedError):
+            release_own_stale(self.state_root, stable_id, [current_epoch - 1])
 
-        # release_own_stale should accept these prior epochs
-        # (actual claim release is coordinated through the lease backend in Inc 4+)
-        # For now, just verify the function exists and is callable
-        result = release_own_stale(self.state_root, stable_id, prior_epochs)
+    def test_release_own_stale_raises_even_for_empty_epoch_list(self):
+        """No silent 'success' path: an empty list must not read as 'reclaimed'."""
+        from state_store.identity import get_identity_with_epoch, release_own_stale
 
-        # Should return success status
-        self.assertIsNotNone(result, "release_own_stale should return a result")
+        stable_id, _ = get_identity_with_epoch(self.state_root)
+        with self.assertRaises(NotImplementedError):
+            release_own_stale(self.state_root, stable_id, [])
 
     def test_corrupt_prior_id_file_fails_closed(self):
         """Verify corrupt/torn-write id file FAILS CLOSED when prior file existed.
