@@ -263,7 +263,7 @@ def summarize_ledger(ledger_path: str, json_output: bool = False, markdown_outpu
             before = entry.get("score_before")
             after = entry.get("score_after")
             if before is not None and after is not None:
-                key = (entry.get("doc"), entry.get("ts"), before, after)
+                key = (entry.get("doc"), entry.get("detector"), entry.get("note"), before, after)  # one recording = one movement
                 if key in seen_docs:
                     continue
                 seen_docs.add(key)
