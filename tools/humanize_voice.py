@@ -279,18 +279,31 @@ def compare_profile(profile: dict, draft_file: str) -> dict:
     divergences.sort(key=lambda x: x['distance'], reverse=True)
     top_divergences = divergences[:5]
 
-    # Generate suggestions for top divergences
-    suggestions = {
-        'sentence_length_mean': 'Try breaking longer sentences into shorter ones.',
-        'fragment_rate': 'Use more complete sentences or fewer fragments.',
-        'contraction_rate': 'Add more contractions like "it\'s", "don\'t" for a casual tone.',
-        'first_person_rate': 'Use more first-person pronouns (I, me, we) to personalize.',
-        'discourse_marker_rate': 'Add more discourse markers like "honestly", "so", "anyway".',
-        'em_dash_density': 'Use more em-dashes for emphasis or thoughts.',
-        'semicolon_density': 'Use more semicolons to connect related clauses.',
-        'question_rate': 'Ask more questions to engage the reader.',
-        'avg_word_length': 'Use shorter words for accessibility or longer words for formality.',
+    # Direction-aware suggestions: say "more" or "fewer" based on which side the draft is on.
+    nouns = {
+        'sentence_length_mean': ('words per sentence', 'split the long ones', 'let some sentences run longer'),
+        'sentence_length_p10': ('words in the shortest sentences', 'add a few short ones', 'lengthen the shortest sentences'),
+        'sentence_length_p90': ('words in the longest sentences', 'trim the longest sentences', 'allow a longer sentence now and then'),
+        'fragment_rate': ('fragments', 'cut some fragments', 'let a fragment stand'),
+        'contraction_rate': ('contractions', 'spell a few out', "use contractions (it's, don't)"),
+        'first_person_rate': ('first-person pronouns', 'take yourself out of a few sentences', 'say I'),
+        'question_rate': ('questions', 'cut a question', 'ask one'),
+        'discourse_marker_rate': ('discourse markers (honestly, so, anyway)', 'drop a marker', 'add one where you would say it aloud'),
+        'em_dash_density': ('em dashes', 'swap dashes for commas or full stops', 'a dash is fine here and there'),
+        'semicolon_density': ('semicolons', 'swap semicolons for full stops', 'a semicolon is fine'),
+        'colon_density': ('colons', 'cut a colon', 'a colon is fine'),
+        'avg_word_length': ('letters per word', 'use plainer words', 'longer words are fine here'),
+        'number_density': ('numbers', 'fewer figures', 'put a real number in'),
+        'paragraph_length_mean': ('sentences per paragraph', 'break a paragraph', 'join two short paragraphs'),
+        'type_token_ratio': ('distinct words', 'repeat a word rather than reach for a synonym', 'vary the wording'),
     }
+
+    def suggest(d):
+        noun, too_high, too_low = nouns.get(d['feature'], (d['feature'], 'bring it down', 'bring it up'))
+        pv, dv = d['profile_value'], d['draft_value']
+        if dv > pv:
+            return f"Draft has more {noun} than you do ({dv:g} vs {pv:g}): {too_high}."
+        return f"Draft has fewer {noun} than you do ({dv:g} vs {pv:g}): {too_low}."
 
     comparison = {
         'profile_name': profile['name'],
@@ -302,7 +315,7 @@ def compare_profile(profile: dict, draft_file: str) -> dict:
                 'profile_value': d['profile_value'],
                 'draft_value': d['draft_value'],
                 'distance': d['distance'],
-                'suggestion': suggestions.get(d['feature'], 'Check this metric.')
+                'suggestion': suggest(d)
             }
             for d in top_divergences
         ],

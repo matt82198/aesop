@@ -262,3 +262,16 @@ def run_all_tests():
 if __name__ == '__main__':
     suite_status, suite_decl = run_all_tests()
     sys.exit(0 if suite_decl else 1)
+
+
+def test_suggestions_name_the_direction(tmp_path):
+    """A draft with MORE semicolons than the profile must be told to use fewer, not more."""
+    terse = "I built it. It works. No drama. We shipped it on a Tuesday. It still runs today."
+    semi = "I built it; it works; there was no drama; we shipped it on a Tuesday; it still runs today."
+    c = tmp_path / "c.txt"; c.write_text(terse * 4, encoding="utf-8")
+    d = tmp_path / "d.txt"; d.write_text(semi * 4, encoding="utf-8")
+    prof = build_profile([str(c)], "t")
+    comp = compare_profile(prof, str(d))
+    semis = [x for x in comp["top_5_divergences"] if x["feature"] == "semicolon_density"]
+    assert semis, comp["top_5_divergences"]
+    assert "more semicolons" in semis[0]["suggestion"] and "fewer" not in semis[0]["suggestion"].split(":")[0]
