@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Humanize Ledger — Records before/after text edits and their rule improvements.
+INDEX: Append-only JSONL ledger for humanization fixes; records sentence-level edits with rules cleared/introduced and score movement for pattern learning.
 
 Append-only JSONL ledger capturing sentence-level edits with rule clearances and
 score movement. Enables pattern learning from real human-written text.
