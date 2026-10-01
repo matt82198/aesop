@@ -77,18 +77,40 @@ def split_paragraphs(text: str) -> list[str]:
 
 def split_sentences(text: str) -> list[str]:
     """
-    Split text into sentences. Keeps abbreviations simple.
+    Split text into sentences. Preserves abbreviations and initials.
     Looks for .!? followed by space and capital letter or quote.
+    Does NOT split after:
+    - Single capital letter followed by period (initials like J. in "Matthew J. Culliton")
+    - Common abbreviations (Mr., Mrs., Dr., St., etc., Inc., Ltd., etc.)
     """
-    # Replace common abbreviations to protect them
-    protected = text.replace('Mr.', 'MR').replace('Mrs.', 'MRS').replace('Dr.', 'DR')
-    protected = protected.replace('Prof.', 'PROF').replace('vs.', 'VS')
+    # Step 1: Protect initials by replacing single capital + period with a marker
+    # E.g., "Matthew J. Culliton" -> "Matthew XJXINITX Culliton"
+    # The marker starts with capital X so it passes the split pattern's lookahead
+    initial_pattern = r'([A-Z])\.(\s+)(?=[A-Z])'
 
-    # Split on [.!?] followed by space and capital or quote
+    def replace_initial(match):
+        initial = match.group(1)
+        space = match.group(2)
+        # Return placeholder that will pass the lookahead [A-Z"]
+        return f"X{initial}XINITIALL{space}"
+
+    protected = re.sub(initial_pattern, replace_initial, text)
+
+    # Step 2: Protect common abbreviations by replacing the period with a marker
+    # E.g., "Mr." -> "MrXABBREV"
+    abbreviations = ['Mr.', 'Mrs.', 'Ms.', 'Dr.', 'Prof.', 'Sr.', 'Jr.', 'St.',
+                     'vs.', 'etc.', 'e.g.', 'i.e.', 'Inc.', 'Ltd.', 'Co.', 'Corp.']
+
+    for abbr in abbreviations:
+        # Replace period with marker: "Mr." -> "MrXABBREV"
+        protected = protected.replace(abbr, abbr[:-1] + "XABBREV")
+
+    # Step 3: Split on [.!?] followed by space and capital letter or quote
+    # This won't split at "J. Matthew" or "Mr. Smith" because those periods are now gone
     pattern = r'([.!?])\s+(?=[A-Z"])'
     sentences = re.split(pattern, protected)
 
-    # Reconstruct: every odd index is the punctuation, pair it with the next chunk
+    # Step 4: Reconstruct sentences by pairing content with punctuation
     result = []
     i = 0
     while i < len(sentences):
@@ -98,9 +120,14 @@ def split_sentences(text: str) -> list[str]:
         else:
             sent = sentences[i]
             i += 1
-        # Restore abbreviations
-        sent = sent.replace('MR', 'Mr.').replace('MRS', 'Mrs.').replace('DR', 'Dr.')
-        sent = sent.replace('PROF', 'Prof.').replace('VS', 'vs.')
+
+        # Step 5: Restore abbreviations and initials
+        # Replace XABBREV with period
+        sent = sent.replace("XABBREV", ".")
+        # Replace XJXINITIAL with J. (restore the initial and period)
+        for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+            sent = sent.replace(f"X{letter}XINITIALL", f"{letter}.")
+
         result.append(sent.strip())
 
     return [s for s in result if s]

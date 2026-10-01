@@ -34,6 +34,15 @@ class TestHumanizeLint(unittest.TestCase):
         self.assertTrue(sentences[0].startswith("Hello"))
         self.assertTrue(sentences[-1].startswith("Mr."))
 
+    def test_split_sentences_with_initials(self):
+        """Test sentence splitting does not split on initials like J. in 'Matthew J. Culliton'."""
+        text = "Matthew J. Culliton wrote it. It works."
+        sentences = split_sentences(text)
+        # Should be exactly 2 sentences, not 3
+        self.assertEqual(len(sentences), 2, f"Expected 2 sentences for 'Matthew J. Culliton wrote it. It works.', got {len(sentences)}: {sentences}")
+        self.assertEqual(sentences[0], "Matthew J. Culliton wrote it.")
+        self.assertEqual(sentences[1], "It works.")
+
     def test_split_paragraphs(self):
         """Test paragraph splitting on blank lines."""
         text = "First paragraph.\n\nSecond paragraph.\n\nThird."

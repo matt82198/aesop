@@ -27,19 +27,37 @@ from collections import defaultdict
 # INDEX: humanize_ledger.py — Append-only JSONL ledger for humanization fixes
 # with sentence-level alignments, rules cleared/introduced, and pattern learning.
 
-# Try to import split_sentences from humanize_lint; fallback to minimal implementation
+# Try to import split_sentences and lint_text from humanize_lint
+_lint_text_available = False
+_import_warning_shown = False
+
 try:
     from tools.humanize_lint import split_sentences, lint_text
+    _lint_text_available = True
 except ImportError:
-    def split_sentences(text: str) -> List[str]:
-        """Fallback sentence splitter: split on [.!?] followed by space + capital."""
-        # Simple regex-based fallback for when humanize_lint is not yet available
-        sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z"\'])', text)
-        return [s.strip() for s in sentences if s.strip()]
+    try:
+        # Try sibling import if tools is not a package
+        from humanize_lint import split_sentences, lint_text
+        _lint_text_available = True
+    except ImportError:
+        # Fallback: provide stub implementations
+        def split_sentences(text: str) -> List[str]:
+            """Fallback sentence splitter: split on [.!?] followed by space + capital."""
+            # Simple regex-based fallback for when humanize_lint is not yet available
+            sentences = re.split(r'(?<=[.!?])\s+(?=[A-Z"\'])', text)
+            return [s.strip() for s in sentences if s.strip()]
 
-    def lint_text(text: str, reference: Optional[str] = None) -> Dict[str, Any]:
-        """Fallback lint function: returns empty findings until humanize_lint is available."""
-        return {"rules_cleared": [], "rules_introduced": [], "score": 0, "findings": []}
+        def lint_text(text: str, reference: Optional[str] = None) -> List[Any]:
+            """Fallback lint function: returns empty findings until humanize_lint is available."""
+            return []
+
+
+def _ensure_lint_warning():
+    """Print a one-time warning if lint_text is unavailable."""
+    global _import_warning_shown
+    if not _lint_text_available and not _import_warning_shown:
+        print("WARNING: humanize_lint module not found. Linting unavailable; entries will have empty rules.", file=sys.stderr)
+        _import_warning_shown = True
 
 
 def resolve_state_root(override: Optional[str] = None) -> Path:
@@ -93,16 +111,42 @@ def align_sentences(before_text: str, after_text: str) -> List[Tuple[str, str, s
     return alignments
 
 
-def extract_rules_from_lint(lint_result: Dict[str, Any]) -> Tuple[List[str], List[str]]:
-    """Extract cleared and introduced rules from lint_text result."""
-    cleared = []
-    introduced = []
-    if isinstance(lint_result, dict):
-        if "rules_cleared" in lint_result:
-            cleared = lint_result["rules_cleared"]
-        if "rules_introduced" in lint_result:
-            introduced = lint_result["rules_introduced"]
-    return cleared, introduced
+def get_sentence_char_offsets(text: str) -> List[Tuple[str, int, int]]:
+    """
+    Return list of (sentence, start_offset, end_offset) for each sentence in text.
+    Offsets are absolute character positions in the original text.
+    """
+    sentences = split_sentences(text)
+    offsets = []
+    search_pos = 0
+
+    for sent in sentences:
+        # Find this sentence in the remaining text
+        start = text.find(sent, search_pos)
+        if start == -1:
+            # Sentence not found, skip
+            continue
+        end = start + len(sent)
+        offsets.append((sent, start, end))
+        search_pos = end
+
+    return offsets
+
+
+def get_rules_in_range(findings: List[Any], start: int, end: int) -> List[str]:
+    """
+    Given a list of findings (with start/end character offsets),
+    return the set of rule IDs for findings that overlap with [start, end).
+    """
+    rules = set()
+    for finding in findings:
+        # Check if finding overlaps with the range [start, end)
+        if finding.end > start and finding.start < end:
+            if hasattr(finding, 'rule'):
+                rules.add(finding.rule)
+            elif isinstance(finding, dict) and 'rule' in finding:
+                rules.add(finding['rule'])
+    return sorted(list(rules))
 
 
 def record_edits(
@@ -118,7 +162,14 @@ def record_edits(
     """
     Record edits from before/after files to the ledger.
     Writes one JSONL entry per sentence change.
+
+    Lints the WHOLE before and after documents (not individual sentences),
+    then attributes findings to sentences based on character offsets.
+    Rules cleared/introduced are determined by comparing the rules
+    in each sentence's position before vs. after.
     """
+    _ensure_lint_warning()
+
     try:
         before_text = Path(before_file).read_text(encoding="utf-8")
         after_text = Path(after_file).read_text(encoding="utf-8")
@@ -137,7 +188,23 @@ def record_edits(
         except Exception as e:
             print(f"WARNING: Failed to read reference file: {e}", file=sys.stderr)
 
+    # Run lint on the WHOLE before and after documents
+    before_findings = lint_text(before_text, reference_text) if _lint_text_available else []
+    after_findings = lint_text(after_text, reference_text) if _lint_text_available else []
+
+    # Record the availability of lint for debugging
+    lint_status = "available" if _lint_text_available else "unavailable"
+
+    # Get sentence alignments
     alignments = align_sentences(before_text, after_text)
+
+    # Get character offsets for sentences in before and after documents
+    before_offsets = get_sentence_char_offsets(before_text)
+    after_offsets = get_sentence_char_offsets(after_text)
+
+    # Create maps from sentence text to (start, end) for quick lookup
+    before_offset_map = {sent: (start, end) for sent, start, end in before_offsets}
+    after_offset_map = {sent: (start, end) for sent, start, end in after_offsets}
 
     entries_written = 0
     for before_sent, after_sent, op in alignments:
@@ -145,30 +212,21 @@ def record_edits(
         if op == "equal":
             continue
 
-        # Get rules for before/after
         rules_cleared = []
         rules_introduced = []
 
-        if before_sent:
-            before_lint = lint_text(before_sent, reference_text)
-            _, intro_before = extract_rules_from_lint(before_lint)
-        else:
-            intro_before = []
+        # Get character offsets for this sentence
+        before_range = before_offset_map.get(before_sent, (0, 0))
+        after_range = after_offset_map.get(after_sent, (0, 0))
 
-        if after_sent:
-            after_lint = lint_text(after_sent, reference_text)
-            clear_after, _ = extract_rules_from_lint(after_lint)
-        else:
-            clear_after = []
+        # Get rules that apply to this sentence in before and after
+        rules_before = set(get_rules_in_range(before_findings, before_range[0], before_range[1]))
+        rules_after = set(get_rules_in_range(after_findings, after_range[0], after_range[1]))
 
-        # Rules cleared: violations in before that don't appear in after
-        if before_sent and after_sent:
-            before_lint = lint_text(before_sent, reference_text)
-            after_lint = lint_text(after_sent, reference_text)
-            before_violations = set(extract_rules_from_lint(before_lint)[0])
-            after_violations = set(extract_rules_from_lint(after_lint)[0])
-            rules_cleared = sorted(list(before_violations - after_violations))
-            rules_introduced = sorted(list(after_violations - before_violations))
+        # Rules cleared: in before but not in after
+        rules_cleared = sorted(list(rules_before - rules_after))
+        # Rules introduced: in after but not in before
+        rules_introduced = sorted(list(rules_after - rules_before))
 
         entry = {
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -182,6 +240,7 @@ def record_edits(
             "score_after": score_after,
             "detector": detector,
             "note": note,
+            "lint": lint_status,
         }
 
         # Append to ledger
