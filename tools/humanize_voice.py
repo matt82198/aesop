@@ -5,7 +5,7 @@ humanize_voice.py — Build and compare against personal voice profiles.
 Extracts style features (sentence length, contractions, discourse markers, etc.)
 from a person's writing and measures how far a draft diverges from their style.
 
-INDEX: humanize_voice.py — voice profiler from stdlib text features (sentence/paragraph metrics, contractions, discourse markers, content words, phrase frequency)
+INDEX: Voice profiler extracting style features from corpus text to measure draft divergence from personal writing patterns.
 """
 
 import argparse
