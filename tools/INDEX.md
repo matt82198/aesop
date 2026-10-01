@@ -64,6 +64,7 @@ listed by adding an `INDEX: <one-liner>` line to its module docstring/header.
 - `healthcheck.py` -- Fleet health aggregator (heartbeat/alert/orchestrator status); health.js wraps Python
 - `heartbeat.py` -- Single-instance loop liveness registry
 - `hook_preflight.py` -- Interpreter health checker; verifies hooks/daemons interpreters; stdlib-only
+- `humanize_lint.py` -- Flags machine-writing patterns (ai-lexicon, tricolon, low-burstiness, bow-tie-closer, contrast-frame, dash-density, echo-source, opener-repeat, hedge-stack); scores 0-100; importable split_sentences() and lint_text().
 - `humanize_voice.py` -- Voice profiler extracting style features from corpus text to measure draft divergence from personal writing patterns.
 - `import_cycle_check.py` -- AST-based import cycle detector for Python modules
 - `import_resolution_check.py` -- Guardrail G5: Python import resolution validator (AST-parses .py files, resolves imports against repo structure + stdlib + environment, fail-closed on unresolvable modules); CLI: `--range A..B` (files ACTUALLY being pushed, blob read at range tip -- what pre-push-policy.sh uses) | `--staged` (index; pre-commit) | `--files P...` (worktree) | `--repo PATH`; exit 0=all resolvable/1=unresolvable/2=usage-or-git-error (fail-closed, never "clean"); logs audit trail to state/IMPORT-AUDIT.log
