@@ -320,8 +320,8 @@ def main():
         default=str(resolve_state_root() / "humanize-ledger.jsonl"),
         help="Path to ledger file (default: $AESOP_STATE_ROOT/humanize-ledger.jsonl)",
     )
-    record_parser.add_argument("--score-before", type=int, help="Humanness score before edit")
-    record_parser.add_argument("--score-after", type=int, help="Humanness score after edit")
+    record_parser.add_argument("--score-before", type=float, help="Humanness score before edit")
+    record_parser.add_argument("--score-after", type=float, help="Humanness score after edit")
     record_parser.add_argument("--detector", default="manual", help="Detector name (default: manual)")
     record_parser.add_argument("--note", default="", help="Optional note about the edit")
     record_parser.add_argument("--reference", help="Reference text file for comparison")
