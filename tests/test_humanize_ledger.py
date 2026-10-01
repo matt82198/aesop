@@ -278,3 +278,18 @@ if __name__ == "__main__":
         sys.exit(exit_code)
     else:
         sys.exit(result)
+
+
+def test_net_score_movement_counts_each_recording_once(tmp_path, capsys):
+    """Two sentence edits from one recording with scores 35.5 -> 7.4 move the net by -28.1, not -56.2."""
+    before = tmp_path / "b.md"; after = tmp_path / "a.md"; ledger = tmp_path / "l.jsonl"
+    before.write_text("The first sentence is long and formal. The second sentence is also long and formal.", encoding="utf-8")
+    after.write_text("First one. Short now. Second one, shorter.", encoding="utf-8")
+    rc = record_edits(str(before), str(after), str(ledger), score_before=35.5, score_after=7.4, detector="zerogpt")
+    assert rc == 0
+    lines = [json.loads(l) for l in ledger.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert len(lines) >= 2
+    capsys.readouterr()
+    assert summarize_ledger(str(ledger), json_output=True) == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert abs(summary["net_score_movement"] - (-28.1)) < 1e-6

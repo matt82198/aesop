@@ -108,8 +108,8 @@ def record_edits(
     before_file: str,
     after_file: str,
     ledger_path: str,
-    score_before: Optional[int] = None,
-    score_after: Optional[int] = None,
+    score_before: Optional[float] = None,
+    score_after: Optional[float] = None,
     detector: str = "manual",
     note: str = "",
     reference_file: Optional[str] = None,
@@ -255,12 +255,18 @@ def summarize_ledger(ledger_path: str, json_output: bool = False, markdown_outpu
                 }
             )
 
-        # Net score movement (if scores are present)
+        # Net score movement: a document's detector score moves once per recording, not once per
+        # sentence edit, so count each (doc, ts, before, after) once.
         score_deltas = []
+        seen_docs = set()
         for entry in entries:
             before = entry.get("score_before")
             after = entry.get("score_after")
             if before is not None and after is not None:
+                key = (entry.get("doc"), entry.get("ts"), before, after)
+                if key in seen_docs:
+                    continue
+                seen_docs.add(key)
                 score_deltas.append(after - before)
 
         summary = {
