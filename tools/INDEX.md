@@ -64,6 +64,7 @@ listed by adding an `INDEX: <one-liner>` line to its module docstring/header.
 - `healthcheck.py` -- Fleet health aggregator (heartbeat/alert/orchestrator status); health.js wraps Python
 - `heartbeat.py` -- Single-instance loop liveness registry
 - `hook_preflight.py` -- Interpreter health checker; verifies hooks/daemons interpreters; stdlib-only
+- `humanize_ledger.py` -- Append-only JSONL ledger for humanization fixes; records sentence-level edits with rules cleared/introduced and score movement for pattern learning.
 - `humanize_lint.py` -- Flags machine-writing patterns (ai-lexicon, tricolon, low-burstiness, bow-tie-closer, contrast-frame, dash-density, echo-source, opener-repeat, hedge-stack); scores 0-100; importable split_sentences() and lint_text().
 - `humanize_voice.py` -- Voice profiler extracting style features from corpus text to measure draft divergence from personal writing patterns.
 - `import_cycle_check.py` -- AST-based import cycle detector for Python modules
