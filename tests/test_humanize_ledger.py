@@ -246,6 +246,63 @@ class TestHumanizeLedger(unittest.TestCase):
             summary = json.loads(out_buffer.getvalue())
             self.assertAlmostEqual(summary["net_score_movement"], -28.1, places=6)
 
+    def test_attribution_ai_lexicon_cleared_on_sentence_edit(self):
+        """
+        Test that ai-lexicon rule is detected in before sentence and cleared in after.
+        Anti-vacuity: This test will FAIL if rules_cleared is always empty [].
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            before = tmpdir / "b.md"
+            after = tmpdir / "a.md"
+            ledger = tmpdir / "l.jsonl"
+
+            # Before: sentence with AI lexicon word "leverage"
+            before.write_text("We will leverage and unlock seamless synergy.", encoding="utf-8")
+            # After: same meaning, human-like phrasing without AI words
+            after.write_text("We will use and improve the system.", encoding="utf-8")
+
+            rc = record_edits(str(before), str(after), str(ledger), detector="test")
+            self.assertEqual(rc, 0)
+
+            lines = [json.loads(l) for l in ledger.read_text(encoding="utf-8").splitlines() if l.strip()]
+            self.assertGreaterEqual(len(lines), 1, f"Expected at least one ledger entry, got {lines}")
+
+            entry = lines[0]
+            # The before sentence should have triggered ai-lexicon rule
+            # The after sentence should not have the rule
+            self.assertIn("ai-lexicon", entry.get("rules_cleared", []),
+                f"Expected ai-lexicon in rules_cleared, got: {entry}")
+
+    def test_attribution_tricolon_cleared_on_split_sentence(self):
+        """
+        Test that tricolon rule is detected in before sentence with parallel structure,
+        and cleared when the sentence is split into shorter, uneven parts.
+        Anti-vacuity: This test will FAIL if rules attribution is not working.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            before = tmpdir / "b.md"
+            after = tmpdir / "a.md"
+            ledger = tmpdir / "l.jsonl"
+
+            # Before: tricolon - three parallel items with commas and 'and'
+            before.write_text("We can look at it, say plainly what works, and prove the recommendation.", encoding="utf-8")
+            # After: split into short uneven sentences without the parallel structure
+            after.write_text("We look at it. We explain what works. We prove the recommendation.", encoding="utf-8")
+
+            rc = record_edits(str(before), str(after), str(ledger), detector="test")
+            self.assertEqual(rc, 0)
+
+            lines = [json.loads(l) for l in ledger.read_text(encoding="utf-8").splitlines() if l.strip()]
+            self.assertGreaterEqual(len(lines), 1, f"Expected at least one ledger entry, got {lines}")
+
+            entry = lines[0]
+            # The before sentence should have tricolon rule
+            # The after sentences should not have it
+            self.assertIn("tricolon", entry.get("rules_cleared", []),
+                f"Expected tricolon in rules_cleared, got: {entry}")
+
 
 def run_suite():
     """Run all tests and return exit code."""
