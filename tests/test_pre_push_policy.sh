@@ -961,6 +961,17 @@ sys.exit(0)
 SCANNER
   chmod +x "$AESOP_ROOT/tools/secret_scan.py"
 
+  # Stub the remaining gate scripts. A tools/ directory holding only
+  # secret_scan.py is a PARTIAL aesop install, and the gates now fail closed on
+  # that (a missing gate script in a repo that has tools/ used to be silently
+  # skipped -- the escape this fixture must not re-create). These stubs keep the
+  # fixture focused on main()'s stdin handling instead of gate behavior.
+  for gate_stub in tracker_guard import_resolution_check claudemd_sync_gate \
+                   gen_tool_index metrics_gate verify_test_suite_count encoding_lint \
+                   verify_test_coverage; do
+    printf 'import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/$gate_stub.py"
+  done
+
   # Test 1: Piped empty stdin (simulates up-to-date push with no ref tuples)
   # main() should allow (rc=0) — this is the #289 legitimate case.
   # HEAD-INDEPENDENCE: check_branch_policy's empty-stdin fallback inspects the
@@ -1189,6 +1200,147 @@ SHIM
     exit 1
   fi
   printf 'PASS: check_secret_scan prefers python3, so a broken/legacy "python" earlier on PATH does not crash the scan\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test P1-Worktree: Checkers use resolve_aesop_root, not hardcoded paths ===\n'
+(
+  # This test verifies the fix for the audit finding: check_encoding_lint and
+  # check_test_coverage now call resolve_aesop_root() instead of hardcoding
+  # ${AESOP_ROOT:-$HOME/aesop}, so they run the worktree's copy of the checker
+  # tools, not the primary tree's copy.
+  #
+  # Worktree scenario:
+  # 1. Primary tree has encoding_lint.py that always exits 0
+  # 2. Worktree has encoding_lint.py that exits 1 (gate violation)
+  # 3. Push from worktree should use worktree's checker and fail
+  # 4. Without the fix, it would use primary tree's checker and pass
+  #
+  # We can't easily create actual worktrees in the test, but we CAN verify
+  # that the functions call resolve_aesop_root() by checking the script itself.
+
+  # Extract the check_encoding_lint function and verify it uses resolve_aesop_root()
+  encoding_lint_fn=$(sed -n '/^check_encoding_lint()/,/^}/p' "$HOOK_SCRIPT")
+
+  # The function should contain a call to resolve_aesop_root, not a hardcoded path
+  if printf '%s' "$encoding_lint_fn" | grep -q 'aesop_root=\$(resolve_aesop_root)'; then
+    printf 'PASS: check_encoding_lint calls resolve_aesop_root()\n'
+  else
+    printf 'FAIL: check_encoding_lint does not call resolve_aesop_root()\n'
+    exit 1
+  fi
+
+  # The function should NOT contain a hardcoded ${AESOP_ROOT:-$HOME/aesop} assignment
+  # in its local variable (resolve_aesop_root itself may reference AESOP_ROOT, but
+  # the check_encoding_lint function should not hardcode it)
+  if printf '%s' "$encoding_lint_fn" | grep 'local aesop_root' | grep -q 'AESOP_ROOT'; then
+    printf 'FAIL: check_encoding_lint still hardcodes AESOP_ROOT in local assignment\n'
+    exit 1
+  fi
+
+  # Extract the check_test_coverage function and verify it uses resolve_aesop_root()
+  test_coverage_fn=$(sed -n '/^check_test_coverage()/,/^}/p' "$HOOK_SCRIPT")
+
+  if printf '%s' "$test_coverage_fn" | grep -q 'aesop_root=\$(resolve_aesop_root)'; then
+    printf 'PASS: check_test_coverage calls resolve_aesop_root()\n'
+  else
+    printf 'FAIL: check_test_coverage does not call resolve_aesop_root()\n'
+    exit 1
+  fi
+
+  # The function should NOT contain a hardcoded ${AESOP_ROOT:-$HOME/aesop} assignment
+  if printf '%s' "$test_coverage_fn" | grep 'local aesop_root' | grep -q 'AESOP_ROOT'; then
+    printf 'FAIL: check_test_coverage still hardcodes AESOP_ROOT in local assignment\n'
+    exit 1
+  fi
+
+  # Verify no other check functions have this pattern (grep for hardcoded patterns)
+  # Count functions that have "local aesop_root" followed by hardcoding on same/next line
+  hardcoded_count=$(grep -A1 'local aesop_root' "$HOOK_SCRIPT" | grep '${AESOP_ROOT:-' | wc -l)
+  if [ "$hardcoded_count" -gt 0 ]; then
+    printf 'FAIL: Found %d other instances of hardcoded AESOP_ROOT in local aesop_root assignments\n' "$hardcoded_count"
+    exit 1
+  fi
+
+  printf 'PASS: No hardcoded AESOP_ROOT paths found in check functions\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test: gen_tool_index gate fails when tool has no INDEX: line ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_no_index"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+
+  # Create a dummy gen_tool_index.py script that returns 1 (simulating missing INDEX line)
+  # This mimics the real tool's behavior when it finds a tool without an INDEX: line
+  cat > "$AESOP_ROOT/tools/gen_tool_index.py" <<'SCRIPT'
+#!/usr/bin/env python3
+import sys
+if "--check" in sys.argv:
+    print("ERROR: tools/ files missing an INDEX: docstring line (fail-closed):", file=sys.stderr)
+    print("  - tools/new_tool.py", file=sys.stderr)
+    sys.exit(1)
+sys.exit(0)
+SCRIPT
+  chmod +x "$AESOP_ROOT/tools/gen_tool_index.py"
+
+  # Create stub scripts for other gates so check_gen_tool_index doesn't fail before we test it
+  for gate in tracker_guard import_resolution_check claudemd_sync_gate metrics_gate \
+              verify_test_suite_count encoding_lint verify_test_coverage; do
+    printf 'import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/${gate}.py"
+  done
+
+  # Test: check_gen_tool_index should return 1 when the index script fails
+  if ! check_gen_tool_index; then
+    printf 'PASS: check_gen_tool_index correctly fails when INDEX line is missing\n'
+  else
+    printf 'FAIL: check_gen_tool_index should have failed (exit 1) when INDEX line missing\n'
+    exit 1
+  fi
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test: gen_tool_index gate passes when all tools have INDEX lines ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_with_index"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+
+  # Create a dummy gen_tool_index.py script that returns 0 (simulating success)
+  cat > "$AESOP_ROOT/tools/gen_tool_index.py" <<'SCRIPT'
+#!/usr/bin/env python3
+import sys
+if "--check" in sys.argv:
+    print("[OK] tools/INDEX.md is in sync (42 tools)")
+    sys.exit(0)
+sys.exit(1)
+SCRIPT
+  chmod +x "$AESOP_ROOT/tools/gen_tool_index.py"
+
+  # Create stub scripts for other gates
+  for gate in tracker_guard import_resolution_check claudemd_sync_gate metrics_gate \
+              verify_test_suite_count encoding_lint verify_test_coverage; do
+    printf 'import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/${gate}.py"
+  done
+
+  # Test: check_gen_tool_index should return 0 when index is in sync
+  if check_gen_tool_index; then
+    printf 'PASS: check_gen_tool_index correctly passes when all tools have INDEX lines\n'
+  else
+    printf 'FAIL: check_gen_tool_index should have passed (exit 0) when INDEX is in sync\n'
+    exit 1
+  fi
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))
