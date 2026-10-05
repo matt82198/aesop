@@ -167,6 +167,7 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   test file (see tests/CLAUDE.md for shard assignment). CI is confirmation of local verification, not discovery of breakage. Paste
   the shard output to your report: it proves your changes work before they hit main.
 - **Merge = `python tools/auto_merge.py <n>` with the PR number. Never bare.** The primary tree is the merge tool's working tree.
+- Generated whole-tree artifacts (`tools/generated_paths.py::GENERATED_PATHS`) self-heal post-merge via `.github/workflows/regen-on-main.yml` + `tools/regen_all.py`; do not hand-edit them.
 - Stay inside your declared files. If the chain leaves them, **STOP and hand off** — a clean hand-off
   beats a collision and is a complete result, not a failure.
 - **REARCH sections 69+ are orchestrator-reserved.** Claim an unreserved number AT WRITE TIME and
