@@ -30,17 +30,43 @@ class TestWavePreflight(unittest.TestCase):
         """Clean up temp directory."""
         self.temp_dir.cleanup()
 
-    def _create_test_repo(self):
-        """Create a minimal git repo for history tests."""
-        repo_dir = os.path.join(self.temp_path, "test_repo")
+    def _create_test_repo(self, dirname="test_repo"):
+        """Create a minimal git repo for history tests.
+
+        List-form argv + cwd= (never `bash -c "cd {path} && ..."`): an
+        interpolated path containing a space -- or a Windows backslash --
+        silently corrupts a shell string.
+        """
+        repo_dir = os.path.join(self.temp_path, dirname)
         os.makedirs(repo_dir, exist_ok=True)
         subprocess.run(
-            ["bash", "-c", f"cd {repo_dir} && git init"],
+            ["git", "init", "-q"],
+            cwd=repo_dir,
             capture_output=True,
-            timeout=5,
+            timeout=30,
             check=False
         )
         return repo_dir
+
+    def _commit(self, repo_dir, rel_path, content):
+        """Write + commit a file in repo_dir with an inline (never global) identity."""
+        full = Path(repo_dir) / rel_path
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(content, encoding="utf-8")
+        subprocess.run(
+            ["git", "add", "--", rel_path],
+            cwd=repo_dir, capture_output=True, timeout=30, check=False
+        )
+        subprocess.run(
+            [
+                "git",
+                "-c", "user.name=Aesop Test",
+                "-c", "user.email=test@example.invalid",
+                "-c", "commit.gpgsign=false",
+                "commit", "-q", "-m", f"touch {rel_path}",
+            ],
+            cwd=repo_dir, capture_output=True, timeout=30, check=False
+        )
 
     def _run_validator(self, manifest, args=None, cwd=None):
         """Run wave_manifest_lint.py and return exit code + stdout + stderr."""
@@ -72,16 +98,17 @@ class TestWavePreflight(unittest.TestCase):
                 {
                     "slug": "feat/a",
                     "ownsFiles": ["src/a.py"],
-                    "prompt": "Implement feature A. [ISOLATION: sibling worktree]"
+                    "prompt": "Implement feature A. [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version"
                 },
                 {
                     "slug": "feat/b",
                     "ownsFiles": ["src/b.py"],
-                    "prompt": "Implement feature B. [ISOLATION: sibling worktree]"
+                    "prompt": "Implement feature B. [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version"
                 }
             ],
-            "workDir": "/tmp/aesop",
-            "testCmd": "python --version"
+            "workDir": "/tmp/aesop"
         }
         rc, stdout, stderr = self._run_validator(manifest)
         self.assertEqual(rc, 0, f"Expected exit 0, got {rc}. stdout: {stdout}, stderr: {stderr}")
@@ -94,16 +121,17 @@ class TestWavePreflight(unittest.TestCase):
                 {
                     "slug": "feat/a",
                     "ownsFiles": ["src/shared.py"],
-                    "prompt": "Implement A. [ISOLATION: sibling worktree]"
+                    "prompt": "Implement A. [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version"
                 },
                 {
                     "slug": "feat/b",
                     "ownsFiles": ["src/shared.py"],
-                    "prompt": "Implement B. [ISOLATION: sibling worktree]"
+                    "prompt": "Implement B. [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version"
                 }
             ],
-            "workDir": "/tmp/aesop",
-            "testCmd": "python --version"
+            "workDir": "/tmp/aesop"
         }
         rc, stdout, stderr = self._run_validator(manifest)
         self.assertNotEqual(rc, 0, "Overlapping files should fail")
@@ -117,16 +145,17 @@ class TestWavePreflight(unittest.TestCase):
                 {
                     "slug": "feat/a",
                     "ownsFiles": ["src/*.py"],
-                    "prompt": "A. [ISOLATION: sibling worktree]"
+                    "prompt": "A. [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version"
                 },
                 {
                     "slug": "feat/b",
                     "ownsFiles": ["src/module.py"],
-                    "prompt": "B. [ISOLATION: sibling worktree]"
+                    "prompt": "B. [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version"
                 }
             ],
-            "workDir": "/tmp/aesop",
-            "testCmd": "python --version"
+            "workDir": "/tmp/aesop"
         }
         rc, stdout, stderr = self._run_validator(manifest)
         self.assertNotEqual(rc, 0, "Glob patterns should detect overlap")
@@ -140,11 +169,11 @@ class TestWavePreflight(unittest.TestCase):
                 {
                     "slug": "feat/a",
                     "ownsFiles": ["nonexistent.py"],
-                    "prompt": "A. [ISOLATION: sibling worktree]"
+                    "prompt": "A. [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version"
                 }
             ],
-            "workDir": repo_dir,
-            "testCmd": "echo test"
+            "workDir": repo_dir
         }
         rc, stdout, stderr = self._run_validator(manifest, cwd=repo_dir)
         self.assertIn("INFO", stdout)
@@ -157,11 +186,11 @@ class TestWavePreflight(unittest.TestCase):
                 {
                     "slug": "feat/a",
                     "ownsFiles": ["src/a.py"],
-                    "prompt": ""
+                    "prompt": "",
+                    "testCmd": "python --version"
                 }
             ],
-            "workDir": "/tmp/aesop",
-            "testCmd": "python --version"
+            "workDir": "/tmp/aesop"
         }
         rc, stdout, stderr = self._run_validator(manifest)
         self.assertNotEqual(rc, 0, "Empty prompt should fail")
@@ -174,11 +203,11 @@ class TestWavePreflight(unittest.TestCase):
                 {
                     "slug": "feat/a",
                     "ownsFiles": ["src/a.py"],
-                    "prompt": "Implement feature without marker"
+                    "prompt": "Implement feature without marker",
+                    "testCmd": "python --version"
                 }
             ],
-            "workDir": "/tmp/aesop",
-            "testCmd": "python --version"
+            "workDir": "/tmp/aesop"
         }
         rc, stdout, stderr = self._run_validator(manifest)
         self.assertIn("WARN", stdout)
@@ -191,11 +220,11 @@ class TestWavePreflight(unittest.TestCase):
                 {
                     "slug": "feat/a",
                     "ownsFiles": ["src/a.py"],
-                    "prompt": "Do something. [[ALLOW-NON-HAIKU]] [ISOLATION: sibling worktree]"
+                    "prompt": "Do something. [[ALLOW-NON-HAIKU]] [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version"
                 }
             ],
-            "workDir": "/tmp/aesop",
-            "testCmd": "python --version"
+            "workDir": "/tmp/aesop"
         }
         rc, stdout, stderr = self._run_validator(manifest)
         self.assertIn("WARN", stdout)
@@ -208,11 +237,11 @@ class TestWavePreflight(unittest.TestCase):
                 {
                     "slug": "feat/a",
                     "ownsFiles": ["src/a.py"],
-                    "prompt": "Do something [[ALLOW-NON-HAIKU]] [[ALLOW-SONNET]] [ISOLATION: sibling worktree]"
+                    "prompt": "Do something [[ALLOW-NON-HAIKU]] [[ALLOW-SONNET]] [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version"
                 }
             ],
-            "workDir": "/tmp/aesop",
-            "testCmd": "python --version"
+            "workDir": "/tmp/aesop"
         }
         rc, stdout, stderr = self._run_validator(manifest)
         self.assertNotIn("WARN", stdout)
@@ -225,11 +254,11 @@ class TestWavePreflight(unittest.TestCase):
                 {
                     "slug": "feat/a",
                     "ownsFiles": ["src/a.py"],
-                    "prompt": "A. [ISOLATION: sibling worktree]"
+                    "prompt": "A. [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version"
                 }
             ],
-            "workDir": "/tmp/aesop",
-            "testCmd": "python --version"
+            "workDir": "/tmp/aesop"
         }
         rc, stdout, stderr = self._run_validator(manifest)
         self.assertNotIn("FAIL", stdout)
@@ -242,11 +271,11 @@ class TestWavePreflight(unittest.TestCase):
                 {
                     "slug": "feat/a",
                     "ownsFiles": ["src/a.py"],
-                    "prompt": "A. [ISOLATION: sibling worktree]"
+                    "prompt": "A. [ISOLATION: sibling worktree]",
+                    "testCmd": "nonexistent_binary_xyz_42 --test"
                 }
             ],
-            "workDir": "/tmp/aesop",
-            "testCmd": "nonexistent_binary_xyz_42 --test"
+            "workDir": "/tmp/aesop"
         }
         rc, stdout, stderr = self._run_validator(manifest)
         self.assertNotEqual(rc, 0, "Missing binary should fail")
@@ -259,11 +288,11 @@ class TestWavePreflight(unittest.TestCase):
                 {
                     "slug": "feat/a",
                     "ownsFiles": ["src/a.py"],
-                    "prompt": "A. [ISOLATION: sibling worktree]"
+                    "prompt": "A. [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version"
                 }
             ],
-            "workDir": "/tmp/aesop",
-            "testCmd": "python --version"
+            "workDir": "/tmp/aesop"
         }
         rc, stdout, stderr = self._run_validator(manifest, args=["--json"])
 
@@ -281,11 +310,11 @@ class TestWavePreflight(unittest.TestCase):
                 {
                     "slug": "feat/a",
                     "ownsFiles": ["src/a.py"],
-                    "prompt": "Missing marker"
+                    "prompt": "Missing marker",
+                    "testCmd": "python --version"
                 }
             ],
-            "workDir": "/tmp/aesop",
-            "testCmd": "python --version"
+            "workDir": "/tmp/aesop"
         }
         rc, stdout, stderr = self._run_validator(manifest, args=["--strict"])
         self.assertNotEqual(rc, 0, "--strict should fail on warnings")
@@ -297,21 +326,23 @@ class TestWavePreflight(unittest.TestCase):
                 {
                     "slug": "feat/a",
                     "ownsFiles": ["src/shared1.py", "src/shared2.py"],
-                    "prompt": "A. [ISOLATION: sibling worktree]"
+                    "prompt": "A. [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version"
                 },
                 {
                     "slug": "feat/b",
                     "ownsFiles": ["src/shared1.py", "src/other.py"],
-                    "prompt": "B. [ISOLATION: sibling worktree]"
+                    "prompt": "B. [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version"
                 },
                 {
                     "slug": "feat/c",
                     "ownsFiles": ["src/shared2.py"],
-                    "prompt": "C. [ISOLATION: sibling worktree]"
+                    "prompt": "C. [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version"
                 }
             ],
-            "workDir": "/tmp/aesop",
-            "testCmd": "python --version"
+            "workDir": "/tmp/aesop"
         }
         rc, stdout, stderr = self._run_validator(manifest)
         self.assertNotEqual(rc, 0)
@@ -325,11 +356,11 @@ class TestWavePreflight(unittest.TestCase):
                 {
                     "slug": "feat/test",
                     "ownsFiles": ["src/test.py"],
-                    "prompt": "Test. [ISOLATION: sibling worktree]"
+                    "prompt": "Test. [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version"
                 }
             ],
-            "workDir": "/tmp/aesop",
-            "testCmd": "echo test"
+            "workDir": "/tmp/aesop"
         }
         rc, stdout, stderr = self._run_validator(manifest)
 
@@ -338,6 +369,197 @@ class TestWavePreflight(unittest.TestCase):
             stderr.encode("ascii")
         except UnicodeEncodeError:
             self.fail("Output contains non-ASCII characters")
+
+    # ---------------------------------------------------------------- #
+    # Cluster 1: churn check must survive a repo path containing a space
+    # ---------------------------------------------------------------- #
+
+    def test_churn_check_works_in_path_with_spaces(self):
+        """Churn detection must work when the repo path contains a space.
+
+        Regression: check_git_history_churn built
+        ``f"cd {repo_root} && git log ..."`` and handed it to ``bash -c``.
+        A repo root containing a space (or a Windows backslash) turns the
+        interpolated ``cd`` into a broken command, git never runs, and the
+        check silently reports "No high-churn files detected" -- a false
+        PASS. The fix is list-form argv with cwd=, no shell at all.
+        """
+        repo_dir = self._create_test_repo("repo with spaces")
+        for i in range(5):
+            self._commit(repo_dir, "src/hot.py", f"# rev {i}\n")
+
+        manifest = {
+            "items": [
+                {
+                    "slug": "feat/hot",
+                    "ownsFiles": ["src/hot.py"],
+                    "prompt": "Touch the hot file. [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version"
+                }
+            ],
+            "workDir": repo_dir
+        }
+        rc, stdout, stderr = self._run_validator(
+            manifest, args=["--root", repo_dir], cwd=repo_dir
+        )
+        self.assertIn(
+            "WARN: git_history_churn", stdout,
+            f"churn not detected in a spaced path. stdout: {stdout}, stderr: {stderr}"
+        )
+        self.assertIn("src/hot.py", stdout)
+        self.assertEqual(rc, 0, "churn is a WARN, not a FAIL")
+
+    def test_churn_check_quiet_on_cold_repo(self):
+        """A repo with a single commit must not warn (no false churn)."""
+        repo_dir = self._create_test_repo("cold repo with spaces")
+        self._commit(repo_dir, "src/cold.py", "# once\n")
+
+        manifest = {
+            "items": [
+                {
+                    "slug": "feat/cold",
+                    "ownsFiles": ["src/cold.py"],
+                    "prompt": "Touch the cold file. [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version"
+                }
+            ],
+            "workDir": repo_dir
+        }
+        rc, stdout, stderr = self._run_validator(
+            manifest, args=["--root", repo_dir], cwd=repo_dir
+        )
+        self.assertIn("PASS: git_history_churn", stdout)
+        self.assertEqual(rc, 0)
+
+    # ---------------------------------------------------------------- #
+    # Cluster 2: testCmd is a PER-ITEM field (what driver/wave_loop reads)
+    # ---------------------------------------------------------------- #
+
+    def test_shipped_example_manifest_is_per_item_shaped(self):
+        """Ground truth: the shipped example manifest has no top-level testCmd.
+
+        driver/wave_loop.py and driver/wave_scheduler.py both read
+        ``item["testCmd"]``; nothing reads a top-level ``testCmd``. This test
+        pins the shape the linter must validate against.
+        """
+        example = Path(REPO_ROOT) / "examples" / "first-wave-baseline" / "wave-manifest.json"
+        data = json.loads(example.read_text(encoding="utf-8"))
+        self.assertNotIn("testCmd", data, "example manifest has no top-level testCmd")
+        self.assertTrue(data.get("items"))
+        for item in data["items"]:
+            self.assertTrue(
+                item.get("testCmd"),
+                f"item {item.get('slug')!r} must carry its own testCmd"
+            )
+
+    def test_strict_mode_passes_on_real_shaped_manifest(self):
+        """--strict must exit 0 on a real-shaped (per-item testCmd) manifest.
+
+        Regression: check_testcmd_validity read the TOP-LEVEL testCmd, which
+        real manifests never set, so it always emitted
+        "WARN: No testCmd specified" -- making --strict exit 1 on every real
+        manifest, i.e. strict mode was permanently broken.
+
+        Shape mirrors examples/first-wave-baseline/wave-manifest.json. Run
+        against a cold temp repo so the other four checks are all quiet and
+        the exit code isolates the signal under test (the isolation marker is
+        added for the same reason).
+        """
+        repo_dir = self._create_test_repo("strict repo with spaces")
+        self._commit(repo_dir, "README.md", "# readme\n")
+        self._commit(repo_dir, "CHANGELOG.md", "# changelog\n")
+        manifest = {
+            "wave_id": "first-wave-baseline",
+            "wave_description": "Baseline wave",
+            "items": [
+                {
+                    "slug": "readme-typo-fix",
+                    "ownsFiles": ["README.md"],
+                    "prompt": "Fix the typo. [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version",
+                    "workDir": "."
+                },
+                {
+                    "slug": "changelog-touch",
+                    "ownsFiles": ["CHANGELOG.md"],
+                    "prompt": "Add an entry. [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version",
+                    "workDir": "."
+                }
+            ]
+        }
+        rc, stdout, stderr = self._run_validator(
+            manifest, args=["--strict", "--root", repo_dir], cwd=repo_dir
+        )
+        self.assertIn("PASS: testcmd_validity", stdout)
+        self.assertNotIn("WARN", stdout)
+        self.assertEqual(
+            rc, 0,
+            f"--strict must not fail a valid real-shaped manifest. stdout: {stdout}"
+        )
+
+    def test_item_missing_testcmd_warns(self):
+        """An item with no testCmd should WARN (engine cannot verify it)."""
+        manifest = {
+            "items": [
+                {
+                    "slug": "feat/a",
+                    "ownsFiles": ["src/a.py"],
+                    "prompt": "A. [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version"
+                },
+                {
+                    "slug": "feat/b",
+                    "ownsFiles": ["src/b.py"],
+                    "prompt": "B. [ISOLATION: sibling worktree]"
+                }
+            ]
+        }
+        rc, stdout, stderr = self._run_validator(manifest)
+        self.assertIn("WARN: testcmd_validity", stdout)
+        self.assertIn("feat/b", stdout)
+        self.assertEqual(rc, 0)
+
+    def test_top_level_testcmd_is_reported_as_ignored(self):
+        """A top-level testCmd must WARN: the engine never reads it."""
+        manifest = {
+            "items": [
+                {
+                    "slug": "feat/a",
+                    "ownsFiles": ["src/a.py"],
+                    "prompt": "A. [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version"
+                }
+            ],
+            "testCmd": "python --version"
+        }
+        rc, stdout, stderr = self._run_validator(manifest)
+        self.assertIn("WARN: testcmd_validity", stdout)
+        self.assertIn("top-level", stdout)
+        self.assertEqual(rc, 0)
+
+    def test_item_testcmd_missing_binary_fails_by_slug(self):
+        """A per-item testCmd whose binary is absent should FAIL and name the item."""
+        manifest = {
+            "items": [
+                {
+                    "slug": "feat/good",
+                    "ownsFiles": ["src/a.py"],
+                    "prompt": "A. [ISOLATION: sibling worktree]",
+                    "testCmd": "python --version"
+                },
+                {
+                    "slug": "feat/bad",
+                    "ownsFiles": ["src/b.py"],
+                    "prompt": "B. [ISOLATION: sibling worktree]",
+                    "testCmd": "nonexistent_binary_xyz_42 --test"
+                }
+            ]
+        }
+        rc, stdout, stderr = self._run_validator(manifest)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("FAIL: testcmd_validity", stdout)
+        self.assertIn("feat/bad", stdout)
 
 
 if __name__ == "__main__":
