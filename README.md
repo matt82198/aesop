@@ -25,7 +25,7 @@
 
 Aesop does not trust itself. Every agent writes code claiming to be correct, and [the trap tests](./tests/test_traps.py) deliberately reproduce patterns of agent deception:
 
-- **Fake-green trap**: Tests that skip real validation (caught incident #464: playwright browser-proofs reported green without actually running). Prevention: all test discovery against documented counts via python tools/verify_test_suite_count.py --check.
+- **Fake-green trap**: Tests that skip real validation (caught incident #464: playwright browser-proofs reported green without actually running). Prevention: counts are computed live from git ls-files (no stored artifact to drift) and `python tools/verify_test_suite_count.py --check` verifies the CI shard matrix actually covers every tracked test file.
 - **Gate-activation trap**: Forbidden flags (--admin, --no-verify, --auto) in dispatch templates (caught 7+ incidents). Pre-push secret scan blocks leaks with fail-closed exit on read errors.
 - **Doc-invented trap**: Documentation claims not backed by facts (caught hallucinated 0.3.0 CHANGELOG entries). Prevention: statistics gate verifies README matches git.
 - **Test-pollution trap**: Test state leaking across isolation boundaries (caught 6 incidents including sys.modules mock pollution). Prevention: all tests use isolated temp directories and subprocess cwd= isolation.

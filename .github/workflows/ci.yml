@@ -230,7 +230,7 @@ jobs:
         run: python tools/port_fidelity_check.py --check --root .
 
       - name: Run Python tests (shard ${{ matrix.python-shard }}/4)
-        run: python tools/test_isolation_tripwire.py -- python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
+        run: python tools/remote_refs_tripwire.py -- python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
 
       # The ui/web chain below is shard-INVARIANT: all four ubuntu shards ran the same
       # npm ci + build + tsc + dist-drift + vitest, so 3 of every 4 runs were pure waste.
@@ -274,7 +274,7 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/tracker_autoclose.py --check
 
-      - name: Test suite count drift gate
+      - name: CI shard coverage gate
         if: matrix.python-shard == 0
         run: python tools/verify_test_suite_count.py --check
 
@@ -337,17 +337,14 @@ jobs:
         if: matrix.python-shard == 0
         env:
           AESOP_TEST_CHILD_TIMEOUT_MS: '120000'
-        # --import ./tests/helpers/isolated-env.mjs after --test (not before) so the
-        # literal substring "node --test" survives for tools/ci_gate_runability.py's
-        # suite-family classifier; see tests/CLAUDE.md "isolated HOME" note.
-        run: python tools/test_isolation_tripwire.py -- node --test --import ./tests/helpers/isolated-env.mjs --test-force-exit --test-timeout=180000 tests/*.test.mjs
+        run: node --test --test-force-exit --test-timeout=180000 tests/*.test.mjs
 
       - name: Run Python tests (shard ${{ matrix.python-shard }}/4, PYTHONUTF8=1 for Windows encoding)
         env:
           PYTHONUTF8: '1'
           PYTEST_TIMEOUT: '120'
         shell: bash
-        run: python tools/test_isolation_tripwire.py -- python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
+        run: python tools/remote_refs_tripwire.py -- python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
 
   windows:
     # Aggregator job: enforces that all windows-shard shards succeeded or were skipped.

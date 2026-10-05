@@ -45,10 +45,10 @@ expensive way during aesop development. Each line exists because a lane failed w
   behavioural tests that had never executed once — the branch looked complete and added zero coverage.)*
   Confirm CI reports the executed-suite count went UP by the number you added — not just that yours
   "passed".
-- **The Node suite runs under an isolated HOME** (`tests/helpers/isolated-env.mjs`, preloaded via
-  `--import`), and `tools/test_isolation_tripwire.py` fails the suite closed, naming the changed
-  path(s), if the real `~/.claude` or global git config changes anyway (2026-10-05 incident:
-  `installSkills()` overwrote real `~/.claude/skills/*/SKILL.md`). Do not defeat either.
+- **Tests run with origin rewritten to a local bare repo and `gh` blocked** (`tests/__init__.py` ->
+  `tools/test_network_isolation.py`); `tools/remote_refs_tripwire.py` fails the run if a remote ref or
+  PR appears anyway. Never work around either to make a merge_train/merge_queue/auto_merge test reach
+  a real remote.
 
 ## 3. Never fit green
 - **Never relax an assertion, lower a floor/ratchet, delete a suite, add a skip, or retune a constant
@@ -166,7 +166,12 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   merges. A lane's job ends when the branch is pushed and a PR is open.
 - **Merge automation: arm native auto-merge at PR open time.** After `gh pr create`, immediately run `gh pr merge <N> --auto --squash`
   to arm GitHub's native auto-merge. Never use `--admin`. A PR must never wait for a session daemon or manual merge to complete.
-  Native auto-merge is the merge actor; AesopMergeQueue is disabled.
+  Native auto-merge is the merge actor; AesopMergeQueue is disabled. To re-run required checks on an armed PR without code
+  changes, use `gh api repos/<owner>/<repo>/pulls/<N>/update-branch -X PUT`; a `gh workflow run` dispatch creates a separate
+  check suite that branch protection ignores.
+- **Generated paths (`tools/INDEX.md`, `tests/CLAUDE.md`, etc. — registry: `tools/generated_paths.py`) carry no override
+  flag.** A push touching one is safe only when its bytes are byte-identical to that path's registered generator run in the
+  same commit; the sync gate checks this directly and there is no environment variable that waives it.
 - **Before pushing, run the shard for your test file.** Run `python tools/ci_shard_runner.py <n> 4` for the shard that owns your
   test file (see tests/CLAUDE.md for shard assignment). CI is confirmation of local verification, not discovery of breakage. Paste
   the shard output to your report: it proves your changes work before they hit main.
