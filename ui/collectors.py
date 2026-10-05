@@ -332,6 +332,80 @@ def get_alerts():
         print(f"[collectors] Failed to read alerts: {e}", file=sys.stderr)
     return alerts
 
+def get_queue_status():
+    """Read merge-queue state: exceptions.jsonl + heartbeat file.
+
+    Returns dict:
+    {
+        "queue_depth": <count of open PRs>,
+        "batch_state": <count of open batch PRs>,
+        "last_advance_age": <seconds since heartbeat mtime>,
+        "last_advance_degraded": <bool, true if age > 10min>,
+        "exceptions": [{"ts": ISO, "pr": <number>, "kind": <string>}]
+    }
+
+    If queue state dir is missing, returns empty queue status.
+    """
+    data = {
+        "queue_depth": 0,
+        "batch_state": 0,
+        "last_advance_age": -1,
+        "last_advance_degraded": False,
+        "exceptions": []
+    }
+
+    try:
+        import json
+        import time
+
+        # Read exceptions from JSONL file
+        exceptions_file = config.QUEUE_STATE_DIR / "exceptions.jsonl"
+        if exceptions_file.exists():
+            lines = exceptions_file.read_text(encoding='utf-8').strip().split('\n')
+            exceptions = []
+            for line in lines:
+                if line.strip():
+                    try:
+                        exc = json.loads(line)
+                        exceptions.append(exc)
+                    except json.JSONDecodeError:
+                        pass
+            # Most recent first
+            data["exceptions"] = sorted(
+                exceptions,
+                key=lambda x: x.get("ts", ""),
+                reverse=True
+            )[:10]  # Last 10 exceptions
+
+        # Read heartbeat for last_advance_age
+        heartbeat_file = config.QUEUE_STATE_DIR / ".merge-queue-heartbeat"
+        if heartbeat_file.exists():
+            mtime = heartbeat_file.stat().st_mtime
+            age_sec = int(time.time() - mtime)
+            data["last_advance_age"] = age_sec
+            data["last_advance_degraded"] = age_sec > 600  # > 10 minutes
+
+        # Read PR counts from state files if they exist
+        # (These would be computed by the queue operator)
+        depth_file = config.QUEUE_STATE_DIR / ".queue-depth"
+        if depth_file.exists():
+            try:
+                data["queue_depth"] = int(depth_file.read_text(encoding='utf-8').strip())
+            except (ValueError, OSError):
+                pass
+
+        batch_file = config.QUEUE_STATE_DIR / ".batch-state"
+        if batch_file.exists():
+            try:
+                data["batch_state"] = int(batch_file.read_text(encoding='utf-8').strip())
+            except (ValueError, OSError):
+                pass
+
+    except Exception as e:
+        print(f"[collectors] Failed to read queue status: {e}", file=sys.stderr)
+
+    return data
+
 def get_agent_lifecycle_events():
     """Collect agent lifecycle events from transcript analysis.
 

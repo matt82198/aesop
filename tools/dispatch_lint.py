@@ -108,6 +108,13 @@ FORBIDDEN_PATTERNS = {
         "description": "Credential hunting pattern forbidden",
         "fix": "Name exact env vars, never scan all env vars",
     },
+    "auto_merge_bare_invocation": {
+        # Matches: auto_merge.py NOT followed by (space+digit or space+--all)
+        # This catches: bare invocation, or invocation with only flags (--json, --loop, etc.)
+        "pattern": r"auto_merge\.py(?!(?:\s+\d|\s+--all\b))",
+        "description": "auto_merge.py requires PR number(s) or --all flag; bare invocation blocked",
+        "fix": "Use: auto_merge.py <n> [<n>...] or auto_merge.py --all (see guardrail 69e794d88fef)",
+    },
 }
 
 # File patterns to scan (glob patterns, not regex)
