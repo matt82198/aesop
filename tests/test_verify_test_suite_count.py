@@ -981,5 +981,275 @@ class TestRepoRootAndVacuousGuards(unittest.TestCase):
         )
 
 
+class TestUnmergedStageDeduplication(unittest.TestCase):
+    """A path must count exactly once, whatever the index says about it.
+
+    Finding (bit the conflict sweep on PRs #710 and #711): `git ls-files <pattern>`
+    lists an UNMERGED path once per stage (1=base, 2=ours, 3=theirs). During an
+    in-progress merge a single conflicted `tests/test_*.py` was therefore counted
+    two or three times, `--regenerate` wrote the inflated number into
+    tests/CLAUDE.md, and only the pre-push gate caught it -- twice.
+
+    The same "count the file list, not the unique paths" shape also double-counts a
+    file matched by two of the three shell globs (`tests/test_x.test.sh` matches
+    both `tests/*.test.sh` and `tests/test_*.sh`).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.aesop_root = Path(__file__).parent.parent
+        cls.tool = cls.aesop_root / "tools" / "verify_test_suite_count.py"
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.temp_root = Path(self.temp_dir.name)
+        self.md = self.temp_root / "fixture-CLAUDE.md"
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _run(self, *args):
+        cmd = [sys.executable, str(self.tool)]
+        cmd.extend(args)
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            cwd=str(self.aesop_root),
+            timeout=60,
+        )
+
+    def _write_doc(self, node, shell, python):
+        self.md.write_text(
+            "# fixture\n\n"
+            f"**Node ({node} suites)**: node\n\n"
+            f"**Shell ({shell} suites)**: shell\n\n"
+            f"**Python ({python} suites)**: python\n",
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def _git(root, *args, check=True):
+        """Run git inside root with hermetic, repo-LOCAL identity only."""
+        result = subprocess.run(
+            ["git", *args],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+        )
+        if check and result.returncode != 0:
+            raise AssertionError(
+                f"git {' '.join(args)} failed in {root}: {result.stdout}{result.stderr}"
+            )
+        return result
+
+    def _init_repo(self, name):
+        root = self.temp_root / name
+        (root / "tests").mkdir(parents=True, exist_ok=True)
+        self._git(root, "init", "-q")
+        # Repo-local config only -- tests never touch global git config.
+        self._git(root, "config", "user.email", "tester@example.invalid")
+        self._git(root, "config", "user.name", "tester")
+        self._git(root, "config", "commit.gpgsign", "false")
+        return root
+
+    def _make_conflicted_repo(self, name="conflicted"):
+        """Build a repo left mid-merge with one genuinely conflicted test file.
+
+        Truth on disk: 1 node suite, 1 shell suite, 2 python suites (one of which
+        is the unmerged path).
+        """
+        root = self._init_repo(name)
+        tests = root / "tests"
+        (tests / "node_a.test.mjs").write_text("// node\n", encoding="utf-8")
+        (tests / "test_shell_a.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+        (tests / "test_stable.py").write_text("# stable\n", encoding="utf-8")
+        (tests / "test_conflict.py").write_text("# base\n", encoding="utf-8")
+        self._git(root, "add", "-A")
+        self._git(root, "commit", "-q", "-m", "base")
+
+        head = self._git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        self._git(root, "branch", "side")
+
+        (tests / "test_conflict.py").write_text("# ours\n", encoding="utf-8")
+        self._git(root, "commit", "-q", "-a", "-m", "ours")
+
+        self._git(root, "checkout", "-q", "side")
+        (tests / "test_conflict.py").write_text("# theirs\n", encoding="utf-8")
+        self._git(root, "commit", "-q", "-a", "-m", "theirs")
+
+        self._git(root, "checkout", "-q", head)
+        # Expected to fail: that is the point.
+        self._git(root, "merge", "side", check=False)
+
+        unmerged = self._git(root, "ls-files", "--unmerged").stdout
+        self.assertIn(
+            "tests/test_conflict.py",
+            unmerged,
+            "fixture must actually leave an unmerged path in the index",
+        )
+        merge_head = self._git(root, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False)
+        self.assertEqual(
+            merge_head.returncode, 0, "fixture must leave the merge IN PROGRESS"
+        )
+        return root
+
+    def test_conflicted_path_is_listed_once_per_stage_by_raw_git(self):
+        """Document the mechanism: raw `git ls-files` really does repeat the path."""
+        root = self._make_conflicted_repo()
+
+        listed = [
+            line
+            for line in self._git(root, "ls-files", "tests/test_*.py").stdout.splitlines()
+            if line
+        ]
+
+        self.assertGreater(
+            listed.count("tests/test_conflict.py"),
+            1,
+            "premise of this bug: an unmerged path is listed once per stage",
+        )
+        self.assertEqual(
+            len(set(listed)), 2, "but there are only two unique python suites on disk"
+        )
+
+    def test_check_counts_unmerged_path_exactly_once(self):
+        """RED before the fix: mid-merge, --check reported 'actual is 4' for 2 files."""
+        root = self._make_conflicted_repo()
+        self._write_doc(1, 1, 2)
+
+        result = self._run("--check", "--repo", str(root), "--claudemd", str(self.md))
+
+        self.assertEqual(
+            result.returncode,
+            0,
+            "A conflicted test file must count ONCE, not once per index stage. "
+            f"stdout: {result.stdout} stderr: {result.stderr}",
+        )
+
+    def test_regenerate_writes_deduplicated_count_mid_merge(self):
+        """--regenerate must never write an inflated stage-multiplied count."""
+        root = self._make_conflicted_repo()
+        self._write_doc(1, 1, 99)
+
+        result = self._run(
+            "--regenerate", "--repo", str(root), "--claudemd", str(self.md)
+        )
+
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"--regenerate should succeed mid-merge. stdout: {result.stdout} "
+            f"stderr: {result.stderr}",
+        )
+        content = self.md.read_text(encoding="utf-8")
+        self.assertIn(
+            "**Python (2 suites)**:",
+            content,
+            f"must write the deduplicated count, not a stage-inflated one: {content}",
+        )
+        self.assertNotIn("**Python (4 suites)**:", content)
+        self.assertNotIn("**Python (3 suites)**:", content)
+
+    def test_regenerate_mid_merge_is_idempotent_and_rechecks_clean(self):
+        """The sweep workflow: regenerate during conflict resolution, then verify."""
+        root = self._make_conflicted_repo()
+        self._write_doc(1, 1, 99)
+
+        first = self._run("--regenerate", "--repo", str(root), "--claudemd", str(self.md))
+        self.assertEqual(first.returncode, 0, first.stderr)
+        after_first = self.md.read_bytes()
+
+        second = self._run("--regenerate", "--repo", str(root), "--claudemd", str(self.md))
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(after_first, self.md.read_bytes(), "regenerate must be idempotent")
+
+        recheck = self._run("--check", "--repo", str(root), "--claudemd", str(self.md))
+        self.assertEqual(
+            recheck.returncode,
+            0,
+            f"--check must agree with what --regenerate just wrote. "
+            f"stdout: {recheck.stdout} stderr: {recheck.stderr}",
+        )
+
+    def test_merge_in_progress_is_loudly_warned_not_silently_accepted(self):
+        """Deduped counts are correct, but a half-merged tree must not be silent."""
+        root = self._make_conflicted_repo()
+        self._write_doc(1, 1, 2)
+
+        check = self._run("--check", "--repo", str(root), "--claudemd", str(self.md))
+        self.assertEqual(check.returncode, 0, check.stderr)
+        self.assertIn("MERGE_HEAD", check.stderr)
+        self.assertIn("[WARN]", check.stderr)
+
+        self._write_doc(1, 1, 99)
+        regen = self._run("--regenerate", "--repo", str(root), "--claudemd", str(self.md))
+        self.assertEqual(regen.returncode, 0, regen.stderr)
+        self.assertIn(
+            "MERGE_HEAD",
+            regen.stderr,
+            "the writing mode is exactly where the operator needs the warning",
+        )
+
+    def test_no_merge_warning_on_a_clean_tree(self):
+        """The warning must not fire (and pollute gate output) outside a merge."""
+        root = self._init_repo("clean")
+        tests = root / "tests"
+        (tests / "node_a.test.mjs").write_text("// node\n", encoding="utf-8")
+        (tests / "test_shell_a.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+        (tests / "test_stable.py").write_text("# stable\n", encoding="utf-8")
+        self._git(root, "add", "-A")
+        self._git(root, "commit", "-q", "-m", "base")
+        self._write_doc(1, 1, 1)
+
+        result = self._run("--check", "--repo", str(root), "--claudemd", str(self.md))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("MERGE_HEAD", result.stderr)
+        self.assertNotIn("[WARN]", result.stderr)
+
+    def test_file_matching_two_shell_globs_counts_once(self):
+        """`tests/test_x.test.sh` matches two shell patterns; it is still one suite."""
+        root = self._init_repo("overlap")
+        tests = root / "tests"
+        (tests / "node_a.test.mjs").write_text("// node\n", encoding="utf-8")
+        # Matches BOTH tests/*.test.sh AND tests/test_*.sh.
+        (tests / "test_overlap.test.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+        (tests / "test_stable.py").write_text("# stable\n", encoding="utf-8")
+        self._git(root, "add", "-A")
+        self._git(root, "commit", "-q", "-m", "base")
+        self._write_doc(1, 1, 1)
+
+        result = self._run("--check", "--repo", str(root), "--claudemd", str(self.md))
+
+        self.assertEqual(
+            result.returncode,
+            0,
+            "a file matched by two globs is one suite, not two. "
+            f"stdout: {result.stdout} stderr: {result.stderr}",
+        )
+
+    def test_vacuous_zero_guard_still_fails_closed(self):
+        """Deduping must not weaken the per-family zero-file fail-closed guard."""
+        root = self._init_repo("empty-python")
+        tests = root / "tests"
+        (tests / "node_a.test.mjs").write_text("// node\n", encoding="utf-8")
+        (tests / "test_shell_a.sh").write_text("#!/bin/bash\n", encoding="utf-8")
+        self._git(root, "add", "-A")
+        self._git(root, "commit", "-q", "-m", "base")
+        self._write_doc(1, 1, 7)
+
+        result = self._run("--check", "--repo", str(root), "--claudemd", str(self.md))
+
+        self.assertEqual(
+            result.returncode,
+            2,
+            f"a wiped python family must still fail closed. stdout: {result.stdout}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
