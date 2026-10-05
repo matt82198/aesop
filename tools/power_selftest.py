@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """
 power_selftest.py — Health check harness for /power bootstrap.
-INDEX: Health check harness for /power bootstrap. Hook detection unions BOTH settings scopes Claude Code merges (`brain_root/settings{,.local}.json` and `<repo>/.claude/settings{,.local}.json`) — a project-scoped hook is live, so reading only the user scope reported it missing. Requires PreToolUse `Agent|Task` only (`force-model-policy.mjs` is the sole Claude Code hook aesop ships; the former PostToolUse `Write|Edit|NotebookEdit` requirement matched no shipped hook and failed every clean install). `$CLAUDE_PROJECT_DIR` in a hook command is expanded against the repo root before the file-existence check; a path still holding a variable is skipped, not reported missing
-Validates hooks, brain state, heartbeats, decisions, and scanner regression.
+INDEX: Health check harness for /power bootstrap. Hook detection unions BOTH settings scopes Claude Code merges (`brain_root/settings{,.local}.json` and `<repo>/.claude/settings{,.local}.json`) — a project-scoped hook is live, so reading only the user scope reported it missing. Requires PreToolUse `Agent|Task` only (`force-model-policy.mjs` is the sole Claude Code hook aesop ships; the former PostToolUse `Write|Edit|NotebookEdit` requirement matched no shipped hook and failed every clean install). `$CLAUDE_PROJECT_DIR` in a hook command is expanded against the repo root before the file-existence check; a path still holding a variable is skipped, not reported missing. `trigger` check calls `task_cadence_check.run_cli()` in-process (GAP7, the gate's real consumer) to compare live Task Scheduler state against `daemons/install-tasks.ps1`: FAIL on a missing/mis-paced/unevaluable task, WARN naming a task that is registered but deliberately disabled, n/a (non-Windows) off Windows
+Validates hooks, brain state, heartbeats, decisions, scanner regression, and scheduled-task cadence.
 Exit 0 if OK/DEGRADED, 1 if FAIL. Prints one summary line + bullets for non-OK items.
 
 EXPECTED OUTPUT — HEALTHY SYSTEM:
-  POWER-SELFTEST: OK — hooks:ok brain:ok beats:ok decisions:0 pending,0 inbox scanner:n/a
+  POWER-SELFTEST: OK — hooks:ok brain:ok beats:ok decisions:0 pending,0 inbox scanner:n/a trigger:ok
 
 EXPECTED OUTPUT — UNHEALTHY SYSTEM:
-  POWER-SELFTEST: DEGRADED — hooks:ok brain:ok beats:stale decisions:2 pending scanner:8/9
+  POWER-SELFTEST: DEGRADED — hooks:ok brain:ok beats:stale decisions:2 pending scanner:8/9 trigger:WARN:disabled: AesopMergeQueue
   - beats: watchdog:stale
   - scanner: 8/9 tests passed
+  - trigger: WARN:disabled: AesopMergeQueue
 
-Exit codes: 0=OK/DEGRADED, 1=FAIL (FAIL is any hook/brain/scanner non-OK; stale beats=WARN not FAIL)
+Exit codes: 0=OK/DEGRADED, 1=FAIL (FAIL is any hook/brain/scanner/trigger non-OK; stale beats and a
+deliberately-disabled scheduled task are WARN, not FAIL)
 
 Configuration:
   - Reads aesop.config.json for brain_root, state_root, scripts_root overrides.
@@ -314,6 +316,88 @@ def check_decisions():
         return Check('decisions', 'OK', '0 pending', False)
 
 
+def check_trigger(platform=None, query=None):
+    """Check scheduled-task cadence health via task_cadence_check. Returns Check.
+
+    Imports task_cadence_check (tools/ is already on sys.path -- see the
+    sys.path.insert above) and calls its run_cli() in-process rather than
+    shelling out: run_cli() is a plain importable function, not a CLI-only
+    surface. `platform`/`query` are injectable (mirroring task_cadence_check's
+    own injectable `query`) so tests never touch the real Task Scheduler.
+
+    Policy: a task install-tasks.ps1 defines that Task Scheduler has never
+    registered (MISSING), that runs at the wrong cadence (INTERVAL_MISMATCH),
+    or that cannot be evaluated at all (QUERY_ERROR) is FAIL -- "could not
+    evaluate" must never read as healthy. A task that IS registered but
+    deliberately DISABLED (e.g. AesopMergeQueue on this box since 2026-09-02)
+    is a WARN naming the task: disabling a daemon on purpose is an operator
+    decision, not drift, and FAIL is reserved for a task that is actually
+    missing or mis-paced.
+    """
+    plat = platform if platform is not None else sys.platform
+    try:
+        import task_cadence_check
+    except Exception as exc:
+        return Check('trigger', 'OK', 'n/a (import error: %s)' % exc, False)
+
+    # Graceful degradation (same precedent as check_hooks/check_scanner):
+    # a directory that isn't a real aesop checkout has no install-tasks.ps1
+    # to evaluate against. That's "not applicable", not an evaluation
+    # failure -- fail-closed FAIL is reserved for a checkout that DOES
+    # define a task but can't confirm it's healthy.
+    install_script = paths['aesop_root'] / 'daemons' / 'install-tasks.ps1'
+    if query is None and not install_script.exists():
+        return Check('trigger', 'OK', 'n/a (no install-tasks.ps1)', False)
+
+    run_kwargs = {}
+    if query is not None:
+        run_kwargs['query'] = query
+
+    try:
+        argv = ['--json', '--root', str(paths['aesop_root'])]
+        exit_code, output = task_cadence_check.run_cli(argv, platform=plat, **run_kwargs)
+    except Exception as exc:
+        return Check('trigger', 'FAIL', 'FAIL:error invoking cadence check: %s' % exc, True)
+
+    try:
+        report = json.loads(output)
+    except (ValueError, TypeError):
+        report = None
+
+    if exit_code == 0:
+        if report and report.get('status') == 'SKIPPED-non-windows':
+            return Check('trigger', 'OK', 'n/a (non-Windows)', False)
+        return Check('trigger', 'OK', 'ok', False)
+
+    if report is None:
+        # Early-failure paths (unreadable/unparseable install script) return
+        # plain text even with --json -- still a real, fail-closed FAIL.
+        return Check('trigger', 'FAIL', 'FAIL:%s' % output.strip()[:200], True)
+
+    tasks = report.get('tasks', [])
+    query_errors = [t for t in tasks if t.get('status') == 'QUERY_ERROR']
+    missing = [t for t in tasks if t.get('status') == 'MISSING']
+    mismatched = [t for t in tasks if t.get('status') == 'INTERVAL_MISMATCH']
+    disabled = [t for t in tasks if t.get('status') == 'DISABLED']
+
+    if query_errors:
+        names = ', '.join(t['task'] for t in query_errors)
+        return Check('trigger', 'FAIL', 'FAIL:cannot evaluate: %s' % names, True)
+    if missing:
+        names = ', '.join(t['task'] for t in missing)
+        return Check('trigger', 'FAIL', 'FAIL:missing task(s): %s' % names, True)
+    if mismatched:
+        names = ', '.join(t['task'] for t in mismatched)
+        return Check('trigger', 'FAIL', 'FAIL:cadence drift: %s' % names, True)
+    if disabled:
+        names = ', '.join(t['task'] for t in disabled)
+        return Check('trigger', 'WARN', 'WARN:disabled: %s' % names, False)
+
+    # Nonzero exit with no recognizable per-task drift -- fail closed rather
+    # than silently reporting health for a report shape we don't understand.
+    return Check('trigger', 'FAIL', 'FAIL:unrecognized report (exit %d)' % exit_code, True)
+
+
 def check_scanner():
     """Check secret scanner. Returns Check."""
     try:
@@ -343,7 +427,7 @@ def run_checks():
     """Run all health checks and return results."""
     results = []
 
-    for check_fn in [check_hooks, check_brain, check_beats, check_decisions, check_scanner]:
+    for check_fn in [check_hooks, check_brain, check_beats, check_decisions, check_scanner, check_trigger]:
         result = check_fn()
         if result:
             results.append(result)
@@ -371,7 +455,7 @@ def format_output(results):
     check_details = []
     for result in results:
         if result.status in ('OK', 'WARN'):
-            if result.name in ('decisions', 'scanner'):
+            if result.name in ('decisions', 'scanner', 'trigger'):
                 check_details.append(f'{result.name}:{result.details}')
             else:
                 check_details.append(f'{result.name}:ok')

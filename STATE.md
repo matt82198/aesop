@@ -29,7 +29,7 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 1. **Flaky `test_openai_transport_redirect` characterization** (DONE). Root cause identified and fixed in PR #808. Flaky test no longer reproduces under ci_shard_runner conditions.
 
-2. **Trigger-layer selftest check in power_selftest** (GUARDRAIL #1). Verify scheduled-task execution path during POWER-SELFTEST (fail-closed if conductor3 not cloned or tasks not registered). Addresses fragility noted in Known Limitations.
+2. **Trigger-layer selftest check in power_selftest** (GUARDRAIL #1) — DONE (#701 + this PR). `task_cadence_check.py` (GAP7, #701) parsed `daemons/install-tasks.ps1` and queried live Task Scheduler state but nothing invoked it; power_selftest.py now imports it in-process as a `trigger` check (FAIL on missing/mis-paced/unevaluable task, WARN naming a deliberately-disabled one, n/a off Windows). Addresses fragility noted in Known Limitations.
 
 3. **`test_hook_preflight` rewrite** (IN-REVIEW). Test raised module-level `unittest.SkipTest` (#667 wired it as SKIPPED); coverage gap remains. Full rewrite needed to fix `tmp_path` NameError and make test executable. Medium effort; medium impact (test-suite completeness).
 
