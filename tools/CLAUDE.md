@@ -89,8 +89,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `port_fidelity_check.py` — Validates port/copy/vendor/migrate dispatch prompts require source path, source-unique marker, and independent verification
 - `portability_check.py` — Shipped-surface gate: scan for hardcoded personal/environment paths (Windows user paths, POSIX home paths, private-machine tokens 'conductor3'/'matt8'); exit 0 clean / 1 with findings; --json output, --root flag for base directory; stdlib only
 - `power_selftest.py` — Health check harness for /power bootstrap
-- `prepublish_scan.py` — Pre-publish full history + staged-changes scan gate
-- `proposals.mjs` — Proposal lifecycle manager (list/accept/reject via lock.mjs)
+- `prepublish_scan.py` — Pre-publish full history + staged-changes scan gate | `proposals.mjs` — Proposal lifecycle manager (list/accept/reject via lock.mjs)
 - `reconcile.py` — Detect/resolve drift (git STATE.md vs. state_store projection; git-authoritative; --resolve appends to SQLite only, never rewrites git-side state)
 - `reconstitute.sh` — Clone/fetch repos from config with security validation
 - `remote_inbox.py` — Poll GitHub issue comments for remote command dispatch (phone-to-orchestrator, outbound polling only); verifies repo-owner authorship via GitHub API; strict allowlist of 8 skill commands (/runwave, /power, /afk, etc.); idempotent tracking to prevent replay; appends to ~/conductor3/state/ui-inbox.md for orchestrator pickup; posts reply comments for acknowledgment; audit log to ~/conductor3/state/REMOTE-DISPATCH.log; CLI: `--issue N [--dry-run] [--once]`; exit 0=success / 1=gh failure; designed for scheduled task execution (Windows task scheduler calling --once every 5-10 minutes); documented in docs/REMOTE-ACCESS.md

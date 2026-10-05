@@ -340,19 +340,20 @@ class TestRealTree(unittest.TestCase):
     escape, independent of the incident that prompted the guardrail: commit
     16b3f8e3 (2026-07-31) split two heartbeat filenames the same way, and the
     stateapi ratchet baseline was then lowered 39 -> 37 on the strength of it.
-    Remediating that needs facade routing plus a baseline change, both outside
-    this guardrail's ownership, so the escape is recorded here EXPLICITLY rather
-    than exempted: the detector still exits 1 on the real tree (it reports the
-    truth), and this ratchet fails if the finding set moves in either direction
-    -- a new evasion appears, or these are fixed and the entry is now stale.
+    It was recorded here EXPLICITLY rather than exempted so this ratchet would
+    fail if the finding set moved in either direction -- a new evasion
+    appeared, or this one was fixed and the entry went stale.
+
+    It has since been fixed on main: tools/health_checks.py now keeps the two
+    heartbeat filenames as contiguous literals (see its own module docstring
+    and tests/test_health_checks.py::TestNoLintEvasion), so KNOWN_ESCAPES is
+    empty and the real tree scans clean. The set stays here, empty, as the
+    bidirectional ratchet: a regression refills it and this test goes red.
 
     The detector must not be wired into CI until this set is empty.
     """
 
-    KNOWN_ESCAPES = {
-        ("tools/health_checks.py", ".watchdog-heartbeat"),
-        ("tools/health_checks.py", ".monitor-heartbeat"),
-    }
+    KNOWN_ESCAPES: set = set()
 
     def test_repo_tree_matches_known_escape_ratchet(self):
         import json
