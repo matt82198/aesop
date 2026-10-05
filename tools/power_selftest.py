@@ -24,6 +24,7 @@ Configuration:
 
 import json
 import os
+import re
 import subprocess
 import sys
 import io
@@ -314,80 +315,178 @@ def check_decisions():
         return Check('decisions', 'OK', '0 pending', False)
 
 
+def _resolve_scanner_selftest_path():
+    """Locate the secret-scanner's own regression harness (TP/FP self-test).
+
+    Prefers the copy living alongside this tool (scripts_root, default
+    <aesop-root>/tools) so the check validates the scanner that actually
+    ships here; falls back to the canonical ~/scripts library copy (Cardinal
+    Rule 9: check ~/scripts before treating anything as missing). Both are
+    resolved through Path.home()/paths['scripts_root'] -- never a
+    hard-coded user profile -- so it behaves identically across boxes.
+    Returns None if neither candidate exists.
+    """
+    candidates = [
+        paths['scripts_root'] / 'scanner_selftest.py',
+        Path.home() / 'scripts' / 'scanner_selftest.py',
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def check_scanner():
-    """Check secret scanner. Returns Check."""
+    """Check the secret scanner's own regression self-test. Returns Check.
+
+    This validates scanner REGRESSION (does secret_scan.py still correctly
+    flag true positives and pass false positives?), not "are there staged
+    secrets right now" -- the latter is a different question (answered by
+    the pre-push gate) and depends on git/cwd state the health check has no
+    business caring about.
+
+    A check that cannot locate or run the harness, or cannot parse a
+    pass/total count out of its output, must never report OK/n/a -- it
+    reports FAIL so a silently-broken scanner gate is never read healthy.
+    """
     try:
-        scanner_path = paths['scripts_root'] / 'secret_scan.py'
-        if not scanner_path.exists():
-            return Check('scanner', 'OK', 'n/a', False)
+        scanner_path = _resolve_scanner_selftest_path()
+        if scanner_path is None:
+            return Check('scanner', 'FAIL', 'unevaluated: scanner_selftest.py not found', True)
 
         result = subprocess.run(
-            [sys.executable, str(scanner_path), '--staged'],
+            [sys.executable, str(scanner_path)],
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30,
-            cwd=str(paths['aesop_root'])
+            cwd=str(scanner_path.parent)
         )
 
-        # Scanner exit 0 = clean, 1 = findings, 2 = usage error
-        if result.returncode == 0:
-            return Check('scanner', 'OK', None, False)
-        elif result.returncode == 1:
-            # Findings detected
-            return Check('scanner', 'FAIL', 'findings detected', True)
-        else:
-            return Check('scanner', 'OK', 'n/a', False)
+        output = result.stdout.strip()
+        match = re.search(r'(\d+)/(\d+)\s*passed', output) or re.search(r'(\d+)/(\d+)', output)
+        if not match:
+            return Check(
+                'scanner', 'FAIL',
+                f'unevaluated: unparseable output (exit {result.returncode})', True
+            )
+
+        passed, total = int(match.group(1)), int(match.group(2))
+        details = f'{passed}/{total}'
+        if passed < total:
+            return Check('scanner', 'FAIL', details, True)
+        return Check('scanner', 'OK', details, False)
     except Exception as e:
-        return Check('scanner', 'OK', 'n/a', False)
+        return Check('scanner', 'FAIL', f'unevaluated: exception:{type(e).__name__}', True)
+
+
+# Checks whose healthy state is expressed THROUGH their details string
+# (a count, a pending tally) rather than a bare "ok" -- a None value here
+# means the check didn't actually evaluate anything, so it must never be
+# allowed to render as healthy. hooks/brain/beats intentionally carry
+# details=None on a clean OK and that stays a plain "<name>:ok".
+DETAILED_OK_CHECKS = ('decisions', 'scanner')
+
+# (name, check_fn) pairs -- the single source of truth run_checks() iterates.
+# Tests may monkeypatch this tuple to inject a check that returns None, to
+# prove a crashed/mis-shaped check is surfaced as a failure, not dropped.
+CHECKS = (
+    ('hooks', check_hooks),
+    ('brain', check_brain),
+    ('beats', check_beats),
+    ('decisions', check_decisions),
+    ('scanner', check_scanner),
+)
 
 
 def run_checks():
-    """Run all health checks and return results."""
+    """Run all health checks and return results.
+
+    A check function is expected to return a Check namedtuple. If it
+    returns None (or raises) instead -- a crash, a mis-shaped result -- that
+    is itself a failure of evaluation and must surface as one, never be
+    silently dropped from the headline (silence would read as healthy).
+    """
     results = []
 
-    for check_fn in [check_hooks, check_brain, check_beats, check_decisions, check_scanner]:
-        result = check_fn()
-        if result:
+    for name, check_fn in CHECKS:
+        try:
+            result = check_fn()
+        except Exception as e:
+            result = None
+            detail = f'unevaluated: exception:{type(e).__name__}'
+            results.append(Check(name, 'FAIL', detail, True))
+            continue
+        if result is None:
+            results.append(Check(name, 'FAIL', 'unevaluated: check returned None', True))
+        else:
             results.append(result)
 
     return results
 
 
+def render_segment(name, result):
+    """Render one check's headline segment as '<name>:<status-or-detail>'.
+
+    The single place every check result is turned into text. A result this
+    cannot make sense of -- None, an unrecognized status, or an OK/WARN
+    DETAILED_OK_CHECKS result whose details is None -- renders
+    '<name>:FAIL:unevaluated' and is always treated as a failure. This is
+    the fix for the literal "scanner:None" that reached the headline when a
+    check's details silently stayed unset.
+
+    Returns (segment_str, is_fail).
+    """
+    status = getattr(result, 'status', None)
+    details = getattr(result, 'details', None)
+
+    if status not in ('OK', 'WARN', 'FAIL', 'ERROR'):
+        return f'{name}:FAIL:unevaluated', True
+
+    if status in ('OK', 'WARN'):
+        if name in DETAILED_OK_CHECKS:
+            if details is None:
+                return f'{name}:FAIL:unevaluated', True
+            return f'{name}:{details}', False
+        return f'{name}:ok', False
+
+    # FAIL / ERROR -- always carries an explicit FAIL: marker in the segment
+    # itself (not just the overall verdict word) so a reader scanning the
+    # per-check list sees which one broke without cross-referencing status.
+    if details:
+        return f'{name}:FAIL:{details}', True
+    return f'{name}:FAIL', True
+
+
 def format_output(results):
     """Format results into the summary line and optional bullets."""
-    # Build status
-    has_fail = any(r.is_fail for r in results)
-    has_warn = any(r.status == 'WARN' for r in results)
+    check_details = []
+    any_fail = False
+    any_warn = any(getattr(r, 'status', None) == 'WARN' for r in results)
 
-    if has_fail:
+    for result in results:
+        name = getattr(result, 'name', '?')
+        segment, seg_is_fail = render_segment(name, result)
+        check_details.append(segment)
+        if seg_is_fail or getattr(result, 'is_fail', False):
+            any_fail = True
+
+    if any_fail:
         overall = 'FAIL'
         exit_code = 1
-    elif has_warn:
+    elif any_warn:
         overall = 'DEGRADED'
         exit_code = 0
     else:
         overall = 'OK'
         exit_code = 0
 
-    # Build detail strings for each check
-    check_details = []
-    for result in results:
-        if result.status in ('OK', 'WARN'):
-            if result.name in ('decisions', 'scanner'):
-                check_details.append(f'{result.name}:{result.details}')
-            else:
-                check_details.append(f'{result.name}:ok')
-        elif result.status in ('FAIL', 'ERROR'):
-            if result.details:
-                check_details.append(f'{result.name}:{result.details}')
-            else:
-                check_details.append(f'{result.name}:fail')
-
     summary_line = f'POWER-SELFTEST: {overall} — {" ".join(check_details)}'
 
     # Build bullet points for non-OK items
     bullets = []
     for result in results:
-        if result.status not in ('OK',):
-            msg = f'- {result.name}: {result.details}' if result.details else f'- {result.name}'
+        if getattr(result, 'status', None) not in ('OK',):
+            name = getattr(result, 'name', '?')
+            details = getattr(result, 'details', None)
+            msg = f'- {name}: {details}' if details else f'- {name}'
             bullets.append(msg)
 
     output_lines = [summary_line]
