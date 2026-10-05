@@ -277,6 +277,7 @@ main() {
       printf '%s  cycle #%d [ERROR: exit %d]\n%s\n' "$(date '+%H:%M:%S')" "$n" "$cmd_exit" "$out"
     fi
     check_monitor_staleness "$MONITOR_HB_FILE" "$MONITOR_HB_STALE_THRESHOLD" "$AESOP_ROOT/state/FLEET-BACKUP.log"
+    if [ -n "$PYTHON_EXE" ] && [ -f "$AESOP_ROOT/tools/git_integrity_check.py" ] && [ -f "$AESOP_ROOT/state/.watchdog-repos.json" ]; then "$PYTHON_EXE" "$AESOP_ROOT/tools/git_integrity_check.py" --repos-json "$AESOP_ROOT/state/.watchdog-repos.json" >> "$AESOP_ROOT/state/FLEET-BACKUP.log" 2>&1 || echo "[$(date '+%F %T')] SECURITY ALERT: git repository integrity check found DAMAGED repos (exit code $?)" >> "$AESOP_ROOT/state/SECURITY-ALERTS.log"; fi
     if [ -n "$PYTHON_EXE" ]; then
       "$PYTHON_EXE" "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
     fi

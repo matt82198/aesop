@@ -10,7 +10,7 @@
 
 ## Files
 
-- **run-watchdog.sh**: Daemon supervisor (1.7K); spawns backup-fleet.sh every 150s with atomic lockfile guard, maintains heartbeat, logs to FLEET-BACKUP.log, posts security alerts via alert_bridge.py (opt-in). Traps INT/TERM cleanly. **BASH_SOURCE exec-guard**: all path/env variables declared INSIDE the guard (sourcing exposes only functions like acquire_lock/release_lock, not env side effects).
+- **run-watchdog.sh**: Daemon supervisor (1.7K); spawns backup-fleet.sh every 150s with atomic lockfile guard, maintains heartbeat, logs to FLEET-BACKUP.log, calls `tools/git_integrity_check.py --repos-json` on .watchdog-repos.json after each cycle (appends FLEET-BACKUP.log; on DAMAGED repos writes SECURITY-ALERTS.log alert), posts security alerts via alert_bridge.py (opt-in). Traps INT/TERM cleanly. **BASH_SOURCE exec-guard**: all path/env variables declared INSIDE the guard (sourcing exposes only functions like acquire_lock/release_lock, not env side effects).
 - **backup-fleet.sh**: Core backup worker (5K); discovers repos (~/.*, ~/*, ~/dev/*), stashes uncommitted work to backup/* branches, pushes unpushed commits, scans tracked/untracked files for secrets. Blocks push if secret-scan fails. **Set -u pipefail** at top; heartbeat is written at the END of a completed cycle, never before main() runs -- a heartbeat must attest to work DONE. Written up front, a crash inside main() still left a fresh timestamp, so selfheal.sh saw a healthy age and never restarted the daemon while backups silently halted. Failure paths deliberately skip the write so staleness is detectable.
 - **selfheal.sh**: Self-healing supervisor; monitors heartbeats of run-watchdog.sh and the sibling monitor daemon (CONDUCTOR_ROOT-resolved). On each cycle (~60s), detects stale heartbeats (>600s age) and restarts dead daemons. Single-instance guarded via atomic mkdir. Never kills anything with fresh heartbeat (idempotent). Logs to state/SELFHEAL.log. **BASH_SOURCE exec-guard**: all path/env variables inside guard. CRLF-safe. Supports `--once` mode for testing.
 - **run-merge-queue.sh**: Merge-queue advancer runner (~140 lines). NOT a daemon and NOT a loop: one invocation runs exactly ONE bounded pass of `tools/merge_queue.py --advance`, and the 5-minute `AesopMergeQueue` Scheduled Task IS the loop. Deliberate -- merging must not depend on a live interactive session (measured green->merge dead time ~31.75 HOURS sessionless vs 9-109 seconds seated). Zero `sleep` calls, zero polling. Checks `.HALT` first via `check_halt_any` over EVERY location halt.py may have written it — `$AESOP_STATE_ROOT/.HALT` then `$AESOP_ROOT/state/.HALT`, deduped so one halt logs once (halted = log + exit 0, no work) — `cd`s to `$AESOP_ROOT` because `gh` resolves the repo from cwd, exports `AESOP_STATE_ROOT`, appends to state/MERGE-QUEUE.log, and propagates the tool's exit code. **BASH_SOURCE exec-guard**: every path/env variable declared INSIDE the guard, so sourcing exposes only resolve_python/log_line/check_halt.
@@ -56,6 +56,30 @@
 10. **Windows: tasks must be registered via install-tasks.ps1** (hidden wscript launcher) — never raw bash.exe actions (visible console window flashes every interval).
 11. **The scheduler is the loop**: run-merge-queue.sh has no loop, no sleep and no watcher; it runs one bounded pass and exits. Never add polling here or in tools/merge_queue.py — a scheduled actor that waits is just a session with extra steps.
 12. **The advancer never bypasses a gate**: no `--admin`, no `--auto`, no force-push, no review-thread resolution, no secret-scan tampering, no model calls. It merges only when `enforce_admins` is asserted AND every required check is green under its own fail-closed bucketing; anything else becomes an exception row.
+
+## Cadence verification (Windows)
+
+Heartbeats prove a daemon *ran*; they cannot prove it ran at the right *rate*. The refinement
+monitor once fired hourly against its 20-minute SLA with every cycle exiting 0 and every
+heartbeat fresh at read time -- nothing compared the registered cadence to the defined one.
+
+`tools/task_cadence_check.py` closes that gap: it parses this directory's `install-tasks.ps1`
+as the source of truth (binding each `Register-DaemonTask` call site's `-TaskName` /
+`-IntervalMinutes` through the param defaults and `${TaskPrefix}` interpolation, so expected
+cadences are never hand-copied), then reads live state from `schtasks /query /tn <name> /xml`
+and compares. Exit 1 on interval mismatch, unregistered task, or disabled task; exit 2
+(fail-closed) on any query/parse failure, which outranks exit 1 so an unevaluable task is
+never masked by clean siblings. `<Enabled>` is optional in Task Scheduler XML and its absence
+means enabled; `/xml` output is UTF-16 and is decoded by BOM.
+
+Windows-only by construction: on any other platform it prints a `SKIPPED-non-windows` line and
+exits 0, so ubuntu CI is unaffected. The intended consumer is the local `/power` self-test
+(`power_selftest.py`), which should invoke it alongside the existing heartbeat-staleness
+checks. Run it manually after any `install-tasks.ps1` change or after a reboot:
+`python tools/task_cadence_check.py [--json]`.
+
+Its tests (`tests/test_task_cadence_check.py`) are fixture-driven and never shell out to
+`schtasks` -- the query function is injectable -- so the suite runs identically on both OSes.
 
 ## Testing
 

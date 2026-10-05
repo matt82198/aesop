@@ -967,7 +967,7 @@ SCANNER
   # skipped -- the escape this fixture must not re-create). These stubs keep the
   # fixture focused on main()'s stdin handling instead of gate behavior.
   for gate_stub in tracker_guard import_resolution_check claudemd_sync_gate \
-                   metrics_gate verify_test_suite_count encoding_lint \
+                   gen_tool_index metrics_gate verify_test_suite_count encoding_lint \
                    verify_test_coverage; do
     printf 'import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/$gate_stub.py"
   done
@@ -1267,6 +1267,80 @@ printf '\n=== Test P1-Worktree: Checkers use resolve_aesop_root, not hardcoded p
   fi
 
   printf 'PASS: No hardcoded AESOP_ROOT paths found in check functions\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test: gen_tool_index gate fails when tool has no INDEX: line ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_no_index"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+
+  # Create a dummy gen_tool_index.py script that returns 1 (simulating missing INDEX line)
+  # This mimics the real tool's behavior when it finds a tool without an INDEX: line
+  cat > "$AESOP_ROOT/tools/gen_tool_index.py" <<'SCRIPT'
+#!/usr/bin/env python3
+import sys
+if "--check" in sys.argv:
+    print("ERROR: tools/ files missing an INDEX: docstring line (fail-closed):", file=sys.stderr)
+    print("  - tools/new_tool.py", file=sys.stderr)
+    sys.exit(1)
+sys.exit(0)
+SCRIPT
+  chmod +x "$AESOP_ROOT/tools/gen_tool_index.py"
+
+  # Create stub scripts for other gates so check_gen_tool_index doesn't fail before we test it
+  for gate in tracker_guard import_resolution_check claudemd_sync_gate metrics_gate \
+              verify_test_suite_count encoding_lint verify_test_coverage; do
+    printf 'import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/${gate}.py"
+  done
+
+  # Test: check_gen_tool_index should return 1 when the index script fails
+  if ! check_gen_tool_index; then
+    printf 'PASS: check_gen_tool_index correctly fails when INDEX line is missing\n'
+  else
+    printf 'FAIL: check_gen_tool_index should have failed (exit 1) when INDEX line missing\n'
+    exit 1
+  fi
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test: gen_tool_index gate passes when all tools have INDEX lines ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_with_index"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+
+  # Create a dummy gen_tool_index.py script that returns 0 (simulating success)
+  cat > "$AESOP_ROOT/tools/gen_tool_index.py" <<'SCRIPT'
+#!/usr/bin/env python3
+import sys
+if "--check" in sys.argv:
+    print("[OK] tools/INDEX.md is in sync (42 tools)")
+    sys.exit(0)
+sys.exit(1)
+SCRIPT
+  chmod +x "$AESOP_ROOT/tools/gen_tool_index.py"
+
+  # Create stub scripts for other gates
+  for gate in tracker_guard import_resolution_check claudemd_sync_gate metrics_gate \
+              verify_test_suite_count encoding_lint verify_test_coverage; do
+    printf 'import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/${gate}.py"
+  done
+
+  # Test: check_gen_tool_index should return 0 when index is in sync
+  if check_gen_tool_index; then
+    printf 'PASS: check_gen_tool_index correctly passes when all tools have INDEX lines\n'
+  else
+    printf 'FAIL: check_gen_tool_index should have passed (exit 0) when INDEX is in sync\n'
+    exit 1
+  fi
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))

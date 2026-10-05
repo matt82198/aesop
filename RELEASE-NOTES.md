@@ -1,5 +1,11 @@
 # UNRELEASED
 
+(None yet; see v0.8.0 below for the shipped release.)
+
+---
+
+# aesop 0.8.0 — Release 2026-09-11
+
 **Headline**: Merge-pipeline debottlenecking (queued batch advancer, contention telemetry, stacked-PR deconfliction), multibox coordination MVP (durable identity, lease-by-append claims, shared-FS backend), CI repair (red-workflow fixes, weekly drift snapshot via rolling PR), guardrail hardenings (Q0 concurrency gate, G5 import-check, merge-queue discipline), skills-loader fail-closed upgrades (tool INDEX registration, secret-scan provisioning).
 
 ## Shipping

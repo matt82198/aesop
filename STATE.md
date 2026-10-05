@@ -2,7 +2,7 @@
 
 **What this file is:** The live durable checkpoint that Aesop itself uses during its own `/buildsystem` loop. It records the current system version, architectural decisions, known limitations, and the next milestone. This is not historical archive; it is read by the orchestrator to understand operational state.
 
-**Current Version:** v0.8.0 (release candidate 2026-09-11; tag pending).
+**Current Version:** v0.8.0 (tagged + released 2026-09-11; npm latest 0.8.0). HEAD: 4837ae60 (2026-10-05); 73 commits since v0.8.0.
 
 ## Architectural Thesis
 
@@ -27,7 +27,7 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 **NEXT STEPS (post-0.7.2, ranked):**
 
-1. **Flaky `test_openai_transport_redirect` characterization** (IN-REVIEW). Flaky in shard 0 (pytest mode) — failed once, passed on clean re-run, passes in isolation. High impact (blocks shard confidence); low effort (1–2 PRs to isolate root cause and fix). Highest priority for unblocking.
+1. **Flaky `test_openai_transport_redirect` characterization** (DONE). Root cause identified and fixed in PR #808. Flaky test no longer reproduces under ci_shard_runner conditions.
 
 2. **Trigger-layer selftest check in power_selftest** (GUARDRAIL #1). Verify scheduled-task execution path during POWER-SELFTEST (fail-closed if conductor3 not cloned or tasks not registered). Addresses fragility noted in Known Limitations.
 
@@ -35,14 +35,18 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 4. **`test_agent_detail_roundtrip` pollution re-verify under ci_shard_runner** (IN-REVIEW). Fix landed in #668 (`/api/state` served real data, not empty default); config.reload() wired in setUp (#667). Re-verification under shard-runner conditions needed before fully closed. Medium effort; medium impact (integration-test stability).
 
-5. **STATE.md freshness gate** (GUARDRAIL #2). Detect stale checkpoints by parsing Current Version claim and comparing committed-at date vs. HEAD date. Gate should fail if STATE.md's claimed version significantly lags behind HEAD (e.g., >50 commits). Prevents future staleness escapes.
+5. **STATE.md freshness gate** (DONE). Gate implemented and shipped in PR #809; detects stale checkpoints by comparing Current Version claim vs. HEAD commit count. Baseline freshness checkpoint set 2026-10-05.
 
 6. **Portability path scan (box-restore / trigger-layer absolutization)** (REFACTOR). Ensure all scripts invoked by scheduled tasks use absolute paths (AESOP_HOME or durable ~/scripts location). Validates guardrail proposal from refinesystem R1. Medium effort; medium impact (multi-box readiness).
    Evidence from 2026-09-10 half-restore incident: settings hooks pointed at wrong profile, scheduled-task StartBoundary in past prevented first run, packed-refs/pack loss on restore. Guardrail tracked in PR #793.
 
 7. **Dead-baseline liveness check** (GUARDRAIL #3). Verify that unused test baselines (e.g., .encoding-baseline.json if no encoding tests) do not accumulate. Proposed in refinesystem R1 (lens6, deferred). Low effort; low impact (hygiene).
 
-8. **Stats-refresh PR jam** (USER DECISION). PR #774 (stats-refresh) conflicted with main; PR #781 (keeper stats) in flight. User consent needed: merge #781 + close #774, or resolve conflicts and rebase batch. ~110 unreleased PRs since v0.7.2; release-cadence decision also pending.
+8. **Stats-refresh PR jam** (RESOLVED). PR #781 (keeper stats) merged. Portfolio stats pipeline validated (2026-10-05). v0.8.0 released with freshness gate active; board catch-up lane started.
+
+9. **Merge actor must not depend on a session** (IN-PROGRESS). Lanes arm native auto-merge at PR open; AesopMergeQueue task disabled. 37-PR board catch-up in progress (2026-10-05). All PRs must merge via GitHub native auto-merge, never by session daemon or manual merge.
+
+10. **Hard checkpoint+clear enforcement hooks** (QUEUED). Implement pre-push gates to verify STATE.md/BUILDLOG.md are checkpointed before context clears. Enforce single-writer discipline on control files. Matt 2026-10-05 directive.
 
 **Release-state note:** `v0.7.1` is tagged at `ec5ea9db` and has **no GitHub release** — that commit's CI was red (pre-existing `/api/state` bug). The tag was deliberately NOT moved, since retagging a pushed release rewrites published history. `v0.7.2` is published on npm (Latest, MIT license) and GitHub (Release v0.7.2 Latest). Consumer-visible release history therefore reads 0.7.0 -> 0.7.2; publishing 0.7.1 retroactively is a user decision. `v0.7.1` remains tag-only on git. Current unreleased commits: 219 since v0.7.2 tag (as of 2026-09-11, HEAD 07732210).
 

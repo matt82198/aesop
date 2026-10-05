@@ -154,9 +154,9 @@ def check_ci_status(status_rollup, allow_no_checks=False, expected_checks=None):
             status = check.get("status", "").upper()
             conclusion = check.get("conclusion", "")
 
-            if status == "COMPLETED":
+            if status == "COMPLETED":  # bucket-lint: ok "pending" blocks the merge here (merge is structurally unreachable unless SUCCESS), so it IS the fail-closed bucket
                 # Check conclusion for failure indicators
-                if conclusion and conclusion.upper() in ("FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"):
+                if conclusion and conclusion.upper() in ("FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"):  # bucket-lint: ok unknown conclusion -> "pending" never merges (F6 fix, intentional)
                     check_status = "failure"
                 elif not conclusion or conclusion == "":
                     # COMPLETED with null/empty conclusion = fail-closed to PENDING (API anomaly)
@@ -177,7 +177,7 @@ def check_ci_status(status_rollup, allow_no_checks=False, expected_checks=None):
         elif "state" in check:
             # StatusContext entry (has 'state' field)
             state = check.get("state", "").lower()
-            if state == "success":
+            if state == "success":  # bucket-lint: ok unknown state -> "pending" blocks the merge (fail-closed by construction)
                 check_status = "success"
             elif state in ("failure", "error"):
                 check_status = "failure"

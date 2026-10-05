@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Lane A: Implement humanize_lint.py** (#822).
+- **Lane B: humanize_ledger.py** — append-only ledger for humanization edits (#821).
+- **Lane C: humanize_voice.py** — voice profiler (#820).
+
+### Fixed
+- **fix(portability): remove the last 32 literal profile paths** — multi-box deployment readiness (#817).
+- **Fix humanize_ledger.py attribution and split_sentences initials** (#823).
+- **fix: trigger CI and auto-merge for stats-refresh PR** (#825).
+
+### Docs
+- **docs(paper): The Receipts Loop** — arXiv manuscript draft with dated provenance (#824).
+- **docs: post-release 0.8.0 checkpoint** (#813).
+
+### Chore
+- **chore(deps)(deps): bump undici from 8.9.0 to 8.11.2 in /ui/web** (#819).
+- **chore(deps)(deps-dev): bump @playwright/test from 1.62.1 to 1.63.0** (#814).
+
 ## [0.8.0] - 2026-09-11
 
 ### Changed
