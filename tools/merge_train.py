@@ -470,15 +470,10 @@ def cleanup_integration_branch(branch: str):
 def run_integration_train(prs: list[int], batch_name: str = "",
                           poll_interval: int = 45, max_polls: int = 60,
                           dry_run: bool = False) -> bool:
-    """B1: Integration-batch merges by default + stacked-PR chains + landed-content close guard.
-
-    B1.1: --integration is DEFAULT; batch_name auto-generated if not provided.
-    B1.2: Stacked PRs handled via chain graph; drop entire chain on conflict.
-    B1.3: Before closing, verify ancestor of origin/main.
-    B1.4: Assert enforce_admins enabled.
-    B1.5: Never update_branch in integration mode.
-    B1.6: Regeneration hook stub.
-    """
+    """B1: Integration-batch merges by default + stacked-PR chains + landed-content close
+    guard. B1.1: --integration DEFAULT, batch_name auto-generated. B1.2: stacked-PR chain
+    graph, drop chain on conflict. B1.3: ancestor-verify before close. B1.4: enforce_admins
+    required. B1.5: never update_branch in integration mode. B1.6: regeneration hook stub."""
     # Check halt BEFORE starting the integration train
     _check_halt(" [run_integration_train entry]")
     if not batch_name:
