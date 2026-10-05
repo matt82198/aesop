@@ -160,6 +160,12 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
 ## 6. Boundaries
 - **Lanes open/update PRs and push branches. They NEVER merge.** Only the orchestrator (via `tools/auto_merge.py`)
   merges. A lane's job ends when the branch is pushed and a PR is open.
+- **Merge automation: arm native auto-merge at PR open time.** After `gh pr create`, immediately run `gh pr merge <N> --auto --squash`
+  to arm GitHub's native auto-merge. Never use `--admin`. A PR must never wait for a session daemon or manual merge to complete.
+  Native auto-merge is the merge actor; AesopMergeQueue is disabled.
+- **Before pushing, run the shard for your test file.** Run `python tools/ci_shard_runner.py <n> 4` for the shard that owns your
+  test file (see tests/CLAUDE.md for shard assignment). CI is confirmation of local verification, not discovery of breakage. Paste
+  the shard output to your report: it proves your changes work before they hit main.
 - **Merge = `python tools/auto_merge.py <n>` with the PR number. Never bare.** The primary tree is the merge tool's working tree.
 - Stay inside your declared files. If the chain leaves them, **STOP and hand off** — a clean hand-off
   beats a collision and is a complete result, not a failure.
