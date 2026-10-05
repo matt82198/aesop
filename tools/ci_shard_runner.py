@@ -168,6 +168,17 @@ def main():
     root = script_dir.parent
     if str(root) not in sys.path:
         sys.path.insert(0, str(root))
+    if str(script_dir) not in sys.path:
+        sys.path.insert(0, str(script_dir))
+
+    # Defense-in-depth: tests/__init__.py already applies this on first import of
+    # the `tests` package (the universal hook, reached by every path below), but
+    # setting it explicitly here too documents the intent at this entry point and
+    # means it is active even before any test module is imported. Idempotent
+    # per-process. See tools/test_network_isolation.py (incident 2026-10-05: an
+    # unmocked merge_train/merge_queue subprocess test pushed real branches).
+    from test_network_isolation import apply_test_isolation_env
+    apply_test_isolation_env()
 
     shard_id, total_shards, timing_file, emit_timing = _parse_args(sys.argv[1:])
 

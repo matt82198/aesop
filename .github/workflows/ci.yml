@@ -201,7 +201,7 @@ jobs:
         run: python tools/port_fidelity_check.py --check --root .
 
       - name: Run Python tests (shard ${{ matrix.python-shard }}/4)
-        run: python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
+        run: python tools/remote_refs_tripwire.py -- python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
 
       # The ui/web chain below is shard-INVARIANT: all four ubuntu shards ran the same
       # npm ci + build + tsc + dist-drift + vitest, so 3 of every 4 runs were pure waste.
@@ -305,7 +305,7 @@ jobs:
           PYTHONUTF8: '1'
           PYTEST_TIMEOUT: '120'
         shell: bash
-        run: python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
+        run: python tools/remote_refs_tripwire.py -- python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
 
   windows:
     # Aggregator job: enforces that all windows-shard shards succeeded or were skipped.
