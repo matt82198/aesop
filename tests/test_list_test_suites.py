@@ -128,7 +128,7 @@ class TestListTestSuites(TestCase):
         self.assertEqual(results[0], results[1], "Output is not deterministic")
 
     def test_counts_match_verify_gate(self):
-        """Verify counts match those found by verify_test_suite_count.py."""
+        """Verify counts match those found by gen_suite_counts.py."""
         # Run list_test_suites.py and extract counts
         result = subprocess.run(
             [sys.executable, "tools/list_test_suites.py", "--repo", str(self.repo_root)],
@@ -141,6 +141,7 @@ class TestListTestSuites(TestCase):
         output = result.stdout
 
         import re
+        import json
 
         node_match = re.search(r"## Node\.js \((\d+) suites?\)", output)
         shell_match = re.search(r"## Shell \((\d+) suites?\)", output)
@@ -154,41 +155,31 @@ class TestListTestSuites(TestCase):
         list_shell = int(shell_match.group(1))
         list_python = int(python_match.group(1))
 
-        # Run verify_test_suite_count.py to get expected counts
-        verify_result = subprocess.run(
-            [sys.executable, "tools/verify_test_suite_count.py", "--check", "--repo", str(self.repo_root)],
-            cwd=self.repo_root,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        # verify_test_suite_count may return 0 (match) or 1 (drift), both are valid
+        # Extract expected counts from SUITE-COUNTS.json (generated artifact)
+        suite_counts_path = self.repo_root / "tests" / "SUITE-COUNTS.json"
+        self.assertTrue(suite_counts_path.exists(), f"{suite_counts_path} not found")
 
-        # Extract expected counts from CLAUDE.md
-        claudemd = (self.repo_root / "tests" / "CLAUDE.md").read_text()
-        node_in_md = re.search(r"\*\*Node \((\d+) suites?\)\*\*:", claudemd)
-        shell_in_md = re.search(r"\*\*Shell \((\d+) suites?\)\*\*:", claudemd)
-        python_in_md = re.search(r"\*\*Python \((\d+) suites?\)\*\*:", claudemd)
+        suite_counts_text = suite_counts_path.read_text()
+        # Extract JSON between markers
+        start = suite_counts_text.find("{")
+        end = suite_counts_text.rfind("}") + 1
+        suite_counts = json.loads(suite_counts_text[start:end])
 
-        self.assertIsNotNone(node_in_md)
-        self.assertIsNotNone(shell_in_md)
-        self.assertIsNotNone(python_in_md)
-
-        # Counts discovered should match those documented in CLAUDE.md
+        # Counts discovered should match those in SUITE-COUNTS.json
         self.assertEqual(
             list_node,
-            int(node_in_md.group(1)),
-            f"Node count mismatch: list_test_suites says {list_node}, CLAUDE.md says {node_in_md.group(1)}",
+            suite_counts["Node"],
+            f"Node count mismatch: list_test_suites says {list_node}, SUITE-COUNTS.json says {suite_counts['Node']}",
         )
         self.assertEqual(
             list_shell,
-            int(shell_in_md.group(1)),
-            f"Shell count mismatch: list_test_suites says {list_shell}, CLAUDE.md says {shell_in_md.group(1)}",
+            suite_counts["Shell"],
+            f"Shell count mismatch: list_test_suites says {list_shell}, SUITE-COUNTS.json says {suite_counts['Shell']}",
         )
         self.assertEqual(
             list_python,
-            int(python_in_md.group(1)),
-            f"Python count mismatch: list_test_suites says {list_python}, CLAUDE.md says {python_in_md.group(1)}",
+            suite_counts["Python"],
+            f"Python count mismatch: list_test_suites says {list_python}, SUITE-COUNTS.json says {suite_counts['Python']}",
         )
 
 
