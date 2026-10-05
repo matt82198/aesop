@@ -11,6 +11,20 @@ name: CI
 # causing matrix jobs to report skipped. This approach preserves deadlock safety while allowing
 # incremental gate optimization (browser-proofs and windows-shard skip safely as non-required).
 #
+# GAP (found 2026-10-05, ~8h of armed PRs stuck unmerged): the `needs: docs-only-gate` edge on
+# `ci`/`windows-shard`/`browser-proofs` reintroduces the SAME deadlock via a different path, with
+# no job-level `if:` skip and no `paths-ignore:` in sight. GitHub Actions implicitly prepends
+# `success() &&` to any job's scheduling decision when it has a `needs:` entry, UNLESS that job's
+# own `if:` explicitly calls always()/cancelled()/failure(). So whenever docs-only-gate itself does
+# not conclude "success" — a genuine script bug, OR (as observed) the job sitting queued and then
+# getting cancelled by runner/concurrency starvation, with zero steps ever executing — `ci` reports
+# `skipped` on all 4 shards and `windows-shard` also skips (which the `windows` aggregator then
+# treats as an acceptable "correctly skipped for docs-only," turning a Windows run that never
+# happened into a false green). Required contexts "ci (0..3)"/"windows" must always conclude
+# success or failure, never skipped, REGARDLESS of why docs-only-gate failed to resolve — hence
+# `if: always() && (needs.docs-only-gate.result != 'success' || ...)` on all three downstream jobs.
+# Do not remove always() from any of them; without it the implicit success()-gate comes back.
+#
 # PR-only by design. `push: branches: [main]` was removed: main is protected by PR
 # checks, so the merge commit's `ci` run already passed on the PR, and .github/workflows/
 # main-full.yml is the post-merge verification (that is why it exists — see its header).
@@ -64,6 +78,17 @@ jobs:
 
   ci:
     needs: docs-only-gate
+    # if: always() is load-bearing, not decorative. Without it, GitHub Actions
+    # implicitly prepends `success() &&` to a job's scheduling decision whenever
+    # it has a `needs:` entry and no `if:` says otherwise -- so ANY non-success
+    # conclusion of docs-only-gate (a real script failure, a cancellation from
+    # the runner/concurrency queue, a timeout) makes `ci` report `skipped`
+    # instead of running, which is the exact deadlock this file's top comment
+    # warns about (a skipped required check can never satisfy branch
+    # protection). `ci` must run on every PR unconditionally per that comment;
+    # always() is what actually enforces "unconditional" against a failed
+    # upstream job, not just an `if:`-skipped one. Do not remove.
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -151,6 +176,10 @@ jobs:
       - name: CI gates runability check (Guardrail G2.5)
         if: matrix.python-shard == 0
         run: python tools/ci_gate_runability.py
+
+      - name: Needs-skip-cascade guard (required checks never skip on upstream failure)
+        if: matrix.python-shard == 0
+        run: python tools/ci_needs_skip_guard.py
       - name: Workflow model linter
         if: matrix.python-shard == 0
         run: python tools/workflow_model_linter.py
@@ -201,7 +230,7 @@ jobs:
         run: python tools/port_fidelity_check.py --check --root .
 
       - name: Run Python tests (shard ${{ matrix.python-shard }}/4)
-        run: python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
+        run: python tools/remote_refs_tripwire.py -- python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
 
       # The ui/web chain below is shard-INVARIANT: all four ubuntu shards ran the same
       # npm ci + build + tsc + dist-drift + vitest, so 3 of every 4 runs were pure waste.
@@ -245,7 +274,7 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/tracker_autoclose.py --check
 
-      - name: Test suite count drift gate
+      - name: CI shard coverage gate
         if: matrix.python-shard == 0
         run: python tools/verify_test_suite_count.py --check
 
@@ -259,7 +288,17 @@ jobs:
 
   windows-shard:
     needs: docs-only-gate
-    if: needs.docs-only-gate.outputs.is_docs_only == 'false'
+    # Fail-OPEN, not fail-skip: run unless docs-only-gate explicitly SUCCEEDED
+    # and determined the PR is docs-only. The leading always() is required --
+    # without it GitHub prepends an implicit success() to this condition, so a
+    # failed/cancelled docs-only-gate (script bug, runner starvation, timeout)
+    # would make this job report `skipped`, which makes the `windows`
+    # aggregator below treat a Windows test run that never happened as
+    # equivalent to "correctly skipped" and report a false green -- the same
+    # deadlock/false-green class the top-of-file comment warns about, just one
+    # hop further down the needs chain. Do not drop always() or invert the
+    # comparison back to a bare `== 'false'`.
+    if: always() && (needs.docs-only-gate.result != 'success' || needs.docs-only-gate.outputs.is_docs_only != 'true')
     # Sharded test suite: runs Node tests (shard 0 only) and Python tests distributed 4-way
     # Excludes: shell test suite (Git Bash variance on Windows), browser proofs (Playwright setup cost)
     runs-on: windows-latest
@@ -305,7 +344,7 @@ jobs:
           PYTHONUTF8: '1'
           PYTEST_TIMEOUT: '120'
         shell: bash
-        run: python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
+        run: python tools/remote_refs_tripwire.py -- python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
 
   windows:
     # Aggregator job: enforces that all windows-shard shards succeeded or were skipped.
@@ -337,7 +376,11 @@ jobs:
 
   browser-proofs:
     needs: docs-only-gate
-    if: needs.docs-only-gate.outputs.is_docs_only == 'false'
+    # Same fail-open rationale as windows-shard above: always() prevents the
+    # implicit success()-gating GitHub Actions adds to any needs-gated `if:`,
+    # so a failed/cancelled docs-only-gate still lets browser-proofs run
+    # instead of silently skipping.
+    if: always() && (needs.docs-only-gate.result != 'success' || needs.docs-only-gate.outputs.is_docs_only != 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
