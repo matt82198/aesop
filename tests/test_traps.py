@@ -37,8 +37,11 @@ class TestFakeGreenTrap(unittest.TestCase):
     - Playwright browser-proofs job reported green but never executed tests
     - Resolution: Actually execute playwright specs, not mock them
 
-    Trap: Verify all test files are discovered by the collection system
-    and that the collected count matches the documented count in tests/CLAUDE.md.
+    Trap: Verify every tracked Python test file is actually assigned to and
+    collected by one of the real CI shards -- the modern instance of #464's
+    "reported green but never executed": a file can be tracked, syntactically
+    valid, and individually passing, yet still never run in CI if the shard
+    round-robin distribution does not actually cover it.
     """
 
     @classmethod
@@ -48,24 +51,45 @@ class TestFakeGreenTrap(unittest.TestCase):
         cls.tests_dir = cls.repo_root / "tests"
 
     def test_collected_test_count_matches_documentation(self):
-        """Trap: test collection must match documented counts in tests/CLAUDE.md.
+        """Trap: the union of files ci_shard_runner.py's real round-robin
+        distribution assigns across the CI's configured shards must equal the
+        full on-disk, git-tracked set of tests/test_*.py files.
 
-        Incident #464: Browser-proofs reported green but never collected/executed.
-        Prevention: Run verify_test_suite_count.py --check to gate discovery vs docs.
+        Incident #464: Browser-proofs reported green but never collected/
+        executed. Prevention (post PR #830, which removed the committed
+        tests/SUITE-COUNTS.json this trap used to gate -- nothing but the
+        generator/gate/registry triangle ever consumed its committed value):
+        rather than comparing a live count to a stored count (nothing is
+        stored any more), this directly proves totality against the REAL
+        `distribute_shards()` function CI actually runs, across the same
+        `total_shards=4` every job in .github/workflows/ci.yml invokes it
+        with. A file dropped from the union here means CI would silently
+        never execute it -- the exact #464 shape, at the shard-config layer.
         """
-        # Use the verify_test_suite_count tool to check that counts match
-        result = subprocess.run(
-            [sys.executable, str(self.repo_root / "tools" / "verify_test_suite_count.py"), "--check"],
-            capture_output=True,
-            text=True,
-            cwd=str(self.repo_root),
-            timeout=30,
-        )
+        tools_dir = self.repo_root / "tools"
+        if str(tools_dir) not in sys.path:
+            sys.path.insert(0, str(tools_dir))
+        import ci_shard_runner  # noqa: E402 (sys.path adjusted above)
 
+        total_shards = 4  # matches every `ci_shard_runner.py <id> 4` in ci.yml
+        tracked = subprocess.run(
+            ["git", "ls-files", "tests/test_*.py"],
+            cwd=str(self.repo_root), capture_output=True, text=True,
+            encoding="utf-8", timeout=30, check=True,
+        ).stdout
+        on_disk = sorted({Path(line).stem for line in tracked.splitlines() if line})
+        self.assertGreater(len(on_disk), 0, "fake-green trap is vacuous with zero tracked tests")
+
+        collected = set()
+        for shard_id in range(total_shards):
+            collected.update(ci_shard_runner.distribute_shards(on_disk, shard_id, total_shards))
+
+        missing = sorted(set(on_disk) - collected)
         self.assertEqual(
-            result.returncode,
-            0,
-            f"Test collection count mismatch (fake-green trap):\n{result.stdout}\n{result.stderr}"
+            missing,
+            [],
+            f"fake-green trap: {len(missing)} tracked test file(s) would never be "
+            f"collected by any of the {total_shards} CI shards: {missing[:10]}",
         )
 
     def test_python_test_files_are_valid_python(self):
@@ -256,24 +280,71 @@ class TestDocInventedTrap(unittest.TestCase):
         cls.repo_root = Path(__file__).parent.parent
 
     def test_readme_statistics_match_verified_counts(self):
-        """Trap: README.md statistics must match self_stats.py output.
+        """Trap: docs/TESTING.md's hand-authored suite-count table must match
+        live ground truth, not a number nobody re-verifies.
 
-        Incident: README claimed counts that didn't match actual test counts.
-        Prevention: Run verify_test_suite_count.py --check as a gate.
+        Incident: README/docs statistics claimed counts that didn't match
+        actual test counts. Historical prevention was
+        `verify_test_suite_count.py --check` against a committed
+        tests/SUITE-COUNTS.json artifact (removed by PR #830: two clean
+        merges drifted it anyway, and nothing but the generator/gate/registry
+        triangle ever consumed its committed value). With no artifact,
+        the doc-invented risk moves to the one place that still hand-authors
+        a specific number: docs/TESTING.md's "Totals" table. This test proves
+        that table against ground truth computed independently here (raw
+        `git ls-files`, not a call into tools/gen_suite_counts.py), so a
+        hand-edit to the doc that is not re-verified fails closed instead of
+        rotting silently -- which is exactly what had already happened to
+        this table before this test existed.
         """
-        # Verify that tests/CLAUDE.md counts match actual test files
-        result = subprocess.run(
-            [sys.executable, str(self.repo_root / "tools" / "verify_test_suite_count.py"), "--check"],
-            capture_output=True,
-            text=True,
-            cwd=str(self.repo_root),
-            timeout=30,
+        def tracked_count(*patterns):
+            paths = set()
+            for pattern in patterns:
+                result = subprocess.run(
+                    ["git", "ls-files", pattern],
+                    cwd=str(self.repo_root), capture_output=True, text=True,
+                    encoding="utf-8", timeout=30, check=True,
+                )
+                paths.update(line for line in result.stdout.splitlines() if line)
+            return len(paths)
+
+        live = {
+            "Node": tracked_count("tests/*.test.mjs"),
+            "Shell": tracked_count("tests/*.test.sh", "tests/test_*.sh", "tests/test-*.sh"),
+            "Python": tracked_count("tests/test_*.py"),
+        }
+        live["All"] = live["Node"] + live["Shell"] + live["Python"]
+
+        testing_md = self.repo_root / "docs" / "TESTING.md"
+        self.assertTrue(testing_md.exists(), f"{testing_md} not found (doc-invented trap)")
+        doc_text = testing_md.read_text(encoding="utf-8")
+
+        table_match = re.search(
+            r"\|\s*Shell\s*\|\s*(\d+)\s*\|.*?\n"
+            r"\|\s*Node\s*\|\s*(\d+)\s*\|.*?\n"
+            r"\|\s*Python\s*\|\s*(\d+)\s*\|.*?\n"
+            r"\|\s*\*\*All\*\*\s*\|\s*\*\*(\d+)\*\*\s*\|",
+            doc_text,
         )
+        self.assertIsNotNone(
+            table_match,
+            "Could not find the Shell/Node/Python/All suite-count table in "
+            f"{testing_md} (doc-invented trap: table shape changed without "
+            "updating this trap)",
+        )
+        doc_counts = {
+            "Shell": int(table_match.group(1)),
+            "Node": int(table_match.group(2)),
+            "Python": int(table_match.group(3)),
+            "All": int(table_match.group(4)),
+        }
 
         self.assertEqual(
-            result.returncode,
-            0,
-            f"Statistics drift (doc-invented trap): {result.stdout}\n{result.stderr}"
+            doc_counts,
+            {k: live[k] for k in ("Shell", "Node", "Python", "All")},
+            f"Statistics drift (doc-invented trap): docs/TESTING.md's table says "
+            f"{doc_counts}, live git-tracked counts are {live}. Update the table "
+            "in the same PR that adds or removes a test suite.",
         )
 
     def test_package_json_version_is_semver(self):

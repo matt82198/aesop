@@ -8,7 +8,7 @@ Aesop's test strategy is built on one principle: **behavioral proof over code in
 
 Aesop runs three independent test harnesses, each covering different system layers. All three must pass before any merge.
 
-### Shell (13 suites)
+### Shell (14 suites)
 
 **Run:** `bash tools/run_shell_tests.sh` or `npm run test:sh`
 
@@ -16,7 +16,7 @@ Aesop runs three independent test harnesses, each covering different system laye
 
 **Discovery:** Dynamic from `tests/*.test.sh`, `tests/test_*.sh`, `tests/test-*.sh` plus `hooks/pre-push-policy.sh --test`.
 
-### Node (24 suites)
+### Node (29 suites)
 
 **Run:** `npm run test:node` or `node --test --test-force-exit --test-timeout=60000 tests/*.test.mjs`
 
@@ -24,7 +24,7 @@ Aesop runs three independent test harnesses, each covering different system laye
 
 **Discovery:** Dynamic from `tests/*.test.mjs`.
 
-### Python (181 suites)
+### Python (254 suites)
 
 **Run:** `npm run test:py` or `python -m unittest discover -s tests`
 
@@ -36,12 +36,16 @@ Aesop runs three independent test harnesses, each covering different system laye
 
 | Harness | Suite count | Run command |
 |---------|-------------|-------------|
-| Shell   | 13          | `npm run test:sh` |
-| Node    | 24          | `npm run test:node` |
-| Python  | 181         | `npm run test:py` |
-| **All** | **218**     | `npm run test:all` |
+| Shell   | 14          | `npm run test:sh` |
+| Node    | 29          | `npm run test:node` |
+| Python  | 254         | `npm run test:py` |
+| **All** | **297**     | `npm run test:all` |
 
-Suite counts are gate-verified by `python tools/verify_test_suite_count.py --check` (CI blocking gate). Live inventory: `python tools/list_test_suites.py`.
+Counts are not stored anywhere (PR #830 removed the generated tests/SUITE-COUNTS.json
+artifact after it drifted on two clean merges); this table is verified against live
+`git ls-files` ground truth by `tests/test_traps.py::TestDocInventedTrap`. Live inventory:
+`python tools/list_test_suites.py`. CI-shard coverage (every tracked test actually gets
+run, not merely counted) is gated by `python tools/verify_test_suite_count.py --check`.
 
 ---
 
