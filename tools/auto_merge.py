@@ -86,7 +86,7 @@ def merge_pr(pr_num):
 
 
 def fix_branch(branch):
-    """Merge main into branch, fix test counts + CLAUDE.md limits, push."""
+    """Merge main into branch, fix CLAUDE.md limits, push."""
     git(['fetch', 'origin', 'main'], check=False)
     r = git(['fetch', 'origin', branch], check=False)
     if r.returncode != 0:
@@ -108,7 +108,6 @@ def fix_branch(branch):
             git(['checkout', 'main'], check=False)
             return False, 'merge conflict unresolvable'
 
-    run([sys.executable, 'tools/verify_test_suite_count.py', '--fix'], check=False, timeout=30)
     run([sys.executable, 'tools/claudemd_lint.py'], check=False, timeout=30)
 
     git(['add', '-A'], check=False)
