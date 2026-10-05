@@ -45,8 +45,16 @@ from typing import List, Tuple
 # checkout, so a cwd-relative sibling import would silently fail in exactly
 # the cases this tool exists to serve.
 _TOOLS_DIR = Path(__file__).resolve().parent
-if str(_TOOLS_DIR) not in sys.path:
-    sys.path.insert(0, str(_TOOLS_DIR))
+# Unconditional top-level insert is the repo's sanctioned sibling-import guard
+# (same form as auto_merge.py / tracker_autoclose.py / merge_queue.py) and the
+# only form tools/sibling_import_check.py recognizes. The conditional
+# `if ... not in sys.path` variant guards identically at runtime but is
+# invisible to the checker's AST walk (which only looks for a bare
+# sys.path.insert(...) statement directly in the module body, not nested
+# inside an `if`), which is what left the two imports below reported as
+# unguarded violations. A module body executes once, so an unconditional
+# insert cannot accumulate duplicate sys.path entries.
+sys.path.insert(0, str(_TOOLS_DIR))
 
 import ci_shard_runner  # noqa: E402  (sys.path adjusted above)
 import gen_suite_counts  # noqa: E402  (sys.path adjusted above)

@@ -24,7 +24,7 @@ Aesop runs three independent test harnesses, each covering different system laye
 
 **Discovery:** Dynamic from `tests/*.test.mjs`.
 
-### Python (254 suites)
+### Python (255 suites)
 
 **Run:** `npm run test:py` or `python -m unittest discover -s tests`
 
@@ -38,8 +38,8 @@ Aesop runs three independent test harnesses, each covering different system laye
 |---------|-------------|-------------|
 | Shell   | 14          | `npm run test:sh` |
 | Node    | 29          | `npm run test:node` |
-| Python  | 254         | `npm run test:py` |
-| **All** | **297**     | `npm run test:all` |
+| Python  | 255         | `npm run test:py` |
+| **All** | **298**     | `npm run test:all` |
 
 Counts are not stored anywhere (PR #830 removed the generated tests/SUITE-COUNTS.json
 artifact after it drifted on two clean merges); this table is verified against live

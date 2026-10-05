@@ -612,7 +612,17 @@ class TestDocsOnlyDetectorFailClosed(unittest.TestCase):
             "docs-only-gate must output is_docs_only")
 
     def test_browser_proofs_uses_is_docs_only(self):
-        """browser-proofs job must skip on is_docs_only == 'false'."""
+        """browser-proofs must skip ONLY when docs-only-gate succeeded as docs-only.
+
+        Originally this asserted the job's if: contained the literal substring
+        'false' (an `== 'false'` check). That phrasing is itself unsafe: with no
+        always(), GitHub implicitly ANDs success() onto the condition, so a
+        failed/cancelled docs-only-gate makes this job report skipped -- which the
+        windows/browser-proofs aggregators can mistake for "correctly skipped",
+        manufacturing a false green for a check that never ran (root-caused
+        2026-10-05). The fixed condition is fail-OPEN: skip only on a confirmed
+        'success' + 'true' docs-only result; run in every other case.
+        """
         import yaml
         ci_path = self.REAL_REPO_ROOT / '.github' / 'workflows' / 'ci.yml'
 
@@ -622,12 +632,16 @@ class TestDocsOnlyDetectorFailClosed(unittest.TestCase):
         browser_job = workflow['jobs'].get('browser-proofs')
         self.assertIsNotNone(browser_job, "browser-proofs job not found")
 
-        # Must have an if condition using is_docs_only output
         job_if = browser_job.get('if', '')
         self.assertIn('is_docs_only', job_if,
             "browser-proofs must use is_docs_only output in its if condition")
-        self.assertIn('false', job_if,
-            "browser-proofs must skip when is_docs_only is false (double negative: docs-only PRs skip)")
+        self.assertIn('always()', job_if,
+            "browser-proofs if: must call always(), otherwise GitHub implicitly "
+            "ANDs success() onto it and a failed/cancelled docs-only-gate "
+            "skip-cascades this job instead of running it")
+        self.assertIn("!= 'success'", job_if,
+            "browser-proofs must treat a non-successful docs-only-gate as "
+            "not-docs-only (fail open) so it runs rather than skips")
 
     def test_windows_shard_uses_is_docs_only(self):
         """windows-shard job must skip on is_docs_only == 'false'."""
