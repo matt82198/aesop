@@ -194,3 +194,50 @@ ALSO PRODUCED: Medium draft "Determinism Is a System Property" -- filesystem-as-
 this release used as the evidence. Artifact (private):
 https://claude.ai/code/artifact/d78c0706-9dcf-4c2f-991d-e84071751441
 NOT published to Medium; outward publishing stays user-gated.
+
+---
+
+## 2026-09-11 Documentation Currency Update
+
+**Summary:** Refreshed STATE.md with current HEAD, commit counts, npm publication status, and relicense info.
+
+- Confirmed npm v0.7.2 published (MIT license for that version).
+- Updated HEAD from e5e6e22 (2026-08-18) to 07732210 (2026-09-11); commit count 201→219.
+- Added PR #799 relicense context (PolyForm Noncommercial 1.0.0 on main; versions ≤0.7.0 remain MIT).
+- Corrected Release-state note: v0.7.2 is published on npm (Latest) and GitHub; v0.7.1 remains tag-only.
+- Added Licensing section clarifying version/platform MIT vs PolyForm split.
+- Appended 2026-09-10 box-restore incident evidence to NEXT STEPS #6 with PR #793 guardrail reference.
+- Portfolio recency PRs #86–#88 shipped; box-restore repair confirmed.
+
+
+---
+
+## 2026-10-05 v0.8.0 Checkpoint & Board Catch-up
+
+**Summary:** v0.8.0 shipped 2026-09-11 (tag v0.8.0, npm latest 0.8.0, PolyForm Noncommercial 1.0.0). Currency sweep + board catch-up lane started.
+
+**Merges since v0.8.0 (73 commits):**
+- PR #825: chore(stats): scheduled refresh (portfolio auto-update pipeline)
+- PR #824: docs(paper): The Receipts Loop — arXiv manuscript draft with dated provenance
+- PR #823: Fix humanize_ledger.py attribution and split_sentences initials
+- PR #822: Lane A: Implement humanize_lint.py
+- PR #821: Lane B: humanize_ledger.py — append-only ledger for humanization edits
+- PR #820: Lane C: humanize_voice.py voice profiler
+- PR #819: chore(deps): bump undici from 8.9.0 to 8.11.2 in /ui/web
+- PR #817: fix(portability): remove the last 32 literal profile paths
+- PR #814: chore(deps-dev): bump @playwright/test from 1.62.1 to 1.63.0
+- PR #813: docs: post-release 0.8.0 checkpoint
+
+**Checkpoint refreshed:**
+- STATE.md: v0.8.0 marked as tagged + released (npm latest 0.8.0), updated HEAD sha and commit count
+- NEXT STEPS: Items 1 (test flake #808) and 5 (STATE.md freshness #809) marked DONE; item 8 (stats jam) resolved
+- Added items 9 (merge actor independence) and 10 (checkpoint+clear enforcement hooks)
+- CHANGELOG.md: Unreleased section populated with 10 merged PRs (Added/Fixed/Docs/Chore)
+- RELEASE-NOTES.md: "UNRELEASED" section retitled "v0.8.0 — Release 2026-09-11"
+- docs/INCIDENTS.md: Regenerated (106 total incidents tracked)
+- LANE-CONTRACT.md: Merge rules added (native auto-merge @ PR open, shard-local test before push)
+
+**Board catch-up in progress:** 37 open PRs (#793, board automation, policy, multi-box coordination) scheduled for lane-based merge train. Merge actor must not depend on session daemon or manual merge.
+
+**Next:** Lane contract hardening + board merge automation per PR #793 + 10-PR batches.
+

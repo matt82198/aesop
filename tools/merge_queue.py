@@ -68,8 +68,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 _TOOLS_DIR = Path(__file__).resolve().parent
-if str(_TOOLS_DIR) not in sys.path:
-    sys.path.insert(0, str(_TOOLS_DIR))
+# Unconditional top-level insert is the repo's sanctioned sibling-import guard
+# (same form as auto_merge.py / tracker_autoclose.py) and the only form
+# tools/sibling_import_check.py recognizes. The conditional
+# `if ... not in sys.path` variant guards identically at runtime but is invisible
+# to the checker, which is what left the three bare imports below reported as
+# unguarded violations on main. A module body executes once, so an unconditional
+# insert cannot accumulate duplicate sys.path entries.
+sys.path.insert(0, str(_TOOLS_DIR))
 
 # Transport primitives are IMPORTED from merge_train, never duplicated. They
 # become module globals here so tests can patch them directly. (`is_ancestor`
@@ -1057,12 +1063,29 @@ def worktree_is_safe() -> tuple:
     stalled the next pass over output the repo itself generates. Such paths are
     restored by name -- but only when EVERY dirty path is a registered generated
     file. One unregistered edit poisons the whole tree and nothing is touched.
+
+    Self-healing: if the tree is on an integrate/q-* branch with a clean tree
+    (leftover from a crashed pass), repark it to main automatically.
     """
     trunk = base_branch()
     ok, branch = git("rev-parse", "--abbrev-ref", "HEAD")
     if not ok:
         return False, "cannot read current branch"
     branch = branch.strip()
+
+    # Self-heal: if on an integrate/q-* branch with a clean tree, repark to trunk
+    if BATCH_BRANCH_RE.match(branch):
+        ok, out = git("status", "--porcelain")
+        if ok and not out.strip():
+            # Tree is on integrate/q-* and clean; restore it to trunk
+            ok, _ = git_safe("checkout", trunk)
+            if ok:
+                return True, "self-healed: reparked from %s to %s (was clean)" % (branch, trunk)
+            else:
+                return False, "working tree is on '%s' (crashed from previous pass) and cannot repark to %s" % (branch, trunk)
+        else:
+            return False, "working tree is on '%s' (crashed from previous pass) and is dirty" % branch
+
     if branch != trunk:
         return False, "working tree is on '%s', not %s" % (branch, trunk)
 
