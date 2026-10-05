@@ -228,6 +228,7 @@ def merge_in_progress(repo_root: Path) -> bool:
             capture_output=True,
             text=True,
             encoding='utf-8',
+            errors='replace',
             check=False,
             timeout=10,
         )
