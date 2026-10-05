@@ -1423,6 +1423,7 @@ def build_bisect_batches(members: list, parent_pr: int, generation: int,
         summary["status"] = "error"
         return []
 
+    base = base_branch()
     epoch = int(time.time())
     mid = len(members) // 2
     left_members = members[:mid]
@@ -1431,13 +1432,13 @@ def build_bisect_batches(members: list, parent_pr: int, generation: int,
 
     for half_idx, half_members in enumerate([left_members, right_members], 1):
         branch = "integrate/q-%d-bisect-%d-%d" % (epoch, generation, half_idx)
-        ok, out = git("fetch", "origin", "main")
+        ok, out = git("fetch", "origin", base)
         if not ok:
-            record_exception(0, "git_failed", "fetch origin main for bisect: %s" % out[:200])
+            record_exception(0, "git_failed", "fetch origin %s for bisect: %s" % (base, out[:200]))
             summary["status"] = "error"
             return branches_built
 
-        ok, out = git("checkout", "-B", branch, "origin/main")
+        ok, out = git("checkout", "-B", branch, "origin/%s" % base)
         if not ok:
             record_exception(0, "git_failed", "checkout bisect %s: %s" % (branch, out[:200]))
             summary["status"] = "error"
@@ -1466,8 +1467,8 @@ def build_bisect_batches(members: list, parent_pr: int, generation: int,
             included.append(number)
 
         if len(included) < 1:
-            git("checkout", "main")
-            git("branch", "-D", branch)
+            restore_worktree_to_main(summary)
+            git_safe("branch", "-D", branch)
             record_exception(0, "bisect_no_survivors",
                             "bisect %s has no clean members" % branch)
             continue
@@ -1479,8 +1480,8 @@ def build_bisect_batches(members: list, parent_pr: int, generation: int,
 
         ok, out = git("push", "-u", "origin", branch)
         if not ok:
-            git("checkout", "main")
-            git("branch", "-D", branch)
+            restore_worktree_to_main(summary)
+            git_safe("branch", "-D", branch)
             record_exception(0, "git_failed", "push bisect %s: %s" % (branch, out[:200]))
             summary["status"] = "error"
             continue
@@ -1493,7 +1494,7 @@ def build_bisect_batches(members: list, parent_pr: int, generation: int,
                 "`git merge-base --is-ancestor` proves their content landed on main."
                 % (next_gen, parent_pr, ", ".join("#%d" % n for n in included),
                    lineage_marker))
-        created = gh("pr", "create", "--base", "main", "--head", branch,
+        created = gh("pr", "create", "--base", base, "--head", branch,
                     "--title", "merge-queue bisect gen-%d q-%d" % (next_gen, epoch),
                     "--body", body)
         if _errored(created):
@@ -1510,7 +1511,7 @@ def build_bisect_batches(members: list, parent_pr: int, generation: int,
                                                          ", ".join("#%d" % n for n in included)))
         branches_built.append(branch)
 
-        git("checkout", "main")
+        restore_worktree_to_main(summary)
 
     return branches_built
 
