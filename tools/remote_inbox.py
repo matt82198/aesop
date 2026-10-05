@@ -102,7 +102,7 @@ def run_gh(args: List[str]) -> Tuple[int, str, str]:
             capture_output=True,
             text=False,  # We'll decode ourselves
             timeout=30,
-            encoding=None,
+            encoding=None, errors='replace',
         )
         # Decode as UTF-8, fallback to latin-1
         try:
