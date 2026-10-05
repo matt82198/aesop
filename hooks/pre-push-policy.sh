@@ -108,6 +108,53 @@ resolve_py_bin() {
   return 1
 }
 
+gate_tool_status() {
+  # Classify a missing gate script: is the whole aesop toolchain absent, or is
+  # this one gate gone from a repo that has the rest of it?
+  #
+  # Every gate used to treat both cases as "skip", so deleting, renaming, or
+  # failing to ship a single gate script silently disabled that gate in the very
+  # repo that owns it -- a push could go green having verified nothing. The hook
+  # genuinely does install into repos without an aesop checkout, so the skip is
+  # still needed; it is now conditioned on tools/ being absent as a whole rather
+  # than on one file being missing.
+  #
+  # Executability is deliberately NOT required: gate scripts are run as
+  # "$py_bin" "$script", so the exec bit is irrelevant, and demanding it turned
+  # any checkout without exec bits into a silently ungated one.
+  #
+  # Prints one of: ok | skip | missing
+  local aesop_root="$1"
+  local script="$2"
+
+  if [ -f "$script" ]; then
+    printf 'ok'
+    return 0
+  fi
+  if [ ! -d "$aesop_root/tools" ]; then
+    printf 'skip'
+    return 0
+  fi
+  printf 'missing'
+}
+
+gate_tool_missing_block() {
+  # Shared fail-closed message for a gate script that vanished from a repo that
+  # still has tools/. Cannot verify => deny.
+  local label="$1"
+  local script="$2"
+  printf 'FATAL: %s not found at %s, but this repo has a tools/ directory.\n' "$label" "$script" >&2
+  printf 'A gate that cannot run must not report success. Push blocked.\n' >&2
+}
+
+gate_no_python_block() {
+  # Shared fail-closed message for a gate whose interpreter is unavailable.
+  # The top-of-file guard already requires python, so reaching this means the
+  # interpreter disappeared mid-run; either way, unverifiable => denied.
+  local label="$1"
+  printf 'FATAL: no python interpreter found; %s cannot run. Push blocked.\n' "$label" >&2
+}
+
 acquire_audit_lock() {
   # Finding 1: Mkdir-based atomic lock for audit log write safety
   local lock_dir="$1"
@@ -570,16 +617,23 @@ check_tracker_guard() {
   aesop_root=$(resolve_aesop_root)
   local guard_script="$aesop_root/tools/tracker_guard.py"
 
-  if [ ! -f "$guard_script" ]; then
-    log_event "tracker_guard_skipped_tool_missing"
+  local tool_status
+  tool_status=$(gate_tool_status "$aesop_root" "$guard_script")
+  if [ "$tool_status" = "skip" ]; then
+    log_event "tracker_guard_skipped_no_aesop_tools"
     return 0
+  fi
+  if [ "$tool_status" = "missing" ]; then
+    gate_tool_missing_block "tracker_guard.py" "$guard_script"
+    log_event "tracker_guard_tool_missing"
+    return 1
   fi
 
   local py_bin=""
   if ! py_bin=$(resolve_py_bin); then
-    printf 'Warning: no python interpreter found; tracker guard skipped\n' >&2
-    log_event "tracker_guard_skipped_no_python"
-    return 0
+    gate_no_python_block "tracker guard"
+    log_event "tracker_guard_no_python"
+    return 1
   fi
 
   local guard_output
@@ -598,44 +652,87 @@ check_tracker_guard() {
 
 check_import_resolution() {
   # Python import resolution validator (guardrail G5).
-  # Parses all staged .py files via AST, extracts import/from-import statements,
-  # resolves each module against repo structure and sys.stdlib_module_names.
-  # Fail-closed (exit 1) if any import cannot resolve.
+  # AST-parses the pushed .py files, resolves each import against repo
+  # structure and sys.stdlib_module_names. Fail-closed if any cannot resolve.
   #
-  # Root cause: Agent wrote file with unresolvable import to primary tree
-  # during worktree isolation, bypassing any import-resolution gate.
-  # This guardrail validates all staged .py imports before push.
+  # VACUITY FIX (guard/g5-import-check-actually-runs): this used to invoke the
+  # tool with NO arguments, so it evaluated `git diff --cached`. A pre-push hook
+  # runs AFTER the commit -- the index is EMPTY -- so the gate printed "No
+  # staged Python files found" and exited 0 on EVERY normal push. It had never
+  # actually run. It now evaluates the files ACTUALLY BEING PUSHED.
+  #
+  # The file-list mechanism is REUSED, not reinvented: get_commit_range()
+  # already parses git pre-push stdin into one "remote-sha..local-sha" range per
+  # ref tuple, and check_secret_scan() already consumes it exactly this way
+  # (multi-ref loop, rc=2 delete-only, rc=3 empty-stdin, rc=1 malformed =>
+  # fail-closed). Same parser, same loop shape, same semantics.
   #
   # Fail-open ONLY for missing optional tool (repo without aesop checkout);
-  # actual resolution failures stay fail-closed.
+  # actual resolution failures and malformed stdin stay fail-closed.
   local aesop_root
   aesop_root=$(resolve_aesop_root)
   local import_check_script="$aesop_root/tools/import_resolution_check.py"
 
-  if [ ! -f "$import_check_script" ]; then
-    log_event "import_check_skipped_tool_missing"
+  local tool_status
+  tool_status=$(gate_tool_status "$aesop_root" "$import_check_script")
+  if [ "$tool_status" = "skip" ]; then
+    log_event "import_check_skipped_no_aesop_tools"
     return 0
+  fi
+  if [ "$tool_status" = "missing" ]; then
+    gate_tool_missing_block "import_resolution_check.py" "$import_check_script"
+    log_event "import_check_tool_missing"
+    return 1
   fi
 
   local py_bin=""
   if ! py_bin=$(resolve_py_bin); then
-    printf 'Warning: no python interpreter found; import resolution check skipped\n' >&2
-    log_event "import_check_skipped_no_python"
-    return 0
-  fi
-
-  local check_output
-  check_output=$("$py_bin" "$import_check_script" 2>&1)
-  local check_exit_code=$?
-
-  if [ $check_exit_code -ne 0 ]; then
-    if [ -n "$check_output" ]; then
-      printf '%s\n' "$check_output" >&2
-    fi
+    gate_no_python_block "import resolution check"
+    log_event "import_check_no_python"
     return 1
   fi
 
-  return 0
+  local commit_ranges
+  commit_ranges=$(get_commit_range)
+  local parse_exit_code=$?
+
+  if [ $parse_exit_code -eq 2 ]; then
+    # Delete-only push: no content pushed, nothing to check.
+    log_event "import_check_skipped_delete_only_push"
+    return 0
+  fi
+
+  if [ $parse_exit_code -eq 3 ]; then
+    # Empty stdin: no tuples at all (e.g. up-to-date push), nothing to check.
+    log_event "import_check_skipped_empty_stdin"
+    return 0
+  fi
+
+  if [ $parse_exit_code -ne 0 ] || [ -z "$commit_ranges" ]; then
+    # Malformed stdin: fail-CLOSED (never silently degrade to "no files").
+    log_block "import_check_stdin_parse_failed"
+    printf 'Error: Could not parse pre-push stdin for commit range (import resolution check)\n' >&2
+    return 1
+  fi
+
+  local overall_exit_code=0
+  local range
+  while IFS= read -r range || [ -n "$range" ]; do
+    [ -z "$range" ] && continue
+
+    local check_output
+    check_output=$("$py_bin" "$import_check_script" --range "$range" 2>&1)
+    local check_exit_code=$?
+
+    if [ $check_exit_code -ne 0 ]; then
+      if [ -n "$check_output" ]; then
+        printf '%s\n' "$check_output" >&2
+      fi
+      overall_exit_code=$check_exit_code
+    fi
+  done <<< "$commit_ranges"
+
+  return $overall_exit_code
 }
 
 check_claudemd_sync() {
@@ -648,16 +745,23 @@ check_claudemd_sync() {
   aesop_root=$(resolve_aesop_root)
   local sync_script="$aesop_root/tools/claudemd_sync_gate.py"
 
-  if [ ! -f "$sync_script" ] || [ ! -x "$sync_script" ]; then
-    log_event "claudemd_sync_skipped_tool_missing"
+  local tool_status
+  tool_status=$(gate_tool_status "$aesop_root" "$sync_script")
+  if [ "$tool_status" = "skip" ]; then
+    log_event "claudemd_sync_skipped_no_aesop_tools"
     return 0
+  fi
+  if [ "$tool_status" = "missing" ]; then
+    gate_tool_missing_block "claudemd_sync_gate.py" "$sync_script"
+    log_event "claudemd_sync_tool_missing"
+    return 1
   fi
 
   local py_bin=""
   if ! py_bin=$(resolve_py_bin); then
-    printf 'Warning: no python interpreter found; CLAUDE.md sync gate skipped\n' >&2
-    log_event "claudemd_sync_skipped_no_python"
-    return 0
+    gate_no_python_block "CLAUDE.md sync gate"
+    log_event "claudemd_sync_no_python"
+    return 1
   fi
 
   local sync_output
@@ -667,6 +771,49 @@ check_claudemd_sync() {
   if [ $sync_exit_code -ne 0 ]; then
     if [ -n "$sync_output" ]; then
       printf '%s\n' "$sync_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
+check_gen_tool_index() {
+  # Tool index synchronization gate (tools/gen_tool_index.py --check).
+  # Ensures tools/INDEX.md stays in sync with per-tool INDEX: docstring lines.
+  # Any new tool without an INDEX: line fails closed to prevent undocumented tools.
+  #
+  # Fail-open for missing optional tooling; fail-closed for actual drift or missing INDEX lines.
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local index_script="$aesop_root/tools/gen_tool_index.py"
+
+  local tool_status
+  tool_status=$(gate_tool_status "$aesop_root" "$index_script")
+  if [ "$tool_status" = "skip" ]; then
+    log_event "gen_tool_index_skipped_no_aesop_tools"
+    return 0
+  fi
+  if [ "$tool_status" = "missing" ]; then
+    gate_tool_missing_block "gen_tool_index.py" "$index_script"
+    log_event "gen_tool_index_tool_missing"
+    return 1
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    gate_no_python_block "tool index gate"
+    log_event "gen_tool_index_no_python"
+    return 1
+  fi
+
+  local index_output
+  index_output=$("$py_bin" "$index_script" --check 2>&1)
+  local index_exit_code=$?
+
+  if [ $index_exit_code -ne 0 ]; then
+    if [ -n "$index_output" ]; then
+      printf '%s\n' "$index_output" >&2
     fi
     return 1
   fi
@@ -684,16 +831,23 @@ check_metrics() {
   aesop_root=$(resolve_aesop_root)
   local metrics_script="$aesop_root/tools/metrics_gate.py"
 
-  if [ ! -f "$metrics_script" ] || [ ! -x "$metrics_script" ]; then
-    log_event "metrics_gate_skipped_tool_missing"
+  local tool_status
+  tool_status=$(gate_tool_status "$aesop_root" "$metrics_script")
+  if [ "$tool_status" = "skip" ]; then
+    log_event "metrics_gate_skipped_no_aesop_tools"
     return 0
+  fi
+  if [ "$tool_status" = "missing" ]; then
+    gate_tool_missing_block "metrics_gate.py" "$metrics_script"
+    log_event "metrics_gate_tool_missing"
+    return 1
   fi
 
   local py_bin=""
   if ! py_bin=$(resolve_py_bin); then
-    printf 'Warning: no python interpreter found; metrics gate skipped\n' >&2
-    log_event "metrics_gate_skipped_no_python"
-    return 0
+    gate_no_python_block "metrics gate"
+    log_event "metrics_gate_no_python"
+    return 1
   fi
 
   local metrics_output
@@ -724,16 +878,23 @@ check_test_suite_count() {
   aesop_root=$(resolve_aesop_root)
   local verify_script="$aesop_root/tools/verify_test_suite_count.py"
 
-  if [ ! -f "$verify_script" ]; then
-    log_event "test_suite_count_skipped_tool_missing"
+  local tool_status
+  tool_status=$(gate_tool_status "$aesop_root" "$verify_script")
+  if [ "$tool_status" = "skip" ]; then
+    log_event "test_suite_count_skipped_no_aesop_tools"
     return 0
+  fi
+  if [ "$tool_status" = "missing" ]; then
+    gate_tool_missing_block "verify_test_suite_count.py" "$verify_script"
+    log_event "test_suite_count_tool_missing"
+    return 1
   fi
 
   local py_bin=""
   if ! py_bin=$(resolve_py_bin); then
-    printf 'Warning: no python interpreter found; test suite count check skipped\n' >&2
-    log_event "test_suite_count_skipped_no_python"
-    return 0
+    gate_no_python_block "test suite count check"
+    log_event "test_suite_count_no_python"
+    return 1
   fi
 
   local verify_output
@@ -743,6 +904,59 @@ check_test_suite_count() {
   if [ $verify_exit_code -ne 0 ]; then
     if [ -n "$verify_output" ]; then
       printf '%s\n' "$verify_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
+check_claudemd_headroom() {
+  # CLAUDE.md merge-union cap gate (tools/claudemd_lint.py --headroom).
+  #
+  # The working-tree line-cap check only ever sees the BRANCH. A branch can sit
+  # at 149/150 and pass while origin/main independently grew, so the merge lands
+  # at 151 and busts the cap on main with nothing red on the way in (three such
+  # cascades in one day). This previews the merge against origin/main and lints
+  # the UNION's line count, catching the cascade before the push.
+  #
+  # Tool exit contract: 0=clean, 1=a union busts its cap (fail-CLOSED, push
+  # blocked), 2=merge union UNREADABLE. Exit 2 is an environment condition (no
+  # origin/main fetched yet, shallow clone, un-previewable merge), not a policy
+  # violation, so it fails OPEN with an audit event -- the same philosophy as the
+  # missing-tool fail-open below.
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local lint_script="$aesop_root/tools/claudemd_lint.py"
+
+  if [ ! -f "$lint_script" ]; then
+    log_event "claudemd_headroom_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; CLAUDE.md headroom gate skipped\n' >&2
+    log_event "claudemd_headroom_skipped_no_python"
+    return 0
+  fi
+
+  local base_ref="${AESOP_HEADROOM_BASE_REF:-origin/main}"
+  local headroom_output
+  headroom_output=$("$py_bin" "$lint_script" --root "$aesop_root" --headroom --base-ref "$base_ref" 2>&1)
+  local headroom_exit_code=$?
+
+  if [ $headroom_exit_code -eq 2 ]; then
+    if [ -n "$headroom_output" ]; then
+      printf '%s\n' "$headroom_output" >&2
+    fi
+    log_event "claudemd_headroom_skipped_unreadable"
+    return 0
+  fi
+
+  if [ $headroom_exit_code -ne 0 ]; then
+    if [ -n "$headroom_output" ]; then
+      printf '%s\n' "$headroom_output" >&2
     fi
     return 1
   fi
@@ -831,20 +1045,33 @@ log_block() {
 check_encoding_lint() {
   # Guardrail G10 extension: encoding lint for subprocess calls.
   # Runs tools/encoding_lint.py --check against staged Python files.
-  # Fail-open if tool missing (optional tooling); fail-closed on actual findings.
-  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  # Skips only when there is no aesop checkout; fail-closed when tools/ exists
+  # but this gate's script does not, and on actual findings.
+  #
+  # resolve_aesop_root(), not $HOME/aesop: the hardcoded fallback ran the
+  # primary tree's script when pushing from a worktree, and silently skipped
+  # the gate entirely on any machine without ~/aesop.
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
   local lint_script="$aesop_root/tools/encoding_lint.py"
 
-  if [ ! -f "$lint_script" ] || [ ! -x "$lint_script" ]; then
-    log_event "encoding_lint_skipped_tool_missing"
+  local tool_status
+  tool_status=$(gate_tool_status "$aesop_root" "$lint_script")
+  if [ "$tool_status" = "skip" ]; then
+    log_event "encoding_lint_skipped_no_aesop_tools"
     return 0
+  fi
+  if [ "$tool_status" = "missing" ]; then
+    gate_tool_missing_block "encoding_lint.py" "$lint_script"
+    log_event "encoding_lint_tool_missing"
+    return 1
   fi
 
   local py_bin=""
   if ! py_bin=$(resolve_py_bin); then
-    printf 'Warning: no python interpreter found; encoding lint skipped\n' >&2
-    log_event "encoding_lint_skipped_no_python"
-    return 0
+    gate_no_python_block "encoding lint"
+    log_event "encoding_lint_no_python"
+    return 1
   fi
 
   local lint_output
@@ -864,20 +1091,30 @@ check_encoding_lint() {
 check_test_coverage() {
   # Guardrail G2 extension: verify all on-disk test files are run by CI.
   # Runs tools/verify_test_coverage.py --check to detect orphaned tests.
-  # Fail-open if tool missing (optional tooling); fail-closed on findings.
-  local aesop_root="${AESOP_ROOT:-$HOME/aesop}"
+  # Skips only when there is no aesop checkout; fail-closed when tools/ exists
+  # but this gate's script does not, and on actual findings.
+  # resolve_aesop_root(), not $HOME/aesop -- see check_encoding_lint.
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
   local coverage_script="$aesop_root/tools/verify_test_coverage.py"
 
-  if [ ! -f "$coverage_script" ] || [ ! -x "$coverage_script" ]; then
-    log_event "test_coverage_skipped_tool_missing"
+  local tool_status
+  tool_status=$(gate_tool_status "$aesop_root" "$coverage_script")
+  if [ "$tool_status" = "skip" ]; then
+    log_event "test_coverage_skipped_no_aesop_tools"
     return 0
+  fi
+  if [ "$tool_status" = "missing" ]; then
+    gate_tool_missing_block "verify_test_coverage.py" "$coverage_script"
+    log_event "test_coverage_tool_missing"
+    return 1
   fi
 
   local py_bin=""
   if ! py_bin=$(resolve_py_bin); then
-    printf 'Warning: no python interpreter found; test coverage check skipped\n' >&2
-    log_event "test_coverage_skipped_no_python"
-    return 0
+    gate_no_python_block "test coverage check"
+    log_event "test_coverage_no_python"
+    return 1
   fi
 
   local coverage_output
@@ -1539,16 +1776,20 @@ refs/heads/feature/test $local_sha refs/heads/main 00000000000000000000000000000
     test_failed=$((test_failed + 1))
   fi
 
-  printf '\n=== Test 19: check_generated_paths skipped when tool missing ===\n'
+  # Tests 19-22: a repo that HAS tools/ but is missing one gate script must be
+  # blocked, not skipped. Tests 17-18 above cover the legitimate skip (no aesop
+  # checkout at all); these cover the escape that skip used to hide -- deleting
+  # or renaming a gate script silently disabled it and the push still went green.
+  printf '\n=== Test 19: check_claudemd_sync BLOCKS when tools/ exists but gate script is gone ===\n'
   (
-    export AESOP_ROOT="$tmpdir/aesop_no_genpaths"
-    mkdir -p "$AESOP_ROOT"
+    export AESOP_ROOT="$tmpdir/aesop_tools_no_claudemd"
+    mkdir -p "$AESOP_ROOT/tools"
 
-    if printf '' | check_generated_paths >/dev/null 2>&1; then
-      printf 'PASS: check_generated_paths returns 0 (fail-open) when tool missing\n'
-    else
-      printf 'FAIL: check_generated_paths should fail-open when tool missing\n'
+    if check_claudemd_sync >/dev/null 2>&1; then
+      printf 'FAIL: check_claudemd_sync fail-opened despite tools/ being present\n'
       exit 1
+    else
+      printf 'PASS: check_claudemd_sync returns 1 (fail-closed) when its script is missing from tools/\n'
     fi
   )
   if [ $? -eq 0 ]; then
@@ -1557,7 +1798,111 @@ refs/heads/feature/test $local_sha refs/heads/main 00000000000000000000000000000
     test_failed=$((test_failed + 1))
   fi
 
-  printf '\n=== Test 20: check_generated_paths blocks a registered generated path ===\n'
+  printf '\n=== Test 20: check_metrics BLOCKS when tools/ exists but gate script is gone ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_tools_no_metrics"
+    mkdir -p "$AESOP_ROOT/tools"
+
+    if check_metrics >/dev/null 2>&1; then
+      printf 'FAIL: check_metrics fail-opened despite tools/ being present\n'
+      exit 1
+    else
+      printf 'PASS: check_metrics returns 1 (fail-closed) when its script is missing from tools/\n'
+    fi
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
+  printf '\n=== Test 21: check_tracker_guard and check_import_resolution both fail closed ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_tools_empty"
+    mkdir -p "$AESOP_ROOT/tools"
+
+    if check_tracker_guard >/dev/null 2>&1; then
+      printf 'FAIL: check_tracker_guard fail-opened despite tools/ being present\n'
+      exit 1
+    fi
+    if check_import_resolution >/dev/null 2>&1; then
+      printf 'FAIL: check_import_resolution fail-opened despite tools/ being present\n'
+      exit 1
+    fi
+    printf 'PASS: both gates return 1 when their scripts are missing from tools/\n'
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
+  printf '\n=== Test 22: a gate script present but non-executable still RUNS ===\n'
+  (
+    # Gates are invoked as "$py_bin" "$script", so the exec bit is irrelevant.
+    # Requiring -x turned any checkout without exec bits into a silent skip.
+    export AESOP_ROOT="$tmpdir/aesop_tools_noexec"
+    mkdir -p "$AESOP_ROOT/tools"
+    printf 'import sys\nsys.exit(1)\n' > "$AESOP_ROOT/tools/metrics_gate.py"
+    chmod -x "$AESOP_ROOT/tools/metrics_gate.py" 2>/dev/null
+
+    if check_metrics >/dev/null 2>&1; then
+      printf 'FAIL: non-executable gate script was skipped instead of run\n'
+      exit 1
+    else
+      printf 'PASS: non-executable gate script ran and its exit 1 blocked the push\n'
+    fi
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
+  printf '\n=== Test 23: check_claudemd_headroom exit contract (missing tool / unreadable / bust) ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_headroom"
+    mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+
+    # 23a: tool absent -> fail-open (hook installs into repos without an aesop checkout)
+    if ! check_claudemd_headroom >/dev/null 2>&1; then
+      printf 'FAIL: check_claudemd_headroom should fail-open when tool missing\n'
+      exit 1
+    fi
+
+    # 23b: tool reports exit 2 (merge union UNREADABLE) -> fail-open, not a policy block
+    cat > "$AESOP_ROOT/tools/claudemd_lint.py" <<'HEADROOM_UNREADABLE'
+#!/usr/bin/env python3
+import sys
+print("Error: merge union unreadable: ref 'origin/main' does not resolve", file=sys.stderr)
+sys.exit(2)
+HEADROOM_UNREADABLE
+    if ! check_claudemd_headroom >/dev/null 2>&1; then
+      printf 'FAIL: exit 2 (unreadable) must fail-open, not block the push\n'
+      exit 1
+    fi
+
+    # 23c: tool reports exit 1 (a union busts its cap) -> fail-CLOSED
+    cat > "$AESOP_ROOT/tools/claudemd_lint.py" <<'HEADROOM_BUST'
+#!/usr/bin/env python3
+import sys
+print("1. [headroom-line-count] tools/CLAUDE.md: merge union is 151 lines, exceeds max 150")
+sys.exit(1)
+HEADROOM_BUST
+    if check_claudemd_headroom >/dev/null 2>&1; then
+      printf 'FAIL: exit 1 (union busts cap) must fail-closed and block the push\n'
+      exit 1
+    fi
+
+    printf 'PASS: headroom gate fails open on missing tool + unreadable, fails closed on a busted union\n'
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
+  printf '\n=== Test 24: check_generated_paths blocks a registered generated path ===\n'
   (
     export AESOP_ROOT="$tmpdir/aesop_genpaths"
     mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
@@ -1599,7 +1944,7 @@ GENPATHS
     test_failed=$((test_failed + 1))
   fi
 
-  printf '\n=== Test 21: check_generated_paths passes on ordinary paths ===\n'
+  printf '\n=== Test 25: check_generated_paths passes on ordinary paths ===\n'
   (
     export AESOP_ROOT="$tmpdir/aesop_genpaths"
 
@@ -1632,12 +1977,30 @@ GENPATHS
     test_failed=$((test_failed + 1))
   fi
 
+  printf '\n=== Test 26: check_generated_paths skipped when tool missing ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_no_genpaths"
+    mkdir -p "$AESOP_ROOT"
+
+    if printf '' | check_generated_paths >/dev/null 2>&1; then
+      printf 'PASS: check_generated_paths returns 0 (fail-open) when tool missing\n'
+    else
+      printf 'FAIL: check_generated_paths should fail-open when tool missing\n'
+      exit 1
+    fi
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
   printf '\n=== Test Results ===\n'
   printf 'PASSED: %d\n' "$test_passed"
   printf 'FAILED: %d\n' "$test_failed"
 
   if [ "$test_failed" -eq 0 ]; then
-    printf '\nAll 21 tests passed.\n'
+    printf '\nAll 26 tests passed.\n'
     return 0
   else
     printf '\nSome tests failed.\n'
@@ -1652,7 +2015,9 @@ main() {
   fi
 
   if [ "${1:-}" = "--verify-audit-log" ]; then
-    local audit_log="${2:-${AESOP_ROOT:-$HOME/aesop}/state/SECURITY-AUDIT.log}"
+    local aesop_root
+    aesop_root=$(resolve_aesop_root)
+    local audit_log="${2:-$aesop_root/state/SECURITY-AUDIT.log}"
     verify_audit_log "$audit_log"
     exit $?
   fi
@@ -1691,7 +2056,10 @@ main() {
     exit 1
   fi
 
-  if ! check_import_resolution; then
+  # Feed the SAME captured stdin: this gate reads the pushed ref range via
+  # get_commit_range(), exactly like check_secret_scan above. Calling it without
+  # stdin is what made it vacuously green (empty index at push time).
+  if ! check_import_resolution <<< "$prepush_stdin"; then
     printf 'Error: Python import resolution check failed. Push blocked.\n' >&2
     log_block "import_check_failure"
     exit 1
@@ -1709,9 +2077,21 @@ main() {
     exit 1
   fi
 
+  if ! check_gen_tool_index; then
+    printf 'Error: Tool index synchronization gate failed. Push blocked.\n' >&2
+    log_block "gen_tool_index_failure"
+    exit 1
+  fi
+
   if ! check_metrics; then
     printf 'Error: Metrics verification gate failed. Push blocked.\n' >&2
     log_block "metrics_gate_failure"
+    exit 1
+  fi
+
+  if ! check_claudemd_headroom; then
+    printf 'Error: CLAUDE.md merge-union line cap busted. Push blocked.\n' >&2
+    log_block "claudemd_headroom_failure"
     exit 1
   fi
 

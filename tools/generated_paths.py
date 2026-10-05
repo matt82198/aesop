@@ -17,8 +17,10 @@ TWO REGISTRIES, TWO QUESTIONS -- do not conflate them:
 
 Membership criteria -- all three must hold:
   1. A committed tool in this repo rewrites the file deterministically
-     (`tools/verify_test_suite_count.py` rewrites the `**<Lang> (N suites):**`
-     count lines; `tools/claudemd_lint.py` normalises the same documents;
+     (`tools/gen_suite_counts.py --regenerate` rewrites `tests/SUITE-COUNTS.json`
+     from `git ls-files`, counted per unique path; `tools/verify_test_suite_count.py`
+     is a thin wrapper that delegates to it for backward compatibility with
+     pre-push/CI callers; `tools/claudemd_lint.py` normalises the same documents;
      `tools/gen_tool_index.py --regenerate` builds `tools/INDEX.md` from the
      `INDEX:` header line of every file under `tools/`).
   2. The rewrite is reproducible: re-running the gate restores the same bytes,
@@ -134,6 +136,7 @@ REGISTRY: List[Dict[str, str]] = [
 # `git checkout .` is equally forbidden -- it is not targeted.
 GENERATED_PATHS = (
     "tests/CLAUDE.md",
+    "tests/SUITE-COUNTS.json",
     "tools/CLAUDE.md",
     "tools/INDEX.md",
 )
