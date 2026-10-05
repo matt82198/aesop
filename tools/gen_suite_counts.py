@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Generate tests/SUITE-COUNTS.json with actual test suite counts.
-INDEX: Generated suite-count artifact builder; walks git ls-files for test suites, emits JSON to tests/SUITE-COUNTS.json between GENERATED-BY markers; modes `--check` (byte-compare, exit 1 + regenerate hint) / `--regenerate` / `--json`; counts never derive to zero (fail-closed); deterministic + ASCII-safe; stdlib-only.
+INDEX: Generated suite-count artifact builder; walks git ls-files for test suites, emits JSON to tests/SUITE-COUNTS.json between GENERATED-BY markers; modes `--check` (byte-compare, exit 1 + regenerate hint) / `--regenerate` / `--json`; counts never derive to zero (fail-closed); deterministic + ASCII-safe; stdlib-only. Counts are derived per UNIQUE path, not per `git ls-files` line: an unmerged path is listed once per index stage (1=base/2=ours/3=theirs), and one file can match two shell globs at once, so a naive line-count over-counts (bit PRs #710/#711 under the old tests/CLAUDE.md-line gate); `list_git_files()` collects into a Python set to fix both. A merge in progress (MERGE_HEAD set) is a loud, non-fatal stderr `[WARN]` rather than a refusal, since conflict resolution is exactly when the sweep needs `--regenerate`.
 
 This tool is the SOLE SOURCE OF TRUTH for suite-count values used by verify_test_suite_count.py
 and pre-push/CI gates. It GENERATES tests/SUITE-COUNTS.json deterministically from git ls-files,
@@ -100,13 +100,78 @@ def ensure_git_repo(repo_root: Path) -> None:
         )
 
 
-def count_git_files(repo_root: Path, *patterns: str) -> int:
-    """Count tracked files matching patterns using git ls-files inside repo_root.
+def merge_in_progress(repo_root: Path) -> bool:
+    """True when repo_root has an in-progress merge (MERGE_HEAD resolvable).
+
+    Advisory only: a merge is the state in which the index carries multiple stages
+    per conflicted path, so it is the state that used to inflate the counts. It is
+    NOT a refusal condition -- see warn_if_merge_in_progress().
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            check=False,
+            timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        # Never let an advisory probe break the gate; ensure_git_repo() already
+        # fails closed on a genuinely unusable git.
+        return False
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def warn_if_merge_in_progress(repo_root: Path) -> None:
+    """Emit a loud, non-fatal warning when counts are derived mid-merge.
+
+    Deliberately a WARNING and not a refusal. Conflict resolution is exactly when
+    suite counts drift and exactly when the sweep needs --regenerate, so refusing
+    would break the workflow that needs this tool most. What must never happen is
+    a SILENT wrong number: list_git_files() makes the derivation correct (one count
+    per unique path) and this makes the half-resolved tree visible to the operator.
+    """
+    if not merge_in_progress(repo_root):
+        return
+    print(
+        f"[WARN] A merge is in progress in {repo_root} (MERGE_HEAD is set). Suite "
+        "counts are derived per UNIQUE path, so unmerged index stages are not "
+        "double counted -- but the tree is only half resolved, so files the merge "
+        "has yet to add or delete are not reflected yet. Re-run this gate after "
+        "the merge concludes.",
+        file=sys.stderr,
+    )
+
+
+def list_git_files(repo_root: Path, *patterns: str) -> set:
+    """Return the SET of tracked paths matching any pattern, inside repo_root.
+
+    Deduplication is load-bearing, not cosmetic, for two reasons:
+
+    1. `git ls-files <pattern>` lists an UNMERGED path once per index stage
+       (1=base, 2=ours, 3=theirs). During an in-progress merge a single conflicted
+       `tests/test_*.py` was counted two or three times, which is how a mid-merge
+       --regenerate wrote an inflated suite count into the generated artifact.
+    2. The shell family is derived from three globs, and one path can match two of
+       them (`tests/test_x.test.sh` matches `tests/*.test.sh` AND `tests/test_*.sh`),
+       which double counted it across patterns.
+
+    Deduplicating in Python rather than relying on `git ls-files --deduplicate`
+    (git >= 2.31) keeps this correct on every git the project might be built with,
+    and is the only form that also fixes the cross-pattern case above.
+
+    Omits untracked files; uses git to ensure we count only tracked files. The
+    `cwd` is threaded explicitly so `--repo` actually selects the tree being
+    graded instead of silently grading the process CWD.
 
     Raises:
-        StructureError: code 2 if git cannot be run for a pattern.
+        StructureError: code 2 if git cannot be run for a pattern (a swallowed
+            failure here reads as a count of zero, i.e. fake-green).
     """
-    count = 0
+    paths = set()
     for pattern in patterns:
         try:
             result = subprocess.run(
@@ -126,8 +191,17 @@ def count_git_files(repo_root: Path, *patterns: str) -> int:
                 f"failed in {repo_root}: {type(exc).__name__}",
                 2,
             )
-        count += len([line for line in result.stdout.strip().split("\n") if line])
-    return count
+        # splitlines(), not strip().split("\n"): a path is only ever mangled by
+        # stripping, and git quotes any path that could contain a newline.
+        for line in result.stdout.splitlines():
+            if line:
+                paths.add(line)
+    return paths
+
+
+def count_git_files(repo_root: Path, *patterns: str) -> int:
+    """Count UNIQUE tracked files matching patterns using git ls-files."""
+    return len(list_git_files(repo_root, *patterns))
 
 
 def get_actual_counts(repo_root: Path) -> Dict[str, int]:
@@ -136,6 +210,7 @@ def get_actual_counts(repo_root: Path) -> Dict[str, int]:
     Returns: {"Node": int, "Shell": int, "Python": int}
     """
     ensure_git_repo(repo_root)
+    warn_if_merge_in_progress(repo_root)
 
     node_count = count_git_files(repo_root, "tests/*.test.mjs")
     shell_count = count_git_files(

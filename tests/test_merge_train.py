@@ -496,6 +496,71 @@ class TestMergeTrain(unittest.TestCase):
             self.fail("Help output contains non-ASCII characters")
 
 
+class TestCheckEnforceAdmins(unittest.TestCase):
+    """Tests for check_enforce_admins() - B1.4 branch protection gate."""
+
+    def setUp(self):
+        self.tool_path = Path(__file__).parent.parent / "tools" / "merge_train.py"
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("merge_train", self.tool_path)
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+
+    def test_enforce_admins_with_python_bool_true(self):
+        """RED-FIRST: gh() returns Python bool True, not string 'true'.
+
+        When gh() parses JSON, enforce_admins.enabled comes back as Python True,
+        not the string "true". The current check `if result == "true":` fails to
+        catch this and always prints FAIL even on correctly protected repos.
+        """
+        with patch.object(self.module, 'gh') as mock_gh:
+            mock_gh.return_value = True  # Python bool, as gh() returns from json.loads
+            result = self.module.check_enforce_admins()
+            self.assertTrue(result, "Should pass when gh() returns Python bool True")
+
+    def test_enforce_admins_with_python_bool_false(self):
+        """gh() returns Python bool False when enforce_admins is disabled."""
+        with patch.object(self.module, 'gh') as mock_gh:
+            mock_gh.return_value = False  # Python bool False
+            result = self.module.check_enforce_admins()
+            self.assertFalse(result, "Should fail when gh() returns Python bool False")
+
+    def test_enforce_admins_with_string_true(self):
+        """Backward compatibility: handle string 'true' (case-insensitive, stripped)."""
+        with patch.object(self.module, 'gh') as mock_gh:
+            mock_gh.return_value = "true"
+            result = self.module.check_enforce_admins()
+            self.assertTrue(result, "Should pass when gh() returns string 'true'")
+
+    def test_enforce_admins_with_string_false(self):
+        """Handle string 'false'."""
+        with patch.object(self.module, 'gh') as mock_gh:
+            mock_gh.return_value = "false"
+            result = self.module.check_enforce_admins()
+            self.assertFalse(result, "Should fail when gh() returns string 'false'")
+
+    def test_enforce_admins_with_error_dict(self):
+        """gh() returns error dict when the API call fails."""
+        with patch.object(self.module, 'gh') as mock_gh:
+            mock_gh.return_value = {"error": "not found"}
+            result = self.module.check_enforce_admins()
+            self.assertFalse(result, "Should fail when gh() returns error dict")
+
+    def test_enforce_admins_with_string_true_uppercase(self):
+        """Case-insensitive string comparison."""
+        with patch.object(self.module, 'gh') as mock_gh:
+            mock_gh.return_value = "TRUE"
+            result = self.module.check_enforce_admins()
+            self.assertTrue(result, "Should pass with uppercase TRUE")
+
+    def test_enforce_admins_with_string_true_whitespace(self):
+        """Strings should be stripped before comparison."""
+        with patch.object(self.module, 'gh') as mock_gh:
+            mock_gh.return_value = "  true  "
+            result = self.module.check_enforce_admins()
+            self.assertTrue(result, "Should pass with whitespace-padded 'true'")
+
+
 class TestIntegrationMode(unittest.TestCase):
     """Tests for --integration batch merge mode."""
 
@@ -622,8 +687,14 @@ class TestIntegrationMode(unittest.TestCase):
             self.assertIn("99", url)
 
     def test_close_superseded_prs(self):
-        with patch.object(self.module, 'gh') as mock_gh:
-            mock_gh.return_value = ""
+        with patch.object(self.module, 'gh') as mock_gh, \
+             patch.object(self.module, 'git') as mock_git:
+            def gh_side_effect(*args):
+                if "view" in args:
+                    return {"headRefOid": "abc123", "title": "test"}
+                return ""
+            mock_gh.side_effect = gh_side_effect
+            mock_git.return_value = (True, "")  # is_ancestor returns True
             self.module.close_superseded_prs([10, 11, 12])
             close_calls = [c for c in mock_gh.call_args_list
                            if "pr" in c[0] and "close" in c[0]]
@@ -642,21 +713,25 @@ class TestIntegrationMode(unittest.TestCase):
 
     def test_run_integration_train_happy_path(self):
         m = self.module
-        with patch.object(m, 'create_integration_branch') as mock_create, \
+        with patch.object(m, 'check_enforce_admins') as mock_enforce, \
+             patch.object(m, 'create_integration_branch') as mock_create, \
              patch.object(m, 'merge_pr_into_integration') as mock_merge_pr, \
              patch.object(m, 'push_integration_branch') as mock_push, \
              patch.object(m, 'create_integration_pr') as mock_create_pr, \
              patch.object(m, 'wait_for_integration_ci') as mock_wait, \
              patch.object(m, 'merge_integration_pr') as mock_merge_int, \
+             patch.object(m, 'run_regenerators') as mock_regen, \
              patch.object(m, 'close_superseded_prs') as mock_close, \
              patch.object(m, 'cleanup_integration_branch') as mock_cleanup:
 
+            mock_enforce.return_value = True
             mock_create.return_value = True
             mock_merge_pr.return_value = True
             mock_push.return_value = True
             mock_create_pr.return_value = "https://github.com/org/repo/pull/99"
             mock_wait.return_value = True
             mock_merge_int.return_value = True
+            mock_regen.return_value = True
 
             result = m.run_integration_train([10, 11, 12], "batch-wave")
             self.assertTrue(result)
@@ -672,21 +747,25 @@ class TestIntegrationMode(unittest.TestCase):
 
     def test_run_integration_train_skips_conflicting_prs(self):
         m = self.module
-        with patch.object(m, 'create_integration_branch') as mock_create, \
+        with patch.object(m, 'check_enforce_admins') as mock_enforce, \
+             patch.object(m, 'create_integration_branch') as mock_create, \
              patch.object(m, 'merge_pr_into_integration') as mock_merge_pr, \
              patch.object(m, 'push_integration_branch') as mock_push, \
              patch.object(m, 'create_integration_pr') as mock_create_pr, \
              patch.object(m, 'wait_for_integration_ci') as mock_wait, \
              patch.object(m, 'merge_integration_pr') as mock_merge_int, \
+             patch.object(m, 'run_regenerators') as mock_regen, \
              patch.object(m, 'close_superseded_prs') as mock_close, \
              patch.object(m, 'cleanup_integration_branch') as mock_cleanup:
 
+            mock_enforce.return_value = True
             mock_create.return_value = True
             mock_merge_pr.side_effect = [True, False, True]
             mock_push.return_value = True
             mock_create_pr.return_value = "https://github.com/org/repo/pull/99"
             mock_wait.return_value = True
             mock_merge_int.return_value = True
+            mock_regen.return_value = True
 
             result = m.run_integration_train([10, 11, 12], "batch-wave")
             self.assertTrue(result)
@@ -694,10 +773,12 @@ class TestIntegrationMode(unittest.TestCase):
 
     def test_run_integration_train_all_conflict_aborts(self):
         m = self.module
-        with patch.object(m, 'create_integration_branch') as mock_create, \
+        with patch.object(m, 'check_enforce_admins') as mock_enforce, \
+             patch.object(m, 'create_integration_branch') as mock_create, \
              patch.object(m, 'merge_pr_into_integration') as mock_merge_pr, \
              patch.object(m, 'cleanup_integration_branch') as mock_cleanup:
 
+            mock_enforce.return_value = True
             mock_create.return_value = True
             mock_merge_pr.return_value = False
 
@@ -802,6 +883,60 @@ class TestIntegrationMode(unittest.TestCase):
             ]
             ok = self.module.merge_integration_pr(99)
             self.assertFalse(ok)
+
+    def test_b13_ancestor_check_blocks_bogus_close(self):
+        """TDD-FIRST test for B1.3: verify ancestor before close_superseded_prs.
+
+        BUG: A partially-applied integration can close a PR whose content never landed.
+        Example: PR #42 merged into integration but integration PR merge failed.
+        Content of #42 never reached main, but close_superseded_prs(42) still closes it.
+
+        FIX: Before closing, verify `git merge-base --is-ancestor <headRefOid> origin/main`.
+        If check fails, report loudly and DO NOT close that PR.
+        """
+        m = self.module
+        with patch.object(m, 'gh') as mock_gh, \
+             patch.object(m, 'git') as mock_git:
+
+            # PR info: headRefOid is abc123, but it's NOT an ancestor of origin/main
+            # (it was merged into integration, but integration PR never reached main)
+            def gh_side_effect(*args):
+                if "pr" in args and "view" in args:
+                    # Reading PR info to get headRefOid
+                    return {
+                        "headRefOid": "abc123",
+                        "headRefName": "feat/unlanded",
+                        "title": "Unlanded feature",
+                    }
+                if "pr" in args and "close" in args:
+                    return ""
+                return {}
+
+            def git_side_effect(*args):
+                if "merge-base" in args and "--is-ancestor" in args:
+                    # abc123 is NOT an ancestor of origin/main
+                    return (False, "merge-base check failed")
+                return (True, "")
+
+            mock_gh.side_effect = gh_side_effect
+            mock_git.side_effect = git_side_effect
+
+            # Should NOT close PR 42 because content never landed
+            m.close_superseded_prs([42])
+
+            # Verify that ancestor check was called
+            ancestor_checks = [c for c in mock_git.call_args_list
+                              if "merge-base" in c[0] and "--is-ancestor" in c[0]]
+
+            self.assertTrue(len(ancestor_checks) > 0,
+                          "Should check ancestor before closing")
+
+            # Verify close was NOT called (because ancestor check failed)
+            close_calls = [c for c in mock_gh.call_args_list
+                          if "pr" in c[0] and "close" in c[0]]
+
+            self.assertEqual(len(close_calls), 0,
+                           "Should NOT close PR if content not ancestor of origin/main")
 
 
 class TestTransportDecodesUndecodableBytes(unittest.TestCase):

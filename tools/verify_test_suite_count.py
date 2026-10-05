@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
 Verify test suite counts via generated tests/SUITE-COUNTS.json (gateway to gen_suite_counts.py).
-INDEX: Test suite count verification gateway. `--check` (default): READ-ONLY validation against generated tests/SUITE-COUNTS.json artifact, exit 1 on drift, 2 on eval error. `--regenerate` (alias `--fix`): delegates to gen_suite_counts.py --regenerate. This tool wraps gen_suite_counts.py to maintain backward compatibility with pre-push gates while counts live in a generated artifact. Counts are no longer hand-maintained in tests/CLAUDE.md (moved to tests/SUITE-COUNTS.json by gen_suite_counts.py). Exit 0=counts match (check)/regenerated, 1=drift, 2=cannot-evaluate. Runs as a pre-push gate via `hooks/pre-push-policy.sh` AND as a blocking CI step. Adding/removing a test suite requires running `gen_suite_counts.py --regenerate` and committing tests/SUITE-COUNTS.json
+INDEX: Test suite count verification gateway. `--check` (default): READ-ONLY validation against generated tests/SUITE-COUNTS.json artifact, exit 1 on drift, 2 on eval error. `--regenerate` (alias `--fix`): delegates to gen_suite_counts.py --regenerate. This tool wraps gen_suite_counts.py to maintain backward compatibility with pre-push gates while counts live in a generated artifact. Counts are no longer hand-maintained in tests/CLAUDE.md (moved to tests/SUITE-COUNTS.json by gen_suite_counts.py, which also carries the per-UNIQUE-path dedup and in-progress-merge warning: an unmerged path is listed once per index stage by `git ls-files`, and a file can match two shell globs at once, so counting raw lines over-counts; see gen_suite_counts.py for the fix). Exit 0=counts match (check)/regenerated, 1=drift, 2=cannot-evaluate. Runs as a pre-push gate via `hooks/pre-push-policy.sh` AND as a blocking CI step. Adding/removing a test suite requires running `gen_suite_counts.py --regenerate` (or this wrapper's `--regenerate`/`--fix`) and committing tests/SUITE-COUNTS.json
 
 This tool wraps gen_suite_counts.py for backward compatibility with existing pre-push
-gates and CI references. All actual work is delegated to gen_suite_counts.py:
+gates and CI references. All actual work -- including the git ls-files derivation,
+the per-unique-path deduplication, and the in-progress-merge warning -- is delegated
+to gen_suite_counts.py:
 
 - --check (default) / --strict: READ-ONLY validation. Delegates to
   gen_suite_counts.py --check. Verifies tests/SUITE-COUNTS.json matches actual
@@ -13,9 +15,13 @@ gates and CI references. All actual work is delegated to gen_suite_counts.py:
   gen_suite_counts.py --regenerate. Rewrites tests/SUITE-COUNTS.json to match
   actual files. --dry-run shows what would change without writing.
 
-The actual generation logic and hardened scanning are in gen_suite_counts.py.
-This wrapper exists to maintain backward compatibility with existing hook/CI
-references to verify_test_suite_count.py.
+The actual generation logic and hardened scanning (including unmerged-stage
+deduplication and the MERGE_HEAD warning) are in gen_suite_counts.py. This wrapper
+exists to maintain backward compatibility with existing hook/CI references to
+verify_test_suite_count.py. It is resolved by this file's own location
+(`Path(__file__).resolve().parent`), never by a cwd-relative string, so it keeps
+working when invoked with a different process cwd (e.g. a pre-push hook run from
+inside the repo being pushed, or a test that points --repo at a fixture tree).
 
 Exit codes:
     0  counts match (check) / regeneration succeeded
@@ -84,8 +90,13 @@ def main():
 
     args = parser.parse_args()
 
-    # Translate arguments to gen_suite_counts.py equivalents
-    gen_args = ["python", "tools/gen_suite_counts.py"]
+    # Resolve gen_suite_counts.py relative to THIS file's location, never a
+    # cwd-relative string -- the caller's process cwd is frequently a different
+    # repo tree (a pre-push hook running inside the repo being pushed, a test
+    # pointing --repo at a temp fixture), and a cwd-relative "tools/gen_suite_counts.py"
+    # would resolve against the wrong tree in exactly those cases.
+    gen_tool = Path(__file__).resolve().parent / "gen_suite_counts.py"
+    gen_args = [sys.executable, str(gen_tool)]
 
     read_only = args.check or args.strict
     write = args.regenerate or args.fix
@@ -116,12 +127,14 @@ def main():
     if args.repo:
         gen_args.extend(["--repo", str(args.repo)])
 
-    # Delegate to gen_suite_counts.py
+    # Delegate to gen_suite_counts.py. No cwd override here: the child must
+    # inherit THIS process's cwd so a bare `--check`/`--regenerate` (no --repo)
+    # still grades the tree the caller is actually standing in.
     try:
         result = subprocess.run(gen_args, check=False)
         return result.returncode
     except FileNotFoundError:
-        print("[ERROR] tools/gen_suite_counts.py not found", file=sys.stderr)
+        print(f"[ERROR] {gen_tool} not found", file=sys.stderr)
         return 2
     except Exception as e:
         print(f"[ERROR] Failed to run gen_suite_counts.py: {e}", file=sys.stderr)
