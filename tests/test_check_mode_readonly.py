@@ -97,13 +97,13 @@ KNOWN_OFFENDERS = {
     # verify_test_suite_count.py was a known offender until guard/count-check-no-write
     # merged into main. Its --check/--strict modes are now strictly read-only, so the
     # entry is deleted (per the rule above) and the tool is enforced like any other.
-    "cost_ceiling.py": (
-        "--check reaches read_ledger_total_tokens -> fleet_ledger.parse_ledger_rows() "
-        "-> ensure_ledger_header(), which mkdirs and writes "
-        "<state>/ledger/OUTCOMES-LEDGER.md on a fresh tree. Discovered by this "
-        "gate (GAP6); needs its own fix lane -- the header write belongs on the "
-        "append path, not the read path."
-    ),
+    #
+    # cost_ceiling.py was a known offender until the ledger header write was moved
+    # off the read path: fleet_ledger.ensure_ledger_header() is now WRITE-PATH-ONLY
+    # (called only from append_ledger_line/harvest/rotate); parse_ledger_rows() and
+    # summary() never create the ledger file or its directory. --check is now
+    # strictly read-only, so the entry is deleted and the tool is enforced like
+    # any other (per the rule above).
 }
 
 
