@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "_comment": [
+    "Reviewed exemptions for tools/gate_inventory.py --check (axis 1).",
+    "An entry means: this gate-shaped tool legitimately has NO automated invoker.",
+    "Every entry MUST carry a non-empty 'reason' of at least 12 characters explaining",
+    "why -- e.g. 'operator-invoked only: <why>'. An entry without a real reason is a",
+    "finding, not an exemption. Do NOT add a tool here to silence a genuine orphan:",
+    "an unwired real gate is a wiring bug, and belongs in CI or a git hook instead.",
+    "As of this file's creation the inventory has 4 confirmed orphans",
+    "(sibling_import_check, git_identity_check, fixture_intent_check,",
+    "port_fidelity_check). All four are real guardrails that SHOULD be wired, so they",
+    "are deliberately left failing rather than allowlisted."
+  ],
+  "entries": {}
+}
