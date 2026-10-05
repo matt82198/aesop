@@ -318,7 +318,7 @@ class TestPerRepoShip(unittest.TestCase):
             def _probe(repo):
                 out = {}
                 for label, cmd in [("status", "git status --porcelain"), ("log", "git log --oneline"), ("lsfiles", "git ls-files")]:
-                    r = subprocess.run(cmd, cwd=str(repo), shell=True, capture_output=True, text=True)
+                    r = subprocess.run(cmd, cwd=str(repo), shell=True, capture_output=True, text=True, timeout=60)
                     out[label] = r.stdout.strip()
                 fa = Path(repo) / "file-a.py"
                 out["file-a.exists"] = fa.exists()
@@ -342,6 +342,7 @@ class TestPerRepoShip(unittest.TestCase):
             shell=True,
             capture_output=True,
             text=True,
+            timeout=60,
         )
         self.assertIn("Wave:", result_a.stdout)
 
@@ -356,6 +357,7 @@ class TestPerRepoShip(unittest.TestCase):
             shell=True,
             capture_output=True,
             text=True,
+            timeout=60,
         )
         self.assertIn("Wave:", result_b.stdout)
 

@@ -121,5 +121,149 @@ class TestPowerSelftest(unittest.TestCase):
         self.assertIn("decisions:", result.stdout)
 
 
+class TestPowerSelftestHookDetection(unittest.TestCase):
+    """Hook detection reads both settings scopes Claude Code merges."""
+
+    def setUp(self):
+        """Create temporary directories for testing."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.selftest_script = Path(__file__).parent.parent / "tools" / "power_selftest.py"
+        self.state_dir = Path(self.temp_dir) / "state"
+        self.brain_dir = Path(self.temp_dir) / "brain"
+
+    def tearDown(self):
+        """Clean up temporary directories."""
+        import shutil
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def _run_selftest(self):
+        """Run power_selftest.py against the temp state/brain roots."""
+        env = os.environ.copy()
+        env["AESOP_STATE_ROOT"] = str(self.state_dir)
+        env["BRAIN_ROOT"] = str(self.brain_dir)
+        return subprocess.run(
+            [sys.executable, str(self.selftest_script)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            cwd=self.temp_dir,
+            env=env
+        )
+
+    AGENT_HOOK = {
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Agent|Task",
+                    "hooks": [{"type": "command", "command": "echo policy"}],
+                }
+            ]
+        }
+    }
+
+    def _write_settings(self, directory, payload):
+        directory.mkdir(parents=True, exist_ok=True)
+        with open(directory / "settings.json", "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+
+    def test_project_scope_hook_is_detected(self):
+        """A hook registered in <repo>/.claude counts; only reading the user scope missed it."""
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self._write_settings(Path(self.temp_dir) / ".claude", self.AGENT_HOOK)
+
+        result = self._run_selftest()
+        self.assertIn("hooks:ok", result.stdout)
+        self.assertEqual(result.returncode, 0)
+
+    def test_user_scope_hook_is_detected(self):
+        """A hook registered in the brain root still counts."""
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self._write_settings(self.brain_dir, self.AGENT_HOOK)
+
+        result = self._run_selftest()
+        self.assertIn("hooks:ok", result.stdout)
+        self.assertEqual(result.returncode, 0)
+
+    def test_no_posttooluse_requirement(self):
+        """Settings with PreToolUse but no PostToolUse must pass.
+
+        aesop ships no PostToolUse hook, so requiring one made every clean
+        install fail a check it had no way to satisfy.
+        """
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self._write_settings(Path(self.temp_dir) / ".claude", self.AGENT_HOOK)
+
+        result = self._run_selftest()
+        self.assertNotIn("PostToolUse", result.stdout)
+        self.assertIn("hooks:ok", result.stdout)
+
+    def test_missing_agent_matcher_still_fails_closed(self):
+        """Settings present but without Agent|Task is a real failure."""
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self._write_settings(
+            Path(self.temp_dir) / ".claude",
+            {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": []}]}},
+        )
+
+        result = self._run_selftest()
+        self.assertIn("missing matchers", result.stdout)
+        self.assertEqual(result.returncode, 1)
+
+    def test_project_dir_variable_in_command_is_expanded(self):
+        """$CLAUDE_PROJECT_DIR resolves against the repo root, not reported missing."""
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        hook_script = Path(self.temp_dir) / "policy.mjs"
+        hook_script.write_text("// hook\n", encoding="utf-8")
+        self._write_settings(
+            Path(self.temp_dir) / ".claude",
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Agent|Task",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": 'node "$CLAUDE_PROJECT_DIR/policy.mjs"',
+                                }
+                            ],
+                        }
+                    ]
+                }
+            },
+        )
+
+        result = self._run_selftest()
+        self.assertNotIn("missing files", result.stdout)
+        self.assertIn("hooks:ok", result.stdout)
+
+    def test_missing_hook_script_is_reported(self):
+        """A hook pointing at a script that does not exist fails closed."""
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self._write_settings(
+            Path(self.temp_dir) / ".claude",
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": "Agent|Task",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": 'node "$CLAUDE_PROJECT_DIR/absent.mjs"',
+                                }
+                            ],
+                        }
+                    ]
+                }
+            },
+        )
+
+        result = self._run_selftest()
+        self.assertIn("missing files", result.stdout)
+        self.assertEqual(result.returncode, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

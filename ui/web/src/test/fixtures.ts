@@ -39,6 +39,7 @@ import type {
   WaveAuditTailEvent,
   WaveReasoningTailData,
   WaveReasoningAgent,
+  QueuePanelData,
 } from '../lib/types';
 
 /* ------------------------------------------------------------------ */
@@ -168,6 +169,19 @@ export const TESTIDS = {
   failureDrilldownRun: 'failure-drilldown-run',
   failureDrilldownJob: 'failure-drilldown-job',
   failureDrilldownLogExcerpt: 'failure-drilldown-log-excerpt',
+
+  // Queue Panel component (merge-queue operator)
+  queuePanel: 'queue-panel',
+  queuePanelToggle: 'queue-panel-toggle',
+  queuePanelContent: 'queue-panel-content',
+  queueDepth: 'queue-depth',
+  queueBatchState: 'queue-batch-state',
+  queueLastAdvance: 'queue-last-advance',
+  queueExceptionsList: 'queue-exceptions-list',
+  queueExceptionRow: 'queue-exception-row',
+  queueLoading: 'queue-loading',
+  queueError: 'queue-error',
+  queueEmpty: 'queue-empty',
 } as const;
 
 export type TestId = (typeof TESTIDS)[keyof typeof TESTIDS];
@@ -1057,4 +1071,50 @@ export const fixtureWaveReasoningTailUnavailable: WaveReasoningTailData = {
   available: false,
   agents: [],
   at: '2026-07-21T10:35:00Z',
+};
+
+export const fixtureQueueData: QueuePanelData = {
+  queue_depth: 8,
+  batch_state: 2,
+  last_advance_age: 180, // 3 minutes
+  last_advance_degraded: false,
+  exceptions: [
+    {
+      ts: '2026-07-21T14:30:45Z',
+      pr: 743,
+      kind: 'ci_failure',
+    },
+    {
+      ts: '2026-07-21T14:25:30Z',
+      pr: 741,
+      kind: 'merge_conflict',
+    },
+    {
+      ts: '2026-07-21T14:20:15Z',
+      pr: 739,
+      kind: 'blocked',
+    },
+  ],
+};
+
+export const fixtureQueueDataDegraded: QueuePanelData = {
+  queue_depth: 12,
+  batch_state: 1,
+  last_advance_age: 725, // 12+ minutes
+  last_advance_degraded: true,
+  exceptions: [
+    {
+      ts: '2026-07-21T14:12:00Z',
+      pr: 742,
+      kind: 'merge_conflict',
+    },
+  ],
+};
+
+export const fixtureQueueDataEmpty: QueuePanelData = {
+  queue_depth: 0,
+  batch_state: 0,
+  last_advance_age: 45, // Fresh heartbeat
+  last_advance_degraded: false,
+  exceptions: [],
 };

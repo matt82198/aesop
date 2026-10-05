@@ -362,6 +362,7 @@ class TestSingletonFastPath(StateIsolatedTestCase):
             "mergeable": mergeable, "mergeStateStatus": merge_state,
             "statusCheckRollup": rollup if rollup is not None
             else green_rollup(self.module),
+            "baseRefName": "main",
             "headRefName": "feat/x", "headRefOid": "abc123",
             "labels": [], "body": "", "url": "https://x/pull/%d" % number,
         }
@@ -478,6 +479,7 @@ class TestBatchConstruction(StateIsolatedTestCase):
             if args[:2] == ("pr", "view"):
                 number = int(args[2])
                 return {"headRefOid": "sha%d" % number,
+                        "baseRefName": "main",
                         "headRefName": "feat/%d" % number,
                         "title": "pr %d" % number,
                         "labels": [{"name": n} for n in sorted(applied)]}
@@ -630,6 +632,7 @@ class TestBatchConstruction(StateIsolatedTestCase):
                 return {"number": 77, "state": "OPEN", "mergeable": "MERGEABLE",
                         "mergeStateStatus": "CLEAN",
                         "statusCheckRollup": green_rollup(self.module),
+                        "baseRefName": "main",
                         "headRefName": "feat/x", "headRefOid": "sha77",
                         "labels": [], "body": "", "url": "https://x/pull/77"}
             return ""
@@ -643,6 +646,201 @@ class TestBatchConstruction(StateIsolatedTestCase):
             ok = self.module.advance_singleton(77, summary)
         self.assertTrue(ok)
         self.assertEqual(git_calls, [], "singleton merge must not invoke git")
+
+
+class TestWorktreeAlwaysRestored(StateIsolatedTestCase):
+    """A3: every exit path out of build_batch puts the shared tree back on main.
+
+    build_batch does `git checkout -B integrate/q-<epoch>` in a working tree
+    the scheduled task shares with a human. A failure that returned without
+    restoring main left the tree on the integration branch forever, so every
+    later pass died `unsafe_worktree` -- and record_exception's dedupe meant
+    the row was written once and then silenced. The queue stops merging and
+    says nothing.
+    """
+
+    def _git(self, calls, fail_on=None):
+        """git fake on a clean tree; `fail_on` names one failing subcommand."""
+        def side_effect(*args):
+            calls.append(args)
+            if fail_on and args[0] == fail_on:
+                return (False, "simulated %s failure" % fail_on)
+            if args[0] == "status":
+                return (True, "")
+            if args[0] == "rev-parse":
+                return (True, "main")
+            return (True, "")
+        return side_effect
+
+    def _gh(self, create_fails=False):
+        def side_effect(*args):
+            if args[:2] == ("pr", "edit"):
+                return ""
+            if args[:2] == ("pr", "view"):
+                number = int(args[2])
+                return {"headRefOid": "sha%d" % number,
+                        "baseRefName": "main",
+                        "headRefName": "feat/%d" % number,
+                        "title": "pr %d" % number,
+                        "labels": [{"name": self.module.BATCH_LABEL}]}
+            if args[:2] == ("pr", "create"):
+                if create_fails:
+                    return {"error": "GraphQL: was submitted too quickly"}
+                return "https://github.com/o/r/pull/900"
+            return {}
+        return side_effect
+
+    def assertRestoredToMain(self, git_calls):
+        restores = [c for c in git_calls if c[0] == "checkout" and "-B" not in c]
+        self.assertTrue(
+            restores and restores[-1][:2] == ("checkout", "main"),
+            "working tree was left on the integration branch; git calls: %s"
+            % (git_calls,))
+
+    def test_pr_create_failure_restores_main(self):
+        """The observed strand: `gh pr create` errors and the tree never returns."""
+        git_calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._gh(create_fails=True)), \
+             patch.object(self.module, "git", side_effect=self._git(git_calls)):
+            branch = self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertEqual(branch, "")
+        self.assertEqual(summary["status"], "error")
+        self.assertEqual([r["kind"] for r in self.exception_rows()],
+                         ["batch_pr_create_failed"])
+        self.assertRestoredToMain(git_calls)
+
+    def test_push_failure_restores_main(self):
+        git_calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._gh()), \
+             patch.object(self.module, "git",
+                          side_effect=self._git(git_calls, fail_on="push")):
+            branch = self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertEqual(branch, "")
+        self.assertRestoredToMain(git_calls)
+        self.assertTrue([c for c in git_calls if c[0] == "branch" and "-D" in c],
+                        "the unpushed integration branch must be deleted")
+
+    def test_success_restores_main(self):
+        git_calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._gh()), \
+             patch.object(self.module, "git", side_effect=self._git(git_calls)):
+            branch = self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertEqual(branch, "integrate/q-1700000000")
+        self.assertRestoredToMain(git_calls)
+
+    def test_unexpected_exception_still_restores_main(self):
+        """Even a raise out of the middle of batch construction restores main."""
+        git_calls = []
+        summary = {"actions": [], "merged": [], "status": "ok"}
+
+        def exploding_gh(*args):
+            if args[:2] == ("pr", "view"):
+                raise subprocess.TimeoutExpired(cmd=["gh", "pr", "view"], timeout=60)
+            return {}
+
+        with patch.object(self.module, "gh", side_effect=exploding_gh), \
+             patch.object(self.module, "git", side_effect=self._git(git_calls)):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertRestoredToMain(git_calls)
+
+
+class TestTimeoutContainment(StateIsolatedTestCase):
+    """A7: a hung transport call is contained, not a traceback.
+
+    merge_train.gh/git run subprocess with timeout=60/120 and no handler
+    anywhere in merge_queue, so a hung gh or git raised TimeoutExpired straight
+    out of run_pass/main: no exception row (the ledger shows nothing at all),
+    a possibly stranded working tree, and a scheduled task whose only record is
+    a Python traceback nobody reads.
+    """
+
+    def _preconditions_ok(self, then):
+        """gh fake: preconditions pass, then `then(*args)` handles the rest."""
+        contexts = list(self.module.EXPECTED_REQUIRED_CHECKS)
+
+        def side_effect(*args):
+            if args[:2] == ("auth", "status"):
+                return ""
+            if "--jq" in args and ".default_branch" in args:
+                return "main"
+            if "--jq" in args and ".enforce_admins.enabled" in args:
+                return True
+            if "--jq" in args and ".required_status_checks.contexts" in args:
+                return contexts
+            return then(*args)
+        return side_effect
+
+    def test_timeout_writes_an_exception_row_and_exits_nonzero(self):
+        def hang(*args):
+            raise subprocess.TimeoutExpired(cmd=["gh"] + list(args), timeout=60)
+
+        with patch.object(self.module, "gh",
+                          side_effect=self._preconditions_ok(hang)), \
+             patch.object(self.module, "git", return_value=(True, "")):
+            code, summary = self.module.run_pass(repo="o/r")
+        self.assertEqual(code, 1)
+        self.assertEqual(summary["status"], "error")
+        rows = self.exception_rows()
+        self.assertEqual([r["kind"] for r in rows], ["subprocess_timeout"])
+        self.assertIn("timeout", rows[0]["detail"].lower())
+
+    def test_timeout_restores_the_working_tree(self):
+        git_calls = []
+
+        def hang(*args):
+            raise subprocess.TimeoutExpired(cmd=["gh"] + list(args), timeout=60)
+
+        def tracking_git(*args):
+            git_calls.append(args)
+            return (True, "")
+
+        with patch.object(self.module, "gh",
+                          side_effect=self._preconditions_ok(hang)), \
+             patch.object(self.module, "git", side_effect=tracking_git):
+            self.module.run_pass(repo="o/r")
+        self.assertIn(("checkout", "main"), git_calls,
+                      "a timed-out pass must not leave the tree off main")
+
+    def test_timeout_releases_the_lock(self):
+        def hang(*args):
+            raise subprocess.TimeoutExpired(cmd=["gh"] + list(args), timeout=60)
+
+        with patch.object(self.module, "gh",
+                          side_effect=self._preconditions_ok(hang)), \
+             patch.object(self.module, "git", return_value=(True, "")):
+            self.module.run_pass(repo="o/r")
+        self.assertFalse((self.state_root / self.module.LOCK_DIRNAME).exists())
+
+    def test_a_timeout_during_restore_is_swallowed(self):
+        """The containment path itself must never raise a second time."""
+        def hang(*args):
+            raise subprocess.TimeoutExpired(cmd=["gh"] + list(args), timeout=60)
+
+        def hanging_git(*args):
+            raise subprocess.TimeoutExpired(cmd=["git"] + list(args), timeout=120)
+
+        with patch.object(self.module, "gh",
+                          side_effect=self._preconditions_ok(hang)), \
+             patch.object(self.module, "git", side_effect=hanging_git):
+            code, summary = self.module.run_pass(repo="o/r")
+        self.assertEqual(code, 1)
+        self.assertEqual(summary["status"], "error")
+
+    def test_main_contains_a_timeout_from_preconditions(self):
+        """A hang before the lock is taken exits nonzero, not by traceback."""
+        def hang(*args):
+            raise subprocess.TimeoutExpired(cmd=["gh"] + list(args), timeout=60)
+
+        with patch.object(self.module, "gh", side_effect=hang), \
+             patch.object(self.module, "git", return_value=(True, "")):
+            code = self.module.main(["--advance", "--repo", "o/r"])
+        self.assertEqual(code, 1)
+        self.assertEqual([r["kind"] for r in self.exception_rows()],
+                         ["subprocess_timeout"])
 
 
 class TestAncestorGuard(StateIsolatedTestCase):
@@ -699,6 +897,7 @@ class TestBatchEvaluation(StateIsolatedTestCase):
             "mergeStateStatus": "CLEAN",
             "statusCheckRollup": rollup if rollup is not None
             else green_rollup(self.module),
+            "baseRefName": "main",
             "headRefName": "integrate/q-1700000000", "headRefOid": "batchsha",
             "labels": [{"name": self.module.BATCH_LABEL}],
             "body": "Members: %s\n" % members,
@@ -1032,12 +1231,97 @@ class TestLock(StateIsolatedTestCase):
         self.module.release_lock(lock)
         self.assertTrue(lock.exists())
 
+    def test_two_reclaimers_cannot_both_win(self):
+        """A2: interleaved stale reclaim must produce exactly ONE lock holder.
+
+        The old sequence was `shutil.rmtree(stale)` then `os.mkdir()`. Those are
+        two steps, so pass B could reclaim and claim in the window between A's
+        rmtree decision and A's rmtree call -- and then A's rmtree deleted B's
+        brand-new FRESH lock and A claimed it too. Two advancers then ran
+        concurrently against the same queue, which is the observed #727/#728
+        double-batch shape.
+
+        The interleave is forced deterministically rather than raced: B runs to
+        completion from inside the exact instant A is about to take the stale
+        lock away, which is the only window the bug lives in.
+        """
+        module = self.module
+        lock = self.state_root / module.LOCK_DIRNAME
+        lock.mkdir(parents=True)
+        (lock / "timestamp").write_text("1", encoding="utf-8")  # epoch 1 = ancient
+        (lock / "pid").write_text("999999", encoding="utf-8")
+
+        results = []
+        state = {"reentered": False}
+        real_rmtree, real_rename = module.shutil.rmtree, module.os.rename
+
+        def reenter_once():
+            if state["reentered"]:
+                return
+            state["reentered"] = True
+            results.append(module.acquire_lock(lock, stale_s=60))
+
+        def rmtree_hook(path, *a, **kw):
+            if str(path).startswith(str(lock)):
+                reenter_once()
+            return real_rmtree(path, *a, **kw)
+
+        def rename_hook(src, dst, *a, **kw):
+            if str(src) == str(lock):
+                reenter_once()
+            return real_rename(src, dst, *a, **kw)
+
+        with patch.object(module.shutil, "rmtree", side_effect=rmtree_hook), \
+             patch.object(module.os, "rename", side_effect=rename_hook):
+            results.append(module.acquire_lock(lock, stale_s=60))
+
+        self.assertTrue(state["reentered"], "the interleave never happened")
+        self.assertEqual(
+            results.count(True), 1,
+            "exactly one pass may hold the advancer lock, got %s" % (results,))
+
+    def test_reclaim_never_deletes_a_fresh_lock(self):
+        """After an interleaved reclaim the surviving lock is a live one."""
+        module = self.module
+        lock = self.state_root / module.LOCK_DIRNAME
+        lock.mkdir(parents=True)
+        (lock / "timestamp").write_text("1", encoding="utf-8")
+        (lock / "pid").write_text("999999", encoding="utf-8")
+
+        state = {"reentered": False}
+        real_rename = module.os.rename
+
+        def rename_hook(src, dst, *a, **kw):
+            if str(src) == str(lock) and not state["reentered"]:
+                state["reentered"] = True
+                module.acquire_lock(lock, stale_s=60)
+            return real_rename(src, dst, *a, **kw)
+
+        with patch.object(module.os, "rename", side_effect=rename_hook):
+            module.acquire_lock(lock, stale_s=60)
+
+        self.assertTrue(lock.exists(), "the winner's lock was deleted")
+        self.assertTrue((lock / "pid").exists(), "the surviving lock has no owner")
+
+    def test_no_stale_graveyard_directories_are_left_behind(self):
+        """Reclaim must not litter the state dir with orphaned lock copies."""
+        module = self.module
+        lock = self.state_root / module.LOCK_DIRNAME
+        lock.mkdir(parents=True)
+        (lock / "timestamp").write_text("1", encoding="utf-8")
+        self.assertTrue(module.acquire_lock(lock, stale_s=60))
+        siblings = [p.name for p in self.state_root.iterdir()
+                    if p.is_dir() and p.name != module.LOCK_DIRNAME]
+        self.assertEqual(siblings, [], "reclaim left %s behind" % siblings)
+
     def test_lock_contention_exits_cleanly(self):
         lock = self.state_root / self.module.LOCK_DIRNAME
         self.assertTrue(self.module.acquire_lock(lock))
         contexts = list(self.module.EXPECTED_REQUIRED_CHECKS)
 
         def gh_side_effect(*args):
+            if "--jq" in args and ".default_branch" in args:
+                return "main"
             if "--jq" in args and ".enforce_admins.enabled" in args:
                 return True
             if "--jq" in args and ".required_status_checks.contexts" in args:
@@ -1053,6 +1337,8 @@ class TestLock(StateIsolatedTestCase):
         contexts = list(self.module.EXPECTED_REQUIRED_CHECKS)
 
         def gh_side_effect(*args):
+            if "--jq" in args and ".default_branch" in args:
+                return "main"
             if "--jq" in args and ".enforce_admins.enabled" in args:
                 return True
             if "--jq" in args and ".required_status_checks.contexts" in args:
@@ -1072,6 +1358,8 @@ class TestLock(StateIsolatedTestCase):
         contexts = list(self.module.EXPECTED_REQUIRED_CHECKS)
 
         def gh_side_effect(*args):
+            if "--jq" in args and ".default_branch" in args:
+                return "main"
             if "--jq" in args and ".enforce_admins.enabled" in args:
                 return True
             if "--jq" in args and ".required_status_checks.contexts" in args:
@@ -1093,6 +1381,8 @@ class TestIdempotentReEntry(StateIsolatedTestCase):
 
         def side_effect(*args):
             calls.append(args)
+            if "--jq" in args and ".default_branch" in args:
+                return "main"
             if "--jq" in args and ".enforce_admins.enabled" in args:
                 return True
             if "--jq" in args and ".required_status_checks.contexts" in args:
@@ -1103,13 +1393,15 @@ class TestIdempotentReEntry(StateIsolatedTestCase):
                         == self.module.BATCH_LABEL):
                     return []
                 return [{"number": 55, "title": "t", "labels": [],
-                         "body": "", "headRefName": "feat/x"}]
+                         "body": "", "baseRefName": "main",
+                         "headRefName": "feat/x"}]
             if args[:2] == ("pr", "view") and "files" in args:
                 return {"files": [{"path": "tools/x.py"}]}
             if args[:2] == ("pr", "view"):
                 return {"number": 55, "state": "OPEN", "mergeable": "MERGEABLE",
                         "mergeStateStatus": "BLOCKED",
                         "statusCheckRollup": rollup,
+                        "baseRefName": "main",
                         "headRefName": "feat/x", "headRefOid": "sha55",
                         "labels": [], "body": "", "url": "https://x/pull/55"}
             return ""
@@ -1146,6 +1438,8 @@ class TestIdempotentReEntry(StateIsolatedTestCase):
 
         def gh_side_effect(*args):
             calls.append(args)
+            if "--jq" in args and ".default_branch" in args:
+                return "main"
             if "--jq" in args and ".enforce_admins.enabled" in args:
                 return True
             if "--jq" in args and ".required_status_checks.contexts" in args:
@@ -1197,13 +1491,15 @@ class TestBatchDiscoveryAndDedupe(StateIsolatedTestCase):
         """A batch PR as it appears in a `gh pr list` payload."""
         return {"number": number, "title": "merge-queue batch q-1785727927",
                 "labels": labels if labels is not None else [],
-                "body": body, "headRefName": branch}
+                "body": body, "baseRefName": "main",
+                "headRefName": branch}
 
     def _queue_rows(self):
         """The seven queued members, each file-disjoint, all `merge-queue`."""
         return [{"number": n, "title": "lane %d" % n,
                  "labels": [{"name": self.module.QUEUE_LABEL}],
-                 "body": "", "headRefName": "feat/%d" % n}
+                 "body": "", "baseRefName": "main",
+                 "headRefName": "feat/%d" % n}
                 for n in REAL_MEMBERS]
 
     def _gh(self, calls, batch_rows, queue_rows, batch_rollup=None):
@@ -1218,6 +1514,8 @@ class TestBatchDiscoveryAndDedupe(StateIsolatedTestCase):
 
         def side_effect(*args):
             calls.append(args)
+            if "--jq" in args and ".default_branch" in args:
+                return "main"
             if "--jq" in args and ".enforce_admins.enabled" in args:
                 return True
             if "--jq" in args and ".required_status_checks.contexts" in args:
@@ -1247,6 +1545,7 @@ class TestBatchDiscoveryAndDedupe(StateIsolatedTestCase):
                 return {"number": number, "state": "OPEN",
                         "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN",
                         "statusCheckRollup": green_rollup(module),
+                        "baseRefName": "main",
                         "headRefName": "feat/%d" % number,
                         "headRefOid": "sha%d" % number,
                         "labels": [{"name": module.QUEUE_LABEL}],
@@ -1337,6 +1636,7 @@ class TestBatchDiscoveryAndDedupe(StateIsolatedTestCase):
         queue = self._queue_rows() + [
             {"number": 727, "title": "batch", "labels":
                 [{"name": self.module.QUEUE_LABEL}], "body": REAL_BATCH_BODY,
+             "baseRefName": "main",
              "headRefName": REAL_BATCH_BRANCH}]
         with patch.object(self.module, "gh",
                           side_effect=self._gh(gh_calls, [], queue)), \
@@ -1365,6 +1665,7 @@ class TestBatchDiscoveryAndDedupe(StateIsolatedTestCase):
             return (True, "")
 
         batch = {"number": 900, "body": "no members line here",
+                 "baseRefName": "main",
                  "headRefName": "integrate/q-1700000000"}
         with patch.object(self.module, "git", side_effect=git_side_effect):
             members = self.module.resolve_batch_members(batch)
@@ -1378,6 +1679,7 @@ class TestBatchDiscoveryAndDedupe(StateIsolatedTestCase):
             return (True, "integrate #99 into integrate/q-1\n")
 
         batch = {"number": 727, "body": REAL_BATCH_BODY,
+                 "baseRefName": "main",
                  "headRefName": REAL_BATCH_BRANCH}
         with patch.object(self.module, "git", side_effect=git_side_effect):
             members = self.module.resolve_batch_members(batch)
@@ -1390,6 +1692,7 @@ class TestBatchDiscoveryAndDedupe(StateIsolatedTestCase):
         batch = {"number": 900, "state": "OPEN", "mergeable": "MERGEABLE",
                  "mergeStateStatus": "CLEAN",
                  "statusCheckRollup": green_rollup(self.module),
+                 "baseRefName": "main",
                  "headRefName": "integrate/q-1700000000",
                  "headRefOid": "batchsha", "labels": [],
                  "body": "no members line", "url": "https://x/pull/900"}
@@ -1434,6 +1737,7 @@ class TestBatchLabelIsVerified(StateIsolatedTestCase):
             if args[:2] == ("pr", "view"):
                 number = int(args[2])
                 return {"headRefOid": "sha%d" % number,
+                        "baseRefName": "main",
                         "headRefName": "feat/%d" % number,
                         "title": "pr %d" % number,
                         "labels": [{"name": n} for n in sorted(state["labels"])]}
@@ -1504,6 +1808,7 @@ class TestGeneratedFileTolerance(StateIsolatedTestCase):
             if args[:2] == ("pr", "view"):
                 number = int(args[2])
                 return {"headRefOid": "sha%d" % number,
+                        "baseRefName": "main",
                         "headRefName": "feat/%d" % number,
                         "title": "pr %d" % number,
                         "labels": [{"name": self.module.BATCH_LABEL}]}
@@ -1703,6 +2008,7 @@ class TestBatchRegeneration(StateIsolatedTestCase):
             if args[:2] == ("pr", "view"):
                 number = int(args[2])
                 return {"headRefOid": "sha%d" % number,
+                        "baseRefName": "main",
                         "headRefName": "feat/%d" % number,
                         "title": "pr %d" % number,
                         "labels": [{"name": "merge-queue-batch"}]}
@@ -1791,6 +2097,447 @@ class TestBatchRegeneration(StateIsolatedTestCase):
         self.assertIn("sys.executable", marker)
         self.assertIn('encoding="utf-8"', marker)
         self.assertIn("timeout=", marker)
+
+
+class TestNonDefaultBaseIsRefused(StateIsolatedTestCase):
+    """The stacked-PR guard: a PR whose base is not the trunk is never merged.
+
+    Measured red (2026-08-03, against the pre-fix module): `list_queue`,
+    `list_open_prs` and `PR_FIELDS` never requested `baseRefName` at all, so a
+    PR based on `feat/parent` and labeled `merge-queue` reached
+    `advance_singleton`, was found green + CLEAN, and was MERGED -- into its
+    parent branch. `gh pr view --json state` answered MERGED, so the daemon's
+    own merge verification, the load-bearing proof that a merge really happened,
+    reported success for content that never reached the trunk.
+
+      advance_singleton returned : True
+      gh pr merge calls          : [('pr', 'merge', '101', '--merge')]
+      summary['merged']          : [101]
+      exception rows             : []
+
+    A batch of >1 is worse: build_batch cuts `integrate/q-*` from the trunk and
+    merges member HEADs onto it, so a stacked member grafts its parent's
+    unmerged commits onto the trunk under a single green batch check.
+    """
+
+    TRUNK = "main"
+    STACKED_BASE = "feat/parent"
+
+    def _pr(self, number=101, base="main", state="OPEN", rollup=None,
+            mergeable="MERGEABLE", merge_state="CLEAN"):
+        return {
+            "number": number, "title": "t", "state": state,
+            "mergeable": mergeable, "mergeStateStatus": merge_state,
+            "statusCheckRollup": rollup if rollup is not None
+            else green_rollup(self.module),
+            "headRefName": "feat/child", "baseRefName": base,
+            "headRefOid": "abc123", "labels": [], "body": "",
+            "url": "https://x/pull/%d" % number,
+        }
+
+    def _gh(self, view_payload, calls, list_payload=None):
+        """gh fake: preconditions green, one PR in the queue, merge reports MERGED."""
+        contexts = list(self.module.EXPECTED_REQUIRED_CHECKS)
+
+        def side_effect(*args):
+            calls.append(args)
+            if "--jq" in args and ".default_branch" in args:
+                return self.TRUNK
+            if "--jq" in args and ".enforce_admins.enabled" in args:
+                return True
+            if "--jq" in args and ".required_status_checks.contexts" in args:
+                return contexts
+            if args[:2] == ("pr", "list"):
+                if ("--label" in args
+                        and args[args.index("--label") + 1]
+                        == self.module.BATCH_LABEL):
+                    return []
+                return list_payload if list_payload is not None else []
+            if args[:2] == ("pr", "view") and "state" in args and "--jq" in args:
+                # GitHub genuinely reports MERGED for a PR merged into its
+                # parent branch. This is the false success the guard prevents.
+                return "MERGED"
+            if args[:2] == ("pr", "view") and "files" in args:
+                return {"files": [{"path": "tools/x.py"}]}
+            if args[:2] == ("pr", "view"):
+                return view_payload
+            return ""
+        return side_effect
+
+    @staticmethod
+    def merges(calls):
+        return [c for c in calls if c[:2] == ("pr", "merge")]
+
+    # -- the finding ------------------------------------------------------
+
+    def test_stacked_pr_is_never_merged_by_the_singleton_path(self):
+        """THE RED TEST. Pre-fix this merged #101 into feat/parent."""
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        calls = []
+        with patch.object(self.module, "gh",
+                          side_effect=self._gh(self._pr(base=self.STACKED_BASE),
+                                               calls)):
+            ok = self.module.advance_singleton(101, summary)
+
+        self.assertFalse(ok)
+        self.assertEqual(self.merges(calls), [],
+                         "a PR based on a feature branch must never be merged")
+        self.assertEqual(summary["merged"], [])
+        rows = self.exception_rows()
+        self.assertEqual([r["kind"] for r in rows], ["non_default_base"])
+        self.assertIn(self.STACKED_BASE, rows[0]["detail"])
+
+    def test_trunk_based_pr_still_merges(self):
+        """The guard must not break the common case it wraps."""
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        calls = []
+        with patch.object(self.module, "gh",
+                          side_effect=self._gh(self._pr(base=self.TRUNK), calls)):
+            ok = self.module.advance_singleton(101, summary)
+        self.assertTrue(ok)
+        self.assertEqual(len(self.merges(calls)), 1)
+        self.assertEqual(self.exception_rows(), [])
+
+    # -- root cause: the field was never fetched --------------------------
+
+    def test_listings_and_views_request_baserefname(self):
+        """The guard cannot work on a field the queries do not ask for."""
+        self.assertIn("baseRefName", self.module.PR_FIELDS)
+        self.assertIn("baseRefName", self.module.LIST_FIELDS)
+
+        calls = []
+
+        def side_effect(*args):
+            calls.append(args)
+            return []
+
+        with patch.object(self.module, "gh", side_effect=side_effect):
+            self.module.list_queue(self.module.QUEUE_LABEL)
+            self.module.list_open_prs()
+        for call in calls:
+            self.assertIn("--json", call)
+            self.assertIn("baseRefName", call[call.index("--json") + 1])
+
+    # -- fail-closed on the unknown ---------------------------------------
+
+    def test_absent_baserefname_fails_closed(self):
+        payload = self._pr()
+        payload.pop("baseRefName")
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        calls = []
+        with patch.object(self.module, "gh",
+                          side_effect=self._gh(payload, calls)):
+            ok = self.module.advance_singleton(101, summary)
+        self.assertFalse(ok)
+        self.assertEqual(self.merges(calls), [])
+        self.assertEqual([r["kind"] for r in self.exception_rows()],
+                         ["non_default_base"])
+
+    def test_empty_baserefname_fails_closed(self):
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        calls = []
+        with patch.object(self.module, "gh",
+                          side_effect=self._gh(self._pr(base=""), calls)):
+            self.assertFalse(self.module.advance_singleton(101, summary))
+        self.assertEqual(self.merges(calls), [])
+
+    def test_predicate_is_fail_closed_on_junk(self):
+        for payload in (None, {}, {"baseRefName": None}, {"baseRefName": "   "},
+                        {"baseRefName": "mainline"}, {"baseRefName": "Main"}):
+            ok, _ = self.module.base_is_integration_target(payload)
+            self.assertFalse(ok, "must refuse %r" % (payload,))
+        self.assertTrue(
+            self.module.base_is_integration_target({"baseRefName": "main"})[0])
+
+    # -- selection-time refusal -------------------------------------------
+
+    def test_stacked_pr_is_filtered_out_of_the_queue(self):
+        """A whole pass: the stacked PR is never admitted, never merged."""
+        listing = [{"number": 101, "title": "t", "labels": [], "body": "",
+                    "headRefName": "feat/child",
+                    "baseRefName": self.STACKED_BASE}]
+        calls = []
+        with patch.object(self.module, "gh",
+                          side_effect=self._gh(self._pr(base=self.STACKED_BASE),
+                                               calls, list_payload=listing)):
+            code, summary = self.module.run_pass(repo="o/r")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(summary["merged"], [])
+        self.assertEqual(summary["admitted"], [])
+        self.assertEqual(self.merges(calls), [])
+        self.assertEqual([r["kind"] for r in self.exception_rows()],
+                         ["non_default_base"])
+
+    # -- the skip must NOT be sticky --------------------------------------
+
+    def test_refusal_touches_no_label(self):
+        """GitHub retargets stacked PRs on their own; a sticky skip would fight it.
+
+        Removing `merge-queue` or applying `queue-rejected` would turn a
+        temporary, self-healing condition into one needing a human re-queue.
+        """
+        listing = [{"number": 101, "title": "t", "labels": [], "body": "",
+                    "headRefName": "feat/child",
+                    "baseRefName": self.STACKED_BASE}]
+        calls = []
+        with patch.object(self.module, "gh",
+                          side_effect=self._gh(self._pr(base=self.STACKED_BASE),
+                                               calls, list_payload=listing)):
+            self.module.run_pass(repo="o/r")
+
+        self.assertEqual([c for c in calls if c[:2] == ("pr", "edit")], [])
+        flat = " ".join(" ".join(str(a) for a in c) for c in calls)
+        self.assertNotIn(self.module.REJECT_LABEL, flat)
+        self.assertNotIn("--remove-label", flat)
+
+    def test_pr_retargeted_to_the_trunk_is_picked_up_on_a_later_pass(self):
+        """Parent merged -> GitHub retargets to main -> the queue must take it."""
+        stacked_listing = [{"number": 101, "title": "t", "labels": [], "body": "",
+                            "headRefName": "feat/child",
+                            "baseRefName": self.STACKED_BASE}]
+        retargeted_listing = [dict(stacked_listing[0], baseRefName=self.TRUNK)]
+
+        calls_a = []
+        with patch.object(self.module, "gh",
+                          side_effect=self._gh(self._pr(base=self.STACKED_BASE),
+                                               calls_a,
+                                               list_payload=stacked_listing)):
+            _, summary_a = self.module.run_pass(repo="o/r")
+        self.assertEqual(summary_a["merged"], [])
+        self.assertEqual(self.merges(calls_a), [])
+
+        # GitHub has now retargeted #101 onto the trunk. Same state dir, same
+        # labels, no human intervention.
+        calls_b = []
+        with patch.object(self.module, "gh",
+                          side_effect=self._gh(self._pr(base=self.TRUNK),
+                                               calls_b,
+                                               list_payload=retargeted_listing)):
+            _, summary_b = self.module.run_pass(repo="o/r")
+
+        self.assertEqual(summary_b["merged"], [101],
+                         "a PR retargeted onto the trunk must merge without a "
+                         "human re-queue -- the skip is not sticky")
+        self.assertEqual(len(self.merges(calls_b)), 1)
+
+    def test_repeated_refusal_appends_one_row(self):
+        """Re-observing an unchanged stacked PR every 5 minutes is a no-op."""
+        listing = [{"number": 101, "title": "t", "labels": [], "body": "",
+                    "headRefName": "feat/child",
+                    "baseRefName": self.STACKED_BASE}]
+        for _ in range(3):
+            with patch.object(self.module, "gh",
+                              side_effect=self._gh(
+                                  self._pr(base=self.STACKED_BASE), [],
+                                  list_payload=listing)):
+                self.module.run_pass(repo="o/r")
+        self.assertEqual(len(self.exception_rows()), 1)
+
+    # -- re-check at MERGE time, not only at selection ---------------------
+
+    def test_base_changed_after_selection_does_not_slip_through(self):
+        """Selected while based on the trunk, retargeted away before the merge.
+
+        The listing is a separate, earlier read. Only the check on the payload
+        `pr_view` returns immediately before `gh pr merge` can actually bind.
+        """
+        listing = [{"number": 101, "title": "t", "labels": [], "body": "",
+                    "headRefName": "feat/child", "baseRefName": self.TRUNK}]
+        calls = []
+        with patch.object(self.module, "gh",
+                          side_effect=self._gh(self._pr(base=self.STACKED_BASE),
+                                               calls, list_payload=listing)):
+            code, summary = self.module.run_pass(repo="o/r")
+
+        self.assertEqual(summary["admitted"], [101], "selection saw the trunk")
+        self.assertEqual(summary["merged"], [],
+                         "the merge-time re-check must catch the change")
+        self.assertEqual(self.merges(calls), [])
+        rows = self.exception_rows()
+        self.assertEqual([r["kind"] for r in rows], ["non_default_base"])
+        self.assertIn("at merge time", rows[0]["detail"])
+
+    def test_stacked_member_is_excluded_from_a_batch(self):
+        """A stacked member would graft its parent's unmerged commits onto the trunk."""
+        calls = []
+        merged_shas = []
+
+        def gh_side_effect(*args):
+            calls.append(args)
+            if args[:2] == ("pr", "view"):
+                number = int(args[2])
+                base = self.STACKED_BASE if number == 102 else self.TRUNK
+                return {"number": number, "headRefOid": "sha%d" % number,
+                        "headRefName": "feat/%d" % number,
+                        "baseRefName": base, "title": "t"}
+            if args[:2] == ("pr", "create"):
+                return "https://github.com/o/r/pull/999"
+            return {}
+
+        def git_side_effect(*args):
+            if args[0] == "merge" and len(args) > 1 and args[1].startswith("sha"):
+                merged_shas.append(args[1])
+            if args[0] == "rev-parse":
+                return True, "main"
+            if args[0] == "status":
+                return True, ""
+            return True, ""
+
+        summary = {"actions": [], "merged": [], "status": "ok", "batch": None}
+        with patch.object(self.module, "gh", side_effect=gh_side_effect), \
+                patch.object(self.module, "git", side_effect=git_side_effect), \
+                patch.object(self.module, "pr_has_label", return_value=True):
+            self.module.build_batch([101, 102, 103], summary, epoch=1700000000)
+
+        self.assertEqual(merged_shas, ["sha101", "sha103"],
+                         "the stacked member's HEAD must never be grafted")
+        self.assertEqual(summary["batch"]["members"], [101, 103])
+        rows = self.exception_rows()
+        self.assertEqual([r["kind"] for r in rows], ["non_default_base"])
+        self.assertEqual(rows[0]["pr"], 102)
+
+    def test_batch_pr_retargeted_away_from_the_trunk_is_not_merged(self):
+        """A human can retarget the batch PR this module opened."""
+        calls = []
+
+        def gh_side_effect(*args):
+            calls.append(args)
+            if args[:2] == ("pr", "view") and "state" in args and "--jq" in args:
+                return "MERGED"
+            if args[:2] == ("pr", "view"):
+                return {"number": 999, "state": "OPEN", "mergeable": "MERGEABLE",
+                        "mergeStateStatus": "CLEAN",
+                        "statusCheckRollup": green_rollup(self.module),
+                        "headRefName": "integrate/q-1700000000",
+                        "baseRefName": "release/0.8.0",
+                        "headRefOid": "shabatch", "labels": [],
+                        "body": "Members: #101, #102",
+                        "url": "https://x/pull/999", "createdAt": None}
+            return ""
+
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=gh_side_effect):
+            self.module.handle_batch_pr({"number": 999}, summary)
+
+        self.assertEqual(self.merges(calls), [])
+        self.assertEqual(summary["merged"], [])
+        self.assertEqual([r["kind"] for r in self.exception_rows()],
+                         ["non_default_base"])
+        # A retarget is a deliberate human act; refusing must not also destroy
+        # the batch (which would discard seven members' worth of integration).
+        self.assertEqual([c for c in calls if c[:2] == ("pr", "close")], [])
+
+
+class TestDefaultBranchIsResolved(StateIsolatedTestCase):
+    """Portability: the integration target is the repo's default branch.
+
+    The daemon is a generic any-repo actor (`--repo OWNER/NAME`), and every ref
+    it used was the literal `main`. Resolving the default branch is only sound
+    if EVERY site reads the same value -- a guard that admits PRs targeting
+    `master` while build_batch still cut `integrate/q-*` from `origin/main`
+    would graft unrelated history onto the trunk, which is a worse bug than the
+    one being fixed. So there is one resolver and one reader.
+    """
+
+    def test_default_branch_is_read_from_the_repository(self):
+        with patch.object(self.module, "gh", return_value="develop"):
+            ok, detail = self.module.resolve_base_branch("o/r")
+        self.assertTrue(ok)
+        self.assertIn("develop", detail)
+        self.assertEqual(self.module.base_branch(), "develop")
+
+    def test_unreadable_default_branch_fails_closed(self):
+        with patch.object(self.module, "gh", return_value={"error": "404"}):
+            ok, detail = self.module.resolve_base_branch("o/r")
+        self.assertFalse(ok)
+        self.assertIn("default branch", detail)
+
+    def test_non_string_default_branch_fails_closed(self):
+        for junk in (None, [], {}, 7, "", "   "):
+            with patch.object(self.module, "gh", return_value=junk):
+                self.assertFalse(self.module.resolve_base_branch("o/r")[0],
+                                 "must refuse %r" % (junk,))
+
+    def test_run_pass_exits_two_when_the_default_branch_is_unreadable(self):
+        def side_effect(*args):
+            if "--jq" in args and ".default_branch" in args:
+                return {"error": "not found"}
+            return True
+
+        with patch.object(self.module, "gh", side_effect=side_effect):
+            code, summary = self.module.run_pass(repo="o/r")
+        self.assertEqual(code, 2)
+        self.assertEqual(summary["status"], "precondition_failed")
+
+    def test_unresolved_default_branch_falls_back_to_main(self):
+        """Direct unit calls that skip preconditions behave as they always did."""
+        self.assertEqual(self.module.base_branch(),
+                         self.module.DEFAULT_BASE_BRANCH)
+
+    def test_every_ref_follows_the_resolved_branch(self):
+        """One value, or none: guard, ancestor proof, cut and --base must agree."""
+        git_calls, gh_calls = [], []
+
+        def git_side_effect(*args):
+            git_calls.append(args)
+            if args[0] == "rev-parse":
+                return True, "trunk"
+            if args[0] == "status":
+                return True, ""
+            return True, ""
+
+        def gh_side_effect(*args):
+            gh_calls.append(args)
+            if "--jq" in args and ".default_branch" in args:
+                return "trunk"
+            if args[:2] == ("pr", "view"):
+                number = int(args[2])
+                return {"number": number, "headRefOid": "sha%d" % number,
+                        "headRefName": "feat/%d" % number,
+                        "baseRefName": "trunk", "title": "t"}
+            if args[:2] == ("pr", "create"):
+                return "https://github.com/o/r/pull/999"
+            return {}
+
+        summary = {"actions": [], "merged": [], "status": "ok", "batch": None}
+        with patch.object(self.module, "gh", side_effect=gh_side_effect), \
+                patch.object(self.module, "git", side_effect=git_side_effect), \
+                patch.object(self.module, "pr_has_label", return_value=True):
+            self.module.resolve_base_branch("o/r")
+            self.module.build_batch([101, 102], summary, epoch=1700000000)
+            self.module.is_ancestor("deadbeef")
+
+        self.assertIn(("checkout", "-B", "integrate/q-1700000000", "origin/trunk"),
+                      git_calls)
+        self.assertIn(("fetch", "origin", "trunk"), git_calls)
+        self.assertIn(("merge-base", "--is-ancestor", "deadbeef", "origin/trunk"),
+                      git_calls)
+        create = [c for c in gh_calls if c[:2] == ("pr", "create")][0]
+        self.assertEqual(create[create.index("--base") + 1], "trunk")
+        # And the guard agrees with the branch that was actually cut.
+        self.assertTrue(
+            self.module.base_is_integration_target({"baseRefName": "trunk"})[0])
+        self.assertFalse(
+            self.module.base_is_integration_target({"baseRefName": "main"})[0])
+
+    def test_no_hard_coded_trunk_ref_survives_in_executable_code(self):
+        """Rules-as-code: a re-introduced literal would desync the guard.
+
+        This is the guardrail for the class of bug fixed here -- a hard-coded
+        `origin/main` alongside a resolved guard is how a base check silently
+        stops describing the branch the module merges into.
+        """
+        code = TestForbiddenOperations.executable_source()
+        for token in ('"origin/main"', "'origin/main'", 'branches/main/',
+                      '"--base", "main"'):
+            self.assertNotIn(token, code,
+                             "%s must go through base_branch()" % token)
+        main_literals = re.findall(r'(?<![\w/])"main"', code)
+        self.assertEqual(
+            len(main_literals), 1,
+            'exactly one "main" literal is allowed in executable code '
+            '(DEFAULT_BASE_BRANCH); found %d' % len(main_literals))
 
 
 class TestForbiddenOperations(unittest.TestCase):
