@@ -81,6 +81,7 @@ Run: `npm run test:py` or `python -m unittest discover -s tests`
 - **cwd pollution**: Never bare `os.chdir()` without `try/finally` restoration or tearDown. Preferred: subprocess `cwd=` parameter.
 - **git config pollution**: Tests must never call `git config user.*` on the live repo. Scope all identity changes to temp fixture repos only (validated by test_test_hygiene.py AST scanner).
 - Violations cause Windows cleanup deadlock (deleted temp dirs leave poisoned cwd, later tests inherit it).
+- **Real-profile isolation (2026-10-05 incident)**: the Node suite runs under an isolated HOME (`tests/helpers/isolated-env.mjs`); `tools/test_isolation_tripwire.py` fails the suite closed if the real `~/.claude` or global git config changes anyway, naming the changed path(s) (inert-but-loud in CI, where `~/.claude` does not exist).
 
 ### Platform-Conditioned Repro (Permanent, incident-proven 2x)
 - A fix for a windows-RUNNER-only failure is NOT done without reproducing the runner

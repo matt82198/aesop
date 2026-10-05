@@ -45,6 +45,10 @@ expensive way during aesop development. Each line exists because a lane failed w
   behavioural tests that had never executed once — the branch looked complete and added zero coverage.)*
   Confirm CI reports the executed-suite count went UP by the number you added — not just that yours
   "passed".
+- **The Node suite runs under an isolated HOME** (`tests/helpers/isolated-env.mjs`, preloaded via
+  `--import`), and `tools/test_isolation_tripwire.py` fails the suite closed, naming the changed
+  path(s), if the real `~/.claude` or global git config changes anyway (2026-10-05 incident:
+  `installSkills()` overwrote real `~/.claude/skills/*/SKILL.md`). Do not defeat either.
 
 ## 3. Never fit green
 - **Never relax an assertion, lower a floor/ratchet, delete a suite, add a skip, or retune a constant
