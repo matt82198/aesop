@@ -865,15 +865,20 @@ check_metrics() {
 }
 
 check_test_suite_count() {
-  # Test suite count drift detection gate (tools/verify_test_suite_count.py --check).
-  # Verifies that test suite counts documented in tests/CLAUDE.md match the actual
-  # number of test files on disk. This gate is wired here (not just in CI) because
-  # CI only runs after push; a local pre-push check catches the drift immediately.
+  # CI-shard-coverage gate (tools/verify_test_suite_count.py --check).
+  # Verifies the CI workflow's shard matrix (.github/workflows/ci.yml) actually
+  # covers every git-tracked tests/test_*.py file -- a gap there means some
+  # shard index never runs in CI, so test files assigned to it are silently
+  # never executed. Counts are computed live (PR #830 removed the committed
+  # tests/SUITE-COUNTS.json this gate used to compare against); this gate is
+  # wired here (not just in CI) because CI only runs after push; a local
+  # pre-push check catches a shard-matrix gap immediately.
   #
   # Fail-open ONLY for missing optional tooling (hook is installed into
   # repos without an aesop checkout; no aesop install == no verify tool).
-  # An actual drift detection (exit 1 from --check) stays fail-closed and blocks
-  # the push. verify_test_suite_count exits 0 when counts match, 1 on drift.
+  # An actual gap (exit 1 from --check) stays fail-closed and blocks the push.
+  # verify_test_suite_count exits 0 when fully covered (or N/A for a repo with
+  # no shard matrix), 1 on a coverage gap, 2 if it cannot evaluate.
   local aesop_root
   aesop_root=$(resolve_aesop_root)
   local verify_script="$aesop_root/tools/verify_test_suite_count.py"
@@ -2096,7 +2101,7 @@ main() {
   fi
 
   if ! check_test_suite_count; then
-    printf 'Error: Test suite count drift detected. Push blocked.\n' >&2
+    printf 'Error: CI shard matrix would silently drop tracked test file(s). Push blocked.\n' >&2
     log_block "test_suite_count_drift"
     exit 1
   fi
