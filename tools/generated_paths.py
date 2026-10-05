@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The single registry of files this repository GENERATES rather than authors.
-INDEX: The single registry of files this repository GENERATES rather than authors -- tracked paths a committed gate rewrites deterministically (suite-count lines, normalised CLAUDE.md docs, the generated `tools/INDEX.md` tool index); unattended automation (merge_queue worktree-safety, regeneration hook) may `git restore` them individually by name but never `git stash`. Registration is what lets the merge queue repair a batch whose UNION drifts a generated file every member had correct in isolation; every entry must therefore be paired with a `merge_queue.REGENERATORS` command that rebuilds it, or the queue fail-closes on a branch it can never publish. Registration never weakens the gate that guards the file: the artifact is a pure function of its sources, so the only edit automation can discard is an edit to the derived bytes, and every meaningful edit lives in an unregistered source file and still faces the unchanged gate
+INDEX: The single registry of files this repository GENERATES rather than authors -- tracked paths a committed gate rewrites deterministically (normalised CLAUDE.md docs, the generated `tools/INDEX.md` tool index); unattended automation (merge_queue worktree-safety, regeneration hook) may `git restore` them individually by name but never `git stash`. Registration is what lets the merge queue repair a batch whose UNION drifts a generated file every member had correct in isolation; every entry must therefore be paired with a `merge_queue.REGENERATORS` command that rebuilds it, or the queue fail-closes on a branch it can never publish. Registration never weakens the gate that guards the file: the artifact is a pure function of its sources, so the only edit automation can discard is an edit to the derived bytes, and every meaningful edit lives in an unregistered source file and still faces the unchanged gate
 
 A generated path is one that some deterministic gate rewrites from ground truth
 whenever it runs, so an uncommitted modification to it carries no information a
@@ -9,12 +9,9 @@ is NEVER allowed to discard anything else.
 
 Membership criteria -- all three must hold:
   1. A committed tool in this repo rewrites the file deterministically
-     (`tools/gen_suite_counts.py --regenerate` rewrites `tests/SUITE-COUNTS.json`
-     from `git ls-files`, counted per unique path; `tools/verify_test_suite_count.py`
-     is a thin wrapper that delegates to it for backward compatibility with
-     pre-push/CI callers; `tools/claudemd_lint.py` normalises the same documents;
-     `tools/gen_tool_index.py --regenerate` builds `tools/INDEX.md` from the
-     `INDEX:` header line of every file under `tools/`).
+     (`tools/claudemd_lint.py` normalises CLAUDE.md docs; `tools/gen_tool_index.py
+     --regenerate` builds `tools/INDEX.md` from the `INDEX:` header line of every
+     file under `tools/`).
   2. The rewrite is reproducible: re-running the gate restores the same bytes,
      so discarding the working-tree copy loses nothing recoverable.
   3. The file is TRACKED. An untracked file is never restorable and is never
@@ -26,9 +23,14 @@ to prevent is a batch whose UNION drifts a generated file that every member had
 correct in isolation: each member's own CI is green, the integration branch is
 not, the byte-identity gate fail-closes on a branch the queue already built,
 and the queue wedges holding something it can never publish. That is how the
-suite-count lines jammed the board on 2026-08-03; `tools/INDEX.md` was the same
-shape waiting to happen, since two members each adding a tool with its own
-`INDEX:` line produce a merged tree neither of them ever indexed.
+hand-maintained suite-count lines in tests/CLAUDE.md jammed the board on
+2026-08-03 (later moved to a generated `tests/SUITE-COUNTS.json` artifact by PR
+#776, and then -- when THAT artifact itself drifted on two clean merges, PR
+#828 postmortem -- removed outright by PR #830, since nothing but this
+generator/gate/registry triangle ever consumed its committed value); the same
+wedge shape is why `tools/INDEX.md` is registered, since two members each
+adding a tool with its own `INDEX:` line produce a merged tree neither of them
+ever indexed.
 
 Registration does NOT weaken the gate guarding a generated file, and must never
 be used on a file where it would. A registered artifact is a pure function of
@@ -46,15 +48,16 @@ Consumers must restore these paths individually and by name (`git restore --
 worktrees, so a stash in one lane silently eats another lane's work in progress.
 A blanket `git checkout .` is equally forbidden -- it is not targeted.
 
-Historical note: `tools/auto_merge.py` already hard-codes this same pair while
-resolving merge conflicts. This module exists so that list lives in exactly one
-place; new consumers import it rather than re-typing it.
+Historical note: `tools/auto_merge.py` already hard-codes a `--theirs` checkout
+of `tests/CLAUDE.md` / `tools/CLAUDE.md` while resolving merge conflicts, then
+runs `tools/claudemd_lint.py` to renormalise them. This module exists so that
+the generated-paths list lives in exactly one place; new consumers import it
+rather than re-typing it.
 """
 
 # Ordered, ASCII, repo-root-relative POSIX paths.
 GENERATED_PATHS = (
     "tests/CLAUDE.md",
-    "tests/SUITE-COUNTS.json",
     "tools/CLAUDE.md",
     "tools/INDEX.md",
 )

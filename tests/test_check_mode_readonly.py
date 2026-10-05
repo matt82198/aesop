@@ -122,15 +122,6 @@ class FixtureSpec:
         self.why = why
 
 
-def _drift_suite_counts(root: Path):
-    """Counts deliberately wrong so the auto-correct branch fires."""
-    (root / "tests" / "CLAUDE.md").write_text(
-        "# tests/\n\n**Shell (999 suites)**: x\n\n"
-        "**Node (999 suites)**: x\n\n**Python (999 suites)**: x\n",
-        encoding="utf-8",
-    )
-
-
 def _drift_stats(root: Path):
     """stats.json + README markers stale, so --regenerate/--update-readme would write."""
     (root / "stats.json").write_text(
@@ -152,11 +143,6 @@ def _oversized_log(root: Path):
 
 
 TOOL_FIXTURES = {
-    "verify_test_suite_count.py": FixtureSpec(
-        mutate=_drift_suite_counts,
-        why="counts must DRIFT or the auto-correct write path never runs and the "
-            "check passes vacuously",
-    ),
     "self_stats.py": FixtureSpec(
         mutate=_drift_stats,
         why="stats.json/README must be stale so --check is tempted down the "

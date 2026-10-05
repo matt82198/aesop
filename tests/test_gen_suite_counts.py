@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Test suite for gen_suite_counts.py (generated artifact builder).
+Test suite for gen_suite_counts.py (live suite-count library).
 
-Contract under test:
-- --check / default is READ-ONLY validation and NEVER writes. Drift = exit 1.
-- --regenerate is the only writing mode. Produces tests/SUITE-COUNTS.json.
+Contract under test (post PR #830 "guard: compute suite counts live"):
+- There is no stored artifact any more: `--json` (default) is the ONLY mode
+  and NEVER writes a file. No `--check`, no `--regenerate`, no `--dry-run`.
+- Counts are derived fresh from `git ls-files` on every call -- running twice
+  must produce byte-identical output (determinism, not idempotent-writing).
 - Fail-closed preserved: non-git-repo = exit 2, vacuous zero derivation = exit 2.
-- JSON artifact is idempotent (running --regenerate twice produces identical output).
 """
 
 import json
@@ -18,7 +19,7 @@ from pathlib import Path
 
 
 class TestGenSuiteCounts(unittest.TestCase):
-    """Test gen_suite_counts.py artifact generation."""
+    """Test gen_suite_counts.py's live --json derivation."""
 
     @classmethod
     def setUpClass(cls):
@@ -30,133 +31,39 @@ class TestGenSuiteCounts(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.temp_root = Path(self.temp_dir.name)
 
-        # Create tools and tests directories
         tools_dir = self.temp_root / "tools"
         tools_dir.mkdir(parents=True, exist_ok=True)
 
         tests_dir = self.temp_root / "tests"
         tests_dir.mkdir(parents=True, exist_ok=True)
 
-        # Copy the tool
         tool_path = self.repo_root / "tools" / "gen_suite_counts.py"
         if tool_path.exists():
             (tools_dir / "gen_suite_counts.py").write_text(tool_path.read_text())
 
-        # Create test files
         (tests_dir / "test_a.py").touch()
         (tests_dir / "test_b.py").touch()
         (tests_dir / "test_a.test.mjs").touch()
         (tests_dir / "test_a.sh").touch()
 
-        # Initialize git repo
-        subprocess.run(
-            ["git", "init"],
-            cwd=str(self.temp_root),
-            capture_output=True,
-            check=False,
-        )
-        subprocess.run(
-            ["git", "add", "-A"],
-            cwd=str(self.temp_root),
-            capture_output=True,
-            check=False,
-        )
+        subprocess.run(["git", "init"], cwd=str(self.temp_root),
+                        capture_output=True, check=False)
+        subprocess.run(["git", "add", "-A"], cwd=str(self.temp_root),
+                        capture_output=True, check=False)
 
     def tearDown(self):
-        """Clean up temp directory."""
         self.temp_dir.cleanup()
 
     def _run_tool(self, *args):
-        """Run gen_suite_counts.py in the isolated temp repo."""
         cmd = [sys.executable, str(self.repo_root / "tools" / "gen_suite_counts.py")]
         cmd.extend(args)
-
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
+        return subprocess.run(
+            cmd, capture_output=True, text=True, encoding='utf-8',
             cwd=str(self.temp_root),
         )
-        return result
 
-    def test_check_mode_fails_when_file_missing(self):
-        """--check fails (exit 1) when tests/SUITE-COUNTS.json doesn't exist."""
-        result = self._run_tool("--check", "--repo", str(self.temp_root))
-        self.assertEqual(result.returncode, 1, f"stderr: {result.stderr}")
-        self.assertIn("not found", result.stderr)
-
-    def test_regenerate_creates_json_file(self):
-        """--regenerate creates tests/SUITE-COUNTS.json with correct structure."""
-        result = self._run_tool("--regenerate", "--repo", str(self.temp_root))
-        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
-
-        json_path = self.temp_root / "tests" / "SUITE-COUNTS.json"
-        self.assertTrue(json_path.exists(), "tests/SUITE-COUNTS.json was not created")
-
-        # Verify JSON structure
-        content = json_path.read_text()
-        self.assertIn("GENERATED-BY", content)
-        self.assertIn("gen_suite_counts.py", content)
-
-        # Extract and parse JSON
-        start = content.find("{")
-        end = content.rfind("}") + 1
-        data = json.loads(content[start:end])
-
-        self.assertIn("Node", data)
-        self.assertIn("Shell", data)
-        self.assertIn("Python", data)
-        self.assertEqual(data["Node"], 1)  # test_a.test.mjs
-        self.assertEqual(data["Shell"], 1)  # test_a.sh
-        self.assertEqual(data["Python"], 2)  # test_a.py, test_b.py
-
-    def test_check_mode_passes_when_counts_match(self):
-        """--check passes (exit 0) when counts match."""
-        # First regenerate
-        result = self._run_tool("--regenerate", "--repo", str(self.temp_root))
-        self.assertEqual(result.returncode, 0)
-
-        # Then check
-        result = self._run_tool("--check", "--repo", str(self.temp_root))
-        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
-        self.assertIn("counts match", result.stdout)
-
-    def test_check_mode_fails_on_drift(self):
-        """--check fails (exit 1) when counts drift from actual files."""
-        # Regenerate
-        result = self._run_tool("--regenerate", "--repo", str(self.temp_root))
-        self.assertEqual(result.returncode, 0)
-
-        # Corrupt the JSON
-        json_path = self.temp_root / "tests" / "SUITE-COUNTS.json"
-        content = json_path.read_text()
-        corrupted = content.replace('"Node": 1', '"Node": 5')
-        json_path.write_text(corrupted)
-
-        # Check should fail
-        result = self._run_tool("--check", "--repo", str(self.temp_root))
-        self.assertEqual(result.returncode, 1, f"stderr: {result.stderr}")
-        self.assertIn("DRIFT", result.stdout)
-
-    def test_regenerate_is_idempotent(self):
-        """Running --regenerate twice produces identical output."""
-        result1 = self._run_tool("--regenerate", "--repo", str(self.temp_root))
-        self.assertEqual(result1.returncode, 0)
-
-        json_path = self.temp_root / "tests" / "SUITE-COUNTS.json"
-        first_content = json_path.read_text()
-
-        # Run again
-        result2 = self._run_tool("--regenerate", "--repo", str(self.temp_root))
-        self.assertEqual(result2.returncode, 0)
-        self.assertIn("already match", result2.stdout)
-
-        second_content = json_path.read_text()
-        self.assertEqual(first_content, second_content, "Output is not idempotent")
-
-    def test_json_mode_outputs_json(self):
-        """--json outputs JSON to stdout (read-only)."""
+    def test_json_mode_outputs_live_counts(self):
+        """--json outputs the live-derived counts to stdout (read-only)."""
         result = self._run_tool("--json", "--repo", str(self.temp_root))
         self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
 
@@ -165,13 +72,43 @@ class TestGenSuiteCounts(unittest.TestCase):
         self.assertEqual(data["Shell"], 1)
         self.assertEqual(data["Python"], 2)
 
-        # Verify no file was created
-        json_path = self.temp_root / "tests" / "SUITE-COUNTS.json"
-        self.assertFalse(json_path.exists(), "--json should not create file")
+    def test_default_mode_is_also_json(self):
+        """No flags at all behaves exactly like --json (there is no other mode)."""
+        result = self._run_tool("--repo", str(self.temp_root))
+        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
+        data = json.loads(result.stdout)
+        self.assertEqual(data, {"Node": 1, "Shell": 1, "Python": 2})
+
+    def test_nothing_is_ever_written(self):
+        """A live library writes no files anywhere, under any flag combination."""
+        before = sorted(p.relative_to(self.temp_root).as_posix()
+                         for p in self.temp_root.rglob("*") if p.is_file())
+        for args in (("--json", "--repo", str(self.temp_root)),
+                     ("--repo", str(self.temp_root))):
+            self._run_tool(*args)
+        after = sorted(p.relative_to(self.temp_root).as_posix()
+                       for p in self.temp_root.rglob("*") if p.is_file())
+        self.assertEqual(before, after, "gen_suite_counts.py must never write a file")
+
+    def test_check_and_regenerate_flags_no_longer_exist(self):
+        """--check/--regenerate were removed with the artifact; argparse rejects them."""
+        for flag in ("--check", "--regenerate", "--fix", "--dry-run"):
+            result = self._run_tool(flag, "--repo", str(self.temp_root))
+            self.assertNotEqual(
+                result.returncode, 0,
+                f"{flag} should no longer be a recognised argument",
+            )
+
+    def test_running_twice_is_byte_identical(self):
+        """Determinism: calling --json twice in a row yields identical output."""
+        first = self._run_tool("--json", "--repo", str(self.temp_root))
+        second = self._run_tool("--json", "--repo", str(self.temp_root))
+        self.assertEqual(first.returncode, 0)
+        self.assertEqual(second.returncode, 0)
+        self.assertEqual(first.stdout, second.stdout)
 
     def test_fail_closed_on_non_git_repo(self):
         """Fail-closed (exit 2) when repo is not a git work tree."""
-        # Create a directory without git
         temp_dir2 = tempfile.TemporaryDirectory()
         temp_root2 = Path(temp_dir2.name)
 
@@ -179,7 +116,6 @@ class TestGenSuiteCounts(unittest.TestCase):
         tests_dir.mkdir(parents=True, exist_ok=True)
         (tests_dir / "test_real.py").touch()
 
-        # Try to use --json mode (doesn't need file)
         result = subprocess.run(
             [sys.executable, str(self.repo_root / "tools" / "gen_suite_counts.py"),
              "--json", "--repo", str(temp_root2)],
@@ -188,30 +124,17 @@ class TestGenSuiteCounts(unittest.TestCase):
             cwd=str(temp_root2),
         )
 
-        # Should fail-close (exit 2) because not a git repo
         self.assertEqual(result.returncode, 2, f"stderr: {result.stderr}")
         self.assertIn("not a git repository", result.stderr)
         temp_dir2.cleanup()
 
-    def test_dry_run_with_regenerate(self):
-        """--dry-run with --regenerate shows changes without writing."""
-        result = self._run_tool("--regenerate", "--dry-run", "--repo", str(self.temp_root))
-        self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
-        self.assertIn("DRY-RUN", result.stdout)
-        self.assertIn("Node: 1 suites", result.stdout)
-
-        # Verify no file was created
-        json_path = self.temp_root / "tests" / "SUITE-COUNTS.json"
-        self.assertFalse(json_path.exists(), "--dry-run should not create file")
-
     def test_vacuous_zero_guard_fails_closed(self):
         """A family that derives to zero while files clearly exist elsewhere
-        must fail closed (exit 2), never silently write/report a 0 count."""
+        must fail closed (exit 2), never silently report a 0 count."""
         empty_root = Path(tempfile.mkdtemp())
         try:
             tests_dir = empty_root / "tests"
             tests_dir.mkdir(parents=True, exist_ok=True)
-            # Only Python files -- Node and Shell are genuinely absent.
             (tests_dir / "test_only.py").touch()
             subprocess.run(["git", "init", "-q"], cwd=str(empty_root), check=True,
                             capture_output=True)
@@ -233,16 +156,15 @@ class TestUnmergedStageDeduplication(unittest.TestCase):
     """A path must count exactly once, whatever the index says about it.
 
     Ported from the pre-#776 tests/test_verify_test_suite_count.py (the fix
-    landed in PR #759, reconciled here with the #776 artifact move): this
-    coverage now targets gen_suite_counts.py directly, since that is where the
-    git ls-files derivation -- and therefore the dedup/merge-warning logic --
-    actually lives. verify_test_suite_count.py is just a wrapper around it.
+    landed in PR #759), reconciled here with the #830 artifact removal: this
+    coverage targets gen_suite_counts.py's live `--json` derivation directly,
+    since that is where the git ls-files derivation -- and therefore the
+    dedup/merge-warning logic -- actually lives.
 
     Finding (bit the conflict sweep on PRs #710 and #711): `git ls-files <pattern>`
     lists an UNMERGED path once per stage (1=base, 2=ours, 3=theirs). During an
     in-progress merge a single conflicted `tests/test_*.py` was therefore counted
-    two or three times, and a mid-merge `--regenerate` wrote the inflated number
-    into the generated artifact.
+    two or three times.
 
     The same "count the file list, not the unique paths" shape also double-counts
     a file matched by two of the three shell globs (`tests/test_x.test.sh` matches
@@ -375,62 +297,24 @@ class TestUnmergedStageDeduplication(unittest.TestCase):
         self.assertEqual(data["Node"], 1)
         self.assertEqual(data["Shell"], 1)
 
-    def test_regenerate_writes_deduplicated_count_mid_merge(self):
-        """--regenerate must never write an inflated stage-multiplied count."""
+    def test_json_mid_merge_is_deterministic(self):
+        """Calling --json twice mid-merge must agree (no write path to drift)."""
         root = self._make_conflicted_repo()
 
-        result = self._run("--regenerate", "--repo", str(root))
-
-        self.assertEqual(
-            result.returncode,
-            0,
-            f"--regenerate should succeed mid-merge. stdout: {result.stdout} "
-            f"stderr: {result.stderr}",
-        )
-        content = (root / "tests" / "SUITE-COUNTS.json").read_text(encoding="utf-8")
-        self.assertIn('"Python": 2', content)
-        self.assertNotIn('"Python": 4', content)
-        self.assertNotIn('"Python": 3', content)
-
-    def test_regenerate_mid_merge_is_idempotent_and_rechecks_clean(self):
-        """The sweep workflow: regenerate during conflict resolution, then verify."""
-        root = self._make_conflicted_repo()
-
-        first = self._run("--regenerate", "--repo", str(root))
+        first = self._run("--json", "--repo", str(root))
+        second = self._run("--json", "--repo", str(root))
         self.assertEqual(first.returncode, 0, first.stderr)
-        after_first = (root / "tests" / "SUITE-COUNTS.json").read_bytes()
-
-        second = self._run("--regenerate", "--repo", str(root))
         self.assertEqual(second.returncode, 0, second.stderr)
-        self.assertEqual(
-            after_first, (root / "tests" / "SUITE-COUNTS.json").read_bytes(),
-            "regenerate must be idempotent",
-        )
-
-        recheck = self._run("--check", "--repo", str(root))
-        self.assertEqual(
-            recheck.returncode,
-            0,
-            f"--check must agree with what --regenerate just wrote. "
-            f"stdout: {recheck.stdout} stderr: {recheck.stderr}",
-        )
+        self.assertEqual(first.stdout, second.stdout)
 
     def test_merge_in_progress_is_loudly_warned_not_silently_accepted(self):
         """Deduped counts are correct, but a half-merged tree must not be silent."""
         root = self._make_conflicted_repo()
 
-        check_before = self._run("--json", "--repo", str(root))
-        self.assertEqual(check_before.returncode, 0, check_before.stderr)
-        self.assertIn("MERGE_HEAD", check_before.stderr)
-        self.assertIn("[WARN]", check_before.stderr)
-
-        regen = self._run("--regenerate", "--repo", str(root))
-        self.assertEqual(regen.returncode, 0, regen.stderr)
-        self.assertIn(
-            "MERGE_HEAD",
-            regen.stderr,
-            "the writing mode is exactly where the operator needs the warning",
-        )
+        result = self._run("--json", "--repo", str(root))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("MERGE_HEAD", result.stderr)
+        self.assertIn("[WARN]", result.stderr)
 
     def test_no_merge_warning_on_a_clean_tree(self):
         """The warning must not fire (and pollute gate output) outside a merge."""
