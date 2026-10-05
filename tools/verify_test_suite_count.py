@@ -194,6 +194,7 @@ def ensure_git_repo(repo_root: Path) -> None:
             capture_output=True,
             text=True,
             encoding='utf-8',
+            errors='replace',
             check=True,
             timeout=10,
         )
@@ -292,6 +293,7 @@ def list_git_files(repo_root: Path, *patterns: str) -> set:
                 capture_output=True,
                 text=True,
                 encoding='utf-8',
+                errors='replace',
                 check=True,
                 timeout=10,
             )

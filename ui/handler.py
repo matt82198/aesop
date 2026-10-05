@@ -36,7 +36,7 @@ from collectors import (_snapshot_data, _snapshot_tracker,
                        get_alerts, get_heartbeat_status,
                        get_main_thread_messages, get_monitor_heartbeat_status,
                        get_recent_events, get_repos_status,
-                       parse_audit_backlog)
+                       parse_audit_backlog, get_queue_status)
 from agents import (_AGENT_ID_FORBIDDEN, _transcripts_fingerprint,
                    extract_agent_dispatch_prompt, get_agent_detail,
                    get_fleet_agents)
@@ -214,6 +214,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         "/api/state": "serve_api_state",
         "/api/session": "serve_api_session",
         "/api/cost": "serve_api_cost",
+        "/api/queue": "serve_api_queue",
         "/api/wave/prs": "serve_api_wave_prs",
         "/api/wave/telemetry": "serve_api_wave_telemetry",
         "/api/wave/dispatch": "serve_api_wave_dispatch",
@@ -525,6 +526,27 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             if _is_client_disconnect_error(e):
                 return  # client gone: nothing to send or log
             print(f"[serve_api_cost] Uncaught exception: {e}", file=sys.stderr)
+            try:
+                self.send_response(500)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "Internal server error"}).encode('utf-8'))
+            except Exception:
+                pass  # best-effort error response; client may be gone
+
+    def serve_api_queue(self):
+        """GET /api/queue — merge-queue operator status (exceptions + heartbeat)."""
+        try:
+            status = get_queue_status()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+            self.end_headers()
+            self.wfile.write(json.dumps(status, default=str).encode('utf-8'))
+        except Exception as e:
+            if _is_client_disconnect_error(e):
+                return  # client gone: nothing to send or log
+            print(f"[serve_api_queue] Uncaught exception: {e}", file=sys.stderr)
             try:
                 self.send_response(500)
                 self.send_header("Content-Type", "application/json; charset=utf-8")

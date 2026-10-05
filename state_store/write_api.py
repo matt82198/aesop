@@ -787,8 +787,9 @@ class WriteAPI:
     def _project_tracker(self, store: EventStore) -> dict:
         """Project the tracker state from the event log.
 
-        Reads all events from the "tracker" stream and folds them into the
-        current tracker state using the standard projection rules.
+        Uses snapshot + tail-replay (O(n)) when available; falls back to full
+        replay (O(n²)) when snapshot is missing or corrupt. This avoids replaying
+        the entire tracker history on every mutation.
 
         Args:
             store: EventStore instance to read events from
@@ -797,12 +798,12 @@ class WriteAPI:
             dict: Tracker projection ({"version": 1, "items": [...]})
         """
         try:
-            from state_store import project_tracker
+            from state_store import project_tracker_with_snapshot
         except ImportError:
-            from state_store.projections import project_tracker
+            from state_store.projections import project_tracker_with_snapshot
 
         events = store.read("tracker")
-        return project_tracker(events)
+        return project_tracker_with_snapshot(store, "tracker", events)
 
     def _project_orchestrator_status(self, store: EventStore) -> dict:
         """Project the orchestrator status from the event log.
