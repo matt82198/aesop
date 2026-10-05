@@ -31,9 +31,9 @@ def create_leak_fixture(tmpdir: Path, leak_type: str) -> None:
 
     # Plant the leak into fixture content
     if leak_type == 'posix_uppercase':
-        leaked_content = "Agent analyzed /Users/matt8/aesop directory structure"
+        leaked_content = "Agent analyzed /Users/testuser/aesop directory structure"
     elif leak_type == 'windows_path':
-        leaked_content = "Scanning C:\\Users\\matt8\\aesop for changes"
+        leaked_content = "Scanning C:\\Users\\testuser\\aesop for changes"
     elif leak_type == 'sk_token':
         # Runtime-concatenate to bypass simple pattern scanning in repo per PR #288
         # Token is built from non-contiguous parts to defeat static grep/pattern detection
@@ -167,8 +167,8 @@ def main():
     tests_total = 5  # 3 leak detection + 1 clean content + 1 drift simulation
 
     test_cases = [
-        ('posix_uppercase', '/Users/matt8/aesop (uppercase POSIX path)'),
-        ('windows_path', 'C:\\Users\\matt8\\aesop (Windows path)'),
+        ('posix_uppercase', '/Users/testuser/aesop (uppercase POSIX path)'),
+        ('windows_path', 'C:\\Users\\testuser\\aesop (Windows path)'),
         ('sk_token', 'sk' + '-' + 'proj_7k9x2m4q5b8w1a0c (24-char token)'),
     ]
 
@@ -179,9 +179,9 @@ def main():
 
         # Prepare the leaked content based on type
         if leak_type == 'posix_uppercase':
-            leaked_text = "Agent analyzed /Users/matt8/aesop directory structure"
+            leaked_text = "Agent analyzed /Users/testuser/aesop directory structure"
         elif leak_type == 'windows_path':
-            leaked_text = "Scanning C:\\Users\\matt8\\aesop for changes"
+            leaked_text = "Scanning C:\\Users\\testuser\\aesop for changes"
         elif leak_type == 'sk_token':
             # Runtime-concatenate token to defeat static scanning per PR #288
             tk_p1 = "sk" + "-" + "proj"
