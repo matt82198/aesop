@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Toolchain health check — verifies interpreter and binary availability.
-INDEX: Binary/heartbeat availability verifier. CLI: `[--check] [--json] [--max-age S]`; stdlib only
+INDEX: Binary/heartbeat availability verifier. CLI: `[--check] [--json] [--max-age S]`; stdlib only. Heartbeat freshness goes through the `state_store.read_api.ReadAPI` facade constructed with `get_state_dir()` -- the class is `ReadAPI`, NOT `StateReadAPI`, a symbol that never existed: importing that name made the ImportError fallback fire on every single run, so both heartbeat checks reported "unavailable" and never actually ran (a check that was silently dead from the day it was written). `tests/test_toolchain_health.py` now asserts every symbol imported from `state_store.read_api` really exists in that module AND that `run_checks` passes a non-None `state_api` into `check_heartbeat`, so a rename can never silently re-disable the check.
 
 Detects:
   - Binaries that exist but cannot execute (e.g., Git for Windows bash.exe
@@ -36,18 +36,26 @@ import time
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
+# Repo root on sys.path so the state_store package resolves when this tool is
+# run by file path (python tools/toolchain_health.py), where sys.path[0] is
+# tools/ and `state_store` would otherwise be invisible.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 try:
     from common import get_state_dir
 except ImportError:
     from tools.common import get_state_dir
 
+# The facade class is named ReadAPI (state_store/read_api.py). It was previously
+# imported here as `StateReadAPI`, a symbol that has never existed, so the
+# ImportError fallback fired on every run and every heartbeat check below was
+# silently reported as "unavailable" instead of actually running.
 try:
-    from state_store.read_api import StateReadAPI
+    from state_store.read_api import ReadAPI
 except ImportError:
-    try:
-        from ..state_store.read_api import StateReadAPI
-    except (ImportError, ValueError):
-        StateReadAPI = None
+    ReadAPI = None
 
 
 # Required binaries to check
@@ -140,7 +148,7 @@ def check_heartbeat(
         name: Heartbeat name (for diagnostics)
         filename: Heartbeat filename (e.g., ".watchdog-heartbeat")
         max_age_seconds: Maximum age before considering stale
-        state_api: Optional StateReadAPI instance; if None, check is skipped
+        state_api: Optional ReadAPI instance; if None, check is skipped
 
     Returns:
         (is_ok, message) where is_ok=True means heartbeat is fresh
@@ -171,11 +179,13 @@ def run_checks(json_mode: bool = False, max_age_seconds: int = 300) -> int:
     findings: List[Dict[str, str]] = []
     check_count = 0
 
-    # Initialize StateAPI if available
+    # Initialize the StateAPI read facade if available. ReadAPI requires the
+    # state directory (AESOP_STATE_ROOT, else ./state) -- the same resolution
+    # every other tool uses.
     state_api = None
-    if StateReadAPI is not None:
+    if ReadAPI is not None:
         try:
-            state_api = StateReadAPI()
+            state_api = ReadAPI(get_state_dir())
         except Exception:
             # StateAPI initialization failed; skip heartbeat checks
             pass

@@ -232,6 +232,65 @@ def build_domain_map(domains):
     return "\n".join(lines)
 
 
+def resolve_real_git_dir(target_dir):
+    """
+    Resolve real git directory, handling worktree case.
+    In a worktree, .git is a FILE containing 'gitdir: <path>'.
+    Returns Path to the actual git directory, or None if resolution fails.
+    """
+    target = Path(target_dir).resolve()
+    git_path = target / ".git"
+
+    # Check if .git exists
+    if not git_path.exists():
+        return None
+
+    # Check if .git is a file (worktree case)
+    if git_path.is_file():
+        # Worktree case: use git rev-parse --git-common-dir to get hooks dir
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--git-common-dir"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                cwd=str(target),
+                timeout=5,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                common_dir = result.stdout.strip()
+                # Resolve relative paths
+                if Path(common_dir).is_absolute():
+                    return Path(common_dir)
+                else:
+                    return (target / common_dir).resolve()
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            pass
+
+        # Fallback: parse gitdir pointer manually
+        try:
+            content = git_path.read_text(encoding="utf-8")
+            for line in content.splitlines():
+                if line.startswith("gitdir:"):
+                    gitdir_path = line.split(":", 1)[1].strip()
+                    if gitdir_path:
+                        p = Path(gitdir_path)
+                        if not p.is_absolute():
+                            p = (target / gitdir_path).resolve()
+                        return p
+        except (OSError, UnicodeDecodeError):
+            pass
+
+        return None
+    elif git_path.is_dir():
+        # Regular git directory
+        return git_path
+    else:
+        # .git exists but is neither file nor directory (symlink/other)
+        return None
+
+
 def copy_secret_scan_script(target_dir):
     """
     Copy tools/secret_scan.py from the aesop repo into the target repo's tools/ dir.
@@ -276,20 +335,25 @@ def copy_secret_scan_script(target_dir):
 def install_pre_push_hook(target_dir, force=False):
     """Install the pre-push hook into .git/hooks/."""
     target = Path(target_dir).resolve()
-    git_dir = target / ".git"
-    if not git_dir.is_dir():
-        return False, "no .git directory"
 
-    # Security: reject symlinked .git
+    # Resolve real git directory (handles worktree case)
+    git_dir = resolve_real_git_dir(str(target))
+    if not git_dir:
+        return False, "no .git directory or resolution failed"
+
+    # Security: reject symlinked git dir
     if git_dir.is_symlink():
-        return False, ".git is a symlink (security risk)"
+        return False, "git directory is a symlink (security risk)"
 
     hooks_dir = git_dir / "hooks"
-    hooks_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        hooks_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return False, f"failed to create hooks directory: {e}"
 
     # Security: reject symlinked hooks dir
     if hooks_dir.is_symlink():
-        return False, ".git/hooks is a symlink (security risk)"
+        return False, "hooks directory is a symlink (security risk)"
 
     hook_path = hooks_dir / "pre-push"
 
