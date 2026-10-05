@@ -69,21 +69,11 @@ Durable substrate moving aesop's coordination/state off git (which cannot scale 
 ## Test Commands
 Run from repo root:
 - `python -m unittest tests.test_state_store` — Core API, concurrency, round-trip tests.
-- `python -m unittest tests.test_state_store_occ` — OCC multi-process tests (Phase 2): exactly-one-succeeds, no-write-on-conflict, retry-convergence, backward-compat.
-- `python -m unittest tests.test_state_store_concurrency` — Phase 1 multi-process coordination tests (claims, leases).
+- `python -m unittest tests.test_state_store_occ` — OCC multi-process tests (Phase 2).
+- `python -m unittest tests.test_state_store_concurrency` — Phase 1 multi-process coordination.
 - `python -m unittest tests.test_state_store_hardening` — Corrupt event handling, input validation.
 - `python -m unittest tests.test_state_store_snapshots` — Snapshot read/write and tail-replay.
 - `npm run test:py` — All Python test suites (includes state_store).
-
-## Agent Lifecycle Events (Wave-29)
-
-**New event types** (additive, appended by UI collectors on agent phase changes):
-- `agent_dispatched` — payload `{agent_id, timestamp}` — marks agent dispatch start
-- `agent_working` — payload `{agent_id, timestamp}` — marks work in progress (thinking/tool-use)
-- `agent_done` — payload `{agent_id, timestamp}` — marks completion
-- `agent_stalled` — payload `{agent_id, timestamp}` — marks stall/error detected
-
-**Projection**: `project_agent_lifecycle(events)` folds these into per-agent lifecycle state with transition history (state + timestamp). Enables Activity view to show agents entering/leaving states over time.
 
 ## Multi-instance coordination (MVP — this increment)
 
