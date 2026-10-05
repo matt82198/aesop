@@ -83,7 +83,7 @@ def run(
             cmd,
             capture_output=capture,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=timeout,
             check=False,  # We handle errors ourselves
         )
@@ -181,7 +181,7 @@ def git(
             cmd,
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=timeout,
             cwd=cwd,
             check=False,  # We handle errors ourselves
