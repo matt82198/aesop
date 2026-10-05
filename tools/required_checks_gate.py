@@ -90,7 +90,8 @@ def fetch_protection(repo, branch):
     cmd = ['gh', 'api', f'repos/{repo}/branches/{branch}/protection']
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, encoding='utf-8', timeout=GH_TIMEOUT_SEC
+            cmd, capture_output=True, text=True, encoding='utf-8', errors='replace',
+            timeout=GH_TIMEOUT_SEC
         )
     except subprocess.TimeoutExpired:
         raise ValueError(f'gh api timed out after {GH_TIMEOUT_SEC}s')
