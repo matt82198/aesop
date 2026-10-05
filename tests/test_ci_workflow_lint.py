@@ -558,17 +558,24 @@ class TestToolsImportable(unittest.TestCase):
 
 
 class TestCIJobNoJobLevelIf(unittest.TestCase):
-    """Safety test: ci job must never have a job-level if condition (PR #170 deadlock).
+    """Safety test: ci job must never have a SKIPPABLE job-level if (PR #170 deadlock).
 
-    The ci job is REQUIRED under branch protection. If it has a job-level if condition,
-    it can report skipped status, which deadlocks PRs forever (skipped does not satisfy
-    required check). Step-level conditions are safe; job-level conditions are forbidden.
+    The ci job is REQUIRED under branch protection. A job-level if condition that can
+    evaluate false reports skipped status, which deadlocks PRs forever (skipped does
+    not satisfy a required check). Originally this test forbade an `if:` key
+    entirely -- but omitting `if:` is not actually safe: GitHub Actions implicitly
+    ANDs success() onto a job's scheduling whenever it has a `needs:` entry, so with
+    no `if:` at all, ci silently skips the instant its needs-parent (docs-only-gate)
+    fails or is cancelled for ANY reason (script bug, runner/concurrency starvation,
+    timeout) -- the same deadlock, reached a different way (root-caused 2026-10-05,
+    ~8h of armed PRs stuck). `if: always()` is the one value that is both present and
+    genuinely unconditional, which is why it alone is allowed here.
     """
 
     REAL_REPO_ROOT = Path(__file__).resolve().parent.parent
 
     def test_ci_job_has_no_job_level_if(self):
-        """The ci job must not have an if condition at the job level."""
+        """The ci job's if condition, when present, must be exactly always()."""
         ci_path = self.REAL_REPO_ROOT / '.github' / 'workflows' / 'ci.yml'
         self.assertTrue(ci_path.exists(), f"ci.yml not found at {ci_path}")
 
@@ -579,11 +586,18 @@ class TestCIJobNoJobLevelIf(unittest.TestCase):
         ci_job = workflow['jobs'].get('ci')
         self.assertIsNotNone(ci_job, "ci job not found in ci.yml")
 
-        # ci job must NOT have an 'if' key at the job level
-        self.assertNotIn('if', ci_job,
-            "ci job has a job-level if condition, which causes PR deadlock (skipped status). "
-            "PR #170 documented this: skipped required checks do not satisfy branch protection. "
-            "Use step-level conditions instead.")
+        # ci job's 'if' key, if present at all, must be unconditionally always() --
+        # anything else (including absent, which GitHub implicitly treats as
+        # success()) can evaluate false and reports skipped, deadlocking the PR.
+        condition = ci_job.get('if')
+        self.assertEqual(condition, 'always()',
+            "ci job's if condition must be exactly 'always()' (got %r). Any other "
+            "value -- including no 'if:' key at all -- lets docs-only-gate's "
+            "outcome skip-cascade into ci, which causes PR deadlock (skipped "
+            "status). PR #170 documented the job-level-if version of this; the "
+            "implicit-needs-success() version was root-caused 2026-10-05. Use "
+            "step-level conditions for anything that actually needs to vary."
+            % condition)
 
 
 class TestWindowsAggregatorHandlesSkipped(unittest.TestCase):
@@ -789,11 +803,16 @@ class TestUIBuildStepsShardScoped(unittest.TestCase):
                     f"gate it with `if: {self.SHARD_ZERO}`.")
 
     def test_ci_job_has_no_job_level_if_still(self):
-        """Shard scoping must stay step-level (PR #170 deadlock guard)."""
+        """Shard scoping must stay step-level; job-level if must stay always()."""
         ci_job, _ = self._ci_job_steps()
-        self.assertNotIn('if', ci_job,
-            "ci job gained a job-level if condition -- skipped required checks "
-            "deadlock PRs (PR #170). Conditions belong on steps.")
+        condition = ci_job.get('if')
+        self.assertEqual(condition, 'always()',
+            "ci job's job-level if condition must stay exactly 'always()' (got %r). "
+            "A SKIPPABLE job-level if deadlocks PRs (PR #170); conditions that vary "
+            "by context belong on steps, not on this job. Removing 'if:' entirely "
+            "is also unsafe: GitHub implicitly ANDs success() onto a needs-gated "
+            "job with no if:, which skip-cascades on any docs-only-gate failure "
+            "(root-caused 2026-10-05)." % condition)
 
     def test_python_shard_matrix_still_four_way(self):
         """Sanity: the shard-0 condition only makes sense with a shard matrix."""
