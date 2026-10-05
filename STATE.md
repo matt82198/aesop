@@ -35,7 +35,7 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 4. **`test_agent_detail_roundtrip` pollution re-verify under ci_shard_runner** (IN-REVIEW). Fix landed in #668 (`/api/state` served real data, not empty default); config.reload() wired in setUp (#667). Re-verification under shard-runner conditions needed before fully closed. Medium effort; medium impact (integration-test stability).
 
-5. **STATE.md freshness gate** (GUARDRAIL #2). Detect stale checkpoints by parsing Current Version claim and comparing committed-at date vs. HEAD date. Gate should fail if STATE.md's claimed version significantly lags behind HEAD (e.g., >50 commits). Prevents future staleness escapes.
+5. **STATE.md freshness gate** (GUARDRAIL #2). Detect stale checkpoints by parsing Current Version claim and comparing committed-at date vs. HEAD date. Gate should fail if STATE.md's claimed version significantly lags behind HEAD (e.g., >50 commits). Prevents future staleness escapes. SHIPPED PR #809.
 
 6. **Portability path scan (box-restore / trigger-layer absolutization)** (REFACTOR). Ensure all scripts invoked by scheduled tasks use absolute paths (AESOP_HOME or durable ~/scripts location). Validates guardrail proposal from refinesystem R1. Medium effort; medium impact (multi-box readiness).
    Evidence from 2026-09-10 half-restore incident: settings hooks pointed at wrong profile, scheduled-task StartBoundary in past prevented first run, packed-refs/pack loss on restore. Guardrail tracked in PR #793.

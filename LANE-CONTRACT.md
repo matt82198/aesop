@@ -160,6 +160,7 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
 ## 6. Boundaries
 - **Lanes open/update PRs and push branches. They NEVER merge.** Only the orchestrator (via `tools/auto_merge.py`)
   merges. A lane's job ends when the branch is pushed and a PR is open.
+- **Merge = `python tools/auto_merge.py <n>` with the PR number. Never bare.** The primary tree is the merge tool's working tree.
 - Stay inside your declared files. If the chain leaves them, **STOP and hand off** — a clean hand-off
   beats a collision and is a complete result, not a failure.
 - **REARCH sections 69+ are orchestrator-reserved.** Claim an unreserved number AT WRITE TIME and

@@ -778,6 +778,49 @@ check_claudemd_sync() {
   return 0
 }
 
+check_gen_tool_index() {
+  # Tool index synchronization gate (tools/gen_tool_index.py --check).
+  # Ensures tools/INDEX.md stays in sync with per-tool INDEX: docstring lines.
+  # Any new tool without an INDEX: line fails closed to prevent undocumented tools.
+  #
+  # Fail-open for missing optional tooling; fail-closed for actual drift or missing INDEX lines.
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local index_script="$aesop_root/tools/gen_tool_index.py"
+
+  local tool_status
+  tool_status=$(gate_tool_status "$aesop_root" "$index_script")
+  if [ "$tool_status" = "skip" ]; then
+    log_event "gen_tool_index_skipped_no_aesop_tools"
+    return 0
+  fi
+  if [ "$tool_status" = "missing" ]; then
+    gate_tool_missing_block "gen_tool_index.py" "$index_script"
+    log_event "gen_tool_index_tool_missing"
+    return 1
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    gate_no_python_block "tool index gate"
+    log_event "gen_tool_index_no_python"
+    return 1
+  fi
+
+  local index_output
+  index_output=$("$py_bin" "$index_script" --check 2>&1)
+  local index_exit_code=$?
+
+  if [ $index_exit_code -ne 0 ]; then
+    if [ -n "$index_output" ]; then
+      printf '%s\n' "$index_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
 check_metrics() {
   # Metrics verification gate (tools/metrics_gate.py).
   # Ensures hard numeric claims in markdown are verified with source markers.
@@ -1769,6 +1812,12 @@ main() {
   if ! check_claudemd_sync; then
     printf 'Error: CLAUDE.md synchronization gate failed. Push blocked.\n' >&2
     log_block "claudemd_sync_failure"
+    exit 1
+  fi
+
+  if ! check_gen_tool_index; then
+    printf 'Error: Tool index synchronization gate failed. Push blocked.\n' >&2
+    log_block "gen_tool_index_failure"
     exit 1
   fi
 
