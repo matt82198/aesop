@@ -8,7 +8,7 @@ Aesop's test strategy is built on one principle: **behavioral proof over code in
 
 Aesop runs three independent test harnesses, each covering different system layers. All three must pass before any merge.
 
-### Shell (13 suites)
+### Shell
 
 **Run:** `bash tools/run_shell_tests.sh` or `npm run test:sh`
 
@@ -16,7 +16,7 @@ Aesop runs three independent test harnesses, each covering different system laye
 
 **Discovery:** Dynamic from `tests/*.test.sh`, `tests/test_*.sh`, `tests/test-*.sh` plus `hooks/pre-push-policy.sh --test`.
 
-### Node (24 suites)
+### Node
 
 **Run:** `npm run test:node` or `node --test --test-force-exit --test-timeout=60000 tests/*.test.mjs`
 
@@ -24,7 +24,7 @@ Aesop runs three independent test harnesses, each covering different system laye
 
 **Discovery:** Dynamic from `tests/*.test.mjs`.
 
-### Python (181 suites)
+### Python
 
 **Run:** `npm run test:py` or `python -m unittest discover -s tests`
 
@@ -34,14 +34,23 @@ Aesop runs three independent test harnesses, each covering different system laye
 
 ### Totals
 
-| Harness | Suite count | Run command |
-|---------|-------------|-------------|
-| Shell   | 13          | `npm run test:sh` |
-| Node    | 24          | `npm run test:node` |
-| Python  | 181         | `npm run test:py` |
-| **All** | **218**     | `npm run test:all` |
+No suite-count table lives here. A hand-typed count is a whole-tree scalar
+that every PR adding or removing a test file would have to bump, and it rots
+the instant a merge changes the count without the bump landing with it --
+exactly the problem PR #830 eliminated from the committed
+`tests/SUITE-COUNTS.json` artifact, and exactly what had already happened to
+this very table (`tests/test_traps.py::TestDocInventedTrap` catches it, but
+catching drift after the fact is strictly worse than not having drift to
+catch).
 
-Suite counts are gate-verified by `python tools/verify_test_suite_count.py --check` (CI blocking gate). Live inventory: `python tools/list_test_suites.py`.
+- **Current counts:** `python tools/gen_suite_counts.py --json` -- derived
+  live from `git ls-files` on every call; nothing is stored, so nothing can
+  go stale.
+- **Run everything:** `npm run test:all`
+- **Per-harness commands:** `npm run test:sh` / `npm run test:node` / `npm run test:py`
+- **Live inventory:** `python tools/list_test_suites.py`
+- **CI-shard coverage** (every tracked test file actually gets run, not
+  merely counted): `python tools/verify_test_suite_count.py --check`
 
 ---
 

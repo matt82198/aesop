@@ -73,7 +73,7 @@
     "test": "node --test --test-force-exit --test-timeout=60000 tests/*.test.mjs",
     "test:node": "node --test --test-force-exit --test-timeout=60000 tests/*.test.mjs",
     "test:sh": "bash tools/run_shell_tests.sh",
-    "test:py": "python -m unittest discover -s tests",
+    "test:py": "python tools/remote_refs_tripwire.py -- python -m unittest discover -s tests",
     "test:all": "npm run test:node && npm run test:sh && npm run test:py"
   },
   "devDependencies": {
