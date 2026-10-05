@@ -89,14 +89,14 @@ def redact_paths(text: str) -> str:
     """Redact absolute machine paths from text.
 
     Replaces:
-    - C:\\Users\\matt8\\aesop → <REPO> (handles single or double backslashes)
-    - /c/Users/matt8/aesop → <REPO>
-    - C:\\Users\\matt8 → <HOME> (handles single or double backslashes)
-    - /c/Users/matt8 → <HOME>
-    - Users/matt8 → <HOME>
-    - Users\\matt8 → <HOME>
+    - C:\\Users\\<profile>\\aesop → <REPO> (handles single or double backslashes)
+    - /c/Users/<profile>/aesop → <REPO>
+    - C:\\Users\\<profile> → <HOME> (handles single or double backslashes)
+    - /c/Users/<profile> → <HOME>
+    - Users/<profile> → <HOME>
+    - Users\\<profile> → <HOME>
 
-    Non-path occurrences of 'matt8' are preserved.
+    Non-path occurrences of profile names are preserved.
 
     Separators match ANY run of backslashes or forward slashes so single-,
     double-, and repr/JSON re-escaped forms (\\, \\\\, \\\\\\\\ ...) are all
@@ -104,32 +104,32 @@ def redact_paths(text: str) -> str:
     2x/4x-escaped separators; a 1-2 backslash pattern misses those.
     """
     # First redact repo-specific paths (longer pattern, must be first)
-    # Windows: C:\Users\matt8\aesop at any escape depth, or C:/Users/... form
+    # Windows: C:\Users\<profile>\aesop at any escape depth, or C:/Users/... form
     text = re.sub(
-        r"C:[\\/]+Users[\\/]+matt8[\\/]+aesop",
+        r"C:[\\/]+Users[\\/]+[A-Za-z0-9_]+[\\/]+aesop",
         "<REPO>",
         text,
         flags=re.IGNORECASE,
     )
-    # POSIX: /c/Users/matt8/aesop
+    # POSIX: /c/Users/<profile>/aesop
     text = re.sub(
-        r"/c/Users/matt8/aesop",
+        r"/c/Users/[A-Za-z0-9_]+/aesop",
         "<REPO>",
         text,
         flags=re.IGNORECASE,
     )
 
     # Then redact home paths (shorter pattern)
-    # Windows: C:\Users\matt8 at any escape depth, or C:/Users/matt8
+    # Windows: C:\Users\<profile> at any escape depth, or C:/Users/<profile>
     text = re.sub(
-        r"C:[\\/]+Users[\\/]+matt8",
+        r"C:[\\/]+Users[\\/]+[A-Za-z0-9_]+",
         "<HOME>",
         text,
         flags=re.IGNORECASE,
     )
-    # POSIX: /c/Users/matt8
+    # POSIX: /c/Users/<profile>
     text = re.sub(
-        r"/c/Users/matt8",
+        r"/c/Users/[A-Za-z0-9_]+",
         "<HOME>",
         text,
         flags=re.IGNORECASE,
