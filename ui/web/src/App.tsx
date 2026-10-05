@@ -18,6 +18,8 @@ import Activity from './views/Activity';
 import { Cost } from './views/Cost';
 import { WavePRBoard } from './views/WavePRBoard';
 import { CostSummaryDrawer } from './components/CostSummaryDrawer';
+import { QueuePanel } from './components/QueuePanel';
+import type { QueuePanelData } from './lib/types';
 
 const THEME_STORAGE_KEY = 'aesop-theme';
 type Theme = 'light' | 'dark' | null; // null = follow OS preference
@@ -83,8 +85,28 @@ export default function App() {
   const { toggle } = useTheme();
   const [dataTimestamp, setDataTimestamp] = useState<number | null>(null);
   const [now, setNow] = useState<number>(Date.now());
+  const [queue, setQueue] = useState<QueuePanelData | null>(null);
 
   const connection = sseState.connectionStatus;
+
+  // Fetch queue data periodically (~5s)
+  useEffect(() => {
+    const fetchQueue = async () => {
+      try {
+        const response = await fetch('/api/queue');
+        if (response.ok) {
+          const data = await response.json();
+          setQueue(data);
+        }
+      } catch (err) {
+        // Silently fail — queue is optional data
+      }
+    };
+
+    fetchQueue();
+    const interval = setInterval(fetchQueue, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Wall-clock ticker (~5s) for staleness re-evaluation without SSE traffic
   useEffect(() => {
@@ -122,6 +144,7 @@ export default function App() {
         onRefresh={handleRefresh}
       />
       <CostSummaryDrawer cost={sseState.cost ?? null} connectionStatus={connection} />
+      <QueuePanel queue={queue} connectionStatus={connection} />
       <nav className="app-nav" aria-label="Views">
         {NAV_ITEMS.map(({ hash, label }) => (
           <a key={hash} href={hash} aria-current={route === hash ? 'page' : undefined} className="app-nav__link">
