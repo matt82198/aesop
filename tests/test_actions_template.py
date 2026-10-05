@@ -189,7 +189,7 @@ def load_and_validate_yaml(template_path):
         raise ValueError(f"YAML parse error: {e}")
 
 
-def test_yaml_validity(template_path):
+def check_yaml_validity(template_path):
     """Test 1: YAML syntax is valid."""
     print("TEST 1: YAML Validity...", end=' ')
     try:
@@ -201,7 +201,7 @@ def test_yaml_validity(template_path):
         return False
 
 
-def test_workflow_structure(template_path):
+def check_workflow_structure(template_path):
     """Test 2: Workflow has required structure."""
     print("TEST 2: Workflow Structure...", end=' ')
     try:
@@ -243,7 +243,7 @@ def test_workflow_structure(template_path):
         return False
 
 
-def test_cli_command_existence(template_path, repo_root):
+def check_cli_command_existence(template_path, repo_root):
     """Test 3: All CLI commands referenced in workflow exist."""
     print("TEST 3: CLI Command Existence...", end=' ')
     try:
@@ -302,7 +302,7 @@ def test_cli_command_existence(template_path, repo_root):
         return False
 
 
-def test_no_invented_flags(template_path):
+def check_no_invented_flags(template_path):
     """Test 4: Workflow examples do not use invented/undocumented flags."""
     print("TEST 4: No Invented Flags...", end=' ')
     try:
@@ -346,7 +346,7 @@ def test_no_invented_flags(template_path):
         return False
 
 
-def test_no_fabricated_output(template_path):
+def check_no_fabricated_output(template_path):
     """Test 5: Workflow does not show fabricated command outputs."""
     print("TEST 5: No Fabricated Outputs...", end=' ')
     try:
@@ -403,11 +403,11 @@ def main():
 
         # Run tests
         results = [
-            test_yaml_validity(template_path),
-            test_workflow_structure(template_path),
-            test_cli_command_existence(template_path, repo_root),
-            test_no_invented_flags(template_path),
-            test_no_fabricated_output(template_path),
+            check_yaml_validity(template_path),
+            check_workflow_structure(template_path),
+            check_cli_command_existence(template_path, repo_root),
+            check_no_invented_flags(template_path),
+            check_no_fabricated_output(template_path),
         ]
 
         print()
