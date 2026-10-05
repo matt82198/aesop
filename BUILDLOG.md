@@ -209,3 +209,35 @@ NOT published to Medium; outward publishing stays user-gated.
 - Appended 2026-09-10 box-restore incident evidence to NEXT STEPS #6 with PR #793 guardrail reference.
 - Portfolio recency PRs #86–#88 shipped; box-restore repair confirmed.
 
+
+---
+
+## 2026-10-05 v0.8.0 Checkpoint & Board Catch-up
+
+**Summary:** v0.8.0 shipped 2026-09-11 (tag v0.8.0, npm latest 0.8.0, PolyForm Noncommercial 1.0.0). Currency sweep + board catch-up lane started.
+
+**Merges since v0.8.0 (73 commits):**
+- PR #825: chore(stats): scheduled refresh (portfolio auto-update pipeline)
+- PR #824: docs(paper): The Receipts Loop — arXiv manuscript draft with dated provenance
+- PR #823: Fix humanize_ledger.py attribution and split_sentences initials
+- PR #822: Lane A: Implement humanize_lint.py
+- PR #821: Lane B: humanize_ledger.py — append-only ledger for humanization edits
+- PR #820: Lane C: humanize_voice.py voice profiler
+- PR #819: chore(deps): bump undici from 8.9.0 to 8.11.2 in /ui/web
+- PR #817: fix(portability): remove the last 32 literal profile paths
+- PR #814: chore(deps-dev): bump @playwright/test from 1.62.1 to 1.63.0
+- PR #813: docs: post-release 0.8.0 checkpoint
+
+**Checkpoint refreshed:**
+- STATE.md: v0.8.0 marked as tagged + released (npm latest 0.8.0), updated HEAD sha and commit count
+- NEXT STEPS: Items 1 (test flake #808) and 5 (STATE.md freshness #809) marked DONE; item 8 (stats jam) resolved
+- Added items 9 (merge actor independence) and 10 (checkpoint+clear enforcement hooks)
+- CHANGELOG.md: Unreleased section populated with 10 merged PRs (Added/Fixed/Docs/Chore)
+- RELEASE-NOTES.md: "UNRELEASED" section retitled "v0.8.0 — Release 2026-09-11"
+- docs/INCIDENTS.md: Regenerated (106 total incidents tracked)
+- LANE-CONTRACT.md: Merge rules added (native auto-merge @ PR open, shard-local test before push)
+
+**Board catch-up in progress:** 37 open PRs (#793, board automation, policy, multi-box coordination) scheduled for lane-based merge train. Merge actor must not depend on session daemon or manual merge.
+
+**Next:** Lane contract hardening + board merge automation per PR #793 + 10-PR batches.
+

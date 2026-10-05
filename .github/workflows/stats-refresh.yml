@@ -10,6 +10,7 @@ permissions:
   contents: write
   pull-requests: write
   issues: write
+  actions: write
 
 env:
   # ONE long-lived branch, not one per day. Every run replaces its content, so
@@ -87,6 +88,12 @@ jobs:
             git push origin "HEAD:refs/heads/${STATS_BRANCH}"
           fi
 
+      - name: Dispatch CI workflow
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run ci.yml --ref ${{ env.STATS_BRANCH }}
+
       - name: Create or update pull request
         if: steps.check.outputs.changed == 'true'
         env:
@@ -125,6 +132,17 @@ jobs:
           # merge-queue hands the refresh to the merge-queue advancer daemon so a
           # routine stats bump does not need a human on high-velocity days.
           gh pr edit "$PR_URL" --add-label merge-queue || echo 'note: could not add label merge-queue (non-fatal)'
+
+      - name: Enable auto-merge on PR
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          PR_URL=$(gh pr list --state open --head "${STATS_BRANCH}" --json url -q '.[0].url' || true)
+          if [ -n "$PR_URL" ]; then
+            gh pr merge --auto --merge "$PR_URL" || echo 'note: auto-merge may already be enabled (non-fatal)'
+          fi
 
       # --- failure visibility -------------------------------------------------
       # Nothing watches a scheduled workflow's conclusion, so this job failed on
