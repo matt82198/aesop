@@ -8,8 +8,13 @@ Test coverage:
 """
 import subprocess
 import sys
+import tempfile
 import unittest
 import os
+from pathlib import Path
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'tools'))
+from test_network_isolation import build_isolation_env  # noqa: E402
 
 
 class TestAutoMergePRRequired(unittest.TestCase):
@@ -32,15 +37,30 @@ class TestAutoMergePRRequired(unittest.TestCase):
         self.assertIn('--all', result.stderr)
 
     def test_all_flag_exits_0_with_no_prs(self):
-        """--all flag with --dry-run exits 0 when no open PRs."""
-        # Use --dry-run to avoid actual merging; use --all to pass validation
-        result = subprocess.run(
-            [sys.executable, os.path.join(self.tools_dir, 'auto_merge.py'),
-             '--all', '--dry-run'],
-            capture_output=True,
-            text=True,
-            cwd=os.path.dirname(self.tools_dir)
-        )
+        """--all flag with --dry-run exits 0 when no open PRs.
+
+        `--all` makes auto_merge.py call `gh pr list` for real discovery even
+        under `--dry-run` -- this is the exact "any other test that invokes
+        auto_merge.py entry points" case from the 2026-10-05 network-isolation
+        hardening (the incident itself was tests/test_merge_train_halt_enforcement.py
+        / tests/test_merge_queue_halt_enforcement.py, a sibling tool). Without an
+        explicit isolated env this subprocess inherits the real ambient `gh` auth
+        and would hit the real GitHub API. tools/ci_shard_runner.py and
+        tests/__init__.py already isolate the whole process by default (see
+        tools/test_network_isolation.py), but this test sets it explicitly too,
+        so it stays safe even if ever invoked completely outside that harness.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            env = os.environ.copy()
+            env.update(build_isolation_env(Path(tmp) / "sink"))
+            result = subprocess.run(
+                [sys.executable, os.path.join(self.tools_dir, 'auto_merge.py'),
+                 '--all', '--dry-run'],
+                capture_output=True,
+                text=True,
+                cwd=os.path.dirname(self.tools_dir),
+                env=env,
+            )
         # Should exit 0 or 1 depending on whether there are open PRs
         # Main point: validation passed (exit 2 not returned)
         self.assertNotEqual(result.returncode, 2)

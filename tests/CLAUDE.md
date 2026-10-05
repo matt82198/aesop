@@ -81,6 +81,7 @@ Run: `npm run test:py` or `python -m unittest discover -s tests`
 - **cwd pollution**: Never bare `os.chdir()` without `try/finally` restoration or tearDown. Preferred: subprocess `cwd=` parameter.
 - **git config pollution**: Tests must never call `git config user.*` on the live repo. Scope all identity changes to temp fixture repos only (validated by test_test_hygiene.py AST scanner).
 - Violations cause Windows cleanup deadlock (deleted temp dirs leave poisoned cwd, later tests inherit it).
+- **Real-remote isolation (2026-10-05 incident)**: `tests/__init__.py` rewrites every github.com remote URL to a throwaway local bare repo and blocks `gh` for the whole run (`tools/test_network_isolation.py`); `tools/remote_refs_tripwire.py` fails the run if a real remote branch or open PR appears anyway.
 
 ### Platform-Conditioned Repro (Permanent, incident-proven 2x)
 - A fix for a windows-RUNNER-only failure is NOT done without reproducing the runner

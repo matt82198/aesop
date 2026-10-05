@@ -45,6 +45,10 @@ expensive way during aesop development. Each line exists because a lane failed w
   behavioural tests that had never executed once — the branch looked complete and added zero coverage.)*
   Confirm CI reports the executed-suite count went UP by the number you added — not just that yours
   "passed".
+- **Tests run with origin rewritten to a local bare repo and `gh` blocked** (`tests/__init__.py` ->
+  `tools/test_network_isolation.py`); `tools/remote_refs_tripwire.py` fails the run if a remote ref or
+  PR appears anyway. Never work around either to make a merge_train/merge_queue/auto_merge test reach
+  a real remote.
 
 ## 3. Never fit green
 - **Never relax an assertion, lower a floor/ratchet, delete a suite, add a skip, or retune a constant
