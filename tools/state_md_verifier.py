@@ -38,7 +38,7 @@ def run_command(cmd, cwd=None):
             capture_output=True,
             text=True,
             encoding='utf-8', errors='replace',
-            timeout=10
+            timeout=30
         )
         return result.returncode, result.stdout, result.stderr
     except subprocess.TimeoutExpired:
