@@ -163,7 +163,7 @@ def discover_lanes(repo_root):
     try:
         result = subprocess.run(
             ["git", "worktree", "list", "--porcelain"],
-            capture_output=True, text=True, encoding="utf-8",
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=60, cwd=str(repo_root))
     except (OSError, subprocess.SubprocessError) as exc:
         raise LaneDiscoveryError(f"git worktree list failed: {exc}")
