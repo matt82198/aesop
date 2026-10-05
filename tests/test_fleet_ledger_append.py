@@ -513,6 +513,109 @@ class TestFleetLedgerAppendWave(unittest.TestCase):
         self.assertTrue(len(lines) > 0)
 
 
+class TestLedgerReadPathIsReadOnly(unittest.TestCase):
+    """parse_ledger_rows()/summary() are READ operations and must not create files.
+
+    Header creation belongs on the APPEND path (append_ledger_line/harvest/rotate)
+    only. A reader that materializes the ledger makes every `--check` mode of every
+    downstream tool (cost_ceiling, cost_projection, state_store read facade) a writer.
+    """
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.state_dir = Path(self.temp_dir) / "state"
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+        self.ledger_file = self.state_dir / "ledger" / "OUTCOMES-LEDGER.md"
+        self._saved = os.environ.get("AESOP_STATE_ROOT")
+        os.environ["AESOP_STATE_ROOT"] = str(self.state_dir)
+        sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
+        sys.modules.pop("fleet_ledger", None)
+        sys.modules.pop("common", None)
+        import fleet_ledger
+        self.fleet_ledger = fleet_ledger
+
+    def tearDown(self):
+        import shutil
+        if self._saved is None:
+            os.environ.pop("AESOP_STATE_ROOT", None)
+        else:
+            os.environ["AESOP_STATE_ROOT"] = self._saved
+        sys.modules.pop("fleet_ledger", None)
+        sys.path.pop(0)
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_parse_ledger_rows_missing_ledger_returns_empty_and_writes_nothing(self):
+        rows = self.fleet_ledger.parse_ledger_rows()
+        self.assertEqual(rows, [])
+        self.assertFalse(self.ledger_file.exists(),
+                         "parse_ledger_rows() created the ledger file -- reads must not write")
+        self.assertFalse(self.ledger_file.parent.exists(),
+                         "parse_ledger_rows() created the ledger dir -- reads must not write")
+
+    def test_summary_missing_ledger_writes_nothing(self):
+        import io
+        import contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.fleet_ledger.summary()
+        self.assertFalse(self.ledger_file.exists(),
+                         "summary() created the ledger file -- reads must not write")
+
+    def test_parse_ledger_rows_still_reads_existing_ledger(self):
+        """Read-only must not mean blind."""
+        self.ledger_file.parent.mkdir(parents=True, exist_ok=True)
+        self.ledger_file.write_text(
+            "| ISO ts | agent_type | model | duration_sec | tokens_in | tokens_out | verdict | phase | wave |\n"
+            "|--------|------------|-------|--------------|-----------|------------|--------|-------|------|\n"
+            "| 2026-08-02T00:00:00Z | waverun | haiku | 10 | 5 | 7 | OK | build | 3 |\n",
+            encoding="utf-8",
+        )
+        rows = self.fleet_ledger.parse_ledger_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["tokens_out"], 7)
+        self.assertEqual(rows[0]["wave"], 3)
+
+    def test_append_path_still_creates_header_when_missing(self):
+        """REGRESSION: moving header creation off the read path must not break appends."""
+        self.assertFalse(self.ledger_file.exists())
+        self.fleet_ledger.append_ledger_line(
+            "2026-08-02T00:00:00Z", "waverun", "haiku", 1, 10, 20, "OK", "build", 4
+        )
+        self.assertTrue(self.ledger_file.exists(), "append must create the ledger + header")
+        content = self.ledger_file.read_text(encoding="utf-8")
+        self.assertIn("| ISO ts | agent_type | model |", content)
+        self.assertIn("|--------|------------|-------|", content)
+        rows = self.fleet_ledger.parse_ledger_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["tokens_in"], 10)
+        self.assertEqual(rows[0]["tokens_out"], 20)
+
+    def test_append_wave_creates_header_when_missing(self):
+        """REGRESSION: append_wave's idempotency pre-read must not block header creation."""
+        report = Path(self.temp_dir) / "report.json"
+        report.write_text(json.dumps({"tokens": {"buildOut": 42}, "integration": {"green": True}}),
+                          encoding="utf-8")
+        ok, msg = self.fleet_ledger.append_wave(str(report), 7, "build", "2026-08-02T01:00:00Z")
+        self.assertTrue(ok, msg)
+        self.assertTrue(self.ledger_file.exists(), "append_wave must create the ledger + header")
+        rows = self.fleet_ledger.parse_ledger_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["tokens_out"], 42)
+        # And it stays idempotent across the now-existing ledger
+        ok2, msg2 = self.fleet_ledger.append_wave(str(report), 7, "build", "2026-08-02T01:00:00Z")
+        self.assertTrue(ok2, msg2)
+        self.assertEqual(len(self.fleet_ledger.parse_ledger_rows()), 1, "append_wave lost idempotency")
+
+    def test_rotate_on_missing_ledger_does_not_crash(self):
+        """rotate() is a write path: it may create the header, it must not crash."""
+        import io
+        import contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            self.fleet_ledger.rotate()
+        self.assertIn("no rotation needed", buf.getvalue())
+
+
 class TestFleetLedgerAppendWaveImportable(unittest.TestCase):
     """Test that tools can be imported without errors."""
 
