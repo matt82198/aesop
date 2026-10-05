@@ -49,6 +49,7 @@ def list_tool_files(repo_root: Path):
         capture_output=True,
         text=True,
         encoding="utf-8",
+        errors="replace",
     )
     if res.returncode != 0:
         raise RuntimeError("git ls-files tools/ failed: " + (res.stderr or "").strip())

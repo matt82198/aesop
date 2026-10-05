@@ -136,7 +136,7 @@ def find_bash_process_by_script(script_path):
             ["powershell", "-NoProfile", "-Command", ps_cmd],
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
@@ -158,7 +158,7 @@ def check_bash_running(script_path):
             ["tasklist"],
             capture_output=True,
             text=True,
-            encoding='utf-8',
+            encoding='utf-8', errors='replace',
             timeout=5,
         )
         # If bash or git-bash is running, assume script might be active
