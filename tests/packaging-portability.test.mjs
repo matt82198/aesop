@@ -116,7 +116,10 @@ test('generated config uses portable paths (not absolute machine paths)', () => 
     // Run scaffold with --name
     const targetDir = path.join(tempDir, 'fleet');
     const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
-    const result = spawnSync('node', [CLI, targetDir, '--name', 'test-service'], {
+    // --no-skills: this test doesn't exercise skill installation; without it the
+    // scaffold call would write into the real ~/.claude/skills/ (isolation contract
+    // documented in cli-skills-install.test.mjs) and contend with it on CI Windows.
+    const result = spawnSync('node', [CLI, targetDir, '--name', 'test-service', '--no-skills'], {
       encoding: 'utf8',
       cwd: tempDir,
       timeout
@@ -294,7 +297,8 @@ test('dashboard config generation guards against missing dashboard key (defect b
     const targetDir = path.join(tempDir, 'fleet');
 
     const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
-    const result = spawnSync('node', [CLI, targetDir, '--name', 'test-fleet'], {
+    // --no-skills: see note above — keeps this test off the real ~/.claude/skills/.
+    const result = spawnSync('node', [CLI, targetDir, '--name', 'test-fleet', '--no-skills'], {
       encoding: 'utf8',
       cwd: tempDir,
       timeout
@@ -430,7 +434,8 @@ test('pre-commit waveguard hook is installed in scaffolded fleet (wave-24 scaffo
     // Run scaffold with --name into a fresh directory
     const targetDir = path.join(tempDir, 'fleet');
     const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
-    const result = spawnSync('node', [CLI, targetDir, '--name', 'test-fleet'], {
+    // --no-skills: see note above — keeps this test off the real ~/.claude/skills/.
+    const result = spawnSync('node', [CLI, targetDir, '--name', 'test-fleet', '--no-skills'], {
       encoding: 'utf8',
       cwd: tempDir,
       timeout
@@ -472,7 +477,7 @@ test('pre-commit waveguard hook is installed in scaffolded fleet (wave-24 scaffo
     execSync('git config user.name "Test User"', { cwd: targetDir, stdio: 'ignore' });
 
     // Re-run scaffold with --force to install hooks in the newly initialized git repo
-    const result2 = spawnSync('node', [CLI, targetDir, '--name', 'test-fleet', '--force'], {
+    const result2 = spawnSync('node', [CLI, targetDir, '--name', 'test-fleet', '--force', '--no-skills'], {
       encoding: 'utf8',
       cwd: tempDir,
       timeout

@@ -30,7 +30,13 @@ function runCli(targetDir, args = []) {
   // Honors AESOP_TEST_CHILD_TIMEOUT_MS override (same pattern as wizard.test.mjs /
   // scaffold-*.test.mjs) so CI can widen the window under Windows contention.
   const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
-  const res = spawnSync(process.execPath, [CLI, targetDir, ...args], {
+  // --no-skills: this file doesn't test skill installation, and without it every
+  // scaffold call here would write into the real ~/.claude/skills/ (see
+  // cli-skills-install.test.mjs's isolation contract) — on Windows CI that real,
+  // shared directory gets hammered concurrently by every other test file's scaffold
+  // calls too, and the resulting contention is what blew cli-skills-install's own
+  // 180s file timeout.
+  const res = spawnSync(process.execPath, [CLI, targetDir, ...args, '--no-skills'], {
     encoding: 'utf8',
     cwd: path.dirname(targetDir),
     timeout,
