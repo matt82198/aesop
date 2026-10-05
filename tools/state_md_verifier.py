@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-STATE.md checkpoint-accuracy verifier (guardrail #1).
-INDEX: Guardrail #1: STATE.md checkpoint-accuracy verifier; parses STATE.md for falsifiable progress claims ("**Current Version:** vX.Y.Z", "resolved", "pushed", "MERGED") and verifies against on-disk git truth (git tags + package.json for versions, git status --porcelain for unmerged files, git ls-remote --heads for pushed branches, gh pr view for PR states); exit 0=no contradictions + at least one claim verified / 1=contradictions found / 2=error or zero verifiable claims (fail-closed); reports UNVERIFIABLE/SKIP for unparseable/unavailable-tool claims; stdlib-only
+STATE.md checkpoint-accuracy verifier (guardrail #1 + #5).
+INDEX: Guardrail #1: STATE.md checkpoint-accuracy verifier; parses STATE.md for falsifiable progress claims ("**Current Version:** vX.Y.Z", "resolved", "pushed", "MERGED", "current HEAD <sha>") and verifies against on-disk git truth (git tags + package.json for versions, git status --porcelain for unmerged files, git ls-remote --heads for pushed branches, gh pr view for PR states, git rev-list for commit lag); exit 0=no contradictions + at least one claim verified / 1=contradictions found / 2=error or zero verifiable claims (fail-closed); reports UNVERIFIABLE/SKIP for unparseable/unavailable-tool claims; stdlib-only. Guardrail #5: STATE.md freshness gate detects stale checkpoints (>50 commits behind HEAD).
 
 Parses STATE.md for falsifiable progress claims and verifies each against on-disk git truth.
 Catches cases where the orchestrator's checkpoint overstates progress (e.g., "resolved" while
@@ -12,6 +12,7 @@ Claim classes verified:
   (b) "resolved"/"conflicts resolved"/"clean" -> git status --porcelain (no UU/AA for those paths)
   (c) "pushed" -> git ls-remote --heads (ref exists on origin)
   (d) "MERGED" PR -> gh pr view --json state (if gh available, else SKIP)
+  (e) "current HEAD <sha>" -> git rev-list --count <sha>..HEAD (fails if >50 commits stale)
 
 Exit codes:
   0: No contradictions found, and at least one verifiable claim was extracted
@@ -66,7 +67,8 @@ def parse_state_md(state_md_path):
         "resolved": [],
         "pushed": [],
         "merged": [],
-        "version": []
+        "version": [],
+        "freshness": []
     }
 
     try:
@@ -89,6 +91,10 @@ def parse_state_md(state_md_path):
     # Note: The closing ** comes before the colon in markdown: "**Current Version:**"
     version_pattern = r'\*\*Current\s+Version:\*\*\s*(v[\d\.]+)'
 
+    # Pattern: "current HEAD <sha>" (freshness check)
+    # Matches: "current HEAD e5e6e22" or similar SHA patterns (case-insensitive)
+    freshness_pattern = r'current\s+head\s+([a-f0-9]{7,})'
+
     for i, line in enumerate(lines, 1):
         lower_line = line.lower()
 
@@ -101,6 +107,17 @@ def parse_state_md(state_md_path):
                 "line": i,
                 "context": line,
                 "version": version_str
+            })
+
+        # Freshness claims (match "current HEAD <sha>")
+        freshness_match = re.search(freshness_pattern, lower_line)
+        if freshness_match:
+            sha = freshness_match.group(1)  # e.g., "e5e6e22"
+            claims["freshness"].append({
+                "claim": line.strip(),
+                "line": i,
+                "context": line,
+                "sha": sha
             })
 
         # Resolved claims
@@ -427,6 +444,89 @@ def verify_version_claims(claims, git_root):
     return findings
 
 
+def verify_freshness_claims(claims, git_root):
+    """Verify STATE.md freshness: current HEAD <sha> should not lag >50 commits behind HEAD.
+
+    Checks:
+      - Parse the claimed HEAD sha from "current HEAD <sha>"
+      - Verify sha exists in repo (fail-closed if unknown)
+      - Compute git rev-list --count <sha>..HEAD (commits since claimed sha)
+      - CONTRADICTION if count > 50 (stale)
+
+    Returns findings list.
+    """
+    findings = []
+
+    if not claims:
+        return findings
+
+    for claim_info in claims:
+        claim = claim_info["claim"]
+        line = claim_info["line"]
+        sha = claim_info.get("sha", "")
+
+        if not sha:
+            findings.append({
+                "claim": claim,
+                "line": line,
+                "status": "ERROR",
+                "detail": "Could not extract SHA from freshness claim"
+            })
+            continue
+
+        # Verify the SHA exists in the repo
+        rc, _, stderr = run_command(
+            ["git", "cat-file", "-t", sha],
+            cwd=git_root
+        )
+
+        if rc != 0:
+            findings.append({
+                "claim": claim,
+                "line": line,
+                "status": "ERROR",
+                "detail": f"SHA {sha} not found in repository: {stderr}"
+            })
+            continue
+
+        # Count commits since the claimed sha
+        rc, stdout, stderr = run_command(
+            ["git", "rev-list", "--count", f"{sha}..HEAD"],
+            cwd=git_root
+        )
+
+        if rc != 0:
+            findings.append({
+                "claim": claim,
+                "line": line,
+                "status": "ERROR",
+                "detail": f"Failed to count commits: {stderr}"
+            })
+            continue
+
+        try:
+            commit_lag = int(stdout.strip())
+        except ValueError:
+            findings.append({
+                "claim": claim,
+                "line": line,
+                "status": "ERROR",
+                "detail": f"Could not parse commit count: {stdout}"
+            })
+            continue
+
+        # Check freshness (limit: 50 commits)
+        if commit_lag > 50:
+            findings.append({
+                "claim": claim,
+                "line": line,
+                "status": "CONTRADICTION",
+                "detail": f"STATE.md is {commit_lag} commits stale (limit 50)"
+            })
+
+    return findings
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Verify STATE.md checkpoint accuracy against git truth"
@@ -490,7 +590,7 @@ def main():
     # Check if we extracted ANY verifiable claims (fail-closed if zero)
     total_claims = sum(len(v) for v in claims.values())
     if total_claims == 0:
-        print("ERROR: STATE.md contains no verifiable claims (no version, resolved, pushed, or merged statements). Cannot verify.", file=sys.stderr)
+        print("ERROR: STATE.md contains no verifiable claims (no version, resolved, pushed, merged, or freshness statements). Cannot verify.", file=sys.stderr)
         return 2
 
     # Verify claims
@@ -499,6 +599,7 @@ def main():
     all_findings.extend(verify_resolved_claims(claims["resolved"], git_root))
     all_findings.extend(verify_pushed_claims(claims["pushed"], git_root))
     all_findings.extend(verify_merged_claims(claims["merged"], git_root))
+    all_findings.extend(verify_freshness_claims(claims["freshness"], git_root))
 
     # Output findings
     if args.json:
@@ -525,8 +626,11 @@ def main():
 
     # Return codes
     contradiction_count = sum(1 for f in all_findings if f["status"] == "CONTRADICTION")
+    error_count = sum(1 for f in all_findings if f["status"] == "ERROR")
     if contradiction_count > 0:
         return 1
+    if error_count > 0:
+        return 2
     return 0
 
 
