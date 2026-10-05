@@ -27,6 +27,19 @@ import time
 import unittest
 from pathlib import Path
 
+# Unconditional top-level insert is the repo's sanctioned sibling-import guard
+# (same form as auto_merge.py / tracker_autoclose.py / merge_queue.py) and the
+# only form tools/sibling_import_check.py recognizes -- its AST walk only
+# looks for a bare sys.path.insert(...) directly in the module body, applied
+# file-wide, so main()'s own `from test_network_isolation import ...` (below)
+# needs exactly this, not a guard nested inside main() itself. A module body
+# executes once, so an unconditional insert cannot accumulate duplicate
+# sys.path entries.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_TOOLS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(_REPO_ROOT))
+sys.path.insert(0, str(_TOOLS_DIR))
+
 
 def distribute_shards(test_files, shard_id, total_shards):
     """Distribute test files across shards using round-robin.
@@ -164,12 +177,8 @@ def _parse_args(argv):
 
 def main():
     """Run Python tests for the assigned shard."""
-    script_dir = Path(__file__).resolve().parent
-    root = script_dir.parent
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
-    if str(script_dir) not in sys.path:
-        sys.path.insert(0, str(script_dir))
+    # sys.path already carries _REPO_ROOT/_TOOLS_DIR from module import time
+    # (see the module-level guard above).
 
     # Defense-in-depth: tests/__init__.py already applies this on first import of
     # the `tests` package (the universal hook, reached by every path below), but

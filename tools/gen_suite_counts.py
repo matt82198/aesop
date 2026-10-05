@@ -1,31 +1,25 @@
 #!/usr/bin/env python3
 """
-Generate tests/SUITE-COUNTS.json with actual test suite counts.
-INDEX: Generated suite-count artifact builder; walks git ls-files for test suites, emits JSON to tests/SUITE-COUNTS.json between GENERATED-BY markers; modes `--check` (byte-compare, exit 1 + regenerate hint) / `--regenerate` / `--json`; counts never derive to zero (fail-closed); deterministic + ASCII-safe; stdlib-only. Counts are derived per UNIQUE path, not per `git ls-files` line: an unmerged path is listed once per index stage (1=base/2=ours/3=theirs), and one file can match two shell globs at once, so a naive line-count over-counts (bit PRs #710/#711 under the old tests/CLAUDE.md-line gate); `list_git_files()` collects into a Python set to fix both. A merge in progress (MERGE_HEAD set) is a loud, non-fatal stderr `[WARN]` rather than a refusal, since conflict resolution is exactly when the sweep needs `--regenerate`.
+Live test-suite-count library: derives Node/Shell/Python suite counts from git ls-files.
+INDEX: Live suite-count library (no stored artifact): derives Node/Shell/Python test-suite counts straight from `git ls-files` on every call; stdlib-only, deterministic, ASCII-safe; counts never derive to zero (fail-closed). `--json` (default, read-only) prints the live counts; there is no `--check`/`--regenerate` mode and nothing is written anywhere, because as of structural fix #830 there is no committed tests/SUITE-COUNTS.json left to drift or regenerate -- counts are a pure function of the tree, computed fresh on every call, so nothing can go stale. Counts are derived per UNIQUE path, not per `git ls-files` line: an unmerged path is listed once per index stage (1=base/2=ours/3=theirs), and one file can match two shell globs at once, so a naive line-count over-counts (bit PRs #710/#711 under the old tests/CLAUDE.md-line gate); `list_git_files()` collects into a Python set to fix both. A merge in progress (MERGE_HEAD set) is a loud, non-fatal stderr `[WARN]` rather than a refusal, since conflict resolution is exactly when counts legitimately move. Consumed by `tools/verify_test_suite_count.py` (CI-shard-coverage gate) and `tests/test_list_test_suites.py` / `tests/test_tests_claudemd_drift.py` as the live ground truth.
 
-This tool is the SOLE SOURCE OF TRUTH for suite-count values used by verify_test_suite_count.py
-and pre-push/CI gates. It GENERATES tests/SUITE-COUNTS.json deterministically from git ls-files,
-never from hand-maintained state in tests/CLAUDE.md.
-
-Modes:
-  --check (default): READ-ONLY validation. Compare tests/SUITE-COUNTS.json against derived counts.
-    Exit 0 if counts match, 1 if drift, 2 if file missing or cannot evaluate.
-  --regenerate: Rewrite tests/SUITE-COUNTS.json to match actual files.
-    Exit 0 on success, 1 on structural error, 2 on evaluation failure.
-  --json: Output counts as JSON (read-only, no file I/O).
-
-The generated JSON is between GENERATED-BY markers for idempotent regeneration.
-Count derivation always uses --repo (default: CWD) as the git work tree.
-
-Exit codes:
-    0  counts match (--check) / regeneration succeeded / --json output
-    1  drift, file missing, or usage conflict
-    2  cannot evaluate (target not a git repo, git failure, vacuous zero)
+Why there is no artifact any more (PR #830, "guard: compute suite counts live"):
+tests/SUITE-COUNTS.json was a committed snapshot of this module's own output, rewritten by
+`--regenerate` and compared against by `--check`. Two clean merges (PR #828 postmortem)
+drifted it anyway: each side's own branch had the file correct in isolation, but the UNION
+of two merges changed the live count without either side's CI ever re-running --check against
+the merged tree, so main went red both times over a file that carried no information a human
+put there -- it was always a pure function of `git ls-files`. Nothing else in the repo ever
+read the committed VALUE (only the generator/gate/registry triangle that produced and checked
+it did), so the fix is to stop storing it: callers that need the count call get_actual_counts()
+or run `--json` and get the live number directly, and there is nothing left to drift.
 
 Usage:
-    python tools/gen_suite_counts.py --check [--repo ROOT]
-    python tools/gen_suite_counts.py --regenerate [--dry-run] [--repo ROOT]
-    python tools/gen_suite_counts.py --json [--repo ROOT]
+    python tools/gen_suite_counts.py [--json] [--repo ROOT]
+
+Exit codes:
+    0  counts printed successfully
+    2  cannot evaluate (target not a git repo, git failure, vacuous zero)
 """
 
 import argparse
@@ -33,7 +27,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict
 
 
 # Force UTF-8 output on all platforms (especially Windows where stdout defaults to cp1252)
@@ -50,19 +44,12 @@ if sys.stderr.encoding and 'utf' not in sys.stderr.encoding.lower():
 
 
 LABELS = ("Node", "Shell", "Python")
-GENERATED_JSON_PATH = "tests/SUITE-COUNTS.json"
-
-TEMPLATE = """\
-<!-- GENERATED-BY: tools/gen_suite_counts.py -->
-{json_content}
-<!-- END-GENERATED -->
-"""
 
 
 class StructureError(Exception):
     """Evaluation or structural problem, carrying the process exit code."""
 
-    def __init__(self, message: str, code: int = 1):
+    def __init__(self, message: str, code: int = 2):
         super().__init__(message)
         self.code = code
 
@@ -128,11 +115,11 @@ def merge_in_progress(repo_root: Path) -> bool:
 def warn_if_merge_in_progress(repo_root: Path) -> None:
     """Emit a loud, non-fatal warning when counts are derived mid-merge.
 
-    Deliberately a WARNING and not a refusal. Conflict resolution is exactly when
-    suite counts drift and exactly when the sweep needs --regenerate, so refusing
-    would break the workflow that needs this tool most. What must never happen is
-    a SILENT wrong number: list_git_files() makes the derivation correct (one count
-    per unique path) and this makes the half-resolved tree visible to the operator.
+    Deliberately a WARNING and not a refusal: counts are computed live on every
+    call, so there is no stale artifact to protect and no reason to refuse. What
+    must never happen is a SILENT wrong number: list_git_files() makes the
+    derivation correct (one count per unique path) and this makes the
+    half-resolved tree visible to the operator.
     """
     if not merge_in_progress(repo_root):
         return
@@ -140,8 +127,8 @@ def warn_if_merge_in_progress(repo_root: Path) -> None:
         f"[WARN] A merge is in progress in {repo_root} (MERGE_HEAD is set). Suite "
         "counts are derived per UNIQUE path, so unmerged index stages are not "
         "double counted -- but the tree is only half resolved, so files the merge "
-        "has yet to add or delete are not reflected yet. Re-run this gate after "
-        "the merge concludes.",
+        "has yet to add or delete are not reflected yet. Re-run this after "
+        "the merge concludes for a fully-resolved count.",
         file=sys.stderr,
     )
 
@@ -154,7 +141,7 @@ def list_git_files(repo_root: Path, *patterns: str) -> set:
     1. `git ls-files <pattern>` lists an UNMERGED path once per index stage
        (1=base, 2=ours, 3=theirs). During an in-progress merge a single conflicted
        `tests/test_*.py` was counted two or three times, which is how a mid-merge
-       --regenerate wrote an inflated suite count into the generated artifact.
+       read once inflated a now-removed generated count.
     2. The shell family is derived from three globs, and one path can match two of
        them (`tests/test_x.test.sh` matches `tests/*.test.sh` AND `tests/test_*.sh`),
        which double counted it across patterns.
@@ -205,7 +192,7 @@ def count_git_files(repo_root: Path, *patterns: str) -> int:
 
 
 def get_actual_counts(repo_root: Path) -> Dict[str, int]:
-    """Get actual test suite counts from the tree at repo_root.
+    """Get live test suite counts from the tree at repo_root.
 
     Returns: {"Node": int, "Shell": int, "Python": int}
     """
@@ -248,105 +235,8 @@ def format_json(counts: Dict[str, int]) -> str:
     return json.dumps(ordered, indent=2, sort_keys=False)
 
 
-def read_generated_json(json_path: Path) -> Dict[str, int]:
-    """Read and parse the generated JSON file.
-
-    Raises:
-        StructureError: code 1 or 2 if file is missing or malformed.
-    """
-    if not json_path.exists():
-        raise StructureError(
-            f"[ERROR] {json_path} not found. "
-            "Run: python tools/gen_suite_counts.py --regenerate",
-            1,
-        )
-
-    try:
-        content = json_path.read_text(encoding="utf-8")
-        # Extract JSON content between markers
-        if "<!-- GENERATED-BY:" in content:
-            start = content.find("{")
-            end = content.rfind("}") + 1
-            if start >= 0 and end > start:
-                content = content[start:end]
-        data = json.loads(content)
-        return data
-    except (json.JSONDecodeError, ValueError) as e:
-        raise StructureError(
-            f"[ERROR] {json_path} is not valid JSON: {e}",
-            2,
-        )
-
-
-def check_mode(json_path: Path, repo_root: Path) -> int:
-    """READ-ONLY validation of suite counts. Never writes.
-
-    Returns:
-        0 if counts match, 1 if drift / missing file, 2 if cannot evaluate.
-    """
-    try:
-        documented = read_generated_json(json_path)
-        actual = get_actual_counts(repo_root)
-        assert_no_vacuous_zero(actual, repo_root)
-    except StructureError as e:
-        print(str(e), file=sys.stderr)
-        return e.code
-
-    if documented == actual:
-        print("[OK] Suite counts match")
-        return 0
-
-    print("[DRIFT] Suite count mismatch in tests/SUITE-COUNTS.json:")
-    for label in LABELS:
-        if documented.get(label) != actual.get(label):
-            print(f"  {label}: file says {documented.get(label)}, actual is {actual.get(label)}")
-    print("")
-    print("Run: python tools/gen_suite_counts.py --regenerate")
-    print("Then commit the updated tests/SUITE-COUNTS.json with your change.")
-    return 1
-
-
-def regenerate_mode(json_path: Path, repo_root: Path, dry_run: bool = False) -> int:
-    """Rewrite tests/SUITE-COUNTS.json to match actual files.
-
-    Returns:
-        0 if successful (or dry_run), 1 on error, 2 if cannot evaluate.
-    """
-    try:
-        actual = get_actual_counts(repo_root)
-        assert_no_vacuous_zero(actual, repo_root)
-    except StructureError as e:
-        print(str(e), file=sys.stderr)
-        return e.code
-
-    json_content = format_json(actual)
-    full_content = TEMPLATE.format(json_content=json_content)
-
-    # Check if already up-to-date
-    if json_path.exists():
-        current_content = json_path.read_text(encoding="utf-8")
-        if current_content == full_content:
-            print("[OK] Counts already match, no changes needed")
-            return 0
-
-    if dry_run:
-        print("[DRY-RUN] Would update tests/SUITE-COUNTS.json:")
-        for label in LABELS:
-            print(f"  {label}: {actual[label]} suites")
-        print("")
-        print("Run without --dry-run to apply changes.")
-        return 0
-
-    json_path.write_text(full_content, encoding="utf-8")
-
-    print("[REGENERATED] Updated tests/SUITE-COUNTS.json:")
-    for label in LABELS:
-        print(f"  {label}: {actual[label]} suites")
-    return 0
-
-
 def json_mode(repo_root: Path) -> int:
-    """Output counts as JSON (read-only).
+    """Print live counts as JSON (read-only, no file I/O anywhere).
 
     Returns:
         0 on success, 2 if cannot evaluate.
@@ -363,31 +253,16 @@ def json_mode(repo_root: Path) -> int:
 
 
 def main():
-    """Main entry point."""
+    """Main entry point. Always read-only: there is nothing left to write."""
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
     parser.add_argument(
-        "--check",
-        action="store_true",
-        help="Read-only: verify counts match; exit 1 on drift. Default mode.",
-    )
-    parser.add_argument(
-        "--regenerate",
-        action="store_true",
-        help="Rewrite tests/SUITE-COUNTS.json to match actual files",
-    )
-    parser.add_argument(
         "--json",
         action="store_true",
-        help="Output counts as JSON to stdout (read-only, no file I/O)",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="With --regenerate: show what would change but don't write",
+        help="Output live counts as JSON to stdout (default; read-only, no file I/O)",
     )
     parser.add_argument(
         "--repo",
@@ -398,36 +273,13 @@ def main():
 
     args = parser.parse_args()
 
-    modes = sum([args.check, args.regenerate, args.json])
-    if modes > 1:
-        print(
-            "[ERROR] --check, --regenerate, and --json are mutually exclusive",
-            file=sys.stderr,
-        )
-        return 1
-
-    # --dry-run implies --regenerate
-    if args.dry_run and not args.regenerate:
-        args.regenerate = True
-
-    # Default to --check if no mode specified
-    if modes == 0:
-        args.check = True
-
     repo_root = (args.repo or Path.cwd()).resolve()
 
     if not repo_root.is_dir():
         print(f"[ERROR] repo root {repo_root} is not a directory", file=sys.stderr)
         return 2
 
-    json_path = repo_root / GENERATED_JSON_PATH
-
-    if args.json:
-        return json_mode(repo_root)
-    elif args.regenerate:
-        return regenerate_mode(json_path, repo_root, dry_run=args.dry_run)
-    else:  # --check
-        return check_mode(json_path, repo_root)
+    return json_mode(repo_root)
 
 
 if __name__ == "__main__":

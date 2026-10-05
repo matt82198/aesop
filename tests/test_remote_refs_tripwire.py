@@ -148,6 +148,33 @@ class TestSnapshotFunctions(unittest.TestCase):
         before = {"refs/heads/main": "aaa"}
         self.assertEqual(self.mod.diff_branches(before, dict(before)), [])
 
+    def test_diff_branches_excludes_backup_wip_ref_but_not_others(self):
+        """The repo's own daemons/backup-fleet.sh force-pushes
+        refs/heads/backup/wip-YYYYMMDD on an independent ~150s cycle; the
+        tripwire must not flag that specific ref moving OR appearing, while
+        still catching every other new-or-moved ref (the real incident
+        pattern, e.g. integrate/batch-*) exactly as before."""
+        before = {
+            "refs/heads/main": "aaa",
+            "refs/heads/backup/wip-20261005": "bbb",
+        }
+        # The daemon force-pushes its own ref (moved) and a real leak also
+        # lands in the same window (new, unrelated ref).
+        after = {
+            "refs/heads/main": "aaa",
+            "refs/heads/backup/wip-20261005": "ccc",
+            "refs/heads/integrate/leaked": "ddd",
+        }
+        findings = self.mod.diff_branches(before, after)
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("integrate/leaked", findings[0])
+        self.assertFalse(any("backup/wip" in f for f in findings), findings)
+
+        # A brand-new day's backup ref appearing mid-run must also be exempt.
+        after_new_day = dict(before)
+        after_new_day["refs/heads/backup/wip-20261006"] = "eee"
+        self.assertEqual(self.mod.diff_branches(before, after_new_day), [])
+
     def test_diff_prs_detects_new_pr(self):
         findings = self.mod.diff_prs([1, 2], [1, 2, 3])
         self.assertEqual(len(findings), 1)

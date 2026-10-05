@@ -37,9 +37,23 @@ remote state, so it must never itself run under tools/test_network_isolation.py'
 rewrite. The WRAPPED command is a separate subprocess with its own environment,
 inheriting whatever the caller already had (isolated or not); this tripwire does not
 set or unset anything for it.
+
+EXCLUDED_REF_PATTERN is a second, narrower exemption: this repo's own resident
+daemons/backup-fleet.sh (run every ~150s by the watchdog Scheduled Task on the dev
+box, independent of and concurrent with any CI run against the SAME origin)
+force-pushes `refs/heads/backup/wip-YYYYMMDD` as a one-ref-per-day WIP snapshot.
+That is a real, documented, pre-existing writer of this exact remote that has
+nothing to do with test isolation, so a before/after snapshot taken minutes apart
+sees it move on an unrelated schedule. The first CI run after this tripwire was
+wired in (#837) red-flagged on exactly that ref moving mid-shard, with no test in
+the wrapped command ever touching the remote. Excluding only this one documented
+ref pattern keeps the tripwire fail-closed on everything else -- any NEW branch or
+any OTHER moved branch (the actual #837 incident pattern, e.g. integrate/batch-*)
+still fails it immediately.
 """
 import argparse
 import json
+import re
 import sys
 import subprocess
 import time
@@ -48,6 +62,7 @@ from pathlib import Path
 REMOTE = "origin"
 PROBE_TIMEOUT = 20
 PR_LIST_LIMIT = 500
+EXCLUDED_REF_PATTERN = re.compile(r"^refs/heads/backup/wip-\d{8}$")
 
 
 def _repo_root() -> Path:
@@ -102,13 +117,22 @@ def snapshot_open_prs(repo_root):
 
 
 def diff_branches(before, after):
-    """Return human-readable findings, or [] if clean/unmeasurable."""
+    """Return human-readable findings, or [] if clean/unmeasurable.
+
+    Refs matching EXCLUDED_REF_PATTERN (this repo's own backup-fleet.sh daemon
+    ref) are skipped entirely -- see the module docstring. Every other ref is
+    still held to the full new-or-moved standard.
+    """
     if before is None or after is None:
         return []
     findings = []
     for ref in sorted(set(after) - set(before)):
+        if EXCLUDED_REF_PATTERN.match(ref):
+            continue
         findings.append(f"NEW remote branch appeared: {ref} ({after[ref]})")
     for ref in sorted((set(after) & set(before))):
+        if EXCLUDED_REF_PATTERN.match(ref):
+            continue
         if after[ref] != before[ref]:
             findings.append(f"remote branch moved: {ref} ({before[ref]} -> {after[ref]})")
     return findings
