@@ -29,6 +29,12 @@ import unittest
 from pathlib import Path
 from typing import List, Set
 
+# tools/ci_shard_runner.py's real distribute_shards() is imported directly
+# (not re-derived) so TestFakeGreenTrap proves totality against the function
+# CI actually runs, not a re-implementation of its math.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+import ci_shard_runner  # noqa: E402  (sys.path adjusted above)
+
 
 class TestFakeGreenTrap(unittest.TestCase):
     """Trap: FAKE-GREEN incidents (tests report pass but don't execute)
@@ -66,11 +72,6 @@ class TestFakeGreenTrap(unittest.TestCase):
         with. A file dropped from the union here means CI would silently
         never execute it -- the exact #464 shape, at the shard-config layer.
         """
-        tools_dir = self.repo_root / "tools"
-        if str(tools_dir) not in sys.path:
-            sys.path.insert(0, str(tools_dir))
-        import ci_shard_runner  # noqa: E402 (sys.path adjusted above)
-
         total_shards = 4  # matches every `ci_shard_runner.py <id> 4` in ci.yml
         tracked = subprocess.run(
             ["git", "ls-files", "tests/test_*.py"],
