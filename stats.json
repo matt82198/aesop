@@ -1,12 +1,12 @@
 {
   "git": {
-    "merged_prs": 551,
+    "merged_prs": 568,
     "merged_prs_source": "git-log",
-    "total_commits": 2095,
-    "project_age_days": 59,
+    "total_commits": 2157,
+    "project_age_days": 85,
     "wave_count": 31,
-    "insertions_deletions": 371818,
-    "files_tracked": 1102,
+    "insertions_deletions": 377868,
+    "files_tracked": 1113,
     "distinct_coauthors": 18,
     "authors_human": 0,
     "model_tiers": 6,
@@ -28,14 +28,14 @@
     "cumulative_tokens": null,
     "total_coding_hours": null
   },
-  "generated_at": "2026-09-09T07:15:36.765640+00:00",
-  "loc": 343009,
-  "head_sha": "c6df7b6ffa6ee7fff6aa7ba8fd054b2b9af22b56",
+  "generated_at": "2026-10-05T08:45:20.914731+00:00",
+  "loc": 346651,
+  "head_sha": "d8135aba6ec730ea5b9a9b13b0115b56a9aa6613",
   "economics": {
     "token_ledger_available": false,
-    "merged_prs": 551,
+    "merged_prs": 568,
     "merged_prs_source": "git-log",
-    "lines_of_code": 343009,
+    "lines_of_code": 346651,
     "wave_count": 31
   },
   "economics_caveats": {
