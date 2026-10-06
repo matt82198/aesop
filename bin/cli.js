@@ -978,20 +978,38 @@ function initializeGitRepo(targetDir, noGitFlag = false) {
     return false;  // Git already initialized
   }
 
+  // Every git invocation below gets a bounded timeout: unlike every other
+  // subprocess call in this file (resolvePythonInterpreter, resolveRealGitDir,
+  // installDependencies, the Python dispatch spawns), these five execSync calls
+  // historically had NO timeout -- a lock contention, credential prompt, or GPG
+  // signing hang on any one of them blocked indefinitely with no way out,
+  // observed as a full node --test file-level 180s timeout with zero subtest
+  // output on CI's windows-shard(0) (git init is optional/best-effort for a
+  // scaffold; fail fast and move on rather than hang forever).
+  const GIT_OP_TIMEOUT_MS = 15000;
+
   try {
     // Initialize git repo
-    execSync('git init -q', { cwd: targetDir, stdio: 'pipe' });
+    execSync('git init -q', { cwd: targetDir, stdio: 'pipe', timeout: GIT_OP_TIMEOUT_MS });
     console.log('✓ Initialized git repository');
 
     // Create initial commit
-    execSync('git config user.email "aesop-scaffold@local"', { cwd: targetDir, stdio: 'pipe' });
-    execSync('git config user.name "Aesop Scaffold"', { cwd: targetDir, stdio: 'pipe' });
-    execSync('git add -A', { cwd: targetDir, stdio: 'pipe' });
-    execSync('git commit -q -m "Initial aesop scaffold"', { cwd: targetDir, stdio: 'pipe' });
+    execSync('git config user.email "aesop-scaffold@local"', { cwd: targetDir, stdio: 'pipe', timeout: GIT_OP_TIMEOUT_MS });
+    execSync('git config user.name "Aesop Scaffold"', { cwd: targetDir, stdio: 'pipe', timeout: GIT_OP_TIMEOUT_MS });
+    // -c commit.gpgsign=false: this is a throwaway scaffold commit under a
+    // just-generated local identity (not the invoking user's), so there is
+    // nothing meaningful to sign; signing it would also inherit the invoker's
+    // global GPG config and can hang indefinitely waiting on a pinentry prompt
+    // with no TTY available (the actual hang this guards against).
+    execSync('git add -A', { cwd: targetDir, stdio: 'pipe', timeout: GIT_OP_TIMEOUT_MS });
+    execSync('git -c commit.gpgsign=false commit -q -m "Initial aesop scaffold"', { cwd: targetDir, stdio: 'pipe', timeout: GIT_OP_TIMEOUT_MS });
     console.log('✓ Created initial git commit');
     return true;
   } catch (e) {
-    // Git operations failed, continue anyway
+    // Git operations failed (or timed out), continue anyway
+    if (e.signal || e.code === 'ETIMEDOUT') {
+      console.warn(`⚠ git initialization timed out or was killed (${e.signal || e.code}); continuing without a git repo`);
+    }
     console.warn('⚠ Warning: Failed to initialize git repo automatically');
     console.warn('  Run manually: cd ' + targetDir + ' && git init && git add -A && git commit -m "Initial commit"');
     return false;

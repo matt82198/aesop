@@ -15,6 +15,7 @@ If you're new to Aesop, follow this 4-stage path:
 - Quick-start: `npx @matt82198/aesop my-fleet`
 - Manual setup for development (git clone)
 - Pre-push hook installation
+- **[ACTIONS-TEMPLATE.md](ACTIONS-TEMPLATE.md)** — Ready-to-fork GitHub Actions dispatch workflow
 
 ### Stage 2: Configure
 **[CONFIGURE.md](CONFIGURE.md)** — aesop.config.json, repos, ports, brain root

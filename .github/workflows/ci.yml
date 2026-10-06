@@ -11,6 +11,20 @@ name: CI
 # causing matrix jobs to report skipped. This approach preserves deadlock safety while allowing
 # incremental gate optimization (browser-proofs and windows-shard skip safely as non-required).
 #
+# GAP (found 2026-10-05, ~8h of armed PRs stuck unmerged): the `needs: docs-only-gate` edge on
+# `ci`/`windows-shard`/`browser-proofs` reintroduces the SAME deadlock via a different path, with
+# no job-level `if:` skip and no `paths-ignore:` in sight. GitHub Actions implicitly prepends
+# `success() &&` to any job's scheduling decision when it has a `needs:` entry, UNLESS that job's
+# own `if:` explicitly calls always()/cancelled()/failure(). So whenever docs-only-gate itself does
+# not conclude "success" — a genuine script bug, OR (as observed) the job sitting queued and then
+# getting cancelled by runner/concurrency starvation, with zero steps ever executing — `ci` reports
+# `skipped` on all 4 shards and `windows-shard` also skips (which the `windows` aggregator then
+# treats as an acceptable "correctly skipped for docs-only," turning a Windows run that never
+# happened into a false green). Required contexts "ci (0..3)"/"windows" must always conclude
+# success or failure, never skipped, REGARDLESS of why docs-only-gate failed to resolve — hence
+# `if: always() && (needs.docs-only-gate.result != 'success' || ...)` on all three downstream jobs.
+# Do not remove always() from any of them; without it the implicit success()-gate comes back.
+#
 # PR-only by design. `push: branches: [main]` was removed: main is protected by PR
 # checks, so the merge commit's `ci` run already passed on the PR, and .github/workflows/
 # main-full.yml is the post-merge verification (that is why it exists — see its header).
@@ -20,6 +34,10 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    # Nightly full CI matrix (03:30 UTC): drift guard for Windows shard de-collection,
+    # flaky luck-passes, and skip-path classes
+    - cron: '30 3 * * *'
 
 concurrency:
   # Cancel in-progress runs on PR branches (superseded pushes waste runners).
@@ -62,8 +80,58 @@ jobs:
     outputs:
       is_docs_only: ${{ steps.is-docs-only.outputs.is_docs_only }}
 
+  windows-sensitive-paths:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Detect Windows-sensitive changes
+        id: windows-touched
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          else
+            # On workflow_dispatch and schedule, run Windows (conservative)
+            echo "windows_touched=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          # Check for Windows-sensitive paths (OS-specific behavior only):
+          # - daemons/** (daemon scripts, Windows service)
+          # - hooks/** (pre-push enforcement, PowerShell/bash mix)
+          # - **/*.ps1, **/*.sh (shell scripts, OS-specific interpreters)
+          # - bin/** (CLI entry points, npm scripts platform-specific)
+          # - package.json, package-lock.json (npm, PATH handling differs)
+          # - ui/web/** (vite build outputs, line ending sensitivity)
+          # - .github/workflows/** (CI configuration)
+          # - specific tools/ files with OS-specific behavior:
+          #   ci_shard_runner.py, halt.py, test_isolation_tripwire.py,
+          #   remote_refs_tripwire.py, test_network_isolation.py,
+          #   subprocess_common.py, encoding_lint.py, power_selftest.py,
+          #   hook_preflight.py, task_cadence_check.py, build_static_dash.py
+          if echo "$CHANGED" | grep -qE '^(daemons/|hooks/|bin/|ui/web/|\.github/workflows/)|\.ps1$|\.sh$|^package(-lock)?\.json$|^tools/(ci_shard_runner|halt|test_isolation_tripwire|remote_refs_tripwire|test_network_isolation|subprocess_common|encoding_lint|power_selftest|hook_preflight|task_cadence_check|build_static_dash)\.py$'; then
+            echo "windows_touched=true" >> $GITHUB_OUTPUT
+          else
+            echo "windows_touched=false" >> $GITHUB_OUTPUT
+          fi
+
+    outputs:
+      windows_touched: ${{ steps.windows-touched.outputs.windows_touched }}
+
   ci:
     needs: docs-only-gate
+    # if: always() is load-bearing, not decorative. Without it, GitHub Actions
+    # implicitly prepends `success() &&` to a job's scheduling decision whenever
+    # it has a `needs:` entry and no `if:` says otherwise -- so ANY non-success
+    # conclusion of docs-only-gate (a real script failure, a cancellation from
+    # the runner/concurrency queue, a timeout) makes `ci` report `skipped`
+    # instead of running, which is the exact deadlock this file's top comment
+    # warns about (a skipped required check can never satisfy branch
+    # protection). `ci` must run on every PR unconditionally per that comment;
+    # always() is what actually enforces "unconditional" against a failed
+    # upstream job, not just an `if:`-skipped one. Do not remove.
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -73,6 +141,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          # On pull_request, check out the PR HEAD commit (not the merge commit).
+          # This ensures a red main never turns every PR red; main-full + regen-on-main
+          # own post-merge integration. Fixes: a red main would make the PR's ci checks
+          # red even though the PR code is unrelated to the breakage.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -144,13 +217,31 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/gen_tool_index.py --check
 
+      - name: Install actionlint (GitHub-semantics workflow validator)
+        if: matrix.python-shard == 0
+        # Pinned release via the official downloader. GAP 2026-10-06: PyYAML-valid
+        # main-full.yml was rejected by GitHub ("Unexpected value 'exclude'") and
+        # ran ZERO jobs for ~10 merges; actionlint flags that class at PR time.
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12 "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/actionlint" -version
+
       - name: CI workflow linter gate (fail-closed)
         if: matrix.python-shard == 0
+        env:
+          # Structural GitHub-semantics checks always run; in CI actionlint is mandatory too.
+          CI_WORKFLOW_LINT_REQUIRE_ACTIONLINT: '1'
         run: python tools/ci_workflow_lint.py
 
       - name: CI gates runability check (Guardrail G2.5)
         if: matrix.python-shard == 0
         run: python tools/ci_gate_runability.py
+
+      - name: Needs-skip-cascade guard (required checks never skip on upstream failure)
+        if: matrix.python-shard == 0
+        run: python tools/ci_needs_skip_guard.py
       - name: Workflow model linter
         if: matrix.python-shard == 0
         run: python tools/workflow_model_linter.py
@@ -184,6 +275,10 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/portability_check.py --root . --baseline .portability-baseline.json
 
+      - name: Dead-baseline liveness gate (GUARDRAIL #3)
+        if: matrix.python-shard == 0
+        run: python tools/baseline_liveness_check.py --root .
+
       - name: Wave templates validation gate
         if: matrix.python-shard == 0
         run: python tools/wave_templates.py validate --template all
@@ -201,7 +296,7 @@ jobs:
         run: python tools/port_fidelity_check.py --check --root .
 
       - name: Run Python tests (shard ${{ matrix.python-shard }}/4)
-        run: python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
+        run: python tools/remote_refs_tripwire.py --attributed -- python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
 
       # The ui/web chain below is shard-INVARIANT: all four ubuntu shards ran the same
       # npm ci + build + tsc + dist-drift + vitest, so 3 of every 4 runs were pure waste.
@@ -245,7 +340,7 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/tracker_autoclose.py --check
 
-      - name: Test suite count drift gate
+      - name: CI shard coverage gate
         if: matrix.python-shard == 0
         run: python tools/verify_test_suite_count.py --check
 
@@ -258,8 +353,14 @@ jobs:
         run: python tools/secret_scan.py .
 
   windows-shard:
-    needs: docs-only-gate
-    if: needs.docs-only-gate.outputs.is_docs_only == 'false'
+    needs: [docs-only-gate, windows-sensitive-paths]
+    # On pull_request, run only if Windows-sensitive paths are touched, OR if docs-only-gate
+    # failed (fail-open on upstream failure). On workflow_dispatch/schedule, always run
+    # (Windows matrix must verify all paths in those triggers). The leading always() is required
+    # to prevent implicit success()-gating when we have a `needs:` entry.
+    if: |
+      always() && (needs.docs-only-gate.result != 'success' || needs.docs-only-gate.outputs.is_docs_only != 'true') &&
+      (github.event_name != 'pull_request' || needs.windows-sensitive-paths.outputs.windows_touched == 'true')
     # Sharded test suite: runs Node tests (shard 0 only) and Python tests distributed 4-way
     # Excludes: shell test suite (Git Bash variance on Windows), browser proofs (Playwright setup cost)
     runs-on: windows-latest
@@ -273,6 +374,9 @@ jobs:
         python-shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v7
+        with:
+          # On pull_request, check out the PR HEAD commit (not the merge commit).
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -305,18 +409,26 @@ jobs:
           PYTHONUTF8: '1'
           PYTEST_TIMEOUT: '120'
         shell: bash
-        run: python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
+        run: python tools/remote_refs_tripwire.py --attributed -- python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
 
   windows:
     # Aggregator job: enforces that all windows-shard shards succeeded or were skipped.
     # Keeps the required check name for branch protection (no config change needed).
-    needs: windows-shard
+    # Always reports a conclusion (success when matrix was intentionally skipped on pull_request).
+    needs: [windows-shard, windows-sensitive-paths]
     runs-on: ubuntu-latest
     if: always()
     steps:
-      - name: Check all Windows shards passed
+      - name: Resolve Windows run result
         run: |
-          if [ "${{ needs.windows-shard.result }}" != "success" ] && [ "${{ needs.windows-shard.result }}" != "skipped" ]; then
+          # On pull_request with no Windows-sensitive changes, windows-shard is skipped
+          # (via job-level if:). Report success for the aggregator in that case.
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.windows-sensitive-paths.outputs.windows_touched }}" != "true" ]; then
+            echo "Windows-sensitive paths not touched on PR; skipped (expected)"
+            exit 0
+          fi
+          # Otherwise, windows-shard ran: check its result
+          if [ "${{ needs.windows-shard.result }}" != "success" ]; then
             echo "One or more Windows shards failed"
             exit 1
           fi
@@ -337,7 +449,11 @@ jobs:
 
   browser-proofs:
     needs: docs-only-gate
-    if: needs.docs-only-gate.outputs.is_docs_only == 'false'
+    # Same fail-open rationale as windows-shard above: always() prevents the
+    # implicit success()-gating GitHub Actions adds to any needs-gated `if:`,
+    # so a failed/cancelled docs-only-gate still lets browser-proofs run
+    # instead of silently skipping.
+    if: always() && (needs.docs-only-gate.result != 'success' || needs.docs-only-gate.outputs.is_docs_only != 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

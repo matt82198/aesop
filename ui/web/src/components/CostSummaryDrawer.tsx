@@ -5,8 +5,18 @@
  * - Model-mix breakdown (compact bar chart or list)
  *
  * Default: collapsed (toggle rail only, ~40px). Expanded: ~180px width.
- * Handles three data states: loading (live but no data yet), error (connection issue),
- * empty (no runs). Never renders a blank pane.
+ *
+ * State contract — connection status wins over cached data. `useSSE` retains the
+ * last `cost` payload across a disconnect, so any state gated on `!cost` becomes
+ * unreachable once one payload has landed. The drawer is persistent across every
+ * view, so a healthy-looking render over a dead stream is the worst failure mode
+ * available to it. Four states, in precedence order:
+ *   error   — stream is not live (regardless of cached data). When a cached cost
+ *             exists it is shown under an explicit STALE label, never as current.
+ *   loading — stream is live, first payload not yet delivered.
+ *   empty   — stream is live, payload delivered, zero runs.
+ *   loaded  — stream is live, payload delivered, runs present.
+ * Never renders a blank pane.
  *
  * Bound to same SSE source as Cost view; no polling.
  */
@@ -54,10 +64,14 @@ const EMPTY_COST: CostSummary = {
 export function CostSummaryDrawer({ cost, connectionStatus }: CostSummaryDrawerProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
-  // State determination (same logic as Cost.tsx)
-  const isLoading = !cost && connectionStatus.status === 'live';
-  const isError = !cost && connectionStatus.status !== 'live';
-  const isEmpty = cost && cost.overall_scorecard.total_runs === 0;
+  // State determination. The error determination is the connection status ALONE —
+  // deliberately not gated on `!cost`, because useSSE keeps the last payload when
+  // the EventSource dies and the drawer would otherwise show that stale spend
+  // indefinitely with no indication.
+  const isError = connectionStatus.status !== 'live';
+  const isStale = isError && cost !== null;
+  const isLoading = !isError && !cost;
+  const isEmpty = !isError && !!cost && cost.overall_scorecard.total_runs === 0;
 
   const summary = cost ?? EMPTY_COST;
 
@@ -100,28 +114,35 @@ export function CostSummaryDrawer({ cost, connectionStatus }: CostSummaryDrawerP
     }
   }, [summary, isEmpty]);
 
-  // Compute model mix (percentage of total tokens by model in latest day)
+  // Compute model mix: each model's share of the ALL-TIME token total.
+  //
+  // Window choice: `summary.models` is the only per-model token breakdown the
+  // CostSummary contract carries, and it is all-time (`daily_totals` is a
+  // per-day roll-up with no model dimension). So numerator and denominator both
+  // come from `summary.models` — same window, shares that sum to 100%. The
+  // window is labelled in the UI so the number cannot be misread as "today".
+  // (The previous denominator mixed windows: all-time model tokens over
+  // latest-day tokens x model count, which is a share of nothing and routinely
+  // exceeded 100%.)
   const modelMix = useMemo(() => {
-    const sortedDays = Object.keys(summary.daily_totals).sort().reverse();
-    if (sortedDays.length === 0) return [];
+    const entries = Object.entries(summary.models).map(([model, stats]) => ({
+      model,
+      tokens: stats.tokens_in + stats.tokens_out,
+    }));
 
-    const latestDay = sortedDays[0];
-    const dayTokens = summary.daily_totals[latestDay];
-    const dayTotal = dayTokens.tokens_in + dayTokens.tokens_out;
+    const grandTotal = entries.reduce((sum, e) => sum + e.tokens, 0);
+    if (grandTotal === 0) return [];
 
-    if (dayTotal === 0) return [];
-
-    // Calculate each model's share
-    const modelShares: Array<{ model: string; percentage: number }> = [];
-    Object.entries(summary.models).forEach(([model, stats]) => {
-      const modelTotal = stats.tokens_in + stats.tokens_out;
-      const percentage = (modelTotal / (dayTotal * Object.keys(summary.models).length)) * 100;
-      if (percentage > 0) {
-        modelShares.push({ model, percentage });
-      }
-    });
-
-    return modelShares.sort((a, b) => b.percentage - a.percentage).slice(0, 3);
+    return entries
+      .filter((e) => e.tokens > 0)
+      // Round to 0.1% once, here, so the label and the bar width can never
+      // disagree and float noise (0.3 * 100 = 29.999...) never leaks into either.
+      .map((e) => ({
+        model: e.model,
+        percentage: Math.round((e.tokens / grandTotal) * 1000) / 10,
+      }))
+      .sort((a, b) => b.percentage - a.percentage)
+      .slice(0, 3);
   }, [summary]);
 
   // Format model name for display
@@ -168,6 +189,14 @@ export function CostSummaryDrawer({ cost, connectionStatus }: CostSummaryDrawerP
             {connectionStatus.lastError && (
               <p className="cost-summary__message">{connectionStatus.lastError}</p>
             )}
+            {isStale && (
+              <div className="cost-summary__stale" data-testid={TESTIDS.costSummaryStale}>
+                <p className="cost-summary__stale-label">Stale &mdash; last known</p>
+                <p className="cost-summary__stale-value">
+                  {totalSpend.formatted} &middot; {spendRate}
+                </p>
+              </div>
+            )}
           </div>
         )}
 
@@ -192,19 +221,24 @@ export function CostSummaryDrawer({ cost, connectionStatus }: CostSummaryDrawerP
 
             {modelMix.length > 0 && (
               <div className="cost-summary__breakdown" data-testid={TESTIDS.costSummaryModelMix}>
-                <span className="cost-summary__breakdown-label">Models</span>
+                <span className="cost-summary__breakdown-label">Models (all-time share)</span>
                 <div className="cost-summary__model-list">
                   {modelMix.map(({ model, percentage }) => (
-                    <div key={model} className="cost-summary__model-row">
+                    <div
+                      key={model}
+                      className="cost-summary__model-row"
+                      data-testid={TESTIDS.costSummaryModelRow}
+                    >
                       <span className="cost-summary__model-name">
                         {formatModelName(model)}
                       </span>
                       <span className="cost-summary__model-bar">
                         <span
                           className="cost-summary__model-fill"
-                          style={{ width: `${Math.min(percentage * 2, 100)}%` }}
+                          style={{ width: `${percentage}%` }}
                         />
                       </span>
+                      <span className="cost-summary__model-pct">{percentage}%</span>
                     </div>
                   ))}
                 </div>

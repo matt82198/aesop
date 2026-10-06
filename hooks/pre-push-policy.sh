@@ -865,15 +865,20 @@ check_metrics() {
 }
 
 check_test_suite_count() {
-  # Test suite count drift detection gate (tools/verify_test_suite_count.py --check).
-  # Verifies that test suite counts documented in tests/CLAUDE.md match the actual
-  # number of test files on disk. This gate is wired here (not just in CI) because
-  # CI only runs after push; a local pre-push check catches the drift immediately.
+  # CI-shard-coverage gate (tools/verify_test_suite_count.py --check).
+  # Verifies the CI workflow's shard matrix (.github/workflows/ci.yml) actually
+  # covers every git-tracked tests/test_*.py file -- a gap there means some
+  # shard index never runs in CI, so test files assigned to it are silently
+  # never executed. Counts are computed live (PR #830 removed the committed
+  # tests/SUITE-COUNTS.json this gate used to compare against); this gate is
+  # wired here (not just in CI) because CI only runs after push; a local
+  # pre-push check catches a shard-matrix gap immediately.
   #
   # Fail-open ONLY for missing optional tooling (hook is installed into
   # repos without an aesop checkout; no aesop install == no verify tool).
-  # An actual drift detection (exit 1 from --check) stays fail-closed and blocks
-  # the push. verify_test_suite_count exits 0 when counts match, 1 on drift.
+  # An actual gap (exit 1 from --check) stays fail-closed and blocks the push.
+  # verify_test_suite_count exits 0 when fully covered (or N/A for a repo with
+  # no shard matrix), 1 on a coverage gap, 2 if it cannot evaluate.
   local aesop_root
   aesop_root=$(resolve_aesop_root)
   local verify_script="$aesop_root/tools/verify_test_suite_count.py"
@@ -904,6 +909,59 @@ check_test_suite_count() {
   if [ $verify_exit_code -ne 0 ]; then
     if [ -n "$verify_output" ]; then
       printf '%s\n' "$verify_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
+check_claudemd_headroom() {
+  # CLAUDE.md merge-union cap gate (tools/claudemd_lint.py --headroom).
+  #
+  # The working-tree line-cap check only ever sees the BRANCH. A branch can sit
+  # at 149/150 and pass while origin/main independently grew, so the merge lands
+  # at 151 and busts the cap on main with nothing red on the way in (three such
+  # cascades in one day). This previews the merge against origin/main and lints
+  # the UNION's line count, catching the cascade before the push.
+  #
+  # Tool exit contract: 0=clean, 1=a union busts its cap (fail-CLOSED, push
+  # blocked), 2=merge union UNREADABLE. Exit 2 is an environment condition (no
+  # origin/main fetched yet, shallow clone, un-previewable merge), not a policy
+  # violation, so it fails OPEN with an audit event -- the same philosophy as the
+  # missing-tool fail-open below.
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local lint_script="$aesop_root/tools/claudemd_lint.py"
+
+  if [ ! -f "$lint_script" ]; then
+    log_event "claudemd_headroom_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; CLAUDE.md headroom gate skipped\n' >&2
+    log_event "claudemd_headroom_skipped_no_python"
+    return 0
+  fi
+
+  local base_ref="${AESOP_HEADROOM_BASE_REF:-origin/main}"
+  local headroom_output
+  headroom_output=$("$py_bin" "$lint_script" --root "$aesop_root" --headroom --base-ref "$base_ref" 2>&1)
+  local headroom_exit_code=$?
+
+  if [ $headroom_exit_code -eq 2 ]; then
+    if [ -n "$headroom_output" ]; then
+      printf '%s\n' "$headroom_output" >&2
+    fi
+    log_event "claudemd_headroom_skipped_unreadable"
+    return 0
+  fi
+
+  if [ $headroom_exit_code -ne 0 ]; then
+    if [ -n "$headroom_output" ]; then
+      printf '%s\n' "$headroom_output" >&2
     fi
     return 1
   fi
@@ -1071,6 +1129,79 @@ check_test_coverage() {
   if [ $coverage_exit_code -ne 0 ]; then
     if [ -n "$coverage_output" ]; then
       printf '%s\n' "$coverage_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
+check_generated_paths() {
+  # Generated-path registry gate (tools/generated_paths.py --check).
+  # Machine-generated files have exactly ONE legitimate writer -- their
+  # generator. A hand edit is silently reverted on the next regeneration AND
+  # collides with every concurrent lane that regenerates the same file, which
+  # is the contended-file conflict class this gate exists to kill.
+  #
+  # Reads the pushed ref tuples from stdin (same capture main() feeds every
+  # other stdin consumer), turns each range into its changed-path list, and
+  # hands the union to the registry. Paths go over stdin, not argv, so a large
+  # diff cannot blow the command-line length limit.
+  #
+  # Escape hatch: AESOP_ALLOW_GENERATED=1 (honored inside the tool) is the
+  # DESIGNED writer path for generators/daemon regeneration pushes, not a
+  # weakening -- an ordinary push never sets it.
+  #
+  # Fail-open ONLY for missing optional tooling / no python (the hook installs
+  # into repos without an aesop checkout). Malformed or unparseable stdin is
+  # already fail-closed by check_secret_scan, which runs first; here it simply
+  # means there is no diff to classify.
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local gen_script="$aesop_root/tools/generated_paths.py"
+
+  if [ ! -f "$gen_script" ]; then
+    log_event "generated_paths_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'Warning: no python interpreter found; generated-path gate skipped\n' >&2
+    log_event "generated_paths_skipped_no_python"
+    return 0
+  fi
+
+  local commit_ranges
+  commit_ranges=$(get_commit_range)
+  local range_exit_code=$?
+  if [ $range_exit_code -ne 0 ] || [ -z "$commit_ranges" ]; then
+    # Delete-only / empty / malformed: no content diff to classify here.
+    return 0
+  fi
+
+  local changed=""
+  local range
+  while IFS= read -r range || [ -n "$range" ]; do
+    [ -z "$range" ] && continue
+    local range_paths
+    range_paths=$(git diff --name-only "$range" 2>/dev/null)
+    if [ -n "$range_paths" ]; then
+      changed="${changed}${range_paths}"$'\n'
+    fi
+  done <<< "$commit_ranges"
+
+  if [ -z "$(printf '%s' "$changed" | tr -d '[:space:]')" ]; then
+    return 0
+  fi
+
+  local gen_output
+  gen_output=$(printf '%s\n' "$changed" | "$py_bin" "$gen_script" --check 2>&1)
+  local gen_exit_code=$?
+
+  if [ $gen_exit_code -ne 0 ]; then
+    if [ -n "$gen_output" ]; then
+      printf '%s\n' "$gen_output" >&2
     fi
     return 1
   fi
@@ -1733,12 +1864,148 @@ refs/heads/feature/test $local_sha refs/heads/main 00000000000000000000000000000
     test_failed=$((test_failed + 1))
   fi
 
+  printf '\n=== Test 23: check_claudemd_headroom exit contract (missing tool / unreadable / bust) ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_headroom"
+    mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+
+    # 23a: tool absent -> fail-open (hook installs into repos without an aesop checkout)
+    if ! check_claudemd_headroom >/dev/null 2>&1; then
+      printf 'FAIL: check_claudemd_headroom should fail-open when tool missing\n'
+      exit 1
+    fi
+
+    # 23b: tool reports exit 2 (merge union UNREADABLE) -> fail-open, not a policy block
+    cat > "$AESOP_ROOT/tools/claudemd_lint.py" <<'HEADROOM_UNREADABLE'
+#!/usr/bin/env python3
+import sys
+print("Error: merge union unreadable: ref 'origin/main' does not resolve", file=sys.stderr)
+sys.exit(2)
+HEADROOM_UNREADABLE
+    if ! check_claudemd_headroom >/dev/null 2>&1; then
+      printf 'FAIL: exit 2 (unreadable) must fail-open, not block the push\n'
+      exit 1
+    fi
+
+    # 23c: tool reports exit 1 (a union busts its cap) -> fail-CLOSED
+    cat > "$AESOP_ROOT/tools/claudemd_lint.py" <<'HEADROOM_BUST'
+#!/usr/bin/env python3
+import sys
+print("1. [headroom-line-count] tools/CLAUDE.md: merge union is 151 lines, exceeds max 150")
+sys.exit(1)
+HEADROOM_BUST
+    if check_claudemd_headroom >/dev/null 2>&1; then
+      printf 'FAIL: exit 1 (union busts cap) must fail-closed and block the push\n'
+      exit 1
+    fi
+
+    printf 'PASS: headroom gate fails open on missing tool + unreadable, fails closed on a busted union\n'
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
+  printf '\n=== Test 24: check_generated_paths blocks a registered generated path ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_genpaths"
+    mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+    # Stand-in registry tool: exits 1 iff tools/INDEX.md appears on stdin. The
+    # real tool is exercised by tests/test_generated_paths.py; this proves the
+    # HOOK collects the diff and propagates the tool's exit code.
+    cat > "$AESOP_ROOT/tools/generated_paths.py" <<'GENPATHS'
+#!/usr/bin/env python3
+import sys
+paths = sys.stdin.read().split()
+sys.exit(1 if "tools/INDEX.md" in paths else 0)
+GENPATHS
+
+    REPO="$tmpdir/genpaths_repo"
+    mkdir -p "$REPO/tools"
+    cd "$REPO" || exit 1
+    git init -q
+    git config user.email "test@example.com"
+    git config user.name "Test User"
+    printf 'seed\n' > seed.txt
+    git add seed.txt
+    git commit -q -m "base"
+    base_sha=$(git rev-parse HEAD)
+    printf 'generated\n' > tools/INDEX.md
+    git add tools/INDEX.md
+    git commit -q -m "hand-edit a generated file"
+    head_sha=$(git rev-parse HEAD)
+
+    tuple="refs/heads/feature/x $head_sha refs/heads/feature/x $base_sha"
+    if printf '%s\n' "$tuple" | check_generated_paths >/dev/null 2>&1; then
+      printf 'FAIL: should have blocked a push touching a registered generated path\n'
+      exit 1
+    fi
+    printf 'PASS: push touching a registered generated path blocked\n'
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
+  printf '\n=== Test 25: check_generated_paths passes on ordinary paths ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_genpaths"
+
+    REPO="$tmpdir/genpaths_repo_clean"
+    mkdir -p "$REPO/tools"
+    cd "$REPO" || exit 1
+    git init -q
+    git config user.email "test@example.com"
+    git config user.name "Test User"
+    printf 'seed\n' > seed.txt
+    git add seed.txt
+    git commit -q -m "base"
+    base_sha=$(git rev-parse HEAD)
+    printf 'authored\n' > tools/regular_tool.py
+    git add tools/regular_tool.py
+    git commit -q -m "ordinary change"
+    head_sha=$(git rev-parse HEAD)
+
+    tuple="refs/heads/feature/y $head_sha refs/heads/feature/y $base_sha"
+    if printf '%s\n' "$tuple" | check_generated_paths >/dev/null 2>&1; then
+      printf 'PASS: ordinary push allowed through the generated-path gate\n'
+    else
+      printf 'FAIL: ordinary push should not be blocked\n'
+      exit 1
+    fi
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
+  printf '\n=== Test 26: check_generated_paths skipped when tool missing ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_no_genpaths"
+    mkdir -p "$AESOP_ROOT"
+
+    if printf '' | check_generated_paths >/dev/null 2>&1; then
+      printf 'PASS: check_generated_paths returns 0 (fail-open) when tool missing\n'
+    else
+      printf 'FAIL: check_generated_paths should fail-open when tool missing\n'
+      exit 1
+    fi
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
   printf '\n=== Test Results ===\n'
   printf 'PASSED: %d\n' "$test_passed"
   printf 'FAILED: %d\n' "$test_failed"
 
   if [ "$test_failed" -eq 0 ]; then
-    printf '\nAll 22 tests passed.\n'
+    printf '\nAll 26 tests passed.\n'
     return 0
   else
     printf '\nSome tests failed.\n'
@@ -1827,8 +2094,14 @@ main() {
     exit 1
   fi
 
+  if ! check_claudemd_headroom; then
+    printf 'Error: CLAUDE.md merge-union line cap busted. Push blocked.\n' >&2
+    log_block "claudemd_headroom_failure"
+    exit 1
+  fi
+
   if ! check_test_suite_count; then
-    printf 'Error: Test suite count drift detected. Push blocked.\n' >&2
+    printf 'Error: CI shard matrix would silently drop tracked test file(s). Push blocked.\n' >&2
     log_block "test_suite_count_drift"
     exit 1
   fi
@@ -1842,6 +2115,12 @@ main() {
   if ! check_test_coverage; then
     printf 'Error: Test coverage check failed. Push blocked.\n' >&2
     log_block "test_coverage_failure"
+    exit 1
+  fi
+
+  if ! check_generated_paths <<< "$prepush_stdin"; then
+    printf 'Error: Push touches a machine-generated path. Push blocked.\n' >&2
+    log_block "generated_path_hand_edit"
     exit 1
   fi
 

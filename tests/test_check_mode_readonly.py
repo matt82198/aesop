@@ -122,15 +122,6 @@ class FixtureSpec:
         self.why = why
 
 
-def _drift_suite_counts(root: Path):
-    """Counts deliberately wrong so the auto-correct branch fires."""
-    (root / "tests" / "CLAUDE.md").write_text(
-        "# tests/\n\n**Shell (999 suites)**: x\n\n"
-        "**Node (999 suites)**: x\n\n**Python (999 suites)**: x\n",
-        encoding="utf-8",
-    )
-
-
 def _drift_stats(root: Path):
     """stats.json + README markers stale, so --regenerate/--update-readme would write."""
     (root / "stats.json").write_text(
@@ -152,11 +143,6 @@ def _oversized_log(root: Path):
 
 
 TOOL_FIXTURES = {
-    "verify_test_suite_count.py": FixtureSpec(
-        mutate=_drift_suite_counts,
-        why="counts must DRIFT or the auto-correct write path never runs and the "
-            "check passes vacuously",
-    ),
     "self_stats.py": FixtureSpec(
         mutate=_drift_stats,
         why="stats.json/README must be stale so --check is tempted down the "
@@ -272,11 +258,22 @@ def _init_fixture_repo(dest: Path):
     Several gates shell out to `git ls-files` / `git diff`, so the fixture needs
     real history. Identity is set with `--local` and every command is scoped by
     `cwd=dest`: the live repo's config is never touched.
+
+    `maintenance.auto` (plus `gc.auto` / `gc.autoDetach`, belt-and-braces) is
+    disabled BEFORE the commit: see `TestTemplateRepoAutoGcDisabled` above
+    for why (2026-10-06 main-full incident, heads 3a2f8cb6 / 495f7d2b) --
+    skipping this lets a background maintenance task prune
+    `.git/objects/<xx>` out from under a later test's `shutil.copytree` of
+    this template. `dest` is always a tempfile-derived path (never the live
+    repo), so these are temp-repo mutations.
     """
     for cmd in (
         ["git", "init", "-q"],
         ["git", "config", "--local", "user.email", "fixture@example.com"],
         ["git", "config", "--local", "user.name", "Fixture"],
+        ["git", "config", "--local", "gc.auto", "0"],
+        ["git", "config", "--local", "gc.autoDetach", "false"],
+        ["git", "config", "--local", "maintenance.auto", "false"],
         ["git", "add", "-A"],
         ["git", "commit", "-q", "-m", "feat: fixture baseline"],
     ):
@@ -293,6 +290,66 @@ def setUpModule():
 def tearDownModule():
     if _TEMPLATE_ROOT is not None:
         shutil.rmtree(_TEMPLATE_ROOT, ignore_errors=True)
+
+
+def _git_count_objects(repo: Path):
+    """Parse `git count-objects -v` into a dict, e.g. {'in-pack': '0', ...}."""
+    result = subprocess.run(
+        ["git", "count-objects", "-v"], cwd=str(repo),
+        capture_output=True, text=True, timeout=30,
+    )
+    counts = {}
+    for line in result.stdout.splitlines():
+        if ":" in line:
+            key, _, value = line.partition(":")
+            counts[key.strip()] = value.strip()
+    return counts
+
+
+class TestTemplateRepoAutoGcDisabled(unittest.TestCase):
+    """Regression: 2026-10-06 main-full incident (RED twice, heads 3a2f8cb6 /
+    495f7d2b): `TestCheckModeIsReadOnly.setUp` errored with
+    `shutil.Error: ... .git/objects/<xx> ... No such file or directory`
+    while `shutil.copytree(_TEMPLATE_DIR, fixture)` was copying the shared
+    template repo.
+
+    Mechanism: `_init_fixture_repo`'s single `git commit` commits the copied
+    tools/ tree (150+ files -> ~175-190 objects), which is enough to trip
+    git's background maintenance subsystem (`maintenance.auto`, default
+    true) -- NOT the classic loose-object `gc.auto` threshold (default 6700,
+    which this object count never approaches; measured directly: setting
+    `gc.auto 0` alone did not stop the repack, `maintenance.auto false` did).
+    That maintenance pass repacks the loose objects and PRUNES the now-empty
+    `.git/objects/<xx>` fan-out directories -- and it can run in a background
+    child process that outlives `git commit`, racing any later test's
+    `shutil.copytree` of the template. The fix is to disable
+    `maintenance.auto` (plus `gc.auto`/`gc.autoDetach`, belt-and-braces) in
+    the template repo before its commit, so the trigger never fires.
+
+    This test is deterministic (no timing/race dependency): it asserts the
+    commit itself does not produce a pack, which is the root-cause condition
+    that makes the background-prune race possible at all.
+    """
+
+    def test_building_template_does_not_trigger_auto_repack(self):
+        tmp_root = Path(tempfile.mkdtemp(prefix="aesop-check-readonly-gctest-"))
+        try:
+            dest = tmp_root / "template"
+            _build_template(dest)
+            counts = _git_count_objects(dest)
+            self.assertEqual(
+                counts.get("in-pack"), "0",
+                "building the template repo triggered an auto-repack "
+                "(git count-objects -v: in-pack=%s, packs=%s) -- this is the "
+                "condition that lets a detached background maintenance task "
+                "prune .git/objects/* while a concurrent test's "
+                "shutil.copytree is reading the template (2026-10-06 "
+                "main-full incident, heads 3a2f8cb6 / 495f7d2b). The "
+                "template repo must set maintenance.auto false before its "
+                "commit." % (counts.get("in-pack"), counts.get("packs")),
+            )
+        finally:
+            shutil.rmtree(tmp_root, ignore_errors=True)
 
 
 def snapshot_tree(root: Path):

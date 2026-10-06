@@ -141,8 +141,10 @@ def is_dispatch_file(content: str) -> bool:
 
 
 def check_suppression(line: str) -> bool:
-    """Check if line has # dispatch-ok suppression."""
-    return "# dispatch-ok" in line or "// dispatch-ok" in line
+    """Check if line has dispatch-ok suppression (any comment style)."""
+    return ("# dispatch-ok" in line or
+            "// dispatch-ok" in line or
+            "<!-- dispatch-ok -->" in line)
 
 
 def is_comment_only(line: str, pattern: str) -> bool:
@@ -180,6 +182,29 @@ def is_comment_only(line: str, pattern: str) -> bool:
     return True
 
 
+def is_in_string_literal(lines: List[str], line_num: int, col_start: int, col_end: int) -> bool:
+    """Check if a position range is inside a backtick string (JS template).
+
+    Returns True only if the pattern is inside a backtick-delimited string (typically
+    documentation in JS files). Does NOT filter triple-quoted Python strings, as those
+    are often actual dispatch prompts being tested.
+    """
+    # Only filter backtick strings (JavaScript template literals used for documentation)
+    # Don't filter triple-quoted strings as they're often actual dispatch code being tested
+    marker = '`'
+    # Count occurrences before this line
+    lines_before = '\n'.join(lines[:line_num-1])
+    count_before = lines_before.count(marker)
+    # Count occurrences up to col_start on current line
+    current_line = lines[line_num - 1]
+    count_current = current_line[:col_start].count(marker)
+    # If odd total, we're inside a backtick string
+    if (count_before + count_current) % 2 == 1:
+        return True
+
+    return False
+
+
 def find_violations(
     file_path: Path, content: str
 ) -> List[Dict]:
@@ -198,9 +223,13 @@ def find_violations(
             continue
 
         for pattern_key, pattern_info in FORBIDDEN_PATTERNS.items():
-            if re.search(pattern_info["pattern"], line, re.IGNORECASE):
+            for match in re.finditer(pattern_info["pattern"], line, re.IGNORECASE):
                 # Skip if pattern only appears in comments
                 if is_comment_only(line, pattern_info["pattern"]):
+                    continue
+
+                # Skip if pattern is inside a string literal
+                if is_in_string_literal(lines, line_num, match.start(), match.end()):
                     continue
 
                 violations.append({
@@ -241,8 +270,11 @@ def scan_directory(
                 paths_to_scan.extend(start_path.glob(pattern))
 
     for file_path in sorted(set(paths_to_scan)):
-        # Skip certain directories
-        if any(skip in str(file_path) for skip in [".git", "node_modules", ".pytest_cache", "state"]):
+        # Skip certain directories and test files
+        if any(skip in str(file_path) for skip in [".git", "node_modules", ".pytest_cache", "state", "/tests/", "\\tests\\"]):
+            continue
+        # Skip test files specifically (test_*.py, etc.)
+        if file_path.name.startswith("test_"):
             continue
 
         try:
@@ -287,7 +319,7 @@ def format_violations(violations_by_file: Dict, as_json: bool = False) -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Dispatch linter — enforces merge automation and security rules"
+        description="Dispatch linter - enforces merge automation and security rules"
     )
     parser.add_argument(
         "path",

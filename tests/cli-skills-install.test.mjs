@@ -7,10 +7,18 @@
 //  - --no-skills opts out entirely
 //  - dependency manifests ship into the target so --install-deps has something to read
 //
-// Every test redirects AESOP_SKILLS_HOME into a temp dir; the real ~/.claude is
-// never touched.
+// Every test ALSO redirects AESOP_SKILLS_HOME into its own per-test temp dir on
+// top of that -- belt-and-suspenders, since this file is literally the one whose
+// forgotten redirect caused the real-~/.claude-overwrite incident (#831) the
+// isolated-env fixture exists to prevent structurally.
 //
 // Run: node --test tests/cli-skills-install.test.mjs
+
+// Harness-level HOME isolation (tests/helpers/isolated-env.mjs, #831): a
+// side-effect import, not merely a package.json/ci.yml --import flag, so this
+// file is structurally isolated even when run directly (as above) and not only
+// through the npm test/test:node scripts.
+import './helpers/isolated-env.mjs';
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
