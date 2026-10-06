@@ -572,3 +572,29 @@ export interface BenchResult {
  */
 export type BenchComparison = Record<string, BenchResult>;
 
+/**
+ * One exception row from state/merge-queue/exceptions.jsonl
+ * (ts: ISO timestamp, pr: PR number, kind: exception type)
+ */
+export interface QueueException {
+  ts: string; // ISO 8601 timestamp
+  pr: number;
+  kind: string; // e.g., "merge_conflict", "ci_failure", "blocked"
+}
+
+/**
+ * GET /api/queue — merge-queue operator panel data
+ * queue_depth: # open PRs labeled merge-queue
+ * batch_state: # open merge-queue-batch PRs
+ * last_advance_age: seconds since last heartbeat mtime
+ * last_advance_degraded: true if age > 10min
+ * exceptions: last N exception rows (most recent first)
+ */
+export interface QueuePanelData {
+  queue_depth: number;
+  batch_state: number;
+  last_advance_age: number; // seconds, -1 if heartbeat missing
+  last_advance_degraded: boolean;
+  exceptions: QueueException[];
+}
+

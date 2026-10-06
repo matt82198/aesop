@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
 """Batch auto-merge: fix conflicts, merge green PRs, loop until done.
-INDEX: Batch PR merge tool (fix-by-default: merge main into broken branches + merge green PRs; `--no-fix`/`--loop`/`--dry-run`/`--json`/`--wait`); uses subprocess_common.py for timeouts + encoding; MERGED-state verification gate at lines 101-105; run with `--loop` to continuously merge all green PRs; use merge_train.py for one-shot serial CI-gated queues
+INDEX: Batch PR merge tool (fix-by-default: merge main into broken branches + merge green PRs; `--no-fix`/`--loop`/`--dry-run`/`--json`/`--wait`); uses subprocess_common.py for timeouts + encoding; MERGED-state verification gate at lines 101-105; run with `--loop` to continuously merge all green PRs; use merge_train.py for one-shot serial CI-gated queues. `fix_branch()` auto-resolves merge conflicts by taking `--theirs` ONLY over paths listed by `generated_paths.py` -- the single registry of repo-generated files. It imports that module and calls `generated_paths()` at CALL time rather than re-typing the list, because a copy silently drifts the moment a path is registered: this tool held its own two-entry copy while PR #757 was adding `tools/INDEX.md` to the registry, and a batch conflicting on that path would have gone unresolved here. Never `git stash` (the stash stack is shared across worktrees) and never a blanket `git checkout .`; resolution stays path-by-path and registry-bounded, so an unregistered conflicted file still aborts the merge rather than being discarded. Enforced by `tests/test_auto_merge_registry.py`, which injects a sentinel into the registry and asserts this tool acts on it, plus an AST source scan failing any module under `tools/` that re-types the registry as a literal collection
 
 One command to clear the PR backlog. No serial merge trains.
 
 Modes:
-  (default)        Merge green PRs AND fix non-green branches (merge main,
-                   resolve test counts, push to re-trigger CI)
+  python tools/auto_merge.py <n> [<n>...]  Merge specific PR(s) by number
+  python tools/auto_merge.py --all          Merge all green PRs (board-wide mode)
+
+Options:
   --no-fix         Only merge green PRs, skip fixing broken branches
-  --loop           Fix + merge in a loop until all PRs are merged or stuck
+  --loop           Fix + merge in a loop until done (max 3 rounds)
   --dry-run        Show plan without acting
+  --json           JSON output
 
 Usage:
-    python tools/auto_merge.py [--no-fix] [--loop] [--dry-run] [--json]
+    python tools/auto_merge.py 806           Merge PR #806
+    python tools/auto_merge.py 806 807 809   Merge PRs #806, #807, #809
+    python tools/auto_merge.py --all         Merge all open green PRs
 
 Exit codes: 0=all merged, 1=some blocked, 2=error
 """
@@ -27,6 +32,11 @@ import time
 # harness resolves regardless of cwd or how the file is loaded
 # (the import-gate loads tools by path, without tools/ on sys.path).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Imported as a MODULE rather than `from generated_paths import
+# GENERATED_PATHS`: the registry is then read at CALL time, so this tool
+# tracks whatever tools/generated_paths.py currently holds instead of
+# freezing a copy of it at import.
+import generated_paths  # noqa: E402
 from subprocess_common import gh, git, json_output, run
 
 
@@ -81,7 +91,7 @@ def merge_pr(pr_num):
 
 
 def fix_branch(branch):
-    """Merge main into branch, fix test counts + CLAUDE.md limits, push."""
+    """Merge main into branch, fix CLAUDE.md limits, push."""
     git(['fetch', 'origin', 'main'], check=False)
     r = git(['fetch', 'origin', branch], check=False)
     if r.returncode != 0:
@@ -94,7 +104,12 @@ def fix_branch(branch):
 
     r = git(['merge', 'origin/main', '--no-edit'], check=False)
     if r.returncode != 0:
-        for f in ['tests/CLAUDE.md', 'tools/CLAUDE.md']:
+        # Resolve conflicts ONLY over registered generated files -- paths a
+        # committed gate deterministically rewrites, so taking "theirs" and
+        # regenerating loses nothing a human authored. Read live from the
+        # registry so a path added there (e.g. tools/INDEX.md) is handled
+        # here without this list ever being edited again.
+        for f in generated_paths.generated_paths():
             git(['checkout', '--theirs', f], check=False)
             git(['add', f], check=False)
         r2 = git(['-c', 'core.editor=true', 'merge', '--continue'], check=False)
@@ -103,8 +118,8 @@ def fix_branch(branch):
             git(['checkout', 'main'], check=False)
             return False, 'merge conflict unresolvable'
 
-    run([sys.executable, 'tools/verify_test_suite_count.py', '--fix'], check=False, timeout=30)
     run([sys.executable, 'tools/claudemd_lint.py'], check=False, timeout=30)
+    run([sys.executable, 'tools/gen_tool_index.py', '--regenerate'], check=False, timeout=30)
 
     git(['add', '-A'], check=False)
     r = git(['diff', '--cached', '--quiet'], check=False)
@@ -125,15 +140,26 @@ def fix_branch(branch):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('pr_numbers', nargs='*', type=int,
+                        help='PR number(s) to merge (required unless --all is given)')
+    parser.add_argument('--all', action='store_true',
+                        help='Merge all open green PRs (board-wide mode)')
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--no-fix', action='store_true',
                         help='Skip fixing non-green branches (default: fix is ON)')
     parser.add_argument('--loop', action='store_true',
-                        help='Loop: fix → wait → merge until done (max 3 rounds)')
+                        help='Loop: fix -> wait -> merge until done (max 3 rounds)')
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--wait', type=int, default=180,
                         help='Seconds to wait for CI between loop rounds (default 180)')
     args = parser.parse_args()
+
+    # Fail-closed: require explicit PR number(s) or --all flag
+    if not args.pr_numbers and not args.all:
+        print('auto_merge.py: error: must specify PR number(s) or use --all flag', file=sys.stderr)
+        print('Usage: auto_merge.py <n> [<n>...] or auto_merge.py --all', file=sys.stderr)
+        sys.exit(2)
+
     args.fix = not args.no_fix
 
     max_rounds = 3 if args.loop else 1
@@ -145,12 +171,20 @@ def main():
             print('No open PRs.')
             break
 
-        prs.sort(key=lambda p: p['number'])
+        # Filter PRs based on mode
+        if args.all:
+            # Board-wide mode: process all open PRs
+            target_prs = prs
+        else:
+            # Scoped mode: only process specified PRs
+            target_prs = [pr for pr in prs if pr['number'] in args.pr_numbers]
+
+        target_prs.sort(key=lambda p: p['number'])
         round_results = []
         merged = 0
         fixed = 0
 
-        for pr in prs:
+        for pr in target_prs:
             num, title, branch = pr['number'], pr['title'], pr['headRefName']
             status, detail = check_pr_status(num)
 
@@ -183,14 +217,15 @@ def main():
                 print(f'\n=== Round {round_num} ===')
             for num, action, detail, title in round_results:
                 print(f'  #{num} [{action}] {detail}  — {title}')
-            print(f'  Merged: {merged}, Fixed: {fixed}, Remaining: {len(prs) - merged}')
+            print(f'  Merged: {merged}, Fixed: {fixed}, Remaining: {len(target_prs) - merged}')
 
         all_results.extend(round_results)
 
-        remaining = get_open_prs()
+        # For scoped mode, check if all target PRs are done
+        remaining = target_prs if not args.all else get_open_prs()
         if not remaining:
             if not args.json:
-                print('\nAll PRs merged!')
+                print('\nAll targeted PRs merged!')
             break
 
         if args.loop and round_num < max_rounds and fixed > 0:
@@ -204,7 +239,10 @@ def main():
             for r in all_results
         ], indent=2))
 
-    remaining = get_open_prs()
+    if args.all:
+        remaining = get_open_prs()
+    else:
+        remaining = [pr for pr in get_open_prs() if pr['number'] in args.pr_numbers]
     return 0 if not remaining else 1
 
 
