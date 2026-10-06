@@ -1,6 +1,19 @@
 # Team-Shared State: Current & Future Architecture
 
-**Status (0.1.0)**: Single-instance with durable git checkpointing. Event-sourced SQLite module (`state_store/`) is production-ready but not yet integrated into orchestrator reader/writer paths.
+**Status (0.7.2)**: Event-sourced SQLite (`state_store/`) is production-ready
+and **partially wired**: the markdown writers — `tools/buildlog.py`,
+`tools/ensure_state.py`, `tools/eod_sweep.py` — write STATE.md and BUILDLOG.md
+*through* `WriteAPI` (dual-write: event + file), proven by
+`tests/test_ws4_writer_migrations.py`. Direct-write paths still exist and are
+held under a ratchet: `tools/stateapi_lint.py` runs in CI against a
+40-violation baseline that may shrink but never grow.
+
+**Multi-instance status**: cross-box coordination is **shipped** as Phase 0.5
+(off by default). Instances do NOT share one database — each keeps its own local
+SQLite and they coordinate through an append-only claim log on a shared
+directory. See `docs/MULTI-INSTANCE-ROADMAP.md` (Phase 0.5) and
+`docs/design/MULTIBOX-DESIGN.md`. A network-backed event store (Postgres) is a
+separate, **unscheduled** question — Phase 1 in the roadmap.
 
 ---
 
@@ -27,7 +40,7 @@ Aesop currently stores orchestration state in **two git-tracked files**:
 - `state_store/api.py` — Facade (backend swap seam; currently SQLite WAL)
 - `tests/test_state_store.py` — Concurrent-write proofs, projection tests
 
-**Next steps**: Wire the orchestrator and agent writers to use `StateAPI` instead of git direct writes. This unblocks team-scale coordination without breaking single-instance durability (git exports remain).
+**Progress**: the markdown writers listed above are migrated; the remaining direct-write call sites are enumerated by `tools/stateapi_lint.py` and burn down under its ratchet baseline. Single-instance durability is unaffected — git exports remain.
 
 For implementation details, see `state_store/` source code and inline documentation.
             status["phase"] = ev["payload"]["phase"]
@@ -202,15 +215,28 @@ Currently, dashboards query the git export (STATE.md, tracker.json). For real-ti
 
 **Effort**: ~1 sprint. Touch: `ui/`, `state_store/api.py`.
 
-### 3. **Team-Shared Database Setup** (Not Scheduled)
+### 3. **Network-Backed Event Store** (Not Scheduled)
 
-The current design assumes a **local SQLite file** (filesystem-shared at best). For a true team needing multi-host coordination:
+**Note the correction**: an earlier version of this section said multi-host
+coordination requires a network-accessible backend. That is false, and Phase 0.5
+falsifies it — 3-5 boxes coordinate today through a shared *directory*, each
+with its own local SQLite. A shared database was never the requirement; a shared
+*serialisation point* was.
 
-- Backend swap: `StateAPI` points to a network-accessible backend instead of SQLite (seamless; only `api.py` changes).
-- Setup: Database server, connection pooling, schema migration job.
-- Tuning: Query optimization for high read/write load.
+What is still not built is a **single queryable event history across
+instances**. That would need:
 
-**Effort**: ~2 sprints. Mostly infrastructure/testing; application code is abstracted. **Not currently justified**: single-box SQLite handles ~704 ev/s (measured ceiling) vs ~100 ev/s (real-world throughput).
+- Backend swap: `StateAPI` points to a network-accessible backend instead of
+  SQLite (only `api.py` changes; the facade is the seam).
+- Setup: database server, connection pooling, schema migration job.
+- Tuning: query optimization for high read/write load.
+
+**Effort**: ~2 sprints, mostly infrastructure and testing. **Not currently
+justified**, on two counts: local SQLite handles ~704 ev/s measured against
+~100 ev/s real-world throughput, and the coordination problem that used to
+motivate it is already solved. Do NOT put a WAL SQLite file on the share as a
+shortcut — `tools/multibox_preflight.py` actively refuses that configuration,
+because SQLite's WAL index is only coherent within one host.
 
 ### 4. **Reconciliation & Conflict Resolution**
 

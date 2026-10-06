@@ -1024,6 +1024,17 @@ async function getFleetMultiboxSummary() {
   return new Promise((resolve) => {
     const helperPath = path.join(AESOP_ROOT, 'mcp', 'instances-claims.py');
     const dbPath = path.join(STATE_ROOT, 'aesop.db');
+    const configPath = path.join(AESOP_ROOT, 'aesop.config.json');
+    // Absent/failure shape. backend.kind is 'unknown' -- NOT 'advisory' --
+    // because the config was never resolved, and a status surface must not
+    // assert a coordination mode it did not observe.
+    const UNKNOWN_BACKEND = {
+      kind: 'unknown',
+      enabled: false,
+      transport: null,
+      shared_dir: null,
+      error: 'backend not resolved'
+    };
 
     if (!fs.existsSync(helperPath) || !fs.existsSync(dbPath)) {
       resolve({
@@ -1032,13 +1043,14 @@ async function getFleetMultiboxSummary() {
         instance_count: 0,
         active_count: 0,
         stale_count: 0,
-        claim_count: 0
+        claim_count: 0,
+        backend: UNKNOWN_BACKEND
       });
       return;
     }
 
     try {
-      const proc = spawn('python3', [helperPath, '--db', dbPath, '--root', AESOP_ROOT], {
+      const proc = spawn('python3', [helperPath, '--db', dbPath, '--root', AESOP_ROOT, '--config', configPath], {
         cwd: AESOP_ROOT,
         env: {
           ...process.env,
@@ -1067,8 +1079,10 @@ async function getFleetMultiboxSummary() {
               instance_count: 0,
               active_count: 0,
               stale_count: 0,
-              claim_count: 0
+              claim_count: 0,
+              backend: UNKNOWN_BACKEND
             };
+            if (!summary.backend) summary.backend = UNKNOWN_BACKEND;
             resolve({
               absent: false,
               ...summary
@@ -1080,7 +1094,8 @@ async function getFleetMultiboxSummary() {
               instance_count: 0,
               active_count: 0,
               stale_count: 0,
-              claim_count: 0
+              claim_count: 0,
+              backend: UNKNOWN_BACKEND
             });
           }
         } else {
@@ -1090,7 +1105,8 @@ async function getFleetMultiboxSummary() {
             instance_count: 0,
             active_count: 0,
             stale_count: 0,
-            claim_count: 0
+            claim_count: 0,
+            backend: UNKNOWN_BACKEND
           });
         }
       });
@@ -1102,7 +1118,8 @@ async function getFleetMultiboxSummary() {
           instance_count: 0,
           active_count: 0,
           stale_count: 0,
-          claim_count: 0
+          claim_count: 0,
+          backend: UNKNOWN_BACKEND
         });
       });
     } catch (e) {
@@ -1112,7 +1129,8 @@ async function getFleetMultiboxSummary() {
         instance_count: 0,
         active_count: 0,
         stale_count: 0,
-        claim_count: 0
+        claim_count: 0,
+        backend: UNKNOWN_BACKEND
       });
     }
   });
@@ -1211,7 +1229,7 @@ const TOOLS = [
   },
   {
     name: 'fleet_multibox_summary',
-    description: 'Get dashboard summary of multi-instance status: instance count, active/stale, claim count',
+    description: 'Get dashboard summary of multi-instance status: instance count, active/stale, claim count, and the ACTIVE coordination backend (backend.kind: advisory | local-lease | fs-claim-log | unknown) resolved from the multibox config block',
     inputSchema: {
       type: 'object',
       properties: {}
