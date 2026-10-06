@@ -7,16 +7,16 @@ ui vitest+tsc) as concurrent subprocesses with per-harness rc capture, stdin
 closed (the hook suite hangs on never-EOF stdin), and an explicit summary
 table. Exit 0 only when every harness exits 0.
 
-Per-harness timeout (AESOP_BATTERY_HARNESS_TIMEOUT_S, default 1800s = 30min):
-on expiry, the process tree is killed and rc=124 is recorded with a TIMEOUT
-note. Applies in both serial and parallel modes.
+Per-harness timeout (1800s = 30min): on expiry, the process tree is killed
+and rc=124 is recorded with a TIMEOUT note. Applies in both serial and
+parallel modes.
 
 Usage:
   python tools/test_battery.py [--serial] [--skip ui|sh|node|py ...] [--json]
 
 --serial runs harnesses one at a time (the pre-wave-29 behavior; fallback if
-parallel runs prove load-fragile on a box). Logs land in the state scratch dir
-(AESOP_BATTERY_LOGDIR or the system temp dir) as battery-<harness>.log.
+parallel runs prove load-fragile on a box). Logs land in a fresh system-temp
+directory as battery-<harness>.log.
 """
 import argparse
 import json
@@ -39,13 +39,7 @@ HARNESSES = {
 }
 
 
-def _get_harness_timeout():
-    """Get per-harness timeout in seconds (env AESOP_BATTERY_HARNESS_TIMEOUT_S, default 1800)."""
-    timeout_s = os.environ.get("AESOP_BATTERY_HARNESS_TIMEOUT_S", "1800")
-    try:
-        return int(timeout_s)
-    except ValueError:
-        return 1800
+HARNESS_TIMEOUT_S = 1800  # 30min per-harness ceiling; no automation overrides this.
 
 
 def _kill_process_tree(proc):
@@ -129,12 +123,12 @@ def main():
     ap.add_argument("--json", action="store_true", help="machine-readable summary")
     args = ap.parse_args()
 
-    logdir = os.environ.get("AESOP_BATTERY_LOGDIR") or tempfile.mkdtemp(prefix="aesop-battery-")
+    logdir = tempfile.mkdtemp(prefix="aesop-battery-")
     os.makedirs(logdir, exist_ok=True)
     names = [n for n in HARNESSES if n not in args.skip]
     started = time.time()
     results = {}
-    timeout_s = _get_harness_timeout()
+    timeout_s = HARNESS_TIMEOUT_S
 
     if args.serial:
         for n in names:

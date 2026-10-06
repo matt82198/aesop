@@ -101,6 +101,7 @@ expensive way during aesop development. Each line exists because a lane failed w
   default is cp1252, which corrupts UTF-8 output and has crashed production processes. Every
   subprocess.run/check_output/Popen that reads output: `encoding='utf-8', errors='replace'` not
   `text=True`.
+- **Lanes may emit a local receipt after their full run:** `python tools/emit_receipt.py --post` (signs what ran, posts it on the head sha; the hosted `verify-receipt` check recomputes the tree hash and is NON-required during the measurement period -- see docs/RECEIPT-GATE.md).
 - **Run the ACTUAL CI gate, not a proxy.** `npm run test:py` != a hand-written pytest call; the real
   test count is what CI reports. Verify each gate actually runs: check CI output for the expected counts
   and pass/fail status, never assume "green" means "verified". Partial verification is NOT a pass.
