@@ -110,9 +110,62 @@ class CIThroughputTests(unittest.TestCase):
         self.assertIn("daemons/", run, "Must detect daemons/ changes")
         self.assertIn("hooks/", run, "Must detect hooks/ changes")
         self.assertIn(".ps1", run, "Must detect *.ps1 files")
-        self.assertIn("tools/", run, "Must detect tools/ changes")
+        self.assertIn(".sh", run, "Must detect *.sh files")
         self.assertIn("bin/", run, "Must detect bin/ changes")
         self.assertIn("package.json", run, "Must detect package.json changes")
+        self.assertIn("package-lock", run, "Must detect package-lock.json changes")
+        self.assertIn("ui/web/", run, "Must detect ui/web/ changes")
+        self.assertIn(".github/workflows/", run, "Must detect .github/workflows/ changes")
+        self.assertIn("halt", run, "Must detect tools/halt.py specifically")
+        self.assertIn("ci_shard_runner", run, "Must detect tools/ci_shard_runner.py specifically")
+        self.assertIn("subprocess_common", run, "Must detect tools/subprocess_common.py specifically")
+
+    def test_windows_sensitive_paths_narrow_not_broad(self):
+        """windows-sensitive-paths must NOT trigger on generic tools/ files.
+
+        Changes to tools/gen_tool_index.py (not in Windows-specific list) should NOT trigger
+        Windows tests. Changes to tools/halt.py (in the list) should trigger Windows tests.
+        The pattern must explicitly list specific OS-sensitive tools files, not use broad
+        'tools/.*\.py' which would match every PR.
+        """
+        jobs = self.ci_workflow.get("jobs", {})
+        wsp_job = jobs.get("windows-sensitive-paths", {})
+        steps = wsp_job.get("steps", [])
+
+        detect_step = None
+        for step in steps:
+            if step.get("name") == "Detect Windows-sensitive changes":
+                detect_step = step
+                break
+
+        self.assertIsNotNone(detect_step, "Missing detect step")
+        run = detect_step.get("run", "")
+
+        # Find the grep -qE pattern line
+        pattern_lines = [l for l in run.split('\n') if 'grep -qE' in l]
+        self.assertGreater(len(pattern_lines), 0, "Must have grep pattern for path detection")
+
+        pattern = pattern_lines[0]
+        # The pattern should NOT use broad "tools/.*\.py" which matches all tools Python files
+        self.assertNotIn("tools/.*\\.py", pattern,
+                        "Pattern must not match all tools/*.py; narrow to specific OS-sensitive files")
+
+        # The pattern SHOULD explicitly list specific tools files with OS-specific behavior
+        expected_tools_files = [
+            "ci_shard_runner",      # subprocess/Windows shard runner
+            "halt",                 # Windows task termination
+            "test_isolation_tripwire",  # test isolation on Windows
+            "remote_refs_tripwire",     # network isolation
+            "test_network_isolation",   # network isolation on Windows
+            "subprocess_common",    # subprocess semantics on Windows
+            "encoding_lint",        # UTF-8 encoding on Windows
+            "power_selftest",       # PowerShell integration test
+            "hook_preflight",       # pre-push hook execution
+            "task_cadence_check",   # Windows task scheduling
+            "build_static_dash",    # build output handling
+        ]
+        for file in expected_tools_files:
+            self.assertIn(file, pattern, f"Pattern must explicitly list tools/{file}.py")
 
     def test_ci_job_uses_pr_head_sha(self):
         """ci job must check out PR HEAD commit for pull_request events."""

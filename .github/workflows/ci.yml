@@ -97,10 +97,20 @@ jobs:
             echo "windows_touched=true" >> $GITHUB_OUTPUT
             exit 0
           fi
-          # Check for Windows-sensitive paths: daemons/**, hooks/**, *.ps1, tools/*subprocess*,
-          # tools/halt.py, tools/ci_shard_runner.py, tools/test_isolation_tripwire.py,
-          # tools/remote_refs_tripwire.py, bin/**, package.json
-          if echo "$CHANGED" | grep -qE '^(daemons/|hooks/|.*\.ps1$|tools/.*subprocess|tools/halt\.py|tools/ci_shard_runner\.py|tools/test_isolation_tripwire\.py|tools/remote_refs_tripwire\.py|bin/|package\.json)'; then
+          # Check for Windows-sensitive paths (OS-specific behavior only):
+          # - daemons/** (daemon scripts, Windows service)
+          # - hooks/** (pre-push enforcement, PowerShell/bash mix)
+          # - **/*.ps1, **/*.sh (shell scripts, OS-specific interpreters)
+          # - bin/** (CLI entry points, npm scripts platform-specific)
+          # - package.json, package-lock.json (npm, PATH handling differs)
+          # - ui/web/** (vite build outputs, line ending sensitivity)
+          # - .github/workflows/** (CI configuration)
+          # - specific tools/ files with OS-specific behavior:
+          #   ci_shard_runner.py, halt.py, test_isolation_tripwire.py,
+          #   remote_refs_tripwire.py, test_network_isolation.py,
+          #   subprocess_common.py, encoding_lint.py, power_selftest.py,
+          #   hook_preflight.py, task_cadence_check.py, build_static_dash.py
+          if echo "$CHANGED" | grep -qE '^(daemons/|hooks/|bin/|ui/web/|\.github/workflows/)|\.ps1$|\.sh$|^package(-lock)?\.json$|^tools/(ci_shard_runner|halt|test_isolation_tripwire|remote_refs_tripwire|test_network_isolation|subprocess_common|encoding_lint|power_selftest|hook_preflight|task_cadence_check|build_static_dash)\.py$'; then
             echo "windows_touched=true" >> $GITHUB_OUTPUT
           else
             echo "windows_touched=false" >> $GITHUB_OUTPUT
