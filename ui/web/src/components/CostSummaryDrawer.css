@@ -212,6 +212,42 @@
   transition: width 0.3s ease;
 }
 
+/* Numeric share beside each bar — a bar alone cannot be read off precisely. */
+.cost-summary__model-pct {
+  min-width: 34px;
+  text-align: right;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Stale block: last-known values retained across a disconnect, rendered inside
+   the error state so they can never be read as current. */
+.cost-summary__stale {
+  margin-top: var(--space-1);
+  padding-top: var(--space-1);
+  border-top: 1px dashed var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cost-summary__stale-label {
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-status-warn);
+  margin: 0;
+}
+
+.cost-summary__stale-value {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  margin: 0;
+}
+
 /* Scrollbar styling for the panel */
 .cost-summary-drawer__panel::-webkit-scrollbar {
   width: 4px;
