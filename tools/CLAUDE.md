@@ -28,6 +28,7 @@ cleanly with both lines kept, then `gen_tool_index.py --regenerate` normalizes o
 
 ## Gates & tests
 - `secret_scan.py --staged` — pre-push gate (exit 0=clean/1=findings/2=error; `# secretscan: allow-pattern-docs` pragma)
+- **Receipt gate (measurement period)**: `emit_receipt.py --post` signs a local run (Ed25519 key at `$AESOP_RECEIPT_KEY`, pub `receipt_pubkey.pub`); `verify_receipt.py` recomputes tree hash + freshness; `verify-receipt.yml` non-required. See docs/RECEIPT-GATE.md.
 - `agent-forensics.sh <commit>` — behavior forensics; `--diff <A> <B>` for rules/docs diff
 - **Python**: `npm run test:py`; **Shell**: `bash -n tools/*.sh && shellcheck tools/*.sh`; **Node**: `node --check tools/*.mjs`
 - **Subprocess encoding (G10)**: every `subprocess.run`/`Popen` decoding output passes explicit `encoding='utf-8'`; the platform default is cp1252 on Windows and corrupts non-ASCII output. `encoding_lint.py` scans the WHOLE repo, so one violation anywhere blocks every Python-touching push. Same trap hits argparse `--help` text: a Unicode arrow/dash in a `help=`/`description=` string crashes `print_help()` on a stock cp1252 console (not caught by `encoding_lint.py`, which only checks `subprocess`/`open`) — keep all argparse-printed text plain ASCII (`->`, `-`); fixed 2026-10-05 in `auto_merge.py` + 7 other tools' `description=` strings.
