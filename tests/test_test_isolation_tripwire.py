@@ -157,6 +157,7 @@ def make_fake_conductor(root: Path):
     (state / ".watchdog-heartbeat").write_text("1700000000", encoding="utf-8")
     (monitor / ".monitor-heartbeat").write_text("1700000000", encoding="utf-8")
     (state / "tracker.json").write_text('{"items": []}', encoding="utf-8")
+    (state / ".watchdog-repos.json").write_text('{"repos": []}', encoding="utf-8")
 
 
 class TestIsolationTripwireConductor3(unittest.TestCase):
@@ -245,6 +246,159 @@ class TestIsolationTripwireConductor3(unittest.TestCase):
             root.mkdir()
             proc = run_tripwire(root, [sys.executable, "-c", "pass"])
             self.assertEqual(proc.returncode, 0, proc.stderr)
+
+
+class TestIsolationTripwireHeartbeatValidity(unittest.TestCase):
+    """Daemon-written files (heartbeats, logs, repos.json) require VALIDITY
+    checks instead of hash comparisons. The daemons legitimately update
+    these files during test runs; the tripwire must distinguish between
+    expected changes (daemon ticking) and anomalies (wrong value, invalid
+    format, truncation).
+
+    Incident 2026-10-06: tests/test-selfheal.sh left "1234567890" in the
+    LIVE ~/.conductor3/state/.watchdog-heartbeat because the hash comparison
+    failed to detect the daemon's legitimate updates mid-run, and no test
+    created a true/green baseline for this class of validity check."""
+
+    def test_heartbeat_can_advance_by_daemon(self):
+        """A heartbeat that advances by the daemon ticking (+300s) must PASS
+        (this is the normal case during ≥5-min test runs)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home-real"
+            make_fake_conductor(root)
+
+            before_hb = root / "conductor3" / "state" / ".watchdog-heartbeat"
+            before_val = before_hb.read_text(encoding="utf-8").strip()
+
+            # Wrapped command advances the heartbeat (simulating daemon tick)
+            # by 300 seconds forward.
+            import time
+            before_epoch = int(before_val)
+            after_epoch = before_epoch + 300
+            script = f"open(r'{before_hb}', 'w').write(str({after_epoch}))"
+
+            proc = run_tripwire(root, [sys.executable, "-c", script])
+
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertNotIn("FAIL", proc.stderr)
+
+    def test_heartbeat_rejects_placeholder_value(self):
+        """Heartbeat overwritten with test placeholder '1234567890' (far in
+        the past, 2009) must FAIL -- this was the literal incident."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home-real"
+            make_fake_conductor(root)
+
+            victim = root / "conductor3" / "state" / ".watchdog-heartbeat"
+            script = f"open(r'{victim}', 'w').write('1234567890')"
+            proc = run_tripwire(root, [sys.executable, "-c", script])
+
+            self.assertNotEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("FAIL", proc.stderr)
+            self.assertIn("watchdog-heartbeat", proc.stderr)
+
+    def test_heartbeat_rejects_non_integer(self):
+        """Heartbeat with non-integer content must FAIL."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home-real"
+            make_fake_conductor(root)
+
+            victim = root / "conductor3" / "state" / ".watchdog-heartbeat"
+            script = f"open(r'{victim}', 'w').write('not_a_timestamp')"
+            proc = run_tripwire(root, [sys.executable, "-c", script])
+
+            self.assertNotEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("FAIL", proc.stderr)
+            self.assertIn("watchdog-heartbeat", proc.stderr)
+
+    def test_heartbeat_rejects_decrease(self):
+        """Heartbeat that decreases (time going backwards) must FAIL."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home-real"
+            make_fake_conductor(root)
+
+            before_hb = root / "conductor3" / "state" / ".watchdog-heartbeat"
+            before_val = int(before_hb.read_text(encoding="utf-8").strip())
+
+            # Decrease by 60 seconds
+            after_epoch = before_val - 60
+            script = f"open(r'{before_hb}', 'w').write(str({after_epoch}))"
+
+            proc = run_tripwire(root, [sys.executable, "-c", script])
+
+            self.assertNotEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("FAIL", proc.stderr)
+            self.assertIn("watchdog-heartbeat", proc.stderr)
+
+    def test_log_can_grow(self):
+        """A log file that only grows (append) must PASS."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home-real"
+            make_fake_conductor(root)
+
+            # Create a log file in the conductor state dir
+            log_file = root / "conductor3" / "state" / "FLEET-BACKUP.log"
+            log_file.write_text("[2026-10-06 12:00:00] cycle 1 ok\n", encoding="utf-8")
+
+            # Wrapped command appends to the log
+            script = f"with open(r'{log_file}', 'a') as f: f.write('[2026-10-06 12:00:01] cycle 2 ok\\n')"
+            proc = run_tripwire(root, [sys.executable, "-c", script])
+
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertNotIn("FAIL", proc.stderr)
+
+    def test_log_rejects_truncation(self):
+        """A log file that shrinks (truncation) must FAIL."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home-real"
+            make_fake_conductor(root)
+
+            log_file = root / "conductor3" / "state" / "FLEET-BACKUP.log"
+            log_file.write_text("[2026-10-06 12:00:00] cycle 1 ok\n", encoding="utf-8")
+
+            # Wrapped command truncates the log
+            script = f"open(r'{log_file}', 'w').write('[2026-10-06 12:00:00] c')"
+            proc = run_tripwire(root, [sys.executable, "-c", script])
+
+            self.assertNotEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("FAIL", proc.stderr)
+
+    def test_repos_json_can_have_new_fields(self):
+        """A repos.json that still parses and keeps the same top-level shape
+        (dict with consistent keys) must PASS."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home-real"
+            make_fake_conductor(root)
+
+            repos_json = root / "conductor3" / "state" / ".watchdog-repos.json"
+            repos_json.write_text('{"repos": [], "timestamp": 1700000000}', encoding="utf-8")
+
+            # Wrapped command updates the repos json (same shape, different values)
+            script = (
+                "import json;"
+                f"j = {{'repos': [{{'path': '/some/repo'}}], 'timestamp': 1700000300}};"
+                f"open(r'{repos_json}', 'w').write(json.dumps(j))"
+            )
+            proc = run_tripwire(root, [sys.executable, "-c", script])
+
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertNotIn("FAIL", proc.stderr)
+
+    def test_repos_json_rejects_invalid_json(self):
+        """A repos.json that no longer parses as JSON must FAIL."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home-real"
+            make_fake_conductor(root)
+
+            repos_json = root / "conductor3" / "state" / ".watchdog-repos.json"
+            repos_json.write_text('{"repos": []}', encoding="utf-8")
+
+            # Wrapped command corrupts the JSON
+            script = f"open(r'{repos_json}', 'w').write('not valid json here')"
+            proc = run_tripwire(root, [sys.executable, "-c", script])
+
+            self.assertNotEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("FAIL", proc.stderr)
 
 
 class TestIsolationTripwireScheduledTasks(unittest.TestCase):
