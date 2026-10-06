@@ -2,7 +2,7 @@
 """
 Test-isolation tripwire: fails closed if the REAL developer profile changes
 while a test suite runs.
-INDEX: Test-isolation tripwire (incident 2026-10-05: installSkills() in bin/cli.js overwrote real ~/.claude/skills during a Node test run); snapshots sha256 of ~/.claude/{skills,settings.json,memory,hooks} + `git config --global -l` before/after wrapping a command, FAILS CLOSED naming every changed path when the profile exists, degrades loudly-but-green ("no profile present, tripwire inert") when ~/.claude is absent (CI); CLI: `[--root DIR] -- <command...>`; exit = max(wrapped command's exit code, tripwire finding); stdlib-only. Extended 2026-10-06 (shell-test-isolation incident) to also snapshot `<root>/conductor3/state/.watchdog-heartbeat`, `conductor3/monitor/.monitor-heartbeat`, `conductor3/state/*.json`, and Windows Aesop* scheduled-task registrations (`schtasks /query /fo CSV`, Windows-only / AESOP_TRIPWIRE_SCHTASKS_CMD override for tests). Daemon-written files use VALIDITY checks (heartbeat epoch bounds, log growth, JSON parse+shape) instead of hash comparisons since daemons legitimately update them during test runs.
+INDEX: Test-isolation tripwire (incident 2026-10-05: installSkills() in bin/cli.js overwrote real ~/.claude/skills during a Node test run); snapshots sha256 of ~/.claude/{skills,settings.json,memory,hooks} + `git config --global -l` before/after wrapping a command, FAILS CLOSED naming every changed path when the profile exists, degrades loudly-but-green ("no profile present, tripwire inert") when ~/.claude is absent (CI); CLI: `[--root DIR] -- <command...>`; exit = max(wrapped command's exit code, tripwire finding); stdlib-only. Extended 2026-10-06 (shell-test-isolation incident) to also snapshot fleet-state heartbeat/state files, and Windows Aesop* scheduled-task registrations (`schtasks /query /fo CSV`, Windows-only / AESOP_TRIPWIRE_SCHTASKS_CMD override for tests). Daemon-written files use VALIDITY checks (heartbeat epoch bounds, log growth, JSON parse+shape) instead of hash comparisons since daemons legitimately update them during test runs.
 
 Why this exists: tests/CLAUDE.md and LANE-CONTRACT.md have said "tests must not
 pollute cwd or global state" as prose for a long time. Prose is not a gate. On
@@ -16,7 +16,7 @@ that it worked, and the backstop for any future escape (a Python test, a shell
 hook test, anything invoked outside the Node harness).
 
 On 2026-10-06, a shell-test lane left "1234567890" in the LIVE
-~/conductor3/state/.watchdog-heartbeat because the hash-snapshot approach
+fleet-state heartbeat file because the hash-snapshot approach
 failed to distinguish between legitimate daemon ticks (+300s) and escape writes
 (placeholder test value, far in the past). Solution: DAEMON-WRITTEN files now
 use VALIDITY checks instead. Heartbeat must be an epoch integer >= before and
@@ -56,6 +56,16 @@ import sys
 import time
 from pathlib import Path
 
+# Add the repo root to sys.path so we can import tools.common (works whether
+# this script is run from repo root or from anywhere else)
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _SCRIPT_DIR.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+# Import the shared resolver
+from tools import common
+
 ABSENT = "<absent>"
 
 # Logical name -> path relative to the profile root, checked whenever the root's
@@ -67,26 +77,29 @@ SENSITIVE_RELPATHS = {
     "hooks": ".claude/hooks",
 }
 
-# DAEMON-WRITTEN heartbeat files under conductor3. These are written by:
+# DAEMON-WRITTEN heartbeat files under the fleet-state root. These are written by:
 # - daemons/backup-fleet.sh writes .watchdog-heartbeat with `date +%s` every 150s
 # - monitor/collect-signals.mjs writes .monitor-heartbeat with epoch seconds
 # These must use VALIDITY checks (epoch bounds) not hash comparisons.
+# Paths are relative to the conductor root (derived from CONDUCTOR_ROOT env or parent-of-AESOP_ROOT).
 CONDUCTOR_DAEMON_HEARTBEAT_RELPATHS = {
-    "watchdog_heartbeat": "conductor3/state/.watchdog-heartbeat",
-    "monitor_heartbeat": "conductor3/monitor/.monitor-heartbeat",
+    "watchdog_heartbeat": "state/.watchdog-heartbeat",
+    "monitor_heartbeat": "monitor/.monitor-heartbeat",
 }
 
-# DAEMON-WRITTEN log files under conductor3/state/. These may only GROW
+# DAEMON-WRITTEN log files under the fleet-state root. These may only GROW
 # (append-only). Checked via size comparison, not hashes.
-CONDUCTOR_DAEMON_LOG_PATTERNS = ["conductor3/state/FLEET-BACKUP.log", "conductor3/state/cron-*.log"]
+# Patterns are relative to the conductor root.
+CONDUCTOR_DAEMON_LOG_PATTERNS = ["state/FLEET-BACKUP.log", "state/cron-*.log"]
 
 # DAEMON-WRITTEN repos JSON file. Must parse as JSON and maintain top-level shape.
-CONDUCTOR_DAEMON_REPOS_JSON_RELPATH = "conductor3/state/.watchdog-repos.json"
+# Path is relative to the conductor root.
+CONDUCTOR_DAEMON_REPOS_JSON_RELPATH = "state/.watchdog-repos.json"
 
-# STATIC JSON files under conductor3/state/ (lock files, tracker.json, etc.)
+# STATIC JSON files under the fleet-state root (lock files, tracker.json, etc.)
 # These use hash comparisons since they should never be touched by running daemons
-# during a test suite.
-CONDUCTOR_STATIC_JSON_GLOB = "conductor3/state/*.json"
+# during a test suite. Pattern is relative to the conductor root.
+CONDUCTOR_STATIC_JSON_GLOB = "state/*.json"
 
 
 def _hash_file(path: Path) -> str:
@@ -301,7 +314,26 @@ def snapshot_git_global_config(root: Path):
 def take_snapshot(root: Path) -> dict:
     claude_root = root / ".claude"
     profile_present = claude_root.exists()
-    conductor_present = (root / "conductor3").exists()
+
+    # Resolve the conductor root. When running tests with --root, this will be
+    # the fake home; the conductor root should exist relative to it.
+    # Set up AESOP_ROOT so common.get_conductor_root() computes correctly when
+    # --root is given (used by tests to pin the fake home).
+    old_aesop_root = os.environ.get("AESOP_ROOT")
+    try:
+        # When testing with --root, set AESOP_ROOT to root so conductor root resolves
+        # relative to the test fixture, not the real repo.
+        if old_aesop_root is None and "CONDUCTOR_ROOT" not in os.environ:
+            os.environ["AESOP_ROOT"] = str(root)
+        conductor_root = common.get_conductor_root()
+    finally:
+        # Restore the original AESOP_ROOT
+        if old_aesop_root is None:
+            os.environ.pop("AESOP_ROOT", None)
+        else:
+            os.environ["AESOP_ROOT"] = old_aesop_root
+
+    conductor_present = conductor_root.exists()
     now = int(time.time())
     snap = {
         "profile_present": profile_present,
@@ -321,24 +353,24 @@ def take_snapshot(root: Path) -> dict:
     if conductor_present:
         # DAEMON-WRITTEN heartbeats: snapshot for epoch bounds checking
         for name, rel in CONDUCTOR_DAEMON_HEARTBEAT_RELPATHS.items():
-            path = root / rel
+            path = conductor_root / rel
             snap["conductor_daemon_heartbeats"][name] = snapshot_heartbeat(path)
 
         # DAEMON-WRITTEN logs: snapshot for growth checking
         for pattern in CONDUCTOR_DAEMON_LOG_PATTERNS:
-            for path in sorted(root.glob(pattern)):
-                rel = str(path.relative_to(root)).replace("\\", "/")
+            for path in sorted(conductor_root.glob(pattern)):
+                rel = str(path.relative_to(conductor_root)).replace("\\", "/")
                 snap["conductor_daemon_logs"][rel] = snapshot_log_file(path)
 
         # DAEMON-WRITTEN repos JSON: snapshot for parse check
-        repos_path = root / CONDUCTOR_DAEMON_REPOS_JSON_RELPATH
+        repos_path = conductor_root / CONDUCTOR_DAEMON_REPOS_JSON_RELPATH
         snap["conductor_daemon_repos_json"]["repos"] = snapshot_repos_json(repos_path)
 
         # STATIC JSON files: hash comparison as before (but exclude .watchdog-repos.json)
         # since that's handled by daemon_repos_json above
         exclude_repos = {CONDUCTOR_DAEMON_REPOS_JSON_RELPATH}
         snap["conductor_static_json"] = snapshot_glob(
-            root, CONDUCTOR_STATIC_JSON_GLOB, exclude_files=exclude_repos
+            conductor_root, CONDUCTOR_STATIC_JSON_GLOB, exclude_files=exclude_repos
         )
     return snap
 
@@ -389,7 +421,7 @@ def diff_snapshots(before: dict, after: dict):
             # If the after-snapshot marks the value as invalid (non-integer), fail
             if not a_snap.get("valid", True):
                 rel = CONDUCTOR_DAEMON_HEARTBEAT_RELPATHS.get(name, name)
-                changes.append(f"~/{rel} ({name}) invalid: {a_snap.get('error', 'unknown')}")
+                changes.append(f"fleet-state/{rel} ({name}) invalid: {a_snap.get('error', 'unknown')}")
                 continue
 
             # If before was ABSENT but after is present, that's OK (file created during run)
@@ -399,7 +431,7 @@ def diff_snapshots(before: dict, after: dict):
             # If before was present but after is ABSENT, that's an escape
             if b_val != ABSENT and a_val == ABSENT:
                 rel = CONDUCTOR_DAEMON_HEARTBEAT_RELPATHS.get(name, name)
-                changes.append(f"~/{rel} ({name}) disappeared")
+                changes.append(f"fleet-state/{rel} ({name}) disappeared")
                 continue
 
             # Both present: check bounds
@@ -411,17 +443,17 @@ def diff_snapshots(before: dict, after: dict):
                 if a_epoch < b_epoch:
                     rel = CONDUCTOR_DAEMON_HEARTBEAT_RELPATHS.get(name, name)
                     changes.append(
-                        f"~/{rel} ({name}) decreased: before={b_epoch}, after={a_epoch}"
+                        f"fleet-state/{rel} ({name}) decreased: before={b_epoch}, after={a_epoch}"
                     )
                 elif a_epoch > now + 60:
                     rel = CONDUCTOR_DAEMON_HEARTBEAT_RELPATHS.get(name, name)
                     changes.append(
-                        f"~/{rel} ({name}) far in future: after={a_epoch}, now={now}"
+                        f"fleet-state/{rel} ({name}) far in future: after={a_epoch}, now={now}"
                     )
             except (ValueError, TypeError):
                 # Should not happen if a_snap["valid"] is True, but be defensive
                 rel = CONDUCTOR_DAEMON_HEARTBEAT_RELPATHS.get(name, name)
-                changes.append(f"~/{rel} ({name}) non-integer value")
+                changes.append(f"fleet-state/{rel} ({name}) non-integer value")
 
         # Check DAEMON-WRITTEN log files for growth
         before_logs = before.get("conductor_daemon_logs", {})
@@ -433,7 +465,7 @@ def diff_snapshots(before: dict, after: dict):
             a_size = a_snap.get("size", -1)
 
             if b_size != -1 and a_size < b_size:
-                changes.append(f"~/{rel} truncated (before: {b_size}, after: {a_size})")
+                changes.append(f"fleet-state/{rel} truncated (before: {b_size}, after: {a_size})")
 
         # Check DAEMON-WRITTEN repos JSON for parse validity
         before_repos = before.get("conductor_daemon_repos_json", {}).get("repos", {})
@@ -441,7 +473,7 @@ def diff_snapshots(before: dict, after: dict):
 
         if before_repos.get("valid", True) and not after_repos.get("valid", True):
             changes.append(
-                f"~/conductor3/state/.watchdog-repos.json invalid: "
+                f"fleet-state/state/.watchdog-repos.json invalid: "
                 f"{after_repos.get('error', 'unknown')}"
             )
         # If both were valid dicts, check that keys are consistent (shape unchanged)
@@ -459,7 +491,7 @@ def diff_snapshots(before: dict, after: dict):
                 if removed:
                     detail.append(f"removed keys: {', '.join(removed)}")
                 changes.append(
-                    f"~/conductor3/state/.watchdog-repos.json shape changed "
+                    f"fleet-state/state/.watchdog-repos.json shape changed "
                     f"({'; '.join(detail)})"
                 )
 
@@ -471,11 +503,11 @@ def diff_snapshots(before: dict, after: dict):
             a_files = after_static if isinstance(after_static, dict) else {}
             for rel in sorted(set(b_files) | set(a_files)):
                 if b_files.get(rel) != a_files.get(rel):
-                    changes.append(f"~/{rel} (conductor3 static json) changed")
+                    changes.append(f"fleet-state/{rel} (fleet-state root) changed")
 
     elif before["conductor_present"] != after["conductor_present"]:
         changes.append(
-            "~/conductor3 " + ("appeared" if after["conductor_present"] else "disappeared")
+            "fleet-state root " + ("appeared" if after["conductor_present"] else "disappeared")
             + " during the run"
         )
 
