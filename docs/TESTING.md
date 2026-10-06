@@ -18,7 +18,9 @@ Aesop runs three independent test harnesses, each covering different system laye
 
 ### Node
 
-**Run:** `npm run test:node` or `node --test --test-force-exit --test-timeout=60000 tests/*.test.mjs`
+**Run:** `npm run test:node` or `node --import ./tests/helpers/isolated-env.mjs --test --test-force-exit --test-timeout=60000 tests/*.test.mjs`
+
+**HOME isolation:** `tests/helpers/isolated-env.mjs` redirects `HOME`/`USERPROFILE`/`AESOP_SKILLS_HOME`/`AESOP_HOME` to a throwaway temp dir for the whole Node test process (incident 2026-10-05: a test overwrote the real `~/.claude/skills`). It MUST be loaded via `--import` on every Node test invocation -- running plain `node --test` without it is unprotected. `tests/isolated-home-tripwire.test.mjs` fails if the import is missing; `tools/test_isolation_tripwire.py` (wired around `npm run test:node` and the CI Node step) is the independent behavioral proof that the real profile never changed.
 
 **Covers:** CLI scaffolding, config management, signal collection, drift detection, dashboard UI rendering, fleet/MCP APIs, test templating, orchestration core logic. These test the Node.js layer that powers the CLI (`npx @matt82198/aesop`) and the MCP server.
 

@@ -437,6 +437,75 @@ def bad_merge():
         # Should only check the actual invocation, which has a PR number
         self.assertFalse(any(v["pattern"] == "auto_merge_bare_invocation" for v in violations))
 
+    def test_index_md_documentation_never_scanned(self):
+        """Reproduces the exact PR #856 incident: a merge lane re-generated
+        tools/INDEX.md and dispatch_lint went red on it, because (a) one
+        tool's one-liner literally quotes `agent(`/`Agent(` dispatch-indicator
+        syntax (making is_dispatch_file() treat the whole generated doc as a
+        dispatch template) and (b) other tools' one-liners describe, in
+        prose, the exact forbidden tokens they detect or prevent
+        (--admin/--auto/merge_train.py), with no `# dispatch-ok` marker
+        anywhere (markers on a GENERATED file don't survive regeneration).
+        tools/INDEX.md must be exempt from scanning categorically -- not via
+        per-line markers -- so this can never recur after a regen.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            (tmppath / "INDEX.md").write_text(
+                "<!-- GENERATED-BY: tools/gen_tool_index.py -->\n"
+                "# tools/ index\n\n"
+                "- `spec_contract_validator.py` -- AST-scans agent-dispatch call "
+                "sites (`agent(`/`Agent(`/`Task(`) for forbidden flags\n"
+                "- `merge_train.py` -- Merge train; MERGED state verification "
+                "mandatory; no --admin/--auto emitted\n"
+                "- `subprocess_common.py` -- used by auto_merge, ci_merge_wait, "
+                "defect_escape\n",
+                encoding="utf-8",
+            )
+            violations_by_file, errors = scan_directory(tmppath)
+            self.assertEqual(len(errors), 0)
+            self.assertEqual(
+                violations_by_file, {},
+                "tools/INDEX.md is generated documentation and must never be "
+                "scanned as a dispatch template, regardless of merge/regen drift",
+            )
+
+    def test_claude_md_prose_never_scanned(self):
+        """CLAUDE.md prose describing forbidden tokens (e.g. a gate's own
+        docs) must never be treated as a dispatch template."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            (tmppath / "CLAUDE.md").write_text(
+                "# tools/ — Build utilities\n\n"
+                "- dispatch_lint.py detects forbidden patterns (gh pr merge, "
+                "--admin/--auto/--no-verify/--force, git stash) in Agent() "
+                "dispatch prompts; merge_train.py is for one-shot serial queues.\n",
+                encoding="utf-8",
+            )
+            violations_by_file, errors = scan_directory(tmppath)
+            self.assertEqual(len(errors), 0)
+            self.assertEqual(
+                violations_by_file, {},
+                "CLAUDE.md prose must never be scanned as a dispatch template",
+            )
+
+    def test_index_docstring_summary_line_exempt(self):
+        """A module's own `INDEX:` docstring summary line documents a tool's
+        forbidden-pattern detection in prose (so it legitimately contains
+        tokens like --admin/merge_train.py); it must be exempt even when the
+        rest of the file legitimately qualifies as a dispatch file."""
+        content = (
+            "Agent()\n"
+            "INDEX: Detects --admin/--auto flags and merge_train.py lane "
+            "polling; gh pr merge forbidden; git stash forbidden\n"
+        )
+        violations = find_violations(Path("some_tool.py"), content)
+        self.assertEqual(
+            violations, [],
+            "INDEX: docstring summary lines must be exempt from forbidden-"
+            "pattern scanning",
+        )
+
     def test_excludes_test_files_from_violations(self):
         """Test files with Agent() should be excluded from dispatch_lint scanning."""
         # This test verifies that test_dispatch_lint.py itself does not
