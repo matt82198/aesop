@@ -112,6 +112,17 @@ Does **not** prove:
 
 Exit codes of `tools/verify_receipt.py`: `0` valid, `1` invalid, `2` cannot evaluate.
 
+**The "none" row is a lookup outcome, not just an evaluation outcome.** The fetch step
+(`tools/verify_receipt.py --fetch-for-head`) only ever LOOKS for a receipt; a failure
+while looking -- a `gh api` error, a malformed check-run payload, or the PR's own tree
+predating this tool entirely (the job checks out the PR head, not main) -- is
+indistinguishable from "no receipt was posted" and always degrades to the "none" row,
+never to a crash. Only a receipt the fetch step actually extracted and then handed to
+`verify()` can land on the "invalid" or "cannot evaluate" rows. (2026-10-06 incident:
+PRs #856/#857 showed FAILURE because the inline fetch script raised
+`ModuleNotFoundError` on branches cut before this file existed -- fixed by making the
+lookup exception-safe and guarding the module's own absence at the shell level.)
+
 ## Increments to come
 
 4. **Protection change** — add `verify-receipt` to required checks and make the python
