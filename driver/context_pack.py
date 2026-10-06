@@ -242,29 +242,70 @@ def build_context_pack(
 
     # Add evidence if provided (explicit, allowlist-only).
     if evidence:
-        for evidence_name, evidence_text in evidence.items():
-            if not evidence_name:
-                continue
-
-            pack.evidence[evidence_name] = evidence_text
-            evidence_bytes = len(evidence_text.encode("utf-8"))
-            pack.evidence_size_bytes += evidence_bytes
-
-            pack.evidence_manifest.append(
-                {
-                    "name": evidence_name,
-                    "included": True,
-                    "truncated": False,
-                    "truncation_reason": None,
-                    "size_bytes": evidence_bytes,
-                }
-            )
-
-        # Enforce size cap on evidence: truncate end-of-text if needed.
-        if pack.evidence_size_bytes > pack.evidence_size_cap:
-            _truncate_evidence(pack, pack.evidence_size_cap)
+        add_evidence_to_pack(pack, evidence, pack.evidence_size_cap)
 
     return pack
+
+
+def add_evidence_to_pack(
+    pack: ContextPack,
+    evidence: Dict[str, str],
+    evidence_cap: Optional[int] = None,
+) -> None:
+    """Attach explicit, already-in-memory evidence text to an existing pack.
+
+    This is the ONLY supported way to add evidence to a pack that was built
+    outside build_context_pack() (e.g. a caller that constructs its own
+    ContextPack.content directly, such as a blind-adjudication brief). It never
+    touches the filesystem and never consults repo_root/conductor_root -- the
+    caller already has the text in hand, so there is nothing to allowlist.
+
+    Do NOT work around this by inventing a fake 'brief:<name>' source and
+    re-invoking build_context_pack() just to piggyback on its evidence-capping
+    logic: 'brief:' sources are resolved against cwd (see _read_source) and a
+    placeholder name like 'finding' is not a real path, so that resolution is
+    at the mercy of whatever the process cwd happens to be when this runs --
+    exactly the defect this function replaces (tools/shadow_adjudication.py's
+    build_finding_context_pack used to do this; a cwd-polluting test running
+    earlier in the same pytest process made it raise ContextPackViolation for
+    a perfectly legitimate in-memory brief).
+
+    Mutates pack.evidence / pack.evidence_manifest / pack.evidence_size_bytes
+    in place.
+
+    Args:
+        pack: The ContextPack to attach evidence to.
+        evidence: Dict mapping evidence_name -> evidence_text (in-memory text,
+                  never a path).
+        evidence_cap: Size limit in bytes for evidence (default: pack's own
+                      evidence_size_cap).
+    """
+    if evidence_cap is None:
+        evidence_cap = pack.evidence_size_cap
+    else:
+        pack.evidence_size_cap = evidence_cap
+
+    for evidence_name, evidence_text in evidence.items():
+        if not evidence_name:
+            continue
+
+        pack.evidence[evidence_name] = evidence_text
+        evidence_bytes = len(evidence_text.encode("utf-8"))
+        pack.evidence_size_bytes += evidence_bytes
+
+        pack.evidence_manifest.append(
+            {
+                "name": evidence_name,
+                "included": True,
+                "truncated": False,
+                "truncation_reason": None,
+                "size_bytes": evidence_bytes,
+            }
+        )
+
+    # Enforce size cap on evidence: truncate end-of-text if needed.
+    if pack.evidence_size_bytes > evidence_cap:
+        _truncate_evidence(pack, evidence_cap)
 
 
 def _read_source(

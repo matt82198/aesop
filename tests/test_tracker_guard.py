@@ -57,7 +57,58 @@ class TrackerGuardTestBase(unittest.TestCase):
         shutil.rmtree(self.fixture_root, ignore_errors=True)
 
     def create_tracker(self, items):
-        """Create tracker.json with given items."""
+        """Create tracker.json with given items.
+
+        Also seeds the event store (tracker_events.db) with matching
+        item_created/item_updated events, mirroring production (where
+        tracker.json is always rendered from the event log). This is required
+        because --enforce now closes items THROUGH WriteAPI, which fails
+        closed (WriteConflict) if tracker.json contains an id the event store
+        has never heard of ("unexplained disk state"). Items missing an id or
+        a valid title (e.g. the malformed-item fixtures) are intentionally
+        left out of the event store -- those tests never exercise --enforce.
+
+        After seeding, tracker.json is rewritten to the EXACT shape the
+        caller authored (not the WriteAPI projection's shape, which adds
+        default fields), so assertions about the raw file and --seed/--check's
+        own malformed-item handling keep working unchanged.
+        """
+        from state_store.store import EventStore
+        from state_store.projections import project_tracker
+        from state_store.write_api import WriteAPI
+
+        db_path = self.state_dir / "tracker_events.db"
+        existing_ids = set()
+        if db_path.exists():
+            store = EventStore(str(db_path))
+            try:
+                existing_ids = {
+                    item["id"]
+                    for item in project_tracker(store.read("tracker")).get("items", [])
+                }
+            finally:
+                store.close()
+
+        api = WriteAPI(self.state_dir)
+        try:
+            for item in items:
+                item_id = item.get("id")
+                if not item_id:
+                    continue
+                try:
+                    if item_id in existing_ids:
+                        fields = {k: v for k, v in item.items() if k != "id"}
+                        api.tracker_update_item(item_id, fields, actor="test")
+                    else:
+                        api.tracker_append_item(dict(item), actor="test")
+                        existing_ids.add(item_id)
+                except Exception:
+                    # Malformed fixture item (e.g. empty title): leave it out of
+                    # the event store; it still lands in tracker.json below.
+                    pass
+        finally:
+            api.close()
+
         tracker_file = self.state_dir / "tracker.json"
         tracker_data = {"version": 1, "items": items}
         tracker_file.write_text(json.dumps(tracker_data, indent=2))

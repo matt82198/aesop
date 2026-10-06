@@ -1,16 +1,17 @@
-"""PARTIALLY SKIPPED -- API changed after these tests were written.
+"""Publish-path tests rebased onto the current secret-gist API.
 
 status_publish was retargeted from PUBLIC GitHub issues to SECRET GISTS mid-development
 (the aesop repo is public, so an "issue" target would have made every fleet-status
-snapshot world-readable). The publish entry point became publish_to_gist(gist_id=...),
-dropping the issue_num keyword these tests still pass.
+snapshot world-readable). The publish entry point became
+publish_to_gist(payload, gist_id, dry_run=False), dropping the old issue_num/as_comment
+keywords.
 
-These classes were ALSO never executing: they had no unittest.TestCase base, so
-`unittest discover` silently skipped the whole module. Basing them revealed the drift.
-
-The redaction and payload tests below are real and now run. The publish-path tests are
-skipped with this reason rather than rewritten blind against an API this session did not
-verify -- a skip that states why beats a green that never ran.
+TestDryRun, TestIdempotence, and TestGhFailure below exercise that gist path: a
+run_command() stand-in is injected via unittest.mock.patch so no test ever shells out
+to a real `gh` (the harness blocks it anyway) -- each fake runner records the argv it
+was called with and answers only `gh gist view` / `gh gist edit`, raising on anything
+else. These classes previously carried an unconditional @unittest.skip and had no real
+assertions against this API; they are now live.
 """
 #!/usr/bin/env python3
 # secretscan: allow-pattern-docs
@@ -30,6 +31,7 @@ Usage:
     python -m pytest tests/test_status_publish.py -v
 """
 
+import hashlib
 import io
 import sys
 import unittest
@@ -175,9 +177,8 @@ class TestRedaction(unittest.TestCase):
         assert text == result
 
 
-@unittest.skip("publish path retargeted to secret gists; tests reference the removed issue_num API")
 class TestDryRun(unittest.TestCase):
-    """Test --dry-run output."""
+    """Test --dry-run output against the current gist publish path."""
 
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
@@ -199,7 +200,7 @@ class TestDryRun(unittest.TestCase):
         mock_pr,
         mock_agent
     ):
-        """Test that --dry-run produces a valid markdown payload."""
+        """Test that build_payload() assembles the expected markdown payload."""
         mock_agent.return_value = "3 active"
         mock_pr.return_value = "5 open"
         mock_heartbeat.return_value = "watchdog: 50s · monitor: 100s"
@@ -216,130 +217,184 @@ class TestDryRun(unittest.TestCase):
         assert "Wave completed" in payload
         assert "2 pending" in payload
 
-    @patch('status_publish.gather_agent_status')
-    @patch('status_publish.gather_pr_status')
-    @patch('status_publish.gather_heartbeat_status')
-    @patch('status_publish.gather_buildlog_summary')
-    @patch('status_publish.gather_pending_items')
-    @patch('sys.stdout', new_callable=lambda: MagicMock())
-    def test_dry_run_prints_payload(
-        self,
-        mock_stdout,
-        mock_pending,
-        mock_buildlog,
-        mock_heartbeat,
-        mock_pr,
-        mock_agent
-    ):
-        """Test that --dry-run prints the payload."""
-        mock_agent.return_value = "status reported"
-        mock_pr.return_value = "0 open PRs"
-        mock_heartbeat.return_value = "watchdog: ok"
-        mock_buildlog.return_value = "Recent activity"
-        mock_pending.return_value = "none"
+    @patch('status_publish.run_command')
+    def test_dry_run_prints_payload_and_makes_no_gh_call(self, mock_run):
+        """--dry-run prints the payload and never shells out to gh (no network)."""
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        try:
+            result = status_publish.publish_to_gist(
+                "# Fleet Status\nhello", gist_id="abc123", dry_run=True
+            )
+        finally:
+            sys.stdout = old_stdout
 
-        config = {}
-        payload = status_publish.build_payload(config)
-        status_publish.publish_to_gist(
-            payload, issue_num=1, as_comment=False, dry_run=True
-        )
+        assert result is True
+        assert "Fleet Status" in buf.getvalue()
+        # dry-run must skip BOTH the visibility check and the gist edit
+        mock_run.assert_not_called()
 
-        # Verify no exception and dry-run succeeded
-        assert True  # If we get here, no exception
+    @patch('status_publish.run_command')
+    def test_dry_run_output_is_redacted(self, mock_run):
+        """Dry-run must print the redacted payload, not the raw one."""
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        try:
+            status_publish.publish_to_gist(
+                "Home dir is /home/matt8/aesop", gist_id="abc123", dry_run=True
+            )
+        finally:
+            sys.stdout = old_stdout
+
+        assert "/home/matt8" not in buf.getvalue()
+        assert "[REDACTED_HOME]" in buf.getvalue()
+        mock_run.assert_not_called()
 
 
-@unittest.skip("publish path retargeted to secret gists; tests reference the removed issue_num API")
 class TestIdempotence(unittest.TestCase):
-    """Test idempotence: skip update if unchanged."""
+    """Publishing unchanged content must not re-edit the gist; publishing
+    changed content must edit the SAME gist again -- never create a new one."""
 
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
         self.tmp_path = Path(self._td.name)
+        self.state_dir = self.tmp_path / 'state'
+        self.state_dir.mkdir()
+        self.last_publish_file = self.state_dir / '.status-publish-last'
 
     def tearDown(self):
         self._td.cleanup()
+
+    @staticmethod
+    def _fake_runner(calls):
+        """Injected stand-in for status_publish.run_command.
+
+        Records every argv it is called with (for assertions) and answers
+        the two gh subcommands the publish path actually issues. Hits no
+        network/process -- this is the "inject a runner" seam the real gh
+        invocation goes through.
+        """
+        def _run(cmd, timeout=10):
+            calls.append(list(cmd))
+            if cmd[:3] == ['gh', 'gist', 'view']:
+                return (json.dumps({"isPublic": False}), 0)
+            if cmd[:3] == ['gh', 'gist', 'edit']:
+                return ("", 0)
+            raise AssertionError(f"unexpected command in idempotence test: {cmd}")
+        return _run
 
     def test_unchanged_payload_skips_update(self):
-        tmp_path = self.tmp_path
-        _buf = io.StringIO(); _old = sys.stdout; sys.stdout = _buf
-        """Test that unchanged payload skips GitHub update."""
-        # Create mock state directory
-        state_dir = tmp_path / 'state'
-        state_dir.mkdir()
-        last_publish_file = state_dir / '.status-publish-last'
+        """Second publish of IDENTICAL content must not call `gh gist edit` again."""
+        payload = "# Fleet Status\nNo changes"
+        payload_hash = hashlib.sha256(payload.encode()).hexdigest()[:8]
+        self.last_publish_file.write_text(payload_hash, encoding='utf-8')
 
-        # Write a previous hash
-        import hashlib
-        test_payload = "# Fleet Status\nNo changes"
-        test_hash = hashlib.sha256(test_payload.encode()).hexdigest()[:8]
-        last_publish_file.write_text(test_hash, encoding='utf-8')
+        calls = []
+        buf = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = buf
+        try:
+            with patch('status_publish.AESOP_STATE_ROOT', self.state_dir), \
+                 patch('status_publish.LAST_PUBLISH_FILE', self.last_publish_file), \
+                 patch('status_publish.redact_payload', return_value=payload), \
+                 patch('status_publish.run_command', side_effect=self._fake_runner(calls)):
+                result = status_publish.publish_to_gist(
+                    payload, gist_id="abc123", dry_run=False
+                )
+        finally:
+            sys.stdout = old_stdout
 
-        # Mock AESOP_STATE_ROOT and run_command
-        with patch('status_publish.AESOP_STATE_ROOT', state_dir):
-            with patch('status_publish.LAST_PUBLISH_FILE', last_publish_file):
-                with patch('status_publish.redact_payload', return_value=test_payload):
-                    with patch('status_publish.run_command') as mock_run:
-                        result = status_publish.publish_to_gist(
-                            test_payload, issue_num=1, as_comment=False, dry_run=False
-                        )
-
-        # Verify no gh command was run (unchanged, so skip)
-        mock_run.assert_not_called()
         assert result is True
+        assert "No changes" in buf.getvalue()
+        edit_calls = [c for c in calls if c[:3] == ['gh', 'gist', 'edit']]
+        assert edit_calls == [], f"unchanged content must skip the edit, got: {calls}"
 
-        # Verify skip message
-        sys.stdout = _old
-        captured = type("C", (), {"out": _buf.getvalue(), "err": ""})()
-        assert "No changes" in captured.out
+    def test_changed_payload_edits_same_gist_not_a_new_one(self):
+        """Two publishes of DIFFERENT content must both land as `gh gist edit`
+        against the same gist id -- the code must never fall back to
+        `gh gist create` on a repeat publish."""
+        calls = []
+        with patch('status_publish.AESOP_STATE_ROOT', self.state_dir), \
+             patch('status_publish.LAST_PUBLISH_FILE', self.last_publish_file), \
+             patch('status_publish.run_command', side_effect=self._fake_runner(calls)):
+            status_publish.publish_to_gist("first payload", gist_id="abc123", dry_run=False)
+            status_publish.publish_to_gist("second payload", gist_id="abc123", dry_run=False)
+
+        edit_calls = [c for c in calls if c[:3] == ['gh', 'gist', 'edit']]
+        create_calls = [c for c in calls if 'create' in c]
+        assert create_calls == [], f"must never create a new gist, got argv: {calls}"
+        assert len(edit_calls) == 2, f"expected 2 edits (one per changed publish), got: {calls}"
+        assert all(c[3] == "abc123" for c in edit_calls), (
+            f"both edits must target the same gist id, got: {edit_calls}"
+        )
 
 
-@unittest.skip("publish path retargeted to secret gists; tests reference the removed issue_num API")
 class TestGhFailure(unittest.TestCase):
-    """Test handling of gh command failures."""
+    """gh failures must surface as a real exception the caller sees --
+    never a silently-returned None/True (the vacuous-pass class of bug)."""
 
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
         self.tmp_path = Path(self._td.name)
+        self.state_dir = self.tmp_path / 'state'
+        self.state_dir.mkdir()
+        # Non-existent -- forces the idempotence check to miss and proceed to publish.
+        self.last_publish_file = self.state_dir / 'nonexistent'
 
     def tearDown(self):
         self._td.cleanup()
 
-    @patch('status_publish.LAST_PUBLISH_FILE')
-    @patch('status_publish.run_command')
-    def test_gh_failure_raises(self, mock_run, mock_last_file, tmp_path):
-        """Test that gh command failure raises RuntimeError."""
-        state_dir = tmp_path / 'state'
-        state_dir.mkdir()
+    def test_gh_edit_raising_propagates(self):
+        """run_command raising on the edit call must raise out of publish_to_gist,
+        not swallow the error and return a falsy/None success value."""
+        def _run(cmd, timeout=10):
+            if cmd[:3] == ['gh', 'gist', 'view']:
+                return (json.dumps({"isPublic": False}), 0)
+            raise RuntimeError("gh not found")
 
-        # Ensure last publish file doesn't exist (so idempotence check is skipped)
-        mock_last_file_path = tmp_path / 'nonexistent'
-        mock_last_file.exists.return_value = False
+        with patch('status_publish.LAST_PUBLISH_FILE', self.last_publish_file), \
+             patch('status_publish.run_command', side_effect=_run):
+            with pytest.raises(RuntimeError, match="Failed to update gist"):
+                status_publish.publish_to_gist(
+                    "payload", gist_id="abc123", dry_run=False
+                )
 
-        mock_run.side_effect = RuntimeError("gh not found")
+    def test_gh_nonzero_exit_code_raises(self):
+        """A non-zero `gh gist edit` exit code must raise, not return silently."""
+        def _run(cmd, timeout=10):
+            if cmd[:3] == ['gh', 'gist', 'view']:
+                return (json.dumps({"isPublic": False}), 0)
+            if cmd[:3] == ['gh', 'gist', 'edit']:
+                return ("error", 1)
+            raise AssertionError(f"unexpected command: {cmd}")
 
-        with patch('status_publish.LAST_PUBLISH_FILE', mock_last_file_path):
-            with patch('status_publish.redact_payload', return_value="payload"):
-                with pytest.raises(RuntimeError):
-                    status_publish.publish_to_gist(
-                        "payload", issue_num=1, as_comment=False, dry_run=False
-                    )
+        with patch('status_publish.LAST_PUBLISH_FILE', self.last_publish_file), \
+             patch('status_publish.run_command', side_effect=_run):
+            with pytest.raises(RuntimeError, match="gh gist edit failed"):
+                status_publish.publish_to_gist(
+                    "payload", gist_id="abc123", dry_run=False
+                )
 
-    @patch('status_publish.run_command')
-    def test_gh_nonzero_exit_code(self, mock_run, tmp_path):
-        """Test handling of non-zero gh exit code."""
-        state_dir = tmp_path / 'state'
-        state_dir.mkdir()
-        last_file = state_dir / 'nonexistent'  # Non-existent file
+    def test_public_gist_refused_before_any_edit(self):
+        """Fail-closed: a PUBLIC gist must be refused before any edit is attempted."""
+        calls = []
 
-        # Mock gh returning error
-        mock_run.return_value = ("error", 1)
+        def _run(cmd, timeout=10):
+            calls.append(list(cmd))
+            if cmd[:3] == ['gh', 'gist', 'view']:
+                return (json.dumps({"isPublic": True}), 0)
+            raise AssertionError("must not reach gh gist edit on a public gist")
 
-        with patch('status_publish.LAST_PUBLISH_FILE', last_file):
-            with patch('status_publish.redact_payload', return_value="payload"):
-                with pytest.raises(RuntimeError, match="gh issue edit failed"):
-                    status_publish.publish_to_gist(
-                        "payload", issue_num=1, as_comment=False, dry_run=False
-                    )
+        with patch('status_publish.LAST_PUBLISH_FILE', self.last_publish_file), \
+             patch('status_publish.run_command', side_effect=_run):
+            with pytest.raises(RuntimeError, match="PUBLIC"):
+                status_publish.publish_to_gist(
+                    "payload", gist_id="abc123", dry_run=False
+                )
+
+        assert all(c[:3] != ['gh', 'gist', 'edit'] for c in calls)
 
 
 class TestCommandTimeout(unittest.TestCase):

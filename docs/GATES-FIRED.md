@@ -6,12 +6,12 @@ A committed audit of which guardrails have demonstrably blocked code, versus whi
 
 ## Summary
 
-- **PROVEN**: 7 gates with documented activations
-- **UNPROVEN**: 15 gates implemented, no documented blocking event
+- **PROVEN**: 8 gates with documented activations
+- **UNPROVEN**: 14 gates implemented, no documented blocking event
 - **FAIL-OPEN**: 7 gates (deliberate two-tier design with critical caveat)
 - **Total**: 22 gates
 
-## Proven Activations (7)
+## Proven Activations (8)
 
 ### 1. secret_scan.py — Multiple Blocks
 - Commit dc76586: Fixed fail-open vulnerabilities
@@ -38,6 +38,11 @@ A committed audit of which guardrails have demonstrably blocked code, versus whi
 
 ### 7. Branch Protection (main/master)
 - ~100+ recent commits on feature branches, zero direct main pushes
+
+### 8. ci_workflow_lint.py — GitHub-Semantics Check (WORKFLOW-INVALID, Fake-Green Caught)
+- Escape: PR #850 (merge f8c898de, 2026-10-06 17:07Z) put `exclude:` as a sibling of `matrix:` under `strategy:` and used `shell: ${{ runner.os ... }}` in `.github/workflows/main-full.yml`. PyYAML parsed it and `ci_workflow_lint.py` printed `OK` — GitHub rejected it on every push to main (run 37504613105 and every later one): "Invalid workflow file: (Line: 36, Col: 7): Unexpected value 'exclude', (Line: 92, Col: 16): Unrecognized named-value: 'runner'". The post-merge integration gate ran ZERO jobs for ~10 merges.
+- Activation: the FIX is the evidence — on the broken file the extended gate now reports `unexpected key \`exclude\` for strategy ... put it inside matrix:` and `\`shell\` uses runner (GitHub allows: NONE)` (exit 1); actionlint (pinned 1.7.12, mandatory in ci.yml) reports the same two lines.
+- **Escape-detector signature (WORKFLOW-INVALID)** for `~/scripts/detect_red_ci_runs.py`: an Actions run with `conclusion == "failure"`, `jobs == []` (`gh run view <id> --json jobs --jq '.jobs|length'` is 0), and `name == path` (GitHub falls back to the file path as the run name when it cannot parse the workflow); UI text "This run likely failed because of a workflow file issue". Classify as WORKFLOW-INVALID, not as a test failure — nothing ran.
 
 ## Fail-Open Gates (7) — Deliberate Two-Tier Design
 

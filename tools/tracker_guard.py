@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Tracker zombie-resurrection prevention gate.
-INDEX: Append-only lane journal + zombie-resurrection fail-closed gate; prevents items in terminal lanes (done/rejected) from re-entering active lanes (ranked/proposed/in-progress/accepted); modes: --seed (bootstrap journal), --check (detect violations, exit 1 if found, default), --enforce (revert zombies to terminal lane); CLI: `tracker_guard.py [--seed | --check | --enforce]`; journaled in state/tracker-journal.jsonl with rotation at 5000 lines
+INDEX: Append-only lane journal + zombie-resurrection fail-closed gate; prevents items in terminal lanes (done/rejected) from re-entering active lanes (ranked/proposed/in-progress/accepted); modes: --seed (bootstrap journal), --check (detect violations, exit 1 if found, default), --enforce (revert zombies to terminal lane via WriteAPI, event-sourced), --reconcile-journal (backfill missing item_updated events for past direct-patch reverts); CLI: `tracker_guard.py [--seed | --check | --enforce | --reconcile-journal]`; journaled in state/tracker-journal.jsonl with rotation at 5000 lines
 
 Maintains an append-only lane journal (state/tracker-journal.jsonl) to enforce
 the ZOMBIE RULE: items that reach a terminal lane (done/rejected) may NEVER
 re-enter an active lane (ranked/proposed/in-progress/accepted).
 
 Usage:
-  tracker_guard.py [--seed | --enforce | --check]
+  tracker_guard.py [--seed | --enforce | --check | --reconcile-journal]
   tracker_guard.py --help
 
 Modes:
@@ -20,8 +20,19 @@ Modes:
     1 if violations detected (fail-closed). Appends normal transitions to journal.
 
   --enforce
-    Revert any zombie items to their last terminal lane. Appends revert entries
-    to journal. Exits 0 after fixing. Use after --check detects zombies.
+    Revert any zombie items to their last terminal lane. Closes items THROUGH
+    the sanctioned writer (state_store.write_api.WriteAPI.tracker_update_item),
+    which appends an item_updated event before re-rendering tracker.json, so the
+    event log and the projection never disagree. Appends revert entries to the
+    journal. Exits 0 after fixing. Use after --check detects zombies.
+
+  --reconcile-journal
+    One-time migration for history produced by the OLD (pre-event-sourced)
+    --enforce, which patched tracker.json directly without appending an
+    item_updated event. For every item the journal records as reverted to a
+    terminal lane, backfills the missing item_updated event into the event log
+    IF the event-store-only projection does not already reflect that lane.
+    Idempotent: a second run appends zero new events.
 
 Environment:
   AESOP_STATE_ROOT: Directory containing tracker.json and tracker-journal.jsonl
@@ -33,7 +44,6 @@ Exit codes:
 """
 
 import json
-import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -48,16 +58,14 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from state_store.read_api import ReadAPI
+from state_store.write_api import WriteAPI
+from state_store.store import EventStore
+from state_store.projections import project_tracker
 
 
 def get_journal_path():
     """Return path to tracker-journal.jsonl."""
     return common.get_state_dir() / "tracker-journal.jsonl"
-
-
-def get_tracker_path():
-    """Return path to tracker.json."""
-    return common.get_state_dir() / "tracker.json"
 
 
 def read_tracker():
@@ -75,12 +83,6 @@ def read_tracker():
     if not tracker_data:
         return None
     return tracker_data
-
-
-def write_tracker(tracker_data):
-    """Write tracker.json."""
-    tracker_path = get_tracker_path()
-    tracker_path.write_text(json.dumps(tracker_data, indent=2), encoding="utf-8")
 
 
 def read_journal():
@@ -292,8 +294,24 @@ def cmd_check(args):
     return 0
 
 
+def _zombie_revert_note(item_id, current_lane, terminal_lane):
+    """Build the audit note recorded on the item_updated event for a zombie revert."""
+    return f"tracker_guard: zombie {item_id} reverted {current_lane} -> {terminal_lane}"
+
+
 def cmd_enforce(args):
-    """Revert zombies to their last terminal lane."""
+    """Revert zombies to their last terminal lane.
+
+    Closes items THROUGH the sanctioned writer (WriteAPI.tracker_update_item),
+    which appends an item_updated event to the event log BEFORE re-rendering
+    tracker.json. This is load-bearing: tracker.json is re-rendered FROM the
+    event log on every WriteAPI call anywhere in the system (any mutation
+    re-projects the whole tracker), so a lane change that only patches
+    tracker.json directly is correct only until the next unrelated write --
+    at which point the un-journaled item silently resurrects to whatever lane
+    the event log (still) says it's in. See --reconcile-journal for backfilling
+    history already lost to that bug.
+    """
     tracker = read_tracker()
     if tracker is None:
         print("INFO: tracker.json not found, nothing to enforce")
@@ -302,37 +320,47 @@ def cmd_enforce(args):
     journal = read_journal()
     items = tracker.get("items", [])
 
-    # Build current state
-    current_lanes = {}
-    for item in items:
-        item_id = item.get("id")
-        lane = item.get("lane")
-
-        if not item_id or lane is None:
-            print(f"WARN: skipping malformed item: {item}")
-            continue
-
-        current_lanes[item_id] = lane
-
-    # Find and revert zombies
-    reverted = []
+    # Find zombies (read-only pass; no mutation yet)
+    to_revert = []
     for item in items:
         item_id = item.get("id")
         current_lane = item.get("lane")
 
         if not item_id or current_lane is None:
+            print(f"WARN: skipping malformed item: {item}")
             continue
 
         if is_zombie(item_id, current_lane, journal):
             terminal_lane = find_last_terminal_lane(item_id, journal)
             if terminal_lane:
-                item["lane"] = terminal_lane
+                to_revert.append((item_id, current_lane, terminal_lane))
+
+    reverted = []
+    if to_revert:
+        write_api = WriteAPI(common.get_state_dir())
+        try:
+            for item_id, current_lane, terminal_lane in to_revert:
+                try:
+                    write_api.tracker_update_item(
+                        item_id,
+                        {
+                            "lane": terminal_lane,
+                            "notes": _zombie_revert_note(item_id, current_lane, terminal_lane),
+                            "source": "tracker_guard",
+                        },
+                        actor="tracker_guard",
+                    )
+                except Exception as e:
+                    print(f"ERROR: failed to revert {item_id} via WriteAPI: {e}", file=sys.stderr)
+                    continue
+
                 reverted.append({
                     "id": item_id,
                     "from": current_lane,
                     "to": terminal_lane,
                 })
-                # Log revert to journal
+                # Log revert to journal (independent audit trail; the event log
+                # above is the source of truth, this journal is what --check uses)
                 entry = {
                     "ts": datetime.utcnow().isoformat(),
                     "id": item_id,
@@ -341,14 +369,97 @@ def cmd_enforce(args):
                     "type": "reverted",
                 }
                 append_journal_entry(entry)
+        finally:
+            write_api.close()
 
-    # Write updated tracker
     if reverted:
-        write_tracker(tracker)
         print(f"INFO: reverted {len(reverted)} zombie item(s):")
         for r in reverted:
             print(f"  {r['id']}: {r['from']} -> {r['to']}")
         rotate_journal_if_needed()
+
+    return 0
+
+
+def cmd_reconcile_journal(args):
+    """Backfill item_updated events for reverts the OLD direct-patch --enforce lost.
+
+    The journal (state/tracker-journal.jsonl) is an independent append-only audit
+    trail that recorded every revert the pre-fix --enforce performed, even though
+    those reverts never made it into the event log. For each item the journal says
+    was reverted to a terminal lane, check whether the event-store-ONLY projection
+    (ignoring tracker.json on disk) already reflects that lane; if not, append the
+    missing item_updated event via WriteAPI so the event log catches up.
+
+    Idempotent: once the event log agrees with the journal for an item, re-running
+    this appends zero further events for it (safe to run repeatedly / in CI).
+    """
+    journal = read_journal()
+    reverts = [e for e in journal if e.get("type") == "reverted" and e.get("id") and e.get("to")]
+
+    if not reverts:
+        print("INFO: no journaled reverts to reconcile")
+        return 0
+
+    # Keep only the most recent journaled revert per item (its intended current lane).
+    last_revert = {}
+    for entry in reverts:
+        last_revert[entry["id"]] = entry["to"]
+
+    state_dir = common.get_state_dir()
+    db_path = state_dir / common.STATE_DB_FILENAME
+
+    def _event_store_lanes():
+        """Read the event-store-ONLY tracker projection (ignores tracker.json)."""
+        if not db_path.exists():
+            return {}
+        store = EventStore(str(db_path))
+        try:
+            events = store.read("tracker")
+        finally:
+            store.close()
+        projection = project_tracker(events)
+        return {item["id"]: item.get("lane") for item in projection.get("items", [])}
+
+    event_lanes = _event_store_lanes()
+
+    reconciled = []
+    write_api = WriteAPI(state_dir)
+    try:
+        for item_id, terminal_lane in last_revert.items():
+            if item_id not in event_lanes:
+                # Never created via the event log (legacy/manual item) -- nothing
+                # safe to backfill against. Skip rather than invent an item_created.
+                continue
+            if event_lanes[item_id] == terminal_lane:
+                # Event log already agrees with the journal: no drift, no-op.
+                continue
+            try:
+                write_api.tracker_update_item(
+                    item_id,
+                    {
+                        "lane": terminal_lane,
+                        "notes": f"tracker_guard: reconcile-journal backfill -> {terminal_lane}",
+                        "source": "tracker_guard",
+                    },
+                    actor="tracker_guard",
+                )
+            except Exception as e:
+                print(f"ERROR: failed to reconcile {item_id}: {e}", file=sys.stderr)
+                continue
+
+            reconciled.append({"id": item_id, "to": terminal_lane})
+            # Refresh baseline so later iterations in this same run see this write.
+            event_lanes = _event_store_lanes()
+    finally:
+        write_api.close()
+
+    if reconciled:
+        print(f"INFO: reconciled {len(reconciled)} item(s) into the event log:")
+        for r in reconciled:
+            print(f"  {r['id']}: backfilled lane={r['to']}")
+    else:
+        print("INFO: event log already matches journal (0 new events)")
 
     return 0
 
@@ -375,6 +486,8 @@ def main(argv=None):
             mode = "check"
         elif arg == "--enforce":
             mode = "enforce"
+        elif arg == "--reconcile-journal":
+            mode = "reconcile-journal"
         elif arg.startswith("--"):
             print(f"ERROR: unknown flag: {arg}", file=sys.stderr)
             return 1
@@ -386,6 +499,8 @@ def main(argv=None):
         return cmd_check(argv)
     elif mode == "enforce":
         return cmd_enforce(argv)
+    elif mode == "reconcile-journal":
+        return cmd_reconcile_journal(argv)
     else:
         print(f"ERROR: unknown mode: {mode}", file=sys.stderr)
         return 1
