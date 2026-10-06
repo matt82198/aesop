@@ -34,6 +34,10 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    # Nightly full CI matrix (03:30 UTC): drift guard for Windows shard de-collection,
+    # flaky luck-passes, and skip-path classes
+    - cron: '30 3 * * *'
 
 concurrency:
   # Cancel in-progress runs on PR branches (superseded pushes waste runners).
@@ -76,6 +80,35 @@ jobs:
     outputs:
       is_docs_only: ${{ steps.is-docs-only.outputs.is_docs_only }}
 
+  windows-sensitive-paths:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Detect Windows-sensitive changes
+        id: windows-touched
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          else
+            # On workflow_dispatch and schedule, run Windows (conservative)
+            echo "windows_touched=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          # Check for Windows-sensitive paths: daemons/**, hooks/**, *.ps1, tools/*subprocess*,
+          # tools/halt.py, tools/ci_shard_runner.py, tools/test_isolation_tripwire.py,
+          # tools/remote_refs_tripwire.py, bin/**, package.json
+          if echo "$CHANGED" | grep -qE '^(daemons/|hooks/|.*\.ps1$|tools/.*subprocess|tools/halt\.py|tools/ci_shard_runner\.py|tools/test_isolation_tripwire\.py|tools/remote_refs_tripwire\.py|bin/|package\.json)'; then
+            echo "windows_touched=true" >> $GITHUB_OUTPUT
+          else
+            echo "windows_touched=false" >> $GITHUB_OUTPUT
+          fi
+
+    outputs:
+      windows_touched: ${{ steps.windows-touched.outputs.windows_touched }}
+
   ci:
     needs: docs-only-gate
     # if: always() is load-bearing, not decorative. Without it, GitHub Actions
@@ -98,6 +131,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          # On pull_request, check out the PR HEAD commit (not the merge commit).
+          # This ensures a red main never turns every PR red; main-full + regen-on-main
+          # own post-merge integration. Fixes: a red main would make the PR's ci checks
+          # red even though the PR code is unrelated to the breakage.
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -291,18 +329,14 @@ jobs:
         run: python tools/secret_scan.py .
 
   windows-shard:
-    needs: docs-only-gate
-    # Fail-OPEN, not fail-skip: run unless docs-only-gate explicitly SUCCEEDED
-    # and determined the PR is docs-only. The leading always() is required --
-    # without it GitHub prepends an implicit success() to this condition, so a
-    # failed/cancelled docs-only-gate (script bug, runner starvation, timeout)
-    # would make this job report `skipped`, which makes the `windows`
-    # aggregator below treat a Windows test run that never happened as
-    # equivalent to "correctly skipped" and report a false green -- the same
-    # deadlock/false-green class the top-of-file comment warns about, just one
-    # hop further down the needs chain. Do not drop always() or invert the
-    # comparison back to a bare `== 'false'`.
-    if: always() && (needs.docs-only-gate.result != 'success' || needs.docs-only-gate.outputs.is_docs_only != 'true')
+    needs: [docs-only-gate, windows-sensitive-paths]
+    # On pull_request, run only if Windows-sensitive paths are touched, OR if docs-only-gate
+    # failed (fail-open on upstream failure). On workflow_dispatch/schedule, always run
+    # (Windows matrix must verify all paths in those triggers). The leading always() is required
+    # to prevent implicit success()-gating when we have a `needs:` entry.
+    if: |
+      always() && (needs.docs-only-gate.result != 'success' || needs.docs-only-gate.outputs.is_docs_only != 'true') &&
+      (github.event_name != 'pull_request' || needs.windows-sensitive-paths.outputs.windows_touched == 'true')
     # Sharded test suite: runs Node tests (shard 0 only) and Python tests distributed 4-way
     # Excludes: shell test suite (Git Bash variance on Windows), browser proofs (Playwright setup cost)
     runs-on: windows-latest
@@ -316,6 +350,9 @@ jobs:
         python-shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@v7
+        with:
+          # On pull_request, check out the PR HEAD commit (not the merge commit).
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -353,13 +390,21 @@ jobs:
   windows:
     # Aggregator job: enforces that all windows-shard shards succeeded or were skipped.
     # Keeps the required check name for branch protection (no config change needed).
-    needs: windows-shard
+    # Always reports a conclusion (success when matrix was intentionally skipped on pull_request).
+    needs: [windows-shard, windows-sensitive-paths]
     runs-on: ubuntu-latest
     if: always()
     steps:
-      - name: Check all Windows shards passed
+      - name: Resolve Windows run result
         run: |
-          if [ "${{ needs.windows-shard.result }}" != "success" ] && [ "${{ needs.windows-shard.result }}" != "skipped" ]; then
+          # On pull_request with no Windows-sensitive changes, windows-shard is skipped
+          # (via job-level if:). Report success for the aggregator in that case.
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.windows-sensitive-paths.outputs.windows_touched }}" != "true" ]; then
+            echo "Windows-sensitive paths not touched on PR; skipped (expected)"
+            exit 0
+          fi
+          # Otherwise, windows-shard ran: check its result
+          if [ "${{ needs.windows-shard.result }}" != "success" ]; then
             echo "One or more Windows shards failed"
             exit 1
           fi

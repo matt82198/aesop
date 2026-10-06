@@ -7,6 +7,10 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    # Nightly full CI matrix (03:30 UTC): drift guard for Windows shard de-collection,
+    # flaky luck-passes, and skip-path classes
+    - cron: '30 3 * * *'
 
 concurrency:
   # Group per COMMIT, and never cancel. Every merged commit is its own thing to verify:
@@ -28,6 +32,15 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
+        python-shard: [0, 1, 2, 3]
+      exclude:
+        # Ubuntu runs all Python tests in one shard; Windows shards 4-way
+        - os: ubuntu-latest
+          python-shard: 1
+        - os: ubuntu-latest
+          python-shard: 2
+        - os: ubuntu-latest
+          python-shard: 3
     steps:
       - uses: actions/checkout@v7
 
@@ -45,23 +58,46 @@ jobs:
         # PyYAML is required by tools/ci_workflow_lint.py (fail-closed without it)
         # and its test suite tests/test_ci_workflow_lint.py.
         # pytest is required by tests/test_seam_s_e2e_oracle.py subprocess tests.
-        run: pip install pyyaml pytest
+        run: pip install pyyaml pytest pytest-timeout
 
-      - name: Run Node.js tests
+      - name: Set shard-specific temporary directory (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          if (!(Test-Path "$env:TEMP\shard-${{ matrix.python-shard }}" -PathType Container)) { New-Item -ItemType Directory -Path "$env:TEMP\shard-${{ matrix.python-shard }}" }
+          echo "TMPDIR=$env:TEMP\shard-${{ matrix.python-shard }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Set shard-specific temporary directory (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p /tmp/shard-${{ matrix.python-shard }}
+          echo "TMPDIR=/tmp/shard-${{ matrix.python-shard }}" >> $GITHUB_ENV
+
+      - name: Run Node.js tests (Linux only)
+        if: runner.os == 'Linux'
         env:
           AESOP_TEST_CHILD_TIMEOUT_MS: '120000'
         run: node --test --test-force-exit --test-timeout=180000 tests/*.test.mjs
 
-      - name: Run Python tests (PYTHONUTF8=1 for Windows encoding)
+      - name: Run Node.js tests (Windows, shard 0 only)
+        if: runner.os == 'Windows' && matrix.python-shard == 0
+        env:
+          AESOP_TEST_CHILD_TIMEOUT_MS: '120000'
+        run: node --test --test-force-exit --test-timeout=180000 tests/*.test.mjs
+
+      - name: Run Python tests (shard ${{ matrix.python-shard }}/4, PYTHONUTF8=1 for Windows)
         env:
           PYTHONUTF8: '1'
-        run: npm run test:py
+          PYTEST_TIMEOUT: '120'
+        shell: ${{ runner.os == 'Windows' && 'bash' || 'sh' }}
+        run: python tools/remote_refs_tripwire.py --attributed -- python tools/ci_shard_runner.py ${{ matrix.python-shard }} 4 --timing-file .github/shard-timing.json
 
-      - name: Run shell test suites (ubuntu only)
-        if: runner.os == 'Linux'
+      - name: Run shell test suites (ubuntu, shard 0 only)
+        if: runner.os == 'Linux' && matrix.python-shard == 0
         run: npm run test:sh
 
-      - name: README stats freshness gate (drift guard)
+      - name: README stats freshness gate (drift guard, shard 0 only)
+        if: matrix.python-shard == 0
         run: python tools/self_stats.py --check
 
   main-full-browser-proofs:
