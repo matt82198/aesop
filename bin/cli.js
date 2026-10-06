@@ -1049,7 +1049,24 @@ function initializeGitRepo(targetDir, noGitFlag = false) {
   // signing-related hook or template), and (c) sets GIT_TERMINAL_PROMPT=0 so
   // git fails fast instead of blocking on a credential/terminal prompt with no
   // TTY attached.
+  //
+  // `add -A` gets a MUCH larger timeout than the other four calls: CI's
+  // windows-shard(0) log (PR #784) proved this is not a hang at all -- the
+  // instrumentation below caught it mid-flight, stderr showed only the
+  // ordinary "LF will be replaced by CRLF" warning, then execSync's own
+  // 15000ms budget fired and SIGKILLed it (message: "spawnSync cmd.exe
+  // ETIMEDOUT"). `add -A` here stages the entire copied template tree
+  // (daemons/dash/monitor/tools/ui/docs/state_store/skills/mcp/scan/hooks/
+  // driver -- hundreds of files), and GitHub's hosted Windows runners are
+  // known to be slow at exactly this (per-file CRLF normalization plus
+  // Windows Defender real-time scanning on every file `git add` touches);
+  // this box's local run finishes the same `add -A` in well under a second
+  // with no such scanning overhead. 15s was simply too tight for a legitimate
+  // slow operation, not a deadlock -- raising it is the fix, not a workaround:
+  // a true hang still gets caught and named well inside the 180s file-level
+  // test timeout (every other step here finishes in milliseconds).
   const GIT_OP_TIMEOUT_MS = 15000;
+  const GIT_OP_TIMEOUT_MS_HEAVY = 60000;
   const GIT_SAFE_FLAGS = '-c core.hooksPath= -c commit.gpgsign=false';
   const gitOpts = {
     cwd: targetDir,
@@ -1059,6 +1076,7 @@ function initializeGitRepo(targetDir, noGitFlag = false) {
     windowsHide: true,
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
   };
+  const gitOptsHeavy = { ...gitOpts, timeout: GIT_OP_TIMEOUT_MS_HEAVY };
 
   // Diagnostic instrumentation (kept permanently, not a one-off debug aid):
   // each step logs to stderr before it runs so a CI failure names the exact
@@ -1067,19 +1085,19 @@ function initializeGitRepo(targetDir, noGitFlag = false) {
   // real git stderr on CI (PR #784) while the catch-all warning above gave
   // no way to tell which of the five calls failed or why.
   const steps = [
-    ['init', `git ${GIT_SAFE_FLAGS} init -q`],
-    ['config-email', `git ${GIT_SAFE_FLAGS} config user.email "aesop-scaffold@local"`],
-    ['config-name', `git ${GIT_SAFE_FLAGS} config user.name "Aesop Scaffold"`],
-    ['add', `git ${GIT_SAFE_FLAGS} add -A`],
-    ['commit', `git ${GIT_SAFE_FLAGS} commit -q -m "Initial aesop scaffold"`]
+    ['init', `git ${GIT_SAFE_FLAGS} init -q`, gitOpts],
+    ['config-email', `git ${GIT_SAFE_FLAGS} config user.email "aesop-scaffold@local"`, gitOpts],
+    ['config-name', `git ${GIT_SAFE_FLAGS} config user.name "Aesop Scaffold"`, gitOpts],
+    ['add', `git ${GIT_SAFE_FLAGS} add -A`, gitOptsHeavy],
+    ['commit', `git ${GIT_SAFE_FLAGS} commit -q -m "Initial aesop scaffold"`, gitOptsHeavy]
   ];
 
   let lastStep = null;
   try {
-    for (const [name, cmd] of steps) {
+    for (const [name, cmd, opts] of steps) {
       lastStep = name;
       process.stderr.write(`[git-init] step=${name} cmd=git cwd=${targetDir}\n`);
-      execSync(cmd, gitOpts);
+      execSync(cmd, opts);
       process.stderr.write(`[git-init] step=${name} ok\n`);
     }
     console.log('✓ Initialized git repository');
