@@ -2,8 +2,8 @@
 """state_store.materialize — canonical materializer for all views.
 
 This module consolidates view rendering to ONE place: all caller write paths
-(WriteAPI, event-sourced collectors, orchestrator) call materialize_all() or
-view-specific functions to keep the derived files (tracker.json, STATE.md, etc.)
+(WriteAPI, event-sourced collectors, orchestrator) call the view-specific
+functions below to keep the derived files (tracker.json, STATE.md, etc.)
 in sync with the event log.
 
 Each view is a pure function: (projection_dict) -> bytes. Deterministic,
@@ -14,14 +14,11 @@ Views exported:
   - materialize_orchestrator_status() — orchestrator-status.json (stub)
   - materialize_state_md() — STATE.md (delegates to gen_state_md.generate_state_md)
   - materialize_ledger() — ledger view (stub)
-  - materialize_all() — renders all views under a file lock
 """
 from __future__ import annotations
 
 import json
-import os
 import sys
-import tempfile
 from pathlib import Path
 
 
@@ -119,90 +116,3 @@ def materialize_ledger(ledger_projection: dict | None) -> bytes:
         "",
     ]
     return "\n".join(lines).encode("utf-8")
-
-
-def materialize_all(api, state_dir: Path | str, file_lock=None) -> dict:
-    """Render all views atomically under an optional file lock.
-
-    Materializes tracker.json, orchestrator-status.json, STATE.md, and ledger
-    views from the event store. Each view is written atomically (tempfile +
-    os.replace) to minimize data loss windows.
-
-    If file_lock is provided, all writes are held under the same lock.
-
-    Args:
-        api: StateAPI instance
-        state_dir: Path to state directory
-        file_lock: Optional file lock context (from WriteAPI._file_lock)
-
-    Returns:
-        dict: Summary of materialized views
-        {
-            "views": ["tracker.json", "orchestrator-status.json", ...],
-            "errors": [{"view": "...", "error": "..."}],
-            "timestamp": ISO timestamp
-        }
-    """
-    from datetime import datetime, timezone
-
-    state_dir = Path(state_dir)
-    state_dir.mkdir(parents=True, exist_ok=True)
-
-    timestamp = datetime.now(timezone.utc).isoformat()
-    views_written = []
-    errors = []
-
-    def _write_atomic(view_name: str, file_path: Path, content: bytes) -> bool:
-        """Write content atomically to file_path."""
-        try:
-            temp_file = file_path.with_suffix(file_path.suffix + ".tmp")
-            temp_file.write_bytes(content)
-            os.replace(str(temp_file), str(file_path))
-            views_written.append(view_name)
-            return True
-        except Exception as e:
-            errors.append({"view": view_name, "error": str(e)})
-            print(f"[materialize] Failed to write {view_name}: {e}", file=sys.stderr)
-            return False
-
-    # Render all views
-    try:
-        # Tracker
-        tracker_proj = api.project("tracker")
-        tracker_bytes = materialize_tracker(tracker_proj)
-        _write_atomic("tracker.json", state_dir / "tracker.json", tracker_bytes)
-    except Exception as e:
-        errors.append({"view": "tracker.json (project)", "error": str(e)})
-
-    try:
-        # Orchestrator status (stub for now)
-        orch_proj = api.project("orchestrator_status") if hasattr(api, "project") else None
-        orch_bytes = materialize_orchestrator_status(orch_proj)
-        _write_atomic(
-            "orchestrator-status.json",
-            state_dir / "orchestrator-status.json",
-            orch_bytes
-        )
-    except Exception as e:
-        errors.append({"view": "orchestrator-status.json", "error": str(e)})
-
-    try:
-        # STATE.md (delegates to gen_state_md)
-        state_md_bytes = materialize_state_md(api, state_dir)
-        _write_atomic("STATE.md", state_dir / "STATE.md", state_md_bytes)
-    except Exception as e:
-        errors.append({"view": "STATE.md", "error": str(e)})
-
-    try:
-        # Ledger (stub for now)
-        ledger_proj = api.project("ledger") if hasattr(api, "project") else None
-        ledger_bytes = materialize_ledger(ledger_proj)
-        _write_atomic("ledger", state_dir / "ledger.md", ledger_bytes)
-    except Exception as e:
-        errors.append({"view": "ledger", "error": str(e)})
-
-    return {
-        "views": views_written,
-        "errors": errors,
-        "timestamp": timestamp,
-    }
