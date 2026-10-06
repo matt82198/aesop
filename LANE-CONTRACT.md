@@ -51,6 +51,10 @@ expensive way during aesop development. Each line exists because a lane failed w
   the PR's own head branch moving unexpectedly) -- it does NOT fail on an unrelated branch moving
   elsewhere in the fleet mid-run (logged as "observed, not attributed"; PR #829/#837). Never work
   around either to make a merge_train/merge_queue/auto_merge test reach a real remote.
+- **Shell tests run under an isolated `AESOP_STATE_ROOT`/`CONDUCTOR_ROOT`/`HOME`** (`tools/run_shell_tests.sh`
+  pins `HOME`/`TMPDIR` before any test runs; `tools/test_isolation_tripwire.py` also guards conductor3
+  heartbeats, state JSON, and scheduled-task registrations) -- never pin `AESOP_ROOT`/`CONDUCTOR_ROOT` to
+  `REPO_ROOT` or leave them unset on a daemon invocation; always point them at your own mktemp fixture.
 
 ## 3. Never fit green
 - **Never relax an assertion, lower a floor/ratchet, delete a suite, add a skip, or retune a constant

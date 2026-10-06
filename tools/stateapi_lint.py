@@ -66,6 +66,12 @@ WRITER_ALLOWLIST = [
     "tools/state_md_verifier.py",  # Verifies the on-disk STATE.md against git truth; it must
                                    # read the literal file, since reading the projection
                                    # instead would defeat the drift check it exists to make.
+    "tools/test_isolation_tripwire.py",  # Hashes the literal bytes of the REAL conductor3
+                                   # heartbeat/state files (watchdog/monitor heartbeats,
+                                   # state/*.json) before/after a wrapped command to prove a
+                                   # test run did not leak into live state; it must reference
+                                   # those literal on-disk paths, since reading via the
+                                   # projection facade would defeat the drift check itself.
 ]
 
 # Markdown files that should only be written via the WriteAPI facade
