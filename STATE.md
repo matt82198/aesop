@@ -29,6 +29,7 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 ### Shipped (Most Recent)
 
+- #859, #872: CI-modes product surface — `ci.mode` config, `aesop init --ci-mode`, `aesop doctor` capability table, `aesop runner install|remove` (#859); linux-shape row added to the capability table (#872)
 - #872: linux_shape_check gate — distro-aware WSL detection (`wsl -l -q` + `wsl -e true`, not bare `wsl --status`); coexists with G14 in pre-push + CI
 - #874: pr_sweep.py — session-independent PR-sweep actor under the 15-min watchdog throttle (closes item 9 residual)
 - #870: G14 conflict-marker detection gate (PR #834 incident), wired into pre-push + CI
@@ -49,7 +50,6 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 ### In Progress
 
-14. **CI-modes product surface** (IN-FLIGHT). Expose CI run modes and performance characteristics (dispatch vs. serial, shard allocation, cross-OS drift) as browsable UI panels. Complements cost telemetry + scheduling observability.
 18. **Watchdog script parity** (IN-FLIGHT). Live watchdog task runs a stale conductor3 copy of `daemons/run-watchdog.sh` — repoint/sync + WATCHDOG-SCRIPT-PARITY selftest (lane in flight).
 
 ### Open / Queued
