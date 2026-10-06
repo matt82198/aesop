@@ -1,0 +1,64 @@
+name: CI
+
+# Scaffolded by `aesop init --ci-mode hosted` from templates/ci/ci-hosted.yml.
+# Shape mirrors aesop's own .github/workflows/ci.yml:
+#   - PR-only trigger (post-merge coverage belongs in a separate main workflow)
+#   - per-branch concurrency so superseded pushes cancel
+#   - a sharded Linux job plus a Windows job on GitHub-hosted runners
+# Keep gates STEP-level. A job-level `if:` skip, or a `needs:` without always(), makes a
+# required check report `skipped`, which never satisfies branch protection (deadlock).
+# See docs/CI-MODES.md in the aesop package.
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Run tests (shard ${{ matrix.shard }}/4)
+        run: echo "Add your test commands here (shard ${{ matrix.shard }} of 4)"
+
+      - name: Secret scan
+        if: matrix.shard == 0
+        run: python tools/secret_scan.py .
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Run tests (Windows)
+        env:
+          PYTHONUTF8: '1'
+        run: echo "Add your Windows test commands here"

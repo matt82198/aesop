@@ -247,3 +247,125 @@ def exit_code(findings=None, error=None):
         if findings is not None:
             return 1 if findings > 0 else 0
         return 0
+
+
+# ============================================================================
+# CI mode config -- the `ci` block of aesop.config.json
+# MIRRORED in tools/ci_config.js (Node reads the same file: bin/cli.js, tools/doctor.js).
+# Keep the two validators code-for-code in sync; tests/test_ci_config.py drives both
+# on the same fixtures and fails on any divergence.
+# ============================================================================
+
+CI_MODES = ("hosted", "self-hosted-runner", "local-receipt-gate")
+CI_WINDOWS_MATRIX = ("hosted", "self-hosted", "skip-on-pr")
+CI_RECEIPT_GATES = ("off", "alongside", "required")
+CI_DEFAULT_LABELS = ("self-hosted", "windows", "aesop-box")
+CI_KNOWN_KEYS = ("mode", "windowsMatrix", "receiptGate", "selfHostedLabels")
+VERIFY_RECEIPT_WORKFLOW = ".github/workflows/verify-receipt.yml"
+
+
+def default_ci_config():
+    """The `ci` block `aesop init` writes when no mode is chosen (hosted)."""
+    return {
+        "mode": ["hosted"],
+        "windowsMatrix": "hosted",
+        "receiptGate": "off",
+        "selfHostedLabels": list(CI_DEFAULT_LABELS),
+    }
+
+
+def _finding(code, message):
+    return {"code": code, "message": message}
+
+
+def validate_ci_config(config, repo_root):
+    """Validate the optional `ci` block of a parsed aesop.config.json.
+
+    Args:
+        config: the parsed config object (dict)
+        repo_root: directory the config lives in; `receiptGate: required` needs
+            `.github/workflows/verify-receipt.yml` to exist under it.
+
+    Returns:
+        list of {"code", "message"} findings; empty list means valid. An absent
+        `ci` block is valid (every key has a default).
+    """
+    findings = []
+    if not isinstance(config, dict) or "ci" not in config:
+        return findings
+    ci = config["ci"]
+    if not isinstance(ci, dict):
+        return [_finding("CI_NOT_OBJECT", "ci must be an object")]
+
+    for key in ci:
+        if key not in CI_KNOWN_KEYS:
+            findings.append(_finding("CI_UNKNOWN_KEY", "ci.%s is not a known key (known: %s)"
+                                     % (key, ", ".join(CI_KNOWN_KEYS))))
+
+    modes = set()
+    mode = ci.get("mode", ["hosted"])
+    if not isinstance(mode, list):
+        findings.append(_finding("CI_MODE_NOT_LIST", "ci.mode must be a list of modes"))
+    elif not mode:
+        findings.append(_finding("CI_MODE_EMPTY", "ci.mode must name at least one mode"))
+    else:
+        unknown = [m for m in mode if not isinstance(m, str) or m not in CI_MODES]
+        if unknown:
+            findings.append(_finding("CI_MODE_UNKNOWN", "ci.mode has unknown entries %r (known: %s)"
+                                     % (unknown, ", ".join(CI_MODES))))
+        if len(mode) != len(set(str(m) for m in mode)):
+            findings.append(_finding("CI_MODE_DUPLICATE", "ci.mode lists a mode more than once"))
+        modes = set(m for m in mode if isinstance(m, str) and m in CI_MODES)
+
+    windows_matrix = ci.get("windowsMatrix", "hosted")
+    if windows_matrix not in CI_WINDOWS_MATRIX:
+        findings.append(_finding("CI_WINDOWS_MATRIX_UNKNOWN", "ci.windowsMatrix must be one of %s"
+                                 % ", ".join(CI_WINDOWS_MATRIX)))
+    elif windows_matrix == "self-hosted" and "self-hosted-runner" not in modes:
+        findings.append(_finding("CI_WINDOWS_MATRIX_NEEDS_RUNNER_MODE",
+                                 "ci.windowsMatrix=self-hosted requires 'self-hosted-runner' in ci.mode"))
+
+    receipt_gate = ci.get("receiptGate", "off")
+    if receipt_gate not in CI_RECEIPT_GATES:
+        findings.append(_finding("CI_RECEIPT_GATE_UNKNOWN", "ci.receiptGate must be one of %s"
+                                 % ", ".join(CI_RECEIPT_GATES)))
+    else:
+        if receipt_gate != "off" and "local-receipt-gate" not in modes:
+            findings.append(_finding("CI_RECEIPT_GATE_NEEDS_RECEIPT_MODE",
+                                     "ci.receiptGate=%s requires 'local-receipt-gate' in ci.mode" % receipt_gate))
+        if receipt_gate == "required":
+            workflow = Path(repo_root) / VERIFY_RECEIPT_WORKFLOW
+            if not workflow.is_file():
+                findings.append(_finding("CI_RECEIPT_GATE_REQUIRES_WORKFLOW",
+                                         "ci.receiptGate=required but %s is not present; scaffold it with "
+                                         "`aesop init --ci-mode local-receipt-gate` first" % VERIFY_RECEIPT_WORKFLOW))
+
+    labels = ci.get("selfHostedLabels", list(CI_DEFAULT_LABELS))
+    if not isinstance(labels, list):
+        findings.append(_finding("CI_LABELS_NOT_LIST", "ci.selfHostedLabels must be a list of strings"))
+    else:
+        if any((not isinstance(x, str)) or not x.strip() for x in labels):
+            findings.append(_finding("CI_LABELS_ITEM_INVALID", "ci.selfHostedLabels entries must be non-empty strings"))
+        if "self-hosted-runner" in modes and "self-hosted" not in labels:
+            findings.append(_finding("CI_LABELS_MISSING_SELF_HOSTED",
+                                     "ci.selfHostedLabels must include 'self-hosted' (GitHub routes on it)"))
+    return findings
+
+
+def load_aesop_config(repo_root):
+    """Read aesop.config.json under repo_root and validate its `ci` block.
+
+    Returns:
+        (config, findings): config is None when the file is missing or not JSON
+        (findings then carry CONFIG_MISSING / CONFIG_INVALID_JSON); otherwise the
+        parsed dict plus validate_ci_config() findings.
+    """
+    path = Path(repo_root) / "aesop.config.json"
+    if not path.is_file():
+        return None, [_finding("CONFIG_MISSING", "aesop.config.json not found in %s" % repo_root)]
+    try:
+        import json
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return None, [_finding("CONFIG_INVALID_JSON", "aesop.config.json unreadable: %s" % exc)]
+    return config, validate_ci_config(config, repo_root)
