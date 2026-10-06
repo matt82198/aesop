@@ -265,6 +265,67 @@ class TestGateActivationTrap(unittest.TestCase):
         )
 
 
+# A "stated test-suite count" is a harness name (Shell/Node/Python/All)
+# paired with an integer on the same line, in either of two shapes seen in
+# this repo's docs:
+#   1. prose/headers: "Shell (14 suites)", "Node has 29 tests"
+#   2. a markdown table row: "| Python | 257 |", "| **All** | **300** |"
+# A line that names a harness WITHOUT a nearby number (e.g. a historical
+# incident-log row like "merge: resolve remote conflict (187 suites
+# correct)", which never puts the harness name on that line) is out of
+# scope by construction -- only a doc that pairs a harness name with a
+# falsifiable, live-comparable number is in scope.
+_STATED_COUNT_RE = re.compile(
+    r"\b(Shell|Node|Python|All)\b"
+    r"(?:"
+    r"[^\n|]{0,40}?(\d+)\s*(?:suites?|tests?)\b"            # "Shell ... 14 suites"
+    r"|"
+    r"\*{0,2}\s*\|\s*\*{0,2}(\d+)\*{0,2}\s*\|"               # "| Python | 257 |"
+    r")"
+)
+
+
+def _find_stated_suite_counts(text):
+    """Return [(harness, stated_count, line_no, line_text), ...] for every
+    line in `text` that states a test-suite count next to a harness name.
+    """
+    found = []
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        for m in _STATED_COUNT_RE.finditer(line):
+            count_str = m.group(2) or m.group(3)
+            if count_str is None:
+                continue
+            found.append((m.group(1), int(count_str), lineno, line.strip()))
+    return found
+
+
+def _live_suite_counts(repo_root):
+    """Live Shell/Node/Python/All suite counts from raw `git ls-files`.
+
+    Computed independently here (not via a call into
+    tools/gen_suite_counts.py) so a bug shared by the doc-writer and the
+    verifier can't both be wrong the same way.
+    """
+    def tracked_count(*patterns):
+        paths = set()
+        for pattern in patterns:
+            result = subprocess.run(
+                ["git", "ls-files", pattern],
+                cwd=str(repo_root), capture_output=True, text=True,
+                encoding="utf-8", timeout=30, check=True,
+            )
+            paths.update(line for line in result.stdout.splitlines() if line)
+        return len(paths)
+
+    counts = {
+        "Node": tracked_count("tests/*.test.mjs"),
+        "Shell": tracked_count("tests/*.test.sh", "tests/test_*.sh", "tests/test-*.sh"),
+        "Python": tracked_count("tests/test_*.py"),
+    }
+    counts["All"] = counts["Node"] + counts["Shell"] + counts["Python"]
+    return counts
+
+
 class TestDocInventedTrap(unittest.TestCase):
     """Trap: DOC-INVENTED incidents (documentation claims not backed by facts)
 
@@ -280,73 +341,95 @@ class TestDocInventedTrap(unittest.TestCase):
         """Set up class-level fixtures."""
         cls.repo_root = Path(__file__).parent.parent
 
-    def test_readme_statistics_match_verified_counts(self):
-        """Trap: docs/TESTING.md's hand-authored suite-count table must match
-        live ground truth, not a number nobody re-verifies.
+    def test_doc_suite_counts_match_live_counts(self):
+        """Trap: no doc under docs/ or README.md may state a test-suite
+        count that disagrees with live ground truth.
 
-        Incident: README/docs statistics claimed counts that didn't match
-        actual test counts. Historical prevention was
-        `verify_test_suite_count.py --check` against a committed
-        tests/SUITE-COUNTS.json artifact (removed by PR #830: two clean
-        merges drifted it anyway, and nothing but the generator/gate/registry
-        triangle ever consumed its committed value). With no artifact,
-        the doc-invented risk moves to the one place that still hand-authors
-        a specific number: docs/TESTING.md's "Totals" table. This test proves
-        that table against ground truth computed independently here (raw
-        `git ls-files`, not a call into tools/gen_suite_counts.py), so a
-        hand-edit to the doc that is not re-verified fails closed instead of
-        rotting silently -- which is exactly what had already happened to
-        this table before this test existed.
+        Incident: docs/TESTING.md hand-authored a Shell/Node/Python/All
+        suite-count table (and per-harness "(N suites)" headers) that
+        drifted from the real counts more than once -- the same
+        whole-tree-scalar conflict class PR #830 eliminated from the
+        committed tests/SUITE-COUNTS.json artifact (two clean merges
+        drifted it even though each side's own diff was correct in
+        isolation). The structural fix (this PR) is for docs/TESTING.md to
+        stop stating a number at all, in favor of a pointer to
+        `tools/gen_suite_counts.py --json`. This test keeps the trap
+        meaningful for whatever comes next: it scans every doc under docs/
+        plus README.md for ANY line that pairs a harness name with a
+        number (prose "N suites"/"N tests", or a `| Harness | N |` table
+        row) and fails closed if that number disagrees with the live
+        count. A doc that states no number for a harness passes -- there
+        is nothing to verify.
         """
-        def tracked_count(*patterns):
-            paths = set()
-            for pattern in patterns:
-                result = subprocess.run(
-                    ["git", "ls-files", pattern],
-                    cwd=str(self.repo_root), capture_output=True, text=True,
-                    encoding="utf-8", timeout=30, check=True,
-                )
-                paths.update(line for line in result.stdout.splitlines() if line)
-            return len(paths)
+        live = _live_suite_counts(self.repo_root)
 
-        live = {
-            "Node": tracked_count("tests/*.test.mjs"),
-            "Shell": tracked_count("tests/*.test.sh", "tests/test_*.sh", "tests/test-*.sh"),
-            "Python": tracked_count("tests/test_*.py"),
-        }
-        live["All"] = live["Node"] + live["Shell"] + live["Python"]
-
-        testing_md = self.repo_root / "docs" / "TESTING.md"
-        self.assertTrue(testing_md.exists(), f"{testing_md} not found (doc-invented trap)")
-        doc_text = testing_md.read_text(encoding="utf-8")
-
-        table_match = re.search(
-            r"\|\s*Shell\s*\|\s*(\d+)\s*\|.*?\n"
-            r"\|\s*Node\s*\|\s*(\d+)\s*\|.*?\n"
-            r"\|\s*Python\s*\|\s*(\d+)\s*\|.*?\n"
-            r"\|\s*\*\*All\*\*\s*\|\s*\*\*(\d+)\*\*\s*\|",
-            doc_text,
+        result = subprocess.run(
+            ["git", "ls-files", "README.md", "docs/*.md"],
+            cwd=str(self.repo_root), capture_output=True, text=True,
+            encoding="utf-8", timeout=30, check=True,
         )
-        self.assertIsNotNone(
-            table_match,
-            "Could not find the Shell/Node/Python/All suite-count table in "
-            f"{testing_md} (doc-invented trap: table shape changed without "
-            "updating this trap)",
+        doc_rel_paths = sorted(line for line in result.stdout.splitlines() if line)
+        self.assertTrue(
+            doc_rel_paths,
+            "Could not find README.md or any docs/*.md (doc-invented trap: "
+            "doc layout changed without updating this trap)",
         )
-        doc_counts = {
-            "Shell": int(table_match.group(1)),
-            "Node": int(table_match.group(2)),
-            "Python": int(table_match.group(3)),
-            "All": int(table_match.group(4)),
-        }
+
+        mismatches = []
+        for rel_path in doc_rel_paths:
+            doc_text = (self.repo_root / rel_path).read_text(encoding="utf-8")
+            for harness, stated, lineno, line_text in _find_stated_suite_counts(doc_text):
+                if stated != live[harness]:
+                    mismatches.append(
+                        f"{rel_path}:{lineno} states {harness}={stated} but "
+                        f"live count is {live[harness]} (line: {line_text!r})"
+                    )
 
         self.assertEqual(
-            doc_counts,
-            {k: live[k] for k in ("Shell", "Node", "Python", "All")},
-            f"Statistics drift (doc-invented trap): docs/TESTING.md's table says "
-            f"{doc_counts}, live git-tracked counts are {live}. Update the table "
-            "in the same PR that adds or removes a test suite.",
+            mismatches, [],
+            "Statistics drift (doc-invented trap): " + "; ".join(mismatches),
         )
+
+    def test_doc_suite_count_trap_detects_planted_mismatch(self):
+        """Red-first proof: the scanner behind the trap above actually
+        catches a wrong count, naming the file and the wrong number --
+        not a vacuous no-op that would pass on any input.
+        """
+        live = _live_suite_counts(self.repo_root)
+        wrong = live["Python"] + 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            planted = Path(tmp) / "PLANTED-TESTING.md"
+            planted.write_text(
+                f"### Python ({wrong} suites)\n\n"
+                f"| Node | {live['Node']} | `npm run test:node` |\n",
+                encoding="utf-8",
+            )
+            found = _find_stated_suite_counts(planted.read_text(encoding="utf-8"))
+
+            mismatches = [
+                f"{planted.name}:{lineno} states {harness}={stated} but "
+                f"live count is {live[harness]} (line: {line_text!r})"
+                for harness, stated, lineno, line_text in found
+                if stated != live[harness]
+            ]
+
+            self.assertTrue(
+                mismatches,
+                f"Trap failed to detect the planted wrong count {wrong} for "
+                f"Python in {planted.name} -- found: {found}",
+            )
+            self.assertTrue(
+                any(str(wrong) in m and planted.name in m for m in mismatches),
+                f"Trap detected a mismatch but didn't name the planted file "
+                f"and wrong number {wrong}: {mismatches}",
+            )
+            # The correctly-stated Node row must NOT be flagged -- proves the
+            # trap isn't just failing every line it looks at.
+            self.assertFalse(
+                any("Node" in m for m in mismatches),
+                f"Trap false-positived on a correctly-stated Node count: {mismatches}",
+            )
 
     def test_package_json_version_is_semver(self):
         """Trap: package.json version must be valid semver format.

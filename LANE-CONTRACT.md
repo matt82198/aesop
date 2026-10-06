@@ -46,9 +46,11 @@ expensive way during aesop development. Each line exists because a lane failed w
   Confirm CI reports the executed-suite count went UP by the number you added — not just that yours
   "passed".
 - **Tests run with origin rewritten to a local bare repo and `gh` blocked** (`tests/__init__.py` ->
-  `tools/test_network_isolation.py`); `tools/remote_refs_tripwire.py` fails the run if a remote ref or
-  PR appears anyway. Never work around either to make a merge_train/merge_queue/auto_merge test reach
-  a real remote.
+  `tools/test_network_isolation.py`); `tools/remote_refs_tripwire.py` wraps CI's test shards and fails
+  if a remote branch/PR it can attribute to the run appears (a plausibly test-created branch name, or
+  the PR's own head branch moving unexpectedly) -- it does NOT fail on an unrelated branch moving
+  elsewhere in the fleet mid-run (logged as "observed, not attributed"; PR #829/#837). Never work
+  around either to make a merge_train/merge_queue/auto_merge test reach a real remote.
 
 ## 3. Never fit green
 - **Never relax an assertion, lower a floor/ratchet, delete a suite, add a skip, or retune a constant
@@ -171,7 +173,8 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   check suite that branch protection ignores.
 - **Generated paths (`tools/INDEX.md`, `tests/CLAUDE.md`, etc. — registry: `tools/generated_paths.py`) carry no override
   flag.** A push touching one is safe only when its bytes are byte-identical to that path's registered generator run in the
-  same commit; the sync gate checks this directly and there is no environment variable that waives it.
+  same commit; the sync gate checks this directly and there is no environment variable that waives it. `tools/INDEX.md` merges
+  with the `union` driver (`.gitattributes`); always run `gen_tool_index.py --regenerate` after merging main to normalize order.
 - **Before pushing, run the shard for your test file.** Run `python tools/ci_shard_runner.py <n> 4` for the shard that owns your
   test file (see tests/CLAUDE.md for shard assignment). CI is confirmation of local verification, not discovery of breakage. Paste
   the shard output to your report: it proves your changes work before they hit main.
