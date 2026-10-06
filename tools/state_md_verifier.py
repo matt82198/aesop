@@ -215,8 +215,6 @@ def verify_resolved_claims(claims, git_root):
 
     return findings
 
-    return findings
-
 
 def verify_pushed_claims(claims, git_root):
     """Verify "pushed" claims against git ls-remote.
