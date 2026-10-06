@@ -107,6 +107,35 @@ class AgentDetailRoundtripTest(unittest.TestCase):
         self.assertEqual(result["dispatcher"], "main thread")
         self.assertEqual(result["model"], "claude-haiku-4-5")
 
+    def test_config_reload_isolates_state_root_per_test(self):
+        """Regression guard (verified 2026-10-05 under tools/ci_shard_runner.py
+        shard 3/4, run alone, and run last-in-shard after 63 preceding files --
+        all green, no pollution found): setUp's config.reload() must actually
+        repoint the shared `config` module at THIS test's fixture root.
+
+        If config.reload() in setUp ever stops being called, or stops being
+        effective, config.STATE_DIR / config.TRANSCRIPTS_ROOT would silently
+        drift back to a shared/default root and cross-process-state pollution
+        would return -- the exact failure mode #667/#668 fixed (/api/state
+        serving stale data instead of this test's isolated fixture). Assert
+        the isolation directly so a regression here cannot hide behind
+        whatever happens to run before or after this test in the shard.
+        """
+        self.assertEqual(
+            config.STATE_DIR.resolve(), self.state_dir.resolve(),
+            "config.STATE_DIR did not pick up this test's isolated fixture "
+            "root -- setUp's config.reload() is not wired or not effective; "
+            "this is the exact pollution mode #667/#668 fixed.")
+        self.assertEqual(
+            config.TRANSCRIPTS_ROOT.resolve(), self.transcripts_root.resolve(),
+            "config.TRANSCRIPTS_ROOT did not pick up this test's isolated "
+            "fixture root -- setUp's config.reload() is not wired or not "
+            "effective; this is the exact pollution mode #667/#668 fixed.")
+        self.assertEqual(
+            config.AESOP_ROOT.resolve(), self.fixture_root.resolve(),
+            "config.AESOP_ROOT did not pick up this test's isolated fixture "
+            "root -- setUp's config.reload() is not wired or not effective.")
+
     def test_multiple_agents_each_resolve_correctly(self):
         """When multiple agents are active, each emitted ID must resolve uniquely."""
         transcripts_subdir = self.transcripts_root / "subagents"
