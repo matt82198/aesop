@@ -62,6 +62,20 @@
       "local_ollama": { "backend": "openai-compatible", "base_url": "http://localhost:11434/v1", "model": "mistral", "is_local": true }
     }
   },
+  "multibox": {
+    "_comment": "Multi-instance coordination (Phase 0.5). The values below ARE the built-in defaults, so this block as shipped changes nothing and deleting it changes nothing: enabled=false means NO multibox code path is reached at all (tools/multibox_config.py returns before importing a single coordination module). Every key is overridable by an AESOP_MULTIBOX_<UPPER_KEY> environment variable; precedence is env > this file > default. Setting enabled=true runs a HARD startup preflight (tools/multibox_preflight.py) that REFUSES to proceed unless (i) the event-store SQLite DB is on local storage -- SQLite WAL needs a shared-memory index that is only coherent on one host, so a WAL DB on NFS/SMB is silently unsafe -- (ii) the measured p99 cross-box directory-visibility delay is below settle_seconds, and (iii) the measured clock skew is below max_skew_seconds. Probe failure is itself a refusal: an unmeasurable share is an unsafe share. The refusal message names the mount options that make a share measurable (NFS: nfsvers=4.1,actimeo=1,lookupcache=none / SMB: cache=none).",
+    "_transport": "'local' = one box, atomic SQLite leases (LocalLeaseBackend) -- closes the multi_dispatch TOCTOU window without any shared filesystem. 'shared-fs' = 3-5 boxes sharing ONE directory (shared_dir) that carries only an append-only claim log; each instance keeps its own local SQLite event store. shared_dir is required for 'shared-fs' and forbidden for 'local' (a silently ignored share is a footgun).",
+    "_tuning": "settle_seconds must exceed the MEASURED p99 visibility delay -- it is the window a claim waits before folding the directory listing, and it is what makes a fold-decided claim safe (tools/verify_multibox.py proves it load-bearing by showing the same harness DOES double-grant when delay > settle). max_skew_seconds only ever LENGTHENS a lease, so over-estimating costs throughput, never correctness. heartbeat_seconds must stay below lease_ttl_seconds or a live instance's lease expires between heartbeats. case_policy='insensitive' deliberately over-collides across heterogeneous boxes: a spurious conflict costs throughput, a missed conflict costs correctness. instance_id=null derives a durable id from $AESOP_STATE_ROOT/instance-id.",
+    "enabled": false,
+    "transport": "local",
+    "shared_dir": null,
+    "settle_seconds": 5.0,
+    "max_skew_seconds": 2.0,
+    "lease_ttl_seconds": 300,
+    "heartbeat_seconds": 30,
+    "case_policy": "insensitive",
+    "instance_id": null
+  },
   "limits": {
     "_comment": "Cost ceiling / kill switch (tools/cost_ceiling.py, tools/halt.py). null disables a given ceiling (feature opt-in). When spend meets or exceeds a configured ceiling, cost_ceiling.py trips tools/halt.py's .HALT sentinel, which daemons/run-watchdog.sh checks at the top of every cycle and refuses to do work (no backup, no push, no scan) until cleared via 'python tools/halt.py --clear'.",
     "max_wave_tokens": null,
