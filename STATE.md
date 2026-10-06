@@ -33,14 +33,14 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 3. **`test_hook_preflight` rewrite** (DONE (this PR)). Replaced the module-level `unittest.SkipTest` and the pytest-only `tmp_path` fixture (which would have raised NameError) with `unittest.TestCase` + `tempfile.TemporaryDirectory`, subprocess-driven against hermetic fixtures. 8 tests now actually collect and run under `python -m unittest discover` (was 0 before: silently skipped). Covers fail-closed exit 1 (broken/missing interpreter, hooks/ and daemons/), fail-closed exit 2 (no repo root; zero checkable files; hidden files ignored), exit 0 (real interpreter available; non-script files skipped), with a RED-first proof (a stubbed `is_interpreter_available` that always returns available wrongly exits 0 against the broken-interpreter fixture; the real implementation correctly exits 1).
 
-4. **`test_agent_detail_roundtrip` pollution re-verify under ci_shard_runner** (IN-REVIEW). Fix landed in #668 (`/api/state` served real data, not empty default); config.reload() wired in setUp (#667). Re-verification under shard-runner conditions needed before fully closed. Medium effort; medium impact (integration-test stability).
+4. **`test_agent_detail_roundtrip` pollution re-verify under ci_shard_runner** — DONE (this PR): re-verified stable under real shard-runner conditions (shard 3/4, round-robin, x2; alone; shard with file last after 63 preceding files) — all green, no pollution found; added `test_config_reload_isolates_state_root_per_test` regression guard (falsifiability-checked: fails if setUp's `config.reload()` is removed or made ineffective).
 
 5. **STATE.md freshness gate** (DONE). Gate implemented and shipped in PR #809; detects stale checkpoints by comparing Current Version claim vs. HEAD commit count. Baseline freshness checkpoint set 2026-10-05.
 
 6. **Portability path scan (box-restore / trigger-layer absolutization)** (REFACTOR). Ensure all scripts invoked by scheduled tasks use absolute paths (AESOP_HOME or durable ~/scripts location). Validates guardrail proposal from refinesystem R1. Medium effort; medium impact (multi-box readiness).
    Evidence from 2026-09-10 half-restore incident: settings hooks pointed at wrong profile, scheduled-task StartBoundary in past prevented first run, packed-refs/pack loss on restore. Guardrail tracked in PR #793.
 
-7. **Dead-baseline liveness check** (GUARDRAIL #3). Verify that unused test baselines (e.g., .encoding-baseline.json if no encoding tests) do not accumulate. Proposed in refinesystem R1 (lens6, deferred). Low effort; low impact (hygiene).
+7. **Dead-baseline liveness check** (GUARDRAIL #3) — DONE (this PR). `tools/baseline_liveness_check.py` finds each ratchet baseline's consumer and re-runs its own `--baseline FILE --json` check for stale entries; wired into ci.yml. Real-repo run found `.encoding-baseline.json` dead (no consumer -- `encoding_lint.py` never had a `--baseline` flag) and removed it; `.stateapi-baseline.json`/`.portability-baseline.json`/`.subprocess-guard-baseline.json` all healthy (zero stale entries).
 
 8. **Stats-refresh PR jam** (RESOLVED). PR #781 (keeper stats) merged. Portfolio stats pipeline validated (2026-10-05). v0.8.0 released with freshness gate active; board catch-up lane started.
 
