@@ -38,10 +38,19 @@ class TestPowerSelftest(unittest.TestCase):
             shutil.rmtree(self.temp_dir)
 
     def _run_selftest(self, env_overrides=None):
-        """Run power_selftest.py with environment overrides."""
+        """Run power_selftest.py with environment overrides.
+
+        Points SCRIPTS_ROOT at this repo's real tools/ dir by default so the
+        scanner check finds a real, passing scanner_selftest.py -- these
+        happy-path tests are about hooks/beats/decisions graceful
+        degradation, not the scanner fail-closed behavior (covered
+        separately below), and must stay deterministic regardless of
+        whether the host box happens to have a ~/scripts fallback.
+        """
         env = os.environ.copy()
         env["AESOP_STATE_ROOT"] = str(self.state_dir)
         env["BRAIN_ROOT"] = str(self.brain_dir)
+        env["SCRIPTS_ROOT"] = str(self.selftest_script.parent)
         if env_overrides:
             env.update(env_overrides)
 
@@ -149,10 +158,22 @@ class TestPowerSelftestHookDetection(unittest.TestCase):
             shutil.rmtree(self.temp_dir)
 
     def _run_selftest(self):
-        """Run power_selftest.py against the temp state/brain roots."""
+        """Run power_selftest.py against the temp state/brain roots.
+
+        Points SCRIPTS_ROOT at this repo's real tools/ dir, same as the
+        base TestPowerSelftest class above: these tests are about hook
+        detection, not the scanner fail-closed behavior (covered in
+        TestPowerSelftestScannerFailClosed), and the overall exit code is
+        the union of every check. Leaving SCRIPTS_ROOT unset let the
+        scanner check fall through to the profile-agnostic $HOME/scripts
+        fallback, which is absent on CI runners -- scanner:FAIL then
+        flipped the exit code these tests assert on for a reason that has
+        nothing to do with hooks.
+        """
         env = os.environ.copy()
         env["AESOP_STATE_ROOT"] = str(self.state_dir)
         env["BRAIN_ROOT"] = str(self.brain_dir)
+        env["SCRIPTS_ROOT"] = str(self.selftest_script.parent)
         return subprocess.run(
             [sys.executable, str(self.selftest_script)],
             capture_output=True,
@@ -274,6 +295,153 @@ class TestPowerSelftestHookDetection(unittest.TestCase):
         result = self._run_selftest()
         self.assertIn("missing files", result.stdout)
         self.assertEqual(result.returncode, 1)
+
+
+class TestPowerSelftestScannerFailClosed(unittest.TestCase):
+    """A scanner check that cannot evaluate must never render healthy.
+
+    scanner:None was observed live (checks that evaluated to nothing still
+    rendered as if they'd passed). This class pins the fix: a found,
+    passing scanner_selftest.py renders 'scanner:N/N'; an unfindable one
+    renders 'scanner:FAIL:...' and fails the whole selftest closed.
+    """
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.selftest_script = Path(__file__).parent.parent / "tools" / "power_selftest.py"
+        self.state_dir = Path(self.temp_dir) / "state"
+        self.brain_dir = Path(self.temp_dir) / "brain"
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        import shutil
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def _run_selftest(self, scripts_root, no_home_fallback=False):
+        env = os.environ.copy()
+        env["AESOP_STATE_ROOT"] = str(self.state_dir)
+        env["BRAIN_ROOT"] = str(self.brain_dir)
+        env["SCRIPTS_ROOT"] = str(scripts_root)
+        if no_home_fallback:
+            # Defeat the profile-agnostic $HOME/scripts fallback deterministically,
+            # regardless of whether the host box happens to carry its own
+            # ~/scripts/scanner_selftest.py (as this dev box does).
+            empty_home = Path(self.temp_dir) / "empty_home"
+            empty_home.mkdir(parents=True, exist_ok=True)
+            env["USERPROFILE"] = str(empty_home)
+            env["HOME"] = str(empty_home)
+        return subprocess.run(
+            [sys.executable, str(self.selftest_script)],
+            capture_output=True, text=True, encoding="utf-8",
+            cwd=self.temp_dir, env=env,
+        )
+
+    def test_scanner_found_and_passing_shows_pass_count(self):
+        """A real scanner_selftest.py renders 'scanner:N/N', never 'scanner:None'."""
+        real_tools_dir = self.selftest_script.parent
+        result = self._run_selftest(real_tools_dir)
+        self.assertNotIn("scanner:None", result.stdout)
+        self.assertRegex(result.stdout, r"scanner:\d+/\d+")
+
+    def test_scanner_unlocatable_fails_closed(self):
+        """No scanner_selftest.py anywhere findable -> FAIL, not OK/n/a/None."""
+        empty_scripts_root = Path(self.temp_dir) / "no_scanner_here"
+        empty_scripts_root.mkdir(parents=True, exist_ok=True)
+        result = self._run_selftest(empty_scripts_root, no_home_fallback=True)
+        self.assertNotIn("scanner:None", result.stdout)
+        self.assertIn("scanner:FAIL", result.stdout)
+        self.assertIn("POWER-SELFTEST: FAIL", result.stdout)
+        self.assertEqual(result.returncode, 1)
+
+    def test_scanner_resolves_profile_agnostic_home_fallback(self):
+        """When SCRIPTS_ROOT has no harness, a real $HOME/scripts copy is still found.
+
+        Proves the fallback is resolved via Path.home() (HOME/USERPROFILE),
+        never a hard-coded user profile path.
+        """
+        empty_scripts_root = Path(self.temp_dir) / "no_scanner_here"
+        empty_scripts_root.mkdir(parents=True, exist_ok=True)
+        fake_home = Path(self.temp_dir) / "fake_home"
+        fake_scripts = fake_home / "scripts"
+        fake_scripts.mkdir(parents=True, exist_ok=True)
+        # A minimal self-contained fake harness: always reports 3/3 passed, exit 0.
+        (fake_scripts / "scanner_selftest.py").write_text(
+            "import sys\nprint('SELFTEST: 3/3 passed')\nsys.exit(0)\n",
+            encoding="utf-8",
+        )
+
+        env = os.environ.copy()
+        env["AESOP_STATE_ROOT"] = str(self.state_dir)
+        env["BRAIN_ROOT"] = str(self.brain_dir)
+        env["SCRIPTS_ROOT"] = str(empty_scripts_root)
+        env["USERPROFILE"] = str(fake_home)
+        env["HOME"] = str(fake_home)
+        result = subprocess.run(
+            [sys.executable, str(self.selftest_script)],
+            capture_output=True, text=True, encoding="utf-8",
+            cwd=self.temp_dir, env=env,
+        )
+        self.assertIn("scanner:3/3", result.stdout)
+        self.assertEqual(result.returncode, 0)
+
+
+class TestRenderSegmentFailClosed(unittest.TestCase):
+    """Unit tests on the shared render_segment() formatter, imported directly.
+
+    Every check result -- real Check, a None details on an OK/WARN check, or
+    a missing result entirely -- is funneled through one render_segment()
+    that treats anything it cannot make sense of as FAIL:unevaluated. It
+    must never let Python's None print as if a check were healthy.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        selftest_path = Path(__file__).parent.parent / "tools" / "power_selftest.py"
+        spec = importlib.util.spec_from_file_location(
+            f"power_selftest_{id(cls)}", selftest_path
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        cls.mod = module
+
+    def test_none_result_renders_fail_unevaluated(self):
+        segment, is_fail = self.mod.render_segment("scanner", None)
+        self.assertNotIn("None", segment)
+        self.assertIn("scanner:FAIL", segment)
+        self.assertTrue(is_fail)
+
+    def test_ok_status_with_none_details_renders_fail_unevaluated(self):
+        """The exact shape that produced literal 'scanner:None' in the wild."""
+        fake_check = self.mod.Check("scanner", "OK", None, False)
+        segment, is_fail = self.mod.render_segment("scanner", fake_check)
+        self.assertEqual(segment, "scanner:FAIL:unevaluated")
+        self.assertTrue(is_fail)
+
+    def test_ok_status_with_none_details_on_untracked_name_still_ok(self):
+        """hooks/brain/beats intentionally pass details=None on a clean OK;
+        only names whose healthy state is expressed THROUGH details
+        (decisions, scanner) must treat a None detail as unevaluated."""
+        fake_check = self.mod.Check("hooks", "OK", None, False)
+        segment, is_fail = self.mod.render_segment("hooks", fake_check)
+        self.assertEqual(segment, "hooks:ok")
+        self.assertFalse(is_fail)
+
+    def test_run_checks_never_silently_drops_a_none_result(self):
+        """A check function that returns None (crashed/mis-shaped) must
+        still surface in the headline as a failure, not vanish."""
+        original_checks = self.mod.CHECKS
+        try:
+            self.mod.CHECKS = original_checks + (("ghost", lambda: None),)
+            results = self.mod.run_checks()
+            names = [r.name for r in results]
+            self.assertIn("ghost", names)
+            ghost = next(r for r in results if r.name == "ghost")
+            self.assertEqual(ghost.status, "FAIL")
+            self.assertTrue(ghost.is_fail)
+        finally:
+            self.mod.CHECKS = original_checks
 
 
 class TestPowerSelftestTrigger(unittest.TestCase):
