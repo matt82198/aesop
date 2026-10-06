@@ -12,3 +12,4 @@
 *.py text eol=lf
 *.mjs text eol=lf
 *.js text eol=lf
+tools/INDEX.md merge=union
