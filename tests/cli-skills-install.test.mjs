@@ -12,6 +12,21 @@
 // forgotten redirect caused the real-~/.claude-overwrite incident (#831) the
 // isolated-env fixture exists to prevent structurally.
 //
+// Scaffold budget (PR #784 follow-up): a full scaffold (template copy + git
+// init/add/commit + skill install) costs 15-40s+ on CI's windows-shard(0)
+// (Windows Defender real-time scanning on every file touched), and this file
+// used to run 10 of them serially, summing past the file-level 180s timeout.
+// Two structural changes keep it well under budget without touching that
+// 180s number: (1) every scaffold here passes --no-git except exactly ONE
+// (the shared `before` fixture below), since no test in this file asserts on
+// git state -- --no-git skips the git init/add/commit path entirely
+// (bin/cli.js's initializeGitRepo short-circuits on the flag); (2) tests that
+// only READ an already-installed skills home (the "installs skills" and
+// "does not write to the real home" checks) share that one `before`-built
+// scaffold instead of each building their own. Tests that MUTATE a skills
+// home (writing a local edit, re-scaffolding with --force) keep independent
+// scaffolds, since sharing would make them interfere with each other.
+//
 // Run: node --test tests/cli-skills-install.test.mjs
 
 // Harness-level HOME isolation (tests/helpers/isolated-env.mjs, #831): a
@@ -20,7 +35,7 @@
 // through the npm test/test:node scripts.
 import './helpers/isolated-env.mjs';
 
-import { test } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -93,7 +108,7 @@ function scaffold(targetDir, skillsHome, extraArgs = []) {
   const deadlineMs = Math.min(timeoutMs, 60000);
   const callId = ++scaffoldCallIndex;
   const t0 = Date.now();
-  process.stderr.write(`[cli-skills-install] scaffold#${callId} start targetDir=${targetDir} deadline=${deadlineMs}ms\n`);
+  process.stderr.write(`[cli-skills-install] scaffold#${callId} start targetDir=${targetDir} deadline=${deadlineMs}ms args=${extraArgs.join(' ')}\n`);
 
   return new Promise((resolve) => {
     const child = spawn(
@@ -150,26 +165,47 @@ function scaffold(targetDir, skillsHome, extraArgs = []) {
   });
 }
 
-test('scaffold installs skills into the skills home', async () => {
+// Shared fixture: the ONE full scaffold in this file that keeps git ENABLED
+// (no --no-git), so the installer+git integration path stays covered by
+// something. Built once; the two tests below that only READ its result
+// (never mutate it) reuse it instead of each building their own.
+let shared = null;
+
+before(async () => {
   const base = createTestDir();
-  try {
-    const skillsHome = path.join(base, 'skills-home');
-    const res = await scaffold(path.join(base, 'fleet'), skillsHome);
+  const skillsHome = path.join(base, 'skills-home');
+  const target = path.join(base, 'fleet');
+  const sentinel = path.join(os.homedir(), '.claude', 'skills');
+  const sentinelBefore = fs.existsSync(sentinel)
+    ? fs.readdirSync(sentinel).sort().join(',')
+    : '<absent>';
 
-    assert.equal(res.status, 0, `CLI exited ${res.status}: ${res.stderr}`);
-    assert.ok(fs.existsSync(skillsHome), 'skills home should be created');
+  const res = await scaffold(target, skillsHome);
 
-    // power and buildsystem are the two the orchestrator cannot run without
-    for (const skill of ['power', 'buildsystem']) {
-      const skillFile = path.join(skillsHome, skill, 'SKILL.md');
-      assert.ok(fs.existsSync(skillFile), `${skill}/SKILL.md should be installed`);
-      assert.ok(
-        fs.readFileSync(skillFile, 'utf8').length > 0,
-        `${skill}/SKILL.md should not be empty`
-      );
-    }
-  } finally {
-    cleanupTestDir(base);
+  const sentinelAfter = fs.existsSync(sentinel)
+    ? fs.readdirSync(sentinel).sort().join(',')
+    : '<absent>';
+
+  shared = { base, skillsHome, target, res, sentinel, sentinelBefore, sentinelAfter };
+});
+
+after(() => {
+  if (shared) cleanupTestDir(shared.base);
+});
+
+test('scaffold installs skills into the skills home', () => {
+  const { res, skillsHome } = shared;
+  assert.equal(res.status, 0, `CLI exited ${res.status}: ${res.stderr}`);
+  assert.ok(fs.existsSync(skillsHome), 'skills home should be created');
+
+  // power and buildsystem are the two the orchestrator cannot run without
+  for (const skill of ['power', 'buildsystem']) {
+    const skillFile = path.join(skillsHome, skill, 'SKILL.md');
+    assert.ok(fs.existsSync(skillFile), `${skill}/SKILL.md should be installed`);
+    assert.ok(
+      fs.readFileSync(skillFile, 'utf8').length > 0,
+      `${skill}/SKILL.md should not be empty`
+    );
   }
 });
 
@@ -177,7 +213,7 @@ test('--no-skills skips installation entirely', async () => {
   const base = createTestDir();
   try {
     const skillsHome = path.join(base, 'skills-home');
-    const res = await scaffold(path.join(base, 'fleet'), skillsHome, ['--no-skills']);
+    const res = await scaffold(path.join(base, 'fleet'), skillsHome, ['--no-skills', '--no-git']);
 
     assert.equal(res.status, 0, `CLI exited ${res.status}: ${res.stderr}`);
     assert.ok(
@@ -191,11 +227,12 @@ test('--no-skills skips installation entirely', async () => {
 });
 
 test('re-scaffolding over identical skills is idempotent', async () => {
+  // Reuses the shared fixture's already-populated skillsHome as the "first"
+  // scaffold (built once in `before`, with real skills installed) -- only
+  // one NEW scaffold call is needed here to exercise the idempotent path.
   const base = createTestDir();
   try {
-    const skillsHome = path.join(base, 'skills-home');
-    await scaffold(path.join(base, 'fleet-a'), skillsHome);
-    const res = await scaffold(path.join(base, 'fleet-b'), skillsHome);
+    const res = await scaffold(path.join(base, 'fleet-b'), shared.skillsHome, ['--no-git']);
 
     assert.equal(res.status, 0, `CLI exited ${res.status}: ${res.stderr}`);
     assert.match(
@@ -212,13 +249,13 @@ test('a locally modified skill is preserved without --force', async () => {
   const base = createTestDir();
   try {
     const skillsHome = path.join(base, 'skills-home');
-    await scaffold(path.join(base, 'fleet-a'), skillsHome);
+    await scaffold(path.join(base, 'fleet-a'), skillsHome, ['--no-git']);
 
     const powerSkill = path.join(skillsHome, 'power', 'SKILL.md');
     const mine = '# my own power skill\n';
     fs.writeFileSync(powerSkill, mine);
 
-    const res = await scaffold(path.join(base, 'fleet-b'), skillsHome);
+    const res = await scaffold(path.join(base, 'fleet-b'), skillsHome, ['--no-git']);
 
     assert.equal(res.status, 0, `CLI exited ${res.status}: ${res.stderr}`);
     assert.equal(
@@ -242,12 +279,12 @@ test('--force overwrites a locally modified skill', async () => {
   const base = createTestDir();
   try {
     const skillsHome = path.join(base, 'skills-home');
-    await scaffold(path.join(base, 'fleet-a'), skillsHome);
+    await scaffold(path.join(base, 'fleet-a'), skillsHome, ['--no-git']);
 
     const powerSkill = path.join(skillsHome, 'power', 'SKILL.md');
     fs.writeFileSync(powerSkill, '# my own power skill\n');
 
-    const res = await scaffold(path.join(base, 'fleet-b'), skillsHome, ['--force']);
+    const res = await scaffold(path.join(base, 'fleet-b'), skillsHome, ['--force', '--no-git']);
 
     assert.equal(res.status, 0, `CLI exited ${res.status}: ${res.stderr}`);
     assert.notEqual(
@@ -265,7 +302,7 @@ test('dependency manifests ship into the scaffolded target', async () => {
   try {
     const skillsHome = path.join(base, 'skills-home');
     const target = path.join(base, 'fleet');
-    const res = await scaffold(target, skillsHome, ['--no-skills']);
+    const res = await scaffold(target, skillsHome, ['--no-skills', '--no-git']);
 
     assert.equal(res.status, 0, `CLI exited ${res.status}: ${res.stderr}`);
     for (const manifest of ['requirements.txt', 'requirements-dev.txt']) {
@@ -279,22 +316,9 @@ test('dependency manifests ship into the scaffolded target', async () => {
   }
 });
 
-test('scaffold does not write to the real home when AESOP_SKILLS_HOME is set', async () => {
-  const base = createTestDir();
-  try {
-    const skillsHome = path.join(base, 'skills-home');
-    const sentinel = path.join(os.homedir(), '.claude', 'skills');
-    const before = fs.existsSync(sentinel)
-      ? fs.readdirSync(sentinel).sort().join(',')
-      : '<absent>';
-
-    await scaffold(path.join(base, 'fleet'), skillsHome);
-
-    const after = fs.existsSync(sentinel)
-      ? fs.readdirSync(sentinel).sort().join(',')
-      : '<absent>';
-    assert.equal(after, before, 'real ~/.claude/skills must be untouched');
-  } finally {
-    cleanupTestDir(base);
-  }
+test('scaffold does not write to the real home when AESOP_SKILLS_HOME is set', () => {
+  // Reuses the shared fixture's before/after sentinel snapshot (taken around
+  // its one scaffold call in `before`) instead of running a second scaffold
+  // purely to re-check the same thing.
+  assert.equal(shared.sentinelAfter, shared.sentinelBefore, 'real ~/.claude/skills must be untouched');
 });
