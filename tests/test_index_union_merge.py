@@ -25,6 +25,12 @@ class TestIndexUnionMerge(unittest.TestCase):
 
     def setUp(self):
         """Create a temp git repo for testing."""
+        # Save the original cwd BEFORE chdir'ing away: tearDown must restore
+        # it exactly, not just chdir("/"). A process-wide cwd leak here
+        # poisons every later test in the same shard process (GAP: PR #699
+        # CI escape -- this exact class of bug is why test_metrics_gate.py
+        # deliberately avoids os.chdir at all).
+        self._orig_cwd = os.getcwd()
         self.test_dir = tempfile.mkdtemp(prefix="index_union_merge_")
         self.repo_path = Path(self.test_dir) / "repo"
         self.repo_path.mkdir()
@@ -52,7 +58,7 @@ class TestIndexUnionMerge(unittest.TestCase):
 
     def tearDown(self):
         """Clean up temp dir."""
-        os.chdir("/")
+        os.chdir(self._orig_cwd)
         shutil.rmtree(self.test_dir, ignore_errors=True)
 
     def test_with_attribute_union_merge_succeeds(self):
