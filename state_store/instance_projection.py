@@ -249,7 +249,10 @@ def get_all_claimed_files(store) -> dict[str, list[str]]:
 
 
 def detect_stale_instances(
-    store, stale_threshold_seconds: float = 300.0
+    store,
+    stale_threshold_seconds: float = 300.0,
+    source: Any = None,
+    now: float | None = None,
 ) -> list[dict[str, Any]]:
     """Detect instances that have not sent a heartbeat recently.
 
@@ -260,18 +263,77 @@ def detect_stale_instances(
     Stale instances can have their claims forcibly released by other instances
     (e.g., after a crash).
 
+    TRANSPORT-AWARE SOURCE (multibox Inc 5). Tier L reads heartbeats out of the
+    ``instances`` event stream, one appended event per beat. Tier S cannot afford
+    that -- 3-5 boxes beating every 10s would flood a log that every peer re-reads
+    in full -- so it publishes one atomically REPLACED file per instance
+    (``state_store.failover.HeartbeatDir``) and passes it here as ``source``.
+
+    Only the SOURCE of the heartbeat changes. The threshold semantics and the 300s
+    default are identical on both transports, and so is the shape of what comes
+    back, so callers and the reclamation path need no transport awareness at all.
+
     Args:
-        store: StateAPI or EventStore instance
+        store: StateAPI or EventStore instance. Ignored (and may be None) when
+            ``source`` is given.
         stale_threshold_seconds: threshold in seconds (default 300s = 5min)
+        source: optional Tier-S heartbeat source -- a list of heartbeat records, a
+            callable returning them, or any object exposing ``read_heartbeats()``.
+            When None (the default) the event stream is used, unchanged.
+        now: reference time in epoch seconds; defaults to ``time.time()``. Present
+            so both paths are testable without sleeping.
 
     Returns:
-        List of stale instance dicts
+        List of stale instance dicts, oldest heartbeat first. Fail-closed: any
+        error yields ``[]`` (nothing reported stale, so nothing is reclaimed on
+        the strength of evidence we could not read).
     """
     try:
+        if source is not None:
+            return _detect_stale_from_heartbeats(
+                source, stale_threshold_seconds, now
+            )
         events = _read_instances_events(store)
-        return _detect_stale_instances(events, stale_threshold_seconds)
+        return _detect_stale_instances(events, stale_threshold_seconds, now)
     except Exception:
         return []
+
+
+def _detect_stale_from_heartbeats(
+    source: Any, stale_threshold_seconds: float, now: float | None
+) -> list[dict[str, Any]]:
+    """Fold Tier-S heartbeat records into the same stale-instance shape.
+
+    The record readers live in ``failover`` because they belong to the transport,
+    not to this projection; the import is local so this low-level module does not
+    depend on the failover layer at import time.
+    """
+    from state_store.failover import (  # local: avoids inverting the layering
+        _latest_beat_per_instance,
+        _read_heartbeat_source,
+    )
+
+    reference = time.time() if now is None else float(now)
+    records = _read_heartbeat_source(source)
+
+    stale: list[dict[str, Any]] = []
+    for rec in _latest_beat_per_instance(records):
+        last_heartbeat = float(rec.get("heartbeat_at", reference))
+        if (reference - last_heartbeat) <= stale_threshold_seconds:
+            continue
+        try:
+            epoch = int(rec.get("epoch", 1))
+        except (TypeError, ValueError):
+            epoch = 1
+        stale.append({
+            "instance_id": rec.get("instance_id"),
+            "epoch": epoch,
+            "registered_at": float(rec.get("registered_at", last_heartbeat)),
+            "last_heartbeat": last_heartbeat,
+            "status": "active",
+        })
+
+    return sorted(stale, key=lambda x: x["last_heartbeat"])
 
 
 # ---------------------------------------------------------------------------
@@ -394,10 +456,10 @@ def _project_all_instances(events: list[dict]) -> list[dict[str, Any]]:
 
 
 def _detect_stale_instances(
-    events: list[dict], stale_threshold_seconds: float
+    events: list[dict], stale_threshold_seconds: float, now: float | None = None
 ) -> list[dict[str, Any]]:
-    """Detect instances whose last heartbeat is older than threshold."""
-    now = time.time()
+    """Detect instances whose last heartbeat is older than threshold (Tier L)."""
+    now = time.time() if now is None else float(now)
     state = {}
 
     for ev in events:

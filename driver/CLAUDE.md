@@ -32,6 +32,12 @@
 - **anthropic_transport.py** — stdlib urllib transport for the Anthropic endpoint.
 - **backend_config.py** — Seat config builder: reads `aesop.config.json` seats block, constructs driver instances.
 - **context_pack.py** — Context-pack assembly for orchestrator decisions (allowlist-only reads).
+  `add_evidence_to_pack()` is the ONLY supported way to attach already-in-memory evidence
+  text to a pack built outside `build_context_pack()` — pure in-memory, never touches
+  repo_root/conductor_root/the filesystem. Do not fake a `brief:<name>` source to reuse the
+  evidence-capping logic (2026-10-06 incident: `tools/shadow_adjudication.py` did, resolving
+  the placeholder name as a literal relative path against the process cwd — harmless only by
+  coincidence when cwd == repo_root, `ContextPackViolation` otherwise).
 - **wave_scheduler.py** — Wave-manifest scheduler: builds worker driver from config, dispatches wave items.
 - **decisions/** — Decision type schema registry (sibling lane owns schemas; absent = optional).
   Test corpora (corpus-*.jsonl) use profile-agnostic paths in evidence/examples (~/aesop, testuser, not hardcoded machine-specific paths) to support multi-profile shared checkouts.
