@@ -1055,19 +1055,34 @@ function initializeGitRepo(targetDir, noGitFlag = false) {
     cwd: targetDir,
     stdio: 'pipe',
     timeout: GIT_OP_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+    windowsHide: true,
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
   };
 
-  try {
-    // Initialize git repo
-    execSync(`git ${GIT_SAFE_FLAGS} init -q`, gitOpts);
-    console.log('✓ Initialized git repository');
+  // Diagnostic instrumentation (kept permanently, not a one-off debug aid):
+  // each step logs to stderr before it runs so a CI failure names the exact
+  // git subcommand involved instead of surfacing only the generic catch-all
+  // warning below. Cheap, and this path has twice silently swallowed the
+  // real git stderr on CI (PR #784) while the catch-all warning above gave
+  // no way to tell which of the five calls failed or why.
+  const steps = [
+    ['init', `git ${GIT_SAFE_FLAGS} init -q`],
+    ['config-email', `git ${GIT_SAFE_FLAGS} config user.email "aesop-scaffold@local"`],
+    ['config-name', `git ${GIT_SAFE_FLAGS} config user.name "Aesop Scaffold"`],
+    ['add', `git ${GIT_SAFE_FLAGS} add -A`],
+    ['commit', `git ${GIT_SAFE_FLAGS} commit -q -m "Initial aesop scaffold"`]
+  ];
 
-    // Create initial commit
-    execSync(`git ${GIT_SAFE_FLAGS} config user.email "aesop-scaffold@local"`, gitOpts);
-    execSync(`git ${GIT_SAFE_FLAGS} config user.name "Aesop Scaffold"`, gitOpts);
-    execSync(`git ${GIT_SAFE_FLAGS} add -A`, gitOpts);
-    execSync(`git ${GIT_SAFE_FLAGS} commit -q -m "Initial aesop scaffold"`, gitOpts);
+  let lastStep = null;
+  try {
+    for (const [name, cmd] of steps) {
+      lastStep = name;
+      process.stderr.write(`[git-init] step=${name} cmd=git cwd=${targetDir}\n`);
+      execSync(cmd, gitOpts);
+      process.stderr.write(`[git-init] step=${name} ok\n`);
+    }
+    console.log('✓ Initialized git repository');
     console.log('✓ Created initial git commit');
     return true;
   } catch (e) {
@@ -1077,6 +1092,16 @@ function initializeGitRepo(targetDir, noGitFlag = false) {
     }
     console.warn('⚠ Warning: Failed to initialize git repo automatically');
     console.warn('  Run manually: cd ' + targetDir + ' && git init && git add -A && git commit -m "Initial commit"');
+    // Named-cause diagnostics: print the real failure instead of swallowing
+    // it. These go to stderr so they show up in CI logs without disturbing
+    // anything that parses stdout.
+    process.stderr.write(`[git-init] FAILED at step=${lastStep}\n`);
+    process.stderr.write(`[git-init] message=${e.message}\n`);
+    if (e.status !== undefined) process.stderr.write(`[git-init] status=${e.status}\n`);
+    if (e.signal) process.stderr.write(`[git-init] signal=${e.signal}\n`);
+    if (e.code) process.stderr.write(`[git-init] code=${e.code}\n`);
+    if (e.stdout) process.stderr.write(`[git-init] stdout=${e.stdout.toString()}\n`);
+    if (e.stderr) process.stderr.write(`[git-init] stderr=${e.stderr.toString()}\n`);
     return false;
   }
 }
