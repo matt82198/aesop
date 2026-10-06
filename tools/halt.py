@@ -84,6 +84,15 @@ def resolve_state_dir(config=None):
             p = root / p
         return p
 
+    # No AESOP_STATE_ROOT, no config state_root: default to $AESOP_ROOT/state
+    # when AESOP_ROOT is set (matches the pre-delegation daemon behavior of
+    # always reading $AESOP_ROOT/state/.HALT regardless of cwd — a caller
+    # invoking the daemon with AESOP_ROOT pointing elsewhere must not have its
+    # halt sentinel silently missed just because cwd differs). Only fall back
+    # to get_state_dir()'s cwd-relative default when AESOP_ROOT is unset too.
+    if os.environ.get("AESOP_ROOT"):
+        return Path(os.environ["AESOP_ROOT"]) / "state"
+
     return get_state_dir()
 
 
