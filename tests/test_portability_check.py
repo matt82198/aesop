@@ -254,6 +254,38 @@ machine_tag = "conductor3"
         self.assertGreaterEqual(len(findings), 3)
 
 
+class TestPortabilityCheckAgainstRealBaseline(unittest.TestCase):
+    """Regression: run the real gate against the real repo + committed baseline.
+
+    This reproduces the exact CI step (`ci.yml`'s "Portability gate (ratchet
+    mode)") locally so a new unmarked private-token mention (e.g. a bare
+    'conductor3' in a docstring/comment added to tools/common.py) is caught
+    before push instead of failing all CI shards via matrix fail-fast.
+    """
+
+    def test_repo_passes_portability_ratchet(self):
+        repo_root = os.path.join(os.path.dirname(__file__), '..')
+        script_path = os.path.join(repo_root, 'tools', 'portability_check.py')
+        baseline_path = os.path.join(repo_root, '.portability-baseline.json')
+
+        result = subprocess.run(
+            [
+                sys.executable, script_path,
+                '--root', repo_root,
+                '--baseline', baseline_path,
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(
+            result.returncode, 0,
+            "portability_check ratchet failed against committed baseline "
+            "(new or stale private-token/path findings) -- mark legitimate "
+            "'default'/'example'/'e.g.' lines or regenerate the baseline:\n"
+            + result.stderr
+        )
+
+
 class TestPortabilityCheckImport(unittest.TestCase):
     """Test that portability_check can be imported."""
 

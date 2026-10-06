@@ -489,14 +489,38 @@ get_commit_range() {
     fi
 
     # Found a valid ref tuple; build its range
-    # If remote_sha is all zeros (new branch), use merge-base with default branch
+    # If remote_sha is all zeros (new branch), use merge-base with remote default branch
     if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
-      # New branch: find merge-base with main/master
-      local default_branch="main"
-      if ! git rev-parse "$default_branch" >/dev/null 2>&1; then
-        default_branch="master"
+      # New branch: find merge-base with remote main/master, NOT local
+      # (local main may be stale; remote is the authoritative ref)
+      local base_sha=""
+
+      # Try remote main first
+      if git rev-parse "origin/main" >/dev/null 2>&1; then
+        base_sha=$(git merge-base "$local_sha" "origin/main" 2>/dev/null || echo "")
       fi
-      printf '%s..%s\n' "$default_branch" "$local_sha"
+
+      # Fall back to remote master
+      if [ -z "$base_sha" ] && git rev-parse "origin/master" >/dev/null 2>&1; then
+        base_sha=$(git merge-base "$local_sha" "origin/master" 2>/dev/null || echo "")
+      fi
+
+      # Fall back to local main
+      if [ -z "$base_sha" ] && git rev-parse "main" >/dev/null 2>&1; then
+        base_sha=$(git merge-base "$local_sha" "main" 2>/dev/null || echo "")
+      fi
+
+      # Last resort: local master
+      if [ -z "$base_sha" ] && git rev-parse "master" >/dev/null 2>&1; then
+        base_sha=$(git merge-base "$local_sha" "master" 2>/dev/null || echo "")
+      fi
+
+      # If no base found, use all-zeros (will scan all commits)
+      if [ -z "$base_sha" ]; then
+        base_sha="0000000000000000000000000000000000000000"
+      fi
+
+      printf '%s..%s\n' "$base_sha" "$local_sha"
     else
       # Existing branch: use remote sha as base
       printf '%s..%s\n' "$remote_sha" "$local_sha"
@@ -2000,12 +2024,111 @@ GENPATHS
     test_failed=$((test_failed + 1))
   fi
 
+  printf '\n=== Test 27: get_commit_range uses origin/main for new branches, not stale local main ===\n'
+  (
+    local fixture_tmpdir
+    fixture_tmpdir=$(mktemp -d)
+    trap "rm -rf '$fixture_tmpdir'" EXIT
+
+    cd "$fixture_tmpdir" || exit 1
+
+    # Create a bare "origin" repo
+    origin_repo="$fixture_tmpdir/origin.git"
+    mkdir -p "$origin_repo"
+    cd "$origin_repo" || exit 1
+    git init -q --bare
+
+    # Create a working repo that pushes to origin
+    work_repo="$fixture_tmpdir/work"
+    git clone -q "$origin_repo" "$work_repo"
+    cd "$work_repo" || exit 1
+
+    # Create initial commit on main
+    git config user.email "test@example.com"
+    git config user.name "Test User"
+    echo "initial" > file.txt
+    git add file.txt
+    git commit -q -m "initial commit"
+    git branch -M main
+    git push -q -u origin main
+
+    # Create several commits on origin/main
+    for i in 1 2 3; do
+      echo "origin commit $i" >> file.txt
+      git add file.txt
+      git commit -q -m "origin commit $i"
+      git push -q origin main
+    done
+
+    # Fetch all the new commits from origin
+    git fetch -q origin
+
+    # Create a new branch from origin/main (the actual main tip)
+    git checkout -q origin/main
+    git checkout -q -b feature/new-branch
+
+    # Add a commit on the feature branch
+    echo "feature commit" >> file.txt
+    git add file.txt
+    git commit -q -m "feature commit on new branch"
+
+    # Now reset local main to point back to the initial commit (simulating stale state)
+    git checkout -q main
+    git reset -q --hard HEAD~3
+
+    # Verify local main is behind origin/main
+    commits_behind=$(git rev-list --count main..origin/main)
+    if [ "$commits_behind" -lt 3 ]; then
+      printf 'FAIL: Setup failed; local main should be 3+ commits behind origin/main\n'
+      exit 1
+    fi
+
+    # Simulate the git pre-push stdin for pushing a new branch
+    # Format: <local-ref> <local-sha> <remote-ref> <remote-sha>
+    local_ref="refs/heads/feature/new-branch"
+    local_sha=$(git rev-parse feature/new-branch)
+    remote_ref="refs/heads/feature/new-branch"
+    remote_sha="0000000000000000000000000000000000000000"  # New branch (all zeros)
+
+    prepush_stdin="$local_ref $local_sha $remote_ref $remote_sha"
+
+    # Call get_commit_range with the simulated stdin
+    range=$(get_commit_range <<< "$prepush_stdin" || true)
+
+    # Parse the range and verify it uses origin/main, not local main
+    if [[ $range =~ ^([^.]+)\.\.([^.]+)$ ]]; then
+      base_sha="${BASH_REMATCH[1]}"
+      tip_sha="${BASH_REMATCH[2]}"
+
+      # Count commits in the range
+      commit_count=$(git rev-list --count "$base_sha..$tip_sha" 2>/dev/null || echo "ERROR")
+
+      # Should be exactly 1 commit (the feature commit on the new branch)
+      # NOT 4+ commits (if using stale local main)
+      if [ "$commit_count" = "1" ]; then
+        printf 'PASS: get_commit_range correctly uses origin/main (1 commit in range)\n'
+      else
+        printf 'FAIL: get_commit_range should find 1 commit, found %s\n' "$commit_count"
+        printf '  Computed range: %s\n' "$range"
+        exit 1
+      fi
+    else
+      printf 'FAIL: Could not parse range: %s\n' "$range"
+      exit 1
+    fi
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
   printf '\n=== Test Results ===\n'
   printf 'PASSED: %d\n' "$test_passed"
   printf 'FAILED: %d\n' "$test_failed"
 
   if [ "$test_failed" -eq 0 ]; then
-    printf '\nAll 26 tests passed.\n'
+    printf '\nAll 27 tests passed.\n'
     return 0
   else
     printf '\nSome tests failed.\n'

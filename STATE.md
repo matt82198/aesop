@@ -27,40 +27,49 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 **NEXT STEPS (post-0.7.2, ranked):**
 
-1. **Flaky `test_openai_transport_redirect` characterization** (DONE). Root cause identified and fixed in PR #808. Flaky test no longer reproduces under ci_shard_runner conditions.
+### Shipped (Most Recent)
 
-2. **Trigger-layer selftest check in power_selftest** (GUARDRAIL #1) — DONE (#701 + this PR). `task_cadence_check.py` (GAP7, #701) parsed `daemons/install-tasks.ps1` and queried live Task Scheduler state but nothing invoked it; power_selftest.py now imports it in-process as a `trigger` check (FAIL on missing/mis-paced/unevaluable task, WARN naming a deliberately-disabled one, n/a off Windows). Addresses fragility noted in Known Limitations.
+- #867: Scheduled-task snapshot diffing (XML fidelity, 5-run stable proof, 4 red-first regression tests)
+- #866: dispatch_lint categorical doc exemption (fix for post-#850 red)
+- #865: PR symbol survival check (Guardrail G13, non-blocking; promote to blocking after 2026-10-14)
+- #864: Node test isolation via isolated-env.mjs
+- #863: tripwire hardcoded-path resolution (env-derived conductor root)
+- #862: verify-receipt neutral on missing receipt
+- #860: pre-push range computation via origin/main (fixes new-branch cases)
+- #856: shell-test isolation from conductor3 state
+- #855: main-full.yml GitHub schema fix + actionlint (GAP)
+- #850: CI throughput: PR head-SHA checkout + Windows path gating
+- #854: Receipt gate increments 1–3 (emit, verify, non-required Action)
 
-3. **`test_hook_preflight` rewrite** (DONE). PR #842: replaced module-level `unittest.SkipTest` and pytest-only `tmp_path` fixture with `unittest.TestCase` + `tempfile.TemporaryDirectory`, subprocess-driven against hermetic fixtures. 8 tests now collect and run under `python -m unittest discover` (was 0 before: silently skipped). Covers fail-closed exit 1 (broken/missing interpreter), fail-closed exit 2 (no repo root; zero checkable files), exit 0 (real interpreter available; non-script files skipped), with RED-first proof (stubbed `is_interpreter_available` fails on broken-interpreter fixture; real implementation correctly exits 1).
+### In Progress
 
-4. **`test_agent_detail_roundtrip` pollution re-verify under ci_shard_runner** (DONE). PR #843: re-verified stable under real shard-runner conditions (shard 3/4, round-robin x2; run alone; shard with file last after 63 preceding files). All green; no order-dependent pollution found. Added `test_config_reload_isolates_state_root_per_test` regression guard (falsifiability-checked: fails if `config.reload()` removed or made ineffective).
+9. **Merge actor must not depend on a session** (IN-PROGRESS). All recent PRs (#860, #863, #864, #855, #850, #866, #856, #867) merged via GitHub native auto-merge. Board catch-up serial merge train for 10-PR batches continuing. #784 (Windows skills-install hang): instrumentation lane for named-step stderr + per-spawn timeouts; conflict-marker gate lane running (no PR yet).
 
-5. **STATE.md freshness gate** (DONE). Gate implemented and shipped in PR #809; detects stale checkpoints by comparing Current Version claim vs. HEAD commit count. Baseline freshness checkpoint set 2026-10-05.
+14. **CI-modes product surface** (IN-FLIGHT). Expose CI run modes and performance characteristics (dispatch vs. serial, shard allocation, cross-OS drift) as browsable UI panels. Complements cost telemetry + scheduling observability.
+
+### Open / Queued
+
+10. **Hard checkpoint+clear enforcement hooks** (QUEUED). Implement pre-push gates to verify STATE.md/BUILDLOG.md are checkpointed before context clears. Enforce single-writer discipline on control files. Matt 2026-10-05 directive.
+
+13. **Receipt gate increments 4–6 — after measurement** (QUEUED). PR #854 shipped increments 1–3. Pending: storage codecs, receipt lineage, signed ledger append. Foundation for auditability + billing transparency.
+
+16. **pyflakes unused-import sweep** (QUEUED). Detect and remove unreferenced imports in driver/, tools/, mcp/, ui/ Python. Code-hygiene improvement, no behavioral change.
+
+### Blocked / Deferred
 
 6. **Portability path scan (box-restore / trigger-layer absolutization)** (REFACTOR). Ensure all scripts invoked by scheduled tasks use absolute paths (AESOP_HOME or durable ~/scripts location). Validates guardrail proposal from refinesystem R1. Medium effort; medium impact (multi-box readiness).
    Evidence from 2026-09-10 half-restore incident: settings hooks pointed at wrong profile, scheduled-task StartBoundary in past prevented first run, packed-refs/pack loss on restore. Guardrail tracked in PR #793.
 
-7. **Dead-baseline liveness check** (DONE). PR #844: `tools/baseline_liveness_check.py` finds each ratchet baseline's consumer and re-runs its `--baseline FILE --json` check for stale entries; fails closed if baseline has no consumer. `--prune` shrinks counts, never raises. Wired into ci.yml shard 0. Real-repo run found `.encoding-baseline.json` dead (no consumer); removed it. Other three baselines (`.stateapi-baseline.json`, `.portability-baseline.json`, `.subprocess-guard-baseline.json`) all healthy with zero stale entries.
-
-8. **Stats-refresh PR jam** (RESOLVED). PR #781 (keeper stats) merged. Portfolio stats pipeline validated (2026-10-05). v0.8.0 released with freshness gate active; board catch-up lane started.
-
-9. **Merge actor must not depend on a session** (IN-PROGRESS). Lanes arm native auto-merge at PR open; AesopMergeQueue task disabled. 37-PR board catch-up in progress (2026-10-05). All PRs must merge via GitHub native auto-merge, never by session daemon or manual merge.
-
-10. **Hard checkpoint+clear enforcement hooks** (QUEUED). Implement pre-push gates to verify STATE.md/BUILDLOG.md are checkpointed before context clears. Enforce single-writer discipline on control files. Matt 2026-10-05 directive.
-
-11. **main-full.yml validity fix** (OPEN). PR #855: fix main-full.yml schema errors (jobs:[], conclusion:failure runs since PR #850). Lint GitHub Actions semantics + actionlint. Confirm a main-full run with jobs>0 green when merged.
-
-12. **Merge finishers — PR stacks and board catch-up** (IN-PROGRESS). Board catch-up lane: serial merge train for 10-PR batches. Stacks: #738→#739, #745, #754, #777, #784, #832, #833, #834, #849, #852, #856. Auto-merge armed at PR open; GitHub native auto-merge is the only merge actor (session daemon disabled).
-
-13. **Receipt gate increments 4–6 — after measurement** (QUEUED). PR #854 shipped increments 1–3 (emit, verify, non-required Action). Pending: storage codecs, receipt lineage, signed ledger append. Foundation for auditability + billing transparency.
-
-14. **CI-modes product surface** (IN-FLIGHT). Expose CI run modes and performance characteristics (dispatch vs. serial, shard allocation, cross-OS drift) as browsable UI panels. Complements cost telemetry + scheduling observability.
-
 15. **Event bridge durable deployment** (BLOCKED). Architecture: Slack webhook integration via Cloudflared tunnel (hostname + auth). Requires Matt to allocate Cloudflare account. Enables: incident notifications, lane-status pings, cost-ceiling alerts.
 
-16. **pyflakes unused-import sweep** (QUEUED). Detect and remove unreferenced imports in driver/, tools/, mcp/, ui/ Python. Code-hygiene improvement, no behavioral change.
-
 17. **LANE-CONTRACT line for AESOP_ALLOW_GENERATED** (BLOCKED). Add contract statement permitting lanes to deploy generated-paths registry entries. Requires prior policy clarification (generated-paths governance + merge-driver interaction).
+
+### Follow-ups (Parked)
+
+- **tools/INDEX.md union-merge post-merge regenerate hook** — duplicates accumulate on clean merges due to drift. Implement post-merge hook or duplicate-tolerant check.
+- **Promote pr_symbol_survival_check (G13) to blocking** — After 2026-10-14 (1 week clean runs since #865). Gate is non-blocking but stable; escalate to blocking in CI.
+- **Conflict-marker gate in-flight** — Lane dispatched for `guard/conflict-marker-check` branch (test fixture in flight, no PR yet).
+- **#784 Windows skills-install hang — instrumentation lane** — Named-step stderr lines + ≤20 s per-spawn timeouts to capture hang location in CI log.
 
 **Release-state note:** `v0.7.1` is tagged at `ec5ea9db` and has **no GitHub release** — that commit's CI was red (pre-existing `/api/state` bug). The tag was deliberately NOT moved, since retagging a pushed release rewrites published history. `v0.7.2` is published on npm (Latest, MIT license) and GitHub (Release v0.7.2 Latest). Consumer-visible release history therefore reads 0.7.0 -> 0.7.2; publishing 0.7.1 retroactively is a user decision. `v0.7.1` remains tag-only on git. Current unreleased commits: 219 since v0.7.2 tag (as of 2026-09-11, HEAD 07732210).
 

@@ -24,6 +24,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -717,29 +718,52 @@ class WriteAPI:
         fd = None
 
         try:
-            # Create and open the lock file (create it if it doesn't exist)
-            fd = os.open(
-                str(lock_file_path),
-                os.O_CREAT | os.O_WRONLY | os.O_BINARY if sys.platform == "win32" else os.O_CREAT | os.O_WRONLY,
-                0o666
-            )
-
-            if sys.platform == "win32":
-                # Windows: use msvcrt.locking for advisory lock (exclusive lock)
+            # Acquire the lock file handle and, on Windows, the byte-range lock
+            # on it. Both the open() and the locking() calls can transiently
+            # fail with a Windows PermissionError/OSError while another thread
+            # is concurrently creating/unlinking the same lock filename (the
+            # lock file is deleted on release, so open-after-unlink is a real
+            # race, not just the byte-range lock contending) -- retry the whole
+            # acquisition a bounded number of times rather than only the
+            # msvcrt.locking() call, so a losing thread reliably ends up
+            # re-reading the (now-updated) disk state and raising WriteConflict
+            # instead of bubbling up a raw PermissionError.
+            max_attempts = 20
+            last_err: Exception | None = None
+            for attempt in range(max_attempts):
                 try:
-                    msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-                except OSError:
-                    # Lock failed; sleep briefly and retry
-                    import time
+                    fd = os.open(
+                        str(lock_file_path),
+                        os.O_CREAT | os.O_WRONLY | os.O_BINARY if sys.platform == "win32" else os.O_CREAT | os.O_WRONLY,
+                        0o666
+                    )
+                except OSError as e:
+                    last_err = e
                     time.sleep(0.01)
+                    continue
+
+                if sys.platform == "win32":
+                    # Windows: use msvcrt.locking for advisory lock (exclusive lock)
                     try:
                         msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
-                    except OSError:
-                        # Give up after one retry
-                        raise IOError(f"Failed to acquire lock on {file_path.name}")
-            else:
-                # Unix: use fcntl.flock for advisory lock
-                fcntl.flock(fd, fcntl.LOCK_EX)
+                    except OSError as e:
+                        last_err = e
+                        try:
+                            os.close(fd)
+                        except Exception:
+                            pass
+                        fd = None
+                        time.sleep(0.01)
+                        continue
+                else:
+                    # Unix: use fcntl.flock for advisory lock
+                    fcntl.flock(fd, fcntl.LOCK_EX)
+
+                last_err = None
+                break
+
+            if fd is None:
+                raise IOError(f"Failed to acquire lock on {file_path.name}: {last_err}")
 
             yield
 

@@ -70,6 +70,13 @@ expensive way during aesop development. Each line exists because a lane failed w
   annotation.
 - Re-measure scalars on the MERGED tree. **Never sum two sides' literals** — disjoint changes can
   carry the same stale number with nothing for git to conflict on, and it stays silently wrong.
+- **Resolving a merge conflict means keeping BOTH intents, never taking one side's whole file.**
+  Taking "theirs" (or "ours") wholesale on a conflicted file silently deletes the other side's
+  additions with nothing for git to flag (PR #745: a conflict resolution took origin/main's whole
+  `tools/merge_queue.py`, dropping the PR's own `build_bisect_batches`/`parse_bisect_lineage`/
+  `bisect_is_exhausted`, and CI stayed green because only the PR's own tests exercised them). After
+  resolving any merge conflict, run `python tools/pr_symbol_survival_check.py --base <base> --head
+  <head>` (Guardrail G13) before pushing.
 
 - **A scalar's COUNTING RULE is part of the scalar.** Re-measuring is not enough if you assume what
   is being counted. A gate counting "Python test files executed" has a rule; a leg adding a `.mjs`

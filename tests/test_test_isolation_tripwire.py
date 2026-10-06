@@ -402,57 +402,204 @@ class TestIsolationTripwireHeartbeatValidity(unittest.TestCase):
 
 
 class TestIsolationTripwireScheduledTasks(unittest.TestCase):
-    """Aesop* Windows scheduled-task registrations, via a stubbed
-    AESOP_TRIPWIRE_SCHTASKS_CMD so this is exercised on any platform without
-    touching the real Task Scheduler. The stub reads its CSV rows from a flag
-    file so the WRAPPED command (which the tripwire runs between its before/
-    after probes) can flip what the second probe sees -- simulating a
-    scheduled task registration appearing mid-run."""
+    """Aesop* Windows scheduled-task DEFINITIONS, via stubbed
+    AESOP_TRIPWIRE_SCHTASKS_CMD (task-name listing) and
+    AESOP_TRIPWIRE_SCHTASKS_XML_CMD (per-task definition XML) so this is
+    exercised on any platform without touching the real Task Scheduler.
 
-    def _write_stub(self, tmp: Path, flag: Path) -> str:
-        """A fake schtasks that prints one row normally, and a second row once
-        `flag` exists. Returns the shlex-quoted AESOP_TRIPWIRE_SCHTASKS_CMD."""
-        script = tmp / "fake_schtasks.py"
-        base_row = r'\Aesop\Watchdog,"10/6/2026 12:00:00 PM","Ready"'
-        new_row = r'\Aesop\RogueTask,"10/6/2026 1:00:00 PM","Ready"'
-        lines = [
-            "import pathlib, sys",
-            f"flag = pathlib.Path({str(flag)!r})",
-            f"rows = ['TaskName,\"Next Run Time\",\"Status\"', {base_row!r}]",
-            "if flag.exists():",
-            f"    rows.append({new_row!r})",
-            "sys.stdout.write(chr(10).join(rows) + chr(10))",
-        ]
-        script.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    Regression context (2026-10-06 flaky-tripwire incident): the prior
+    design hashed the CSV's Status column, which the live
+    AesopWatchdogDaemon/AesopRefinementMonitor flip between Running/Ready
+    every few minutes with no test touching tasks -- alternating OK/FAIL on
+    a live box with nothing wrong. The fix hashes only the per-task
+    definition XML, which structurally never contains run-state fields
+    (LastRunTime/NextRunTime/Last Result/State). These tests are red-first:
+    each one failed under the OLD Status-hashing design and passes under the
+    new definition-only one (verified by running them against the pre-fix
+    snapshot_scheduled_tasks before this change landed)."""
+
+    def _write_list_stub(self, tmp: Path) -> str:
+        """Fake `schtasks /query /fo CSV`: always lists \\Aesop\\Watchdog,
+        plus \\Aesop\\RogueTask once env AESOP_TEST_SCHTASKS_LIST_FLAG exists.
+        Status alternates Ready/Running on successive calls (counted via
+        AESOP_TEST_SCHTASKS_LIST_COUNTER) when AESOP_TEST_SCHTASKS_LIST_TOGGLE=1
+        -- simulating exactly the live-daemon churn that caused the incident,
+        with no test actually touching anything."""
+        script = tmp / "fake_schtasks_list.py"
+        script.write_text(
+            "import os, pathlib, sys\n"
+            "flag = os.environ.get('AESOP_TEST_SCHTASKS_LIST_FLAG')\n"
+            "counter_path = os.environ.get('AESOP_TEST_SCHTASKS_LIST_COUNTER')\n"
+            "toggle = os.environ.get('AESOP_TEST_SCHTASKS_LIST_TOGGLE') == '1'\n"
+            "names = ['\\\\Aesop\\\\Watchdog']\n"
+            "if flag and pathlib.Path(flag).exists():\n"
+            "    names.append('\\\\Aesop\\\\RogueTask')\n"
+            "status = 'Ready'\n"
+            "if toggle and counter_path:\n"
+            "    p = pathlib.Path(counter_path)\n"
+            "    n = int(p.read_text()) + 1 if p.exists() else 1\n"
+            "    p.write_text(str(n))\n"
+            "    status = 'Running' if n % 2 == 0 else 'Ready'\n"
+            "rows = ['TaskName,\"Next Run Time\",\"Status\"']\n"
+            "for nm in names:\n"
+            "    rows.append('{},\"N/A\",\"{}\"'.format(nm, status))\n"
+            "sys.stdout.write(chr(10).join(rows) + chr(10))\n",
+            encoding="utf-8",
+        )
         return " ".join(shlex.quote(p) for p in (sys.executable, str(script)))
 
-    def test_catches_scheduled_task_change(self):
+    def _write_xml_stub(self, tmp: Path) -> str:
+        """Fake `schtasks /query /tn <name> /xml`: emits a fixed task
+        definition, except the Command for \\Aesop\\Watchdog switches to a
+        different path once env AESOP_TEST_SCHTASKS_XML_FLAG exists --
+        simulating a real definition edit (not run-state). Returns the
+        AESOP_TRIPWIRE_SCHTASKS_XML_CMD template with the literal "{name}"
+        token the tripwire substitutes."""
+        script = tmp / "fake_schtasks_xml.py"
+        script.write_text(
+            "import os, sys\n"
+            "name = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+            "flag = os.environ.get('AESOP_TEST_SCHTASKS_XML_FLAG')\n"
+            "changed = bool(flag) and os.path.exists(flag)\n"
+            "command = (r'C:\\new\\aesop\\run.exe' if (changed and name == '\\\\Aesop\\\\Watchdog')\n"
+            "           else r'C:\\orig\\aesop\\run.exe')\n"
+            "xml = ('<Task><RegistrationInfo><URI>' + name + '</URI></RegistrationInfo>'\n"
+            "       '<Actions><Exec><Command>' + command + '</Command></Exec></Actions>'\n"
+            "       '<Triggers><TimeTrigger><StartBoundary>2026-01-01T00:00:00'\n"
+            "       '</StartBoundary></TimeTrigger></Triggers></Task>')\n"
+            "sys.stdout.write(xml)\n",
+            encoding="utf-8",
+        )
+        quoted = " ".join(shlex.quote(p) for p in (sys.executable, str(script)))
+        return f"{quoted} {{name}}"
+
+    def test_clean_when_scheduled_tasks_unchanged(self):
+        """Baseline: nothing flagged, no toggling -> no scheduled-task FAIL."""
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             root = tmp_path / "fake-home-real"
             root.mkdir()
-            flag = tmp_path / "task-appeared"
-            cmd = self._write_stub(tmp_path, flag)
-
-            # The wrapped command creates the flag file, so the tripwire's
-            # SECOND (after) probe of the stub sees the new RogueTask row.
-            switch_script = f"import pathlib; pathlib.Path(r'{flag}').write_text('1')"
+            list_cmd = self._write_list_stub(tmp_path)
+            xml_cmd = self._write_xml_stub(tmp_path)
             proc = run_tripwire(
-                root,
-                [sys.executable, "-c", switch_script],
-                env={"AESOP_TRIPWIRE_SCHTASKS_CMD": cmd},
+                root, [sys.executable, "-c", "pass"],
+                env={"AESOP_TRIPWIRE_SCHTASKS_CMD": list_cmd, "AESOP_TRIPWIRE_SCHTASKS_XML_CMD": xml_cmd},
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertNotIn("FAIL", proc.stderr)
+
+    def test_passes_when_only_status_and_next_run_time_change(self):
+        """RED-FIRST: Status/Next Run Time alternate between the tripwire's
+        own before/after probes (AESOP_TEST_SCHTASKS_LIST_TOGGLE=1), with no
+        test touching any task -- exactly the live-box incident. Must PASS.
+        Under the OLD Status-hashing design this would FAIL every time."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            root = tmp_path / "fake-home-real"
+            root.mkdir()
+            list_cmd = self._write_list_stub(tmp_path)
+            xml_cmd = self._write_xml_stub(tmp_path)
+            proc = run_tripwire(
+                root, [sys.executable, "-c", "pass"],
+                env={
+                    "AESOP_TRIPWIRE_SCHTASKS_CMD": list_cmd,
+                    "AESOP_TRIPWIRE_SCHTASKS_XML_CMD": xml_cmd,
+                    "AESOP_TEST_SCHTASKS_LIST_TOGGLE": "1",
+                    "AESOP_TEST_SCHTASKS_LIST_COUNTER": str(tmp_path / "list_calls.count"),
+                },
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertNotIn("FAIL", proc.stderr)
+
+    def test_fails_when_action_command_changes(self):
+        """A real definition edit (Action Command) between before/after
+        probes of the SAME task -> must FAIL, naming the task."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            root = tmp_path / "fake-home-real"
+            root.mkdir()
+            list_cmd = self._write_list_stub(tmp_path)
+            xml_cmd = self._write_xml_stub(tmp_path)
+            xml_flag = tmp_path / "xml-changed"
+
+            # Wrapped command flips the Action Command the XML stub reports
+            # for \Aesop\Watchdog on the tripwire's SECOND (after) probe.
+            switch_script = f"import pathlib; pathlib.Path(r'{xml_flag}').write_text('1')"
+            proc = run_tripwire(
+                root, [sys.executable, "-c", switch_script],
+                env={
+                    "AESOP_TRIPWIRE_SCHTASKS_CMD": list_cmd,
+                    "AESOP_TRIPWIRE_SCHTASKS_XML_CMD": xml_cmd,
+                    "AESOP_TEST_SCHTASKS_XML_FLAG": str(xml_flag),
+                },
             )
             self.assertNotEqual(proc.returncode, 0, proc.stderr)
             self.assertIn("scheduled task", proc.stderr)
+            self.assertIn("definition changed", proc.stderr)
+            self.assertIn(r"\Aesop\Watchdog", proc.stderr)
 
-    def test_clean_when_scheduled_tasks_unchanged(self):
+    def test_fails_when_new_aesop_task_appears(self):
+        """A new Aesop* task registration appearing mid-run -> must FAIL,
+        naming the new task."""
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             root = tmp_path / "fake-home-real"
             root.mkdir()
-            flag = tmp_path / "task-appeared"  # never created in this test
-            cmd = self._write_stub(tmp_path, flag)
-            proc = run_tripwire(root, [sys.executable, "-c", "pass"], env={"AESOP_TRIPWIRE_SCHTASKS_CMD": cmd})
+            list_cmd = self._write_list_stub(tmp_path)
+            xml_cmd = self._write_xml_stub(tmp_path)
+            list_flag = tmp_path / "list-changed"
+
+            # Wrapped command makes the list stub report a second task
+            # (\Aesop\RogueTask) on the tripwire's SECOND (after) probe.
+            switch_script = f"import pathlib; pathlib.Path(r'{list_flag}').write_text('1')"
+            proc = run_tripwire(
+                root, [sys.executable, "-c", switch_script],
+                env={
+                    "AESOP_TRIPWIRE_SCHTASKS_CMD": list_cmd,
+                    "AESOP_TRIPWIRE_SCHTASKS_XML_CMD": xml_cmd,
+                    "AESOP_TEST_SCHTASKS_LIST_FLAG": str(list_flag),
+                },
+            )
+            self.assertNotEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("scheduled task", proc.stderr)
+            self.assertIn("new task(s)", proc.stderr)
+            self.assertIn(r"\Aesop\RogueTask", proc.stderr)
+
+    def test_clean_when_schtasks_unavailable(self):
+        """schtasks itself failing (non-zero exit) -> ABSENT sentinel on both
+        sides -> no scheduled-task FAIL (loudly-but-green contract)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            root = tmp_path / "fake-home-real"
+            root.mkdir()
+            script = tmp_path / "fake_schtasks_fail.py"
+            script.write_text("import sys; sys.exit(1)\n", encoding="utf-8")
+            cmd = " ".join(shlex.quote(p) for p in (sys.executable, str(script)))
+            proc = run_tripwire(
+                root, [sys.executable, "-c", "pass"],
+                env={"AESOP_TRIPWIRE_SCHTASKS_CMD": cmd},
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertNotIn("FAIL", proc.stderr)
+
+    def test_non_windows_or_no_override_is_inert(self):
+        """No override set and not running on win32 -> ABSENT, never FAIL.
+        On this box (win32) this exercises the override absent AND the real
+        `schtasks` binary together with everything else the tripwire checks,
+        which is covered by the 5-run stability proof instead; here we only
+        assert the contract holds when forced non-Windows via the override
+        mechanism returning nothing parseable."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            root = tmp_path / "fake-home-real"
+            root.mkdir()
+            script = tmp_path / "fake_schtasks_empty.py"
+            script.write_text("import sys; sys.stdout.write('not,valid,csv\\n')\n", encoding="utf-8")
+            cmd = " ".join(shlex.quote(p) for p in (sys.executable, str(script)))
+            proc = run_tripwire(
+                root, [sys.executable, "-c", "pass"],
+                env={"AESOP_TRIPWIRE_SCHTASKS_CMD": cmd},
+            )
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertNotIn("FAIL", proc.stderr)
 
