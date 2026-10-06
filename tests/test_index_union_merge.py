@@ -25,6 +25,7 @@ class TestIndexUnionMerge(unittest.TestCase):
 
     def setUp(self):
         """Create a temp git repo for testing."""
+        self._saved_cwd = os.getcwd()
         self.test_dir = tempfile.mkdtemp(prefix="index_union_merge_")
         self.repo_path = Path(self.test_dir) / "repo"
         self.repo_path.mkdir()
@@ -51,8 +52,11 @@ class TestIndexUnionMerge(unittest.TestCase):
         run_cmd(["git", "branch", "-M", "main"])
 
     def tearDown(self):
-        """Clean up temp dir."""
-        os.chdir("/")
+        """Restore the original cwd (never a hardcoded path -- see PR #841 incident,
+        2026-10-06: os.chdir("/") here leaked a polluted process cwd into every test
+        that runs later in the same pytest invocation, e.g. tests/test_shadow_adjudication.py
+        on a shard that happens to colocate the two files) before cleaning up the temp dir."""
+        os.chdir(self._saved_cwd)
         shutil.rmtree(self.test_dir, ignore_errors=True)
 
     def test_with_attribute_union_merge_succeeds(self):
