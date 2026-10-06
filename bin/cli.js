@@ -211,23 +211,58 @@ if (isPythonDispatch && args.length >= 1) {
   process.exit(2);
 }
 
-// Check for runtime subcommands (doctor, watch, dash, status, fleet, health, health-score, reproduce, init)
-const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health', 'health-score', 'reproduce', 'init'];
+// Check for runtime subcommands (doctor, watch, dash, status, fleet, health, health-score, reproduce, init, runner)
+const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health', 'health-score', 'reproduce', 'init', 'runner'];
 const isRuntimeCommand = runtimeCommands.includes(args[0]);
 
 if (isRuntimeCommand) {
+  // 'runner install|remove' is handled by tools/runner_install.py (preflight via the doctor's
+  // capability probe; refuses on Smart App Control / UMCI boxes and on public repos without
+  // all_external_contributors fork approval). All flags pass through untouched.
+  if (args[0] === 'runner') {
+    const sub = args[1];
+    if (sub !== 'install' && sub !== 'remove') {
+      console.error('Usage: aesop runner <install|remove> [--repo OWNER/NAME] [--instances N] [--labels L1,L2] [--install-root DIR] [--dry-run] [--set-fork-policy] [--json]');
+      console.error('Run `aesop doctor` first: its "CI capability" table says whether this machine can run the runner.');
+      process.exit(2);
+    }
+    const pythonInterp = resolvePythonInterpreter();
+    if (!pythonInterp) {
+      console.error('Error: Python interpreter not found. Please install Python 3 or Python.');
+      process.exit(2);
+    }
+    const { spawnSync } = require('child_process');
+    const runnerScript = path.join(__dirname, '..', 'tools', 'runner_install.py');
+    const result = spawnSync(pythonInterp, [runnerScript, ...args.slice(1)], {
+      stdio: 'inherit',
+      timeout: 600000
+    });
+    if (result.error) {
+      console.error(`Error spawning ${pythonInterp}: ${result.error.message}`);
+      process.exit(2);
+    }
+    process.exit(exitCodeFromSpawnResult(result));
+    return;
+  }
+
   // 'init' is handled by a Python tool via spawnSync (scaffolds aesop into the current repo)
   if (args[0] === 'init') {
     const { spawnSync } = require('child_process');
     const initScript = path.join(__dirname, '..', 'tools', 'init_project.py');
     const initArgs = ['--dir', '.'];
-    // Forward --name and --force flags
+    // Forward --name, --force, --ci-mode and --self-hosted-labels flags
     for (let i = 1; i < args.length; i++) {
       if (args[i] === '--name' && i + 1 < args.length) {
         initArgs.push('--name', args[i + 1]);
         i++;
       } else if (args[i] === '--force') {
         initArgs.push('--force');
+      } else if (args[i] === '--ci-mode' && i + 1 < args.length) {
+        initArgs.push('--ci-mode', args[i + 1]);
+        i++;
+      } else if (args[i] === '--self-hosted-labels' && i + 1 < args.length) {
+        initArgs.push('--self-hosted-labels', args[i + 1]);
+        i++;
       }
     }
     const result = spawnSync('python3', [initScript, ...initArgs], {
@@ -442,18 +477,29 @@ aesop — Multi-agent orchestration template scaffolder
 Usage:
   npx @matt82198/aesop [target-dir] [options]
   npx @matt82198/aesop wizard [options]
-  npx @matt82198/aesop doctor
+  npx @matt82198/aesop doctor [--json]
   npx @matt82198/aesop watch
   npx @matt82198/aesop dash
   npx @matt82198/aesop status
   npx @matt82198/aesop fleet
   npx @matt82198/aesop reproduce
-  npx @matt82198/aesop init [--name NAME] [--force]
+  npx @matt82198/aesop init [--name NAME] [--force] [--ci-mode hosted|self-hosted-runner|local-receipt-gate] [--self-hosted-labels L1,L2]
+  npx @matt82198/aesop runner install [--repo OWNER/NAME] [--instances N] [--labels L1,L2] [--install-root DIR] [--dry-run] [--set-fork-policy] [--json]
+  npx @matt82198/aesop runner remove [--repo OWNER/NAME] [--instances N] [--install-root DIR] [--dry-run] [--json]
   npx @matt82198/aesop <namespace> <verb> [args...]
 
 Commands (Node.js):
   init                    Initialize aesop orchestration in current repo (CLAUDE.md, config, state, CI, hooks)
-  doctor                  Preflight readiness check (Node.js, Python, git, config, dirs, hook, port)
+                          --ci-mode picks the CI workflow template: hosted (default), self-hosted-runner
+                          (fork PRs -> GitHub-hosted, same-repo PRs -> your runner labels), or
+                          local-receipt-gate (hosted + verify-receipt.yml; refused until the receipt gate ships)
+  doctor                  Preflight readiness check (Node.js, Python, git, config, dirs, hook, port) plus a
+                          report-only "CI capability" table: mode -> runnable here (OS, cores/RAM, Smart App
+                          Control / UMCI, WSL/Docker, gh auth, cloudflared); --json for machines
+  runner                  install|remove GitHub Actions self-hosted runner instances on this machine
+                          (preflight = the doctor's capability probe: refuses when Smart App Control / UMCI
+                          blocks unsigned runner binaries, or on a public repo without all_external_contributors
+                          fork approval -- --set-fork-policy sets it via gh api); --dry-run prints the plan
   watch                   Launch the watchdog daemon (spawns daemons/run-watchdog.sh)
   dash                    Launch the web dashboard (spawns python3 ui/serve.py or python fallback; add --demo for a seeded zero-key snapshot)
   status                  One-shot fleet status snapshot (heartbeats, dashboard port, git branch)
@@ -491,6 +537,9 @@ Options:
 
 Examples:
   npx @matt82198/aesop doctor                               # Run preflight checks before starting
+  npx @matt82198/aesop doctor --json                        # Same, as JSON (checks + ci_capability)
+  npx @matt82198/aesop init --ci-mode self-hosted-runner    # Scaffold CI routing same-repo PRs to your runner labels
+  npx @matt82198/aesop runner install --instances 2 --dry-run  # Plan 2 runner instances (nothing installed)
   npx @matt82198/aesop watch                                # Launch watchdog daemon
   npx @matt82198/aesop dash                                 # Launch web dashboard (default localhost:8770)
   npx @matt82198/aesop dash --demo                          # Launch dashboard with a seeded zero-key demo snapshot (no API key)

@@ -1,0 +1,23 @@
+# aesop-template: PLACEHOLDER -- `aesop init --ci-mode local-receipt-gate` REFUSES to emit this file.
+#
+# The real workflow is .github/workflows/verify-receipt.yml from the receipt-gate lane
+# (branch feat/receipt-gate-increment-1: tools/emit_receipt.py, tools/verify_receipt.py,
+# .github/workflows/verify-receipt.yml). Until that lane lands on main this template is a
+# documented stand-in: valid YAML so template gates parse it, never scaffolded. When the lane
+# lands, replace this file's body with that workflow verbatim and delete the PLACEHOLDER
+# marker line above. The scaffold prefers a real .github/workflows/verify-receipt.yml in the
+# aesop checkout over this template, so a development checkout works the moment it merges.
+name: verify-receipt
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Receipt gate not available yet
+        run: |
+          echo "verify-receipt.yml placeholder: the receipt-gate lane has not landed, this file is never scaffolded"
+          exit 1
