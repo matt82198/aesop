@@ -6,7 +6,8 @@ set -uo pipefail
 # P2 FIX: JSON escaping for repo names and NUL-delimited internal protocol.
 
 AESOP_ROOT="${AESOP_ROOT:-.}"
-HEARTBEAT="$AESOP_ROOT/state/.watchdog-heartbeat"
+CONDUCTOR_ROOT="${CONDUCTOR_ROOT:-$(dirname "$AESOP_ROOT")/conductor3}"
+HEARTBEAT="$CONDUCTOR_ROOT/state/.watchdog-heartbeat"
 LOG="$AESOP_ROOT/state/FLEET-BACKUP.log"
 REPOS_STATUS="$AESOP_ROOT/state/.watchdog-repos.json"
 
