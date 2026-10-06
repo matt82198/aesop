@@ -107,6 +107,139 @@ class TestTripwireDetectsNewRemoteBranch(unittest.TestCase):
             self.assertEqual(proc.returncode, 7, proc.stderr)
 
 
+def _env_without_ci():
+    """A deterministic 'developer box' environment for the CLI subprocess, even when
+    this test itself happens to be running inside real GitHub Actions (which already
+    sets GITHUB_ACTIONS=true for the whole job and would otherwise leak into the
+    child via plain env inheritance)."""
+    env = dict(os.environ)
+    for k in ("GITHUB_ACTIONS", "GITHUB_HEAD_REF", "GITHUB_SHA", "GITHUB_WORKFLOW"):
+        env.pop(k, None)
+    return env
+
+
+def _env_with_ci():
+    """A deterministic 'CI' environment: GITHUB_ACTIONS=true, nothing else -- proves
+    the implicit (no --strict/--attributed flag) mode resolution, not just the flag."""
+    env = _env_without_ci()
+    env["GITHUB_ACTIONS"] = "true"
+    return env
+
+
+class TestAttributedVerdictMode(unittest.TestCase):
+    """Red-first proof for the PR #829/#837 false-positive fix: CI wires the tripwire
+    around the test shards, and #829's run failed only because an UNRELATED branch
+    moved while other lanes in this fleet pushed concurrently -- nothing in the
+    wrapped shard ever touched the remote. Attributed mode (CI default) must not fail
+    on that; strict mode (developer-box default) must keep failing on it exactly as
+    before."""
+
+    def _push_second_branch(self, work, name):
+        _git(["push", "origin", f"HEAD:refs/heads/{name}"], cwd=work)
+
+    def _write_mover_script(self, tmp, work, branch):
+        script = tmp / "mover.py"
+        script.write_text(
+            "import subprocess\n"
+            f"subprocess.run(['git', 'commit', '--allow-empty', '-q', '-m', 'unrelated'],"
+            f" cwd=r'{work}', check=True)\n"
+            f"subprocess.run(['git', 'push', '--force', 'origin', 'HEAD:refs/heads/{branch}'],"
+            f" cwd=r'{work}', check=True)\n",
+            encoding="utf-8",
+        )
+        return script
+
+    def test_a_moved_unrelated_branch_in_ci_mode_exits_0_and_is_observed(self):
+        """(a) moved unrelated branch in CI mode -> exit 0 with the observed line."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            work, bare = _make_repo_with_bare_origin(tmp)
+            self._push_second_branch(work, "other")
+            mover = self._write_mover_script(tmp, work, "other")
+
+            proc = subprocess.run(
+                [sys.executable, str(TRIPWIRE), "--repo", str(work), "--",
+                 sys.executable, str(mover)],
+                capture_output=True, text=True, timeout=60, env=_env_with_ci(),
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("observed, not attributed", proc.stderr)
+            self.assertIn("other", proc.stderr)
+            self.assertNotIn("FAIL", proc.stderr)
+
+    def test_b_new_integrate_batch_branch_fails_naming_it_in_both_modes(self):
+        """(b) new integrate/batch-... branch -> fail naming it, in BOTH modes."""
+        for env, label in (
+            (_env_without_ci(), "strict (local default)"),
+            (_env_with_ci(), "attributed (CI default)"),
+        ):
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp = Path(tmp)
+                work, bare = _make_repo_with_bare_origin(tmp)
+                leak_script = tmp / "leak.py"
+                leak_script.write_text(
+                    "import subprocess\n"
+                    "subprocess.run(['git', 'push', 'origin',"
+                    " 'HEAD:refs/heads/integrate/batch-20261005-1500'],"
+                    f" cwd=r'{work}', check=True)\n",
+                    encoding="utf-8",
+                )
+                proc = subprocess.run(
+                    [sys.executable, str(TRIPWIRE), "--repo", str(work), "--",
+                     sys.executable, str(leak_script)],
+                    capture_output=True, text=True, timeout=60, env=env,
+                )
+                self.assertNotEqual(proc.returncode, 0, f"{label}: {proc.stderr}")
+                self.assertIn("integrate/batch-20261005-1500", proc.stderr, label)
+                self.assertIn("FAIL", proc.stderr, label)
+
+    def test_c_local_strict_mode_still_fails_on_any_moved_branch(self):
+        """(c) local strict mode still fails on any moved branch, even one with no
+        leak-shaped name (the exact opposite of (a), proving the mode -- not just
+        the branch name -- is what changed)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            work, bare = _make_repo_with_bare_origin(tmp)
+            self._push_second_branch(work, "other")
+            mover = self._write_mover_script(tmp, work, "other")
+
+            proc = subprocess.run(
+                [sys.executable, str(TRIPWIRE), "--repo", str(work), "--",
+                 sys.executable, str(mover)],
+                capture_output=True, text=True, timeout=60, env=_env_without_ci(),
+            )
+            self.assertNotEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("other", proc.stderr)
+            self.assertIn("FAIL", proc.stderr)
+
+    def test_explicit_attributed_flag_overrides_ambient_env(self):
+        """--attributed forces the lenient verdict even without GITHUB_ACTIONS set."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            work, bare = _make_repo_with_bare_origin(tmp)
+            self._push_second_branch(work, "other")
+            mover = self._write_mover_script(tmp, work, "other")
+
+            proc = subprocess.run(
+                [sys.executable, str(TRIPWIRE), "--repo", str(work), "--attributed", "--",
+                 sys.executable, str(mover)],
+                capture_output=True, text=True, timeout=60, env=_env_without_ci(),
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("observed, not attributed", proc.stderr)
+
+    def test_strict_and_attributed_together_is_a_usage_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            work, bare = _make_repo_with_bare_origin(tmp)
+            proc = subprocess.run(
+                [sys.executable, str(TRIPWIRE), "--repo", str(work), "--strict", "--attributed", "--",
+                 sys.executable, "-c", "pass"],
+                capture_output=True, text=True, timeout=60, env=_env_without_ci(),
+            )
+            self.assertEqual(proc.returncode, 2, proc.stderr)
+
+
 class TestTripwireDegradesLoudlyWhenNoRemote(unittest.TestCase):
     def test_inert_but_green_when_origin_unreachable(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -174,6 +307,17 @@ class TestSnapshotFunctions(unittest.TestCase):
         after_new_day = dict(before)
         after_new_day["refs/heads/backup/wip-20261006"] = "eee"
         self.assertEqual(self.mod.diff_branches(before, after_new_day), [])
+
+        # (d) The exclusion holds in attributed mode too: the daemon's own ref is
+        # never flagged (as new-day or moved), while integrate/leaked -- a plausible
+        # test-created name -- still fails even here.
+        findings_attributed = self.mod.diff_branches(before, after, mode="attributed")
+        self.assertEqual(len(findings_attributed), 1, findings_attributed)
+        self.assertIn("integrate/leaked", findings_attributed[0])
+        self.assertFalse(any("backup/wip" in f for f in findings_attributed), findings_attributed)
+        self.assertEqual(
+            self.mod.diff_branches(before, after_new_day, mode="attributed"), []
+        )
 
     def test_diff_prs_detects_new_pr(self):
         findings = self.mod.diff_prs([1, 2], [1, 2, 3])

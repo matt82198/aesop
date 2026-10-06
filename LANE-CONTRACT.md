@@ -46,9 +46,11 @@ expensive way during aesop development. Each line exists because a lane failed w
   Confirm CI reports the executed-suite count went UP by the number you added — not just that yours
   "passed".
 - **Tests run with origin rewritten to a local bare repo and `gh` blocked** (`tests/__init__.py` ->
-  `tools/test_network_isolation.py`); `tools/remote_refs_tripwire.py` fails the run if a remote ref or
-  PR appears anyway. Never work around either to make a merge_train/merge_queue/auto_merge test reach
-  a real remote.
+  `tools/test_network_isolation.py`); `tools/remote_refs_tripwire.py` wraps CI's test shards and fails
+  if a remote branch/PR it can attribute to the run appears (a plausibly test-created branch name, or
+  the PR's own head branch moving unexpectedly) -- it does NOT fail on an unrelated branch moving
+  elsewhere in the fleet mid-run (logged as "observed, not attributed"; PR #829/#837). Never work
+  around either to make a merge_train/merge_queue/auto_merge test reach a real remote.
 
 ## 3. Never fit green
 - **Never relax an assertion, lower a floor/ratchet, delete a suite, add a skip, or retune a constant
