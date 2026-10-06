@@ -33,7 +33,7 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 3. **`test_hook_preflight` rewrite** (IN-REVIEW). Test raised module-level `unittest.SkipTest` (#667 wired it as SKIPPED); coverage gap remains. Full rewrite needed to fix `tmp_path` NameError and make test executable. Medium effort; medium impact (test-suite completeness).
 
-4. **`test_agent_detail_roundtrip` pollution re-verify under ci_shard_runner** (IN-REVIEW). Fix landed in #668 (`/api/state` served real data, not empty default); config.reload() wired in setUp (#667). Re-verification under shard-runner conditions needed before fully closed. Medium effort; medium impact (integration-test stability).
+4. **`test_agent_detail_roundtrip` pollution re-verify under ci_shard_runner** — DONE (this PR): re-verified stable under real shard-runner conditions (shard 3/4, round-robin, x2; alone; shard with file last after 63 preceding files) — all green, no pollution found; added `test_config_reload_isolates_state_root_per_test` regression guard (falsifiability-checked: fails if setUp's `config.reload()` is removed or made ineffective).
 
 5. **STATE.md freshness gate** (DONE). Gate implemented and shipped in PR #809; detects stale checkpoints by comparing Current Version claim vs. HEAD commit count. Baseline freshness checkpoint set 2026-10-05.
 
