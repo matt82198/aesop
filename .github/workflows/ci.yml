@@ -217,8 +217,22 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/gen_tool_index.py --check
 
+      - name: Install actionlint (GitHub-semantics workflow validator)
+        if: matrix.python-shard == 0
+        # Pinned release via the official downloader. GAP 2026-10-06: PyYAML-valid
+        # main-full.yml was rejected by GitHub ("Unexpected value 'exclude'") and
+        # ran ZERO jobs for ~10 merges; actionlint flags that class at PR time.
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12 "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/actionlint" -version
+
       - name: CI workflow linter gate (fail-closed)
         if: matrix.python-shard == 0
+        env:
+          # Structural GitHub-semantics checks always run; in CI actionlint is mandatory too.
+          CI_WORKFLOW_LINT_REQUIRE_ACTIONLINT: '1'
         run: python tools/ci_workflow_lint.py
 
       - name: CI gates runability check (Guardrail G2.5)
