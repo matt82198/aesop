@@ -69,6 +69,47 @@ def get_state_db_path():
     return get_state_dir() / STATE_DB_FILENAME
 
 
+def get_conductor_root():
+    """Resolve the conductor fleet-state root directory.
+
+    This is the parent directory containing the fleet-state subdirectories (state/, monitor/, etc.).
+    Resolved from:
+      1. CONDUCTOR_ROOT environment variable (explicit override)
+      2. AESOP_ROOT environment variable: check for sibling convention (parent/conductor3)
+         or child convention (AESOP_ROOT/conductor3, used in tests)
+      3. Current working directory's parent (fallback when neither env var is set)
+
+    This function exists to centralize conductor root discovery and eliminate
+    hardcoded path tokens from shipped tools. The default documented path
+    is ~/conductor3 on a developer's machine (e.g., when AESOP_ROOT is ~/aesop,
+    the default CONDUCTOR_ROOT becomes ~/conductor3). In test fixtures, conductor3
+    may be a child of the root (e.g., root/conductor3), which is checked second.
+
+    Returns:
+        Path: The conductor root directory (absolute, normalized).
+              When CONDUCTOR_ROOT is set, returns it as-is.
+              Otherwise computes parent-of-AESOP_ROOT / "conductor3" (the default),
+              or AESOP_ROOT / "conductor3" if the child form is present.
+    """
+    # Explicit CONDUCTOR_ROOT override takes precedence
+    if os.environ.get("CONDUCTOR_ROOT"):
+        return Path(os.environ["CONDUCTOR_ROOT"]).resolve()
+
+    # Try to derive from AESOP_ROOT env var. Default subdirectory name is 'conductor3'
+    aesop_root = os.environ.get("AESOP_ROOT")
+    if aesop_root:
+        aesop_path = Path(aesop_root).resolve()
+        # Check for child form first (test fixtures use AESOP_ROOT/conductor3)
+        child_conductor = aesop_path / "conductor3"
+        if child_conductor.exists():
+            return child_conductor
+        # Fall back to sibling form (production uses parent-of-AESOP_ROOT/conductor3)
+        return aesop_path.parent / "conductor3"  # default convention
+
+    # Fallback: assume cwd is under AESOP_ROOT. Use parent-of-cwd/conductor3 (default subdirectory)
+    return Path.cwd().resolve().parent / "conductor3"  # default convention
+
+
 def check_heartbeat_staleness(hb_file, threshold_s):
     """Check if a heartbeat file is stale.
 
