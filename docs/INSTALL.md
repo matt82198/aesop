@@ -523,8 +523,27 @@ chmod +x .git/hooks/pre-push
 The hook enforces:
 - Feature branches only (never direct pushes to `main`/`master`)
 - Secret scanning (blocks commits with detected credentials)
+- Machine-generated paths stay machine-written (`python tools/generated_paths.py --list` shows the registry; regeneration pushes set `AESOP_ALLOW_GENERATED=1`)
 
 To bypass during testing: `git push --no-verify` (not recommended for production).
+
+---
+
+## Register the JSON list-union merge driver (one-time, per clone)
+
+`.gitattributes` routes `*-baseline.json` ratchet files through a union-and-sort merge
+driver, so two lanes appending to the same baseline stop conflicting. Git deliberately
+never reads driver definitions out of the repository (they execute code), so each clone
+registers it once:
+
+```bash
+git config merge.aesop-json-union.name "union-and-sort JSON string lists"
+git config merge.aesop-json-union.driver "python tools/json_list_merge.py %O %A %B"
+```
+
+Skipping this is safe: an unregistered clone simply gets today's ordinary conflict. The
+driver is fail-closed — any parse failure, or a shape it cannot merge soundly (the
+count-map baselines), exits 1 and git falls back to a normal conflict.
 
 ---
 
