@@ -250,6 +250,10 @@ jobs:
       - name: Needs-skip-cascade guard (required checks never skip on upstream failure)
         if: matrix.python-shard == 0
         run: python tools/ci_needs_skip_guard.py
+
+      - name: Node-suite HOME-isolation wiring check (G8 cross-site drift guard)
+        if: matrix.python-shard == 0
+        run: python tools/node_harness_wiring_check.py --check
       - name: Workflow model linter
         if: matrix.python-shard == 0
         run: python tools/workflow_model_linter.py
