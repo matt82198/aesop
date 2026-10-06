@@ -111,7 +111,7 @@ def compute_wsl_path(windows_path: Path) -> str:
     # Fallback: rough /mnt/<drive>/... conversion. Parse the path TEXT directly
     # (never Path.resolve()/.parts) -- on a POSIX host, pathlib has no concept
     # of a Windows drive or backslash separator, so a WindowsPath-shaped string
-    # like "C:\\Users\\matt8\\aesop" resolves against the POSIX cwd instead of
+    # like "C:\\Users\\example\\repo" resolves against the POSIX cwd instead of
     # being recognized as already absolute, producing a mangled result. This
     # repo's only caller always passes an already-absolute path (get_repo_root
     # via `git rev-parse --show-toplevel`), so no resolve() is needed here.
