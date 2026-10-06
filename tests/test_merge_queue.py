@@ -2749,8 +2749,10 @@ class TestLaneContractLint(unittest.TestCase):
     """Q2: dispatch_lint forbids lane-side CI polling in DISPATCH PROMPTS.
 
     The lane's terminal action is: push -> open PR ->
-    `gh pr edit <n> --add-label merge-queue` -> exit. Anything that makes the
-    lane sit on CI re-couples merging to a live session.
+    `gh pr merge <n> --auto --squash` (arms GitHub native auto-merge) -> exit.
+    Anything that makes the lane sit on CI re-couples merging to a live
+    session. (AesopMergeQueue/label regime retired 2026-10-05; see
+    LANE-CONTRACT.md.)
     """
 
     @classmethod
