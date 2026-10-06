@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+"""
+Linux shape checker — detect platform-specific failures via WSL before push.
+INDEX: Linux shape check (cross-platform test runner, detects Windows-only red CI via WSL)
+
+Runs shell, Node, and workflow tests under WSL to catch platform-specific failures
+locally before pushing (e.g., isolated-home USERPROFILE assumption, shell test failures
+on Ubuntu).
+
+Trigger rules:
+  - If commit range touches: *.sh, hooks/*, tools/run_shell_tests.sh, .github/workflows/*.yml
+    run: steps, or tests/**/*.test.mjs
+  - Then: run owning test suites under WSL with timeout
+  - Shell: wsl bash -lc 'cd <wsl-path> && bash tools/run_shell_tests.sh' (or hooks/pre-push-policy.sh --test)
+  - Node: wsl bash -lc '... node --import ./tests/helpers/isolated-env.mjs --test <files>' + USERPROFILE unset
+
+Exit contract:
+  - Range without shell/node changes → exit 0 (skipped)
+  - With changes + WSL unavailable → print NOTICE + exit 0 (CI remains gate)
+  - With changes + WSL unavailable + AESOP_REQUIRE_LINUX_SHAPE=1 → exit 1
+  - With changes + WSL available + suite fails → exit 1 (with Linux output)
+  - Mocked/test invocation: honesty on success/failure
+
+CLI:
+  python tools/linux_shape_check.py [--range <base>..HEAD] [--require-wsl]
+    --range: commit range to check (default: origin/main..HEAD)
+    --require-wsl: fail closed if WSL unavailable (AESOP_REQUIRE_LINUX_SHAPE override)
+
+Usage in hook:
+  python tools/linux_shape_check.py --range <commit-range>
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import List, Tuple, Optional
+
+
+def get_repo_root() -> Path:
+    """Resolve repo root via git rev-parse or AESOP_ROOT."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return Path(result.stdout.strip())
+    except Exception:
+        pass
+    # Fallback to AESOP_ROOT env var or current directory
+    return Path(os.environ.get("AESOP_ROOT", "."))
+
+
+def wsl_available() -> bool:
+    """Check if wsl.exe is available and a distro is installed."""
+    try:
+        result = subprocess.run(
+            ["wsl.exe", "-l", "-q"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        # wsl -l -q returns list of distro names; if any exist, output is non-empty
+        distros = result.stdout.strip().split("\n")
+        return len([d for d in distros if d.strip()]) > 0
+    except Exception:
+        return False
+
+
+def compute_wsl_path(windows_path: Path) -> str:
+    """Convert Windows path to WSL path using wslpath -a."""
+    try:
+        result = subprocess.run(
+            ["wsl.exe", "wslpath", "-a", str(windows_path)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    # Fallback: rough /mnt/<drive>/... conversion
+    abs_path = windows_path.resolve()
+    parts = abs_path.parts
+    # parts[0] could be 'C:\\' (3 chars) or 'C:' (2 chars) depending on Path implementation
+    if parts and isinstance(parts[0], str):
+        if len(parts[0]) >= 2 and parts[0][1] == ":":
+            drive = parts[0][0].lower()
+            rest = "/".join(parts[1:])
+            return f"/mnt/{drive}/{rest}"
+    # Ultimate fallback: return stringified path (shouldn't happen but safe)
+    return str(abs_path)
+
+
+def get_changed_files(commit_range: str, repo_root: Path) -> List[str]:
+    """Get list of changed files in commit range."""
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", commit_range],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            return [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
+    except Exception:
+        pass
+    return []
+
+
+def should_check_linux_shape(changed_files: List[str]) -> bool:
+    """Determine if any changes trigger Linux shape check."""
+    patterns = [
+        r"\.sh$",  # Any shell script
+        r"^hooks/",  # hooks directory
+        r"^tools/run_shell_tests\.sh$",  # Shell test runner
+        r"^\.github/workflows/.*\.yml$",  # Workflow files
+        r"^tests/.*\.test\.mjs$",  # Node tests
+    ]
+    for file_path in changed_files:
+        for pattern in patterns:
+            if re.search(pattern, file_path):
+                return True
+    return False
+
+
+def run_shell_tests_wsl(repo_root: Path, wsl_path: str, timeout: int = 120) -> Tuple[int, str]:
+    """Run shell tests under WSL."""
+    cmd = f"cd '{wsl_path}' && bash tools/run_shell_tests.sh"
+    try:
+        result = subprocess.run(
+            ["wsl.exe", "bash", "-lc", cmd],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        output = result.stdout + result.stderr
+        return result.returncode, output
+    except subprocess.TimeoutExpired:
+        return 124, f"Shell tests timed out after {timeout}s"
+    except Exception as e:
+        return 2, f"Error running shell tests: {e}"
+
+
+def run_node_tests_wsl(repo_root: Path, wsl_path: str, test_files: List[str], timeout: int = 120) -> Tuple[int, str]:
+    """Run Node tests under WSL with USERPROFILE unset."""
+    files_str = " ".join(f"'{f}'" for f in test_files)
+    cmd = (
+        f"cd '{wsl_path}' && "
+        f"unset USERPROFILE && "
+        f"node --import ./tests/helpers/isolated-env.mjs --test {files_str}"
+    )
+    try:
+        result = subprocess.run(
+            ["wsl.exe", "bash", "-lc", cmd],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        output = result.stdout + result.stderr
+        return result.returncode, output
+    except subprocess.TimeoutExpired:
+        return 124, f"Node tests timed out after {timeout}s"
+    except Exception as e:
+        return 2, f"Error running Node tests: {e}"
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Check shell/Node tests on Linux shape (via WSL) before push"
+    )
+    parser.add_argument(
+        "--range",
+        default="origin/main..HEAD",
+        help="Commit range to check (default: origin/main..HEAD)",
+    )
+    parser.add_argument(
+        "--require-wsl",
+        action="store_true",
+        help="Fail closed if WSL unavailable (AESOP_REQUIRE_LINUX_SHAPE override)",
+    )
+    args = parser.parse_args()
+
+    repo_root = get_repo_root()
+    changed_files = get_changed_files(args.range, repo_root)
+
+    # Check if any files trigger Linux shape check
+    if not should_check_linux_shape(changed_files):
+        print("SKIP: No shell/workflow/Node-test changes detected")
+        return 0
+
+    print(f"TRIGGER: {len(changed_files)} changed file(s) include shell/workflow/Node changes")
+
+    # Check WSL availability
+    is_wsl_available = wsl_available()
+    require_wsl = args.require_wsl or os.environ.get("AESOP_REQUIRE_LINUX_SHAPE") == "1"
+
+    if not is_wsl_available:
+        if require_wsl:
+            print("ERROR: WSL required (AESOP_REQUIRE_LINUX_SHAPE=1) but unavailable")
+            print("  Please enable WSL or install a Linux distro (wsl --install)")
+            return 1
+        else:
+            print("NOTICE: WSL unavailable; Linux shape check skipped (CI gate remains)")
+            print("  To enforce local Linux testing: export AESOP_REQUIRE_LINUX_SHAPE=1")
+            return 0
+
+    # Convert repo path to WSL path
+    wsl_repo_path = compute_wsl_path(repo_root)
+    print(f"Running tests under WSL: {wsl_repo_path}")
+
+    # Determine which suites to run
+    has_shell_changes = any(
+        re.search(r"\.sh$|^hooks/|^tools/run_shell_tests\.sh$|^\.github/workflows/.*\.yml$", f)
+        for f in changed_files
+    )
+    has_node_changes = any(re.search(r"^tests/.*\.test\.mjs$", f) for f in changed_files)
+
+    exit_code = 0
+
+    # Run shell tests if relevant
+    if has_shell_changes:
+        print("\nRunning shell tests...")
+        rc, output = run_shell_tests_wsl(repo_root, wsl_repo_path)
+        if rc != 0:
+            print(f"FAIL: Shell tests exited {rc}")
+            print("--- WSL Output ---")
+            print(output)
+            print("--- End Output ---")
+            exit_code = 1
+        else:
+            print("PASS: Shell tests")
+
+    # Run Node tests if relevant
+    if has_node_changes:
+        # Find changed test files
+        test_files = [f for f in changed_files if re.search(r"^tests/.*\.test\.mjs$", f)]
+        if test_files:
+            print(f"\nRunning Node tests ({len(test_files)} file(s))...")
+            rc, output = run_node_tests_wsl(repo_root, wsl_repo_path, test_files)
+            if rc != 0:
+                print(f"FAIL: Node tests exited {rc}")
+                print("--- WSL Output ---")
+                print(output)
+                print("--- End Output ---")
+                exit_code = 1
+            else:
+                print("PASS: Node tests")
+
+    if exit_code == 0:
+        print("\nLinux shape check: PASS")
+    else:
+        print("\nLinux shape check: FAIL (see output above)")
+
+    return exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -122,6 +122,17 @@ def _probe_wsl():
     return {"present": rc == 0}
 
 
+def _probe_linux_shape():
+    """Check if linux_shape_check (WSL-based pre-push gate) is available."""
+    if platform.system() != "Windows":
+        return {"wsl": False, "note": "not Windows: native Linux shards available"}
+    if not shutil.which("wsl"):
+        return {"wsl": False}
+    rc, _ = _run(["wsl", "-l", "-q"])
+    # Check if any distro is installed (stdout non-empty on success)
+    return {"wsl": rc == 0}
+
+
 def _probe_which(name):
     return {"present": bool(shutil.which(name))}
 
@@ -156,6 +167,7 @@ def probe_all(repo_root=None):
         "ram_gb": _probe_ram_gb(),
         "windows_code_integrity": _probe_windows_code_integrity(),
         "wsl": _probe_wsl(),
+        "linux_shape": _probe_linux_shape(),
         "docker": _probe_which("docker"),
         "gh": _probe_gh(),
         "cloudflared": _probe_which("cloudflared"),

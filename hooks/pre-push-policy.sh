@@ -1160,6 +1160,72 @@ check_test_coverage() {
   return 0
 }
 
+check_linux_shape() {
+  # Linux shape checker: run shell/Node tests under WSL to catch platform-specific
+  # failures before push (e.g., isolated-home USERPROFILE assumption, shell test
+  # failures on Ubuntu). Detects changes to *.sh, hooks/*, .github/workflows/*.yml,
+  # and tests/**/*.test.mjs, then runs owning suites under WSL.
+  #
+  # Skips only when there is no aesop checkout; fail-closed when tools/ exists
+  # but this gate's script does not.
+  #
+  # Returns 0 (skip) if:
+  #   - No aesop checkout (tools/ absent)
+  #   - No shell/workflow/node changes detected
+  #   - WSL unavailable (unless AESOP_REQUIRE_LINUX_SHAPE=1)
+  # Returns 1 (fail) if:
+  #   - Gate script missing from aesop repo
+  #   - Python unavailable
+  #   - WSL tests fail
+  #   - AESOP_REQUIRE_LINUX_SHAPE=1 and WSL unavailable
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local shape_script="$aesop_root/tools/linux_shape_check.py"
+
+  local tool_status
+  tool_status=$(gate_tool_status "$aesop_root" "$shape_script")
+  if [ "$tool_status" = "skip" ]; then
+    log_event "linux_shape_skipped_no_aesop_tools"
+    return 0
+  fi
+  if [ "$tool_status" = "missing" ]; then
+    gate_tool_missing_block "linux_shape_check.py" "$shape_script"
+    log_event "linux_shape_tool_missing"
+    return 1
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    gate_no_python_block "linux shape check"
+    log_event "linux_shape_no_python"
+    return 1
+  fi
+
+  # Get commit range from pre-push stdin (same as secret_scan, import_resolution)
+  local commit_ranges
+  commit_ranges=$(get_commit_range)
+  local range_exit_code=$?
+  if [ $range_exit_code -ne 0 ] || [ -z "$commit_ranges" ]; then
+    # Delete-only / empty push: no content to check
+    log_event "linux_shape_skipped_delete_only"
+    return 0
+  fi
+
+  # Run the linux shape checker against the commit range
+  local shape_output
+  shape_output=$("$py_bin" "$shape_script" --range "$commit_ranges" 2>&1)
+  local shape_exit_code=$?
+
+  if [ $shape_exit_code -ne 0 ]; then
+    if [ -n "$shape_output" ]; then
+      printf '%s\n' "$shape_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
 check_generated_paths() {
   # Generated-path registry gate (tools/generated_paths.py --check).
   # Machine-generated files have exactly ONE legitimate writer -- their
@@ -2244,6 +2310,12 @@ main() {
   if ! check_generated_paths <<< "$prepush_stdin"; then
     printf 'Error: Push touches a machine-generated path. Push blocked.\n' >&2
     log_block "generated_path_hand_edit"
+    exit 1
+  fi
+
+  if ! check_linux_shape; then
+    printf 'Error: Linux shape check failed. Push blocked.\n' >&2
+    log_block "linux_shape_check_failure"
     exit 1
   fi
 
