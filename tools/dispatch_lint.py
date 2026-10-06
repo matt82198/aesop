@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Dispatch linter — enforces merge automation and security rules for agent prompts.
-INDEX: Dispatch policy linter (merge automation + security + lane-contract rules); detects forbidden patterns (gh pr merge, --admin/--auto/--no-verify/--force, git stash, credential hunting) and lane-side CI polling (`ci_merge_wait`, `gh run watch`, `merge_train.py`, sleep-wrapped `gh pr checks`) in dispatch prompts. **Lane terminal action it enforces**: a lane ends at push -> open PR -> `gh pr edit <n> --add-label merge-queue` -> exit, and NEVER waits on CI, because `merge_queue.py` owns every wait after the label. `# dispatch-ok` suppression; CLI: `[--check] [--fix] [--json] [PATH]`; exit 0=clean/1=violations/2=error
+INDEX: Dispatch policy linter (merge automation + security + lane-contract rules); detects forbidden patterns (gh pr merge, --admin/--auto/--no-verify/--force, git stash, credential hunting) and lane-side CI polling (`ci_merge_wait`, `gh run watch`, `merge_train.py`, sleep-wrapped `gh pr checks`) in dispatch prompts. **Lane terminal action it enforces**: a lane ends at push -> open PR -> `gh pr edit <n> --add-label merge-queue` -> exit, and NEVER waits on CI, because `merge_queue.py` owns every wait after the label. `# dispatch-ok` suppression for genuine code sites; categorically exempts `tools/INDEX.md`, any `CLAUDE.md`, and `INDEX:` docstring summary lines as documentation (never relies on per-line markers for those, since a generated file's markers don't survive regeneration); CLI: `[--check] [--fix] [--json] [PATH]`; exit 0=clean/1=violations/2=error
 
 Scans Python/JS/MD files for agent dispatch patterns and flags FORBIDDEN patterns:
   - `gh pr merge` (must use tools/auto_merge.py instead)
@@ -27,7 +27,12 @@ Modes:
   dispatch_lint.py [PATH]                  Default: check mode on cwd
 
 Suppression:
-  Add '# dispatch-ok' on the line with a violation to suppress it.
+  Add '# dispatch-ok' (or '// dispatch-ok' / '<!-- dispatch-ok -->') on the
+  line with a violation to suppress it in genuine code/prompt sites.
+  Documentation is NEVER a dispatch template regardless of markers:
+  tools/INDEX.md, any CLAUDE.md, and `INDEX:` docstring summary lines are
+  categorically exempt (DOC_EXEMPT_FILENAMES / is_index_summary_line), since
+  a one-line marker on a GENERATED file does not survive regeneration.
 
 Exit: 0=clean, 1=violations found, 2=error
 """
@@ -120,6 +125,17 @@ FORBIDDEN_PATTERNS = {
 # File patterns to scan (glob patterns, not regex)
 SCANNABLE_GLOB_PATTERNS = ["*.py", "*.js", "*.mjs", "*.md", "*.sh"]
 
+# Categorical documentation exemptions. These are never dispatch templates --
+# they are generated or hand-written PROSE that *describes* forbidden patterns
+# (so a tool's job of preventing --admin/--auto/merge_train.py/etc necessarily
+# mentions those tokens in its own one-line summary). Excluded by filename
+# regardless of content drift from regeneration or merges, so a future
+# `gen_tool_index.py --regenerate` or CLAUDE.md edit can never silently flip
+# this gate red again (the #856 incident: a merge lane "fixed" this false
+# positive by hand-appending `# dispatch-ok` markers onto a GENERATED file,
+# which both fights regeneration and never covers a new tool's one-liner).
+DOC_EXEMPT_FILENAMES = {"INDEX.md", "CLAUDE.md"}
+
 # Patterns indicating dispatch context (must be in file to trigger full scan)
 DISPATCH_INDICATORS = [
     r"\bAgent\s*\(",
@@ -145,6 +161,20 @@ def check_suppression(line: str) -> bool:
     return ("# dispatch-ok" in line or
             "// dispatch-ok" in line or
             "<!-- dispatch-ok -->" in line)
+
+
+def is_index_summary_line(line: str) -> bool:
+    """Check if a line is a module's `INDEX:` one-line tool summary.
+
+    `INDEX:` lines are the docstring summary every tools/*.py module carries
+    for `gen_tool_index.py` to aggregate into tools/INDEX.md. They are pure
+    documentation ABOUT a tool's behavior (including, for security/lint
+    tools, prose naming the exact forbidden tokens they detect or prevent),
+    never an actual dispatch prompt -- so they are categorically exempt from
+    forbidden-pattern scanning, independent of per-line `# dispatch-ok`
+    markers (which do not survive `tools/INDEX.md` regeneration anyway).
+    """
+    return line.strip().startswith("INDEX:")
 
 
 def is_comment_only(line: str, pattern: str) -> bool:
@@ -222,6 +252,11 @@ def find_violations(
         if check_suppression(line):
             continue
 
+        # Skip INDEX: docstring summary lines -- documentation about a tool,
+        # never a dispatch template (see is_index_summary_line docstring).
+        if is_index_summary_line(line):
+            continue
+
         for pattern_key, pattern_info in FORBIDDEN_PATTERNS.items():
             for match in re.finditer(pattern_info["pattern"], line, re.IGNORECASE):
                 # Skip if pattern only appears in comments
@@ -275,6 +310,10 @@ def scan_directory(
             continue
         # Skip test files specifically (test_*.py, etc.)
         if file_path.name.startswith("test_"):
+            continue
+        # Skip categorical documentation files (generated tool index, domain
+        # CLAUDE.md docs) -- never dispatch templates; see DOC_EXEMPT_FILENAMES.
+        if file_path.name in DOC_EXEMPT_FILENAMES:
             continue
 
         try:

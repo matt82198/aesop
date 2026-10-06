@@ -260,7 +260,7 @@ opt-out is visible in the transcript and auditable after the fact.
 ### Testing
 
 ```bash
-node --test tests/force-model-policy.test.mjs
+node --import ./tests/helpers/isolated-env.mjs --test tests/force-model-policy.test.mjs
 ```
 
 Covers the rewrite, escape-hatch, malformed-stdin, and config-override cases.
