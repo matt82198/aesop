@@ -23,15 +23,8 @@ import sys
 import json
 import argparse
 from pathlib import Path
-from typing import Callable, Optional, Any
+from typing import Optional, Any
 from dataclasses import dataclass, asdict
-
-try:
-    from tools.cli import CLIBuilder, OutputFormatter
-except ImportError:
-    import sys
-    sys.path.insert(0, str(Path(__file__).parent))
-    from cli import CLIBuilder, OutputFormatter
 
 
 STOPWORDS = {
