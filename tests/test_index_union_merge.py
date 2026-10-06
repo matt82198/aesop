@@ -25,11 +25,6 @@ class TestIndexUnionMerge(unittest.TestCase):
 
     def setUp(self):
         """Create a temp git repo for testing."""
-        # Save the real cwd before leaving it: tearDown must restore THIS,
-        # never a hardcoded "/" -- chdir("/") leaks into every test that runs
-        # later in the same process (e.g. test_tools_importable.py spawns a
-        # subprocess that inherits the polluted cwd and then can't resolve
-        # `tools/common.py` at all, failing on a file this test never touched).
         self._saved_cwd = os.getcwd()
         self.test_dir = tempfile.mkdtemp(prefix="index_union_merge_")
         self.repo_path = Path(self.test_dir) / "repo"
@@ -57,7 +52,10 @@ class TestIndexUnionMerge(unittest.TestCase):
         run_cmd(["git", "branch", "-M", "main"])
 
     def tearDown(self):
-        """Clean up temp dir."""
+        """Restore the original cwd (never a hardcoded path -- see PR #841 incident,
+        2026-10-06: os.chdir("/") here leaked a polluted process cwd into every test
+        that runs later in the same pytest invocation, e.g. tests/test_shadow_adjudication.py
+        on a shard that happens to colocate the two files) before cleaning up the temp dir."""
         os.chdir(self._saved_cwd)
         shutil.rmtree(self.test_dir, ignore_errors=True)
 
