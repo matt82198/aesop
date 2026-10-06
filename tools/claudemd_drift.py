@@ -350,7 +350,7 @@ def run_drift_check(repo_root: Path) -> List[Dict[str, str]]:
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="CLAUDE.md semantic drift detector — detect drift between docs and disk"
+        description="CLAUDE.md semantic drift detector - detect drift between docs and disk"
     )
     parser.add_argument(
         "--root",
