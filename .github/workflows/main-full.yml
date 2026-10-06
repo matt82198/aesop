@@ -78,7 +78,16 @@ jobs:
         if: matrix.python-shard == 0
         env:
           AESOP_TEST_CHILD_TIMEOUT_MS: '120000'
-        run: node --test --test-force-exit --test-timeout=180000 tests/*.test.mjs
+        # Must match ci.yml's wired form exactly (ubuntu "Run Node.js tests" step +
+        # windows-shard's step) -- GAP fixed 2026-10-06: PR #864 wired
+        # tests/helpers/isolated-env.mjs's --import into ci.yml's two Node-test
+        # invocations but missed this third invocation site in main-full.yml, so
+        # tests/isolated-home-tripwire.test.mjs (and HOME isolation generally) ran
+        # unwired here. It stayed green on windows-latest because USERPROFILE is an
+        # ambient OS env var there regardless of wiring, and went RED on
+        # ubuntu-latest (no such ambient var) on every main-full run since. See
+        # tools/CLAUDE.md's "Node-suite HOME isolation (G8)" entry.
+        run: python tools/test_isolation_tripwire.py -- node --import ./tests/helpers/isolated-env.mjs --test --test-force-exit --test-timeout=180000 tests/*.test.mjs
 
       - name: Run Python tests (shard ${{ matrix.python-shard }}/4, PYTHONUTF8=1 for Windows)
         env:
