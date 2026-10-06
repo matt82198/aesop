@@ -29,7 +29,10 @@ const DOCTOR = path.join(
 
 function runCli(targetDir, args = []) {
   const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
-  const res = spawnSync(process.execPath, [CLI, targetDir, ...args], {
+  // --no-skills: this file doesn't test skill installation; without it every
+  // scaffold call would write into the real ~/.claude/skills/ (isolation contract
+  // documented in cli-skills-install.test.mjs) and contend with it on CI Windows.
+  const res = spawnSync(process.execPath, [CLI, targetDir, ...args, '--no-skills'], {
     encoding: 'utf8',
     cwd: path.dirname(targetDir),
     timeout,

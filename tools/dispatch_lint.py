@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Dispatch linter — enforces merge automation and security rules for agent prompts.
-INDEX: Dispatch policy linter (merge automation + security + lane-contract rules); detects forbidden patterns (gh pr merge, --admin/--auto/--no-verify/--force, git stash, credential hunting) and lane-side CI polling (`ci_merge_wait`, `gh run watch`, `merge_train.py`, sleep-wrapped `gh pr checks`) in dispatch prompts. **Lane terminal action it enforces**: a lane ends at push -> open PR -> `gh pr edit <n> --add-label merge-queue` -> exit, and NEVER waits on CI, because `merge_queue.py` owns every wait after the label. `# dispatch-ok` suppression for genuine code sites; categorically exempts `tools/INDEX.md`, any `CLAUDE.md`, and `INDEX:` docstring summary lines as documentation (never relies on per-line markers for those, since a generated file's markers don't survive regeneration); CLI: `[--check] [--fix] [--json] [PATH]`; exit 0=clean/1=violations/2=error
+INDEX: Dispatch policy linter (merge automation + security + lane-contract rules); detects forbidden patterns (manual gh pr merge without --auto, bare --auto with no PR number, --admin/--no-verify/--force, git stash, credential hunting) and lane-side CI polling (`ci_merge_wait`, `gh run watch`, `merge_train.py`, sleep-wrapped `gh pr checks`) in dispatch prompts. **Lane terminal action it enforces**: a lane ends at push -> open PR -> `gh pr merge <n> --auto --squash` (arms GitHub's native auto-merge) -> exit, and NEVER waits on CI, because native auto-merge is the merge actor and does not depend on a live session (AesopMergeQueue is disabled; LANE-CONTRACT.md is the source of truth). `# dispatch-ok` suppression for genuine code sites; categorically exempts `tools/INDEX.md`, any `CLAUDE.md`, and `INDEX:` docstring summary lines as documentation (never relies on per-line markers for those, since a generated file's markers don't survive regeneration); CLI: `[--check] [--fix] [--json] [PATH]`; exit 0=clean/1=violations/2=error
 
 Scans Python/JS/MD files for agent dispatch patterns and flags FORBIDDEN patterns:
-  - `gh pr merge` (must use tools/auto_merge.py instead)
-  - `--admin` flag (merge automation bypass)
-  - `--auto` flag (merge automation bypass)
+  - `gh pr merge <n>` without `--auto` (manual/direct merge; lanes only ever ARM, never merge)
+  - `gh pr merge --auto` with no explicit PR number/URL anywhere on the line (ambiguous target,
+    matches the live no-orchestrator-merge-train PreToolUse hook's own denial semantics)
+  - `--admin` flag (merge automation bypass; forbidden even alongside a legitimately-armed --auto)
   - `--no-verify` flag (pre-commit hook bypass)
   - `--force` in git context (dangerous history rewrite)
   - `git stash` (shared across worktrees, cross-contamination risk)
@@ -13,12 +14,19 @@ Scans Python/JS/MD files for agent dispatch patterns and flags FORBIDDEN pattern
   - Lane-side CI polling (ci_merge_wait, `gh run watch`, merge_train.py,
     sleep-wrapped `gh pr checks`) -- a lane must never babysit CI
 
+  `gh pr merge <n> --auto --squash` (PR number before OR after --auto) is the
+  POLICY-SANCTIONED arming form per LANE-CONTRACT.md and is explicitly ALLOWED:
+  this gate must never contradict the contract it exists to enforce. (Fixed
+  2026-10-06, GAP: merge-actor session-independence -- this linter previously
+  blocked the exact command LANE-CONTRACT.md requires every lane to run, a
+  dead letter from the retired label+AesopMergeQueue regime.)
+
 Lane terminal action (what the lane_ci_polling_* rules enforce):
-  push -> open PR -> `gh pr edit <n> --add-label merge-queue` -> exit.
-  Everything after that belongs to the merge-queue advancer
-  (tools/merge_queue.py, 5-minute scheduled task). A lane that polls CI burns an
-  agent for the length of a CI run and re-couples merging to a live session --
-  the exact bottleneck the advancer exists to remove.
+  push -> open PR -> `gh pr merge <n> --auto --squash` -> exit.
+  Everything after that is GitHub's own server-side native auto-merge, which
+  completes the merge whether or not any session is live. A lane that polls CI
+  burns an agent for the length of a CI run and re-couples merging to a live
+  session -- the exact bottleneck arming at PR-open time removes.
 
 Modes:
   dispatch_lint.py --check [PATH]          Exit 1 if violations found
@@ -48,19 +56,26 @@ from typing import Dict, List, Tuple, Optional
 # Forbidden patterns and their suggested fixes
 FORBIDDEN_PATTERNS = {
     "gh_pr_merge": {
-        "pattern": r"\bgh\s+pr\s+merge\b",
-        "description": "Use tools/auto_merge.py instead of manual gh pr merge",
-        "fix": "Replace with: python tools/auto_merge.py -u <pr-number>",
+        # Forbidden ONLY when the line has no --auto anywhere: a bare/manual
+        # `gh pr merge <n>` merges directly, which lanes must never do. The
+        # policy-sanctioned arming form `gh pr merge <n> --auto --squash`
+        # (LANE-CONTRACT.md) is deliberately excluded via the negative lookahead.
+        "pattern": r"\bgh\s+pr\s+merge\b(?!.*--auto\b)",
+        "description": "Manual/direct 'gh pr merge' without --auto is forbidden; lanes arm native auto-merge, never merge directly",
+        "fix": "Arm native auto-merge instead: gh pr merge <n> --auto --squash (board catch-up: python tools/auto_merge.py <n> [<n>...] or --all)",
+    },
+    "gh_pr_merge_auto_bare": {
+        # `gh pr merge --auto` with NO digit anywhere on the line has no
+        # explicit PR number/URL target -- ambiguous, forbidden. A PR number
+        # on either side of --auto (before or after) satisfies this.
+        "pattern": r"\bgh\s+pr\s+merge\s+--auto\b(?!.*\d)",
+        "description": "'gh pr merge --auto' with no explicit PR number/URL is forbidden (ambiguous target)",
+        "fix": "Specify the PR number: gh pr merge <n> --auto --squash",
     },
     "admin_flag": {
         "pattern": r"--admin\b",
         "description": "Merge automation bypass flag forbidden in dispatch prompts",
         "fix": "Remove --admin flag; use merge automation instead",
-    },
-    "auto_flag": {
-        "pattern": r"--auto\b",
-        "description": "Merge automation bypass flag forbidden in dispatch prompts",
-        "fix": "Remove --auto flag; use merge automation instead",
     },
     "no_verify_flag": {
         "pattern": r"--no-verify\b",
@@ -89,24 +104,24 @@ FORBIDDEN_PATTERNS = {
     },
     "lane_ci_polling_merge_wait": {
         "pattern": r"\bci_merge_wait(?:\.py)?\b",
-        "description": "Lane-side CI polling forbidden; the merge-queue advancer owns the wait",
-        "fix": "End the lane at: gh pr edit <n> --add-label merge-queue, then exit",
+        "description": "Lane-side CI polling forbidden; native auto-merge owns the wait once armed",
+        "fix": "End the lane at: gh pr merge <n> --auto --squash, then exit",
     },
     "lane_ci_polling_run_watch": {
         "pattern": r"\bgh\s+run\s+watch\b",
-        "description": "Lane-side CI polling forbidden; the merge-queue advancer owns the wait",
-        "fix": "End the lane at: gh pr edit <n> --add-label merge-queue, then exit",
+        "description": "Lane-side CI polling forbidden; native auto-merge owns the wait once armed",
+        "fix": "End the lane at: gh pr merge <n> --auto --squash, then exit",
     },
     "lane_ci_polling_merge_train": {
         "pattern": r"\bmerge_train\.py\b",
-        "description": "Lanes never run a merge train; label the PR merge-queue and exit",
-        "fix": "End the lane at: gh pr edit <n> --add-label merge-queue, then exit",
+        "description": "Lanes never run a merge train; arm native auto-merge and exit",
+        "fix": "End the lane at: gh pr merge <n> --auto --squash, then exit",
     },
     "lane_ci_polling_sleep_checks": {
         "pattern": (r"\bsleep\b[^\n]{0,120}?\bgh\s+pr\s+checks\b"
                     r"|\bgh\s+pr\s+checks\b[^\n]{0,120}?\bsleep\b"),
         "description": "Sleep-wrapped `gh pr checks` is lane-side CI polling",
-        "fix": "End the lane at: gh pr edit <n> --add-label merge-queue, then exit",
+        "fix": "End the lane at: gh pr merge <n> --auto --squash, then exit",
     },
     "env_key_hunting": {
         "pattern": r"\benv\s+.*\b(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)\b",
