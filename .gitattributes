@@ -1,5 +1,13 @@
 * text=auto
 *.sh text eol=lf
+# Ratchet baselines: union-and-sort instead of a line conflict every time two
+# lanes both append. Needs a one-time per-clone driver registration:
+#   git config merge.aesop-json-union.name "union-and-sort JSON string lists"
+#   git config merge.aesop-json-union.driver "python tools/json_list_merge.py %O %A %B"
+# Unregistered clones just get today's ordinary conflict; count-map baselines
+# (.portability-baseline.json, .subprocess-guard-baseline.json) are matched here
+# but the driver refuses them by shape -- union is unsound for counts.
+*-baseline.json merge=aesop-json-union
 *.bash text eol=lf
 *.py text eol=lf
 *.mjs text eol=lf
