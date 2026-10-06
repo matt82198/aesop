@@ -46,12 +46,10 @@ def get_repo_root() -> Path:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
-            text=True,
-            encoding='utf-8', errors='replace',
             timeout=5,
         )
         if result.returncode == 0:
-            return Path(result.stdout.strip())
+            return Path(result.stdout.decode('utf-8', errors='replace').strip())
     except Exception:
         pass
     # Fallback to AESOP_ROOT env var or current directory
@@ -59,18 +57,35 @@ def get_repo_root() -> Path:
 
 
 def wsl_available() -> bool:
-    """Check if wsl.exe is available and a distro is installed."""
+    """Check if wsl.exe is available and a distro is installed.
+
+    Uses wsl.exe --status (reliable) and falls back to -l -q with UTF-16LE decoding.
+    Note: wsl.exe -l -q returns UTF-16LE with BOM, not UTF-8.
+    """
+    # Method 1: Use wsl.exe --status (most reliable, exit 0 if available)
+    try:
+        result = subprocess.run(
+            ["wsl.exe", "--status"],
+            capture_output=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return True
+    except Exception:
+        pass
+
+    # Method 2: Fallback to wsl.exe -l -q with UTF-16LE decoding
     try:
         result = subprocess.run(
             ["wsl.exe", "-l", "-q"],
             capture_output=True,
-            text=True,
-            encoding='utf-8', errors='replace',
             timeout=5,
         )
-        # wsl -l -q returns list of distro names; if any exist, output is non-empty
-        distros = result.stdout.strip().split("\n")
-        return len([d for d in distros if d.strip()]) > 0
+        # wsl.exe -l -q returns UTF-16LE (with BOM), not UTF-8
+        # Decode the byte output as UTF-16LE
+        output_text = result.stdout.decode('utf-16-le', errors='replace')
+        distros = [d.strip() for d in output_text.strip().split("\n") if d.strip()]
+        return len(distros) > 0
     except Exception:
         return False
 
@@ -81,12 +96,11 @@ def compute_wsl_path(windows_path: Path) -> str:
         result = subprocess.run(
             ["wsl.exe", "wslpath", "-a", str(windows_path)],
             capture_output=True,
-            text=True,
-            encoding='utf-8', errors='replace',
             timeout=5,
         )
         if result.returncode == 0:
-            return result.stdout.strip()
+            # wslpath output is UTF-8 (unlike wsl.exe -l -q which is UTF-16LE)
+            return result.stdout.decode('utf-8', errors='replace').strip()
     except Exception:
         pass
     # Fallback: rough /mnt/<drive>/... conversion
@@ -109,12 +123,11 @@ def get_changed_files(commit_range: str, repo_root: Path) -> List[str]:
             ["git", "diff", "--name-only", commit_range],
             cwd=repo_root,
             capture_output=True,
-            text=True,
-            encoding='utf-8', errors='replace',
             timeout=10,
         )
         if result.returncode == 0:
-            return [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
+            output = result.stdout.decode('utf-8', errors='replace')
+            return [f.strip() for f in output.strip().split("\n") if f.strip()]
     except Exception:
         pass
     return []
@@ -143,11 +156,12 @@ def run_shell_tests_wsl(repo_root: Path, wsl_path: str, timeout: int = 120) -> T
         result = subprocess.run(
             ["wsl.exe", "bash", "-lc", cmd],
             capture_output=True,
-            text=True,
-            encoding='utf-8', errors='replace',
             timeout=timeout,
         )
-        output = result.stdout + result.stderr
+        # Decode output with UTF-8 (WSL bash output is UTF-8, not UTF-16LE)
+        stdout = result.stdout.decode('utf-8', errors='replace')
+        stderr = result.stderr.decode('utf-8', errors='replace')
+        output = stdout + stderr
         return result.returncode, output
     except subprocess.TimeoutExpired:
         return 124, f"Shell tests timed out after {timeout}s"
@@ -167,11 +181,12 @@ def run_node_tests_wsl(repo_root: Path, wsl_path: str, test_files: List[str], ti
         result = subprocess.run(
             ["wsl.exe", "bash", "-lc", cmd],
             capture_output=True,
-            text=True,
-            encoding='utf-8', errors='replace',
             timeout=timeout,
         )
-        output = result.stdout + result.stderr
+        # Decode output with UTF-8 (WSL bash output is UTF-8, not UTF-16LE)
+        stdout = result.stdout.decode('utf-8', errors='replace')
+        stderr = result.stderr.decode('utf-8', errors='replace')
+        output = stdout + stderr
         return result.returncode, output
     except subprocess.TimeoutExpired:
         return 124, f"Node tests timed out after {timeout}s"
