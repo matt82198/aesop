@@ -124,7 +124,7 @@ function resolvePythonInterpreter() {
   for (const interpreter of ['python3', 'python']) {
     try {
       // Verify it actually executes and outputs something
-      execSync(`${interpreter} --version`, { stdio: 'pipe', timeout: 2000 });
+      execSync(`${interpreter} --version`, { stdio: 'pipe', timeout: 2000, windowsHide: true });
       return interpreter;
     } catch (e) {
       // This interpreter doesn't work; try next
@@ -189,7 +189,8 @@ if (isPythonDispatch && args.length >= 1) {
     const { spawnSync } = require('child_process');
     const result = spawnSync(pythonInterp, [scriptPath, ...scriptArgs], {
       stdio: 'inherit',
-      timeout: 600000  // 10 min timeout
+      timeout: 600000,  // 10 min timeout
+      windowsHide: true
     });
 
     // Propagate exact exit code (0, 1, 2, ...); fail closed on error or signal-kill
@@ -237,7 +238,8 @@ if (isRuntimeCommand) {
     const runnerScript = path.join(__dirname, '..', 'tools', 'runner_install.py');
     const result = spawnSync(pythonInterp, [runnerScript, ...args.slice(1)], {
       stdio: 'inherit',
-      timeout: 600000
+      timeout: 600000,
+      windowsHide: true
     });
     if (result.error) {
       console.error(`Error spawning ${pythonInterp}: ${result.error.message}`);
@@ -269,13 +271,15 @@ if (isRuntimeCommand) {
     }
     const result = spawnSync('python3', [initScript, ...initArgs], {
       stdio: 'inherit',
-      timeout: 30000
+      timeout: 30000,
+      windowsHide: true
     });
     if (result.error) {
       // Fallback to 'python' if 'python3' is not found
       const fallback = spawnSync('python', [initScript, ...initArgs], {
         stdio: 'inherit',
-        timeout: 30000
+        timeout: 30000,
+        windowsHide: true
       });
       process.exit(exitCodeFromSpawnResult(fallback));
     } else {
@@ -434,7 +438,8 @@ function resolveRealGitDir(targetDir) {
           cwd: targetDir,
           stdio: 'pipe',
           timeout: 5000,
-          encoding: 'utf8'
+          encoding: 'utf8',
+          windowsHide: true
         }).trim();
 
         if (commonDir) {
@@ -816,7 +821,7 @@ function installDependencies(targetDir, { enabled = false } = {}) {
   if (fs.existsSync(pkgJson)) {
     console.log('→ Installing Node dependencies (npm install)...');
     const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-    const res = spawnSync(npmCmd, ['install'], { cwd: targetDir, stdio: 'inherit' });
+    const res = spawnSync(npmCmd, ['install'], { cwd: targetDir, stdio: 'inherit', windowsHide: true });
     if (res.status === 0) {
       console.log('✓ Node dependencies installed');
       ran.push('npm');
@@ -834,7 +839,8 @@ function installDependencies(targetDir, { enabled = false } = {}) {
       console.log('→ Installing Python dependencies (pip install -r requirements.txt)...');
       const res = spawnSync(python, ['-m', 'pip', 'install', '-r', requirements], {
         cwd: targetDir,
-        stdio: 'inherit'
+        stdio: 'inherit',
+        windowsHide: true
       });
       if (res.status === 0) {
         console.log('✓ Python dependencies installed');
@@ -1003,7 +1009,7 @@ async function printNextStepsAndWatchdog(rl, targetDir, configPath, port) {
           const watchdogScript = path.join(targetDir, 'daemons', 'run-watchdog.sh');
           if (fs.existsSync(watchdogScript)) {
             // Use bash to run the script
-            execSync(`bash "${watchdogScript}" --once`, { stdio: 'inherit', cwd: targetDir });
+            execSync(`bash "${watchdogScript}" --once`, { stdio: 'inherit', cwd: targetDir, windowsHide: true });
             console.log('\n✓ Watchdog smoke test completed');
           }
         } catch (e) {

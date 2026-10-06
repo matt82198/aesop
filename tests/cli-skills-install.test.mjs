@@ -22,7 +22,7 @@ import './helpers/isolated-env.mjs';
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -47,27 +47,114 @@ function cleanupTestDir(dir) {
   }
 }
 
-// Scaffold into `targetDir` with the skills home redirected at `skillsHome`.
-function scaffold(targetDir, skillsHome, extraArgs = []) {
-  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 60000;
-  return spawnSync(
-    process.execPath,
-    [CLI, targetDir, '--name', 'skills-test', '--yes', ...extraArgs],
-    {
-      encoding: 'utf8',
-      cwd: path.dirname(targetDir),
-      timeout,
-      killSignal: 'SIGKILL',
-      env: { ...process.env, AESOP_SKILLS_HOME: skillsHome }
+// Kill the WHOLE process tree rooted at pid, not just the immediate child.
+// Windows class of bug (PR #784): a grandchild (e.g. a git subprocess cli.js
+// spawned) can hold the parent's inherited stdio pipes open even after the
+// immediate child is signalled, which previously left spawnSync's own
+// `timeout`+`killSignal` blocked waiting on those pipes well past its own
+// deadline -- observed as a full 180000ms node --test file-level timeout
+// with zero subtest output. `taskkill /T /F` terminates the whole tree in
+// one call so no descendant can keep a pipe open.
+function killProcessTree(pid) {
+  if (process.platform === 'win32') {
+    try {
+      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    } catch (e) {
+      // best-effort; the deadline promise resolves regardless
     }
-  );
+  } else {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch (e) {
+      // process may already be gone
+    }
+  }
 }
 
-test('scaffold installs skills into the skills home', () => {
+// Scaffold into `targetDir` with the skills home redirected at `skillsHome`.
+//
+// Diagnostic + mechanism fix (PR #784): this file was observed on CI's
+// windows-shard(0) as a full 180000ms file-level timeout with ZERO subtest
+// output. node's TAP reporter only prints a "# Subtest:" line once that
+// test's callback RETURNS, and the old spawnSync-based scaffold() only
+// handed stdout/stderr back to the caller once the child EXITED -- so a
+// hung first call produced literally no signal anywhere. This async
+// `spawn`-based version (a) streams stdout/stderr incrementally as it
+// arrives instead of only on exit, so partial output survives a hang,
+// (b) never inherits a pipe nothing reads (`stdio: ['ignore','pipe','pipe']`),
+// (c) enforces its own bounded deadline (<=60s) and on expiry kills the
+// WHOLE process tree via taskkill /T /F (not just the immediate child) so a
+// pipe-holding grandchild can never freeze the test file, and (d) keeps the
+// scaffold#N start/done stderr markers so a CI log names which call and how
+// long it ran even when everything else is silent.
+let scaffoldCallIndex = 0;
+function scaffold(targetDir, skillsHome, extraArgs = []) {
+  const timeoutMs = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 60000;
+  const deadlineMs = Math.min(timeoutMs, 60000);
+  const callId = ++scaffoldCallIndex;
+  const t0 = Date.now();
+  process.stderr.write(`[cli-skills-install] scaffold#${callId} start targetDir=${targetDir} deadline=${deadlineMs}ms\n`);
+
+  return new Promise((resolve) => {
+    const child = spawn(
+      process.execPath,
+      [CLI, targetDir, '--name', 'skills-test', '--yes', ...extraArgs],
+      {
+        cwd: path.dirname(targetDir),
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, AESOP_SKILLS_HOME: skillsHome }
+      }
+    );
+
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let timedOut = false;
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      process.stderr.write(`[cli-skills-install] scaffold#${callId} DEADLINE EXCEEDED at ${Date.now() - t0}ms pid=${child.pid}; killing process tree\n`);
+      killProcessTree(child.pid);
+    }, deadlineMs);
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+      process.stdout.write(`[cli-skills-install] scaffold#${callId} stdout> ${chunk}`);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+      process.stderr.write(`[cli-skills-install] scaffold#${callId} stderr> ${chunk}`);
+    });
+
+    const finish = (status, signal, error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const elapsed = Date.now() - t0;
+      process.stderr.write(`[cli-skills-install] scaffold#${callId} done elapsed=${elapsed}ms status=${status} signal=${signal} timedOut=${timedOut}\n`);
+      resolve({ status, signal, stdout, stderr, error });
+    };
+
+    child.on('error', (err) => {
+      finish(null, null, err);
+    });
+
+    child.on('close', (code, signal) => {
+      if (timedOut) {
+        finish(null, signal || 'SIGKILL', Object.assign(new Error('scaffold deadline exceeded'), { code: 'ETIMEDOUT' }));
+      } else {
+        finish(code, signal, null);
+      }
+    });
+  });
+}
+
+test('scaffold installs skills into the skills home', async () => {
   const base = createTestDir();
   try {
     const skillsHome = path.join(base, 'skills-home');
-    const res = scaffold(path.join(base, 'fleet'), skillsHome);
+    const res = await scaffold(path.join(base, 'fleet'), skillsHome);
 
     assert.equal(res.status, 0, `CLI exited ${res.status}: ${res.stderr}`);
     assert.ok(fs.existsSync(skillsHome), 'skills home should be created');
@@ -86,11 +173,11 @@ test('scaffold installs skills into the skills home', () => {
   }
 });
 
-test('--no-skills skips installation entirely', () => {
+test('--no-skills skips installation entirely', async () => {
   const base = createTestDir();
   try {
     const skillsHome = path.join(base, 'skills-home');
-    const res = scaffold(path.join(base, 'fleet'), skillsHome, ['--no-skills']);
+    const res = await scaffold(path.join(base, 'fleet'), skillsHome, ['--no-skills']);
 
     assert.equal(res.status, 0, `CLI exited ${res.status}: ${res.stderr}`);
     assert.ok(
@@ -103,12 +190,12 @@ test('--no-skills skips installation entirely', () => {
   }
 });
 
-test('re-scaffolding over identical skills is idempotent', () => {
+test('re-scaffolding over identical skills is idempotent', async () => {
   const base = createTestDir();
   try {
     const skillsHome = path.join(base, 'skills-home');
-    scaffold(path.join(base, 'fleet-a'), skillsHome);
-    const res = scaffold(path.join(base, 'fleet-b'), skillsHome);
+    await scaffold(path.join(base, 'fleet-a'), skillsHome);
+    const res = await scaffold(path.join(base, 'fleet-b'), skillsHome);
 
     assert.equal(res.status, 0, `CLI exited ${res.status}: ${res.stderr}`);
     assert.match(
@@ -121,17 +208,17 @@ test('re-scaffolding over identical skills is idempotent', () => {
   }
 });
 
-test('a locally modified skill is preserved without --force', () => {
+test('a locally modified skill is preserved without --force', async () => {
   const base = createTestDir();
   try {
     const skillsHome = path.join(base, 'skills-home');
-    scaffold(path.join(base, 'fleet-a'), skillsHome);
+    await scaffold(path.join(base, 'fleet-a'), skillsHome);
 
     const powerSkill = path.join(skillsHome, 'power', 'SKILL.md');
     const mine = '# my own power skill\n';
     fs.writeFileSync(powerSkill, mine);
 
-    const res = scaffold(path.join(base, 'fleet-b'), skillsHome);
+    const res = await scaffold(path.join(base, 'fleet-b'), skillsHome);
 
     assert.equal(res.status, 0, `CLI exited ${res.status}: ${res.stderr}`);
     assert.equal(
@@ -151,16 +238,16 @@ test('a locally modified skill is preserved without --force', () => {
   }
 });
 
-test('--force overwrites a locally modified skill', () => {
+test('--force overwrites a locally modified skill', async () => {
   const base = createTestDir();
   try {
     const skillsHome = path.join(base, 'skills-home');
-    scaffold(path.join(base, 'fleet-a'), skillsHome);
+    await scaffold(path.join(base, 'fleet-a'), skillsHome);
 
     const powerSkill = path.join(skillsHome, 'power', 'SKILL.md');
     fs.writeFileSync(powerSkill, '# my own power skill\n');
 
-    const res = scaffold(path.join(base, 'fleet-b'), skillsHome, ['--force']);
+    const res = await scaffold(path.join(base, 'fleet-b'), skillsHome, ['--force']);
 
     assert.equal(res.status, 0, `CLI exited ${res.status}: ${res.stderr}`);
     assert.notEqual(
@@ -173,12 +260,12 @@ test('--force overwrites a locally modified skill', () => {
   }
 });
 
-test('dependency manifests ship into the scaffolded target', () => {
+test('dependency manifests ship into the scaffolded target', async () => {
   const base = createTestDir();
   try {
     const skillsHome = path.join(base, 'skills-home');
     const target = path.join(base, 'fleet');
-    const res = scaffold(target, skillsHome, ['--no-skills']);
+    const res = await scaffold(target, skillsHome, ['--no-skills']);
 
     assert.equal(res.status, 0, `CLI exited ${res.status}: ${res.stderr}`);
     for (const manifest of ['requirements.txt', 'requirements-dev.txt']) {
@@ -192,7 +279,7 @@ test('dependency manifests ship into the scaffolded target', () => {
   }
 });
 
-test('scaffold does not write to the real home when AESOP_SKILLS_HOME is set', () => {
+test('scaffold does not write to the real home when AESOP_SKILLS_HOME is set', async () => {
   const base = createTestDir();
   try {
     const skillsHome = path.join(base, 'skills-home');
@@ -201,7 +288,7 @@ test('scaffold does not write to the real home when AESOP_SKILLS_HOME is set', (
       ? fs.readdirSync(sentinel).sort().join(',')
       : '<absent>';
 
-    scaffold(path.join(base, 'fleet'), skillsHome);
+    await scaffold(path.join(base, 'fleet'), skillsHome);
 
     const after = fs.existsSync(sentinel)
       ? fs.readdirSync(sentinel).sort().join(',')
