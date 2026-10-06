@@ -75,8 +75,8 @@ def get_conductor_root():
     This is the parent directory containing the fleet-state subdirectories (state/, monitor/, etc.).
     Resolved from:
       1. CONDUCTOR_ROOT environment variable (explicit override)
-      2. AESOP_ROOT environment variable: check for sibling convention (parent/conductor3)
-         or child convention (AESOP_ROOT/conductor3, used in tests)
+      2. AESOP_ROOT environment variable: check for sibling convention (default: parent/conductor3)
+         or child convention (default: AESOP_ROOT/conductor3, used in tests)
       3. Current working directory's parent (fallback when neither env var is set)
 
     This function exists to centralize conductor root discovery and eliminate
@@ -89,7 +89,7 @@ def get_conductor_root():
         Path: The conductor root directory (absolute, normalized).
               When CONDUCTOR_ROOT is set, returns it as-is.
               Otherwise computes parent-of-AESOP_ROOT / "conductor3" (the default),
-              or AESOP_ROOT / "conductor3" if the child form is present.
+              or AESOP_ROOT / "conductor3" (default child form) if present.
     """
     # Explicit CONDUCTOR_ROOT override takes precedence
     if os.environ.get("CONDUCTOR_ROOT"):
@@ -99,11 +99,11 @@ def get_conductor_root():
     aesop_root = os.environ.get("AESOP_ROOT")
     if aesop_root:
         aesop_path = Path(aesop_root).resolve()
-        # Check for child form first (test fixtures use AESOP_ROOT/conductor3)
-        child_conductor = aesop_path / "conductor3"
+        # Check for child form first (default: test fixtures use AESOP_ROOT/conductor3)
+        child_conductor = aesop_path / "conductor3"  # default convention
         if child_conductor.exists():
             return child_conductor
-        # Fall back to sibling form (production uses parent-of-AESOP_ROOT/conductor3)
+        # Fall back to sibling form (default: production uses parent-of-AESOP_ROOT/conductor3)
         return aesop_path.parent / "conductor3"  # default convention
 
     # Fallback: assume cwd is under AESOP_ROOT. Use parent-of-cwd/conductor3 (default subdirectory)
