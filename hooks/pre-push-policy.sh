@@ -2035,13 +2035,13 @@ GENPATHS
     # Create a bare "origin" repo
     origin_repo="$fixture_tmpdir/origin.git"
     mkdir -p "$origin_repo"
-    cd "$origin_repo"
+    cd "$origin_repo" || exit 1
     git init -q --bare
 
     # Create a working repo that pushes to origin
     work_repo="$fixture_tmpdir/work"
     git clone -q "$origin_repo" "$work_repo"
-    cd "$work_repo"
+    cd "$work_repo" || exit 1
 
     # Create initial commit on main
     git config user.email "test@example.com"
