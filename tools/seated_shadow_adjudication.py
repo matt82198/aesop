@@ -691,7 +691,7 @@ def write_seated_md(
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Seated shadow adjudication — increment 4a redo over wired seam"
+        description="Seated shadow adjudication - increment 4a redo over wired seam"
     )
     parser.add_argument(
         "--corpus",
