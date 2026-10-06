@@ -14,6 +14,7 @@ real profile" (never the developer's actual ~/.claude or global git config),
 per tools/test_isolation_tripwire.py's own --root contract.
 """
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -146,6 +147,160 @@ class TestIsolationTripwire(unittest.TestCase):
             make_fake_profile(root)
             proc = run_tripwire(root, [sys.executable, "-c", "import sys; sys.exit(7)"])
             self.assertEqual(proc.returncode, 7, proc.stderr)
+
+
+def make_fake_conductor(root: Path):
+    state = root / "conductor3" / "state"
+    monitor = root / "conductor3" / "monitor"
+    state.mkdir(parents=True)
+    monitor.mkdir(parents=True)
+    (state / ".watchdog-heartbeat").write_text("1700000000", encoding="utf-8")
+    (monitor / ".monitor-heartbeat").write_text("1700000000", encoding="utf-8")
+    (state / "tracker.json").write_text('{"items": []}', encoding="utf-8")
+
+
+class TestIsolationTripwireConductor3(unittest.TestCase):
+    """2026-10-06 incident: a shell-test lane left the test placeholder
+    "1234567890" in the LIVE ~/conductor3/state/.watchdog-heartbeat. These
+    tests prove the extended tripwire catches exactly that class of write
+    against a fake 'real' conductor3 fixture under --root -- never the
+    developer's actual ~/conductor3."""
+
+    def test_catches_write_to_watchdog_heartbeat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home-real"
+            make_fake_conductor(root)
+
+            victim = root / "conductor3" / "state" / ".watchdog-heartbeat"
+            script = f"open(r'{victim}', 'w').write('1234567890')"
+            proc = run_tripwire(root, [sys.executable, "-c", script])
+
+            self.assertNotEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("FAIL", proc.stderr)
+            self.assertIn("watchdog-heartbeat", proc.stderr)
+
+    def test_catches_write_to_monitor_heartbeat(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home-real"
+            make_fake_conductor(root)
+
+            victim = root / "conductor3" / "monitor" / ".monitor-heartbeat"
+            script = f"open(r'{victim}', 'w').write('not_a_timestamp')"
+            proc = run_tripwire(root, [sys.executable, "-c", script])
+
+            self.assertNotEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("FAIL", proc.stderr)
+            self.assertIn("monitor-heartbeat", proc.stderr)
+
+    def test_catches_write_to_conductor_state_json(self):
+        """A lock/state JSON file under conductor3/state/ (e.g. tracker.json)
+        changing must be caught and the exact file named."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home-real"
+            make_fake_conductor(root)
+
+            victim = root / "conductor3" / "state" / "tracker.json"
+            script = f"open(r'{victim}', 'w').write('{{\"items\": [\"clobbered\"]}}')"
+            proc = run_tripwire(root, [sys.executable, "-c", script])
+
+            self.assertNotEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("FAIL", proc.stderr)
+            self.assertIn("tracker.json", proc.stderr)
+
+    def test_catches_new_conductor_state_json_file(self):
+        """A NEW json file appearing under conductor3/state/ must also be
+        caught, not just a modified one."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home-real"
+            make_fake_conductor(root)
+
+            new_file = root / "conductor3" / "state" / "orchestrator-status.json"
+            script = f"open(r'{new_file}', 'w').write('{{}}')"
+            proc = run_tripwire(root, [sys.executable, "-c", script])
+
+            self.assertNotEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("orchestrator-status.json", proc.stderr)
+
+    def test_allows_write_outside_conductor_root(self):
+        """A write to a conductor3 fixture OTHER than --root's must be let
+        through, mirroring test_allows_write_outside_root for ~/.claude."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home-real"
+            make_fake_conductor(root)
+            isolated = Path(tmp) / "fake-home-isolated"
+            (isolated / "conductor3" / "state").mkdir(parents=True)
+
+            write_target = isolated / "conductor3" / "state" / ".watchdog-heartbeat"
+            script = f"open(r'{write_target}', 'w').write('1234567890')"
+            proc = run_tripwire(root, [sys.executable, "-c", script])
+
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertNotIn("FAIL", proc.stderr)
+
+    def test_inert_when_conductor_absent(self):
+        """No conductor3 dir under --root at all -> degrades loudly-but-green,
+        same contract as the ~/.claude absent case."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home-empty"
+            root.mkdir()
+            proc = run_tripwire(root, [sys.executable, "-c", "pass"])
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+
+class TestIsolationTripwireScheduledTasks(unittest.TestCase):
+    """Aesop* Windows scheduled-task registrations, via a stubbed
+    AESOP_TRIPWIRE_SCHTASKS_CMD so this is exercised on any platform without
+    touching the real Task Scheduler. The stub reads its CSV rows from a flag
+    file so the WRAPPED command (which the tripwire runs between its before/
+    after probes) can flip what the second probe sees -- simulating a
+    scheduled task registration appearing mid-run."""
+
+    def _write_stub(self, tmp: Path, flag: Path) -> str:
+        """A fake schtasks that prints one row normally, and a second row once
+        `flag` exists. Returns the shlex-quoted AESOP_TRIPWIRE_SCHTASKS_CMD."""
+        script = tmp / "fake_schtasks.py"
+        base_row = r'\Aesop\Watchdog,"10/6/2026 12:00:00 PM","Ready"'
+        new_row = r'\Aesop\RogueTask,"10/6/2026 1:00:00 PM","Ready"'
+        lines = [
+            "import pathlib, sys",
+            f"flag = pathlib.Path({str(flag)!r})",
+            f"rows = ['TaskName,\"Next Run Time\",\"Status\"', {base_row!r}]",
+            "if flag.exists():",
+            f"    rows.append({new_row!r})",
+            "sys.stdout.write(chr(10).join(rows) + chr(10))",
+        ]
+        script.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return " ".join(shlex.quote(p) for p in (sys.executable, str(script)))
+
+    def test_catches_scheduled_task_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            root = tmp_path / "fake-home-real"
+            root.mkdir()
+            flag = tmp_path / "task-appeared"
+            cmd = self._write_stub(tmp_path, flag)
+
+            # The wrapped command creates the flag file, so the tripwire's
+            # SECOND (after) probe of the stub sees the new RogueTask row.
+            switch_script = f"import pathlib; pathlib.Path(r'{flag}').write_text('1')"
+            proc = run_tripwire(
+                root,
+                [sys.executable, "-c", switch_script],
+                env={"AESOP_TRIPWIRE_SCHTASKS_CMD": cmd},
+            )
+            self.assertNotEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("scheduled task", proc.stderr)
+
+    def test_clean_when_scheduled_tasks_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            root = tmp_path / "fake-home-real"
+            root.mkdir()
+            flag = tmp_path / "task-appeared"  # never created in this test
+            cmd = self._write_stub(tmp_path, flag)
+            proc = run_tripwire(root, [sys.executable, "-c", "pass"], env={"AESOP_TRIPWIRE_SCHTASKS_CMD": cmd})
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertNotIn("FAIL", proc.stderr)
 
 
 if __name__ == "__main__":
