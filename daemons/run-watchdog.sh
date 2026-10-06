@@ -140,6 +140,36 @@ check_monitor_staleness() {
   fi
 }
 
+# Session-independent PR sweep (tools/pr_sweep.py, STATE.md item 9 residual):
+# arms missing GitHub native auto-merge, nudges BEHIND branches (capped at 2),
+# and signals stuck-red/DIRTY PRs to the signal-hub queue. Throttled to at
+# most once every 15 minutes via a stamp file so it layers cheaply onto the
+# existing 5-minute --once cadence without spamming `gh`. Never blocks or
+# fails the watchdog cycle (|| true) -- a sweep failure is advisory, not a
+# backup-fleet outage.
+run_pr_sweep_throttled() {
+  local aesop_root="$1"
+  local python_exe="$2"
+  local log_file="$3"
+  local stamp_file="$aesop_root/state/.pr-sweep-last"
+  if [ -z "$python_exe" ] || [ ! -f "$aesop_root/tools/pr_sweep.py" ]; then
+    return
+  fi
+  local now_epoch
+  now_epoch=$(date +%s)
+  local last_epoch=0
+  if [ -f "$stamp_file" ]; then
+    last_epoch=$(cat "$stamp_file" 2>/dev/null || echo 0)
+  fi
+  if [ -z "$last_epoch" ]; then
+    last_epoch=0
+  fi
+  if [ $((now_epoch - last_epoch)) -gt 900 ]; then
+    "$python_exe" "$aesop_root/tools/pr_sweep.py" >> "$log_file" 2>&1 || true
+    echo "$now_epoch" > "$stamp_file"
+  fi
+}
+
 # Kill switch check (wave-26 safety brake). Returns 0 (bash true) and logs
 # "HALTED: <reason>" if halt sentinel exists; returns 1 otherwise.
 # Never runs backup/push/scan work when halted — caller must skip the cycle.
@@ -238,6 +268,7 @@ main() {
     if [ -n "$PYTHON_EXE" ]; then
       "$PYTHON_EXE" "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
     fi
+    run_pr_sweep_throttled "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log"
     release_lock "$LOCK_DIR"
     printf 'WATCHDOG SMOKE: PASSED\n'
     exit 0
@@ -273,6 +304,7 @@ main() {
     if [ -n "$PYTHON_EXE" ]; then
       "$PYTHON_EXE" "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
     fi
+    run_pr_sweep_throttled "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log"
     sleep 150
   done
 }
