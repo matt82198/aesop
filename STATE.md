@@ -31,7 +31,7 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 2. **Trigger-layer selftest check in power_selftest** (GUARDRAIL #1). Verify scheduled-task execution path during POWER-SELFTEST (fail-closed if conductor3 not cloned or tasks not registered). Addresses fragility noted in Known Limitations.
 
-3. **`test_hook_preflight` rewrite** (IN-REVIEW). Test raised module-level `unittest.SkipTest` (#667 wired it as SKIPPED); coverage gap remains. Full rewrite needed to fix `tmp_path` NameError and make test executable. Medium effort; medium impact (test-suite completeness).
+3. **`test_hook_preflight` rewrite** (DONE (this PR)). Replaced the module-level `unittest.SkipTest` and the pytest-only `tmp_path` fixture (which would have raised NameError) with `unittest.TestCase` + `tempfile.TemporaryDirectory`, subprocess-driven against hermetic fixtures. 8 tests now actually collect and run under `python -m unittest discover` (was 0 before: silently skipped). Covers fail-closed exit 1 (broken/missing interpreter, hooks/ and daemons/), fail-closed exit 2 (no repo root; zero checkable files; hidden files ignored), exit 0 (real interpreter available; non-script files skipped), with a RED-first proof (a stubbed `is_interpreter_available` that always returns available wrongly exits 0 against the broken-interpreter fixture; the real implementation correctly exits 1).
 
 4. **`test_agent_detail_roundtrip` pollution re-verify under ci_shard_runner** (IN-REVIEW). Fix landed in #668 (`/api/state` served real data, not empty default); config.reload() wired in setUp (#667). Re-verification under shard-runner conditions needed before fully closed. Medium effort; medium impact (integration-test stability).
 

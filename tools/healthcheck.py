@@ -291,7 +291,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Aesop healthcheck — aggregate fleet health signals"
+        description="Aesop healthcheck - aggregate fleet health signals"
     )
     parser.add_argument(
         "--json",
