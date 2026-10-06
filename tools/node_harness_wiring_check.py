@@ -29,9 +29,9 @@ import re
 import sys
 from pathlib import Path
 
-IMPORT_TOKEN = "--import ./tests/helpers/isolated-env.mjs"
-IMPORT_TOKEN_ALT = "--import tests/helpers/isolated-env.mjs"
-TRIPWIRE_TOKEN = "tools/test_isolation_tripwire.py --"
+IMPORT_FLAG = "--import ./tests/helpers/isolated-env.mjs"
+IMPORT_FLAG_ALT = "--import tests/helpers/isolated-env.mjs"
+TRIPWIRE_WRAPPER = "tools/test_isolation_tripwire.py --"
 SUITE_GLOB = "tests/*.test.mjs"
 
 # Matches a `run:` scalar (single-line `run: <cmd>` or the first line of a `run: |`
@@ -100,12 +100,12 @@ def _is_npm_test_node_invocation(cmd):
 
 def _wiring_findings(cmd, site):
     findings = []
-    has_import = IMPORT_TOKEN in cmd or IMPORT_TOKEN_ALT in cmd
-    has_tripwire = TRIPWIRE_TOKEN in cmd
+    has_import = IMPORT_FLAG in cmd or IMPORT_FLAG_ALT in cmd
+    has_tripwire = TRIPWIRE_WRAPPER in cmd
     if not has_import:
-        findings.append(f"{site}: missing `{IMPORT_TOKEN}` -- Node suite runs against the REAL HOME/USERPROFILE")
+        findings.append(f"{site}: missing `{IMPORT_FLAG}` -- Node suite runs against the REAL HOME/USERPROFILE")
     if not has_tripwire:
-        findings.append(f"{site}: missing `{TRIPWIRE_TOKEN}` wrapper -- no independent proof the profile stayed untouched")
+        findings.append(f"{site}: missing `{TRIPWIRE_WRAPPER}` wrapper -- no independent proof the profile stayed untouched")
     return findings
 
 
