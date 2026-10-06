@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """PR sweep: session-independent nudger for armed-but-stuck PRs.
-INDEX: Session-independent PR sweep (closes STATE.md item 9 residual, PR #871 gap): per open non-draft PR, arms missing GitHub native auto-merge (`gh pr merge <N> --auto --squash`, never --admin), updates BEHIND branches capped at 2/run oldest-first (skips PRs touched in the last 20 min), and signals stuck-red (required check failing, head older than 30 min) or DIRTY PRs as `pr.red`/`pr.dirty` events to the conductor signal-hub queue, deduped per (pr, head, type); `--dry-run` prints the plan only, `--json` adds a machine summary; exit 2 if `gh auth` is missing; never rebases, pushes code, or merges.
+INDEX: Session-independent PR sweep (closes STATE.md item 9 residual, PR #871 gap): per open non-draft PR, arms missing GitHub native auto-merge (`gh pr merge <N> --auto --squash`, never an admin-override merge), updates BEHIND branches capped at 2/run oldest-first (skips PRs touched in the last 20 min), and signals stuck-red (required check failing, head older than 30 min) or DIRTY PRs as `pr.red`/`pr.dirty` events to the conductor signal-hub queue, deduped per (pr, head, type); `--dry-run` prints the plan only, `--json` adds a machine summary; exit 2 if `gh auth` is missing; never rebases, pushes code, or merges.
 
 Gap this closes: a PR that goes RED (or falls BEHIND, or loses its auto-merge
 arming) after auto-merge is armed previously had no session-independent actor --
@@ -11,7 +11,7 @@ tools/merge_queue.py is the scheduled actor for merging.
 
 What it does, per open non-draft PR of the target repo:
   (a) autoMergeRequest is null  -> arm native auto-merge:
-      `gh pr merge <N> --auto --squash` (literal PR number, never --admin).
+      `gh pr merge <N> --auto --squash` (literal PR number, never an admin-override merge).
   (b) mergeStateStatus == BEHIND -> `gh api repos/<repo>/pulls/<N>/update-branch
       -X PUT`. At most 2 per run (hosted-runner capacity), oldest PR
       (by createdAt) first, skipping any PR whose `updatedAt` is under 20
