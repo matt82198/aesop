@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for power_selftest.py health check harness."""
+import importlib.util
 import os
 import sys
 import subprocess
@@ -8,6 +9,16 @@ import unittest
 import json
 from pathlib import Path
 from datetime import datetime, timedelta
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _load_module(name, relpath):
+    """Load a tools/ module by file path (tools/ is not a package)."""
+    spec = importlib.util.spec_from_file_location(name, REPO_ROOT / relpath)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class TestPowerSelftest(unittest.TestCase):
@@ -263,6 +274,102 @@ class TestPowerSelftestHookDetection(unittest.TestCase):
         result = self._run_selftest()
         self.assertIn("missing files", result.stdout)
         self.assertEqual(result.returncode, 1)
+
+
+class TestPowerSelftestTrigger(unittest.TestCase):
+    """GAP7 wiring: power_selftest's trigger check calls task_cadence_check.
+
+    task_cadence_check.py (PR #701) parses daemons/install-tasks.ps1 for the
+    real scheduled-task names/intervals and compares them against live
+    Task Scheduler state, but nothing invoked it -- this is that wiring.
+    These tests import both tools/ modules directly (not via subprocess) so
+    the `query` callable can be mocked without touching the real Task
+    Scheduler, mirroring task_cadence_check's own injectable-`query` design.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.power_selftest = _load_module(
+            "power_selftest_trigger_under_test", "tools/power_selftest.py"
+        )
+        cls.tcc = _load_module(
+            "task_cadence_check_trigger_under_test", "tools/task_cadence_check.py"
+        )
+        cls.expected = cls.tcc.parse_expected_cadences(
+            (REPO_ROOT / "daemons" / "install-tasks.ps1").read_text(encoding="utf-8")
+        )
+
+    @staticmethod
+    def _task_xml(interval_minutes, enabled=True):
+        return (
+            '<?xml version="1.0" encoding="UTF-16"?>\n'
+            '<Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n'
+            "  <Settings><Enabled>%s</Enabled></Settings>\n"
+            "  <Triggers><TimeTrigger><Repetition><Interval>PT%dM</Interval>"
+            "</Repetition></TimeTrigger></Triggers>\n"
+            "</Task>"
+        ) % ("true" if enabled else "false", int(interval_minutes))
+
+    def test_trigger_fail_on_missing_task(self):
+        """A task install-tasks.ps1 defines but Task Scheduler has never registered is FAIL."""
+
+        def fake_query(name):
+            raise self.tcc.TaskMissingError(name)
+
+        result = self.power_selftest.check_trigger(platform="win32", query=fake_query)
+        self.assertEqual(result.status, "FAIL")
+        self.assertTrue(result.is_fail)
+
+        output, exit_code = self.power_selftest.format_output([result])
+        self.assertIn("trigger:FAIL", output)
+        self.assertIn("FAIL", output.splitlines()[0])
+        self.assertEqual(exit_code, 1)
+
+    def test_trigger_ok_when_all_tasks_ready(self):
+        """Every defined task registered, enabled, at its defined cadence -> trigger:ok."""
+
+        def fake_query(name):
+            return self._task_xml(self.expected[name], enabled=True)
+
+        result = self.power_selftest.check_trigger(platform="win32", query=fake_query)
+        self.assertEqual(result.status, "OK")
+        self.assertFalse(result.is_fail)
+
+        output, exit_code = self.power_selftest.format_output([result])
+        self.assertIn("trigger:ok", output)
+        self.assertNotIn("FAIL", output.splitlines()[0])
+
+    def test_trigger_na_on_non_windows(self):
+        """Non-Windows platforms report n/a, never FAIL -- the gate is Windows-only."""
+        result = self.power_selftest.check_trigger(platform="linux")
+        self.assertEqual(result.status, "OK")
+        self.assertFalse(result.is_fail)
+
+        output, exit_code = self.power_selftest.format_output([result])
+        self.assertIn("trigger:n/a (non-Windows)", output)
+        self.assertNotIn("FAIL", output)
+
+    def test_trigger_warn_on_disabled_task(self):
+        """A task that install-tasks.ps1 defines but that is deliberately disabled is a
+        WARN naming the task, not a FAIL -- FAIL is reserved for a task that is
+        missing outright or genuinely drifted off-cadence.
+        """
+
+        def fake_query(name):
+            # AesopMergeQueue deliberately disabled on this box since 2026-09-02;
+            # everything else Ready at its defined cadence.
+            enabled = name != "AesopMergeQueue"
+            return self._task_xml(self.expected[name], enabled=enabled)
+
+        result = self.power_selftest.check_trigger(platform="win32", query=fake_query)
+        self.assertEqual(result.status, "WARN")
+        self.assertFalse(result.is_fail)
+        self.assertIn("AesopMergeQueue", result.details)
+
+        output, exit_code = self.power_selftest.format_output([result])
+        self.assertIn("trigger:WARN", output)
+        self.assertIn("AesopMergeQueue", output)
+        self.assertNotIn("FAIL", output.splitlines()[0])
 
 
 if __name__ == "__main__":
