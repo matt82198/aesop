@@ -259,22 +259,13 @@ def _init_fixture_repo(dest: Path):
     real history. Identity is set with `--local` and every command is scoped by
     `cwd=dest`: the live repo's config is never touched.
 
-    `maintenance.auto` is disabled BEFORE the commit (`gc.auto` /
-    `gc.autoDetach` alongside it, belt-and-braces): committing the copied
-    tools/ tree (150+ files, ~190 objects) is enough to trip git's background
-    maintenance subsystem (`maintenance.auto`, default true -- a lighter-weight,
-    separate mechanism from the classic loose-object `gc.auto` threshold,
-    which this repo's object count never approaches). That maintenance pass
-    repacks the loose objects and prunes the now-empty `.git/objects/<xx>`
-    fan-out directories -- and it can run in a background child process that
-    outlives `git commit`, racing a later test's `shutil.copytree` of this
-    same template and pruning those directories out from under it
-    (2026-10-06 main-full incident, heads 3a2f8cb6 / 495f7d2b;
-    `tests.test_check_mode_readonly.TestTemplateRepoAutoGcDisabled` guards
-    the regression -- confirmed by measurement, not assumption: `gc.auto 0`
-    alone did NOT stop the repack, `maintenance.auto false` did). The config
-    is written to `dest/.git/config`, so it is carried into every per-test
-    fixture copy as well.
+    `maintenance.auto` (plus `gc.auto` / `gc.autoDetach`, belt-and-braces) is
+    disabled BEFORE the commit: see `TestTemplateRepoAutoGcDisabled` above
+    for why (2026-10-06 main-full incident, heads 3a2f8cb6 / 495f7d2b) --
+    skipping this lets a background maintenance task prune
+    `.git/objects/<xx>` out from under a later test's `shutil.copytree` of
+    this template. `dest` is always a tempfile-derived path (never the live
+    repo), so these are temp-repo mutations.
     """
     for cmd in (
         ["git", "init", "-q"],
