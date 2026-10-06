@@ -402,7 +402,7 @@ jobs:
         if: matrix.python-shard == 0
         env:
           AESOP_TEST_CHILD_TIMEOUT_MS: '120000'
-        run: node --test --test-force-exit --test-timeout=180000 tests/*.test.mjs
+        run: python tools/test_isolation_tripwire.py -- node --import ./tests/helpers/isolated-env.mjs --test --test-force-exit --test-timeout=180000 tests/*.test.mjs
 
       - name: Run Python tests (shard ${{ matrix.python-shard }}/4, PYTHONUTF8=1 for Windows encoding)
         env:
