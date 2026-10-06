@@ -2,7 +2,7 @@
 """
 Test-isolation tripwire: fails closed if the REAL developer profile changes
 while a test suite runs.
-INDEX: Test-isolation tripwire (incident 2026-10-05: installSkills() in bin/cli.js overwrote real ~/.claude/skills during a Node test run); snapshots sha256 of ~/.claude/{skills,settings.json,memory,hooks} + `git config --global -l` before/after wrapping a command, FAILS CLOSED naming every changed path when the profile exists, degrades loudly-but-green ("no profile present, tripwire inert") when ~/.claude is absent (CI); CLI: `[--root DIR] -- <command...>`; exit = max(wrapped command's exit code, tripwire finding); stdlib-only. Extended 2026-10-06 (shell-test-isolation incident) to also snapshot `<root>/conductor3/state/.watchdog-heartbeat`, `conductor3/monitor/.monitor-heartbeat`, `conductor3/state/*.json`, and Windows Aesop* scheduled-task registrations (`schtasks /query /fo CSV`, Windows-only / AESOP_TRIPWIRE_SCHTASKS_CMD override for tests). Daemon-written files use VALIDITY checks (heartbeat epoch bounds, log growth, JSON parse+shape) instead of hash comparisons since daemons legitimately update them during test runs.
+INDEX: Test-isolation tripwire (incident 2026-10-05: installSkills() in bin/cli.js overwrote real ~/.claude/skills during a Node test run); snapshots sha256 of ~/.claude/{skills,settings.json,memory,hooks} + `git config --global -l` before/after wrapping a command, FAILS CLOSED naming every changed path when the profile exists, degrades loudly-but-green ("no profile present, tripwire inert") when ~/.claude is absent (CI); CLI: `[--root DIR] -- <command...>`; exit = max(wrapped command's exit code, tripwire finding); stdlib-only. Extended 2026-10-06 (shell-test-isolation incident) to also snapshot `<root>/conductor3/state/.watchdog-heartbeat`, `conductor3/monitor/.monitor-heartbeat`, `conductor3/state/*.json`, and Windows Aesop* scheduled-task DEFINITIONS. Daemon-written files use VALIDITY checks (heartbeat epoch bounds, log growth, JSON parse+shape) instead of hash comparisons since daemons legitimately update them during test runs. Fixed 2026-10-06 (flaky-tripwire incident): the scheduled-task check was fingerprinting `schtasks /query /fo CSV`'s Status column, which the live AesopWatchdogDaemon/AesopRefinementMonitor flip between Running/Ready every few minutes with no test touching tasks, alternating OK/FAIL with no real change -- now lists Aesop* task names via CSV (AESOP_TRIPWIRE_SCHTASKS_CMD override), then hashes each task's DEFINITION ONLY via `schtasks /query /tn <name> /xml` (AESOP_TRIPWIRE_SCHTASKS_XML_CMD override, `{name}` placeholder) -- the exported Task Scheduler XML schema never contains LastRunTime/NextRunTime/Last Result/State, only Triggers/Actions/Principals/Settings, so run-state churn can no longer flip this check.
 
 Why this exists: tests/CLAUDE.md and LANE-CONTRACT.md have said "tests must not
 pollute cwd or global state" as prose for a long time. Prose is not a gate. On
@@ -227,54 +227,103 @@ def snapshot_glob(root: Path, pattern: str, exclude_files: set = None) -> dict:
     return out
 
 
-def snapshot_scheduled_tasks():
-    """Fingerprint Aesop* Windows scheduled task REGISTRATIONS (TaskName +
-    Status only) via `schtasks /query /fo CSV`, filtered to rows naming
-    "aesop" (the watchdog/monitor/selfheal scheduled tasks). Deliberately
-    drops the "Next Run Time" column: it ticks forward on every query purely
-    from the clock advancing, which would otherwise fail this check on every
-    single run regardless of whether any registration actually changed.
-    AESOP_TRIPWIRE_SCHTASKS_CMD lets tests stub the command on any platform;
-    otherwise this check is Windows-only and degrades to the ABSENT sentinel
-    everywhere else (or if schtasks itself is unavailable/fails/returns
-    unparseable CSV), matching this tripwire's loudly-but-green contract."""
+def _list_aesop_task_names():
+    """List Aesop* Windows scheduled task names via `schtasks /query /fo CSV`
+    (NAME ONLY -- the Status/Next Run Time columns are run-state, never
+    hashed). AESOP_TRIPWIRE_SCHTASKS_CMD lets tests stub the command on any
+    platform; otherwise this is Windows-only. Returns None if the list could
+    not be determined (non-Windows, schtasks unavailable/failed, unparseable
+    CSV) -- distinct from an empty list, which means "ran fine, no Aesop
+    tasks registered"."""
     override = os.environ.get("AESOP_TRIPWIRE_SCHTASKS_CMD")
     if override:
         cmd = shlex.split(override)
     elif sys.platform == "win32":
         cmd = ["schtasks", "/query", "/fo", "CSV"]
     else:
-        return ABSENT
+        return None
     try:
         res = subprocess.run(
             cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return ABSENT
+        return None
     if res.returncode != 0:
-        return ABSENT
+        return None
     try:
         rows = list(csv.reader(res.stdout.splitlines()))
     except csv.Error:
-        return ABSENT
+        return None
     if not rows:
-        return ABSENT
+        return None
     header = [c.strip().lower() for c in rows[0]]
     try:
         name_idx = header.index("taskname")
-        status_idx = header.index("status")
     except ValueError:
+        return None
+    return sorted({
+        row[name_idx] for row in rows[1:]
+        if len(row) > name_idx and "aesop" in row[name_idx].lower()
+    })
+
+
+def _query_task_definition_xml(name: str):
+    """Fetch one task's exported Task Scheduler definition XML via
+    `schtasks /query /tn <name> /xml`. The exported Task schema (RegistrationInfo/
+    Triggers/Actions/Principals/Settings) structurally never contains
+    LastRunTime/NextRunTime/Last Result/State -- those are runtime query-only
+    fields the Scheduler service tracks separately -- so this is DEFINITION
+    ONLY by construction, with no field-stripping needed.
+    AESOP_TRIPWIRE_SCHTASKS_XML_CMD lets tests stub this per-task; it is a
+    shlex-split template where the literal token "{name}" is replaced with
+    the task name (as one argv entry, so names with spaces/backslashes are
+    never re-split). Returns None on any failure (unavailable/non-Windows/
+    error/timeout)."""
+    override = os.environ.get("AESOP_TRIPWIRE_SCHTASKS_XML_CMD")
+    if override:
+        template = shlex.split(override)
+        cmd = [name if tok == "{name}" else tok for tok in template]
+    elif sys.platform == "win32":
+        cmd = ["schtasks", "/query", "/tn", name, "/xml"]
+    else:
+        return None
+    try:
+        res = subprocess.run(
+            cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if res.returncode != 0:
+        return None
+    return res.stdout
+
+
+def snapshot_scheduled_tasks():
+    """Fingerprint Aesop* Windows scheduled task DEFINITIONS -- never
+    run-state. Lists Aesop* task names (`schtasks /query /fo CSV`, name
+    column only), then for each task hashes its full definition XML
+    (`schtasks /query /tn <name> /xml`), which structurally excludes
+    LastRunTime/NextRunTime/Last Result/State (see
+    _query_task_definition_xml). Returns {task_name: sha256_of_xml}, or the
+    ABSENT sentinel when the list is undeterminable (non-Windows, schtasks
+    unavailable/failed) or empty (no Aesop tasks registered) -- matching this
+    tripwire's loudly-but-green contract. A task whose XML query itself
+    fails mid-run is recorded as an explicit error string (not silently
+    dropped), so losing query access to a previously-queryable task still
+    registers as a change."""
+    names = _list_aesop_task_names()
+    if not names:
         return ABSENT
-    aesop_rows = sorted(
-        f"{row[name_idx]}|{row[status_idx]}"
-        for row in rows[1:]
-        if len(row) > max(name_idx, status_idx) and "aesop" in row[name_idx].lower()
-    )
-    if not aesop_rows:
-        return ABSENT
-    text = "\n".join(aesop_rows)
-    return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
+    result = {}
+    for name in names:
+        xml_text = _query_task_definition_xml(name)
+        if xml_text is None:
+            result[name] = "ERROR: /xml query failed"
+            continue
+        result[name] = hashlib.sha256(xml_text.encode("utf-8", "replace")).hexdigest()
+    return result
 
 
 def snapshot_git_global_config(root: Path):
@@ -480,8 +529,23 @@ def diff_snapshots(before: dict, after: dict):
         )
 
     if before["scheduled_tasks"] != after["scheduled_tasks"]:
+        b_tasks = before["scheduled_tasks"] if isinstance(before["scheduled_tasks"], dict) else {}
+        a_tasks = after["scheduled_tasks"] if isinstance(after["scheduled_tasks"], dict) else {}
+        added = sorted(set(a_tasks) - set(b_tasks))
+        removed = sorted(set(b_tasks) - set(a_tasks))
+        changed = sorted(n for n in (set(a_tasks) & set(b_tasks)) if a_tasks[n] != b_tasks[n])
+        detail = []
+        if added:
+            detail.append("new task(s): " + ", ".join(added))
+        if removed:
+            detail.append("removed task(s): " + ", ".join(removed))
+        if changed:
+            detail.append("definition changed: " + ", ".join(changed))
+        if not detail:
+            detail.append("unspecified (schtasks became unavailable on one side)")
         changes.append(
-            "Aesop* Windows scheduled task registrations changed (schtasks /query /fo CSV)"
+            "Aesop* Windows scheduled task definition(s) changed "
+            "(schtasks /query /tn NAME /xml): " + "; ".join(detail)
         )
 
     gb, ga = before["git_global_config"], after["git_global_config"]
