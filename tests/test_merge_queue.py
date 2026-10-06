@@ -2070,6 +2070,54 @@ class TestBatchRegeneration(StateIsolatedTestCase):
         self.assertIn("regenerator_failed", kinds)
         self.assertNotIn("commit", [c[0] for c in calls])
 
+    def test_push_of_a_regenerated_branch_sets_the_escape_hatch(self):
+        """The pushed branch carries regenerated REGISTRY bytes (tools/INDEX.md
+        is in both GENERATED_PATHS and generated_paths.REGISTRY), so the
+        receiving pre-push hook's check_generated_paths() would otherwise block
+        this exact push. AESOP_ALLOW_GENERATED=1 is the designed writer path
+        for it -- set for this one git("push", ...) call only."""
+        allow_env = self.module.ALLOW_ENV
+        seen = {}
+        calls = []
+        git_side_effect = self._git(calls, "M tests/CLAUDE.md")
+
+        def spying_git(*args):
+            if args and args[0] == "push":
+                seen["during_push"] = os.environ.get(allow_env)
+            return git_side_effect(*args)
+
+        self.assertNotIn(allow_env, os.environ)
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._gh()), \
+             patch.object(self.module, "git", side_effect=spying_git), \
+             patch.object(self.module, "run_regenerator", return_value=(True, "")):
+            self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertEqual(seen.get("during_push"), "1")
+        # Never leaks into the rest of the process's environment afterward.
+        self.assertNotIn(allow_env, os.environ)
+
+    def test_push_of_an_unregenerated_branch_never_sets_the_escape_hatch(self):
+        """No registered path drifted, so nothing was regenerated -- the push
+        must go through as an ordinary push, never carrying the escape hatch
+        it has no legitimate reason to need."""
+        allow_env = self.module.ALLOW_ENV
+        seen = {}
+        calls = []
+        git_side_effect = self._git(calls, "")
+
+        def spying_git(*args):
+            if args and args[0] == "push":
+                seen["during_push"] = os.environ.get(allow_env)
+            return git_side_effect(*args)
+
+        summary = {"actions": [], "merged": [], "status": "ok"}
+        with patch.object(self.module, "gh", side_effect=self._gh()), \
+             patch.object(self.module, "git", side_effect=spying_git), \
+             patch.object(self.module, "run_regenerator", return_value=(True, "")):
+            self.module.build_batch([11, 12], summary, epoch=1700000000)
+        self.assertIsNone(seen.get("during_push"))
+        self.assertNotIn(allow_env, os.environ)
+
     def test_every_regenerator_exists_and_accepts_its_flags(self):
         """Really invoke each generator: an unknown flag must not ship.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// INDEX: Preflight checklist for adopter onboarding (diagnostic checks: config, hooks, CLAUDE.md, state, heartbeats, git identity, secret-scan; exit 0=all pass, 1=failed)
+// INDEX: Preflight checklist for adopter onboarding (diagnostic checks: Node/Python versions, git repo, aesop.config.json structure incl. the `ci` block via tools/ci_config.js, placeholder repo URLs, skills, dirs, pre-push hook, port; exit 0=all pass, 1=failed) plus a REPORT-ONLY `CI capability` section from tools/ci_capability.py (OS, cores/RAM, Smart App Control / UMCI, WSL/Docker, gh auth, cloudflared, and the table mode -> runnable here: yes/no + why for hosted | self-hosted-runner | local-receipt-gate) that never fails the doctor; `--json` emits {checks, summary, ci_capability}
 
 /**
  * Aesop doctor — preflight checklist for adopter onboarding
@@ -15,6 +15,8 @@ const { spawnSync } = require('child_process');
 const net = require('net');
 
 const CURRENT_DIR = process.cwd();
+const JSON_MODE = process.argv.includes('--json');
+const ciConfig = require('./ci_config.js');
 
 // ANSI color helpers
 const COLORS = {
@@ -124,6 +126,12 @@ function checkConfig() {
       if (repo.path && !fs.existsSync(repo.path)) {
         return { passed: false, hint: `Repo path does not exist: ${repo.path}` };
       }
+    }
+
+    // Validate the optional `ci` block (same codes as tools/common.py validate_ci_config)
+    const ciFindings = ciConfig.validateCiConfig(config, CURRENT_DIR);
+    if (ciFindings.length > 0) {
+      return { passed: false, hint: `ci block invalid: ${ciFindings.map(f => `${f.code} (${f.message})`).join('; ')}` };
     }
 
     return { passed: true, hint: '' };
@@ -269,6 +277,67 @@ function checkPort8770() {
   });
 }
 
+// Resolve the Python interpreter the capability probe runs under (python3, then python)
+function resolvePythonBin() {
+  for (const candidate of ['python3', 'python']) {
+    const res = spawnSync(candidate, ['--version'], { encoding: 'utf8', timeout: 5000 });
+    if (!res.error && res.status === 0) return candidate;
+  }
+  return null;
+}
+
+// CI capability probe (REPORT-ONLY): delegates to tools/ci_capability.py --json.
+// Never influences pass/fail -- a missing optional capability is a row, not a failure.
+function probeCiCapability() {
+  const pythonBin = resolvePythonBin();
+  if (!pythonBin) {
+    return { error: 'python3/python not found; capability probe skipped', modes: [] };
+  }
+  const script = path.join(__dirname, 'ci_capability.py');
+  const res = spawnSync(pythonBin, [script, '--json', '--repo-root', CURRENT_DIR], {
+    encoding: 'utf8', timeout: 90000, env: process.env
+  });
+  if (res.error || res.status !== 0) {
+    const detail = res.error ? res.error.message : (res.stderr || '').trim().split('\n').pop();
+    return { error: `capability probe failed: ${detail}`, modes: [] };
+  }
+  try {
+    return JSON.parse(res.stdout);
+  } catch (e) {
+    return { error: `capability probe returned non-JSON: ${e.message}`, modes: [] };
+  }
+}
+
+function yesNo(v) {
+  return v ? 'yes' : 'no';
+}
+
+// Render the CI capability section as text (mirrors tools/ci_capability.py render_text)
+function formatCiCapability(cap) {
+  const lines = [`\n${COLORS.BOLD}CI capability (report-only)${COLORS.RESET}`];
+  if (cap.error) {
+    lines.push(`  ${cap.error}`);
+    return lines.join('\n');
+  }
+  const probes = cap.probes || {};
+  const osInfo = probes.os || {};
+  const win = cap.windows || {};
+  lines.push(`  ${'OS'.padEnd(20)} ${osInfo.system || '?'} ${osInfo.release || ''} (${osInfo.version || ''})`);
+  lines.push(`  ${'CPU / RAM'.padEnd(20)} ${probes.cpu_cores ?? '?'} cores / ${probes.ram_gb ?? '?'} GB`);
+  lines.push(`  ${'Smart App Control'.padEnd(20)} ${win.smart_app_control}`);
+  lines.push(`  ${'UMCI'.padEnd(20)} ${win.umci}`);
+  lines.push(`  ${'WSL / Docker'.padEnd(20)} ${yesNo((probes.wsl || {}).present)} / ${yesNo((probes.docker || {}).present)}`);
+  const gh = probes.gh || {};
+  lines.push(`  ${'gh auth'.padEnd(20)} ${gh.authenticated ? 'authenticated' : (gh.present ? 'present, not authenticated' : 'absent')}`);
+  lines.push(`  ${'cloudflared'.padEnd(20)} ${(probes.cloudflared || {}).present ? 'present' : 'absent'}`);
+  lines.push('');
+  lines.push(`  ${'mode'.padEnd(22)} ${'runnable here'.padEnd(15)} why`);
+  for (const row of cap.modes || []) {
+    lines.push(`  ${row.mode.padEnd(22)} ${yesNo(row.runnable).padEnd(15)} ${row.why}`);
+  }
+  return lines.join('\n');
+}
+
 // Format a row in the readiness table
 function formatRow(label, status, hint) {
   const statusStr = status ? colorPass() : colorFail();
@@ -281,11 +350,9 @@ function formatRow(label, status, hint) {
 // Main execution
 (async function main() {
   try {
-    console.log(`\n${COLORS.BOLD}Aesop Readiness Check${COLORS.RESET}\n`);
-
     const syncChecks = [
-      { label: 'Node.js version ≥18', fn: checkNodeVersion },
-      { label: 'Python version ≥3.10', fn: checkPython },
+      { label: 'Node.js version >=18', fn: checkNodeVersion },
+      { label: 'Python version >=3.10', fn: checkPython },
       { label: 'Git repository', fn: checkGitRepo },
       { label: 'aesop.config.json (structure & required fields)', fn: checkConfig },
       { label: 'Repository URLs (no placeholders)', fn: checkRepoURLs },
@@ -295,35 +362,45 @@ function formatRow(label, status, hint) {
     ];
 
     const results = [];
-
-    // Run sync checks
     for (const check of syncChecks) {
       const result = check.fn();
-      results.push({ label: check.label, ...result });
-      console.log(formatRow(check.label, result.passed, result.hint));
+      results.push({ label: check.label, passed: result.passed, hint: result.hint || '' });
     }
 
-    // Run async port check
     try {
       const portResult = await checkPort8770();
-      results.push({ label: 'Port 8770 available', ...portResult });
-      console.log(formatRow('Port 8770 available', portResult.passed, portResult.hint));
+      results.push({ label: 'Port 8770 available', passed: portResult.passed, hint: portResult.hint || '' });
     } catch (e) {
       results.push({ label: 'Port 8770 available', passed: false, hint: 'Port check failed' });
-      console.log(formatRow('Port 8770 available', false, 'Port check failed'));
     }
+
+    // Report-only section: probed after the checks, counted in none of them.
+    const ciCapability = probeCiCapability();
 
     const allPassed = results.every(r => r.passed);
     const passCount = results.filter(r => r.passed).length;
     const failCount = results.length - passCount;
+    const summary = { total: results.length, passed: passCount, failed: failCount };
+
+    if (JSON_MODE) {
+      process.stdout.write(JSON.stringify({ checks: results, summary, ci_capability: ciCapability }, null, 2) + '\n');
+      process.exitCode = allPassed ? 0 : 1;
+      return;
+    }
+
+    console.log(`\n${COLORS.BOLD}Aesop Readiness Check${COLORS.RESET}\n`);
+    for (const r of results) {
+      console.log(formatRow(r.label, r.passed, r.hint));
+    }
+    console.log(formatCiCapability(ciCapability));
 
     console.log(`\n${COLORS.BOLD}Summary: ${passCount}/${results.length} checks passed${COLORS.RESET}`);
 
     if (allPassed) {
-      console.log(`${COLORS.GREEN}✓ You are ready to run: bash daemons/run-watchdog.sh --once${COLORS.RESET}\n`);
+      console.log(`${COLORS.GREEN}\u2713 You are ready to run: bash daemons/run-watchdog.sh --once${COLORS.RESET}\n`);
       process.exitCode = 0;
     } else {
-      console.log(`${COLORS.RED}✗ Fix the ${failCount} failed check(s) above and try again${COLORS.RESET}\n`);
+      console.log(`${COLORS.RED}\u2717 Fix the ${failCount} failed check(s) above and try again${COLORS.RESET}\n`);
       process.exitCode = 1;
     }
   } catch (err) {

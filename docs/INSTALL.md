@@ -140,6 +140,8 @@ Expected output:
 
 If you see errors, check the logs in `state/FLEET-BACKUP.log`.
 
+The doctor's final section, **CI capability**, is report-only: it tells you which CI mode this machine can run (hosted, self-hosted runner, local receipt gate) and why. See [CI-MODES.md](CI-MODES.md) for choosing a mode with `aesop init --ci-mode` and registering runners with `aesop runner install`.
+
 ---
 
 ## Zero-Friction Reproduce Path
@@ -523,8 +525,27 @@ chmod +x .git/hooks/pre-push
 The hook enforces:
 - Feature branches only (never direct pushes to `main`/`master`)
 - Secret scanning (blocks commits with detected credentials)
+- Machine-generated paths stay machine-written (`python tools/generated_paths.py --list` shows the registry; regeneration pushes set `AESOP_ALLOW_GENERATED=1`)
 
 To bypass during testing: `git push --no-verify` (not recommended for production).
+
+---
+
+## Register the JSON list-union merge driver (one-time, per clone)
+
+`.gitattributes` routes `*-baseline.json` ratchet files through a union-and-sort merge
+driver, so two lanes appending to the same baseline stop conflicting. Git deliberately
+never reads driver definitions out of the repository (they execute code), so each clone
+registers it once:
+
+```bash
+git config merge.aesop-json-union.name "union-and-sort JSON string lists"
+git config merge.aesop-json-union.driver "python tools/json_list_merge.py %O %A %B"
+```
+
+Skipping this is safe: an unregistered clone simply gets today's ordinary conflict. The
+driver is fail-closed — any parse failure, or a shape it cannot merge soundly (the
+count-map baselines), exits 1 and git falls back to a normal conflict.
 
 ---
 
@@ -580,5 +601,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 -D
 4. **Understand [CONCEPTS.md](CONCEPTS.md)** — Learn the dispatch model and state model
 5. **Read [MICROKERNEL.md](MICROKERNEL.md)** — Swap the worker or orchestrator seat to a non-Claude model
 6. **Explore the dashboard** — `python3 ui/serve.py` then open http://localhost:8770
+7. **Pick a CI mode with [CI-MODES.md](CI-MODES.md)** — hosted, self-hosted runner, or the local receipt gate; `aesop doctor` says which this machine can run
 
 For troubleshooting, see the [Aesop README](../README.md#troubleshooting) or [GOVERNANCE.md](GOVERNANCE.md) for operational policies.

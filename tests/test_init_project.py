@@ -17,7 +17,6 @@ from init_project import (
     ROOT_CLAUDE_MD,
     DOMAIN_CLAUDE_MD,
     DEFAULT_CONFIG,
-    CI_YML,
     PRE_PUSH_HOOK,
     CODE_DIRS,
     build_domain_map,

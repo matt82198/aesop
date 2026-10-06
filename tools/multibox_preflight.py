@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Multibox preflight probe + network-filesystem guard (multibox increment 0).
-INDEX: Multibox increment 0 preflight probe + network-FS guard: `detect_fs_kind()` returns local/network/unknown (POSIX longest-prefix match over /proc/mounts against {nfs,nfs4,cifs,smbfs,smb3,fuse.sshfs,glusterfs}, octal-escape decoded, component-boundary anchored; Windows UNC prefix or GetDriveTypeW==DRIVE_REMOTE via ctypes), unknown treated as network by `is_network_kind()` (fail-closed); `assert_local_sqlite()` raises `NetworkFilesystemError` when the event-store DB sits on a share — the rules-to-code artifact making WAL-over-SMB/NFS structurally impossible, since SQLite's `-shm` index is coherent only between processes on one host; `measure_visibility_delay()` writes fsynced probes (file + parent dir) and force-revalidates the listing for p50/p95/p99, raising `VisibilityTimeout` rather than reporting a bound it never observed; `measure_clock_skew()` estimates local-vs-server skew from server-stamped mtime; `write_peer_probe`/`observe_peer_delays`/`run_peer_probe` implement two-sided `--peer-probe` mode (single-process path exercised in CI, corrupt peer records skipped); CLI `--check --shared-dir DIR --db PATH [--json] [--samples N] [--settle-seconds S] [--max-skew-seconds S] [--peer-probe --peer-id ID --peer-wait-seconds S]`, exit 0=clean/1=findings/2=error; finding ids DB-ON-NETWORK-FS, VISIBILITY-DELAY-EXCEEDS-SETTLE, VISIBILITY-UNBOUNDED, VISIBILITY-PROBE-FAILED, CLOCK-SKEW-EXCEEDS-BOUND, CLOCK-SKEW-PROBE-FAILED; advisory-only until the multibox flag ships, then a hard startup gate; stdlib-only, ASCII, hermetic (temp dirs, no network)  |
+INDEX: Multibox increment 0 preflight probe + network-FS guard: `detect_fs_kind()` returns local/network/unknown (POSIX longest-prefix match over /proc/mounts against {nfs,nfs4,cifs,smbfs,smb3,fuse.sshfs,glusterfs}, octal-escape decoded, component-boundary anchored; Windows UNC prefix or GetDriveTypeW==DRIVE_REMOTE via ctypes), unknown treated as network by `is_network_kind()` (fail-closed); `assert_local_sqlite()` raises `NetworkFilesystemError` when the event-store DB sits on a share — the rules-to-code artifact making WAL-over-SMB/NFS structurally impossible, since SQLite's `-shm` index is coherent only between processes on one host; `measure_visibility_delay()` writes fsynced probes (file + parent dir) and force-revalidates the listing for p50/p95/p99, raising `VisibilityTimeout` rather than reporting a bound it never observed; `measure_clock_skew()` estimates local-vs-server skew from server-stamped mtime; `write_peer_probe`/`observe_peer_delays`/`run_peer_probe` implement two-sided `--peer-probe` mode (single-process path exercised in CI, corrupt peer records skipped); CLI `--check --shared-dir DIR --db PATH [--json] [--samples N] [--settle-seconds S] [--max-skew-seconds S] [--peer-probe --peer-id ID --peer-wait-seconds S]`, exit 0=clean/1=findings/2=error; finding ids DB-ON-NETWORK-FS, VISIBILITY-DELAY-EXCEEDS-SETTLE, VISIBILITY-UNBOUNDED, VISIBILITY-PROBE-FAILED, CLOCK-SKEW-EXCEEDS-BOUND, CLOCK-SKEW-PROBE-FAILED; advisory-only until the multibox flag ships, then a hard startup gate; stdlib-only, ASCII, hermetic (temp dirs, no network)
 
 The multibox design puts a *claim log* on a shared filesystem but keeps each
 instance's SQLite event store on local disk. SQLite WAL requires a shared-memory
@@ -29,6 +29,7 @@ Stdlib only, ASCII output, hermetic (no network).
 
 import argparse
 import json
+import ntpath
 import os
 import statistics
 import sys
@@ -193,10 +194,19 @@ def _default_drive_type_fn(root):
 
 
 def _detect_windows(path, drive_type_fn):
+    """Classify a path under simulated Windows semantics.
+
+    Uses ntpath.splitdrive explicitly, not os.path.splitdrive: this branch is
+    reached whenever the caller forces os_name="nt" (every test, and any real
+    Windows host), and os.path is posixpath on a POSIX host. posixpath never
+    extracts a drive letter, so a host-native os.path.splitdrive would
+    silently classify every "C:\\..." path as unknown on Linux CI while
+    working by accident on a real Windows box (GAP: PR #699 CI escape).
+    """
     text = str(path)
     if text.startswith("//"):
         return "network"
-    drive = os.path.splitdrive(text)[0]
+    drive = ntpath.splitdrive(text)[0]
     if not drive or ":" not in drive:
         return "unknown"
     root = drive + "\\"
