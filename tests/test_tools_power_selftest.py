@@ -147,10 +147,22 @@ class TestPowerSelftestHookDetection(unittest.TestCase):
             shutil.rmtree(self.temp_dir)
 
     def _run_selftest(self):
-        """Run power_selftest.py against the temp state/brain roots."""
+        """Run power_selftest.py against the temp state/brain roots.
+
+        Points SCRIPTS_ROOT at this repo's real tools/ dir, same as the
+        base TestPowerSelftest class above: these tests are about hook
+        detection, not the scanner fail-closed behavior (covered in
+        TestPowerSelftestScannerFailClosed), and the overall exit code is
+        the union of every check. Leaving SCRIPTS_ROOT unset let the
+        scanner check fall through to the profile-agnostic $HOME/scripts
+        fallback, which is absent on CI runners -- scanner:FAIL then
+        flipped the exit code these tests assert on for a reason that has
+        nothing to do with hooks.
+        """
         env = os.environ.copy()
         env["AESOP_STATE_ROOT"] = str(self.state_dir)
         env["BRAIN_ROOT"] = str(self.brain_dir)
+        env["SCRIPTS_ROOT"] = str(self.selftest_script.parent)
         return subprocess.run(
             [sys.executable, str(self.selftest_script)],
             capture_output=True,
