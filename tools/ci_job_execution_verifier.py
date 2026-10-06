@@ -223,7 +223,7 @@ def _run_gh(args, root, timeout=GH_TIMEOUT_SECONDS):
         cwd=str(root),
         capture_output=True,
         text=True,
-        encoding="utf-8",
+        encoding="utf-8", errors="replace",
         timeout=timeout,
     )
 

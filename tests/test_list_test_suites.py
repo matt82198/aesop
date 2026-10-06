@@ -128,8 +128,22 @@ class TestListTestSuites(TestCase):
         self.assertEqual(results[0], results[1], "Output is not deterministic")
 
     def test_counts_match_verify_gate(self):
-        """Verify counts match those found by verify_test_suite_count.py."""
-        # Run list_test_suites.py and extract counts
+        """list_test_suites.py's filesystem scan must agree with the live,
+        git-index-derived counts from tools/gen_suite_counts.py.
+
+        Protects against: the "Live suite inventory" command
+        (`tools/list_test_suites.py`, documented in tests/CLAUDE.md as the way
+        to see current counts) silently diverging from what CI actually runs.
+        The two tools discover suites through genuinely independent
+        mechanisms -- list_test_suites.py walks the filesystem with
+        `Path.glob()`, gen_suite_counts.py asks git's index via
+        `git ls-files` -- so this is not tautological: a file present on disk
+        but not yet `git add`ed (or the reverse, a file staged for deletion but
+        still on disk) makes them disagree, and that disagreement is exactly
+        the live-vs-tracked split this test exists to catch. There is no
+        stored artifact any more (removed by PR #830); the reference side is
+        gen_suite_counts.py's live `--json` output, computed fresh here.
+        """
         result = subprocess.run(
             [sys.executable, "tools/list_test_suites.py", "--repo", str(self.repo_root)],
             cwd=self.repo_root,
@@ -141,6 +155,7 @@ class TestListTestSuites(TestCase):
         output = result.stdout
 
         import re
+        import json
 
         node_match = re.search(r"## Node\.js \((\d+) suites?\)", output)
         shell_match = re.search(r"## Shell \((\d+) suites?\)", output)
@@ -154,41 +169,36 @@ class TestListTestSuites(TestCase):
         list_shell = int(shell_match.group(1))
         list_python = int(python_match.group(1))
 
-        # Run verify_test_suite_count.py to get expected counts
-        verify_result = subprocess.run(
-            [sys.executable, "tools/verify_test_suite_count.py", "--check", "--repo", str(self.repo_root)],
+        # Reference: live counts derived straight from git ls-files, computed
+        # fresh (no stored artifact to read).
+        gen_result = subprocess.run(
+            [sys.executable, "tools/gen_suite_counts.py", "--json",
+             "--repo", str(self.repo_root)],
             cwd=self.repo_root,
             capture_output=True,
             text=True,
             timeout=10,
         )
-        # verify_test_suite_count may return 0 (match) or 1 (drift), both are valid
+        self.assertEqual(gen_result.returncode, 0, f"stderr: {gen_result.stderr}")
+        live_counts = json.loads(gen_result.stdout)
 
-        # Extract expected counts from CLAUDE.md
-        claudemd = (self.repo_root / "tests" / "CLAUDE.md").read_text()
-        node_in_md = re.search(r"\*\*Node \((\d+) suites?\)\*\*:", claudemd)
-        shell_in_md = re.search(r"\*\*Shell \((\d+) suites?\)\*\*:", claudemd)
-        python_in_md = re.search(r"\*\*Python \((\d+) suites?\)\*\*:", claudemd)
-
-        self.assertIsNotNone(node_in_md)
-        self.assertIsNotNone(shell_in_md)
-        self.assertIsNotNone(python_in_md)
-
-        # Counts discovered should match those documented in CLAUDE.md
         self.assertEqual(
             list_node,
-            int(node_in_md.group(1)),
-            f"Node count mismatch: list_test_suites says {list_node}, CLAUDE.md says {node_in_md.group(1)}",
+            live_counts["Node"],
+            f"Node count mismatch: list_test_suites (filesystem) says {list_node}, "
+            f"gen_suite_counts.py (git index) says {live_counts['Node']}",
         )
         self.assertEqual(
             list_shell,
-            int(shell_in_md.group(1)),
-            f"Shell count mismatch: list_test_suites says {list_shell}, CLAUDE.md says {shell_in_md.group(1)}",
+            live_counts["Shell"],
+            f"Shell count mismatch: list_test_suites (filesystem) says {list_shell}, "
+            f"gen_suite_counts.py (git index) says {live_counts['Shell']}",
         )
         self.assertEqual(
             list_python,
-            int(python_in_md.group(1)),
-            f"Python count mismatch: list_test_suites says {list_python}, CLAUDE.md says {python_in_md.group(1)}",
+            live_counts["Python"],
+            f"Python count mismatch: list_test_suites (filesystem) says {list_python}, "
+            f"gen_suite_counts.py (git index) says {live_counts['Python']}",
         )
 
 

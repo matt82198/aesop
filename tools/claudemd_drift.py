@@ -242,7 +242,7 @@ def check_cli_flags(cli_specs: Dict[str, Set[str]], repo_root: Path) -> List[Dic
                 [str(tool_path), "--help"],
                 capture_output=True,
                 text=True,
-                encoding='utf-8',
+                encoding='utf-8', errors='replace',
                 timeout=5,
             )
             help_text = result.stdout + result.stderr
@@ -350,7 +350,7 @@ def run_drift_check(repo_root: Path) -> List[Dict[str, str]]:
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="CLAUDE.md semantic drift detector — detect drift between docs and disk"
+        description="CLAUDE.md semantic drift detector - detect drift between docs and disk"
     )
     parser.add_argument(
         "--root",
