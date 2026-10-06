@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Offline verifier for a signed local receipt (the hosted side of the receipt gate).
-INDEX: Receipt-gate increment 2 -- offline verifier used by `.github/workflows/verify-receipt.yml`: input is a receipt envelope (`--receipt FILE|-`, as posted by `emit_receipt.py`) plus the head sha of ITS OWN checkout (`--head`, default HEAD); it RECOMPUTES `git rev-parse <head>^{tree}` and compares to the receipt's tree_hash (never trusts the lane's number), verifies the signature (Ed25519 against the committed `tools/receipt_pubkey.pub`, or HMAC-SHA256 against `$AESOP_RECEIPT_HMAC_SECRET`), checks freshness (receipt.base_sha must be an ancestor of `--main-ref` (origin/main) and at most `--max-behind` (50) commits behind its tip), and requires every REQUIRED part (`--required a,b` ; default py-shard-0..3) present with exit_code 0. Exit 0 = valid, 1 = INVALID (any check failed), 2 = cannot evaluate (unreadable/malformed envelope, no key material for the scheme, git failure) -- fail-closed, never exit 0 on doubt. Also exposes `extract_receipt_from_check_runs()` / `extract_receipt_from_comments()` for the Action's fetch step. stdlib-only; `cryptography` optional (needed for ed25519 receipts).
+INDEX: Receipt-gate increment 2 -- offline verifier used by `.github/workflows/verify-receipt.yml`: input is a receipt envelope (`--receipt FILE|-`, as posted by `emit_receipt.py`) plus the head sha of ITS OWN checkout (`--head`, default HEAD); it RECOMPUTES `git rev-parse <head>^{tree}` and compares to the receipt's tree_hash (never trusts the lane's number), verifies the signature (Ed25519 against the committed `tools/receipt_pubkey.pub`, or HMAC-SHA256 against `$AESOP_RECEIPT_HMAC_SECRET`), checks freshness (receipt.base_sha must be an ancestor of `--main-ref` (origin/main) and at most `--max-behind` (50) commits behind its tip), and requires every REQUIRED part (`--required a,b` ; default py-shard-0..3) present with exit_code 0. Exit 0 = valid, 1 = INVALID (any check failed), 2 = cannot evaluate (unreadable/malformed envelope, no key material for the scheme, git failure) -- fail-closed, never exit 0 on doubt. Also exposes `extract_receipt_from_check_runs()` / `extract_receipt_from_comments()`, and a `--fetch-for-head SHA --repo-slug OWNER/REPO` CLI mode (`fetch_receipt_for_head()`) that the Action's fetch step uses to look up a receipt via `gh api`: this mode NEVER fails -- a lookup problem (gh api error, malformed payload, this module missing on a stale PR tree) degrades to "no receipt found", never to a job failure; only a receipt actually found and then shown invalid by the main verify path may exit nonzero. stdlib-only; `cryptography` optional (needed for ed25519 receipts).
 
 What a PASS proves: the holder of the signing key ran the named parts on a tree whose
 hash equals the one in this checkout, those parts exited 0, and the run was against a
@@ -153,9 +153,49 @@ def extract_receipt_from_comments(comments):
     return best
 
 
+def _gh_api(path):
+    res = subprocess.run(["gh", "api", path], capture_output=True, encoding="utf-8",
+                         errors="replace", timeout=120)
+    if res.returncode != 0:
+        print("gh api %s failed: %s" % (path, res.stderr.strip()[:300]), file=sys.stderr)
+        return None
+    try:
+        return json.loads(res.stdout)
+    except ValueError:
+        print("gh api %s returned non-JSON" % path, file=sys.stderr)
+        return None
+
+
+def fetch_receipt_for_head(sha, repo_slug, api=None):
+    """Look up the newest local receipt for `sha`: check-runs first, commit comments as
+    fallback. Returns (envelope_or_None, note).
+
+    This NEVER raises. A failure while merely LOOKING for a receipt -- a `gh api` call
+    erroring, a malformed payload, anything unexpected -- is indistinguishable from "no
+    receipt was posted" and must degrade to the absent case, never to a crash. Per the
+    design in docs/RECEIPT-GATE.md, only a receipt we actually found and then examined
+    may fail the gate (see `verify()`); failing to even find one must stay neutral.
+    """
+    api = api or _gh_api
+    try:
+        env = None
+        runs = api("repos/%s/commits/%s/check-runs?per_page=100" % (repo_slug, sha))
+        if runs is not None:
+            env = extract_receipt_from_check_runs(runs)
+        if env is None:
+            comments = api("repos/%s/commits/%s/comments?per_page=100" % (repo_slug, sha))
+            if comments is not None:
+                env = extract_receipt_from_comments(comments)
+        if env is None:
+            return None, "no %s receipt on %s" % (rc.CHECK_NAME, sha)
+        return env, "receipt found for %s (scheme=%s)" % (sha, env.get("sig", {}).get("scheme"))
+    except Exception as e:  # noqa: BLE001 -- defensive: a lookup failure is NOT an invalid receipt
+        return None, "receipt lookup failed unexpectedly (%s); treating as no receipt" % e
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="verify_receipt.py", description=__doc__.split("\n")[0])
-    p.add_argument("--receipt", required=True, help="envelope JSON file, or - for stdin")
+    p.add_argument("--receipt", default=None, help="envelope JSON file, or - for stdin")
     p.add_argument("--repo", default=".", help="checkout to verify against (default: cwd)")
     p.add_argument("--head", default="HEAD")
     p.add_argument("--main-ref", default="origin/main")
@@ -164,12 +204,42 @@ def build_parser():
     p.add_argument("--pubkey", default=None, help="Ed25519 public key (default: <repo>/%s)" % rc.DEFAULT_PUBKEY_REL)
     p.add_argument("--extract", choices=("check-runs", "comments"), default=None,
                    help="treat --receipt as a GitHub API payload and extract the newest receipt first")
+    p.add_argument("--fetch-for-head", metavar="SHA", default=None,
+                   help="look up (don't verify) the newest local receipt for this head sha via `gh api`; "
+                        "writes --out-found/--out-envelope and always exits 0 (see fetch_receipt_for_head)")
+    p.add_argument("--repo-slug", default=None, help="owner/repo, required with --fetch-for-head")
+    p.add_argument("--out-found", default="receipt_found", help="file to write true/false into (--fetch-for-head)")
+    p.add_argument("--out-envelope", default="receipt.json", help="file to write the envelope into if found")
     return p
+
+
+def _run_fetch_for_head(args):
+    """CLI body of --fetch-for-head. Always exits 0: this mode only LOOKS for a receipt
+    and must never fail the job over a lookup problem (see fetch_receipt_for_head)."""
+    try:
+        if not args.repo_slug:
+            print("--repo-slug is required with --fetch-for-head", file=sys.stderr)
+            env, note = None, "--repo-slug missing; treating as no receipt"
+        else:
+            env, note = fetch_receipt_for_head(args.fetch_for_head, args.repo_slug)
+        print(note)
+        Path(args.out_found).write_text("true" if env is not None else "false", encoding="utf-8")
+        if env is not None:
+            Path(args.out_envelope).write_text(json.dumps(env), encoding="utf-8")
+    except Exception as e:  # noqa: BLE001 -- defensive: never crash this mode
+        print("--fetch-for-head failed unexpectedly (%s); treating as no receipt" % e, file=sys.stderr)
+        Path(args.out_found).write_text("false", encoding="utf-8")
+    return 0
 
 
 def main(argv=None, environ=None):
     environ = os.environ if environ is None else environ
     args = build_parser().parse_args(argv)
+    if args.fetch_for_head:
+        return _run_fetch_for_head(args)
+    if not args.receipt:
+        print("--receipt is required unless --fetch-for-head is given", file=sys.stderr)
+        return 2
     repo = Path(args.repo).resolve()
     pubkey = Path(args.pubkey) if args.pubkey else repo / rc.DEFAULT_PUBKEY_REL
     try:
