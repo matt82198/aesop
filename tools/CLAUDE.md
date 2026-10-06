@@ -5,29 +5,32 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 ## Universal rules (every domain)
 - Feature branch only, never main; every push gated by `python tools/secret_scan.py --staged` exit 0.
 - Tests never pollute cwd or global git config; temp dirs only; dummy secrets are runtime-concatenated, never literal.
-- In worktrees use ABSOLUTE paths under the worktree for every write.
+- In worktrees use ABSOLUTE paths under the worktree for every write; redaction and path-handling code must genericize over Windows profile names (use `[A-Za-z0-9_]+` regex, not hardcoded) so checkout works across shared boxes.
 - Domain docs stay minimal-but-complete; update this file in the same PR as code it describes.
 
 ## Core invariants
-
 - **Never print secrets**: mask as pattern name + masked value only; NEVER output raw credentials/tokens.
 - **AESOP_STATE_ROOT**: all heartbeat/ledger/logs use `AESOP_STATE_ROOT` env var (default `./state`) or CLI args; no hardcoded personal paths.
+- **halt.py state-dir default**: `resolve_state_dir()`'s precedence is `AESOP_STATE_ROOT` env > `aesop.config.json` `state_root` > `$AESOP_ROOT/state` (when `AESOP_ROOT` is set) > `common.get_state_dir()`'s cwd-relative `./state`. The `$AESOP_ROOT/state` step (fixed 2026-10-05, PR #773) matters because callers that `cd` elsewhere before invoking `halt.py --status` (e.g. `daemons/run-watchdog.sh`'s single-source-of-truth delegation) must still find a sentinel written at `$AESOP_ROOT/state/.HALT` — a bare cwd fallback silently missed it and let a halted daemon keep running.
 - **Fragment-assembled secrets in tests**: `scanner_selftest.py` concatenates dummy secrets at runtime so pattern text never appears contiguously (self-scan invariant).
-- **verify_*.py are mandatory CI gates**: `verify_dash.py`, `verify_submit_encoding.py`, `verify_activity_filter.py`, `verify_agent_inspector.py`, `verify_prboard.py`, `verify_failure_drilldown.py`, `verify_wave_telemetry.py`, `verify_dispatch_panel.py`, `verify_scorecards.py`, `verify_ui_trio.py`, `verify_cost_panel.py`, etc. are required pre-push gates; use `--allow-skip` only in truly browserless environments (CI must run all).
+- **verify_*.py are mandatory CI gates**: `verify_dash.py`, `verify_submit_encoding.py`, `verify_activity_filter.py`, `verify_agent_inspector.py`, `verify_prboard.py`, `verify_failure_drilldown.py`, `verify_wave_telemetry.py`, `verify_dispatch_panel.py`, `verify_scorecards.py`, `verify_ui_trio.py`, `verify_cost_panel.py`, `verify_cost_summary_drawer.py`, etc. are required pre-push gates; use `--allow-skip` only in truly browserless environments (CI must run all).
 - **lock.mjs is the ONLY lock implementation**: never reimplement locking in `proposals.mjs` or elsewhere; all proposals/state updates must use fail-closed `lock.mjs` with exponential backoff + stale-lock breaking.
-
+- **state_rebuild.py --check is the tracker.json drift gate, not a proxy**: it diffs disk against the canonical materializer, so any tracker writer (e.g. `tracker_guard.py`) must close items through the sanctioned write facade — direct `tracker.json` patches are correct only until the next unrelated write re-renders the whole file from the event log (GAP, 2026-10-05).
 ## Tool index
 
-The per-tool one-liner index lives in `tools/INDEX.md`, generated from each tool's
-`INDEX:` docstring/header line — NOT hand-maintained here (that inline list was the
-top merge-queue conflict surface, since every tool-adding PR edited it). To document
-a new or changed tool, edit that tool's own `INDEX:` line and run
-`python tools/gen_tool_index.py --regenerate`. A tool with no `INDEX:` line fails
-closed. `claudemd_lint.py` enforces that `tools/INDEX.md` is byte-identical to the
-generator output (hand-edits are rejected).
+Full one-liner index of every tool in this directory: see `tools/INDEX.md` (generated
+by `tools/gen_tool_index.py --regenerate` from each file's own `INDEX:` header line;
+never hand-edit it -- the byte-identity gate rejects drift). This file stays navigation
+only so a tool-adding PR never conflicts with every other in-flight PR over the same
+inline list (that conflict-magnet is why PR #751 moved the index out of here). Index
+merges with the `union` driver (`.gitattributes`) — two PRs each adding a tool merge
+cleanly with both lines kept, then `gen_tool_index.py --regenerate` normalizes order.
 
 ## Gates & tests
 - `secret_scan.py --staged` — pre-push gate (exit 0=clean/1=findings/2=error; `# secretscan: allow-pattern-docs` pragma)
-- `agent-forensics.sh <commit>` — incident/behavior forensics, read-only git plumbing; `--diff <A> <B>` for rules/docs diff
+- `agent-forensics.sh <commit>` — behavior forensics; `--diff <A> <B>` for rules/docs diff
 - **Python**: `npm run test:py`; **Shell**: `bash -n tools/*.sh && shellcheck tools/*.sh`; **Node**: `node --check tools/*.mjs`
-- **Subprocess encoding (G10)**: every `subprocess.run`/`Popen` decoding output passes explicit `encoding='utf-8'`; the platform default is cp1252 on Windows and corrupts non-ASCII output. `encoding_lint.py` scans the WHOLE repo, so one violation anywhere blocks every Python-touching push.
+- **Subprocess encoding (G10)**: every `subprocess.run`/`Popen` decoding output passes explicit `encoding='utf-8'`; the platform default is cp1252 on Windows and corrupts non-ASCII output. `encoding_lint.py` scans the WHOLE repo, so one violation anywhere blocks every Python-touching push. Same trap hits argparse `--help` text: a Unicode arrow/dash in a `help=`/`description=` string crashes `print_help()` on a stock cp1252 console (not caught by `encoding_lint.py`, which only checks `subprocess`/`open`) — keep all argparse-printed text plain ASCII (`->`, `-`); fixed 2026-10-05 in `auto_merge.py` + 7 other tools' `description=` strings.
+- **Dead-baseline liveness (GUARDRAIL #3)**: `baseline_liveness_check.py` finds each `.*-baseline.json` ratchet baseline's consumer (hardcoded usage in `tools/*.py`, or `--baseline` wiring in `.github/workflows/*.yml`/`hooks/*.sh`) and re-runs that consumer's own `--baseline FILE --json` check to surface entries it no longer finds (stale allowance hiding a new violation); a baseline with no consumer is DEAD, fail-closed. `--prune` drops exactly the stale entries (shrinks counts, never raises them). CLI `[--root DIR] [--prune] [--json]`, exit 0=clean/1=dead or stale/2=error, stdlib-only; wired into `ci.yml`.
+- **Lint evasion (G11)**: `verify_no_lint_evasion.py` flags compile-time string construction that hides another gate's trigger token — adjacent-literal `+` chains, all-constant `str.join`, all-constant f-strings (Python via `ast`; `.js/.mjs/.cjs` via regex). Fires only when the RECONSTRUCTED value matches a gate token (word-boundary anchored) AND no single fragment contains that whole token, so for a protected `alpha.json` the form `prefix + 'alpha' + '.json'` is evasion while `prefix + 'alpha.json'` is not (the owning gate still sees the latter). Reports file:line + reconstructed value + matched token; CLI `[--root DIR] [--paths P ...] [--json] [--check]`, exit 0=clean/1=findings/2=error, stdlib-only. Tokens are DERIVED by AST-parsing the `*_TO_PROTECT` tables in `stateapi_lint.py` — never imported and never re-spelled as literals here, since spelling them would make the detector itself a violation of the gate it protects — plus built-in ratchet-baseline filenames. Sanctioned exemptions, deliberate and not to be "fixed": runtime-assembled dummy credentials (splitting those is a REQUIRED invariant, so credential-placeholder-shaped values are skipped), `tests/**/fixtures/` trees, and `# lint-evasion-ok` / `// lint-evasion-ok` on any line of the construction. NOT yet wired into CI, so this entry deliberately does not claim wired-gate status (see the module docstring for that labelling rule): the first real-tree run found a live escape (`health_checks.py` splits two heartbeat filenames, commit 16b3f8e3, after which the stateapi baseline was ratcheted down 39->37); remediation needs facade routing plus a baseline change, so until then the tool exits 1 on the tree and `tests/test_verify_no_lint_evasion.py` pins the known-escape set as a bidirectional ratchet. Wire into `ci.yml` only once that set is empty.
+- **Templates**: `templates/aesop-dispatch-template.yml` — ready-to-fork GitHub Actions dispatch workflow (workflow_dispatch + cron); adopter guide `docs/ACTIONS-TEMPLATE.md`; verified by `tests/test_actions_template.py` (YAML validity, CLI commands checked against `bin/cli.js --help`, no invented flags/fabricated output). `templates/wave-presets/*.json` is the unrelated wave-manifest-preset set consumed by `wave_templates.py`.

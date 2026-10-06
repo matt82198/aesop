@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+"""
+Test-isolation tripwire: fails closed if the REAL developer profile changes
+while a test suite runs.
+INDEX: Test-isolation tripwire (incident 2026-10-05: installSkills() in bin/cli.js overwrote real ~/.claude/skills during a Node test run); snapshots sha256 of ~/.claude/{skills,settings.json,memory,hooks} + `git config --global -l` before/after wrapping a command, FAILS CLOSED naming every changed path when the profile exists, degrades loudly-but-green ("no profile present, tripwire inert") when ~/.claude is absent (CI); CLI: `[--root DIR] -- <command...>`; exit = max(wrapped command's exit code, tripwire finding); stdlib-only.
+
+Why this exists: tests/CLAUDE.md and LANE-CONTRACT.md have said "tests must not
+pollute cwd or global state" as prose for a long time. Prose is not a gate. On
+2026-10-05, running the Node suite on a developer box let bin/cli.js's
+installSkills() write aesop's scaffold skill templates over the REAL
+~/.claude/skills/{power,dashboard,buildsystem}/SKILL.md (4 files, restored from
+git), because a test forgot --no-skills / AESOP_SKILLS_HOME. tests/helpers/
+isolated-env.mjs is the primary fix (the Node test process can no longer reach
+the real HOME at all, structurally); this tripwire is the independent proof
+that it worked, and the backstop for any future escape (a Python test, a shell
+hook test, anything invoked outside the Node harness).
+
+Usage:
+  python tools/test_isolation_tripwire.py -- npm run test:node
+  python tools/test_isolation_tripwire.py -- python -m unittest discover -s tests
+  python tools/test_isolation_tripwire.py --root /tmp/fake-home -- true   # tests
+
+--root overrides which directory stands in for "the profile" (default: the
+real home directory). Tests point it at a fake fixture so they never touch the
+developer's actual ~/.claude or global git config while proving the gate bites.
+When --root is given, it is also used as HOME/USERPROFILE for the
+`git config --global -l` subprocess, so the git-config check is fully
+sandboxed under the fixture too.
+
+Exit codes:
+  0: no drift (or profile absent -> inert) and the wrapped command exited 0
+  1 (or the wrapped command's own exit code if higher): drift detected; every
+     changed path is named on stderr
+  2: usage error (no `--` separator, or no command given)
+
+The wrapped command's exit code and the tripwire's own finding are combined as
+max(command_exit, tripwire_exit), so neither a red suite nor a tripwire finding
+can be swallowed by the other.
+"""
+import argparse
+import hashlib
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+ABSENT = "<absent>"
+
+# Logical name -> path relative to the profile root, checked whenever the root's
+# .claude directory exists.
+SENSITIVE_RELPATHS = {
+    "skills": ".claude/skills",
+    "settings": ".claude/settings.json",
+    "memory": ".claude/memory",
+    "hooks": ".claude/hooks",
+}
+
+
+def _hash_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _hash_tree(path: Path) -> dict:
+    """Return {relpath: sha256} for every file under path (sorted, deterministic)."""
+    out = {}
+    for p in sorted(path.rglob("*")):
+        if p.is_file():
+            rel = str(p.relative_to(path)).replace("\\", "/")
+            try:
+                out[rel] = _hash_file(p)
+            except OSError:
+                out[rel] = "<unreadable>"
+    return out
+
+
+def snapshot_path(abs_path: Path):
+    """Fingerprint one sensitive path: {relpath: hash} for a dir, {'<file>': hash}
+    for a single file, or the ABSENT sentinel."""
+    if not abs_path.exists():
+        return ABSENT
+    if abs_path.is_file():
+        return {"<file>": _hash_file(abs_path)}
+    return _hash_tree(abs_path)
+
+
+def snapshot_git_global_config(root: Path):
+    """Return a fingerprint of `git config --global -l`, run with HOME/USERPROFILE
+    pinned to `root` so --root fixtures fully sandbox this check too."""
+    env = dict(os.environ)
+    env["HOME"] = str(root)
+    env["USERPROFILE"] = str(root)
+    try:
+        res = subprocess.run(
+            ["git", "config", "--global", "-l"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=30, env=env, cwd=str(root),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ABSENT
+    if res.returncode != 0:
+        return ABSENT
+    text = res.stdout
+    keys = sorted({line.split("=", 1)[0] for line in text.splitlines() if "=" in line})
+    return {"hash": hashlib.sha256(text.encode("utf-8", "replace")).hexdigest(), "keys": keys}
+
+
+def take_snapshot(root: Path) -> dict:
+    claude_root = root / ".claude"
+    profile_present = claude_root.exists()
+    snap = {
+        "profile_present": profile_present,
+        "paths": {},
+        "git_global_config": snapshot_git_global_config(root),
+    }
+    if profile_present:
+        for name, rel in SENSITIVE_RELPATHS.items():
+            snap["paths"][name] = snapshot_path(root / rel)
+    return snap
+
+
+def diff_snapshots(before: dict, after: dict):
+    """Return a list of human-readable changed-path descriptions, or [] if clean."""
+    changes = []
+
+    if before["profile_present"] and after["profile_present"]:
+        names = sorted(set(before["paths"]) | set(after["paths"]))
+        for name in names:
+            b = before["paths"].get(name, ABSENT)
+            a = after["paths"].get(name, ABSENT)
+            if b != a:
+                rel = SENSITIVE_RELPATHS.get(name, name)
+                changes.append(f"~/{rel} ({name}) changed")
+    elif before["profile_present"] != after["profile_present"]:
+        changes.append(
+            "~/.claude " + ("appeared" if after["profile_present"] else "disappeared")
+            + " during the run"
+        )
+    # else: absent in both before and after snapshots -> inert, nothing to diff.
+
+    gb, ga = before["git_global_config"], after["git_global_config"]
+    if gb != ga:
+        if gb == ABSENT or ga == ABSENT:
+            present = ga if ga != ABSENT else gb
+            verb = "appeared" if ga != ABSENT else "disappeared"
+            keys_note = f" (keys: {', '.join(present['keys'])})" if present.get("keys") else ""
+            changes.append(f"global git config (git config --global -l) {verb}{keys_note}")
+        else:
+            added = sorted(set(ga["keys"]) - set(gb["keys"]))
+            removed = sorted(set(gb["keys"]) - set(ga["keys"]))
+            detail = []
+            if added:
+                detail.append("added keys: " + ", ".join(added))
+            if removed:
+                detail.append("removed keys: " + ", ".join(removed))
+            if gb["hash"] != ga["hash"] and not added and not removed:
+                detail.append("values changed for existing keys")
+            changes.append(
+                "global git config (git config --global -l) changed ("
+                + "; ".join(detail or ["unspecified"]) + ")"
+            )
+    return changes
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    parser = argparse.ArgumentParser(
+        description="Fail closed if the real developer profile changes during a test run",
+        usage="test_isolation_tripwire.py [--root DIR] -- <command...>",
+    )
+    parser.add_argument(
+        "--root", type=Path, default=Path.home(),
+        help="Profile root to protect (default: real home dir); tests point this "
+             "at a fake 'real' dir fixture",
+    )
+
+    if "--" not in argv:
+        print(
+            "ERROR: no command given; usage: "
+            "test_isolation_tripwire.py [--root DIR] -- <command...>",
+            file=sys.stderr,
+        )
+        return 2
+    sep = argv.index("--")
+    own_args, command = argv[:sep], argv[sep + 1:]
+    if not command:
+        print("ERROR: empty command after `--`", file=sys.stderr)
+        return 2
+    args = parser.parse_args(own_args)
+
+    root = args.root.resolve()
+    before = take_snapshot(root)
+
+    if not before["profile_present"]:
+        print(
+            f"[test_isolation_tripwire] {root}/.claude is absent -- no profile "
+            "present, tripwire inert for ~/.claude checks this run "
+            "(global git config is still checked)",
+            file=sys.stderr,
+        )
+
+    proc = subprocess.run(command, cwd=str(Path.cwd()))
+    cmd_exit = proc.returncode if proc.returncode is not None else 1
+
+    after = take_snapshot(root)
+    changes = diff_snapshots(before, after)
+
+    if changes:
+        print(
+            "[test_isolation_tripwire] FAIL: the real profile changed during this run:",
+            file=sys.stderr,
+        )
+        for c in changes:
+            print(f"  - {c}", file=sys.stderr)
+        print(
+            "[test_isolation_tripwire] A test reached the real profile -- see "
+            "tests/helpers/isolated-env.mjs and LANE-CONTRACT.md. Restore the "
+            "changed path(s) from git and fix the test's isolation before "
+            "re-running.",
+            file=sys.stderr,
+        )
+        tripwire_exit = 1
+    else:
+        tripwire_exit = 0
+        if before["profile_present"]:
+            print("[test_isolation_tripwire] OK: real profile unchanged", file=sys.stderr)
+
+    return max(cmd_exit, tripwire_exit)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

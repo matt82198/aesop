@@ -14,7 +14,7 @@
   <a href="https://github.com/matt82198/aesop/actions/workflows/ci.yml"><img src="https://github.com/matt82198/aesop/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://www.npmjs.com/package/@matt82198/aesop"><img src="https://img.shields.io/npm/v/@matt82198/aesop" alt="npm version"></a>
   <a href="https://www.npmjs.com/package/@matt82198/aesop"><img src="https://img.shields.io/npm/dm/@matt82198/aesop" alt="npm downloads"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm--Noncommercial--1.0.0-blue.svg" alt="License: PolyForm Noncommercial 1.0.0"></a>
 </p>
 
 ## What It Is
@@ -25,7 +25,7 @@
 
 Aesop does not trust itself. Every agent writes code claiming to be correct, and [the trap tests](./tests/test_traps.py) deliberately reproduce patterns of agent deception:
 
-- **Fake-green trap**: Tests that skip real validation (caught incident #464: playwright browser-proofs reported green without actually running). Prevention: all test discovery against documented counts via python tools/verify_test_suite_count.py --check.
+- **Fake-green trap**: Tests that skip real validation (caught incident #464: playwright browser-proofs reported green without actually running). Prevention: counts are computed live from git ls-files (no stored artifact to drift) and `python tools/verify_test_suite_count.py --check` verifies the CI shard matrix actually covers every tracked test file.
 - **Gate-activation trap**: Forbidden flags (--admin, --no-verify, --auto) in dispatch templates (caught 7+ incidents). Pre-push secret scan blocks leaks with fail-closed exit on read errors.
 - **Doc-invented trap**: Documentation claims not backed by facts (caught hallucinated 0.3.0 CHANGELOG entries). Prevention: statistics gate verifies README matches git.
 - **Test-pollution trap**: Test state leaking across isolation boundaries (caught 6 incidents including sys.modules mock pollution). Prevention: all tests use isolated temp directories and subprocess cwd= isolation.
@@ -98,7 +98,7 @@ See the Learn More section for setup and architecture guides.
 
 ## Contributing
 
-Aesop is **open source** under the MIT License. Patches and contributions are welcome.
+Aesop is **source-available** under the PolyForm Noncommercial License 1.0.0. Patches and contributions are welcome.
 
 - **Issues and bug reports** — tell us what's broken or confusing.
 - **Discussion and ideas** — feature requests, design critiques, use-case questions.
@@ -108,7 +108,11 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for details. The repo develops itself v
 
 ## License
 
-**Open source** under the [MIT License](./LICENSE). Relicensed to MIT on 2026-07-29.
+Aesop is licensed under the **[PolyForm Noncommercial License 1.0.0](./LICENSE)** from this version forward: free for personal, research, and noncommercial use; commercial use is prohibited without a separate agreement.
+
+Versions **0.7.0 and earlier** were released under the MIT License and remain available under those terms — the relicense is not retroactive.
+
+For commercial licensing, contact the author (Matt Culliton).
 
 Copyright 2026 Matt Culliton.
 

@@ -1,0 +1,125 @@
+name: Regenerate On Main
+
+# Self-heals the CLEAN-MERGE-DRIFT class of incident: two PRs can each regenerate a
+# whole-tree generated artifact (tests/SUITE-COUNTS.json, tools/INDEX.md, ...) on their
+# own tree, git merges the identical line cleanly, and the merged tree is still wrong
+# (main carries a stale count while the file set grew) -- PR #706 and #709 both bumped
+# tests/SUITE-COUNTS.json 252->253 independently, the merge was clean, and main-full went
+# red only after the merge landed. Branch protection on main runs strict=false (native
+# auto-merge, not serial rebase), so nothing upstream of the merge can catch this; this
+# workflow re-derives every registered generated artifact AFTER a push to main and opens
+# a bot PR when one drifted.
+#
+# NOTE ON QUOTING: tests/test_traps.py::TestCIDriftTrap lexes every non-comment line of
+# every workflow file and rejects an odd number of double quotes on that line. Keep every
+# line's double quotes balanced: no double-quoted string spanning lines, jq filters in
+# single quotes, multi-line text via unquoted heredocs.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  # One lane at a time: two pushes landing close together must not both decide there is
+  # drift and race to open/push two different bot/regen-<run_id> branches against the
+  # same stale state. Never cancelled -- each push is its own thing to verify, same
+  # reasoning as main-full.yml.
+  group: regen-on-main
+  cancel-in-progress: false
+
+jobs:
+  regen-on-main:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 2
+
+      - name: Loop guard
+        id: guard
+        run: |
+          set -eu
+          AUTHOR=$(git log -1 --format=%an)
+          SUBJECT=$(git log -1 --format=%s)
+          echo "triggering commit: $AUTHOR: $SUBJECT"
+          if [ "$AUTHOR" = "github-actions[bot]" ] || [ "$AUTHOR" = "aesop regen-on-main" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          elif [ "${SUBJECT#chore(regen)}" != "$SUBJECT" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Python
+        if: steps.guard.outputs.skip == 'false'
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Run every registered regenerator (tools/regen_all.py --fix)
+        id: regen
+        if: steps.guard.outputs.skip == 'false'
+        run: |
+          set -eu
+          python tools/regen_all.py --fix --json | tee "$RUNNER_TEMP/regen-result.json"
+          FIXED=$(python -c "import json,sys; print(json.load(open(sys.argv[1])).get('fixed', []))" "$RUNNER_TEMP/regen-result.json")
+          echo "fixed paths: $FIXED"
+          if [ "$FIXED" = "[]" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create the self-heal branch
+        id: branch
+        if: steps.guard.outputs.skip == 'false' && steps.regen.outputs.changed == 'true'
+        run: |
+          set -eu
+          BRANCH="bot/regen-${GITHUB_RUN_ID}"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git checkout -b "$BRANCH"
+          FILES=$(python -c "import json; d=json.load(open('$RUNNER_TEMP/regen-result.json')); print(', '.join(d.get('fixed', [])))")
+          git add -- $(python -c "import json; d=json.load(open('$RUNNER_TEMP/regen-result.json')); print(' '.join(d.get('fixed', [])))")
+          git commit -m "chore(regen): heal generated artifacts after clean-merge drift ($FILES)" -m "Co-Authored-By: aesop regen-on-main <noreply@github.com>"
+          git push origin "$BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch CI on the self-heal branch
+        if: steps.guard.outputs.skip == 'false' && steps.regen.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run ci.yml --ref "${{ steps.branch.outputs.branch }}"
+
+      - name: Open the self-heal PR and arm auto-merge
+        if: steps.guard.outputs.skip == 'false' && steps.regen.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -eu
+          BODY_FILE=$RUNNER_TEMP/regen-pr-body.md
+          cat > "$BODY_FILE" <<EOF
+          Automated generated-artifact self-heal from the regen-on-main workflow.
+
+          Files regenerated:
+          ${{ steps.branch.outputs.files }}
+
+          Triggering sha on main: ${{ github.sha }}
+          Run: $RUN_URL
+
+          🐢 Generated with Aesop
+          EOF
+          PR_URL=$(gh pr create --title "chore(regen): heal generated artifacts" --body-file "$BODY_FILE" --head "${{ steps.branch.outputs.branch }}" --base main)
+          echo "opened: $PR_URL"
+          gh pr merge --auto --squash "$PR_URL"
