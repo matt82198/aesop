@@ -66,6 +66,12 @@ WRITER_ALLOWLIST = [
     "tools/state_md_verifier.py",  # Verifies the on-disk STATE.md against git truth; it must
                                    # read the literal file, since reading the projection
                                    # instead would defeat the drift check it exists to make.
+    "tools/test_isolation_tripwire.py",  # Guard tool that validates DAEMON-WRITTEN heartbeat
+                                   # files (.watchdog-heartbeat/.monitor-heartbeat) by reading
+                                   # their raw bytes for epoch-bounds validity checks; same
+                                   # class as state_md_verifier.py — it exists to observe what
+                                   # daemons actually wrote on disk, so routing through the
+                                   # facade would defeat the check.
 ]
 
 # Markdown files that should only be written via the WriteAPI facade
