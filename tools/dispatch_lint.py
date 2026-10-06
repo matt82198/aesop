@@ -287,7 +287,7 @@ def format_violations(violations_by_file: Dict, as_json: bool = False) -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Dispatch linter — enforces merge automation and security rules"
+        description="Dispatch linter - enforces merge automation and security rules"
     )
     parser.add_argument(
         "path",

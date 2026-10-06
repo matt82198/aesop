@@ -144,5 +144,23 @@ class TestAutoMergeTimeout(unittest.TestCase):
             pass
 
 
+class TestAutoMergeHelpEncoding(unittest.TestCase):
+    """--help must not crash on a Windows cp1252 console (non-UTF-8 codepage)."""
+
+    def test_help_runs_clean_under_cp1252(self):
+        """python tools/auto_merge.py --help must exit 0 and print usage under cp1252."""
+        src = os.path.join(os.path.dirname(__file__), '..', 'tools', 'auto_merge.py')
+        env = {**os.environ, 'PYTHONIOENCODING': 'cp1252'}
+        result = subprocess.run(
+            [sys.executable, src, '--help'],
+            env=env, capture_output=True, text=True,
+        )
+        self.assertEqual(
+            result.returncode, 0,
+            f'--help crashed under cp1252 (stderr): {result.stderr}'
+        )
+        self.assertIn('usage', result.stdout)
+
+
 if __name__ == '__main__':
     unittest.main()
