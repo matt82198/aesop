@@ -968,7 +968,7 @@ SCANNER
   # fixture focused on main()'s stdin handling instead of gate behavior.
   for gate_stub in tracker_guard import_resolution_check claudemd_sync_gate \
                    gen_tool_index metrics_gate verify_test_suite_count encoding_lint \
-                   verify_test_coverage linux_shape_check; do
+                   verify_test_coverage conflict_marker_check linux_shape_check; do
     printf 'import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/$gate_stub.py"
   done
 

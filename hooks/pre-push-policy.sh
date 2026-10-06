@@ -759,6 +759,87 @@ check_import_resolution() {
   return $overall_exit_code
 }
 
+check_conflict_markers() {
+  # Literal conflict-marker gate (tools/conflict_marker_check.py --staged).
+  # Catches a clean-merge landing a literal <<<<<<<< / ======= / >>>>>>>>
+  # block in a tracked text file (PR #834 incident, merge commit b2c4db77 --
+  # claudemd_lint, claudemd_sync_gate, and all PR CI passed on it because none
+  # of them scan for literal conflict markers).
+  #
+  # Same file-list mechanism as check_secret_scan/check_import_resolution:
+  # get_commit_range() parses pre-push stdin into one "remote-sha..local-sha"
+  # range per ref tuple; this scans only ADDED lines in that range's diff
+  # (not the whole tree -- the full-tree sweep is CI's job), so it catches a
+  # marker introduced BY this push.
+  #
+  # Fail-open ONLY for missing optional tooling; an actual marker finding and
+  # malformed stdin stay fail-closed.
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local marker_script="$aesop_root/tools/conflict_marker_check.py"
+
+  local tool_status
+  tool_status=$(gate_tool_status "$aesop_root" "$marker_script")
+  if [ "$tool_status" = "skip" ]; then
+    log_event "conflict_marker_check_skipped_no_aesop_tools"
+    return 0
+  fi
+  if [ "$tool_status" = "missing" ]; then
+    gate_tool_missing_block "conflict_marker_check.py" "$marker_script"
+    log_event "conflict_marker_check_tool_missing"
+    return 1
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    gate_no_python_block "conflict marker check"
+    log_event "conflict_marker_check_no_python"
+    return 1
+  fi
+
+  local commit_ranges
+  commit_ranges=$(get_commit_range)
+  local parse_exit_code=$?
+
+  if [ $parse_exit_code -eq 2 ]; then
+    # Delete-only push: no content pushed, nothing to scan.
+    log_event "conflict_marker_check_skipped_delete_only_push"
+    return 0
+  fi
+
+  if [ $parse_exit_code -eq 3 ]; then
+    # Empty stdin: no tuples at all (e.g. up-to-date push), nothing to scan.
+    log_event "conflict_marker_check_skipped_empty_stdin"
+    return 0
+  fi
+
+  if [ $parse_exit_code -ne 0 ] || [ -z "$commit_ranges" ]; then
+    # Malformed stdin: fail-CLOSED (never silently degrade to "no files").
+    log_block "conflict_marker_check_stdin_parse_failed"
+    printf 'Error: Could not parse pre-push stdin for commit range (conflict marker check)\n' >&2
+    return 1
+  fi
+
+  local overall_exit_code=0
+  local range
+  while IFS= read -r range || [ -n "$range" ]; do
+    [ -z "$range" ] && continue
+
+    local check_output
+    check_output=$("$py_bin" "$marker_script" --staged "$range" 2>&1)
+    local check_exit_code=$?
+
+    if [ $check_exit_code -ne 0 ]; then
+      if [ -n "$check_output" ]; then
+        printf '%s\n' "$check_output" >&2
+      fi
+      overall_exit_code=$check_exit_code
+    fi
+  done <<< "$commit_ranges"
+
+  return $overall_exit_code
+}
+
 check_claudemd_sync() {
   # CLAUDE.md synchronization gate (tools/claudemd_sync_gate.py --check).
   # Ensures code changes are accompanied by domain CLAUDE.md updates.
@@ -2189,12 +2270,57 @@ GENPATHS
     test_failed=$((test_failed + 1))
   fi
 
+  printf '\n=== Test 28: check_conflict_markers skipped when tool missing, BLOCKS on a real marker ===\n'
+  (
+    export AESOP_ROOT="$tmpdir/aesop_no_conflict_check"
+    mkdir -p "$AESOP_ROOT"
+
+    if ! printf '' | check_conflict_markers >/dev/null 2>&1; then
+      printf 'FAIL: check_conflict_markers should fail-open (return 0) when tool missing\n'
+      exit 1
+    fi
+
+    real_repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+    marker_repo="$tmpdir/conflict_marker_repo"
+    rm -rf "$marker_repo"
+    mkdir -p "$marker_repo/tools"
+    cp "$real_repo_root/tools/conflict_marker_check.py" "$marker_repo/tools/conflict_marker_check.py"
+    git init -q "$marker_repo"
+    git -C "$marker_repo" config user.email "test@example.com"
+    git -C "$marker_repo" config user.name "Test User"
+    printf 'clean\n' > "$marker_repo/file.md"
+    git -C "$marker_repo" add -A
+    git -C "$marker_repo" commit -q -m base
+    base_sha=$(git -C "$marker_repo" rev-parse HEAD)
+    printf 'clean\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> feature\n' > "$marker_repo/file.md"
+    git -C "$marker_repo" add -A
+    git -C "$marker_repo" commit -q -m "introduces marker"
+    tip_sha=$(git -C "$marker_repo" rev-parse HEAD)
+
+    (
+      cd "$marker_repo" || exit 1
+      unset AESOP_ROOT
+      stdin_line="$tip_sha $tip_sha refs/heads/feature $base_sha"
+      if printf '%s\n' "$stdin_line" | check_conflict_markers >/dev/null 2>&1; then
+        printf 'FAIL: check_conflict_markers should BLOCK a push introducing a literal marker\n'
+        exit 1
+      fi
+      printf 'PASS: check_conflict_markers fail-opens on missing tool and blocks a real marker\n'
+    )
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
   printf '\n=== Test Results ===\n'
   printf 'PASSED: %d\n' "$test_passed"
   printf 'FAILED: %d\n' "$test_failed"
 
   if [ "$test_failed" -eq 0 ]; then
-    printf '\nAll 27 tests passed.\n'
+    printf '\nAll 28 tests passed.\n'
     return 0
   else
     printf '\nSome tests failed.\n'
@@ -2256,6 +2382,13 @@ main() {
   if ! check_import_resolution <<< "$prepush_stdin"; then
     printf 'Error: Python import resolution check failed. Push blocked.\n' >&2
     log_block "import_check_failure"
+    exit 1
+  fi
+
+  # Same captured stdin, same reason as above: reads the pushed ref range.
+  if ! check_conflict_markers <<< "$prepush_stdin"; then
+    printf 'Error: Literal conflict marker found in pushed content. Push blocked.\n' >&2
+    log_block "conflict_marker_check_failure"
     exit 1
   fi
 
