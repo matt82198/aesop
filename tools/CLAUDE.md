@@ -38,6 +38,14 @@ inline list (that conflict-magnet is why PR #751 moved the index out of here). I
 merges with the `union` driver (`.gitattributes`) — two PRs each adding a tool merge
 cleanly with both lines kept, then `gen_tool_index.py --regenerate` normalizes order.
 
+## Recent additions (2026-10)
+
+- `linux_shape_check.py` — WSL-based cross-platform test gate: detects commits touching
+  shell/workflow/Node files, runs test suites under WSL to catch Windows-only CI reds
+  (e.g., isolated-home USERPROFILE assumptions, shell failures on Ubuntu). Wired into
+  pre-push-policy.sh after generated_paths check. Tests: 17 unit cases covering skip/
+  notice/fail/require-wsl scenarios.
+
 ## Gates & tests
 - `secret_scan.py --staged` — pre-push gate (exit 0=clean/1=findings/2=error; `# secretscan: allow-pattern-docs` pragma)
 - **Receipt gate (measurement period)**: `emit_receipt.py --post` signs a local run (Ed25519 key at `$AESOP_RECEIPT_KEY`, pub `receipt_pubkey.pub`); `verify_receipt.py` recomputes tree hash + freshness; `verify-receipt.yml` non-required. `verify_receipt.py --fetch-for-head SHA --repo-slug OWNER/REPO` (backed by `fetch_receipt_for_head()`) is the Action's own lookup step — it NEVER raises; any lookup failure (gh api error, malformed payload, this module absent on a stale PR tree) degrades to "no receipt found" (absent), never a crash, since only a receipt actually found-and-invalid may fail the job (2026-10-06 incident: #856/#857 showed FAILURE from an uncaught ModuleNotFoundError in the old inline fetch script). See docs/RECEIPT-GATE.md.

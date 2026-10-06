@@ -241,3 +241,15 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
 ## 8. Report format
 Causal chain with `file:line` | gate output (literal) | the anti-vacuity run as literal output
 | gate counts | PR number | MERGED-state proof | worktree removed | **anything you refused to decide silently**.
+
+## 9. Linux shape — cross-platform test gate
+- **Shell, workflow, and Node-test changes are proven on the Linux shape before push**
+  (detect Windows-only CI red via WSL local testing): `tools/linux_shape_check.py` runs
+  shell and Node test suites under WSL when commits touch `*.sh`, `hooks/*`,
+  `.github/workflows/*.yml`, or `tests/**/*.test.mjs`.
+- On Windows with WSL available: tests run automatically before push; failures block push
+- On Windows without WSL: NOTICE printed, exit 0 (CI gate remains); set `AESOP_REQUIRE_LINUX_SHAPE=1`
+  to enforce local testing
+- On non-Windows: automatically skip (native Linux tests run on CI)
+- Node tests run with `USERPROFILE` unset to catch environment variable assumptions
+  (e.g., isolated-home tripwire test failures on Windows-only CI shard #864)
