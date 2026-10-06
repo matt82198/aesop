@@ -344,28 +344,39 @@ class CIThroughputTests(unittest.TestCase):
             "main-full-verify must shard Python tests 0-3"
         )
 
-    def test_main_full_excludes_unnecessary_ubuntu_shards(self):
-        """main-full.yml must exclude unnecessary Ubuntu shards (runs shard 0 only)."""
+    def test_main_full_runs_full_matrix_on_both_platforms(self):
+        """main-full is the post-merge integration gate: full os x shard matrix.
+
+        GAP 2026-10-06 (run 37504613105): #850 put `exclude:` beside `matrix:`
+        under `strategy:` to drop ubuntu shards 1-3. GitHub rejects that key
+        ("Unexpected value 'exclude'"), so main-full produced ZERO jobs for ~10
+        merges -- and the previous version of this test asserted the invalid
+        location, so it only passed BECAUSE the file was broken. Also, #850's
+        ubuntu "shard 0 only" ran `ci_shard_runner.py 0 4`, i.e. 1/4 of the
+        Python tests, not "all Python tests in one shard" as its comment said.
+        """
         jobs = self.main_full_workflow.get("jobs", {})
         main_full_verify = jobs.get("main-full-verify", {})
-
         strategy = main_full_verify.get("strategy", {})
-        exclude = strategy.get("exclude", [])
 
-        # Ubuntu should exclude shards 1, 2, 3 to avoid waste
-        self.assertGreater(len(exclude), 0, "main-full-verify must have exclude entries")
-
-        # Check that Ubuntu+shard combinations are excluded
-        found_excludes = 0
-        for entry in exclude:
-            if entry.get("os") == "ubuntu-latest":
-                found_excludes += 1
-
-        self.assertGreaterEqual(
-            found_excludes,
-            3,
-            "main-full-verify must exclude Ubuntu shards 1, 2, 3"
+        # `exclude`/`include` are matrix keys; under `strategy` GitHub rejects the file.
+        self.assertEqual(
+            set(strategy.keys()) - {"fail-fast", "matrix", "max-parallel"},
+            set(),
+            "strategy may only contain fail-fast/matrix/max-parallel; "
+            "`exclude` belongs INSIDE matrix (GitHub rejects it here)",
         )
+
+        matrix = strategy.get("matrix", {})
+        self.assertEqual(matrix.get("os"), ["ubuntu-latest", "windows-latest"])
+        self.assertEqual(matrix.get("python-shard"), [0, 1, 2, 3])
+
+        # No platform may be trimmed: every os must keep every shard.
+        for entry in matrix.get("exclude", []) or []:
+            self.fail(
+                "main-full-verify must run every shard on every platform; "
+                "exclude entry %r drops coverage from the integration gate" % (entry,)
+            )
 
 
 if __name__ == "__main__":
