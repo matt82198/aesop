@@ -173,7 +173,8 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   check suite that branch protection ignores.
 - **Generated paths (`tools/INDEX.md`, `tests/CLAUDE.md`, etc. — registry: `tools/generated_paths.py`) carry no override
   flag.** A push touching one is safe only when its bytes are byte-identical to that path's registered generator run in the
-  same commit; the sync gate checks this directly and there is no environment variable that waives it.
+  same commit; the sync gate checks this directly and there is no environment variable that waives it. `tools/INDEX.md` merges
+  with the `union` driver (`.gitattributes`); always run `gen_tool_index.py --regenerate` after merging main to normalize order.
 - **Before pushing, run the shard for your test file.** Run `python tools/ci_shard_runner.py <n> 4` for the shard that owns your
   test file (see tests/CLAUDE.md for shard assignment). CI is confirmation of local verification, not discovery of breakage. Paste
   the shard output to your report: it proves your changes work before they hit main.

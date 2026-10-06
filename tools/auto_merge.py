@@ -109,6 +109,7 @@ def fix_branch(branch):
             return False, 'merge conflict unresolvable'
 
     run([sys.executable, 'tools/claudemd_lint.py'], check=False, timeout=30)
+    run([sys.executable, 'tools/gen_tool_index.py', '--regenerate'], check=False, timeout=30)
 
     git(['add', '-A'], check=False)
     r = git(['diff', '--cached', '--quiet'], check=False)

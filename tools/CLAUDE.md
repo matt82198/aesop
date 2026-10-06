@@ -21,7 +21,9 @@ Full one-liner index of every tool in this directory: see `tools/INDEX.md` (gene
 by `tools/gen_tool_index.py --regenerate` from each file's own `INDEX:` header line;
 never hand-edit it -- the byte-identity gate rejects drift). This file stays navigation
 only so a tool-adding PR never conflicts with every other in-flight PR over the same
-inline list (that conflict-magnet is why PR #751 moved the index out of here).
+inline list (that conflict-magnet is why PR #751 moved the index out of here). Index
+merges with the `union` driver (`.gitattributes`) — two PRs each adding a tool merge
+cleanly with both lines kept, then `gen_tool_index.py --regenerate` normalizes order.
 
 ## Gates & tests
 - `secret_scan.py --staged` — pre-push gate (exit 0=clean/1=findings/2=error; `# secretscan: allow-pattern-docs` pragma)
