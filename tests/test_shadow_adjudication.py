@@ -13,6 +13,7 @@ stdlib-only (unittest), ASCII-only, Windows + Linux safe.
 """
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -533,6 +534,56 @@ class TestEvidenceMechanismMode(unittest.TestCase):
                 f"Item {item.id}: mechanism mode must have exactly 2 evidence items "
                 f"(no [3] conclusion clause), got {len(pack.evidence)}: {list(pack.evidence.keys())}",
             )
+
+
+class TestEnrichedPackIsCwdIndependent(unittest.TestCase):
+    """Regression: build_finding_context_pack(enriched=True) must never depend on
+    the process cwd (incident 2026-10-06, PR #841 x shadow_adjudication.py).
+
+    build_finding_context_pack() builds its brief entirely in memory (the
+    finding text + source lens). Before the fix, the enriched path threw that
+    away and re-derived the pack via build_context_pack() with a fake
+    'brief:finding' source -- which resolves "finding" as a literal relative
+    filesystem path against whatever the process cwd happens to be. That is
+    accidentally harmless when cwd == repo_root (silently returns "File not
+    found: finding" and drops the real brief) and raises ContextPackViolation
+    whenever cwd is anything else (e.g. a prior test's tearDown left cwd at
+    "/"). Both outcomes are wrong; this test pins down the only correct one:
+    the real finding brief, present, regardless of cwd.
+    """
+
+    def test_enriched_pack_survives_cwd_outside_repo_root(self):
+        corpus_path = (
+            REPO_ROOT / "driver" / "decisions" / "shadow" / "corpus-2026-07-23.jsonl"
+        )
+        corpus = load_corpus(str(corpus_path))
+        item = corpus[0]
+        self.assertGreaterEqual(len(item.evidence), 2, "Test item must have evidence")
+
+        repo_root = REPO_ROOT
+        conductor_root = REPO_ROOT.parent / "conductor3"
+
+        saved_cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as outside_dir:
+            try:
+                # Simulate the leaked-cwd condition: process cwd points somewhere
+                # that is NOT under repo_root or conductor_root at all.
+                os.chdir(outside_dir)
+
+                pack = build_finding_context_pack(
+                    item, str(repo_root), str(conductor_root),
+                    enriched=True, evidence_mode="full",
+                )
+            finally:
+                os.chdir(saved_cwd)
+
+        # Must not have silently lost the real brief to a "File not found"
+        # placeholder, and must not have raised ContextPackViolation either.
+        self.assertIn("finding", pack.content)
+        self.assertIn("FINDING:", pack.content["finding"])
+        self.assertIn(item.finding_text, pack.content["finding"])
+        self.assertNotIn("File not found", pack.content["finding"])
+        self.assertGreaterEqual(len(pack.evidence), 2)
 
 
 class TestEvidenceSymmetry(unittest.TestCase):

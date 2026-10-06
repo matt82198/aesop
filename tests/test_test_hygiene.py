@@ -194,6 +194,72 @@ class TestTestHygiene(unittest.TestCase):
             msg += "\n".join(f"  {v}" for v in violations)
             self.fail(msg)
 
+    def test_teardown_chdir_restores_a_saved_cwd_not_a_literal(self):
+        """Fail if a tearDown/tearDownModule os.chdir() target is a hardcoded
+        string literal instead of a variable holding a cwd captured earlier.
+
+        PR #841 incident (2026-10-06): tests/test_index_union_merge.py's
+        tearDown called os.chdir("/") -- a literal, not the pre-test cwd it
+        never saved. test_no_bare_os_chdir_without_restoration() above treats
+        ANY os.chdir() call inside tearDown/tearDownModule as adequate
+        "restoration" (it only scrutinizes chdir calls made directly inside
+        test_* bodies), so a tearDown that chdir's to the wrong place entirely
+        passes silently. That let the PR merge green on its own shard, then
+        broke tests/test_shadow_adjudication.py once a later PR's shard
+        happened to colocate the two files in one pytest process: the leaked
+        cwd ("/") made a legitimate in-memory evidence brief resolve as
+        outside context_pack.py's allowlist.
+
+        Every legitimate restoration in this suite (test_health_score.py,
+        test_self_stats.py, the _MODULE_SAVED_CWD pattern, etc.) passes a
+        Name/Attribute (a saved variable) to os.chdir() in tearDown -- never a
+        string literal. That makes "chdir target is a literal" a precise
+        signal for this exact defect class, not a style preference.
+        """
+        tests_dir = Path(__file__).parent
+        violations = []
+
+        for test_file in sorted(tests_dir.glob("test_*.py")):
+            if test_file.name == "test_test_hygiene.py":
+                continue
+
+            try:
+                with open(test_file, "r", encoding="utf-8") as f:
+                    source = f.read()
+                    tree = ast.parse(source, filename=str(test_file))
+            except SyntaxError as e:
+                self.fail(f"Syntax error in {test_file}: {e}")
+
+            visitor = CallVisitor()
+            visitor.visit(tree)
+
+            for call_info in visitor.calls:
+                if call_info['function'] != 'os.chdir':
+                    continue
+                func_name = call_info['in_function']
+                if not func_name or not (
+                    func_name == 'tearDown' or func_name == 'tearDownModule'
+                ):
+                    continue
+
+                node = call_info['node']
+                if not node.args:
+                    continue
+                arg = node.args[0]
+                if isinstance(arg, ast.Constant):
+                    violations.append(
+                        f"{test_file.name}:{call_info['lineno']} in {func_name}(): "
+                        f"os.chdir({arg.value!r}) restores to a hardcoded literal, "
+                        f"not a saved cwd. Capture the original cwd in setUp/"
+                        f"setUpModule (e.g. self._saved_cwd = os.getcwd()) and "
+                        f"restore THAT variable here."
+                    )
+
+        if violations:
+            msg = "Found tearDown os.chdir() literal-target violations:\n"
+            msg += "\n".join(f"  {v}" for v in violations)
+            self.fail(msg)
+
     def test_no_git_config_user_outside_temp_repos(self):
         """Fail if any test calls git config user.* on the live repo (not temp)."""
         tests_dir = Path(__file__).parent
