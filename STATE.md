@@ -40,7 +40,7 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 6. **Portability path scan (box-restore / trigger-layer absolutization)** (REFACTOR). Ensure all scripts invoked by scheduled tasks use absolute paths (AESOP_HOME or durable ~/scripts location). Validates guardrail proposal from refinesystem R1. Medium effort; medium impact (multi-box readiness).
    Evidence from 2026-09-10 half-restore incident: settings hooks pointed at wrong profile, scheduled-task StartBoundary in past prevented first run, packed-refs/pack loss on restore. Guardrail tracked in PR #793.
 
-7. **Dead-baseline liveness check** (GUARDRAIL #3). Verify that unused test baselines (e.g., .encoding-baseline.json if no encoding tests) do not accumulate. Proposed in refinesystem R1 (lens6, deferred). Low effort; low impact (hygiene).
+7. **Dead-baseline liveness check** (GUARDRAIL #3) — DONE (this PR). `tools/baseline_liveness_check.py` finds each ratchet baseline's consumer and re-runs its own `--baseline FILE --json` check for stale entries; wired into ci.yml. Real-repo run found `.encoding-baseline.json` dead (no consumer -- `encoding_lint.py` never had a `--baseline` flag) and removed it; `.stateapi-baseline.json`/`.portability-baseline.json`/`.subprocess-guard-baseline.json` all healthy (zero stale entries).
 
 8. **Stats-refresh PR jam** (RESOLVED). PR #781 (keeper stats) merged. Portfolio stats pipeline validated (2026-10-05). v0.8.0 released with freshness gate active; board catch-up lane started.
 
