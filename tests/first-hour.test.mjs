@@ -81,10 +81,18 @@ async function runTests() {
       const cliScript = path.join(projectRoot, 'bin', 'cli.js');
       const targetDir = path.join(tempDir, 'test-fleet');
 
-      await execAsync(`node "${cliScript}" "${targetDir}" --name "test-fleet" --yes`, {
+      const scaffoldResult = await execAsync(`node "${cliScript}" "${targetDir}" --name "test-fleet" --yes`, {
         cwd: projectRoot,
         stdio: 'pipe'
       });
+      // Diagnostic (PR #784): the scaffold process always exits 0 even when
+      // initializeGitRepo's internal git calls fail (it degrades gracefully
+      // by design), so execAsync never rejects and this output was
+      // previously discarded -- hiding the real git error on CI. Print it
+      // unconditionally so a CI failure a few lines below names the cause
+      // instead of only showing "fatal: ... no commits yet".
+      if (scaffoldResult.stdout) process.stdout.write(scaffoldResult.stdout);
+      if (scaffoldResult.stderr) process.stderr.write(scaffoldResult.stderr);
 
       // Check .git exists
       const gitDir = path.join(targetDir, '.git');

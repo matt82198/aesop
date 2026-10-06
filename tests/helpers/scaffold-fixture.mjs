@@ -129,6 +129,12 @@ export function scaffoldOnce(dirName, opts = {}) {
     if (opts.force) args.push('--force');
   }
 
+  // Skill installation isn't under test via this shared fixture; without this,
+  // every scaffold/wizard call here would write into the real ~/.claude/skills/
+  // (isolation contract documented in cli-skills-install.test.mjs) and contend
+  // with it on CI Windows runners.
+  if (!opts.skills) args.push('--no-skills');
+
   // Run scaffold (use tunable timeout)
   const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 120000;
   const cwd = mode === 'wizard' ? tempBase : path.dirname(targetDir);

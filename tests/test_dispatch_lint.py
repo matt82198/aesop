@@ -38,16 +38,67 @@ class TestDispatchLint(unittest.TestCase):
         violations = find_violations(Path("test.py"), content)
         self.assertTrue(any(v["pattern"] == "admin_flag" for v in violations))
 
-    def test_detects_auto_flag(self):
-        """Detects '--auto' flag."""
+    def test_allows_armed_native_auto_merge_with_pr_number(self):
+        """LANE-CONTRACT.md requires lanes to arm native auto-merge at PR open:
+        `gh pr merge <n> --auto --squash`. This exact, policy-sanctioned form
+        (explicit PR number + --auto) must NOT be flagged -- the gate must not
+        contradict the contract it is supposed to enforce (GAP: merge actor
+        session-independence, 2026-10-06)."""
         content = """
         Agent()
         dispatch_prompt = '''
-        Run: gh pr merge --auto 123
+        After gh pr create, run: gh pr merge 123 --auto --squash
         '''
         """
         violations = find_violations(Path("test.py"), content)
-        self.assertTrue(any(v["pattern"] == "auto_flag" for v in violations))
+        self.assertFalse(any(v["pattern"] in ("gh_pr_merge", "auto_flag", "gh_pr_merge_auto_bare")
+                              for v in violations))
+
+    def test_allows_pr_number_after_auto_flag(self):
+        """PR number may appear after --auto (gh CLI accepts either order);
+        still a legitimate arm-and-exit, not a bare invocation."""
+        content = """
+        Agent()
+        dispatch_prompt = '''
+        Run: gh pr merge --auto 123 --squash
+        '''
+        """
+        violations = find_violations(Path("test.py"), content)
+        self.assertFalse(any(v["pattern"] in ("gh_pr_merge", "auto_flag", "gh_pr_merge_auto_bare")
+                              for v in violations))
+
+    def test_forbids_bare_auto_merge_without_pr_number(self):
+        """`gh pr merge --auto` with no explicit PR number/URL anywhere on the
+        line is still forbidden -- ambiguous target, matches the live
+        no-orchestrator-merge-train PreToolUse hook's own denial semantics."""
+        content = """
+        Agent()
+        dispatch_prompt = '''
+        Run: gh pr merge --auto --squash
+        '''
+        """
+        violations = find_violations(Path("test.py"), content)
+        self.assertTrue(any(v["pattern"] == "gh_pr_merge_auto_bare" for v in violations))
+
+    def test_forbids_manual_merge_without_auto(self):
+        """`gh pr merge <n>` with no --auto is still a manual/direct merge --
+        forbidden; lanes only ever arm, never merge directly."""
+        content = """
+        Agent()
+        gh pr merge 123 --squash
+        """
+        violations = find_violations(Path("test.py"), content)
+        self.assertTrue(any(v["pattern"] == "gh_pr_merge" for v in violations))
+
+    def test_admin_flag_forbidden_even_when_auto_present(self):
+        """--admin is forbidden regardless of --auto; arming auto-merge never
+        licenses an admin-override merge."""
+        content = """
+        Agent()
+        gh pr merge 123 --admin --auto
+        """
+        violations = find_violations(Path("test.py"), content)
+        self.assertTrue(any(v["pattern"] == "admin_flag" for v in violations))
 
     def test_detects_no_verify_flag(self):
         """Detects '--no-verify' flag."""
@@ -201,7 +252,7 @@ line 2
         """
         violations = find_violations(Path("test.py"), content)
         v = [v for v in violations if v["pattern"] == "gh_pr_merge"][0]
-        self.assertIn("auto_merge", v["description"])
+        self.assertIn("auto-merge", v["description"])
 
     def test_json_cli_output(self):
         """CLI --json produces valid JSON."""

@@ -39,6 +39,8 @@ const args = process.argv.slice(2);
 const helpFlag = args.includes('--help') || args.includes('-h');
 const forceFlag = args.includes('--force');
 const yesFlag = args.includes('--yes');
+const noSkillsFlag = args.includes('--no-skills');
+const installDepsFlag = args.includes('--install-deps');
 
 // Python dispatch table: namespace -> { verb -> script_path }
 const pythonNamespaces = {
@@ -122,7 +124,7 @@ function resolvePythonInterpreter() {
   for (const interpreter of ['python3', 'python']) {
     try {
       // Verify it actually executes and outputs something
-      execSync(`${interpreter} --version`, { stdio: 'pipe', timeout: 2000 });
+      execSync(`${interpreter} --version`, { stdio: 'pipe', timeout: 2000, windowsHide: true });
       return interpreter;
     } catch (e) {
       // This interpreter doesn't work; try next
@@ -187,7 +189,8 @@ if (isPythonDispatch && args.length >= 1) {
     const { spawnSync } = require('child_process');
     const result = spawnSync(pythonInterp, [scriptPath, ...scriptArgs], {
       stdio: 'inherit',
-      timeout: 600000  // 10 min timeout
+      timeout: 600000,  // 10 min timeout
+      windowsHide: true
     });
 
     // Propagate exact exit code (0, 1, 2, ...); fail closed on error or signal-kill
@@ -235,7 +238,8 @@ if (isRuntimeCommand) {
     const runnerScript = path.join(__dirname, '..', 'tools', 'runner_install.py');
     const result = spawnSync(pythonInterp, [runnerScript, ...args.slice(1)], {
       stdio: 'inherit',
-      timeout: 600000
+      timeout: 600000,
+      windowsHide: true
     });
     if (result.error) {
       console.error(`Error spawning ${pythonInterp}: ${result.error.message}`);
@@ -267,13 +271,15 @@ if (isRuntimeCommand) {
     }
     const result = spawnSync('python3', [initScript, ...initArgs], {
       stdio: 'inherit',
-      timeout: 30000
+      timeout: 30000,
+      windowsHide: true
     });
     if (result.error) {
       // Fallback to 'python' if 'python3' is not found
       const fallback = spawnSync('python', [initScript, ...initArgs], {
         stdio: 'inherit',
-        timeout: 30000
+        timeout: 30000,
+        windowsHide: true
       });
       process.exit(exitCodeFromSpawnResult(fallback));
     } else {
@@ -432,7 +438,8 @@ function resolveRealGitDir(targetDir) {
           cwd: targetDir,
           stdio: 'pipe',
           timeout: 5000,
-          encoding: 'utf8'
+          encoding: 'utf8',
+          windowsHide: true
         }).trim();
 
         if (commonDir) {
@@ -528,8 +535,10 @@ Arguments:
 
 Options:
   --help, -h              Show this help message
-  --force                 Replace any existing .git/hooks/pre-push during scaffold
+  --force                 Replace any existing .git/hooks/pre-push and overwrite installed skills
   --yes                   Skip interactive prompts, use defaults (CI-safe)
+  --no-skills             Do not install skills into ~/.claude/skills/ (scaffold only)
+  --install-deps          Run npm install and pip install -r requirements.txt in the target
   --name <name>           Project name (for headless scaffolding; generates CLAUDE.md + aesop.config.json)
   --domains <list>        Comma-separated domain list (e.g., "api,worker,monitoring")
   --repos <paths>         Comma-separated repo paths (e.g., "/path/to/repo1,/path/to/repo2")
@@ -629,7 +638,11 @@ if (fs.existsSync(targetDir)) {
     'CHANGELOG.md',
     'CLAUDE-TEMPLATE.md',
     'CLAUDE.md',
-    'MEMORY-SEED.md'
+    'MEMORY-SEED.md',
+    // Scaffolded dependency manifests; without these, re-scaffolding a target
+    // aborts because its own output looks like an unexpected file.
+    'requirements.txt',
+    'requirements-dev.txt'
   ];
   const allowedItems = new Set([...aesopDirs, ...aesopFiles]);
 
@@ -683,7 +696,11 @@ const filesToCopy = [
   'README.md',
   'LICENSE',
   'CHANGELOG.md',
-  'CLAUDE-TEMPLATE.md'
+  'CLAUDE-TEMPLATE.md',
+  // Shipped so a scaffolded fleet can install its own Python dependencies
+  // (--install-deps); without these the target has no dependency manifest.
+  'requirements.txt',
+  'requirements-dev.txt'
 ];
 
 let copiedCount = 0;
@@ -704,6 +721,137 @@ function copyRecursive(src, dest) {
     fs.copyFileSync(src, dest);
     copiedCount++;
   }
+}
+
+// Install the scaffolded skills into the only directory Claude Code scans.
+// A skill left in ./skills/ is never discovered, so scaffolding without this
+// step produces a fleet whose orchestrator cannot be invoked. Idempotent:
+// identical skills are left alone, divergent ones are preserved unless --force.
+function installSkills(targetDir, { force = false, skip = false } = {}) {
+  if (skip) {
+    console.log('- Skipped skill installation (--no-skills)');
+    return { installed: [], skipped: [], diverged: [] };
+  }
+
+  const sourceDir = path.join(targetDir, 'skills');
+  if (!fs.existsSync(sourceDir)) {
+    return { installed: [], skipped: [], diverged: [] };
+  }
+
+  // AESOP_SKILLS_HOME redirects the install target so tests never write to the
+  // real ~/.claude (test-hygiene rule: no global state outside temp dirs).
+  const skillsHome = process.env.AESOP_SKILLS_HOME
+    || path.join(os.homedir(), '.claude', 'skills');
+
+  // Refuse to follow a symlinked skills dir (same guard as the pre-push hook install)
+  try {
+    if (fs.existsSync(skillsHome) && fs.lstatSync(skillsHome).isSymbolicLink()) {
+      console.warn('⚠ Warning: ~/.claude/skills is a symlink (security risk); skipping skill installation');
+      return { installed: [], skipped: [], diverged: [] };
+    }
+  } catch (e) {
+    // lstat failed; proceed
+  }
+
+  const names = fs.readdirSync(sourceDir).filter(name => {
+    try {
+      return fs.statSync(path.join(sourceDir, name)).isDirectory();
+    } catch (e) {
+      return false;
+    }
+  });
+  if (names.length === 0) {
+    return { installed: [], skipped: [], diverged: [] };
+  }
+
+  fs.mkdirSync(skillsHome, { recursive: true });
+
+  const installed = [];
+  const skipped = [];
+  const diverged = [];
+
+  names.forEach(name => {
+    const from = path.join(sourceDir, name);
+    const to = path.join(skillsHome, name);
+    const fromSkill = path.join(from, 'SKILL.md');
+    const toSkill = path.join(to, 'SKILL.md');
+
+    if (fs.existsSync(toSkill) && !force) {
+      const same = fs.existsSync(fromSkill)
+        && fs.readFileSync(fromSkill, 'utf8') === fs.readFileSync(toSkill, 'utf8');
+      if (same) {
+        skipped.push(name);
+      } else {
+        diverged.push(name);
+      }
+      return;
+    }
+
+    copyRecursive(from, to);
+    installed.push(name);
+  });
+
+  if (installed.length > 0) {
+    console.log(`✓ Installed ${installed.length} skill(s) to ${skillsHome}: ${installed.join(', ')}`);
+  }
+  if (skipped.length > 0) {
+    console.log(`✓ ${skipped.length} skill(s) already installed and identical: ${skipped.join(', ')}`);
+  }
+  if (diverged.length > 0) {
+    console.warn(`⚠ Kept your existing version of: ${diverged.join(', ')} (use --force to overwrite)`);
+  }
+  if (installed.length > 0) {
+    console.log('  Restart Claude Code to pick them up — skills are enumerated at startup.');
+  }
+
+  return { installed, skipped, diverged };
+}
+
+// Install Node and Python dependencies into the scaffolded fleet. Opt-in:
+// scaffolding must stay offline-safe, so this only runs behind --install-deps.
+function installDependencies(targetDir, { enabled = false } = {}) {
+  if (!enabled) {
+    return { ran: [] };
+  }
+
+  const { spawnSync } = require('child_process');
+  const ran = [];
+
+  const pkgJson = path.join(targetDir, 'package.json');
+  if (fs.existsSync(pkgJson)) {
+    console.log('→ Installing Node dependencies (npm install)...');
+    const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+    const res = spawnSync(npmCmd, ['install'], { cwd: targetDir, stdio: 'inherit', windowsHide: true });
+    if (res.status === 0) {
+      console.log('✓ Node dependencies installed');
+      ran.push('npm');
+    } else {
+      console.warn('⚠ npm install failed; install Node dependencies manually');
+    }
+  }
+
+  const requirements = path.join(targetDir, 'requirements.txt');
+  if (fs.existsSync(requirements)) {
+    const python = resolvePythonInterpreter();
+    if (!python) {
+      console.warn('⚠ No Python interpreter found; skipping Python dependencies');
+    } else {
+      console.log('→ Installing Python dependencies (pip install -r requirements.txt)...');
+      const res = spawnSync(python, ['-m', 'pip', 'install', '-r', requirements], {
+        cwd: targetDir,
+        stdio: 'inherit',
+        windowsHide: true
+      });
+      if (res.status === 0) {
+        console.log('✓ Python dependencies installed');
+        ran.push('pip');
+      } else {
+        console.warn('⚠ pip install failed; install Python dependencies manually');
+      }
+    }
+  }
+
+  return { ran };
 }
 
 function generateDomainText(domainsStr) {
@@ -837,8 +985,8 @@ async function printNextStepsAndWatchdog(rl, targetDir, configPath, port) {
   console.log('2. Set real repository URLs in aesop.config.json:');
   console.log('     Edit aesop.config.json — replace placeholder URLs (https://github.com/user/...) with actual repo URLs');
   console.log('');
-  console.log('3. Set up orchestration skills:');
-  console.log('     Skills scaffolded to ./skills/ — copy to ~/.claude/skills/ or run /power to auto-discover');
+  console.log('3. Orchestration skills were installed to ~/.claude/skills/ automatically:');
+  console.log('     Restart Claude Code to pick them up; skills are enumerated at startup.');
   console.log('');
   console.log('4. Run preflight checks:');
   console.log('     aesop doctor  (or: npx @matt82198/aesop doctor)');
@@ -861,7 +1009,7 @@ async function printNextStepsAndWatchdog(rl, targetDir, configPath, port) {
           const watchdogScript = path.join(targetDir, 'daemons', 'run-watchdog.sh');
           if (fs.existsSync(watchdogScript)) {
             // Use bash to run the script
-            execSync(`bash "${watchdogScript}" --once`, { stdio: 'inherit', cwd: targetDir });
+            execSync(`bash "${watchdogScript}" --once`, { stdio: 'inherit', cwd: targetDir, windowsHide: true });
             console.log('\n✓ Watchdog smoke test completed');
           }
         } catch (e) {
@@ -885,22 +1033,99 @@ function initializeGitRepo(targetDir, noGitFlag = false) {
     return false;  // Git already initialized
   }
 
-  try {
-    // Initialize git repo
-    execSync('git init -q', { cwd: targetDir, stdio: 'pipe' });
-    console.log('✓ Initialized git repository');
+  // Every git invocation below gets a bounded timeout: unlike every other
+  // subprocess call in this file (resolvePythonInterpreter, resolveRealGitDir,
+  // installDependencies, the Python dispatch spawns), these five execSync calls
+  // historically had NO timeout -- a lock contention, credential prompt, or GPG
+  // signing hang on any one of them blocked indefinitely with no way out,
+  // observed as a full node --test file-level 180s timeout with zero subtest
+  // output on CI's windows-shard(0) (git init is optional/best-effort for a
+  // scaffold; fail fast and move on rather than hang forever).
+  //
+  // The timeout alone was not sufficient on CI (PR #784): `timeout` kills the
+  // immediate child, but on Windows that does not reliably reach a grandchild
+  // (e.g. a credential-manager UI, pinentry, or a hooksPath script a global/
+  // system gitconfig on the runner image points `init.templateDir`/hooks at)
+  // that is still holding the inherited stdio pipes open -- execSync then
+  // keeps waiting on those pipes well past its own timeout, which is exactly
+  // the zero-subtest-output 180s file-level hang this guards against. So every
+  // invocation also: (a) disables hooks for this throwaway repo (-c
+  // core.hooksPath=), (b) never signs (-c commit.gpgsign=false — applied to
+  // every command, not only commit, since init/config can themselves trigger a
+  // signing-related hook or template), and (c) sets GIT_TERMINAL_PROMPT=0 so
+  // git fails fast instead of blocking on a credential/terminal prompt with no
+  // TTY attached.
+  //
+  // `add -A` gets a MUCH larger timeout than the other four calls: CI's
+  // windows-shard(0) log (PR #784) proved this is not a hang at all -- the
+  // instrumentation below caught it mid-flight, stderr showed only the
+  // ordinary "LF will be replaced by CRLF" warning, then execSync's own
+  // 15000ms budget fired and SIGKILLed it (message: "spawnSync cmd.exe
+  // ETIMEDOUT"). `add -A` here stages the entire copied template tree
+  // (daemons/dash/monitor/tools/ui/docs/state_store/skills/mcp/scan/hooks/
+  // driver -- hundreds of files), and GitHub's hosted Windows runners are
+  // known to be slow at exactly this (per-file CRLF normalization plus
+  // Windows Defender real-time scanning on every file `git add` touches);
+  // this box's local run finishes the same `add -A` in well under a second
+  // with no such scanning overhead. 15s was simply too tight for a legitimate
+  // slow operation, not a deadlock -- raising it is the fix, not a workaround:
+  // a true hang still gets caught and named well inside the 180s file-level
+  // test timeout (every other step here finishes in milliseconds).
+  const GIT_OP_TIMEOUT_MS = 15000;
+  const GIT_OP_TIMEOUT_MS_HEAVY = 60000;
+  const GIT_SAFE_FLAGS = '-c core.hooksPath= -c commit.gpgsign=false';
+  const gitOpts = {
+    cwd: targetDir,
+    stdio: 'pipe',
+    timeout: GIT_OP_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
+    windowsHide: true,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+  };
+  const gitOptsHeavy = { ...gitOpts, timeout: GIT_OP_TIMEOUT_MS_HEAVY };
 
-    // Create initial commit
-    execSync('git config user.email "aesop-scaffold@local"', { cwd: targetDir, stdio: 'pipe' });
-    execSync('git config user.name "Aesop Scaffold"', { cwd: targetDir, stdio: 'pipe' });
-    execSync('git add -A', { cwd: targetDir, stdio: 'pipe' });
-    execSync('git commit -q -m "Initial aesop scaffold"', { cwd: targetDir, stdio: 'pipe' });
+  // Diagnostic instrumentation (kept permanently, not a one-off debug aid):
+  // each step logs to stderr before it runs so a CI failure names the exact
+  // git subcommand involved instead of surfacing only the generic catch-all
+  // warning below. Cheap, and this path has twice silently swallowed the
+  // real git stderr on CI (PR #784) while the catch-all warning above gave
+  // no way to tell which of the five calls failed or why.
+  const steps = [
+    ['init', `git ${GIT_SAFE_FLAGS} init -q`, gitOpts],
+    ['config-email', `git ${GIT_SAFE_FLAGS} config user.email "aesop-scaffold@local"`, gitOpts],
+    ['config-name', `git ${GIT_SAFE_FLAGS} config user.name "Aesop Scaffold"`, gitOpts],
+    ['add', `git ${GIT_SAFE_FLAGS} add -A`, gitOptsHeavy],
+    ['commit', `git ${GIT_SAFE_FLAGS} commit -q -m "Initial aesop scaffold"`, gitOptsHeavy]
+  ];
+
+  let lastStep = null;
+  try {
+    for (const [name, cmd, opts] of steps) {
+      lastStep = name;
+      process.stderr.write(`[git-init] step=${name} cmd=git cwd=${targetDir}\n`);
+      execSync(cmd, opts);
+      process.stderr.write(`[git-init] step=${name} ok\n`);
+    }
+    console.log('✓ Initialized git repository');
     console.log('✓ Created initial git commit');
     return true;
   } catch (e) {
-    // Git operations failed, continue anyway
+    // Git operations failed (or timed out), continue anyway
+    if (e.signal || e.code === 'ETIMEDOUT') {
+      console.warn(`⚠ git initialization timed out or was killed (${e.signal || e.code}); continuing without a git repo`);
+    }
     console.warn('⚠ Warning: Failed to initialize git repo automatically');
     console.warn('  Run manually: cd ' + targetDir + ' && git init && git add -A && git commit -m "Initial commit"');
+    // Named-cause diagnostics: print the real failure instead of swallowing
+    // it. These go to stderr so they show up in CI logs without disturbing
+    // anything that parses stdout.
+    process.stderr.write(`[git-init] FAILED at step=${lastStep}\n`);
+    process.stderr.write(`[git-init] message=${e.message}\n`);
+    if (e.status !== undefined) process.stderr.write(`[git-init] status=${e.status}\n`);
+    if (e.signal) process.stderr.write(`[git-init] signal=${e.signal}\n`);
+    if (e.code) process.stderr.write(`[git-init] code=${e.code}\n`);
+    if (e.stdout) process.stderr.write(`[git-init] stdout=${e.stdout.toString()}\n`);
+    if (e.stderr) process.stderr.write(`[git-init] stderr=${e.stderr.toString()}\n`);
     return false;
   }
 }
@@ -1308,6 +1533,10 @@ if (!isRuntimeCommand) {
     // Install the pre-commit waveguard hook (only works if .git exists)
     installPreCommitWaveguard(finalTargetDir, templateRoot);
 
+    // Install skills where Claude Code can actually find them, and (opt-in) deps
+    installSkills(finalTargetDir, { force: forceFlag, skip: noSkillsFlag });
+    installDependencies(finalTargetDir, { enabled: installDepsFlag });
+
     console.log(`\n✅ Scaffolded aesop template into "${finalTargetDir}" (${copiedCount} files)`);
 
     if (wizardMode && wizardRl) {
@@ -1325,9 +1554,9 @@ if (!isRuntimeCommand) {
       console.log('2. Set real repository URLs in aesop.config.json:');
       console.log('     Edit aesop.config.json — replace placeholder URLs (https://github.com/user/...) with actual repo URLs');
       console.log('');
-      console.log('3. Copy the skills (required for orchestration):');
-      console.log('     cp ~/.claude/skills/power/SKILL.md . (verify it exists first)');
-      console.log('     cp ~/.claude/skills/buildsystem/SKILL.md . (verify it exists first)');
+      console.log('3. Skills were installed to ~/.claude/skills/ automatically (see above):');
+      console.log('     Restart Claude Code to pick them up — skills are enumerated at startup.');
+      console.log('     Re-run with --no-skills to skip, or --force to overwrite your own versions.');
       console.log('');
       console.log('4. Run preflight checks:');
       console.log('     aesop doctor  (or: npx @matt82198/aesop doctor)');
@@ -1354,9 +1583,9 @@ if (!isRuntimeCommand) {
       console.log('2. Set real repository URLs in aesop.config.json:');
       console.log('     Edit aesop.config.json — replace placeholder URLs (https://github.com/user/...) with actual repo URLs');
       console.log('');
-      console.log('3. Copy the skills (required for orchestration):');
-      console.log('     cp ~/.claude/skills/power/SKILL.md . (verify it exists first)');
-      console.log('     cp ~/.claude/skills/buildsystem/SKILL.md . (verify it exists first)');
+      console.log('3. Skills were installed to ~/.claude/skills/ automatically (see above):');
+      console.log('     Restart Claude Code to pick them up — skills are enumerated at startup.');
+      console.log('     Re-run with --no-skills to skip, or --force to overwrite your own versions.');
       console.log('');
       console.log('4. Run preflight checks:');
       console.log('     aesop doctor  (or: npx @matt82198/aesop doctor)');
@@ -1384,9 +1613,9 @@ if (!isRuntimeCommand) {
       console.log('     Edit CLAUDE-TEMPLATE.md and save as CLAUDE.md');
       console.log('     Update domains, team, and project details');
       console.log('');
-      console.log('3. Copy the skills (required for orchestration):');
-      console.log('     cp ~/.claude/skills/power/SKILL.md . (verify it exists first)');
-      console.log('     cp ~/.claude/skills/buildsystem/SKILL.md . (verify it exists first)');
+      console.log('3. Skills were installed to ~/.claude/skills/ automatically (see above):');
+      console.log('     Restart Claude Code to pick them up — skills are enumerated at startup.');
+      console.log('     Re-run with --no-skills to skip, or --force to overwrite your own versions.');
       console.log('');
       console.log('4. Run preflight checks:');
       console.log('     aesop doctor  (or: npx @matt82198/aesop doctor)');
