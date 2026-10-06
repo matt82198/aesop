@@ -29,7 +29,12 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 ### Shipped (Most Recent)
 
-- #871: Merge actor session-independence closed out — dispatch_lint.py no longer contradicts LANE-CONTRACT.md's native-auto-merge policy (see item 9 below, DONE)
+- #872: linux_shape_check gate — distro-aware WSL detection (`wsl -l -q` + `wsl -e true`, not bare `wsl --status`); coexists with G14 in pre-push + CI
+- #874: pr_sweep.py — session-independent PR-sweep actor under the 15-min watchdog throttle (closes item 9 residual)
+- #870: G14 conflict-marker detection gate (PR #834 incident), wired into pre-push + CI
+- #869: main-full.yml Node wiring — isolated-env.mjs into the Node test step (node_harness_wiring_check)
+- #871: Merge actor session-independence closed out — dispatch_lint.py no longer contradicts LANE-CONTRACT.md's native-auto-merge policy (item 9, DONE)
+- #784: CLI skills installer fails closed; installer fixes its own Windows scaffold gap
 - #867: Scheduled-task snapshot diffing (XML fidelity, 5-run stable proof, 4 red-first regression tests)
 - #866: dispatch_lint categorical doc exemption (fix for post-#850 red)
 - #865: PR symbol survival check (Guardrail G13, non-blocking; promote to blocking after 2026-10-14)
@@ -45,32 +50,26 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 ### In Progress
 
 14. **CI-modes product surface** (IN-FLIGHT). Expose CI run modes and performance characteristics (dispatch vs. serial, shard allocation, cross-OS drift) as browsable UI panels. Complements cost telemetry + scheduling observability.
+18. **Watchdog script parity** (IN-FLIGHT). Live watchdog task runs a stale conductor3 copy of `daemons/run-watchdog.sh` — repoint/sync + WATCHDOG-SCRIPT-PARITY selftest (lane in flight).
 
 ### Open / Queued
 
 10. **Hard checkpoint+clear enforcement hooks** (QUEUED). Implement pre-push gates to verify STATE.md/BUILDLOG.md are checkpointed before context clears. Enforce single-writer discipline on control files. Matt 2026-10-05 directive.
-
-13. **Receipt gate increments 4–6 — after measurement** (QUEUED). PR #854 shipped increments 1–3. Pending: storage codecs, receipt lineage, signed ledger append. Foundation for auditability + billing transparency.
-
-16. **pyflakes unused-import sweep** (QUEUED). Detect and remove unreferenced imports in driver/, tools/, mcp/, ui/ Python. Code-hygiene improvement, no behavioral change.
+13. **Receipt gate increments 4–6 — after measurement** (QUEUED). PR #854 shipped increments 1–3. Pending: storage codecs, receipt lineage, signed ledger append.
+16. **pyflakes unused-import sweep** (QUEUED). Detect and remove unreferenced imports in driver/, tools/, mcp/, ui/ Python.
+17. **LANE-CONTRACT line for AESOP_ALLOW_GENERATED** (QUEUED). Add contract statement permitting lanes to deploy generated-paths registry entries; policy clarification pending.
+19. **tools/new_gate_check.py** (QUEUED). One-command new-gate checklist (stub list, inventory parity, claudemd lint/headroom/sync, portability, pre-push self-test) — #872 took 5 red rounds hitting these one at a time; also derive the TTY fixture stub list from `check_*` functions automatically.
+20. **tools/INDEX.md union-merge duplicates** (QUEUED). Duplicates accumulate on clean merges due to drift — post-merge regenerate hook or duplicate-tolerant check.
+21. **Promote pr_symbol_survival_check (G13) to blocking** (QUEUED). After 2026-10-14 (1 week clean runs since #865).
 
 ### Blocked / Deferred
 
-6. **Portability path scan (box-restore / trigger-layer absolutization)** (REFACTOR). Ensure all scripts invoked by scheduled tasks use absolute paths (AESOP_HOME or durable ~/scripts location). Validates guardrail proposal from refinesystem R1. Medium effort; medium impact (multi-box readiness).
-   Evidence from 2026-09-10 half-restore incident: settings hooks pointed at wrong profile, scheduled-task StartBoundary in past prevented first run, packed-refs/pack loss on restore. Guardrail tracked in PR #793.
+- **FLY_API_TOKEN** (BLOCKED — Matt). Needed for psinasty deploy.
+- **Cloudflare zone for dynastywrapped.com** (BLOCKED — Matt). GoDaddy NS cutover + `cloudflared tunnel login`, then signal-hub `deploy/install_tunnel.ps1`.
+- **WSL distro install decision** (BLOCKED — Matt). `wsl --install -d Ubuntu` or equivalent; #872's detection fix now correctly reports "no distro" either way.
+- **Merchant feed hosting choice** (BLOCKED — Matt). Where tannery-merchant-feed.tsv (claude-scripts #31) gets served from.
 
-15. **Event bridge durable deployment** (BLOCKED). Architecture: Slack webhook integration via Cloudflared tunnel (hostname + auth). Requires Matt to allocate Cloudflare account. Enables: incident notifications, lane-status pings, cost-ceiling alerts.
-
-17. **LANE-CONTRACT line for AESOP_ALLOW_GENERATED** (BLOCKED). Add contract statement permitting lanes to deploy generated-paths registry entries. Requires prior policy clarification (generated-paths governance + merge-driver interaction).
-
-### Follow-ups (Parked)
-
-- **tools/INDEX.md union-merge post-merge regenerate hook** — duplicates accumulate on clean merges due to drift. Implement post-merge hook or duplicate-tolerant check.
-- **Promote pr_symbol_survival_check (G13) to blocking** — After 2026-10-14 (1 week clean runs since #865). Gate is non-blocking but stable; escalate to blocking in CI.
-- **Conflict-marker gate in-flight** — Lane dispatched for `guard/conflict-marker-check` branch (test fixture in flight, no PR yet).
-- **#784 Windows skills-install hang — instrumentation lane** — Named-step stderr lines + ≤20 s per-spawn timeouts to capture hang location in CI log.
-
-**Merge actor session-independence — DONE (2026-10-06, PR #871):** Investigated idle_tick's top NEXT STEPS item. GitHub native auto-merge (armed per-PR at open via `gh pr merge <n> --auto --squash`) IS the session-independent merge actor; `AesopMergeQueue` Scheduled Task is correctly `Status: Disabled` (confirmed via `schtasks /query /tn AesopMergeQueue /v`, last run 2026-09-11) — this is the deliberate retirement of the old label+daemon regime, not a regression. Live board evidence (2026-10-06): all 3 open PRs (#870, #869, #784) carry `autoMergeRequest`; recent merges (#860, #863, #864, #855, #850, #866, #856, #867) all completed via GitHub's own infrastructure, zero session dependency. **Real gap found and fixed**: `tools/dispatch_lint.py` — wired live as the `hooks/pre-commit-dispatch-lint.sh` pre-commit gate — still unconditionally forbade `--auto` and bare `gh pr merge`, i.e. it blocked the EXACT command LANE-CONTRACT.md (lines 163–165) requires every lane to run to arm the merge actor; a dead letter from the retired AesopMergeQueue/label regime that would fail-closed any lane correctly following the current contract. Fixed: `gh pr merge <n> --auto --squash` (PR number before or after `--auto`) is now explicitly allowed; manual `gh pr merge` without `--auto`, bare `gh pr merge --auto` with no PR number, and `--admin` (even alongside `--auto`) remain forbidden. Stale "merge-queue label" fix-hints and docstrings across the module updated to match LANE-CONTRACT.md. Red-first: 3 new tests failed against the old pattern set, proving the gate really did block the policy-sanctioned form; 7 new/updated regression tests now green (45/45 in tests/test_dispatch_lint.py, 223/223 across test_dispatch_lint.py + test_merge_queue.py + test_traps.py). Residual, separately-tracked risk (not part of this item): PRs that go RED after auto-merge is armed (e.g. live #784) have no session-independent retry actor — see Follow-ups above (#784 instrumentation lane, conflict-marker gate).
+**Merge actor session-independence — DONE (2026-10-06, PR #871):** GitHub native auto-merge (armed per-PR at open via `gh pr merge <n> --auto --squash`) is the session-independent merge actor; `AesopMergeQueue` Scheduled Task is correctly `Status: Disabled` — deliberate retirement of the old label+daemon regime. Real gap found and fixed: `tools/dispatch_lint.py` unconditionally forbade `--auto`/bare `gh pr merge`, blocking the exact command LANE-CONTRACT.md requires to arm the merge actor; now `gh pr merge <n> --auto --squash` is explicitly allowed while manual merge, bare `--auto` with no PR number, and `--admin` remain forbidden. 45/45 + 223/223 regression tests green.
 
 **Release-state note:** `v0.7.1` is tagged at `ec5ea9db` and has **no GitHub release** — that commit's CI was red (pre-existing `/api/state` bug). The tag was deliberately NOT moved, since retagging a pushed release rewrites published history. `v0.7.2` is published on npm (Latest, MIT license) and GitHub (Release v0.7.2 Latest). Consumer-visible release history therefore reads 0.7.0 -> 0.7.2; publishing 0.7.1 retroactively is a user decision. `v0.7.1` remains tag-only on git. Current unreleased commits: 219 since v0.7.2 tag (as of 2026-09-11, HEAD 07732210).
 
