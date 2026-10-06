@@ -75,8 +75,7 @@ Defect escape stats (first-try-green rate, fix-forward rate) if available.
 Get active and stale instances with heartbeat age for multi-instance coordination.
 **Input**: `{}` (no args).
 **Output**: `{ absent: bool, reason?: string, instances: [{ id, hostname, pid, status, registered_at, last_heartbeat, heartbeat_age_seconds, stale: bool }], stale_threshold_seconds: int }`.
-**Design**: Spawns `mcp/instances-claims.py` helper which reads from state_store SQLite via `state_store.instance_projection.list_active_instances()` and `detect_stale_instances()`. Instances are sorted by registration time. Each instance includes: `id` unique instance identifier | `hostname` machine hostname | `pid` orchestrator process ID | `status` "active"/"stale"/"failed" | `registered_at`, `last_heartbeat` Unix epoch timestamps (seconds) | `heartbeat_age_seconds` seconds since last heartbeat (bucket-aligned for privacy) | `stale` boolean flag (true if age > 300s).
-Stale instances are those whose last heartbeat exceeds `stale_threshold_seconds` (300s). Missing state_store database returns `absent: true` with explanation.
+**Design**: Spawns `mcp/instances-claims.py` helper (state_store `list_active_instances()`/`detect_stale_instances()`); sorted by registration time; `stale` true when heartbeat age exceeds `stale_threshold_seconds` (300s); missing state_store returns `absent: true` with explanation.
 
 ### fleet_claims (NEW — Wave-???)
 Get all current file claims by instance from multi-instance coordination layer.
@@ -88,8 +87,7 @@ Get all current file claims by instance from multi-instance coordination layer.
 Dashboard-ready summary of multi-instance status.
 **Input**: `{}` (no args).
 **Output**: `{ absent: bool, instance_count: int, active_count: int, stale_count: int, claim_count: int }`.
-**Design**: Spawns `mcp/instances-claims.py` helper which aggregates `fleet_instances` + `fleet_claims` data. Suitable for a dashboard header or status tile. Counts: `instance_count` total registered instances (active + stale + failed) | `active_count` instances with recent heartbeats (< 300s) | `stale_count` instances with old heartbeats (>= 300s) or failed | `claim_count` total file claims across all instances.
-Missing state_store returns all zeros with `absent: true`.
+**Design**: Spawns `mcp/instances-claims.py` helper, aggregating `fleet_instances` + `fleet_claims` counts for a dashboard tile; missing state_store returns all zeros with `absent: true`.
 
 ### ci_job_status (NEW)
 Query GitHub Actions run history for a CI job: status, conclusion, duration, flake signal.
@@ -100,16 +98,7 @@ Query GitHub Actions run history for a CI job: status, conclusion, duration, fla
 
 ## Multibox Coordination Helper
 
-**File**: `mcp/instances-claims.py` — Resolver for multi-instance status (instances, claims, backend config).
-
-**Invocation**: Spawned by `server.mjs` for `fleet_instances`, `fleet_claims`, `fleet_multibox_summary` tools.
-```bash
-python mcp/instances-claims.py --db <db> [--root <aesop_root>] [--config <path>]
-```
-
-**Output**: JSON object with `instances` (list), `claims` (map by instance), `summary` (backend config + counts).
-
-**Design**: Reads multi-instance state via state_store API (list_active_instances, detect_stale_instances, get_all_claimed_files). Resolves coordination backend config through the same precedence as tools/multibox_config (env → aesop.config.json → default). Reports backend mode (`"advisory"` | `"local-lease"` | `"fs-claim-log"`), enabled flag, transport, shared directory, TTL, settle_seconds. Gracefully handles missing state_store or config errors with structured `absent: true` + `reason` fields. Zero state mutations.
+**File**: `mcp/instances-claims.py` (`--db <db> [--root <aesop_root>] [--config <path>]`) — spawned by the three `fleet_instances`/`fleet_claims`/`fleet_multibox_summary` tools above; resolves coordination backend config via the same precedence as `tools/multibox_config` (env → aesop.config.json → default) and reports mode (`advisory`|`local-lease`|`fs-claim-log`), transport, shared dir, TTL; read-only, structured `absent`/`reason` on error.
 
 ## Core Invariants
 
