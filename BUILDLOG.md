@@ -241,3 +241,17 @@ NOT published to Medium; outward publishing stays user-gated.
 
 **Next:** Lane contract hardening + board merge automation per PR #793 + 10-PR batches.
 
+
+---
+
+## 2026-10-06 Merge actor session-independence -- gap found + fixed (STATE.md item 9)
+
+**Summary:** Investigated idle_tick's top NEXT STEPS item ("Merge actor must not depend on a session"). Confirmed GitHub native auto-merge, armed per-PR at open, is already the session-independent merge actor (AesopMergeQueue Scheduled Task correctly Disabled; all 3 live open PRs carry autoMergeRequest; 8 recent PRs merged unattended). Found and fixed a real policy/enforcement contradiction: tools/dispatch_lint.py, wired live via hooks/pre-commit-dispatch-lint.sh, still unconditionally forbade the auto-merge arming flag and bare manual merges -- a dead letter from the retired AesopMergeQueue/label regime that would block the exact arming invocation LANE-CONTRACT.md requires every lane to run after opening a PR.
+
+**Fix:** Arming with an explicit PR number present (either side of the auto-merge flag) is now explicitly allowed; manual merge without that flag, a bare invocation with no PR number, and an admin-override flag remain forbidden. Stale "add-label merge-queue" fix-hints replaced across the module; module docstring updated to describe the current regime.
+
+**Verification:** Red-first -- 3 new tests failed against the pre-fix pattern set, proving the gate really did contradict policy. 45 of 45 green in tests/test_dispatch_lint.py post-fix; 223 of 223 across test_dispatch_lint.py + test_merge_queue.py + test_traps.py. Whole-repo dispatch_lint --check clean. gen_tool_index --regenerate and secret_scan --staged both clean.
+
+**Residual (separately tracked, not this item):** PRs that go RED after auto-merge is armed have no session-independent retry actor (live example: PR #784, already tracked as its own instrumentation-lane follow-up in STATE.md Follow-ups).
+
+**STATE.md item 9** moved from In Progress to Shipped, DONE.
