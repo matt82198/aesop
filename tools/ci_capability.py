@@ -123,13 +123,33 @@ def _probe_wsl():
 
 
 def _probe_linux_shape():
-    """Check if linux_shape_check (WSL-based pre-push gate) is available."""
+    """Check if linux_shape_check (WSL-based pre-push gate) is available.
+
+    Requires BOTH:
+      (a) wsl -l -q lists ≥1 distro
+      (b) wsl -e true exits 0 (verify WSL is executable)
+    """
     if platform.system() != "Windows":
         return {"wsl": False, "note": "not Windows: native Linux shards available"}
     if not shutil.which("wsl"):
         return {"wsl": False}
-    rc, _ = _run(["wsl", "-l", "-q"])
-    # Check if any distro is installed (stdout non-empty on success)
+
+    # Check (a): wsl -l -q lists distros
+    rc, output = _run(["wsl", "-l", "-q"])
+    if rc != 0:
+        return {"wsl": False}
+
+    # Decode UTF-16LE output (wsl -l -q returns UTF-16LE, not UTF-8)
+    try:
+        distros_text = output.encode('utf-8').decode('utf-16-le', errors='replace')
+        distros = [d.strip() for d in distros_text.strip().split("\n") if d.strip()]
+        if len(distros) == 0:
+            return {"wsl": False, "note": "WSL present but no distro installed"}
+    except (UnicodeDecodeError, AttributeError):
+        return {"wsl": False}
+
+    # Check (b): wsl -e true exits 0 (verify WSL is executable)
+    rc, _ = _run(["wsl", "-e", "true"])
     return {"wsl": rc == 0}
 
 

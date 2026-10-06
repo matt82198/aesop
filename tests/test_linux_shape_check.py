@@ -65,12 +65,21 @@ class TestLinuxShapeCheckWSL(unittest.TestCase):
 
     @mock.patch("subprocess.run")
     def test_wsl_available_with_distros(self, mock_run):
-        """WSL available when wsl -l -q returns distro names."""
-        mock_run.return_value = mock.Mock(
-            returncode=0,
-            stdout="Ubuntu\nDebian\n",
-            stderr="",
-        )
+        """WSL available when wsl -l -q returns distro names and -e true succeeds."""
+        # First call: wsl -l -q returns distros (UTF-16LE encoded)
+        # Second call: wsl -e true succeeds
+        mock_run.side_effect = [
+            mock.Mock(
+                returncode=0,
+                stdout="Ubuntu\nDebian\n".encode('utf-16-le'),
+                stderr=b"",
+            ),
+            mock.Mock(
+                returncode=0,
+                stdout=b"",
+                stderr=b"",
+            ),
+        ]
         self.assertTrue(lsc.wsl_available())
 
     @mock.patch("subprocess.run")
@@ -81,12 +90,32 @@ class TestLinuxShapeCheckWSL(unittest.TestCase):
 
     @mock.patch("subprocess.run")
     def test_wsl_unavailable_no_distros(self, mock_run):
-        """WSL unavailable when no distros installed."""
+        """WSL unavailable when no distros installed (wsl -l -q returns empty)."""
+        # wsl -l -q returns empty (no distros)
         mock_run.return_value = mock.Mock(
             returncode=0,
-            stdout="",
-            stderr="",
+            stdout=b"",
+            stderr=b"",
         )
+        self.assertFalse(lsc.wsl_available())
+
+    @mock.patch("subprocess.run")
+    def test_wsl_unavailable_when_executable_fails(self, mock_run):
+        """WSL unavailable when distro listed but -e true fails."""
+        # First call: wsl -l -q returns a distro
+        # Second call: wsl -e true fails
+        mock_run.side_effect = [
+            mock.Mock(
+                returncode=0,
+                stdout="Ubuntu\n".encode('utf-16-le'),
+                stderr=b"",
+            ),
+            mock.Mock(
+                returncode=1,
+                stdout=b"",
+                stderr=b"",
+            ),
+        ]
         self.assertFalse(lsc.wsl_available())
 
 

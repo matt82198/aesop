@@ -57,35 +57,40 @@ def get_repo_root() -> Path:
 
 
 def wsl_available() -> bool:
-    """Check if wsl.exe is available and a distro is installed.
+    """Check if wsl.exe is available and a distro is installed and executable.
 
-    Uses wsl.exe --status (reliable) and falls back to -l -q with UTF-16LE decoding.
+    Requires BOTH:
+      (a) wsl.exe -l -q returns ≥1 distro (UTF-16LE decoded, no BOM/NULs)
+      (b) wsl.exe -e true exits 0 (verify WSL actually works)
+
     Note: wsl.exe -l -q returns UTF-16LE with BOM, not UTF-8.
     """
-    # Method 1: Use wsl.exe --status (most reliable, exit 0 if available)
-    try:
-        result = subprocess.run(
-            ["wsl.exe", "--status"],
-            capture_output=True,
-            timeout=5,
-        )
-        if result.returncode == 0:
-            return True
-    except Exception:
-        pass
-
-    # Method 2: Fallback to wsl.exe -l -q with UTF-16LE decoding
+    # Check (a): wsl.exe -l -q lists ≥1 distro
     try:
         result = subprocess.run(
             ["wsl.exe", "-l", "-q"],
             capture_output=True,
             timeout=5,
         )
+        if result.returncode != 0:
+            return False
         # wsl.exe -l -q returns UTF-16LE (with BOM), not UTF-8
-        # Decode the byte output as UTF-16LE
+        # Decode the byte output as UTF-16LE, stripping BOM and NULs
         output_text = result.stdout.decode('utf-16-le', errors='replace')
         distros = [d.strip() for d in output_text.strip().split("\n") if d.strip()]
-        return len(distros) > 0
+        if len(distros) == 0:
+            return False
+    except Exception:
+        return False
+
+    # Check (b): wsl.exe -e true exits 0 (verify WSL is executable)
+    try:
+        result = subprocess.run(
+            ["wsl.exe", "-e", "true"],
+            capture_output=True,
+            timeout=5,
+        )
+        return result.returncode == 0
     except Exception:
         return False
 
@@ -227,10 +232,13 @@ def main():
     if not is_wsl_available:
         if require_wsl:
             print("ERROR: WSL required (AESOP_REQUIRE_LINUX_SHAPE=1) but unavailable")
-            print("  Please enable WSL or install a Linux distro (wsl --install)")
+            print("  WSL present but no distro installed? Run: wsl --install -d Ubuntu")
+            print("  WSL not present? Run: wsl --install")
             return 1
         else:
             print("NOTICE: WSL unavailable; Linux shape check skipped (CI gate remains)")
+            print("  WSL present but no distro installed? Run: wsl --install -d Ubuntu")
+            print("  WSL not present? Run: wsl --install")
             print("  To enforce local Linux testing: export AESOP_REQUIRE_LINUX_SHAPE=1")
             return 0
 
