@@ -23,6 +23,7 @@
     "tools/shadow_adjudication.py@posix_home_path": 1,
     "tools/shadow_adjudication.py@private_token": 1,
     "tools/shadow_adjudication.py@windows_user_path": 1,
+    "tools/stateapi_lint.py@private_token": 1,
     "tools/test_isolation_tripwire.py@private_token": 18,
     "tools/transcript_digest.py@private_token": 2,
     "tools/verify_ui_trio.py@posix_home_path": 2,
