@@ -535,3 +535,34 @@ jobs:
 
       - name: Run watchdog GUI tests
         run: bash tests/dash-watchdog-gui.test.sh
+
+  # Guardrail G13 (tools/CLAUDE.md). ADVISORY ONLY: continue-on-error + no required-check
+  # registration, so it can never deadlock or block a merge -- this is the first
+  # invocation of pr_symbol_survival_check.py (gate-inventory rule: every documented
+  # gate needs an invoker) while it earns trust against real PR history before anyone
+  # considers making it required. Standalone job, no docs-only-gate dependency: it is
+  # cheap, read-only, and never a required context, so skipping-cascade deadlock risk
+  # (see docs-only-gate's header comment above) does not apply here.
+  pr-symbol-survival:
+    if: github.event_name == 'pull_request'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Run pr_symbol_survival_check.py (advisory)
+        run: |
+          {
+            echo "### PR symbol survival check (Guardrail G13, advisory/non-blocking)"
+            echo '```'
+            python tools/pr_symbol_survival_check.py --base "origin/${{ github.base_ref }}" --head HEAD || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
