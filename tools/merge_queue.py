@@ -1416,7 +1416,7 @@ def parse_bisect_lineage(body: str) -> tuple:
 
 
 def bisect_is_exhausted(batch_number: int, generation: int) -> bool:
-    """True if this batch's bisect has already spawned MAX_BISECT_ROUNDS.
+    """True if this batch's bisect has already reached MAX_BISECT_ROUNDS.
 
     A batch of N members can be bisected at most ceil(log2 N) times before
     narrowing to a singleton. Practical bound: 4 rounds, up to 8 batch builds
