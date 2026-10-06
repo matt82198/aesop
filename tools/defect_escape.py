@@ -175,7 +175,7 @@ def compute_first_try_estimate(repo_path, commits_window):
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Defect escape telemetry — Haiku code quality measurement"
+        description="Defect escape telemetry - Haiku code quality measurement"
     )
     parser.add_argument("--repo", required=True, help="Path to git repository")
     parser.add_argument(
