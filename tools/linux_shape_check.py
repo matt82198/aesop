@@ -47,6 +47,7 @@ def get_repo_root() -> Path:
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
+            encoding='utf-8', errors='replace',
             timeout=5,
         )
         if result.returncode == 0:
@@ -64,6 +65,7 @@ def wsl_available() -> bool:
             ["wsl.exe", "-l", "-q"],
             capture_output=True,
             text=True,
+            encoding='utf-8', errors='replace',
             timeout=5,
         )
         # wsl -l -q returns list of distro names; if any exist, output is non-empty
@@ -80,6 +82,7 @@ def compute_wsl_path(windows_path: Path) -> str:
             ["wsl.exe", "wslpath", "-a", str(windows_path)],
             capture_output=True,
             text=True,
+            encoding='utf-8', errors='replace',
             timeout=5,
         )
         if result.returncode == 0:
@@ -107,6 +110,7 @@ def get_changed_files(commit_range: str, repo_root: Path) -> List[str]:
             cwd=repo_root,
             capture_output=True,
             text=True,
+            encoding='utf-8', errors='replace',
             timeout=10,
         )
         if result.returncode == 0:
@@ -140,6 +144,7 @@ def run_shell_tests_wsl(repo_root: Path, wsl_path: str, timeout: int = 120) -> T
             ["wsl.exe", "bash", "-lc", cmd],
             capture_output=True,
             text=True,
+            encoding='utf-8', errors='replace',
             timeout=timeout,
         )
         output = result.stdout + result.stderr
@@ -163,6 +168,7 @@ def run_node_tests_wsl(repo_root: Path, wsl_path: str, test_files: List[str], ti
             ["wsl.exe", "bash", "-lc", cmd],
             capture_output=True,
             text=True,
+            encoding='utf-8', errors='replace',
             timeout=timeout,
         )
         output = result.stdout + result.stderr
