@@ -1,0 +1,139 @@
+name: verify-receipt
+
+# RECEIPT GATE -- increment 3 (measurement period, NON-required).
+#
+# A lane that ran the local matrix posts a signed receipt on its head sha
+# (`python tools/emit_receipt.py --post`: a `verify-receipt-local` check-run, or a
+# commit comment when the token cannot create check-runs). This job fetches that
+# receipt and verifies it OFFLINE with tools/verify_receipt.py, which recomputes the
+# tree hash from THIS checkout (never trusts the lane's number), re-checks the
+# signature against the committed public key, and binds freshness to origin/main.
+#
+# Behaviour during the measurement period (see docs/RECEIPT-GATE.md):
+#   - no receipt on the head sha   -> job SUCCEEDS with a notice ("no receipt"); this
+#                                     check is not required yet, so a missing receipt
+#                                     must never block a PR.
+#   - receipt present and valid    -> job succeeds ("receipt VALID").
+#   - receipt present but INVALID  -> job FAILS. A lane that posts a wrong/stale/forged
+#                                     receipt is a real defect even while non-required.
+#   - receipt present, cannot be evaluated (exit 2: malformed, unknown scheme, no key
+#     material) -> job FAILS (fail-closed; doubt is not a pass).
+#
+# This workflow is deliberately NOT in ci.yml and NOT in the required-checks list
+# (tools/merge_queue.EXPECTED_REQUIRED_CHECKS); increment 4 flips it to required once
+# the measurement period shows receipts agree with hosted CI.
+#
+# Checkout pins the PR HEAD sha (not the synthetic merge commit) because the receipt's
+# tree_hash is the tree of the commit the lane actually tested.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  checks: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify-receipt:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install optional Ed25519 support
+        # tools/ stays stdlib-only; `cryptography` is an optional runtime import that
+        # lets the verifier accept ed25519 receipts (hmac-sha256 needs nothing).
+        run: pip install cryptography
+
+      - name: Fetch the local receipt for the head sha
+        id: fetch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -u
+          python - <<'PY' "$HEAD_SHA" "$GITHUB_REPOSITORY"
+          import json, subprocess, sys
+          sys.path.insert(0, "tools")
+          import verify_receipt as vr
+          sha, repo = sys.argv[1], sys.argv[2]
+
+          def api(path):
+              # One page of 100 is ample for a single sha; --paginate would concatenate
+              # JSON objects for the object-shaped check-runs endpoint.
+              res = subprocess.run(["gh", "api", path], capture_output=True,
+                                   encoding="utf-8", errors="replace", timeout=120)
+              if res.returncode != 0:
+                  print("gh api %s failed: %s" % (path, res.stderr.strip()[:300]))
+                  return None
+              try:
+                  return json.loads(res.stdout)
+              except ValueError:
+                  print("gh api %s returned non-JSON" % path)
+                  return None
+
+          env = None
+          runs = api("repos/%s/commits/%s/check-runs?per_page=100" % (repo, sha))
+          if runs is not None:
+              env = vr.extract_receipt_from_check_runs(runs)
+          if env is None:
+              comments = api("repos/%s/commits/%s/comments?per_page=100" % (repo, sha))
+              if comments is not None:
+                  env = vr.extract_receipt_from_comments(comments)
+          if env is None:
+              open("receipt_found", "w").write("false")
+              print("no %s receipt on %s" % (vr.rc.CHECK_NAME, sha))
+          else:
+              json.dump(env, open("receipt.json", "w"))
+              open("receipt_found", "w").write("true")
+              print("receipt found for %s (scheme=%s)" % (sha, env.get("sig", {}).get("scheme")))
+          PY
+          echo "found=$(cat receipt_found)" >> "$GITHUB_OUTPUT"
+
+      - name: No receipt (not required during the measurement period)
+        if: steps.fetch.outputs.found != 'true'
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          echo "::notice title=verify-receipt::No local receipt posted for ${HEAD_SHA}. Lanes may emit one with: python tools/emit_receipt.py --post (not required yet)."
+          {
+            echo "## verify-receipt: no receipt"
+            echo ""
+            echo "No \`verify-receipt-local\` receipt was found for \`${HEAD_SHA}\`."
+            echo "This check is NOT required during the measurement period (docs/RECEIPT-GATE.md)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify the receipt offline
+        if: steps.fetch.outputs.found == 'true'
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          AESOP_RECEIPT_HMAC_SECRET: ${{ secrets.AESOP_RECEIPT_HMAC_SECRET }}
+        run: |
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          set +e
+          python tools/verify_receipt.py --receipt receipt.json --repo . --head "$HEAD_SHA" \
+            --main-ref origin/main --max-behind 50 | tee verify.out
+          code=${PIPESTATUS[0]}
+          set -e
+          {
+            echo "## verify-receipt: exit ${code}"
+            echo ""
+            echo '```'
+            cat verify.out
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$code"
