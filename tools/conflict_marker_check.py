@@ -52,7 +52,7 @@ MARKER_PATTERNS = (
 )
 MARKER_MID = "======="
 
-SUPPRESS_TOKEN = "conflict-marker-ok"
+SUPPRESS_MARKER = "conflict-marker-ok"
 
 DEFAULT_ALLOWLIST_NAME = ".conflict-marker-allowlist.json"
 
@@ -143,7 +143,7 @@ def scan_text(path_label, text, findings):
         marker = line_marker_type(line)
         if marker is None:
             continue
-        if SUPPRESS_TOKEN in line:
+        if SUPPRESS_MARKER in line:
             continue
         findings.append({
             "file": path_label,
@@ -243,7 +243,7 @@ def check_range_diff(repo_root, commit_range, allowlist):
         marker = line_marker_type(added)
         if marker is None:
             continue
-        if SUPPRESS_TOKEN in added:
+        if SUPPRESS_MARKER in added:
             continue
         # Line number within the new file: look it up via blame-free re-grep
         # of the tip blob rather than tracking hunk headers (--unified=0 keeps
