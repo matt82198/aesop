@@ -56,11 +56,28 @@ test('--help advertises the CI-modes surface', () => {
   }
 });
 
+const RUNNABLE_PROBES = {
+  os: { system: 'Linux', release: '6.8', version: '#1 SMP' },
+  cpu_cores: 16,
+  ram_gb: 64,
+  windows_code_integrity: null,
+  wsl: { present: false, note: 'not Windows' },
+  docker: { present: true },
+  gh: { present: true, authenticated: true },
+  cloudflared: { present: true },
+  receipt_tools: { emit_receipt: true, verify_receipt: true, verify_workflow: true }
+};
+
+function doctorJson(td, env) {
+  const res = runCli(['doctor', '--json'], td, env);
+  let data;
+  try { data = JSON.parse(res.stdout); } catch (e) { assert.fail(`doctor --json is not JSON: ${res.stdout.slice(0, 300)} ${res.stderr.slice(0, 300)}`); }
+  return { res, data };
+}
+
 test('doctor --json reports ci_capability without counting it as a check', () => {
   withFixture(BLOCKED_PROBES, (td, env) => {
-    const res = runCli(['doctor', '--json'], td, env);
-    let data;
-    try { data = JSON.parse(res.stdout); } catch (e) { assert.fail(`doctor --json is not JSON: ${res.stdout.slice(0, 300)} ${res.stderr.slice(0, 300)}`); }
+    const { data } = doctorJson(td, env);
     assert.ok(Array.isArray(data.checks), 'checks array');
     assert.equal(data.summary.total, data.checks.length, 'summary counts only the pass/fail checks');
     const modes = data.ci_capability.modes.map((m) => m.mode).sort();
@@ -69,9 +86,30 @@ test('doctor --json reports ci_capability without counting it as a check', () =>
     assert.equal(runner.runnable, false);
     assert.match(runner.why, /Smart App Control/);
     assert.equal(data.ci_capability.windows.smart_app_control, 'enforced');
-    // report-only: no mode row carries a pass/fail verdict
+    // report-only: no mode row carries a pass/fail verdict, and no check is a mode row
     for (const m of data.ci_capability.modes) assert.ok(!('passed' in m));
+    for (const c of data.checks) assert.ok(!modes.includes(c.label), `capability row leaked into checks: ${c.label}`);
   });
+});
+
+test('doctor verdict is independent of CI capability (report-only, never fails the doctor)', () => {
+  // Same directory, opposite capability fixtures: the checks, summary and exit status must not move.
+  const td = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-doctor-indep-'));
+  try {
+    const blockedFx = path.join(td, 'blocked.json');
+    const runnableFx = path.join(td, 'runnable.json');
+    fs.writeFileSync(blockedFx, JSON.stringify(BLOCKED_PROBES));
+    fs.writeFileSync(runnableFx, JSON.stringify(RUNNABLE_PROBES));
+    const blocked = doctorJson(td, { ...process.env, AESOP_CI_PROBE_FIXTURE: blockedFx });
+    const runnable = doctorJson(td, { ...process.env, AESOP_CI_PROBE_FIXTURE: runnableFx });
+    assert.equal(blocked.data.ci_capability.modes.filter((m) => m.runnable).length, 1, 'blocked fixture: only hosted runnable');
+    assert.equal(runnable.data.ci_capability.modes.filter((m) => m.runnable).length, 3, 'runnable fixture: every mode runnable');
+    assert.deepEqual(blocked.data.summary, runnable.data.summary, 'summary moved with capability');
+    assert.deepEqual(blocked.data.checks, runnable.data.checks, 'checks moved with capability');
+    assert.equal(blocked.res.status, runnable.res.status, 'exit status moved with capability');
+  } finally {
+    fs.rmSync(td, { recursive: true, force: true });
+  }
 });
 
 test('doctor text output renders the mode -> runnable table', () => {
