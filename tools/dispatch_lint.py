@@ -39,6 +39,14 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
+# Import to check if a path is a generated artifact
+try:
+    from generated_paths import is_generated
+except ImportError:
+    def is_generated(path_str: str) -> None:
+        """Fallback: no generated paths check available."""
+        return None
+
 
 # Forbidden patterns and their suggested fixes
 FORBIDDEN_PATTERNS = {
@@ -276,6 +284,15 @@ def scan_directory(
         # Skip test files specifically (test_*.py, etc.)
         if file_path.name.startswith("test_"):
             continue
+        # Skip generated artifacts (they are documentation, not dispatch prompts)
+        # Compute relative path for matching against is_generated patterns
+        try:
+            rel_path = file_path.relative_to(Path.cwd())
+            if is_generated(str(rel_path).replace("\\", "/")) is not None:
+                continue
+        except ValueError:
+            # If relative path computation fails, proceed with scanning
+            pass
 
         try:
             with open(file_path, "r", encoding="utf-8") as f:
