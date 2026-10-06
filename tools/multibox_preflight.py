@@ -29,6 +29,7 @@ Stdlib only, ASCII output, hermetic (no network).
 
 import argparse
 import json
+import ntpath
 import os
 import statistics
 import sys
@@ -193,10 +194,19 @@ def _default_drive_type_fn(root):
 
 
 def _detect_windows(path, drive_type_fn):
+    """Classify a path under simulated Windows semantics.
+
+    Uses ntpath.splitdrive explicitly, not os.path.splitdrive: this branch is
+    reached whenever the caller forces os_name="nt" (every test, and any real
+    Windows host), and os.path is posixpath on a POSIX host. posixpath never
+    extracts a drive letter, so a host-native os.path.splitdrive would
+    silently classify every "C:\\..." path as unknown on Linux CI while
+    working by accident on a real Windows box (GAP: PR #699 CI escape).
+    """
     text = str(path)
     if text.startswith("//"):
         return "network"
-    drive = os.path.splitdrive(text)[0]
+    drive = ntpath.splitdrive(text)[0]
     if not drive or ":" not in drive:
         return "unknown"
     root = drive + "\\"
