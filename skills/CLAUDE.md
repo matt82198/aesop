@@ -42,6 +42,7 @@ Time estimates: 3–5 min (typo/config), 5–10 min (function/test), 10–15 min
 - No two backlog items may own the same file or directory
 - Each item assigned to exactly one agent
 - Preflight detects overlap and aborts with remediation plan before dispatch
+- Template includes documentation strings (dispatch-ok markers suppress lint false positives on tool references)
 
 **Phases**:
 1. Preflight (1–2 min) — validate setup, check heartbeat, parse backlog, detect file overlap
