@@ -177,12 +177,7 @@ class TestGateActivationTrap(unittest.TestCase):
                 continue
 
             for file_path in search_path.rglob("*.py"):
-                # Enforcement tools document the forbidden flag (to prove they
-                # never emit it) in INDEX docstrings/comments that also contain
-                # the word "dispatch" (e.g. the "# dispatch-ok" doc-line marker
-                # used by dispatch_lint.py's own suppression convention) -- that
-                # self-reference is not a template that could emit --admin.
-                if file_path.name in ("dispatch_lint.py", "merge_train.py"):
+                if file_path.name == "dispatch_lint.py":
                     continue
                 try:
                     content = file_path.read_text(encoding="utf-8")
