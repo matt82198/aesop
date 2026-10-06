@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run every registered generated-artifact regenerator and report or repair drift.
 INDEX: Generated-artifact self-heal runner (post-merge drift gate): imports the registry
-from `tools/generated_paths.py::GENERATED_PATHS`/`is_generated` and
+from `tools/generated_paths.py::GENERATED_PATHS`/`is_restorable` and
 `tools/merge_queue.py::REGENERATORS`/`dirty_paths` -- NEVER a re-typed copy, which is
 exactly what PR #758's AST guard exists to catch -- then runs every registered
 regenerator's own write flag against a target repo and measures what changed. `--check`
@@ -39,7 +39,7 @@ _TOOLS_DIR = Path(__file__).resolve().parent
 # tools/sibling_import_check.py recognizes.
 sys.path.insert(0, str(_TOOLS_DIR))
 
-from generated_paths import GENERATED_PATHS, is_generated  # noqa: E402
+from generated_paths import GENERATED_PATHS, is_restorable  # noqa: E402
 from merge_queue import REGENERATORS, REGEN_TIMEOUT_S, dirty_paths  # noqa: E402
 
 GIT_TIMEOUT_S = 60
@@ -146,7 +146,7 @@ def run(repo_root, fix: bool) -> RegenResult:
     except RuntimeError as exc:
         return RegenResult(2, error=str(exc))
 
-    preexisting_unregistered = sorted(p for p in before if not is_generated(p))
+    preexisting_unregistered = sorted(p for p in before if not is_restorable(p))
     if preexisting_unregistered:
         return RegenResult(
             2, error="working tree already has unregistered dirty path(s); refusing "
@@ -170,7 +170,7 @@ def run(repo_root, fix: bool) -> RegenResult:
         restore_paths(written, repo_root)
         return RegenResult(2, error="a regenerator failed", failed=failed)
 
-    unregistered = sorted(p for p in written if not is_generated(p))
+    unregistered = sorted(p for p in written if not is_restorable(p))
     if unregistered:
         # A generator wrote outside the registry it owns. Restore every path
         # THIS run touched (registered or not) and refuse -- never commit, and
