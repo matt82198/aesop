@@ -107,13 +107,16 @@ class LocalLeaseBackend(ClaimBackend):
     already proven to be atomic (6311288b fixed TOCTOU at this level).
     """
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, config: Optional[dict] = None):
         """Initialize with a LeaseStore.
 
         Args:
             db_path: path to SQLite database file
+            config: optional aesop config dict. ``multibox.case_policy`` selects the
+                    claim-path case policy; omitting it uses the host-independent
+                    default (see state_store.lease_claims).
         """
-        self._store = LeaseStore(db_path)
+        self._store = LeaseStore(db_path, config=config)
 
     def claim(
         self, paths: list[str], instance_id: str, ttl_seconds: float
@@ -149,6 +152,12 @@ class LocalLeaseBackend(ClaimBackend):
 def get_backend(db_path: str, config: Optional[dict] = None) -> Optional[ClaimBackend]:
     """Get a ClaimBackend instance based on config.
 
+    Low-level selector over an already-parsed config dict. The WIRED seam is
+    ``tools.multibox_config.build_backend``, which additionally applies
+    env > config > default precedence, runs the hard startup preflight, and can
+    return the shared-filesystem ``FsClaimLog``. Use that from anything that
+    starts up; this stays for callers that already hold a settings dict.
+
     Args:
         db_path: path to SQLite database file
         config: configuration dict with multibox.enabled key
@@ -165,6 +174,7 @@ def get_backend(db_path: str, config: Optional[dict] = None) -> Optional[ClaimBa
     enabled = multibox_config.get("enabled", False)
 
     if enabled:
-        return LocalLeaseBackend(db_path)
+        # Pass config through so multibox.case_policy reaches the claim keyspace.
+        return LocalLeaseBackend(db_path, config=config)
     else:
         return None

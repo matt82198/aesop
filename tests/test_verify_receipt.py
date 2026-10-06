@@ -180,6 +180,114 @@ class TestCli(VerifyBase):
                                   "--repo", str(self.repo)], environ=environ), 2)
 
 
+class TestFetchReceiptForHead(VerifyBase):
+    """Red-first coverage for the Action's fetch step (tools/verify_receipt.py
+    --fetch-for-head), which must land on exactly one of three outcomes:
+    absent (no receipt) -> neutral, found-and-valid -> pass, found-and-invalid -> fail.
+    The fetch lookup itself must NEVER raise or report "found" on a lookup failure --
+    only an envelope it actually extracted counts as found.
+    """
+
+    def test_absent_when_api_returns_nothing(self):
+        # Simulates: no check-run, no commit comment carries a receipt for this sha.
+        env, note = vr.fetch_receipt_for_head(self.head, "o/r", api=lambda path: {"check_runs": []} if "check-runs" in path else [])
+        self.assertIsNone(env)
+        self.assertIn("no", note)
+        self.assertIn(rc.CHECK_NAME, note)
+
+    def test_absent_when_api_call_itself_fails(self):
+        # gh api returning None (nonzero exit / bad JSON) must still resolve to absent,
+        # not blow up the lookup.
+        env, note = vr.fetch_receipt_for_head(self.head, "o/r", api=lambda path: None)
+        self.assertIsNone(env)
+
+    def test_absent_never_raises_on_unexpected_lookup_exception(self):
+        # Red-first: this is the exact production failure (ModuleNotFoundError on a
+        # stale PR tree, surfaced as an uncaught exception during the lookup) -- any
+        # exception during the lookup phase must degrade to absent, never propagate.
+        def boom(path):
+            raise RuntimeError("network blip")
+        env, note = vr.fetch_receipt_for_head(self.head, "o/r", api=boom)
+        self.assertIsNone(env)
+        self.assertIn("unexpectedly", note)
+
+    def test_found_valid_receipt_via_check_run(self):
+        good = self.envelope()
+
+        def api(path):
+            if "check-runs" in path:
+                return {"check_runs": [{"name": rc.CHECK_NAME, "completed_at": "2026-10-06T10:00:00Z",
+                                        "output": {"text": emit.wrap_receipt_text(good)}}]}
+            return []
+
+        env, note = vr.fetch_receipt_for_head(self.head, "o/r", api=api)
+        self.assertIsNotNone(env)
+        self.assertIn("found", note)
+        code, reasons = self.run_verify(env)
+        self.assertEqual((code, reasons), (0, []), "a receipt the fetch step finds must still verify VALID")
+
+    def test_found_invalid_receipt_via_commit_comment(self):
+        bad = self.envelope(tree_hash="0" * 40)  # forged/stale tree -> INVALID, not absent
+
+        def api(path):
+            if "check-runs" in path:
+                return {"check_runs": []}
+            return [{"body": emit.wrap_receipt_text(bad), "created_at": "2026-10-06T10:00:00Z"}]
+
+        env, note = vr.fetch_receipt_for_head(self.head, "o/r", api=api)
+        self.assertIsNotNone(env, "a present-but-invalid receipt must be FOUND, not absent")
+        code, reasons = self.run_verify(env)
+        self.assertEqual(code, 1)
+        self.assertTrue(any("tree" in r for r in reasons), reasons)
+
+
+class TestFetchForHeadCli(VerifyBase):
+    """The --fetch-for-head CLI mode the workflow actually invokes: it must always
+    exit 0 and communicate the outcome purely through --out-found / --out-envelope,
+    regardless of which of the three outcomes occurred."""
+
+    def _run(self, api_patch):
+        found_path = Path(self.tmp.name) / "receipt_found"
+        env_path = Path(self.tmp.name) / "receipt.json"
+        args = ["--fetch-for-head", self.head, "--repo-slug", "o/r",
+                "--out-found", str(found_path), "--out-envelope", str(env_path)]
+        orig = vr._gh_api
+        vr._gh_api = api_patch
+        try:
+            code = vr.main(args, environ={})
+        finally:
+            vr._gh_api = orig
+        return code, found_path, env_path
+
+    def test_cli_absent_exits_0_and_writes_false(self):
+        code, found_path, env_path = self._run(lambda path: None)
+        self.assertEqual(code, 0)
+        self.assertEqual(found_path.read_text(encoding="utf-8"), "false")
+        self.assertFalse(env_path.exists())
+
+    def test_cli_found_exits_0_and_writes_envelope(self):
+        good = self.envelope()
+
+        def api(path):
+            if "check-runs" in path:
+                return {"check_runs": [{"name": rc.CHECK_NAME, "completed_at": "2026-10-06T10:00:00Z",
+                                        "output": {"text": emit.wrap_receipt_text(good)}}]}
+            return []
+
+        code, found_path, env_path = self._run(api)
+        self.assertEqual(code, 0)
+        self.assertEqual(found_path.read_text(encoding="utf-8"), "true")
+        self.assertEqual(json.loads(env_path.read_text(encoding="utf-8"))["receipt"]["head_sha"], good["receipt"]["head_sha"])
+
+    def test_cli_missing_repo_slug_is_absent_not_a_crash(self):
+        code, found_path, _ = self._run(lambda path: None)  # api unused; repo-slug omission short-circuits
+        found_path2 = Path(self.tmp.name) / "receipt_found2"
+        args = ["--fetch-for-head", self.head, "--out-found", str(found_path2),
+                "--out-envelope", str(Path(self.tmp.name) / "r2.json")]
+        self.assertEqual(vr.main(args, environ={}), 0)
+        self.assertEqual(found_path2.read_text(encoding="utf-8"), "false")
+
+
 class TestExtractFromCheckRuns(unittest.TestCase):
     """The Action extracts the newest receipt from check-runs or commit comments."""
 

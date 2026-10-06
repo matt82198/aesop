@@ -8,7 +8,7 @@ AST-scans Python source for agent-dispatch call sites -- calls named `agent(...)
 -- and validates each dispatch's prompt text against the safety contracts that must hold
 at spawn time:
 
-  1. Env var allowlist -- if the prompt names an env-var-shaped token (FOO_KEY, FOO_TOKEN,
+  1. Env var allowlist -- if the prompt names an env-var-shaped token (FOO_KEY, FOO_TOKEN,  # dispatch-ok
      FOO_SECRET, FOO_PASSWORD, FOO_CREDENTIAL[S]), it must be one of the vars this project
      actually provisions (KNOWN_ENV_VARS below). Open-ended credential-hunting phrasing
      ("find credentials", "search for keys", "hunt for api key", ...) is always a finding,
@@ -20,8 +20,8 @@ at spawn time:
   3. Isolation marker -- a prompt whose text implies file writes (Write(/Edit(/git commit/
      git push/etc.) must carry an explicit isolation instruction such as
      "[ISOLATION: sibling worktree]" (or the equivalent "sibling worktree" phrase).
-  4. Git stash prohibition (G8) -- "git stash" must never appear in dispatch prompts
-     (git stash is shared across all worktrees; agents in parallel worktrees cross-contaminate
+  4. Git stash prohibition (G8) -- "git stash" must never appear in dispatch prompts  # dispatch-ok
+     (git stash is shared across all worktrees; agents in parallel worktrees cross-contaminate  # dispatch-ok
      each other's WIP).
   5. Role routing (advisory) -- a typed dispatch (subagent_type=/agentType= given) whose
      value isn't "general-purpose" and isn't in the known specialist catalog is flagged;
@@ -108,9 +108,9 @@ CREDENTIAL_HUNTING_PATTERNS = [
     "locate credentials",
     "locate api key",
     "find secrets",
-    "grep for key",
+    "grep for key",  # dispatch-ok
     "grep for credentials",
-    "grep for secret",
+    "grep for secret",  # dispatch-ok
 ]
 
 ISOLATION_MARKERS = [
@@ -134,7 +134,7 @@ FILE_WRITE_INDICATORS = [
 # Git stash is FORBIDDEN in dispatch prompts because git stash is shared across
 # all worktrees; agents in parallel worktrees cross-contaminate each other's WIP.
 GIT_STASH_PATTERNS = [
-    "git stash",
+    "git stash",  # dispatch-ok
 ]
 
 # Advisory role-routing catalog: known specialist subagent_type values. "general-purpose" is

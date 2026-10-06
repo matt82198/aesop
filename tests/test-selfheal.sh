@@ -8,6 +8,30 @@ set -e
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR=$(mktemp -d)
+
+# ISOLATION GUARD (incident: live ~/conductor3/state/.watchdog-heartbeat got
+# overwritten with a test placeholder): refuse to run at all if TMP_DIR did
+# not land inside a real temp location. mktemp -d is the structural guarantee
+# here, but fail loudly rather than silently writing fixtures anywhere real if
+# that guarantee is ever violated (e.g. a future edit replaces mktemp with a
+# hardcoded path, or TMPDIR is pointed at a real, non-temp directory).
+TMP_DIR_RESOLVED="$(cd "$TMP_DIR" && pwd -P)"
+case "$TMP_DIR_RESOLVED" in
+  "$REPO_ROOT"|"$REPO_ROOT"/*)
+    echo "FAIL: isolation guard: TMP_DIR '$TMP_DIR_RESOLVED' resolves inside the real repo checkout '$REPO_ROOT' -- refusing to run" >&2
+    exit 1
+    ;;
+esac
+if [ -n "${HOME:-}" ]; then
+  REAL_HOME_RESOLVED="$(cd "$HOME" 2>/dev/null && pwd -P)" || REAL_HOME_RESOLVED=""
+  case "$TMP_DIR_RESOLVED" in
+    "$REAL_HOME_RESOLVED/conductor3"|"$REAL_HOME_RESOLVED/conductor3"/*)
+      echo "FAIL: isolation guard: TMP_DIR '$TMP_DIR_RESOLVED' resolves inside the real conductor3 -- refusing to run" >&2
+      exit 1
+      ;;
+  esac
+fi
+
 AESOP_STATE="$TMP_DIR/aesop/state"
 CONDUCTOR_MONITOR="$TMP_DIR/conductor3/monitor"
 SELFHEAL_LOG="$AESOP_STATE/SELFHEAL.log"

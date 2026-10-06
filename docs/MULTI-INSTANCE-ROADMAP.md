@@ -1,6 +1,13 @@
 # Multi-Instance Roadmap
 
-Architectural path from single-box SQLite to multi-instance coordination. Current state and planned phases. All phases beyond the current SQLite WAL backend are design sketches, not commitments; none are scheduled.
+Architectural path from single-box SQLite to multi-instance coordination.
+
+**Phase 0.5 is shipped.** Multi-instance coordination across separate boxes no
+longer requires a network database: it runs on a shared *directory*, with each
+instance keeping its own local SQLite. Everything beyond Phase 0.5 — the
+Postgres backend, multi-writer OCC over a network store, cross-region
+federation — remains a design sketch. **None of Phase 1, 2 or 3 is scheduled**,
+and Phase 0.5 removed the reason that made Phase 1 look urgent.
 
 ## Current Architecture: Single-Box SQLite WAL
 
@@ -24,15 +31,112 @@ Architectural path from single-box SQLite to multi-instance coordination. Curren
 
 ### Limitations
 
-- **Single host only**: SQLite file-lock is local; no cross-machine readers/writers
-- **No distributed leasing**: Multi-instance coordination would require a network-accessible backend (e.g. Postgres)
+- **Single host only, for the event store**: the SQLite file-lock is local, so a
+  single `state.db` cannot be shared between machines. This limitation is real
+  and permanent (see the WAL-over-network verdict under Phase 0.5) — Phase 0.5
+  works *around* it rather than removing it.
+- ~~**No distributed leasing**: multi-instance coordination would require a
+  network-accessible backend (e.g. Postgres)~~ — **this claim was wrong, and
+  Phase 0.5 falsifies it.** Distributed leasing needs a *shared serialisation
+  point*, not a *network database*. A shared directory whose filenames are
+  unique by construction is such a point: mutual exclusion is decided by a
+  deterministic fold over the directory listing, requiring no file locking, no
+  exclusive-create, and no server-side transaction. See Phase 0.5 below.
 - **Scaling ceiling**: Not yet measured under sustained load; the ~704 ev/s micro-benchmark is well above current real-world throughput (~100 ev/s)
+
+---
+
+## Phase 0.5: Shared-Filesystem Coordination (SHIPPED)
+
+**Status**: Implemented, increments 0-7. Off by default (`multibox.enabled: false`).
+
+**Goal**: 3-5 Aesop instances on separate boxes safely sharing coordination
+state — no Postgres, no consensus protocol, no network locking.
+
+### The WAL-over-network verdict (this is what drives the design)
+
+**Do not put `state.db` on the share.** SQLite WAL mode needs a shared-memory
+index (`-shm`) that is mmap-backed and only coherent between processes *on the
+same host*; SQLite's own documentation states WAL does not work over a network
+filesystem. The alternatives were examined and rejected:
+
+- NFSv3 advisory locking (fcntl) is emulated by lockd and historically
+  unreliable — a lost lock reply silently yields two writers.
+- SMB2/3 byte-range locks are server-mediated and better, but client-side
+  attribute and directory caching still breaks SQLite's cache-invalidation
+  assumptions.
+- `PRAGMA locking_mode=EXCLUSIVE` makes WAL work without `-shm`, but permits
+  exactly one connection — which defeats the point.
+- Falling back to `journal_mode=DELETE` restores lock-based coherence in theory
+  but still rests on the same unreliable advisory locking, and would regress the
+  measured single-box concurrency story (~704 ev/s).
+
+So the verdict is **not** "shared storage is unusable"; it is "**a shared
+*database* is unusable, a shared *directory* is not**".
+
+### The design
+
+Each instance keeps its **own local SQLite** (WAL, unchanged, local disk — the
+standing single-box decision holds verbatim). The shared filesystem carries
+**only a claim log**, designed to need no file locking and no exclusive-create:
+
+> Every claim record is written to a filename that is unique by construction:
+> `claims/<lamport>-<epoch_ms>-<instance_id>-<uuid4>.json`. No two writers ever
+> contend for the same name, so no filesystem atomicity primitive (O_EXCL,
+> link(), rename(), flock) is required. Mutual exclusion is decided by a
+> **deterministic fold over the directory listing**.
+
+The only property the shared filesystem must supply is that a written+fsynced
+file becomes visible in another host's directory listing within a bounded time
+D. That is far weaker than POSIX lock semantics — and, crucially, it is
+**measurable**.
+
+Because D > 0, a naive "write claim, list, I'm lowest, go" double-grants under
+concurrent claims. So a claim waits a **settle window** (`settle_seconds`,
+default 5s) before re-listing and folding, and grants only if it is still the
+winner for every requested path; otherwise it writes its own tombstone and fails
+closed.
+
+### Why this is trustworthy rather than merely plausible
+
+- **The assumption is measured, not assumed.** `tools/multibox_preflight.py`
+  measures p99 visibility delay and clock skew on the actual share.
+- **The measurement is enforced.** Enabling multibox runs a hard startup gate
+  (`tools/multibox_config.py`) that refuses to proceed unless the event-store DB
+  is on local storage, the measured p99 delay is below `settle_seconds`, and the
+  measured skew is below `max_skew_seconds`. Fail-closed; the refusal names the
+  mount options that fix it (NFS: `nfsvers=4.1,actimeo=1,lookupcache=none`;
+  SMB: `cache=none`).
+- **The mechanism is proven load-bearing, not decorative.**
+  `tools/verify_multibox.py` runs in CI and asserts both that 200 seeded rounds
+  with delay <= settle produce zero double grants **and** that the same harness
+  with delay > settle *does* double-grant. A safety property that cannot fail
+  proves nothing; this one can, and does, on demand.
+- **Blast radius is bounded.** Worst case is two instances on one file —
+  recoverable by the existing merge-train machinery, not state corruption, since
+  each instance's event store is local and independent.
+
+### What it does not do
+
+No Postgres. No Raft/Paxos/etcd/ZooKeeper — leases, TTL and a monotonic fencing
+generation only. No shared SQLite over a network (actively *prevented* by the
+preflight guard). No cross-region federation, and no more than ~5 boxes.
+
+### Where it lives
+
+- Design: `docs/design/MULTIBOX-DESIGN.md` (per-increment status table)
+- Config: `aesop.config.json` -> `multibox` block; see `aesop.config.example.json`
+- Seam: `tools/multibox_config.py` (parse + hard gate + backend selection)
+- Backends: `state_store/claim_backend.py` (local), `state_store/fs_claim_log.py` (shared-FS)
+- Proof: `tools/verify_multibox.py`, `tests/multibox_sim.py`
 
 ---
 
 ## Phase 1: Read-Your-Writes + Multi-Instance Reader (Not Scheduled)
 
 **Goal**: Enable two Aesop instances on separate boxes to coordinate via shared Postgres; primary instance writes, secondary (read-only) follows.
+
+**Not scheduled, and no longer load-bearing.** Phase 0.5 already delivers cross-box coordination, so Phase 1 is now only about a *shared queryable event history*, not about making multibox possible at all. It would be worth doing if a team wanted one durable store for all instances' events; it is not a prerequisite for anything shipped.
 
 ### Scope
 
@@ -42,7 +146,7 @@ Architectural path from single-box SQLite to multi-instance coordination. Curren
    - StateAPI facade unchanged (no caller churn)
 
 2. **Instance identity + coordination**
-   - `state_store.identity.InstanceID(hostname, pid, nonce)` to tag each process
+   - Instance identity is already shipped by Phase 0.5: `state_store/identity.py` exports `get_instance_id()` and `get_identity_with_epoch()` (a persisted id plus a monotonic boot epoch used as a fencing token). There is no `InstanceID` class.
    - Orchestrator reads `InstanceID` on startup
    - Lease-by-append (already implemented): `try_claim(store, "orchestrator_lock", instance_id, ttl=300s)`
    - **Primary**: Claims the lock, drives orchestration, appends events
@@ -199,7 +303,7 @@ Does aesop need to coordinate across multiple hosts?
 
 - **Current implementation**: `state_store/` (EventStore, StateAPI, projections, OCC)
 - **Testing**: `tests/test_state_store*.py` (concurrency, round-trip, hardening)
-- **Design doc**: `docs/TEAM-STATE.md` (full architecture, migration plan)
+- **Design docs**: `docs/TEAM-STATE.md` (full architecture, migration plan), `docs/design/MULTIBOX-DESIGN.md` (Phase 0.5 coordination design + per-increment status)
 - **Config**: `aesop.config.json` → `state_backend` (phase deployment switch)
 - **Spike results** (2026-07-18): Postgres connection pool scaling, query latency under contention (internal note; link if shared)
 
@@ -207,12 +311,14 @@ Does aesop need to coordinate across multiple hosts?
 
 ## Summary
 
-**Current (SQLite WAL)**: Production-ready, single-box only, ~704 events/sec measured (single-host micro-benchmark; real-world ~100 ev/s), OCC shipped, thread-local connection pooling, claims-stream compaction.
+**Current (SQLite WAL)**: Production-ready, ~704 events/sec measured (single-host micro-benchmark; real-world ~100 ev/s), OCC shipped, thread-local connection pooling, claims-stream compaction. The event store is per-instance and local — that is a deliberate invariant, not a gap.
 
-**Phase 1 (network backend, read-only follower)**: Design sketch only, not scheduled. Would enable multi-instance reads.
+**Phase 0.5 (shared-filesystem coordination)**: SHIPPED, off by default. 3-5 boxes coordinate through an append-only claim log on a shared directory, with mutual exclusion decided by a deterministic fold. Enabling it requires passing a hard, measured preflight. This is the phase that falsified "no distributed leasing without Postgres".
+
+**Phase 1 (network backend, read-only follower)**: Design sketch only, **not scheduled**. Would give all instances one shared queryable event history; it is no longer what makes multi-instance possible.
 
 **Phase 2 (Multi-writer OCC)**: Design sketch only, not scheduled. OCC interface already stable on SQLite; a network backend would implement the same semantics in SQL.
 
 **Phase 3 (Cross-region federation)**: Stretch goal, contingent on user demand + Phase 1/2 stability.
 
-**No phase commits until measured production data supports the cost-benefit trade-off. Single-box SQLite is sufficient for current workloads.**
+**No Postgres-phase commits until measured production data supports the cost-benefit trade-off. A local-per-instance SQLite event store plus a shared claim log is sufficient for current workloads and team sizes.**

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for power_selftest.py health check harness."""
+import importlib.util
 import os
 import sys
 import subprocess
@@ -8,6 +9,16 @@ import unittest
 import json
 from pathlib import Path
 from datetime import datetime, timedelta
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _load_module(name, relpath):
+    """Load a tools/ module by file path (tools/ is not a package)."""
+    spec = importlib.util.spec_from_file_location(name, REPO_ROOT / relpath)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class TestPowerSelftest(unittest.TestCase):
@@ -27,10 +38,19 @@ class TestPowerSelftest(unittest.TestCase):
             shutil.rmtree(self.temp_dir)
 
     def _run_selftest(self, env_overrides=None):
-        """Run power_selftest.py with environment overrides."""
+        """Run power_selftest.py with environment overrides.
+
+        Points SCRIPTS_ROOT at this repo's real tools/ dir by default so the
+        scanner check finds a real, passing scanner_selftest.py -- these
+        happy-path tests are about hooks/beats/decisions graceful
+        degradation, not the scanner fail-closed behavior (covered
+        separately below), and must stay deterministic regardless of
+        whether the host box happens to have a ~/scripts fallback.
+        """
         env = os.environ.copy()
         env["AESOP_STATE_ROOT"] = str(self.state_dir)
         env["BRAIN_ROOT"] = str(self.brain_dir)
+        env["SCRIPTS_ROOT"] = str(self.selftest_script.parent)
         if env_overrides:
             env.update(env_overrides)
 
@@ -138,10 +158,22 @@ class TestPowerSelftestHookDetection(unittest.TestCase):
             shutil.rmtree(self.temp_dir)
 
     def _run_selftest(self):
-        """Run power_selftest.py against the temp state/brain roots."""
+        """Run power_selftest.py against the temp state/brain roots.
+
+        Points SCRIPTS_ROOT at this repo's real tools/ dir, same as the
+        base TestPowerSelftest class above: these tests are about hook
+        detection, not the scanner fail-closed behavior (covered in
+        TestPowerSelftestScannerFailClosed), and the overall exit code is
+        the union of every check. Leaving SCRIPTS_ROOT unset let the
+        scanner check fall through to the profile-agnostic $HOME/scripts
+        fallback, which is absent on CI runners -- scanner:FAIL then
+        flipped the exit code these tests assert on for a reason that has
+        nothing to do with hooks.
+        """
         env = os.environ.copy()
         env["AESOP_STATE_ROOT"] = str(self.state_dir)
         env["BRAIN_ROOT"] = str(self.brain_dir)
+        env["SCRIPTS_ROOT"] = str(self.selftest_script.parent)
         return subprocess.run(
             [sys.executable, str(self.selftest_script)],
             capture_output=True,
@@ -263,6 +295,249 @@ class TestPowerSelftestHookDetection(unittest.TestCase):
         result = self._run_selftest()
         self.assertIn("missing files", result.stdout)
         self.assertEqual(result.returncode, 1)
+
+
+class TestPowerSelftestScannerFailClosed(unittest.TestCase):
+    """A scanner check that cannot evaluate must never render healthy.
+
+    scanner:None was observed live (checks that evaluated to nothing still
+    rendered as if they'd passed). This class pins the fix: a found,
+    passing scanner_selftest.py renders 'scanner:N/N'; an unfindable one
+    renders 'scanner:FAIL:...' and fails the whole selftest closed.
+    """
+
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+        self.selftest_script = Path(__file__).parent.parent / "tools" / "power_selftest.py"
+        self.state_dir = Path(self.temp_dir) / "state"
+        self.brain_dir = Path(self.temp_dir) / "brain"
+        self.state_dir.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        import shutil
+        if os.path.exists(self.temp_dir):
+            shutil.rmtree(self.temp_dir)
+
+    def _run_selftest(self, scripts_root, no_home_fallback=False):
+        env = os.environ.copy()
+        env["AESOP_STATE_ROOT"] = str(self.state_dir)
+        env["BRAIN_ROOT"] = str(self.brain_dir)
+        env["SCRIPTS_ROOT"] = str(scripts_root)
+        if no_home_fallback:
+            # Defeat the profile-agnostic $HOME/scripts fallback deterministically,
+            # regardless of whether the host box happens to carry its own
+            # ~/scripts/scanner_selftest.py (as this dev box does).
+            empty_home = Path(self.temp_dir) / "empty_home"
+            empty_home.mkdir(parents=True, exist_ok=True)
+            env["USERPROFILE"] = str(empty_home)
+            env["HOME"] = str(empty_home)
+        return subprocess.run(
+            [sys.executable, str(self.selftest_script)],
+            capture_output=True, text=True, encoding="utf-8",
+            cwd=self.temp_dir, env=env,
+        )
+
+    def test_scanner_found_and_passing_shows_pass_count(self):
+        """A real scanner_selftest.py renders 'scanner:N/N', never 'scanner:None'."""
+        real_tools_dir = self.selftest_script.parent
+        result = self._run_selftest(real_tools_dir)
+        self.assertNotIn("scanner:None", result.stdout)
+        self.assertRegex(result.stdout, r"scanner:\d+/\d+")
+
+    def test_scanner_unlocatable_fails_closed(self):
+        """No scanner_selftest.py anywhere findable -> FAIL, not OK/n/a/None."""
+        empty_scripts_root = Path(self.temp_dir) / "no_scanner_here"
+        empty_scripts_root.mkdir(parents=True, exist_ok=True)
+        result = self._run_selftest(empty_scripts_root, no_home_fallback=True)
+        self.assertNotIn("scanner:None", result.stdout)
+        self.assertIn("scanner:FAIL", result.stdout)
+        self.assertIn("POWER-SELFTEST: FAIL", result.stdout)
+        self.assertEqual(result.returncode, 1)
+
+    def test_scanner_resolves_profile_agnostic_home_fallback(self):
+        """When SCRIPTS_ROOT has no harness, a real $HOME/scripts copy is still found.
+
+        Proves the fallback is resolved via Path.home() (HOME/USERPROFILE),
+        never a hard-coded user profile path.
+        """
+        empty_scripts_root = Path(self.temp_dir) / "no_scanner_here"
+        empty_scripts_root.mkdir(parents=True, exist_ok=True)
+        fake_home = Path(self.temp_dir) / "fake_home"
+        fake_scripts = fake_home / "scripts"
+        fake_scripts.mkdir(parents=True, exist_ok=True)
+        # A minimal self-contained fake harness: always reports 3/3 passed, exit 0.
+        (fake_scripts / "scanner_selftest.py").write_text(
+            "import sys\nprint('SELFTEST: 3/3 passed')\nsys.exit(0)\n",
+            encoding="utf-8",
+        )
+
+        env = os.environ.copy()
+        env["AESOP_STATE_ROOT"] = str(self.state_dir)
+        env["BRAIN_ROOT"] = str(self.brain_dir)
+        env["SCRIPTS_ROOT"] = str(empty_scripts_root)
+        env["USERPROFILE"] = str(fake_home)
+        env["HOME"] = str(fake_home)
+        result = subprocess.run(
+            [sys.executable, str(self.selftest_script)],
+            capture_output=True, text=True, encoding="utf-8",
+            cwd=self.temp_dir, env=env,
+        )
+        self.assertIn("scanner:3/3", result.stdout)
+        self.assertEqual(result.returncode, 0)
+
+
+class TestRenderSegmentFailClosed(unittest.TestCase):
+    """Unit tests on the shared render_segment() formatter, imported directly.
+
+    Every check result -- real Check, a None details on an OK/WARN check, or
+    a missing result entirely -- is funneled through one render_segment()
+    that treats anything it cannot make sense of as FAIL:unevaluated. It
+    must never let Python's None print as if a check were healthy.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        selftest_path = Path(__file__).parent.parent / "tools" / "power_selftest.py"
+        spec = importlib.util.spec_from_file_location(
+            f"power_selftest_{id(cls)}", selftest_path
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        cls.mod = module
+
+    def test_none_result_renders_fail_unevaluated(self):
+        segment, is_fail = self.mod.render_segment("scanner", None)
+        self.assertNotIn("None", segment)
+        self.assertIn("scanner:FAIL", segment)
+        self.assertTrue(is_fail)
+
+    def test_ok_status_with_none_details_renders_fail_unevaluated(self):
+        """The exact shape that produced literal 'scanner:None' in the wild."""
+        fake_check = self.mod.Check("scanner", "OK", None, False)
+        segment, is_fail = self.mod.render_segment("scanner", fake_check)
+        self.assertEqual(segment, "scanner:FAIL:unevaluated")
+        self.assertTrue(is_fail)
+
+    def test_ok_status_with_none_details_on_untracked_name_still_ok(self):
+        """hooks/brain/beats intentionally pass details=None on a clean OK;
+        only names whose healthy state is expressed THROUGH details
+        (decisions, scanner) must treat a None detail as unevaluated."""
+        fake_check = self.mod.Check("hooks", "OK", None, False)
+        segment, is_fail = self.mod.render_segment("hooks", fake_check)
+        self.assertEqual(segment, "hooks:ok")
+        self.assertFalse(is_fail)
+
+    def test_run_checks_never_silently_drops_a_none_result(self):
+        """A check function that returns None (crashed/mis-shaped) must
+        still surface in the headline as a failure, not vanish."""
+        original_checks = self.mod.CHECKS
+        try:
+            self.mod.CHECKS = original_checks + (("ghost", lambda: None),)
+            results = self.mod.run_checks()
+            names = [r.name for r in results]
+            self.assertIn("ghost", names)
+            ghost = next(r for r in results if r.name == "ghost")
+            self.assertEqual(ghost.status, "FAIL")
+            self.assertTrue(ghost.is_fail)
+        finally:
+            self.mod.CHECKS = original_checks
+
+
+class TestPowerSelftestTrigger(unittest.TestCase):
+    """GAP7 wiring: power_selftest's trigger check calls task_cadence_check.
+
+    task_cadence_check.py (PR #701) parses daemons/install-tasks.ps1 for the
+    real scheduled-task names/intervals and compares them against live
+    Task Scheduler state, but nothing invoked it -- this is that wiring.
+    These tests import both tools/ modules directly (not via subprocess) so
+    the `query` callable can be mocked without touching the real Task
+    Scheduler, mirroring task_cadence_check's own injectable-`query` design.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.power_selftest = _load_module(
+            "power_selftest_trigger_under_test", "tools/power_selftest.py"
+        )
+        cls.tcc = _load_module(
+            "task_cadence_check_trigger_under_test", "tools/task_cadence_check.py"
+        )
+        cls.expected = cls.tcc.parse_expected_cadences(
+            (REPO_ROOT / "daemons" / "install-tasks.ps1").read_text(encoding="utf-8")
+        )
+
+    @staticmethod
+    def _task_xml(interval_minutes, enabled=True):
+        return (
+            '<?xml version="1.0" encoding="UTF-16"?>\n'
+            '<Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n'
+            "  <Settings><Enabled>%s</Enabled></Settings>\n"
+            "  <Triggers><TimeTrigger><Repetition><Interval>PT%dM</Interval>"
+            "</Repetition></TimeTrigger></Triggers>\n"
+            "</Task>"
+        ) % ("true" if enabled else "false", int(interval_minutes))
+
+    def test_trigger_fail_on_missing_task(self):
+        """A task install-tasks.ps1 defines but Task Scheduler has never registered is FAIL."""
+
+        def fake_query(name):
+            raise self.tcc.TaskMissingError(name)
+
+        result = self.power_selftest.check_trigger(platform="win32", query=fake_query)
+        self.assertEqual(result.status, "FAIL")
+        self.assertTrue(result.is_fail)
+
+        output, exit_code = self.power_selftest.format_output([result])
+        self.assertIn("trigger:FAIL", output)
+        self.assertIn("FAIL", output.splitlines()[0])
+        self.assertEqual(exit_code, 1)
+
+    def test_trigger_ok_when_all_tasks_ready(self):
+        """Every defined task registered, enabled, at its defined cadence -> trigger:ok."""
+
+        def fake_query(name):
+            return self._task_xml(self.expected[name], enabled=True)
+
+        result = self.power_selftest.check_trigger(platform="win32", query=fake_query)
+        self.assertEqual(result.status, "OK")
+        self.assertFalse(result.is_fail)
+
+        output, exit_code = self.power_selftest.format_output([result])
+        self.assertIn("trigger:ok", output)
+        self.assertNotIn("FAIL", output.splitlines()[0])
+
+    def test_trigger_na_on_non_windows(self):
+        """Non-Windows platforms report n/a, never FAIL -- the gate is Windows-only."""
+        result = self.power_selftest.check_trigger(platform="linux")
+        self.assertEqual(result.status, "OK")
+        self.assertFalse(result.is_fail)
+
+        output, exit_code = self.power_selftest.format_output([result])
+        self.assertIn("trigger:n/a (non-Windows)", output)
+        self.assertNotIn("FAIL", output)
+
+    def test_trigger_warn_on_disabled_task(self):
+        """A task that install-tasks.ps1 defines but that is deliberately disabled is a
+        WARN naming the task, not a FAIL -- FAIL is reserved for a task that is
+        missing outright or genuinely drifted off-cadence.
+        """
+
+        def fake_query(name):
+            # AesopMergeQueue deliberately disabled on this box since 2026-09-02;
+            # everything else Ready at its defined cadence.
+            enabled = name != "AesopMergeQueue"
+            return self._task_xml(self.expected[name], enabled=enabled)
+
+        result = self.power_selftest.check_trigger(platform="win32", query=fake_query)
+        self.assertEqual(result.status, "WARN")
+        self.assertFalse(result.is_fail)
+        self.assertIn("AesopMergeQueue", result.details)
+
+        output, exit_code = self.power_selftest.format_output([result])
+        self.assertIn("trigger:WARN", output)
+        self.assertIn("AesopMergeQueue", output)
+        self.assertNotIn("FAIL", output.splitlines()[0])
 
 
 if __name__ == "__main__":

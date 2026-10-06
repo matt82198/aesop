@@ -66,42 +66,22 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -u
-          python - <<'PY' "$HEAD_SHA" "$GITHUB_REPOSITORY"
-          import json, subprocess, sys
-          sys.path.insert(0, "tools")
-          import verify_receipt as vr
-          sha, repo = sys.argv[1], sys.argv[2]
-
-          def api(path):
-              # One page of 100 is ample for a single sha; --paginate would concatenate
-              # JSON objects for the object-shaped check-runs endpoint.
-              res = subprocess.run(["gh", "api", path], capture_output=True,
-                                   encoding="utf-8", errors="replace", timeout=120)
-              if res.returncode != 0:
-                  print("gh api %s failed: %s" % (path, res.stderr.strip()[:300]))
-                  return None
-              try:
-                  return json.loads(res.stdout)
-              except ValueError:
-                  print("gh api %s returned non-JSON" % path)
-                  return None
-
-          env = None
-          runs = api("repos/%s/commits/%s/check-runs?per_page=100" % (repo, sha))
-          if runs is not None:
-              env = vr.extract_receipt_from_check_runs(runs)
-          if env is None:
-              comments = api("repos/%s/commits/%s/comments?per_page=100" % (repo, sha))
-              if comments is not None:
-                  env = vr.extract_receipt_from_comments(comments)
-          if env is None:
-              open("receipt_found", "w").write("false")
-              print("no %s receipt on %s" % (vr.rc.CHECK_NAME, sha))
-          else:
-              json.dump(env, open("receipt.json", "w"))
-              open("receipt_found", "w").write("true")
-              print("receipt found for %s (scheme=%s)" % (sha, env.get("sig", {}).get("scheme")))
-          PY
+          # Guard at the shell level, before touching python: a PR branch cut before
+          # this tool existed has no tools/verify_receipt.py on its checked-out tree
+          # (this job pins the PR HEAD sha, not main -- see header). That must read as
+          # "no receipt" (absent), never a crash: absent is neutral, only a
+          # found-but-invalid receipt fails this job (docs/RECEIPT-GATE.md).
+          # tools/verify_receipt.py's own --fetch-for-head mode is ALSO defensive
+          # (never raises, always exits 0) against every other lookup failure (gh api
+          # errors, malformed payloads); this check only covers the one failure mode
+          # that happens before any python of ours can run at all.
+          if [ ! -f tools/verify_receipt.py ]; then
+            echo "::notice title=verify-receipt::tools/verify_receipt.py is not present on this checkout (branch predates the receipt gate); treating as no receipt."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python tools/verify_receipt.py --fetch-for-head "$HEAD_SHA" --repo-slug "$GITHUB_REPOSITORY" \
+            --out-found receipt_found --out-envelope receipt.json
           echo "found=$(cat receipt_found)" >> "$GITHUB_OUTPUT"
 
       - name: No receipt (not required during the measurement period)

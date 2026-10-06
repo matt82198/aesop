@@ -437,6 +437,16 @@ def bad_merge():
         # Should only check the actual invocation, which has a PR number
         self.assertFalse(any(v["pattern"] == "auto_merge_bare_invocation" for v in violations))
 
+    def test_excludes_test_files_from_violations(self):
+        """Test files with Agent() should be excluded from dispatch_lint scanning."""
+        # This test verifies that test_dispatch_lint.py itself does not
+        # trigger violations for its intentional test fixtures
+        test_file = Path(__file__)
+        violations_by_file, _ = scan_directory(test_file)
+        # Should have no violations since this is a test file
+        self.assertEqual(len(violations_by_file), 0,
+            "Test files should not trigger dispatch_lint violations")
+
 
 if __name__ == "__main__":
     unittest.main()
