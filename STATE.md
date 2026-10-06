@@ -43,7 +43,7 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 ### In Progress
 
-9. **Merge actor must not depend on a session** (IN-PROGRESS). All recent PRs (#860, #863, #864, #855, #850, #866, #856, #867) merged via GitHub native auto-merge. Board catch-up serial merge train for 10-PR batches continuing. #784 (Windows skills-install hang): instrumentation lane for named-step stderr + per-spawn timeouts; conflict-marker gate lane running (no PR yet).
+9. **Merge actor must not depend on a session** (IN-PROGRESS). All recent PRs (#860, #863, #864, #855, #850, #866, #856, #867) merged via GitHub native auto-merge. Board catch-up serial merge train for 10-PR batches continuing. #784 (Windows skills-install hang): instrumentation lane for named-step stderr + per-spawn timeouts; conflict-marker gate lane running (no PR yet). **Residual gap CLOSED**: a PR that went RED after auto-merge was armed previously had no session-independent actor (only a live orchestrator's Monitor tool noticed) -- `tools/pr_sweep.py` (+ `tests/test_pr_sweep.py`) is now that actor, invoked every 15 min from `daemons/run-watchdog.sh`'s `run_pr_sweep_throttled()`: arms missing auto-merge, nudges BEHIND branches (capped at 2/run), and signals stuck-red (>30 min)/DIRTY PRs to the conductor signal-hub queue for pickup.
 
 14. **CI-modes product surface** (IN-FLIGHT). Expose CI run modes and performance characteristics (dispatch vs. serial, shard allocation, cross-OS drift) as browsable UI panels. Complements cost telemetry + scheduling observability.
 
