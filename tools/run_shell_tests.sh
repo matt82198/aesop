@@ -98,6 +98,41 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     exit 0
   fi
 
+  # Isolation (incident: a shell-test lane left the test placeholder "1234567890"
+  # in the LIVE ~/conductor3/state/.watchdog-heartbeat). Pin HOME/USERPROFILE and
+  # TMPDIR/TMP/TEMP to a fresh mktemp root before any test runs, so:
+  #   - any `mktemp -d`/`${TMPDIR:-/tmp}` fallback a test uses for its OWN
+  #     fixtures lands under the isolated root structurally, and
+  #   - any future tool that derives a default from Path.home()/$HOME (e.g.
+  #     ui/config.py's AESOP_CONDUCTOR3_ROOT default) gets the fake home, not
+  #     the real one.
+  # Deliberately NOT exported here: AESOP_ROOT / AESOP_STATE_ROOT /
+  # CONDUCTOR_ROOT. Several already-hermetic tests (test-selfheal.sh, the
+  # test-run-watchdog*.sh family, test-daemon-halt-sentinel.sh) rely on the
+  # daemon scripts' own `${CONDUCTOR_ROOT:-$(dirname "$AESOP_ROOT")/conductor3}`
+  # fallback staying UNSET so it derives from THEIR OWN AESOP_ROOT fixture, and
+  # test-daemon-halt-config-path.sh's Test 2 relies on AESOP_STATE_ROOT staying
+  # UNSET so halt.py falls through to its aesop.config.json state_root check.
+  # Exporting a runner-level default for these doesn't add safety (every
+  # invocation that matters already pins them explicitly per-command) and
+  # actively breaks that fallback-must-be-unset contract -- confirmed by
+  # running the full suite with them exported: it broke 5 previously-green
+  # tests. The real, confirmed vulnerability (test-daemon-halt-config-path.sh
+  # passing REPO_ROOT as AESOP_ROOT with CONDUCTOR_ROOT unpinned, so it derived
+  # the REAL ~/conductor3) is fixed directly in that file instead.
+  SHELL_TEST_ISO_ROOT="$(mktemp -d)"
+  export SHELL_TEST_ISO_ROOT
+  export HOME="${SHELL_TEST_ISO_ROOT}/home"
+  export USERPROFILE="${SHELL_TEST_ISO_ROOT}/home"
+  export TMPDIR="${SHELL_TEST_ISO_ROOT}/tmp"
+  export TMP="${TMPDIR}"
+  export TEMP="${TMPDIR}"
+  mkdir -p "$HOME" "$TMPDIR"
+  trap 'rm -rf "$SHELL_TEST_ISO_ROOT"' EXIT
+
+  echo "Isolation: SHELL_TEST_ISO_ROOT=$SHELL_TEST_ISO_ROOT (HOME/USERPROFILE/TMPDIR/TMP/TEMP pinned under it for this run)"
+  echo ""
+
   # Run mode: discover and execute tests
   echo "Shell test runner — discovering and running tests from $TESTS_DIR"
   echo ""
