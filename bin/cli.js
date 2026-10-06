@@ -1035,23 +1035,39 @@ function initializeGitRepo(targetDir, noGitFlag = false) {
   // observed as a full node --test file-level 180s timeout with zero subtest
   // output on CI's windows-shard(0) (git init is optional/best-effort for a
   // scaffold; fail fast and move on rather than hang forever).
+  //
+  // The timeout alone was not sufficient on CI (PR #784): `timeout` kills the
+  // immediate child, but on Windows that does not reliably reach a grandchild
+  // (e.g. a credential-manager UI, pinentry, or a hooksPath script a global/
+  // system gitconfig on the runner image points `init.templateDir`/hooks at)
+  // that is still holding the inherited stdio pipes open -- execSync then
+  // keeps waiting on those pipes well past its own timeout, which is exactly
+  // the zero-subtest-output 180s file-level hang this guards against. So every
+  // invocation also: (a) disables hooks for this throwaway repo (-c
+  // core.hooksPath=), (b) never signs (-c commit.gpgsign=false — applied to
+  // every command, not only commit, since init/config can themselves trigger a
+  // signing-related hook or template), and (c) sets GIT_TERMINAL_PROMPT=0 so
+  // git fails fast instead of blocking on a credential/terminal prompt with no
+  // TTY attached.
   const GIT_OP_TIMEOUT_MS = 15000;
+  const GIT_SAFE_FLAGS = '-c core.hooksPath= -c commit.gpgsign=false';
+  const gitOpts = {
+    cwd: targetDir,
+    stdio: 'pipe',
+    timeout: GIT_OP_TIMEOUT_MS,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+  };
 
   try {
     // Initialize git repo
-    execSync('git init -q', { cwd: targetDir, stdio: 'pipe', timeout: GIT_OP_TIMEOUT_MS });
+    execSync(`git ${GIT_SAFE_FLAGS} init -q`, gitOpts);
     console.log('✓ Initialized git repository');
 
     // Create initial commit
-    execSync('git config user.email "aesop-scaffold@local"', { cwd: targetDir, stdio: 'pipe', timeout: GIT_OP_TIMEOUT_MS });
-    execSync('git config user.name "Aesop Scaffold"', { cwd: targetDir, stdio: 'pipe', timeout: GIT_OP_TIMEOUT_MS });
-    // -c commit.gpgsign=false: this is a throwaway scaffold commit under a
-    // just-generated local identity (not the invoking user's), so there is
-    // nothing meaningful to sign; signing it would also inherit the invoker's
-    // global GPG config and can hang indefinitely waiting on a pinentry prompt
-    // with no TTY available (the actual hang this guards against).
-    execSync('git add -A', { cwd: targetDir, stdio: 'pipe', timeout: GIT_OP_TIMEOUT_MS });
-    execSync('git -c commit.gpgsign=false commit -q -m "Initial aesop scaffold"', { cwd: targetDir, stdio: 'pipe', timeout: GIT_OP_TIMEOUT_MS });
+    execSync(`git ${GIT_SAFE_FLAGS} config user.email "aesop-scaffold@local"`, gitOpts);
+    execSync(`git ${GIT_SAFE_FLAGS} config user.name "Aesop Scaffold"`, gitOpts);
+    execSync(`git ${GIT_SAFE_FLAGS} add -A`, gitOpts);
+    execSync(`git ${GIT_SAFE_FLAGS} commit -q -m "Initial aesop scaffold"`, gitOpts);
     console.log('✓ Created initial git commit');
     return true;
   } catch (e) {

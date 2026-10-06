@@ -51,6 +51,21 @@ if (process.env.AESOP_TEST_REAL_HOME !== '1') {
   // unrelated reasons).
   process.env.AESOP_TEST_HARNESS = '1';
 
+  // Git isolation (PR #784, CI-only hang): overriding HOME/USERPROFILE above stops git
+  // from finding a *user*-level .gitconfig, but a CI runner image's *global* config path
+  // (GIT_CONFIG_GLOBAL, when already set in the runner's own env) or a hooksPath/signing
+  // hook defined there can still be picked up by any git invocation a spawned CLI makes
+  // (e.g. bin/cli.js's initializeGitRepo), and on Windows a hung grandchild (credential UI,
+  // pinentry, hook script) can hold a spawnSync child's stdio pipes open well past its own
+  // `timeout` option -- observed as a full node --test file-level 180s timeout with zero
+  // subtest output on CI's windows-shard(0). Point GIT_CONFIG_GLOBAL at an empty file
+  // inside the isolated home (so no runner-image global config applies) and disable
+  // terminal prompts so git fails fast instead of blocking with no TTY attached.
+  const isolatedGitConfig = path.join(isolatedHome, 'gitconfig');
+  fs.writeFileSync(isolatedGitConfig, '');
+  process.env.GIT_CONFIG_GLOBAL = isolatedGitConfig;
+  process.env.GIT_TERMINAL_PROMPT = '0';
+
   const cleanup = () => {
     try {
       fs.rmSync(isolatedHome, { recursive: true, force: true, maxRetries: 3 });
