@@ -108,17 +108,21 @@ def compute_wsl_path(windows_path: Path) -> str:
             return result.stdout.decode('utf-8', errors='replace').strip()
     except Exception:
         pass
-    # Fallback: rough /mnt/<drive>/... conversion
-    abs_path = windows_path.resolve()
-    parts = abs_path.parts
-    # parts[0] could be 'C:\\' (3 chars) or 'C:' (2 chars) depending on Path implementation
-    if parts and isinstance(parts[0], str):
-        if len(parts[0]) >= 2 and parts[0][1] == ":":
-            drive = parts[0][0].lower()
-            rest = "/".join(parts[1:])
-            return f"/mnt/{drive}/{rest}"
-    # Ultimate fallback: return stringified path (shouldn't happen but safe)
-    return str(abs_path)
+    # Fallback: rough /mnt/<drive>/... conversion. Parse the path TEXT directly
+    # (never Path.resolve()/.parts) -- on a POSIX host, pathlib has no concept
+    # of a Windows drive or backslash separator, so a WindowsPath-shaped string
+    # like "C:\\Users\\matt8\\aesop" resolves against the POSIX cwd instead of
+    # being recognized as already absolute, producing a mangled result. This
+    # repo's only caller always passes an already-absolute path (get_repo_root
+    # via `git rev-parse --show-toplevel`), so no resolve() is needed here.
+    normalized = str(windows_path).replace("\\", "/")
+    match = re.match(r"^([A-Za-z]):/(.*)$", normalized)
+    if match:
+        drive = match.group(1).lower()
+        rest = match.group(2)
+        return f"/mnt/{drive}/{rest}"
+    # Already POSIX-shaped or unrecognized; return the normalized string as-is.
+    return normalized
 
 
 def get_changed_files(commit_range: str, repo_root: Path) -> List[str]:

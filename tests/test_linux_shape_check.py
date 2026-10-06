@@ -127,8 +127,8 @@ class TestLinuxShapeCheckPathConversion(unittest.TestCase):
         """wslpath -a conversion succeeds."""
         mock_run.return_value = mock.Mock(
             returncode=0,
-            stdout="/mnt/c/Users/matt8/aesop\n",
-            stderr="",
+            stdout=b"/mnt/c/Users/matt8/aesop\n",
+            stderr=b"",
         )
         wsl_path = lsc.compute_wsl_path(Path("C:\\Users\\matt8\\aesop"))
         self.assertEqual(wsl_path, "/mnt/c/Users/matt8/aesop")
