@@ -85,7 +85,7 @@ sys.path.insert(0, str(_TOOLS_DIR))
 # an unlanded symbol, so the guard is defined locally over the shared `git`.)
 from merge_train import gh, git  # noqa: E402
 from common import get_state_dir  # noqa: E402
-from generated_paths import GENERATED_PATHS  # noqa: E402
+from generated_paths import GENERATED_PATHS, ALLOW_ENV  # noqa: E402
 
 DEFAULT_REPO = "matt82198/aesop"
 
@@ -1305,7 +1305,26 @@ def build_batch(members: list, summary: dict, epoch: int = None) -> str:
             summary["actions"].append(
                 "regenerated %s on %s" % (", ".join(regenerated), branch))
 
-        ok, out = git("push", "-u", "origin", branch)
+        # The commit just pushed may carry a regenerated REGISTRY path
+        # (tools/INDEX.md is in both GENERATED_PATHS and generated_paths.REGISTRY).
+        # check_generated_paths() on the receiving pre-push hook blocks any push
+        # that touches one unless AESOP_ALLOW_GENERATED=1 is set -- the DESIGNED
+        # writer path for a generator/regeneration push, not a weakening (see
+        # tools/generated_paths.py). This is exactly that push: the bytes just
+        # committed are the real generator's output, so set it for this one git
+        # call only and restore the prior value immediately after, never
+        # leaking the escape hatch into any other push this process makes.
+        prior_allow = os.environ.get(ALLOW_ENV)
+        if regenerated:
+            os.environ[ALLOW_ENV] = "1"
+        try:
+            ok, out = git("push", "-u", "origin", branch)
+        finally:
+            if regenerated:
+                if prior_allow is None:
+                    os.environ.pop(ALLOW_ENV, None)
+                else:
+                    os.environ[ALLOW_ENV] = prior_allow
         if not ok:
             delete_branch = True
             record_exception(0, "git_failed", "push %s: %s" % (branch, out[:200]))

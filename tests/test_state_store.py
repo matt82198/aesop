@@ -185,6 +185,62 @@ class ProjectionTest(unittest.TestCase):
         ])
         self.assertEqual(proj["items"], [])
 
+    def test_duplicate_item_created_for_existing_id_does_not_erase_later_update(self):
+        """Regression for tracker cffdf93d567f: a stray second item_created for an id
+        that already exists (observed in ~38 real items, many tagged "restore
+        pre-migration status") must NOT clobber state folded from a later
+        item_updated. Before the fix this projects to lane="proposed" (resurrected);
+        it must project to lane="done".
+        """
+        events = [
+            {"type": "item_created", "payload": {"id": "A", "lane": "proposed", "status": "todo"}},
+            {"type": "item_updated", "payload": {"id": "A", "lane": "done", "status": "done"}},
+            {"type": "item_created", "payload": {"id": "A", "lane": "proposed", "status": "todo"}},
+        ]
+        proj = project_tracker(events)
+        by_id = {it["id"]: it for it in proj["items"]}
+        self.assertEqual([it["id"] for it in proj["items"]], ["A"])  # no duplicate entry in order
+        self.assertEqual(by_id["A"]["lane"], "done")
+        self.assertEqual(by_id["A"]["status"], "done")
+
+    def test_duplicate_created_replay_at_scale_produces_zero_zombies(self):
+        """Replay of the real shape: N items, a duplicate item_created for some that
+        already reached a terminal lane, then tracker_guard-style zombie detection
+        on the resulting projection must report zero zombies. Before the fix, the
+        duplicated ids resurrect to an active lane and ARE flagged as zombies.
+        """
+        from tools.tracker_guard import is_zombie
+
+        ids = [f"item-{i}" for i in range(50)]
+        events = [
+            {"type": "item_created", "payload": {"id": iid, "lane": "proposed", "status": "todo"}}
+            for iid in ids
+        ]
+        closed_ids = ids[:20]
+        events += [
+            {"type": "item_updated", "payload": {"id": iid, "lane": "done", "status": "done"}}
+            for iid in closed_ids
+        ]
+        # Stray duplicate item_created for a subset of already-closed items,
+        # simulating the real "restore pre-migration status" duplicates.
+        duped_ids = closed_ids[:8]
+        events += [
+            {"type": "item_created", "payload": {"id": iid, "lane": "proposed", "status": "todo"}}
+            for iid in duped_ids
+        ]
+
+        proj = project_tracker(events)
+        by_id = {it["id"]: it for it in proj["items"]}
+        for iid in duped_ids:
+            self.assertEqual(by_id[iid]["lane"], "done")
+
+        # Synthetic journal matching the lane history these events imply.
+        journal = [{"id": iid, "to": "proposed"} for iid in ids]
+        journal += [{"id": iid, "to": "done"} for iid in closed_ids]
+
+        zombies = [iid for iid in ids if is_zombie(iid, by_id[iid]["lane"], journal)]
+        self.assertEqual(zombies, [])
+
 
 class ApiAndExportTest(unittest.TestCase):
     def setUp(self):

@@ -28,7 +28,7 @@ DRIVER_DIR = REPO_ROOT / "driver"
 if str(DRIVER_DIR) not in sys.path:
     sys.path.insert(0, str(DRIVER_DIR))
 
-from context_pack import build_context_pack, ContextPack  # noqa: E402
+from context_pack import add_evidence_to_pack, ContextPack  # noqa: E402
 from orchestrator_driver import OrchestratorDriver  # noqa: E402
 from orchestrator_backend import (  # noqa: E402
     FakeOrchestratorBackend,
@@ -286,12 +286,6 @@ def build_finding_context_pack(
         ContextPack with finding_text + source framing (no labels).
         If enriched, also includes evidence section (sliced per evidence_mode).
     """
-    # Build sources dict: finding text + source lens.
-    # This is the BLIND framing the challenger sees.
-    sources = {
-        "brief:finding": None,  # Will be constructed inline.
-    }
-
     # Construct the brief as finding_text + source framing.
     finding_brief = f"""FINDING: {item.finding_text}
 
@@ -334,20 +328,19 @@ Provide evidence supporting your classification."""
         elif evidence_mode != "full":
             raise ValueError(f"Unknown evidence_mode: {evidence_mode}")
 
-        # Convert evidence list to a dict for build_context_pack
+        # Convert evidence list to a dict for add_evidence_to_pack.
         evidence_dict = {}
         for idx, evidence_item in enumerate(evidence_list):
             evidence_dict[f"evidence_{idx}"] = evidence_item
 
-        # Rebuild pack with evidence
-        pack_with_evidence = build_context_pack(
-            decision_type="adjudicate_finding",
-            sources=sources,
-            repo_root=repo_root,
-            conductor_root=conductor_root,
-            evidence=evidence_dict,
-        )
-        return pack_with_evidence
+        # Attach evidence directly to the already-built pack. Deliberately NOT
+        # routed back through build_context_pack() with a fake 'brief:finding'
+        # source: that re-derivation reads "finding" as a literal relative
+        # filesystem path resolved against the process cwd, which has nothing
+        # to do with repo_root/conductor_root and is not allowlist-safe (see
+        # add_evidence_to_pack's docstring for the 2026-10-06 incident this
+        # replaces). The finding brief is already in-memory; evidence is too.
+        add_evidence_to_pack(pack, evidence_dict)
 
     return pack
 

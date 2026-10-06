@@ -101,6 +101,7 @@ expensive way during aesop development. Each line exists because a lane failed w
   default is cp1252, which corrupts UTF-8 output and has crashed production processes. Every
   subprocess.run/check_output/Popen that reads output: `encoding='utf-8', errors='replace'` not
   `text=True`.
+- **Lanes may emit a local receipt after their full run:** `python tools/emit_receipt.py --post` (signs what ran, posts it on the head sha; the hosted `verify-receipt` check recomputes the tree hash and is NON-required during the measurement period -- see docs/RECEIPT-GATE.md).
 - **Run the ACTUAL CI gate, not a proxy.** `npm run test:py` != a hand-written pytest call; the real
   test count is what CI reports. Verify each gate actually runs: check CI output for the expected counts
   and pass/fail status, never assume "green" means "verified". Partial verification is NOT a pass.
@@ -171,13 +172,22 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   Native auto-merge is the merge actor; AesopMergeQueue is disabled. To re-run required checks on an armed PR without code
   changes, use `gh api repos/<owner>/<repo>/pulls/<N>/update-branch -X PUT`; a `gh workflow run` dispatch creates a separate
   check suite that branch protection ignores.
-- **Generated paths (`tools/INDEX.md`, `tests/CLAUDE.md`, etc. — registry: `tools/generated_paths.py`) carry no override
-  flag.** A push touching one is safe only when its bytes are byte-identical to that path's registered generator run in the
-  same commit; the sync gate checks this directly and there is no environment variable that waives it.
+- **Fully machine-generated paths (`tools/INDEX.md`, `state/ledger/*.jsonl`, etc. — `tools/generated_paths.py::REGISTRY`)
+  are push-blocked by `hooks/pre-push-policy.sh check_generated_paths()`.** The only override is
+  `AESOP_ALLOW_GENERATED=1` — the DESIGNED writer path for a generator/regeneration push (a seated session re-running
+  the generator, `tools/merge_queue.py::build_batch` scoped to the one push right after `regenerate_on_batch`, a
+  daemon push), never for a hand edit. A bot push from GitHub Actions needs no override at all: Actions checkouts
+  never have this repo's local pre-push hook installed. Separately, `tests/CLAUDE.md`/`tools/CLAUDE.md` are in the
+  broader, weaker `GENERATED_PATHS`/`is_restorable()` tuple (automation may `git restore` them if dirty) but are NOT
+  in `REGISTRY` — hand-editing them is legitimate and they are never blocked at push; `tools/INDEX.md` is the one
+  path in both, and its own byte-identity gate (`tools/gen_tool_index.py --check`) still runs unchanged regardless of
+  who was allowed to push it. `tools/INDEX.md` merges with the `union` driver (`.gitattributes`); always run
+  `gen_tool_index.py --regenerate` after merging main to normalize order.
 - **Before pushing, run the shard for your test file.** Run `python tools/ci_shard_runner.py <n> 4` for the shard that owns your
   test file (see tests/CLAUDE.md for shard assignment). CI is confirmation of local verification, not discovery of breakage. Paste
   the shard output to your report: it proves your changes work before they hit main.
 - **Merge = `python tools/auto_merge.py <n>` with the PR number. Never bare.** The primary tree is the merge tool's working tree.
+- Generated whole-tree artifacts (`tools/generated_paths.py::GENERATED_PATHS`) self-heal post-merge via `.github/workflows/regen-on-main.yml` + `tools/regen_all.py`; do not hand-edit them.
 - Stay inside your declared files. If the chain leaves them, **STOP and hand off** — a clean hand-off
   beats a collision and is a complete result, not a failure.
 - **REARCH sections 69+ are orchestrator-reserved.** Claim an unreserved number AT WRITE TIME and
