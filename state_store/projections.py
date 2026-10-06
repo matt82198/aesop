@@ -13,11 +13,24 @@
 Unknown ids on update/archive and unknown event types are ignored, keeping the
 fold tolerant of partial/legacy streams.
 
+**Duplicate item_created rule (fix for cffdf93d567f, 2026-10-05):** a second
+``item_created`` for an id that already exists in the fold is a NO-OP on
+already-present fields -- it never overwrites state folded from a later
+``item_updated``/``item_archived``. It only backfills fields that are still
+null on the existing item. This is load-bearing: ~38 real tracker items carry
+a stray duplicate ``item_created`` (many tagged "restore pre-migration
+status"); folding it as a blind overwrite resurrected closed items on every
+full re-render, which `tools/tracker_guard.py --enforce` then reverted. The
+event log is never rewritten (append-only); the duplicate is made visible via
+a stderr warning line at fold time rather than silently dropped.
+
 Snapshots enable O(n) tail-replay (instead of replaying full log each time):
   - save_snapshot(store, stream, event_version, projection): persist materialized state
   - project_tracker_with_snapshot(store, stream, events): load snapshot, fold tail events
 """
 from __future__ import annotations
+
+import sys
 
 TRACKER_VERSION = 1
 
@@ -50,7 +63,31 @@ def _fold_events(events: list, order: list | None = None, items: dict | None = N
                 continue
             if iid not in items:
                 order.append(iid)
-            items[iid] = dict(payload)
+                items[iid] = dict(payload)
+            else:
+                # Duplicate item_created for an id that already exists (observed:
+                # ~38 real items, many tagged "restore pre-migration status").
+                # MUST NOT overwrite -- a later item_updated/item_archived may
+                # already be folded onto this id, and a blind overwrite here
+                # resurrects a closed item. Treat as a no-op fold except to
+                # backfill fields that are still null on the existing item
+                # (never clobber a present value). The event itself is never
+                # dropped from the append-only log; only the FOLD is a no-op,
+                # and that is surfaced below so the duplicate stays visible.
+                existing = items[iid]
+                merged = dict(existing)
+                for key, value in payload.items():
+                    if key == "id":
+                        continue
+                    if merged.get(key) is None:
+                        merged[key] = value
+                items[iid] = merged
+                print(
+                    f"PROJECTION WARNING: duplicate item_created for existing "
+                    f"id={iid!r} ignored in fold (null-field backfill only); "
+                    f"source event preserved append-only in the log",
+                    file=sys.stderr,
+                )
         elif etype == "item_updated":
             iid = payload.get("id")
             if iid in items:

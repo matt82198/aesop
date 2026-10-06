@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 STATE.md checkpoint-accuracy verifier (guardrail #1 + #5).
-INDEX: Guardrail #1: STATE.md checkpoint-accuracy verifier; parses STATE.md for falsifiable progress claims ("**Current Version:** vX.Y.Z", "resolved", "pushed", "MERGED", "current HEAD <sha>") and verifies against on-disk git truth (git tags + package.json for versions, git status --porcelain for unmerged files, git ls-remote --heads for pushed branches, gh pr view for PR states, git rev-list for commit lag); exit 0=no contradictions + at least one claim verified / 1=contradictions found / 2=error or zero verifiable claims (fail-closed); reports UNVERIFIABLE/SKIP for unparseable/unavailable-tool claims; stdlib-only. Guardrail #5: STATE.md freshness gate detects stale checkpoints (>50 commits behind HEAD).
+INDEX: Guardrail #1: STATE.md checkpoint-accuracy verifier; parses STATE.md for falsifiable progress claims ("**Current Version:** vX.Y.Z", "resolved", "pushed", "MERGED", "current HEAD <sha>") and verifies against on-disk git truth (git tags + package.json for versions, git status --porcelain for unmerged files, git ls-remote --heads for pushed branches, gh pr view for PR states, git rev-list for commit lag); exit 0=no contradictions + at least one claim verified / 1=contradictions found / 2=error or zero verifiable claims (fail-closed); reports UNVERIFIABLE/SKIP for unparseable/unavailable-tool claims; subprocess timeout 30s for Windows CI compatibility; stdlib-only. Guardrail #5: STATE.md freshness gate detects stale checkpoints (>50 commits behind HEAD).
 
 Parses STATE.md for falsifiable progress claims and verifies each against on-disk git truth.
 Catches cases where the orchestrator's checkpoint overstates progress (e.g., "resolved" while
@@ -38,7 +38,7 @@ def run_command(cmd, cwd=None):
             capture_output=True,
             text=True,
             encoding='utf-8', errors='replace',
-            timeout=10
+            timeout=30
         )
         return result.returncode, result.stdout, result.stderr
     except subprocess.TimeoutExpired:
@@ -212,8 +212,6 @@ def verify_resolved_claims(claims, git_root):
                 "status": "CONTRADICTION",
                 "detail": detail
             })
-
-    return findings
 
     return findings
 

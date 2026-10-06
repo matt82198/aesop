@@ -331,7 +331,7 @@ def format_json(result):
 def main():
     """CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="Aesop health score — readiness assessment for primed projects"
+        description="Aesop health score - readiness assessment for primed projects"
     )
     parser.add_argument(
         "--json",

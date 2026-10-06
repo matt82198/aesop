@@ -558,17 +558,24 @@ class TestToolsImportable(unittest.TestCase):
 
 
 class TestCIJobNoJobLevelIf(unittest.TestCase):
-    """Safety test: ci job must never have a job-level if condition (PR #170 deadlock).
+    """Safety test: ci job must never have a SKIPPABLE job-level if (PR #170 deadlock).
 
-    The ci job is REQUIRED under branch protection. If it has a job-level if condition,
-    it can report skipped status, which deadlocks PRs forever (skipped does not satisfy
-    required check). Step-level conditions are safe; job-level conditions are forbidden.
+    The ci job is REQUIRED under branch protection. A job-level if condition that can
+    evaluate false reports skipped status, which deadlocks PRs forever (skipped does
+    not satisfy a required check). Originally this test forbade an `if:` key
+    entirely -- but omitting `if:` is not actually safe: GitHub Actions implicitly
+    ANDs success() onto a job's scheduling whenever it has a `needs:` entry, so with
+    no `if:` at all, ci silently skips the instant its needs-parent (docs-only-gate)
+    fails or is cancelled for ANY reason (script bug, runner/concurrency starvation,
+    timeout) -- the same deadlock, reached a different way (root-caused 2026-10-05,
+    ~8h of armed PRs stuck). `if: always()` is the one value that is both present and
+    genuinely unconditional, which is why it alone is allowed here.
     """
 
     REAL_REPO_ROOT = Path(__file__).resolve().parent.parent
 
     def test_ci_job_has_no_job_level_if(self):
-        """The ci job must not have an if condition at the job level."""
+        """The ci job's if condition, when present, must be exactly always()."""
         ci_path = self.REAL_REPO_ROOT / '.github' / 'workflows' / 'ci.yml'
         self.assertTrue(ci_path.exists(), f"ci.yml not found at {ci_path}")
 
@@ -579,11 +586,18 @@ class TestCIJobNoJobLevelIf(unittest.TestCase):
         ci_job = workflow['jobs'].get('ci')
         self.assertIsNotNone(ci_job, "ci job not found in ci.yml")
 
-        # ci job must NOT have an 'if' key at the job level
-        self.assertNotIn('if', ci_job,
-            "ci job has a job-level if condition, which causes PR deadlock (skipped status). "
-            "PR #170 documented this: skipped required checks do not satisfy branch protection. "
-            "Use step-level conditions instead.")
+        # ci job's 'if' key, if present at all, must be unconditionally always() --
+        # anything else (including absent, which GitHub implicitly treats as
+        # success()) can evaluate false and reports skipped, deadlocking the PR.
+        condition = ci_job.get('if')
+        self.assertEqual(condition, 'always()',
+            "ci job's if condition must be exactly 'always()' (got %r). Any other "
+            "value -- including no 'if:' key at all -- lets docs-only-gate's "
+            "outcome skip-cascade into ci, which causes PR deadlock (skipped "
+            "status). PR #170 documented the job-level-if version of this; the "
+            "implicit-needs-success() version was root-caused 2026-10-05. Use "
+            "step-level conditions for anything that actually needs to vary."
+            % condition)
 
 
 class TestWindowsAggregatorHandlesSkipped(unittest.TestCase):
@@ -789,11 +803,16 @@ class TestUIBuildStepsShardScoped(unittest.TestCase):
                     f"gate it with `if: {self.SHARD_ZERO}`.")
 
     def test_ci_job_has_no_job_level_if_still(self):
-        """Shard scoping must stay step-level (PR #170 deadlock guard)."""
+        """Shard scoping must stay step-level; job-level if must stay always()."""
         ci_job, _ = self._ci_job_steps()
-        self.assertNotIn('if', ci_job,
-            "ci job gained a job-level if condition -- skipped required checks "
-            "deadlock PRs (PR #170). Conditions belong on steps.")
+        condition = ci_job.get('if')
+        self.assertEqual(condition, 'always()',
+            "ci job's job-level if condition must stay exactly 'always()' (got %r). "
+            "A SKIPPABLE job-level if deadlocks PRs (PR #170); conditions that vary "
+            "by context belong on steps, not on this job. Removing 'if:' entirely "
+            "is also unsafe: GitHub implicitly ANDs success() onto a needs-gated "
+            "job with no if:, which skip-cascades on any docs-only-gate failure "
+            "(root-caused 2026-10-05)." % condition)
 
     def test_python_shard_matrix_still_four_way(self):
         """Sanity: the shard-0 condition only makes sense with a shard matrix."""
@@ -805,3 +824,361 @@ class TestUIBuildStepsShardScoped(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGitHubSemantics(unittest.TestCase):
+    """GAP 2026-10-06 -- valid YAML is not a valid workflow.
+
+    PR #850 (merge f8c898de) put `exclude:` as a SIBLING of `matrix:` under
+    `strategy:` and used `shell: ${{ runner.os ... }}`. PyYAML parsed it, this
+    linter said OK, and GitHub rejected the file on every push to main (run
+    37504613105: "Invalid workflow file: (Line: 36, Col: 7): Unexpected value
+    'exclude', (Line: 92, Col: 16): Unrecognized named-value: 'runner'"), so
+    main-full produced ZERO jobs for ~10 merges. These tests drive
+    lint_workflows() over fixtures reproducing each rejection class.
+    """
+
+    def setUp(self):
+        self.fixture_root = Path(tempfile.mkdtemp(prefix="ci-lint-sem-"))
+        self.workflows_dir = self.fixture_root / ".github" / "workflows"
+        self.workflows_dir.mkdir(parents=True)
+
+    def tearDown(self):
+        if self.fixture_root.exists():
+            shutil.rmtree(self.fixture_root)
+
+    def _lint(self, content, name="main-full.yml"):
+        (self.workflows_dir / name).write_text(content, encoding="utf-8")
+        return ci_workflow_lint.lint_workflows(str(self.fixture_root))
+
+    # Exact shape of the #850 defect, minimised.
+    EXCLUDE_SIBLING_OF_MATRIX = """
+name: main-full
+on:
+  push:
+    branches: [main]
+jobs:
+  main-full-verify:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-shard: [0, 1, 2, 3]
+      exclude:
+        - os: ubuntu-latest
+          python-shard: 1
+    steps:
+      - run: echo ${{ matrix.python-shard }}
+"""
+
+    def test_exclude_as_sibling_of_matrix_is_rejected(self):
+        exit_code, findings = self._lint(self.EXCLUDE_SIBLING_OF_MATRIX)
+        self.assertEqual(exit_code, 1, findings)
+        hits = [f for f in findings if "unexpected key `exclude` for strategy" in f]
+        self.assertEqual(len(hits), 1, findings)
+        self.assertIn("main-full.yml > main-full-verify", hits[0])
+        self.assertIn("put it inside matrix:", hits[0])
+
+    def test_exclude_inside_matrix_passes(self):
+        fixed = self.EXCLUDE_SIBLING_OF_MATRIX.replace(
+            "        python-shard: [0, 1, 2, 3]\n      exclude:\n        - os: ubuntu-latest\n          python-shard: 1\n",
+            "        python-shard: [0, 1, 2, 3]\n        exclude:\n          - os: ubuntu-latest\n            python-shard: 1\n",
+        )
+        self.assertNotEqual(fixed, self.EXCLUDE_SIBLING_OF_MATRIX)
+        exit_code, findings = self._lint(fixed)
+        self.assertEqual(exit_code, 0, findings)
+
+    def test_exclude_key_that_is_not_a_matrix_variable_is_rejected(self):
+        wf = """
+on: push
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        exclude:
+          - shard: 1
+    steps:
+      - run: true
+"""
+        exit_code, findings = self._lint(wf)
+        self.assertEqual(exit_code, 1, findings)
+        self.assertTrue(any("matrix.exclude key `shard` is not a matrix variable" in f for f in findings), findings)
+
+    def test_runner_context_in_shell_is_rejected(self):
+        wf = """
+on: push
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run Python tests
+        shell: ${{ runner.os == 'Windows' && 'bash' || 'sh' }}
+        run: python -m unittest
+"""
+        exit_code, findings = self._lint(wf)
+        self.assertEqual(exit_code, 1, findings)
+        hits = [f for f in findings if "`shell` uses runner" in f]
+        self.assertEqual(len(hits), 1, findings)
+        self.assertIn("j > Run Python tests", hits[0])
+        self.assertIn("GitHub allows: NONE", hits[0])
+
+    def test_literal_shell_passes(self):
+        wf = """
+on: push
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - shell: bash
+        run: python -m unittest
+"""
+        exit_code, findings = self._lint(wf)
+        self.assertEqual(exit_code, 0, findings)
+
+    def test_needs_target_must_exist(self):
+        wf = """
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: true
+  deploy:
+    needs: [build, windows-shard]
+    runs-on: ubuntu-latest
+    steps:
+      - run: true
+"""
+        exit_code, findings = self._lint(wf)
+        self.assertEqual(exit_code, 1, findings)
+        hits = [f for f in findings if "needs target does not exist" in f and "`windows-shard`" in f]
+        self.assertEqual(len(hits), 1, findings)
+
+    def test_needs_reference_must_be_declared_dependency(self):
+        wf = """
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: true
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - run: test "${{ needs.build.result }}" = success
+"""
+        exit_code, findings = self._lint(wf)
+        self.assertEqual(exit_code, 1, findings)
+        self.assertTrue(any("needs.build referenced but `build` is not in needs" in f for f in findings), findings)
+        # Declaring the dependency resolves it.
+        exit_code, findings = self._lint(wf.replace("  gate:\n", "  gate:\n    needs: build\n"))
+        self.assertEqual(exit_code, 0, findings)
+
+    def test_matrix_reference_must_resolve(self):
+        wf = """
+on: push
+jobs:
+  j:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        include:
+          - os: ubuntu-latest
+            extra: yes
+    steps:
+      - run: echo ${{ matrix.extra }} ${{ matrix.python-shard }}
+"""
+        exit_code, findings = self._lint(wf)
+        self.assertEqual(exit_code, 1, findings)
+        hits = [f for f in findings if "matrix.python-shard does not resolve" in f]
+        self.assertEqual(len(hits), 1, findings)
+        # `extra` came from include and `os` from the matrix: neither is flagged.
+        self.assertFalse(any("matrix.extra" in f or "matrix.os " in f for f in findings), findings)
+
+    def test_matrix_reference_without_strategy_is_rejected(self):
+        wf = """
+on: push
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo ${{ matrix.os }}
+"""
+        exit_code, findings = self._lint(wf)
+        self.assertEqual(exit_code, 1, findings)
+        self.assertTrue(any("referenced but job has no strategy.matrix" in f for f in findings), findings)
+
+    def test_expression_matrix_is_not_flagged(self):
+        wf = """
+on: push
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    needs: plan
+    steps:
+      - run: echo ${{ matrix.anything }}
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - run: true
+"""
+        exit_code, findings = self._lint(wf)
+        self.assertEqual(exit_code, 0, findings)
+
+    def test_runs_on_rules(self):
+        base = """
+on: push
+jobs:
+  j:
+    runs-on: %s
+    steps:
+      - run: true
+"""
+        for literal in ("ubuntu-latest", "[self-hosted, linux]", "{ group: default }"):
+            exit_code, findings = self._lint(base % literal)
+            self.assertEqual(exit_code, 0, (literal, findings))
+        exit_code, findings = self._lint(base % "${{ runner.os }}")
+        self.assertEqual(exit_code, 1, findings)
+        self.assertTrue(any("`runs-on` uses runner" in f for f in findings), findings)
+        exit_code, findings = self._lint(base % "${{ github.event.inputs.os }}")
+        self.assertEqual(exit_code, 0, findings)
+        exit_code, findings = self._lint(base % "42")
+        self.assertEqual(exit_code, 1, findings)
+        self.assertTrue(any("runs-on must be a string, list, or group map" in f for f in findings), findings)
+        exit_code, findings = self._lint(base.replace("    runs-on: %s\n", ""))
+        self.assertEqual(exit_code, 1, findings)
+        self.assertTrue(any("runs-on is required" in f for f in findings), findings)
+
+    def test_job_level_if_cannot_use_runner_context(self):
+        wf = """
+on: push
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    if: runner.os == 'Linux'
+    steps:
+      - if: runner.os == 'Linux'
+        run: true
+"""
+        # `if:` is an implicit expression; wrap so the context scanner sees it.
+        wf = wf.replace("if: runner.os == 'Linux'", "if: ${{ runner.os == 'Linux' }}")
+        exit_code, findings = self._lint(wf)
+        self.assertEqual(exit_code, 1, findings)
+        job_hits = [f for f in findings if "main-full.yml > j: `if` uses runner" in f]
+        self.assertEqual(len(job_hits), 1, findings)
+        # The step-level `if` MAY use runner; only the job-level one is flagged.
+        self.assertEqual(len([f for f in findings if "uses runner" in f]), 1, findings)
+
+    def test_real_repo_workflows_have_no_semantic_findings(self):
+        repo_root = Path(__file__).resolve().parent.parent
+        for path in ci_workflow_lint.find_workflow_files(repo_root):
+            data = ci_workflow_lint.load_yaml_file(path)
+            self.assertEqual(ci_workflow_lint.check_github_semantics(path, data), [], path.name)
+
+
+class TestActionlintIntegration(unittest.TestCase):
+    """actionlint runs when available and its findings fail the gate; when it is
+    missing the gate fails closed only if required (CI sets
+    CI_WORKFLOW_LINT_REQUIRE_ACTIONLINT=1), and the structural checks above run
+    regardless. A fake actionlint driven by sys.executable keeps this hermetic.
+    """
+
+    FAKE = (
+        "import sys\n"
+        "mode = open(sys.argv[0] + '.mode', encoding='utf-8').read().strip()\n"
+        "open(sys.argv[0] + '.argv', 'w', encoding='utf-8').write(' '.join(sys.argv[1:]))\n"
+        "if mode == 'fail':\n"
+        "    print('wf.yml:36:7: unexpected key \"exclude\" for \"strategy\" section [syntax-check]')\n"
+        "    print('   |')\n"
+        "    print('36 |       exclude:')\n"
+        "    sys.exit(1)\n"
+        "sys.exit(0)\n"
+    )
+
+    def setUp(self):
+        self.fixture_root = Path(tempfile.mkdtemp(prefix="ci-lint-al-"))
+        self.workflows_dir = self.fixture_root / ".github" / "workflows"
+        self.workflows_dir.mkdir(parents=True)
+        self.wf = self.workflows_dir / "wf.yml"
+        self.wf.write_text("on: push\njobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n", encoding="utf-8")
+        self.fake = self.fixture_root / "fake_actionlint.py"
+        self.fake.write_text(self.FAKE, encoding="utf-8")
+        self._env = dict(os.environ)
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self._env)
+        if self.fixture_root.exists():
+            shutil.rmtree(self.fixture_root)
+
+    def _set_mode(self, mode):
+        (self.fixture_root / "fake_actionlint.py.mode").write_text(mode, encoding="utf-8")
+
+    def _fake_binary(self):
+        """An actually-executable wrapper so find_actionlint()/ACTIONLINT_BIN work end to end."""
+        if os.name == "nt":
+            wrapper = self.fixture_root / "actionlint.cmd"
+            wrapper.write_text(
+                '@echo off\r\n"%s" "%s" %%*\r\nexit /b %%ERRORLEVEL%%\r\n' % (sys.executable, self.fake),
+                encoding="utf-8",
+            )
+        else:
+            wrapper = self.fixture_root / "actionlint"
+            wrapper.write_text('#!/bin/sh\nexec "%s" "%s" "$@"\n' % (sys.executable, self.fake), encoding="utf-8")
+            wrapper.chmod(0o755)
+        return wrapper
+
+    def test_findings_surface_and_excerpt_lines_are_dropped(self):
+        self._set_mode("fail")
+        findings = ci_workflow_lint.run_actionlint([self.wf], binary=[sys.executable, str(self.fake)])
+        self.assertEqual(findings, ['actionlint: wf.yml:36:7: unexpected key "exclude" for "strategy" section [syntax-check]'])
+        argv = (self.fixture_root / "fake_actionlint.py.argv").read_text(encoding="utf-8")
+        self.assertIn("-no-color", argv)
+        self.assertIn("-shellcheck=", argv)
+        self.assertIn(str(self.wf), argv)
+
+    def test_clean_run_yields_no_findings(self):
+        self._set_mode("ok")
+        self.assertEqual(ci_workflow_lint.run_actionlint([self.wf], binary=[sys.executable, str(self.fake)]), [])
+
+    def test_missing_binary_fails_closed_only_when_required(self):
+        os.environ["ACTIONLINT_BIN"] = str(self.fixture_root / "does-not-exist")
+        self.assertIsNone(ci_workflow_lint.find_actionlint())
+        required = ci_workflow_lint.run_actionlint([self.wf], required=True)
+        self.assertEqual(len(required), 1, required)
+        self.assertIn("fail-closed", required[0])
+        self.assertEqual(ci_workflow_lint.run_actionlint([self.wf], required=False), [])
+        os.environ["CI_WORKFLOW_LINT_REQUIRE_ACTIONLINT"] = "1"
+        self.assertEqual(len(ci_workflow_lint.run_actionlint([self.wf])), 1)
+
+    def test_lint_workflows_opt_in_runs_actionlint(self):
+        self._set_mode("fail")
+        os.environ["ACTIONLINT_BIN"] = str(self._fake_binary())
+        exit_code, findings = ci_workflow_lint.lint_workflows(str(self.fixture_root))
+        self.assertEqual((exit_code, findings), (0, []), "default must stay hermetic for fixture tests")
+        exit_code, findings = ci_workflow_lint.lint_workflows(str(self.fixture_root), use_actionlint=True)
+        self.assertEqual(exit_code, 1, findings)
+        self.assertTrue(any(f.startswith("[1] actionlint: wf.yml:36:7") for f in findings), findings)
+
+    def test_cli_runs_actionlint_by_default_and_honours_no_actionlint(self):
+        import subprocess
+        self._set_mode("fail")
+        env = dict(os.environ)
+        env["ACTIONLINT_BIN"] = str(self._fake_binary())
+        tool = str(TOOLS_DIR / "ci_workflow_lint.py")
+        proc = subprocess.run(
+            [sys.executable, tool, "--root", str(self.fixture_root)],
+            capture_output=True, encoding="utf-8", errors="replace", env=env,
+        )
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("actionlint: wf.yml:36:7", proc.stdout)
+        proc = subprocess.run(
+            [sys.executable, tool, "--root", str(self.fixture_root), "--no-actionlint"],
+            capture_output=True, encoding="utf-8", errors="replace", env=env,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)

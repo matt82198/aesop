@@ -372,7 +372,7 @@ def summarize_ledger(ledger_path: str, json_output: bool = False, markdown_outpu
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Humanize Ledger — Record and summarize text improvement edits.",
+        description="Humanize Ledger - Record and summarize text improvement edits.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     subparsers = parser.add_subparsers(dest="command", help="Subcommand")
