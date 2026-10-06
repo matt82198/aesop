@@ -1,0 +1,69 @@
+name: CI
+
+# Scaffolded by `aesop init --ci-mode self-hosted-runner` from
+# templates/ci/ci-self-hosted-windows.yml. Same shape as ci-hosted.yml, except the Windows
+# job routes by PR origin:
+#   - a PR from a FORK runs on GitHub-hosted windows-latest (never on your hardware)
+#   - a same-repo PR (and workflow_dispatch) runs on your self-hosted runner labels
+# The labels below are rendered from aesop.config.json ci.selfHostedLabels at scaffold time.
+# Register runners with `aesop runner install --labels <same labels>`; `aesop doctor` tells you
+# whether this machine can run the runner at all (Smart App Control / UMCI block it).
+# Self-hosted is capacity relief, not the long-term design: see docs/CI-MODES.md.
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 20
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Run tests (shard ${{ matrix.shard }}/4)
+        run: echo "Add your test commands here (shard ${{ matrix.shard }} of 4)"
+
+      - name: Secret scan
+        if: matrix.shard == 0
+        run: python tools/secret_scan.py .
+
+  windows:
+    # Fork PRs never touch your hardware; same-repo PRs use the self-hosted labels.
+    runs-on: ${{ github.event.pull_request.head.repo.fork == true && 'windows-latest' || fromJSON('__AESOP_SELF_HOSTED_LABELS_JSON__') }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Never leave the GITHUB_TOKEN in a self-hosted checkout's git config.
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Run tests (Windows)
+        env:
+          PYTHONUTF8: '1'
+        run: echo "Add your Windows test commands here"

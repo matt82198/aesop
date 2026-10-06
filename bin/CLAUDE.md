@@ -40,8 +40,10 @@ require(commandMap[args[0]]); // Load + run; returns immediately after
 **Init command** (`npx @matt82198/aesop init`):
 - Scaffolds aesop orchestration into the CURRENT directory (not a new fleet dir)
 - Creates: CLAUDE.md, domain CLAUDE.md for first code dir, aesop.config.json, state/.gitkeep, .github/workflows/ci.yml, pre-push hook
-- Flags: `--name <name>` (project name, auto-detected from git remote), `--force` (overwrite existing files)
+- Flags: `--name <name>` (project name, auto-detected from git remote), `--force` (overwrite existing files), `--ci-mode hosted|self-hosted-runner|local-receipt-gate` + `--self-hosted-labels L1,L2` (CI workflow template from templates/ci/ and the `ci` block of aesop.config.json; see docs/CI-MODES.md)
 - Delegates to `tools/init_project.py` via spawnSync (python3 with python fallback)
+
+**CI-modes surface** (docs/CI-MODES.md): `doctor [--json]` appends a REPORT-ONLY "CI capability" table (mode -> runnable here, from `tools/ci_capability.py`; never fails the doctor) and validates the config `ci` block via `tools/ci_config.js` (Node mirror of `tools/common.py validate_ci_config`); `runner install|remove [...]` dispatches to `tools/runner_install.py` through the fail-closed propagator (preflight refuses on Smart App Control / UMCI boxes and on public repos without all_external_contributors fork approval; `--dry-run` plans only). Tests: `tests/ci-modes.test.mjs`.
 
 **Python dispatch table** (`aesop <namespace> <verb> [args...]`):
 - Routes to 113 `tools/*.py` scripts via namespace+verb lookup table (Phase 2: additive, no script moves or renames)
