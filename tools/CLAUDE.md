@@ -14,6 +14,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - **Fragment-assembled secrets in tests**: `scanner_selftest.py` concatenates dummy secrets at runtime so pattern text never appears contiguously (self-scan invariant).
 - **verify_*.py are mandatory CI gates**: `verify_dash.py`, `verify_submit_encoding.py`, `verify_activity_filter.py`, `verify_agent_inspector.py`, `verify_prboard.py`, `verify_failure_drilldown.py`, `verify_wave_telemetry.py`, `verify_dispatch_panel.py`, `verify_scorecards.py`, `verify_ui_trio.py`, `verify_cost_panel.py`, `verify_cost_summary_drawer.py`, etc. are required pre-push gates; use `--allow-skip` only in truly browserless environments (CI must run all).
 - **lock.mjs is the ONLY lock implementation**: never reimplement locking in `proposals.mjs` or elsewhere; all proposals/state updates must use fail-closed `lock.mjs` with exponential backoff + stale-lock breaking.
+- **state_rebuild.py --check is the tracker.json drift gate, not a proxy**: it diffs disk against the canonical materializer, so any tracker writer (e.g. `tracker_guard.py`) must close items through the sanctioned write facade — direct `tracker.json` patches are correct only until the next unrelated write re-renders the whole file from the event log (GAP, 2026-10-05).
 ## Tool index
 
 Full one-liner index of every tool in this directory: see `tools/INDEX.md` (generated

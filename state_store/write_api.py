@@ -1102,9 +1102,18 @@ class WriteAPI:
                 text=False,  # Binary mode for explicit encoding control
             )
             try:
-                # Write projection as JSON (indent for git diffability)
-                content = json.dumps(projection, indent=2, ensure_ascii=False)
-                os.write(fd, content.encode("utf-8"))
+                # Render via the canonical materializer (state_store/materialize.py)
+                # so this write path is byte-IDENTICAL to what tools/state_rebuild.py
+                # --check compares against. This previously hand-rolled its own
+                # json.dumps() here (no trailing newline, ensure_ascii=False) while
+                # materialize_tracker() renders with a trailing newline (and the
+                # ensure_ascii default) -- same content, different bytes -- so
+                # EVERY tracker.json ever written by this method drifted against
+                # --check by construction, independent of content. One canonical
+                # renderer, used by both the writer and the checker, is the fix.
+                from state_store.materialize import materialize_tracker
+                content_bytes = materialize_tracker(projection)
+                os.write(fd, content_bytes)
                 os.close(fd)
 
                 # Atomic rename (fails if target exists on some systems, but Python's
