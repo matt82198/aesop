@@ -12,6 +12,7 @@
 # Configuration:
 #   AESOP_ROOT        project root (default: parent of this script's directory)
 #   AESOP_STATE_ROOT  state directory (default: $AESOP_ROOT/state)
+#   AESOP_QUEUE_ROOT  queue checkout root (default: $AESOP_ROOT; must be set before invoking merge_queue.py)
 #   AESOP_MERGE_QUEUE_CMD  override the advancer invocation (test hook)
 #
 # Kill switch: if a .HALT sentinel exists, the pass logs "HALTED: <reason>" and
@@ -134,7 +135,9 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   AESOP_ROOT="${AESOP_ROOT:-$(dirname "$SCRIPT_DIR")}"
   AESOP_STATE_ROOT="${AESOP_STATE_ROOT:-$AESOP_ROOT/state}"
+  AESOP_QUEUE_ROOT="${AESOP_QUEUE_ROOT:-$AESOP_ROOT}"
   export AESOP_STATE_ROOT
+  export AESOP_QUEUE_ROOT
   # Resolve halt.py from the repo (daemons/ is in same AESOP_ROOT as tools/)
   HALT_PY_PATH="$(dirname "$SCRIPT_DIR")/tools/halt.py"
   MODE="${1:---once}"
@@ -142,7 +145,8 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   PYTHON_EXE="$(resolve_python)"
 
   # gh resolves the repository from the working directory, so the pass must run
-  # inside the project root.
+  # inside the project root. AESOP_QUEUE_ROOT must be exported before cd so
+  # merge_queue.py can verify it's in the right directory.
   cd "$AESOP_ROOT" || exit 2
 
   main "$@"

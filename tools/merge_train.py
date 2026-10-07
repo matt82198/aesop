@@ -270,15 +270,19 @@ def retry_ci(n: int, head_ref_name: str) -> bool:
 # Integration-branch mode (B1: six features)
 # ---------------------------------------------------------------------------
 
-def git(*args: str) -> tuple[bool, str]:
+def git(*args: str, cwd: str = None) -> tuple[bool, str]:
     """Run one `git` call, returning (ok, combined stdout+stderr).
 
     See `gh()` for why `errors='replace'` is mandatory here: git emits raw
     bytes from refs, config and commit messages without transcoding them, so
     strict UTF-8 decoding is a live crash, not a theoretical one.
+
+    Args:
+        *args: git command arguments
+        cwd: working directory for the git call (default: current directory)
     """
     cmd = ["git"] + list(args)
-    result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8',
+    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, encoding='utf-8',
                             errors='replace', timeout=120)
     out = (result.stdout.strip() + "\n" + result.stderr.strip()).strip()
     return (result.returncode == 0, out)

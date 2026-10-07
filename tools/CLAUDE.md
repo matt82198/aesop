@@ -20,6 +20,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - **power_selftest.py scanner check fails closed (2026-10-05)**: a check that cannot locate/run/parse `scanner_selftest.py` renders `scanner:FAIL`, never `scanner:None`/`n/a`/OK -- a silently-broken scanner gate must never read healthy. Every check result funnels through `render_segment()`, which treats a `None` result or an OK/WARN `DETAILED_OK_CHECKS` (`decisions`/`scanner`/`trigger`) result whose `details` is `None` as `FAIL:unevaluated`. Tests asserting the overall exit code (e.g. `TestPowerSelftestHookDetection`) must pin `SCRIPTS_ROOT` at a real `scanner_selftest.py` so the scanner check is deterministic regardless of whether the CI runner's `$HOME` happens to carry `~/scripts` -- otherwise an unrelated check flips the exit code these tests assert on.
 - **Halt kill-switch enforcement**: `merge_train.py` gates ALL entry points and merge actions with `halt.py` checks; halted tool exits 1, import failure exits 2 (FAIL CLOSED). `halt.py` provides the public API: `is_halted()` / `get_halt_info()` / `clear_halt()` / `resolve_state_dir()` (respects `AESOP_STATE_ROOT` env > config `state_root` > default). Sentinel location: `<state_dir>/.HALT` (JSON). Do not edit the sentinel manually; use `halt.py set/--clear` CLI.
 - **Merge-queue daemon (merge_queue.py) self-heals on crash**: when a pass crashes mid-batch and leaves the shared worktree checked out on an `integrate/q-*` branch, the next pass detects this in `worktree_is_safe()` and automatically reparks to main before proceeding. No manual intervention needed; stalled passes recover transparently.
+- **Queue root isolation guard (2026-10-06 incident)**: `build_batch()` refuses to mint `integrate/q-*` branches unless `AESOP_QUEUE_ROOT` env is set and matches the current working directory (resolved paths account for symlinks/case on Windows). The `git()` helper in `merge_train.py` accepts an optional `cwd` parameter (default None preserves backwards compatibility) to allow tree-mutating calls to explicitly target the queue root. This prevents accidental branch creation in lane worktrees: lanes calling build_batch() from sibling worktrees created real `integrate/batch-*` branches because git() had no cwd. Daemon: `daemons/run-merge-queue.sh` exports `AESOP_QUEUE_ROOT` before cd'ing and invoking merge_queue.py.
 - **Inert-code cleanup (2026-10-06, audit #2)**: `state_md_verifier.py` had an unreachable duplicate `return` after the real one; `humanize_lint.py` imported `CLIBuilder`/`OutputFormatter`/`Callable` and never used any of them; `audit_report.py` imported `Path` unused. `test_battery.py`'s `AESOP_BATTERY_HARNESS_TIMEOUT_S`/`AESOP_BATTERY_LOGDIR` env overrides had no setter anywhere (no workflow/script/settings.json) and the tool itself has no automation caller — removed in favor of the hardcoded defaults they always resolved to. Verified each via `pyflakes`/`grep` before touching; `audit_report.py --strict` was checked and kept (implemented, tested, documented — just not yet wired into any CI gate, which is a feature decision, not dead code).
 
 ## init_project.py — Worktree support
@@ -28,6 +29,12 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - **Fallback git dir resolution**: Manual parsing of `.git` file's `gitdir:` pointer if git command fails.
 - **Hook installation**: `install_pre_push_hook()` uses resolved git dir to place hooks in the common directory (not worktree), preventing ENOTDIR errors in worktree scenarios.
 - **Security**: symlink checks preserved throughout resolution.
+
+## Key tools
+
+- **tools/merge_queue.py**: Merge-queue advancer. Updated 2026-10-06: added AESOP_QUEUE_ROOT isolation guard (refuses to mint integrate/q-* branches unless running in dedicated queue checkout).
+- **tools/merge_train.py**: Transport layer. Updated 2026-10-06: git() helper now accepts optional cwd parameter for explicit working directory control.
+
 ## Tool index
 
 Full one-liner index of every tool in this directory: see `tools/INDEX.md` (generated
