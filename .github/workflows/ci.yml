@@ -567,6 +567,28 @@ jobs:
       - name: Run watchdog GUI tests
         run: bash tests/dash-watchdog-gui.test.sh
 
+  # Guardrail G2.7 (tools/CLAUDE.md): PR footprint gate — detects oversized PRs (>100 files
+  # or >5000 deletions) or fixture-polluted branches (test fixtures committed into lanes).
+  # REQUIRED: blocks auto-merge of oversized/polluted PRs unless labeled 'big-change' or
+  # chore(stats)-only. Standalone job, no docs-only-gate dependency: read-only, fast, and
+  # critical for preventing fixture explosions (incident: 339K line deletions in 2 PRs today).
+  pr-footprint-gate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Run pr_footprint_gate (Guardrail G2.7)
+        run: python tools/pr_footprint_gate.py --base "origin/${{ github.base_ref }}" --head HEAD --labels '${{ toJson(github.event.pull_request.labels) }}'
+
   # Guardrail G13 (tools/CLAUDE.md). ADVISORY ONLY: continue-on-error + no required-check
   # registration, so it can never deadlock or block a merge -- this is the first
   # invocation of pr_symbol_survival_check.py (gate-inventory rule: every documented
