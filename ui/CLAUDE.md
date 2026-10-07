@@ -60,7 +60,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **wave_failure.py** â€” Wave PR failure drill-down: `get_wave_failure(pr_number)` shells `gh run view --json jobs` for jobs on PR branch, then `gh api .../jobs/{id}/logs` for failing jobs; extracts ~100-line log tails. Caches ~5s per PR; degrades to `{available:false, error}` when gh missing/un-authed. Override gh binary: `AESOP_GH_BIN` env var.
 
-**demo.py** â€” Zero-key demo mode (`--demo` or `AESOP_DEMO=1`). Seeds throwaway state root with fabricated data, redirects all env vars to it; shell-out collectors use `get_demo_agents()`/`get_demo_wave_prs()`. Daemon refresher (~45s) keeps timestamps fresh. `AESOP_ROOT` stays real (dist must resolve). Honesty: BANNER_HTML + `"demo": true` in /api/state. No-op in default mode. Optional `AESOP_DEMO_ROOT` (tests).
+**demo.py** â€” Zero-key demo mode (`--demo` or `AESOP_DEMO=1`). Seeds throwaway state root with fabricated data, redirects all env vars to it; shell-out collectors use `get_demo_agents()`/`get_demo_wave_prs()`. Daemon refresher (~45s) keeps timestamps fresh. `AESOP_ROOT` stays real (dist must resolve). Honesty: BANNER_HTML + `"demo": true` in /api/state. No-op in default mode. Optional `AESOP_DEMO_ROOT` (tests). **`_write_ledger()`'s most-recent row uses `hours_ago=0.0` (not a small positive offset)** â€” it must equal `now` exactly, otherwise a run within minutes of UTC midnight lands every row on the prior UTC date and `test_seeded_ledger_uses_current_dates` fails (observed on PR #878, proved via a mocked `datetime.now` at 00:01Z).
 
 **bench_panel.py**: Benchmark API routes (`/api/bench`, `/api/bench/compare`). Reads `bench_results_cache` at call time.
 
