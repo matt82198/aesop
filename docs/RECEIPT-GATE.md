@@ -195,6 +195,7 @@ lookup exception-safe and guarding the module's own absence at the shell level.)
 ## Proof runs
 
 2026-10-07: push-emission proof
+- 2026-10-07 end-to-end hook-emission proof after #924 (throwaway worktree + GIT_* scrub)
 # Hook test
 # Another test
 # Test 4 after unset hooks path
