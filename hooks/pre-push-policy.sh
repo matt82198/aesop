@@ -1470,6 +1470,161 @@ check_generated_regen() {
   return 0
 }
 
+check_emit_receipt() {
+  # Receipt-gate auto-emission (docs/RECEIPT-GATE.md). Day-1 measurement found
+  # 41 merged PRs and ZERO receipts: lanes were never told to run
+  # `emit_receipt.py` and nothing ran it automatically, so the honesty signal
+  # had no data. This runs it for every push, ONCE every gate above has
+  # already passed, so the receipt is bound to a tree this hook itself just
+  # verified.
+  #
+  # ALWAYS fail-open, by construction: a missing tool, missing python,
+  # missing `gh`, missing signing-key material, or a red matrix part inside
+  # emit_receipt.py all print a one-line WARN and `return 0`. The receipt is
+  # an honesty signal, not a gate -- it must never be the reason a push is
+  # blocked (see increment 3 in docs/RECEIPT-GATE.md: the hosted verify-receipt
+  # check is itself non-required for the same reason). This function's return
+  # value is therefore always 0; main() calls it unconditionally.
+  #
+  # BOUNDED, not just fail-open: the default matrix re-runs all 4 python
+  # shards (the whole repo's test suite), which measured ~500s for the
+  # slowest shard alone on this box -- a git hook must never be able to hang
+  # a push indefinitely. Wrapped in `timeout`; AESOP_RECEIPT_TIMEOUT overrides
+  # the default 900s bound. A timeout WARNs and fails open exactly like every
+  # other branch here -- it is not a verification failure, just a slow run
+  # that ran out of patience.
+  #
+  # Opt-out: AESOP_RECEIPT_EMIT=0 skips emission entirely (e.g. a lane that
+  # intentionally wants no receipt, or a CI checkout that should not try to
+  # sign anything).
+  if [ "${AESOP_RECEIPT_EMIT:-1}" = "0" ]; then
+    log_event "receipt_emit_skipped_opted_out"
+    return 0
+  fi
+
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local receipt_script="$aesop_root/tools/emit_receipt.py"
+
+  if [ ! -f "$receipt_script" ]; then
+    # Not fail-closed like gate_tool_status's "missing" case: this is not a
+    # verification gate, so a repo without tools/emit_receipt.py (no aesop
+    # checkout, or a branch predating this tool) simply emits nothing.
+    log_event "receipt_emit_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'WARN: no python interpreter found; receipt not emitted (push continues).\n' >&2
+    log_event "receipt_emit_skipped_no_python"
+    return 0
+  fi
+
+  if ! command -v gh >/dev/null 2>&1 || ! gh --version >/dev/null 2>&1; then
+    printf 'WARN: gh CLI not found or not working; receipt not emitted (push continues).\n' >&2
+    log_event "receipt_emit_skipped_no_gh"
+    return 0
+  fi
+
+  if [ -z "${AESOP_RECEIPT_KEY:-}" ] && [ -z "${AESOP_RECEIPT_HMAC_SECRET:-}" ]; then
+    printf 'WARN: no receipt signing key material (%s or %s unset); receipt not emitted (push continues).\n' \
+      "AESOP_RECEIPT_KEY" "AESOP_RECEIPT_HMAC_SECRET" >&2
+    log_event "receipt_emit_skipped_no_key_material"
+    return 0
+  fi
+
+  local timeout_bin=""
+  if command -v timeout >/dev/null 2>&1 && timeout --version >/dev/null 2>&1; then
+    timeout_bin="timeout"
+  elif command -v gtimeout >/dev/null 2>&1 && gtimeout --version >/dev/null 2>&1; then
+    timeout_bin="gtimeout"
+  fi
+  local timeout_secs="${AESOP_RECEIPT_TIMEOUT:-900}"
+
+  local receipt_output
+  local receipt_exit_code
+  local receipt_tmpfile
+  receipt_tmpfile=$(mktemp)
+  trap "rm -f '$receipt_tmpfile'" RETURN
+
+  if [ -n "$timeout_bin" ]; then
+    # Use timeout with --kill-after to ensure process group cleanup on both Linux and macOS.
+    # Redirect to temp file instead of command substitution to avoid bash subshell hanging
+    # when the process group is killed but the pipe reader doesn't get EOF notification.
+    "$timeout_bin" --kill-after=5 "$timeout_secs" "$py_bin" "$receipt_script" --repo "$aesop_root" --post \
+      < /dev/null > "$receipt_tmpfile" 2>&1
+    receipt_exit_code=$?
+  else
+    # No `timeout` on this box: use background job with explicit deadline.
+    # Still fail-open on timeout, just without coreutils timeout binary.
+    # Logged so the gap is visible, not invisible.
+    log_event "receipt_emit_unbounded_no_timeout_bin"
+    "$py_bin" "$receipt_script" --repo "$aesop_root" --post \
+      < /dev/null > "$receipt_tmpfile" 2>&1 &
+    local receipt_pid=$!
+    local elapsed=0
+    local timed_out=0
+
+    # Poll until process exits or timeout expires
+    while [ $elapsed -lt "$timeout_secs" ]; do
+      if ! kill -0 "$receipt_pid" 2>/dev/null; then
+        # Process has already exited
+        break
+      fi
+      sleep 1
+      elapsed=$((elapsed + 1))
+    done
+
+    # If still running after timeout, kill it
+    if kill -0 "$receipt_pid" 2>/dev/null; then
+      timed_out=1
+      # Send SIGTERM to the process and its children
+      kill -TERM "$receipt_pid" 2>/dev/null || true
+      # Also try pkill to get any shell/python subprocesses
+      pkill -P "$receipt_pid" 2>/dev/null || true
+      sleep 1
+      # Force kill if still running
+      if kill -0 "$receipt_pid" 2>/dev/null; then
+        kill -KILL "$receipt_pid" 2>/dev/null || true
+        pkill -9 -P "$receipt_pid" 2>/dev/null || true
+      fi
+    fi
+
+    # Wait for the process to clean up, with a small timeout to avoid hanging
+    ( sleep 2; kill -KILL "$receipt_pid" 2>/dev/null || true ) &
+    wait "$receipt_pid" 2>/dev/null || true
+    receipt_exit_code=$?
+
+    # If we timed out, report exit code 124 (same as timeout command)
+    if [ $timed_out -eq 1 ]; then
+      receipt_exit_code=124
+    fi
+  fi
+  receipt_output=$(cat "$receipt_tmpfile" 2>/dev/null || true)
+
+  if [ $receipt_exit_code -eq 124 ]; then
+    printf 'WARN: receipt emission timed out after %ss; push continues without a receipt.\n' "$timeout_secs" >&2
+    log_event "receipt_emit_timed_out"
+    return 0
+  fi
+
+  if [ $receipt_exit_code -ne 0 ]; then
+    printf 'WARN: receipt emission failed (exit %d); push continues without a receipt.\n' "$receipt_exit_code" >&2
+    if [ -n "$receipt_output" ]; then
+      printf '%s\n' "$receipt_output" >&2
+    fi
+    log_event "receipt_emit_failed"
+    return 0
+  fi
+
+  if [ -n "$receipt_output" ]; then
+    printf '%s\n' "$receipt_output"
+  fi
+  log_event "receipt_emit_posted"
+  return 0
+}
+
 run_test_mode() {
   local test_passed=0
   local test_failed=0
@@ -2551,6 +2706,12 @@ main() {
     log_block "linux_shape_check_failure"
     exit 1
   fi
+
+  # Receipt auto-emission: ALWAYS fail-open by construction (see
+  # check_emit_receipt), so there is no exit-1 branch here unlike every check
+  # above -- it runs last, after every gate has already passed, and never
+  # blocks the push.
+  check_emit_receipt
 
   exit 0
 }
