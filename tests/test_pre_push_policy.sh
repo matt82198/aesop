@@ -1503,7 +1503,8 @@ fi
 printf '\n=== Test: check_emit_receipt WARNs and fails open when no signing key material is set ===\n'
 (
   export AESOP_ROOT="$TEST_ROOT/aesop_receipt_no_key"
-  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+  export HOME="$AESOP_ROOT/home"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools" "$HOME"
   printf 'import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/emit_receipt.py"
   unset AESOP_RECEIPT_EMIT
   unset AESOP_RECEIPT_KEY
@@ -1526,6 +1527,40 @@ printf '\n=== Test: check_emit_receipt WARNs and fails open when no signing key 
     exit 1
   fi
   printf 'PASS: no key material WARNs and fails open\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test: check_emit_receipt uses default path when env vars unset ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_receipt_default_path"
+  export HOME="$AESOP_ROOT/home"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools" "$HOME/.aesop"
+
+  # Create a key file at the default path
+  printf 'dummy_key_content' > "$HOME/.aesop/receipt_key.pem"
+
+  printf 'import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/emit_receipt.py"
+  unset AESOP_RECEIPT_EMIT
+  unset AESOP_RECEIPT_KEY
+  unset AESOP_RECEIPT_HMAC_SECRET
+
+  stderr_output=$( { check_emit_receipt; } 2>&1 1>/dev/null )
+  exit_code=$?
+
+  if [ "$exit_code" -ne 0 ]; then
+    printf 'FAIL: check_emit_receipt must proceed (return 0) when default path key exists\n'
+    exit 1
+  fi
+  # Should NOT warn about missing key material since default path exists
+  if printf '%s' "$stderr_output" | grep -qi 'no receipt signing key material'; then
+    printf 'FAIL: should not warn about missing key when default path exists, got: %s\n' "$stderr_output"
+    exit 1
+  fi
+  printf 'PASS: default path fallback allows emission to proceed\n'
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))

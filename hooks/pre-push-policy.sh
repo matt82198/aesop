@@ -1527,8 +1527,8 @@ check_emit_receipt() {
     return 0
   fi
 
-  if [ -z "${AESOP_RECEIPT_KEY:-}" ] && [ -z "${AESOP_RECEIPT_HMAC_SECRET:-}" ]; then
-    printf 'WARN: no receipt signing key material (%s or %s unset); receipt not emitted (push continues).\n' \
+  if [ -z "${AESOP_RECEIPT_KEY:-}" ] && [ -z "${AESOP_RECEIPT_HMAC_SECRET:-}" ] && [ ! -f "${AESOP_HOME:-$HOME}/.aesop/receipt_key.pem" ]; then
+    printf 'WARN: no receipt signing key material (%s or %s unset, and default path not found); receipt not emitted (push continues).\n' \
       "AESOP_RECEIPT_KEY" "AESOP_RECEIPT_HMAC_SECRET" >&2
     log_event "receipt_emit_skipped_no_key_material"
     return 0
