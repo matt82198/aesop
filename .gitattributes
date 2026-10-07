@@ -12,4 +12,12 @@
 *.py text eol=lf
 *.mjs text eol=lf
 *.js text eol=lf
-tools/INDEX.md merge=union
+# Registered generated artifacts: a structured merge rendered through the
+# artifact's own generator instead of git's `union` (which kept both sides'
+# lines verbatim and left the index unsorted/duplicated on every merge-from-main;
+# #784/#856/#739). One-time per-clone registration, done for you by the pre-push
+# hook and by `python tools/install_merge_drivers.py`:
+#   git config merge.aesop-regen.driver "python tools/generated_merge.py %O %A %B %L %P"
+# Unregistered clones get an ordinary conflict; the committed bytes are verified
+# at push by hooks/pre-push-policy.sh check_generated_regen() either way.
+tools/INDEX.md merge=aesop-regen
