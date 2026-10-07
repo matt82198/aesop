@@ -1,6 +1,5 @@
 {
   "violations": [
-    "base",
-    "lane-b"
+    "base"
   ]
 }
