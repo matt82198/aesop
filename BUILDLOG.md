@@ -206,7 +206,7 @@ NOT published to Medium; outward publishing stays user-gated.
 - Added PR #799 relicense context (PolyForm Noncommercial 1.0.0 on main; versions ≤0.7.0 remain MIT).
 - Corrected Release-state note: v0.7.2 is published on npm (Latest) and GitHub; v0.7.1 remains tag-only.
 - Added Licensing section clarifying version/platform MIT vs PolyForm split.
-- Appended 2026-09-10 box-restore incident evidence to NEXT STEPS #6 with PR #793 guardrail reference.
+(DONE) - Appended 2026-09-10 box-restore incident evidence to NEXT STEPS #6 with PR #793 guardrail reference.
 - Portfolio recency PRs #86–#88 shipped; box-restore repair confirmed.
 
 
@@ -239,7 +239,7 @@ NOT published to Medium; outward publishing stays user-gated.
 
 **Board catch-up in progress:** 37 open PRs (#793, board automation, policy, multi-box coordination) scheduled for lane-based merge train. Merge actor must not depend on session daemon or manual merge.
 
-**Next:** Lane contract hardening + board merge automation per PR #793 + 10-PR batches.
+(DONE) **Next:** Lane contract hardening + board merge automation per PR #793 + 10-PR batches.
 
 
 ---
