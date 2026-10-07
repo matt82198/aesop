@@ -207,6 +207,7 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   `tools/INDEX.md` merges through the `aesop-regen` driver (`.gitattributes` -> `tools/generated_merge.py`, registered
   per clone by `python tools/install_merge_drivers.py` — the pre-push hook does it for you), and
   `check_generated_regen()` rejects a push whose COMMITTED index is stale, printing exactly that instruction.
+  **When a lane may set `AESOP_ALLOW_GENERATED=1`:** Only when the PR's deliberate purpose is to add/edit a `generated_paths.py::REGISTRY` entry (declaring a new generated path) or to regenerate a registered artifact (e.g., re-running `tools/gen_tool_index.py --regenerate` after adding new tool documentation). In either case, the lane must (1) run the registered generator to produce the artifact, (2) commit both the generator code and the regenerated artifact together in the same commit (never a hand-edited generated file), and (3) explain in the PR body which artifact was regenerated and why. The escape hatch must never be used to push hand-edited generated files, to regenerate unrelated artifacts, or to bypass the byte-identity gate on paths outside the PR's stated purpose.
 - **Before pushing, run the shard for your test file.** Run `python tools/ci_shard_runner.py <n> 4` for the shard that owns your
   test file (see tests/CLAUDE.md for shard assignment). CI is confirmation of local verification, not discovery of breakage. Paste
   the shard output to your report: it proves your changes work before they hit main.
