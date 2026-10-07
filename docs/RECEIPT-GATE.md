@@ -18,7 +18,14 @@ is measured, the hosted re-run can become a sample instead of a tax.
 | 2 | Offline verifier | `tools/verify_receipt.py` |
 | 3 | Hosted verifying Action (non-required) | `.github/workflows/verify-receipt.yml` |
 
-Lane usage, after the full local run:
+**Emission is now automatic.** `hooks/pre-push-policy.sh`'s `check_emit_receipt()` runs
+`tools/emit_receipt.py --post` on every push, once every gate above it has passed (see
+hooks/CLAUDE.md item 16). A day-1 measurement of the manual-only design found 41 merged
+PRs and ZERO receipts — lanes were never told to run the emitter and nothing ran it for
+them, so the honesty signal had no data. The hook step is ALWAYS fail-open: a missing
+tool/python/`gh`/signing-key, or a red matrix part, prints a one-line WARN and never
+blocks the push. `AESOP_RECEIPT_EMIT=0` opts out entirely. Manual invocation still works
+the same way, e.g. for a `--dry-run` preview or a narrower `--matrix`:
 
 ```
 python tools/emit_receipt.py --post            # default matrix, Ed25519 if $AESOP_RECEIPT_KEY is set
@@ -143,3 +150,10 @@ lookup exception-safe and guarding the module's own absence at the shell level.)
   same head sha? Any disagreement is the signal that blocks increment 4.
 - Receipt count vs PR count: adoption by lanes (`emit_receipt.py --post` in the lane
   contract is advisory for now).
+
+## Proof runs
+
+2026-10-07: push-emission proof
+# Hook test
+# Another test
+# Test 4 after unset hooks path
