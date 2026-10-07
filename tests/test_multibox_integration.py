@@ -439,11 +439,22 @@ class TestRealFilesystemSmoke(_TempDirCase):
 
     Every other assertion runs through a substituted ``listdir``. This one does
     not, so it is the check that the simulator has not quietly become the thing
-    under test: the same protocol, on a real tmpdir, with a real 0.05s settle
-    window, must still grant a contended path exactly once.
+    under test: the same protocol, on a real tmpdir, with a real settle window,
+    must still grant a contended path exactly once.
+
+    The settle window here stands in for "p99 visibility delay" (see
+    ``FsClaimLog``'s docstring): on a real tmpdir that delay is ~0, but the two
+    contending threads also need the OS scheduler to actually run both of them
+    within the window, and a shared/loaded CI runner (2 vCPUs, hundreds of other
+    tests in the same process) can deschedule one thread for tens of
+    milliseconds. 0.05s cut it too close and produced an observed double-grant
+    in CI (``AssertionError: 2 != 1``, shard 0, 2026-10-06) though it always
+    passed locally; 0.5s keeps the same real-thread, real-fsync protocol while
+    giving the scheduler enough headroom not to flake, and still finishes in a
+    fraction of the 10s ceiling below.
     """
 
-    SETTLE = 0.05
+    SETTLE = 0.5
 
     def test_two_real_threads_contend_once(self):
         """Two backends on a real tmpdir, real time: exactly one winner."""
