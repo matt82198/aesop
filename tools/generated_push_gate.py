@@ -123,6 +123,8 @@ def verify_tip(root: Path, tip: str, paths: List[str]) -> Tuple[List[Dict[str, s
 
     Returns (stale_records, verified_paths). A generator that fails to run is
     reported as stale: a gate that cannot verify must not report success.
+    Comparison is done through git diff, which applies EOL normalization
+    (core.autocrlf, .gitattributes) so the gate works correctly on all platforms.
     """
     stale: List[Dict[str, str]] = []
     verified: List[str] = []
@@ -144,8 +146,9 @@ def verify_tip(root: Path, tip: str, paths: List[str]) -> Tuple[List[Dict[str, s
                 sys.stdout.write("generated_push_gate: %s has no %s at %s; nothing to verify\n"
                                  % (path, argv[0], tip[:7]))
                 continue
-            target = wt / path
-            before = target.read_bytes() if target.exists() else None
+            # Capture the state of the file at tip (committed state).
+            # We do NOT use raw bytes; instead we'll use git diff which applies
+            # EOL normalization and .gitattributes rules.
             try:
                 proc = subprocess.run(
                     [sys.executable, str(script)] + list(argv[1:]), cwd=str(wt),
@@ -159,8 +162,13 @@ def verify_tip(root: Path, tip: str, paths: List[str]) -> Tuple[List[Dict[str, s
                               "reason": "generator exited %d: %s"
                               % (proc.returncode, (proc.stderr or proc.stdout).strip())})
                 continue
-            after = target.read_bytes() if target.exists() else None
-            if before != after:
+            # Use git diff to compare the committed version (with EOL normalization applied)
+            # against the regenerated working tree file. This is platform-agnostic and
+            # handles core.autocrlf and .gitattributes line-ending rules.
+            diff_rc, _, _ = _git(wt, "diff", "--quiet", "--exit-code", "--", path)
+            if diff_rc != 0:
+                # Diff exit code 0 = no changes, 1 = changes exist, 2+ = error.
+                # Only 0 means the regenerated file matches the committed version.
                 stale.append({"path": path, "tip": tip,
                               "reason": "committed bytes differ from the generator's output"})
             else:

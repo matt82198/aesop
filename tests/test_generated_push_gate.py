@@ -313,5 +313,99 @@ class TestGeneratorOutputDriftWithoutTouchingPath(GateFixture):
                      "Error message must suggest the regeneration command")
 
 
+class TestAutoCRLFNormalization(unittest.TestCase):
+    """Test that the gate correctly handles core.autocrlf line-ending normalization."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.repo = self.tmp / "repo"
+        (self.repo / "tools").mkdir(parents=True)
+        for name in FIXTURE_TOOLS:
+            shutil.copy(TOOLS / name, self.repo / "tools" / name)
+        git(self.repo, "init", "-q", "-b", "main")
+        git(self.repo, "config", "user.email", "test@example.com")
+        git(self.repo, "config", "user.name", "Test User")
+        # KEY: enable autocrlf for this test repo
+        git(self.repo, "config", "core.autocrlf", "true")
+        git(self.repo, "add", "-A")
+        (self.repo / ".gitattributes").write_text(
+            "tools/INDEX.md merge=union\n", encoding="utf-8", newline="\n")
+        add_tool(self.repo, "alpha.py", "alpha purpose")
+        regenerate(self.repo)
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "base with alpha")
+        self.base = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+
+    def tearDown(self):
+        git(self.repo, "worktree", "prune")
+        self._tmp.cleanup()
+
+    def gate(self, *ranges):
+        args = [str(GATE)]
+        for r in ranges:
+            args += ["--range", r]
+        return py(self.repo, *args)
+
+    def test_autocrlf_true_with_lf_generator_passes(self):
+        """With core.autocrlf=true, a file generated with LF should pass the gate.
+
+        The gate uses git diff which applies autocrlf normalization, so the
+        comparison is platform-agnostic. A file generated with LF will be
+        stored in git with LF, checked out as CRLF in the worktree, and
+        the gate should recognize them as equivalent.
+        """
+        git(self.repo, "checkout", "-q", "-b", "feature")
+        add_tool(self.repo, "beta.py", "beta purpose")
+        regenerate(self.repo)
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "add beta")
+        tip = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+
+        # The gate should PASS because the regenerated file matches
+        # the committed version (via git diff with autocrlf normalization)
+        proc = self.gate("%s..%s" % (self.base, tip))
+        self.assertEqual(proc.returncode, 0,
+                        "Gate must pass when generated file matches committed version "
+                        "under autocrlf normalization. stderr: " + proc.stderr)
+
+    def test_autocrlf_true_detects_genuinely_stale_artifact(self):
+        """With core.autocrlf=true, a genuinely stale artifact should still fail.
+
+        The fix (using git diff) should not create a false negative: truly stale
+        files should still be caught, regardless of autocrlf.
+        """
+        git(self.repo, "checkout", "-q", "-b", "feature2")
+        add_tool(self.repo, "gamma.py", "gamma purpose")
+        regenerate(self.repo)
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "add gamma")
+
+        # Now modify gamma's docstring but do NOT regenerate INDEX.md
+        (self.repo / "tools" / "gamma.py").write_text(
+            '"""gamma.\nINDEX: modified gamma purpose\n"""\n',
+            encoding="utf-8", newline="\n")
+        git(self.repo, "add", "tools/gamma.py")
+        git(self.repo, "commit", "-q", "-m", "update gamma docstring without regenerating")
+        stale_tip = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+
+        # The gate should FAIL because tools/INDEX.md is genuinely stale
+        proc = self.gate("%s..%s" % (self.base, stale_tip))
+        self.assertEqual(proc.returncode, 1,
+                        "Gate must fail when generator output differs, even with autocrlf=true. "
+                        "stderr: " + proc.stderr)
+        self.assertIn("tools/INDEX.md", proc.stderr)
+
+
+def return_suite():
+    """Required by test runner."""
+    suite = unittest.TestSuite()
+    suite.addTest(unittest.makeSuite(TestGateTool))
+    suite.addTest(unittest.makeSuite(TestPrePushWiring))
+    suite.addTest(unittest.makeSuite(TestGeneratorOutputDriftWithoutTouchingPath))
+    suite.addTest(unittest.makeSuite(TestAutoCRLFNormalization))
+    return suite
+
+
 if __name__ == "__main__":
     unittest.main()
