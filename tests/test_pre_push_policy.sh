@@ -1432,7 +1432,7 @@ printf '\n=== Test: check_emit_receipt is BOUNDED -- times out and fails open in
   # the timeout path fires and still returns 0 (fail-open), not a hang.
   export AESOP_ROOT="$TEST_ROOT/aesop_receipt_timeout"
   mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
-  printf 'import sys, time\ntime.sleep(5)\nsys.exit(0)\n' > "$AESOP_ROOT/tools/emit_receipt.py"
+  printf 'import sys, time\ntime.sleep(30)\nsys.exit(0)\n' > "$AESOP_ROOT/tools/emit_receipt.py"
   export AESOP_RECEIPT_KEY="$AESOP_ROOT/dummy_key.pem"
   touch "$AESOP_ROOT/dummy_key.pem"
   export AESOP_RECEIPT_TIMEOUT=1
@@ -1447,7 +1447,12 @@ printf '\n=== Test: check_emit_receipt is BOUNDED -- times out and fails open in
     printf 'FAIL: check_emit_receipt must fail-open (return 0) on timeout\n'
     exit 1
   fi
-  if [ "$elapsed" -gt 4 ]; then
+  # Threshold is a wide 20s, not a tight bound on the 1s AESOP_RECEIPT_TIMEOUT:
+  # this box runs under heavy, variable concurrent load (observed 3-5s just
+  # for process teardown), so the real property under test is "nowhere near
+  # the 30s sleep" (timeout worked), not "exactly 1s" (which would make the
+  # test flake on load alone without catching any real regression).
+  if [ "$elapsed" -gt 20 ]; then
     printf 'FAIL: check_emit_receipt took %ds, did not actually bound the sleeping stub to ~1s\n' "$elapsed"
     exit 1
   fi
@@ -1510,22 +1515,27 @@ printf '\n=== Test: check_emit_receipt WARNs and fails open when gh is unavailab
   touch "$AESOP_ROOT/dummy_key.pem"
   unset AESOP_RECEIPT_EMIT
 
-  # Build a MINIMAL PATH from scratch containing ONLY symlinks to the exact
-  # binaries check_emit_receipt / log_event need (resolved from the real
-  # PATH), deliberately excluding gh. Filtering gh's directory OUT of the
-  # real PATH is NOT reliable across environments (a CI runner can have gh
-  # reachable via more than one PATH entry, or via a wrapper), so build the
-  # allowlist instead of a denylist.
-  gh_free_bin="$AESOP_ROOT/gh-free-bin"
-  mkdir -p "$gh_free_bin"
-  for _tool in git python3 python sha256sum shasum date mkdir basename tail cat grep sed awk stat tr head; do
-    _tool_path=$(command -v "$_tool" 2>/dev/null || true)
-    if [ -n "$_tool_path" ]; then
-      ln -sf "$_tool_path" "$gh_free_bin/$_tool" 2>/dev/null
+  # Filter PATH down to entries that do NOT contain a gh/gh.exe binary --
+  # checked per-directory (not just the first hit from `command -v gh`), so
+  # gh reachable via more than one PATH entry is still fully excluded. Every
+  # OTHER real binary stays at its ORIGINAL location (no copying/symlinking):
+  # two earlier attempts both hung for 10+ minutes on this Windows box --
+  # `ln -s` here silently falls back to a full binary COPY (no real symlink
+  # support), and invoking a relocated copy of python.exe without its
+  # sibling DLLs/stdlib can hang on launch instead of erroring. Filtering
+  # entries in place sidesteps that class of failure entirely.
+  test_path=""
+  _old_ifs="$IFS"
+  IFS=':'
+  for _p in $PATH; do
+    if [ -n "$_p" ] && { [ -e "$_p/gh" ] || [ -e "$_p/gh.exe" ]; }; then
+      continue  # this directory has a gh binary; exclude it
     fi
+    test_path="${test_path:+$test_path:}$_p"
   done
+  IFS="$_old_ifs"
 
-  stderr_output=$( { PATH="$gh_free_bin" check_emit_receipt; } 2>&1 1>/dev/null )
+  stderr_output=$( { PATH="$test_path" check_emit_receipt; } 2>&1 1>/dev/null )
   exit_code=$?
 
   if [ "$exit_code" -ne 0 ]; then
@@ -1591,8 +1601,30 @@ printf '\n=== Test: main() emits a receipt only after every gate above it passed
     # hand-listed, so a new check_*() added later (like check_generated_regen's
     # generated_push_gate.py, which broke this exact hand list once already)
     # is covered automatically rather than needing this fixture edited again.
+    #
+    # Retried up to 3x: under this box's heavy concurrent load (this fixture
+    # runs after 30+ prior subprocess-spawning tests in the same suite), a
+    # bare `python ...` invocation has been observed to transiently return
+    # empty/short output with no non-zero exit code to flag it -- never
+    # reproduced in isolation, only after sustained prior load. A short,
+    # empty, or failed result is retried rather than silently trusted, since
+    # trusting it silently is exactly what produced a confusing
+    # "which gate is missing" failure instead of a clear one.
+    local gate_list=""
+    local attempt
+    for attempt in 1 2 3; do
+      gate_list=$(python "$REPO_ROOT/tools/gate_stub_list.py" "$REPO_ROOT/hooks/pre-push-policy.sh" 2>/dev/null)
+      local gate_rc=$?
+      if [ $gate_rc -eq 0 ] && [ "$(printf '%s' "$gate_list" | wc -l)" -ge 8 ]; then
+        break
+      fi
+      gate_list=""
+    done
+    if [ -z "$gate_list" ]; then
+      echo "FIXTURE ERROR: tools/gate_stub_list.py gave no usable output after 3 attempts" >&2
+    fi
     local gate
-    for gate in $(python "$REPO_ROOT/tools/gate_stub_list.py" "$REPO_ROOT/hooks/pre-push-policy.sh"); do
+    for gate in $gate_list; do
       [ "$gate" = "claudemd_sync_gate" ] && continue  # needs a variable exit code below
       printf 'import sys\nsys.exit(0)\n' > "$aesop_root/tools/${gate}.py"
     done
