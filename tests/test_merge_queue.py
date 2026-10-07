@@ -80,7 +80,7 @@ class StateIsolatedTestCase(unittest.TestCase):
         # a different directory (lane worktree) with AESOP_QUEUE_ROOT pointing elsewhere.
         self.queue_root = Path(self._tmp.name) / "queue"
         self.queue_root.mkdir(parents=True, exist_ok=True)
-        # Initialize queue_root as a git repo so the guard's validation passes
+        # tempfile-scoped fixture: initialize queue_root as a git repo for guard validation
         subprocess.run(
             ["git", "init", "-q"],
             cwd=str(self.queue_root),
