@@ -27,6 +27,48 @@ const CONFIG_EXAMPLE = path.join(REPO_ROOT, 'aesop.config.example.json');
 const CLI = path.join(REPO_ROOT, 'bin', 'cli.js');
 const README = path.join(REPO_ROOT, 'README.md');
 
+// Shared fixtures for expensive scaffold operations
+let sharedScaffoldDir = null;
+let sharedTargetDir = null;
+
+// Before hook: set up expensive scaffold fixture once for all tests
+test('setup: shared scaffold fixture', async () => {
+  sharedScaffoldDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-shared-scaffold-'));
+  sharedTargetDir = path.join(sharedScaffoldDir, 'fleet');
+
+  try {
+    // Initialize git
+    execSync('git init', { cwd: sharedScaffoldDir, stdio: 'ignore' });
+    execSync('git config user.email "test@example.com"', { cwd: sharedScaffoldDir, stdio: 'ignore' });
+    execSync('git config user.name "Test"', { cwd: sharedScaffoldDir, stdio: 'ignore' });
+
+    // Run scaffold with --name
+    const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
+    const result = spawnSync('node', [CLI, sharedTargetDir, '--name', 'test-service', '--no-skills'], {
+      encoding: 'utf8',
+      cwd: sharedScaffoldDir,
+      timeout
+    });
+
+    assert.equal(result.status, 0, `Shared scaffold should succeed: ${result.stderr}`);
+    assert.ok(fs.existsSync(sharedTargetDir), 'Scaffolded target directory should exist');
+    assert.ok(
+      fs.existsSync(path.join(sharedTargetDir, 'aesop.config.json')),
+      'aesop.config.json should be generated in shared fixture'
+    );
+  } catch (e) {
+    // Ensure cleanup on failure
+    if (sharedScaffoldDir) {
+      try {
+        fs.rmSync(sharedScaffoldDir, { recursive: true, force: true });
+      } catch (_) {
+        // Ignore cleanup errors
+      }
+    }
+    throw e;
+  }
+});
+
 test('package.json files list includes skills/', () => {
   const pkg = JSON.parse(fs.readFileSync(PACKAGE_JSON, 'utf8'));
   assert.ok(
@@ -105,52 +147,24 @@ test('README documents that skills/ needs to be copied', () => {
 });
 
 test('generated config uses portable paths (not absolute machine paths)', () => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-config-test-'));
+  // This test uses sharedTargetDir which is set up by the before hook below
+  assert.ok(sharedTargetDir, 'Shared scaffold directory should be set up');
 
-  try {
-    // Initialize git
-    execSync('git init', { cwd: tempDir, stdio: 'ignore' });
-    execSync('git config user.email "test@example.com"', { cwd: tempDir, stdio: 'ignore' });
-    execSync('git config user.name "Test"', { cwd: tempDir, stdio: 'ignore' });
+  // Check generated config
+  const configPath = path.join(sharedTargetDir, 'aesop.config.json');
+  assert.ok(fs.existsSync(configPath), 'aesop.config.json should be generated');
 
-    // Run scaffold with --name
-    const targetDir = path.join(tempDir, 'fleet');
-    const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
-    // --no-skills: this test doesn't exercise skill installation; without it the
-    // scaffold call would write into the real ~/.claude/skills/ (isolation contract
-    // documented in cli-skills-install.test.mjs) and contend with it on CI Windows.
-    const result = spawnSync('node', [CLI, targetDir, '--name', 'test-service', '--no-skills'], {
-      encoding: 'utf8',
-      cwd: tempDir,
-      timeout
-    });
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 
-    assert.equal(result.status, 0, `Scaffold should succeed: ${result.stderr}`);
-
-    // Check generated config
-    const configPath = path.join(targetDir, 'aesop.config.json');
-    assert.ok(fs.existsSync(configPath), 'aesop.config.json should be generated');
-
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-
-    // brain_root and scripts_root should be ~ paths, not absolute
-    // OR if absolute, should be commented as "generated for this machine"
-    if (config.brain_root && !config.brain_root.includes('~')) {
-      // If absolute, there should be a comment in the file explaining it
-      const configContent = fs.readFileSync(configPath, 'utf8');
-      assert.ok(
-        configContent.includes('generated for') || configContent.includes('machine'),
-        'Absolute paths should be documented with "generated for this machine" comment'
-      );
-    }
-
-  } finally {
-    // Cleanup
-    try {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    } catch (e) {
-      // Ignore cleanup errors
-    }
+  // brain_root and scripts_root should be ~ paths, not absolute
+  // OR if absolute, should be commented as "generated for this machine"
+  if (config.brain_root && !config.brain_root.includes('~')) {
+    // If absolute, there should be a comment in the file explaining it
+    const configContent = fs.readFileSync(configPath, 'utf8');
+    assert.ok(
+      configContent.includes('generated for') || configContent.includes('machine'),
+      'Absolute paths should be documented with "generated for this machine" comment'
+    );
   }
 });
 
@@ -284,44 +298,16 @@ test('dashboard config generation guards against missing dashboard key (defect b
   // This tests that the wizard mode doesn't crash even if config.dashboard key is missing
   // (defect b: originally accessed config.dashboard.refresh_seconds without checking if dashboard exists)
 
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-dashboard-test-'));
+  // This test uses sharedTargetDir which is set up by the before hook below
+  assert.ok(sharedTargetDir, 'Shared scaffold directory should be set up');
 
-  try {
-    // Initialize git
-    execSync('git init', { cwd: tempDir, stdio: 'ignore' });
-    execSync('git config user.email "test@example.com"', { cwd: tempDir, stdio: 'ignore' });
-    execSync('git config user.name "Test"', { cwd: tempDir, stdio: 'ignore' });
+  // Check generated config is valid JSON
+  const configPath = path.join(sharedTargetDir, 'aesop.config.json');
+  assert.ok(fs.existsSync(configPath), 'aesop.config.json should be generated');
 
-    // Run scaffold — this should not crash even if the example config
-    // doesn't have a dashboard key
-    const targetDir = path.join(tempDir, 'fleet');
-
-    const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
-    // --no-skills: see note above — keeps this test off the real ~/.claude/skills/.
-    const result = spawnSync('node', [CLI, targetDir, '--name', 'test-fleet', '--no-skills'], {
-      encoding: 'utf8',
-      cwd: tempDir,
-      timeout
-    });
-
-    assert.equal(result.status, 0,
-      `Scaffold should succeed without crashing (even if config lacks dashboard key): ${result.stderr}`);
-
-    // Check generated config is valid JSON
-    const configPath = path.join(targetDir, 'aesop.config.json');
-    assert.ok(fs.existsSync(configPath), 'aesop.config.json should be generated');
-
-    // Verify generated config is valid JSON (the main goal)
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    assert.ok(typeof config === 'object', 'Generated config should be valid JSON object');
-
-  } finally {
-    try {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    } catch (e) {
-      // Ignore cleanup errors
-    }
-  }
+  // Verify generated config is valid JSON (the main goal)
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  assert.ok(typeof config === 'object', 'Generated config should be valid JSON object');
 });
 
 test('pre-push hook is copied not symlinked on all platforms (defect c)', () => {
@@ -424,96 +410,79 @@ test('aesopDirs allowlist includes hooks directory (wave-24 scaffolder-hooks)', 
   );
 });
 
-test('pre-commit waveguard hook is installed in scaffolded fleet (wave-24 scaffolder-hooks)', () => {
+test('pre-commit waveguard hook is installed in scaffolded fleet (wave-24 scaffolder-hooks)', { skip: false }, async () => {
   // Verify that the pre-commit waveguard hook is properly installed during scaffolding
-  // This test scaffolds into a git repo and then checks if the pre-commit hook is installed
+  // This test uses the shared scaffold from the before hook and initializes git in it
 
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-hooks-test-'));
+  assert.ok(sharedTargetDir, 'Shared scaffold directory should be set up');
 
+  // Check that hooks directory was copied
+  const hooksDir = path.join(sharedTargetDir, 'hooks');
+  assert.ok(
+    fs.existsSync(hooksDir) && fs.statSync(hooksDir).isDirectory(),
+    'hooks/ directory should be copied to scaffolded target'
+  );
+
+  // Check that pre-commit-waveguard.sh exists
+  const waveguardSource = path.join(hooksDir, 'pre-commit-waveguard.sh');
+  assert.ok(
+    fs.existsSync(waveguardSource),
+    'hooks/pre-commit-waveguard.sh should exist in scaffolded target'
+  );
+
+  // Check that install-waveguard.sh exists
+  const installWaveguard = path.join(hooksDir, 'install-waveguard.sh');
+  assert.ok(
+    fs.existsSync(installWaveguard),
+    'hooks/install-waveguard.sh should exist in scaffolded target'
+  );
+
+  // Check that pre-push-policy.sh exists
+  const prePushPolicy = path.join(hooksDir, 'pre-push-policy.sh');
+  assert.ok(
+    fs.existsSync(prePushPolicy),
+    'hooks/pre-push-policy.sh should exist in scaffolded target'
+  );
+
+  // Now initialize git in the scaffolded directory
   try {
-    // Run scaffold with --name into a fresh directory
-    const targetDir = path.join(tempDir, 'fleet');
-    const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
-    // --no-skills: see note above — keeps this test off the real ~/.claude/skills/.
-    const result = spawnSync('node', [CLI, targetDir, '--name', 'test-fleet', '--no-skills'], {
-      encoding: 'utf8',
-      cwd: tempDir,
-      timeout
-    });
-
-    assert.equal(result.status, 0, `Scaffold should succeed: ${result.stderr}`);
-
-    // Check that hooks directory was copied
-    const hooksDir = path.join(targetDir, 'hooks');
-    assert.ok(
-      fs.existsSync(hooksDir) && fs.statSync(hooksDir).isDirectory(),
-      'hooks/ directory should be copied to scaffolded target'
-    );
-
-    // Check that pre-commit-waveguard.sh exists
-    const waveguardSource = path.join(hooksDir, 'pre-commit-waveguard.sh');
-    assert.ok(
-      fs.existsSync(waveguardSource),
-      'hooks/pre-commit-waveguard.sh should exist in scaffolded target'
-    );
-
-    // Check that install-waveguard.sh exists
-    const installWaveguard = path.join(hooksDir, 'install-waveguard.sh');
-    assert.ok(
-      fs.existsSync(installWaveguard),
-      'hooks/install-waveguard.sh should exist in scaffolded target'
-    );
-
-    // Check that pre-push-policy.sh exists
-    const prePushPolicy = path.join(hooksDir, 'pre-push-policy.sh');
-    assert.ok(
-      fs.existsSync(prePushPolicy),
-      'hooks/pre-push-policy.sh should exist in scaffolded target'
-    );
-
-    // Now initialize git in the scaffolded directory
-    execSync('git init', { cwd: targetDir, stdio: 'ignore' });
-    execSync('git config user.email "test@example.com"', { cwd: targetDir, stdio: 'ignore' });
-    execSync('git config user.name "Test User"', { cwd: targetDir, stdio: 'ignore' });
-
-    // Re-run scaffold with --force to install hooks in the newly initialized git repo
-    const result2 = spawnSync('node', [CLI, targetDir, '--name', 'test-fleet', '--force', '--no-skills'], {
-      encoding: 'utf8',
-      cwd: tempDir,
-      timeout
-    });
-
-    assert.equal(result2.status, 0, `Re-scaffold with --force should succeed: ${result2.stderr}`);
-
-    // Check that .git/hooks/pre-commit was installed
-    const preCommitHook = path.join(targetDir, '.git', 'hooks', 'pre-commit');
-    assert.ok(
-      fs.existsSync(preCommitHook),
-      '.git/hooks/pre-commit hook should be installed'
-    );
-
-    // Verify the hook content contains the waveguard logic
-    const hookContent = fs.readFileSync(preCommitHook, 'utf8');
-    assert.ok(
-      hookContent.includes('pre-commit-waveguard'),
-      '.git/hooks/pre-commit should reference the waveguard hook'
-    );
-
-    // Check that .git/hooks/pre-push was also installed
-    const prePushHook = path.join(targetDir, '.git', 'hooks', 'pre-push');
-    assert.ok(
-      fs.existsSync(prePushHook),
-      '.git/hooks/pre-push hook should be installed'
-    );
-
-  } finally {
-    // Cleanup
-    try {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    } catch (e) {
-      // Ignore cleanup errors
-    }
+    execSync('git init', { cwd: sharedTargetDir, stdio: 'ignore' });
+    execSync('git config user.email "test@example.com"', { cwd: sharedTargetDir, stdio: 'ignore' });
+    execSync('git config user.name "Test User"', { cwd: sharedTargetDir, stdio: 'ignore' });
+  } catch (e) {
+    // May already be initialized; continue
   }
+
+  // Re-run scaffold with --force to install hooks in the newly initialized git repo
+  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
+  const result = spawnSync('node', [CLI, sharedTargetDir, '--name', 'test-fleet', '--force', '--no-skills'], {
+    encoding: 'utf8',
+    cwd: sharedScaffoldDir,
+    timeout
+  });
+
+  assert.equal(result.status, 0, `Re-scaffold with --force should succeed: ${result.stderr}`);
+
+  // Check that .git/hooks/pre-commit was installed
+  const preCommitHook = path.join(sharedTargetDir, '.git', 'hooks', 'pre-commit');
+  assert.ok(
+    fs.existsSync(preCommitHook),
+    '.git/hooks/pre-commit hook should be installed'
+  );
+
+  // Verify the hook content contains the waveguard logic
+  const hookContent = fs.readFileSync(preCommitHook, 'utf8');
+  assert.ok(
+    hookContent.includes('pre-commit-waveguard'),
+    '.git/hooks/pre-commit should reference the waveguard hook'
+  );
+
+  // Check that .git/hooks/pre-push was also installed
+  const prePushHook = path.join(sharedTargetDir, '.git', 'hooks', 'pre-push');
+  assert.ok(
+    fs.existsSync(prePushHook),
+    '.git/hooks/pre-push hook should be installed'
+  );
 });
 
 test('installPreCommitWaveguard function exists (wave-24 scaffolder-hooks)', () => {
@@ -529,4 +498,18 @@ test('installPreCommitWaveguard function exists (wave-24 scaffolder-hooks)', () 
     cli.includes('installPreCommitWaveguard(finalTargetDir, templateRoot)'),
     'cli.js should call installPreCommitWaveguard during scaffolding'
   );
+});
+
+// Cleanup hook: remove shared scaffold fixture after all tests
+test('cleanup: shared scaffold fixture', () => {
+  if (sharedScaffoldDir) {
+    try {
+      fs.rmSync(sharedScaffoldDir, { recursive: true, force: true });
+    } catch (e) {
+      // Ignore cleanup errors but don't fail the test
+      console.warn('Failed to clean up shared scaffold:', e.message);
+    }
+    sharedScaffoldDir = null;
+    sharedTargetDir = null;
+  }
 });
