@@ -136,6 +136,7 @@ def build_receipt(repo, parts, skipped, slug=None, main_ref="origin/main"):
     head = _git(repo, "rev-parse", "HEAD")
     return {
         "schema": 1,
+        "schema_version": 1,
         "repo": slug or repo_slug(repo) or "unknown",
         "head_sha": head,
         "base_sha": _git(repo, "merge-base", head, main_ref),

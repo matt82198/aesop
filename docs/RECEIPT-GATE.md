@@ -44,7 +44,7 @@ under the marker `<!-- aesop-receipt:verify-receipt-local -->`. The Action reads
 
 ```json
 {"receipt": {
-   "schema": 1, "repo": "owner/name",
+   "schema": 1, "schema_version": 1, "repo": "owner/name",
    "head_sha": "...", "base_sha": "<merge-base with origin/main>",
    "tree_hash": "<git rev-parse HEAD^{tree}>",
    "parts":   [{"name": "py-shard-0", "exit_code": 0, "test_count": 212, "duration_s": 48.1}, ...],
@@ -56,7 +56,7 @@ under the marker `<!-- aesop-receipt:verify-receipt-local -->`. The Action reads
 
 Canonical form: `json.dumps(receipt, sort_keys=True, separators=(",", ":"))`. The
 signature covers the canonical bytes, so changing **any** field (an exit code, the tree,
-the base) invalidates it.
+the base) invalidates it. The optional `schema_version` field (default: absent, treated as version 1 for backward compatibility) enables forward-compatible extensions without breaking existing verifiers.
 
 Default matrix: `py-shard-0..3` (`tools/ci_shard_runner.py n 4`) plus the pre-push gate
 set (`secret-scan`, `claudemd-sync-gate`, `gen-tool-index`, `verify-test-suite-count`,

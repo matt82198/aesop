@@ -73,6 +73,9 @@ def verify(envelope, repo, head, main_ref, max_behind, required, pubkey_path, hm
         receipt, sig = envelope["receipt"], envelope["sig"]
         scheme = sig.get("scheme")
         reasons = []
+        schema_version = receipt.get("schema_version")
+        if schema_version is not None and schema_version != 1:
+            reasons.append("schema_version: unsupported version %r (expected 1 or absent)" % (schema_version,))
         if scheme not in rc.SCHEMES:
             reasons.append("signature: unknown scheme %r" % (scheme,))
         elif not rc.has_key_material(scheme, pubkey_path=pubkey_path, hmac_secret=hmac_secret):
