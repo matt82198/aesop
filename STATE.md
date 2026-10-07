@@ -29,6 +29,8 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 ### Shipped (Most Recent)
 
+- **Heartbeat-pollution fix — SHIPPED (PR #898, 2026-10-07T02:59:17Z):** daemons/backup-fleet.sh only auto-derives CONDUCTOR_ROOT for the canonical ~/aesop tree, else explicit or skip; new tests/test-backup-fleet-heartbeat-guard.sh.
+- **pyflakes unused-import sweep — SHIPPED (PR #890, 2026-10-07T03:24:22Z):** 527 pyflakes findings fixed + tools/pyflakes_gate.py G15 ratchet.
 - **Receipt gate increments 1–3 SHIPPED (PR #854, 2026-10-06):** Emit, verify, non-required Action. Increments 4–6 (storage codecs, lineage, signed ledger) remain queued.
 - **Automatic receipt emission in pre-push SHIPPED (PR #895, 2026-10-07 09:15:25Z):** feat(receipts): gate 3.5 automatic emission. Linux hang fixes (process-group-safe bound, stub gh/timeout, 60s guards). Receipts LIVE on matt8 box.
 - **Receipt signing key provisioned SHIPPED (PR #903, 2026-10-07 09:26:25Z):** chore/receipt proof — Ed25519 key per docs: private ~/.aesop/receipt_key.pem (outside repo), public tools/receipt_pubkey.pub (key_id 8d2a494af2689854). User-scope AESOP_RECEIPT_KEY env var points to key path. Real push emitted and verified.
@@ -57,9 +59,6 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 - **tools/INDEX.md union-merge deflake — SHIPPED (2026-10-07 02:30:41Z, PR #882):** Regen driver + committed-bytes push gate; prevents duplicate INDEX.md entries on clean merges; also fixes remote_refs_tripwire false positive; 45/45 + 223/223 regression tests green.
 
 ### In Progress
-
-26. **Heartbeat-pollution fix** (IN-PROGRESS, lane open). tests/test-backup-fleet-conductor-root.sh line 84 — remove ephemeral heartbeat writes from test fixtures.
-27. **pyflakes unused-import sweep** (IN-PROGRESS, lane open). Detect and remove unreferenced imports in driver/, tools/, mcp/, ui/ Python. Lane open as of 2026-10-07 (PR #890 ratchet gate for G15).
 
 ### Open / Queued
 
