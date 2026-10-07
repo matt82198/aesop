@@ -90,10 +90,12 @@ EXCLUDED_REF_PATTERN = re.compile(r"^refs/heads/backup/wip-\d{8}$")
 
 # Attributed mode: a NEW branch only fails the run if its name looks like something
 # a test (not a human/bot doing routine fleet work) would have created. These are
-# prefixes on the branch's short name (ref with "refs/heads/" stripped), matching the
-# actual incident pattern (integrate/batch-*, PR #837/#777) plus the other shapes a
-# careless test fixture could plausibly produce.
-ATTRIBUTABLE_NEW_BRANCH_PREFIXES = ("integrate/", "test-", "tmp-")
+# prefixes on the branch's short name (ref with "refs/heads/" stripped). Note: in CI,
+# "integrate/batch-*" branches are ALWAYS from concurrent merge-train/auto-merge work
+# (concurrent fleet operations), never from pytest runs -- so we exclude them from
+# attribution here to avoid false positives. Only "test-" and "tmp-" indicate actual
+# test-created branches (see PR #888).
+ATTRIBUTABLE_NEW_BRANCH_PREFIXES = ("test-", "tmp-")
 # bot/regen- is a Guardrail-G12 self-heal branch shape (see tools/CLAUDE.md); it is
 # only EXCLUDED from attribution (i.e. only legitimate) when this run IS that regen
 # workflow -- see _running_in_regen_workflow(). Anywhere else a bot/regen- branch
