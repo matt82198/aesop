@@ -80,11 +80,13 @@ never reaching the hook.
 
 - `generated_merge.py` / `generated_push_gate.py` / `install_merge_drivers.py` — the
   generated-artifact merge triangle (see § Tool index): regenerating merge driver, committed-
-  bytes pre-push gate, idempotent per-clone driver registration. Tests:
-  `tests/test_generated_merge.py` (git integration incl. the `union` negative control,
-  3-way entry semantics, stamp, registry/queue agreement), `tests/test_generated_push_gate.py`
-  (stale-commit rejection with the one-line instruction, dirty-tree-does-not-rescue, stamp
-  consumption, sourced-hook wiring).
+  bytes pre-push gate, idempotent per-clone driver registration. The gate runs each registered
+  generator against the pushed tip in a detached throwaway worktree and fails closed on any byte
+  mismatch even when the generated path was untouched in the range, catching drift when sources
+  change without regenerating the artifact. Tests: `tests/test_generated_merge.py` (git integration
+  incl. the `union` negative control, 3-way entry semantics, stamp, registry/queue agreement),
+  `tests/test_generated_push_gate.py` (stale-commit rejection with the one-line instruction,
+  dirty-tree-does-not-rescue, stamp consumption, sourced-hook wiring).
 
 - `linux_shape_check.py` — WSL-based cross-platform test gate: detects commits touching
   shell/workflow/Node files, runs test suites under WSL to catch Windows-only CI reds
