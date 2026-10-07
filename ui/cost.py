@@ -61,7 +61,6 @@ Key behavior:
   - Pricing estimates ONLY if aesop.config.json has a "pricing" map.
 """
 import json
-from pathlib import Path
 
 # Note: import config at module level, but read config.X at CALL time
 # (not at import time) to ensure test-fixture isolation works.
@@ -106,9 +105,9 @@ def _validate_ledger_format(lines):
         # Extract core columns (first 7 required columns)
         try:
             timestamp = parts[1]
-            agent_type = parts[2]
-            model = parts[3]
-            duration_str = parts[4]
+            parts[2]
+            parts[3]
+            parts[4]
             tokens_in_str = parts[5]
             tokens_out_str = parts[6]
             verdict = parts[7]
@@ -167,7 +166,6 @@ def get_cost_summary():
               (or error field if invalid).
     """
     import sys
-    from datetime import datetime, timedelta
 
     # Read ledger path at call time
     ledger_file = config.STATE_DIR / "ledger" / "OUTCOMES-LEDGER.md"
@@ -263,7 +261,7 @@ def get_cost_summary():
             timestamp = parts[1]  # ISO timestamp
             agent_type = parts[2]  # "Agent"
             model = parts[3]
-            duration_str = parts[4]
+            parts[4]
             tokens_in_str = parts[5]
             tokens_out_str = parts[6]
             verdict = parts[7]

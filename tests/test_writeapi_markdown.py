@@ -11,8 +11,6 @@ Tests:
 - OCC conflict detection prevents concurrent modification loss
 - Round-trip: write → read → verify both representations agree
 """
-import json
-import os
 import sys
 import tempfile
 import threading

@@ -2,11 +2,10 @@
 """Unit tests for tools/merge_train.py serial merge train."""
 import os
 import sys
-import json
 import subprocess
 import unittest
 from pathlib import Path
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch
 import tempfile
 
 

@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 """Tests for ui/wave_audit_tail.py — audit tail verdict extraction and validation."""
-import json
-import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from datetime import datetime, timezone
 
 UI_DIR = Path(__file__).parent.parent / "ui"
 if str(UI_DIR) not in sys.path:

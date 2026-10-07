@@ -18,7 +18,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Set, Tuple, Optional
+from typing import Dict, List, Set, Optional
 
 
 def extract_domain_map(root_claude_content: str) -> Dict[str, Optional[str]]:

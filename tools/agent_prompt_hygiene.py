@@ -15,7 +15,6 @@ Fail-closed: exit 1 on violation, exit 0 on success, exit 2 on usage error.
 """
 
 import sys
-import os
 import re
 from pathlib import Path
 

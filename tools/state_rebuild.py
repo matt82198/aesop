@@ -17,7 +17,6 @@ Exit codes:
   1 — failure (missing DB, corrupt state, write error, or drift with --check)
 """
 import argparse
-import json
 import os
 import sys
 from pathlib import Path

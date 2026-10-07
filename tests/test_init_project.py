@@ -5,20 +5,14 @@ import stat
 import subprocess
 import sys
 import tempfile
-import textwrap
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 # Ensure tools/ is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'tools'))
 
 from init_project import (
-    ROOT_CLAUDE_MD,
-    DOMAIN_CLAUDE_MD,
-    DEFAULT_CONFIG,
     PRE_PUSH_HOOK,
-    CODE_DIRS,
     build_domain_map,
     detect_project_name,
     discover_code_dirs,

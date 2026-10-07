@@ -8,14 +8,11 @@ This test suite verifies the seat optimization work:
 Both increments maintain strict no-op guarantees when data is absent or test passes.
 """
 
-import json
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock
 import sys
-import os
 
 # Add driver/ to path for imports.
 REPO = Path(__file__).resolve().parent.parent

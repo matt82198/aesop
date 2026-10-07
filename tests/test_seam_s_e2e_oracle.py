@@ -13,7 +13,6 @@ Uses REAL fixtures (st01 + created reference) to prove seam-s grading works.
 stdlib-only (unittest), ASCII-only, Windows + Linux safe.
 """
 
-import json
 import os
 import shutil
 import subprocess
@@ -21,7 +20,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
 
 # Add driver/bench to path.
 REPO = Path(__file__).resolve().parent.parent
@@ -32,7 +30,6 @@ if str(DRIVER_DIR) not in sys.path:
 if str(BENCH_DIR) not in sys.path:
     sys.path.insert(0, str(BENCH_DIR))
 
-from agent_driver import WORKER_DONE
 import run_seam_s as seam_s
 
 

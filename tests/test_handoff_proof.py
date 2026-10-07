@@ -10,14 +10,12 @@ This test suite validates:
 """
 
 import json
-import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Dict, Any, Tuple
 
 # Add tools/ and driver/ to path
 REPO = Path(__file__).resolve().parent.parent

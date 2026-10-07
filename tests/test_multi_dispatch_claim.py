@@ -9,12 +9,10 @@ that exactly one succeeds (ClaimConflict is raised on the loser).
 """
 from __future__ import annotations
 
-import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 from threading import Thread
-from typing import Optional
 
 # Add parent directory to path
 import sys

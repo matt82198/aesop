@@ -19,9 +19,8 @@ import shutil
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
-from unittest import mock
 
 # Add driver/ and tools/ to path for imports
 REPO = Path(__file__).resolve().parent.parent

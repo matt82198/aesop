@@ -7,7 +7,6 @@ so the liveness checker is exercised against real subprocess invocations rather 
 mocks.
 """
 import json
-import os
 import shutil
 import sys
 import tempfile

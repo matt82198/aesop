@@ -20,7 +20,6 @@ import sys
 import subprocess
 import tempfile
 import unittest
-import re
 from pathlib import Path
 
 
@@ -56,7 +55,6 @@ class TestInstallTasks(unittest.TestCase):
         - Match posix path pattern /[A-Za-z]/ (valid drive letter format)
         - Contain 'daemons/run-watchdog.sh'
         """
-        import re
 
         cmd = [
             "powershell",

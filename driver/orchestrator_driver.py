@@ -29,7 +29,6 @@ DRIVER_DIR = Path(__file__).resolve().parent
 if str(DRIVER_DIR) not in sys.path:
     sys.path.insert(0, str(DRIVER_DIR))
 
-from agent_driver import AgentDriver, CommandResult, DriverCapabilities
 from context_pack import ContextPack
 from orchestrator_backend import OrchestratorBackend
 
@@ -37,7 +36,6 @@ from orchestrator_backend import OrchestratorBackend
 class DecisionFailed(Exception):
     """Raised when a decision cannot be made after retries exhausted."""
 
-    pass
 
 
 class SchemaLoadError(Exception):
@@ -50,7 +48,6 @@ class SchemaLoadError(Exception):
     to minimal validation.
     """
 
-    pass
 
 
 class OrchestratorDriver:

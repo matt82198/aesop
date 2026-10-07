@@ -51,7 +51,6 @@ stdlib-only, ASCII-only, Windows + Linux safe.
 
 import ipaddress
 import json
-import os
 import re
 import socket
 import sys

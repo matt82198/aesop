@@ -56,12 +56,10 @@ Design notes:
 
 import argparse
 import json
-import os
-import re
 import sys
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
-from statistics import median, stdev, quantiles
+from datetime import datetime, timezone
+from statistics import quantiles
 from typing import Optional, Dict, Any, List, Tuple
 
 try:

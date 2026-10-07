@@ -75,8 +75,31 @@ class StateIsolatedTestCase(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.state_root = Path(self._tmp.name) / "state"
         self.state_root.mkdir(parents=True, exist_ok=True)
+        # Queue root must NOT be derived from cwd; create a separate temp directory.
+        # This ensures the guard catches the incident scenario: build_batch called from
+        # a different directory (lane worktree) with AESOP_QUEUE_ROOT pointing elsewhere.
+        self.queue_root = Path(self._tmp.name) / "queue"
+        self.queue_root.mkdir(parents=True, exist_ok=True)
+        # tempfile-scoped fixture: initialize queue_root as a git repo for guard validation
+        subprocess.run(
+            ["git", "init", "-q"],
+            cwd=str(self.queue_root),
+            check=True,
+            capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=str(self.queue_root),
+            check=True,
+            capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=str(self.queue_root),
+            check=True,
+            capture_output=True)
         self._prev_state_root = os.environ.get("AESOP_STATE_ROOT")
+        self._prev_queue_root = os.environ.get("AESOP_QUEUE_ROOT")
         os.environ["AESOP_STATE_ROOT"] = str(self.state_root)
+        os.environ["AESOP_QUEUE_ROOT"] = str(self.queue_root)
         # No unit test may shell out. `run_regenerator` is the module's only
         # subprocess call; it is stubbed green here so build_batch tests
         # exercise batch construction, not this repo's real generators. Tests
@@ -91,6 +114,10 @@ class StateIsolatedTestCase(unittest.TestCase):
             os.environ.pop("AESOP_STATE_ROOT", None)
         else:
             os.environ["AESOP_STATE_ROOT"] = self._prev_state_root
+        if self._prev_queue_root is None:
+            os.environ.pop("AESOP_QUEUE_ROOT", None)
+        else:
+            os.environ["AESOP_QUEUE_ROOT"] = self._prev_queue_root
         self._tmp.cleanup()
 
     def exception_rows(self):
@@ -370,7 +397,7 @@ class TestSingletonFastPath(StateIsolatedTestCase):
     def _gh(self, pr_payload, merged_state="MERGED", calls=None):
         calls = calls if calls is not None else []
 
-        def side_effect(*args):
+        def side_effect(*args, cwd=None, **kwargs):
             calls.append(args)
             if args[:2] == ("pr", "view") and "state" in args and "--jq" in args:
                 return merged_state
@@ -471,7 +498,7 @@ class TestBatchConstruction(StateIsolatedTestCase):
         failure guard checks)."""
         applied = set()
 
-        def side_effect(*args):
+        def side_effect(*args, cwd=None, **kwargs):
             calls.append(args)
             if args[:2] == ("pr", "edit") and "--add-label" in args:
                 applied.add(args[args.index("--add-label") + 1])
@@ -489,7 +516,7 @@ class TestBatchConstruction(StateIsolatedTestCase):
         return side_effect
 
     def _git(self, calls, conflict_sha=None):
-        def side_effect(*args):
+        def side_effect(*args, cwd=None):
             calls.append(args)
             if args[0] == "merge" and "--abort" not in args:
                 if conflict_sha and conflict_sha in args:
@@ -497,6 +524,9 @@ class TestBatchConstruction(StateIsolatedTestCase):
             if args[0] == "status":
                 return (True, "")
             if args[0] == "rev-parse":
+                # If this is a --show-toplevel call from the guard, return the cwd
+                if "--show-toplevel" in args and cwd:
+                    return (True, cwd)
                 return (True, "main")
             return (True, "")
         return side_effect
@@ -571,11 +601,14 @@ class TestBatchConstruction(StateIsolatedTestCase):
         gh_calls, git_calls = [], []
         summary = {"actions": [], "merged": [], "status": "ok"}
 
-        def dirty_git(*args):
+        def dirty_git(*args, cwd=None, **kwargs):
             git_calls.append(args)
             if args[0] == "status":
                 return (True, " M tools/x.py")
             if args[0] == "rev-parse":
+                # If this is a --show-toplevel call from the guard, return the cwd
+                if "--show-toplevel" in args and cwd:
+                    return (True, cwd)
                 return (True, "main")
             return (True, "")
 
@@ -593,11 +626,14 @@ class TestBatchConstruction(StateIsolatedTestCase):
         gh_calls, git_calls = [], []
         summary = {"actions": [], "merged": [], "status": "ok"}
 
-        def other_branch_git(*args):
+        def other_branch_git(*args, cwd=None, **kwargs):
             git_calls.append(args)
             if args[0] == "status":
                 return (True, "")
             if args[0] == "rev-parse":
+                # If this is a --show-toplevel call from the guard, return the cwd
+                if "--show-toplevel" in args and cwd:
+                    return (True, cwd)
                 return (True, "feat/someones-work")
             return (True, "")
 
@@ -613,8 +649,16 @@ class TestBatchConstruction(StateIsolatedTestCase):
     def test_unreadable_git_state_refuses_to_build(self):
         """Fail-closed: if git state cannot be read, do not build."""
         summary = {"actions": [], "merged": [], "status": "ok"}
+
+        def broken_git(*args, cwd=None, **kwargs):
+            # Guard's --show-toplevel call must succeed to pass the guard
+            if args[0] == "rev-parse" and "--show-toplevel" in args and cwd:
+                return (True, cwd)
+            # Everything else fails
+            return (False, "fatal")
+
         with patch.object(self.module, "gh", side_effect=self._batch_gh([])), \
-             patch.object(self.module, "git", return_value=(False, "fatal")):
+             patch.object(self.module, "git", side_effect=broken_git):
             branch = self.module.build_batch([11, 12], summary, epoch=1700000000)
         self.assertEqual(branch, "")
         self.assertEqual([r["kind"] for r in self.exception_rows()],
@@ -637,7 +681,7 @@ class TestBatchConstruction(StateIsolatedTestCase):
                         "labels": [], "body": "", "url": "https://x/pull/77"}
             return ""
 
-        def tracking_git(*args):
+        def tracking_git(*args, **kwargs):
             git_calls.append(args)
             return (True, "")
 
@@ -661,19 +705,22 @@ class TestWorktreeAlwaysRestored(StateIsolatedTestCase):
 
     def _git(self, calls, fail_on=None):
         """git fake on a clean tree; `fail_on` names one failing subcommand."""
-        def side_effect(*args):
+        def side_effect(*args, cwd=None):
             calls.append(args)
             if fail_on and args[0] == fail_on:
                 return (False, "simulated %s failure" % fail_on)
             if args[0] == "status":
                 return (True, "")
             if args[0] == "rev-parse":
+                # If this is a --show-toplevel call from the guard, return the cwd
+                if "--show-toplevel" in args and cwd:
+                    return (True, cwd)
                 return (True, "main")
             return (True, "")
         return side_effect
 
     def _gh(self, create_fails=False):
-        def side_effect(*args):
+        def side_effect(*args, cwd=None, **kwargs):
             if args[:2] == ("pr", "edit"):
                 return ""
             if args[:2] == ("pr", "view"):
@@ -762,7 +809,7 @@ class TestTimeoutContainment(StateIsolatedTestCase):
         """gh fake: preconditions pass, then `then(*args)` handles the rest."""
         contexts = list(self.module.EXPECTED_REQUIRED_CHECKS)
 
-        def side_effect(*args):
+        def side_effect(*args, cwd=None, **kwargs):
             if args[:2] == ("auth", "status"):
                 return ""
             if "--jq" in args and ".default_branch" in args:
@@ -794,7 +841,7 @@ class TestTimeoutContainment(StateIsolatedTestCase):
         def hang(*args):
             raise subprocess.TimeoutExpired(cmd=["gh"] + list(args), timeout=60)
 
-        def tracking_git(*args):
+        def tracking_git(*args, **kwargs):
             git_calls.append(args)
             return (True, "")
 
@@ -820,7 +867,7 @@ class TestTimeoutContainment(StateIsolatedTestCase):
         def hang(*args):
             raise subprocess.TimeoutExpired(cmd=["gh"] + list(args), timeout=60)
 
-        def hanging_git(*args):
+        def hanging_git(*args, **kwargs):
             raise subprocess.TimeoutExpired(cmd=["git"] + list(args), timeout=120)
 
         with patch.object(self.module, "gh",
@@ -966,7 +1013,7 @@ class TestBatchEvaluation(StateIsolatedTestCase):
 
     def _bisect_aware_git(self, calls):
         """Git mock that supports bisect branch queries and operations."""
-        def side_effect(*args):
+        def side_effect(*args, cwd=None, **kwargs):
             calls.append(args)
             if args[0] == "rev-parse" and "--abbrev-ref" in args:
                 return (True, "main")
@@ -1198,9 +1245,12 @@ class TestBatchEvaluation(StateIsolatedTestCase):
                 return batch
             return {}
 
-        def git_side_effect(*args):
+        def git_side_effect(*args, cwd=None, **kwargs):
             if args[0] == "ls-remote":
                 return (True, "batchsha\trefs/heads/integrate/q-1700000000")
+            # If this is a --show-toplevel call from the guard, return the cwd
+            if args[0] == "rev-parse" and "--show-toplevel" in args and cwd:
+                return (True, cwd)
             return (True, "")
 
         summary = {"actions": [], "merged": [], "status": "ok"}
@@ -1457,7 +1507,7 @@ class TestIdempotentReEntry(StateIsolatedTestCase):
     def _stable_gh(self, calls, rollup):
         contexts = list(self.module.EXPECTED_REQUIRED_CHECKS)
 
-        def side_effect(*args):
+        def side_effect(*args, cwd=None, **kwargs):
             calls.append(args)
             if "--jq" in args and ".default_branch" in args:
                 return "main"
@@ -1590,7 +1640,7 @@ class TestBatchDiscoveryAndDedupe(StateIsolatedTestCase):
         module = self.module
         rollup = batch_rollup
 
-        def side_effect(*args):
+        def side_effect(*args, cwd=None, **kwargs):
             calls.append(args)
             if "--jq" in args and ".default_branch" in args:
                 return "main"
@@ -1633,11 +1683,14 @@ class TestBatchDiscoveryAndDedupe(StateIsolatedTestCase):
 
     @staticmethod
     def _git(calls):
-        def side_effect(*args):
+        def side_effect(*args, cwd=None, **kwargs):
             calls.append(args)
             if args[0] == "status":
                 return (True, "")
             if args[0] == "rev-parse":
+                # If this is a --show-toplevel call from the guard, return the cwd
+                if "--show-toplevel" in args and cwd:
+                    return (True, cwd)
                 return (True, "main")
             if args[0] == "ls-remote":
                 return (True, "batchsha\trefs/heads/%s" % args[-1])
@@ -1673,7 +1726,7 @@ class TestBatchDiscoveryAndDedupe(StateIsolatedTestCase):
         labelled = self._batch_pr_row(
             labels=[{"name": self.module.BATCH_LABEL}])
 
-        def side_effect(*args):
+        def side_effect(*args, cwd=None, **kwargs):
             gh_calls.append(args)
             if args[:2] == ("pr", "list"):
                 if "--label" in args and \
@@ -1735,11 +1788,14 @@ class TestBatchDiscoveryAndDedupe(StateIsolatedTestCase):
                "integrate #11 into integrate/q-1700000000\n"
                "some unrelated subject\n")
 
-        def git_side_effect(*args):
+        def git_side_effect(*args, cwd=None, **kwargs):
             if args[0] == "log":
                 return (True, log)
             if args[0] == "ls-remote":
                 return (True, "sha\trefs/heads/integrate/q-1700000000")
+            # If this is a --show-toplevel call from the guard, return the cwd
+            if args[0] == "rev-parse" and "--show-toplevel" in args and cwd:
+                return (True, cwd)
             return (True, "")
 
         batch = {"number": 900, "body": "no members line here",
@@ -1752,8 +1808,11 @@ class TestBatchDiscoveryAndDedupe(StateIsolatedTestCase):
     def test_body_members_win_over_the_commit_fallback(self):
         git_calls = []
 
-        def git_side_effect(*args):
+        def git_side_effect(*args, cwd=None, **kwargs):
             git_calls.append(args)
+            # If this is a --show-toplevel call from the guard, return the cwd
+            if args[0] == "rev-parse" and "--show-toplevel" in args and cwd:
+                return (True, cwd)
             return (True, "integrate #99 into integrate/q-1\n")
 
         batch = {"number": 727, "body": REAL_BATCH_BODY,
@@ -1799,7 +1858,7 @@ class TestBatchLabelIsVerified(StateIsolatedTestCase):
         module = self.module
         state = {"exists": label_exists, "labels": set()}
 
-        def side_effect(*args):
+        def side_effect(*args, cwd=None, **kwargs):
             calls.append(args)
             if args[:2] == ("pr", "edit") and "--add-label" in args:
                 name = args[args.index("--add-label") + 1]
@@ -1826,10 +1885,13 @@ class TestBatchLabelIsVerified(StateIsolatedTestCase):
 
     @staticmethod
     def _git(*_args, **_kwargs):
-        def side_effect(*args):
+        def side_effect(*args, cwd=None, **kwargs):
             if args[0] == "status":
                 return (True, "")
             if args[0] == "rev-parse":
+                # If this is a --show-toplevel call from the guard, return the cwd
+                if "--show-toplevel" in args and cwd:
+                    return (True, cwd)
                 return (True, "main")
             return (True, "")
         return side_effect
@@ -1882,7 +1944,7 @@ class TestGeneratedFileTolerance(StateIsolatedTestCase):
     """
 
     def _gh(self):
-        def side_effect(*args):
+        def side_effect(*args, cwd=None, **kwargs):
             if args[:2] == ("pr", "view"):
                 number = int(args[2])
                 return {"headRefOid": "sha%d" % number,
@@ -1899,7 +1961,7 @@ class TestGeneratedFileTolerance(StateIsolatedTestCase):
         """git fake whose `status` reports `dirty` until those paths restore."""
         remaining = {"paths": list(dirty)}
 
-        def side_effect(*args):
+        def side_effect(*args, cwd=None, **kwargs):
             calls.append(args)
             if args[0] == "status":
                 return (True, "\n".join(" M %s" % p
@@ -1910,6 +1972,9 @@ class TestGeneratedFileTolerance(StateIsolatedTestCase):
                                       if p != target]
                 return (True, "")
             if args[0] == "rev-parse":
+                # If this is a --show-toplevel call from the guard, return the cwd
+                if "--show-toplevel" in args and cwd:
+                    return (True, cwd)
                 return (True, "main")
             return (True, "")
         return side_effect
@@ -1953,10 +2018,13 @@ class TestGeneratedFileTolerance(StateIsolatedTestCase):
         self.assertEqual([c for c in calls if c[0] == "restore"], [])
 
     def test_restore_that_fails_to_clean_the_tree_still_refuses(self):
-        def stubborn_git(*args):
+        def stubborn_git(*args, cwd=None, **kwargs):
             if args[0] == "status":
                 return (True, " M tests/CLAUDE.md")
             if args[0] == "rev-parse":
+                # If this is a --show-toplevel call from the guard, return the cwd
+                if "--show-toplevel" in args and cwd:
+                    return (True, cwd)
                 return (True, "main")
             return (True, "")
 
@@ -1969,11 +2037,14 @@ class TestGeneratedFileTolerance(StateIsolatedTestCase):
         """Never touch files in a tree a human has checked out elsewhere."""
         calls = []
 
-        def other_branch_git(*args):
+        def other_branch_git(*args, cwd=None, **kwargs):
             calls.append(args)
             if args[0] == "status":
                 return (True, " M tests/CLAUDE.md")
             if args[0] == "rev-parse":
+                # If this is a --show-toplevel call from the guard, return the cwd
+                if "--show-toplevel" in args and cwd:
+                    return (True, cwd)
                 return (True, "feat/someones-work")
             return (True, "")
 
@@ -2024,8 +2095,11 @@ class TestGeneratedFileTolerance(StateIsolatedTestCase):
 
     def test_worktree_is_safe_tolerates_a_stripped_generated_path(self):
         """The end-to-end effect of the slice bug: a batch is buildable again."""
-        def fake_git(*args):
+        def fake_git(*args, cwd=None, **kwargs):
             if args[0] == "rev-parse":
+                # If this is a --show-toplevel call from the guard, return the cwd
+                if "--show-toplevel" in args and cwd:
+                    return (True, cwd)
                 return (True, "main")
             if args[0] == "status":
                 # Post-restore status is clean; pre-restore is the stripped form.
@@ -2068,13 +2142,16 @@ class TestBatchRegeneration(StateIsolatedTestCase):
         have been merged -- which is exactly when a batch's union diverges."""
         state = {"merged": False}
 
-        def side_effect(*args):
+        def side_effect(*args, cwd=None, **kwargs):
             calls.append(args)
             if args[0] == "merge" and "--abort" not in args:
                 state["merged"] = True
             if args[0] == "status":
                 return (True, status_after_regen if state["merged"] else "")
             if args[0] == "rev-parse":
+                # If this is a --show-toplevel call from the guard, return the cwd
+                if "--show-toplevel" in args and cwd:
+                    return (True, cwd)
                 return (True, "main")
             if args[0] == "commit":
                 state["merged"] = False  # committing cleans the tree
@@ -2159,10 +2236,10 @@ class TestBatchRegeneration(StateIsolatedTestCase):
         calls = []
         git_side_effect = self._git(calls, "M tests/CLAUDE.md")
 
-        def spying_git(*args):
+        def spying_git(*args, **kwargs):
             if args and args[0] == "push":
                 seen["during_push"] = os.environ.get(allow_env)
-            return git_side_effect(*args)
+            return git_side_effect(*args, **kwargs)
 
         self.assertNotIn(allow_env, os.environ)
         summary = {"actions": [], "merged": [], "status": "ok"}
@@ -2183,10 +2260,10 @@ class TestBatchRegeneration(StateIsolatedTestCase):
         calls = []
         git_side_effect = self._git(calls, "")
 
-        def spying_git(*args):
+        def spying_git(*args, **kwargs):
             if args and args[0] == "push":
                 seen["during_push"] = os.environ.get(allow_env)
-            return git_side_effect(*args)
+            return git_side_effect(*args, **kwargs)
 
         summary = {"actions": [], "merged": [], "status": "ok"}
         with patch.object(self.module, "gh", side_effect=self._gh()), \
@@ -2265,7 +2342,7 @@ class TestNonDefaultBaseIsRefused(StateIsolatedTestCase):
         """gh fake: preconditions green, one PR in the queue, merge reports MERGED."""
         contexts = list(self.module.EXPECTED_REQUIRED_CHECKS)
 
-        def side_effect(*args):
+        def side_effect(*args, cwd=None, **kwargs):
             calls.append(args)
             if "--jq" in args and ".default_branch" in args:
                 return self.TRUNK
@@ -2333,7 +2410,7 @@ class TestNonDefaultBaseIsRefused(StateIsolatedTestCase):
 
         calls = []
 
-        def side_effect(*args):
+        def side_effect(*args, cwd=None, **kwargs):
             calls.append(args)
             return []
 
@@ -2501,10 +2578,13 @@ class TestNonDefaultBaseIsRefused(StateIsolatedTestCase):
                 return "https://github.com/o/r/pull/999"
             return {}
 
-        def git_side_effect(*args):
+        def git_side_effect(*args, cwd=None, **kwargs):
             if args[0] == "merge" and len(args) > 1 and args[1].startswith("sha"):
                 merged_shas.append(args[1])
             if args[0] == "rev-parse":
+                # If this is a --show-toplevel call from the guard, return the cwd
+                if "--show-toplevel" in args and cwd:
+                    return True, cwd
                 return True, "main"
             if args[0] == "status":
                 return True, ""
@@ -2586,7 +2666,7 @@ class TestDefaultBranchIsResolved(StateIsolatedTestCase):
                                  "must refuse %r" % (junk,))
 
     def test_run_pass_exits_two_when_the_default_branch_is_unreadable(self):
-        def side_effect(*args):
+        def side_effect(*args, cwd=None, **kwargs):
             if "--jq" in args and ".default_branch" in args:
                 return {"error": "not found"}
             return True
@@ -2605,9 +2685,12 @@ class TestDefaultBranchIsResolved(StateIsolatedTestCase):
         """One value, or none: guard, ancestor proof, cut and --base must agree."""
         git_calls, gh_calls = [], []
 
-        def git_side_effect(*args):
+        def git_side_effect(*args, cwd=None, **kwargs):
             git_calls.append(args)
             if args[0] == "rev-parse":
+                # If this is a --show-toplevel call from the guard, return the cwd
+                if "--show-toplevel" in args and cwd:
+                    return True, cwd
                 return True, "trunk"
             if args[0] == "status":
                 return True, ""
@@ -2816,6 +2899,47 @@ class TestLaneContractLint(unittest.TestCase):
         """Only dispatch prompts are in scope; ordinary code is untouched."""
         content = "subprocess.run(['python', 'tools/merge_train.py', '1'])\n"
         self.assertEqual(self.lint.find_violations(Path("x.py"), content), [])
+
+
+class TestQueueRootIsolationGuard(StateIsolatedTestCase):
+    """Guard: build_batch must refuse to mint branches outside queue root.
+
+    Regression for 2026-10-06: lanes calling build_batch() from sibling
+    worktrees created integrate/batch-* branches in shared refs because
+    git() had no cwd. The guard refuses unless AESOP_QUEUE_ROOT points
+    at the repo root, and all git calls pass cwd explicitly.
+    """
+
+    def test_build_batch_refuses_without_queue_root_env(self):
+        """build_batch refuses when AESOP_QUEUE_ROOT is not set."""
+        summary = {"actions": [], "merged": [], "status": "ok"}
+
+        # Ensure AESOP_QUEUE_ROOT is not set
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("AESOP_QUEUE_ROOT", None)
+
+            result = self.module.build_batch([11, 12], summary, epoch=1700000000)
+
+        # Should refuse (return empty string)
+        self.assertEqual(result, "", "build_batch must refuse without AESOP_QUEUE_ROOT")
+
+        # Verify exception was recorded
+        exceptions = self.module.read_exceptions()
+        has_guard_error = any("queue_root" in e.get("kind", "") for e in exceptions)
+        self.assertTrue(has_guard_error, "Should record queue_root guard exception")
+
+    def test_build_batch_refuses_when_queue_root_differs_from_cwd(self):
+        """build_batch refuses when AESOP_QUEUE_ROOT points to different repo than cwd."""
+        summary = {"actions": [], "merged": [], "status": "ok"}
+
+        # Set AESOP_QUEUE_ROOT to a different temp directory
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(os.environ, {"AESOP_QUEUE_ROOT": tmpdir}, clear=False):
+                # cwd is still this worktree, not tmpdir
+                result = self.module.build_batch([11, 12], summary, epoch=1700000000)
+
+        # Should refuse because cwd doesn't match AESOP_QUEUE_ROOT
+        self.assertEqual(result, "", "build_batch must refuse when queue_root != cwd")
 
 
 if __name__ == "__main__":

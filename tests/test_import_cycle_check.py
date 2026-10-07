@@ -1,7 +1,6 @@
 """Tests for tools/import_cycle_check.py — AST-based import cycle detector."""
 
 import json
-import os
 import sys
 import tempfile
 import unittest

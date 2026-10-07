@@ -13,7 +13,6 @@ import json
 import shutil
 import tempfile
 import unittest
-from datetime import datetime, timezone
 from pathlib import Path
 
 # Add repo root to path
@@ -23,7 +22,6 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from state_store.projections import project_orchestrator_status
-from state_store.api import StateAPI
 from state_store.write_api import WriteAPI
 from state_store.read_api import ReadAPI
 from state_store.materialize import materialize_orchestrator_status

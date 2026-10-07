@@ -199,7 +199,7 @@ def main(argv=None):
         argv = sys.argv[1:]
 
     # Simple arg parsing (stdlib only)
-    check_mode = '--check' in argv
+    '--check' in argv
     json_mode = '--json' in argv
     paths_flag = '--paths' in argv
     root_flag = '--root' in argv

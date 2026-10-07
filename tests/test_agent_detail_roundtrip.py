@@ -19,7 +19,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 UI_DIR = Path(__file__).parent.parent / "ui"
 if str(UI_DIR) not in sys.path:

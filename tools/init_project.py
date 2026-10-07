@@ -23,7 +23,6 @@ Exit: 0=success, 1=error or scaffold refused, 2=usage error
 """
 import argparse
 import json
-import os
 import stat
 import subprocess
 import sys

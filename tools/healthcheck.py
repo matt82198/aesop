@@ -19,11 +19,9 @@ Config read at CALL time. Graceful on missing files (missing = reported, not cra
 Encoding: UTF-8 always. --json mode outputs machine-readable format.
 """
 import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from time import time
 
 try:
     from common import check_heartbeat_staleness, get_state_dir

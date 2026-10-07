@@ -9,7 +9,6 @@ split-brain regressions through the canonical form, tests heterogeneity guard
 import os
 import sys
 import tempfile
-import unicodedata
 import unittest
 from pathlib import Path
 from unittest import mock

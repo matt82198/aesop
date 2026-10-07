@@ -28,7 +28,6 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest import mock
 
 # Add tools/ to path for imports
 REPO = Path(__file__).resolve().parent.parent

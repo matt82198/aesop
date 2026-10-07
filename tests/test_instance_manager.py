@@ -15,7 +15,6 @@ Uses temporary SQLite databases to avoid pollution; enforces isolation per test.
 """
 import json
 import os
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -27,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from state_store import StateAPI, EventStore
+from state_store import StateAPI
 from state_store.instance_projection import (
     register_instance,
     heartbeat,

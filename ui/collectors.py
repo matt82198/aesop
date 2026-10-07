@@ -1055,7 +1055,6 @@ def drain_tracker_inbox():
         except Exception as e:
             print(f"[inbox] Failed to project tracker state: {e}", file=sys.stderr)
             # Fall back to tracker.json only if projection fails
-            pass
 
         rejects = []
         for line in lines:

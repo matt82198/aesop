@@ -12,7 +12,6 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from typing import List
 
 # Import the sampler module
 import sys
@@ -22,7 +21,6 @@ from bench.sample_transcripts import (
     extract_coding_task_from_turns,
     generate_task_id,
     is_code_response,
-    load_transcript_lines,
     redact_sensitive_data,
     sample_transcript_file,
 )

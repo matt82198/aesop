@@ -1074,7 +1074,7 @@ def restore_generated_paths(paths) -> list:
     return restored
 
 
-def git_safe(*args) -> tuple:
+def git_safe(*args, cwd: str = None) -> tuple:
     """`git` that never raises. Used only on containment/cleanup paths.
 
     The shared transport runs subprocess with an explicit timeout (60s for gh,
@@ -1084,7 +1084,7 @@ def git_safe(*args) -> tuple:
     leave the working tree stranded, which is the failure A3 exists to prevent.
     """
     try:
-        return git(*args)
+        return git(*args, cwd=cwd)
     except subprocess.TimeoutExpired:
         return False, "timeout: git %s" % " ".join(str(a) for a in args)
     except (OSError, subprocess.SubprocessError) as exc:
@@ -1271,7 +1271,32 @@ def build_batch(members: list, summary: dict, epoch: int = None) -> str:
 
     A member that conflicts is dropped (exception row) and the rest continue.
     Returns the batch branch name, or "" if no batch was opened.
+
+    GUARD: Refuses to mint integrate/batch-* branches outside the dedicated queue checkout
+    to prevent accidental branch creation in lane worktrees. Checks AESOP_QUEUE_ROOT env
+    or .aesop-queue-root marker file at repo root.
     """
+    # Guard: ensure AESOP_QUEUE_ROOT is set and points to a valid git repo.
+    # Process cwd is irrelevant: all tree/ref-mutating git() calls pass cwd=queue_root explicitly.
+    queue_root = os.environ.get("AESOP_QUEUE_ROOT")
+    if queue_root is None:
+        record_exception(0, "queue_root_isolation_guard",
+                         "build_batch called without AESOP_QUEUE_ROOT env; "
+                         "daemon must export AESOP_QUEUE_ROOT before invoking merge_queue.py")
+        summary["status"] = "error"
+        return ""
+
+    # Verify AESOP_QUEUE_ROOT is a valid git repository (resolved to handle symlinks/case on Windows).
+    # Store resolved queue root for all subsequent git() calls.
+    queue_root_resolved = Path(queue_root).resolve()
+    ok, toplevel = git("rev-parse", "--show-toplevel", cwd=str(queue_root_resolved))
+    if not ok or str(queue_root_resolved) != str(Path(toplevel.strip()).resolve()):
+        record_exception(0, "queue_root_isolation_guard",
+                         "build_batch: AESOP_QUEUE_ROOT=%s is not a valid git repository"
+                         % queue_root_resolved)
+        summary["status"] = "error"
+        return ""
+
     safe, why = worktree_is_safe()
     if not safe:
         record_exception(0, "unsafe_worktree",
@@ -1283,12 +1308,14 @@ def build_batch(members: list, summary: dict, epoch: int = None) -> str:
     branch = "integrate/q-%d" % epoch
     base = base_branch()
 
-    ok, out = git("fetch", "origin", base)
+    # All git calls that mutate refs/tree MUST pass cwd=queue_root_resolved to ensure
+    # they operate on the queue root, not the process cwd (which may be a lane worktree).
+    ok, out = git("fetch", "origin", base, cwd=str(queue_root_resolved))
     if not ok:
         record_exception(0, "git_failed", "fetch origin %s: %s" % (base, out[:200]))
         summary["status"] = "error"
         return ""
-    ok, out = git("checkout", "-B", branch, "origin/%s" % base)
+    ok, out = git("checkout", "-B", branch, "origin/%s" % base, cwd=str(queue_root_resolved))
     if not ok:
         record_exception(0, "git_failed", "checkout %s: %s" % (branch, out[:200]))
         summary["status"] = "error"
@@ -1325,13 +1352,14 @@ def build_batch(members: list, summary: dict, epoch: int = None) -> str:
             sha = info["headRefOid"]
             head_ref = info.get("headRefName", "")
             if head_ref:
-                git("fetch", "origin", head_ref)
+                git("fetch", "origin", head_ref, cwd=str(queue_root_resolved))
             else:
-                git("fetch", "origin", sha)
+                git("fetch", "origin", sha, cwd=str(queue_root_resolved))
             ok, out = git("merge", sha, "--no-edit",
-                          "-m", "integrate #%d into %s" % (number, branch))
+                          "-m", "integrate #%d into %s" % (number, branch),
+                          cwd=str(queue_root_resolved))
             if not ok:
-                git("merge", "--abort")
+                git("merge", "--abort", cwd=str(queue_root_resolved))
                 record_exception(number, "member_conflict",
                                  "conflicts against %s: %s" % (branch, out[:200]))
                 continue
@@ -1363,7 +1391,7 @@ def build_batch(members: list, summary: dict, epoch: int = None) -> str:
         if regenerated:
             os.environ[ALLOW_ENV] = "1"
         try:
-            ok, out = git("push", "-u", "origin", branch)
+            ok, out = git("push", "-u", "origin", branch, cwd=str(queue_root_resolved))
         finally:
             if regenerated:
                 if prior_allow is None:
@@ -1399,7 +1427,7 @@ def build_batch(members: list, summary: dict, epoch: int = None) -> str:
     finally:
         restore_worktree_to_main()
         if delete_branch:
-            git_safe("branch", "-D", branch)
+            git_safe("branch", "-D", branch, cwd=str(queue_root_resolved))
 
 
 def _pr_number_from_url(url: str):

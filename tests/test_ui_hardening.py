@@ -14,11 +14,7 @@ Test coverage:
 
 Run: python -m unittest tests.test_ui_hardening -v
 """
-import inspect
-import json
-import os
 import shutil
-import sys
 import tempfile
 import unittest
 from pathlib import Path

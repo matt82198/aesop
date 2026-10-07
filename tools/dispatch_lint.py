@@ -50,7 +50,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 
 
 # Forbidden patterns and their suggested fixes
@@ -198,7 +198,7 @@ def is_comment_only(line: str, pattern: str) -> bool:
     Returns True if the pattern is only found after # or // comment markers,
     indicating it's a comment-only reference that shouldn't trigger a violation.
     """
-    stripped = line.strip()
+    line.strip()
 
     # Find comment markers
     hash_pos = line.find('#')

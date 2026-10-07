@@ -37,9 +37,9 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 try:
-    from common import get_state_dir
+    pass
 except ImportError:
-    from tools.common import get_state_dir
+    pass
 
 
 def load_config(root_dir=None):

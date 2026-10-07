@@ -5,7 +5,7 @@ import subprocess
 import json
 import unittest
 from pathlib import Path
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 
 class TestCiMergeWait(unittest.TestCase):

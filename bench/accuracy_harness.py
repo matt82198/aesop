@@ -36,12 +36,11 @@ import sys
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 # Import agent driver classes (same directory).
 sys.path.insert(0, str(Path(__file__).parent.parent / "driver"))
-from agent_driver import WorkerRequest, WorkerResult, WORKER_DONE, WORKER_FAILED
-from codex_driver import CodexDriver, WORKER_PATCH_SCHEMA
+from codex_driver import WORKER_PATCH_SCHEMA
 
 
 # ============================================================================

@@ -10,11 +10,6 @@ Tests verify:
 """
 
 import unittest
-import json
-import tempfile
-import subprocess
-from pathlib import Path
-from datetime import datetime, timezone
 
 
 class TestIncidentClassifier(unittest.TestCase):
@@ -386,7 +381,7 @@ class TestCheckMode(unittest.TestCase):
     def test_check_mode_drift_detected(self):
         """--check should return 1 if docs/INCIDENTS.md drifts from git."""
         try:
-            from tools.incident_report import IncidentChecker
+            pass
         except ImportError:
             self.skipTest("incident_report module not yet implemented")
 

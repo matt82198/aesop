@@ -13,7 +13,6 @@ Run: python -m pytest tests/test_symlink_guard.py -v
 """
 import http.client
 import importlib.util
-import json
 import os
 import shutil
 import subprocess

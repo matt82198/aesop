@@ -8,10 +8,7 @@ Verifies:
 3. Oracle conftest can find ../repo relative to oracle/
 """
 
-import json
 import shutil
-import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path

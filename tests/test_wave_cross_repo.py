@@ -17,14 +17,12 @@ stdlib-only (unittest), ASCII-only, Windows + Linux safe.
 """
 
 import os
-import json
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 # Add driver/ to path for imports.
 REPO = Path(__file__).resolve().parent.parent

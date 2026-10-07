@@ -10,7 +10,6 @@ Uses a local ephemeral HTTP server (no external network).
 """
 
 import http.server
-import io
 import json
 import os
 import socketserver
@@ -89,7 +88,6 @@ class _TestHTTPHandler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         """Suppress default logging."""
-        pass
 
 
 def _call_transport(*args, **kwargs):

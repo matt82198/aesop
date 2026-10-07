@@ -24,19 +24,14 @@ Run: python -m unittest tests.test_sse_disconnect
 """
 import http.client
 import importlib.util
-import io
-import json
 import os
 import shutil
-import socket
 import sys
 import tempfile
 import threading
 import time
 import unittest
-from contextlib import redirect_stderr
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
 
 SERVE_PATH = Path(__file__).parent.parent / "ui" / "serve.py"
 UI_PATH = Path(__file__).parent.parent / "ui"

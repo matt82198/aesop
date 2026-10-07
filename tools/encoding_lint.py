@@ -41,7 +41,7 @@ import ast
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 
 def _is_binary_mode(mode_arg: Optional[str]) -> bool:

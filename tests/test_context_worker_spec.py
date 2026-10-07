@@ -24,7 +24,6 @@ and still resolves policy knobs as before.
 
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
 import sys
 
 # Add driver/ to path for imports.

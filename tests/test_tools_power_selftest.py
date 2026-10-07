@@ -8,7 +8,7 @@ import tempfile
 import unittest
 import json
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 

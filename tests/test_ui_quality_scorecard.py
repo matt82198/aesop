@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Tests for ui/quality_scorecard.py — per-agent-specialty quality metrics."""
 import json
-import os
 import sys
 import tempfile
 import unittest

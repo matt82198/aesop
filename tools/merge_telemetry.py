@@ -31,11 +31,9 @@ Exit codes:
 import subprocess
 import json
 import sys
-import os
 import argparse
 from pathlib import Path
-from datetime import datetime, timedelta
-from collections import defaultdict
+from datetime import datetime
 from statistics import median
 
 try:
