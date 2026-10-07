@@ -48,9 +48,9 @@ class TestSpoolLocationResolver(unittest.TestCase):
         """Test that $AESOP_RECEIPT_SPOOL env var takes precedence."""
         env_spool = self.temp_root / "custom_spool"
         environ = {rc.SPOOL_ENV: str(env_spool)}
-        
+
         result = rc.resolve_spool_dir(environ=environ)
-        self.assertEqual(Path(result), env_spool)
+        self.assertEqual(Path(result).resolve(), env_spool.resolve())
 
     def test_spool_location_git_common_dir_in_worktree(self):
         """Test that git-common-dir is used inside a worktree (survives removal)."""
@@ -87,7 +87,7 @@ class TestSpoolLocationResolver(unittest.TestCase):
             ).stdout.strip()
         )
         expected = Path(git_common).resolve() / "aesop-receipt-spool"
-        self.assertEqual(Path(result), expected)
+        self.assertEqual(Path(result).resolve(), expected.resolve())
 
         # Create a spool file
         spool_dir = Path(result)
@@ -112,29 +112,30 @@ class TestSpoolLocationResolver(unittest.TestCase):
         home_dir = self.temp_root / "fake_home"
         home_dir.mkdir()
         environ = {"HOME": str(home_dir)}
-        
+
         # Repo without git common dir available
         result = rc.resolve_spool_dir(repo="/nonexistent", environ=environ)
         expected = home_dir / ".aesop" / "receipt-spool"
-        self.assertEqual(Path(result), expected)
+        self.assertEqual(Path(result).resolve(), expected.resolve())
 
     def test_legacy_spool_path_still_readable(self):
         """Test that legacy <repo>/state/receipts/spool is still checked as a fallback source."""
         repo_root = self.temp_root / "legacy_repo"
         repo_root.mkdir()
-        
+
         # Create legacy spool file
         legacy_spool = repo_root / "state" / "receipts" / "spool"
         legacy_spool.mkdir(parents=True, exist_ok=True)
         legacy_file = legacy_spool / "old.json"
         legacy_file.write_text('{"legacy": true}')
-        
+
         # Get list of spool sources (primary + legacy fallback)
         sources = rc.get_spool_search_paths(repo=str(repo_root), environ={})
-        
-        # Legacy path should be in the sources
+
+        # Legacy path should be in the sources (compare by resolved identity, not string)
         legacy_path = Path(repo_root) / "state" / "receipts" / "spool"
-        self.assertIn(legacy_path, sources, "Legacy spool path should be in search paths")
+        resolved_sources = [p.resolve() for p in sources]
+        self.assertIn(legacy_path.resolve(), resolved_sources, "Legacy spool path should be in search paths")
 
 
 class TestSpoolIntegration(unittest.TestCase):
@@ -151,11 +152,12 @@ class TestSpoolIntegration(unittest.TestCase):
         """Test that emit can write to resolved spool and flush can find it."""
         home_dir = self.temp_root / "home"
         home_dir.mkdir()
-        
+
+        # Use a nonexistent repo to avoid picking up the live aesop repo's git-common-dir
         environ = {"HOME": str(home_dir)}
-        spool_dir = rc.resolve_spool_dir(environ=environ)
+        spool_dir = rc.resolve_spool_dir(repo="/nonexistent", environ=environ)
         spool_path = Path(spool_dir) / "test_receipt.json"
-        
+
         # Simulate emit writing to the spool
         spool_path.parent.mkdir(parents=True, exist_ok=True)
         test_envelope = {
@@ -166,12 +168,12 @@ class TestSpoolIntegration(unittest.TestCase):
             "sig": {"scheme": "hmac-sha256", "value": "test"}
         }
         spool_path.write_text(json.dumps(test_envelope), encoding="utf-8")
-        
-        # Verify flush can find and read it
+
+        # Verify flush can find and read it (compare by resolved identity, not string)
         spool_files = list(Path(spool_dir).glob("*.json"))
         self.assertEqual(len(spool_files), 1)
-        self.assertEqual(spool_files[0], spool_path)
-        
+        self.assertEqual(spool_files[0].resolve(), spool_path.resolve())
+
         # Read it back
         loaded = json.loads(spool_path.read_text(encoding="utf-8"))
         self.assertEqual(loaded["receipt"]["head_sha"], "1234567890abcdef")
