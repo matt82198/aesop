@@ -5,7 +5,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import GanttTimeline from './GanttTimeline';
-import { TESTIDS, fixtureWaveGantt, fixtureWaveGanttUnavailable } from '../test/fixtures';
+import { TESTIDS, fixtureWaveGanttUnavailable } from '../test/fixtures';
+import type { WaveGanttData } from '../lib/types';
+import ganttSampleFixture from './__fixtures__/gantt-sample.json';
+
+// Load frozen fixture to ensure tests never break on stats.json refreshes
+const fixtureWaveGantt: WaveGanttData = ganttSampleFixture as WaveGanttData;
 
 describe('GanttTimeline', () => {
   it('renders loading state initially', () => {
