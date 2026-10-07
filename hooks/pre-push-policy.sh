@@ -14,7 +14,3 @@ main() {
   if ! check_secret_scan; then exit 1; fi
   if ! check_metrics; then exit 1; fi
 }
-
-check_orphaned_gate() {
-  return 0
-}

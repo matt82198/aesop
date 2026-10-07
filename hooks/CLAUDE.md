@@ -6,7 +6,6 @@
 1. `check_branch_policy()` -- documented pre-push check; exit 1 on violation
 2. `check_secret_scan()` -- documented pre-push check; exit 1 on violation
 3. `check_metrics()` -- documented pre-push check; exit 1 on violation
-4. `check_orphaned_gate()` -- documented pre-push check; exit 1 on violation
 
 ## pre-commit-waveguard.sh
 
