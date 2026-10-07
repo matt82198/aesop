@@ -539,6 +539,41 @@ class TestRuntimeConfigGuard(unittest.TestCase):
             f"Commits made after the test run may contain the wrong identity."
         )
 
+    def test_repo_core_hookspath_not_set_by_tests(self):
+        """Assert that the real repo's core.hooksPath is not set by tests.
+
+        This tripwire catches fixture pollution where a test's git config write
+        escaped into the parent repo (like incident: test_commit_lint.py's
+        _make_fixture_repo set core.hooksPath to a temp path, leaking to .git/config).
+
+        core.hooksPath should never be set in the live repo; it's a test fixture thing.
+        If set, the hooks gate is disabled silently, which is a critical security regression.
+        """
+        import subprocess
+
+        repo_root = Path(__file__).parent.parent
+
+        # Read the real repo's core.hooksPath (should not be set)
+        result = subprocess.run(
+            ['git', 'config', '--local', 'core.hooksPath'],
+            cwd=str(repo_root),
+            capture_output=True,
+            encoding='utf-8'
+        )
+        current_hookspath = result.stdout.strip()
+
+        # Fail LOUDLY if any test set core.hooksPath
+        self.assertEqual(
+            current_hookspath, '',
+            f"CRITICAL: core.hooksPath was set to '{current_hookspath}' by a test. "
+            f"The live repo's core.hooksPath must be unset. "
+            f"This disables the pre-push hook gate silently, "
+            f"allowing unscanned commits past security gates. "
+            f"A test's git config write escaped into the parent repo. "
+            f"Check: tests/test_commit_lint.py _make_fixture_repo and _git() function "
+            f"must use 'git -C <temp_path>' not 'cwd=<repo>' to prevent fixture pollution."
+        )
+
 
 class TestGitMutationsRequireCwdGuard(unittest.TestCase):
     """Enforce that git-mutating subprocess calls use cwd= argument or run in temp fixtures.
@@ -562,7 +597,7 @@ class TestGitMutationsRequireCwdGuard(unittest.TestCase):
         violations = []
 
         # Git-mutating commands that MUST be scoped to a temp directory
-        GIT_MUTATIONS = {'commit', 'init', 'add', 'reset', 'checkout', 'clean', 'push'}
+        GIT_MUTATIONS = {'commit', 'init', 'add', 'reset', 'checkout', 'clean', 'push', 'config'}
 
         for test_file in sorted(tests_dir.glob("test_*.py")):
             if test_file.name == "test_test_hygiene.py":
@@ -601,9 +636,20 @@ class TestGitMutationsRequireCwdGuard(unittest.TestCase):
                 if not is_git_mutation_call:
                     continue
 
-                # Check if this line has a cwd= argument (good)
-                if 'cwd=' in line:
-                    continue
+                # For git config specifically, enforce git -C <path> over cwd= parameter.
+                # The reason: cwd= parameter can fail silently if path resolution is wrong,
+                # but git -C forces explicit path specification and fails loudly.
+                # (Incident: test_commit_lint.py line 43 used cwd= and config leaked to parent repo)
+                if mutation_found == 'config':
+                    # config writes MUST use "git -C" or be in a protected context
+                    if 'git' in line and '-C' in line:
+                        # git -C is present, good
+                        continue
+                    # Otherwise, fall through to check fixture context below
+                else:
+                    # Non-config mutations: cwd= is acceptable
+                    if 'cwd=' in line:
+                        continue
 
                 # Check if this line is part of a fixture/setup context (look back for context)
                 # Good patterns:
@@ -630,12 +676,20 @@ class TestGitMutationsRequireCwdGuard(unittest.TestCase):
                     continue
 
                 # Violation found
-                violations.append(
-                    f"{test_file.name}:{i} "
-                    f"git {mutation_found} called without cwd= guard and not in fixture context. "
-                    f"Pattern: {stripped[:80]}. "
-                    f"FIX: Add cwd=<temp_path> to subprocess call, or move into setUp/fixture method."
-                )
+                if mutation_found == 'config':
+                    violations.append(
+                        f"{test_file.name}:{i} "
+                        f"git {mutation_found} called without 'git -C <path>' guard. "
+                        f"Pattern: {stripped[:80]}. "
+                        f"FIX: Use 'git -C <absolute_temp_path>' instead of 'git' with cwd= parameter."
+                    )
+                else:
+                    violations.append(
+                        f"{test_file.name}:{i} "
+                        f"git {mutation_found} called without cwd= guard and not in fixture context. "
+                        f"Pattern: {stripped[:80]}. "
+                        f"FIX: Add cwd=<temp_path> to subprocess call, or move into setUp/fixture method."
+                    )
 
         if violations:
             msg = "Found git-mutating subprocess calls without cwd guards (wave-25 isolation pattern):\n"
