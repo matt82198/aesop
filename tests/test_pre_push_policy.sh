@@ -1371,6 +1371,13 @@ fi
 # push). These tests prove each branch behaviorally via the real function
 # and the real audit log, not by reading source text.
 
+# Capture the real timeout binary BEFORE we modify PATH in any test
+real_timeout=$(command -v timeout)
+if [ -z "$real_timeout" ]; then
+  printf 'ERROR: timeout binary not found on PATH\n'
+  exit 1
+fi
+
 printf '\n=== Test: check_emit_receipt opts out entirely on AESOP_RECEIPT_EMIT=0 ===\n'
 (
   export AESOP_ROOT="$TEST_ROOT/aesop_receipt_optout"
@@ -1442,10 +1449,10 @@ printf '\n=== Test: check_emit_receipt is BOUNDED -- times out and fails open in
   unset AESOP_RECEIPT_EMIT
 
   start_ts=$(date +%s)
-  # Use 60s timeout guard to catch hangs and print trace
+  # Use 60s timeout guard (with real timeout from outer PATH) to catch hangs and print trace
   trace_file="$AESOP_ROOT/test-trace.log"
   stderr_output=$(
-    timeout --foreground 60 bash -c "
+    "$real_timeout" --foreground 60 bash -c "
       set -x
       { check_emit_receipt; } 2>&1 1>/dev/null
     " 2>"$trace_file" || true
@@ -1543,10 +1550,10 @@ printf '\n=== Test: check_emit_receipt WARNs and fails open when gh is unavailab
   chmod +x "$stub_gh_dir/gh"
   test_path="$stub_gh_dir:$PATH"
 
-  # Use 60s timeout guard to catch any hangs and print trace for debugging
+  # Use 60s timeout guard (with real timeout from outer PATH) to catch hangs and print trace
   trace_file="$AESOP_ROOT/test-trace.log"
   stderr_output=$(
-    timeout --foreground 60 bash -c "
+    "$real_timeout" --foreground 60 bash -c "
       set -x
       export PATH='$test_path'
       { check_emit_receipt; } 2>&1 1>/dev/null
@@ -1598,32 +1605,24 @@ printf '\n=== Test: check_emit_receipt is BOUNDED without timeout binary (fallba
   export AESOP_RECEIPT_TIMEOUT=1
   unset AESOP_RECEIPT_EMIT
 
-  # Filter PATH to exclude timeout/gtimeout, forcing the fallback branch.
-  # This makes `command -v timeout` and `command -v gtimeout` fail.
-  test_path=""
-  _old_ifs="$IFS"
-  IFS=':'
-  for _p in $PATH; do
-    if [ -n "$_p" ]; then
-      # Skip directories that contain timeout or gtimeout
-      if ! [ -e "$_p/timeout" ] && ! [ -e "$_p/gtimeout" ]; then
-        test_path="${test_path:+$test_path:}$_p"
-      fi
-    fi
-  done
-  IFS="$_old_ifs"
+  # Create stub timeout/gtimeout that exit 127. Prepend to PATH so they shadow real ones.
+  # This forces the hook's fallback branch. Don't copy binaries (they break on CI due to RPATH deps).
+  stub_timeout_dir="$AESOP_ROOT/stub-timeout"
+  mkdir -p "$stub_timeout_dir"
+  printf '#!/bin/sh\nexit 127\n' > "$stub_timeout_dir/timeout"
+  printf '#!/bin/sh\nexit 127\n' > "$stub_timeout_dir/gtimeout"
+  chmod +x "$stub_timeout_dir/timeout" "$stub_timeout_dir/gtimeout"
+  test_path="$stub_timeout_dir:$PATH"
 
   # Use 60s timeout guard (with REAL timeout from outer PATH) to catch hangs
   trace_file="$AESOP_ROOT/test-trace.log"
-  start_ts=$(date +%s)
   stderr_output=$(
-    timeout --foreground 60 bash -c "
+    "$real_timeout" --foreground 60 bash -c "
       set -x
       export PATH='$test_path'
       { check_emit_receipt; } 2>&1 1>/dev/null
     " 2>"$trace_file" || true
   )
-  elapsed=$(( $(date +%s) - start_ts ))
   exit_code=$?
 
   if [ $exit_code -eq 124 ]; then
@@ -1632,8 +1631,10 @@ printf '\n=== Test: check_emit_receipt is BOUNDED without timeout binary (fallba
     exit 1
   fi
 
-  # Re-run without trace to get stderr
+  # Re-run without trace to get stderr (need to get timing for elapsed check)
+  start_ts=$(date +%s)
   stderr_output=$( { PATH="$test_path" check_emit_receipt; } 2>&1 1>/dev/null )
+  elapsed=$(( $(date +%s) - start_ts ))
   exit_code=$?
 
   if [ "$exit_code" -ne 0 ]; then

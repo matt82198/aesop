@@ -1535,9 +1535,9 @@ check_emit_receipt() {
   fi
 
   local timeout_bin=""
-  if command -v timeout >/dev/null 2>&1; then
+  if command -v timeout >/dev/null 2>&1 && timeout --version >/dev/null 2>&1; then
     timeout_bin="timeout"
-  elif command -v gtimeout >/dev/null 2>&1; then
+  elif command -v gtimeout >/dev/null 2>&1 && gtimeout --version >/dev/null 2>&1; then
     timeout_bin="gtimeout"
   fi
   local timeout_secs="${AESOP_RECEIPT_TIMEOUT:-900}"
