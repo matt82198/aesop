@@ -362,9 +362,9 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
             print("dry-run: nothing posted")
             return 0
         if args.post:
-            # Spool directory is state/receipts/spool (state is git-ignored)
-            spool_dir = repo / "state" / "receipts" / "spool"
-            channel = post_receipt(envelope, receipt["repo"], gh_runner, spool_dir=str(spool_dir))
+            # Spool directory survives worktree removal via env override or git-common-dir
+            spool_dir = rc.resolve_spool_dir(repo=str(repo), environ=environ)
+            channel = post_receipt(envelope, receipt["repo"], gh_runner, spool_dir=spool_dir)
             if channel == "spooled":
                 print("spooled receipt for %s (publish after push)" % receipt["head_sha"][:12])
             else:
