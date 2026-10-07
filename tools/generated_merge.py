@@ -39,8 +39,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 HERE = Path(__file__).resolve().parent
-if str(HERE) not in sys.path:
-    sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE))  # sibling imports below resolve when loaded by file path
 
 import gen_tool_index  # noqa: E402
 import generated_paths  # noqa: E402
