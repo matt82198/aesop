@@ -2,7 +2,8 @@
 """Tests for receipt_agreement.py measurement tool.
 
 This test suite validates the agreement between locally-emitted receipts and
-hosted CI check-run results.
+hosted CI check-run results. Fixtures use check-run JSON payloads containing
+receipt envelopes.
 """
 
 import sys
@@ -16,41 +17,35 @@ import receipt_agreement as ra  # noqa: E402
 
 def test_agreement_all_match():
     """Agreement when all py-shard parts agree with hosted ci checks."""
-    receipts = [
-        {
-            "sha": "abc123def456",
-            "receipt": {
-                "head_sha": "abc123def456",
-                "parts": [
-                    {"name": "py-shard-0", "exit_code": 0},
-                    {"name": "py-shard-1", "exit_code": 0},
-                    {"name": "py-shard-2", "exit_code": 0},
-                    {"name": "py-shard-3", "exit_code": 0},
-                ]
-            }
-        }
-    ]
-
-    check_runs = {
-        "abc123def456": {
-            "ci (0)": {"conclusion": "success"},
-            "ci (1)": {"conclusion": "success"},
-            "ci (2)": {"conclusion": "success"},
-            "ci (3)": {"conclusion": "success"},
-        }
-    }
 
     def fetch_fake_receipt(sha, repo_slug, api=None):
-        if sha in [r["sha"] for r in receipts]:
-            r = next(r for r in receipts if r["sha"] == sha)
-            return ({"receipt": r["receipt"], "sig": {"scheme": "hmac-sha256"}}, f"found {sha}")
+        if sha == "abc123def456":
+            return ({
+                "receipt": {
+                    "head_sha": "abc123def456",
+                    "parts": [
+                        {"name": "py-shard-0", "exit_code": 0},
+                        {"name": "py-shard-1", "exit_code": 0},
+                        {"name": "py-shard-2", "exit_code": 0},
+                        {"name": "py-shard-3", "exit_code": 0},
+                    ]
+                },
+                "sig": {"scheme": "hmac-sha256"}
+            }, f"found {sha}")
         return (None, f"not found {sha}")
 
     def fetch_fake_check_runs(sha, repo_slug):
-        return check_runs.get(sha, {})
+        if sha == "abc123def456":
+            return {
+                "ci (0)": {"conclusion": "success"},
+                "ci (1)": {"conclusion": "success"},
+                "ci (2)": {"conclusion": "success"},
+                "ci (3)": {"conclusion": "success"},
+            }
+        return {}
 
     agreements, disagreements, missing = ra.measure_agreement(
-        receipts,
+        [{"sha": "abc123def456"}],
         fetch_receipt_func=fetch_fake_receipt,
         fetch_check_runs_func=fetch_fake_check_runs
     )
@@ -62,41 +57,35 @@ def test_agreement_all_match():
 
 def test_disagreement_shard_mismatch():
     """Disagreement when receipt and hosted CI disagree."""
-    receipts = [
-        {
-            "sha": "bad456789def",
-            "receipt": {
-                "head_sha": "bad456789def",
-                "parts": [
-                    {"name": "py-shard-0", "exit_code": 1},  # failed locally
-                    {"name": "py-shard-1", "exit_code": 0},
-                    {"name": "py-shard-2", "exit_code": 0},
-                    {"name": "py-shard-3", "exit_code": 0},
-                ]
-            }
-        }
-    ]
-
-    check_runs = {
-        "bad456789def": {
-            "ci (0)": {"conclusion": "success"},  # passed hosted
-            "ci (1)": {"conclusion": "success"},
-            "ci (2)": {"conclusion": "success"},
-            "ci (3)": {"conclusion": "success"},
-        }
-    }
 
     def fetch_fake_receipt(sha, repo_slug, api=None):
-        if sha in [r["sha"] for r in receipts]:
-            r = next(r for r in receipts if r["sha"] == sha)
-            return ({"receipt": r["receipt"], "sig": {"scheme": "hmac-sha256"}}, f"found {sha}")
+        if sha == "bad456789def":
+            return ({
+                "receipt": {
+                    "head_sha": "bad456789def",
+                    "parts": [
+                        {"name": "py-shard-0", "exit_code": 1},  # failed locally
+                        {"name": "py-shard-1", "exit_code": 0},
+                        {"name": "py-shard-2", "exit_code": 0},
+                        {"name": "py-shard-3", "exit_code": 0},
+                    ]
+                },
+                "sig": {"scheme": "hmac-sha256"}
+            }, f"found {sha}")
         return (None, f"not found {sha}")
 
     def fetch_fake_check_runs(sha, repo_slug):
-        return check_runs.get(sha, {})
+        if sha == "bad456789def":
+            return {
+                "ci (0)": {"conclusion": "success"},  # passed hosted
+                "ci (1)": {"conclusion": "success"},
+                "ci (2)": {"conclusion": "success"},
+                "ci (3)": {"conclusion": "success"},
+            }
+        return {}
 
     agreements, disagreements, missing = ra.measure_agreement(
-        receipts,
+        [{"sha": "bad456789def"}],
         fetch_receipt_func=fetch_fake_receipt,
         fetch_check_runs_func=fetch_fake_check_runs
     )
@@ -111,6 +100,7 @@ def test_disagreement_shard_mismatch():
 
 def test_missing_receipt():
     """Handle missing receipts gracefully."""
+
     def fetch_fake_receipt(sha, repo_slug, api=None):
         return (None, f"not found {sha}")
 
@@ -118,7 +108,7 @@ def test_missing_receipt():
         return {}
 
     agreements, disagreements, missing = ra.measure_agreement(
-        [{"sha": "noreceipe1234", "receipt": None}],
+        [{"sha": "noreceipe1234"}],
         fetch_receipt_func=fetch_fake_receipt,
         fetch_check_runs_func=fetch_fake_check_runs
     )
@@ -129,34 +119,26 @@ def test_missing_receipt():
 
 def test_unknown_part_mapping():
     """Handle unknown part names in receipt."""
-    receipts = [
-        {
-            "sha": "unknown999999",
-            "receipt": {
-                "head_sha": "unknown999999",
-                "parts": [
-                    {"name": "unknown-part", "exit_code": 0},
-                ]
-            }
-        }
-    ]
-
-    check_runs = {
-        "unknown999999": {}
-    }
 
     def fetch_fake_receipt(sha, repo_slug, api=None):
-        if sha in [r["sha"] for r in receipts]:
-            r = next(r for r in receipts if r["sha"] == sha)
-            return ({"receipt": r["receipt"], "sig": {"scheme": "hmac-sha256"}}, f"found {sha}")
+        if sha == "unknown999999":
+            return ({
+                "receipt": {
+                    "head_sha": "unknown999999",
+                    "parts": [
+                        {"name": "unknown-part", "exit_code": 0},
+                    ]
+                },
+                "sig": {"scheme": "hmac-sha256"}
+            }, f"found {sha}")
         return (None, f"not found {sha}")
 
     def fetch_fake_check_runs(sha, repo_slug):
-        return check_runs.get(sha, {})
+        return {}
 
     # Receipt has only unknown parts; all comparable parts will be marked missing
     agreements, disagreements, missing = ra.measure_agreement(
-        receipts,
+        [{"sha": "unknown999999"}],
         fetch_receipt_func=fetch_fake_receipt,
         fetch_check_runs_func=fetch_fake_check_runs
     )
@@ -168,41 +150,35 @@ def test_unknown_part_mapping():
 
 def test_agreement_percentage():
     """Calculate agreement percentage correctly."""
-    receipts = [
-        {
-            "sha": "perc111111111",
-            "receipt": {
-                "head_sha": "perc111111111",
-                "parts": [
-                    {"name": "py-shard-0", "exit_code": 0},
-                    {"name": "py-shard-1", "exit_code": 1},
-                    {"name": "py-shard-2", "exit_code": 0},
-                    {"name": "py-shard-3", "exit_code": 0},
-                ]
-            }
-        }
-    ]
-
-    check_runs = {
-        "perc111111111": {
-            "ci (0)": {"conclusion": "success"},
-            "ci (1)": {"conclusion": "success"},  # disagrees: local failed, hosted success
-            "ci (2)": {"conclusion": "success"},
-            "ci (3)": {"conclusion": "success"},
-        }
-    }
 
     def fetch_fake_receipt(sha, repo_slug, api=None):
-        if sha in [r["sha"] for r in receipts]:
-            r = next(r for r in receipts if r["sha"] == sha)
-            return ({"receipt": r["receipt"], "sig": {"scheme": "hmac-sha256"}}, f"found {sha}")
+        if sha == "perc111111111":
+            return ({
+                "receipt": {
+                    "head_sha": "perc111111111",
+                    "parts": [
+                        {"name": "py-shard-0", "exit_code": 0},
+                        {"name": "py-shard-1", "exit_code": 1},  # failed locally
+                        {"name": "py-shard-2", "exit_code": 0},
+                        {"name": "py-shard-3", "exit_code": 0},
+                    ]
+                },
+                "sig": {"scheme": "hmac-sha256"}
+            }, f"found {sha}")
         return (None, f"not found {sha}")
 
     def fetch_fake_check_runs(sha, repo_slug):
-        return check_runs.get(sha, {})
+        if sha == "perc111111111":
+            return {
+                "ci (0)": {"conclusion": "success"},
+                "ci (1)": {"conclusion": "success"},  # disagrees: local failed, hosted success
+                "ci (2)": {"conclusion": "success"},
+                "ci (3)": {"conclusion": "success"},
+            }
+        return {}
 
     agreements, disagreements, missing = ra.measure_agreement(
-        receipts,
+        [{"sha": "perc111111111"}],
         fetch_receipt_func=fetch_fake_receipt,
         fetch_check_runs_func=fetch_fake_check_runs
     )
@@ -214,33 +190,25 @@ def test_agreement_percentage():
 
 def test_hosted_check_missing():
     """Handle missing hosted check-runs."""
-    receipts = [
-        {
-            "sha": "mischeck1234",
-            "receipt": {
-                "head_sha": "mischeck1234",
-                "parts": [
-                    {"name": "py-shard-0", "exit_code": 0},
-                ]
-            }
-        }
-    ]
-
-    check_runs = {
-        "mischeck1234": {}  # no ci (0)
-    }
 
     def fetch_fake_receipt(sha, repo_slug, api=None):
-        if sha in [r["sha"] for r in receipts]:
-            r = next(r for r in receipts if r["sha"] == sha)
-            return ({"receipt": r["receipt"], "sig": {"scheme": "hmac-sha256"}}, f"found {sha}")
+        if sha == "mischeck1234":
+            return ({
+                "receipt": {
+                    "head_sha": "mischeck1234",
+                    "parts": [
+                        {"name": "py-shard-0", "exit_code": 0},
+                    ]
+                },
+                "sig": {"scheme": "hmac-sha256"}
+            }, f"found {sha}")
         return (None, f"not found {sha}")
 
     def fetch_fake_check_runs(sha, repo_slug):
-        return check_runs.get(sha, {})
+        return {}  # no ci (0)
 
     agreements, disagreements, missing = ra.measure_agreement(
-        receipts,
+        [{"sha": "mischeck1234"}],
         fetch_receipt_func=fetch_fake_receipt,
         fetch_check_runs_func=fetch_fake_check_runs
     )
