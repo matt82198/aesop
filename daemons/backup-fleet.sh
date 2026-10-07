@@ -6,8 +6,26 @@ set -uo pipefail
 # P2 FIX: JSON escaping for repo names and NUL-delimited internal protocol.
 
 AESOP_ROOT="${AESOP_ROOT:-.}"
-CONDUCTOR_ROOT="${CONDUCTOR_ROOT:-$(dirname "$AESOP_ROOT")/conductor3}"  # default sibling
-HEARTBEAT="$CONDUCTOR_ROOT/state/.watchdog-heartbeat"
+
+# Heartbeat-pollution guard (incident 2026-10-06/07): CONDUCTOR_ROOT used to
+# default unconditionally to "$(dirname "$AESOP_ROOT")/conductor3". Every
+# worktree (aesop-wt-*) and every test fixture lives as a direct child of the
+# same $HOME as the real fleet-state root's parent, so that derivation
+# silently resolved to the REAL fleet-state root for ANY AESOP_ROOT, not just the canonical
+# ~/aesop tree -- letting test/lane runs overwrite the live watchdog
+# heartbeat. Only auto-derive the sibling when AESOP_ROOT's basename is
+# exactly "aesop" (the canonical tree's name); any other shape (a worktree,
+# a test fixture) must pass CONDUCTOR_ROOT explicitly, or the heartbeat
+# write below is skipped entirely -- same fail-closed contract as the
+# existing "failure paths skip the write so staleness is detectable" rule.
+if [ -n "${CONDUCTOR_ROOT:-}" ]; then
+  : # explicit override always wins
+elif [ "$(basename "$AESOP_ROOT")" = "aesop" ]; then
+  CONDUCTOR_ROOT="$(dirname "$AESOP_ROOT")/conductor3"  # default sibling (canonical tree only)
+else
+  CONDUCTOR_ROOT=""  # non-canonical AESOP_ROOT: no silent derivation
+fi
+HEARTBEAT="${CONDUCTOR_ROOT:+$CONDUCTOR_ROOT/state/.watchdog-heartbeat}"
 LOG="$AESOP_ROOT/state/FLEET-BACKUP.log"
 REPOS_STATUS="$AESOP_ROOT/state/.watchdog-repos.json"
 
@@ -423,7 +441,11 @@ $real_dir"
   # timestamp, so selfheal.sh saw a healthy age, never restarted the daemon, and
   # fleet backups halted silently. A heartbeat must attest to work DONE, not work
   # attempted. Failure paths deliberately do not write it, so staleness is detected.
-  date +%s > "$HEARTBEAT" 2>/dev/null
+  # HEARTBEAT is empty when CONDUCTOR_ROOT could not be safely resolved (see the
+  # heartbeat-pollution guard above) -- skip the write in that case too.
+  if [ -n "$HEARTBEAT" ]; then
+    date +%s > "$HEARTBEAT" 2>/dev/null
+  fi
   exit 0
 }
 
