@@ -177,6 +177,7 @@ def resolve_spool_dir(repo=None, environ=None) -> str:
             ["git", "-C", str(repo_path), "rev-parse", "--git-common-dir"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=10,
             check=False
         )
