@@ -5,8 +5,21 @@ Red-first: a fixture with one unused import is a NEW finding (exit 1) against
 an empty/mismatched baseline, and the SAME fixture passes (exit 0) once that
 exact finding is recorded in the baseline. These two tests are the ratchet's
 own falsifiability proof -- if either one breaks, the gate itself is inert.
+
+pyflakes is a dev-only lint dependency (tools/CLAUDE.md "stdlib-only" policy
+exception), not guaranteed present on every CI runner (e.g. a windows-shard
+job that never installs it). Every test below that needs the real pyflakes
+analysis is skipped -- not failed -- when the package is absent, via
+`REQUIRES_PYFLAKES`. The one test that must run EVERYWHERE regardless of
+whether pyflakes happens to be installed in this environment is
+`test_pyflakes_not_installed_is_fail_closed_exit_2`: it forces the "not
+installed" path with `python -S` (disables site-packages, so even an
+installed pyflakes becomes unimportable for that one subprocess) rather than
+depending on the ambient environment, so the exit-2 fail-closed contract is
+exercised unconditionally, not just skipped-around.
 """
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -15,6 +28,11 @@ import tempfile
 import unittest
 
 GATE_SCRIPT = os.path.join(os.path.dirname(__file__), '..', 'tools', 'pyflakes_gate.py')
+
+REQUIRES_PYFLAKES = unittest.skipUnless(
+    importlib.util.find_spec("pyflakes") is not None,
+    "pyflakes not installed (dev-only dependency, e.g. windows-shard CI)",
+)
 
 
 class TestPyflakesGate(unittest.TestCase):
@@ -45,6 +63,7 @@ class TestPyflakesGate(unittest.TestCase):
 
     # --- RED: a NEW finding above an empty/mismatched baseline must fail ---
 
+    @REQUIRES_PYFLAKES
     def test_unused_import_is_new_finding_against_empty_baseline(self):
         """RED: one unused import, no baseline on disk -> NEW finding, exit 1."""
         self._write('pkg/mod.py', 'import os\n\n\ndef f():\n    return 1\n')
@@ -57,6 +76,7 @@ class TestPyflakesGate(unittest.TestCase):
         self.assertIn('NEW', stderr)
         self.assertIn('UnusedImport', stderr)
 
+    @REQUIRES_PYFLAKES
     def test_unused_import_is_new_finding_against_wrong_baseline(self):
         """RED: an unrelated committed baseline still treats the unused import as NEW."""
         self._write('pkg/mod.py', 'import os\n\n\ndef f():\n    return 1\n')
@@ -71,6 +91,7 @@ class TestPyflakesGate(unittest.TestCase):
 
     # --- GREEN: the exact same finding, once baselined, passes ---
 
+    @REQUIRES_PYFLAKES
     def test_unused_import_baselined_passes(self):
         """GREEN: the same unused import, recorded in the baseline, exits 0."""
         self._write('pkg/mod.py', 'import os\n\n\ndef f():\n    return 1\n')
@@ -82,6 +103,7 @@ class TestPyflakesGate(unittest.TestCase):
         self.assertEqual(exit_code, 0, f"expected exit 0 (baselined), got {exit_code}: {stderr}")
         self.assertIn('PASS', stdout)
 
+    @REQUIRES_PYFLAKES
     def test_clean_file_passes_with_empty_baseline(self):
         """A file with no findings passes even with no baseline on disk."""
         self._write('pkg/mod.py', 'def f():\n    return 1\n')
@@ -92,6 +114,7 @@ class TestPyflakesGate(unittest.TestCase):
 
     # --- Burn-down: a fixed finding must be removed from the baseline, not left stale ---
 
+    @REQUIRES_PYFLAKES
     def test_fixed_finding_leaves_stale_baseline_entry_failing(self):
         """A baseline entry whose finding was fixed is STALE, not silently fine."""
         self._write('pkg/mod.py', 'def f():\n    return 1\n')
@@ -105,6 +128,7 @@ class TestPyflakesGate(unittest.TestCase):
 
     # --- --update-baseline (review-only) regenerates an exact-matching baseline ---
 
+    @REQUIRES_PYFLAKES
     def test_update_baseline_then_check_passes(self):
         self._write('pkg/mod.py', 'import os\nimport sys\n\n\ndef f():\n    return os\n')
         baseline_path = os.path.join(self.test_dir, '.pyflakes-baseline.json')
@@ -120,6 +144,7 @@ class TestPyflakesGate(unittest.TestCase):
         exit_code, stdout, stderr = self._run_gate(['--baseline', baseline_path])
         self.assertEqual(exit_code, 0, f"expected clean exit after update-baseline, got {exit_code}: {stderr}")
 
+    @REQUIRES_PYFLAKES
     def test_unused_variable_detected(self):
         """A dead local assignment is caught as UnusedVariable."""
         self._write('pkg/mod.py', 'def f():\n    x = 1\n    return 2\n')
@@ -129,6 +154,7 @@ class TestPyflakesGate(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn('UnusedVariable', stderr)
 
+    @REQUIRES_PYFLAKES
     def test_json_output_reports_by_category(self):
         self._write('pkg/mod.py', 'import os\n\n\ndef f():\n    return 1\n')
         baseline_path = os.path.join(self.test_dir, '.pyflakes-baseline.json')
@@ -140,6 +166,7 @@ class TestPyflakesGate(unittest.TestCase):
         self.assertEqual(data['by_category'].get('UnusedImport'), 1)
         self.assertEqual(len(data['new']), 1)
 
+    @REQUIRES_PYFLAKES
     def test_missing_baseline_file_is_fail_closed_not_crash(self):
         """A --baseline path that doesn't exist is treated as an empty baseline."""
         self._write('pkg/mod.py', 'def f():\n    return 1\n')
@@ -147,6 +174,28 @@ class TestPyflakesGate(unittest.TestCase):
 
         exit_code, stdout, stderr = self._run_gate(['--baseline', missing_baseline])
         self.assertEqual(exit_code, 0, f"clean tree + missing baseline should pass: {stderr}")
+
+    def test_pyflakes_not_installed_is_fail_closed_exit_2(self):
+        """Fail-closed exit 2 when pyflakes can't be imported -- runs EVERYWHERE,
+        not gated by REQUIRES_PYFLAKES: forces unavailability with `python -S`
+        (disables site-packages for this one subprocess) instead of depending
+        on whether the ambient test environment happens to have pyflakes
+        installed, so this exact contract is exercised unconditionally on
+        every CI runner (including a windows-shard job with no pyflakes)."""
+        self._write('pkg/mod.py', 'def f():\n    return 1\n')
+        baseline_path = os.path.join(self.test_dir, '.pyflakes-baseline.json')
+
+        result = subprocess.run(
+            [sys.executable, '-S', GATE_SCRIPT, '--root', self.test_dir, '--paths', 'pkg',
+             '--baseline', baseline_path],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(
+            result.returncode, 2,
+            f"expected exit 2 (pyflakes unavailable), got {result.returncode}: {result.stderr}"
+        )
+        self.assertIn("not installed", result.stderr)
+        self.assertIn("pip install pyflakes", result.stderr)
 
 
 class TestPyflakesGateAgainstRealBaseline(unittest.TestCase):

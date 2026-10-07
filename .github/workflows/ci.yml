@@ -417,7 +417,12 @@ jobs:
           cache: pip
 
       - name: Install Python test dependencies
-        run: pip install pyyaml pytest pytest-timeout
+        # pyflakes is a dev-only lint dependency for tools/pyflakes_gate.py's
+        # tests (Guardrail G15) -- tests/test_pyflakes_gate.py's real-pyflakes
+        # cases run on whichever shard ci_shard_runner.py round-robins them
+        # to, so it must be installed here too, not just in the ubuntu
+        # shard-0 job that runs the gate itself.
+        run: pip install pyyaml pytest pytest-timeout pyflakes
 
       - name: Set shard-specific temporary directory
         run: |
