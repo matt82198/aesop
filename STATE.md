@@ -21,6 +21,12 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 - **Trigger-layer and box-restore fragility.** Orchestrator-startup recovery (scheduled tasks, conductor3 state clone) is now gated by scheduled-task execution (#787 fix pending in weekly drift PR #790). If scheduled tasks do not fire, trigger layer never runs state updates. Guardrail check proposed (power_selftest trigger-layer check).
 - **STATE.md checkpoint staleness.** Live checkpoint was 110+ PRs stale (v0.7.2 era → 2026-08-18 main). Freshness gate proposed; this regeneration sets baseline (2026-08-19).
 
+## Incidents & Fixes (2026-10-07)
+
+- **Shared bare-repo core.hooksPath pollution (FIXED):** tests/test_commit_lint fixture left core.hooksPath in bare primary repo's config; pre-push hooks silently inert for hours. Cleared manually; power_selftest hooks-path-sane check added (cardinal rule 8 enforcement); #919 adds fixture isolation scanner + tripwire.
+- **Lanes bypassing pre-push via bare-repo push (FIXED):** Lanes using `git -C ~/aesop push` (primary worktree) bypassed hook enforcement. Brain hook deny-default-branch-push now denies it; LANE-CONTRACT.md worktree-only rule reinforced.
+- **Checkpoint/clear hooks registered (2026-10-07):** SessionEnd auto-commits control files with secret-scan gate; PreCompact enforces staleness checks with recovery hints. Durable, on-disk rules (session-end-checkpoint.mjs, checkpoint-before-clear.mjs) now enforce state transitions.
+
 ## Next Milestone
 
 **Wave-31+:** State-layer multi-instance lifecycle (crash-orphan recovery, liveness detection, monotonic expiry); unsupervised failure-recovery loop; frontier live-run capability; external-benchmark validation.
@@ -59,6 +65,8 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 - #881: LANE-CONTRACT updates — PID-scoped process kills, dirty-PR recovery, claims-need-proof; ship 2026-10-07
 - **v0.9.0 release — SHIPPED (2026-10-07 02:25:53Z, PR #886):** GitHub release published via `release:published` event; tag 5dffb81f; 103 PRs merged since v0.8.0. Main-full CI resolved after #882/#897 fixes; npm publish via OIDC triggered (workflow success 2026-10-07T02:25:55Z).
 - **tools/INDEX.md union-merge deflake — SHIPPED (2026-10-07 02:30:41Z, PR #882):** Regen driver + committed-bytes push gate; prevents duplicate INDEX.md entries on clean merges; also fixes remote_refs_tripwire false positive; 45/45 + 223/223 regression tests green.
+- **Receipt increments 1–3 extended to gates 4–6 (PRs #909–#918, 2026-10-06/07):** Receipt schema_version=1 backward-compatible (#909); verify_receipt added to gate_inventory (#910); tools/receipt_agreement.py measures local vs hosted-CI agreement via check-runs/commit-comments (#911); receipt_common.resolve_receipt_key_path chain (env → ~/.aesop/receipt_key.pem) (#913); pre-push hook probes default path before warning (#916); generated_push_gate eol-normalization fix resolves Windows autocrlf false positive (#918). Publication proven via direct matrix/emit_receipt → commit comment (06d9b607); unproven: real `git push` emission (scheduled after #919 merges). Checks API requires auth (403 user-token); commit comments are channel.
+- **tests/test_commit_lint fixture hygiene (PR #919, 2026-10-07, OPEN):** Fixture isolation scanner + tripwire for all git config writes (core.hooksPath guard). Fixes core.hooksPath pollution incident (bare-repo config left pre-push hooks silent for hours); power_selftest hooks-path-sane check added. Staged, awaiting merge (full matrix ran; #919 required for proof push).
 
 ### In Progress
 
@@ -66,12 +74,13 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 10. **Promote pr_symbol_survival_check (G13) to blocking** (QUEUED). After 2026-10-14 (1 week clean runs since #865).
 11. **Extend hooks/no-polling.mjs** (QUEUED). Deny backgrounded whole-filesystem searches in lanes.
-12. **tests/test_test_hygiene.py lookback off-by-one** (QUEUED). Lookback window hardcoded as 19 lines; doc claims 20. Review window semantics + fix mismatch (2026-10-06 audit).
+12. **tests/test_test_hygiene.py lookback off-by-one** (QUEUED). Lookback window hardcoded as 19 lines; doc claims 20. Review window semantics + fix mismatch (2026-10-07 audit carried forward).
 13. **AesopMergeQueue task lifecycle decision** (QUEUED, decision pending with Matt). Scheduled task `AesopMergeQueue` Status: Disabled since 2026-09-11; `aesop-queue-main` branch stale at #800. Decision: retire gracefully (cleanup PR) vs re-enable? GitHub native auto-merge (PR #871) is the active merge actor; old queue is dormant.
 14. **integrate/batch-* minting process guard** (QUEUED). Lane-local process that minted `integrate/batch-20261006-{2052,2158}` was never pinned to dispatch identity. Guard implemented in #899 prevents recurrence; audit for prior orphans recommended.
-15. **Literal 1234567890 heartbeat writer** (QUEUED). Ephemeral test-fixture heartbeat writes used hardcoded timestamp never pinned to test identity. Structural fix deferred to #898 scope; isolated-env.mjs fixtures now guard against recurring artifacts (2026-10-06 audit).
-16. **Receipt gate increments 4–6 storage/lineage/ledger** (QUEUED, post-#903). Increments 1–3 (emit/verify/action) shipped #854/#895/#903. Increments 4–6 (storage codecs, lineage, signed ledger storage) remain queued. Second box (Mattt profile) has no receipt key provisioned; fail-open by design.
+15. **Literal 1234567890 heartbeat writer** (QUEUED). Ephemeral test-fixture heartbeat writes used hardcoded timestamp never pinned to test identity. Structural fix deferred to #898 scope; isolated-env.mjs fixtures now guard against recurring artifacts (2026-10-07 audit).
+16. **Receipt gate increments 4–6 storage/lineage/ledger** (QUEUED, post-#918). Increments 1–3 (emit/verify/action) shipped #854/#895/#903. Increment 4 (agreement measurement) gated on tools/receipt_agreement.py results (now exists, #911). Increments 6a–6c (signed ledger storage, lineage codec plans) in docs/plans. Second box (Mattt profile) receipt key provisioning queued.
 17. **packaging-portability timeout hygiene** (QUEUED, watch). Windows shard-0 180s timeout mitigated by fixture sharing (#901). If timeout recurs, pull per-subtest duration_ms from CI log for targeted fixes.
+18. **PR #919 merge gate (OPEN):** tests/test_commit_lint fixture isolation + hooksPath tripwire staged, awaiting CI closure. Unblocks proof push for real-`git-push` receipt emission.
 
 ### Blocked / Deferred
 
