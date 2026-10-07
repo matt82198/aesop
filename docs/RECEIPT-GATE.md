@@ -153,7 +153,10 @@ lookup exception-safe and guarding the module's own absence at the shell level.)
 
 ## Proof runs
 
-2026-10-07: push-emission proof
-# Hook test
-# Another test
-# Test 4 after unset hooks path
+2026-10-07 05:24 UTC: Key generation and emission test
+- Generated Ed25519 keypair: private at ~/.aesop/receipt_key.pem (119 bytes, mode 600), public at tools/receipt_pubkey.pub (113 bytes)
+- Public key ID: 8d2a494af2689854
+- Set AESOP_RECEIPT_KEY environment variable in User scope
+- Proved emission: tools/emit_receipt.py --matrix secret-scan,gen-tool-index --dry-run: success (2 parts, 5.4s total)
+- Proved signing: Ed25519 signature generated (jtuCwyO3SWTiAyaVTqdQU2Xjjrhq60RQhzBqiMaKC45X1k2Cc8XMS2Zq2wvoZv6D2bv/eI2G+j8TYWQ2lszlAw==)
+- Receipt structure: valid schema, repo slug derived, tree hash computed, canonical form (sorted keys, no whitespace)
