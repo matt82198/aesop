@@ -34,6 +34,17 @@ python tools/emit_receipt.py --dry-run         # print the signed envelope, post
 python tools/emit_receipt.py --matrix py-shard-0,py-shard-1 --post
 ```
 
+## Isolation mechanism
+
+Matrix parts run in a **detached throwaway worktree** at the HEAD commit, not the caller's
+tree, so tests that create fixture git repos and commit cannot mutate the lane's branch.
+Parts inherit a scrubbed environment (GIT_DIR, GIT_WORK_TREE, and related vars unset) as
+defense in depth — git's hook environment would otherwise leak into parts and let them
+commit to the lane via inherited GIT_DIR. The caller tree is verified untouched via
+tripwire (HEAD, index tree hash, working tree status compared before and after). The spool
+directory (state/receipts/spool) lives outside the throwaway worktree so spooled receipts
+survive its removal.
+
 ## Spool-and-flush design (increment 2a)
 
 **Problem:** The pre-push hook runs before the commit is pushed to GitHub, so when
@@ -45,7 +56,8 @@ then flush it once the sha exists on GitHub. The flush runs automatically:
 
 1. **At the start of `check_emit_receipt`** in `hooks/pre-push-policy.sh`: Before emitting
    a new receipt, `tools/receipt_flush.py` checks any prior spooled receipts and posts them
-   if their shas now exist on GitHub. Fail-open: errors do not block the push.
+   if their shas now exist on GitHub. The flush runs with scrubbed environment (GIT_* vars
+   unset) to maintain isolation. Fail-open: errors do not block the push.
 
 2. **In `tools/pr_sweep.py`** (session-independent watchdog actor): Once per sweep, `receipt_flush.py`
    flushes any remaining spooled receipts.
