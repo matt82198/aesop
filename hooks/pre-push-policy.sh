@@ -1504,6 +1504,18 @@ check_emit_receipt() {
 
   local aesop_root
   aesop_root=$(resolve_aesop_root)
+
+  # Flush any spooled receipts from prior pushes before emitting a new one.
+  # This ensures that once shas are pushed and exist on GitHub, their receipts
+  # are published. Fail-open: errors in flushing do not block the push.
+  local flush_script="$aesop_root/tools/receipt_flush.py"
+  local py_bin=""
+  if [ -f "$flush_script" ]; then
+    if py_bin=$(resolve_py_bin); then
+      "$py_bin" "$flush_script" --repo "$aesop_root" < /dev/null > /dev/null 2>&1 || true
+    fi
+  fi
+
   local receipt_script="$aesop_root/tools/emit_receipt.py"
 
   if [ ! -f "$receipt_script" ]; then
