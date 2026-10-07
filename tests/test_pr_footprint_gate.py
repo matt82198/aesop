@@ -2,7 +2,6 @@
 """Test suite for pr_footprint_gate.py."""
 
 import json
-import os
 import subprocess
 import sys
 import tempfile

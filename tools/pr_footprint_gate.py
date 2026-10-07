@@ -29,7 +29,6 @@ import sys
 import json
 import re
 import subprocess
-from pathlib import Path
 
 
 FIXTURE_PATTERNS = [
@@ -95,9 +94,8 @@ def get_diff_stats(base_sha, head_sha, repo_cwd=None):
         if len(parts) < 3:
             continue
 
-        additions_str, deletions_str, filepath = parts[0], parts[1], parts[2]
+        _, deletions_str, filepath = parts[0], parts[1], parts[2]
         try:
-            additions = int(additions_str) if additions_str != '-' else 0
             deletions = int(deletions_str) if deletions_str != '-' else 0
         except ValueError:
             continue
@@ -160,7 +158,7 @@ def main():
 
     # Check for fixture pollution first (always fail, no bypass)
     if has_fixture_commit(commits):
-        print(f"FAIL: PR contains fixture-pattern commit (detected test fixture pollution)")
+        print("FAIL: PR contains fixture-pattern commit (detected test fixture pollution)")
         return 1
 
     # Check if labeled for big changes
