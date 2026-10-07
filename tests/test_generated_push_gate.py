@@ -259,5 +259,59 @@ class TestPrePushWiring(GateFixture):
         self.assertIn("if ! check_generated_regen <<< \"$prepush_stdin\"; then", text)
 
 
+class TestGeneratorOutputDriftWithoutTouchingPath(GateFixture):
+    """Reproduces the gap: tool docstring changed (generator output changed) but
+    INDEX.md was not touched in the committed range.
+
+    Scenario from PRs #893 and #892:
+    1. Branch commits a change to a tool's INDEX: docstring (e.g., updating purpose)
+    2. Branch does NOT regenerate INDEX.md
+    3. INDEX.md is not in the committed diff of the push range (it wasn't touched in this branch)
+    4. The gate should FAIL because the generator output (the new purpose line) doesn't match committed bytes
+    5. Currently the gate PASSES because it only verifies paths that were touched in the range
+    """
+
+    def test_generator_output_differs_from_committed_when_source_changed_but_artifact_untouched(self):
+        """Gate must fail when generator output differs, even if the artifact wasn't touched."""
+        # Setup: create a state where a tool's docstring changed but INDEX.md hasn't been regenerated
+        # Start fresh from base
+        git(self.repo, "checkout", "-q", "main")
+        (self.repo / ".gitattributes").write_text(
+            "tools/INDEX.md merge=union\n", encoding="utf-8", newline="\n")
+        add_tool(self.repo, "delta.py", "original delta purpose")
+        regenerate(self.repo)
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "add delta with original purpose")
+        original_commit = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+
+        # Now change delta's docstring WITHOUT regenerating INDEX.md
+        (self.repo / "tools" / "delta.py").write_text(
+            '"""delta.\nINDEX: modified delta purpose - this is the updated docstring\n"""\n',
+            encoding="utf-8", newline="\n")
+        git(self.repo, "add", "tools/delta.py")
+        # Crucially: do NOT regenerate INDEX.md, do NOT add it to the commit
+        git(self.repo, "commit", "-q", "-m", "update delta docstring but skip INDEX.md regeneration")
+        stale_tip = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+
+        # Verify the precondition: the committed INDEX.md is stale (doesn't contain the new docstring)
+        current_index = (self.repo / "tools" / "INDEX.md").read_text(encoding="utf-8")
+        self.assertNotIn("modified delta purpose", current_index,
+                        "precondition: INDEX.md must not contain the new docstring yet")
+
+        # The gate must detect this and fail, even though INDEX.md was not in the pushed range
+        # The range is from original_commit to stale_tip (the delta docstring change)
+        proc = self.gate("%s..%s" % (original_commit, stale_tip))
+
+        # This should FAIL with the regeneration instruction, but currently PASSES (the bug)
+        self.assertEqual(proc.returncode, 1,
+                        "Gate must fail when generator output differs from committed bytes, "
+                        "regardless of whether the artifact was touched in the range. "
+                        f"stderr: {proc.stderr}")
+        self.assertIn("tools/INDEX.md", proc.stderr,
+                     "Error message must name the stale artifact")
+        self.assertIn("gen_tool_index.py", proc.stderr,
+                     "Error message must suggest the regeneration command")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -222,10 +222,24 @@ def main(argv: List[str]) -> int:
         if changed is None:
             sys.stderr.write("generated_push_gate: git diff failed for %r\n" % text)
             return 2
+        # Collect all regenerable paths: those changed in the range, plus stamped, plus all
+        # regenerable paths that exist at the tip (to catch generator output drift even when
+        # the artifact itself wasn't touched in this push range, e.g., a tool docstring changed
+        # but INDEX.md wasn't regenerated). Only check regenerable paths if there are commits
+        # in the range (non-empty diff); an empty range with no stamp is a no-op.
         targets = [p for p in changed if generated_paths.regenerator_for(p)]
         for p in stamped:
             if p not in targets:
                 targets.append(p)
+        # Only add regenerable paths if there's a non-empty diff in this range
+        if changed:
+            for p in generated_paths.regenerable_paths():
+                if p not in targets:
+                    # Check if this path exists at the tip
+                    rc, _, _ = _git(root, "rev-parse", "--verify", "--quiet", tip + ":" + p)
+                    if rc == 0:
+                        # Path exists at tip; add it to targets for verification
+                        targets.append(p)
         if targets:
             bucket = per_tip.setdefault(tip, [])
             for p in targets:
