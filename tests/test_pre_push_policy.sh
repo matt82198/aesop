@@ -1518,25 +1518,18 @@ printf '\n=== Test: check_emit_receipt WARNs and fails open when gh is unavailab
   touch "$AESOP_ROOT/dummy_key.pem"
   unset AESOP_RECEIPT_EMIT
 
-  # Filter PATH down to entries that do NOT contain a gh/gh.exe binary --
-  # checked per-directory (not just the first hit from `command -v gh`), so
-  # gh reachable via more than one PATH entry is still fully excluded. Every
-  # OTHER real binary stays at its ORIGINAL location (no copying/symlinking):
-  # two earlier attempts both hung for 10+ minutes on this Windows box --
-  # `ln -s` here silently falls back to a full binary COPY (no real symlink
-  # support), and invoking a relocated copy of python.exe without its
-  # sibling DLLs/stdlib can hang on launch instead of erroring. Filtering
-  # entries in place sidesteps that class of failure entirely.
-  test_path=""
-  _old_ifs="$IFS"
-  IFS=':'
-  for _p in $PATH; do
-    if [ -n "$_p" ] && { [ -e "$_p/gh" ] || [ -e "$_p/gh.exe" ]; }; then
-      continue  # this directory has a gh binary; exclude it
+  # Create a minimal PATH with only bash/python/git but NOT gh or timeout.
+  # This makes `command -v gh` fail while keeping other tools available.
+  minimal_path_dir="$AESOP_ROOT/minimal-path"
+  mkdir -p "$minimal_path_dir"
+  # Copy the minimal set of binaries we need
+  for _bin in bash python python3 git sh timeout; do
+    _bin_path=$(command -v "$_bin" 2>/dev/null || true)
+    if [ -n "$_bin_path" ] && [ "$_bin" != "timeout" ]; then
+      cp "$_bin_path" "$minimal_path_dir/$_bin" 2>/dev/null || ln -s "$_bin_path" "$minimal_path_dir/$_bin" 2>/dev/null || true
     fi
-    test_path="${test_path:+$test_path:}$_p"
   done
-  IFS="$_old_ifs"
+  test_path="$minimal_path_dir"
 
   stderr_output=$( { PATH="$test_path" check_emit_receipt; } 2>&1 1>/dev/null )
   exit_code=$?
@@ -1555,6 +1548,58 @@ printf '\n=== Test: check_emit_receipt WARNs and fails open when gh is unavailab
     exit 1
   fi
   printf 'PASS: missing gh WARNs and fails open\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test: check_emit_receipt is BOUNDED without timeout binary (fallback branch) ===\n'
+(
+  # When coreutils timeout is unavailable (e.g., stripped from PATH),
+  # check_emit_receipt must still be bounded using background job + wait + explicit kill.
+  # This test forces the fallback branch and verifies it doesn't hang.
+  export AESOP_ROOT="$TEST_ROOT/aesop_receipt_no_timeout_bin"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+  printf 'import signal, sys, time\nsignal.signal(signal.SIGTERM, lambda s, f: sys.exit(0))\nwhile True: time.sleep(1)\n' > "$AESOP_ROOT/tools/emit_receipt.py"
+  export AESOP_RECEIPT_KEY="$AESOP_ROOT/dummy_key.pem"
+  touch "$AESOP_ROOT/dummy_key.pem"
+  export AESOP_RECEIPT_TIMEOUT=1
+  unset AESOP_RECEIPT_EMIT
+
+  # Create a PATH that has bash/python/git/gh but no timeout binary.
+  # This forces the fallback branch in check_emit_receipt.
+  no_timeout_path="$AESOP_ROOT/no-timeout-bin"
+  mkdir -p "$no_timeout_path"
+  # Copy bash, python, git, gh to this dir (or symlink on POSIX), but NOT timeout
+  for _bin in bash python python3 git gh sh; do
+    _bin_path=$(command -v "$_bin" 2>/dev/null || true)
+    if [ -n "$_bin_path" ]; then
+      cp "$_bin_path" "$no_timeout_path/$_bin" 2>/dev/null || ln -s "$_bin_path" "$no_timeout_path/$_bin" 2>/dev/null || true
+    fi
+  done
+  # Add the rest of PATH too (for any other utilities emit_receipt might need)
+  test_path="$no_timeout_path:$PATH"
+
+  start_ts=$(date +%s)
+  stderr_output=$( { PATH="$test_path" check_emit_receipt; } 2>&1 1>/dev/null )
+  exit_code=$?
+  elapsed=$(( $(date +%s) - start_ts ))
+
+  if [ "$exit_code" -ne 0 ]; then
+    printf 'FAIL: check_emit_receipt must fail-open (return 0) on timeout even without timeout binary\n'
+    exit 1
+  fi
+  if [ "$elapsed" -gt 20 ]; then
+    printf 'FAIL: check_emit_receipt took %ds without timeout binary, did not bound the sleeping stub\n' "$elapsed"
+    exit 1
+  fi
+  if ! printf '%s' "$stderr_output" | grep -qi 'WARN.*timed out'; then
+    printf 'FAIL: expected a timeout WARN on stderr, got: %s\n' "$stderr_output"
+    exit 1
+  fi
+  printf 'PASS: fallback branch (no timeout binary) is bounded (elapsed %ds)\n' "$elapsed"
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))

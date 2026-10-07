@@ -1556,26 +1556,49 @@ check_emit_receipt() {
       < /dev/null > "$receipt_tmpfile" 2>&1
     receipt_exit_code=$?
   else
-    # No `timeout` on this box: use background job with explicit kill on SIGTERM.
-    # Still fail-open below on any non-zero exit, just without the hang protection.
+    # No `timeout` on this box: use background job with explicit deadline.
+    # Still fail-open on timeout, just without coreutils timeout binary.
     # Logged so the gap is visible, not invisible.
     log_event "receipt_emit_unbounded_no_timeout_bin"
     "$py_bin" "$receipt_script" --repo "$aesop_root" --post \
       < /dev/null > "$receipt_tmpfile" 2>&1 &
     local receipt_pid=$!
     local elapsed=0
-    while [ $elapsed -lt "$timeout_secs" ] && kill -0 "$receipt_pid" 2>/dev/null; do
+    local timed_out=0
+
+    # Poll until process exits or timeout expires
+    while [ $elapsed -lt "$timeout_secs" ]; do
+      if ! kill -0 "$receipt_pid" 2>/dev/null; then
+        # Process has already exited
+        break
+      fi
       sleep 1
       elapsed=$((elapsed + 1))
     done
+
+    # If still running after timeout, kill it
     if kill -0 "$receipt_pid" 2>/dev/null; then
-      kill -TERM "-$receipt_pid" 2>/dev/null || true
+      timed_out=1
+      # Send SIGTERM to the process and its children
+      kill -TERM "$receipt_pid" 2>/dev/null || true
+      # Also try pkill to get any shell/python subprocesses
+      pkill -P "$receipt_pid" 2>/dev/null || true
       sleep 1
-      kill -KILL "-$receipt_pid" 2>/dev/null || true
+      # Force kill if still running
+      if kill -0 "$receipt_pid" 2>/dev/null; then
+        kill -KILL "$receipt_pid" 2>/dev/null || true
+        pkill -9 -P "$receipt_pid" 2>/dev/null || true
+      fi
+    fi
+
+    # Wait for the process to clean up, with a small timeout to avoid hanging
+    ( sleep 2; kill -KILL "$receipt_pid" 2>/dev/null || true ) &
+    wait "$receipt_pid" 2>/dev/null || true
+    receipt_exit_code=$?
+
+    # If we timed out, report exit code 124 (same as timeout command)
+    if [ $timed_out -eq 1 ]; then
       receipt_exit_code=124
-    else
-      wait "$receipt_pid"
-      receipt_exit_code=$?
     fi
   fi
   receipt_output=$(cat "$receipt_tmpfile" 2>/dev/null || true)
