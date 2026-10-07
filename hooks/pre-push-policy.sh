@@ -1380,6 +1380,82 @@ check_generated_paths() {
   return 0
 }
 
+check_emit_receipt() {
+  # Receipt-gate auto-emission (docs/RECEIPT-GATE.md). Day-1 measurement found
+  # 41 merged PRs and ZERO receipts: lanes were never told to run
+  # `emit_receipt.py` and nothing ran it automatically, so the honesty signal
+  # had no data. This runs it for every push, ONCE every gate above has
+  # already passed, so the receipt is bound to a tree this hook itself just
+  # verified.
+  #
+  # ALWAYS fail-open, by construction: a missing tool, missing python,
+  # missing `gh`, missing signing-key material, or a red matrix part inside
+  # emit_receipt.py all print a one-line WARN and `return 0`. The receipt is
+  # an honesty signal, not a gate -- it must never be the reason a push is
+  # blocked (see increment 3 in docs/RECEIPT-GATE.md: the hosted verify-receipt
+  # check is itself non-required for the same reason). This function's return
+  # value is therefore always 0; main() calls it unconditionally.
+  #
+  # Opt-out: AESOP_RECEIPT_EMIT=0 skips emission entirely (e.g. a lane that
+  # intentionally wants no receipt, or a CI checkout that should not try to
+  # sign anything).
+  if [ "${AESOP_RECEIPT_EMIT:-1}" = "0" ]; then
+    log_event "receipt_emit_skipped_opted_out"
+    return 0
+  fi
+
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local receipt_script="$aesop_root/tools/emit_receipt.py"
+
+  if [ ! -f "$receipt_script" ]; then
+    # Not fail-closed like gate_tool_status's "missing" case: this is not a
+    # verification gate, so a repo without tools/emit_receipt.py (no aesop
+    # checkout, or a branch predating this tool) simply emits nothing.
+    log_event "receipt_emit_skipped_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'WARN: no python interpreter found; receipt not emitted (push continues).\n' >&2
+    log_event "receipt_emit_skipped_no_python"
+    return 0
+  fi
+
+  if ! command -v gh >/dev/null 2>&1; then
+    printf 'WARN: gh CLI not found; receipt not emitted (push continues).\n' >&2
+    log_event "receipt_emit_skipped_no_gh"
+    return 0
+  fi
+
+  if [ -z "${AESOP_RECEIPT_KEY:-}" ] && [ -z "${AESOP_RECEIPT_HMAC_SECRET:-}" ]; then
+    printf 'WARN: no receipt signing key material (%s or %s unset); receipt not emitted (push continues).\n' \
+      "AESOP_RECEIPT_KEY" "AESOP_RECEIPT_HMAC_SECRET" >&2
+    log_event "receipt_emit_skipped_no_key_material"
+    return 0
+  fi
+
+  local receipt_output
+  receipt_output=$("$py_bin" "$receipt_script" --repo "$aesop_root" --post 2>&1)
+  local receipt_exit_code=$?
+
+  if [ $receipt_exit_code -ne 0 ]; then
+    printf 'WARN: receipt emission failed (exit %d); push continues without a receipt.\n' "$receipt_exit_code" >&2
+    if [ -n "$receipt_output" ]; then
+      printf '%s\n' "$receipt_output" >&2
+    fi
+    log_event "receipt_emit_failed"
+    return 0
+  fi
+
+  if [ -n "$receipt_output" ]; then
+    printf '%s\n' "$receipt_output"
+  fi
+  log_event "receipt_emit_posted"
+  return 0
+}
+
 run_test_mode() {
   local test_passed=0
   local test_failed=0
@@ -2451,6 +2527,12 @@ main() {
     log_block "linux_shape_check_failure"
     exit 1
   fi
+
+  # Receipt auto-emission: ALWAYS fail-open by construction (see
+  # check_emit_receipt), so there is no exit-1 branch here unlike every check
+  # above -- it runs last, after every gate has already passed, and never
+  # blocks the push.
+  check_emit_receipt
 
   exit 0
 }

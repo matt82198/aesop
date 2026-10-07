@@ -4,7 +4,8 @@
 set -uo pipefail
 
 # Source the hook script
-HOOK_SCRIPT="$(cd "$(dirname "$0")/.." && pwd)/hooks/pre-push-policy.sh"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+HOOK_SCRIPT="$REPO_ROOT/hooks/pre-push-policy.sh"
 
 # Temporary test directory
 TMPDIR="${TMPDIR:-/tmp}"
@@ -1356,6 +1357,273 @@ SCRIPT
     printf 'FAIL: check_gen_tool_index should have passed (exit 0) when INDEX is in sync\n'
     exit 1
   fi
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+# ===== Receipt-gate auto-emission (check_emit_receipt / PR #884-followup) =====
+# Day-1 measurement: 41 merged PRs, ZERO receipts -- lanes were never told to
+# run emit_receipt.py and nothing ran it automatically. check_emit_receipt()
+# makes emission automatic in the hook, ALWAYS fail-open (never blocks a
+# push). These tests prove each branch behaviorally via the real function
+# and the real audit log, not by reading source text.
+
+printf '\n=== Test: check_emit_receipt opts out entirely on AESOP_RECEIPT_EMIT=0 ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_receipt_optout"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+  # A tool that would SUCCEED if invoked -- proves opt-out short-circuits
+  # BEFORE running it, not merely that the end result happens to be 0.
+  printf 'import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/emit_receipt.py"
+  export AESOP_RECEIPT_KEY="$AESOP_ROOT/dummy_key.pem"
+  touch "$AESOP_ROOT/dummy_key.pem"
+  export AESOP_RECEIPT_EMIT=0
+
+  if ! check_emit_receipt; then
+    printf 'FAIL: check_emit_receipt must always return 0 (fail-open), even on opt-out\n'
+    exit 1
+  fi
+
+  audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log" 2>/dev/null)
+  if ! printf '%s' "$audit_line" | grep -q 'receipt_emit_skipped_opted_out'; then
+    printf 'FAIL: expected receipt_emit_skipped_opted_out audit event, got: %s\n' "$audit_line"
+    exit 1
+  fi
+  printf 'PASS: AESOP_RECEIPT_EMIT=0 skips emission without invoking the tool\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test: check_emit_receipt skips silently when tools/emit_receipt.py is absent ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_receipt_no_tool"
+  mkdir -p "$AESOP_ROOT/state"
+  unset AESOP_RECEIPT_EMIT
+
+  if ! check_emit_receipt; then
+    printf 'FAIL: check_emit_receipt must fail-open (return 0) when the tool is missing\n'
+    exit 1
+  fi
+
+  audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log" 2>/dev/null)
+  if ! printf '%s' "$audit_line" | grep -q 'receipt_emit_skipped_tool_missing'; then
+    printf 'FAIL: expected receipt_emit_skipped_tool_missing audit event, got: %s\n' "$audit_line"
+    exit 1
+  fi
+  printf 'PASS: missing tools/emit_receipt.py fails open, never blocks\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test: check_emit_receipt WARNs and fails open when no signing key material is set ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_receipt_no_key"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+  printf 'import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/emit_receipt.py"
+  unset AESOP_RECEIPT_EMIT
+  unset AESOP_RECEIPT_KEY
+  unset AESOP_RECEIPT_HMAC_SECRET
+
+  stderr_output=$( { check_emit_receipt; } 2>&1 1>/dev/null )
+  exit_code=$?
+
+  if [ "$exit_code" -ne 0 ]; then
+    printf 'FAIL: check_emit_receipt must fail-open (return 0) when no key material is set\n'
+    exit 1
+  fi
+  if ! printf '%s' "$stderr_output" | grep -qi 'WARN'; then
+    printf 'FAIL: expected a one-line WARN on stderr, got: %s\n' "$stderr_output"
+    exit 1
+  fi
+  audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log" 2>/dev/null)
+  if ! printf '%s' "$audit_line" | grep -q 'receipt_emit_skipped_no_key_material'; then
+    printf 'FAIL: expected receipt_emit_skipped_no_key_material audit event, got: %s\n' "$audit_line"
+    exit 1
+  fi
+  printf 'PASS: no key material WARNs and fails open\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test: check_emit_receipt WARNs and fails open when gh is unavailable ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_receipt_no_gh"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+  printf 'import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/emit_receipt.py"
+  export AESOP_RECEIPT_KEY="$AESOP_ROOT/dummy_key.pem"
+  touch "$AESOP_ROOT/dummy_key.pem"
+  unset AESOP_RECEIPT_EMIT
+
+  # Build a PATH identical to the real one but with gh's own directory
+  # removed, so every other external command (python, git, sha256sum, date,
+  # mkdir, ...) that check_emit_receipt / log_event need still resolves --
+  # only `gh` specifically becomes unresolvable. If gh is not installed on
+  # this box at all, the unmodified PATH already exercises this branch.
+  gh_real=$(command -v gh 2>/dev/null || true)
+  test_path="$PATH"
+  if [ -n "$gh_real" ]; then
+    gh_dir=$(dirname "$gh_real")
+    test_path=""
+    _old_ifs="$IFS"
+    IFS=':'
+    for _p in $PATH; do
+      if [ "$_p" != "$gh_dir" ]; then
+        test_path="${test_path:+$test_path:}$_p"
+      fi
+    done
+    IFS="$_old_ifs"
+  fi
+
+  stderr_output=$( { PATH="$test_path" check_emit_receipt; } 2>&1 1>/dev/null )
+  exit_code=$?
+
+  if [ "$exit_code" -ne 0 ]; then
+    printf 'FAIL: check_emit_receipt must fail-open (return 0) when gh is unavailable\n'
+    exit 1
+  fi
+  if ! printf '%s' "$stderr_output" | grep -qi 'WARN'; then
+    printf 'FAIL: expected a one-line WARN on stderr, got: %s\n' "$stderr_output"
+    exit 1
+  fi
+  audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log" 2>/dev/null)
+  if ! printf '%s' "$audit_line" | grep -q 'receipt_emit_skipped_no_gh'; then
+    printf 'FAIL: expected receipt_emit_skipped_no_gh audit event, got: %s\n' "$audit_line"
+    exit 1
+  fi
+  printf 'PASS: missing gh WARNs and fails open\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test: main() emits a receipt only after every gate above it passed ===\n'
+(
+  # WATCHED-TO-FAIL pair: fixture A has every gate green -> emission runs.
+  # Fixture B has exactly ONE gate (claudemd_sync_gate) exit 1 -> main()
+  # exits before ever reaching check_emit_receipt. Same fixture builder,
+  # one flipped stub, proving the ordering behaviorally rather than by
+  # reading main()'s source for call order.
+  build_repo() {
+    local repo="$1"
+    mkdir -p "$repo"
+    (
+      cd "$repo" || exit 1
+      git init -q
+      git config user.email "test@example.com"
+      git config user.name "Test User"
+      echo "dummy" > file.txt
+      git add file.txt
+      git commit -q -m "initial"
+      git branch -M main
+      git checkout -q -b feature/receipt-emit-test
+    )
+  }
+
+  build_tools() {
+    local aesop_root="$1"
+    local sync_gate_exit="$2"
+    mkdir -p "$aesop_root/state" "$aesop_root/tools"
+    # check_secret_scan fail-closes on `[ ! -x "$scan_script" ]`, and `chmod
+    # +x` on a freshly-written file under this box's TMPDIR does not reliably
+    # stick (observed: mode stays 644 after chmod 755). `cp` of the repo's
+    # OWN already-executable secret_scan.py preserves the bit, so copy the
+    # real tool instead of writing + chmod'ing a stub.
+    cp "$REPO_ROOT/tools/secret_scan.py" "$aesop_root/tools/secret_scan.py"
+    for gate in import_resolution_check conflict_marker_check tracker_guard \
+                gen_tool_index metrics_gate verify_test_suite_count \
+                encoding_lint verify_test_coverage linux_shape_check; do
+      printf 'import sys\nsys.exit(0)\n' > "$aesop_root/tools/${gate}.py"
+    done
+    printf 'import sys\nsys.exit(%s)\n' "$sync_gate_exit" > "$aesop_root/tools/claudemd_sync_gate.py"
+    # emit_receipt stub: proves it RAN by printing a marker to stdout, which
+    # check_emit_receipt echoes on to main()'s own stdout on success. (A
+    # python-side file write using a bash /tmp path is unreliable here: this
+    # box's native Windows python.exe does not go through MSYS's
+    # argv path translation for a path embedded in SOURCE TEXT rather than
+    # passed as a CLI argument, so it resolves "/tmp/..." against the
+    # current drive root instead of the real TMPDIR and fails. A marker on
+    # stdout sidesteps path translation entirely.)
+    printf 'import sys\nprint("EMIT_RECEIPT_RAN_MARKER")\nsys.exit(0)\n' > "$aesop_root/tools/emit_receipt.py"
+    # claudemd_lint.py / generated_paths.py intentionally absent: both gates
+    # fail OPEN on a missing script by design (check_claudemd_headroom,
+    # check_generated_paths), so leaving them out keeps the fixture minimal.
+  }
+
+  stdin_tuple() {
+    local repo="$1"
+    local local_sha
+    local_sha=$(git -C "$repo" rev-parse HEAD)
+    printf 'refs/heads/feature/receipt-emit-test %s refs/heads/feature/receipt-emit-test %s\n' \
+      "$local_sha" "0000000000000000000000000000000000000000"
+  }
+
+  # --- Fixture A: every gate green -> emission runs ---
+  REPO_A="$TEST_ROOT/receipt_main_green_repo"
+  AESOP_ROOT_A="$TEST_ROOT/receipt_main_green_tools"
+  build_repo "$REPO_A"
+  build_tools "$AESOP_ROOT_A" 0
+  export AESOP_RECEIPT_KEY="$AESOP_ROOT_A/dummy_key.pem"
+  touch "$AESOP_ROOT_A/dummy_key.pem"
+  unset AESOP_RECEIPT_EMIT
+
+  main_stdout_a="$TEST_ROOT/receipt_main_green.stdout"
+  (
+    cd "$REPO_A" || exit 1
+    export AESOP_ROOT="$AESOP_ROOT_A"
+    stdin_tuple "$REPO_A" | main > "$main_stdout_a" 2>"$TEST_ROOT/receipt_main_green.stderr"
+  )
+  main_exit_a=$?
+
+  if [ "$main_exit_a" -ne 0 ]; then
+    printf 'FAIL: main() should exit 0 when every gate is green (got %d)\n' "$main_exit_a"
+    cat "$main_stdout_a" "$TEST_ROOT/receipt_main_green.stderr"
+    exit 1
+  fi
+  if ! grep -q 'EMIT_RECEIPT_RAN_MARKER' "$main_stdout_a"; then
+    printf 'FAIL: emit_receipt.py never ran even though every gate passed\n'
+    exit 1
+  fi
+  printf 'PASS (green): main() reaches check_emit_receipt and it runs\n'
+
+  # --- Fixture B: claudemd_sync_gate fails -> main() must exit before emission ---
+  REPO_B="$TEST_ROOT/receipt_main_red_repo"
+  AESOP_ROOT_B="$TEST_ROOT/receipt_main_red_tools"
+  build_repo "$REPO_B"
+  build_tools "$AESOP_ROOT_B" 1
+  export AESOP_RECEIPT_KEY="$AESOP_ROOT_B/dummy_key.pem"
+  touch "$AESOP_ROOT_B/dummy_key.pem"
+
+  main_stdout_b="$TEST_ROOT/receipt_main_red.stdout"
+  (
+    cd "$REPO_B" || exit 1
+    export AESOP_ROOT="$AESOP_ROOT_B"
+    stdin_tuple "$REPO_B" | main > "$main_stdout_b" 2>"$TEST_ROOT/receipt_main_red.stderr"
+  )
+  main_exit_b=$?
+
+  if [ "$main_exit_b" -eq 0 ]; then
+    printf 'FAIL: main() should exit 1 when claudemd_sync_gate fails\n'
+    exit 1
+  fi
+  if grep -q 'EMIT_RECEIPT_RAN_MARKER' "$main_stdout_b"; then
+    printf 'FAIL: emit_receipt.py ran even though an earlier gate (claudemd_sync_gate) failed -- a red gate must never reach emission\n'
+    exit 1
+  fi
+  printf 'PASS (red): a failing gate blocks the push before emit_receipt.py ever runs\n'
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))

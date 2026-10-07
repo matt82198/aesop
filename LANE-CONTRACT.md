@@ -115,6 +115,8 @@ expensive way during aesop development. Each line exists because a lane failed w
   if secrets are detected. `python tools/encoding_lint.py --check` blocks subprocess calls without
   `encoding='utf-8'`. Never use `--no-verify` to skip (forbidden in every dispatch). If a gate fails,
   FIX IT, do not bypass it.
+- Pushes emit a signed local-run receipt automatically; a push without one means the gates did not
+  run — fix, don't bypass.
 - **Every Python subprocess call needs explicit `encoding='utf-8', errors='replace'`.** The Windows
   default is cp1252, which corrupts UTF-8 output and has crashed production processes. Every
   subprocess.run/check_output/Popen that reads output: `encoding='utf-8', errors='replace'` not
