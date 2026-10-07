@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "entries": {
+    "operator_check.py": {
+      "reason": "operator-invoked only: run by hand during incident triage"
+    }
+  }
+}
