@@ -67,8 +67,10 @@ reason — never silently dropped — and are *not* in the verifier's required l
 ## Signing scheme
 
 **Ed25519** (`cryptography`, optional import) is the scheme in use: the private key
-lives at `$AESOP_RECEIPT_KEY` on the signing box and is never in the repo; the public
-key is committed at `tools/receipt_pubkey.pub` (ssh `.pub` naming because
+lives at `$AESOP_RECEIPT_KEY` on the signing box and is never in the repo; if unset,
+the emitter falls back to `~/.aesop/receipt_key.pem` (or `$AESOP_HOME/.aesop/receipt_key.pem`
+if `AESOP_HOME` is set), allowing shells that don't inherit the env var to still find the key.
+The public key is committed at `tools/receipt_pubkey.pub` (ssh `.pub` naming because
 `tools/secret_scan.py` rejects every `*.pem` filename as credential-shaped, which is the
 right default for a repo). Asymmetric matters: the verifier holds **no secret**, so a
 leaked Actions config cannot forge receipts.

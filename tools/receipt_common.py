@@ -27,6 +27,7 @@ DEFAULT_REQUIRED_PARTS = ("py-shard-0", "py-shard-1", "py-shard-2", "py-shard-3"
 KEY_ENV = "AESOP_RECEIPT_KEY"
 HMAC_ENV = "AESOP_RECEIPT_HMAC_SECRET"
 SCHEMES = ("ed25519", "hmac-sha256")
+DEFAULT_KEY_REL = ".aesop/receipt_key.pem"  # Relative to HOME or AESOP_HOME
 
 
 class ReceiptError(Exception):
@@ -141,3 +142,32 @@ def has_key_material(scheme: str, pubkey_path=None, hmac_secret=None) -> bool:
     if scheme == "ed25519":
         return ed25519_available() and bool(pubkey_path) and Path(pubkey_path).is_file()
     return False
+
+
+def resolve_receipt_key_path(environ=None) -> str:
+    """Resolve the Ed25519 private key path with fallback to default location.
+
+    Priority (highest to lowest):
+    1. $AESOP_RECEIPT_KEY env var (if set, file must exist)
+    2. $AESOP_HOME/.aesop/receipt_key.pem (if AESOP_HOME set and file exists)
+    3. $HOME/.aesop/receipt_key.pem (if HOME set and file exists)
+
+    Returns the path string if found, or None if no valid key location exists.
+    This allows shells that don't inherit AESOP_RECEIPT_KEY to still find the key.
+    """
+    if environ is None:
+        environ = os.environ
+
+    # Check for explicit env var first
+    if environ.get(KEY_ENV):
+        return environ[KEY_ENV]
+
+    # Try AESOP_HOME override, then HOME fallback
+    for home_var in ("AESOP_HOME", "HOME"):
+        home_dir = environ.get(home_var)
+        if home_dir:
+            default_key = Path(home_dir) / DEFAULT_KEY_REL
+            if default_key.is_file():
+                return str(default_key)
+
+    return None

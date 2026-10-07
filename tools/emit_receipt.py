@@ -201,11 +201,13 @@ def post_receipt(envelope, slug, gh_runner):
 def choose_scheme(requested, environ):
     if requested != "auto":
         return requested
-    if rc.ed25519_available() and environ.get(rc.KEY_ENV):
+    # Check for Ed25519 key: explicit arg, env var, or default path
+    key_path = rc.resolve_receipt_key_path(environ=environ)
+    if rc.ed25519_available() and key_path:
         return "ed25519"
     if environ.get(rc.HMAC_ENV):
         return "hmac-sha256"
-    raise ReceiptError("no key material: set %s (Ed25519 PEM path) or %s" % (rc.KEY_ENV, rc.HMAC_ENV))
+    raise ReceiptError("no key material: set %s (Ed25519 PEM path) or %s, or place a key at ~/.aesop/receipt_key.pem" % (rc.KEY_ENV, rc.HMAC_ENV))
 
 
 def build_parser():
@@ -230,10 +232,11 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
     repo = Path(args.repo).resolve()
     try:
         scheme = choose_scheme(args.scheme, environ)
-        key_path = args.key or environ.get(rc.KEY_ENV)
+        # Use explicit --key arg, or resolve from env var / default path
+        key_path = args.key or rc.resolve_receipt_key_path(environ=environ)
         secret = environ.get(rc.HMAC_ENV)
         if scheme == "ed25519" and not key_path:
-            raise ReceiptError("scheme ed25519 needs --key or $%s" % rc.KEY_ENV)
+            raise ReceiptError("scheme ed25519 needs --key, $%s, or ~/.aesop/receipt_key.pem" % rc.KEY_ENV)
         if scheme == "hmac-sha256" and not secret:
             raise ReceiptError("scheme hmac-sha256 needs $%s" % rc.HMAC_ENV)
         names = [n.strip() for n in args.matrix.split(",") if n.strip()] if args.matrix else list(DEFAULT_MATRIX)
