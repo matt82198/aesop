@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 One-command checklist runner for "I am adding or wiring a new pre-push gate".
-INDEX: One-command new-gate checklist runner: pre-push self-test, gate_inventory axis-2 parity, claudemd_lint (+ --headroom + claudemd_sync_gate), portability_check ratchet, verify_gates_wired, dispatch_lint, conflict_marker_check, and a dry pre-push range check against origin/main; prints a pass/fail table with the exact fix command per red row; exit 0=all green/1=any red/2=usage error; stdlib-only.
+INDEX: One-command new-gate checklist runner: pre-push self-test, gate_inventory axis-2 parity, claudemd_lint (+ --headroom + claudemd_sync_gate), portability_check ratchet, verify_gates_wired, dispatch_lint, conflict_marker_check, and a dry pre-push range check against origin/main (runs in detached worktree to avoid mutating HEAD); prints a pass/fail table with the exact fix command per red row; exit 0=all green/1=any red/2=usage error; stdlib-only.
 
 Why this exists: PR #872 (a new pre-push gate) took FIVE red CI rounds, each a
 different checklist item a new gate must satisfy -- the TTY-fixture stub list
@@ -38,6 +38,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT_DEFAULT = Path(__file__).resolve().parent.parent
@@ -250,7 +251,10 @@ def _git(repo_root, env, *args):
 def check_dry_prepush(repo_root, env):
     """Simulate the pre-push hook for the current branch against origin/main
     WITHOUT running `git push` -- builds the exact stdin tuple git would
-    pipe into the hook for a feature-branch push and runs the real hook."""
+    pipe into the hook for a feature-branch push and runs the real hook.
+
+    CRITICAL: runs the simulation in a throwaway detached worktree to avoid
+    mutating the caller's HEAD, index, or working tree."""
     rc, branch, err = _git(repo_root, env, "branch", "--show-current")
     if rc != 0 or not branch:
         return False, "could not resolve current branch:\n" + err, "git branch --show-current  # must be on a feature branch, not detached HEAD"
@@ -267,15 +271,33 @@ def check_dry_prepush(repo_root, env):
     stdin_line = "refs/heads/%s %s refs/heads/%s %s\n" % (
         branch, head_sha, branch, "0" * 40
     )
-    hook_script = repo_root / "hooks" / "pre-push-policy.sh"
-    proc = _run(["bash", str(hook_script)], repo_root, env, timeout=300, input_text=stdin_line)
-    ok = proc.returncode == 0
-    detail = "stdin: %s" % stdin_line.strip() + "\n" + (proc.stdout or "") + (proc.stderr or "")
-    fix = (
-        "git fetch origin main && printf 'refs/heads/%s %s refs/heads/%s %s\\n' | bash hooks/pre-push-policy.sh  "
-        "# re-run after fixing whichever check_* printed FATAL/Error above"
-    ) % (branch, head_sha, branch, "0" * 40)
-    return ok, detail, fix
+
+    # Create a throwaway detached worktree to run the hook, so the simulation
+    # never mutates the caller's HEAD, index, or working tree.
+    tmpdir_obj = tempfile.TemporaryDirectory()
+    tmpdir = Path(tmpdir_obj.name)
+    try:
+        # Create a detached worktree at the current HEAD
+        add_rc, _out, add_err = _git(repo_root, env, "worktree", "add", "--detach", str(tmpdir), head_sha)
+        if add_rc != 0:
+            detail = "git worktree add --detach failed:\n" + add_err
+            return False, detail, "git worktree add --detach  # failed to create temporary worktree for dry pre-push simulation"
+
+        # Run the hook in the throwaway worktree
+        hook_script = tmpdir / "hooks" / "pre-push-policy.sh"
+        proc = _run(["bash", str(hook_script)], tmpdir, env, timeout=300, input_text=stdin_line)
+        ok = proc.returncode == 0
+        detail = "stdin: %s" % stdin_line.strip() + "\n" + (proc.stdout or "") + (proc.stderr or "")
+        fix = (
+            "git fetch origin main && printf 'refs/heads/%s %s refs/heads/%s %s\\n' | bash hooks/pre-push-policy.sh  "
+            "# re-run after fixing whichever check_* printed FATAL/Error above"
+        ) % (branch, head_sha, branch, "0" * 40)
+        return ok, detail, fix
+    finally:
+        # Clean up the temporary worktree
+        tmpdir_obj.cleanup()
+        # Remove the worktree via git (the directory is already gone, but git bookkeeping remains)
+        _git(repo_root, env, "worktree", "prune", "--verbose")
 
 
 CHECKS = [

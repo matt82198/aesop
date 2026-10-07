@@ -19,9 +19,13 @@ to the real, slow gate scripts), proving:
 import io
 import json
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
+from pathlib import Path
 from unittest import mock
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -180,6 +184,171 @@ class TestRealCheckWiring(unittest.TestCase):
             self.assertTrue(callable(fn), key)
             self.assertIsInstance(label, str)
             self.assertTrue(label)
+
+
+class TestDryPrepushHeadPreservation(unittest.TestCase):
+    """Verify that check_dry_prepush does NOT switch the caller's HEAD or index.
+
+    Regression test for the bug where new_gate_check.py's dry pre-push simulation
+    would check out an unrelated branch (e.g., a merge-queue integration branch),
+    leaving the worktree on that branch when it finished.
+    """
+
+    def test_dry_prepush_does_not_mutate_head_or_working_tree(self):
+        """Run dry pre-push in a temp repo with multiple branches; verify HEAD unchanged."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            repo_root = tmppath / "test-repo"
+            repo_root.mkdir()
+
+            # Initialize the git repo with a main branch
+            subprocess.run(
+                ["git", "init", "-q"],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test User"],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+            )
+
+            # Create initial commit on main
+            (repo_root / "file.txt").write_text("initial content\n")
+            subprocess.run(
+                ["git", "add", "file.txt"],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "initial"],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+            )
+
+            # Create a feature branch
+            subprocess.run(
+                ["git", "checkout", "-q", "-b", "feature/test"],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+            )
+            (repo_root / "file.txt").write_text("feature content\n")
+            subprocess.run(
+                ["git", "add", "file.txt"],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "feature commit"],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+            )
+
+            # Create a second branch (simulating a merge-queue or other unrelated branch)
+            subprocess.run(
+                ["git", "checkout", "-q", "-b", "integrate/batch"],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+            )
+            (repo_root / "other.txt").write_text("other branch\n")
+            subprocess.run(
+                ["git", "add", "other.txt"],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "integrate commit"],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+            )
+
+            # Switch back to feature branch (the branch we'll be "pushing" from)
+            subprocess.run(
+                ["git", "checkout", "-q", "feature/test"],
+                cwd=repo_root,
+                check=True,
+                capture_output=True,
+            )
+
+            # Create hooks directory and a minimal pre-push-policy.sh script
+            hooks_dir = repo_root / "hooks"
+            hooks_dir.mkdir(exist_ok=True)
+            hook_script = hooks_dir / "pre-push-policy.sh"
+            # Create a minimal hook that just exits 0 (pass)
+            hook_script.write_text("#!/bin/bash\nexit 0\n")
+            hook_script.chmod(0o755)
+
+            # Verify we're on feature/test before the dry pre-push check
+            result_before = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+            )
+            branch_before = result_before.stdout.strip()
+            self.assertEqual(branch_before, "feature/test",
+                           "Should be on feature/test branch before check")
+
+            # Get working tree status before
+            status_before = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+            )
+            porcelain_before = status_before.stdout
+
+            # Run the dry pre-push check
+            env = dict(os.environ)
+            env["AESOP_ROOT"] = str(repo_root)
+            ok, detail, fix = ngc.check_dry_prepush(repo_root, env)
+
+            # Note: The check might fail for various reasons (missing pre-push hook,
+            # no origin remote, etc.), but that's okay. We only care that HEAD didn't move.
+
+            # Verify HEAD is STILL on feature/test after the check
+            result_after = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+            )
+            branch_after = result_after.stdout.strip()
+            self.assertEqual(branch_after, "feature/test",
+                           f"HEAD should still be on feature/test, but it's on {branch_after}")
+            self.assertEqual(
+                branch_before, branch_after,
+                "check_dry_prepush must not change the checked-out branch"
+            )
+
+            # Verify working tree status is unchanged
+            status_after = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+            )
+            porcelain_after = status_after.stdout
+            self.assertEqual(
+                porcelain_before, porcelain_after,
+                "check_dry_prepush must not modify the working tree"
+            )
 
 
 if __name__ == "__main__":
