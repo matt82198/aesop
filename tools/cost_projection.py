@@ -81,16 +81,14 @@ import json
 import os
 import sys
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from collections import defaultdict
 
 try:
     import fleet_ledger
-    import common
     import cost_ceiling
 except ImportError:
     from tools import fleet_ledger
-    from tools import common
     from tools import cost_ceiling
 
 
@@ -183,7 +181,7 @@ def project(window_minutes=30, ceiling=None, config=None, horizon_minutes=None):
     if config is None:
         config = {}
 
-    state_dir = get_state_dir(config)
+    get_state_dir(config)
     if ceiling is None:
         ceiling = get_ceiling(config)
     if horizon_minutes is None:

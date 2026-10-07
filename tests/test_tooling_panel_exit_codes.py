@@ -16,7 +16,6 @@ The caller must distinguish these and report exit 1 as findings, not as an error
 
 import json
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock

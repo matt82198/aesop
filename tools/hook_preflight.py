@@ -33,7 +33,6 @@ Example:
 import os
 import sys
 import subprocess
-import json
 from pathlib import Path
 
 

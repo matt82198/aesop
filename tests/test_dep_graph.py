@@ -1,7 +1,6 @@
 """Tests for tools/dep_graph.py — Python module dependency graph generator."""
 
 import json
-import os
 import sys
 import tempfile
 import textwrap

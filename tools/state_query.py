@@ -39,7 +39,6 @@ Examples:
 """
 import argparse
 import json
-import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -92,7 +91,6 @@ def query_events(api, stream=None, after_ts=None, before_ts=None, event_type=Non
     Returns:
         list: Filtered event dicts, sorted by timestamp ascending
     """
-    from state_store import StateAPI
 
     # If stream filter is specified, query just that stream
     if stream:

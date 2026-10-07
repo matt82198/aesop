@@ -16,10 +16,8 @@ Exit: 0 on success, 1 on error.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple

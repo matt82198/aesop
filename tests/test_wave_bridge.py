@@ -22,7 +22,6 @@ No dependencies: no openai, no jsonschema, no pytest.
 """
 
 import json
-import os
 import sys
 import tempfile
 import unittest
@@ -693,7 +692,7 @@ class TestRepairContextEnrichment(unittest.TestCase):
         - _get_owned_files_diff gets git diff of owned files
         """
         # Test _cap_test_output
-        from driver.wave_loop import _cap_test_output, _get_owned_files_diff
+        from driver.wave_loop import _cap_test_output
 
         # Short output should not be capped
         short_out = "short output"

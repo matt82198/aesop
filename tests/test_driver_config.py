@@ -31,7 +31,6 @@ DRIVER_DIR = Path(__file__).resolve().parent.parent / "driver"
 if str(DRIVER_DIR) not in sys.path:
     sys.path.insert(0, str(DRIVER_DIR))
 
-from agent_driver import AgentDriver
 from claude_code_driver import ClaudeCodeDriver
 from backend_config import build_driver, describe_backend, load_backend_config
 

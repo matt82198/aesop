@@ -20,8 +20,6 @@ from tools.health_checks import (
     check_heartbeat_file,
     check_watchdog_heartbeat,
     check_monitor_heartbeat,
-    WATCHDOG_THRESHOLD_S,
-    MONITOR_THRESHOLD_S,
 )
 
 

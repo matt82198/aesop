@@ -25,9 +25,7 @@ Run: python tools/verify_scorecards.py            (exit 0 = proven, 1 = failed)
 Fails with exit 1 if playwright/chromium is unavailable (unless --allow-skip is passed).
 """
 import argparse
-import json
 import os
-import shutil
 import socket
 import subprocess
 import sys

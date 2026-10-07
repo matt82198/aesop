@@ -28,7 +28,6 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest import mock
 
 TOOLS_DIR = Path(__file__).parent.parent / "tools"
 if str(TOOLS_DIR) not in sys.path:

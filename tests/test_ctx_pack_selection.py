@@ -11,7 +11,6 @@ MANDATORY: GOLDEN NO-OP test proves byte-identical packs below caps.
 """
 
 import json
-import os
 import sys
 import tempfile
 import unittest

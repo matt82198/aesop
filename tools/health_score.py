@@ -23,9 +23,7 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
-from time import time
 
 try:
     from common import check_heartbeat_staleness

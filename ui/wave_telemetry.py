@@ -9,7 +9,6 @@ State sources (via read_api facade):
   - AUDIT-BACKLOG.md: top blocker via parse
   - ledger: cost data (re-uses cost.py logic)
 """
-import json
 import re
 import sys
 from datetime import datetime, timezone, timedelta

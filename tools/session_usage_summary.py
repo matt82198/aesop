@@ -18,7 +18,6 @@ the main thread. Outputs a table with per-agent summaries and totals.
 import json
 import sys
 from pathlib import Path
-from collections import defaultdict
 from datetime import datetime
 
 

@@ -2,7 +2,6 @@
 """Test suite for bash_guard_check.py"""
 
 import json
-import os
 import subprocess
 import sys
 import tempfile

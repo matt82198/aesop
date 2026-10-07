@@ -7,12 +7,9 @@ from the ledger to create Gantt-style bars (agent rows, phase spans as bars).
 
 Returns timeline data for visualization in the Activity view.
 """
-import json
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
-import config
 import wave_dispatch
 
 

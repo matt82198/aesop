@@ -9,7 +9,7 @@ folds it through the registered projector.
 from __future__ import annotations
 
 from .projections import project_tracker, project_orchestrator_status
-from .store import EventStore, ConcurrencyConflict
+from .store import EventStore
 
 _PROJECTORS = {
     "tracker": project_tracker,

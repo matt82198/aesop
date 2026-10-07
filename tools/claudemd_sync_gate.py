@@ -22,11 +22,10 @@ Supports: --check (default), --json output, --help
 """
 
 import json
-import re
 import sys
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Tuple
 
 
 # Meta files that don't require CLAUDE.md updates

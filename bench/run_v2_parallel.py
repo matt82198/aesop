@@ -38,12 +38,10 @@ Checkpoint format (one JSON line per completed run):
 """
 
 import argparse
-import base64
 import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
 import threading
 import time
@@ -58,7 +56,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # Import frontier infrastructure
 sys.path.insert(0, str(Path(__file__).parent))
 from frontier_slice import FrontierTask, GroundTruth, load_frontier_tasks, load_ground_truth, score_response
-from frontier_eligibility import audit_tasks, parse_token_set, extract_correct_token, remove_format_instruction
+from frontier_eligibility import audit_tasks, remove_format_instruction
 
 # Import OpenAI transport
 sys.path.insert(0, str(Path(__file__).parent.parent / "driver"))

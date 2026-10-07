@@ -18,7 +18,6 @@ Follows Linux-parity rules:
   - No hardcoded absolute timestamps
   - Isolated temp DB per test
 """
-import json
 import os
 import sqlite3
 import sys

@@ -20,7 +20,6 @@ All change: `  if now - req_time <= self.window_duration` to `  if now - req_tim
 import json
 import os
 import shutil
-import sys
 import tempfile
 import unittest
 from pathlib import Path

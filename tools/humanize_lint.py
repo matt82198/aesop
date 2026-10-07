@@ -155,7 +155,7 @@ def find_ai_lexicon(text: str, _ref: Optional[str] = None) -> list[Finding]:
     # Phrases (also whole-word on the main parts)
     for phrase in AI_PHRASES:
         # Remove spaces for matching to handle spacing variations
-        phrase_no_spaces = phrase.replace(' ', '')
+        phrase.replace(' ', '')
         pattern = phrase.replace(' ', r'\s+')
         for match in re.finditer(pattern, lower_text, re.IGNORECASE):
             start, end = match.span()
@@ -438,8 +438,8 @@ def find_hedge_stack(text: str, _ref: Optional[str] = None) -> list[Finding]:
 
         if len(hedge_matches) >= 2:
             offset = text.find(para)
-            first_match = hedge_matches[0]
-            last_match = hedge_matches[-1]
+            hedge_matches[0]
+            hedge_matches[-1]
             findings.append(Finding(
                 rule='hedge-stack',
                 severity=1,

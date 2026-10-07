@@ -164,7 +164,6 @@ def find_domain_claude_files(root_dir="."):
 def main():
     """Main entry point."""
     # Parse CLI args
-    check_mode = True
     root_dir = "."
 
     for arg in sys.argv[1:]:

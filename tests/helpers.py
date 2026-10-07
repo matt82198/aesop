@@ -7,8 +7,6 @@ Provides guards to prevent test contamination:
 - assert_no_repo_root(): Fail if test would run in the actual aesop repo
 """
 
-import os
-import sys
 from pathlib import Path
 
 

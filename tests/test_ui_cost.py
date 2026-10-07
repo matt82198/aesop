@@ -13,7 +13,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 UI_DIR = Path(__file__).parent.parent / "ui"
 if str(UI_DIR) not in sys.path:
@@ -794,7 +793,7 @@ class TestCrossArtifactWithFleetLedger(CostIsolationCase):
         os.environ["AESOP_STATE_ROOT"] = str(self.state_dir)
 
         # Import datetime for valid ISO-8601 timestamps
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         # Use fleet_ledger.append_ledger_line to append 9-column rows
         # This ensures the test truly tests the integration between writer and reader

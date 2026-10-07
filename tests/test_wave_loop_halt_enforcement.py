@@ -12,12 +12,10 @@ Behavioral proof that halt checks work at phase boundaries:
 stdlib-only (unittest), ASCII-only, Windows + Linux safe.
 """
 
-import json
 import os
 import shutil
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -31,11 +29,9 @@ for _p in (str(DRIVER_DIR), str(TOOLS_DIR), str(STATE_STORE_DIR), str(REPO)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import agent_driver as ad
 from agent_driver import (
     AgentDriver,
     DriverCapabilities,
-    WorkerRequest,
     WorkerResult,
     CommandResult,
     WORKER_DONE,
@@ -43,7 +39,6 @@ from agent_driver import (
 )
 import wave_loop
 from wave_loop import run_wave
-from claude_code_driver import ClaudeCodeDriver
 import halt as halt_module
 
 # Module-level tmpdir isolation (hygiene rule: no cwd pollution).

@@ -42,7 +42,6 @@ Exit codes:
 """
 
 import json
-import os
 import re
 import subprocess
 import sys
@@ -245,7 +244,7 @@ def classify_item(item, skip_gh=False, skip_git=False):
     Evidence-based with whole-token PR matching, causality guard, and directionality checks.
     Returns (classification, evidence_string).
     """
-    item_id = item.get("id", "?")
+    item.get("id", "?")
     status = item.get("status")
     notes = item.get("notes", "")
     pr_link = item.get("pr_link", "")

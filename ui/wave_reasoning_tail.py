@@ -8,11 +8,9 @@ redacted format. Reuses transcript_digest.py's redaction + summarization pattern
 Returns reasoning tail data for the Activity view.
 """
 import json
-import os
 import re
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 import config
 import wave_dispatch

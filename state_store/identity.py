@@ -33,7 +33,6 @@ from typing import Optional
 class IdentityCorruptionError(Exception):
     """Raised when persisted identity file is corrupt and recovery is impossible."""
 
-    pass
 
 
 class EpochPersistError(IdentityCorruptionError):
@@ -44,7 +43,6 @@ class EpochPersistError(IdentityCorruptionError):
     instance the SAME fencing token its pre-crash self may still be using.
     """
 
-    pass
 
 
 # Cached instance_id (ephemeral form), computed once per process

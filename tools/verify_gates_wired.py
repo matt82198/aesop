@@ -19,7 +19,6 @@ Exit 2: processing error
 import os
 import re
 import sys
-import json
 from pathlib import Path
 
 

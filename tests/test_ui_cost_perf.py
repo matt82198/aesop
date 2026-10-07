@@ -15,7 +15,6 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 UI_DIR = Path(__file__).parent.parent / "ui"
 if str(UI_DIR) not in sys.path:

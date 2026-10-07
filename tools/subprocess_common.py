@@ -21,8 +21,7 @@ Exit code semantics:
 
 import json
 import subprocess
-import sys
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Any
 
 
 # Default timeouts
@@ -32,17 +31,14 @@ GIT_TIMEOUT = 60  # Git operations may involve disk I/O and network
 
 class SubprocessError(Exception):
     """Base exception for subprocess wrapper errors."""
-    pass
 
 
 class TimeoutError(SubprocessError):
     """Raised when a subprocess times out (wrapper for subprocess.TimeoutExpired)."""
-    pass
 
 
 class CommandError(SubprocessError):
     """Raised when a command returns non-zero exit code."""
-    pass
 
 
 def run(

@@ -6,8 +6,6 @@ Tests behavioural aspects: profile building, feature extraction,
 profile comparison, and divergence ranking.
 """
 
-import contextlib
-import io
 import tempfile
 import unittest
 from pathlib import Path

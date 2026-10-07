@@ -7,14 +7,11 @@ Compact live tail panel showing recent audit events and findings.
 
 Returns audit tail data for the Activity view.
 """
-import json
 import re
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import config
-import cost
 
 
 def _parse_audit_backlog_recent() -> List[Dict]:

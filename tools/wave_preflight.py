@@ -47,9 +47,9 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 try:
-    from common import get_state_dir, check_heartbeat_staleness
+    from common import check_heartbeat_staleness
 except ImportError:
-    from tools.common import get_state_dir, check_heartbeat_staleness
+    from tools.common import check_heartbeat_staleness
 
 try:
     import halt
@@ -173,7 +173,7 @@ def check_orchestrator_status_freshness(status_json_path, threshold_s):
             return True, 0, "orchestrator-status.json missing updated_at field"
 
         # Parse ISO 8601 timestamp
-        from datetime import datetime, timezone
+        from datetime import datetime
         normalized_ts = updated_at.replace("Z", "+00:00")
         updated_dt = datetime.fromisoformat(normalized_ts)
         timestamp = updated_dt.timestamp()
@@ -273,7 +273,7 @@ def can_import_secret_scan():
         (bool, str or None): (importable, detail_msg if not)
     """
     try:
-        import secret_scan
+        import secret_scan  # noqa: F401 -- import-success is the check; no attribute use needed
         return True, None
     except ImportError as e:
         return False, str(e)
@@ -563,11 +563,9 @@ def run_checks(root_dir=None, state_dir=None, config=None):
     status_phase = parse_orchestrator_status_phase(status_json_path)
 
     # Determine phase drift: only if both are defined and differ
-    drift_detected = False
     if state_phase is not None and status_phase is not None:
         if state_phase != status_phase:
             # Drift detected: both phases exist but differ
-            drift_detected = True
             phase_detail = f"STATE.md={state_phase}, status.json={status_phase} [WARN: drift detected]"
         else:
             # Phases match

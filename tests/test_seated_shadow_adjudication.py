@@ -15,8 +15,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from dataclasses import dataclass
-from typing import Dict, Any, Optional
 
 # Add tools/ to path for import
 REPO_ROOT = Path(__file__).resolve().parent.parent

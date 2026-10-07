@@ -17,7 +17,6 @@ added but not picked up by CI") that survives even with counts computed
 fresh on every call.
 """
 
-import json
 import subprocess
 import sys
 import tempfile

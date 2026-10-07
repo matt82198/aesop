@@ -480,7 +480,7 @@ class CodexDriver(AgentDriver):
                         nudge_msg = "Previous response was not valid JSON per the schema; return ONLY the JSON object."
 
                         # Estimate size of new messages to be added
-                        test_payload = json.dumps(payload)
+                        json.dumps(payload)
                         new_messages = [
                             {"role": "assistant", "content": error_msg},
                             {"role": "user", "content": nudge_msg},

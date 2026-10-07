@@ -7,7 +7,6 @@ Validates:
 2. Measured staleness window (how stale can projections be under N writers + readers)
 3. Projection atomic writes (tempfile + replace)
 """
-import json
 import os
 import sqlite3
 import sys
@@ -16,7 +15,6 @@ import threading
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
 from pathlib import Path
 
 # Ensure imports work

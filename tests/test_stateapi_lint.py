@@ -3,7 +3,6 @@
 Tests the linter that detects violations of the "reads go through read_api" rule.
 """
 import json
-import os
 import sys
 import tempfile
 import unittest

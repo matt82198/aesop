@@ -8,7 +8,6 @@ Covers:
 - ASCII-safe output
 - --out flag and stdout fallback
 """
-import json
 import os
 import subprocess
 import sys

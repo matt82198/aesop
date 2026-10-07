@@ -27,13 +27,12 @@ import ast
 import json
 import os
 import sys
-from pathlib import Path
 
 # Ensure this tool's own directory (tools/) is importable so the shared
 # linting core resolves regardless of cwd or how the file is loaded
 # (the import-gate loads tools by path, without tools/ on sys.path).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from lint_core import ASTCache, Finding, exit_code, normalize_path
+from lint_core import ASTCache, Finding, exit_code
 
 
 def find_python_files(root, scan_dirs=None):

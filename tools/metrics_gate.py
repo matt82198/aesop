@@ -35,7 +35,7 @@ import sys
 import subprocess
 import re
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 
 
 class MetricsGate:

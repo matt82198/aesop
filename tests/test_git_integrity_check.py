@@ -11,7 +11,6 @@ Proves:
 7. Linux/Windows parity (no platform-specific paths)
 """
 
-import json
 import os
 import subprocess
 import sys
@@ -22,7 +21,7 @@ from pathlib import Path
 # Add tools to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
 
-from git_integrity_check import check_repo_integrity, main
+from git_integrity_check import check_repo_integrity
 
 
 class TestGitIntegrityCheck(unittest.TestCase):

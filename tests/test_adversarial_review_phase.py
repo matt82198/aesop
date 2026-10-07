@@ -13,13 +13,11 @@ stdlib-only (unittest), ASCII-only, Windows + Linux safe.
 """
 
 import os
-import json
 import shutil
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 from math import ceil
 
 # Add driver/ to path for imports.
@@ -39,7 +37,6 @@ from agent_driver import (
     WORKER_FAILED,
 )
 from wave_loop import run_wave
-from verification_policy import verification_policy
 
 # Module-level tmp for test isolation.
 _MODULE_TMP = None

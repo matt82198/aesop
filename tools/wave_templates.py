@@ -30,7 +30,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Tuple
 
 # Presets directory (relative to this file's location).
 TOOLS_DIR = Path(__file__).resolve().parent
@@ -136,8 +136,8 @@ def validate_manifest(
     # Core required fields (always required).
     required_core_fields = {"slug", "prompt", "ownsFiles"}
     # Optional fields for instantiated manifests.
-    optional_fields = {"testCmd", "workDir"} if require_testcmd else set()
-    required_fields = required_core_fields | ({"testCmd"} if require_testcmd else set())
+    {"testCmd", "workDir"} if require_testcmd else set()
+    required_core_fields | ({"testCmd"} if require_testcmd else set())
 
     owner_map = {}
     conflicts = []

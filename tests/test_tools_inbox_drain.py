@@ -6,7 +6,6 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from datetime import datetime
 
 
 class TestInboxDrain(unittest.TestCase):

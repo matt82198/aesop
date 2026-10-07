@@ -9,7 +9,6 @@ Tests:
   - filter_by_project() handles project paths and normalizes slashes
 """
 
-import json
 import tempfile
 import unittest
 from pathlib import Path

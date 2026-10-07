@@ -3,11 +3,9 @@
 
 import tempfile
 import unittest
-import json
 import sys
-import subprocess
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from datetime import datetime, timezone
 
 # Add tools to path so we can import remote_inbox

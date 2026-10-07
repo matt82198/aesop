@@ -13,7 +13,6 @@ import hmac
 import os
 import secrets
 import sys
-from pathlib import Path
 
 # Must import config module, never "from config import <paths>"
 import config

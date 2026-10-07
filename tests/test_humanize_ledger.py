@@ -9,11 +9,9 @@ summarize with aggregation. Tests use temp directories; dummy lint fallback.
 import contextlib
 import io
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Tuple
 import sys
 
 # Add tools to path for imports

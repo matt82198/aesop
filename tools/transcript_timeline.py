@@ -3,9 +3,7 @@
 INDEX: Extract Write/Edit/Read timeline from transcripts
 """
 import argparse
-import json
 import os
-import pathlib
 import sys
 from datetime import datetime
 
@@ -13,7 +11,7 @@ from datetime import datetime
 # harness resolves regardless of cwd or how the file is loaded
 # (the import-gate loads tools by path, without tools/ on sys.path).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from transcript_reader import walk_jsonl, parse_jsonl_file, parse_timestamp, filter_by_project
+from transcript_reader import walk_jsonl, parse_jsonl_file, parse_timestamp
 
 
 def fmt_time(ts_ms):

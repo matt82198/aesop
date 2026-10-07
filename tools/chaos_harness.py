@@ -33,7 +33,6 @@ stdlib-only, ASCII-only, Windows + Linux safe.
 
 import argparse
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -41,7 +40,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Dict, List, Any, Tuple
+from typing import Dict, Any
 
 
 def get_repo_root() -> Path:

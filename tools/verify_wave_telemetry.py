@@ -19,9 +19,6 @@ Runs: python tools/verify_wave_telemetry.py              (exit 0 = proven, 1 = f
 import argparse
 import os
 import shutil
-import socket
-import stat
-import subprocess
 import sys
 import tempfile
 import time

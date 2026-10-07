@@ -21,7 +21,6 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
-from unittest.mock import patch
 
 UI_DIR = Path(__file__).parent.parent / "ui"
 

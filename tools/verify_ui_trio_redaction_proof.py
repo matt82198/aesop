@@ -12,11 +12,8 @@ Method: Plant leak fixtures, confirm assertion FAILS, restore, verify clean run.
 """
 
 import json
-import os
-import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent  # Go up from tests/ to repo root
@@ -79,8 +76,7 @@ def run_proof_on_fixtures(state_dir: Path, transcripts_dir: Path, reasoning_text
     sys.path.insert(0, str(REPO / 'tools'))
     try:
         from transcript_digest import (
-            REDACTION_PATTERNS, EMAIL_PATTERN, PATH_PATTERN,
-            REPO_NAME_PATTERN, USERNAME_PATTERN
+            REDACTION_PATTERNS
         )
 
         # Use the provided reasoning text directly
