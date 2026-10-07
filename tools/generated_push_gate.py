@@ -146,7 +146,6 @@ def verify_tip(root: Path, tip: str, paths: List[str]) -> Tuple[List[Dict[str, s
                 sys.stdout.write("generated_push_gate: %s has no %s at %s; nothing to verify\n"
                                  % (path, argv[0], tip[:7]))
                 continue
-            target = wt / path
             # Capture the state of the file at tip (committed state).
             # We do NOT use raw bytes; instead we'll use git diff which applies
             # EOL normalization and .gitattributes rules.
