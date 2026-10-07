@@ -2018,7 +2018,7 @@ class TestGeneratedFileTolerance(StateIsolatedTestCase):
         self.assertEqual([c for c in calls if c[0] == "restore"], [])
 
     def test_restore_that_fails_to_clean_the_tree_still_refuses(self):
-        def stubborn_git(*args):
+        def stubborn_git(*args, cwd=None, **kwargs):
             if args[0] == "status":
                 return (True, " M tests/CLAUDE.md")
             if args[0] == "rev-parse":
@@ -2037,7 +2037,7 @@ class TestGeneratedFileTolerance(StateIsolatedTestCase):
         """Never touch files in a tree a human has checked out elsewhere."""
         calls = []
 
-        def other_branch_git(*args):
+        def other_branch_git(*args, cwd=None, **kwargs):
             calls.append(args)
             if args[0] == "status":
                 return (True, " M tests/CLAUDE.md")
@@ -2095,7 +2095,7 @@ class TestGeneratedFileTolerance(StateIsolatedTestCase):
 
     def test_worktree_is_safe_tolerates_a_stripped_generated_path(self):
         """The end-to-end effect of the slice bug: a batch is buildable again."""
-        def fake_git(*args):
+        def fake_git(*args, cwd=None, **kwargs):
             if args[0] == "rev-parse":
                 # If this is a --show-toplevel call from the guard, return the cwd
                 if "--show-toplevel" in args and cwd:
