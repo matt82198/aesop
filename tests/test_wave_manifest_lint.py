@@ -560,6 +560,42 @@ class TestWavePreflight(unittest.TestCase):
         self.assertIn("FAIL: testcmd_validity", stdout)
         self.assertIn("feat/bad", stdout)
 
+    def test_testcmd_shell_negation_resolves_binary(self):
+        """testCmd starting with ! (shell negation) must resolve the binary after it."""
+        manifest = {
+            "items": [
+                {
+                    "slug": "enable-skipped-test",
+                    "ownsFiles": ["tests/test_example.js"],
+                    "prompt": "Enable skipped test. [ISOLATION: sibling worktree]",
+                    "testCmd": "! python --version && npm test"
+                }
+            ],
+            "workDir": "/tmp/aesop"
+        }
+        rc, stdout, stderr = self._run_validator(manifest)
+        self.assertNotIn("FAIL: testcmd_validity", stdout,
+                         f"Shell negation should resolve binary past '!'. stdout: {stdout}")
+        self.assertEqual(rc, 0)
+
+    def test_testcmd_env_assignment_resolves_binary(self):
+        """testCmd starting with env assignment (FOO=1) must resolve the binary after it."""
+        manifest = {
+            "items": [
+                {
+                    "slug": "env-test",
+                    "ownsFiles": ["src/test.py"],
+                    "prompt": "Run test with env var. [ISOLATION: sibling worktree]",
+                    "testCmd": "FOO=1 python --version"
+                }
+            ],
+            "workDir": "/tmp/aesop"
+        }
+        rc, stdout, stderr = self._run_validator(manifest)
+        self.assertNotIn("FAIL: testcmd_validity", stdout,
+                         f"Env assignment should resolve binary past 'FOO=1'. stdout: {stdout}")
+        self.assertEqual(rc, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
