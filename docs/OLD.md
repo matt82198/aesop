@@ -4,5 +4,4 @@ ours
 =======
 theirs
 >>>>>>> feature
-body
 tail
