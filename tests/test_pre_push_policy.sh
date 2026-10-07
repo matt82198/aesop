@@ -1432,7 +1432,10 @@ printf '\n=== Test: check_emit_receipt is BOUNDED -- times out and fails open in
   # the timeout path fires and still returns 0 (fail-open), not a hang.
   export AESOP_ROOT="$TEST_ROOT/aesop_receipt_timeout"
   mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
-  printf 'import sys, time\ntime.sleep(30)\nsys.exit(0)\n' > "$AESOP_ROOT/tools/emit_receipt.py"
+  # Stub that sleeps indefinitely but exits on SIGTERM (which timeout sends).
+  # Python's signal handling causes sleep() to raise KeyboardInterrupt on signals,
+  # so explicit handling ensures the process terminates instead of staying in sleep.
+  printf 'import signal, sys, time\nsignal.signal(signal.SIGTERM, lambda s, f: sys.exit(0))\nwhile True: time.sleep(1)\n' > "$AESOP_ROOT/tools/emit_receipt.py"
   export AESOP_RECEIPT_KEY="$AESOP_ROOT/dummy_key.pem"
   touch "$AESOP_ROOT/dummy_key.pem"
   export AESOP_RECEIPT_TIMEOUT=1

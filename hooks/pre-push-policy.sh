@@ -1544,19 +1544,43 @@ check_emit_receipt() {
 
   local receipt_output
   local receipt_exit_code
+  local receipt_tmpfile
+  receipt_tmpfile=$(mktemp)
+  trap "rm -f '$receipt_tmpfile'" RETURN
+
   if [ -n "$timeout_bin" ]; then
-    receipt_output=$("$timeout_bin" "$timeout_secs" "$py_bin" "$receipt_script" --repo "$aesop_root" --post 2>&1)
+    # Use timeout with --kill-after to ensure process group cleanup on both Linux and macOS.
+    # Redirect to temp file instead of command substitution to avoid bash subshell hanging
+    # when the process group is killed but the pipe reader doesn't get EOF notification.
+    "$timeout_bin" --kill-after=5 "$timeout_secs" "$py_bin" "$receipt_script" --repo "$aesop_root" --post \
+      < /dev/null > "$receipt_tmpfile" 2>&1
     receipt_exit_code=$?
   else
-    # No `timeout` on this box: run unbounded rather than silently skip --
-    # still fail-open below on any non-zero exit, just without the hang
-    # protection. Logged so the gap is visible, not invisible.
+    # No `timeout` on this box: use background job with explicit kill on SIGTERM.
+    # Still fail-open below on any non-zero exit, just without the hang protection.
+    # Logged so the gap is visible, not invisible.
     log_event "receipt_emit_unbounded_no_timeout_bin"
-    receipt_output=$("$py_bin" "$receipt_script" --repo "$aesop_root" --post 2>&1)
-    receipt_exit_code=$?
+    "$py_bin" "$receipt_script" --repo "$aesop_root" --post \
+      < /dev/null > "$receipt_tmpfile" 2>&1 &
+    local receipt_pid=$!
+    local elapsed=0
+    while [ $elapsed -lt "$timeout_secs" ] && kill -0 "$receipt_pid" 2>/dev/null; do
+      sleep 1
+      elapsed=$((elapsed + 1))
+    done
+    if kill -0 "$receipt_pid" 2>/dev/null; then
+      kill -TERM "-$receipt_pid" 2>/dev/null || true
+      sleep 1
+      kill -KILL "-$receipt_pid" 2>/dev/null || true
+      receipt_exit_code=124
+    else
+      wait "$receipt_pid"
+      receipt_exit_code=$?
+    fi
   fi
+  receipt_output=$(cat "$receipt_tmpfile" 2>/dev/null || true)
 
-  if [ -n "$timeout_bin" ] && [ $receipt_exit_code -eq 124 ]; then
+  if [ $receipt_exit_code -eq 124 ]; then
     printf 'WARN: receipt emission timed out after %ss; push continues without a receipt.\n' "$timeout_secs" >&2
     log_event "receipt_emit_timed_out"
     return 0
