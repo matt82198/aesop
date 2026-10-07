@@ -228,6 +228,62 @@ class TestAttributedVerdictMode(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertIn("observed, not attributed", proc.stderr)
 
+    def test_d_new_batch_branch_at_main_s_own_concurrent_advance_is_not_attributed(self):
+        """PR #882/#885 incident (2026-10-07): a `integrate/batch-*`-named branch
+        appears NEW, but it is merely this fleet's own merge-train tagging the SAME
+        commit that `main` (a pre-existing ref) also concurrently advanced to in
+        this window -- not a raw leaked push. Attributed (CI) mode must not fail;
+        strict (local) mode still must, unchanged."""
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            work, bare = _make_repo_with_bare_origin(tmp)
+            script = tmp / "batch_tracker.py"
+            script.write_text(
+                "import subprocess\n"
+                "subprocess.run(['git', 'commit', '--allow-empty', '-q', '-m', 'merge pr'],"
+                f" cwd=r'{work}', check=True)\n"
+                "subprocess.run(['git', 'push', 'origin', 'HEAD:refs/heads/main'],"
+                f" cwd=r'{work}', check=True)\n"
+                "subprocess.run(['git', 'push', 'origin',"
+                " 'HEAD:refs/heads/integrate/batch-20261006-2052'],"
+                f" cwd=r'{work}', check=True)\n",
+                encoding="utf-8",
+            )
+
+            proc_ci = subprocess.run(
+                [sys.executable, str(TRIPWIRE), "--repo", str(work), "--",
+                 sys.executable, str(script)],
+                capture_output=True, text=True, timeout=60, env=_env_with_ci(),
+            )
+            self.assertEqual(proc_ci.returncode, 0, proc_ci.stderr)
+            self.assertNotIn("FAIL", proc_ci.stderr)
+            self.assertIn("integrate/batch-20261006-2052", proc_ci.stderr)
+            self.assertIn("observed, not attributed", proc_ci.stderr)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            work, bare = _make_repo_with_bare_origin(tmp)
+            script = tmp / "batch_tracker2.py"
+            script.write_text(
+                "import subprocess\n"
+                "subprocess.run(['git', 'commit', '--allow-empty', '-q', '-m', 'merge pr'],"
+                f" cwd=r'{work}', check=True)\n"
+                "subprocess.run(['git', 'push', 'origin', 'HEAD:refs/heads/main'],"
+                f" cwd=r'{work}', check=True)\n"
+                "subprocess.run(['git', 'push', 'origin',"
+                " 'HEAD:refs/heads/integrate/batch-20261006-2052'],"
+                f" cwd=r'{work}', check=True)\n",
+                encoding="utf-8",
+            )
+
+            proc_local = subprocess.run(
+                [sys.executable, str(TRIPWIRE), "--repo", str(work), "--",
+                 sys.executable, str(script)],
+                capture_output=True, text=True, timeout=60, env=_env_without_ci(),
+            )
+            self.assertNotEqual(proc_local.returncode, 0, proc_local.stderr)
+            self.assertIn("FAIL", proc_local.stderr)
+
     def test_strict_and_attributed_together_is_a_usage_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
