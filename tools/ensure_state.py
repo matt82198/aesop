@@ -15,7 +15,6 @@ markdown and SQLite state can never drift.
 # secretscan: allow-pattern-docs
 
 import sys
-import os
 import argparse
 import datetime
 from pathlib import Path

@@ -40,7 +40,6 @@ GH_REPO = None  # Auto-detect current repo
 
 class GhError(Exception):
     """gh CLI error."""
-    pass
 
 
 def gh_run_list(limit: int = 10, branch: str = "main") -> List[Dict]:

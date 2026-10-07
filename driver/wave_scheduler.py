@@ -58,7 +58,6 @@ if str(TOOLS_DIR) not in sys.path:
 # Import core modules
 from wave_loop import run_wave
 from agent_driver import AgentDriver
-from verification_policy import verification_policy
 
 # Import safety gates (P1-3: fail-closed if unavailable)
 try:

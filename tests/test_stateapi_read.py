@@ -4,7 +4,6 @@ Tests the consolidated read API that facades tracker snapshot, orchestrator-stat
 heartbeat freshness, and ledger access.
 """
 import json
-import os
 import sys
 import tempfile
 import time

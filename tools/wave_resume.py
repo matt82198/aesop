@@ -37,7 +37,7 @@ import json
 import argparse
 import sys
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
 
 def load_journal(journal_path: str) -> List[Dict[str, Any]]:

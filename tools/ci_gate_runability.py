@@ -28,7 +28,6 @@ Exit codes:
 
 import json
 import sys
-import os
 import re
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple
@@ -276,7 +275,7 @@ def check_workflow(repo_root: str, workflow_path: str) -> Tuple[int, List[str]]:
     jobs = parse_yaml_line_by_line(content)
 
     # Track job names for required-check validation
-    job_names = set(jobs.keys())
+    set(jobs.keys())
 
     for job_name, job_info in jobs.items():
         # Check job-level if conditions

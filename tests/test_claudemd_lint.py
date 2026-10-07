@@ -35,7 +35,6 @@ from claudemd_lint import (
     compute_union_line_counts,
     effective_max_lines,
     HeadroomError,
-    check_generated_files,
 )
 
 
@@ -293,8 +292,6 @@ class TestNestedDomainDiscovery(unittest.TestCase):
             pkg.write_text(json.dumps({"scripts": {"test:py": "python -m unittest"}}))
 
             # Import the discover function or use main logic
-            from claudemd_lint import main as lint_main
-            import argparse
 
             # Simulate the glob from main()
             claudemd_files = sorted(repo_root.glob("*/CLAUDE.md"))

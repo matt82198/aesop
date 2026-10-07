@@ -5,7 +5,6 @@ Nothing here installs anything: `gh` and the capability probe are injected,
 every path is exercised through the plan builder, and the only subprocess is
 the CLI itself in --dry-run.
 """
-import io
 import json
 import os
 import subprocess

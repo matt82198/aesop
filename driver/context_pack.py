@@ -30,7 +30,6 @@ from typing import Dict, List, Optional, Tuple
 
 class ContextPackViolation(Exception):
     """Raised when a context pack request violates the allowlist."""
-    pass
 
 
 @dataclass
@@ -569,11 +568,6 @@ def _truncate_pack(pack: ContextPack, size_cap: int) -> None:
         # For buildlog_tail, use B3 smart truncation (keep errors, drop noise).
         if source_name.startswith("buildlog_tail"):
             lines = text.split("\n")
-            # B3: Extract high-signal lines (ERROR, FAILED, BLOCK, Traceback).
-            high_signal_lines = [
-                i for i, line in enumerate(lines)
-                if any(sig in line for sig in ["ERROR", "FAILED", "BLOCK", "Traceback", "Exception"])
-            ]
 
             # Aggressively reduce: start with 50% of lines, then 25%, etc.
             best_text = text

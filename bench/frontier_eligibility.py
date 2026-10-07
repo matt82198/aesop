@@ -9,7 +9,6 @@ Factors out the token parsing logic used by:
 
 import json
 import re
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 try:

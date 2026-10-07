@@ -2,11 +2,9 @@
 """Unit tests for crossos_drift.py — Windows vs Linux CI outcome drift measurement."""
 import sys
 import subprocess
-import json
 import unittest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
-from io import StringIO
+from unittest.mock import patch
 
 
 class TestCrossOsDrift(unittest.TestCase):

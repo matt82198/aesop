@@ -16,7 +16,6 @@ import json
 import os
 import sys
 import re
-from pathlib import Path
 
 
 def load_manifest(manifest_path):

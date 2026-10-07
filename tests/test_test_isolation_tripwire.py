@@ -272,7 +272,6 @@ class TestIsolationTripwireHeartbeatValidity(unittest.TestCase):
 
             # Wrapped command advances the heartbeat (simulating daemon tick)
             # by 300 seconds forward.
-            import time
             before_epoch = int(before_val)
             after_epoch = before_epoch + 300
             script = f"open(r'{before_hb}', 'w').write(str({after_epoch}))"

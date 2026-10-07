@@ -120,10 +120,6 @@ def find_bash_process_by_script(script_path):
         script_abs = os.path.abspath(script_path)
         # Bash processes may show the path in either Windows or POSIX format
         # Try both: C:\Users\... and /c/Users/...
-        search_patterns = [
-            script_abs,  # Windows format: C:\Users\...
-            "/" + script_abs[0].lower() + script_abs[2:].replace("\\", "/"),  # POSIX: /c/Users/...
-        ]
 
         # Use PowerShell to find bash process matching either path format
         ps_cmd = (

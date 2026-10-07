@@ -8,7 +8,6 @@ claimed in docs/CI-MODES.md must exist in `node bin/cli.js --help`
 (examples invariant: no invented CLI flags).
 """
 import json
-import os
 import re
 import subprocess
 import sys

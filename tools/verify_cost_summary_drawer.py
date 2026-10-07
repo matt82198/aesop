@@ -37,7 +37,6 @@ Fails with exit 1 if playwright/chromium is unavailable (unless --allow-skip is 
 import argparse
 import json
 import os
-import shutil
 import socket
 import subprocess
 import sys

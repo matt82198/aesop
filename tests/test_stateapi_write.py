@@ -8,7 +8,6 @@ Validates fail-closed semantics, atomic projection rendering, and conflict detec
 TDD-organized: gap-centric, no hypothetical tests.
 """
 import json
-import os
 import sys
 import tempfile
 import unittest
@@ -20,7 +19,7 @@ repo_root = Path(__file__).resolve().parents[1]
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from state_store import EventStore, ConcurrencyConflict
+from state_store import EventStore
 from state_store.write_api import WriteAPI, WriteConflict
 
 

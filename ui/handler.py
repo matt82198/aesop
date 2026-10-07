@@ -3,11 +3,8 @@
 import http.server
 import json
 import queue
-import socketserver
 import sys
-import threading
 import urllib.parse
-from pathlib import Path
 
 import config
 import cost
@@ -32,16 +29,15 @@ import state_query_panel
 from render import render_dashboard
 from csrf import validate_csrf_request
 from collectors import (_snapshot_data, _snapshot_tracker,
-                       _snapshot_orchestrator_status, drain_tracker_inbox,
-                       get_alerts, get_heartbeat_status,
-                       get_main_thread_messages, get_monitor_heartbeat_status,
-                       get_recent_events, get_repos_status,
-                       parse_audit_backlog, get_queue_status)
-from agents import (_AGENT_ID_FORBIDDEN, _transcripts_fingerprint,
-                   extract_agent_dispatch_prompt, get_agent_detail,
+                       _snapshot_orchestrator_status, get_alerts,
+                       get_heartbeat_status, get_main_thread_messages,
+                       get_monitor_heartbeat_status, get_recent_events,
+                       get_repos_status, parse_audit_backlog,
+                       get_queue_status)
+from agents import (extract_agent_dispatch_prompt, get_agent_detail,
                    get_fleet_agents)
-from sse import (_latest_lock, _latest_snapshots, _maybe_emit,
-                register_sse_client, unregister_sse_client)
+from sse import (_latest_lock, _latest_snapshots, register_sse_client,
+                unregister_sse_client)
 
 
 # SSE section names, in emit order. /api/state returns the same sections so the
@@ -258,7 +254,6 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         """Suppress default logging."""
-        pass
 
     def _route_get(self):
         """Route a GET request to its handler, or 404 if no match found."""

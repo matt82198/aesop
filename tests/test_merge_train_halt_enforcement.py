@@ -9,12 +9,10 @@ Reference: Audit finding P0 #1 — direct CLI usage of merge_train.py bypassed h
 that only existed in shell daemon wrapper (daemons/run-merge-queue.sh).
 """
 import sys
-import json
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 import os
 
 

@@ -47,7 +47,6 @@ from typing import Optional, Tuple, List, Dict, Any
 
 class SubprocessError(Exception):
     """Raised when subprocess fails (timeout, non-zero exit, etc.)."""
-    pass
 
 
 def run_subprocess(

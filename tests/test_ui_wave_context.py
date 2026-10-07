@@ -27,7 +27,6 @@ class MockConfig:
 
     def reload(self):
         """No-op reload method (defensive against leaked stubs)."""
-        pass
 
 sys.modules['config'] = MockConfig()
 sys.modules['agents'] = type('module', (), {

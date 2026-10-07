@@ -11,7 +11,6 @@ Worktree scenario:
 - Hooks MUST be installed in the common git dir (../repo/.git/hooks), not worktree
 """
 
-import os
 import sys
 import tempfile
 import shutil

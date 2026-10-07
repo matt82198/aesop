@@ -23,7 +23,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from datetime import datetime, timezone
 
 # Add tools directory to path
 TOOLS_DIR = Path(__file__).parent.parent / "tools"

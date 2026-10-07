@@ -2025,7 +2025,7 @@ class TestPathTraversalProtection(unittest.TestCase):
 
     def test_journal_write_sanitizes_slug(self):
         """Journal write should sanitize slug to prevent path traversal."""
-        from wave_loop import _write_journal_entry, _load_journal_state
+        from wave_loop import _write_journal_entry
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as state_dir:
             state_path = Path(state_dir)
@@ -2242,7 +2242,6 @@ class TestShellInjectionExecutionLevel(unittest.TestCase):
         # The key is that _quote_arg is used consistently in wave_loop.py for both
         # git add and git commit, which is verified by reading the source.
         # The execution tests above prove that real git commands with quoted args work.
-        pass
 
 
 class TestSafeSlugCollisionPrevention(unittest.TestCase):
@@ -2298,7 +2297,7 @@ class TestSafeSlugLengthCap(unittest.TestCase):
 
     def test_300_char_slug_succeeds_with_bounded_filename(self):
         """A 300-char slug should be truncated and result in filename <= 255 bytes."""
-        from wave_loop import _safe_slug, _write_journal_entry
+        from wave_loop import _safe_slug
 
         # Create a very long slug.
         long_slug = "a" * 300

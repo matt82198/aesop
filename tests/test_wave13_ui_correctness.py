@@ -18,10 +18,8 @@ import importlib.util
 import json
 import os
 import shutil
-import sys
 import tempfile
 import unittest
-from io import StringIO
 from pathlib import Path
 
 UI_DIR = Path(__file__).parent.parent / "ui"
@@ -231,7 +229,6 @@ class TestResetStateRaceCondition(W13FixtureCase):
     def test_reset_state_acquires_lock_before_setting_stop_event(self):
         """reset_state() must acquire _collector_lock before modifying _collector_stop_event."""
         import sse
-        import threading
 
         # This test verifies the lock order
         old_stop = sse._collector_stop_event

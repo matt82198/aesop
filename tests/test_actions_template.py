@@ -16,8 +16,6 @@ Exit codes:
 
 import sys
 import subprocess
-import json
-import os
 import re
 from pathlib import Path
 

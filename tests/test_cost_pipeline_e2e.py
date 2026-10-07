@@ -21,7 +21,6 @@ Run: python -m unittest tests.test_cost_pipeline_e2e
 import json
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 import unittest

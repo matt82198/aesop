@@ -1,7 +1,6 @@
 """Tests for tools/file_size_lint.py — Python file size linter."""
 
 import json
-import os
 import subprocess
 import sys
 import tempfile

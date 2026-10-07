@@ -25,11 +25,10 @@ CLI:
 """
 
 import argparse
-import json
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
@@ -124,7 +123,6 @@ class FakeExporter:
 
     def shutdown(self):
         """No-op shutdown."""
-        pass
 
 
 class OTelSink:
@@ -166,7 +164,7 @@ class OTelSink:
     def _check_sdk_availability(self):
         """Check if opentelemetry-sdk is available."""
         try:
-            import opentelemetry
+            import opentelemetry  # noqa: F401 -- import-success is the check; no attribute use needed
             self._sdk_available = True
         except ImportError:
             if not self.dry_run and self.endpoint:

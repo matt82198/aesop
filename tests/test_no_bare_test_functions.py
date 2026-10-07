@@ -5,8 +5,6 @@ This test scans all tests/test_*.py files and fails if any module-level
 def test_*() functions are found outside of a class.
 """
 
-import os
-import sys
 import ast
 import unittest
 from pathlib import Path

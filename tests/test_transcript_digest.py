@@ -9,7 +9,6 @@ Tests brief schema, idempotency, and aggressive redaction.
 import json
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Import the module under test
@@ -23,7 +22,6 @@ from tools.transcript_digest import (
     get_existing_agent_ids,
     append_briefs,
     extract_tool_calls,
-    extract_files_from_calls,
     extract_errors,
     extract_token_usage,
     generate_brief,

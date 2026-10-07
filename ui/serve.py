@@ -42,9 +42,9 @@ config.reload()
 import csrf
 csrf.init()
 
-import render
-import collectors
-import agents
+import render  # noqa: F401 -- re-export: binds `serve.render` for tests that poke module globals by path
+import collectors  # noqa: F401 -- re-export: binds `serve.collectors` for tests that poke module globals by path
+import agents  # noqa: F401 -- re-export: binds `serve.agents` for tests that poke module globals by path
 import sse
 
 # Fresh collector/snapshot state per serve import (restores the per-import
@@ -53,20 +53,23 @@ sse.reset_state()
 
 # Re-export sibling symbols so serve.X keeps resolving for tests + the handler.
 # For config symbols, use __getattr__ to ensure they stay live through config.reload()
-from csrf import *
-from render import render_dashboard
-from collectors import *
-from agents import *
-from sse import *
-from collectors import (_snapshot_data, _snapshot_tracker,
+# Everything below is a deliberate re-export surface (not internal use within this
+# file) -- pyflakes cannot see the external callers/tests that resolve `serve.X`,
+# so every name here is a guarded exception, not dead code.
+from csrf import *  # noqa: F401,F403 -- re-export surface
+from render import render_dashboard  # noqa: F401 -- re-export surface
+from collectors import *  # noqa: F401,F403 -- re-export surface
+from agents import *  # noqa: F401,F403 -- re-export surface
+from sse import *  # noqa: F401,F403 -- re-export surface
+from collectors import (_snapshot_data, _snapshot_tracker,  # noqa: F401 -- re-export surface
                         _snapshot_orchestrator_status, drain_tracker_inbox)
-from agents import _AGENT_ID_FORBIDDEN, _transcripts_fingerprint
-from sse import (_sse_lock, _sse_clients, _latest_lock, _latest_snapshots,
+from agents import _AGENT_ID_FORBIDDEN, _transcripts_fingerprint  # noqa: F401 -- re-export surface
+from sse import (_sse_lock, _sse_clients, _latest_lock, _latest_snapshots,  # noqa: F401 -- re-export surface
                  _collector_lock, _collector_stop_event, _maybe_emit)
 
 # HTTP handler + server entry.
-import handler
-from handler import DashboardHandler, run_server
+import handler  # noqa: F401 -- re-export: binds `serve.handler` for tests that poke module globals by path
+from handler import DashboardHandler, run_server  # noqa: F401 -- re-export surface (DashboardHandler)
 
 
 def __getattr__(name):

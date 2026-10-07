@@ -37,7 +37,6 @@ if str(TOOLS_DIR) not in sys.path:
 try:
     import cost_projection
     import cost_ceiling
-    import fleet_ledger
 except ImportError:
     raise RuntimeError(f"Failed to import tools; TOOLS_DIR={TOOLS_DIR}, sys.path={sys.path}")
 

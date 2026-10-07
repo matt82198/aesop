@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,7 +31,7 @@ class TestIdentityPersistence(unittest.TestCase):
 
     def test_identity_file_created_and_loaded(self):
         """Verify identity file is created and loaded correctly."""
-        from state_store.identity import get_identity_with_epoch, _init_identity_file
+        from state_store.identity import get_identity_with_epoch
 
         # Initialize identity
         stable_id, epoch = get_identity_with_epoch(self.state_root)

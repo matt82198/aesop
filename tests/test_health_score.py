@@ -15,10 +15,8 @@ import shutil
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
 from pathlib import Path
 from time import time
-from unittest.mock import patch, MagicMock
 
 UI_DIR = Path(__file__).parent.parent / "ui"
 if str(UI_DIR) not in sys.path:
@@ -446,7 +444,6 @@ class TestHealthScoreEdgeCases(HealthScoreTestCase):
     def test_git_identity_configured(self):
         """Confirms that git identity check passes when configured."""
         import sys
-        import subprocess
         if "health_score" in sys.modules:
             del sys.modules["health_score"]
         import health_score

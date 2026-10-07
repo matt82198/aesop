@@ -15,9 +15,7 @@ Usage:
 """
 import argparse
 import datetime
-import functools
 import importlib.util
-import io
 import json
 import subprocess
 import sys
@@ -73,7 +71,7 @@ except ImportError:
                 raise ImportError("Could not load halt.py spec")
         else:
             raise ImportError("halt.py not found")
-    except ImportError as e:
+    except ImportError:
         print(f"[FATAL] halt.py not found or unimportable -- merge_train refuses to run", file=sys.stderr)
         sys.exit(2)
 

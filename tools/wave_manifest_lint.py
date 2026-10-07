@@ -17,7 +17,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -109,7 +108,6 @@ def check_path_existence(items: List[Dict[str, Any]], repo_root: str) -> List[Ch
     """Check 2: Verify ownsFiles paths exist or flag new files as INFO."""
     checks = []
     new_files = []
-    missing_files = []
 
     for item in items:
         for pattern in item.get("ownsFiles", []):

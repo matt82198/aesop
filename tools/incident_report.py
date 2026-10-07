@@ -24,14 +24,13 @@ All output is deterministic: stable ordering, no generated timestamps, idempoten
 """
 
 import argparse
-import json
 import os
 import re
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, List, Tuple
 
 # Ensure this tool's own directory (tools/) is importable so the shared
 # harness resolves regardless of cwd or how the file is loaded

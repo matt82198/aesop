@@ -17,8 +17,6 @@ These rules prevent wave-25 regressions:
 """
 
 import ast
-import os
-import sys
 import unittest
 from pathlib import Path
 
@@ -669,7 +667,6 @@ class TestFixtureImmutability(unittest.TestCase):
         Tests must use isolated temp directories for ALL file mutations.
         """
         import subprocess
-        import sys
 
         repo_root = Path(__file__).parent.parent
 

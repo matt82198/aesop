@@ -52,7 +52,7 @@ if str(DRIVER_DIR) not in sys.path:
     sys.path.insert(0, str(DRIVER_DIR))
 
 from agent_driver import ROLE_WORKER
-from backend_config import build_driver, load_backend_config
+from backend_config import build_driver
 from wave_bridge import build_manifest_item, dispatch_item
 from verification_policy import verification_policy
 
@@ -174,7 +174,6 @@ def run_bounded_repair(
     total_tokens = 0
     failed_item = manifest_item
     last_error = ""
-    last_test_exit = None
     total_attempts = 1 + repair_cap
 
     for attempt in range(total_attempts):
@@ -208,12 +207,10 @@ def run_bounded_repair(
             if not files_written:
                 # Worker produced no submission at all (genuine failure/refusal).
                 last_error = error or "no files written"
-                last_test_exit = test_exit
                 # fall through to repair/exhaust
             else:
                 # A real visible-test failure -> feed it back and repair.
                 last_error = error
-                last_test_exit = test_exit
 
             if attempt < total_attempts - 1:
                 # Will do another repair attempt.

@@ -30,7 +30,6 @@ from defect_escape import (
     get_commit_subject,
     is_fixforward_commit,
     get_commit_parents,
-    compute_first_try_estimate,
     main as defect_escape_main,
 )
 

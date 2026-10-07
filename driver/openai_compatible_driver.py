@@ -16,19 +16,14 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Optional
 
 # Add driver to path for imports if needed.
 DRIVER_DIR = Path(__file__).resolve().parent
 if str(DRIVER_DIR) not in sys.path:
     sys.path.insert(0, str(DRIVER_DIR))
 
-from agent_driver import (  # noqa: E402
-    DriverCapabilities,
-    ROLE_SETUP,
-    ROLE_VERIFY,
-    ROLE_WORKER,
-)
+from agent_driver import DriverCapabilities  # noqa: E402
 from backend_config import (  # noqa: E402
     validate_base_url,
     validate_is_local_base_url,

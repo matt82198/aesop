@@ -24,7 +24,6 @@ Exit codes: 0=all merged, 1=some blocked, 2=error
 import argparse
 import json
 import os
-import subprocess
 import sys
 import time
 

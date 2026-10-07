@@ -9,11 +9,9 @@ Runs test cases against the scanner and reports pass/fail. Uses system temp by d
 
 # secretscan: allow-pattern-docs
 """
-import os
 import sys
 import subprocess
 import tempfile
-import shutil
 from pathlib import Path
 
 

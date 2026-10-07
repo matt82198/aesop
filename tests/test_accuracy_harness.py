@@ -19,13 +19,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "driver"))
 
 from accuracy_harness import (
     AccuracyTask,
-    TaskScore,
     FakeTransport,
     score_response,
     _build_test_tasks,
     run_offline_benchmark,
 )
-from codex_driver import CodexDriver, WORKER_PATCH_SCHEMA
 
 
 class TestScoringLogic(unittest.TestCase):

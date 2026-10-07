@@ -64,7 +64,6 @@ class OrchestratorBackend(ABC):
             RuntimeError: on transport errors, missing credentials, etc.
                          Caller should retry or return DECISION_FAILED.
         """
-        pass
 
     def get_tokens_spent(self) -> int:
         """Total tokens this backend has spent on decisions (best effort).

@@ -23,8 +23,7 @@ Exit codes:
 import sys
 import subprocess
 import os
-from pathlib import Path
-from typing import Tuple, List, Optional
+from typing import Tuple, List
 
 # Default timeout for git operations (in seconds)
 GIT_FSCK_TIMEOUT = 30

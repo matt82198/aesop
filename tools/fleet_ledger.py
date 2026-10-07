@@ -35,7 +35,6 @@ import json
 import os
 from pathlib import Path
 from datetime import datetime, timezone
-import re
 from collections import defaultdict
 
 try:

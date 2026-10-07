@@ -5,14 +5,12 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
 
 from latency_report import (
     parse_bench_results,
-    parse_wave_journal,
     estimate_orchestrator_overhead,
     compute_latency_breakdown,
     format_latency_table,

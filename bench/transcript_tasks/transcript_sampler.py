@@ -36,7 +36,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 # Configure logging (stderr only, stdout reserved for JSON)
 logging.basicConfig(

@@ -20,14 +20,12 @@ Incident classes NOT mechanizable (excluded):
 
 import ast
 import json
-import os
 import re
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from typing import List, Set
 
 # tools/ci_shard_runner.py's real distribute_shards() is imported directly
 # (not re-derived) so TestFakeGreenTrap proves totality against the function
@@ -690,7 +688,6 @@ class TestNotMechanizableTrap(unittest.TestCase):
         - STALL: stall_check.py, watchdog monitoring
         """
         # This test documents the exclusion; it always passes
-        pass
 
 
 if __name__ == "__main__":

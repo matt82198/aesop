@@ -38,7 +38,6 @@ the diff mode's job is to catch a NEW marker landing in THIS push.
 """
 
 import argparse
-import fnmatch
 import json
 import os
 import subprocess

@@ -47,7 +47,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 
 try:  # dual-path import: runs both as a script and inside the tools package
@@ -123,7 +123,7 @@ def run_command(cmd, timeout=10):
         return result.stdout, result.returncode
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"Command timeout after {timeout}s")
-    except FileNotFoundError as e:
+    except FileNotFoundError:
         raise RuntimeError(f"Command not found: {cmd[0]}")
 
 
@@ -193,7 +193,7 @@ def gather_pr_status():
         if red_count > 0:
             summary += f" · {red_count} RED"
         return summary
-    except Exception as e:
+    except Exception:
         return "PR status unavailable"
 
 
@@ -210,7 +210,7 @@ def gather_heartbeat_status():
     - watchdog (900s = 3x 5-min cadence): FRESH < 15min, STALE >= 15min
     - monitor (5400s = 1.5x 60-min cadence): FRESH < 90min, STALE >= 90min
     """
-    now = datetime.now(timezone.utc)
+    datetime.now(timezone.utc)
     statuses = []
 
     # Heartbeat freshness comes from health_checks, which fails closed on a missing

@@ -472,7 +472,6 @@ def apply_diff_to_sandbox(
             print(f"Warning: git commit failed: {result.stderr[:100]}", file=sys.stderr)
     except Exception as e:
         print(f"Warning: git initialization failed: {str(e)[:100]}", file=sys.stderr)
-        pass
 
     # Try git apply with various -p levels and options (models emit different path formats)
     if git_ok:
@@ -540,7 +539,6 @@ def apply_diff_to_sandbox(
                 return "applied" if any_change else "noop"
     except Exception as e:
         print(f"Warning: Fuzzy apply failed: {str(e)[:100]}", file=sys.stderr)
-        pass
 
     return "failed"
 

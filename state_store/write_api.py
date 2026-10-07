@@ -41,9 +41,9 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 try:
-    from state_store import EventStore, ConcurrencyConflict
+    from state_store import EventStore
 except ImportError:
-    from state_store.store import EventStore, ConcurrencyConflict
+    from state_store.store import EventStore
 
 
 class WriteConflict(Exception):

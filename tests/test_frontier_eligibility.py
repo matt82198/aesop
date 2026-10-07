@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from bench.frontier_eligibility import parse_token_set, extract_correct_token, audit_tasks, remove_format_instruction
-from bench.frontier_slice import load_frontier_tasks, load_ground_truth, score_response
+from bench.frontier_slice import load_frontier_tasks, load_ground_truth
 
 
 class TestParseTokenSet(unittest.TestCase):

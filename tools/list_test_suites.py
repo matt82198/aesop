@@ -18,8 +18,6 @@ Output: Grouped inventory with counts and first-line summaries (read-only, deter
 """
 
 import argparse
-import re
-import subprocess
 import sys
 from pathlib import Path
 from typing import List, Tuple

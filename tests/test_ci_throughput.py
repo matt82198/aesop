@@ -17,8 +17,6 @@ These tests pin down the four mechanisms that reduce per-PR job count:
 Hermetic: parses .github/workflows/ci.yml and main-full.yml YAML, no network/gh.
 """
 
-import sys
-import tempfile
 import unittest
 from pathlib import Path
 

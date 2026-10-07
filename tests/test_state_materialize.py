@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Tests for state_store.materialize — canonical materializer and state_rebuild."""
 import json
-import os
 import sys
 import tempfile
 import threading
@@ -14,8 +13,7 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-from state_store import StateAPI, EventStore
-from state_store.projections import project_tracker
+from state_store import StateAPI
 
 
 def _retry_on_db_lock(func, max_retries=3, delay=0.1):

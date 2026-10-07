@@ -21,7 +21,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple, Set
+from typing import List, Optional, Tuple, Set
 
 
 def find_shell_files(root_dirs: List[str]) -> List[str]:
