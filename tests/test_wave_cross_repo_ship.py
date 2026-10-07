@@ -21,7 +21,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 # Add driver/ to path for imports.
 REPO = Path(__file__).resolve().parent.parent

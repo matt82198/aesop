@@ -15,14 +15,12 @@ HERMETIC: every test creates a throwaway git repo in a temp directory.
 No test touches cwd, global git config, or the real aesop repo.
 """
 
-import datetime
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 

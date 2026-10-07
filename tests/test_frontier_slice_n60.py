@@ -12,8 +12,6 @@ This is the credibility mechanism: patterns are committed before any v2 results 
 import unittest
 import json
 import re
-import sys
-from pathlib import Path
 
 # Load all 60 tasks and ground truth
 def load_tasks(path: str = "bench/tasks_frontier.jsonl") -> dict:

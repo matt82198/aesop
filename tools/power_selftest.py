@@ -31,7 +31,6 @@ import subprocess
 import sys
 import io
 from pathlib import Path
-from datetime import datetime
 from collections import namedtuple
 
 # Ensure this tool's own directory (tools/) is importable so the shared
@@ -179,7 +178,7 @@ def check_hooks():
             return Check('hooks', 'FAIL', f'missing files: {missing_files}', True)
         else:
             return Check('hooks', 'OK', None, False)
-    except Exception as e:
+    except Exception:
         return Check('hooks', 'OK', '(error reading)', False)
 
 
@@ -223,7 +222,7 @@ def check_brain():
             return Check('brain', 'WARN', f'{len(status_lines)} uncommitted', False)
         else:
             return Check('brain', 'OK', None, False)
-    except Exception as e:
+    except Exception:
         return Check('brain', 'OK', '(error checking)', False)
 
 
@@ -313,7 +312,7 @@ def check_decisions():
             details += f',{inbox_count} inbox'
 
         return Check('decisions', 'OK', details, False)
-    except Exception as e:
+    except Exception:
         return Check('decisions', 'OK', '0 pending', False)
 
 

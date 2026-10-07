@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ui"))
 import config
 from collectors import (
     get_recent_events, get_alerts, get_main_thread_messages,
-    drain_tracker_inbox, _snapshot_data
+    _snapshot_data
 )
 
 
@@ -225,7 +225,7 @@ class TestDrainTrackerInboxRecovery(unittest.TestCase):
         )
 
         # Mock tracker API to avoid real DB writes
-        from collectors import drain_tracker_inbox, _tracker_api, load_tracker
+        from collectors import drain_tracker_inbox
 
         # Ensure load_tracker returns empty so dedup finds nothing
         with patch('collectors.load_tracker') as mock_load:

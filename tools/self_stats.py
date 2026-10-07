@@ -1097,7 +1097,7 @@ class StatsCounter:
         # Render classified author stats (prefer new fields over legacy distinct_coauthors)
         authors_human = git_stats.get("authors_human", 0)
         model_tiers = git_stats.get("model_tiers", 0)
-        model_tier_names = git_stats.get("model_tier_names", [])
+        git_stats.get("model_tier_names", [])
         if authors_human > 0 or model_tiers > 0:
             # Build the authors row using new classified fields
             author_parts = []

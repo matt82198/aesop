@@ -25,12 +25,10 @@ Usage: eod_sweep.py [--repos PATHS] [--readonly-repos PATHS] [--fix-push]
   --timestamp: Timestamp for BUILDLOG entry (format: YYYY-MM-DD HH:MM; omit to exclude timestamp)
 """
 
-import json
 import os
 import subprocess
 import sys
 from pathlib import Path
-from datetime import datetime
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -336,11 +334,10 @@ def main():
 
     # Determine verdict
     if not findings:
-        verdict = "SAFE"
         verdict_line = "EOD-SWEEP: SAFE"
         exit_code = 0
     else:
-        verdict = f"AT-RISK — {len(findings)} findings"
+        f"AT-RISK — {len(findings)} findings"
         verdict_line = f"EOD-SWEEP: AT-RISK — {len(findings)} findings"
         exit_code = 1
 
@@ -364,7 +361,6 @@ def main():
 
             # Re-evaluate verdict
             if not findings:
-                verdict = "SAFE"
                 verdict_line = "EOD-SWEEP: SAFE"
                 exit_code = 0
             else:

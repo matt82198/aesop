@@ -6,11 +6,9 @@ oracle validation, and stratification from git history.
 TDD approach: tests define the interface and behavior before implementation.
 """
 import json
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Dict, List
 
 import pytest
 
@@ -21,8 +19,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 from transcript_sampler import (
     TranscriptSampler,
     Task,
-    TaskOracle,
-    extract_task_from_commit,
     sanitize_task,
     validate_oracle,
 )
@@ -198,7 +194,6 @@ class TestTranscriptSampler:
     def test_sampler_respects_max_tasks(self):
         """Sampler must not exceed max_tasks limit."""
         # This will be tested when we run against real repo
-        pass
 
 
 class TestCommitMining:
@@ -207,13 +202,11 @@ class TestCommitMining:
     def test_extract_task_from_commit_structure(self):
         """extract_task_from_commit must return Task with all required fields."""
         # This requires a real commit to extract from; tested via integration tests
-        pass
 
     def test_commit_must_have_test(self):
         """Only commits with test coverage should be sampled (fidelity check)."""
         # A commit that fixes a bug should have a test that exercises it
         # This ensures the oracle is real, not invented
-        pass
 
 
 class TestTaskSet:
@@ -222,17 +215,14 @@ class TestTaskSet:
     def test_task_set_minimum_size(self):
         """Assembled task set must have >=100 tasks."""
         # This is a high-level test; will validate after generation
-        pass
 
     def test_task_set_has_stratification_metadata(self):
         """Task set must include stratification counts."""
         # Each task has .strata; we can count them
-        pass
 
     def test_task_set_sanitization_complete(self):
         """All tasks in set must pass sanitization (no PII leaks)."""
         # Run secret_scan on tasks_transcript.jsonl
-        pass
 
 
 class TestFidelityChecks:
@@ -241,12 +231,10 @@ class TestFidelityChecks:
     def test_oracle_correct_on_defective_version(self):
         """Oracle must fail when run against defective code."""
         # This requires running the actual oracle code
-        pass
 
     def test_oracle_correct_on_fixed_version(self):
         """Oracle must pass when run against fixed code."""
         # This requires running the actual oracle code
-        pass
 
 
 if __name__ == "__main__":

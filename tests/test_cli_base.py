@@ -6,7 +6,6 @@ import sys
 import unittest
 import sys
 import json
-import tempfile
 from pathlib import Path
 
 import pytest

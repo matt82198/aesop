@@ -85,7 +85,6 @@ class TestFleetLedgerInjectionTimestamp(unittest.TestCase):
                     if row['wave'] == 1:
                         # Timestamp must be valid ISO 8601 format
                         # After fix: should match YYYY-MM-DDTHH:MM:SS pattern (with optional timezone)
-                        import re
                         iso_pattern = r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}'
                         self.assertRegex(row['iso_ts'], iso_pattern,
                             f"Timestamp {row['iso_ts']} is not valid ISO 8601 format")

@@ -21,7 +21,7 @@ import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Any, Optional, Tuple
 from collections import defaultdict
 
 # INDEX: humanize_ledger.py — Append-only JSONL ledger for humanization fixes

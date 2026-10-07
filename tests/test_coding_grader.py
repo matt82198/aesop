@@ -352,8 +352,6 @@ def fizzbuzz(n):
 
         # Import and create a tasks.jsonl with malicious entrypoint
         tasks_path = Path(__file__).parent.parent / "bench" / "coding_tasks.jsonl"
-        import json
-        import tempfile
 
         # Create a malicious entry (must be done carefully to not pollute repo)
         # Instead, we'll directly test the entrypoint validation by monkeypatching

@@ -9,7 +9,6 @@ journal (state/bench-runs.jsonl).
 No external dependencies; stdlib only.
 """
 
-import json
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional

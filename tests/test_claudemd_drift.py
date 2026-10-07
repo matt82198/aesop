@@ -8,8 +8,6 @@ Tests the drift detector's ability to find:
 4. Documented CLI flags absent from --help
 """
 
-import json
-import subprocess
 import sys
 import tempfile
 import unittest

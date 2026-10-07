@@ -163,7 +163,9 @@ jobs:
         # PyYAML is required by tools/ci_workflow_lint.py (fail-closed without it)
         # and its test suite tests/test_ci_workflow_lint.py.
         # pytest is required by tests/test_seam_s_e2e_oracle.py subprocess tests.
-        run: pip install pyyaml pytest
+        # pyflakes is a dev-only lint dependency for tools/pyflakes_gate.py
+        # (Guardrail G15, shard 0 only) -- never a runtime dependency of aesop.
+        run: pip install pyyaml pytest pyflakes
 
       - name: Set shard-specific temporary directory
         run: |
@@ -286,6 +288,10 @@ jobs:
       - name: Portability gate (ratchet mode)
         if: matrix.python-shard == 0
         run: python tools/portability_check.py --root . --baseline .portability-baseline.json
+
+      - name: Pyflakes ratchet gate (Guardrail G15)
+        if: matrix.python-shard == 0
+        run: python tools/pyflakes_gate.py --root . --baseline .pyflakes-baseline.json
 
       - name: Dead-baseline liveness gate (GUARDRAIL #3)
         if: matrix.python-shard == 0

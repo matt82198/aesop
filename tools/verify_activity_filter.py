@@ -35,9 +35,6 @@ import argparse
 import json
 import os
 import shutil
-import socket
-import stat
-import subprocess
 import sys
 import tempfile
 import time

@@ -17,12 +17,9 @@ Also includes a LIVE gpt-4o-mini test to verify the model's patches apply.
 import json
 import os
 import shutil
-import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 
 class RobustDiffApplicationTest(unittest.TestCase):

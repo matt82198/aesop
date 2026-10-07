@@ -22,8 +22,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from datetime import datetime, timedelta
-from unittest.mock import patch
+from datetime import datetime
 
 # Make tools/ importable
 TOOLS_DIR = Path(__file__).parent.parent / "tools"

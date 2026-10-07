@@ -45,7 +45,7 @@ import time
 # harness resolves regardless of cwd or how the file is loaded
 # (the import-gate loads tools by path, without tools/ on sys.path).
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from subprocess_common import gh, json_output
+from subprocess_common import gh
 
 
 def run_gh_command(args):

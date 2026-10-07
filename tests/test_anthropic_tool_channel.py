@@ -12,13 +12,10 @@ Tests verify:
 stdlib-only (unittest), ASCII-only, Windows + Linux safe.
 """
 
-import json
-import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
 
 # Add driver to path.
 REPO = Path(__file__).resolve().parent.parent

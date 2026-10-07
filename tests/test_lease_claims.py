@@ -1,10 +1,8 @@
 """Tests for state_store.lease_claims — multi-instance file-scope leasing."""
 
 import os
-import sqlite3
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -20,7 +18,6 @@ from state_store.lease_claims import (
     _normalize_path,
     resolve_case_policy,
 )
-from state_store.paths import canonical_claim_path
 
 
 class TestLeaseStore(unittest.TestCase):

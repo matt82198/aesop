@@ -1,6 +1,5 @@
 import unittest
 import tempfile
-import os
 import subprocess
 from pathlib import Path
 import sys

@@ -28,7 +28,7 @@ import json
 import sys
 from pathlib import Path
 from statistics import mean, median, quantiles
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 
 # ========================================================================
@@ -387,7 +387,6 @@ def main():
     # Compute breakdowns for JSONL waves
     for wave_key, items in sorted(wave_groups.items()):
         durations = [item.get("duration_s") for item in items if isinstance(item.get("duration_s"), (int, float))]
-        wave_duration = sum(durations) / len(durations) * len(items) if durations else 0.0  # Estimate parallel duration
         breakdown = compute_latency_breakdown(
             items=items,
             wave_duration_s=max(durations) if durations else 0.0,

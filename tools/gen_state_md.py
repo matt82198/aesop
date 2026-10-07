@@ -15,7 +15,6 @@ malformed store.
 The read facade is StateAPI in state_store/api.py (no direct state-file reads).
 """
 import argparse
-import json
 import os
 import sys
 from datetime import datetime, timezone

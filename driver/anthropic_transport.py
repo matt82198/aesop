@@ -12,7 +12,7 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Callable, Dict
+from typing import Callable
 
 # Maximum response size (100 KB) to prevent OOM from hostile/broken endpoints.
 MAX_RESPONSE_SIZE = 100 * 1024

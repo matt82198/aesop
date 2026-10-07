@@ -186,7 +186,6 @@ def check_npm_ci_lockfile(workflow_path, workflow_data, root):
         return findings
 
     jobs = workflow_data.get("jobs", {})
-    job_id = 0
 
     for job_name, job_data in jobs.items():
         steps = job_data.get("steps", [])
@@ -343,7 +342,7 @@ def check_file_references(workflow_data, root):
                     if not file_path.exists():
                         # Best-effort: don't fail on generated paths or paths with variables
                         if "$" not in file_ref and "{" not in file_ref:
-                            step_name = step.get("name", "unnamed")
+                            step.get("name", "unnamed")
                             # findings.append(f"File reference not found: {file_ref} ({job_name} > {step_name})")
 
     return findings
@@ -614,7 +613,7 @@ def lint_workflows(root, json_output=False, use_actionlint=False):
         Tuple[int, List[str]]: (exit_code, findings_list)
     """
     findings = []
-    root_path = Path(root)
+    Path(root)
 
     # Fail closed: without a real YAML parser this linter cannot verify anything,
     # and a lint gate that silently passes is worse than one that fails loudly.

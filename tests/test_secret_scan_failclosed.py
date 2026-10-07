@@ -14,7 +14,6 @@ Validates that:
 
 Run: python -m unittest tests.test_secret_scan_failclosed
 """
-import os
 import sys
 import unittest
 import tempfile

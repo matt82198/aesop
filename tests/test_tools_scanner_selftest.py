@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Unit tests for scanner_selftest.py regression harness."""
-import os
 import sys
 import subprocess
 import tempfile
@@ -17,7 +16,6 @@ class TestScannerSelftest(unittest.TestCase):
 
     def tearDown(self):
         """Clean up."""
-        pass
 
     def _run_scanner_selftest(self, temp_dir=None):
         """Run scanner_selftest.py and return result."""

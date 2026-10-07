@@ -29,7 +29,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch
 
 UI_DIR = Path(__file__).parent.parent / "ui"
 

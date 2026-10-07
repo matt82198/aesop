@@ -12,11 +12,9 @@ stdlib-only (unittest), ASCII-only, Windows + Linux safe.
 """
 
 import json
-import os
 import sys
 import tempfile
 import unittest
-from dataclasses import dataclass
 from pathlib import Path
 
 # Add driver/ to sys.path (mirrors AgentDriver test pattern).

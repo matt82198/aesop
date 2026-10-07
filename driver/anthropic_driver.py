@@ -16,12 +16,10 @@ TRANSPORT SEAM & TOOL-CALL CHANNEL
 stdlib-only, ASCII-only, Windows + Linux safe.
 """
 
-import hashlib
 import json
-import os
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional
 
 from proc_util import run_shell_bounded
 
@@ -37,7 +35,6 @@ from agent_driver import (
     WorkerStatus,
     WORKER_DONE,
     WORKER_FAILED,
-    WORKER_RUNNING,
     WORKER_UNKNOWN,
 )
 

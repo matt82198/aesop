@@ -18,12 +18,11 @@ Follows Linux-parity rules:
   - Isolated temp DB per test
 """
 import os
-import sqlite3
 import sys
 import tempfile
 import time
 import unittest
-from multiprocessing import Pool, Barrier, Manager
+from multiprocessing import Pool, Manager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]

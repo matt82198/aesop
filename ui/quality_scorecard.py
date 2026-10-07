@@ -44,8 +44,6 @@ Key behavior:
   - Retry frequency calculated by detecting "failure -> success" transitions (repair cycles).
   - Rankings sorted by metric descending (highest success rate / highest retry frequency first).
 """
-import json
-from pathlib import Path
 
 import config
 
@@ -67,7 +65,6 @@ def get_quality_scorecard():
         dict: QualityScorecard with specialties, top_by_success, top_by_retry,
               and skipped_lines (or error field if invalid).
     """
-    import sys
 
     # Read ledger path at call time
     ledger_file = config.STATE_DIR / "ledger" / "OUTCOMES-LEDGER.md"
@@ -123,8 +120,8 @@ def get_quality_scorecard():
         try:
             timestamp = parts[1]  # ISO timestamp
             agent_type = parts[2]  # "haiku", "sonnet", "orchestrator", etc.
-            model = parts[3]
-            duration_str = parts[4]
+            parts[3]
+            parts[4]
             tokens_in_str = parts[5]
             tokens_out_str = parts[6]
             verdict = parts[7]
@@ -143,8 +140,8 @@ def get_quality_scorecard():
 
         # Parse and validate numeric fields
         try:
-            tokens_in = int(tokens_in_str)
-            tokens_out = int(tokens_out_str)
+            int(tokens_in_str)
+            int(tokens_out_str)
         except ValueError:
             result["skipped_lines"] += 1
             continue

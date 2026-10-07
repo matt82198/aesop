@@ -33,8 +33,8 @@ try:
     # Add tools to path for import
     sys.path.insert(0, str(REPO / 'tools'))
     from transcript_digest import (
-        REDACTION_PATTERNS, EMAIL_PATTERN, PATH_PATTERN,
-        REPO_NAME_PATTERN, USERNAME_PATTERN
+        REDACTION_PATTERNS, EMAIL_PATTERN, REPO_NAME_PATTERN,
+        USERNAME_PATTERN
     )
 except ImportError as e:
     raise ImportError(
@@ -317,7 +317,7 @@ def main():
     print("=" * 60)
 
     # Fixtures for reference
-    fixtures = load_fixtures()
+    load_fixtures()
     print(f"\nUsing fixtures from: {FIXTURES_PATH}")
 
     # Self-host the dashboard on a free port with isolated fixture state —

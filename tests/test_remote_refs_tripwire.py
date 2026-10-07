@@ -14,7 +14,6 @@ prefix, never the literal PATH-resolved name -- see tools/test_network_isolation
 module docstring for why a real PATH shim for `gh` is not reliable on Windows).
 Nothing here ever calls the real `gh` or touches the real origin.
 """
-import json
 import os
 import subprocess
 import sys

@@ -10,7 +10,6 @@ Run: python -m pytest tests/test_serve_wave8_fixes.py -q
 """
 import http.client
 import importlib.util
-import json
 import os
 import shutil
 import sys

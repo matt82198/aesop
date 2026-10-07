@@ -98,11 +98,11 @@ def _run_tool(tool_name, args=None):
         if not output:
             return None
         return json.loads(output)
-    except subprocess.TimeoutExpired as e:
+    except subprocess.TimeoutExpired:
         raise ToolError("tool-timeout", f"{tool_name} timed out after 30s")
-    except json.JSONDecodeError as e:
+    except json.JSONDecodeError:
         raise ToolError("parse-error", f"Invalid JSON output from {tool_name}")
-    except OSError as e:
+    except OSError:
         raise ToolError("file-not-found", f"Cannot access {tool_name}")
 
 

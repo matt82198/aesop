@@ -36,7 +36,6 @@ will be loud and caught in CI.
 stdlib-only, ASCII-only, Windows + Linux safe.
 """
 
-import json
 import sys
 from pathlib import Path
 from typing import Dict, Optional, Any

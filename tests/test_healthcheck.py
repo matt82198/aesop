@@ -18,7 +18,6 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from time import time
-from unittest.mock import patch
 
 UI_DIR = Path(__file__).parent.parent / "ui"
 if str(UI_DIR) not in sys.path:

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Unit tests for tools/bench_results_cache.py — benchmark results journal."""
-import json
 import sys
 import tempfile
 import unittest

@@ -6,7 +6,6 @@ non-UTF-8 bytes gracefully without crashing.
 
 Run: python -m unittest tests.test_merge_queue_encoding
 """
-import json
 import subprocess
 import sys
 import tempfile

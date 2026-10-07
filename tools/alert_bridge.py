@@ -24,9 +24,7 @@ Stdlib-only (urllib, json, sys, os, pathlib, time).
 """
 
 import json
-import os
 import sys
-import time
 import urllib.request
 import urllib.error
 from pathlib import Path

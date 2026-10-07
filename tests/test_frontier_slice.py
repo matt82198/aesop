@@ -11,7 +11,6 @@ Covers:
 import json
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 import sys
 import subprocess
 
@@ -389,7 +388,6 @@ class TestOfflineMode(unittest.TestCase):
     def test_offline_mode_produces_json(self):
         """Offline mode should produce JSON output file."""
         import tempfile
-        import os as os_module
 
         # Use temp directory for test output isolation
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -574,7 +572,6 @@ class TestTestHygiene(unittest.TestCase):
         """Test should not pollute environment."""
         # Tests use subprocess isolation, so env should be clean
         # This is checked by the offline mode test not requiring ANTHROPIC_API_KEY
-        pass
 
 
 if __name__ == "__main__":

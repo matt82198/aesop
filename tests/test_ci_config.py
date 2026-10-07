@@ -6,7 +6,6 @@ the Node mirror (tools/ci_config.js) must produce the identical code set for the
 input -- that parity is driven, not grepped: both validators run on the same fixtures.
 """
 import json
-import os
 import subprocess
 import sys
 import tempfile

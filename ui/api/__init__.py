@@ -30,7 +30,6 @@ from csrf import validate_csrf_request
 
 class NotFoundError(Exception):
     """Raised when a tracker item is not found."""
-    pass
 
 
 # Mutating endpoints cap request bodies at 10KB. Kept as a shared constant so

@@ -8,7 +8,6 @@ Covers:
 This test suite validates the O(n²) -> O(n) tail-replay optimization
 that fixes the tracker mutation replay cost growth across a wave.
 """
-import json
 import os
 import sqlite3
 import sys

@@ -14,7 +14,7 @@ import os
 import sys
 import unittest
 from io import BytesIO
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 
 # Add parent directory for imports.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
