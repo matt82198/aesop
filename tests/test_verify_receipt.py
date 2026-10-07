@@ -165,6 +165,42 @@ class TestVerify(VerifyBase):
         self.assertEqual(self.run_verify({"nope": 1})[0], 2)
         self.assertEqual(self.run_verify({"receipt": {"schema": 2}, "sig": {}})[0], 2)
 
+    def test_receipt_with_schema_version_field(self):
+        """A receipt emitted now carries schema_version=1 inside the signed canonical payload."""
+        env = self.envelope()
+        # After implementation, emit_receipt.build_receipt should include schema_version=1
+        receipt = env["receipt"]
+        self.assertIn("schema_version", receipt, "receipt must include schema_version field")
+        self.assertEqual(receipt["schema_version"], 1, "schema_version must be 1")
+        # Verify the signature is over the entire receipt including schema_version
+        code, reasons = self.run_verify(env)
+        self.assertEqual((code, reasons), (0, []), f"receipt with schema_version=1 must verify (reasons: {reasons})")
+
+    def test_verify_rejects_invalid_schema_version_type(self):
+        """A receipt with an unknown higher schema_version fails verification with a clear message."""
+        env = self.envelope()
+        # Manually set an unknown schema_version in the signed receipt
+        receipt = env["receipt"]
+        receipt["schema_version"] = 99
+        sig = rc.sign(rc.canonical_json(receipt), scheme="hmac-sha256", hmac_secret=_secret())
+        env["sig"] = sig
+        code, reasons = self.run_verify(env)
+        self.assertEqual(code, 1, "receipt with unknown schema_version must fail verification")
+        self.assertTrue(any("schema_version" in r for r in reasons),
+                       f"failure reason must mention schema_version, got: {reasons}")
+
+    def test_verify_accepts_absent_schema_version(self):
+        """A legacy receipt WITHOUT the schema_version field still verifies (backward compatible)."""
+        env = self.envelope()
+        receipt = env["receipt"]
+        # Remove schema_version if present, to simulate legacy receipt
+        receipt.pop("schema_version", None)
+        sig = rc.sign(rc.canonical_json(receipt), scheme="hmac-sha256", hmac_secret=_secret())
+        env["sig"] = sig
+        code, reasons = self.run_verify(env)
+        self.assertEqual((code, reasons), (0, []),
+                        f"legacy receipt without schema_version must still verify (reasons: {reasons})")
+
 
 class TestCli(VerifyBase):
     def test_cli_exit_codes_and_file_input(self):
