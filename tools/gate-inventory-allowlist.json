@@ -12,5 +12,9 @@
     "port_fidelity_check). All four are real guardrails that SHOULD be wired, so they",
     "are deliberately left failing rather than allowlisted."
   ],
-  "entries": {}
+  "entries": {
+    "new_gate_check.py": {
+      "reason": "operator-invoked meta-tool: orchestrates the other gates listed in its own module docstring (pre-push self-test, gate_inventory axis2, claudemd_lint, portability_check, verify_gates_wired, dispatch_lint, conflict_marker_check, a dry pre-push range check) as a pre-push local checklist; it has no file-content rule of its own to wire into CI, see LANE-CONTRACT.md section 5."
+    }
+  }
 }
