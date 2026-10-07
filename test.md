@@ -1,3 +1,2 @@
 # Test
-
-This is 3x faster.
+No numbers here.
