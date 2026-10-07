@@ -4,3 +4,7 @@ def existing():
 
 def alpha():
     pass
+
+
+def beta():
+    pass
