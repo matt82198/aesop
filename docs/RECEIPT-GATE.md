@@ -33,6 +33,15 @@ python tools/emit_receipt.py --dry-run         # print the signed envelope, post
 python tools/emit_receipt.py --matrix py-shard-0,py-shard-1 --post
 ```
 
+## Isolation mechanism
+
+Matrix parts run in a **detached throwaway worktree** at the HEAD commit, not the caller's
+tree, so tests that create fixture git repos and commit cannot mutate the lane's branch.
+Parts inherit a scrubbed environment (GIT_DIR, GIT_WORK_TREE, and related vars unset) as
+defense in depth — git's hook environment would otherwise leak into parts and let them
+commit to the lane via inherited GIT_DIR. The caller tree is verified untouched via
+tripwire (HEAD, index tree hash, working tree status compared before and after).
+
 ## The receipt
 
 The receipt is **not a committed file** — a committed receipt would have to describe

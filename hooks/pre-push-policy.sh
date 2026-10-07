@@ -1552,7 +1552,10 @@ check_emit_receipt() {
     # Use timeout with --kill-after to ensure process group cleanup on both Linux and macOS.
     # Redirect to temp file instead of command substitution to avoid bash subshell hanging
     # when the process group is killed but the pipe reader doesn't get EOF notification.
-    "$timeout_bin" --kill-after=5 "$timeout_secs" "$py_bin" "$receipt_script" --repo "$aesop_root" --post \
+    # Unset GIT_* environment variables to prevent matrix parts from committing to this repo
+    # via inherited GIT_DIR/GIT_WORK_TREE (see docs/RECEIPT-GATE.md for the mechanism).
+    env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+      "$timeout_bin" --kill-after=5 "$timeout_secs" "$py_bin" "$receipt_script" --repo "$aesop_root" --post \
       < /dev/null > "$receipt_tmpfile" 2>&1
     receipt_exit_code=$?
   else
@@ -1560,7 +1563,9 @@ check_emit_receipt() {
     # Still fail-open on timeout, just without coreutils timeout binary.
     # Logged so the gap is visible, not invisible.
     log_event "receipt_emit_unbounded_no_timeout_bin"
-    "$py_bin" "$receipt_script" --repo "$aesop_root" --post \
+    # Unset GIT_* environment variables to prevent matrix parts from committing to this repo.
+    env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+      "$py_bin" "$receipt_script" --repo "$aesop_root" --post \
       < /dev/null > "$receipt_tmpfile" 2>&1 &
     local receipt_pid=$!
     local elapsed=0

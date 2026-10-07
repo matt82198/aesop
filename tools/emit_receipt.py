@@ -18,6 +18,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -87,21 +88,72 @@ def parse_test_count(text):
     return None
 
 
-def run_part(repo, name, spec):
-    argv = spec.cmd(Path(repo))
+def run_part(repo, name, spec, throwaway_wt=None):
+    argv = spec.cmd(Path(throwaway_wt or repo))
     t0 = time.monotonic()
     env = dict(os.environ)
+    # Defense in depth: scrub git hook environment variables to prevent matrix parts
+    # from accidentally committing to a repo via inherited GIT_DIR/GIT_WORK_TREE.
+    # See RECEIPT-GATE.md and hooks/CLAUDE.md for the mechanism.
+    for var in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"):
+        env.pop(var, None)
+
     with tempfile.TemporaryDirectory(prefix="receipt-%s-" % name) as tmp:
         env["TMPDIR"] = tmp  # per-part temp dir, mirrors ci.yml's shard-specific TMPDIR
-        res = subprocess.run(argv, cwd=str(repo), env=env, capture_output=True,
+        res = subprocess.run(argv, cwd=str(throwaway_wt or repo), env=env, capture_output=True,
                              encoding="utf-8", errors="replace")
     out = (res.stdout or "") + "\n" + (res.stderr or "")
     return {"name": name, "exit_code": int(res.returncode), "test_count": parse_test_count(out),
             "duration_s": round(time.monotonic() - t0, 3)}
 
 
+def _capture_caller_state(repo):
+    """Capture the caller repo's git state for tripwire verification.
+    Returns None if repo is not a git repository (e.g., test temp directory)."""
+    repo = Path(repo)
+    try:
+        return {
+            "head": _git(repo, "rev-parse", "HEAD"),
+            "tree": _git(repo, "write-tree"),
+            "porcelain": subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
+                                        capture_output=True, encoding="utf-8", errors="replace").stdout,
+        }
+    except ReceiptError:
+        return None  # Not a git repo; skip tripwire verification
+
+
+def _verify_caller_untouched(repo, state_before):
+    """Tripwire: verify the caller repo was not mutated. Exit non-zero if mutated.
+    Skips verification if repo is not a git repository."""
+    if state_before is None:
+        return  # Caller is not a git repo; nothing to verify
+
+    state_after = _capture_caller_state(repo)
+    if state_after is None:
+        raise ReceiptError("ERROR: matrix removed the caller repo's git metadata")
+
+    if state_before["head"] != state_after["head"]:
+        raise ReceiptError("ERROR: matrix mutated the caller tree (HEAD changed)")
+    if state_before["tree"] != state_after["tree"]:
+        raise ReceiptError("ERROR: matrix mutated the caller tree (index changed)")
+    if state_before["porcelain"] != state_after["porcelain"]:
+        raise ReceiptError("ERROR: matrix mutated the caller tree (working tree changed)")
+
+
+def _remove_throwaway_worktree(repo, wt):
+    """Remove a detached worktree and clean up."""
+    try:
+        subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(wt)],
+                      capture_output=True, timeout=30)
+        subprocess.run(["git", "-C", str(repo), "worktree", "prune"],
+                      capture_output=True, timeout=30)
+    except Exception:
+        pass  # Best effort cleanup
+
+
 def run_matrix(repo, names, registry=None, jobs=1):
-    """Run every runnable part (in parallel up to `jobs`); return (parts, skipped)."""
+    """Run every runnable part (in parallel up to `jobs`) in a detached throwaway worktree;
+    return (parts, skipped). Caller tree is verified untouched via tripwire."""
     registry = DEFAULT_REGISTRY if registry is None else registry
     unknown = [n for n in names if n not in registry]
     if unknown:
@@ -113,12 +165,45 @@ def run_matrix(repo, names, registry=None, jobs=1):
             skipped.append({"name": n, "reason": spec.skip_reason or "not runnable here"})
         else:
             runnable.append(n)
-    parts = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, int(jobs))) as pool:
-        futs = {pool.submit(run_part, repo, n, registry[n]): n for n in runnable}
-        for fut in concurrent.futures.as_completed(futs):
-            parts.append(fut.result())
-    parts.sort(key=lambda p: names.index(p["name"]))
+
+    # Capture caller state before matrix runs
+    state_before = _capture_caller_state(repo)
+
+    # Create a detached throwaway worktree for the matrix (only if repo is a git repo)
+    wt = None
+    tmp_root = None
+    if state_before is not None:
+        # repo is a git repository; create worktree
+        tmp_root = Path(tempfile.mkdtemp(prefix="aesop-receipt-matrix-"))
+        wt = tmp_root / "wt"
+        head_sha = _git(repo, "rev-parse", "HEAD")
+
+        # Create detached worktree at HEAD
+        res = subprocess.run(["git", "-C", str(repo), "worktree", "add", "--detach", "-q", str(wt), head_sha],
+                            capture_output=True, encoding="utf-8", errors="replace", timeout=300)
+        if res.returncode != 0:
+            raise ReceiptError("failed to create throwaway worktree: %s" % (res.stderr or "").strip())
+
+    try:
+        # Run all parts in the throwaway worktree (or caller repo if not a git repo)
+        parts = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, int(jobs))) as pool:
+            futs = {pool.submit(run_part, repo, n, registry[n], wt): n for n in runnable}
+            for fut in concurrent.futures.as_completed(futs):
+                parts.append(fut.result())
+        parts.sort(key=lambda p: names.index(p["name"]))
+    finally:
+        # Cleanup: remove the throwaway worktree
+        if wt is not None:
+            _remove_throwaway_worktree(repo, wt)
+            try:
+                shutil.rmtree(tmp_root, ignore_errors=True)
+            except Exception:
+                pass  # Best effort
+
+    # Tripwire: verify caller tree is untouched
+    _verify_caller_untouched(repo, state_before)
+
     return parts, skipped
 
 
