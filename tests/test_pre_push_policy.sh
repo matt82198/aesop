@@ -1610,21 +1610,7 @@ printf '\n=== Test: main() emits a receipt only after every gate above it passed
     # empty, or failed result is retried rather than silently trusted, since
     # trusting it silently is exactly what produced a confusing
     # "which gate is missing" failure instead of a clear one.
-    local gate_list=""
-    local attempt
-    for attempt in 1 2 3; do
-      gate_list=$(python "$REPO_ROOT/tools/gate_stub_list.py" "$REPO_ROOT/hooks/pre-push-policy.sh" 2>/dev/null)
-      local gate_rc=$?
-      if [ $gate_rc -eq 0 ] && [ "$(printf '%s' "$gate_list" | wc -l)" -ge 8 ]; then
-        break
-      fi
-      gate_list=""
-    done
-    if [ -z "$gate_list" ]; then
-      echo "FIXTURE ERROR: tools/gate_stub_list.py gave no usable output after 3 attempts" >&2
-    fi
-    local gate
-    for gate in $gate_list; do
+    for gate in $(python "$REPO_ROOT/tools/gate_stub_list.py" "$REPO_ROOT/hooks/pre-push-policy.sh"); do
       [ "$gate" = "claudemd_sync_gate" ] && continue  # needs a variable exit code below
       printf 'import sys\nsys.exit(0)\n' > "$aesop_root/tools/${gate}.py"
     done
