@@ -50,21 +50,25 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 - #854: Receipt gate increments 1–3 (emit, verify, non-required Action)
 - #883: tools/new_gate_check.py + gate_stub_list.py — one-command new-gate checklist (TTY fixture stub list, inventory parity, claudemd lint, portability, pre-push self-test) shipped 2026-10-07
 - #881: LANE-CONTRACT updates — PID-scoped process kills, dirty-PR recovery, claims-need-proof; ship 2026-10-07
+- **v0.9.0 release — SHIPPED (2026-10-07 02:25:53Z, PR #886):** GitHub release published via `release:published` event; tag 5dffb81f; 103 PRs merged since v0.8.0. Main-full CI resolved after #882/#897 fixes; npm publish via OIDC triggered (workflow success 2026-10-07T02:25:55Z).
+- **tools/INDEX.md union-merge deflake — SHIPPED (2026-10-07 02:30:41Z, PR #882):** Regen driver + committed-bytes push gate; prevents duplicate INDEX.md entries on clean merges; also fixes remote_refs_tripwire false positive; 45/45 + 223/223 regression tests green.
 
 ### In Progress
 
-20. **tools/INDEX.md union-merge duplicates** (IN-FLIGHT, lane open, PR #882 OPEN). Duplicates accumulate on clean merges due to drift — post-merge regenerate hook or duplicate-tolerant check; also fixes remote_refs_tripwire false positive (b3970e66).
-24. **v0.9.0 tag/publish withheld** (IN-PROGRESS). Tag cut via PR #886 (2026-10-07) but publish blocked: main-full red on 5dffb81f (Windows shard 0) and adbe0c6a (Ubuntu shard 3, tripwire false positive since fixed in #882/#888). Tag only on fully green main-full SHA; publish via `.github/workflows/publish.yml` on `release:published` event.
-25. **Receipt gate increments 4–6 automatic emission** (IN-PROGRESS, lane open). PR #854 shipped increments 1–3 (emit, verify, non-required Action). Increment 4–6 pending: automatic 3.5 emission in pre-push (measurement showed zero receipts previously emitted).
+25. **Receipt gate increments 4–6 automatic emission** (IN-PROGRESS, lane open, PR #895 OPEN). PR #854 shipped increments 1–3 (emit, verify, non-required Action). Increments 4–6 pending: automatic 3.5 emission in pre-push (measurement showed zero receipts previously emitted; #895 takeover lane wrapping up).
 26. **Heartbeat-pollution fix** (IN-PROGRESS, lane open). tests/test-backup-fleet-conductor-root.sh line 84 — remove ephemeral heartbeat writes from test fixtures.
+27. **pyflakes unused-import sweep** (IN-PROGRESS, lane open). Detect and remove unreferenced imports in driver/, tools/, mcp/, ui/ Python. Lane open as of 2026-10-07 (PR #890 ratchet gate for G15).
 
 ### Open / Queued
 
 10. **Hard checkpoint+clear enforcement hooks** (QUEUED). Implement pre-push gates to verify STATE.md/BUILDLOG.md are checkpointed before context clears. Enforce single-writer discipline on control files. Matt 2026-10-05 directive.
-16. **pyflakes unused-import sweep** (IN-PROGRESS, lane open). Detect and remove unreferenced imports in driver/, tools/, mcp/, ui/ Python. Lane open as of 2026-10-07.
 17. **LANE-CONTRACT line for AESOP_ALLOW_GENERATED** (QUEUED). Add contract statement permitting lanes to deploy generated-paths registry entries; policy clarification pending.
 21. **Promote pr_symbol_survival_check (G13) to blocking** (QUEUED). After 2026-10-14 (1 week clean runs since #865).
 22. **Extend hooks/no-polling.mjs** (QUEUED). Deny backgrounded whole-filesystem searches in lanes.
+28. **tests/test_test_hygiene.py lookback off-by-one** (QUEUED). Lookback window hardcoded as 19 lines; doc claims 20. Review window semantics + fix mismatch (2026-10-06 audit).
+29. **AesopMergeQueue task lifecycle decision** (QUEUED, decision pending with Matt). Scheduled task `AesopMergeQueue` Status: Disabled since 2026-09-11; `aesop-queue-main` branch stale at #800. Decision: retire gracefully (cleanup PR) vs re-enable? GitHub native auto-merge (PR #871) is the active merge actor; old queue is dormant.
+30. **integrate/batch-* minting process guard** (QUEUED). Lane-local process that minted `integrate/batch-20261006-{2052,2158}` was never pinned to dispatch identity. Guard implemented in #899 prevents recurrence; audit for prior orphans recommended.
+31. **Literal 1234567890 heartbeat writer** (QUEUED). Ephemeral test-fixture heartbeat writes used hardcoded timestamp never pinned to test identity. Structural fix deferred to #898 scope; isolated-env.mjs fixtures now guard against recurring artifacts (2026-10-06 audit).
 
 ### Blocked / Deferred
 
