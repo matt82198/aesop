@@ -1271,7 +1271,27 @@ def build_batch(members: list, summary: dict, epoch: int = None) -> str:
 
     A member that conflicts is dropped (exception row) and the rest continue.
     Returns the batch branch name, or "" if no batch was opened.
+
+    GUARD: Refuses to mint integrate/batch-* branches outside the dedicated queue checkout
+    to prevent accidental branch creation in lane worktrees. Checks AESOP_QUEUE_ROOT env
+    or .aesop-queue-root marker file at repo root.
     """
+    # Guard: ensure we're in the dedicated queue checkout, never in a lane worktree.
+    # Skip guard in test mode (when AESOP_STATE_ROOT is set).
+    is_test_mode = os.environ.get("AESOP_STATE_ROOT") is not None
+    if not is_test_mode:
+        queue_root = os.environ.get("AESOP_QUEUE_ROOT")
+        if queue_root is None:
+            # Fall back to marker file: check if .aesop-queue-root exists at repo root
+            marker = Path.cwd() / ".aesop-queue-root"
+            if not marker.exists():
+                # Not in queue root; refuse
+                record_exception(0, "queue_root_isolation_guard",
+                                 "build_batch called outside dedicated queue checkout; "
+                                 "set AESOP_QUEUE_ROOT env or place .aesop-queue-root marker at repo root")
+                summary["status"] = "error"
+                return ""
+
     safe, why = worktree_is_safe()
     if not safe:
         record_exception(0, "unsafe_worktree",
