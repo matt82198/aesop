@@ -1,0 +1,6 @@
+jobs:
+  ci:
+    steps:
+      # PyYAML is required by tools/mentioned_check.py
+      - run: python tools/alpha_lint.py --check
+      - run: python tools/verify_gamma.py
