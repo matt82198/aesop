@@ -178,6 +178,7 @@ def resolve_spool_dir(repo=None, environ=None) -> str:
             capture_output=True,
             text=True,
             encoding="utf-8",
+            errors="replace",
             timeout=10,
             check=False
         )
