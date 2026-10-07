@@ -159,3 +159,4 @@ lookup exception-safe and guarding the module's own absence at the shell level.)
 # Hook test
 # Another test
 # Test 4 after unset hooks path
+- 2026-10-07 hook-emission proof push (orchestrator-ordered)
