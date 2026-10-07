@@ -61,6 +61,7 @@
     "tests/test_frontier_eligibility.py@FStringMissingPlaceholders": 3,
     "tests/test_frontier_grader_audit.py@FStringMissingPlaceholders": 2,
     "tests/test_frontier_slice_n60.py@FStringMissingPlaceholders": 1,
+    "tests/test_generated_merge.py@UnusedImport": 1,
     "tests/test_generated_paths.py@RedefinedWhileUnused": 2,
     "tests/test_git_integrity_check.py@UnusedVariable": 2,
     "tests/test_hs2_swap_proof.py@UnusedVariable": 1,
