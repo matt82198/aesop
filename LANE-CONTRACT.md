@@ -17,6 +17,9 @@ expensive way during aesop development. Each line exists because a lane failed w
   *(One lane burned 3 rounds on this before being replaced.)*
 - If something cannot be run, say so and why. Do not narrate a hypothetical result.
 - A claim in a report that was not executed is a defect, not a summary.
+- **"Pre-existing flake", "green locally", and "on schedule" are CLAIMS, not findings.** Attach
+  proof — 3x reruns with pasted summary lines, the literal CI log line, or two unattended heartbeat
+  advances — or open a fix lane instead. *(The orchestrator refuted 3 of 3 flake claims in one day.)*
 
 ## 2. Tests
 - **A test file MUST return a suite declaration** (second return value). Without it the runner prints
@@ -77,6 +80,10 @@ expensive way during aesop development. Each line exists because a lane failed w
   `bisect_is_exhausted`, and CI stayed green because only the PR's own tests exercised them). After
   resolving any merge conflict, run `python tools/pr_symbol_survival_check.py --base <base> --head
   <head>` (Guardrail G13) before pushing.
+- **Lanes cannot force-push (hook-blocked).** Recover a dirty PR with `git merge origin/main` into
+  your branch, keeping BOTH intents (never `checkout --ours/--theirs` on code or docs), regenerate
+  registered generated artifacts (`python tools/gen_tool_index.py --regenerate`), run `python
+  tools/pr_symbol_survival_check.py --base origin/main --head HEAD` (0 MISSING), then a plain push.
 
 - **A scalar's COUNTING RULE is part of the scalar.** Re-measuring is not enough if you assume what
   is being counted. A gate counting "Python test files executed" has a rule; a leg adding a `.mjs`
@@ -212,6 +219,14 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   no tampering with `.git/hooks`. (Cardinal Rule 8: `python ~/scripts/secret_scan.py --staged`, exit 1 blocks)
   — a lane did this once and merged to main with the scan disarmed. If a hook is failing, fix the underlying
   issue or report BLOCKED; do not turn the gate off.
+- **PROCESS KILLS: a lane may stop only a process it identified by PID from its own CommandLine**
+  (e.g. a looping run-watchdog instance it spawned). Never `taskkill /IM bash.exe`, never `/T` on a
+  shell you did not spawn, never `Get-Process bash | Stop-Process` — an untargeted kill took down
+  the orchestrator's monitors three times in one day.
+- **MONITORS are orchestrator-only.** Lanes finish in the foreground; a lane never starts a monitor,
+  watcher, or standing loop of its own.
+- **BACKGROUND RUNS are denied by hook.** A lane runs to completion in the foreground — no
+  `run_in_background`, no detached/nohup process; backgrounding is not a lane capability.
 
 ## 7. Definition of DONE — work that is not pushed does not exist
 - **A lane is not finished when the code is written and the bar is green. It is finished when the
