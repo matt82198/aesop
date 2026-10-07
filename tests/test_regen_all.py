@@ -199,12 +199,17 @@ class TestDriftedToolIndexDetectedAndFixed(RegenAllFixture):
         self.assertEqual(self.git_status().strip(), "",
                           "drift is committed, not working-tree-dirty")
 
-    def test_check_reports_drift_and_restores_the_tree(self):
+    def test_check_reports_drift_without_modifying_tree(self):
+        """--check is read-only (see tests/test_check_mode_readonly.py contract).
+
+        Drift is detected and reported (exit 1, tools/INDEX.md in output) but the
+        working tree is never modified. Uses git hash-object for EOL-agnostic comparison.
+        """
         proc = self.regen_all("--check")
         self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
         self.assertIn("tools/INDEX.md", (proc.stdout + proc.stderr))
         self.assertEqual(self.git_status().strip(), "",
-                          "--check is read-only: it must restore what it wrote")
+                          "--check is read-only: tree must not be modified")
 
     def test_fix_repairs_the_drift_and_leaves_it_uncommitted(self):
         before = self.tool_index_text()

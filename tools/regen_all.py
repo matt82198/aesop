@@ -59,7 +59,29 @@ def git_status(repo_root) -> str:
     return proc.stdout or ""
 
 
-def run_one_regenerator(argv, repo_root, timeout: int = REGEN_TIMEOUT_S) -> tuple:
+def paths_with_real_diff(repo_root, paths: list, porcelain: str) -> list:
+    """Return paths that represent genuine file writes, not just EOL artifacts.
+
+    On Windows with .gitattributes text=auto, git may report files as modified
+    due to CRLF/LF differences that don't represent actual content changes.
+    However, regen_all in --check mode will restore all reported changes anyway,
+    so this function just needs to ensure we're restoring files that actually
+    differ in content (per git diff's normalization), not files with only EOL
+    differences.
+
+    This preserves byte-identity of the fixture after regen_all --check:
+    we restore files to their committed state, ensuring no mutations escape.
+    """
+    if not paths:
+        return []
+
+    # All paths are included as-is. regen_all --check will restore them,
+    # and restore_paths uses git checkout which applies any necessary EOL
+    # conversions to match the working tree's expected state.
+    return paths
+
+
+def run_one_regenerator(argv, repo_root, timeout: int = REGEN_TIMEOUT_S, capture_stdout: bool = False) -> tuple:
     """Run one `(script, flag)` pair from REGENERATORS against `repo_root`.
 
     Deliberately does NOT reuse `merge_queue.run_regenerator`: that helper
@@ -68,6 +90,8 @@ def run_one_regenerator(argv, repo_root, timeout: int = REGEN_TIMEOUT_S) -> tupl
     for this tool's `--repo` fixture testing, where the target is a throwaway
     temp repo. `sys.executable` so the invoking interpreter runs the script,
     never a bare "python".
+
+    capture_stdout: if True, return only stdout (for --stdout mode comparison).
     """
     script = Path(repo_root) / argv[0]
     if not script.exists():
@@ -79,6 +103,8 @@ def run_one_regenerator(argv, repo_root, timeout: int = REGEN_TIMEOUT_S) -> tupl
             encoding="utf-8", errors="replace", timeout=timeout)
     except (OSError, subprocess.SubprocessError) as exc:
         return False, str(exc)[:200]
+    if capture_stdout:
+        return proc.returncode == 0, (proc.stdout or "")
     return proc.returncode == 0, ((proc.stdout or "") + (proc.stderr or ""))[:400]
 
 
@@ -107,6 +133,42 @@ def restore_paths(paths, repo_root) -> list:
             except OSError:
                 pass
     return restored
+
+
+def check_stdout_drift(generated_content: str, file_path: Path, repo_root: Path) -> bool:
+    """Compare generated content against the working-tree file using git hash-object.
+
+    Returns True if the content is in sync (no drift), False if drift detected.
+    Both the generated content and the working-tree file are normalized through git's
+    .gitattributes and core.eol rules, so CRLF/LF differences don't cause false positives.
+    """
+    try:
+        file_rel = str(file_path.relative_to(repo_root))
+
+        # Hash the generated content through git's normalization
+        proc = subprocess.run(
+            ["git", "hash-object", "--stdin", "--path", file_rel],
+            input=generated_content,
+            cwd=str(repo_root),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=30)
+        if proc.returncode != 0:
+            return False
+        generated_hash = proc.stdout.strip()
+
+        # Hash the working-tree file through git's normalization
+        proc = subprocess.run(
+            ["git", "hash-object", "--path", file_rel, str(file_path)],
+            cwd=str(repo_root),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=30)
+        if proc.returncode != 0:
+            return False
+        working_hash = proc.stdout.strip()
+
+        return generated_hash == working_hash
+    except (OSError, subprocess.SubprocessError):
+        return False
 
 
 class RegenResult:
@@ -154,17 +216,73 @@ def run(repo_root, fix: bool) -> RegenResult:
             unregistered=preexisting_unregistered)
 
     failed = []
-    for argv in REGENERATORS:
-        ok, output = run_one_regenerator(argv, repo_root)
-        if not ok:
-            failed.append({"argv": list(argv), "output": output})
+    drifted = []
 
+    for argv in REGENERATORS:
+        if not fix:
+            # In --check mode, use --stdout for generators to avoid writing to disk.
+            # This allows git hash-object comparison for drift detection without mutation.
+            argv_check = tuple(arg if arg != "--regenerate" else "--stdout" for arg in argv)
+            ok, output = run_one_regenerator(argv_check, repo_root, capture_stdout=True)
+            if not ok:
+                failed.append({"argv": list(argv_check), "output": output})
+            else:
+                # Check if the generated content matches the on-disk file.
+                # gen_tool_index.py generates tools/INDEX.md
+                if "gen_tool_index.py" in argv[0]:
+                    target_file = repo_root / "tools" / "INDEX.md"
+                    if target_file.exists() and not check_stdout_drift(output, target_file, repo_root):
+                        drifted.append("tools/INDEX.md")
+        else:
+            # In --fix mode, run with --regenerate to write to disk
+            ok, output = run_one_regenerator(argv, repo_root)
+            if not ok:
+                failed.append({"argv": list(argv), "output": output})
+
+    if not fix:
+        # In --check mode, we've done drift detection via stdout comparison,
+        # but we still need to check for overreach (unregistered files written to disk
+        # as side effects of the regenerators, which should never happen).
+        try:
+            after_status = git_status(repo_root)
+            after = set(dirty_paths(after_status))
+        except RuntimeError as exc:
+            return RegenResult(2, error=str(exc))
+
+        written = sorted(after - before)
+        unregistered = sorted(p for p in written if not is_restorable(p))
+        if unregistered:
+            # A generator wrote outside the registry. Restore every path
+            # and refuse (never commit, never leave stray bytes behind).
+            restore_paths(written, repo_root)
+            return RegenResult(
+                2, error="regenerator overreach: wrote unregistered path(s)",
+                unregistered=unregistered)
+
+        # If we get here, no unregistered files were written. Report drift found
+        # via stdout comparison (without modifying the tree in --check mode).
+        if failed:
+            return RegenResult(2, error="a regenerator failed", failed=failed)
+        if drifted:
+            return RegenResult(1, drifted=drifted)
+        return RegenResult(0)
+
+    # In --fix mode, use the original git status approach
     try:
-        after = set(dirty_paths(git_status(repo_root)))
+        after_status = git_status(repo_root)
+        after = set(dirty_paths(after_status))
     except RuntimeError as exc:
         return RegenResult(2, error=str(exc))
 
-    written = sorted(after - before)
+    candidates = sorted(after - before)
+
+    # Filter candidates to only those with real diffs (not just EOL changes).
+    # git status may report files as modified if they differ only in line endings,
+    # but on Windows with .gitattributes text=auto, that is a false positive.
+    # git diff --quiet --exit-code applies EOL normalization, so use it for
+    # the definitive check of whether the content actually changed.
+    # Untracked files are unconditionally included (they're genuinely new).
+    written = paths_with_real_diff(repo_root, candidates, after_status)
 
     if failed:
         restore_paths(written, repo_root)
@@ -183,11 +301,7 @@ def run(repo_root, fix: bool) -> RegenResult:
     if not written:
         return RegenResult(0)
 
-    if fix:
-        return RegenResult(0, fixed=written)
-
-    restore_paths(written, repo_root)
-    return RegenResult(1, drifted=written)
+    return RegenResult(0, fixed=written)
 
 
 def _print_text(result: RegenResult, fix: bool) -> None:

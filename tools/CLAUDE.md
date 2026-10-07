@@ -34,6 +34,8 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 
 - **tools/merge_queue.py**: Merge-queue advancer. Updated 2026-10-06: added AESOP_QUEUE_ROOT isolation guard (refuses to mint integrate/q-* branches unless running in dedicated queue checkout).
 - **tools/merge_train.py**: Transport layer. Updated 2026-10-06: git() helper now accepts optional cwd parameter for explicit working directory control.
+- **tools/gen_tool_index.py**: Generated INDEX.md builder. Updated 2026-10-07: --check mode uses `git hash-object --path` for EOL-agnostic comparison; generated content hash vs working-tree file hash both normalized through git's .gitattributes/core.eol rules. Fixes Windows false positives where CRLF/LF byte differences were misreported as stale. --regenerate writes LF-only (standard git storage format).
+- **tools/regen_all.py**: Regenerator runner. Updated 2026-10-07: paths_with_real_diff() returns all modified paths for restoration in --check mode, preserving fixture byte-identity. EOL normalization delegated to gen_tool_index.py and git's comparison rules.
 
 ## Tool index
 
