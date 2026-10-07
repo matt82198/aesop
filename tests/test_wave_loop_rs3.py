@@ -221,9 +221,9 @@ def _init_git_repo(path):
     GUARD: path must resolve to a directory inside _MODULE_TMP to prevent
     escapes to the shared .git/config (discovered 2026-10-06).
 
-    Identity is passed via env vars (GIT_AUTHOR_NAME/EMAIL,
-    GIT_COMMITTER_NAME/EMAIL) rather than config writes, isolating test
-    identity from any repo's shared config.
+    Identity is written to the TEMP REPO'S LOCAL config (safe after
+    validation), not the shared config. This allows the wave loop's own
+    commits in that repo to succeed while keeping test identity isolated.
     """
     path_resolved = Path(path).resolve()
     module_tmp_resolved = Path(_MODULE_TMP).resolve()
@@ -239,21 +239,22 @@ def _init_git_repo(path):
             f"(guards against shared .git/config pollution)"
         )
 
-    # Initialize the repo with identity passed via env vars instead of
-    # git config writes. This keeps test identity isolated.
-    env = os.environ.copy()
-    env.update({
-        "GIT_AUTHOR_NAME": "RS3 Test",
-        "GIT_AUTHOR_EMAIL": "rs3@test.local",
-        "GIT_COMMITTER_NAME": "RS3 Test",
-        "GIT_COMMITTER_EMAIL": "rs3@test.local",
-    })
-
+    # Initialize the repo and write identity to its LOCAL config only.
+    # After path validation, this is safe and allows wave loop commits.
     subprocess.run(
         ["git", "init", "-q", str(path)],
         capture_output=True,
         check=True,
-        env=env,
+    )
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.email", "rs3@test.local"],
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.name", "RS3 Test"],
+        capture_output=True,
+        check=True,
     )
 
 
