@@ -1527,8 +1527,23 @@ check_emit_receipt() {
     return 0
   fi
 
-  if [ -z "${AESOP_RECEIPT_KEY:-}" ] && [ -z "${AESOP_RECEIPT_HMAC_SECRET:-}" ]; then
-    printf 'WARN: no receipt signing key material (%s or %s unset); receipt not emitted (push continues).\n' \
+  # Check for Ed25519 key: env var, then default paths
+  local has_ed25519_key=0
+  if [ -n "${AESOP_RECEIPT_KEY:-}" ]; then
+    has_ed25519_key=1
+  else
+    # Check default paths: AESOP_HOME first, then HOME
+    for home_var in "AESOP_HOME" "HOME"; do
+      local home_dir="${!home_var:-}"
+      if [ -n "$home_dir" ] && [ -f "$home_dir/.aesop/receipt_key.pem" ]; then
+        has_ed25519_key=1
+        break
+      fi
+    done
+  fi
+
+  if [ "$has_ed25519_key" = "0" ] && [ -z "${AESOP_RECEIPT_HMAC_SECRET:-}" ]; then
+    printf 'WARN: no receipt signing key material (set %s, %s, or place a key at ~/.aesop/receipt_key.pem); receipt not emitted (push continues).\n' \
       "AESOP_RECEIPT_KEY" "AESOP_RECEIPT_HMAC_SECRET" >&2
     log_event "receipt_emit_skipped_no_key_material"
     return 0
