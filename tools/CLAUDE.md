@@ -48,6 +48,24 @@ artifact (`generated_paths.REGISTRY` entries with a `regen` argv; must equal
 one with exactly that instruction; the driver's per-worktree `.needs-regen` stamp
 (`git rev-parse --git-path aesop-needs-regen`) forces the check even on an empty range.
 
+## Adding a new gate (2026-10-06, PR #872 postmortem)
+
+Adding or wiring a pre-push gate took PR #872 five red CI rounds -- a different
+checklist item each time. Two fixes: `gate_stub_list.py` derives
+`tests/test_pre_push_policy.sh`'s TTY-fixture stub list from the real `check_*`
+functions in `hooks/pre-push-policy.sh` (parses for `gate_tool_status()` call
+sites) instead of a hand list a new gate is never automatically added to --
+see `tests/test_gate_stub_list.py` for the red-first proof a dummy `check_zzz`
+is picked up. `new_gate_check.py` runs the whole checklist in one command
+(pre-push self-test, `gate_inventory.py` axis2 parity, `claudemd_lint.py`
+working-tree + `--headroom`, `claudemd_sync_gate.py`, `portability_check.py`
+ratchet, `verify_gates_wired.py`, `dispatch_lint.py`, `conflict_marker_check.py`,
+and a dry pre-push range check against `origin/main` with no real push) and
+prints the exact fix command for any red row; exit 0=all green/1=any red/2=usage
+error. Allowlisted in `tools/gate-inventory-allowlist.json` (operator-invoked
+meta-tool, no file-content rule of its own to wire into CI). See
+`LANE-CONTRACT.md` section 5.
+
 ## Recent additions (2026-10)
 
 - `generated_merge.py` / `generated_push_gate.py` / `install_merge_drivers.py` — the

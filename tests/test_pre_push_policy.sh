@@ -966,10 +966,24 @@ SCANNER
   # that (a missing gate script in a repo that has tools/ used to be silently
   # skipped -- the escape this fixture must not re-create). These stubs keep the
   # fixture focused on main()'s stdin handling instead of gate behavior.
-  for gate_stub in tracker_guard import_resolution_check claudemd_sync_gate \
-                   gen_tool_index metrics_gate verify_test_suite_count encoding_lint \
-                   verify_test_coverage conflict_marker_check linux_shape_check \
-                   generated_push_gate; do
+  #
+  # DERIVED, not hand-maintained: a hardcoded list here forgets every new
+  # fail-closed gate the moment it's added to pre-push-policy.sh (PR #872 --
+  # five red CI rounds, one of them this exact fixture missing a stub for a
+  # just-added gate). tools/gate_stub_list.py parses the real hook script for
+  # every check_* function that resolves its script via gate_tool_status() and
+  # emits the current, correct list -- see tests/test_gate_stub_list.py for the
+  # red-first proof that a brand-new check_* gate is picked up automatically.
+  py_bin="python3"
+  command -v python3 >/dev/null 2>&1 || py_bin="python"
+  # tr -d '\r': python.exe's stdout text layer translates \n -> \r\n on Windows,
+  # which would otherwise leave a trailing \r glued onto each stub name below.
+  derived_stubs=$("$py_bin" "$(dirname "$HOOK_SCRIPT")/../tools/gate_stub_list.py" "$HOOK_SCRIPT" | tr -d '\r')
+  if [ -z "$derived_stubs" ]; then
+    printf 'FAIL: tools/gate_stub_list.py derived an empty stub list from %s\n' "$HOOK_SCRIPT" >&2
+    exit 1
+  fi
+  for gate_stub in $derived_stubs; do
     printf 'import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/$gate_stub.py"
   done
 

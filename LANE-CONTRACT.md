@@ -155,6 +155,7 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   (subprocess encoding), `python tools/verify_test_coverage.py --check` (orphaned test files), `python tools/claudemd_sync_gate.py --check`
   (domain code changes documented), `python tools/dispatch_lint.py --check` (forbidden dispatch patterns).
   **Every CI workflow job is a gate.** Run or cite literal output for each.
+- **Adding or wiring a gate: run `python tools/new_gate_check.py` green before pushing** — it runs the whole new-gate checklist in one command (pre-push self-test, gate_inventory parity, CLAUDE.md lint/headroom/sync, portability ratchet, verify_gates_wired, dispatch_lint, conflict_marker_check, a dry pre-push range check) and prints the exact fix command for any red row, instead of discovering each item one red CI round at a time (PR #872: five rounds).
 - **"Green can mean never ran."** A test suite or gate marked PASS might be skipped due to a branch
   condition, a stale file, or a missing interpreter. Never assume a check passed — verify it actually ran
   by reading: (1) the exact output message, (2) the count of items processed/verified, (3) the tool's exit
