@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import json
 import os
+import subprocess
 from pathlib import Path
 
 CHECK_NAME = "verify-receipt-local"
@@ -26,8 +27,10 @@ DEFAULT_PUBKEY_REL = "tools/receipt_pubkey.pub"
 DEFAULT_REQUIRED_PARTS = ("py-shard-0", "py-shard-1", "py-shard-2", "py-shard-3")
 KEY_ENV = "AESOP_RECEIPT_KEY"
 HMAC_ENV = "AESOP_RECEIPT_HMAC_SECRET"
+SPOOL_ENV = "AESOP_RECEIPT_SPOOL"
 SCHEMES = ("ed25519", "hmac-sha256")
 DEFAULT_KEY_REL = ".aesop/receipt_key.pem"  # Relative to HOME or AESOP_HOME
+DEFAULT_SPOOL_REL = ".aesop/receipt-spool"  # Relative to git common dir or HOME
 
 
 class ReceiptError(Exception):
@@ -142,6 +145,82 @@ def has_key_material(scheme: str, pubkey_path=None, hmac_secret=None) -> bool:
     if scheme == "ed25519":
         return ed25519_available() and bool(pubkey_path) and Path(pubkey_path).is_file()
     return False
+
+
+def resolve_spool_dir(repo=None, environ=None) -> str:
+    """Resolve the receipt spool directory path with fallback precedence.
+
+    Priority (highest to lowest):
+    1. $AESOP_RECEIPT_SPOOL env var (if set, directory is created if needed)
+    2. <git-common-dir>/aesop-receipt-spool (survives worktree removal)
+    3. $HOME/.aesop/receipt-spool (home fallback)
+
+    Args:
+        repo: Repository path (default: cwd). Used to find git-common-dir.
+        environ: Environment dict (default: os.environ).
+
+    Returns the resolved spool directory path as a string. Directory is not created.
+    """
+    if environ is None:
+        environ = os.environ
+    if repo is None:
+        repo = "."
+
+    # Check for explicit env var first
+    if environ.get(SPOOL_ENV):
+        return environ[SPOOL_ENV]
+
+    # Try git-common-dir (works inside worktrees)
+    repo_path = Path(repo).resolve()
+    try:
+        git_common = subprocess.run(
+            ["git", "-C", str(repo_path), "rev-parse", "--git-common-dir"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            check=False
+        )
+        if git_common.returncode == 0:
+            git_common_dir = Path(git_common.stdout.strip()).resolve()
+            spool_path = git_common_dir / "aesop-receipt-spool"
+            return str(spool_path)
+    except Exception:
+        pass  # Fall through to home fallback
+
+    # Home fallback
+    for home_var in ("HOME",):
+        home_dir = environ.get(home_var)
+        if home_dir:
+            spool_path = Path(home_dir) / DEFAULT_SPOOL_REL
+            return str(spool_path)
+
+    # Absolute fallback: use a temp-relative path (unlikely but safe)
+    return str(Path.home() / DEFAULT_SPOOL_REL)
+
+
+def get_spool_search_paths(repo=None, environ=None) -> list:
+    """Get all paths to search when flushing receipts (primary + legacy fallback).
+
+    Returns a list of Path objects to check, in priority order:
+    1. Resolved primary spool dir
+    2. Legacy repo/state/receipts/spool (for backward compatibility)
+    """
+    if environ is None:
+        environ = os.environ
+    if repo is None:
+        repo = "."
+
+    paths = [Path(resolve_spool_dir(repo=repo, environ=environ))]
+
+    # Add legacy path as fallback source
+    repo_path = Path(repo).resolve()
+    legacy_path = repo_path / "state" / "receipts" / "spool"
+    if legacy_path != paths[0]:  # Avoid duplicates
+        paths.append(legacy_path)
+
+    return paths
 
 
 def resolve_receipt_key_path(environ=None) -> str:
