@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Test that emit_receipt's matrix runs in a throwaway worktree and doesn't mutate the caller tree."""
 
-import os
 import subprocess
 import sys
 import tempfile
