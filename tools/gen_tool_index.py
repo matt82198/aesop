@@ -28,6 +28,7 @@ correctly on all platforms without being fooled by CRLF/LF differences.
 """
 
 import argparse
+import io
 import json
 import re
 import subprocess
@@ -144,8 +145,6 @@ def check_via_git_hash(index_file: Path, repo_root: Path, expected_content: str)
     Returns True if hashes match (file is in sync).
     """
     try:
-        import os
-        import tempfile
         file_rel = str(index_file.relative_to(repo_root))
 
         # Hash the expected (generated) content through git's normalization
@@ -255,7 +254,6 @@ def main(argv=None):
         # Print to stdout without writing to disk. Used by regen_all --check
         # to generate content for git hash-object comparison.
         # Ensure UTF-8 encoding even on Windows where default might be cp1252.
-        import io
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
         print(expected, end="")
         return 0
