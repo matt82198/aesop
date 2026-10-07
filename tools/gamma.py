@@ -1,3 +1,3 @@
-"""gamma.py.
-INDEX: gamma purpose
+"""gamma.
+INDEX: modified gamma purpose
 """
