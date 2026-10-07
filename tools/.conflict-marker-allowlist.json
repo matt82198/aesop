@@ -1,4 +1,0 @@
-{
-  "_comment": "Repo-relative paths permitted to contain literal conflict-marker-shaped lines (e.g. test fixtures that intentionally exercise tools/conflict_marker_check.py). Consumed by conflict_marker_check.py's default --allowlist. Keep this list minimal; prefer the inline `# conflict-marker-ok` suppression for a single line. Empty in this repo -- the test suite builds its own isolated allowlist in a temp git repo rather than committing marker-containing fixtures here.",
-  "paths": []
-}

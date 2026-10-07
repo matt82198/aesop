@@ -1,5 +1,0 @@
-{"id": "s0000", "expected": "code"}
-{"id": "s0001", "expected": "test_validate_config_loader"}
-{"id": "s0002", "expected": "845"}
-{"id": "s0003", "expected": "refactor"}
-{"id": "s0004", "expected": "ValueError"}
