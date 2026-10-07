@@ -18,7 +18,7 @@ SERVE_PATH = Path(__file__).parent.parent / "ui" / "serve.py"
 UI_PATH = Path(__file__).parent.parent / "ui"
 
 ENV_KEYS = ("AESOP_ROOT", "AESOP_TRANSCRIPTS_ROOT", "AESOP_STATE_ROOT",
-            "AESOP_UI_COLLECT_INTERVAL", "PORT")
+            "AESOP_UI_COLLECT_INTERVAL", "PORT", "AESOP_CONDUCTOR3_ROOT")
 
 
 def load_serve(fixture_root, port=None, extra_env=None):
@@ -40,9 +40,12 @@ class AcceptanceCriteriaTestCase(unittest.TestCase):
         self.fixture_root = Path(tempfile.mkdtemp(prefix="aesop-ac-test-"))
         (self.fixture_root / "state").mkdir()
         (self.fixture_root / "transcripts").mkdir()
+        self._conductor_root = Path(tempfile.mkdtemp(prefix="aesop-conductor3-"))
+        (self._conductor_root / "state").mkdir()
         self._saved_env = {k: os.environ.get(k) for k in ENV_KEYS}
         os.environ["AESOP_TRANSCRIPTS_ROOT"] = str(self.fixture_root / "transcripts")
         os.environ["AESOP_UI_COLLECT_INTERVAL"] = "0.2"
+        os.environ["AESOP_CONDUCTOR3_ROOT"] = str(self._conductor_root)
         os.environ["PORT"] = "18771"
 
         self.serve = load_serve(self.fixture_root)
@@ -75,6 +78,7 @@ class AcceptanceCriteriaTestCase(unittest.TestCase):
                 else:
                     os.environ[k] = v
             shutil.rmtree(self.fixture_root, ignore_errors=True)
+            shutil.rmtree(self._conductor_root, ignore_errors=True)
 
     def _conn(self):
         return http.client.HTTPConnection("127.0.0.1", self.actual_port, timeout=5)

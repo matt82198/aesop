@@ -267,7 +267,7 @@ def _write_ledger(state, now):
         (1.2, "general-purpose", DEMO_MODEL, 274, 3300, 11900, "OK", "build", "2"),
         (0.7, "orchestrator", "claude-opus-4-5", 98, 11800, 3100, "OK", "merge", "2"),
         (0.3, "general-purpose", DEMO_MODEL, 189, 2300, 8600, "OK", "build", "2"),
-        (0.1, "test-writer", DEMO_MODEL, 176, 2100, 7900, "OK", "build", "2"),
+        (0.0, "test-writer", DEMO_MODEL, 176, 2100, 7900, "OK", "build", "2"),
     ]
     lines = [
         "| timestamp | agent_type | model | duration | tokens_in | tokens_out | verdict | phase | wave |",
