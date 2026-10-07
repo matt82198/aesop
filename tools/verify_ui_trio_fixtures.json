@@ -1,0 +1,22 @@
+{
+  "gantt_endpoint": "/api/wave/gantt",
+  "audit_endpoint": "/api/wave/audit-tail",
+  "reasoning_endpoint": "/api/wave/reasoning-tail",
+  "expected_keys": {
+    "gantt": [
+      "available",
+      "agents",
+      "at"
+    ],
+    "audit": [
+      "available",
+      "audit_items",
+      "at"
+    ],
+    "reasoning": [
+      "available",
+      "agents",
+      "at"
+    ]
+  }
+}
