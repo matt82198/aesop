@@ -128,6 +128,19 @@ expensive way during aesop development. Each line exists because a lane failed w
 - **Resolve env vars and paths at dispatch time, never hardcode.** Use `$AESOP_ROOT`, `$HOME`, and
   `sys.executable`; never `/c/Users/matt8` or `python3` or machine-specific paths.
 
+## 4a. Before you push — ordered self-checks
+
+Five CI failures this week came from checks lanes could run locally. This ordered checklist prevents them:
+
+1. **Footprint** — `git diff --shortstat origin/main...HEAD` and `git log --oneline origin/main..HEAD`. STOP if diff is unexpectedly large or any commit subject reads like a test fixture ("Initial", "fixture", "base", "seed", "baseline").
+2. **Pyflakes** — `python tools/pyflakes_gate.py` (paste literal output).
+3. **Test hygiene** — `python -m unittest tests.test_no_bare_test_functions tests.test_test_hygiene` (paste output).
+4. **Metadata** — `python tools/claudemd_lint.py --root .` and `python tools/claudemd_sync_gate.py --check` (paste output).
+5. **Tool index** — If tools/ changed, `python tools/gen_tool_index.py --regenerate` and commit the update.
+6. **Push cwd** — Always push from the worktree; never `git -C <primary> push`.
+7. **PR head** — `gh pr create --base main --head <branch>` explicitly, then verify `gh pr view N --json headRefName,headRefOid`.
+8. **Receipt interim** — Until PR #924, push with `AESOP_RECEIPT_EMIT=0` and state it in the PR body.
+
 ## 4b. AESOP NATIVE FIRST — STANDING USER RULE (aesop core)
 
 **"Read tools/CLAUDE.md and the gate implementation BEFORE fixing."** Before writing a gate fix,
