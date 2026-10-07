@@ -248,10 +248,114 @@ def _git(repo_root, env, *args):
     return proc.returncode, (proc.stdout or "").strip(), (proc.stderr or "")
 
 
+# Freshness checks for registered machine-generated paths (tools/generated_paths.py
+# REGISTRY). The pre-push hook's designed writer path is: regenerate, then push
+# with AESOP_ALLOW_GENERATED=1 -- so a branch that merely carries a clean
+# regeneration (e.g. because it merged origin/main, which itself merged a prior
+# regeneration) is NOT a violation and must not red the dry-range row (the bug
+# behind PR #882 reading 9/10 on a perfectly good branch). Each entry maps a
+# REGISTRY path to the command that verifies it is byte-identical to its
+# generator's output, and the exact fix text to print when it is not -- the
+# same text that generator's own --check mode prints. A REGISTRY path with no
+# entry here falls back to "unknown" (see _evaluate_generated_freshness):
+# freshness cannot be verified, so this row defers to the real hook's own
+# check_generated_paths gate unchanged -- never silently waved through.
+GENERATED_FRESHNESS_CHECKS = {
+    "tools/INDEX.md": {
+        "cmd": lambda py, repo_root: [
+            py, str(Path(repo_root) / "tools" / "gen_tool_index.py"), "--check", "--root", str(repo_root),
+        ],
+        "fix": "python tools/gen_tool_index.py --regenerate && git add tools/INDEX.md",
+    },
+}
+
+
+def _changed_registered_generated_paths(repo_root, env, py, changed_paths):
+    """Ask tools/generated_paths.py --check --json which of `changed_paths` are
+    registered machine-generated files. Returns a list of {"path", "pattern",
+    "generator", "why"} dicts (empty if none are registered, or if the tool /
+    interpreter is unavailable -- fail-open, the same posture the pre-push
+    hook's own check_generated_paths uses for missing optional tooling)."""
+    if not changed_paths:
+        return []
+    gen_script = Path(repo_root) / "tools" / "generated_paths.py"
+    if not gen_script.exists():
+        return []
+    stdin_text = "\n".join(changed_paths) + "\n"
+    proc = _run(
+        [py, str(gen_script), "--check", "--json"], repo_root, env, timeout=60, input_text=stdin_text
+    )
+    try:
+        report = json.loads(proc.stdout or "{}")
+    except ValueError:
+        return []
+    return report.get("hits", [])
+
+
+def _evaluate_generated_freshness(repo_root, env, py, hits):
+    """Evaluate registered generated-path hits the way the pre-push hook's
+    designed writer path does: fresh (byte-identical to the generator's
+    output) is fine to push with AESOP_ALLOW_GENERATED=1; stale is a real
+    defect that must be regenerated before push.
+
+    Returns (status, payload):
+      ("none", None)             -- hits was empty; caller changes nothing.
+      ("fresh", note)            -- every hit has a known, passing freshness
+                                      check; note is the human-readable PASS
+                                      annotation to prepend to the row detail.
+      ("stale", (detail, fix))   -- at least one hit's generator check failed;
+                                      fix is the exact regen command (same
+                                      text the generator's own --check prints).
+      ("unknown", None)          -- hits exist but at least one has no known
+                                      freshness check here; defer to the real
+                                      hook's own gate (unchanged behavior).
+    """
+    if not hits:
+        return "none", None
+
+    stale = []
+    unknown = False
+    for hit in hits:
+        path = hit.get("path", "")
+        checker = GENERATED_FRESHNESS_CHECKS.get(path)
+        if checker is None:
+            unknown = True
+            continue
+        proc = _run(checker["cmd"](py, repo_root), repo_root, env, timeout=120)
+        if proc.returncode != 0:
+            stale.append((path, checker["fix"], (proc.stdout or "") + (proc.stderr or "")))
+
+    if stale:
+        detail_lines = ["generated path(s) are stale (regeneration required):"]
+        for path, fix, out in stale:
+            detail_lines.append("  %s -- run: %s" % (path, fix))
+            if out.strip():
+                detail_lines.append("    " + out.strip().replace("\n", "\n    "))
+        fix = "; ".join(dict.fromkeys(f for _p, f, _o in stale))
+        return "stale", ("\n".join(detail_lines), fix)
+
+    if unknown:
+        return "unknown", None
+
+    return "fresh", "generated paths verified regenerated (%s)" % (
+        ", ".join(sorted(h.get("path", "") for h in hits))
+    )
+
+
 def check_dry_prepush(repo_root, env):
     """Simulate the pre-push hook for the current branch against origin/main
     WITHOUT running `git push` -- builds the exact stdin tuple git would
     pipe into the hook for a feature-branch push and runs the real hook.
+
+    Before running the hook, pre-evaluates any registered generated paths
+    (tools/generated_paths.py REGISTRY, e.g. tools/INDEX.md) changed relative
+    to origin/main the same way the hook's designed writer path does: if
+    every changed registered path is byte-identical to its generator's
+    output, the dry run proceeds with AESOP_ALLOW_GENERATED=1 (the designed
+    writer path) and PASSes with a note; if one is stale, this row FAILs
+    immediately with the exact regen command instead of ever reaching the
+    hook. A branch with no registered-path changes, or with a registered
+    change this tool has no freshness check for, behaves exactly as before.
 
     CRITICAL: runs the simulation in a throwaway detached worktree to avoid
     mutating the caller's HEAD, index, or working tree."""
@@ -268,6 +372,23 @@ def check_dry_prepush(repo_root, env):
         detail = "git fetch origin main failed:\n" + fetch_err
         return False, detail, "git fetch origin main  # fetch must succeed before a dry pre-push range check can be meaningful"
 
+    run_env = env
+    gen_note = ""
+    py = _py(repo_root, env)
+    mb_rc, base_sha, _mb_err = _git(repo_root, env, "merge-base", head_sha, "origin/main")
+    if mb_rc == 0 and base_sha:
+        diff_rc, changed_out, _diff_err = _git(repo_root, env, "diff", "--name-only", "%s..%s" % (base_sha, head_sha))
+        if diff_rc == 0:
+            changed_paths = [p for p in changed_out.splitlines() if p.strip()]
+            hits = _changed_registered_generated_paths(repo_root, env, py, changed_paths)
+            status, payload = _evaluate_generated_freshness(repo_root, env, py, hits)
+            if status == "stale":
+                return (False,) + payload
+            if status == "fresh":
+                run_env = dict(env)
+                run_env["AESOP_ALLOW_GENERATED"] = "1"
+                gen_note = payload + "\n"
+
     stdin_line = "refs/heads/%s %s refs/heads/%s %s\n" % (
         branch, head_sha, branch, "0" * 40
     )
@@ -283,11 +404,11 @@ def check_dry_prepush(repo_root, env):
             detail = "git worktree add --detach failed:\n" + add_err
             return False, detail, "git worktree add --detach  # failed to create temporary worktree for dry pre-push simulation"
 
-        # Run the hook in the throwaway worktree
+        # Run the hook in the throwaway worktree with run_env (which includes AESOP_ALLOW_GENERATED if needed)
         hook_script = tmpdir / "hooks" / "pre-push-policy.sh"
-        proc = _run(["bash", str(hook_script)], tmpdir, env, timeout=300, input_text=stdin_line)
+        proc = _run(["bash", str(hook_script)], tmpdir, run_env, timeout=300, input_text=stdin_line)
         ok = proc.returncode == 0
-        detail = "stdin: %s" % stdin_line.strip() + "\n" + (proc.stdout or "") + (proc.stderr or "")
+        detail = gen_note + "stdin: %s" % stdin_line.strip() + "\n" + (proc.stdout or "") + (proc.stderr or "")
         fix = (
             "git fetch origin main && printf 'refs/heads/%s %s refs/heads/%s %s\\n' | bash hooks/pre-push-policy.sh  "
             "# re-run after fixing whichever check_* printed FATAL/Error above"
