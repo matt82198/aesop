@@ -75,6 +75,7 @@
     "tests/test_merge_queue_halt_enforcement.py@UnusedVariable": 1,
     "tests/test_merge_train.py@UnusedVariable": 5,
     "tests/test_multi_dispatch_claim.py@UnusedVariable": 1,
+    "tests/test_new_gate_check.py@UnusedImport": 1,
     "tests/test_openai_compatible_driver.py@UnusedImport": 4,
     "tests/test_openai_compatible_driver.py@UnusedVariable": 2,
     "tests/test_orchestration_core.py@UnusedImport": 1,
