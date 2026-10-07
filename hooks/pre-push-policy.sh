@@ -1396,6 +1396,14 @@ check_emit_receipt() {
   # check is itself non-required for the same reason). This function's return
   # value is therefore always 0; main() calls it unconditionally.
   #
+  # BOUNDED, not just fail-open: the default matrix re-runs all 4 python
+  # shards (the whole repo's test suite), which measured ~500s for the
+  # slowest shard alone on this box -- a git hook must never be able to hang
+  # a push indefinitely. Wrapped in `timeout`; AESOP_RECEIPT_TIMEOUT overrides
+  # the default 900s bound. A timeout WARNs and fails open exactly like every
+  # other branch here -- it is not a verification failure, just a slow run
+  # that ran out of patience.
+  #
   # Opt-out: AESOP_RECEIPT_EMIT=0 skips emission entirely (e.g. a lane that
   # intentionally wants no receipt, or a CI checkout that should not try to
   # sign anything).
@@ -1436,9 +1444,33 @@ check_emit_receipt() {
     return 0
   fi
 
+  local timeout_bin=""
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_bin="timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_bin="gtimeout"
+  fi
+  local timeout_secs="${AESOP_RECEIPT_TIMEOUT:-900}"
+
   local receipt_output
-  receipt_output=$("$py_bin" "$receipt_script" --repo "$aesop_root" --post 2>&1)
-  local receipt_exit_code=$?
+  local receipt_exit_code
+  if [ -n "$timeout_bin" ]; then
+    receipt_output=$("$timeout_bin" "$timeout_secs" "$py_bin" "$receipt_script" --repo "$aesop_root" --post 2>&1)
+    receipt_exit_code=$?
+  else
+    # No `timeout` on this box: run unbounded rather than silently skip --
+    # still fail-open below on any non-zero exit, just without the hang
+    # protection. Logged so the gap is visible, not invisible.
+    log_event "receipt_emit_unbounded_no_timeout_bin"
+    receipt_output=$("$py_bin" "$receipt_script" --repo "$aesop_root" --post 2>&1)
+    receipt_exit_code=$?
+  fi
+
+  if [ -n "$timeout_bin" ] && [ $receipt_exit_code -eq 124 ]; then
+    printf 'WARN: receipt emission timed out after %ss; push continues without a receipt.\n' "$timeout_secs" >&2
+    log_event "receipt_emit_timed_out"
+    return 0
+  fi
 
   if [ $receipt_exit_code -ne 0 ]; then
     printf 'WARN: receipt emission failed (exit %d); push continues without a receipt.\n' "$receipt_exit_code" >&2

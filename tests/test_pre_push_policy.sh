@@ -1424,6 +1424,50 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+printf '\n=== Test: check_emit_receipt is BOUNDED -- times out and fails open instead of hanging ===\n'
+(
+  # The default matrix re-runs the whole repo test suite (~500s for the
+  # slowest shard observed live); a hook must never be able to hang a push
+  # indefinitely. AESOP_RECEIPT_TIMEOUT=1 against a stub that sleeps proves
+  # the timeout path fires and still returns 0 (fail-open), not a hang.
+  export AESOP_ROOT="$TEST_ROOT/aesop_receipt_timeout"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+  printf 'import sys, time\ntime.sleep(5)\nsys.exit(0)\n' > "$AESOP_ROOT/tools/emit_receipt.py"
+  export AESOP_RECEIPT_KEY="$AESOP_ROOT/dummy_key.pem"
+  touch "$AESOP_ROOT/dummy_key.pem"
+  export AESOP_RECEIPT_TIMEOUT=1
+  unset AESOP_RECEIPT_EMIT
+
+  start_ts=$(date +%s)
+  stderr_output=$( { check_emit_receipt; } 2>&1 1>/dev/null )
+  exit_code=$?
+  elapsed=$(( $(date +%s) - start_ts ))
+
+  if [ "$exit_code" -ne 0 ]; then
+    printf 'FAIL: check_emit_receipt must fail-open (return 0) on timeout\n'
+    exit 1
+  fi
+  if [ "$elapsed" -gt 4 ]; then
+    printf 'FAIL: check_emit_receipt took %ds, did not actually bound the sleeping stub to ~1s\n' "$elapsed"
+    exit 1
+  fi
+  if ! printf '%s' "$stderr_output" | grep -qi 'WARN.*timed out'; then
+    printf 'FAIL: expected a one-line timeout WARN on stderr, got: %s\n' "$stderr_output"
+    exit 1
+  fi
+  audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log" 2>/dev/null)
+  if ! printf '%s' "$audit_line" | grep -q 'receipt_emit_timed_out'; then
+    printf 'FAIL: expected receipt_emit_timed_out audit event, got: %s\n' "$audit_line"
+    exit 1
+  fi
+  printf 'PASS: a slow matrix is bounded by AESOP_RECEIPT_TIMEOUT and fails open (elapsed %ds)\n' "$elapsed"
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Test: check_emit_receipt WARNs and fails open when no signing key material is set ===\n'
 (
   export AESOP_ROOT="$TEST_ROOT/aesop_receipt_no_key"
