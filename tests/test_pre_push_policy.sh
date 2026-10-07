@@ -1589,7 +1589,8 @@ printf '\n=== Test: main() emits a receipt only after every gate above it passed
     cp "$REPO_ROOT/tools/secret_scan.py" "$aesop_root/tools/secret_scan.py"
     for gate in import_resolution_check conflict_marker_check tracker_guard \
                 gen_tool_index metrics_gate verify_test_suite_count \
-                encoding_lint verify_test_coverage linux_shape_check; do
+                encoding_lint verify_test_coverage linux_shape_check \
+                generated_push_gate; do
       printf 'import sys\nsys.exit(0)\n' > "$aesop_root/tools/${gate}.py"
     done
     printf 'import sys\nsys.exit(%s)\n' "$sync_gate_exit" > "$aesop_root/tools/claudemd_sync_gate.py"
