@@ -1276,26 +1276,24 @@ def build_batch(members: list, summary: dict, epoch: int = None) -> str:
     to prevent accidental branch creation in lane worktrees. Checks AESOP_QUEUE_ROOT env
     or .aesop-queue-root marker file at repo root.
     """
-    # Guard: ensure we're in the dedicated queue checkout, never in a lane worktree.
-    # Requires AESOP_QUEUE_ROOT env pointing at the queue root directory (absolute path).
-    # Compares resolved path to avoid symlink/case issues on Windows.
+    # Guard: ensure AESOP_QUEUE_ROOT is set and points to a valid git repo.
+    # Process cwd is irrelevant: all tree/ref-mutating git() calls pass cwd=queue_root explicitly.
     queue_root = os.environ.get("AESOP_QUEUE_ROOT")
     if queue_root is None:
-        # Not in queue root; refuse
         record_exception(0, "queue_root_isolation_guard",
                          "build_batch called without AESOP_QUEUE_ROOT env; "
                          "daemon must export AESOP_QUEUE_ROOT before invoking merge_queue.py")
         summary["status"] = "error"
         return ""
 
-    # Verify cwd matches queue root (resolved to handle symlinks/case on Windows).
+    # Verify AESOP_QUEUE_ROOT is a valid git repository (resolved to handle symlinks/case on Windows).
     # Store resolved queue root for all subsequent git() calls.
     queue_root_resolved = Path(queue_root).resolve()
-    cwd_resolved = Path.cwd().resolve()
-    if cwd_resolved != queue_root_resolved:
+    ok, toplevel = git("rev-parse", "--show-toplevel", cwd=str(queue_root_resolved))
+    if not ok or str(queue_root_resolved) != str(Path(toplevel.strip()).resolve()):
         record_exception(0, "queue_root_isolation_guard",
-                         "build_batch called from wrong directory; AESOP_QUEUE_ROOT=%s but cwd=%s"
-                         % (queue_root_resolved, cwd_resolved))
+                         "build_batch: AESOP_QUEUE_ROOT=%s is not a valid git repository"
+                         % queue_root_resolved)
         summary["status"] = "error"
         return ""
 
