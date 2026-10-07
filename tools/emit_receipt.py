@@ -166,8 +166,14 @@ def _default_gh_runner(args):
     return res.returncode, res.stdout or "", res.stderr or ""
 
 
-def post_receipt(envelope, slug, gh_runner):
-    """Publish on the head sha: check-run first, commit comment on 403. Returns the channel used."""
+def post_receipt(envelope, slug, gh_runner, spool_dir=None):
+    """Publish on the head sha: check-run first, commit comment on 403.
+
+    If commit-comment fails with 422 (commit not found), spool the receipt to
+    spool_dir if provided, return "spooled".
+
+    Returns the channel used: "check-run", "commit-comment", or "spooled".
+    """
     receipt = envelope["receipt"]
     text = wrap_receipt_text(envelope)
     parts = receipt["parts"]
@@ -194,9 +200,22 @@ def post_receipt(envelope, slug, gh_runner):
         raise ReceiptError("check-run POST failed (not a 403): %s" % (err or out).strip()[:300])
     code2, out2, err2 = gh_runner(["api", "repos/%s/commits/%s/comments" % (slug, receipt["head_sha"]),
                                    "-X", "POST", "-f", "body=" + text])
-    if code2 != 0:
-        raise ReceiptError("check-run POST got 403 and commit-comment fallback failed: %s" % (err2 or out2).strip()[:300])
-    return "commit-comment"
+    if code2 == 0:
+        return "commit-comment"
+    # Check if this is a 422 (commit not found) - spool if possible, otherwise fail
+    if "422" in str(code2) or "422" in err2 or "No commit found" in err2:
+        if spool_dir:
+            # Spool the envelope for later posting
+            try:
+                spool_path = Path(spool_dir) / (receipt["head_sha"] + ".json")
+                spool_path.parent.mkdir(parents=True, exist_ok=True)
+                spool_path.write_text(json.dumps(envelope, sort_keys=True), encoding="utf-8")
+                return "spooled"
+            except OSError as e:
+                raise ReceiptError("could not write spool file: %s" % e)
+        else:
+            raise ReceiptError("commit not found on GitHub (sha %s not yet pushed); consider spooling" % receipt["head_sha"][:12])
+    raise ReceiptError("check-run POST got 403 and commit-comment fallback failed: %s" % (err2 or out2).strip()[:300])
 
 
 def choose_scheme(requested, environ):
@@ -258,8 +277,13 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
             print("dry-run: nothing posted")
             return 0
         if args.post:
-            channel = post_receipt(envelope, receipt["repo"], gh_runner)
-            print("posted via %s on %s as %s" % (channel, receipt["head_sha"][:12], rc.CHECK_NAME))
+            # Spool directory is state/receipts/spool (state is git-ignored)
+            spool_dir = repo / "state" / "receipts" / "spool"
+            channel = post_receipt(envelope, receipt["repo"], gh_runner, spool_dir=str(spool_dir))
+            if channel == "spooled":
+                print("spooled receipt for %s (publish after push)" % receipt["head_sha"][:12])
+            else:
+                print("posted via %s on %s as %s" % (channel, receipt["head_sha"][:12], rc.CHECK_NAME))
         return 0
     except ReceiptError as e:
         print("ERROR: %s" % e, file=sys.stderr)

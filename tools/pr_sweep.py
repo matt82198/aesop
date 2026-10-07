@@ -58,6 +58,20 @@ sys.path.insert(0, str(_TOOLS_DIR))
 from common import get_conductor_root  # noqa: E402
 
 DEFAULT_BEHIND_CAP = 2
+
+
+def _flush_receipts_if_possible():
+    """Try to flush spooled receipts. This is best-effort; errors are logged but
+    do not block the sweep."""
+    try:
+        import receipt_flush as rf  # noqa: F401, E402
+        # Flush receipts using the aesop repo (origin)
+        aesop_root = Path.home() / "aesop"
+        if aesop_root.exists() and (aesop_root / "tools" / "receipt_flush.py").exists():
+            rf.main(["--repo", str(aesop_root)])
+    except Exception:
+        # Flush errors are best-effort; do not block the sweep
+        pass
 BEHIND_THROTTLE_MIN = 20
 RED_MIN_AGE_MIN = 30
 GH_TIMEOUT = 60
@@ -315,6 +329,11 @@ def main(argv=None):
     if not gh_auth_ok():
         print("ERROR: gh auth missing or invalid -- run `gh auth login` first", file=sys.stderr)
         return 2
+
+    # Flush any spooled receipts from prior pushes. This is the
+    # session-independent actor that completes receipt publication.
+    # Errors are logged but do not block the sweep.
+    _flush_receipts_if_possible()
 
     repo = resolve_repo(args.repo)
     queue_path = Path(args.queue_path) if args.queue_path else default_queue_path()
