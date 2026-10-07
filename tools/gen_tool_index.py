@@ -254,6 +254,9 @@ def main(argv=None):
     if args.stdout:
         # Print to stdout without writing to disk. Used by regen_all --check
         # to generate content for git hash-object comparison.
+        # Ensure UTF-8 encoding even on Windows where default might be cp1252.
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
         print(expected, end="")
         return 0
 
