@@ -44,6 +44,26 @@ class _TestHTTPHandler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         """Handle POST requests; support redirects and track headers."""
+        # Drain the request body from the socket BEFORE responding.
+        #
+        # BaseHTTPRequestHandler never reads the body on our behalf, and this
+        # handler never consumed it either. With the default HTTP/1.0
+        # protocol_version, the server closes the connection right after
+        # sending the response. If the client's POST body (e.g. the 2-byte
+        # b"{}" payload) is still sitting unread in the kernel socket receive
+        # buffer at that moment, closing the socket is an *abortive* close
+        # (unread data present) rather than a graceful one. On Windows this
+        # makes the TCP stack send an RST instead of a FIN, which the client
+        # observes as ConnectionAbortedError / WinError 10053 while reading
+        # the response -- even though the server already wrote a complete,
+        # valid response. Linux's stack does not RST in this situation the
+        # same way, which is why this only ever showed up on Windows.
+        # Reading (and discarding) exactly Content-Length bytes drains the
+        # kernel buffer so the subsequent close is graceful on every OS.
+        content_length = int(self.headers.get("Content-Length", 0) or 0)
+        if content_length:
+            self.rfile.read(content_length)
+
         # Record the request and its headers, protected by lock.
         with _TestHTTPHandler._state_lock:
             _TestHTTPHandler.request_log.append({
