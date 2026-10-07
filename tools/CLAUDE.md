@@ -56,6 +56,16 @@ error. Allowlisted in `tools/gate-inventory-allowlist.json` (operator-invoked
 meta-tool, no file-content rule of its own to wire into CI). See
 `LANE-CONTRACT.md` section 5.
 
+The dry-range row (2026-10-06 follow-up): a branch that merged `origin/main`
+legitimately carries changes to registered generated paths (`generated_paths.py`
+`REGISTRY`, e.g. `tools/INDEX.md`) whose regeneration is the hook's designed
+writer path (`AESOP_ALLOW_GENERATED=1`) -- running the real hook without that
+var set made this row false-red (9/10 on a clean branch, PR #882). The row now
+pre-checks changed registered paths against their generator's own `--check`
+(`GENERATED_FRESHNESS_CHECKS` in `new_gate_check.py`); fresh -> PASS with the
+escape hatch set for the dry run; stale -> FAIL with the exact regen command,
+never reaching the hook.
+
 ## Recent additions (2026-10)
 
 - `linux_shape_check.py` — WSL-based cross-platform test gate: detects commits touching
