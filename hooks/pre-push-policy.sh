@@ -1380,6 +1380,96 @@ check_generated_paths() {
   return 0
 }
 
+ensure_merge_drivers() {
+  # Register aesop's custom git merge drivers (tools/install_merge_drivers.py)
+  # in this clone's config, idempotently. `.gitattributes` names the drivers
+  # but git never reads a driver COMMAND out of the repository, so each clone
+  # registers once; doing it here means no clone that pushes can forget.
+  # Linked worktrees share the config. Fail-open: registration is a
+  # convenience, the byte-identity gate below is the enforcement.
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local install_script="$aesop_root/tools/install_merge_drivers.py"
+  if [ ! -f "$install_script" ]; then
+    return 0
+  fi
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    return 0
+  fi
+  if ! "$py_bin" "$install_script" --quiet >/dev/null 2>&1; then
+    log_event "merge_driver_registration_failed"
+  fi
+  return 0
+}
+
+check_generated_regen() {
+  # Generated-artifact byte-identity gate on COMMITTED content
+  # (tools/generated_push_gate.py). check_gen_tool_index() above verifies the
+  # WORKING TREE; CI verifies the pushed COMMIT. The two differ exactly when a
+  # lane regenerated but did not commit, or when a merge-from-main commit
+  # carries a stale union of tools/INDEX.md (#784, #856, #739). For every
+  # pushed range that touches a registered regenerable path -- or whenever the
+  # merge driver left its `.needs-regen` stamp -- the tool checks the tip out
+  # in a throwaway worktree, runs the registered generator there, and fails
+  # with the exact one-line repair instruction when the bytes differ.
+  #
+  # No escape hatch: a stale generated artifact is never a legitimate write.
+  # Fail-open only when there is no aesop checkout; fail-closed when tools/
+  # exists but the gate script or python is missing.
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local gate_script="$aesop_root/tools/generated_push_gate.py"
+
+  local tool_status
+  tool_status=$(gate_tool_status "$aesop_root" "$gate_script")
+  if [ "$tool_status" = "skip" ]; then
+    log_event "generated_regen_skipped_no_aesop_tools"
+    return 0
+  fi
+  if [ "$tool_status" = "missing" ]; then
+    gate_tool_missing_block "generated_push_gate.py" "$gate_script"
+    log_event "generated_regen_tool_missing"
+    return 1
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    gate_no_python_block "generated-artifact gate"
+    log_event "generated_regen_no_python"
+    return 1
+  fi
+
+  local commit_ranges
+  commit_ranges=$(get_commit_range)
+  local range_exit_code=$?
+  if [ $range_exit_code -ne 0 ] || [ -z "$commit_ranges" ]; then
+    # Delete-only / empty / malformed: nothing pushed to verify.
+    return 0
+  fi
+
+  local range_args=()
+  local range
+  while IFS= read -r range || [ -n "$range" ]; do
+    [ -z "$range" ] && continue
+    range_args+=(--range "$range")
+  done <<< "$commit_ranges"
+  if [ ${#range_args[@]} -eq 0 ]; then
+    return 0
+  fi
+
+  local gate_output
+  gate_output=$("$py_bin" "$gate_script" "${range_args[@]}" 2>&1)
+  local gate_exit_code=$?
+  if [ $gate_exit_code -ne 0 ]; then
+    if [ -n "$gate_output" ]; then
+      printf '%s\n' "$gate_output" >&2
+    fi
+    return 1
+  fi
+  return 0
+}
+
 check_emit_receipt() {
   # Receipt-gate auto-emission (docs/RECEIPT-GATE.md). Day-1 measurement found
   # 41 merged PRs and ZERO receipts: lanes were never told to run
@@ -2551,6 +2641,16 @@ main() {
   if ! check_generated_paths <<< "$prepush_stdin"; then
     printf 'Error: Push touches a machine-generated path. Push blocked.\n' >&2
     log_block "generated_path_hand_edit"
+    exit 1
+  fi
+
+  ensure_merge_drivers
+
+  # Same captured stdin: verifies the pushed TIP's generated artifacts against
+  # their generators (committed bytes, not the working tree).
+  if ! check_generated_regen <<< "$prepush_stdin"; then
+    printf 'Error: A generated artifact is stale in the pushed commit. Push blocked.\n' >&2
+    log_block "generated_artifact_stale"
     exit 1
   fi
 

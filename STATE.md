@@ -2,7 +2,7 @@
 
 **What this file is:** The live durable checkpoint that Aesop itself uses during its own `/buildsystem` loop. It records the current system version, architectural decisions, known limitations, and the next milestone. This is not historical archive; it is read by the orchestrator to understand operational state.
 
-**Current Version:** v0.8.0 (tagged + released 2026-09-11; npm latest 0.8.0). HEAD: 4837ae60 (2026-10-05); 73 commits since v0.8.0.
+**Current Version:** v0.9.0 (release/0.9.0 cut 2026-10-06 from main f41d6c40; 103 PRs since v0.8.0). Previous: v0.8.0 (2026-09-11).
 
 ## Architectural Thesis
 
@@ -48,21 +48,23 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 - #855: main-full.yml GitHub schema fix + actionlint (GAP)
 - #850: CI throughput: PR head-SHA checkout + Windows path gating
 - #854: Receipt gate increments 1–3 (emit, verify, non-required Action)
+- #883: tools/new_gate_check.py + gate_stub_list.py — one-command new-gate checklist (TTY fixture stub list, inventory parity, claudemd lint, portability, pre-push self-test) shipped 2026-10-07
+- #881: LANE-CONTRACT updates — PID-scoped process kills, dirty-PR recovery, claims-need-proof; ship 2026-10-07
 
 ### In Progress
 
-19. **tools/new_gate_check.py** (IN-FLIGHT, lane open). One-command new-gate checklist (stub list, inventory parity, claudemd lint/headroom/sync, portability, pre-push self-test) — #872 took 5 red rounds hitting these one at a time; also derive the TTY fixture stub list from `check_*` functions automatically.
-20. **tools/INDEX.md union-merge duplicates** (IN-FLIGHT, lane open). Duplicates accumulate on clean merges due to drift — post-merge regenerate hook or duplicate-tolerant check.
+20. **tools/INDEX.md union-merge duplicates** (IN-FLIGHT, lane open, PR #882 OPEN). Duplicates accumulate on clean merges due to drift — post-merge regenerate hook or duplicate-tolerant check; also fixes remote_refs_tripwire false positive (b3970e66).
+24. **v0.9.0 tag/publish withheld** (IN-PROGRESS). Tag cut via PR #886 (2026-10-07) but publish blocked: main-full red on 5dffb81f (Windows shard 0) and adbe0c6a (Ubuntu shard 3, tripwire false positive since fixed in #882/#888). Tag only on fully green main-full SHA; publish via `.github/workflows/publish.yml` on `release:published` event.
+25. **Receipt gate increments 4–6 automatic emission** (IN-PROGRESS, lane open). PR #854 shipped increments 1–3 (emit, verify, non-required Action). Increment 4–6 pending: automatic 3.5 emission in pre-push (measurement showed zero receipts previously emitted).
+26. **Heartbeat-pollution fix** (IN-PROGRESS, lane open). tests/test-backup-fleet-conductor-root.sh line 84 — remove ephemeral heartbeat writes from test fixtures.
 
 ### Open / Queued
 
 10. **Hard checkpoint+clear enforcement hooks** (QUEUED). Implement pre-push gates to verify STATE.md/BUILDLOG.md are checkpointed before context clears. Enforce single-writer discipline on control files. Matt 2026-10-05 directive.
-13. **Receipt gate increments 4–6 — after measurement** (QUEUED). PR #854 shipped increments 1–3. Pending: storage codecs, receipt lineage, signed ledger append.
-16. **pyflakes unused-import sweep** (QUEUED). Detect and remove unreferenced imports in driver/, tools/, mcp/, ui/ Python.
+16. **pyflakes unused-import sweep** (IN-PROGRESS, lane open). Detect and remove unreferenced imports in driver/, tools/, mcp/, ui/ Python. Lane open as of 2026-10-07.
 17. **LANE-CONTRACT line for AESOP_ALLOW_GENERATED** (QUEUED). Add contract statement permitting lanes to deploy generated-paths registry entries; policy clarification pending.
 21. **Promote pr_symbol_survival_check (G13) to blocking** (QUEUED). After 2026-10-14 (1 week clean runs since #865).
 22. **Extend hooks/no-polling.mjs** (QUEUED). Deny backgrounded whole-filesystem searches in lanes.
-23. **LANE-CONTRACT: kill only identified PIDs** (QUEUED). Never kill by image name or process tree.
 
 ### Blocked / Deferred
 

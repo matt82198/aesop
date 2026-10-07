@@ -35,8 +35,18 @@ by `tools/gen_tool_index.py --regenerate` from each file's own `INDEX:` header l
 never hand-edit it -- the byte-identity gate rejects drift). This file stays navigation
 only so a tool-adding PR never conflicts with every other in-flight PR over the same
 inline list (that conflict-magnet is why PR #751 moved the index out of here). Index
-merges with the `union` driver (`.gitattributes`) — two PRs each adding a tool merge
-cleanly with both lines kept, then `gen_tool_index.py --regenerate` normalizes order.
+merges through the `aesop-regen` driver (`.gitattributes` -> `generated_merge.py`,
+registered per clone by `install_merge_drivers.py`; the pre-push hook does that for you):
+a structured 3-way merge of entries rendered through the generator, so two PRs each adding
+a tool merge to an already-regenerated index. (git's `union` kept both sides verbatim and
+left the index unsorted/duplicated on every merge-from-main: #784/#856/#739.) Rule:
+merge-from-main = merge, then `python tools/gen_tool_index.py --regenerate && git add
+tools/INDEX.md`, or let the driver/gate do it — `generated_push_gate.py` (hook
+`check_generated_regen()`) verifies the COMMITTED bytes of every registered regenerable
+artifact (`generated_paths.REGISTRY` entries with a `regen` argv; must equal
+`merge_queue.REGENERATORS`) at the pushed tip in a throwaway worktree and rejects a stale
+one with exactly that instruction; the driver's per-worktree `.needs-regen` stamp
+(`git rev-parse --git-path aesop-needs-regen`) forces the check even on an empty range.
 
 ## Adding a new gate (2026-10-06, PR #872 postmortem)
 
@@ -56,7 +66,25 @@ error. Allowlisted in `tools/gate-inventory-allowlist.json` (operator-invoked
 meta-tool, no file-content rule of its own to wire into CI). See
 `LANE-CONTRACT.md` section 5.
 
+The dry-range row (2026-10-06 follow-up): a branch that merged `origin/main`
+legitimately carries changes to registered generated paths (`generated_paths.py`
+`REGISTRY`, e.g. `tools/INDEX.md`) whose regeneration is the hook's designed
+writer path (`AESOP_ALLOW_GENERATED=1`) -- running the real hook without that
+var set made this row false-red (9/10 on a clean branch, PR #882). The row now
+pre-checks changed registered paths against their generator's own `--check`
+(`GENERATED_FRESHNESS_CHECKS` in `new_gate_check.py`); fresh -> PASS with the
+escape hatch set for the dry run; stale -> FAIL with the exact regen command,
+never reaching the hook.
+
 ## Recent additions (2026-10)
+
+- `generated_merge.py` / `generated_push_gate.py` / `install_merge_drivers.py` — the
+  generated-artifact merge triangle (see § Tool index): regenerating merge driver, committed-
+  bytes pre-push gate, idempotent per-clone driver registration. Tests:
+  `tests/test_generated_merge.py` (git integration incl. the `union` negative control,
+  3-way entry semantics, stamp, registry/queue agreement), `tests/test_generated_push_gate.py`
+  (stale-commit rejection with the one-line instruction, dirty-tree-does-not-rescue, stamp
+  consumption, sourced-hook wiring).
 
 - `linux_shape_check.py` — WSL-based cross-platform test gate: detects commits touching
   shell/workflow/Node files, runs test suites under WSL to catch Windows-only CI reds
@@ -78,6 +106,7 @@ meta-tool, no file-content rule of its own to wire into CI). See
 - **CI modes (docs/CI-MODES.md)**: `common.py validate_ci_config()/load_aesop_config()` own the config `ci` block (mirrored code-for-code in `ci_config.js`; `tests/test_ci_config.py` runs both on the same fixtures); `ci_capability.py` is the report-only probe behind `aesop doctor` (Smart App Control / UMCI / WSL / Docker / gh / cloudflared / receipt tools -> mode table; `AESOP_CI_PROBE_FIXTURE` injects probes); `runner_install.py` shares its `runner_blocked()` predicate as preflight; `init_project.py --ci-mode` renders `templates/ci/*.yml` (verify-receipt.yml is a PLACEHOLDER until the receipt lane lands -- the scaffold refuses, never emits it); rendered workflows must pass `ci_workflow_lint.py` + `ci_needs_skip_guard.py` (`tests/test_ci_templates.py`).
 - **Node-suite HOME isolation (G8)**: `test_isolation_tripwire.py` is wired around every Node test invocation (`npm run test:node`/`npm test`, and the CI "Run Node.js tests" step), paired with `tests/helpers/isolated-env.mjs` (loaded via `--import`, redirects `HOME`/`USERPROFILE`/`AESOP_SKILLS_HOME`/`AESOP_HOME` to a throwaway temp dir for the whole process) as the structural fix; the tripwire is the independent behavioral proof, snapshotting `~/.claude/{skills,settings.json,memory,hooks}` + global git config before/after and failing closed on any drift. GAP fixed 2026-10-06 (PR #831 shipped both files but wired neither into any Node test invocation, so every suite but one still ran against the real profile); `tests/isolated-home-tripwire.test.mjs` fails red under plain `node --test` (no `--import`) and green under the wired command, proving the wiring instead of just the fixture's existence. **Cross-site drift guard (second GAP, 2026-10-06)**: PR #864 wired the first GAP's fix into TWO sites (ci.yml's ubuntu step, ci.yml's windows-shard raw invocation) but missed a THIRD, pre-existing site -- `main-full.yml`'s own raw `node --test ...` line -- which ran unisolated on every main-full run, staying accidentally green on windows-latest (USERPROFILE is an ambient OS var there) and genuinely RED on ubuntu-latest. `node_harness_wiring_check.py --check` enumerates EVERY Node-suite invocation site across `.github/workflows/*.yml` + `package.json` (resolving `npm run test:node`/`npm test` through to package.json's own script) and fails closed if any site is missing `--import ./tests/helpers/isolated-env.mjs` or the tripwire wrapper -- catching the SHAPE of the gap (partial wiring across sites) so a fourth site drifts loudly instead of silently. Wired into `ci.yml` alongside the other workflow-scanning gates.
 - **Templates**: `templates/aesop-dispatch-template.yml` — ready-to-fork GitHub Actions dispatch workflow (workflow_dispatch + cron); adopter guide `docs/ACTIONS-TEMPLATE.md`; verified by `tests/test_actions_template.py` (YAML validity, CLI commands checked against `bin/cli.js --help`, no invented flags/fabricated output). `templates/wave-presets/*.json` is the unrelated wave-manifest-preset set consumed by `wave_templates.py`.
+- **wave_manifest_lint.py**: Validates wave manifests for file-ownership disjointness, path existence, prompt sanity, git-history churn heuristics, and per-item testCmd binary resolution. Binary resolution now skips leading shell negation (`!`) and environment assignments (`FOO=value`) to find the actual executable; tested against both negation and env-var patterns.
 - **PR symbol survival (Guardrail G13)**: `pr_symbol_survival_check.py` collects top-level symbols
   (Python `def`/`class`/`async def`, JS/MJS `export function|const|class` + top-level `function name(`,
   shell `name() {`) ADDED by a PR branch's own non-merge commits and verifies each still exists in the

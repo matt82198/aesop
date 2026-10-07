@@ -1,6 +1,14 @@
 # UNRELEASED
 
-(None yet; see v0.8.0 below for the shipped release.)
+(None yet; see v0.9.0 below for the shipped release.)
+
+---
+
+# aesop 0.9.0 — Release 2026-10-06
+
+**Headline**: Event-driven machinery — event-sourced state_store fixes (tracker fold, zombie close via WriteAPI), a session-independent merge actor (native auto-merge + pr_sweep), the receipt gate (emit/verify + non-required Action), multibox increments 0–7, shippable CI modes (`ci.mode`, `aesop init --ci-mode`, `aesop runner`, `aesop doctor` capability table), and a large gates-and-guards cycle (G13 symbol survival, G14 conflict markers, linux_shape, isolation tripwires, new_gate_check). 103 PRs since v0.8.0.
+
+See `CHANGELOG.md` section `[0.9.0]` for the full grouped list with PR numbers.
 
 ---
 

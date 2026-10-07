@@ -85,10 +85,17 @@ class TestRegistryDeclaration(unittest.TestCase):
     def test_registry_is_non_empty_and_well_formed(self):
         self.assertGreater(len(generated_paths.REGISTRY), 0)
         for entry in generated_paths.REGISTRY:
-            self.assertEqual(set(entry), {"pattern", "generator", "why"})
-            for value in entry.values():
-                self.assertIsInstance(value, str)
-                self.assertTrue(value.strip())
+            self.assertEqual(set(entry), {"pattern", "generator", "why", "regen"})
+            for key in ("pattern", "generator", "why"):
+                self.assertIsInstance(entry[key], str)
+                self.assertTrue(entry[key].strip())
+            # `regen` is the machine-runnable regenerator argv (or None for an
+            # artifact that cannot be rebuilt by regeneration, e.g. a ledger).
+            regen = entry["regen"]
+            if regen is not None:
+                self.assertIsInstance(regen, list)
+                self.assertTrue(regen and all(isinstance(a, str) and a for a in regen))
+                self.assertTrue(regen[0].startswith("tools/"), regen)
             self.assertNotIn("\\", entry["pattern"], "patterns are POSIX-normalized")
 
     def test_seeded_paths_are_registered(self):
