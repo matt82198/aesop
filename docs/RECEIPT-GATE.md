@@ -156,3 +156,4 @@ lookup exception-safe and guarding the module's own absence at the shell level.)
 2026-10-07: push-emission proof
 # Hook test
 # Another test
+# Test 4 after unset hooks path
