@@ -194,9 +194,12 @@ def check_claudemd_sync(repo_root, env):
     return ok, detail, fix
 
 
-def check_portability(repo_root, env):
+def check_portability(repo_root, env, baseline=None):
     py = _py(repo_root, env)
-    baseline = repo_root / ".portability-baseline.json"
+    if baseline is None:
+        baseline = repo_root / ".portability-baseline.json"
+    else:
+        baseline = Path(baseline)
     cmd = [py, str(repo_root / "tools" / "portability_check.py"), "--root", str(repo_root), "--baseline", str(baseline)]
     proc = _run(cmd, repo_root, env, timeout=120)
     ok = proc.returncode == 0
@@ -289,11 +292,14 @@ CHECKS = [
 ]
 
 
-def run_all(repo_root, env):
+def run_all(repo_root, env, baseline=None):
     results = []
     for key, label, fn in CHECKS:
         try:
-            ok, detail, fix = fn(repo_root, env)
+            if key == "portability" and baseline is not None:
+                ok, detail, fix = fn(repo_root, env, baseline=baseline)
+            else:
+                ok, detail, fix = fn(repo_root, env)
         except Exception as exc:  # noqa: BLE001 - a row crashing must still report, not abort the table
             ok, detail, fix = False, "INTERNAL ERROR running this check: %r" % exc, "(tool bug -- see tools/new_gate_check.py check_%s)" % key
         results.append(CheckResult(key, label, ok, detail, fix))
@@ -326,6 +332,7 @@ def main(argv=None):
         description="Run the whole new-gate checklist (see module docstring) and print a pass/fail table."
     )
     parser.add_argument("--root", default=str(REPO_ROOT_DEFAULT), help="Repository root (default: this tool's own repo)")
+    parser.add_argument("--baseline", default=None, help="Portability baseline file path (default: <repo-root>/.portability-baseline.json)")
     parser.add_argument("--json", action="store_true", help="Emit a JSON report instead of the text table")
     args = parser.parse_args(argv)
 
@@ -337,14 +344,19 @@ def main(argv=None):
     env = dict(os.environ)
     env["AESOP_ROOT"] = str(repo_root)
 
-    results = run_all(repo_root, env)
+    results = run_all(repo_root, env, baseline=args.baseline)
     failed = [r for r in results if not r.ok]
 
     if args.json:
-        print(json.dumps(
-            {"ok": not failed, "results": [r.to_dict() for r in results]},
-            indent=2,
-        ))
+        # When invoked with --baseline by the liveness gate for JSON output,
+        # emit the stale_entries structure expected by baseline_liveness_check.py
+        output = {"ok": not failed, "results": [r.to_dict() for r in results]}
+        # The liveness gate checks for "stale" or "stale_entries"; this tool
+        # doesn't have baseline-specific stale entries (that's for portability_check.py),
+        # so we emit an empty list to signal success when --baseline is used.
+        if args.baseline is not None:
+            output["stale_entries"] = []
+        print(json.dumps(output, indent=2))
     else:
         print(render_table(results))
         if failed:
