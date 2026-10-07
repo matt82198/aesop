@@ -531,19 +531,24 @@ To bypass during testing: `git push --no-verify` (not recommended for production
 
 ---
 
-## Register the JSON list-union merge driver (one-time, per clone)
+## Register the custom merge drivers (one-time, per clone)
 
-`.gitattributes` routes `*-baseline.json` ratchet files through a union-and-sort merge
-driver, so two lanes appending to the same baseline stop conflicting. Git deliberately
-never reads driver definitions out of the repository (they execute code), so each clone
-registers it once:
+`.gitattributes` routes two kinds of file through custom merge drivers: `*-baseline.json`
+ratchets through union-and-sort (`tools/json_list_merge.py`), and registered generated
+artifacts — `tools/INDEX.md` — through a regenerating structured merge
+(`tools/generated_merge.py`), so two lanes each adding a tool no longer leave a stale,
+duplicated index behind every merge-from-main. Git deliberately never reads driver
+definitions out of the repository (they execute code), so each clone registers them once;
+linked worktrees share the registration:
 
 ```bash
-git config merge.aesop-json-union.name "union-and-sort JSON string lists"
-git config merge.aesop-json-union.driver "python tools/json_list_merge.py %O %A %B"
+python tools/install_merge_drivers.py          # idempotent; --check reports without writing
 ```
 
-Skipping this is safe: an unregistered clone simply gets today's ordinary conflict. The
+The pre-push hook runs the same registration (fail-open) on every push, so a clone that
+pushes is registered whether or not you remembered. Skipping it is safe: an unregistered
+clone simply gets an ordinary conflict on those paths, and the committed bytes of every
+generated artifact are verified at push by `check_generated_regen()` either way. The JSON
 driver is fail-closed — any parse failure, or a shape it cannot merge soundly (the
 count-map baselines), exits 1 and git falls back to a normal conflict.
 

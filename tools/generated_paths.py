@@ -123,11 +123,13 @@ REGISTRY: List[Dict[str, str]] = [
         "pattern": "state/ledger/*.jsonl",
         "generator": "tools/merge_telemetry.py --append / tools/transcript_digest.py (append-only writers)",
         "why": "append-only machine ledgers; hand edits break the journal invariant",
+        "regen": None,
     },
     {
         "pattern": "tools/INDEX.md",
         "generator": "tools/gen_tool_index.py --regenerate",
         "why": "generated tool index extracted from per-module INDEX: docstrings",
+        "regen": ["tools/gen_tool_index.py", "--regenerate"],
     },
     {
         "pattern": "tests/SUITE-COUNTS.md",
@@ -135,8 +137,33 @@ REGISTRY: List[Dict[str, str]] = [
         "why": "reserved for a future committed suite-count snapshot; no generator "
                "currently writes it (counts are live-computed since PR #830), but the "
                "path stays registered so one may land without a race to un-block it",
+        "regen": None,
     },
 ]
+
+# `regen` is the MACHINE-RUNNABLE regenerator (argv, repo-root-relative, run with
+# cwd = repo root) for an artifact that is a pure, idempotent function of its
+# sources -- the contract the regenerating merge driver (generated_merge.py) and
+# the pre-push byte-identity gate (generated_push_gate.py) rely on. Append-only
+# ledgers and not-yet-generated reservations have none (None): they are
+# push-blocked by REGISTRY but can neither be re-merged nor re-verified by
+# regeneration. `merge_queue.REGENERATORS` must stay equal to this set
+# (tests/test_generated_merge.py pins it), so the batch repair, the driver and
+# the gate never disagree about who rebuilds an artifact.
+
+
+def regenerator_for(path: str) -> Optional[List[str]]:
+    """The regenerator argv for ``path`` (a copy), or None when the path is not
+    registered or its artifact has no machine-runnable regenerator."""
+    entry = is_generated(path)
+    if entry is None or not entry.get("regen"):
+        return None
+    return list(entry["regen"])
+
+
+def regenerable_paths() -> List[str]:
+    """Registered patterns that carry a regenerator (currently exact paths)."""
+    return [entry["pattern"] for entry in REGISTRY if entry.get("regen")]
 
 # ---------------------------------------------------------------------------
 # The automation-restorable registry (the SECOND question -- see module docstring).

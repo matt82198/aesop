@@ -9,23 +9,142 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- **Lane A: Implement humanize_lint.py** (#822).
-- **Lane B: humanize_ledger.py** — append-only ledger for humanization edits (#821).
-- **Lane C: humanize_voice.py** — voice profiler (#820).
+(None yet.)
 
-### Fixed
-- **fix(portability): remove the last 32 literal profile paths** — multi-box deployment readiness (#817).
-- **Fix humanize_ledger.py attribution and split_sentences initials** (#823).
-- **fix: trigger CI and auto-merge for stats-refresh PR** (#825).
+## [0.9.0] - 2026-10-06
+
+103 pull requests merged since v0.8.0 (2026-09-11). The release theme is event-driven
+machinery: state is appended as events and projected (never patched), the merge actor
+no longer depends on a live session, and every rule that mattered in this cycle became
+a gate that fails closed.
+
+### Event-driven architecture
+- **Event-sourced state_store fixes**: a duplicate `item_created` no longer overwrites a
+  later `item_updated` in the tracker fold (#845); `tracker_guard --enforce` closes zombie
+  items through the WriteAPI as events, so replays no longer resurrect them (#847).
+- **Session-independent merge actor**: GitHub native auto-merge is armed at PR-open time
+  and `tools/pr_sweep.py` sweeps stragglers without a resident session (#874); `auto_merge.py`
+  is fail-closed PR-scoped (#811) and reads the generated-path registry instead of a
+  hard-coded copy (#758); the merge train honours the halt kill-switch (#777) and daemon
+  halt detection uses `halt.py` as the single source of truth (#773).
+- **Bounded bisect for red batches**: eviction-first red handling with culprit isolation
+  in the merge queue (#745).
+- **Generated-paths registry + typed JSON merge driver**: kills the contended-file class
+  (#711); union merge driver for `tools/INDEX.md` (#841); generated artifacts self-heal
+  after clean-merge drift (#830).
+- **Watchdog heartbeat** is written to `CONDUCTOR_ROOT` (the monitor path) (#877).
+
+### Receipts
+- **Receipt gate increments 1-3**: `emit_receipt.py`, `verify_receipt.py`,
+  `receipt_common.py`, Ed25519 public key, and a non-required `verify-receipt` Action
+  (#854); the Action is neutral, not FAILURE, when no receipt is present (#862).
+- **Humanize toolchain**: `humanize_lint.py` (#822), `humanize_ledger.py` append-only
+  ledger (#821), `humanize_voice.py` voice profiler (#820); ledger attribution and
+  `split_sentences` initials fix (#823).
+- **arXiv manuscript**: "The Receipts Loop" draft with dated provenance (#824).
+
+### Gates & guards
+- **G13 PR symbol survival** catches conflict-resolution symbol loss (#865).
+- **G14 conflict-marker detection** gate, from the PR #834 incident (#870).
+- **linux_shape**: shell/Node suites run under WSL before push to catch platform-specific
+  failures; skips cleanly when WSL is absent unless `AESOP_REQUIRE_LINUX_SHAPE=1` (#872).
+- **new_gate_check.py** runs the whole new-gate checklist in one command, and
+  `gate_stub_list.py` derives the pre-push TTY-fixture stub list from the real `check_*`
+  functions (#883).
+- **node_harness_wiring_check.py**: every Node-suite invocation site must load
+  `tests/helpers/isolated-env.mjs`; fixes the unwired `main-full.yml` step (#869).
+- **main-full validity + actionlint**: `main-full.yml` rejected by GitHub since #850 is
+  fixed and workflow schema semantics are linted (#855).
+- **Isolation tripwire**: Python harness isolated from the real git remote and GitHub
+  (#837); remote-refs tripwire scoped to attributed verdicts (#840); shell tests isolated
+  from the live fleet-state directory (#856); daemon-file validity checks instead of hashes (#857);
+  hardcoded paths removed via resolver (#863); scheduled-task tripwire snapshots
+  definitions, not run-state (#867).
+- **Test isolation**: test-isolation tripwire + harness-level HOME isolation, fail closed
+  (#831); `isolated-env.mjs` wired into every Node test invocation (#864); context-pack
+  cwd leak from a `tearDown os.chdir("/")` fixed (#848).
+- **dispatch_lint**: lint bugs fixed and gate wired to CI (#861); never scans documentation
+  as a dispatch template (#866); no longer contradicts the native-auto-merge lane contract
+  (#871).
+- **GAP series (gates that were defined but not firing)**: lint-evasion detector for
+  concat-obfuscated gate tokens (#700); scheduled-task cadence vs SLA (#701) wired into
+  `power_selftest` (#833); runtime lane-liveness + fail-closed monitor stall signal (#704);
+  hook-tool existence manifest + required-checks drift gate (#705); `--check` modes must
+  be read-only meta-gate (#706); status-bucket fail-open lint + crossos_drift fix (#707);
+  exhaustive gate inventory, every gate tool must have an invoker (#709); claudemd cap
+  checks the merge union (#710); four orphaned gate tools wired into CI (#712);
+  `ci_gate_runability` verdicts location-independent (#726); silently-skipped toolchain
+  health check revived + sibling-import violations fixed (#756); suite count ignores
+  unmerged-stage duplicates (#759); scanner selftest fails closed, never `scanner:None`
+  (#834); dead-baseline liveness check (#844).
+- **Repo-integrity gates**: G8 git repository integrity check (#806); `gen_tool_index.py
+  --check` wired into pre-push and CI (#807); STATE.md freshness gate at >50 commits lag
+  (#809); pre-push range computed against `origin/main` for new branches (#860).
+- **Standing lane contract**: `LANE-CONTRACT.md` authored (#810) and extended with
+  PID-scoped process kills, dirty-PR recovery and claims-need-proof rules (#881).
+
+### CI throughput
+- **Path-gated matrix**: PR head-SHA checkout and Windows path gating (#850).
+- **Live suite counts**: counts moved to a generated artifact (#776) and computed live with
+  `verify_test_suite_count.py` retargeted (#836); hand-authored table drift in
+  `docs/TESTING.md` eliminated (#839); count synced after #806 (#812).
+- **Docs-only gate** no longer skip-cascades required checks (#835).
+- **Weekly cross-OS drift snapshot** is self-landing (#838).
+- **Examples validation workflow** (#805).
+- **Stats bot**: scheduled stats refreshes (#801, #849) and the CI/auto-merge trigger fix
+  for stats-refresh PRs (#825).
+
+### Multibox
+- Inc 0: preflight probe + network-FS guard (#699).
+- Inc 4b: `FsClaimLog` durability, skew bounds and GC (#722).
+- Inc 5: stale-primary failover + fencing generations (#735).
+- Inc 6: simulated-multibox CI harness with a falsifiable no-double-grant proof (#738).
+- Inc 7: Phase 0.5 complete -- config, hard preflight gate, docs, MCP and CI wiring (#739).
+- Canonical paths wired into leases, guard test de-vacuumed, epoch fencing made real (#754).
+- The last 32 literal profile paths removed for multi-box portability (#817).
+
+### CLI / product
+- **CI modes** (#859): `ci.mode` config key (`hosted` | `self-hosted-runner` |
+  `local-receipt-gate`), `aesop init --ci-mode ... [--self-hosted-labels]`, an
+  `aesop doctor` CI-capability table, and `aesop runner install|remove` for self-hosted
+  runners; surfaced in docs as shipped (#876).
+- **Skills installer**: the skills check fails closed and the installer installs skills
+  itself (#784).
+- **Ready-to-fork Actions dispatch workflow** template + guide (#747).
+- `--help` text is ASCII-only (cp1252 `UnicodeEncodeError` fix) (#829).
+
+### Fixes
+- UI drawer stale-state, model-mix math and proof falsifiability (#703).
+- `wave_manifest_lint` quoting + strict-mode field path; subprocess-guard hygiene and an
+  honest baseline (#721).
+- Flaky `test_openai_transport_redirect` in shard 0 (#808).
+- Stale `ui/web/dist` rebuilt after the deps bump (#832).
+- `test_hook_preflight.py` rewritten to actually execute (#842); `agent_detail_roundtrip`
+  re-verified stable under `ci_shard_runner` (#843).
+- Git `maintenance.auto` disabled in the check-readonly template fixture (gate escape) (#851).
+- Inert-code audit cleanup (#852).
+- `status_publish` gist-path tests rebased onto the current API (#853).
+- Windows test isolation in `test_ui_acceptance_criteria` (#878); POST body drained in the
+  test HTTP handler to stop the `WinError 10053` flake (#879).
+- Dependencies: `@playwright/test` 1.63.0 (#814), `undici` 8.11.2 (#819),
+  `source-map-js` 1.2.2 (#846).
 
 ### Docs
-- **docs(paper): The Receipts Loop** — arXiv manuscript draft with dated provenance (#824).
-- **docs: post-release 0.8.0 checkpoint** (#813).
+- `CITATION.cff` added with the "The Receipts Loop" preferred citation (#885).
+- Post-release 0.8.0 checkpoint (#813) and currency refresh (#826).
+- STATE.md reconciled with shipped PRs (#858, #868, #875, #880); stale BUILDLOG follow-ups
+  closed (#884).
 
-### Chore
-- **chore(deps)(deps): bump undici from 8.9.0 to 8.11.2 in /ui/web** (#819).
-- **chore(deps)(deps-dev): bump @playwright/test from 1.62.1 to 1.63.0** (#814).
+### Notable changes for operators
+- New config key `ci.mode`; new CLI commands `aesop runner install|remove`; new flags
+  `aesop init --ci-mode`, `--self-hosted-labels`; `aesop doctor` gains a CI-capability table.
+- `npm test` / `npm run test:node` now run under an isolated `HOME` via
+  `--import ./tests/helpers/isolated-env.mjs`; a raw `node --test` invocation fails the
+  tripwire by design.
+- The pre-push hook gained conflict-marker, symbol-survival and linux_shape (WSL) checks;
+  set `AESOP_REQUIRE_LINUX_SHAPE=1` to make a missing WSL a hard failure.
+- Lanes arm GitHub native auto-merge at PR-open; the session merge queue is no longer the
+  merge actor.
 
 ## [0.8.0] - 2026-09-11
 

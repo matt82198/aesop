@@ -73,6 +73,27 @@ ref pattern keeps the tripwire fail-closed on everything else -- any NEW branch 
 any OTHER moved branch (the actual #837 incident pattern, e.g. integrate/batch-*)
 still fails it immediately in strict mode, and is still attributed (so still fails)
 in attributed mode whenever its name matches a plausible test-leak pattern.
+
+Third incident (PR #882, 2026-10-07, windows-shard (0)): attributed-mode CI still
+failed on a brand-new `integrate/batch-20261006-2052` branch even though the
+wrapped shard (1565 passed, 0 failed) never touched the remote -- confirmed via
+`gh api .../commits/<sha>`: that commit was PR #885's own merge to `main`
+(single parent = main's pre-run sha), landed by this fleet's live, independent
+serial-merge-train while #882's Windows job happened to be running. `main` itself
+is never new/attributable, so the existing heuristics missed it; only the batch
+branch's NAME (prefix `integrate/`) made it look like the #837 leak shape, even
+though its SHA was identical to `main`'s own concurrent, legitimate advance --
+exactly the batch-tracking-branch-at-the-same-commit-as-the-merge shape this
+fleet's merge train produces on every real batch, constantly, by design.
+_concurrently_moved_shas() + the sha check in diff_branches()/diff_branches_observed()
+close this gap: a new ref is never attributed (even if its name matches
+ATTRIBUTABLE_NEW_BRANCH_PREFIXES) when its sha equals the NEW sha of some
+pre-existing ref that itself moved in the same before/after window -- the one
+shape a raw leaked push (no other ref advancing to that same commit) cannot
+produce, so the original #837 pattern (see
+TestAttributedVerdictMode.test_b in tests/test_remote_refs_tripwire.py, which
+pushes the leak alone with nothing else moving) is still caught, unchanged, in
+both modes.
 """
 import argparse
 import json
@@ -196,26 +217,51 @@ def _is_attributable_moved_branch(ref, new_sha):
     return _pr_head_moved_unexpectedly(ref, new_sha)
 
 
+def _concurrently_moved_shas(before, after):
+    """Attributed mode only: shas that some PRE-EXISTING ref (present in both
+    snapshots) itself advanced to within this window, on its own -- independent of
+    any brand-new ref. Used to recognize a NEW ref that is merely a tracking
+    pointer landing on a commit some other tracked ref (almost always `main`) ALSO
+    advanced to in the very same window: exactly the shape of this repo's own
+    serial-merge-train/batch tooling, which fast-forwards main for a merged PR and
+    pushes a same-commit `integrate/batch-<timestamp>` tracking ref alongside it --
+    see the third-incident note below. A genuinely leaked push (the #837 incident,
+    and TestAttributedVerdictMode.test_b in tests/test_remote_refs_tripwire.py)
+    has no such correlated move: it lands a commit of its own, with no pre-existing
+    ref simultaneously advancing to that identical sha."""
+    moved = set()
+    for ref in set(before) & set(after):
+        if before[ref] != after[ref]:
+            moved.add(after[ref])
+    return moved
+
+
 def diff_branches(before, after, mode="strict", session_id=None):
     """Return human-readable FAILURE findings, or [] if clean/unmeasurable/not
     attributable. `mode` is "strict" (default, unchanged legacy behavior: every
     new-or-moved ref is a failure) or "attributed" (a moved ref is never, by itself,
     a failure; a new ref fails only when _is_attributable_new_branch() says a test
-    plausibly made it; a moved ref fails only when it is the PR's own head branch
-    moved out from under the workflow -- see _pr_head_moved_unexpectedly()). Refs
-    matching EXCLUDED_REF_PATTERN (this repo's own backup-fleet.sh daemon ref) are
-    skipped entirely in BOTH modes -- see the module docstring. Non-failing drift in
-    attributed mode is not silently dropped: see diff_branches_observed() for the
-    "observed, not attributed" companion list.
+    plausibly made it AND its sha is not merely a same-commit tracking pointer onto
+    a pre-existing ref that concurrently moved there too -- see
+    _concurrently_moved_shas(); a moved ref fails only when it is the PR's own head
+    branch moved out from under the workflow -- see _pr_head_moved_unexpectedly()).
+    Refs matching EXCLUDED_REF_PATTERN (this repo's own backup-fleet.sh daemon ref)
+    are skipped entirely in BOTH modes -- see the module docstring. Non-failing
+    drift in attributed mode is not silently dropped: see diff_branches_observed()
+    for the "observed, not attributed" companion list.
     """
     if before is None or after is None:
         return []
     findings = []
+    moved_shas = _concurrently_moved_shas(before, after) if mode == "attributed" else set()
     for ref in sorted(set(after) - set(before)):
         if EXCLUDED_REF_PATTERN.match(ref):
             continue
-        if mode == "attributed" and not _is_attributable_new_branch(_branch_name(ref), session_id):
-            continue
+        if mode == "attributed":
+            if after[ref] in moved_shas:
+                continue
+            if not _is_attributable_new_branch(_branch_name(ref), session_id):
+                continue
         findings.append(f"NEW remote branch appeared: {ref} ({after[ref]})")
     for ref in sorted((set(after) & set(before))):
         if EXCLUDED_REF_PATTERN.match(ref):
@@ -237,8 +283,15 @@ def diff_branches_observed(before, after, mode="strict", session_id=None):
     if mode != "attributed" or before is None or after is None:
         return []
     observed = []
+    moved_shas = _concurrently_moved_shas(before, after)
     for ref in sorted(set(after) - set(before)):
         if EXCLUDED_REF_PATTERN.match(ref):
+            continue
+        if after[ref] in moved_shas:
+            observed.append(
+                f"observed, not attributed: NEW remote branch {ref} tracks a "
+                f"concurrently-advanced ref at {after[ref]}"
+            )
             continue
         if _is_attributable_new_branch(_branch_name(ref), session_id):
             continue
