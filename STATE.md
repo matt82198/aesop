@@ -29,6 +29,7 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 ### Shipped (Most Recent)
 
+- **Watchdog script parity — DONE (2026-10-06, PR #877):** `AesopWatchdogDaemon` scheduled task now runs aesop origin/main's `daemons/run-watchdog.sh --once` from runtime worktree `~/aesop-daemon-runtime` (fetch + reset --hard origin/main each tick, CONDUCTOR_ROOT exported; conductor3 commit 94d23915); heartbeat at `$CONDUCTOR_ROOT/state`; `power_selftest` has WATCHDOG-SCRIPT-PARITY (claude-scripts #32/#33/#36, reports `ok (runtime=<sha>)`); two unattended ticks verified.
 - #859, #872: CI-modes product surface — `ci.mode` config, `aesop init --ci-mode`, `aesop doctor` capability table, `aesop runner install|remove` (#859); linux-shape row added to the capability table (#872)
 - #872: linux_shape_check gate — distro-aware WSL detection (`wsl -l -q` + `wsl -e true`, not bare `wsl --status`); coexists with G14 in pre-push + CI
 - #874: pr_sweep.py — session-independent PR-sweep actor under the 15-min watchdog throttle (closes item 9 residual)
@@ -50,7 +51,8 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 ### In Progress
 
-18. **Watchdog script parity** (IN-FLIGHT). Live watchdog task runs a stale conductor3 copy of `daemons/run-watchdog.sh` — repoint/sync + WATCHDOG-SCRIPT-PARITY selftest (lane in flight).
+19. **tools/new_gate_check.py** (IN-FLIGHT, lane open). One-command new-gate checklist (stub list, inventory parity, claudemd lint/headroom/sync, portability, pre-push self-test) — #872 took 5 red rounds hitting these one at a time; also derive the TTY fixture stub list from `check_*` functions automatically.
+20. **tools/INDEX.md union-merge duplicates** (IN-FLIGHT, lane open). Duplicates accumulate on clean merges due to drift — post-merge regenerate hook or duplicate-tolerant check.
 
 ### Open / Queued
 
@@ -58,9 +60,9 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 13. **Receipt gate increments 4–6 — after measurement** (QUEUED). PR #854 shipped increments 1–3. Pending: storage codecs, receipt lineage, signed ledger append.
 16. **pyflakes unused-import sweep** (QUEUED). Detect and remove unreferenced imports in driver/, tools/, mcp/, ui/ Python.
 17. **LANE-CONTRACT line for AESOP_ALLOW_GENERATED** (QUEUED). Add contract statement permitting lanes to deploy generated-paths registry entries; policy clarification pending.
-19. **tools/new_gate_check.py** (QUEUED). One-command new-gate checklist (stub list, inventory parity, claudemd lint/headroom/sync, portability, pre-push self-test) — #872 took 5 red rounds hitting these one at a time; also derive the TTY fixture stub list from `check_*` functions automatically.
-20. **tools/INDEX.md union-merge duplicates** (QUEUED). Duplicates accumulate on clean merges due to drift — post-merge regenerate hook or duplicate-tolerant check.
 21. **Promote pr_symbol_survival_check (G13) to blocking** (QUEUED). After 2026-10-14 (1 week clean runs since #865).
+22. **Extend hooks/no-polling.mjs** (QUEUED). Deny backgrounded whole-filesystem searches in lanes.
+23. **LANE-CONTRACT: kill only identified PIDs** (QUEUED). Never kill by image name or process tree.
 
 ### Blocked / Deferred
 
