@@ -33,6 +33,12 @@ SENTINEL = "<!-- GENERATED-BY: tools/gen_tool_index.py -->"
 END_MARKER = "<!-- END-GENERATED -->"
 INDEX_PATH = "tools/INDEX.md"
 SCAN_EXTS = (".py", ".sh", ".mjs", ".js")
+# The ONE repair line every surface prints (this --check, the pre-push gate,
+# CI). Includes the `git add` because the drift is in the COMMIT: regenerating
+# the working tree alone leaves the pushed bytes stale.
+REGENERATE_INSTRUCTION = (
+    "run: python tools/gen_tool_index.py --regenerate && git add tools/INDEX.md"
+)
 
 # A header line carrying the index one-liner. Strips an optional leading comment
 # marker so the same marker is found in a Python docstring (bare) or a shell/JS
@@ -180,15 +186,14 @@ def main(argv=None):
     # Default mode is --check.
     if not index_file.exists():
         print(
-            f"ERROR: {INDEX_PATH} is missing; run: python tools/gen_tool_index.py --regenerate",
+            f"ERROR: {INDEX_PATH} is missing; {REGENERATE_INSTRUCTION}",
             file=sys.stderr,
         )
         return 1
     actual = index_file.read_text(encoding="utf-8")
     if actual != expected:
         print(
-            f"ERROR: {INDEX_PATH} is out of date; run: "
-            f"python tools/gen_tool_index.py --regenerate",
+            f"ERROR: {INDEX_PATH} is out of date; {REGENERATE_INSTRUCTION}",
             file=sys.stderr,
         )
         return 1
