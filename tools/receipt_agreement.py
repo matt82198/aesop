@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Measure agreement between locally-emitted receipts and hosted CI check-runs.
 
-INDEX: Receipt-gate measurement tool (increment 4 precondition): for a window of recent merged/open PRs, find each head sha's verified receipt (via verify_receipt library), fetch the hosted CI conclusion per matrix part (check-run results from `gh api repos/owner/repo/commits/sha/check-runs`), and report agreement: parts compared, agreements, disagreements (listing sha + part + local vs CI), agreement %, verdict against 90% threshold. Default matrix: py-shard-0..3. Parts mapping: receipt py-shard-N -> ci (N) check-run. `--json` for structured output; `--require 90` exits 1 if agreement < threshold (default exits 0 always). TDD: fixtures only, no network.
+INDEX: Receipt-gate measurement tool (increment 4 precondition): for a window of recent merged/open PRs, find each head sha's verified receipt (via verify_receipt library), fetch the hosted CI conclusion per matrix part (check-run results from `gh api repos/owner/repo/commits/sha/check-runs`), and report agreement: parts compared, agreements, disagreements (listing sha + part + local vs CI), agreement %, verdict against configurable threshold. Default matrix: py-shard-0..3. Parts mapping: receipt py-shard-N -> ci (N) check-run. `--json` for structured output; `--require N` exits 1 if agreement < threshold (default exits 0 always). TDD: fixtures only, no network.
 """
 
 import argparse
