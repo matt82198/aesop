@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# secretscan: allow-pattern-docs
 """
 Wave manifest preflight validator.
 INDEX: Wave manifest preflight validator: (1) file-ownership disjointness (no overlaps via fnmatch glob matching); (2) ownsFiles path existence (new files flagged as INFO); (3) prompt sanity (non-empty + [ISOLATION: sibling worktree] required + [[ALLOW-NON-HAIKU]] warns unless [[ALLOW-SONNET]]/[[ALLOW-OPUS]]); (4) git history churn (14-day commits >3 = WARN; list-form git argv + cwd=, never a shell string — an interpolated path with a space would silently report a false "no churn"); (5) PER-ITEM testCmd validation (`item["testCmd"]`, the field driver/wave_loop.py + driver/wave_scheduler.py actually read — binary on PATH or repo-relative script; missing per-item testCmd = WARN naming the slug; a top-level `testCmd` is inert and WARNs). CLI: `wave_manifest_lint.py <manifest.json> [--json] [--strict] [--root DIR]`. Exit 0=PASS (warnings OK) / 1=FAIL or (--strict) WARN. ASCII+JSON output
@@ -277,11 +278,38 @@ def check_git_history_churn(items: List[Dict[str, Any]], repo_root: str) -> List
 
 
 def _testcmd_binary_resolves(test_cmd: str, repo_root: str) -> Tuple[bool, str]:
-    """Resolve the leading binary of a testCmd. Returns (resolved, binary)."""
+    """Resolve the leading binary of a testCmd. Returns (resolved, binary).
+    
+    Skips past leading shell negation (!) and environment assignments (FOO=value)
+    to find the actual binary.
+    """
     tokens = test_cmd.split()
     if not tokens:
         return False, ""
-    binary = tokens[0]
+
+    # Skip leading shell negation and env assignments to find the real binary
+    idx = 0
+    while idx < len(tokens):
+        token = tokens[idx]
+        # Skip shell negation
+        if token == "!":
+            idx += 1
+            continue
+        # Skip environment assignments (FOO=value pattern)
+        if "=" in token and not os.path.isabs(token) and not token.startswith("-"):
+            # Check if it matches VAR=value pattern (valid env var name before =)
+            var_part = token.split("=", 1)[0]
+            # Valid env var: starts with letter/underscore, contains only alphanumeric/underscore
+            if var_part and var_part.replace("_", "").isalnum() and (var_part[0].isalpha() or var_part[0] == "_"):
+                idx += 1
+                continue
+        # Found the binary
+        break
+
+    if idx >= len(tokens):
+        return False, ""
+
+    binary = tokens[idx]
 
     # Repo-relative script?
     if not os.path.isabs(binary):
