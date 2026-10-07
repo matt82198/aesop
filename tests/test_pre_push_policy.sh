@@ -1510,27 +1510,22 @@ printf '\n=== Test: check_emit_receipt WARNs and fails open when gh is unavailab
   touch "$AESOP_ROOT/dummy_key.pem"
   unset AESOP_RECEIPT_EMIT
 
-  # Build a PATH identical to the real one but with gh's own directory
-  # removed, so every other external command (python, git, sha256sum, date,
-  # mkdir, ...) that check_emit_receipt / log_event need still resolves --
-  # only `gh` specifically becomes unresolvable. If gh is not installed on
-  # this box at all, the unmodified PATH already exercises this branch.
-  gh_real=$(command -v gh 2>/dev/null || true)
-  test_path="$PATH"
-  if [ -n "$gh_real" ]; then
-    gh_dir=$(dirname "$gh_real")
-    test_path=""
-    _old_ifs="$IFS"
-    IFS=':'
-    for _p in $PATH; do
-      if [ "$_p" != "$gh_dir" ]; then
-        test_path="${test_path:+$test_path:}$_p"
-      fi
-    done
-    IFS="$_old_ifs"
-  fi
+  # Build a MINIMAL PATH from scratch containing ONLY symlinks to the exact
+  # binaries check_emit_receipt / log_event need (resolved from the real
+  # PATH), deliberately excluding gh. Filtering gh's directory OUT of the
+  # real PATH is NOT reliable across environments (a CI runner can have gh
+  # reachable via more than one PATH entry, or via a wrapper), so build the
+  # allowlist instead of a denylist.
+  gh_free_bin="$AESOP_ROOT/gh-free-bin"
+  mkdir -p "$gh_free_bin"
+  for _tool in git python3 python sha256sum shasum date mkdir basename tail cat grep sed awk stat tr head; do
+    _tool_path=$(command -v "$_tool" 2>/dev/null || true)
+    if [ -n "$_tool_path" ]; then
+      ln -sf "$_tool_path" "$gh_free_bin/$_tool" 2>/dev/null
+    fi
+  done
 
-  stderr_output=$( { PATH="$test_path" check_emit_receipt; } 2>&1 1>/dev/null )
+  stderr_output=$( { PATH="$gh_free_bin" check_emit_receipt; } 2>&1 1>/dev/null )
   exit_code=$?
 
   if [ "$exit_code" -ne 0 ]; then
@@ -1581,16 +1576,24 @@ printf '\n=== Test: main() emits a receipt only after every gate above it passed
     local aesop_root="$1"
     local sync_gate_exit="$2"
     mkdir -p "$aesop_root/state" "$aesop_root/tools"
-    # check_secret_scan fail-closes on `[ ! -x "$scan_script" ]`, and `chmod
-    # +x` on a freshly-written file under this box's TMPDIR does not reliably
-    # stick (observed: mode stays 644 after chmod 755). `cp` of the repo's
-    # OWN already-executable secret_scan.py preserves the bit, so copy the
-    # real tool instead of writing + chmod'ing a stub.
+    # check_secret_scan fail-closes on `[ ! -x "$scan_script" ]`. git tracks
+    # tools/secret_scan.py at mode 644 (not executable) -- this Windows dev
+    # box's git-bash happens to report every checked-out file as `-x` true
+    # regardless (an observed box-specific quirk), which masked this on one
+    # platform but a real Linux checkout honors the tracked 644 and `cp`
+    # alone copies a NON-executable file there. `chmod +x` after the copy
+    # covers both: a no-op where cp's result already reads executable, a
+    # real fix where it does not.
     cp "$REPO_ROOT/tools/secret_scan.py" "$aesop_root/tools/secret_scan.py"
-    for gate in import_resolution_check conflict_marker_check tracker_guard \
-                gen_tool_index metrics_gate verify_test_suite_count \
-                encoding_lint verify_test_coverage linux_shape_check \
-                generated_push_gate; do
+    chmod +x "$aesop_root/tools/secret_scan.py"
+    # Every OTHER fail-closed gate stub is DERIVED from tools/gate_stub_list.py
+    # -- the same tool tools/new_gate_check.py's checklist uses -- instead of
+    # hand-listed, so a new check_*() added later (like check_generated_regen's
+    # generated_push_gate.py, which broke this exact hand list once already)
+    # is covered automatically rather than needing this fixture edited again.
+    local gate
+    for gate in $(python "$REPO_ROOT/tools/gate_stub_list.py" "$REPO_ROOT/hooks/pre-push-policy.sh"); do
+      [ "$gate" = "claudemd_sync_gate" ] && continue  # needs a variable exit code below
       printf 'import sys\nsys.exit(0)\n' > "$aesop_root/tools/${gate}.py"
     done
     printf 'import sys\nsys.exit(%s)\n' "$sync_gate_exit" > "$aesop_root/tools/claudemd_sync_gate.py"
