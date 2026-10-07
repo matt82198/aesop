@@ -35,8 +35,18 @@ by `tools/gen_tool_index.py --regenerate` from each file's own `INDEX:` header l
 never hand-edit it -- the byte-identity gate rejects drift). This file stays navigation
 only so a tool-adding PR never conflicts with every other in-flight PR over the same
 inline list (that conflict-magnet is why PR #751 moved the index out of here). Index
-merges with the `union` driver (`.gitattributes`) — two PRs each adding a tool merge
-cleanly with both lines kept, then `gen_tool_index.py --regenerate` normalizes order.
+merges through the `aesop-regen` driver (`.gitattributes` -> `generated_merge.py`,
+registered per clone by `install_merge_drivers.py`; the pre-push hook does that for you):
+a structured 3-way merge of entries rendered through the generator, so two PRs each adding
+a tool merge to an already-regenerated index. (git's `union` kept both sides verbatim and
+left the index unsorted/duplicated on every merge-from-main: #784/#856/#739.) Rule:
+merge-from-main = merge, then `python tools/gen_tool_index.py --regenerate && git add
+tools/INDEX.md`, or let the driver/gate do it — `generated_push_gate.py` (hook
+`check_generated_regen()`) verifies the COMMITTED bytes of every registered regenerable
+artifact (`generated_paths.REGISTRY` entries with a `regen` argv; must equal
+`merge_queue.REGENERATORS`) at the pushed tip in a throwaway worktree and rejects a stale
+one with exactly that instruction; the driver's per-worktree `.needs-regen` stamp
+(`git rev-parse --git-path aesop-needs-regen`) forces the check even on an empty range.
 
 ## Adding a new gate (2026-10-06, PR #872 postmortem)
 
@@ -67,6 +77,14 @@ escape hatch set for the dry run; stale -> FAIL with the exact regen command,
 never reaching the hook.
 
 ## Recent additions (2026-10)
+
+- `generated_merge.py` / `generated_push_gate.py` / `install_merge_drivers.py` — the
+  generated-artifact merge triangle (see § Tool index): regenerating merge driver, committed-
+  bytes pre-push gate, idempotent per-clone driver registration. Tests:
+  `tests/test_generated_merge.py` (git integration incl. the `union` negative control,
+  3-way entry semantics, stamp, registry/queue agreement), `tests/test_generated_push_gate.py`
+  (stale-commit rejection with the one-line instruction, dirty-tree-does-not-rescue, stamp
+  consumption, sourced-hook wiring).
 
 - `linux_shape_check.py` — WSL-based cross-platform test gate: detects commits touching
   shell/workflow/Node files, runs test suites under WSL to catch Windows-only CI reds

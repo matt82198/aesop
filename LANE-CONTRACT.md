@@ -200,8 +200,11 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   broader, weaker `GENERATED_PATHS`/`is_restorable()` tuple (automation may `git restore` them if dirty) but are NOT
   in `REGISTRY` — hand-editing them is legitimate and they are never blocked at push; `tools/INDEX.md` is the one
   path in both, and its own byte-identity gate (`tools/gen_tool_index.py --check`) still runs unchanged regardless of
-  who was allowed to push it. `tools/INDEX.md` merges with the `union` driver (`.gitattributes`); always run
-  `gen_tool_index.py --regenerate` after merging main to normalize order.
+  who was allowed to push it. **Merge-from-main = merge, then regenerate registered artifacts
+  (`python tools/gen_tool_index.py --regenerate && git add tools/INDEX.md`), or let the driver/gate do it:**
+  `tools/INDEX.md` merges through the `aesop-regen` driver (`.gitattributes` -> `tools/generated_merge.py`, registered
+  per clone by `python tools/install_merge_drivers.py` — the pre-push hook does it for you), and
+  `check_generated_regen()` rejects a push whose COMMITTED index is stale, printing exactly that instruction.
 - **Before pushing, run the shard for your test file.** Run `python tools/ci_shard_runner.py <n> 4` for the shard that owns your
   test file (see tests/CLAUDE.md for shard assignment). CI is confirmation of local verification, not discovery of breakage. Paste
   the shard output to your report: it proves your changes work before they hit main.
