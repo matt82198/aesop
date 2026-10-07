@@ -150,3 +150,10 @@ lookup exception-safe and guarding the module's own absence at the shell level.)
   same head sha? Any disagreement is the signal that blocks increment 4.
 - Receipt count vs PR count: adoption by lanes (`emit_receipt.py --post` in the lane
   contract is advisory for now).
+
+## Proof runs
+
+2026-10-07: push-emission proof
+# Hook test
+# Another test
+# Test 4 after unset hooks path
