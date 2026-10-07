@@ -11,7 +11,6 @@ Tests three cases:
 """
 
 import importlib.util
-import os
 import sys
 import tempfile
 import unittest
