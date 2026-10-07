@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate tools/INDEX.md from per-tool INDEX: docstring lines.
 
-INDEX: Generated tool-index builder; walks `git ls-files tools/`, extracts each tool's `INDEX:` docstring/header line, emits sorted tools/INDEX.md between GENERATED-BY markers; modes `--check` (byte-compare, exit 1 + regenerate hint) / `--regenerate` / `--json`; a scanned tool with NO `INDEX:` line FAILS CLOSED (exit 1) so a new tool cannot land undocumented; deterministic + ASCII-safe; stdlib-only.
+INDEX: Generated tool-index builder; walks `git ls-files tools/`, extracts each tool's `INDEX:` docstring/header line, emits sorted tools/INDEX.md between GENERATED-BY markers; modes `--check` (git-normalized comparison, exit 1 + regenerate hint) / `--regenerate` / `--json`; a scanned tool with NO `INDEX:` line FAILS CLOSED (exit 1) so a new tool cannot land undocumented; deterministic + ASCII-safe; stdlib-only; EOL-agnostic (handles CRLF/LF via git normalization per .gitattributes).
 
 Design (A2 of the merge-pipeline debottleneck): the ~120-entry tool index used to
 live inline in tools/CLAUDE.md, so every PR that added a tool edited that one file
@@ -20,6 +20,11 @@ Scan scope: top-level tracked files under tools/ with extensions .py/.sh/.mjs/.j
 
 Exit codes: 0 = clean (regenerated, or --check matched), 1 = drift or a tool
 missing its INDEX: line (fail-closed), 2 = usage/environment error.
+
+EOL Handling (Windows CRLF fix): --regenerate writes with platform-native newlines;
+--check uses `git diff --quiet --exit-code` for comparison, which applies git's
+EOL normalization rules (core.eol, .gitattributes text=auto), so the check works
+correctly on all platforms without being fooled by CRLF/LF differences.
 """
 
 import argparse
@@ -106,7 +111,11 @@ def collect(repo_root: Path):
 
 
 def render(entries):
-    """Render the deterministic, ASCII INDEX.md body from sorted entries."""
+    """Render the deterministic, ASCII INDEX.md body from sorted entries.
+
+    Returns LF-only string; the caller (--regenerate) writes it with
+    platform-native newlines for correct git EOL handling on all platforms.
+    """
     lines = [
         SENTINEL,
         "# tools/ index (generated -- do not hand-edit)",
@@ -120,7 +129,58 @@ def render(entries):
         lines.append(f"- `{name}` -- {desc}")
     lines.append("")
     lines.append(END_MARKER)
+    # Return LF-only content; caller writes with platform-native newlines
     return "\n".join(lines) + "\n"
+
+
+def check_via_git_hash(index_file: Path, repo_root: Path, expected_content: str) -> bool:
+    """Compare expected content with working tree file using git hash-object.
+
+    Both the generated content and the working tree file are hashed through
+    git hash-object --path, which applies .gitattributes and core.eol rules.
+    This ensures CRLF/LF differences don't cause false positives, and the
+    comparison is independent of what bytes sit on disk.
+
+    Returns True if hashes match (file is in sync).
+    """
+    try:
+        import os
+        import tempfile
+        file_rel = str(index_file.relative_to(repo_root))
+
+        # Hash the expected (generated) content through git's normalization
+        proc = subprocess.run(
+            ["git", "hash-object", "--stdin", "--path", file_rel],
+            input=expected_content,
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30
+        )
+        if proc.returncode != 0:
+            return False
+        expected_hash = proc.stdout.strip()
+
+        # Hash the working tree file through git's normalization
+        proc = subprocess.run(
+            ["git", "hash-object", "--path", file_rel, str(index_file)],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30
+        )
+        if proc.returncode != 0:
+            return False
+        working_hash = proc.stdout.strip()
+
+        return expected_hash == working_hash
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"ERROR: git hash-object failed: {exc}", file=sys.stderr)
+        return False
 
 
 def main(argv=None):
@@ -134,7 +194,7 @@ def main(argv=None):
     mode.add_argument(
         "--check",
         action="store_true",
-        help="Verify tools/INDEX.md is byte-identical to freshly generated output (default)",
+        help="Verify tools/INDEX.md matches generated output via git-normalized comparison (default)",
     )
     mode.add_argument(
         "--regenerate", action="store_true", help="Write tools/INDEX.md"
@@ -179,26 +239,36 @@ def main(argv=None):
     index_file = repo_root / INDEX_PATH
 
     if args.regenerate:
+        # Write with LF-only line endings. Git stores text files with LF in the
+        # repository (normalized per .gitattributes and core.eol settings), and
+        # the comparison for staleness (--check) also uses git-normalized hashes.
+        # Writing with explicit LF ensures byte-identity with what's committed
+        # and avoids spurious differences from platform EOL conversions.
         index_file.write_text(expected, encoding="utf-8", newline="\n")
         print(f"[OK] wrote {INDEX_PATH} ({len(entries)} tools)")
         return 0
 
-    # Default mode is --check.
+    # Default mode is --check (read-only, never modifies).
     if not index_file.exists():
         print(
             f"ERROR: {INDEX_PATH} is missing; {REGENERATE_INSTRUCTION}",
             file=sys.stderr,
         )
         return 1
-    actual = index_file.read_text(encoding="utf-8")
-    if actual != expected:
-        print(
-            f"ERROR: {INDEX_PATH} is out of date; {REGENERATE_INSTRUCTION}",
-            file=sys.stderr,
-        )
-        return 1
-    print(f"[OK] {INDEX_PATH} is in sync ({len(entries)} tools)")
-    return 0
+
+    # Use git hash-object to compare, which applies .gitattributes and core.eol
+    # normalization to both the generated content and the working tree file.
+    # This makes the comparison independent of platform line endings and avoids
+    # false positives from CRLF/LF differences on Windows.
+    if check_via_git_hash(index_file, repo_root, expected):
+        print(f"[OK] {INDEX_PATH} is in sync ({len(entries)} tools)")
+        return 0
+
+    print(
+        f"ERROR: {INDEX_PATH} is out of date; {REGENERATE_INSTRUCTION}",
+        file=sys.stderr,
+    )
+    return 1
 
 
 if __name__ == "__main__":

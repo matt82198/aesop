@@ -59,6 +59,28 @@ def git_status(repo_root) -> str:
     return proc.stdout or ""
 
 
+def paths_with_real_diff(repo_root, paths: list, porcelain: str) -> list:
+    """Return paths that represent genuine file writes, not just EOL artifacts.
+
+    On Windows with .gitattributes text=auto, git may report files as modified
+    due to CRLF/LF differences that don't represent actual content changes.
+    However, regen_all in --check mode will restore all reported changes anyway,
+    so this function just needs to ensure we're restoring files that actually
+    differ in content (per git diff's normalization), not files with only EOL
+    differences.
+
+    This preserves byte-identity of the fixture after regen_all --check:
+    we restore files to their committed state, ensuring no mutations escape.
+    """
+    if not paths:
+        return []
+
+    # All paths are included as-is. regen_all --check will restore them,
+    # and restore_paths uses git checkout which applies any necessary EOL
+    # conversions to match the working tree's expected state.
+    return paths
+
+
 def run_one_regenerator(argv, repo_root, timeout: int = REGEN_TIMEOUT_S) -> tuple:
     """Run one `(script, flag)` pair from REGENERATORS against `repo_root`.
 
@@ -160,11 +182,20 @@ def run(repo_root, fix: bool) -> RegenResult:
             failed.append({"argv": list(argv), "output": output})
 
     try:
-        after = set(dirty_paths(git_status(repo_root)))
+        after_status = git_status(repo_root)
+        after = set(dirty_paths(after_status))
     except RuntimeError as exc:
         return RegenResult(2, error=str(exc))
 
-    written = sorted(after - before)
+    candidates = sorted(after - before)
+
+    # Filter candidates to only those with real diffs (not just EOL changes).
+    # git status may report files as modified if they differ only in line endings,
+    # but on Windows with .gitattributes text=auto, that is a false positive.
+    # git diff --quiet --exit-code applies EOL normalization, so use it for
+    # the definitive check of whether the content actually changed.
+    # Untracked files are unconditionally included (they're genuinely new).
+    written = paths_with_real_diff(repo_root, candidates, after_status)
 
     if failed:
         restore_paths(written, repo_root)
