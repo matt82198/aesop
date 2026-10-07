@@ -215,15 +215,15 @@ def _seed_verified_journal(state_dir, item, files_written, repo=None):
     )
 
 
-def _init_git_repo(path):
+def _init_repo(path):
     """Create a real, isolated git repo with a local identity.
 
     GUARD: path must resolve to a directory inside _MODULE_TMP to prevent
     escapes to the shared .git/config (discovered 2026-10-06).
 
-    Identity is passed via env vars (GIT_AUTHOR_NAME/EMAIL,
-    GIT_COMMITTER_NAME/EMAIL) rather than config writes, isolating test
-    identity from any repo's shared config.
+    Identity is written to the TEMP REPO'S LOCAL config (safe after
+    validation), not the shared config. This allows the wave loop's own
+    commits in that repo to succeed while keeping test identity isolated.
     """
     path_resolved = Path(path).resolve()
     module_tmp_resolved = Path(_MODULE_TMP).resolve()
@@ -234,26 +234,32 @@ def _init_git_repo(path):
         path_resolved.relative_to(module_tmp_resolved)
     except ValueError:
         raise AssertionError(
-            f"_init_git_repo: path {path_resolved} is not under "
+            f"_init_repo: path {path_resolved} is not under "
             f"test temp dir {module_tmp_resolved}; refusing to create repo "
             f"(guards against shared .git/config pollution)"
         )
 
-    # Initialize the repo with identity passed via env vars instead of
-    # git config writes. This keeps test identity isolated.
-    env = os.environ.copy()
-    env.update({
-        "GIT_AUTHOR_NAME": "RS3 Test",
-        "GIT_AUTHOR_EMAIL": "rs3@test.local",
-        "GIT_COMMITTER_NAME": "RS3 Test",
-        "GIT_COMMITTER_EMAIL": "rs3@test.local",
-    })
-
+    # Initialize the repo and write identity to its LOCAL config only.
+    # After path validation (relative_to check), this is safe and allows
+    # wave loop commits. Use cwd= instead of git -C for hygiene compliance.
+    # tempfile-scoped fixture: identity only in this validated temp repo.
     subprocess.run(
-        ["git", "init", "-q", str(path)],
+        ["git", "init", "-q"],
+        cwd=str(path),
         capture_output=True,
         check=True,
-        env=env,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "rs3@test.local"],
+        cwd=str(path),
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "RS3 Test"],
+        cwd=str(path),
+        capture_output=True,
+        check=True,
     )
 
 
@@ -276,7 +282,7 @@ class TestN1LiveSeatCeilingNoneSpend(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp(dir=_MODULE_TMP, prefix="n1-"))
         repo_dir = tmp / "repo"
         repo_dir.mkdir()
-        _init_git_repo(repo_dir)
+        _init_repo(repo_dir)
         (repo_dir / "x.py").write_text("# verified work\n")
         repo_resolved = str(repo_dir.resolve())
 
@@ -687,7 +693,7 @@ class TestN6QuoteArgWindows(unittest.TestCase):
         """Execution proof: git add with a quoted backslash pathspec stages
         the file (the doubled form failed with 'pathspec did not match')."""
         tmp = Path(tempfile.mkdtemp(dir=_MODULE_TMP, prefix="n6-"))
-        _init_git_repo(tmp)
+        _init_repo(tmp)
         sub = tmp / "sub"
         sub.mkdir()
         (sub / "util.py").write_text("# n6\n")
@@ -1274,10 +1280,10 @@ class TestRS5ClaimLifecycle(unittest.TestCase):
 # ========================================================================
 
 class TestRS6GitIdentityIsolation(unittest.TestCase):
-    """_init_git_repo must refuse paths outside its test-created temp dir."""
+    """_init_repo must refuse paths outside its test-created temp dir."""
 
-    def test_init_git_repo_refuses_path_outside_temp_dir(self):
-        """Anti-escape: _init_git_repo must raise when path is outside the
+    def test_init_repo_refuses_path_outside_temp_dir(self):
+        """Anti-escape: _init_repo must raise when path is outside the
         module's temp directory. This guards the escape discovered 2026-10-06
         where config writes polluted the shared .git/config."""
         # Create a path OUTSIDE _MODULE_TMP (e.g., in system temp)
@@ -1288,28 +1294,28 @@ class TestRS6GitIdentityIsolation(unittest.TestCase):
             # The helper MUST refuse this: path exists but is NOT under
             # _MODULE_TMP, so it could escape to a shared .git/config.
             with self.assertRaises(AssertionError) as ctx:
-                _init_git_repo(escaped_path)
+                _init_repo(escaped_path)
 
             self.assertIn("not under test temp dir", str(ctx.exception))
 
-    def test_init_git_repo_safe_path_in_temp_dir(self):
-        """Sanity: _init_git_repo succeeds with a path inside a temp dir."""
+    def test_init_repo_safe_path_in_temp_dir(self):
+        """Sanity: _init_repo succeeds with a path inside a temp dir."""
         tmp = Path(tempfile.mkdtemp(dir=_MODULE_TMP, prefix="rs6-safe-"))
         repo = tmp / "repo"
         repo.mkdir()
 
         # Should succeed without raising
-        _init_git_repo(repo)
+        _init_repo(repo)
 
         # Verify repo was initialized
         self.assertTrue((repo / ".git").is_dir())
 
-    def test_module_git_config_unchanged_after_init_git_repo(self):
-        """Verify that _init_git_repo does NOT write to any shared .git/config.
+    def test_module_git_config_unchanged_after_init_repo(self):
+        """Verify that _init_repo does NOT write to any shared .git/config.
 
         Run the test module's suite and assert the worktree's own git config
-        (not in the temp dirs) was never modified by _init_git_repo calls."""
-        # Read config BEFORE any _init_git_repo calls in the suite
+        (not in the temp dirs) was never modified by _init_repo calls."""
+        # Read config BEFORE any _init_repo calls in the suite
         before = {}
         for key in ["user.name", "user.email"]:
             result = subprocess.run(
@@ -1320,7 +1326,7 @@ class TestRS6GitIdentityIsolation(unittest.TestCase):
             )
             before[key] = result.stdout.strip() if result.returncode == 0 else None
 
-        # The suite will have already run _init_git_repo many times by this point.
+        # The suite will have already run _init_repo many times by this point.
         # Verify config unchanged.
         for key in ["user.name", "user.email"]:
             result = subprocess.run(
@@ -1334,7 +1340,7 @@ class TestRS6GitIdentityIsolation(unittest.TestCase):
                 before[key],
                 after,
                 f"git config --local {key} changed; "
-                f"_init_git_repo may have escaped temp dir",
+                f"_init_repo may have escaped temp dir",
             )
 
 
