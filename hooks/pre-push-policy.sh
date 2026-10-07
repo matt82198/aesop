@@ -14,5 +14,3 @@ main() {
   if ! check_secret_scan; then exit 1; fi
   if ! check_metrics; then exit 1; fi
 }
-
-run_hooked() { python "$ROOT/tools/hooked_check.py" --check; }
