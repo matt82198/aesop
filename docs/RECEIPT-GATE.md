@@ -154,3 +154,4 @@ lookup exception-safe and guarding the module's own absence at the shell level.)
 ## Proof runs
 
 2026-10-07: push-emission proof
+# Hook test
