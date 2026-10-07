@@ -15,7 +15,8 @@ is measured, the hosted re-run can become a sample instead of a tax.
 | Increment | Piece | File |
 |---|---|---|
 | 1 | Emitter: run the local matrix, sign, post | `tools/emit_receipt.py` (+ `tools/receipt_common.py`) |
-| 2 | Offline verifier | `tools/verify_receipt.py` |
+| 2a | Spool-and-flush: spool receipts if commit missing, flush when sha exists | `tools/receipt_flush.py` |
+| 2b | Offline verifier | `tools/verify_receipt.py` |
 | 3 | Hosted verifying Action (non-required) | `.github/workflows/verify-receipt.yml` |
 
 **Emission is now automatic.** `hooks/pre-push-policy.sh`'s `check_emit_receipt()` runs
@@ -31,6 +32,32 @@ the same way, e.g. for a `--dry-run` preview or a narrower `--matrix`:
 python tools/emit_receipt.py --post            # default matrix, Ed25519 if $AESOP_RECEIPT_KEY is set
 python tools/emit_receipt.py --dry-run         # print the signed envelope, post nothing
 python tools/emit_receipt.py --matrix py-shard-0,py-shard-1 --post
+```
+
+## Spool-and-flush design (increment 2a)
+
+**Problem:** The pre-push hook runs before the commit is pushed to GitHub, so when
+`emit_receipt.py --post` tries to publish, the commit-comment fallback fails with 422
+("No commit found for SHA"). The receipt is lost.
+
+**Solution:** Spool the receipt to `state/receipts/spool/<head_sha>.json` when 422 occurs,
+then flush it once the sha exists on GitHub. The flush runs automatically:
+
+1. **At the start of `check_emit_receipt`** in `hooks/pre-push-policy.sh`: Before emitting
+   a new receipt, `tools/receipt_flush.py` checks any prior spooled receipts and posts them
+   if their shas now exist on GitHub. Fail-open: errors do not block the push.
+
+2. **In `tools/pr_sweep.py`** (session-independent watchdog actor): Once per sweep, `receipt_flush.py`
+   flushes any remaining spooled receipts.
+
+The flush tool is idempotent: it retries failed receipts indefinitely (up to `--max-age-days`,
+default 7 days), deletes them on success, and keeps them on transient errors (sha not yet pushed).
+Exit 0 always unless `--strict`.
+
+```
+python tools/receipt_flush.py --repo .              # flush spooled receipts
+python tools/receipt_flush.py --repo . --dry-run    # print the plan
+python tools/receipt_flush.py --repo . --max-age-days 3  # drop stools older than 3 days
 ```
 
 ## The receipt
