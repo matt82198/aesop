@@ -75,12 +75,15 @@ class StateIsolatedTestCase(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.state_root = Path(self._tmp.name) / "state"
         self.state_root.mkdir(parents=True, exist_ok=True)
+        # Queue root must NOT be derived from cwd; create a separate temp directory.
+        # This ensures the guard catches the incident scenario: build_batch called from
+        # a different directory (lane worktree) with AESOP_QUEUE_ROOT pointing elsewhere.
+        self.queue_root = Path(self._tmp.name) / "queue"
+        self.queue_root.mkdir(parents=True, exist_ok=True)
         self._prev_state_root = os.environ.get("AESOP_STATE_ROOT")
         self._prev_queue_root = os.environ.get("AESOP_QUEUE_ROOT")
         os.environ["AESOP_STATE_ROOT"] = str(self.state_root)
-        # Set AESOP_QUEUE_ROOT to the current working directory for queue root isolation guard.
-        # Tests run from this worktree, so queue_root must match cwd.
-        os.environ["AESOP_QUEUE_ROOT"] = str(Path.cwd())
+        os.environ["AESOP_QUEUE_ROOT"] = str(self.queue_root)
         # No unit test may shell out. `run_regenerator` is the module's only
         # subprocess call; it is stubbed green here so build_batch tests
         # exercise batch construction, not this repo's real generators. Tests
