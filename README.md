@@ -126,6 +126,12 @@ For commercial licensing, contact the author (Matt Culliton).
 
 Copyright 2026 Matt Culliton.
 
+## Citing
+
+If you use Aesop, please cite it using the metadata in [CITATION.cff](./CITATION.cff) (GitHub
+renders a "Cite this repository" button from this file). It also lists the preferred research
+citation, *The Receipts Loop* (manuscript draft, arXiv submission pending).
+
 ## References
 
 - [Anthropic Claude API docs](https://docs.anthropic.com)
