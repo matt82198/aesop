@@ -17,10 +17,22 @@ COMMIT_LINT = str(REPO_ROOT / "tools" / "commit_lint.py")
 
 
 def _git(repo, *args):
-    """Run git in the fixture repo; never touches global/user git config."""
+    """Run git in the fixture repo; never touches global/user git config.
+
+    Uses 'git -C <absolute_path>' to ensure all git operations are scoped to the
+    fixture repo, preventing config writes from leaking to the parent repo.
+    Fails closed if repo is not an absolute path under tempfile.gettempdir().
+    """
+    repo_abs = os.path.abspath(str(repo))
+    temp_root = tempfile.gettempdir()
+    if not repo_abs.startswith(os.path.abspath(temp_root)):
+        raise AssertionError(
+            f"_git repo path must be absolute and under temp directory, got: {repo_abs} "
+            f"(temp root: {temp_root}). This guards against fixture pollution of the real repo."
+        )
     result = subprocess.run(
-        ["git"] + list(args),
-        cwd=repo, capture_output=True, text=True, encoding="utf-8", timeout=30,
+        ["git", "-C", repo_abs] + list(args),
+        capture_output=True, text=True, encoding="utf-8", timeout=30,
     )
     if result.returncode != 0:
         raise AssertionError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
