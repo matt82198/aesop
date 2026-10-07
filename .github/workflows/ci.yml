@@ -1,0 +1,5 @@
+jobs:
+  ci:
+    steps:
+      - run: python tools/alpha_lint.py --check
+      - run: python tools/verify_gamma.py
