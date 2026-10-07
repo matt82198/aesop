@@ -36,6 +36,9 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 ### Shipped (Most Recent)
 
+- **PR #928 Windows compat fix (ef559043, 2026-10-07) — SHIPPED:** Windows regression from #925: expected content passed to git hash-object stdin with text=True so Python translated LF->CRLF and every comparison reported false drift; fixed by passing UTF-8 bytes.
+- **PR #924 emit_receipt throwaway worktree — SHIPPED (2026-10-07):** emit_receipt runs the matrix in a detached throwaway worktree with GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_PREFIX scrubbed + caller-tree tripwire; closes fixture-commit and hooksPath escapes structurally.
+- **Receipt gate end-to-end proven (2026-10-07) — SHIPPED:** Real lane push with no AESOP_RECEIPT_EMIT/AESOP_RECEIPT_KEY ran full matrix in throwaway worktree, signed ed25519 with default key path, spooled (sha not yet on GitHub), posted as commit comment 203865814 on b893a758; caller tree untouched, core.hooksPath unset, branch carried exactly one commit. Caveat: local receipts report conclusion=failure while two Python shards fail on Windows box; tools/receipt_agreement.py measurement is gate for increment 4.
 - **Hard checkpoint+clear enforcement hooks — SHIPPED (brain commits bb31539/00558cf, 2026-10-07):** session-end-checkpoint.mjs (SessionEnd) auto-commits control files with secret-scan gate; checkpoint-before-clear.mjs (PreCompact) enforces staleness checks with recovery hints.
 - **LANE-CONTRACT AESOP_ALLOW_GENERATED — SHIPPED (PR #907, 2026-10-07 09:43:49Z):** lanes may deploy generated-paths registry entries without manual approval.
 - **Heartbeat-pollution fix — SHIPPED (PR #898, 2026-10-07T02:59:17Z):** daemons/backup-fleet.sh only auto-derives CONDUCTOR_ROOT for the canonical ~/aesop tree, else explicit or skip; new tests/test-backup-fleet-heartbeat-guard.sh.
@@ -68,7 +71,7 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 - **tools/INDEX.md union-merge deflake — SHIPPED (2026-10-07 02:30:41Z, PR #882):** Regen driver + committed-bytes push gate; prevents duplicate INDEX.md entries on clean merges; also fixes remote_refs_tripwire false positive; 45/45 + 223/223 regression tests green.
 - **Receipt increments 1–3 extended to gates 4–6 (PRs #909–#918, 2026-10-06/07):** Receipt schema_version=1 backward-compatible (#909); verify_receipt added to gate_inventory (#910); tools/receipt_agreement.py measures local vs hosted-CI agreement via check-runs/commit-comments (#911); receipt_common.resolve_receipt_key_path chain (env → ~/.aesop/receipt_key.pem) (#913); pre-push hook probes default path before warning (#916); generated_push_gate eol-normalization fix resolves Windows autocrlf false positive (#918). Publication proven via direct matrix/emit_receipt → commit comment (06d9b607); unproven: real `git push` emission (scheduled after #919 merges). Checks API requires auth (403 user-token); commit comments are channel.
 - **tests/test_commit_lint fixture hygiene (PR #919, 2026-10-07, SHIPPED):** Fixture isolation scanner + tripwire for all git config writes (core.hooksPath guard); power_selftest hooks-path-sane check added.
-- **PR #922 pr_footprint_gate — SHIPPED (2026-10-07):** tools/pr_footprint_gate.py + ci.yml job `pr-footprint-gate` required check: fails >100 files / >5000 deletions without a big-change label, or fixture-style commit subjects.
+- **PR #922 pr_footprint_gate — SHIPPED (2026-10-07):** tools/pr_footprint_gate.py + ci.yml job `pr-footprint-gate` is now REQUIRED branch-protection check on main: fails >100 files / >5000 deletions without a big-change label, or fixture-style commit subjects.
 - **PR #923 receipts spool/flush — SHIPPED (2026-10-07):** receipts spooled at pre-push under state/receipts/spool and flushed once the sha exists: hook start + pr_sweep.
 - **PR #925 regen_all/gen_tool_index --check read-only — SHIPPED (2026-10-07):** regen_all/gen_tool_index --check are read-only and eol-normalized via git hash-object; fixes the one real local shard failure on Windows.
 - **PR #926 LANE-CONTRACT section 4a — SHIPPED (2026-10-07):** ordered pre-push self-checks: footprint, pyflakes, hygiene, claudemd, regen, worktree-only push, explicit --head, EMIT=0 interim.
@@ -77,15 +80,14 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 ### Open / Queued
 
-18. **PR #924 emit_receipt throwaway worktree — OPEN (2026-10-07):** emit_receipt runs the matrix in a detached throwaway worktree with GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_PREFIX scrubbed + caller-tree tripwire; armed, CI running.
-19. **Promote pr_symbol_survival_check (G13) to blocking** (QUEUED). After 2026-10-14 (1 week clean runs since #865).
-20. **Extend hooks/no-polling.mjs** (QUEUED). Deny backgrounded whole-filesystem searches in lanes.
-21. **tests/test_test_hygiene.py lookback off-by-one** (QUEUED). Lookback window hardcoded as 19 lines; doc claims 20. Review window semantics + fix mismatch (2026-10-07 audit carried forward).
-22. **pyflakes ratchet G15 gate wiring** (QUEUED, post-#924). Add pyflakes to pre-push gate list after #924 merges; fixes ~50 remaining issues found during #890 sweep.
-23. **Receipt gate increments 4–6** (QUEUED, post-#924). Increment 4 (agreement measurement via tools/receipt_agreement.py) gated on measurement completion; increments 6a–6c (signed ledger storage, lineage codec) per conductor3 plan.
-24. **AesopMergeQueue task lifecycle decision** (QUEUED, decision pending). Scheduled task `AesopMergeQueue` Status: Disabled since 2026-09-11; retire gracefully (cleanup PR) vs re-enable?
-25. **Second-box receipt key provisioning** (QUEUED). Mattt profile on macOS needs AESOP_RECEIPT_KEY env var + private key setup.
-26. **Closed unmerged: PR #921** (branch corrupted: fixture commits; salvaged as #923).
+18. **Promote pr_symbol_survival_check (G13) to blocking** (QUEUED). After 2026-10-14 (1 week clean runs since #865).
+19. **Extend hooks/no-polling.mjs** (QUEUED). Deny backgrounded whole-filesystem searches in lanes.
+20. **tests/test_test_hygiene.py lookback off-by-one** (QUEUED). Lookback window hardcoded as 19 lines; doc claims 20. Review window semantics + fix mismatch (2026-10-07 audit carried forward).
+21. **pyflakes ratchet G15 gate wiring** (OPEN/IN PROGRESS). A lane is wiring pyflakes to pre-push gate list; fixes ~50 remaining issues found during #890 sweep; do not claim merged until PR lands.
+22. **Receipt gate increments 4–6** (QUEUED). Increment 4 (agreement measurement via tools/receipt_agreement.py) gated on measurement completion; increments 6a–6c (signed ledger storage, lineage codec) per conductor3 plan.
+23. **AesopMergeQueue task lifecycle decision** (QUEUED, decision pending). Scheduled task `AesopMergeQueue` Status: Disabled since 2026-09-11; retire gracefully (cleanup PR) vs re-enable?
+24. **Second-box receipt key provisioning** (QUEUED). Mattt profile on macOS needs AESOP_RECEIPT_KEY env var + private key setup.
+25. **Closed unmerged: PR #921** (branch corrupted: fixture commits; salvaged as #923).
 
 ### Blocked / Deferred
 
