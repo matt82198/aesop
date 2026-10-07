@@ -70,6 +70,103 @@ for _name, _spec in list(DEFAULT_REGISTRY.items()):
     if not isinstance(_spec, PartSpec):
         DEFAULT_REGISTRY[_name] = PartSpec(_spec)
 DEFAULT_MATRIX = [n for n in DEFAULT_REGISTRY]
+_FAST_PARTS = {"secret-scan", "claudemd-sync-gate", "gen-tool-index",
+               "verify-test-suite-count", "encoding-lint", "import-resolution-check",
+               "sibling-import-check"}
+_PY_SHARDS = {"py-shard-0", "py-shard-1", "py-shard-2", "py-shard-3"}
+
+
+def _resolve_profile(environ):
+    """Resolve receipt profile from AESOP_RECEIPT_PROFILE env var (default: scoped)."""
+    profile = environ.get("AESOP_RECEIPT_PROFILE", "scoped").strip().lower()
+    return "scoped" if profile not in ("scoped", "full") else profile
+
+
+def _get_test_files(repo):
+    """Get list of test files from git ls-files. Returns None if cannot determine."""
+    try:
+        output = _git(repo, "ls-files", "tests/test_*.py")
+        if not output:
+            return []
+        return sorted([Path(line).stem for line in output.split("\n") if line])
+    except ReceiptError:
+        return None
+
+
+def _build_shard_map(shard_names):
+    """Build a map of test file stems to owning shard names. Returns None if unable."""
+    test_files = _get_test_files(Path("."))
+    if test_files is None:
+        return None
+
+    shard_map = {}
+    for i, stem in enumerate(test_files):
+        shard_idx = i % 4  # 4 shards; matches distribute_shards round-robin in ci_shard_runner
+        if shard_idx < len(shard_names):
+            shard_map[stem] = shard_names[shard_idx]
+    return shard_map
+
+
+def _find_owning_shards(changed_files, shard_map):
+    """Map changed files to owning shards. Returns set of shard names or empty set if none."""
+    if shard_map is None:
+        return None  # Underivable
+
+    owning = set()
+    for file_path in changed_files:
+        path = Path(file_path)
+        # Only map test and tools Python files to shards
+        if path.suffix == ".py" and path.parent.name in ("tests", "tools"):
+            stem = path.stem
+            if stem in shard_map:
+                owning.add(shard_map[stem])
+    return owning
+
+
+def _build_parts_and_skipped_for_profile(profile, changed_files, owning_shards, registry):
+    """Build parts and skipped lists for the given profile.
+    Returns (parts_list, skipped_list) of dicts with 'name' keys."""
+    parts = []
+    skipped = []
+
+    if profile == "full":
+        # Full profile: include all shards + fast parts
+        for name in sorted(registry.keys()):
+            if name in _FAST_PARTS or name in _PY_SHARDS:
+                parts.append({"name": name, "runnable": registry[name].cmd is not None})
+            elif registry[name].cmd is None:
+                skipped.append({"name": name, "reason": registry[name].skip_reason or "not runnable here"})
+            else:
+                parts.append({"name": name, "runnable": True})
+    else:  # scoped
+        # Scoped profile: fast parts + only owned shards
+        for name in sorted(registry.keys()):
+            if name in _FAST_PARTS:
+                parts.append({"name": name, "runnable": registry[name].cmd is not None})
+            elif name in _PY_SHARDS:
+                if owning_shards is not None and name in owning_shards:
+                    parts.append({"name": name, "runnable": registry[name].cmd is not None})
+                else:
+                    reason = "not in scope: no changed file maps to this shard (profile=scoped)"
+                    skipped.append({"name": name, "reason": reason})
+            elif registry[name].cmd is None:
+                skipped.append({"name": name, "reason": registry[name].skip_reason or "not runnable here"})
+            else:
+                parts.append({"name": name, "runnable": True})
+
+    # Filter to only names from registry
+    parts_out = []
+    for part in parts:
+        if part["name"] in registry and registry[part["name"]].cmd is not None:
+            parts_out.append(part["name"])
+
+    return parts_out, skipped
+
+
+def _build_parts_for_profile(profile, changed_files, owning_shards, registry):
+    """Build list of runnable part names for the profile. Returns list of part names."""
+    parts, _ = _build_parts_and_skipped_for_profile(profile, changed_files, owning_shards, registry)
+    return parts
 
 
 def _git(repo, *args):
@@ -216,12 +313,13 @@ def repo_slug(repo):
     return m.group(1) if m else None
 
 
-def build_receipt(repo, parts, skipped, slug=None, main_ref="origin/main"):
+def build_receipt(repo, parts, skipped, slug=None, main_ref="origin/main", profile="scoped"):
     repo = Path(repo)
     head = _git(repo, "rev-parse", "HEAD")
     return {
         "schema": 1,
         "schema_version": 1,
+        "profile": profile,
         "repo": slug or repo_slug(repo) or "unknown",
         "head_sha": head,
         "base_sha": _git(repo, "merge-base", head, main_ref),
@@ -344,9 +442,45 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
             raise ReceiptError("scheme ed25519 needs --key, $%s, or ~/.aesop/receipt_key.pem" % rc.KEY_ENV)
         if scheme == "hmac-sha256" and not secret:
             raise ReceiptError("scheme hmac-sha256 needs $%s" % rc.HMAC_ENV)
-        names = [n.strip() for n in args.matrix.split(",") if n.strip()] if args.matrix else list(DEFAULT_MATRIX)
+
+        # Determine profile and matrix to run
+        profile = _resolve_profile(environ)
+        registry = DEFAULT_REGISTRY if registry is None else registry
+
+        if args.matrix:
+            # Explicit --matrix overrides profile scoping
+            names = [n.strip() for n in args.matrix.split(",") if n.strip()]
+        else:
+            # Determine matrix based on profile
+            if profile == "scoped":
+                # Get changed files from git diff
+                try:
+                    base_sha = _git(repo, "merge-base", "HEAD", args.main_ref)
+                    changed_output = _git(repo, "diff", "--name-only", base_sha + "..HEAD")
+                    changed_files = [f.strip() for f in changed_output.split("\n") if f.strip()]
+                except ReceiptError:
+                    changed_files = []  # Fallback: no changes detected
+
+                # Build shard map and find owning shards
+                shard_map = _build_shard_map(sorted(_PY_SHARDS))
+                if shard_map is None:
+                    # Underivable mapping: fall back to full matrix
+                    names = list(DEFAULT_MATRIX)
+                else:
+                    owning_shards = _find_owning_shards(changed_files, shard_map)
+                    if owning_shards is None:
+                        # Underivable: fall back to full
+                        names = list(DEFAULT_MATRIX)
+                    else:
+                        # Build scoped matrix
+                        names, skipped_infos = _build_parts_and_skipped_for_profile(
+                            profile, changed_files, owning_shards, registry
+                        )
+            else:  # full
+                names = list(DEFAULT_MATRIX)
+
         parts, skipped = run_matrix(repo, names, registry=registry, jobs=args.jobs)
-        receipt = build_receipt(repo, parts, skipped, slug=args.slug, main_ref=args.main_ref)
+        receipt = build_receipt(repo, parts, skipped, slug=args.slug, main_ref=args.main_ref, profile=profile)
         sig = rc.sign(rc.canonical_json(receipt), scheme, private_key_path=key_path, hmac_secret=secret)
         envelope = {"receipt": receipt, "sig": sig}
         if args.out:
