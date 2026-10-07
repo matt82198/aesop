@@ -1442,9 +1442,26 @@ printf '\n=== Test: check_emit_receipt is BOUNDED -- times out and fails open in
   unset AESOP_RECEIPT_EMIT
 
   start_ts=$(date +%s)
-  stderr_output=$( { check_emit_receipt; } 2>&1 1>/dev/null )
+  # Use 60s timeout guard to catch hangs and print trace
+  trace_file="$AESOP_ROOT/test-trace.log"
+  stderr_output=$(
+    timeout --foreground 60 bash -c "
+      set -x
+      { check_emit_receipt; } 2>&1 1>/dev/null
+    " 2>"$trace_file" || true
+  )
   exit_code=$?
   elapsed=$(( $(date +%s) - start_ts ))
+
+  if [ $exit_code -eq 124 ]; then
+    printf 'FAIL: check_emit_receipt timed out (hung for 60s). Trace:\n'
+    cat "$trace_file"
+    exit 1
+  fi
+
+  # Re-run without trace to get stderr
+  stderr_output=$( { check_emit_receipt; } 2>&1 1>/dev/null )
+  exit_code=$?
 
   if [ "$exit_code" -ne 0 ]; then
     printf 'FAIL: check_emit_receipt must fail-open (return 0) on timeout\n'
@@ -1518,19 +1535,32 @@ printf '\n=== Test: check_emit_receipt WARNs and fails open when gh is unavailab
   touch "$AESOP_ROOT/dummy_key.pem"
   unset AESOP_RECEIPT_EMIT
 
-  # Create a minimal PATH with only bash/python/git but NOT gh or timeout.
-  # This makes `command -v gh` fail while keeping other tools available.
-  minimal_path_dir="$AESOP_ROOT/minimal-path"
-  mkdir -p "$minimal_path_dir"
-  # Copy the minimal set of binaries we need
-  for _bin in bash python python3 git sh timeout; do
-    _bin_path=$(command -v "$_bin" 2>/dev/null || true)
-    if [ -n "$_bin_path" ] && [ "$_bin" != "timeout" ]; then
-      cp "$_bin_path" "$minimal_path_dir/$_bin" 2>/dev/null || ln -s "$_bin_path" "$minimal_path_dir/$_bin" 2>/dev/null || true
-    fi
-  done
-  test_path="$minimal_path_dir"
+  # Create a stub gh that exits 127 (command not found). Prepend it to PATH
+  # so it shadows any real gh. Don't copy binaries (they break on CI due to RPATH deps).
+  stub_gh_dir="$AESOP_ROOT/stub-gh"
+  mkdir -p "$stub_gh_dir"
+  printf '#!/bin/sh\nexit 127\n' > "$stub_gh_dir/gh"
+  chmod +x "$stub_gh_dir/gh"
+  test_path="$stub_gh_dir:$PATH"
 
+  # Use 60s timeout guard to catch any hangs and print trace for debugging
+  trace_file="$AESOP_ROOT/test-trace.log"
+  stderr_output=$(
+    timeout --foreground 60 bash -c "
+      set -x
+      export PATH='$test_path'
+      { check_emit_receipt; } 2>&1 1>/dev/null
+    " 2>"$trace_file" || true
+  )
+  exit_code=$?
+
+  if [ $exit_code -eq 124 ]; then
+    printf 'FAIL: check_emit_receipt timed out (hung for 60s). Trace:\n'
+    cat "$trace_file"
+    exit 1
+  fi
+
+  # Re-run without trace to get the actual stderr output
   stderr_output=$( { PATH="$test_path" check_emit_receipt; } 2>&1 1>/dev/null )
   exit_code=$?
 
@@ -1557,8 +1587,8 @@ fi
 
 printf '\n=== Test: check_emit_receipt is BOUNDED without timeout binary (fallback branch) ===\n'
 (
-  # When coreutils timeout is unavailable (e.g., stripped from PATH),
-  # check_emit_receipt must still be bounded using background job + wait + explicit kill.
+  # When coreutils timeout is unavailable (e.g., both timeout and gtimeout fail),
+  # check_emit_receipt must still be bounded using background job + explicit kill.
   # This test forces the fallback branch and verifies it doesn't hang.
   export AESOP_ROOT="$TEST_ROOT/aesop_receipt_no_timeout_bin"
   mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
@@ -1568,24 +1598,43 @@ printf '\n=== Test: check_emit_receipt is BOUNDED without timeout binary (fallba
   export AESOP_RECEIPT_TIMEOUT=1
   unset AESOP_RECEIPT_EMIT
 
-  # Create a PATH that has bash/python/git/gh but no timeout binary.
-  # This forces the fallback branch in check_emit_receipt.
-  no_timeout_path="$AESOP_ROOT/no-timeout-bin"
-  mkdir -p "$no_timeout_path"
-  # Copy bash, python, git, gh to this dir (or symlink on POSIX), but NOT timeout
-  for _bin in bash python python3 git gh sh; do
-    _bin_path=$(command -v "$_bin" 2>/dev/null || true)
-    if [ -n "$_bin_path" ]; then
-      cp "$_bin_path" "$no_timeout_path/$_bin" 2>/dev/null || ln -s "$_bin_path" "$no_timeout_path/$_bin" 2>/dev/null || true
+  # Filter PATH to exclude timeout/gtimeout, forcing the fallback branch.
+  # This makes `command -v timeout` and `command -v gtimeout` fail.
+  test_path=""
+  _old_ifs="$IFS"
+  IFS=':'
+  for _p in $PATH; do
+    if [ -n "$_p" ]; then
+      # Skip directories that contain timeout or gtimeout
+      if ! [ -e "$_p/timeout" ] && ! [ -e "$_p/gtimeout" ]; then
+        test_path="${test_path:+$test_path:}$_p"
+      fi
     fi
   done
-  # Add the rest of PATH too (for any other utilities emit_receipt might need)
-  test_path="$no_timeout_path:$PATH"
+  IFS="$_old_ifs"
 
+  # Use 60s timeout guard (with REAL timeout from outer PATH) to catch hangs
+  trace_file="$AESOP_ROOT/test-trace.log"
   start_ts=$(date +%s)
+  stderr_output=$(
+    timeout --foreground 60 bash -c "
+      set -x
+      export PATH='$test_path'
+      { check_emit_receipt; } 2>&1 1>/dev/null
+    " 2>"$trace_file" || true
+  )
+  elapsed=$(( $(date +%s) - start_ts ))
+  exit_code=$?
+
+  if [ $exit_code -eq 124 ]; then
+    printf 'FAIL: check_emit_receipt timed out (hung for 60s) without timeout binary. Trace:\n'
+    cat "$trace_file"
+    exit 1
+  fi
+
+  # Re-run without trace to get stderr
   stderr_output=$( { PATH="$test_path" check_emit_receipt; } 2>&1 1>/dev/null )
   exit_code=$?
-  elapsed=$(( $(date +%s) - start_ts ))
 
   if [ "$exit_code" -ne 0 ]; then
     printf 'FAIL: check_emit_receipt must fail-open (return 0) on timeout even without timeout binary\n'

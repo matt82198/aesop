@@ -1521,8 +1521,8 @@ check_emit_receipt() {
     return 0
   fi
 
-  if ! command -v gh >/dev/null 2>&1; then
-    printf 'WARN: gh CLI not found; receipt not emitted (push continues).\n' >&2
+  if ! command -v gh >/dev/null 2>&1 || ! gh --version >/dev/null 2>&1; then
+    printf 'WARN: gh CLI not found or not working; receipt not emitted (push continues).\n' >&2
     log_event "receipt_emit_skipped_no_gh"
     return 0
   fi
