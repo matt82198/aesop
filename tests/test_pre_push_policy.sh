@@ -1611,6 +1611,7 @@ printf '\n=== Test: main() emits a receipt only after every gate above it passed
     # trusting it silently is exactly what produced a confusing
     # "which gate is missing" failure instead of a clear one.
     for gate in $(python "$REPO_ROOT/tools/gate_stub_list.py" "$REPO_ROOT/hooks/pre-push-policy.sh"); do
+      gate=$(printf '%s' "$gate" | tr -d '\r')  # Strip Windows CR from gate names
       [ "$gate" = "claudemd_sync_gate" ] && continue  # needs a variable exit code below
       printf 'import sys\nsys.exit(0)\n' > "$aesop_root/tools/${gate}.py"
     done
