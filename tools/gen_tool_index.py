@@ -147,34 +147,30 @@ def check_via_git_hash(index_file: Path, repo_root: Path, expected_content: str)
     try:
         file_rel = str(index_file.relative_to(repo_root))
 
-        # Hash the expected (generated) content through git's normalization
+        # Hash the expected (generated) content through git's normalization.
+        # Pass as binary to avoid platform-specific line-ending conversion
+        # (e.g., \n -> \r\n on Windows when text=True).
         proc = subprocess.run(
             ["git", "hash-object", "--stdin", "--path", file_rel],
-            input=expected_content,
+            input=expected_content.encode("utf-8"),
             cwd=str(repo_root),
             capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=30
         )
         if proc.returncode != 0:
             return False
-        expected_hash = proc.stdout.strip()
+        expected_hash = proc.stdout.decode("utf-8", errors="replace").strip()
 
         # Hash the working tree file through git's normalization
         proc = subprocess.run(
             ["git", "hash-object", "--path", file_rel, str(index_file)],
             cwd=str(repo_root),
             capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
             timeout=30
         )
         if proc.returncode != 0:
             return False
-        working_hash = proc.stdout.strip()
+        working_hash = proc.stdout.decode("utf-8", errors="replace").strip()
 
         return expected_hash == working_hash
     except (OSError, subprocess.SubprocessError) as exc:
