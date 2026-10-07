@@ -177,6 +177,11 @@ def run(repo_root, fix: bool) -> RegenResult:
 
     failed = []
     for argv in REGENERATORS:
+        # In --check mode, use --stdout for generators to avoid writing to disk.
+        # This allows git hash-object comparison for drift detection without mutation.
+        if not fix:
+            # Replace --regenerate with --stdout for comparison-only mode
+            argv = tuple(arg if arg != "--regenerate" else "--stdout" for arg in argv)
         ok, output = run_one_regenerator(argv, repo_root)
         if not ok:
             failed.append({"argv": list(argv), "output": output})

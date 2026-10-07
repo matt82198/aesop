@@ -199,6 +199,9 @@ def main(argv=None):
     mode.add_argument(
         "--regenerate", action="store_true", help="Write tools/INDEX.md"
     )
+    mode.add_argument(
+        "--stdout", action="store_true", help="Print generated INDEX to stdout (read-only)"
+    )
     mode.add_argument("--json", action="store_true", help="Emit entries/missing as JSON")
     args = parser.parse_args(argv)
 
@@ -246,6 +249,12 @@ def main(argv=None):
         # and avoids spurious differences from platform EOL conversions.
         index_file.write_text(expected, encoding="utf-8", newline="\n")
         print(f"[OK] wrote {INDEX_PATH} ({len(entries)} tools)")
+        return 0
+
+    if args.stdout:
+        # Print to stdout without writing to disk. Used by regen_all --check
+        # to generate content for git hash-object comparison.
+        print(expected, end="")
         return 0
 
     # Default mode is --check (read-only, never modifies).
