@@ -11,6 +11,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (None yet.)
 
+## [0.9.1] - 2026-10-09
+
+Hotfix release centered on hooks. Ships two new adopter-facing Claude Code hooks, plus 40
+PRs merged since v0.9.0 (2026-10-06): receipt spool/flush durability, pre-push gate
+hardening, and Windows/CRLF correctness fixes.
+
+### Added
+- **`hooks/claude/no-heredoc-file-authoring.mjs`**: PreToolUse hook (matcher `Bash`) that
+  denies authoring file content through any shell heredoc form, including the
+  interpreter-piped forms (`python - <<PY`, `node <<JS`, `sh <<SH`) that kept failing
+  silently on quoting. Escape hatch `[[ALLOW-HEREDOC-WRITE]]`, logged, never silent.
+- **`hooks/claude/no-scrollback-as-record.mjs`**: PreToolUse hook (matcher
+  `Bash|Read|Grep|Glob`) that denies reading session transcripts
+  (`~/.claude/projects/**/*.jsonl`) as if they were the system of record — the durable
+  record is STATE.md/BUILDLOG.md/MEMORY.md/git/artifacts; the `memory/` subtree stays
+  readable. Escape hatch `[[ALLOW-TRANSCRIPT-READ]]`, logged, never silent.
+- **Receipts**: `receipt_agreement.py` measures local-receipt vs. hosted-CI agreement
+  (#911); `verify_receipt` registered in `gate_inventory` (#910); receipt schema
+  versioning (#909); receipts now spool at pre-push and flush once the commit sha exists
+  on GitHub, via the pre-push hook and `pr_sweep.py` (#923).
+- **Gates**: `pr_footprint_gate` fails oversized or fixture-polluted PRs (#922); a pyflakes
+  unused-import/variable ratchet (G15) runs before push, fail-open when the tool is absent
+  (#890, #929).
+
+### Fixed
+- **Receipts**: signing-key path resolution falls back to the default key path before
+  warning instead of failing silently (#913, #916); matrix isolation via a detached
+  worktree with scrubbed `GIT_*` env vars so matrix parts can't commit into a lane's repo
+  (#924); the spool now lives outside the worktree so it survives lane cleanup (#931);
+  spool paths are compared by identity so Windows 8.3 short paths match their long-form
+  counterparts (#933).
+- **Windows / CRLF correctness**: `--check` modes are read-only and EOL-normalized,
+  closing a false-stale report under Windows CRLF line endings (#925);
+  `generated_push_gate` compares generated artifacts through git EOL normalization
+  instead of tripping on autocrlf (#918), restored after a regression (#928); dry pre-push
+  range checks run in a detached throwaway worktree and never move the caller's HEAD
+  (#892), and verify generated paths the same way the real hook does (#887);
+  `wave_manifest_lint` resolves the `testCmd` binary past shell negation and env
+  assignments (#893); commit-lint hook-path isolation fixed (#919); test fixtures (gantt,
+  the rs3 wave-loop, packaging-portability) no longer leak or depend on ambient git
+  identity or timing budgets (#894, #897, #901, #904).
+- **Guards**: `generated_push_gate` compares generator output to the pushed tree, not just
+  the touched paths (#896); `tools/INDEX.md`'s push gate regenerates rather than unions
+  (#882); `merge_queue` refuses to mint `integrate/batch-*` branches outside the dedicated
+  queue checkout (#899); `backup-fleet.sh` no longer derives `CONDUCTOR_ROOT` for a
+  non-canonical `AESOP_ROOT` (#898).
+
 ## [0.9.0] - 2026-10-06
 
 103 pull requests merged since v0.8.0 (2026-09-11). The release theme is event-driven

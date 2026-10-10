@@ -100,6 +100,64 @@ Claude Code **PreToolUse** hook enforcing "subagents are always Haiku" cardinal 
 
 **Test Command**: `node --test tests/force-model-policy.test.mjs` (the .mjs itself has no --test mode). Validates Haiku allowed on subagents, non-Haiku (e.g., Opus) blocked, orchestrator not subject to policy, JSON logging format valid. Exit 0 = pass; exit 1 = fail.
 
+## no-heredoc-file-authoring.mjs
+
+Claude Code **PreToolUse** hook, matcher `Bash`. Denies authoring file content through a shell heredoc, in every form.
+
+**Rule and evidence**: `cat > file <<EOF` / `tee file <<EOF` and the interpreter-piped forms (`python - <<PY`, `node <<JS`, `sh <<SH`) fail silently and expensively — real content contains apostrophes, quotes, backticks and `$`; a quoted heredoc tag protects against shell expansion but not against the surrounding command line's own parsing, and a trailing command in the same invocation can swallow a quote and kill the whole block, so the file is never written and the whole payload has to be re-sent. The interpreter-piped form was tried once as a narrower exception and kept failing the same way. Write/Edit cannot fail this way, so this is a gate (refuses before the cost is paid), not a memory (advisory, read after the fact).
+
+**Denied**: any heredoc shape (`<<` or `<<-`, an optionally quoted tag starting with a letter/underscore, through end of line) anywhere in the Bash command — `cat`, `tee`, and every interpreter form alike.
+**Allowed**: single-line `printf ... >> file` / `echo ... > file` (no heredoc), a `<<` bit-shift inside a quoted code string (its operand can't start with a letter/underscore the way a heredoc tag must), and everything else (tests, git, ssh, greps, `sed`/`head` reads).
+
+**Escape hatch**: `[[ALLOW-HEREDOC-WRITE]]` anywhere in the command allows + logs to `${AESOP_ROOT:-$HOME/aesop}/state/HEREDOC-WRITE-ESCAPES.log` (JSON-lines: ts, event, tool, session_id, cwd, command_head) — same state-root resolution as `force-model-policy.mjs`.
+
+**Fail-open reliability**: malformed stdin, non-Bash tool, or empty command → allow, no output. Stdin read raced against a 2s timeout.
+
+**Registration (`.claude/settings.json`)**:
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{"type":"command","command":"node \"$CLAUDE_PROJECT_DIR/hooks/claude/no-heredoc-file-authoring.mjs\""}]
+      }
+    ]
+  }
+}
+```
+
+**Test Command**: `node hooks/claude/no-heredoc-file-authoring.test.mjs` — 19 behavioral cases (the `.mjs` exports `verdictFor` directly; no `--test` mode needed). Exit 0 = pass; exit 1 = fail.
+
+## no-scrollback-as-record.mjs
+
+Claude Code **PreToolUse** hook, matcher `Bash|Read|Grep|Glob`. Denies reading session transcripts (`~/.claude/projects/**/*.jsonl`) as if they were the system of record.
+
+**Rule and evidence**: the durable record is STATE.md, BUILDLOG.md, MEMORY.md, git, and the artifacts on disk — not conversation history. Mining a transcript breaks three things at once: (1) it is unbounded context (transcripts run to tens of MB, and a grep can flood the most expensive context in the fleet); (2) it is circular evidence (a transcript holds the model's own prior output, so a hit only proves it once said the thing — not that the thing is true); (3) it hides the real defect, since a fact that mattered and isn't in a control file means the checkpoint is missing, and recovering it from scrollback repairs the symptom while leaving the brain still missing it.
+
+**Denied**: any read/search of `~/.claude/projects/**/*.jsonl` via Bash (`cat`, `grep`, `rg`, `head`, `tail`, `sed`, `awk`, `python`, `node`, `jq`, …) or via the Read/Grep/Glob tools aimed into that tree. The transcript path is the same for every Claude Code user regardless of OS — only the home-directory prefix differs — so the match is anchored on `.claude/projects` with either slash and portable across POSIX and Windows homes.
+**Allowed**: everything else, including `ls`/`stat` of that directory (knowing a session exists isn't mining its contents), and the `memory/` subtree under `projects/<project>/memory/`, which lives in that tree but IS part of the durable record.
+
+**Escape hatch**: `[[ALLOW-TRANSCRIPT-READ]]` anywhere in the command allows + logs to `~/.claude/TRANSCRIPT-READ-ESCAPES.log` (JSON-lines: ts, tool, session_id, detail).
+
+**Fail-open reliability**: malformed stdin or no matching path/command → allow, no output. Stdin read raced against a 2s timeout.
+
+**Registration (`.claude/settings.json`)**:
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Read|Grep|Glob",
+        "hooks": [{"type":"command","command":"node \"$CLAUDE_PROJECT_DIR/hooks/claude/no-scrollback-as-record.mjs\""}]
+      }
+    ]
+  }
+}
+```
+
+**Test Command**: `node hooks/claude/no-scrollback-as-record.test.mjs` — 19 behavioral cases, including both Windows-style and POSIX-style home paths (the `.mjs` exports `verdictFor` directly; no `--test` mode needed). Exit 0 = pass; exit 1 = fail.
+
 ## pre-commit-dispatch-lint.sh
 
 Pre-commit hook running `tools/dispatch_lint.py` on staged files. Blocks commits containing dispatch policy violations (forbidden flags like `--admin`, `--no-verify`, `git stash`, credential hunting). BASH_SOURCE guarded. Fail-open when no violations detected.
