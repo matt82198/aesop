@@ -69,7 +69,7 @@ is_touched() {
   [ ! -d "$repo/.git" ] && return 1
   (
     cd "$repo" || return 1
-    [ -n "$(git status --porcelain 2>/dev/null)" ] && return 0
+    [ -n "$(git status --porcelain -u 2>/dev/null)" ] && return 0
     [ -n "$(git log @{u}.. --oneline 2>/dev/null)" ] && return 0
     return 1
   )
@@ -266,7 +266,7 @@ process_repo() {
       [ "$branch" = "HEAD" ] && branch="$default"
 
       if [ "$branch" = "$default" ]; then
-        WIPREF="backup/master-wip-$(date +%Y%m%d)"
+        WIPREF="backup/wip-$(date +%Y%m%d)"
         if scan_unpushed_commits "$repo"; then
           if git push -qf origin "HEAD:refs/heads/$WIPREF" 2>/dev/null; then
             printf 'SNAPSHOTTED\0%s\n' "$name"
