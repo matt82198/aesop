@@ -100,6 +100,21 @@ Claude Code **PreToolUse** hook enforcing "subagents are always Haiku" cardinal 
 
 **Test Command**: `node --test tests/force-model-policy.test.mjs` (the .mjs itself has no --test mode). Validates Haiku allowed on subagents, non-Haiku (e.g., Opus) blocked, orchestrator not subject to policy, JSON logging format valid. Exit 0 = pass; exit 1 = fail.
 
+## Record-discipline guards (no-heredoc-file-authoring.mjs, no-scrollback-as-record.mjs)
+
+Two Claude Code **PreToolUse** hooks, one owner per rule. Full rule + evidence lives in
+each `.mjs` file's header comment; both are gates (refuse before the cost is paid), not
+memories (advisory, read after the fact), and both fail open on malformed stdin.
+
+| Hook | Matcher | Denies | Escape hatch (logged) |
+|---|---|---|---|
+| `no-heredoc-file-authoring.mjs` | `Bash` | any heredoc in a Bash command — `cat`/`tee` and interpreter-piped forms (`python - <<PY`, `node <<JS`, `sh <<SH`) alike; single-line `printf`/`echo` redirects stay allowed | `[[ALLOW-HEREDOC-WRITE]]` -> `${AESOP_ROOT:-$HOME/aesop}/state/HEREDOC-WRITE-ESCAPES.log` |
+| `no-scrollback-as-record.mjs` | `Bash\|Read\|Grep\|Glob` | reading `~/.claude/projects/**/*.jsonl` session transcripts as the record, via shell or Read/Grep/Glob; the `memory/` subtree stays allowed | `[[ALLOW-TRANSCRIPT-READ]]` -> `~/.claude/TRANSCRIPT-READ-ESCAPES.log` |
+
+**Registration**: same `.claude/settings.json` `hooks.PreToolUse` shape as `force-model-policy.mjs` above — one entry per hook, each with its own `matcher` from the table and `command` pointing at that hook's path under `hooks/claude/`.
+
+**Test Command**: `node hooks/claude/no-heredoc-file-authoring.test.mjs` and `node hooks/claude/no-scrollback-as-record.test.mjs` — 19 co-located behavioral cases each (`verdictFor` exported directly; no `--test` mode). Exit 0 = pass; exit 1 = fail.
+
 ## pre-commit-dispatch-lint.sh
 
 Pre-commit hook running `tools/dispatch_lint.py` on staged files. Blocks commits containing dispatch policy violations (forbidden flags like `--admin`, `--no-verify`, `git stash`, credential hunting). BASH_SOURCE guarded. Fail-open when no violations detected.
