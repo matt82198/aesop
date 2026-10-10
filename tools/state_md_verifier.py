@@ -746,19 +746,34 @@ def verify_buildlog_drift(state_md_path, buildlog_path):
 
 
 def _resolve_buildlog_path(args, state_md_path):
-    """Resolve BUILDLOG.md: explicit --buildlog, else ./BUILDLOG.md, else
-    $AESOP_BUILDLOG_MD, else the directory STATE.md itself resolved to
-    (covers the aesop convention of STATE.md + BUILDLOG.md living together,
-    e.g. under C:/Users/matt8/conductor3/). Returns None if nothing exists --
-    verify_buildlog_drift treats a missing file the same as an empty one."""
+    """Resolve BUILDLOG.md: explicit --buildlog, else (when --state-md is
+    explicit) alongside --state-md, else ./BUILDLOG.md, else $AESOP_BUILDLOG_MD.
+    When an explicit --state-md path is given, we prioritize the BUILDLOG.md
+    next to it (covers the aesop convention of STATE.md + BUILDLOG.md living
+    together, e.g. under C:/Users/matt8/conductor3/). Returns None if nothing
+    exists -- verify_buildlog_drift treats a missing file the same as an empty
+    one."""
     if args.buildlog:
         return Path(args.buildlog).resolve()
 
-    candidates = [Path("BUILDLOG.md").resolve()]
+    candidates = []
+
+    # When --state-md is explicit, prioritize BUILDLOG.md next to it
+    if args.state_md:
+        candidates.append(state_md_path.parent / "BUILDLOG.md")
+
+    # Then try repo-local BUILDLOG.md
+    candidates.append(Path("BUILDLOG.md").resolve())
+
+    # Then try environment variable
     env_buildlog = os.environ.get("AESOP_BUILDLOG_MD")
     if env_buildlog:
         candidates.append(Path(env_buildlog).resolve())
-    candidates.append(state_md_path.parent / "BUILDLOG.md")
+
+    # Add state_md's directory again as fallback (in case it wasn't added above)
+    state_sibling = state_md_path.parent / "BUILDLOG.md"
+    if state_sibling not in candidates:
+        candidates.append(state_sibling)
 
     for candidate in candidates:
         if candidate.exists():
