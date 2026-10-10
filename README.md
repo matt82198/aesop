@@ -17,6 +17,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm--Noncommercial--1.0.0-blue.svg" alt="License: PolyForm Noncommercial 1.0.0"></a>
 </p>
 
+**Due to anthropics recent changes preventing clean implementations of fail closed hooks, the project is currently not fully firing all hooks, this is actively being solved v0.9.1 starts fixing some of the largest issues.**
+
 ## What It Is
 
 **Aesop is a multi-agent orchestration harness for autonomous software development.** It runs fleets of LLM coding agents across ranked backlog items, verifies their output locally, and ships merge-ready code to CI. Crash-only by design: workers are stateless, state lives in git + SQLite + durable files, and restart is the only recovery path.
