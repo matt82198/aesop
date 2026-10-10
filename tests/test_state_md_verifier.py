@@ -7,6 +7,7 @@ edge cases (missing gh, unverifiable claims, etc).
 """
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -819,6 +820,249 @@ class TestStatemdFreshness(unittest.TestCase):
                     f"Expected ERROR findings for unknown SHA")
             except json.JSONDecodeError:
                 self.fail(f"Could not parse JSON output: {stdout}")
+
+
+class TestStatemdVerifierWindowsAsciiSafety(unittest.TestCase):
+    """
+    Guardrail: state_md_verifier.py must never crash printing its text-mode
+    report on a non-UTF-8 console (e.g. Windows cp1252), even when the
+    STATE.md content it is verifying contains real Unicode punctuation
+    (en/em dashes, arrows) -- which is exactly what real-world checkpoint
+    prose looks like. The docstring claims "ASCII-safe"; this proves it.
+    """
+
+    def test_unicode_in_state_md_does_not_crash_cp1252_stdout(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+
+            subprocess.run(
+                ["git", "init"], cwd=tmpdir_path, capture_output=True,
+                check=True, encoding="utf-8", errors="replace"
+            )
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.com"],
+                cwd=tmpdir_path, capture_output=True, check=True,
+                encoding="utf-8", errors="replace"
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test User"],
+                cwd=tmpdir_path, capture_output=True, check=True,
+                encoding="utf-8", errors="replace"
+            )
+
+            # A claim line containing real Unicode punctuation (arrow + em
+            # dash) -- the verifier echoes this line verbatim into its
+            # text-mode "claim" output, which is exactly what crashed on a
+            # cp1252 console.
+            state_md = tmpdir_path / "STATE.md"
+            state_md.write_text(
+                "# Checkpoint\n\n"
+                "The PR was MERGED successfully → verified — done.\n",
+                encoding="utf-8",
+            )
+
+            env = dict(os.environ)
+            # Force a non-UTF-8 stdout/stderr codec deterministically,
+            # regardless of the host console's real encoding.
+            env["PYTHONIOENCODING"] = "cp1252"
+
+            result = subprocess.run(
+                [sys.executable, str(tools_path / "state_md_verifier.py"),
+                 "--state-md", str(state_md)],
+                cwd=tmpdir_path,
+                capture_output=True,
+                encoding="utf-8", errors="replace",
+                env=env,
+            )
+
+            self.assertNotIn(
+                "UnicodeEncodeError", result.stderr,
+                f"Verifier crashed encoding non-ASCII output under cp1252.\n"
+                f"rc={result.returncode}\nstdout={result.stdout}\nstderr={result.stderr}"
+            )
+            self.assertIn(
+                result.returncode, (0, 1, 2),
+                f"Expected a documented exit code, got {result.returncode}. "
+                f"stderr={result.stderr}"
+            )
+            # Must still emit a verdict line, not die silently.
+            self.assertTrue(
+                any(tag in result.stdout for tag in ("MERGED", "SKIP", "UNVERIFIABLE", "ERROR")),
+                f"Expected a verdict line in stdout. stdout={result.stdout}"
+            )
+
+    def test_ascii_safe_transliterates_and_strips_non_ascii(self):
+        """Direct unit test of the sanitization helper."""
+        self.assertEqual(state_md_verifier.ascii_safe("a → b"), "a -> b")
+        self.assertEqual(state_md_verifier.ascii_safe("em—dash"), "em--dash")
+        # Anything left over after transliteration must still never raise --
+        # it gets replaced, not re-thrown.
+        exotic = "中文 untouched CJK"
+        out = state_md_verifier.ascii_safe(exotic)
+        self.assertTrue(all(ord(c) < 128 for c in out), f"Non-ASCII survived: {out!r}")
+
+
+class TestStatemdBuildlogDriftCheck(unittest.TestCase):
+    """
+    Guardrail #6: STATE.md's newest '## CURRENT (<ts>)' header must not be
+    older than BUILDLOG.md's newest '--- <ts> [checkpoint...]' line.
+
+    BUILDLOG.md is append-only history and is NEVER the current-state
+    source; STATE.md is the only current-state surface (decided contract,
+    not revisited here). A checkpoint that appends to BUILDLOG.md without
+    also advancing STATE.md's CURRENT header is drift and must be caught.
+    """
+
+    def _write(self, tmpdir, name, text):
+        p = Path(tmpdir) / name
+        p.write_text(text, encoding="utf-8")
+        return p
+
+    def test_state_newer_than_buildlog_passes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_md = self._write(
+                tmpdir, "STATE.md",
+                "## CURRENT (2026-10-10T05:00:00Z) - all good\n"
+            )
+            buildlog = self._write(
+                tmpdir, "BUILDLOG.md",
+                "--- 2026-10-10T02:00:00Z [checkpoint] earlier work\n"
+            )
+            findings = state_md_verifier.verify_buildlog_drift(state_md, buildlog)
+            self.assertEqual(
+                findings, [],
+                f"Expected no findings when STATE.md is newer. findings={findings}"
+            )
+
+    def test_buildlog_newer_than_state_is_drift(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_md = self._write(
+                tmpdir, "STATE.md",
+                "## CURRENT (2026-10-01T05:00:00Z) - stale checkpoint\n"
+            )
+            buildlog = self._write(
+                tmpdir, "BUILDLOG.md",
+                "--- 2026-10-10T02:59:39Z [checkpoint:afk] newer work happened\n"
+            )
+            findings = state_md_verifier.verify_buildlog_drift(state_md, buildlog)
+            self.assertTrue(
+                any(f["status"] == "CONTRADICTION" for f in findings),
+                f"Expected drift CONTRADICTION. findings={findings}"
+            )
+            detail = " ".join(f["detail"] for f in findings)
+            self.assertIn("2026-10-01", detail)
+            self.assertIn("2026-10-10", detail)
+
+    def test_state_has_no_current_block_but_buildlog_has_checkpoints_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_md = self._write(
+                tmpdir, "STATE.md", "# Notes\n\nNo CURRENT header in this file.\n"
+            )
+            buildlog = self._write(
+                tmpdir, "BUILDLOG.md",
+                "--- 2026-10-10T02:59:39Z [checkpoint] work happened\n"
+            )
+            findings = state_md_verifier.verify_buildlog_drift(state_md, buildlog)
+            self.assertTrue(
+                any(f["status"] == "CONTRADICTION" for f in findings),
+                f"Expected fail-closed CONTRADICTION when STATE.md has no "
+                f"parseable CURRENT header but BUILDLOG.md has checkpoints. "
+                f"findings={findings}"
+            )
+
+    def test_neither_file_has_entries_is_documented_skip(self):
+        """Documented behavior: nothing to verify => SKIP. Never a silent
+        pass (that would hide real drift later) and never a false
+        contradiction (that would block a brand-new project with no history
+        yet)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_md = self._write(tmpdir, "STATE.md", "# Notes\n\nNothing here.\n")
+            buildlog = self._write(tmpdir, "BUILDLOG.md", "# Log\n\nNo checkpoints yet.\n")
+            findings = state_md_verifier.verify_buildlog_drift(state_md, buildlog)
+            self.assertEqual(len(findings), 1, f"findings={findings}")
+            self.assertEqual(findings[0]["status"], "SKIP")
+
+    def test_tolerates_date_only_and_cdt_suffix_forms(self):
+        """Real STATE.md CURRENT headers use loose forms like
+        '2026-09-02 12:50 CDT' and '2026-08-03 late' (date-only, no
+        parseable time-of-day). These must parse without raising, at date
+        granularity, per the spec's explicit tolerance requirement."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_md = self._write(
+                tmpdir, "STATE.md",
+                "## CURRENT (2026-10-11 late) - wrapped up\n"
+            )
+            buildlog = self._write(
+                tmpdir, "BUILDLOG.md",
+                "--- 2026-10-10T02:59:39Z [checkpoint:afk] earlier\n"
+            )
+            findings = state_md_verifier.verify_buildlog_drift(state_md, buildlog)
+            self.assertEqual(
+                findings, [],
+                f"Newer date-only CURRENT header must not drift. findings={findings}"
+            )
+
+            state_md2 = self._write(
+                tmpdir, "STATE2.md",
+                "## CURRENT (2026-09-02 12:50 CDT) - resumed\n"
+            )
+            buildlog2 = self._write(
+                tmpdir, "BUILDLOG2.md",
+                "--- 2026-10-10T02:59:39Z [checkpoint:afk] much later\n"
+            )
+            findings2 = state_md_verifier.verify_buildlog_drift(state_md2, buildlog2)
+            self.assertTrue(
+                any(f["status"] == "CONTRADICTION" for f in findings2),
+                f"Older date-only CURRENT header (2026-09-02) vs newer "
+                f"BUILDLOG checkpoint (2026-10-10) must drift. findings={findings2}"
+            )
+
+    def test_cli_check_buildlog_drift_flag_exits_1_on_drift(self):
+        """--check-buildlog-drift runs the drift check standalone through
+        the CLI and surfaces the documented exit code contract (1 = drift)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            state_md = self._write(
+                tmpdir, "STATE.md",
+                "## CURRENT (2026-10-01T05:00:00Z) - stale checkpoint\n"
+            )
+            buildlog = self._write(
+                tmpdir, "BUILDLOG.md",
+                "--- 2026-10-10T02:59:39Z [checkpoint:afk] newer work happened\n"
+            )
+            rc, stdout, stderr = state_md_verifier.run_command(
+                [sys.executable, str(tools_path / "state_md_verifier.py"),
+                 "--state-md", str(state_md), "--buildlog", str(buildlog),
+                 "--check-buildlog-drift"],
+                cwd=tmpdir_path,
+            )
+            self.assertEqual(
+                rc, 1,
+                f"Expected exit 1 for drift. Got {rc}. stdout={stdout} stderr={stderr}"
+            )
+            self.assertIn("CONTRADICTION", stdout)
+
+    def test_cli_check_buildlog_drift_flag_exits_0_when_fresh(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            state_md = self._write(
+                tmpdir, "STATE.md",
+                "## CURRENT (2026-10-10T05:00:00Z) - all good\n"
+            )
+            buildlog = self._write(
+                tmpdir, "BUILDLOG.md",
+                "--- 2026-10-10T02:00:00Z [checkpoint] earlier work\n"
+            )
+            rc, stdout, stderr = state_md_verifier.run_command(
+                [sys.executable, str(tools_path / "state_md_verifier.py"),
+                 "--state-md", str(state_md), "--buildlog", str(buildlog),
+                 "--check-buildlog-drift"],
+                cwd=tmpdir_path,
+            )
+            self.assertEqual(
+                rc, 0,
+                f"Expected exit 0 when fresh. Got {rc}. stdout={stdout} stderr={stderr}"
+            )
 
 
 if __name__ == "__main__":
