@@ -10,7 +10,6 @@ Anti-vacuity: the test FAILS on the broken code (SKIP instead of CONTRADICTION),
 and passes on the fixed code.
 """
 
-import json
 import sys
 import tempfile
 import unittest
@@ -136,8 +135,8 @@ class TestBuildlogResolution(unittest.TestCase):
             # (no checkpoints to compare against)
             self.assertTrue(
                 len(findings) > 0,
-                f"Expected at least one finding (SKIP) but got empty. "
-                f"A state file with CURRENT header but no BUILDLOG should not silently pass."
+                "Expected at least one finding (SKIP) but got empty. "
+                "A state file with CURRENT header but no BUILDLOG should not silently pass."
             )
 
 
