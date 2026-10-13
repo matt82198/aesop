@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
 """
 STATE.md checkpoint-accuracy verifier (guardrail #1 + #5 + #6).
-INDEX: Guardrail #1: STATE.md checkpoint-accuracy verifier; parses STATE.md for falsifiable progress claims ("**Current Version:** vX.Y.Z", "resolved", "pushed", "MERGED", "current HEAD <sha>") and verifies against on-disk git truth (git tags + package.json for versions, git status --porcelain for unmerged files, git ls-remote --heads for pushed branches, gh pr view for PR states, git rev-list for commit lag); exit 0=no contradictions + at least one claim verified / 1=contradictions found / 2=error or zero verifiable claims (fail-closed); reports UNVERIFIABLE/SKIP for unparseable/unavailable-tool claims; subprocess timeout 30s for Windows CI compatibility; stdlib-only; ASCII-only output (ascii_safe()/safe_print() transliterate+sanitize any non-ASCII content read FROM the verified files before printing, so Unicode in real-world checkpoint prose never crashes a non-UTF-8 console). Guardrail #5: STATE.md freshness gate detects stale checkpoints (>50 commits behind HEAD). Guardrail #6 (--check-buildlog-drift, included in the default run): STATE.md's newest "## CURRENT (<ts>)" header must not be older than BUILDLOG.md's newest "--- <ts> [checkpoint...]" line (BUILDLOG.md is append-only history, never the current-state source; STATE.md is the only current-state surface -- a checkpoint that advances BUILDLOG.md without also advancing STATE.md is drift and fails closed, including when STATE.md has no parseable CURRENT header at all).
+INDEX: Guardrail #1: STATE.md checkpoint-accuracy verifier; parses STATE.md for falsifiable progress claims ("**Current Version:** vX.Y.Z", "resolved", "pushed", "MERGED", "current HEAD <sha>") and verifies against on-disk git truth (origin tags, falling back to the nearest tag reachable from HEAD, + package.json for versions, git status --porcelain for unmerged files, git ls-remote --heads for pushed branches -- a branch claim must look ref-shaped (contains '/', or is backtick-quoted) and follow "branch"/"pushed as", never a bare word caught mid-sentence, gh pr view for PR states, git rev-list for commit lag); exit 0=no contradictions + at least one claim verified / 1=contradictions found / 2=error or zero verifiable claims (fail-closed); reports UNVERIFIABLE/SKIP for unparseable/unavailable-tool claims, WARN for a local-only tag absent from origin (never adopted as the resolved version); subprocess timeout 30s for Windows CI compatibility; stdlib-only; ASCII-only output (ascii_safe()/safe_print() transliterate+sanitize any non-ASCII content read FROM the verified files before printing, so Unicode in real-world checkpoint prose never crashes a non-UTF-8 console). Guardrail #5: STATE.md freshness gate detects stale checkpoints (>50 commits behind HEAD). Guardrail #6 (--check-buildlog-drift, included in the default run): STATE.md's newest "## CURRENT (<ts>)" header must not be older than BUILDLOG.md's newest "--- <ts> [checkpoint...]" line (BUILDLOG.md is append-only history, never the current-state source; STATE.md is the only current-state surface -- a checkpoint that advances BUILDLOG.md without also advancing STATE.md is drift and fails closed, including when STATE.md has no parseable CURRENT header at all).
 
 Parses STATE.md for falsifiable progress claims and verifies each against on-disk git truth.
 Catches cases where the orchestrator's checkpoint overstates progress (e.g., "resolved" while
 git status still shows unmerged files).
 
 Claim classes verified:
-  (a) "Current Version: vX.Y.Z" -> git tags + package.json (version matches latest tag and package.json)
+  (a) "Current Version: vX.Y.Z" -> latest tag on ORIGIN (git ls-remote --tags origin), falling
+      back to the nearest tag reachable from HEAD by ancestry (git describe --tags --abbrev=0)
+      only when origin is unreachable, + package.json. A local-only tag higher than origin's
+      latest (never an ancestor-gated `git tag -l` listing) is reported as WARN, never adopted
+      as the version -- this is what keeps a stray/test-fixture tag from being read as "current".
   (b) "resolved"/"conflicts resolved"/"clean" -> git status --porcelain (no UU/AA for those paths)
-  (c) "pushed" -> git ls-remote --heads (ref exists on origin)
+  (c) "pushed" -> git ls-remote --heads (ref exists on origin); branch names are extracted only
+      when ref-shaped (contains '/', or backtick-quoted) and following "branch"/"pushed as" --
+      never a bare English word matched mid-sentence (see extract_branch_claims())
   (d) "MERGED" PR -> gh pr view --json state (if gh available, else SKIP)
   (e) "current HEAD <sha>" -> git rev-list --count <sha>..HEAD (fails if >50 commits stale)
   (f) STATE.md "## CURRENT (<ts>)" vs BUILDLOG.md "--- <ts> [checkpoint...]" (Guardrail #6,
@@ -268,6 +274,65 @@ def verify_resolved_claims(claims, git_root):
     return findings
 
 
+_BACKTICKED_TOKEN_RE = re.compile(r'`([^`\s]+)`')
+_BRANCH_WORD_RE = re.compile(r'\bbranch\s+(\S+)', re.IGNORECASE)
+_PUSHED_AS_RE = re.compile(r'\bpushed\s+as\s+(\S+)', re.IGNORECASE)
+_TRAILING_PUNCT = '.,;:)'
+
+
+def _is_ref_shaped(token):
+    """A branch/ref candidate must look like a ref: it contains a '/' (the
+    shape of every real branch name in this repo -- fix/x, docs/foo,
+    backup/state-checkpoint-...). A bare English word never qualifies, no
+    matter what trigger phrase preceded it."""
+    return '/' in token
+
+
+def extract_branch_claims(claim):
+    """Extract candidate branch/ref names from one claim line, precisely.
+
+    Earlier versions used a single greedy pattern -- r'(?:push|branch)\\s+(\\w...)'
+    -- that matched the literal substring "push" anywhere a word boundary
+    allowed it, including inside hyphenated compounds like "pre-push" (a
+    non-word '-' creates a boundary right before "push"). Real STATE.md prose
+    is full of exactly that shape ("pre-push made FAIL-CLOSED", "pre-push
+    pyflakes fail-closed", "commit/push landed", "branch after #938 merged"),
+    so the old pattern reported branches named 'made', 'landed', 'pyflakes',
+    and 'after' -- ordinary English words, never refs, never pushed anywhere.
+
+    This version looks only in positions that are actually claim-shaped
+    (following the literal word "branch", following "pushed as", or inside
+    backticks) AND additionally requires the captured token look like a ref
+    (contain '/') before accepting it -- a bare word is NEVER accepted even
+    when it follows a trigger phrase (this is what rejects "branch after").
+    Backtick-quoted tokens still require a '/' too: real STATE.md prose
+    routinely backtick-quotes memory-key names and commit messages with no
+    slash at all (`` `never-push-to-pr-automerge-may-take` ``), and those are
+    not branch claims either.
+
+    Deliberately NOT a trigger: a bare "origin/" mention anywhere in the
+    line (e.g. "verified by reading origin/main:README.md" -- a file-path
+    reference, not a push claim). Only "branch X" and "pushed as X" are
+    claim-shaped enough to trust.
+    """
+    candidates = []
+
+    for pattern in (_BACKTICKED_TOKEN_RE, _BRANCH_WORD_RE, _PUSHED_AS_RE):
+        for m in pattern.finditer(claim):
+            token = m.group(1).rstrip(_TRAILING_PUNCT)
+            if token and _is_ref_shaped(token):
+                candidates.append(token)
+
+    # De-duplicate, preserving first-seen order.
+    seen = set()
+    result = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            result.append(c)
+    return result
+
+
 def verify_pushed_claims(claims, git_root):
     """Verify "pushed" claims against git ls-remote.
 
@@ -306,8 +371,9 @@ def verify_pushed_claims(claims, git_root):
                     branch = ref.replace('refs/heads/', '')
                     remote_branches.add(branch)
 
-        # Extract branch names from the claim (guard/state-md-accuracy, etc.)
-        branch_matches = re.findall(r'(?:push|branch)\s+([a-zA-Z0-9\-/_]+)', claim, re.IGNORECASE)
+        # Extract ref-shaped branch names from the claim (guard/state-md-accuracy,
+        # fix/x, etc.) -- never a bare English word. See extract_branch_claims().
+        branch_matches = extract_branch_claims(claim)
 
         if branch_matches:
             found_any = False
@@ -417,12 +483,77 @@ def verify_merged_claims(claims, git_root):
     return findings
 
 
+def _semver_key(tag):
+    """Numeric sort key for a 'vX.Y.Z'-ish tag, e.g. so v0.10.0 sorts after
+    v0.9.1 (a naive string sort, as this function used to do, puts "0.10.0"
+    BEFORE "0.9.1" because '1' < '9' lexically -- wrong beyond single-digit
+    minor/patch versions). Non-numeric components degrade to 0 rather than
+    raising, so a malformed tag never crashes the comparison."""
+    body = tag[1:] if tag[:1] in ('v', 'V') else tag
+    parts = []
+    for piece in body.split('.'):
+        digits = ''.join(ch for ch in piece if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+def get_origin_tags(git_root):
+    """Tag names that exist on origin (`git ls-remote --tags origin`),
+    stripping the 'refs/tags/' prefix and peeled annotated-tag '^{}' markers
+    (ls-remote lists both the tag ref and, for annotated tags, a second
+    '<tag>^{}' entry pointing at the commit it annotates -- same tag name,
+    not a second tag).
+
+    Returns a set[str], or None if the command failed (no network, no
+    'origin' remote, etc.) -- callers must treat None as "unknown, cannot
+    verify against origin", never as "origin has no tags"."""
+    rc, stdout, stderr = run_command(["git", "ls-remote", "--tags", "origin"], cwd=git_root)
+    if rc != 0:
+        return None
+    tags = set()
+    for line_text in stdout.strip().split('\n'):
+        if not line_text:
+            continue
+        parts = line_text.split()
+        if len(parts) < 2:
+            continue
+        ref = parts[1]
+        if ref.endswith('^{}'):
+            continue
+        if ref.startswith('refs/tags/'):
+            tags.add(ref[len('refs/tags/'):])
+    return tags
+
+
+def get_head_describe_tag(git_root):
+    """Nearest tag reachable from HEAD by commit ancestry
+    (`git describe --tags --abbrev=0`). Unlike a bare `git tag -l` listing,
+    this is immune to a stray tag sitting on a commit that is NOT an
+    ancestor of HEAD (e.g. a test-fixture tag accidentally left in the
+    repo's object database on an unrelated orphan commit) -- git only walks
+    real history. Returns the tag name, or None if describe failed (no tags
+    reachable from HEAD at all)."""
+    rc, stdout, stderr = run_command(["git", "describe", "--tags", "--abbrev=0"], cwd=git_root)
+    if rc != 0:
+        return None
+    tag = stdout.strip()
+    return tag or None
+
+
 def verify_version_claims(claims, git_root):
     """Verify "Current Version" claims against git tags and package.json.
 
     Checks:
-      - git describe --tags or latest tag matches the claimed version
-      - package.json version field matches the claimed version
+      - the claimed version matches package.json's version field
+      - the claimed version matches the latest tag ORIGIN actually has
+        (`git ls-remote --tags origin`), falling back to the nearest tag
+        reachable from HEAD by ancestry (`git describe --tags --abbrev=0`)
+        only when origin is unreachable -- NEVER a bare `git tag -l`
+        listing, which trusts any local tag regardless of whether it is
+        even an ancestor of HEAD. A local-only tag higher than origin's
+        latest (a stray/test-fixture leak, e.g. a v1.0.0 tag sitting on an
+        unrelated "Initial commit" with no path to HEAD) is reported as a
+        WARN, never silently adopted as "the version".
 
     Returns findings list.
     """
@@ -430,6 +561,38 @@ def verify_version_claims(claims, git_root):
 
     if not claims:
         return findings
+
+    origin_tags = get_origin_tags(git_root)
+    head_describe = get_head_describe_tag(git_root)
+
+    latest_origin_version = None
+    resolution_source = None
+    if origin_tags:
+        v_tags = [t for t in origin_tags if t.startswith('v')]
+        if v_tags:
+            latest_origin_version = max(v_tags, key=_semver_key)
+            resolution_source = "origin"
+    if latest_origin_version is None and head_describe and head_describe.startswith('v'):
+        latest_origin_version = head_describe
+        resolution_source = "HEAD-ancestry (origin tags unavailable)"
+
+    # Highest LOCAL tag, computed ONLY to detect and WARN about a
+    # stray/test-fixture tag that is not on origin -- never used as the
+    # resolved "current version" (that is the exact leak this replaces: a
+    # local-only v1.0.0 tag on an unrelated commit was reported as the
+    # repo's version).
+    rc, stdout, _ = run_command(["git", "tag", "-l"], cwd=git_root)
+    local_tags = [t.strip() for t in stdout.strip().split('\n') if t.strip()] if rc == 0 else []
+    v_local = [t for t in local_tags if t.startswith('v')]
+    highest_local_version = max(v_local, key=_semver_key) if v_local else None
+
+    stray_local_tag = (
+        highest_local_version is not None
+        and origin_tags is not None
+        and highest_local_version not in origin_tags
+        and (latest_origin_version is None
+             or _semver_key(highest_local_version) > _semver_key(latest_origin_version))
+    )
 
     for claim_info in claims:
         claim = claim_info["claim"]
@@ -447,28 +610,10 @@ def verify_version_claims(claims, git_root):
             except Exception:
                 pass
 
-        # Get latest git tag
-        rc, stdout, stderr = run_command(
-            ["git", "tag", "-l"],
-            cwd=git_root
-        )
-        git_tags = []
-        if rc == 0:
-            git_tags = [tag.strip() for tag in stdout.strip().split('\n') if tag.strip()]
-
-        # Find the latest v-prefixed tag
-        latest_git_version = None
-        if git_tags:
-            v_tags = [t for t in git_tags if t.startswith('v')]
-            if v_tags:
-                # Sort by version number (simple string sort works for v-prefixed semantic versions)
-                v_tags.sort(reverse=True)
-                latest_git_version = v_tags[0]
-
         # Normalize versions for comparison (remove 'v' prefix)
         claimed_ver_normalized = claimed_version.lstrip('v') if claimed_version else ""
         pkg_ver_normalized = package_version.lstrip('v') if package_version else ""
-        git_ver_normalized = latest_git_version.lstrip('v') if latest_git_version else ""
+        origin_ver_normalized = latest_origin_version.lstrip('v') if latest_origin_version else ""
 
         # Check for contradictions
         contradictions = []
@@ -478,9 +623,10 @@ def verify_version_claims(claims, git_root):
                 f"Claimed version {claimed_version} but package.json has {package_version}"
             )
 
-        if latest_git_version and claimed_ver_normalized != git_ver_normalized:
+        if latest_origin_version and claimed_ver_normalized != origin_ver_normalized:
             contradictions.append(
-                f"Claimed version {claimed_version} but latest git tag is {latest_git_version}"
+                f"Claimed version {claimed_version} but latest tag ({resolution_source}) "
+                f"is {latest_origin_version}"
             )
 
         if contradictions:
@@ -489,6 +635,18 @@ def verify_version_claims(claims, git_root):
                 "line": line,
                 "status": "CONTRADICTION",
                 "detail": "; ".join(contradictions)
+            })
+
+        if stray_local_tag:
+            findings.append({
+                "claim": claim,
+                "line": line,
+                "status": "WARN",
+                "detail": (
+                    f"Local tag {highest_local_version} is not present on origin "
+                    f"(origin's latest tag is {latest_origin_version or 'none found'}); "
+                    f"treating it as a stray/test-fixture tag, not the resolved version"
+                ),
             })
 
     return findings
@@ -791,6 +949,7 @@ def _print_findings(findings, json_mode, header_lines):
             "error_count": sum(1 for f in findings if f["status"] == "ERROR"),
             "unverifiable_count": sum(1 for f in findings if f["status"] == "UNVERIFIABLE"),
             "skip_count": sum(1 for f in findings if f["status"] == "SKIP"),
+            "warn_count": sum(1 for f in findings if f["status"] == "WARN"),
             **header_lines,
         }, indent=2))
     elif findings:

@@ -8,6 +8,7 @@ edge cases (missing gh, unverifiable claims, etc).
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,70 @@ tools_path = Path(__file__).parent.parent / "tools"
 sys.path.insert(0, str(tools_path))
 
 import state_md_verifier
+
+
+def _git_isolated_env(base_env=None):
+    """An environment dict safe to pass to a git subprocess call that MUST
+    stay scoped to its explicit cwd=. Strips every GIT_* variable (GIT_DIR
+    and GIT_WORK_TREE above all) that could otherwise silently redirect git
+    to a DIFFERENT repository regardless of cwd -- this is the mechanism a
+    leaked/ambient GIT_DIR env var uses to override explicit cwd-based repo
+    discovery (git honors GIT_DIR unconditionally when set, has priority
+    over the normal "walk up from cwd looking for .git" discovery).
+
+    Starts from `base_env` (default: a copy of the real process
+    environment) so callers can layer an injected/leaked var on top before
+    stripping, to behaviorally prove the stripping actually works -- see
+    TestStatemdVerifierFixtureHermeticity.
+    """
+    source = dict(base_env) if base_env is not None else dict(os.environ)
+    return {k: v for k, v in source.items() if not k.startswith("GIT_")}
+
+
+def _build_v1_tag_fixture_repo(tmpdir_path, env=None):
+    """Build the throwaway git repo used by the "claimed version matches"
+    fixture: an "Initial commit" by "Test User", tagged v1.0.0, with a
+    matching package.json and STATE.md.
+
+    Every git call is explicitly scoped to `tmpdir_path` via BOTH cwd= and
+    an isolated env (stripped of any ambient/leaked GIT_* vars in `env`),
+    so this can never write into any repo other than the one rooted at
+    tmpdir_path -- regardless of what GIT_DIR/GIT_WORK_TREE the invoking
+    process happens to have set. This is the exact shape of the real
+    stray tag discovered in the primary aesop repo on 2026-10-13: a
+    LOCAL-ONLY v1.0.0 tag on commit e438de8d ("Initial commit", author
+    "Test User") that this fixture-building code can create if it is not
+    hermetic. See TestStatemdVerifierFixtureHermeticity for the regression
+    proof.
+
+    Returns the STATE.md path.
+    """
+    git_env = _git_isolated_env(env)
+
+    subprocess.run(["git", "init"], cwd=tmpdir_path, capture_output=True,
+                    check=True, env=git_env)
+    subprocess.run(["git", "config", "user.email", "test@example.com"],
+                    cwd=tmpdir_path, capture_output=True, check=True, env=git_env)
+    subprocess.run(["git", "config", "user.name", "Test User"],
+                    cwd=tmpdir_path, capture_output=True, check=True, env=git_env)
+
+    test_file = tmpdir_path / "tools" / "clean.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text("# Clean code\n")
+
+    subprocess.run(["git", "add", "."], cwd=tmpdir_path, capture_output=True,
+                    check=True, env=git_env)
+    subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=tmpdir_path,
+                    capture_output=True, check=True, env=git_env)
+    subprocess.run(["git", "tag", "v1.0.0"], cwd=tmpdir_path, capture_output=True,
+                    check=True, env=git_env)
+
+    pkg_json = tmpdir_path / "package.json"
+    pkg_json.write_text('{"version": "1.0.0"}\n')
+
+    state_md = tmpdir_path / "STATE.md"
+    state_md.write_text("# Checkpoint\n\n**Current Version:** v1.0.0\n\nNo conflicts to report.\n")
+    return state_md
 
 
 class TestStatemdVerifierEscapeRepro(unittest.TestCase):
@@ -150,64 +215,15 @@ class TestStatemdVerifierEscapeRepro(unittest.TestCase):
         """
         Fixture: STATE.md claims are accurate (has version claim matching repo)
         Expected: verifier exits 0 with no contradictions
+
+        The fixture repo (Initial commit / Test User / tag v1.0.0) is built via
+        the shared hermetic helper -- see TestStatemdVerifierFixtureHermeticity
+        for the regression proof that it cannot leak into any repo other than
+        the tempdir, even under a leaked GIT_DIR environment variable.
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir_path = Path(tmpdir)
-
-            # Initialize clean git repo
-            subprocess.run(
-                ["git", "init"],
-                cwd=tmpdir_path,
-                capture_output=True,
-                check=True
-            )
-            subprocess.run(
-                ["git", "config", "user.email", "test@example.com"],
-                cwd=tmpdir_path,
-                capture_output=True,
-                check=True
-            )
-            subprocess.run(
-                ["git", "config", "user.name", "Test User"],
-                cwd=tmpdir_path,
-                capture_output=True,
-                check=True
-            )
-
-            # Create a clean file
-            test_file = tmpdir_path / "tools" / "clean.py"
-            test_file.parent.mkdir(parents=True, exist_ok=True)
-            test_file.write_text("# Clean code\n")
-
-            # Add and commit it
-            subprocess.run(
-                ["git", "add", "."],
-                cwd=tmpdir_path,
-                capture_output=True,
-                check=True
-            )
-            subprocess.run(
-                ["git", "commit", "-m", "Initial commit"],
-                cwd=tmpdir_path,
-                capture_output=True,
-                check=True
-            )
-
-            # Create a tag for version v1.0.0
-            subprocess.run(
-                ["git", "tag", "v1.0.0"],
-                cwd=tmpdir_path,
-                capture_output=True,
-                check=True
-            )
-
-            # Create package.json with matching version
-            pkg_json = tmpdir_path / "package.json"
-            pkg_json.write_text('{"version": "1.0.0"}\n')
-
-            # Create STATE.md with version claim matching the repo
-            state_md = tmpdir_path / "STATE.md"
-            state_md.write_text("# Checkpoint\n\n**Current Version:** v1.0.0\n\nNo conflicts to report.\n")
+            state_md = _build_v1_tag_fixture_repo(tmpdir_path)
 
             # Run verifier
             rc, stdout, stderr = state_md_verifier.run_command(
@@ -900,6 +916,317 @@ class TestStatemdVerifierWindowsAsciiSafety(unittest.TestCase):
         exotic = "中文 untouched CJK"
         out = state_md_verifier.ascii_safe(exotic)
         self.assertTrue(all(ord(c) < 128 for c in out), f"Non-ASCII survived: {out!r}")
+
+
+class TestStatemdVerifierBranchClaimPrecision(unittest.TestCase):
+    """
+    Guardrail #1's "pushed" branch extraction must never report a bare
+    English word as a branch claim. Incident (2026-10-13): running the
+    verifier against the LIVE aesop STATE.md (--state-md aesop/STATE.md
+    --buildlog conductor3/BUILDLOG.md) reported "Missing branches on
+    origin: ['after']", "['made', 'landed']", "['pyflakes']" -- every one
+    of these came from ordinary prose, never a branch name. The old greedy
+    pattern (push-or-branch, followed by whitespace, followed by a word)
+    matched the literal substring
+    "push" wherever a regex word-boundary-ish context allowed it,
+    including inside hyphenated compounds like "pre-push made" / "pre-push
+    pyflakes" (the '-' creates a boundary right before "push"), and
+    matched "branch" followed by whatever word happened to come next
+    regardless of whether it looked like a ref.
+
+    The fixtures below are the VERBATIM lines read from the primary tree's
+    live STATE.md on 2026-10-13 (lines 8, 26, 36) that produced the false
+    positives, plus the genuine ref-shaped claims that must still fire
+    (never loosen detection while fixing precision).
+    """
+
+    LIVE_STATE_MD_LINE_8 = (
+        "**Since 17:57Z:** PR #940 merged 18:22Z - Matt's hooks flair notice is live on main "
+        "as a scoped known-issue line below the Aesop Kernel positioning (verified by reading "
+        "origin/main:README.md). PR #939 was a DUPLICATE no-op merge (empty diff) caused by the "
+        "orchestrator's own leftover `push && gh pr create` chain resurrecting the auto-deleted "
+        "docs/rebrand-corrections branch after #938 merged - harmless to content, recorded as "
+        "memory `never-push-to-pr-automerge-may-take`. Memory `read-last-two-instructions-literally` "
+        "records the headline/referent hallucination episode and Matt's ruling that outreach, "
+        "titles and headlines are his decisions. STATE.md 17:57Z block's placeholder timestamp "
+        "was corrected (f4cc51d3) and pushed to backup/state-checkpoint-20261013."
+    )
+
+    LIVE_STATE_MD_LINE_26 = (
+        "**On disk NOT pushed - recover before they rot:** aesop-wt-failclosed (pyflakes "
+        "pre-push made FAIL-CLOSED at pre-push-policy.sh ~1058/~1085, committed, unpushed; "
+        "fail-open inventory TASK 2 not started); aesop-wt-readers (fleet/dash readers -> "
+        "canonical CONDUCTOR_ROOT; partial tools/fleet.js + STEP-0-READER-ANALYSIS.md, "
+        "UNCOMMITTED; remaining readers status.js/mcp/server.mjs/ui/config.py/ui/sse.py/dash/"
+        "watchdog-gui.sh). checkpoint-hooks fail-closed lane stopped after its STEP 0 fact "
+        "table: the 6 checkpoint hooks are best-effort (never verify commit/push landed, never "
+        "write a CHECKPOINT-FAILED marker) - resume to make them fail closed + surfaced by "
+        "reprime-from-disk."
+    )
+
+    LIVE_STATE_MD_LINE_36 = (
+        "**In flight (lanes):** fix/state-md-verifier-ascii-and-drift verify + Guardrail #6 "
+        "SKIP->exit0 fail-open; watchdog CLEAN-while-dirty + psinasty WIP pushed at main; "
+        "pre-push pyflakes fail-closed + fail-open inventory (PR); code-search guard false "
+        "positive on quoted text; hook-wiring regression gate in ~/scripts wired into "
+        "power_selftest (reports 4 violations + a UnicodeDecodeError crash to fix); liveness "
+        "census (three-roots hypothesis: CONDUCTOR_ROOT vs AESOP_ROOT vs aesop-daemon-runtime); "
+        "rewrite-dependency hook audit; never-fail-open memory; README/npm flair PR."
+    )
+
+    def test_live_state_md_prose_produces_no_branch_claims(self):
+        """The three real lines that previously false-positived must each
+        extract ZERO branch candidates."""
+        for name, line in (
+            ("line 8", self.LIVE_STATE_MD_LINE_8),
+            ("line 26", self.LIVE_STATE_MD_LINE_26),
+            ("line 36", self.LIVE_STATE_MD_LINE_36),
+        ):
+            with self.subTest(name=name):
+                matches = state_md_verifier.extract_branch_claims(line)
+                self.assertEqual(
+                    matches, [],
+                    f"{name} must extract no branch claims from prose, got {matches}"
+                )
+
+    def test_genuine_ref_shaped_claims_still_extracted(self):
+        """Real push/branch claims -- ref-shaped (contains '/') and
+        following 'branch' / 'pushed as', or backtick-quoted -- must still
+        fire. Precision must never come at the cost of detection."""
+        cases = [
+            ("... and pushed as backup/state-checkpoint-20261013.",
+             "backup/state-checkpoint-20261013"),
+            ("branch fix/x pushed", "fix/x"),
+            ("`docs/foo` pushed", "docs/foo"),
+        ]
+        for claim, expected in cases:
+            with self.subTest(claim=claim):
+                matches = state_md_verifier.extract_branch_claims(claim)
+                self.assertIn(
+                    expected, matches,
+                    f"Expected {expected!r} extracted from {claim!r}, got {matches}"
+                )
+
+    def test_backtick_quoted_non_ref_token_is_not_a_branch_claim(self):
+        """Backtick-quoting alone is not sufficient -- real STATE.md prose
+        backtick-quotes memory-key names and commands with no '/' at all
+        (seen verbatim in line 8 above); those must not be read as refs."""
+        matches = state_md_verifier.extract_branch_claims(
+            "recorded as memory `never-push-to-pr-automerge-may-take`."
+        )
+        self.assertEqual(matches, [])
+
+    def test_genuine_claim_still_verified_against_ls_remote(self):
+        """End-to-end: a genuine ref-shaped pushed claim for a branch that
+        does NOT exist on origin must still be reported as a
+        CONTRADICTION -- precision must not come at the cost of losing
+        real detections."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            subprocess.run(["git", "init"], cwd=tmpdir_path, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"],
+                            cwd=tmpdir_path, capture_output=True, check=True)
+            subprocess.run(["git", "config", "user.name", "Test User"],
+                            cwd=tmpdir_path, capture_output=True, check=True)
+            (tmpdir_path / "f.txt").write_text("x\n")
+            subprocess.run(["git", "add", "."], cwd=tmpdir_path, capture_output=True, check=True)
+            subprocess.run(["git", "commit", "-m", "Initial"], cwd=tmpdir_path,
+                            capture_output=True, check=True)
+
+            other_dir = tmpdir_path.parent / (tmpdir_path.name + "-origin")
+            other_dir.mkdir(exist_ok=True)
+            try:
+                subprocess.run(["git", "init", "--bare"], cwd=other_dir, capture_output=True, check=True)
+                subprocess.run(["git", "remote", "add", "origin", str(other_dir)],
+                                cwd=tmpdir_path, capture_output=True, check=True)
+                subprocess.run(["git", "push", "origin", "HEAD:refs/heads/main"],
+                                cwd=tmpdir_path, capture_output=True, check=True)
+
+                state_md = tmpdir_path / "STATE.md"
+                state_md.write_text("# Checkpoint\n\nbranch fix/never-pushed pushed\n")
+
+                rc, stdout, stderr = state_md_verifier.run_command(
+                    [sys.executable, str(tools_path / "state_md_verifier.py"),
+                     "--state-md", str(state_md), "--json"],
+                    cwd=tmpdir_path
+                )
+                self.assertEqual(
+                    rc, 1,
+                    f"Expected CONTRADICTION exit 1. Got {rc}. stdout={stdout} stderr={stderr}"
+                )
+                result = json.loads(stdout)
+                self.assertGreater(result.get("contradiction_count", 0), 0)
+                detail = " ".join(f["detail"] for f in result["findings"])
+                self.assertIn("fix/never-pushed", detail)
+            finally:
+                shutil.rmtree(other_dir, ignore_errors=True)
+
+
+class TestStatemdVerifierOriginTagVersionResolution(unittest.TestCase):
+    """
+    Guardrail #1's version check used to trust ANY local tag via a bare
+    `git tag -l` listing. Incident (2026-10-13): the primary aesop repo
+    carries a LOCAL-ONLY tag v1.0.0 on commit e438de8d ("Initial commit",
+    author "Test User") -- an unrelated test-fixture leak -- and the
+    verifier reported "git tag is v1.0.0" even though origin's real
+    highest tag is v0.9.1 and the orphan commit is not reachable from HEAD
+    at all.
+
+    Fix: resolve "the current version" from tags that exist on ORIGIN
+    (git ls-remote --tags origin), falling back to the nearest tag
+    reachable from HEAD by ancestry (git describe --tags --abbrev=0) only
+    when origin is unreachable. A local-only tag higher than origin's
+    latest is reported as WARN, never adopted as the version.
+    """
+
+    def _run_git(self, args, cwd, check=True):
+        return subprocess.run(
+            ["git"] + args, cwd=cwd, capture_output=True,
+            encoding="utf-8", errors="replace", check=check
+        )
+
+    def _build_repo_with_stray_local_tag(self, tmpdir_path):
+        """Bare 'origin' + a work clone whose HEAD/package.json/STATE.md
+        claim v0.9.0 (origin's real latest, pushed), PLUS a local-only
+        v1.0.0 tag on an unrelated orphan commit never pushed to origin
+        and not an ancestor of HEAD -- mirroring the real e438de8d leak
+        shape exactly."""
+        origin_dir = tmpdir_path / "origin.git"
+        work_dir = tmpdir_path / "work"
+        work_dir.mkdir()
+
+        self._run_git(["init", "--bare", str(origin_dir)], cwd=tmpdir_path)
+
+        self._run_git(["init"], cwd=work_dir)
+        self._run_git(["symbolic-ref", "HEAD", "refs/heads/main"], cwd=work_dir)
+        self._run_git(["config", "user.email", "test@example.com"], cwd=work_dir)
+        self._run_git(["config", "user.name", "Test User"], cwd=work_dir)
+
+        (work_dir / "README.md").write_text("hello\n")
+        self._run_git(["add", "."], cwd=work_dir)
+        self._run_git(["commit", "-m", "Initial"], cwd=work_dir)
+        self._run_git(["tag", "v0.9.0"], cwd=work_dir)
+        self._run_git(["remote", "add", "origin", str(origin_dir)], cwd=work_dir)
+        self._run_git(["push", "origin", "HEAD:refs/heads/main"], cwd=work_dir)
+        self._run_git(["push", "origin", "v0.9.0"], cwd=work_dir)
+
+        # Unrelated orphan commit, tagged v1.0.0, NEVER pushed to origin --
+        # not an ancestor of main's HEAD, exactly like e438de8d.
+        self._run_git(["checkout", "--orphan", "stray"], cwd=work_dir)
+        self._run_git(["commit", "--allow-empty", "-m", "Initial commit"], cwd=work_dir)
+        self._run_git(["tag", "v1.0.0"], cwd=work_dir)
+        self._run_git(["checkout", "main"], cwd=work_dir)
+
+        (work_dir / "package.json").write_text('{"version": "0.9.0"}\n')
+        state_md = work_dir / "STATE.md"
+        state_md.write_text(
+            "# Checkpoint\n\n**Current Version:** v0.9.0\n\nNo conflicts to report.\n"
+        )
+        return work_dir, state_md
+
+    def test_version_resolves_from_origin_not_stray_local_tag(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            work_dir, state_md = self._build_repo_with_stray_local_tag(Path(tmpdir))
+
+            rc, stdout, stderr = state_md_verifier.run_command(
+                [sys.executable, str(tools_path / "state_md_verifier.py"),
+                 "--state-md", str(state_md), "--json"],
+                cwd=work_dir
+            )
+            self.assertEqual(
+                rc, 0,
+                f"Expected exit 0: claimed v0.9.0 matches origin's real latest tag. "
+                f"Got {rc}. stdout={stdout} stderr={stderr}"
+            )
+            result = json.loads(stdout)
+            self.assertEqual(
+                result.get("contradiction_count", 0), 0,
+                f"Must not report a version contradiction against the stray local "
+                f"v1.0.0 tag. findings={result.get('findings')}"
+            )
+            self.assertGreaterEqual(
+                result.get("warn_count", 0), 1,
+                f"Expected a WARN about the stray local-only v1.0.0 tag. "
+                f"findings={result.get('findings')}"
+            )
+            warn_details = " ".join(
+                f["detail"] for f in result["findings"] if f["status"] == "WARN"
+            )
+            self.assertIn("v1.0.0", warn_details)
+            self.assertIn("not present on origin", warn_details)
+
+    def test_get_origin_tags_strips_peeled_markers_and_excludes_stray(self):
+        """git ls-remote --tags lists annotated tags twice (<tag> and
+        <tag>^{}); get_origin_tags must return each tag name exactly once,
+        and must never include a tag that was never pushed."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            work_dir, _ = self._build_repo_with_stray_local_tag(tmpdir_path)
+            tags = state_md_verifier.get_origin_tags(work_dir)
+            self.assertIsNotNone(tags)
+            self.assertIn("v0.9.0", tags)
+            self.assertNotIn("v1.0.0", tags)
+            self.assertFalse(any(t.endswith("^{}") for t in tags))
+
+    def test_head_describe_ignores_non_ancestor_tag(self):
+        """git describe --tags --abbrev=0 from HEAD must resolve to
+        v0.9.0, never v1.0.0 (which sits on an orphan commit outside
+        HEAD's history) -- this is what makes it safe as a fallback when
+        origin is unreachable."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            work_dir, _ = self._build_repo_with_stray_local_tag(tmpdir_path)
+            self.assertEqual(state_md_verifier.get_head_describe_tag(work_dir), "v0.9.0")
+
+
+class TestStatemdVerifierFixtureHermeticity(unittest.TestCase):
+    """
+    The v1.0.0 / 'Test User' / 'Initial commit' fixture built by
+    _build_v1_tag_fixture_repo() (used by test_clean_accurate_state_md)
+    must build its throwaway git repo regardless of ambient/leaked GIT_*
+    environment variables -- GIT_DIR in particular silently overrides the
+    explicit cwd= passed to every git subprocess call (git honors GIT_DIR
+    unconditionally when set, in preference to discovering a repo by
+    walking up from cwd), which is a real, documented mechanism by which a
+    "hermetic, tempdir-scoped" test fixture can still write into a
+    different repository than the one it created.
+
+    This is the hygiene gap behind the stray v1.0.0 tag discovered in the
+    primary aesop repo on commit e438de8d ("Initial commit", author "Test
+    User", 2026-10-06) -- test-process-isolation-hygiene requires tests
+    never pollute the real repo (memory: test-process-isolation-hygiene).
+    """
+
+    def test_fixture_repo_build_is_immune_to_leaked_git_dir_env(self):
+        with tempfile.TemporaryDirectory() as decoy_dir, \
+             tempfile.TemporaryDirectory() as real_tmpdir:
+            decoy_path = Path(decoy_dir)
+            real_path = Path(real_tmpdir)
+
+            # A decoy repo standing in for "the real primary repo" that an
+            # ambient/leaked GIT_DIR env var could point at.
+            subprocess.run(["git", "init"], cwd=decoy_path, capture_output=True, check=True)
+
+            leaked_env = dict(os.environ)
+            leaked_env["GIT_DIR"] = str(decoy_path / ".git")
+            leaked_env["GIT_WORK_TREE"] = str(decoy_path)
+
+            _build_v1_tag_fixture_repo(real_path, env=leaked_env)
+
+            rc_decoy, out_decoy, _ = state_md_verifier.run_command(
+                ["git", "tag", "-l", "v1.0.0"], cwd=decoy_path
+            )
+            rc_real, out_real, _ = state_md_verifier.run_command(
+                ["git", "tag", "-l", "v1.0.0"], cwd=real_path
+            )
+            self.assertEqual(
+                out_decoy.strip(), "",
+                "Fixture repo setup leaked the v1.0.0 tag into a repo pointed at "
+                "by an ambient GIT_DIR env var instead of the intended tempdir -- "
+                "this is the exact mechanism behind the real-repo leak (commit "
+                "e438de8d)."
+            )
+            self.assertEqual(out_real.strip(), "v1.0.0")
 
 
 class TestStatemdBuildlogDriftCheck(unittest.TestCase):
