@@ -283,9 +283,12 @@ _TRAILING_PUNCT = '.,;:)'
 def _is_ref_shaped(token):
     """A branch/ref candidate must look like a ref: it contains a '/' (the
     shape of every real branch name in this repo -- fix/x, docs/foo,
-    backup/state-checkpoint-...). A bare English word never qualifies, no
-    matter what trigger phrase preceded it."""
-    return '/' in token
+    backup/state-checkpoint-...) AND does not start with '/' -- a leading
+    slash is an absolute path/URL/API-route reference (`` `/api/state` ``
+    bug, `` `/etc/hosts` ``), never a git ref (git refuses a leading '/' in
+    branch names). A bare English word never qualifies either, no matter
+    what trigger phrase preceded it."""
+    return '/' in token and not token.startswith('/')
 
 
 def extract_branch_claims(claim):

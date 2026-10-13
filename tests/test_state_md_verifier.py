@@ -1016,6 +1016,33 @@ class TestStatemdVerifierBranchClaimPrecision(unittest.TestCase):
         )
         self.assertEqual(matches, [])
 
+    # Second-round live finding: running the FIXED verifier against the full
+    # live STATE.md (past line 45) surfaced a NEW false positive from this
+    # fix's own backtick+'/' acceptance path -- line 103 backtick-quotes an
+    # API route, which contains a '/' but is not a branch name.
+    LIVE_STATE_MD_LINE_103 = (
+        "**Release-state note:** `v0.7.1` is tagged at `ec5ea9db` and has "
+        "**no GitHub release** -- that commit's CI was red (pre-existing "
+        "`/api/state` bug). The tag was deliberately NOT moved, since "
+        "retagging a pushed release rewrites published history. `v0.7.2` "
+        "is published on npm (Latest, MIT license) and GitHub (Release "
+        "v0.7.2 Latest). Consumer-visible release history therefore reads "
+        "0.7.0 -> 0.7.2; publishing 0.7.1 retroactively is a user "
+        "decision. `v0.7.1` remains tag-only on git. Current unreleased "
+        "commits: 219 since v0.7.2 tag (as of 2026-09-11, HEAD 07732210)."
+    )
+
+    def test_leading_slash_backtick_token_is_not_a_branch_claim(self):
+        """A backtick-quoted API route/absolute path (`` `/api/state` ``)
+        contains a '/' but starts with one -- never a git ref (git refuses
+        a leading '/' in branch names) -- and must not be read as a branch
+        claim, even though it is backtick-quoted."""
+        matches = state_md_verifier.extract_branch_claims(self.LIVE_STATE_MD_LINE_103)
+        self.assertEqual(
+            matches, [],
+            f"Expected no branch claims from the live line-103 fixture, got {matches}"
+        )
+
     def test_genuine_claim_still_verified_against_ls_remote(self):
         """End-to-end: a genuine ref-shaped pushed claim for a branch that
         does NOT exist on origin must still be reported as a
