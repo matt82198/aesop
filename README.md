@@ -21,9 +21,9 @@
 
 **Aesop Kernel is a multi-agent orchestration kernel for autonomous software development.** A kernel, not a harness: it owns the boundary between the model and your codebase, enforces one invariant (fail-closed verification), and refuses what it cannot verify rather than steering the model. It runs fleets of LLM coding agents across ranked backlog items, verifies their output locally, and ships merge-ready code to CI. Crash-only by design: workers are stateless, state lives in git + SQLite + durable files, and restart is the only recovery path.
 
-The design lineage spans 50 years: Unix kernel/user-space boundaries and fail-closed composable tools (1975), crash-only software (Candea & Fox, 2003), Erlang supervision trees (Armstrong et al., 1996), and Kubernetes reconciliation (2015). Aesop Kernel ports these patterns to the agentic loop: the wave cycle is a reconciliation controller; STATE.md + BUILDLOG.md are the durable event log; workers are supervised processes; crashes trigger re-reads from disk.
+The design lineage spans 50 years: Unix kernel/user-space boundaries and fail-closed composable tools (1975), through crash-only software (Candea & Fox, 2003), to the agentic loop — the Ralph technique of running a coding agent in a tight reconciliation loop (2025). Aesop Kernel implements this: the wave cycle is a reconciliation controller; STATE.md + BUILDLOG.md are the durable event log; workers are supervised processes; crashes trigger re-reads from disk.
 
-**Self-learning.** The kernel dogfeeds itself (it builds itself via its own /buildsystem loop) and categorizes failure modes into enforcement: the gate-escape-resolver skill turns CI failures into postmortems and lint-rule promotions; the audit/backlog cycles extract repeated issues and wire them into verification gates.
+**Self-learning.** The kernel dogfeeds itself (it builds itself via its own /buildsystem loop) and categorizes failure modes into enforcement: the gate-escape-resolver skill turns CI failures into postmortems and audit cycles extract repeated issues and wire them into verification gates.
 
 ## Credibility: The Trap Tests
 

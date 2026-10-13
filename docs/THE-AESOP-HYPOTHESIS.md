@@ -1,4 +1,4 @@
-# The Aesop Kernel Hypothesis: Why Crash-Recoverable Systems Outrun Distributed Ones
+# The Aesop Hypothesis: Why Crash-Recoverable Systems Outrun Distributed Ones
 
 **Expanded from the original essay:** https://medium.com/@matt82198/the-aesop-hypothesis-ai-agents-that-survive-because-theyre-designed-to-fail-de5f033369d4
 
