@@ -25,6 +25,8 @@ The design lineage spans 50 years: Unix kernel/user-space boundaries and fail-cl
 
 **Self-learning.** The kernel dogfeeds itself (it builds itself via its own /buildsystem loop) and categorizes failure modes into enforcement: the gate-escape-resolver skill turns CI failures into postmortems and audit cycles extract repeated issues and wire them into verification gates.
 
+**Due to anthropics recent changes preventing clean implementations of fail closed hooks, the project is currently not fully firing all hooks, this is actively being solved v0.9.1 starts fixing some of the largest issues.**
+
 ## Credibility: The Trap Tests
 
 Aesop Kernel does not trust itself. Every agent writes code claiming to be correct, and [the trap tests](./tests/test_traps.py) deliberately reproduce patterns of agent deception:
