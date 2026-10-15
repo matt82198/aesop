@@ -2,13 +2,13 @@
 
 **What this file is:** The live durable checkpoint that Aesop itself uses during its own `/buildsystem` loop. It records the current system version, architectural decisions, known limitations, and the next milestone. This is not historical archive; it is read by the orchestrator to understand operational state.
 
-**Current Version:** v0.9.0 (release/0.9.0 cut 2026-10-06 from main f41d6c40; 103 PRs since v0.8.0). Previous: v0.8.0 (2026-09-11).
+**Current Version:** v0.9.1 (tag 5026195d, cut 2026-10-09; GitHub release published 2026-10-10; npm @matt82198/aesop 0.9.1; 40 PRs since v0.9.0). Previous: v0.9.0 (2026-10-07).
 
 ## CURRENT (2026-10-14 orchestrator checkpoint)
 
 **Checkpoint 2026-10-14 (orchestrator, Mattt box).** Facts verified by the orchestrator or lanes today:
 
-- **RED main - fix in flight:** scheduled run 38538275152 (main, c5b9babe, job `windows`) was RED. Root cause: the `windows` aggregator in `.github/workflows/ci.yml` treated a legitimate docs-only windows-shard skip on the `schedule` event as a failure; it only exempted the `pull_request` path. Fix = PR #944 (branch `fix/main-windows-red`, head ff535148), auto-merge armed, with `WindowsAggregatorBehaviourTest` in `tests/test_ci_workflow_lint.py` (red/green proof). Status at checkpoint: OPEN.
+- **RED main - fix in flight:** scheduled run 38538275152 (main, c5b9babe, job `windows`) was RED. Root cause: the `windows` aggregator in `.github/workflows/ci.yml` treated a legitimate docs-only windows-shard skip on the `schedule` event as a failure; it only exempted the `pull_request` path. Fix = PR #944 (branch `fix/main-windows-red`, head 3a99e03f), auto-merge armed, with `WindowsAggregatorBehaviourTest` in `tests/test_ci_workflow_lint.py` (red/green proof). Status at checkpoint: OPEN.
 - **PR #943 red is unrelated:** `tests/test_state_md_verifier.py` sets git `user.*` config outside a temp fixture, caught by `test_test_hygiene`. A lane is fixing it on the PR branch.
 - **Watchdog on the Mattt box:** scheduled task `AesopWatchdogDaemon` registered 2026-10-14 via `daemons/install-tasks.ps1 -Force` from runtime worktree `~/aesop-daemon-runtime` (detached at origin/main; each tick fetches and resets to origin/main, `CONDUCTOR_ROOT=$HOME/conductor3`). Status Ready. Heartbeat `~/conductor3/state/.watchdog-heartbeat` advanced 19:18:05 -> 19:20:15 local after `schtasks /run`. A legacy Disabled task `\Aesop\AesopWatchdogDaemon` (stale conductor3 fork) remains; the installer divergence check matches by name across folders (follow-up). `AesopRefinementMonitor` is not registered on this box. `AesopMergeQueue` untouched (retired).
 - **power_selftest:** the hooks `UnicodeDecodeError` was a stale local claude-scripts checkout; master already had the utf-8 fix. Remaining: 2 red tests in claude-scripts `tests/test_power_selftest.py` (aesop-root fixture assumes `~/aesop`; this box uses `~/Desktop/aesop`) and 12-14 hardcoded `C:/Users/Mattt` paths in brain hooks/docs. Lanes in flight for both.
@@ -100,7 +100,7 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 22. **Receipt gate increments 4–6** (QUEUED). Increment 4 (agreement measurement via tools/receipt_agreement.py) gated on measurement completion; increments 6a–6c (signed ledger storage, lineage codec) per conductor3 plan.
 23. **AesopMergeQueue task lifecycle decision** (QUEUED, decision pending). Scheduled task `AesopMergeQueue` Status: Disabled since 2026-09-11; retire gracefully (cleanup PR) vs re-enable?
 24. **Second-box receipt key provisioning** (DEFERRED — Matt 2026-10-14; not queued). Mattt profile on macOS needs AESOP_RECEIPT_KEY env var + private key setup.
-25. **Closed unmerged: PR #921** (branch corrupted: fixture commits; salvaged as #923).
+25. **PR #921 CLOSED without merging** (branch corrupted: fixture commits; salvaged as #923).
 
 ### Blocked / Deferred
 
