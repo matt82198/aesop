@@ -273,10 +273,9 @@ class TestPrePushGate(unittest.TestCase):
         shutil.copytree(REPO_ROOT / "tools", base / "tools",
                         ignore=shutil.ignore_patterns("__pycache__", *skip))
         self.git(base, "init", "-q", "-b", "main")
-        self.git(base, "config", "user.email", "test@example.com")
-        self.git(base, "config", "user.name", "Test User")
         self.git(base, "add", "-A")
-        self.git(base, "commit", "-q", "-m", "base tools")
+        self.git(base, "-c", "user.email=test@example.com",
+                 "-c", "user.name=Test User", "commit", "-q", "-m", "base tools")
         self.git(repo, "remote", "add", "origin", str(base))
         self.git(repo, "fetch", "-q", "origin", "main")
 
