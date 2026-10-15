@@ -12,6 +12,7 @@ required check can never satisfy branch protection (the exact deadlock
 didn't close).
 """
 
+import json
 import sys
 import tempfile
 import unittest
@@ -106,11 +107,22 @@ jobs:
 """
 
 
-def _write_workflow(tmpdir, content):
+FIXTURE_REQUIRED = ["ci (0)", "ci (1)", "ci (2)", "ci (3)", "windows"]
+
+
+def _write_manifest(tmpdir, required=FIXTURE_REQUIRED):
+    manifest = Path(tmpdir) / "tools" / "required-checks.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps({"required_contexts": list(required)}), encoding="utf-8")
+    return manifest
+
+
+def _write_workflow(tmpdir, content, required=FIXTURE_REQUIRED):
     workflows_dir = Path(tmpdir) / ".github" / "workflows"
     workflows_dir.mkdir(parents=True)
     path = workflows_dir / "ci.yml"
     path.write_text(content, encoding="utf-8")
+    _write_manifest(tmpdir, required)
     return path
 
 
@@ -180,6 +192,45 @@ class TestCiNeedsSkipGuard(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             _write_workflow(tmpdir, FIXED_YAML)
             self.assertEqual(guard.main(["--root", tmpdir]), 0)
+
+
+class TestRequiredCheckNames(unittest.TestCase):
+    """Required names come from tools/required-checks.json and must resolve to a job (F-07/F-10)."""
+
+    def test_renamed_required_job_is_a_finding(self):
+        """Red-first: 'windows' is required but its job was renamed to 'windows-x' -- must FAIL."""
+        renamed = FIXED_YAML.replace("\n  windows:\n", "\n  windows-x:\n", 1)
+        self.assertNotEqual(renamed, FIXED_YAML)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_workflow(tmpdir, renamed)
+            findings, _ = guard.check_workflow(path)
+        flagged = {f["feeds_required_check"] for f in findings}
+        self.assertIn("windows", flagged)
+
+    def test_renamed_required_job_cli_exits_1(self):
+        renamed = FIXED_YAML.replace("\n  windows:\n", "\n  windows-x:\n", 1)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_workflow(tmpdir, renamed)
+            self.assertEqual(guard.main(["--root", tmpdir]), 1)
+
+    def test_protection_payload_contexts_are_required(self):
+        """A required context from captured branch protection with no job must be a finding."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_workflow(tmpdir, FIXED_YAML)
+            payload = Path(tmpdir) / "protection.json"
+            payload.write_text(json.dumps({"required_status_checks": {
+                "contexts": ["ci (0)", "ci (1)", "ci (2)", "ci (3)", "windows", "lint-gone"]}}),
+                encoding="utf-8")
+            findings, _ = guard.check_workflow(path, None, str(payload))
+        self.assertIn("lint-gone", {f["feeds_required_check"] for f in findings})
+
+    def test_unreadable_manifest_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_workflow(tmpdir, FIXED_YAML)
+            (Path(tmpdir) / "tools" / "required-checks.json").unlink()
+            with self.assertRaises(guard.GuardError):
+                guard.check_workflow(path)
+            self.assertEqual(guard.main(["--root", tmpdir]), 2)
 
 
 if __name__ == "__main__":

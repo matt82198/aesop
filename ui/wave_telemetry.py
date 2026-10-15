@@ -25,8 +25,11 @@ if _REPO_ROOT not in sys.path:
 from state_store.read_api import ReadAPI  # noqa: E402
 
 
-def _read_orchestrator_status():
+def _read_orchestrator_status(now=None):
     """Read orchestrator-status.json if fresh (<24h old) using the read_api.
+
+    `now` (aware datetime) is the freshness reference instant; None reads the
+    process wall clock. Injectable so callers and tests pin the clock.
 
     Returns:
         tuple: (phase_str, activity_str, source_str) or (None, None, None) if missing/stale/malformed
@@ -51,7 +54,8 @@ def _read_orchestrator_status():
             return None, None, None
 
         # Check if fresh (<24h) and not in the future
-        now = datetime.now(timezone.utc)
+        if now is None:
+            now = datetime.now(timezone.utc)
         age = now - updated_at
         # Treat ANY future-dated timestamp as NOT fresh (fail-closed)
         if age > timedelta(hours=24) or age < timedelta(0):
@@ -305,7 +309,7 @@ def _calculate_burn_rate_fields(total_tokens: int) -> dict:
         }
 
 
-def get_wave_telemetry():
+def get_wave_telemetry(now=None):
     """Get consolidated wave telemetry snapshot.
 
     Prefers state/orchestrator-status.json (if fresh <24h) over STATE.md regex parsing.
@@ -327,7 +331,7 @@ def get_wave_telemetry():
     """
     try:
         # Try orchestrator-status.json first (fresh <24h)
-        orch_phase, orch_activity, source = _read_orchestrator_status()
+        orch_phase, orch_activity, source = _read_orchestrator_status(now=now)
 
         if orch_phase:
             # Fresh orchestrator-status.json found; use it

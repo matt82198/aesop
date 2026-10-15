@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Needs-skip-cascade guard for CI workflows.
-INDEX: Needs-skip-cascade guard: for every required branch-protection check (tools/merge_queue.EXPECTED_REQUIRED_CHECKS), walks its `needs:` ancestry in .github/workflows/ci.yml and fails if any job in that lineage has `needs:` but no `if:` containing always()/cancelled()/failure() -- GitHub Actions implicitly prepends `success() &&` to a job's own scheduling `if:` whenever it is omitted or doesn't name a status function, so a needs-parent that concludes anything but success (a real failure, a cancellation from runner/concurrency starvation, a timeout) makes the job report `skipped` instead of running. A skipped required check can never satisfy branch protection (deadlock, PR #170 2026-07-17); a skipped NON-required job upstream of a required aggregator (e.g. windows-shard feeding windows) can instead manufacture a false green by making the aggregator treat "never ran" as "correctly skipped". Root-caused 2026-10-05: docs-only-gate cancellations (runner/queue starvation, zero steps ever executed) cascaded `ci (0..3)` to skipped on ~every armed PR for ~8h. Exit 0 clean / 1 findings / 2 cannot evaluate (fail-closed: PyYAML missing, workflow unreadable/unparseable, or no jobs).
+INDEX: Needs-skip-cascade guard: for every required branch-protection check (tools/required-checks.json; a required name with no job in ci.yml is itself a finding, fail closed), walks its `needs:` ancestry in .github/workflows/ci.yml and fails if any job in that lineage has `needs:` but no `if:` containing always()/cancelled()/failure() -- GitHub Actions implicitly prepends `success() &&` to a job's own scheduling `if:` whenever it is omitted or doesn't name a status function, so a needs-parent that concludes anything but success (a real failure, a cancellation from runner/concurrency starvation, a timeout) makes the job report `skipped` instead of running. A skipped required check can never satisfy branch protection (deadlock, PR #170 2026-07-17); a skipped NON-required job upstream of a required aggregator (e.g. windows-shard feeding windows) can instead manufacture a false green by making the aggregator treat "never ran" as "correctly skipped". Root-caused 2026-10-05: docs-only-gate cancellations (runner/queue starvation, zero steps ever executed) cascaded `ci (0..3)` to skipped on ~every armed PR for ~8h. Exit 0 clean / 1 findings / 2 cannot evaluate (fail-closed: PyYAML missing, workflow unreadable/unparseable, or no jobs).
 
-CLI: ci_needs_skip_guard.py [--root DIR] [--workflow ci.yml] [--json]
+CLI: ci_needs_skip_guard.py [--root DIR] [--workflow ci.yml] [--json] [--required-checks PATH] [--protection-file PATH]
 """
 
 import argparse
@@ -16,10 +16,45 @@ try:
 except ImportError:  # pragma: no cover - soft import for the tools-importable smoke gate
     yaml = None
 
-# Mirrors tools/merge_queue.EXPECTED_REQUIRED_CHECKS without importing merge_queue
-# (merge_queue.py is agent-only / hook-gated; this guard must stay runnable anywhere,
-# including the plain `--check` lint shard that has no business touching that module).
-DEFAULT_REQUIRED_CHECKS = ("ci (0)", "ci (1)", "ci (2)", "ci (3)", "windows")
+# Required-check names come from the declared manifest tools/required-checks.json, never a
+# hard-coded copy that can drift from branch protection. A required name with no job in the
+# workflow is a finding (fail closed): a renamed job would otherwise silently drop out of
+# the cascade check. Mirrors tools/ci_gate_runability.load_required_contexts (kept as a
+# copy because tools/ modules may not import each other without the sanctioned sys.path guard).
+REQUIRED_CHECKS_MANIFEST = Path("tools") / "required-checks.json"
+
+
+class ManifestError(Exception):
+    """The required-checks manifest (or protection payload) cannot be used: fail closed."""
+
+
+def _protection_contexts(path):
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ManifestError("cannot read protection payload %s: %s" % (path, exc))
+    rsc = payload.get("required_status_checks") if isinstance(payload, dict) else None
+    if not isinstance(rsc, dict):
+        raise ManifestError("protection payload %s has no required_status_checks (API error or unprotected branch)" % path)
+    names = rsc.get("contexts")
+    if not isinstance(names, list):
+        names = [c.get("context") for c in rsc.get("checks", []) if isinstance(c, dict)]
+    return [n for n in names if isinstance(n, str)]
+
+
+def load_required_contexts(manifest_path, protection_file=None):
+    """Required-check names from the manifest, unioned with a protection payload when given."""
+    try:
+        data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ManifestError("cannot read required-checks manifest %s: %s" % (manifest_path, exc))
+    contexts = data.get("required_contexts") if isinstance(data, dict) else None
+    if not isinstance(contexts, list) or not contexts or not all(isinstance(c, str) for c in contexts):
+        raise ManifestError('manifest %s has an empty or invalid "required_contexts" list' % manifest_path)
+    names = list(contexts)
+    if protection_file:
+        names.extend(_protection_contexts(protection_file))
+    return list(dict.fromkeys(names))
 
 _STATUS_FUNCS = ("always(", "cancelled(", "failure(")
 _SUFFIX_RE = re.compile(r"\s*\([^)]*\)\s*$")
@@ -79,10 +114,22 @@ def ancestry(job_id, jobs, _seen=None):
     return _seen
 
 
-def check_workflow(workflow_path, required_checks=DEFAULT_REQUIRED_CHECKS):
-    """Return (findings, notes) for one workflow file. Raises GuardError on unparseable input."""
+def check_workflow(workflow_path, required_checks=None, protection_file=None):
+    """Return (findings, notes) for one workflow file. Raises GuardError on unparseable input.
+
+    required_checks defaults to the manifest at <repo>/tools/required-checks.json, where
+    <repo> is the directory holding .github/ above workflow_path; a missing or unusable
+    manifest raises GuardError (exit 2), never a silent empty set.
+    """
+    workflow_path = Path(workflow_path)
     if yaml is None:
         raise GuardError("PyYAML is required to parse workflows; install it (pip install pyyaml)")
+    if required_checks is None:
+        try:
+            required_checks = load_required_contexts(
+                workflow_path.parents[2] / REQUIRED_CHECKS_MANIFEST, protection_file)
+        except ManifestError as exc:
+            raise GuardError(str(exc))
     try:
         with open(workflow_path, "r", encoding="utf-8") as handle:
             doc = yaml.safe_load(handle.read())
@@ -102,10 +149,15 @@ def check_workflow(workflow_path, required_checks=DEFAULT_REQUIRED_CHECKS):
     for check in required_checks:
         job_id = _job_id_for_check(check, jobs)
         if job_id is None:
-            notes.append({
-                "check": check,
-                "detail": "no job in %s matches required check %r (nothing to verify; "
-                          "confirm the workflow still defines this job)" % (workflow_path.name, check),
+            # Fail closed: a required check with no job can never report, so the PR waits
+            # forever, and the cascade check would otherwise silently verify nothing.
+            findings.append({
+                "job": _SUFFIX_RE.sub("", check).strip(),
+                "feeds_required_check": check,
+                "if": None,
+                "detail": "required check %r has no job in %s (renamed or removed job? "
+                          "update tools/required-checks.json or the workflow)"
+                          % (check, workflow_path.name),
             })
             continue
         for lineage_id in ancestry(job_id, jobs):
@@ -140,13 +192,24 @@ def main(argv=None):
     parser.add_argument("--workflow", default="ci.yml",
                         help="workflow file under .github/workflows (default: ci.yml)")
     parser.add_argument("--json", action="store_true", help="emit JSON instead of text")
+    parser.add_argument("--required-checks", default=None,
+                        help="required-checks manifest (default: <root>/tools/required-checks.json)")
+    parser.add_argument("--protection-file", default=None,
+                        help="optional captured branch-protection payload; its contexts are also required")
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
     workflow_path = root / ".github" / "workflows" / args.workflow
+    required = None
+    if args.required_checks:
+        try:
+            required = load_required_contexts(Path(args.required_checks), args.protection_file)
+        except ManifestError as exc:
+            sys.stderr.write("ERROR: %s\n" % exc)
+            return 2
 
     try:
-        findings, notes = check_workflow(workflow_path)
+        findings, notes = check_workflow(workflow_path, required, args.protection_file)
     except GuardError as exc:
         if args.json:
             sys.stdout.write(json.dumps({"error": str(exc), "exit_code": 2}, indent=2) + "\n")

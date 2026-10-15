@@ -171,6 +171,29 @@ run_pr_sweep_throttled() {
   fi
 }
 
+# Session-independent task-event ingest (tools/ingest_task_events.py): tails
+# ~/.claude/state/task-events.jsonl into the state store `task` stream. Fail
+# closed: a non-zero exit is logged as ERROR to FLEET-BACKUP.log and returned
+# to the caller, which reports it (--once exits 1; daemon keeps its cadence).
+# The tool itself writes the heartbeat only on a clean run.
+run_task_ingest() {
+  local aesop_root="$1"
+  local python_exe="$2"
+  local log_file="$3"
+  if [ -z "$python_exe" ] || [ ! -f "$aesop_root/tools/ingest_task_events.py" ]; then
+    return 0
+  fi
+  local ingest_out ingest_rc
+  ingest_out=$("$python_exe" "$aesop_root/tools/ingest_task_events.py" --state-dir "$aesop_root/state" 2>&1)
+  ingest_rc=$?
+  echo "$ingest_out" >> "$log_file"
+  if [ $ingest_rc -ne 0 ]; then
+    echo "[$(date '+%F %T')] ERROR: task-event ingest failed (exit $ingest_rc)" >> "$log_file"
+    return $ingest_rc
+  fi
+  return 0
+}
+
 # Kill switch check (wave-26 safety brake). Returns 0 (bash true) and logs
 # "HALTED: <reason>" if halt sentinel exists; returns 1 otherwise.
 # Never runs backup/push/scan work when halted — caller must skip the cycle.
@@ -302,6 +325,13 @@ main() {
       "$PYTHON_EXE" "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
     fi
     run_pr_sweep_throttled "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log"
+    ingest_rc=0
+    run_task_ingest "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log" || ingest_rc=$?
+    if [ $ingest_rc -ne 0 ]; then
+      release_lock "$LOCK_DIR"
+      printf 'WATCHDOG SMOKE: FAILED — [task-event ingest exit %d]\n' "$ingest_rc" >&2
+      exit 1
+    fi
     release_lock "$LOCK_DIR"
     printf 'WATCHDOG SMOKE: PASSED\n'
     exit 0
@@ -338,6 +368,7 @@ main() {
       "$PYTHON_EXE" "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
     fi
     run_pr_sweep_throttled "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log"
+    run_task_ingest "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log" || true
     sleep 150
   done
 }

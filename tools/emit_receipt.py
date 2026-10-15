@@ -42,9 +42,12 @@ _TEST_COUNT_RES = (
 class PartSpec:
     """One matrix part: `cmd` builds argv from the repo path; `cmd is None` means not runnable here."""
 
-    def __init__(self, cmd, skip_reason=None):
+    def __init__(self, cmd, skip_reason=None, requires_wsl=False):
         self.cmd = cmd
         self.skip_reason = skip_reason
+        # requires_wsl: the Linux-shape leg. WSL probe absent/no-distro -> skipped-not-runnable;
+        # probe error -> the part runs and fails closed (see run_matrix).
+        self.requires_wsl = requires_wsl
 
 
 def _py(*rest):
@@ -63,6 +66,7 @@ DEFAULT_REGISTRY = {
     "encoding-lint": _py("tools/encoding_lint.py", "--check"),
     "import-resolution-check": _py("tools/import_resolution_check.py"),
     "sibling-import-check": _py("tools/sibling_import_check.py", "--check"),
+    "linux-shape": PartSpec(_py("tools/linux_shape_check.py", "--require-wsl"), requires_wsl=True),
     "browser-proofs": PartSpec(None, "not runnable here: hosted browsers + playwright matrix (ci.yml browser-proofs)"),
     "windows-shard": PartSpec(None, "not runnable here: hosted windows runner (ci.yml windows-shard)"),
 }
@@ -70,6 +74,103 @@ for _name, _spec in list(DEFAULT_REGISTRY.items()):
     if not isinstance(_spec, PartSpec):
         DEFAULT_REGISTRY[_name] = PartSpec(_spec)
 DEFAULT_MATRIX = [n for n in DEFAULT_REGISTRY]
+_FAST_PARTS = {"secret-scan", "claudemd-sync-gate", "gen-tool-index",
+               "verify-test-suite-count", "encoding-lint", "import-resolution-check",
+               "sibling-import-check"}
+_PY_SHARDS = {"py-shard-0", "py-shard-1", "py-shard-2", "py-shard-3"}
+
+
+def _resolve_profile(environ):
+    """Resolve receipt profile from AESOP_RECEIPT_PROFILE env var (default: scoped)."""
+    profile = environ.get("AESOP_RECEIPT_PROFILE", "scoped").strip().lower()
+    return "scoped" if profile not in ("scoped", "full") else profile
+
+
+def _get_test_files(repo):
+    """Get list of test files from git ls-files. Returns None if cannot determine."""
+    try:
+        output = _git(repo, "ls-files", "tests/test_*.py")
+        if not output:
+            return []
+        return sorted([Path(line).stem for line in output.split("\n") if line])
+    except ReceiptError:
+        return None
+
+
+def _build_shard_map(shard_names):
+    """Build a map of test file stems to owning shard names. Returns None if unable."""
+    test_files = _get_test_files(Path("."))
+    if test_files is None:
+        return None
+
+    shard_map = {}
+    for i, stem in enumerate(test_files):
+        shard_idx = i % 4  # 4 shards; matches distribute_shards round-robin in ci_shard_runner
+        if shard_idx < len(shard_names):
+            shard_map[stem] = shard_names[shard_idx]
+    return shard_map
+
+
+def _find_owning_shards(changed_files, shard_map):
+    """Map changed files to owning shards. Returns set of shard names or empty set if none."""
+    if shard_map is None:
+        return None  # Underivable
+
+    owning = set()
+    for file_path in changed_files:
+        path = Path(file_path)
+        # Only map test and tools Python files to shards
+        if path.suffix == ".py" and path.parent.name in ("tests", "tools"):
+            stem = path.stem
+            if stem in shard_map:
+                owning.add(shard_map[stem])
+    return owning
+
+
+def _build_parts_and_skipped_for_profile(profile, changed_files, owning_shards, registry):
+    """Build parts and skipped lists for the given profile.
+    Returns (parts_list, skipped_list) of dicts with 'name' keys."""
+    parts = []
+    skipped = []
+
+    if profile == "full":
+        # Full profile: include all shards + fast parts
+        for name in sorted(registry.keys()):
+            if name in _FAST_PARTS or name in _PY_SHARDS:
+                parts.append({"name": name, "runnable": registry[name].cmd is not None})
+            elif registry[name].cmd is None:
+                skipped.append({"name": name, "reason": registry[name].skip_reason or "not runnable here"})
+            else:
+                parts.append({"name": name, "runnable": True})
+    else:  # scoped
+        # Scoped profile: fast parts + only owned shards
+        for name in sorted(registry.keys()):
+            if name in _FAST_PARTS:
+                parts.append({"name": name, "runnable": registry[name].cmd is not None})
+            elif name in _PY_SHARDS:
+                if owning_shards is not None and name in owning_shards:
+                    parts.append({"name": name, "runnable": registry[name].cmd is not None})
+                else:
+                    reason = "not in scope: no changed file maps to this shard (profile=scoped)"
+                    skipped.append({"name": name, "reason": reason})
+            elif registry[name].cmd is None:
+                skipped.append({"name": name, "reason": registry[name].skip_reason or "not runnable here"})
+            else:
+                parts.append({"name": name, "runnable": True})
+
+    # Filter to only names from registry
+    parts_out = []
+    for part in parts:
+        if part["name"] in registry and registry[part["name"]].cmd is not None:
+            parts_out.append(part["name"])
+
+    return parts_out, skipped
+
+
+def _build_parts_for_profile(profile, changed_files, owning_shards, registry):
+    """Build list of runnable part names for the profile. Returns list of part names."""
+    parts, _ = _build_parts_and_skipped_for_profile(profile, changed_files, owning_shards, registry)
+    return parts
 
 
 def _git(repo, *args):
@@ -88,7 +189,7 @@ def parse_test_count(text):
     return None
 
 
-def run_part(repo, name, spec, throwaway_wt=None):
+def run_part(repo, name, spec, throwaway_wt=None, log_path=None):
     argv = spec.cmd(Path(throwaway_wt or repo))
     t0 = time.monotonic()
     env = dict(os.environ)
@@ -103,20 +204,47 @@ def run_part(repo, name, spec, throwaway_wt=None):
         res = subprocess.run(argv, cwd=str(throwaway_wt or repo), env=env, capture_output=True,
                              encoding="utf-8", errors="replace")
     out = (res.stdout or "") + "\n" + (res.stderr or "")
+    if res.returncode != 0 and log_path is not None:
+        # A failing part must be explainable: keep its output tail on disk (never in the envelope).
+        _write_part_log(Path(log_path), res)
     return {"name": name, "exit_code": int(res.returncode), "test_count": parse_test_count(out),
             "duration_s": round(time.monotonic() - t0, 3)}
 
 
+PART_LOG_TAIL_LINES = 200
+
+
+def part_log_path(repo, head_sha, name):
+    """Where a FAILED part's output tail is kept: state/receipts/parts/<sha>/<part>.log (gitignored state/)."""
+    return Path(repo) / "state" / "receipts" / "parts" / head_sha / (name + ".log")
+
+
+def _write_part_log(log_path, res):
+    """Keep the last PART_LOG_TAIL_LINES lines of a failed part's stdout and stderr."""
+    def tail(text):
+        return "\n".join((text or "").splitlines()[-PART_LOG_TAIL_LINES:])
+    body = "--- stdout (last %d lines) ---\n%s\n--- stderr (last %d lines) ---\n%s\n" % (
+        PART_LOG_TAIL_LINES, tail(res.stdout), PART_LOG_TAIL_LINES, tail(res.stderr))
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(body, encoding="utf-8")
+
+
+PART_LOG_DIR_REL = "state/receipts/parts"  # the emitter's own writes; never a matrix mutation
+
+
 def _capture_caller_state(repo):
     """Capture the caller repo's git state for tripwire verification.
-    Returns None if repo is not a git repository (e.g., test temp directory)."""
+    Returns None if repo is not a git repository (e.g., test temp directory).
+    The emitter's own part-log directory is excluded: writing it is the emitter's
+    job, and state/ is not guaranteed git-ignored in adopter repos."""
     repo = Path(repo)
     try:
         return {
             "head": _git(repo, "rev-parse", "HEAD"),
             "tree": _git(repo, "write-tree"),
-            "porcelain": subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
-                                        capture_output=True, encoding="utf-8", errors="replace").stdout,
+            "porcelain": subprocess.run(
+                ["git", "-C", str(repo), "status", "--porcelain", "--", ".", ":(exclude)" + PART_LOG_DIR_REL],
+                capture_output=True, encoding="utf-8", errors="replace").stdout,
         }
     except ReceiptError:
         return None  # Not a git repo; skip tripwire verification
@@ -151,18 +279,36 @@ def _remove_throwaway_worktree(repo, wt):
         pass  # Best effort cleanup
 
 
-def run_matrix(repo, names, registry=None, jobs=1):
+def _default_wsl_status():
+    import linux_shape_check  # tools/ is on sys.path (see module header)
+    return linux_shape_check.wsl_status()
+
+
+def run_matrix(repo, names, registry=None, jobs=1, wsl_status_fn=None):
     """Run every runnable part (in parallel up to `jobs`) in a detached throwaway worktree;
-    return (parts, skipped). Caller tree is verified untouched via tripwire."""
+    return (parts, skipped). Caller tree is verified untouched via tripwire.
+
+    A part with requires_wsl is skipped (not failed) when the WSL probe reports `absent` or
+    `no-distro`. On `error` it still runs: its command (linux_shape_check --require-wsl) fails
+    closed, so a broken probe can never turn into a silent skip."""
     registry = DEFAULT_REGISTRY if registry is None else registry
     unknown = [n for n in names if n not in registry]
     if unknown:
         raise ReceiptError("unknown matrix part(s): %s (known: %s)" % (", ".join(unknown), ", ".join(sorted(registry))))
     skipped, runnable = [], []
+    wsl_status = None
     for n in names:
         spec = registry[n]
         if spec.cmd is None:
             skipped.append({"name": n, "reason": spec.skip_reason or "not runnable here"})
+        elif getattr(spec, "requires_wsl", False):
+            if wsl_status is None:
+                wsl_status = (wsl_status_fn or _default_wsl_status)()
+            if wsl_status in ("absent", "no-distro"):
+                skipped.append({"name": n, "reason": "not runnable here: WSL distro unavailable (%s); "
+                                                     "hosted Linux CI runs this leg" % wsl_status})
+            else:
+                runnable.append(n)
         else:
             runnable.append(n)
 
@@ -188,7 +334,10 @@ def run_matrix(repo, names, registry=None, jobs=1):
         # Run all parts in the throwaway worktree (or caller repo if not a git repo)
         parts = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, int(jobs))) as pool:
-            futs = {pool.submit(run_part, repo, n, registry[n], wt): n for n in runnable}
+            log_dir_sha = state_before["head"] if state_before is not None else None
+            futs = {pool.submit(run_part, repo, n, registry[n], wt,
+                                part_log_path(repo, log_dir_sha, n) if log_dir_sha else None): n
+                    for n in runnable}
             for fut in concurrent.futures.as_completed(futs):
                 parts.append(fut.result())
         parts.sort(key=lambda p: names.index(p["name"]))
@@ -216,12 +365,13 @@ def repo_slug(repo):
     return m.group(1) if m else None
 
 
-def build_receipt(repo, parts, skipped, slug=None, main_ref="origin/main"):
+def build_receipt(repo, parts, skipped, slug=None, main_ref="origin/main", profile="scoped"):
     repo = Path(repo)
     head = _git(repo, "rev-parse", "HEAD")
     return {
         "schema": 1,
         "schema_version": 1,
+        "profile": profile,
         "repo": slug or repo_slug(repo) or "unknown",
         "head_sha": head,
         "base_sha": _git(repo, "merge-base", head, main_ref),
@@ -344,15 +494,54 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
             raise ReceiptError("scheme ed25519 needs --key, $%s, or ~/.aesop/receipt_key.pem" % rc.KEY_ENV)
         if scheme == "hmac-sha256" and not secret:
             raise ReceiptError("scheme hmac-sha256 needs $%s" % rc.HMAC_ENV)
-        names = [n.strip() for n in args.matrix.split(",") if n.strip()] if args.matrix else list(DEFAULT_MATRIX)
+
+        # Determine profile and matrix to run
+        profile = _resolve_profile(environ)
+        registry = DEFAULT_REGISTRY if registry is None else registry
+
+        if args.matrix:
+            # Explicit --matrix overrides profile scoping
+            names = [n.strip() for n in args.matrix.split(",") if n.strip()]
+        else:
+            # Determine matrix based on profile
+            if profile == "scoped":
+                # Get changed files from git diff
+                try:
+                    base_sha = _git(repo, "merge-base", "HEAD", args.main_ref)
+                    changed_output = _git(repo, "diff", "--name-only", base_sha + "..HEAD")
+                    changed_files = [f.strip() for f in changed_output.split("\n") if f.strip()]
+                except ReceiptError:
+                    changed_files = []  # Fallback: no changes detected
+
+                # Build shard map and find owning shards
+                shard_map = _build_shard_map(sorted(_PY_SHARDS))
+                if shard_map is None:
+                    # Underivable mapping: fall back to full matrix
+                    names = list(DEFAULT_MATRIX)
+                else:
+                    owning_shards = _find_owning_shards(changed_files, shard_map)
+                    if owning_shards is None:
+                        # Underivable: fall back to full
+                        names = list(DEFAULT_MATRIX)
+                    else:
+                        # Build scoped matrix
+                        names, skipped_infos = _build_parts_and_skipped_for_profile(
+                            profile, changed_files, owning_shards, registry
+                        )
+            else:  # full
+                names = list(DEFAULT_MATRIX)
+
         parts, skipped = run_matrix(repo, names, registry=registry, jobs=args.jobs)
-        receipt = build_receipt(repo, parts, skipped, slug=args.slug, main_ref=args.main_ref)
+        receipt = build_receipt(repo, parts, skipped, slug=args.slug, main_ref=args.main_ref, profile=profile)
         sig = rc.sign(rc.canonical_json(receipt), scheme, private_key_path=key_path, hmac_secret=secret)
         envelope = {"receipt": receipt, "sig": sig}
         if args.out:
             Path(args.out).write_text(json.dumps(envelope, sort_keys=True, indent=1), encoding="utf-8")
         for p in parts:
             print("part %-28s exit=%d tests=%s %.1fs" % (p["name"], p["exit_code"], p["test_count"], p["duration_s"]))
+            log = part_log_path(repo, receipt["head_sha"], p["name"])
+            if p["exit_code"] != 0 and log.is_file():
+                print("log  %-28s %s" % (p["name"], log))
         for s in skipped:
             print("skip %-28s %s" % (s["name"], s["reason"]))
         print("conclusion=%s head=%s tree=%s scheme=%s" % (conclusion_for(parts), receipt["head_sha"][:12],

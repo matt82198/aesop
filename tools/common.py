@@ -34,7 +34,9 @@ Constants:
     Multi-instance coordination requires all instances to point to the same file.
 """
 
+import json
 import os
+import subprocess
 import time
 from pathlib import Path
 
@@ -44,15 +46,41 @@ from pathlib import Path
 STATE_DB_FILENAME = "tracker_events.db"
 
 
+def _config_state_root():
+    """Return the state_root from aesop.config.json, or None.
+
+    The config file lives in AESOP_ROOT (env) or the cwd, the same place the
+    ui/config.py loader reads it. A relative state_root resolves against that
+    config file's directory, not the process cwd (ui/config.py parity).
+    """
+    base = Path(os.environ["AESOP_ROOT"]) if os.environ.get("AESOP_ROOT") else Path.cwd()
+    try:
+        with open(base / "aesop.config.json", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    value = data.get("state_root") if isinstance(data, dict) else None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else base / path
+
+
 def get_state_dir():
-    """Resolve state directory from env var or current working directory.
+    """Resolve state directory: env > aesop.config.json state_root > cwd default.
+
+    Precedence matches ui/config.py (env AESOP_STATE_ROOT > config state_root), so
+    the dashboard and the tools read the same directory when a config is present.
 
     Returns:
-        Path: Directory path for state files. Either from AESOP_STATE_ROOT env var
-              or defaults to ./state relative to cwd.
+        Path: Directory path for state files. Either from AESOP_STATE_ROOT env var,
+              the config state_root, or defaults to ./state relative to cwd.
     """
     if os.environ.get("AESOP_STATE_ROOT"):
         return Path(os.environ["AESOP_STATE_ROOT"])
+    configured = _config_state_root()
+    if configured is not None:
+        return configured
     # Default to ./state (relative to cwd)
     return Path.cwd() / "state"
 
@@ -410,3 +438,51 @@ def load_aesop_config(repo_root):
     except (OSError, ValueError) as exc:
         return None, [_finding("CONFIG_INVALID_JSON", "aesop.config.json unreadable: %s" % exc)]
     return config, validate_ci_config(config, repo_root)
+
+
+# ============================================================================
+# Git hooks dir — the single resolver for "where does git run hooks from"
+# ============================================================================
+
+def _git_answer(cwd, args):
+    """Run one read-only git query in cwd. Returns (stdout, None) or (None, error_text)."""
+    try:
+        result = subprocess.run(
+            ["git"] + list(args),
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, "git %s could not run: %s" % (" ".join(args), exc)
+    if result.returncode != 0:
+        return None, result.stderr.strip() or "git %s exited %d" % (" ".join(args), result.returncode)
+    return result.stdout.strip(), None
+
+
+def resolve_hooks_dir(cwd):
+    """Resolve the directory git runs pre-push hooks from for the repo at cwd.
+
+    Asks git, so linked worktrees (where .git is a FILE and hooks live in the
+    common dir) and core.hooksPath are both honoured. Falls back to
+    `git rev-parse --git-common-dir` + "hooks" only when `--git-path` is unavailable.
+
+    Returns:
+        (Path, None) with the resolved (Path.resolve) hooks dir, or
+        (None, error_text) carrying git's own error when git cannot answer.
+        Never guesses a path on failure.
+    """
+    cwd = Path(cwd)
+    out, err = _git_answer(cwd, ["rev-parse", "--git-path", "hooks"])
+    if out is None:
+        common, _common_err = _git_answer(cwd, ["rev-parse", "--git-common-dir"])
+        if common is None:
+            return None, err
+        out = str(Path(common) / "hooks")
+    hooks = Path(out)
+    if not hooks.is_absolute():
+        hooks = cwd / hooks
+    return hooks.resolve(), None
