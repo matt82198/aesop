@@ -1209,9 +1209,50 @@ class WindowsAggregatorBehaviourTest(unittest.TestCase):
                 return step["run"]
         self.fail("aggregator step not found in ci.yml")
 
+    @staticmethod
+    def _working_bash():
+        """Return a bash that actually executes a command, or None.
+
+        On Windows, shutil.which("bash") can resolve to the WSL launcher in System32,
+        which fails with "Windows Subsystem for Linux has no installed distributions".
+        Probe each candidate and keep the first one that really runs.
+        """
+        candidates = [shutil.which("bash"),
+                      r"C:\Program Files\Git\bin\bash.exe",
+                      r"C:\Program Files\Git\usr\bin\bash.exe"]
+        for candidate in candidates:
+            if not candidate or not os.path.exists(candidate):
+                continue
+            try:
+                probe = subprocess.run(
+                    [candidate, "-c", "echo aesop-bash-probe"],
+                    capture_output=True, encoding="utf-8", errors="replace", timeout=30,
+                )
+            except OSError:
+                continue
+            if probe.returncode == 0 and "aesop-bash-probe" in probe.stdout:
+                return candidate
+        return None
+
+    def test_wsl_launcher_without_distro_is_not_chosen(self):
+        # Windows shard regression: bash on PATH was the WSL launcher with no distro.
+        # The probe must reject it (non-zero exit, no probe echo) and never pick it.
+        from unittest import mock
+        wsl = r"C:\Windows\System32\bash.exe"
+        wsl_error = subprocess.CompletedProcess(
+            [wsl], 1,
+            stdout="",
+            stderr="W i n d o w s  S u b s y s t e m  f o r  L i n u x  h a s  n o  i n s t a l l e d  d i s t r i b u t i o n s .",
+        )
+        with mock.patch("shutil.which", return_value=wsl), \
+                mock.patch("os.path.exists", return_value=True), \
+                mock.patch("subprocess.run", return_value=wsl_error):
+            self.assertIsNone(self._working_bash())
+
     def _run(self, event, windows_touched, shard_result, docs_result, is_docs_only):
-        if not shutil.which("bash"):
-            self.skipTest("bash not available")
+        bash = self._working_bash()
+        if bash is None:
+            self.skipTest("no working bash interpreter on this host")
         values = {
             "github.event_name": event,
             "needs.windows-sensitive-paths.outputs.windows_touched": windows_touched,
@@ -1227,7 +1268,7 @@ class WindowsAggregatorBehaviourTest(unittest.TestCase):
 
         script = self.EXPR_RE.sub(render, self._aggregator_script())
         proc = subprocess.run(
-            ["bash", "-c", script], cwd=str(self.ROOT),
+            [bash, "-c", script], cwd=str(self.ROOT),
             capture_output=True, encoding="utf-8", errors="replace", timeout=60,
         )
         return proc.returncode, proc.stdout + proc.stderr
