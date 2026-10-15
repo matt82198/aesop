@@ -132,6 +132,8 @@ Verifies interpreters in hooks/daemons are present and executable. Detects missi
 Usage: `python tools/hook_preflight.py` — exit 0=all OK, 1=broken interpreter, 2=no checks performed.
 Early guard in pre-push-policy.sh blocks push if Python missing (required for secret_scan.py).
 
+- **CODEOWNERS** (`.github/CODEOWNERS`): owner map for the enforcement surface (hooks/, gate tools, workflows, baselines) -- `tests/test_codeowners.py` fails when a gate tool has no owner line.
+
 ## Dropped (reason)
 - `docs/HOOK-INSTALL.md` comprehensive guide inlined above (GitHub config, troubleshooting, customization, rotation); refer to that file if org needs full runbook for distribution teams.
 - Map of all domains: /CLAUDE.md
