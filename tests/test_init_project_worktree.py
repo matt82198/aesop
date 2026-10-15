@@ -83,6 +83,8 @@ class TestInitProjectWorktree(unittest.TestCase):
         self.assertIsNotNone(resolved_git_dir, 'Should resolve git dir for worktree')
         self.assertTrue(resolved_git_dir.exists(), f'Resolved git dir should exist: {resolved_git_dir}')
         self.assertTrue((resolved_git_dir / 'hooks').exists(), 'Hooks dir should exist in resolved git dir')
+        # Common dir must equal the primary repo's .git, compared resolved on both sides
+        self.assertEqual(resolved_git_dir.resolve(), (self.repo_dir / '.git').resolve(), 'Common git dir should be the primary .git')
 
     def test_resolve_real_git_dir_regular_repo(self):
         """Test resolve_real_git_dir function with regular repo"""
@@ -90,7 +92,8 @@ class TestInitProjectWorktree(unittest.TestCase):
 
         self.assertIsNotNone(resolved_git_dir, 'Should resolve git dir for regular repo')
         self.assertTrue(resolved_git_dir.exists(), f'Resolved git dir should exist: {resolved_git_dir}')
-        self.assertEqual(resolved_git_dir, self.repo_dir / '.git', 'Should resolve to .git for regular repo')
+        # Compare resolved on both sides: runner TEMP may be an 8.3 alias (RUNNER~1) or a subst drive
+        self.assertEqual(resolved_git_dir.resolve(), (self.repo_dir / '.git').resolve(), 'Should resolve to .git for regular repo')
 
     def test_resolve_real_git_dir_nonexistent(self):
         """Test resolve_real_git_dir with non-git directory"""

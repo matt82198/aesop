@@ -72,10 +72,9 @@ class WaveTelemetryPhaseCase(unittest.TestCase):
         written = datetime.fromisoformat(record["updated_at"].replace("Z", "+00:00"))
         reference_now = written + timedelta(seconds=60)
 
-        # Bind config and wave_telemetry as one fresh pair. A sibling test in the same
-        # process may have deleted and reimported sys.modules["config"] after
-        # wave_telemetry bound the old object; reload() on the new module then never
-        # reaches the reader's stale STATE_DIR, and the phase reads as "unknown".
+        # Sibling tests (tests/test_ui_wave_context.py) leave a stub `config` in sys.modules and
+        # wave_telemetry binds to whichever `config` was live at its import. Import both fresh so
+        # this test reads the root it just configured, then restore whatever was cached.
         names = ("config", "wave_telemetry")
         saved = {name: sys.modules.pop(name, None) for name in names}
         sys.path.insert(0, str(UI_PATH))

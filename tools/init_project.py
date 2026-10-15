@@ -328,7 +328,7 @@ def resolve_real_git_dir(target_dir):
                 common_dir = result.stdout.strip()
                 # Resolve relative paths
                 if Path(common_dir).is_absolute():
-                    return Path(common_dir)
+                    return Path(common_dir).resolve()
                 else:
                     return (target / common_dir).resolve()
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
@@ -344,7 +344,7 @@ def resolve_real_git_dir(target_dir):
                         p = Path(gitdir_path)
                         if not p.is_absolute():
                             p = (target / gitdir_path).resolve()
-                        return p
+                        return p.resolve()
         except (OSError, UnicodeDecodeError):
             pass
 
