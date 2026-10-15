@@ -297,6 +297,13 @@ def run_live_frontier_benchmark(
             print(f"SKIP: HALT sentinel detected — {reason}", file=sys.stderr)
             return ([], 0.0)
 
+    # Offline seam: AESOP_BENCH_OFFLINE=1 returns BEFORE any API client is
+    # constructed, even with --confirm-spend. Unit tests set it so they can
+    # never reach the network. Placed after the HALT check so HALT still wins.
+    if os.environ.get("AESOP_BENCH_OFFLINE") == "1":
+        print("SKIP: AESOP_BENCH_OFFLINE=1 - live run disabled, no client constructed", file=sys.stderr)
+        return ([], 0.0)
+
     # Import Claude client
     try:
         import anthropic
