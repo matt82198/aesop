@@ -515,6 +515,31 @@ class TestBoundedPollWindow(VerifyBase):
         finally:
             vr._gh_api = orig
 
+    def test_cli_default_fetch_polls_past_a_first_miss(self):
+        """main() must route --fetch-for-head through the poll with the default window: a receipt
+        that lands on the second lookup is found and written, not reported MISSING."""
+        real = vr.fetch_receipt_for_head
+        seen = []
+
+        def late(sha, slug, api=None):
+            seen.append(sha)
+            if len(seen) == 1:
+                return None, "MISSING receipt: not yet"
+            return {"marker": "late"}, "found on lookup 2"
+
+        vr.fetch_receipt_for_head = late
+        try:
+            out_found = Path(self.tmp.name) / "late_found"
+            out_env = Path(self.tmp.name) / "late.json"
+            code = vr.main(["--fetch-for-head", self.head, "--repo-slug", "o/r", "--fetch-interval-s", "1",
+                            "--out-found", str(out_found), "--out-envelope", str(out_env)], environ={})
+        finally:
+            vr.fetch_receipt_for_head = real
+        self.assertEqual(code, 0, "the default CLI path must poll past the first miss")
+        self.assertEqual(len(seen), 2, "exactly one retry after the miss, then stop")
+        self.assertEqual(out_found.read_text(encoding="utf-8"), "true")
+        self.assertEqual(json.loads(out_env.read_text(encoding="utf-8")), {"marker": "late"})
+
 
 if __name__ == "__main__":
     unittest.main()
