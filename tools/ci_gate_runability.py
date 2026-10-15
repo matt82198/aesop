@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 CI Gate Runability Validator (Guardrail G2.5)
-INDEX: CI gate-runability validator (Guardrail G2.5): prevents "green can mean never ran" incidents by verifying known suite families (Python unit suites via ci_shard_runner.py, npm test:node, run_shell_tests.sh, playwright, verify_*.py, lint/guard gates) are not silently skipped due to branch protection misconfiguration; checks job/step-level if conditions that exclude PRs, continue-on-error on gates, missing file references; CLI: `[--check] [--json] [--root DIR] [--workflows DIR]`; exit 0=clean/1=findings/2=error; stdlib-only; wired as a blocking step in ci.yml. **Verdicts are location-independent**: the result is a pure function of (workflow content, files present under `--root`) and must never branch on the shape of the root path -- a sniff for OS temp-directory name fragments in the root path silently disabled the missing-file check for any runner with a temp-based workspace, and survived in a second copy after the first was deleted. Fixtures create the files they reference; the gate never recognises its own fixtures (regression-guarded by `TestCIGateRunabilityLocationIndependence`, incl. a static no-path-sniffing scan of the source)
+INDEX: CI gate-runability validator (Guardrail G2.5): prevents "green can mean never ran" incidents by verifying known suite families (Python unit suites via ci_shard_runner.py, npm test:node, run_shell_tests.sh, playwright, verify_*.py, lint/guard gates) are not silently skipped due to branch protection misconfiguration; checks job/step-level if conditions that exclude PRs, continue-on-error on gates, every script a gate step invokes (block-scalar and multi-file steps included) exists on disk, and that every required branch-protection check name (tools/required-checks.json, plus an optional captured protection payload) resolves to a job in the workflows (fail closed: a renamed required job is a finding, and an unreadable manifest exits 2); CLI: `[--check] [--json] [--root DIR] [--workflows DIR] [--required-checks PATH] [--protection-file PATH]`; exit 0=clean/1=findings/2=error; stdlib-only; wired as a blocking step in ci.yml. **Verdicts are location-independent**: the result is a pure function of (workflow content, files present under `--root`) and must never branch on the shape of the root path -- a sniff for OS temp-directory name fragments in the root path silently disabled the missing-file check for any runner with a temp-based workspace, and survived in a second copy after the first was deleted. Fixtures create the files they reference; the gate never recognises its own fixtures (regression-guarded by `TestCIGateRunabilityLocationIndependence`, incl. a static no-path-sniffing scan of the source)
 
 Verifies that known CI test suite families can actually run and are not silently skipped
 due to branch protection misconfiguration. Prevents "green can mean never ran" incidents.
@@ -14,16 +14,21 @@ Known suite families:
 - verify_*.py gates (Browser proof gates)
 - Lint/guard gates (secret_scan, claudemd_sync_gate, etc.)
 
-Checks per step:
-(a) Step not under job-level/step-level `if:` that can never fire on PR events
+Checks:
+(a) Gate step not under job-level/step-level `if:` that can never fire on PR events
 (b) No continue-on-error on a required gate
-(c) Invoked command/file exists on disk
-(d) Required-check names in workflows exist as jobs in the same workflow file
+(c) Every script path a step invokes exists on disk. Runs for EVERY step (not only the
+    known suite families), over the whole `run:` text including `run: |` block scalars,
+    so a multi-file step fails if any one of its files is missing. Dynamic paths
+    (`$VAR` / `${{ }}`) cannot be resolved statically and are skipped.
+(d) Every required-check name in tools/required-checks.json (plus any name in an optional
+    captured protection payload) matches a job id or `name:` in the workflows. A required
+    check with no job can never report, so the PR waits forever (fail closed).
 
 Exit codes:
   0 = clean (all checks pass)
   1 = findings found (but not fatal)
-  2 = error (usage/parsing error)
+  2 = error (usage/parsing error, unreadable or empty required-checks manifest)
 """
 
 import json
@@ -34,114 +39,162 @@ from typing import Optional, Dict, List, Tuple
 import argparse
 
 
+REQUIRED_CHECKS_MANIFEST = Path("tools") / "required-checks.json"
+_BLOCK_SCALAR_RE = re.compile(r"^[|>][-+0-9]*$")
+_CHECK_SUFFIX_RE = re.compile(r"\s*\([^)]*\)\s*$")
+# A script path with at least one directory component (tools/x.py, ./tests/y.sh).
+_PATH_TOKEN_RE = re.compile(
+    r"(?<![\w$./{-])((?:\.{1,2}/|/)?[\w.\-]+(?:/[\w.\-]+)+\.(?:py|sh|mjs))(?![\w./-])")
+# A bare script name invoked directly by an interpreter (python x.py, bash x.sh).
+_BARE_INTERP_RE = re.compile(
+    r"(?<![\w$./{-])(?:python3?|bash|sh|node)\s+(?:-\S+\s+)*([\w.\-]+\.(?:py|sh|mjs))(?![\w./-])")
+
+
+class ManifestError(Exception):
+    """The required-checks manifest (or protection payload) cannot be used: fail closed."""
+
+
+def _protection_contexts(path) -> List[str]:
+    """Contexts from a captured `gh api .../branches/<b>/protection` payload."""
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ManifestError("cannot read protection payload %s: %s" % (path, exc))
+    rsc = payload.get("required_status_checks") if isinstance(payload, dict) else None
+    if not isinstance(rsc, dict):
+        raise ManifestError("protection payload %s has no required_status_checks (API error or unprotected branch)" % path)
+    names = rsc.get("contexts")
+    if not isinstance(names, list):
+        names = [c.get("context") for c in rsc.get("checks", []) if isinstance(c, dict)]
+    return [n for n in names if isinstance(n, str)]
+
+
+def load_required_contexts(manifest_path, protection_file=None) -> List[str]:
+    """Required-check names from the declared manifest, unioned with a protection payload when given."""
+    try:
+        data = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ManifestError("cannot read required-checks manifest %s: %s" % (manifest_path, exc))
+    contexts = data.get("required_contexts") if isinstance(data, dict) else None
+    if not isinstance(contexts, list) or not contexts or not all(isinstance(c, str) for c in contexts):
+        raise ManifestError('manifest %s has an empty or invalid "required_contexts" list' % manifest_path)
+    names = list(contexts)
+    if protection_file:
+        names.extend(_protection_contexts(protection_file))
+    return list(dict.fromkeys(names))
+
+
+def _read_block(lines: List[str], i: int, prop_indent: int) -> Tuple[str, int]:
+    """Consume a block-scalar (or plain multi-line) value whose body is indented past prop_indent."""
+    body = []
+    while i < len(lines):
+        raw = lines[i]
+        if not raw.strip():
+            body.append("")
+            i += 1
+            continue
+        if len(raw) - len(raw.lstrip()) <= prop_indent:
+            break
+        body.append(raw.strip())
+        i += 1
+    return "\n".join(body).rstrip("\n"), i
+
+
+def _apply_step_prop(step: Dict, text: str, prop_indent: int, lines: List[str], i: int) -> int:
+    """Apply one `key: value` step property; return the index of the next unconsumed line."""
+    key, sep, val = text.partition(":")
+    if not sep:
+        return i
+    key = key.strip()
+    val = val.strip()
+    if key == "run":
+        if val == "" or _BLOCK_SCALAR_RE.match(val):
+            step["run"], i = _read_block(lines, i, prop_indent)
+        else:
+            step["run"] = val
+    elif key == "name":
+        step["name"] = val
+    elif key == "if":
+        step["if_condition"] = val or None
+    elif key == "continue-on-error":
+        step["continue_on_error"] = val.lower() == "true"
+    elif key == "uses":
+        step["uses"] = val
+    return i
+
+
 def parse_yaml_line_by_line(content: str) -> Dict:
     """
     Minimal YAML parser for CI workflow structures.
-    Parses enough to extract job names, step names, if conditions, and run commands.
+    Extracts job ids, job names, job/step if conditions, step names, run text (including
+    `run: |` block scalars and `- run:` on the step marker line) and continue-on-error.
+    Only the top-level `jobs:` mapping is read, so `on:` triggers are never mistaken for jobs.
     Not a full YAML parser, just targeted extraction for CI workflows.
     """
-    lines = content.split('\n')
-    jobs = {}
-    current_job = None
-    current_step = None
+    lines = content.split("\n")
+    jobs: Dict = {}
+    in_jobs = False
+    job = None
     in_steps = False
-    step_indent = 0
-
-    for i, line in enumerate(lines, 1):
-        stripped = line.strip()
-
-        # Skip empty lines and comments
-        if not stripped or stripped.startswith('#'):
+    step = None
+    marker_indent = None
+    i = 0
+    while i < len(lines):
+        raw = lines[i]
+        lineno = i + 1
+        i += 1
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
             continue
+        indent = len(raw) - len(raw.lstrip())
 
-        # Get indentation level
-        indent = len(line) - len(line.lstrip())
-
-        # Top-level jobs section
-        if stripped == 'jobs:' and indent == 0:
-            continue
-
-        # Job definition
-        if indent == 2 and ':' in stripped and not stripped.startswith('-'):
-            key = stripped.split(':')[0].strip()
-            # Check if this looks like a job name (not a YAML key with value on same line)
-            if not stripped.endswith(':'):
-                continue
-            current_job = key
+        if indent == 0:
+            in_jobs = stripped == "jobs:"
+            job = None
             in_steps = False
-            jobs[current_job] = {
-                'name': None,
-                'if_condition': None,
-                'steps': [],
-                'line': i,
-            }
-            current_step = None
+            step = None
+            continue
+        if not in_jobs:
             continue
 
-        # Job-level if condition
-        if current_job and indent == 4 and stripped.startswith('if:'):
-            condition = stripped[3:].strip()
-            jobs[current_job]['if_condition'] = condition
+        # Job id (two-space indent, opens a mapping).
+        if indent == 2 and not stripped.startswith("-") and stripped.endswith(":"):
+            job = {"name": None, "if_condition": None, "steps": [], "line": lineno}
+            jobs[stripped[:-1].strip()] = job
+            in_steps = False
+            step = None
+            marker_indent = None
+            continue
+        if job is None:
             continue
 
-        # Job name
-        if current_job and indent == 4 and stripped.startswith('name:'):
-            name = stripped[5:].strip()
-            jobs[current_job]['name'] = name
+        # Job-level keys (four-space indent).
+        if indent == 4 and not stripped.startswith("-"):
+            key, _, val = stripped.partition(":")
+            key = key.strip()
+            val = val.strip()
+            in_steps = key == "steps"
+            step = None
+            if key == "if":
+                job["if_condition"] = val or None
+            elif key == "name":
+                job["name"] = val or None
             continue
 
-        # Steps section
-        if current_job and indent == 4 and stripped == 'steps:':
-            in_steps = True
-            step_indent = indent + 2
+        # Step marker: `- ...` at the steps-list indent.
+        if in_steps and stripped.startswith("-") and (marker_indent is None or indent == marker_indent):
+            marker_indent = indent
+            step = {"name": None, "if_condition": None, "run": None,
+                    "continue_on_error": False, "line": lineno, "uses": None}
+            job["steps"].append(step)
+            rest = stripped[1:].strip()
+            if rest:
+                i = _apply_step_prop(step, rest, indent + 2, lines, i)
             continue
 
-        # Step definition (starts with -)
-        if current_job and in_steps and indent == step_indent and stripped.startswith('- '):
-            current_step = {
-                'name': None,
-                'if_condition': None,
-                'run': None,
-                'continue_on_error': False,
-                'line': i,
-                'uses': None,
-            }
-            jobs[current_job]['steps'].append(current_step)
-            continue
-
-        # Step properties
-        if current_job and current_step and indent >= step_indent + 2:
-            if stripped.startswith('name:'):
-                current_step['name'] = stripped[5:].strip()
-            elif stripped.startswith('run:'):
-                run_value = stripped[4:].strip()
-                # Handle multiline run blocks
-                if run_value:
-                    current_step['run'] = run_value
-                else:
-                    # Multiline case: consume following lines until next key
-                    run_lines = []
-                    j = i
-                    while j < len(lines):
-                        next_line = lines[j]
-                        next_indent = len(next_line) - len(next_line.lstrip())
-                        next_stripped = next_line.strip()
-
-                        if next_stripped and not next_stripped.startswith('#'):
-                            if next_indent <= indent + 4 and ':' in next_stripped:
-                                # Start of next key
-                                break
-                            if next_indent > indent + 4 or (next_stripped and next_indent > indent + 2):
-                                run_lines.append(next_stripped)
-                        j += 1
-                    current_step['run'] = '\n'.join(run_lines)
-            elif stripped.startswith('if:'):
-                current_step['if_condition'] = stripped[3:].strip()
-            elif stripped.startswith('continue-on-error:'):
-                value = stripped[18:].strip().lower()
-                current_step['continue_on_error'] = value == 'true'
-            elif stripped.startswith('uses:'):
-                current_step['uses'] = stripped[5:].strip()
+        # Step properties sit exactly two columns inside the marker.
+        if in_steps and step is not None and marker_indent is not None and indent == marker_indent + 2:
+            i = _apply_step_prop(step, stripped, indent, lines, i)
 
     return jobs
 
@@ -237,6 +290,22 @@ def get_suite_family(run_text: Optional[str]) -> Optional[str]:
     return None
 
 
+def extract_script_paths(run_text: str) -> List[str]:
+    """Every script path a run block invokes, in order, de-duplicated.
+
+    Matches directory-qualified paths anywhere in the text and bare script names
+    invoked directly by an interpreter. Dynamic references (`$VAR`, `${{ }}`) do
+    not match and are skipped (they cannot be resolved statically).
+    """
+    found = []
+    for match in _PATH_TOKEN_RE.finditer(run_text):
+        found.append((match.start(1), match.group(1)))
+    for match in _BARE_INTERP_RE.finditer(run_text):
+        found.append((match.start(1), match.group(1)))
+    found.sort(key=lambda item: item[0])
+    return list(dict.fromkeys(token for _, token in found))
+
+
 def find_file_on_disk(repo_root: str, pattern: str) -> bool:
     """Check if a file matching the pattern exists."""
     if pattern.startswith('./'):
@@ -246,36 +315,15 @@ def find_file_on_disk(repo_root: str, pattern: str) -> bool:
 
     abs_path = Path(repo_root) / pattern
 
-    # Direct check
-    if abs_path.exists():
-        return True
-
-    # This previously returned True whenever repo_root contained both 'AppData' and
-    # 'Temp', to keep test fixtures from reporting missing files. That is a
-    # Windows-only path shape: the exemption fired on Windows and not on Linux, so
-    # these tests passed locally and failed in CI -- and any real repo living under
-    # such a path silently lost file-existence checking altogether. A gate must not
-    # recognise its own test fixtures; fixtures create the files they reference.
-    return False
+    # Direct check. There is deliberately no fallback for temp-shaped or fixture
+    # roots: a gate must not recognise its own test fixtures; fixtures create the
+    # files they reference (see TestCIGateRunabilityLocationIndependence).
+    return abs_path.exists()
 
 
-def check_workflow(repo_root: str, workflow_path: str) -> Tuple[int, List[str]]:
-    """
-    Check a single workflow file for gate runability issues.
-    Returns (exit_code, list of findings).
-    """
+def check_jobs(repo_root: str, workflow_path: str, jobs: Dict) -> List[str]:
+    """Checks (a), (b) and (c) over one parsed workflow."""
     findings = []
-
-    try:
-        with open(workflow_path, 'r', encoding='utf-8') as f:
-            content = f.read()
-    except Exception as e:
-        return (2, [f"Error reading {workflow_path}: {e}"])
-
-    jobs = parse_yaml_line_by_line(content)
-
-    # Track job names for required-check validation
-    set(jobs.keys())
 
     for job_name, job_info in jobs.items():
         # Check job-level if conditions
@@ -285,12 +333,20 @@ def check_workflow(repo_root: str, workflow_path: str) -> Tuple[int, List[str]]:
                 f"Job '{job_name}' has PR-excluding if condition: {job_info['if_condition']}"
             )
 
-        # Check each step
         for step in job_info['steps']:
             step_name = step['name'] or '(unnamed)'
-            suite_family = get_suite_family(step['run'])
+            run_text = step['run'] or ''
 
-            # Only check known suite families
+            # Check (c): every script the step invokes exists. Runs for every step,
+            # over the whole run text, so a multi-file step cannot hide a missing file.
+            for file_path in extract_script_paths(run_text):
+                if not find_file_on_disk(repo_root, file_path):
+                    findings.append(
+                        f"{workflow_path}:{step['line']}: "
+                        f"Step '{step_name}' references missing file: {file_path}"
+                    )
+
+            suite_family = get_suite_family(step['run'])
             if not suite_family:
                 continue
 
@@ -308,33 +364,49 @@ def check_workflow(repo_root: str, workflow_path: str) -> Tuple[int, List[str]]:
                     f"Step '{step_name}' ({suite_family}) has continue-on-error: true"
                 )
 
-            # Check (c): Invoked command/file exists. Runs unconditionally.
-            # A second copy of the temp-dir exemption lived here: the check ran only
-            # when the repo root did NOT contain both 'AppData' and 'Temp'. Commit
-            # 6afb94ba deleted the copy in find_file_on_disk() but missed this one, so
-            # byte-identical fixtures still produced rc0 under a temp-shaped path and
-            # rc1 outside it. The verdict must be a pure function of (workflow content,
-            # files on disk) and never of where the checkout lives -- otherwise any
-            # runner with a temp-based workspace silently loses this check entirely.
-            # Test fixtures create the files they reference; the gate does not
-            # recognise its own fixtures.
-            if step['run']:
-                commands = extract_run_commands(step['run'])
-                for cmd in commands:
-                    if cmd in ['python', 'npm', 'node', 'bash', 'sh', 'git', 'npx', 'echo', 'test', 'if', 'for', 'while']:
-                        # These are shell builtins, check the actual file path
-                        if 'tools/' in step['run'] or 'tests/' in step['run']:
-                            # Extract file path
-                            match = re.search(r'(?:tools|tests)/[\w_./\-]+\.(?:py|sh|mjs)', step['run'])
-                            if match:
-                                file_path = match.group(0)
-                                if not find_file_on_disk(repo_root, file_path):
-                                    findings.append(
-                                        f"{workflow_path}:{step['line']}: "
-                                        f"Step '{step_name}' references missing file: {file_path}"
-                                    )
+    return findings
 
+
+def check_workflow(repo_root: str, workflow_path: str) -> Tuple[int, List[str]]:
+    """
+    Check a single workflow file for gate-runability issues (checks a, b, c).
+    Returns (exit_code, list of findings).
+    """
+    try:
+        with open(workflow_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+    except Exception as e:
+        return (2, [f"Error reading {workflow_path}: {e}"])
+
+    findings = check_jobs(repo_root, workflow_path, parse_yaml_line_by_line(content))
     return (1 if findings else 0, findings)
+
+
+def _job_identifiers(job_id: str, body: Dict) -> List[str]:
+    names = [job_id]
+    name = body.get('name') if isinstance(body, dict) else None
+    if isinstance(name, str) and name.strip():
+        names.append(name.strip().strip('"\''))
+    return names
+
+
+def check_required_jobs(required_contexts: List[str], jobs_by_workflow: Dict[str, Dict]) -> List[str]:
+    """Check (d): every required-check name must resolve to a job in some workflow (fail closed)."""
+    identifiers = set()
+    for jobs in jobs_by_workflow.values():
+        for job_id, body in jobs.items():
+            identifiers.update(_job_identifiers(job_id, body))
+
+    findings = []
+    for context in required_contexts:
+        base = _CHECK_SUFFIX_RE.sub('', context).strip()
+        if base not in identifiers:
+            findings.append(
+                f"required check '{context}' has no job in .github/workflows: a required "
+                f"check that no job reports can never be satisfied, so the PR waits forever "
+                f"(renamed or removed job? update tools/required-checks.json or the workflow)"
+            )
+    return findings
 
 
 def main():
@@ -349,25 +421,44 @@ def main():
                         help='Path to workflows directory')
     parser.add_argument('--root', type=str, default='.',
                         help='Repository root directory')
+    parser.add_argument('--required-checks', type=str, default=None,
+                        help='Required-checks manifest (default: <root>/tools/required-checks.json)')
+    parser.add_argument('--protection-file', type=str, default=None,
+                        help='Optional captured branch-protection payload; its contexts are also required')
 
     args = parser.parse_args()
 
     repo_root = Path(args.root).resolve()
     workflows_dir = repo_root / args.workflows
+    manifest = Path(args.required_checks) if args.required_checks else repo_root / REQUIRED_CHECKS_MANIFEST
 
     if not workflows_dir.exists():
         print(f"Error: Workflows directory not found: {workflows_dir}", file=sys.stderr)
         return 2
 
+    try:
+        required = load_required_contexts(manifest, args.protection_file)
+    except ManifestError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+
     all_findings = []
     exit_code = 0
+    jobs_by_workflow = {}
 
-    # Process all workflow files
     for workflow_file in sorted(workflows_dir.glob('*.yml')):
-        code, findings = check_workflow(str(repo_root), str(workflow_file))
-        if findings:
-            exit_code = max(exit_code, code)
-            all_findings.extend(findings)
+        try:
+            content = workflow_file.read_text(encoding='utf-8')
+        except Exception as e:
+            print(f"Error: cannot read {workflow_file}: {e}", file=sys.stderr)
+            return 2
+        jobs = parse_yaml_line_by_line(content)
+        jobs_by_workflow[str(workflow_file)] = jobs
+        all_findings.extend(check_jobs(str(repo_root), str(workflow_file), jobs))
+
+    all_findings.extend(check_required_jobs(required, jobs_by_workflow))
+    if all_findings:
+        exit_code = 1
 
     if args.json:
         output = {

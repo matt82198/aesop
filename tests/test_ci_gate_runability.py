@@ -19,12 +19,31 @@ import sys
 from pathlib import Path
 
 
+def _fixture_required(yaml_content: str) -> list:
+    """Default required contexts for a fixture: every job it defines, so check (d) passes."""
+    parts = yaml_content.split('\njobs:', 1)
+    if len(parts) < 2:
+        return ['(no-jobs)']
+    return re.findall(r'^  ([A-Za-z0-9_.-]+):\s*$', parts[1], re.M)
+
+
+def _write_manifest(root: Path, required: list) -> None:
+    """Write tools/required-checks.json under root with the given required_contexts."""
+    manifest = root / 'tools' / 'required-checks.json'
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps({'required_contexts': list(required)}), encoding='utf-8')
+
+
 class TestCIGateRunability(unittest.TestCase):
     """Test suite for CI gate runability validation."""
 
-    def run_tool(self, yaml_content: str, extra_args: list = None) -> tuple:
+    def run_tool(self, yaml_content: str, extra_args: list = None,
+                 required: list = None, stub_files: list = None) -> tuple:
         """
         Run the tool on a temporary workflow file.
+        required: the fixture's required-check manifest (default: every job it defines).
+        stub_files: files to create (default: every tools/*.py the workflow cites);
+        pass a list to leave the rest missing on purpose.
         Returns (exit_code, stdout, stderr, parsed_json_if_requested).
         """
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -34,6 +53,7 @@ class TestCIGateRunability(unittest.TestCase):
 
             workflow_file = workflows_dir / 'test.yml'
             workflow_file.write_text(yaml_content)
+            _write_manifest(tmppath, _fixture_required(yaml_content) if required is None else required)
 
             # Create a stub for every tools/*.py this fixture's workflow references,
             # so the fixture is self-consistent. The tool correctly flags steps that
@@ -41,7 +61,9 @@ class TestCIGateRunability(unittest.TestCase):
             # repo path looked like a Windows temp dir ('AppData' + 'Temp'), so these
             # fixtures passed on Windows and failed on Linux. With that Windows-only
             # exemption removed, a fixture must provide the files it cites.
-            for referenced in set(re.findall(r'tools/[A-Za-z0-9_./-]+\.py', yaml_content)):
+            if stub_files is None:
+                stub_files = set(re.findall(r'tools/[A-Za-z0-9_./-]+\.py', yaml_content))
+            for referenced in stub_files:
                 stub = tmppath / referenced
                 stub.parent.mkdir(parents=True, exist_ok=True)
                 stub.write_text('# test fixture stub\n')
@@ -446,6 +468,7 @@ jobs:
         workflows_dir = root / '.github' / 'workflows'
         workflows_dir.mkdir(parents=True, exist_ok=True)
         (workflows_dir / 'test.yml').write_text(yaml_content, encoding='utf-8')
+        _write_manifest(root, _fixture_required(yaml_content))
         for rel in stub_files:
             stub = root / rel
             stub.parent.mkdir(parents=True, exist_ok=True)
@@ -576,12 +599,130 @@ class TestCIGateRunabilityRealWorkflow(unittest.TestCase):
             text=True,
         )
 
-        # The real workflow should be clean or report only informational findings
-        # (not critical issues)
-        print(f"Real workflow check result:\n{result.stdout}")
-        if result.returncode != 0:
-            print(f"Findings in real workflow:\n{result.stdout}")
-        # Don't fail on real workflow; just report findings for user inspection
+        # The real ci.yml must be clean: every gate step's script exists and every
+        # required check in tools/required-checks.json names a job.
+        self.assertEqual(result.returncode, 0,
+                         f"real ci.yml has runability findings:\n{result.stdout}\n{result.stderr}")
+
+
+class TestCIGateRenamedGates(unittest.TestCase):
+    """Behavioural red-first cases for the 2026-10-14 adv-enforcement findings F-07/F-08/F-09/F-10.
+
+    Each case drives the real tool against a fixture root and asserts its exit code.
+    """
+
+    _CI = """
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Shard tests
+        run: python -m pytest tests/
+  %(aggregator)s:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate
+        run: echo ok
+"""
+
+    def run_tool(self, yaml_content, **kwargs):
+        return TestCIGateRunability.run_tool(self, yaml_content, **kwargs)
+
+    def test_renamed_required_job_is_a_finding(self):
+        """F-07: required check 'windows' with its job renamed to 'windows-x' must fail (red today)."""
+        yaml = self._CI % {'aggregator': 'windows-x'}
+        exit_code, stdout, _, _ = self.run_tool(yaml, required=['ci (0)', 'ci (1)', 'windows'])
+        self.assertEqual(exit_code, 1, stdout)
+        self.assertIn("'windows'", stdout)
+
+    def test_unrenamed_required_jobs_are_clean(self):
+        """Control for F-07: the same fixture with the job name intact passes."""
+        yaml = self._CI % {'aggregator': 'windows'}
+        exit_code, stdout, _, _ = self.run_tool(yaml, required=['ci (0)', 'ci (1)', 'windows'])
+        self.assertEqual(exit_code, 0, stdout)
+
+    def test_renamed_gate_step_in_block_scalar_is_a_finding(self):
+        """F-08/F-09: a `run: |` gate whose script was renamed away must fail (red today)."""
+        yaml = """
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Secret scan
+        run: |
+          python tools/secret_scan_renamed.py .
+"""
+        exit_code, stdout, _, _ = self.run_tool(yaml, stub_files=[])
+        self.assertEqual(exit_code, 1, stdout)
+        self.assertIn('tools/secret_scan_renamed.py', stdout)
+
+    def test_multi_file_step_second_file_missing_is_a_finding(self):
+        """F-08/F-09: the first file exists, the second does not; the step must still fail."""
+        yaml = """
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Two gates
+        run: |
+          python tools/secret_scan.py .
+          python tools/gone_gate_missing.py
+"""
+        exit_code, stdout, _, _ = self.run_tool(yaml, stub_files=['tools/secret_scan.py'])
+        self.assertEqual(exit_code, 1, stdout)
+        self.assertIn('tools/gone_gate_missing.py', stdout)
+
+    def test_non_family_gate_missing_file_is_a_finding(self):
+        """F-08: a gate outside the known suite families is still checked for its script."""
+        yaml = """
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  misc:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Custom check
+        run: python tools/totally_new_check.py --strict
+"""
+        exit_code, stdout, _, _ = self.run_tool(yaml, stub_files=[])
+        self.assertEqual(exit_code, 1, stdout)
+        self.assertIn('tools/totally_new_check.py', stdout)
+
+    def test_missing_manifest_fails_closed(self):
+        """Without a readable required-checks manifest the tool must exit 2, never pass."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workflows_dir = Path(tmpdir) / '.github' / 'workflows'
+            workflows_dir.mkdir(parents=True)
+            (workflows_dir / 'test.yml').write_text(self._CI % {'aggregator': 'windows'}, encoding='utf-8')
+            result = subprocess.run(
+                [sys.executable,
+                 str(Path(__file__).parent.parent / 'tools' / 'ci_gate_runability.py'),
+                 '--root', tmpdir],
+                capture_output=True, text=True, encoding='utf-8')
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
 
 
 class TestDocsOnlyDetectorFailClosed(unittest.TestCase):
