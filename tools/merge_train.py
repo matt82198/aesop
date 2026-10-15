@@ -18,8 +18,10 @@ import datetime
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -367,11 +369,36 @@ def _integration_cwd_authorised(cwd: str, owner: str) -> tuple[bool, str]:
     return True, ""
 
 
-def create_integration_branch(batch_name: str, cwd: str = None, owner: str = None) -> bool:
-    """Create integrate/<batch_name> from origin/main inside `cwd` (guarded).
+def origin_push_authorised(push_origin: bool) -> tuple:
+    """Gate for EVERY origin mutation from merge_train (branch push, PR create, remote delete).
 
-    `cwd` must be an authorised worktree for `owner` (see _integration_cwd_authorised).
-    Every git call is pinned to that cwd, so the process cwd can never be mutated.
+    Both must hold: the explicit `--push-origin` flag AND AESOP_QUEUE_ROOT naming a valid
+    git repository (same contract as merge_queue.build_batch). Anything else returns
+    (False, reason) and the run stays local-only. Fail closed.
+    """
+    if not push_origin:
+        return False, "--push-origin not given"
+    queue_root = os.environ.get("AESOP_QUEUE_ROOT")
+    if queue_root is None:
+        return False, "AESOP_QUEUE_ROOT not set"
+    try:
+        resolved = Path(queue_root).resolve()
+        ok, toplevel = git("rev-parse", "--show-toplevel", cwd=str(resolved))
+    except OSError as exc:
+        return False, f"AESOP_QUEUE_ROOT={queue_root} unusable: {exc}"
+    if not ok or str(resolved) != str(Path(toplevel.strip()).resolve()):
+        return False, f"AESOP_QUEUE_ROOT={queue_root} is not a valid git repository"
+    return True, ""
+
+
+def create_integration_branch(batch_name: str, cwd: str = None, owner: str = None) -> str:
+    """Create integrate/<batch_name> from origin/main in a DEDICATED throwaway worktree.
+
+    `cwd` is the base repository and must be an authorised worktree for `owner` (see
+    _integration_cwd_authorised). The branch is added with `git worktree add -b` into a
+    fresh temp dir, so nothing is ever checked out in `cwd` or the process cwd.
+    Returns the new worktree path, or "" on refusal or failure. A non-empty return means
+    this run created the branch, and the caller owns removing it (cleanup_local_integration).
     """
     if owner is None:
         owner = os.environ.get("AESOP_WORKTREE_OWNER")
@@ -381,21 +408,24 @@ def create_integration_branch(batch_name: str, cwd: str = None, owner: str = Non
         # location) and keep the message ASCII-only: a cp1252 console renders no em dash.
         shown = str(Path(cwd).resolve()) if cwd else "<no cwd>"
         print(f"  [REFUSED] create integrate/{batch_name} in {shown}: {why}")
-        return False
+        return ""
     branch = f"integrate/{batch_name}"
     ok, out = git("fetch", "origin", "main", cwd=cwd)
     if not ok:
         print(f"  [FAIL] fetch origin main: {out[:120]}")
-        return False
-    ok, out = git("checkout", "-B", branch, "origin/main", cwd=cwd)
+        return ""
+    scratch = tempfile.mkdtemp(prefix="aesop-integ-")
+    wt = os.path.join(scratch, "tree")
+    ok, out = git("worktree", "add", "-b", branch, wt, "origin/main", cwd=cwd)
     if not ok:
-        print(f"  [FAIL] checkout {branch}: {out[:120]}")
-        return False
-    print(f"  [ok] created integration branch {branch}")
-    return True
+        print(f"  [FAIL] worktree add {branch}: {out[:120]}")
+        shutil.rmtree(scratch, ignore_errors=True)
+        return ""
+    print(f"  [ok] created integration branch {branch} in worktree {wt}")
+    return wt
 
 
-def merge_pr_into_integration(n: int) -> bool:
+def merge_pr_into_integration(n: int, cwd: str = None) -> bool:
     raw = gh("pr", "view", str(n), "--json", "headRefOid,headRefName,title")
     if isinstance(raw, dict) and "error" in raw:
         print(f"  [FAIL] cannot read PR #{n}: {raw['error'][:120]}")
@@ -408,26 +438,30 @@ def merge_pr_into_integration(n: int) -> bool:
         print(f"  [FAIL] PR #{n} has no headRefOid")
         return False
 
-    ok, _ = git("fetch", "origin", f"{branch}")
+    ok, _ = git("fetch", "origin", f"{branch}", cwd=cwd)
     if not ok:
-        ok, _ = git("fetch", "origin", sha)
+        ok, _ = git("fetch", "origin", sha, cwd=cwd)
         if not ok:
             print(f"  [FAIL] cannot fetch PR #{n} ref")
             return False
 
     ok, out = git("merge", sha, "--no-edit",
-                  "-m", f"integrate #{n}: {title[:60]}")
+                  "-m", f"integrate #{n}: {title[:60]}", cwd=cwd)
     if not ok:
         print(f"  [WARN] PR #{n} conflicts -- skipping: {out[:120]}")
-        git("merge", "--abort")
+        git("merge", "--abort", cwd=cwd)
         return False
 
     print(f"  [ok] merged #{n} ({title[:40]}) into integration branch")
     return True
 
 
-def push_integration_branch(branch: str) -> bool:
-    ok, out = git("push", "-u", "origin", branch, "--force-with-lease")
+def push_integration_branch(branch: str, cwd: str = None, allow_origin: bool = False) -> bool:
+    """Push the integration branch to origin. Refused unless `allow_origin` (see origin_push_authorised)."""
+    if not allow_origin:
+        print(f"  [DRY] would push {branch} (origin not authorised; nothing sent)")
+        return False
+    ok, out = git("push", "-u", "origin", branch, "--force-with-lease", cwd=cwd)
     if not ok:
         print(f"  [FAIL] push {branch}: {out[:120]}")
         return False
@@ -435,7 +469,10 @@ def push_integration_branch(branch: str) -> bool:
     return True
 
 
-def create_integration_pr(branch: str, included_prs: list[int]) -> str:
+def create_integration_pr(branch: str, included_prs: list[int], allow_origin: bool = False) -> str:
+    if not allow_origin:
+        print(f"  [DRY] would open PR for {branch} (origin not authorised; nothing created)")
+        return ""
     existing = gh("pr", "list", "--head", branch, "--json", "number,url",
                   "--state", "open")
     if isinstance(existing, list) and len(existing) > 0:
@@ -515,19 +552,66 @@ def close_superseded_prs(prs: list[int]):
             print(f"  [ok] closed #{n}")
 
 
-def cleanup_integration_branch(branch: str):
-    git("checkout", "main")
-    git("branch", "-D", branch)
-    git("push", "origin", "--delete", branch)
-    print(f"  [ok] cleaned up {branch}")
+def remote_branch_sha(branch: str, cwd: str = None):
+    """Return the sha origin/<branch> points at, or "" when absent (exact ref match only).
+
+    `cwd` pins which repository's `origin` is read (never the process cwd).
+    """
+    ok, out = git("ls-remote", "--heads", "origin", branch, cwd=cwd)
+    if not ok:
+        return ""
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 2 and parts[1].strip() == f"refs/heads/{branch}":
+            return parts[0].strip()
+    return ""
 
 
-# The integration branch is created only inside an authorised `cwd` (see
-# _integration_cwd_authorised); otherwise the train refuses before touching git.
+def discard_remote_branch(branch: str, expected_sha: str, reason: str,
+                          allow_origin: bool = False, cwd: str = None) -> bool:
+    """Delete origin/<branch> ONLY while it still points at the sha this run pushed.
+
+    Name AND sha must both match, so a branch this run did not create is never removed.
+    Refused unless origin is authorised. `cwd` pins the repository whose origin is used.
+    """
+    if not allow_origin:
+        print(f"  [DRY] would delete origin/{branch} ({reason}); origin not authorised")
+        return False
+    remote_sha = remote_branch_sha(branch, cwd=cwd)
+    if remote_sha != expected_sha:
+        shown = remote_sha[:12] if remote_sha else "absent"
+        print(f"  [skip] origin/{branch} is {shown}, not our {expected_sha[:12]}: not deleting")
+        return False
+    ok, out = git("push", "origin", "--delete", branch, cwd=cwd)
+    if not ok:
+        print(f"  [FAIL] delete origin/{branch}: {out[:120]}")
+        return False
+    print(f"  [ok] deleted origin/{branch} ({reason})")
+    return True
+
+
+def cleanup_local_integration(base: str, wt: str, branch: str) -> None:
+    """Remove the throwaway worktree and the LOCAL branch this run created.
+
+    Only called when `wt` is non-empty (this run created the branch). Never touches
+    origin, and every git call is pinned to `base`, never the process cwd.
+    """
+    git("worktree", "remove", "--force", wt, cwd=base)
+    shutil.rmtree(os.path.dirname(wt), ignore_errors=True)
+    git("worktree", "prune", cwd=base)
+    git("branch", "-D", branch, cwd=base)
+    print(f"  [ok] cleaned up local {branch} and its worktree")
+
+
+# The integration branch lives in a throwaway worktree created from an authorised base
+# (see _integration_cwd_authorised); nothing is checked out in cwd. Origin is touched
+# ONLY when origin_push_authorised() passes (--push-origin AND a valid AESOP_QUEUE_ROOT);
+# otherwise the batch is built locally, prints "DRY: would push", and exits 0. Once pushed,
+# a finally block deletes origin/<branch> only while it still points at the pushed sha.
 def run_integration_train(prs: list[int], batch_name: str = "",
                           poll_interval: int = 45, max_polls: int = 60,
                           dry_run: bool = False, cwd: str = None,
-                          owner: str = None) -> bool:
+                          owner: str = None, push_origin: bool = False) -> bool:
     """B1: Integration-batch merges by default + stacked-PR chains + landed-content close
     guard. B1.1: --integration DEFAULT, batch_name auto-generated. B1.2: stacked-PR chain
     graph, drop chain on conflict. B1.3: ancestor-verify before close. B1.4: enforce_admins
@@ -550,76 +634,105 @@ def run_integration_train(prs: list[int], batch_name: str = "",
     if not check_enforce_admins():
         return False
 
-    if not create_integration_branch(batch_name, cwd=cwd, owner=owner):
+    origin_ok, origin_why = origin_push_authorised(push_origin)
+    if not origin_ok:
+        print(f"[info] origin not authorised ({origin_why}): local-only run, no origin writes")
+
+    wt = create_integration_branch(batch_name, cwd=cwd, owner=owner)
+    if not wt:
         return False
 
-    included = []
-    skipped = []
-    for n in prs:
-        if merge_pr_into_integration(n):
-            included.append(n)
-        else:
-            skipped.append(n)
+    base = cwd
+    pushed_sha = None
+    outcome = "not merged (see [FAIL] lines above)"
+    try:
+        included = []
+        skipped = []
+        for n in prs:
+            if merge_pr_into_integration(n, cwd=wt):
+                included.append(n)
+            else:
+                skipped.append(n)
 
-    if not included:
-        print(f"\n[FAIL] No PRs could be merged into integration branch")
-        cleanup_integration_branch(branch)
-        return False
+        if not included:
+            print(f"\n[FAIL] No PRs could be merged into integration branch")
+            return False
 
-    if skipped:
-        print(f"\n[info] Skipped {len(skipped)} conflicting PRs: "
-              f"{', '.join(f'#{n}' for n in skipped)}")
+        if skipped:
+            print(f"\n[info] Skipped {len(skipped)} conflicting PRs: "
+                  f"{', '.join(f'#{n}' for n in skipped)}")
 
-    # B1.1 --dry-run: trial in scratch worktree, don't push
-    if dry_run:
-        print(f"\n[DRY-RUN] Merge partition:")
-        print(f"  Clean PRs: {', '.join(f'#{n}' for n in included)}")
-        print(f"  Conflicting PRs: {', '.join(f'#{n}' for n in skipped)}")
-        cleanup_integration_branch(branch)
-        return len(skipped) == 0
+        # B1.1 --dry-run: trial in scratch worktree, don't push
+        if dry_run:
+            print(f"\n[DRY-RUN] Merge partition:")
+            print(f"  Clean PRs: {', '.join(f'#{n}' for n in included)}")
+            print(f"  Conflicting PRs: {', '.join(f'#{n}' for n in skipped)}")
+            return len(skipped) == 0
 
-    if not push_integration_branch(branch):
-        cleanup_integration_branch(branch)
-        return False
+        if not origin_ok:
+            print(f"DRY: would push {branch}")
+            print(f"  (local-only: {origin_why}; no push, PR, or remote delete)")
+            print(f"  Clean PRs: {', '.join(f'#{n}' for n in included)}")
+            return True
 
-    pr_url = create_integration_pr(branch, included)
-    if not pr_url:
-        cleanup_integration_branch(branch)
-        return False
+        ok, head = git("rev-parse", "HEAD", cwd=wt)
+        if not ok:
+            print(f"  [FAIL] cannot read integration HEAD: {head[:120]}")
+            return False
+        # Recorded BEFORE the push so a failed or interrupted push is still reconciled.
+        pushed_sha = head.strip()
+        if not push_integration_branch(branch, cwd=wt, allow_origin=True):
+            return False
 
-    pr_number = None
-    for part in pr_url.rstrip("/").split("/"):
-        if part.isdigit():
-            pr_number = int(part)
-    if pr_number is None:
-        print(f"  [FAIL] cannot parse PR number from {pr_url}")
-        cleanup_integration_branch(branch)
-        return False
+        pr_url = create_integration_pr(branch, included, allow_origin=True)
+        if not pr_url:
+            outcome = "integration PR could not be created"
+            return False
 
-    print(f"\n[waiting] Waiting for CI on integration PR #{pr_number}...")
-    if not wait_for_integration_ci(pr_number, poll_interval=poll_interval,
-                                   max_polls=max_polls):
-        print(f"\n[FAIL] Integration PR CI did not pass")
-        return False
+        pr_number = None
+        for part in pr_url.rstrip("/").split("/"):
+            if part.isdigit():
+                pr_number = int(part)
+        if pr_number is None:
+            print(f"  [FAIL] cannot parse PR number from {pr_url}")
+            outcome = "integration PR number unparseable"
+            return False
 
-    # Re-check halt before merging integration PR (kill-switch enforcement)
-    _check_halt(" [before integration merge]")
-    if not merge_integration_pr(pr_number):
-        return False
+        print(f"\n[waiting] Waiting for CI on integration PR #{pr_number}...")
+        if not wait_for_integration_ci(pr_number, poll_interval=poll_interval,
+                                       max_polls=max_polls):
+            print(f"\n[FAIL] Integration PR CI did not pass")
+            outcome = f"integration PR #{pr_number} CI did not pass"
+            return False
 
-    # B1.6: Regeneration hook
-    if not run_regenerators(branch):
-        return False
+        # Re-check halt before merging integration PR (kill-switch enforcement)
+        _check_halt(" [before integration merge]")
+        if not merge_integration_pr(pr_number):
+            outcome = f"integration PR #{pr_number} not MERGED"
+            return False
 
-    close_superseded_prs(included)
-    cleanup_integration_branch(branch)
+        # B1.6: Regeneration hook
+        if not run_regenerators(branch):
+            outcome = "regeneration failed after merge"
+            return False
 
-    print(f"\n{'='*60}")
-    print(f"DONE -- {len(included)} PRs merged via integration branch")
-    if skipped:
-        print(f"Skipped (conflicts): {', '.join(f'#{n}' for n in skipped)}")
-    print(f"{'='*60}")
-    return True
+        close_superseded_prs(included)
+        outcome = f"integration PR #{pr_number} merged"
+
+        print(f"\n{'='*60}")
+        print(f"DONE -- {len(included)} PRs merged via integration branch")
+        if skipped:
+            print(f"Skipped (conflicts): {', '.join(f'#{n}' for n in skipped)}")
+        print(f"{'='*60}")
+        return True
+    except BaseException as exc:
+        outcome = f"run aborted by {type(exc).__name__}: {exc}"
+        raise
+    finally:
+        if pushed_sha is not None:
+            discard_remote_branch(branch, pushed_sha, outcome, allow_origin=True, cwd=base)
+        if wt:
+            cleanup_local_integration(base, wt, branch)
 
 
 def run_train(prs: list[int], max_rounds: int = 50, poll_interval: int = 45,
@@ -791,6 +904,10 @@ def main():
     parser.add_argument("--owner", default=None, metavar="ID",
                         help="Integration mode: owner id the worktree marker must name "
                              "(default: AESOP_WORKTREE_OWNER env)")
+    parser.add_argument("--push-origin", action="store_true",
+                        help="Integration mode: allow pushing integrate/* to origin, opening "
+                             "its PR and deleting it. ALSO requires AESOP_QUEUE_ROOT to name "
+                             "a valid git repo. Without both, the run is local-only.")
     args = parser.parse_args()
 
     prs = list(args.prs)
@@ -816,7 +933,8 @@ def main():
         print(f"PRs: {', '.join(f'#{n}' for n in prs)}")
         success = run_integration_train(
             prs, batch_name=batch_name, poll_interval=args.poll,
-            dry_run=args.dry_run, cwd=args.cwd, owner=args.owner)
+            dry_run=args.dry_run, cwd=args.cwd, owner=args.owner,
+            push_origin=args.push_origin)
     sys.exit(0 if success else 1)
 
 
