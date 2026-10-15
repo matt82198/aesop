@@ -143,7 +143,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   # Deliberately NOT exported here: AESOP_ROOT / AESOP_STATE_ROOT /
   # CONDUCTOR_ROOT. Several already-hermetic tests (test-selfheal.sh, the
   # test-run-watchdog*.sh family, test-daemon-halt-sentinel.sh) rely on the
-  # daemon scripts' own default `${CONDUCTOR_ROOT:-$(dirname "$AESOP_ROOT")/conductor3}`
+  # daemon scripts' own CONDUCTOR_ROOT default (sibling of AESOP_ROOT)
   # fallback staying UNSET so it derives from THEIR OWN AESOP_ROOT fixture, and
   # test-daemon-halt-config-path.sh's Test 2 relies on AESOP_STATE_ROOT staying
   # UNSET so halt.py falls through to its aesop.config.json state_root check.
