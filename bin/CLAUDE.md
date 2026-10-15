@@ -107,7 +107,7 @@ undiscoverable and the orchestrator cannot be invoked.
 
 - **Worktree .git handling**: In git worktrees, `.git` is a FILE (not directory) containing `gitdir: <path>`. 
 - **Real git dir resolution**: `resolveRealGitDir()` detects worktree `.git` files and uses `git rev-parse --git-common-dir` to find the actual git directory. Fallback: parse gitdir pointer manually from `.git` file.
-- **Hook installation paths**: `installPrePushHook()` and `installPreCommitWaveguard()` use resolved git dir to install hooks in the common git directory (not worktree), preventing ENOTDIR crashes.
+- **Hook installation paths**: `installPrePushHook()` and `installPreCommitWaveguard()` use resolved git dir to install hooks in the common git directory (not worktree), preventing ENOTDIR crashes. `installPreCommitWaveguard()`'s wrapper also chains `hooks/pre-commit-dispatch-lint.sh` after the waveguard step (fail-closed dispatch gate; skipped only if the hook file is absent).
 - **Security**: symlink checks on `.git` and hooks directories preserved throughout resolution.
 
 ## Invariants

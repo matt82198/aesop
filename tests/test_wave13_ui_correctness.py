@@ -26,7 +26,8 @@ UI_DIR = Path(__file__).parent.parent / "ui"
 SERVE_PATH = UI_DIR / "serve.py"
 
 ENV_KEYS = ("AESOP_ROOT", "AESOP_TRANSCRIPTS_ROOT", "AESOP_STATE_ROOT",
-            "AESOP_UI_COLLECT_INTERVAL", "PORT")
+            "AESOP_UI_COLLECT_INTERVAL", "PORT",
+            "AESOP_CONDUCTOR3_ROOT", "AESOP_WATCHDOG_HEARTBEAT", "AESOP_MONITOR_HEARTBEAT")
 
 
 def load_serve(fixture_root, extra_env=None):
@@ -61,6 +62,25 @@ class W13FixtureCase(unittest.TestCase):
         self.tracker_api = api.tracker
         self.config = ui_config
 
+        # ui/config.py resolves heartbeat paths at IMPORT time, preferring the
+        # real ~/conductor3 when it exists. Re-resolve them under this fixture
+        # so no test in this class can reach the live fleet-state heartbeats.
+        os.environ.pop("AESOP_WATCHDOG_HEARTBEAT", None)
+        os.environ.pop("AESOP_MONITOR_HEARTBEAT", None)
+        os.environ["AESOP_CONDUCTOR3_ROOT"] = str(self.fixture_root / "conductor3")
+        importlib.reload(ui_config)
+
+    def fixture_heartbeat(self, resolved):
+        """Return a heartbeat path only if it lives under this test's fixture.
+
+        Aborts (AssertionError) rather than ever writing outside fixture_root,
+        e.g. into the live ~/conductor3 fleet state."""
+        real = Path(resolved).resolve()
+        root = self.fixture_root.resolve()
+        if root not in real.parents:
+            raise AssertionError(f"heartbeat path escaped the test fixture: {real}")
+        return real
+
     def tearDown(self):
         for k, v in self._saved_env.items():
             if v is None:
@@ -76,7 +96,7 @@ class TestUtf8FileReads(W13FixtureCase):
     def test_collectors_reads_heartbeat_with_utf8_encoding(self):
         """collectors.get_heartbeat_status() must read with utf-8 encoding."""
         import collectors
-        heartbeat_file = self.config.WATCHDOG_HEARTBEAT
+        heartbeat_file = self.fixture_heartbeat(self.config.WATCHDOG_HEARTBEAT)
         heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
         heartbeat_file.write_text("1234567890", encoding="utf-8")
 
@@ -86,7 +106,7 @@ class TestUtf8FileReads(W13FixtureCase):
     def test_collectors_reads_monitor_heartbeat_with_utf8_encoding(self):
         """collectors.get_monitor_heartbeat_status() must read with utf-8 encoding."""
         import collectors
-        heartbeat_file = self.config.MONITOR_HEARTBEAT
+        heartbeat_file = self.fixture_heartbeat(self.config.MONITOR_HEARTBEAT)
         heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
         heartbeat_file.write_text("1234567890", encoding="utf-8")
 

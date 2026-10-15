@@ -647,7 +647,10 @@ class TestN3RecoveryShip(unittest.TestCase):
         self.assertIn("rs3-resume", shipped_slugs)
         self.assertEqual(driver.dispatch_count, 0)
 
-        tracker_after = json.loads(tracker_path.read_text())
+        # WriteAPI re-renders tracker.json in the canonical {"items": [...]} shape
+        # (F-01), so the bare-list fixture is normalised before the status check.
+        tracker_doc = json.loads(tracker_path.read_text())
+        tracker_after = tracker_doc["items"] if isinstance(tracker_doc, dict) else tracker_doc
         self.assertEqual(tracker_after[0]["status"], "in_progress")
 
         report2 = ws.run_wave_scheduler(

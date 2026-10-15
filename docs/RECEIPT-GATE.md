@@ -205,3 +205,5 @@ lookup exception-safe and guarding the module's own absence at the shell level.)
 # Hook test
 # Another test
 # Test 4 after unset hooks path
+
+2026-10-14: verified on the Mattt box - pre-push hook resynced from hooks/pre-push-policy.sh and a signed receipt emitted on push.

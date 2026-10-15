@@ -9,14 +9,16 @@ Rows marked (inferred) were classified from the commit subject because the commi
 - **ci-drift** (3, 3 inferred): CI workflow state out of sync (missing deps, env setup, tools)
 - **conflict** (46, 46 inferred): Merge/rebase conflict, module shadowing, unintended override
 - **doc-invented** (5, 5 inferred): Documentation made unverifiable claims, hallucinated counts or proofs
-- **fake-green** (8, 7 inferred): Tests reported green but never ran or skipped real validation
+- **fake-green** (9, 7 inferred): Tests reported green but never ran or skipped real validation
 - **flake** (7, 7 inferred): Test timing/race condition, deflake required, logical time or retry
 - **gate-activation** (12, 12 inferred): Pre-push secret/verification gate caught an escape or bypass
 - **stall** (8, 8 inferred): Agent/process hung or deadlocked, watchdog detected, restart required
-- **test-pollution** (9, 9 inferred): Test config leaked between shards, state not isolated, mock pollution
+- **test-pollution** (10, 10 inferred): Test config leaked between shards, state not isolated, mock pollution
 
 | Class | What Happened | Resolution | Source |
 | --- | --- | --- | --- |
+| fake-green | fail-closed incident classification via commit trailer | * fix(tools): fail-closed incident classification via commit trailer | PR #960 |
+| test-pollution (inferred) | live heartbeat pollution - tripwire fails on live-file change, wave... | Incident 2026-10-14: a test wrote the placeholder 1234567890 into t... | commit ac3e4b0b |
 | fake-green | fail-closed incident classification via commit trailer | Incident classification no longer guesses from commit bodies. An | commit 4cf489dc |
 | doc-invented (inferred) | doc-invented: lane claims relayed before CI verified them (unverifi... | ENFORCE: relay blocked until CI run id and merged state checked [ex... | commit 8205122c |
 | doc-invented (inferred) | doc-invented: state words not bound to checks (unverifiable) | ENFORCE: state claims must cite a check id; lint fails otherwise [e... | commit 98eb1a3a |
@@ -56,7 +58,7 @@ Rows marked (inferred) were classified from the commit subject because the commi
 | test-pollution (inferred) | fix: make CLAUDE.md linter scan tracked files, and stop test scaffo... | The runner failure was pollution, not a real violation. CI reported: | commit 33fb4a11 |
 | conflict (inferred) | merge: resolve conflict with main (test suite count drift) | origin/main and refactor/transcript-health-modules both touched | commit fbb46c2b |
 | gate-activation (inferred) | docs: GATES-FIRED.md — which guardrails actually fired, with citations | * docs: add GATES-FIRED.md — evidence-backed audit of guardrails | PR #665 |
-| test-pollution (inferred) | ﻿fix: isolate test conductor3 root to prevent heartbeat file pollution | Problem: test_ui_demo_mode.py's TestDefaultModeUnaffected class did... | PR #645 |
+| test-pollution (inferred) | ﻿fix: isolate test [redacted] root to prevent heartbeat file pollution | Problem: test_ui_demo_mode.py's TestDefaultModeUnaffected class did... | PR #645 |
 | doc-invented (inferred) | fix: make escape-repro tests run + classify unresolvable PRs as UNV... | Replaced skipped merge-conflict tests with working fixtures via git... | commit b0303353 |
 | conflict (inferred) | fix: merge main + resolve conflicts |  | commit f4b7fae2 |
 | conflict (inferred) | fix: merge main + resolve conflicts |  | commit ee62d43d |
@@ -130,4 +132,4 @@ Rows marked (inferred) were classified from the commit subject because the commi
 | test-pollution (inferred) | isolate tracker writes to tempdir; guard verify_dash against pollut... | - tools/verify_dash.py now explicitly sets AESOP_STATE_ROOT to temp... | commit 29356d85 |
 | stall (inferred) | stall_check.py — silent-hang detection for the agent watchdog (wave... | Adds automated detection of stalled agents by scanning transcript m... | commit 17010688 |
 
-<!-- Latest incident: 2026-10-14T20:05:30-05:00 -->
+<!-- Latest incident: 2026-10-15T01:14:50Z -->
