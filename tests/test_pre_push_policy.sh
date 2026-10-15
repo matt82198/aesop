@@ -1969,6 +1969,123 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+# ===== REMOTE-REF POLICY: judge the pushed remote ref, not the local branch =====
+# git feeds pre-push stdin as "<local ref> <local sha> <remote ref> <remote sha>".
+# The verdict must follow the remote ref. Each case runs inside an isolated repo
+# whose checked-out (local) branch is set per case.
+policy_fixture_repo() {
+  # policy_fixture_repo <dir> <branch>: fresh repo with one commit, checked out on <branch>.
+  local dir="$1" branch="$2"
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  git -C "$dir" init -q -b main
+  git -C "$dir" config user.email t@example.com
+  git -C "$dir" config user.name t
+  git -C "$dir" config core.autocrlf false
+  printf 'base\n' > "$dir/README.md"
+  git -C "$dir" add -A
+  git -C "$dir" commit -q -m base
+  if [ "$branch" != "main" ]; then
+    git -C "$dir" checkout -q -b "$branch"
+  fi
+}
+
+printf '\n=== Test 33: local main -> refs/heads/checkpoint/x is ALLOWED (remote ref is not protected) ===\n'
+(
+  repo="$TEST_ROOT/policy_main_to_checkpoint"
+  policy_fixture_repo "$repo" main
+  sha=$(git -C "$repo" rev-parse HEAD)
+  cd "$repo" || exit 1
+  printf 'refs/heads/main %s refs/heads/checkpoint/x 0000000000000000000000000000000000000000\n' "$sha" | {
+    check_branch_policy
+  }
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'FAIL: push from local main to refs/heads/checkpoint/x must be allowed, got rc %d\n' "$rc"
+    exit 1
+  fi
+  printf 'PASS: local main -> refs/heads/checkpoint/x allowed\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test 34: local feature/x -> refs/heads/main is BLOCKED ===\n'
+(
+  repo="$TEST_ROOT/policy_feature_to_main"
+  policy_fixture_repo "$repo" feature/x
+  sha=$(git -C "$repo" rev-parse HEAD)
+  cd "$repo" || exit 1
+  printf 'refs/heads/feature/x %s refs/heads/main 0000000000000000000000000000000000000000\n' "$sha" | {
+    check_branch_policy
+  }
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf 'FAIL: push from feature/x to refs/heads/main must be blocked, got rc 0\n'
+    exit 1
+  fi
+  printf 'PASS: local feature/x -> refs/heads/main blocked\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test 35: local main -> refs/heads/main is BLOCKED ===\n'
+(
+  repo="$TEST_ROOT/policy_main_to_main"
+  policy_fixture_repo "$repo" main
+  sha=$(git -C "$repo" rev-parse HEAD)
+  cd "$repo" || exit 1
+  printf 'refs/heads/main %s refs/heads/main 0000000000000000000000000000000000000000\n' "$sha" | {
+    check_branch_policy
+  }
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf 'FAIL: push from local main to refs/heads/main must be blocked, got rc 0\n'
+    exit 1
+  fi
+  printf 'PASS: local main -> refs/heads/main blocked\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test 36: local main -> refs/heads/master blocked; multi-ref with main tuple blocked; feature->feature from main checkout allowed ===\n'
+(
+  repo="$TEST_ROOT/policy_master_multi"
+  policy_fixture_repo "$repo" main
+  sha=$(git -C "$repo" rev-parse HEAD)
+  zeros="0000000000000000000000000000000000000000"
+  cd "$repo" || exit 1
+  printf 'refs/heads/main %s refs/heads/master %s\n' "$sha" "$zeros" | check_branch_policy
+  if [ $? -eq 0 ]; then
+    printf 'FAIL: push to refs/heads/master from local main must be blocked\n'
+    exit 1
+  fi
+  printf 'refs/heads/main %s refs/heads/checkpoint/y %s\nrefs/heads/main %s refs/heads/main %s\n' "$sha" "$zeros" "$sha" "$zeros" | check_branch_policy
+  if [ $? -eq 0 ]; then
+    printf 'FAIL: multi-ref push containing a refs/heads/main tuple must be blocked\n'
+    exit 1
+  fi
+  printf 'refs/heads/main %s refs/heads/feature/z %s\n' "$sha" "$zeros" | check_branch_policy
+  if [ $? -ne 0 ]; then
+    printf 'FAIL: local main -> refs/heads/feature/z must be allowed\n'
+    exit 1
+  fi
+  printf 'PASS: master blocked, multi-ref main tuple blocked, feature/z allowed from main checkout\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Test Summary ===\n'
 printf 'Tests PASSED: %d\n' "$test_passed"
 printf 'Tests FAILED: %d\n' "$test_failed"

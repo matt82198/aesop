@@ -15,12 +15,32 @@ stdlib-only (unittest), ASCII-only, Windows + Linux safe.
 import os
 import json
 import re
+import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+_SHELL_OPERATOR_RE = re.compile(r"[|&;<>`]|\$\(")
+
+
+def _argv(command):
+    """Split a shell-syntax command string into an argv list (no shell).
+
+    The ship phase builds git commands as shell strings (quoted with
+    driver.wave_loop._quote_arg). shlex undoes that quoting for the simple
+    commands used here. Any real shell operator fails loudly instead of
+    being silently reinterpreted.
+    """
+    if _SHELL_OPERATOR_RE.search(command):
+        raise ValueError(
+            "shell operator in command; refusing to run without a shell: "
+            + repr(command)
+        )
+    return shlex.split(command, posix=True)
+
 
 # Add driver/ to path for imports.
 REPO = Path(__file__).resolve().parent.parent
@@ -213,9 +233,8 @@ class FakeDriverForShip(AgentDriver):
             try:
                 if cwd:
                     result = subprocess.run(
-                        command,
+                        _argv(command),
                         cwd=cwd,
-                        shell=True,
                         capture_output=True,
                         text=True,
                         timeout=5,
@@ -227,8 +246,7 @@ class FakeDriverForShip(AgentDriver):
                     )
                 else:
                     result = subprocess.run(
-                        command,
-                        shell=True,
+                        _argv(command),
                         capture_output=True,
                         text=True,
                         timeout=5,
@@ -316,8 +334,8 @@ class TestPerRepoShip(unittest.TestCase):
         if len(result["shipped"]) != 2:
             def _probe(repo):
                 out = {}
-                for label, cmd in [("status", "git status --porcelain"), ("log", "git log --oneline"), ("lsfiles", "git ls-files")]:
-                    r = subprocess.run(cmd, cwd=str(repo), shell=True, capture_output=True, text=True, timeout=60)
+                for label, cmd in [("status", ["git", "status", "--porcelain"]), ("log", ["git", "log", "--oneline"]), ("lsfiles", ["git", "ls-files"])]:
+                    r = subprocess.run(cmd, cwd=str(repo), capture_output=True, text=True, timeout=60)
                     out[label] = r.stdout.strip()
                 fa = Path(repo) / "file-a.py"
                 out["file-a.exists"] = fa.exists()
@@ -336,9 +354,8 @@ class TestPerRepoShip(unittest.TestCase):
         # Check that each repo has a commit with only its files.
         # Repo A should have file-a.py
         result_a = subprocess.run(
-            "git log --pretty=format:%B -n 1",
+            ["git", "log", "--pretty=format:%B", "-n", "1"],
             cwd=str(_FIXTURE_REPO_A),
-            shell=True,
             capture_output=True,
             text=True,
             timeout=60,
@@ -351,9 +368,8 @@ class TestPerRepoShip(unittest.TestCase):
 
         # Repo B should have file-b.py
         result_b = subprocess.run(
-            "git log --pretty=format:%B -n 1",
+            ["git", "log", "--pretty=format:%B", "-n", "1"],
             cwd=str(_FIXTURE_REPO_B),
-            shell=True,
             capture_output=True,
             text=True,
             timeout=60,

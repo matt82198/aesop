@@ -145,6 +145,7 @@ def find_gate_invocations(workflows_dir):
         #  - python tools/ci_gate_runability.py
         #  - run: python tools/verify_test_coverage.py
         #  - bash tools/run_shell_tests.sh
+        #  - python base/tools/verify_receipt.py   (base-pinned checkout, verify-receipt.yml)
 
         # Match "python <path>/tool_name.py", "bash <path>/x.sh", "node <path>/x.mjs", etc.
         for pattern in INVOCATION_PATTERNS:

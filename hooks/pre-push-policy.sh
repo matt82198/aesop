@@ -480,13 +480,20 @@ check_branch_policy() {
     if [ "$saw_tuple" = "1" ] && [ "$saw_nondelete" = "0" ]; then
       return 0
     fi
+
+    # Stdin carried ref tuples and none targets refs/heads/main|master (checked
+    # above): the verdict is decided by the REMOTE refs being pushed. The local
+    # checkout is irrelevant, so `git push origin HEAD:refs/heads/checkpoint/x`
+    # from a local main checkout is allowed. Falling through to the current-branch
+    # check below would wrongly block it.
+    if [ "$saw_tuple" = "1" ]; then
+      return 0
+    fi
   fi
 
-  # If no protected branch in stdin, also check current branch as fallback
-  # (for safety, in case stdin is empty or hook runs without git pre-push).
-  # Note: this fallback is narrowed to apply only when stdin did not contain
-  # a pure tag push or delete-only push, since those are administrative operations
-  # independent of the currently checked-out branch.
+  # Reached only when stdin carried no ref tuples at all (empty stdin, or the
+  # tty path): fall back to the current branch for safety. Any push that supplied
+  # tuples was already judged above by its remote refs.
   local current_branch
   current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 

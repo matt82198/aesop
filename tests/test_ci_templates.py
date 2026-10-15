@@ -25,7 +25,30 @@ except ImportError:  # pragma: no cover - CI installs pyyaml; locally it is requ
 
 from tools import init_project  # noqa: E402
 
+sys.path.insert(0, str(REPO_ROOT / "tools"))
+
+import ci_job_contexts  # noqa: E402
+
 TEMPLATES = REPO_ROOT / "templates" / "ci"
+
+
+def _rendered_check_names(ci_doc):
+    """Every check name GitHub will report for a parsed workflow, via the real renderer.
+
+    Job bodies are passed in the shape tools/ci_job_contexts.py documents: rendered name
+    plus the strategy.matrix (None when absent). Any job whose names cannot be computed
+    fails the test loudly rather than silently dropping a required context.
+    """
+    names = []
+    for job_id, body in ci_doc["jobs"].items():
+        strategy = body.get("strategy") if isinstance(body, dict) else None
+        matrix = strategy.get("matrix") if isinstance(strategy, dict) else None
+        rendered, reason = ci_job_contexts.rendered_names(
+            job_id, {"name": body.get("name"), "matrix": matrix})
+        if rendered is None:
+            raise AssertionError("job %r has no computable check name: %s" % (job_id, reason))
+        names.extend(sorted(rendered))
+    return names
 
 
 def _git_init(td):
@@ -75,12 +98,15 @@ class TestScaffoldModes(unittest.TestCase):
     def _assert_linters_pass(self, td):
         lint = _run_tool("ci_workflow_lint.py", td)
         self.assertEqual(lint.returncode, 0, "ci_workflow_lint: " + lint.stdout + lint.stderr)
-        # The scaffolded repo declares its own required checks: every job in its ci.yml.
-        # The guard fails closed without a manifest (exit 2), so write one.
+        # The scaffolded repo declares its own required checks: the RENDERED check name of
+        # every job in its ci.yml (matrix suffixes, name: overrides), exactly as GitHub reports
+        # them. The guard resolves required contexts against those names, so the raw job ids
+        # are not valid contexts for a matrix job. The guard fails closed without a manifest
+        # (exit 2), so write one.
         ci_doc = yaml.safe_load((Path(td) / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
         manifest = Path(td) / "tools" / "required-checks.json"
         manifest.parent.mkdir(parents=True, exist_ok=True)
-        manifest.write_text(json.dumps({"required_contexts": list(ci_doc["jobs"])}), encoding="utf-8")
+        manifest.write_text(json.dumps({"required_contexts": _rendered_check_names(ci_doc)}), encoding="utf-8")
         guard = _run_tool("ci_needs_skip_guard.py", td)
         self.assertEqual(guard.returncode, 0, "ci_needs_skip_guard: " + guard.stdout + guard.stderr)
 

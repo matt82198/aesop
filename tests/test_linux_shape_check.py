@@ -169,6 +169,18 @@ class TestWslStatus(unittest.TestCase):
         self.assertEqual(lsc.wsl_status(), "no-distro")
 
     @mock.patch("subprocess.run")
+    def test_bom_only_output_is_no_distro(self, mock_run):
+        """wsl.exe -l -q leads with a UTF-16LE BOM; stripped, it lists no distro."""
+        mock_run.return_value = mock.Mock(returncode=0, stdout="﻿\r\n".encode("utf-16-le"), stderr=b"")
+        self.assertEqual(lsc.wsl_status(), "no-distro")
+        self.assertEqual(mock_run.call_count, 1)
+
+    @mock.patch("subprocess.run")
+    def test_bom_prefixed_distro_name_is_still_listed(self, mock_run):
+        mock_run.return_value = mock.Mock(returncode=0, stdout="﻿Ubuntu\r\n".encode("utf-16-le"), stderr=b"")
+        self.assertEqual(lsc.wsl_status(), "ok")
+
+    @mock.patch("subprocess.run")
     def test_error_when_list_call_times_out(self, mock_run):
         import subprocess as sp
         mock_run.side_effect = sp.TimeoutExpired(cmd="wsl.exe", timeout=5)

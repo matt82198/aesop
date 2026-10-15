@@ -153,6 +153,20 @@ signature must still verify under that key. Provisioning a new box: generate its
 to `~/.aesop/receipt_key.pem` (outside any checkout) with `generate_ed25519_keypair`, then
 commit its public key as `tools/receipt_pubkeys/<name>-<key_id>.pub`. Never commit a private key.
 
+**Key rotation (base trust).** The verifier and keyring the Action uses come from the BASE tree
+(`base.sha`, or `main` on `workflow_dispatch`), never from the PR head: a PR that registers a
+signer key in its own checkout cannot make a receipt signed by that key verify (adversarial
+finding on #970). So adding or rotating a key is a two-step flow:
+
+1. Land the key in its own PR (`tools/receipt_pubkeys/<name>-<key_id>.pub`, or the rotated
+   `tools/receipt_pubkey.pub`) and merge it to `main`.
+2. Only after that merge do receipts signed by the new key verify. Until then such a receipt is
+   `INVALID` ("signature: does not verify under ed25519") on every PR, including the key's own PR.
+
+`verify_receipt.py --keyring DIR` names the registered-keys directory explicitly (the Action passes
+`base/tools/receipt_pubkeys`). An empty `--required` list is refused (exit 2) unless the deliberate
+local-only flag `--allow-no-required-parts` is given; CI never passes it.
+
 ## Trust boundary — what a valid receipt proves, and what it does not
 
 Proves (checked by `verify_receipt.py`, each independently, fail-closed):

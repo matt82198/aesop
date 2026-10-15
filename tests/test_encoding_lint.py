@@ -21,6 +21,7 @@ from tools.encoding_lint import (  # noqa: E402
     scan_directory,
     run,
 )
+from tools import encoding_lint as el  # noqa: E402
 
 
 class EncodingLintTest(unittest.TestCase):
@@ -520,6 +521,148 @@ class SubprocessErrorHandlerTest(unittest.TestCase):
             timeout=300,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+class AsciiScopeTest(unittest.TestCase):
+    """tools/*.py is ASCII-only (LANE-CONTRACT section 6), with a shrink-only ratchet.
+
+    The baseline lists the tools/*.py files that were already non-ASCII when the
+    rule landed. It may only shrink: a new non-ASCII file is a finding, and a
+    baselined file that became clean is a stale-entry finding.
+    """
+
+    # Non-ASCII tools/*.py files when the ratchet was introduced. The baseline
+    # may shrink freely; raising this ceiling needs a measured reason.
+    BASELINE_CEILING = 102
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / "tools").mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write(self, rel, text):
+        path = self.root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(text.encode("utf-8"))
+        return path
+
+    def _baseline(self, files):
+        (self.root / "tools" / "encoding-ascii-baseline.json").write_text(
+            json.dumps({"files": files}), encoding="utf-8")
+
+    def test_em_dash_in_tools_file_is_flagged(self):
+        self._write("tools/x.py", "# a — b\nprint('ok')\n")
+        findings = el.ascii_findings(self.root)
+        self.assertEqual(len(findings), 1, findings)
+        self.assertEqual(findings[0]["line"], 1)
+        self.assertIn("U+2014", findings[0]["message"])
+
+    def test_em_dash_fails_the_cli_with_ascii_only_output(self):
+        self._write("tools/x.py", "# a — b\n")
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "tools" / "encoding_lint.py"),
+             "--root", str(self.root), "--paths", str(self.root / "tools")],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=120,
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, r"tools[\\/]x\.py:1:")
+        self.assertIn("\\u2014", result.stdout)
+
+    def test_ascii_tools_file_passes(self):
+        self._write("tools/x.py", "print('plain ascii -- ok')\n")
+        self.assertEqual(el.ascii_findings(self.root), [])
+
+    def test_bom_character_in_tools_file_is_flagged(self):
+        self._write("tools/x.py", "﻿print('x')\n")
+        self.assertEqual(len(el.ascii_findings(self.root)), 1)
+
+    def test_only_tools_top_level_python_is_in_scope(self):
+        self._write("ui/x.py", "# a — b\n")
+        self._write("tools/sub/y.py", "# a — b\n")
+        self.assertEqual(el.ascii_findings(self.root), [])
+
+    def test_baselined_non_ascii_file_is_allowed(self):
+        self._write("tools/x.py", "# a — b\n")
+        self._baseline(["tools/x.py"])
+        self.assertEqual(el.ascii_findings(self.root), [])
+
+    def test_new_non_ascii_file_is_flagged_even_with_a_baseline(self):
+        self._write("tools/old.py", "# a — b\n")
+        self._write("tools/new.py", "# a → b\n")
+        self._baseline(["tools/old.py"])
+        findings = el.ascii_findings(self.root)
+        self.assertEqual([f["file"].endswith("new.py") for f in findings], [True])
+
+    def test_baselined_file_that_became_clean_is_a_stale_entry(self):
+        self._write("tools/x.py", "print('clean')\n")
+        self._baseline(["tools/x.py"])
+        findings = el.ascii_findings(self.root)
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("remove", findings[0]["message"])
+
+    def test_baseline_entry_for_missing_file_is_a_stale_entry(self):
+        self._baseline(["tools/gone.py"])
+        findings = el.ascii_findings(self.root)
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("remove", findings[0]["message"])
+
+    def test_malformed_baseline_fails_closed_with_exit_2(self):
+        self._write("tools/x.py", "print('clean')\n")
+        (self.root / "tools" / "encoding-ascii-baseline.json").write_text(
+            "{not json", encoding="utf-8")
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "tools" / "encoding_lint.py"),
+             "--root", str(self.root), "--paths", str(self.root / "tools")],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=120,
+        )
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+
+    def _baseline_query(self, baseline_path):
+        return subprocess.run(
+            [sys.executable, str(ROOT / "tools" / "encoding_lint.py"),
+             "--baseline", str(baseline_path), "--json", "--root", str(self.root)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=120,
+        )
+
+    def test_baseline_query_reports_stale_entries_as_json(self):
+        self._write("tools/x.py", "print('clean')\n")
+        self._baseline(["tools/x.py", "tools/gone.py"])
+        result = self._baseline_query(self.root / "tools" / "encoding-ascii-baseline.json")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)["stale"], ["tools/gone.py", "tools/x.py"])
+
+    def test_baseline_query_is_empty_when_every_entry_is_live(self):
+        self._write("tools/x.py", "# a — b\n")
+        self._baseline(["tools/x.py"])
+        result = self._baseline_query(self.root / "tools" / "encoding-ascii-baseline.json")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)["stale"], [])
+
+    def test_repo_baseline_is_fully_live(self):
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "tools" / "encoding_lint.py"),
+             "--baseline", str(ROOT / "tools" / "encoding-ascii-baseline.json"), "--json",
+             "--root", str(ROOT)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=120,
+        )
+        self.assertEqual(json.loads(result.stdout)["stale"], [])
+
+    def test_repo_baseline_cannot_grow(self):
+        baseline = json.loads(
+            (ROOT / "tools" / "encoding-ascii-baseline.json").read_text(encoding="utf-8"))
+        files = baseline["files"]
+        self.assertLessEqual(len(files), self.BASELINE_CEILING)
+        self.assertEqual(len(files), len(set(files)))
+
+    def test_repo_tools_are_ascii_under_the_ratchet(self):
+        self.assertEqual(el.ascii_findings(ROOT), [])
 
 
 if __name__ == '__main__':
