@@ -224,5 +224,50 @@ class TestReceiptPayloadProfile(unittest.TestCase):
         self.assertNotIn('"profile"', canonical)
 
 
+class TestShardMapMatchesCIRunner(unittest.TestCase):
+    """The emitter's scoped profile must place each test file in the SAME shard that
+    ci_shard_runner.py runs it in. CI switches to greedy timing-aware bin-packing when a
+    non-empty timing map is supplied; the emitter must follow the same assignment, or a
+    changed file is attributed to the wrong shard and its real shard is skipped."""
+
+    TEST_FILES = ["test_a", "test_b", "test_c", "test_d", "test_e"]
+    SHARDS = ["py-shard-0", "py-shard-1", "py-shard-2", "py-shard-3"]
+
+    def _expected(self, buckets):
+        return {stem: self.SHARDS[i] for i, bucket in enumerate(buckets) for stem in bucket}
+
+    def test_round_robin_matches_ci_runner(self):
+        import ci_shard_runner
+        buckets = [ci_shard_runner.distribute_shards(self.TEST_FILES, i, 4) for i in range(4)]
+        shard_map = emit_receipt._build_shard_map(self.SHARDS, test_files=self.TEST_FILES, timing=None)
+        self.assertEqual(shard_map, self._expected(buckets))
+
+    def test_timing_assignment_matches_ci_runner(self):
+        import ci_shard_runner
+        timing = {"test_a": 10, "test_b": 1, "test_c": 1, "test_d": 1, "test_e": 1}
+        buckets = ci_shard_runner.distribute_shards_by_timing(self.TEST_FILES, 4, timing)
+        shard_map = emit_receipt._build_shard_map(self.SHARDS, test_files=self.TEST_FILES, timing=timing)
+        self.assertEqual(shard_map, self._expected(buckets))
+
+    def test_changed_file_is_owned_by_its_ci_shard_under_timing(self):
+        """test_e is py-shard-0 under round-robin but py-shard-1 under timing bin-packing.
+        The scoped profile must select py-shard-1 (where CI runs it), not py-shard-0."""
+        import ci_shard_runner
+        timing = {"test_a": 10, "test_b": 1, "test_c": 1, "test_d": 1, "test_e": 1}
+        ci_shard = next(i for i, b in enumerate(
+            ci_shard_runner.distribute_shards_by_timing(self.TEST_FILES, 4, timing)) if "test_e" in b)
+        shard_map = emit_receipt._build_shard_map(self.SHARDS, test_files=self.TEST_FILES, timing=timing)
+        owning = emit_receipt._find_owning_shards(["tests/test_e.py"], shard_map)
+        self.assertEqual(owning, {self.SHARDS[ci_shard]})
+
+
+class TestShardSetSingleDeclaration(unittest.TestCase):
+    """Guard: the emitter's python-shard set and the verifier's required set are one declaration."""
+
+    def test_emitter_shards_equal_verifier_required_parts(self):
+        import receipt_common as rc
+        self.assertEqual(set(emit_receipt._PY_SHARDS), set(rc.DEFAULT_REQUIRED_PARTS))
+
+
 if __name__ == "__main__":
     unittest.main()

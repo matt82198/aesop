@@ -138,6 +138,15 @@ ALLOW_ENV = "AESOP_ALLOW_GENERATED"
 # generator (the ONLY writer), why (what the file is).
 REGISTRY: List[Dict[str, str]] = [
     {
+        # Fully derived from git history (HEAD-scoped since #1008). Any lane commit that
+        # carries an Incident-Class trailer changes the table, so the file must be
+        # regenerated at push and in the merge queue, not hand-edited after the fact.
+        "pattern": "docs/INCIDENTS.md",
+        "generator": "tools/incident_report.py --regenerate",
+        "why": "incident taxonomy table derived from HEAD's commit trailers and subjects",
+        "regen": ["tools/incident_report.py", "--regenerate"],
+    },
+    {
         "pattern": "state/ledger/*.jsonl",
         "generator": "tools/merge_telemetry.py --append / tools/transcript_digest.py (append-only writers)",
         "why": "append-only machine ledgers; hand edits break the journal invariant",
@@ -199,6 +208,7 @@ def regenerable_paths() -> List[str]:
 # so a stash in one lane silently eats another lane's work in progress. A blanket
 # `git checkout .` is equally forbidden -- it is not targeted.
 GENERATED_PATHS = (
+    "docs/INCIDENTS.md",
     "tests/CLAUDE.md",
     "tools/CLAUDE.md",
     "tools/INDEX.md",

@@ -21,3 +21,4 @@
 # Unregistered clones get an ordinary conflict; the committed bytes are verified
 # at push by hooks/pre-push-policy.sh check_generated_regen() either way.
 tools/INDEX.md merge=aesop-regen
+docs/INCIDENTS.md merge=aesop-regen

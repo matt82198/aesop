@@ -97,18 +97,36 @@ def _get_test_files(repo):
         return None
 
 
-def _build_shard_map(shard_names):
-    """Build a map of test file stems to owning shard names. Returns None if unable."""
-    test_files = _get_test_files(Path("."))
+def _build_shard_map(shard_names, test_files=None, timing=None):
+    """Build a map of test file stems to owning shard names. Returns None if unable.
+
+    Uses the SAME assignment as ci_shard_runner.py: greedy timing-aware bin-packing when a
+    non-empty timing map is given (CI passes .github/shard-timing.json), otherwise round-robin.
+    `test_files` / `timing` are injectable for tests; the caller passes the CI timing map so
+    the emitter cannot drift from the runner's assignment."""
+    if test_files is None:
+        test_files = _get_test_files(Path("."))
     if test_files is None:
         return None
 
+    import ci_shard_runner  # tools/ is on sys.path; the single source of the shard assignment
+    total = len(shard_names)
+    if timing:
+        buckets = ci_shard_runner.distribute_shards_by_timing(test_files, total, timing)
+    else:
+        buckets = [ci_shard_runner.distribute_shards(test_files, i, total) for i in range(total)]
+
     shard_map = {}
-    for i, stem in enumerate(test_files):
-        shard_idx = i % 4  # 4 shards; matches distribute_shards round-robin in ci_shard_runner
-        if shard_idx < len(shard_names):
+    for shard_idx, bucket in enumerate(buckets):
+        for stem in bucket:
             shard_map[stem] = shard_names[shard_idx]
     return shard_map
+
+
+def _load_ci_timing(repo):
+    """The timing map exactly as ci.yml passes it (`--timing-file .github/shard-timing.json`)."""
+    import ci_shard_runner
+    return ci_shard_runner.load_timing_data(str(Path(repo) / ".github" / "shard-timing.json"))
 
 
 def _find_owning_shards(changed_files, shard_map):
@@ -566,7 +584,7 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
                     changed_files = []  # Fallback: no changes detected
 
                 # Build shard map and find owning shards
-                shard_map = _build_shard_map(sorted(_PY_SHARDS))
+                shard_map = _build_shard_map(sorted(_PY_SHARDS), timing=_load_ci_timing(repo))
                 if shard_map is None:
                     # Underivable mapping: fall back to full matrix
                     names = list(DEFAULT_MATRIX)

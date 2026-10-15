@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Incident log generator: mines git history for operational failures.
-INDEX: Incident log generator: mines git history for operational failures; Incident-Class / Incident-Category commit trailers are authoritative and unknown values fail closed (non-zero exit naming the commit); test-isolation is a documented alias of test-pollution; subject-only keyword fallback is flagged inferred; 13 classes (incl. environment-shape, daemon-liveness, hook-fail-open, sync-drift, conduct); scans HEAD's history (--all opts into every ref, forensics only); generates docs/INCIDENTS.md; CLI: `[--repo PATH] [--all]` (print) | `--regenerate [--output FILE] [--all]` | `--check [--all]` (drift exit 1); uses subprocess_common.git() with 60s timeout; all output deterministic, idempotent
+INDEX: Incident log generator: mines git history for operational failures; Incident-Class / Incident-Category commit trailers are authoritative and unknown values fail closed (non-zero exit naming the commit); test-isolation is a documented alias of test-pollution; subject-only keyword fallback is flagged inferred; 13 classes (incl. environment-shape, daemon-liveness, hook-fail-open, sync-drift, conduct); scans HEAD's history (--all opts into every ref, forensics only); generates docs/INCIDENTS.md; CLI: `[--repo PATH] [--all]` (print) | `--regenerate [--output FILE] [--all]` | `--stdout [--all]` (read-only: the bytes --regenerate would write) | `--check [--all]` (drift exit 1); --regenerate/--stdout refuse a shallow clone (exit 2); registered in generated_paths.REGISTRY + merge_queue.REGENERATORS (regen_all/pre-push/regen-on-main keep it fresh); uses subprocess_common.git() with 60s timeout; all output deterministic, idempotent
 
 Parses git history and extracts failure events, each classified by class.
 
@@ -585,6 +585,23 @@ class IncidentChecker:
             return (False, "DRIFT: docs/INCIDENTS.md does not match current state")
 
 
+def is_shallow_clone(repo_root: str) -> bool:
+    """True when git reports a shallow repository (or the answer cannot be read).
+
+    A shallow checkout sees only a slice of HEAD's history, so a table generated from it
+    is truncated. Writers must refuse on True (fail closed); an unreadable answer counts
+    as shallow for the same reason.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--is-shallow-repository"],
+            cwd=str(repo_root), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return proc.returncode != 0 or proc.stdout.strip() != "false"
+
+
 def _report_errors(errors: List[str]) -> None:
     """Print classification errors to stderr (fail-closed path)."""
     print("FAIL-CLOSED: unclassifiable incident commit(s); nothing written:", file=sys.stderr)
@@ -632,6 +649,11 @@ def main():
         help="Regenerate docs/INCIDENTS.md from live git state"
     )
     mode_group.add_argument(
+        "--stdout",
+        action="store_true",
+        help="Print exactly what --regenerate would write, without touching the file (read-only)"
+    )
+    mode_group.add_argument(
         "--check",
         action="store_true",
         help="Check if docs/INCIDENTS.md matches current state (exit 0=match, 1=drift or classification error)"
@@ -642,7 +664,25 @@ def main():
     incident_parser = IncidentParser(repo_root=args.repo, all_refs=args.all)
     markdown_gen = IncidentMarkdown()
 
+    if args.stdout:
+        # Read-only twin of --regenerate: the exact bytes --regenerate would write.
+        # regen_all.py --check compares these against the committed file.
+        if is_shallow_clone(args.repo):
+            print("FAIL-CLOSED: shallow clone; refusing to generate a truncated incident log "
+                  "(fetch full history: actions/checkout fetch-depth: 0)", file=sys.stderr)
+            return 2
+        incidents, errors = incident_parser.parse()
+        if errors:
+            _report_errors(errors)
+            return 1
+        sys.stdout.write(markdown_gen.generate_table(incidents))
+        return 0
+
     if args.regenerate:
+        if is_shallow_clone(args.repo):
+            print("FAIL-CLOSED: shallow clone; refusing to write a truncated incident log "
+                  "(fetch full history: actions/checkout fetch-depth: 0)", file=sys.stderr)
+            return 2
         incidents, errors = incident_parser.parse()
         if errors:
             _report_errors(errors)
