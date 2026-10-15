@@ -107,22 +107,27 @@ class TaskEventIngestTests(unittest.TestCase):
         self.assertEqual(len(self._task_events()), 2)
 
     # --- fail closed ----------------------------------------------------------
-    def test_malformed_line_fails_closed(self):
+    def test_malformed_line_with_newer_data_is_quarantined_not_wedged(self):
+        # A complete malformed line that has valid lines after it can never parse.
+        # It is quarantined (raw + offset kept on disk), not silently skipped and
+        # not held forever. The valid lines around it are ingested.
         self._write([_rec("a1", "general-purpose"), "{not json", _rec("a2", "general-purpose")])
         result = self._ingest()
-        self.assertEqual(result["malformed"], 1)
-        self.assertEqual(result["exit_code"], 3)
-        # The cursor must not move past the bad line: the next run reports it again.
+        self.assertEqual(result["malformed"], 0)
+        self.assertEqual(result["quarantined"], 1)
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(len(self._task_events()), 2)
         again = self._ingest()
-        self.assertEqual(again["malformed"], 1)
-        self.assertEqual(again["exit_code"], 3)
+        self.assertEqual((again["quarantined"], again["exit_code"]), (0, 0))
 
     def test_malformed_line_is_never_silently_skipped(self):
+        # Every malformed line is recorded in the quarantine file. None vanish.
         self._write(["[]", "not even json", _rec("a1", "general-purpose")])
         result = self._ingest()
-        self.assertEqual(result["malformed"], 2)
-        self.assertEqual(result["exit_code"], 3)
+        self.assertEqual(result["quarantined"], 2)
+        self.assertEqual(result["exit_code"], 0)
         self.assertEqual(len(self._task_events()), 1)
+        self.assertEqual([r["raw"] for r in self._quarantine_rows()], ["[]", "not even json"])
 
     def test_record_missing_required_fields_is_malformed(self):
         self._write([json.dumps({"ts": "2026-10-15T01:00:00.000Z"})])
@@ -204,6 +209,106 @@ class TaskEventIngestTests(unittest.TestCase):
         self._ingest()
         self.assertTrue(hb.exists())
         self.assertTrue(hb.read_text().strip().isdigit())
+
+    # --- torn-line recovery (glued fragment) ----------------------------------
+    def _quarantine_path(self):
+        return self.root / "task-events.jsonl.quarantine.jsonl"
+
+    def _quarantine_rows(self):
+        if not self._quarantine_path().exists():
+            return []
+        return [json.loads(l) for l in self._quarantine_path().read_text(encoding="utf-8").splitlines() if l.strip()]
+
+    def test_glued_torn_line_does_not_wedge_ingest(self):
+        # Writer died mid-record; the next record was appended with no newline,
+        # so the torn fragment and the next record form ONE malformed line that
+        # is followed by a valid line. Must quarantine, not hold forever.
+        torn = '{"ts":"2026-10-15T01:0'
+        self._write([_rec("a1", "general-purpose")])
+        self._write([torn + _rec("glued", "general-purpose")])
+        self._write([_rec("a3", "general-purpose")])
+        hb = self.state / ".task-ingest-heartbeat"
+        result = self._ingest()
+        self.assertEqual(result["exit_code"], 0, result)
+        self.assertEqual(result["quarantined"], 1)
+        self.assertEqual(result["malformed"], 0)
+        self.assertEqual({e["payload"]["agent_id"] for e in self._task_events()}, {"a1", "a3"})
+        self.assertTrue(hb.exists())
+        rows = self._quarantine_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertIn(torn, rows[0]["raw"])
+        self.assertIsInstance(rows[0]["offset"], int)
+        self.assertTrue(rows[0]["ts"])
+        # Second run is idempotent: nothing re-quarantined, nothing re-ingested.
+        again = self._ingest()
+        self.assertEqual((again["exit_code"], again["quarantined"], again["ingested"]), (0, 0, 0))
+        self.assertEqual(len(self._quarantine_rows()), 1)
+
+    def test_glued_torn_line_cli_exits_zero_and_writes_heartbeat(self):
+        self._write([_rec("a1", "general-purpose")])
+        self._write(['{"ts":"2026-10-15T01:0' + _rec("glued", "general-purpose")])
+        self._write([_rec("a3", "general-purpose")])
+        self.assertEqual(self._cli().returncode, 0)
+        self.assertTrue((self.state / ".task-ingest-heartbeat").exists())
+        self.assertEqual(self._cli("--check").returncode, 0)
+
+    def test_newline_terminated_last_malformed_line_is_held_not_quarantined(self):
+        # Slow writer case: a malformed newline-terminated line with NO newer data
+        # is ambiguous -- hold it (exit 3), do not punish the writer by quarantining.
+        self._write([_rec("a1", "general-purpose"), "garbage-last"])
+        result = self._ingest()
+        self.assertEqual(result["exit_code"], 3)
+        self.assertEqual(result["quarantined"], 0)
+        self.assertFalse(self._quarantine_path().exists())
+        self.assertEqual(ite._read_cursor(self.cursor), len(_rec("a1", "general-purpose")) + 1)
+        # Once newer data arrives, the held line is no longer last and is quarantined.
+        self._write([_rec("a3", "general-purpose")])
+        result = self._ingest()
+        self.assertEqual((result["exit_code"], result["quarantined"], result["ingested"]), (0, 1, 1))
+
+    def test_malformed_line_before_unterminated_tail_is_quarantined(self):
+        # A partial record being written after a complete malformed line means the
+        # malformed line is not the file's last line: quarantine it, hold the tail.
+        self._write([_rec("a1", "general-purpose"), "garbage-mid"])
+        with open(self.jsonl, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write('{"ts":"2026-10-15T01:0')
+        result = self._ingest()
+        self.assertEqual(result["exit_code"], 0, result)
+        self.assertEqual(result["quarantined"], 1)
+        self.assertEqual(len(self._quarantine_rows()), 1)
+
+    def test_quarantine_is_idempotent_when_cursor_is_lost(self):
+        self._write(['{"ts":"2026-10-15T01:0' + _rec("glued", "general-purpose"), _rec("a3", "general-purpose")])
+        self._ingest()
+        self.cursor.unlink()
+        result = self._ingest()
+        self.assertEqual(result["quarantined"], 0)
+        self.assertEqual(len(self._quarantine_rows()), 1)
+        self.assertEqual(len(self._task_events()), 1)
+
+    # --- dedupe key: identical raw lines at distinct offsets ------------------
+    def test_byte_identical_lines_are_both_ingested(self):
+        line = _rec("dup", "general-purpose", "same bytes")
+        self._write([line, line])
+        result = self._ingest()
+        self.assertEqual(result["ingested"], 2)
+        self.assertEqual(result["duplicates"], 0)
+        self.assertEqual(len(self._task_events()), 2)
+
+    def test_legacy_raw_hash_rows_still_suppress_replay(self):
+        # Rows written before the offset-keyed dedupe carry sha256(raw) as event_id.
+        # After a lost cursor they must still prevent a duplicate append.
+        import hashlib
+        line = _rec("old", "general-purpose")
+        self._write([line])
+        api = StateAPI(resolve_db_path(self.state, "tracker"))
+        try:
+            api.append("task", "task_event", dict(json.loads(line), event_id=hashlib.sha256(line.encode()).hexdigest(), kind="agent", agent_type="general-purpose"), "task_ingest")
+        finally:
+            api.close()
+        result = self._ingest()
+        self.assertEqual(result["ingested"], 0)
+        self.assertEqual(len(self._task_events()), 1)
 
     # --- CLI exit codes -------------------------------------------------------
     def _cli(self, *extra):
