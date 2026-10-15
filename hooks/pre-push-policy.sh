@@ -987,30 +987,28 @@ check_conflict_markers() {
 }
 
 check_symbol_survival() {
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_symbol_survival"; return 1; }
   # PR symbol survival gate (Guardrail G13, tools/pr_symbol_survival_check.py).
+  # The script runs from the BASE gate copy (gate_base_dir), never the pushed tree,
+  # so a push cannot stub its own symbol gate to pass.
   # BLOCKING since the G13 promotion: a symbol the pushed branch added that a
   # merge commit in range dropped (conflict-resolution loss, PR #745 class)
   # fails the push. Exit 1 = symbols missing; exit 2 = tool/git error. Both
   # block. Same range mechanism as check_conflict_markers (one remote..local
   # range per ref tuple from get_commit_range()).
   #
-  # Fail-open ONLY when there is no aesop tools/ checkout at all (the same
-  # rule as every other gate); a present-but-missing script fails closed.
+  # Fail-closed: the base copy's tools/ always exists (gate_base_dir), so a missing
+  # script in it blocks the push. There is no skip branch here: skipping on a pushed
+  # tools/ deletion would reopen the bypass this function closes.
   # Base-pinned (same rule as every other gate): the tool runs from the origin/main
   # gate copy, never the pushed tree. A PR that weakens the tool to exit 0 must not
   # pass a lossy merge it is judged on (lens L2 F2, G13 not base-pinned).
-  local aesop_root gate_dir
-  aesop_root=$(resolve_aesop_root)
-  gate_dir=$(gate_base_dir) || { gate_base_block "check_symbol_survival"; return 1; }
   local symbol_script="$gate_dir/tools/pr_symbol_survival_check.py"
 
   local tool_status
-  tool_status=$(gate_tool_status "$aesop_root" "$symbol_script")
-  if [ "$tool_status" = "skip" ]; then
-    log_event "symbol_survival_skipped_no_aesop_tools"
-    return 0
-  fi
-  if [ "$tool_status" = "missing" ]; then
+  tool_status=$(gate_tool_status "$gate_dir" "$symbol_script")
+  if [ "$tool_status" != "ok" ]; then
     gate_tool_missing_block "pr_symbol_survival_check.py" "$symbol_script"
     log_event "symbol_survival_tool_missing"
     return 1
@@ -1858,6 +1856,8 @@ check_generated_regen() {
 }
 
 check_emit_receipt() {
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_emit_receipt"; return 1; }
   # Receipt-gate auto-emission (docs/RECEIPT-GATE.md). Day-1 measurement found
   # 41 merged PRs and ZERO receipts: lanes were never told to run
   # `emit_receipt.py` and nothing ran it automatically, so the honesty signal
@@ -1900,7 +1900,9 @@ check_emit_receipt() {
   # Flush any spooled receipts from prior pushes before emitting a new one.
   # This ensures that once shas are pushed and exist on GitHub, their receipts
   # are published. Fail-open: errors in flushing do not block the push.
-  local flush_script="$aesop_root/tools/receipt_flush.py"
+  # Both this flush and the emitter below run from the BASE gate copy (gate_base_dir);
+  # --repo still names the pushed tree, which is the data being receipted.
+  local flush_script="$gate_dir/tools/receipt_flush.py"
   local py_bin=""
   if [ -f "$flush_script" ]; then
     if py_bin=$(resolve_py_bin); then
@@ -1908,14 +1910,14 @@ check_emit_receipt() {
     fi
   fi
 
-  local receipt_script="$aesop_root/tools/emit_receipt.py"
+  local receipt_script="$gate_dir/tools/emit_receipt.py"
 
   if [ ! -f "$receipt_script" ]; then
-    # Not fail-closed like gate_tool_status's "missing" case: this is not a
-    # verification gate, so a repo without tools/emit_receipt.py (no aesop
-    # checkout, or a branch predating this tool) simply emits nothing.
-    log_event "receipt_emit_skipped_tool_missing"
-    return 0
+    # Fail-closed: the emitter is read from the base copy, and a base copy without it
+    # cannot produce a conclusion to gate on. Blocks the push with a named message.
+    printf 'FATAL: emit_receipt.py not found in the base gate copy (%s). Push blocked (fail-closed).\n' "$receipt_script" >&2
+    log_block "receipt_emit_base_tool_missing"
+    return 1
   fi
 
   local py_bin=""
@@ -2069,9 +2071,9 @@ check_emit_receipt() {
     local spool_sha=""
     spool_sha=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
       git -C "$aesop_root" rev-parse HEAD 2>/dev/null) || spool_sha=""
-    if [ -n "$spool_sha" ] && [ -f "$aesop_root/tools/receipt_autoflush.py" ]; then
+    if [ -n "$spool_sha" ] && [ -f "$gate_dir/tools/receipt_autoflush.py" ]; then
       env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
-        "$py_bin" "$aesop_root/tools/receipt_autoflush.py" --repo "$aesop_root" --sha "$spool_sha" --spawn \
+        "$py_bin" "$gate_dir/tools/receipt_autoflush.py" --repo "$aesop_root" --sha "$spool_sha" --spawn \
         < /dev/null 2>&1 || true
       log_event "receipt_autoflush_spawned"
     fi
@@ -3071,6 +3073,8 @@ GENPATHS
     git -C "$sym_repo" config user.email "test@example.com"
     git -C "$sym_repo" config user.name "Test User"
     git -C "$sym_repo" config core.autocrlf false
+    mkdir -p "$sym_repo/tools"
+    cp "$sym_real_root/tools/pr_symbol_survival_check.py" "$sym_repo/tools/"
     printf 'def existing():\n    pass\n' > "$sym_repo/mod.py"
     # The G13 tool is base-pinned: the hook runs origin/main's copy, so the trunk must
     # carry it and origin/main must exist (gate_base_dir fails closed on a bare repo,
@@ -3080,6 +3084,7 @@ GENPATHS
     git -C "$sym_repo" add -A
     git -C "$sym_repo" commit -q -m base
     sym_base=$(git -C "$sym_repo" rev-parse HEAD)
+    # The trunk on origin carries the real gate: that is the base copy the check runs.
     git -C "$sym_repo" update-ref refs/remotes/origin/main "$sym_base"
 
     git -C "$sym_repo" checkout -q -b feature
@@ -3129,12 +3134,159 @@ GENPATHS
     test_failed=$((test_failed + 1))
   fi
 
+  printf '\n=== Test 30: check_symbol_survival runs the BASE tool, not the pushed copy (a pushed always-pass stub cannot pass a lossy merge) ===\n'
+  (
+    sb_real_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+    sb_repo="$tmpdir/symbol_base_repo"
+    rm -rf "$sb_repo"
+    git init -q -b main "$sb_repo"
+    git -C "$sb_repo" config user.email "test@example.com"
+    git -C "$sb_repo" config user.name "Test User"
+    git -C "$sb_repo" config core.autocrlf false
+    mkdir -p "$sb_repo/tools"
+    cp "$sb_real_root/tools/pr_symbol_survival_check.py" "$sb_repo/tools/"
+    printf 'def existing():\n    pass\n' > "$sb_repo/mod.py"
+    git -C "$sb_repo" add -A
+    git -C "$sb_repo" commit -q -m base
+    sb_base=$(git -C "$sb_repo" rev-parse HEAD)
+    # origin/main (the trunk) carries the REAL gate: that is the base copy.
+    git -C "$sb_repo" update-ref refs/remotes/origin/main "$sb_base"
+
+    git -C "$sb_repo" checkout -q -b feature
+    printf 'def existing():\n    pass\n\n\ndef alpha():\n    pass\n' > "$sb_repo/mod.py"
+    git -C "$sb_repo" commit -qam "feat: add alpha"
+    git -C "$sb_repo" checkout -q main
+    printf 'def existing():\n    pass\n\n\ndef gamma():\n    pass\n' > "$sb_repo/mod.py"
+    git -C "$sb_repo" commit -qam "main: add gamma"
+    # Lossy merge with main as FIRST parent: resolution keeps main's whole file (drops alpha).
+    git -C "$sb_repo" merge -q --no-edit feature >/dev/null 2>&1 || true
+    git -C "$sb_repo" checkout -q --ours mod.py
+    git -C "$sb_repo" add mod.py
+    git -C "$sb_repo" commit -q -m "merge feature (resolution drops alpha)"
+    # The PUSHED tree stubs the gate to always pass. The base copy must still judge the push.
+    printf 'import sys\nsys.exit(0)\n' > "$sb_repo/tools/pr_symbol_survival_check.py"
+    git -C "$sb_repo" commit -qam "push: stub the symbol gate to always pass"
+    sb_tip=$(git -C "$sb_repo" rev-parse HEAD)
+
+    (
+      cd "$sb_repo" || exit 1
+      unset AESOP_ROOT
+      stdin_line="$sb_tip $sb_tip refs/heads/feature $sb_base"
+      if printf '%s\n' "$stdin_line" | check_symbol_survival >/dev/null 2>&1; then
+        printf 'FAIL: check_symbol_survival ran the pushed always-pass stub; it must run the base copy and BLOCK\n'
+        exit 1
+      fi
+      printf 'PASS: check_symbol_survival ran the base copy and blocked the lossy merge despite the pushed stub\n'
+    )
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
+  printf '\n=== Test 31: check_symbol_survival fails CLOSED when the base copy of the gate is missing ===\n'
+  (
+    sb_real_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+    sbm_repo="$tmpdir/symbol_base_missing_repo"
+    rm -rf "$sbm_repo"
+    git init -q -b main "$sbm_repo"
+    git -C "$sbm_repo" config user.email "test@example.com"
+    git -C "$sbm_repo" config user.name "Test User"
+    git -C "$sbm_repo" config core.autocrlf false
+    mkdir -p "$sbm_repo/tools"
+    printf 'placeholder\n' > "$sbm_repo/tools/other_gate.txt"
+    printf 'def existing():\n    pass\n' > "$sbm_repo/mod.py"
+    git -C "$sbm_repo" add -A
+    git -C "$sbm_repo" commit -q -m base
+    sbm_base=$(git -C "$sbm_repo" rev-parse HEAD)
+    git -C "$sbm_repo" update-ref refs/remotes/origin/main "$sbm_base"
+
+    # The pushed tree ADDS the gate script the trunk never had: no base copy exists to judge it.
+    git -C "$sbm_repo" checkout -q -b feature
+    cp "$sb_real_root/tools/pr_symbol_survival_check.py" "$sbm_repo/tools/"
+    printf 'def existing():\n    pass\n\n\ndef beta():\n    pass\n' > "$sbm_repo/mod.py"
+    git -C "$sbm_repo" add -A
+    git -C "$sbm_repo" commit -q -m "feat: add symbol gate and beta"
+    sbm_tip=$(git -C "$sbm_repo" rev-parse HEAD)
+
+    (
+      cd "$sbm_repo" || exit 1
+      unset AESOP_ROOT
+      stdin_line="$sbm_tip $sbm_tip refs/heads/feature $sbm_base"
+      sbm_out=$(printf '%s\n' "$stdin_line" | check_symbol_survival 2>&1)
+      sbm_rc=$?
+      if [ "$sbm_rc" -eq 0 ]; then
+        printf 'FAIL: check_symbol_survival must fail closed when the base gate copy is missing (rc=0)\n'
+        exit 1
+      fi
+      case "$sbm_out" in
+        *pr_symbol_survival_check.py*) ;;
+        *) printf 'FAIL: missing base gate must name the script in its message; got: %s\n' "$sbm_out"; exit 1 ;;
+      esac
+      printf 'PASS: check_symbol_survival fails closed (rc=%s) and names the missing base gate\n' "$sbm_rc"
+    )
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
+  printf '\n=== Test 32: check_emit_receipt runs the BASE emit_receipt.py, not a stubbed pushed copy (a RED base matrix blocks) ===\n'
+  (
+    er_repo="$tmpdir/emit_base_repo"
+    rm -rf "$er_repo"
+    git init -q -b main "$er_repo"
+    git -C "$er_repo" config user.email "test@example.com"
+    git -C "$er_repo" config user.name "Test User"
+    git -C "$er_repo" config core.autocrlf false
+    mkdir -p "$er_repo/tools"
+    printf 'import sys\nsys.exit(3)\n' > "$er_repo/tools/emit_receipt.py"
+    printf 'seed\n' > "$er_repo/seed.txt"
+    git -C "$er_repo" add -A
+    git -C "$er_repo" commit -q -m base
+    er_base=$(git -C "$er_repo" rev-parse HEAD)
+    git -C "$er_repo" update-ref refs/remotes/origin/main "$er_base"
+
+    # The PUSHED tree stubs the receipt emitter to always exit 0 (green).
+    git -C "$er_repo" checkout -q -b feature
+    printf 'import sys\nsys.exit(0)\n' > "$er_repo/tools/emit_receipt.py"
+    git -C "$er_repo" commit -qam "push: stub the receipt emitter to always pass"
+
+    # Shim: gh --version must succeed so the check reaches the emitter on any host.
+    er_fakebin="$tmpdir/emit_fakebin"
+    rm -rf "$er_fakebin"
+    mkdir -p "$er_fakebin"
+    printf '#!/bin/sh\nexit 0\n' > "$er_fakebin/gh"
+    chmod +x "$er_fakebin/gh"
+
+    (
+      cd "$er_repo" || exit 1
+      unset AESOP_ROOT
+      export PATH="$er_fakebin:$PATH"
+      export AESOP_RECEIPT_EMIT=1
+      export AESOP_RECEIPT_KEY="test-key-material-not-a-secret"
+      export AESOP_RECEIPT_TIMEOUT=60
+      if check_emit_receipt < /dev/null >/dev/null 2>&1; then
+        printf 'FAIL: check_emit_receipt ran the pushed always-pass stub; it must run the base copy and BLOCK on red\n'
+        exit 1
+      fi
+      printf 'PASS: check_emit_receipt ran the base copy and blocked on its red matrix\n'
+    )
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
   printf '\n=== Test Results ===\n'
   printf 'PASSED: %d\n' "$test_passed"
   printf 'FAILED: %d\n' "$test_failed"
 
   if [ "$test_failed" -eq 0 ]; then
-    printf '\nAll 29 tests passed.\n'
+    printf '\nAll 32 tests passed.\n'
     return 0
   else
     printf '\nSome tests failed.\n'

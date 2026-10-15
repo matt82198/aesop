@@ -268,6 +268,39 @@ See [HOOK-INSTALL.md](HOOK-INSTALL.md) for setup.
 
 ---
 
+## Threat model: prompt injection
+
+**Threat.** Agents read text they do not control: issue and PR bodies, `gh` output, web pages fetched by WebFetch or WebSearch, subagent reports, tool output, and repository files. Any of that text can contain instructions. The orchestrator also composes subagent dispatch prompts from upstream text, and `hooks/claude/force-model-policy.mjs` states that "prompts are untrusted text" (line 14). The agents run as the operator's local user with the same `gh` and git credentials that the scripts in `tools/` use (for example `tools/auto_merge.py`, the merge path named in `LANE-CONTRACT.md` section 6).
+
+The controls below are the only ones this repo implements. Each is cited to the file that implements it. Anything not listed here is not a control.
+
+### Controls that exist
+
+1. **Lane rules (text, not enforcement).** `LANE-CONTRACT.md` tells dispatched agents not to merge, not to use `--admin`, `--no-verify` or `--force`, not to self-grant `--@gate-allow`, and not to hand-edit generated files (sections 3, 4 and 6). It is instruction text to the model. No file under `hooks/` injects it into a dispatch.
+2. **Dispatch linter.** `tools/dispatch_lint.py` scans committed Python, JavaScript and Markdown for forbidden dispatch patterns: manual `gh pr merge` without `--auto`, `--admin`, `--no-verify`, `--force`, `git stash`, and credential hunting. It is a regex scan of files in the tree. It runs as a pre-commit hook (`hooks/pre-commit-dispatch-lint.sh`) and is listed as a gate in `LANE-CONTRACT.md` section 5. It does not see prompts an orchestrator composes at runtime.
+3. **Claude Code PreToolUse hooks** (`hooks/claude/`, wired per `docs/HOOK-INSTALL.md`):
+   - `force-model-policy.mjs` (matcher `Agent|Task`) rewrites a subagent dispatch whose model is not the policy model. It constrains model choice only. It does not inspect the prompt for instructions.
+   - `no-heredoc-file-authoring.mjs` denies Bash heredocs that author file content. Its stated reason is reliability, not security.
+   - `no-scrollback-as-record.mjs` denies Bash, Read, Grep and Glob access to session transcripts. Its stated reason is that transcripts are not the system of record.
+   - The two deny hooks match command or path text with regular expressions in their `verdictFor` function. `force-model-policy.mjs` checks the prompt text for its escape marker. All three honour a bracketed escape token named by an `ESCAPE_HATCH` constant, and each logs its use.
+4. **Dispatch suppression marker.** A `# dispatch-ok` comment suppresses a `tools/dispatch_lint.py` finding on that line (`tools/dispatch_lint.py`, suppression rule in its docstring).
+5. **Secret scan.** `tools/secret_scan.py` checks the pushed range in `hooks/pre-push-policy.sh` (`check_secret_scan`) and runs on the checked-out tree in CI (`.github/workflows/ci.yml`, lines 90 and 414). It matches known credential patterns only.
+6. **Push policy.** `hooks/pre-push-policy.sh` does the following:
+   - `check_branch_policy` blocks any push that targets `main` or `master` on the remote.
+   - Gate pinning: gate scripts run from the trunk's `tools/` copy (`gate_base_dir`), not from the pushed branch, so a branch cannot weaken the gate that judges it.
+   - `check_gate_tamper` prints a non-blocking banner when a push edits gate files.
+   - `check_conflict_markers`, `check_import_resolution` and `check_symbol_survival` (`tools/pr_symbol_survival_check.py`) block pushes that carry conflict markers, unresolvable imports or a symbol dropped by a merge.
+
+### What is not covered
+
+- **No untrusted-text filtering.** No file in `tools/`, `hooks/`, `daemons/` or `bin/` filters, labels or sanitises text from issues, PRs, web pages or subagent reports before it enters an agent prompt.
+- **Escape tokens and suppression markers are readable by injected text.** Any text an agent reads that contains the `ESCAPE_HATCH` token of a hook above, or a `# dispatch-ok` marker, bypasses that check. The bypass is logged, not blocked.
+- **Regex matching.** The two deny hooks match command shapes. A paraphrased command, or a different interpreter that avoids the regex, is not matched.
+- **Model policy is not tool policy.** `force-model-policy.mjs` controls the model of a subagent. It does not limit which tools the subagent may call.
+- **Runtime prompts are not linted.** `tools/dispatch_lint.py` only sees committed files.
+- **Local hook bypass.** The pre-push hook runs on the developer's machine and `git push --no-verify` skips it. Server-side enforcement depends on GitHub branch protection, which is set in GitHub settings and is not in this repo.
+- **Secret scan scope.** `tools/secret_scan.py` does not inspect text sent through `gh` comments or web requests.
+
 ## Scaling Characteristics
 
 ### Parallelism

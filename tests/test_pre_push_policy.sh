@@ -41,6 +41,19 @@ publish_base_tools() {
   git -C "$clone" fetch -q origin main
 }
 
+# emit_fixture_base <root>: makes <root> a git repo and publishes <root>/tools as its
+# origin/main:tools. check_emit_receipt runs its emitter from that BASE copy, so an
+# emit fixture must publish the stub it just wrote; otherwise the real trunk emitter
+# (and its key/gh/network paths) runs instead. Call after writing the stub, then cd.
+emit_fixture_base() {
+  local root="$1"
+  if [ ! -d "$root/.git" ]; then
+    git -C "$root" init -q -b feature/test
+    git -C "$root" -c user.email=t@example.com -c user.name=t -c core.autocrlf=false commit -q --allow-empty -m seed
+  fi
+  publish_base_tools "$root" "$root/tools"
+}
+
 # make_clone_with_base <clone> <tools_src>: fresh clone on feature/test with a base published.
 make_clone_with_base() {
   local clone="$1" src="$2"
@@ -1045,6 +1058,8 @@ SCANNER
     git commit -q -m "initial"
     git checkout -q -b feature/isolated-empty-stdin
   )
+  # emit_receipt.py is read from the base copy and fails closed when absent: stub it green.
+  printf 'import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/emit_receipt.py"
   publish_base_tools "$ISOLATED_MAIN_REPO" "$AESOP_ROOT/tools"  # gate code is pinned to origin/main
   stderr_output=$( { printf '' | ( cd "$ISOLATED_MAIN_REPO" && bash "$HOOK_SCRIPT" ); } 2>&1 1>/dev/null )
   exit_code=$?
@@ -1455,23 +1470,33 @@ else
   test_failed=$((test_failed + 1))
 fi
 
-printf '\n=== Test: check_emit_receipt skips silently when tools/emit_receipt.py is absent ===\n'
+printf '\n=== Test: check_emit_receipt blocks (fail-closed) when the base copy has no emit_receipt.py ===\n'
 (
   export AESOP_ROOT="$TEST_ROOT/aesop_receipt_no_tool"
-  mkdir -p "$AESOP_ROOT/state"
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
   unset AESOP_RECEIPT_EMIT
+  # Base copy (origin/main:tools) has no emit_receipt.py: the emitter is read from the
+  # base, so there is no conclusion to gate on. Contract: hooks/CLAUDE.md step 18.
+  emit_fixture_base "$AESOP_ROOT"
+  cd "$AESOP_ROOT" || exit 1
 
-  if ! check_emit_receipt; then
-    printf 'FAIL: check_emit_receipt must fail-open (return 0) when the tool is missing\n'
+  stderr_output=$( { check_emit_receipt; } 2>&1 1>/dev/null )
+  exit_code=$?
+  if [ "$exit_code" -eq 0 ]; then
+    printf 'FAIL: check_emit_receipt must BLOCK (return 1) when the base copy lacks emit_receipt.py\n'
     exit 1
   fi
+  case "$stderr_output" in
+    *emit_receipt.py*) ;;
+    *) printf 'FAIL: block must name emit_receipt.py; got: %s\n' "$stderr_output"; exit 1 ;;
+  esac
 
   audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log" 2>/dev/null)
-  if ! printf '%s' "$audit_line" | grep -q 'receipt_emit_skipped_tool_missing'; then
-    printf 'FAIL: expected receipt_emit_skipped_tool_missing audit event, got: %s\n' "$audit_line"
+  if ! printf '%s' "$audit_line" | grep -q 'receipt_emit_base_tool_missing'; then
+    printf 'FAIL: expected receipt_emit_base_tool_missing audit event, got: %s\n' "$audit_line"
     exit 1
   fi
-  printf 'PASS: missing tools/emit_receipt.py fails open, never blocks\n'
+  printf 'PASS: missing base emit_receipt.py blocks, fail-closed, and names the file\n'
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))
@@ -1495,6 +1520,8 @@ printf '\n=== Test: check_emit_receipt is BOUNDED -- times out and fails open in
   touch "$AESOP_ROOT/dummy_key.pem"
   export AESOP_RECEIPT_TIMEOUT=1
   unset AESOP_RECEIPT_EMIT
+  emit_fixture_base "$AESOP_ROOT"
+  cd "$AESOP_ROOT" || exit 1
 
   start_ts=$(date +%s)
   # Use 60s timeout guard (with real timeout from outer PATH) to catch hangs and print trace
@@ -1592,6 +1619,8 @@ printf '\n=== Test: check_emit_receipt uses default path when env vars unset ===
   printf 'dummy_key_content' > "$HOME/.aesop/receipt_key.pem"
 
   printf 'import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/emit_receipt.py"
+  emit_fixture_base "$AESOP_ROOT"
+  cd "$AESOP_ROOT" || exit 1
   unset AESOP_RECEIPT_EMIT
   unset AESOP_RECEIPT_KEY
   unset AESOP_RECEIPT_HMAC_SECRET
@@ -1683,6 +1712,8 @@ printf '\n=== Test: check_emit_receipt is BOUNDED without timeout binary (fallba
   export AESOP_ROOT="$TEST_ROOT/aesop_receipt_no_timeout_bin"
   mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
   printf 'import signal, sys, time\nsignal.signal(signal.SIGTERM, lambda s, f: sys.exit(0))\nwhile True: time.sleep(1)\n' > "$AESOP_ROOT/tools/emit_receipt.py"
+  emit_fixture_base "$AESOP_ROOT"
+  cd "$AESOP_ROOT" || exit 1
   export AESOP_RECEIPT_KEY="$AESOP_ROOT/dummy_key.pem"
   touch "$AESOP_ROOT/dummy_key.pem"
   export AESOP_RECEIPT_TIMEOUT=1
@@ -1754,7 +1785,9 @@ receipt_gate_case() {
   printf '#!/bin/sh\nexit 0\n' > "$root/stub-bin/gh"
   chmod +x "$root/stub-bin/gh"
   touch "$root/dummy_key.pem"
+  emit_fixture_base "$root"
   (
+    cd "$root" || exit 1
     export AESOP_ROOT="$root" AESOP_RECEIPT_KEY="$root/dummy_key.pem" STUB_ARGV="$root/argv.txt"
     export PATH="$root/stub-bin:$PATH"
     unset AESOP_RECEIPT_EMIT AESOP_RECEIPT_TIMEOUT AESOP_PUSH_RED
