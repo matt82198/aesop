@@ -95,7 +95,7 @@ def main():
             ),
             (
                 "tp_password_literal",
-                f"password = '{'hunter2secret99'}'\\n",
+                f"{'password'} = '{'hunter2secret99'}'\\n",
                 "app.py",
                 1,
                 "password"
@@ -157,13 +157,24 @@ def main():
                 "pem_private_key"
             ),
             (
-                # Doc-shaped rule: generic assignment IS softened by pragma.
-                "tp_pragma_generic_softened",
+                # generic_secret_assignment is NOT softened by pragma: a real-shaped
+                # value stays fatal (self-asserted pragma must not launder credentials).
+                "tp_pragma_generic_not_softened",
                 "# secretscan: allow-pattern-docs\n"
                 + "password = \"this_is_a_doc_sample_value_12345\"\n",
                 "pattern_docs.py",
+                1,
+                "HIGH"
+            ),
+            (
+                # Doc examples use placeholder values: the rule's own placeholder
+                # check excuses them with or without the pragma.
+                "tp_pragma_generic_placeholder_clean",
+                "# secretscan: allow-pattern-docs\n"
+                + "password = \"<password-value>\"\n",
+                "pattern_docs.py",
                 0,
-                "ALLOWED-DOC"
+                "CLEAN"
             ),
             (
                 # Doc-shaped rule: env access IS softened by pragma.

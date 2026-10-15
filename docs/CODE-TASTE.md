@@ -128,10 +128,9 @@ The scanner uses **two layers**:
    - Connection strings with credentials
 
 2. **Doc-shaped patterns** (allow-pragmaed, but documented):
-   - Generic assignment patterns: `password = "..."`
    - Environment variable access: `os.getenv('SECRET')`
 
-These patterns are high false-positive rate in test files, so they can be allowed by pragma. The `KEY_NAME=value` credential rule (`generic_credential_assignment`) is NOT pragma-able: the pragma is self-asserted by the scanned file, so it cannot launder a credential-shaped value. Doc examples of that rule use a placeholder value (`<...>`, `example`, `xxx`, `changeme`, ...) that the rule itself allows. Fatal patterns are high-precision (PEM headers, AWS key format) and are NEVER pragmaed.
+The only pragma-softened rule is `env_access`. The generic assignment rules are NOT pragma-able: `generic_secret_assignment` (`password = "..."`, `authorization = "..."`) and `generic_credential_assignment` (`KEY_NAME=value`) stay fatal under the pragma, because the pragma is self-asserted by the scanned file and cannot launder a credential-shaped value. Doc examples of those rules use a placeholder value (`<...>`, `example`, `xxx`, `changeme`, ...) that each rule's own placeholder check allows. Fatal patterns are high-precision (PEM headers, AWS key format) and are NEVER pragmaed.
 
 **Why separate fatal from doc-shaped?**
 

@@ -557,6 +557,10 @@ def verify_version_claims(claims, git_root):
         latest (a stray/test-fixture leak, e.g. a v1.0.0 tag sitting on an
         unrelated "Initial commit" with no path to HEAD) is reported as a
         WARN, never silently adopted as "the version".
+      - release window: a claim exactly equal to package.json that is ahead of
+        origin's latest tag (bumped, not yet tagged) is a non-failing PRE-PUBLISH
+        finding, not a CONTRADICTION. A claim behind origin's tag stays a
+        CONTRADICTION.
 
     Returns findings list.
     """
@@ -626,7 +630,20 @@ def verify_version_claims(claims, git_root):
                 f"Claimed version {claimed_version} but package.json has {package_version}"
             )
 
-        if latest_origin_version and claimed_ver_normalized != origin_ver_normalized:
+        # Release window: the claim is exactly package.json's version (the bump is
+        # declared) but origin has no tag for it yet, and origin's tag is older.
+        # That is a named PRE-PUBLISH state, not a contradiction. Only the exact
+        # package.json version qualifies; a claim behind origin's tag stays a
+        # CONTRADICTION (a real downgrade).
+        origin_mismatch = bool(latest_origin_version) and claimed_ver_normalized != origin_ver_normalized
+        pre_publish = (
+            origin_mismatch
+            and bool(pkg_ver_normalized)
+            and claimed_ver_normalized == pkg_ver_normalized
+            and _semver_key(claimed_ver_normalized) > _semver_key(origin_ver_normalized)
+        )
+
+        if origin_mismatch and not pre_publish:
             contradictions.append(
                 f"Claimed version {claimed_version} but latest tag ({resolution_source}) "
                 f"is {latest_origin_version}"
@@ -638,6 +655,18 @@ def verify_version_claims(claims, git_root):
                 "line": line,
                 "status": "CONTRADICTION",
                 "detail": "; ".join(contradictions)
+            })
+        elif pre_publish:
+            findings.append({
+                "claim": claim,
+                "line": line,
+                "status": "PRE-PUBLISH",
+                "detail": (
+                    f"Release window: package.json is {package_version} and the claim matches it, "
+                    f"but origin's latest tag is {latest_origin_version} ({resolution_source}); "
+                    f"the bump is not yet tagged on origin. Named pre-publish state, not a "
+                    f"contradiction; clears when tag v{claimed_ver_normalized} lands on origin"
+                ),
             })
 
         if stray_local_tag:

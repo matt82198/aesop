@@ -42,9 +42,12 @@ _TEST_COUNT_RES = (
 class PartSpec:
     """One matrix part: `cmd` builds argv from the repo path; `cmd is None` means not runnable here."""
 
-    def __init__(self, cmd, skip_reason=None):
+    def __init__(self, cmd, skip_reason=None, requires_wsl=False):
         self.cmd = cmd
         self.skip_reason = skip_reason
+        # requires_wsl: the Linux-shape leg. WSL probe absent/no-distro -> skipped-not-runnable;
+        # probe error -> the part runs and fails closed (see run_matrix).
+        self.requires_wsl = requires_wsl
 
 
 def _py(*rest):
@@ -63,6 +66,7 @@ DEFAULT_REGISTRY = {
     "encoding-lint": _py("tools/encoding_lint.py", "--check"),
     "import-resolution-check": _py("tools/import_resolution_check.py"),
     "sibling-import-check": _py("tools/sibling_import_check.py", "--check"),
+    "linux-shape": PartSpec(_py("tools/linux_shape_check.py", "--require-wsl"), requires_wsl=True),
     "browser-proofs": PartSpec(None, "not runnable here: hosted browsers + playwright matrix (ci.yml browser-proofs)"),
     "windows-shard": PartSpec(None, "not runnable here: hosted windows runner (ci.yml windows-shard)"),
 }
@@ -88,7 +92,7 @@ def parse_test_count(text):
     return None
 
 
-def run_part(repo, name, spec, throwaway_wt=None):
+def run_part(repo, name, spec, throwaway_wt=None, log_path=None):
     argv = spec.cmd(Path(throwaway_wt or repo))
     t0 = time.monotonic()
     env = dict(os.environ)
@@ -103,20 +107,47 @@ def run_part(repo, name, spec, throwaway_wt=None):
         res = subprocess.run(argv, cwd=str(throwaway_wt or repo), env=env, capture_output=True,
                              encoding="utf-8", errors="replace")
     out = (res.stdout or "") + "\n" + (res.stderr or "")
+    if res.returncode != 0 and log_path is not None:
+        # A failing part must be explainable: keep its output tail on disk (never in the envelope).
+        _write_part_log(Path(log_path), res)
     return {"name": name, "exit_code": int(res.returncode), "test_count": parse_test_count(out),
             "duration_s": round(time.monotonic() - t0, 3)}
 
 
+PART_LOG_TAIL_LINES = 200
+
+
+def part_log_path(repo, head_sha, name):
+    """Where a FAILED part's output tail is kept: state/receipts/parts/<sha>/<part>.log (gitignored state/)."""
+    return Path(repo) / "state" / "receipts" / "parts" / head_sha / (name + ".log")
+
+
+def _write_part_log(log_path, res):
+    """Keep the last PART_LOG_TAIL_LINES lines of a failed part's stdout and stderr."""
+    def tail(text):
+        return "\n".join((text or "").splitlines()[-PART_LOG_TAIL_LINES:])
+    body = "--- stdout (last %d lines) ---\n%s\n--- stderr (last %d lines) ---\n%s\n" % (
+        PART_LOG_TAIL_LINES, tail(res.stdout), PART_LOG_TAIL_LINES, tail(res.stderr))
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(body, encoding="utf-8")
+
+
+PART_LOG_DIR_REL = "state/receipts/parts"  # the emitter's own writes; never a matrix mutation
+
+
 def _capture_caller_state(repo):
     """Capture the caller repo's git state for tripwire verification.
-    Returns None if repo is not a git repository (e.g., test temp directory)."""
+    Returns None if repo is not a git repository (e.g., test temp directory).
+    The emitter's own part-log directory is excluded: writing it is the emitter's
+    job, and state/ is not guaranteed git-ignored in adopter repos."""
     repo = Path(repo)
     try:
         return {
             "head": _git(repo, "rev-parse", "HEAD"),
             "tree": _git(repo, "write-tree"),
-            "porcelain": subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
-                                        capture_output=True, encoding="utf-8", errors="replace").stdout,
+            "porcelain": subprocess.run(
+                ["git", "-C", str(repo), "status", "--porcelain", "--", ".", ":(exclude)" + PART_LOG_DIR_REL],
+                capture_output=True, encoding="utf-8", errors="replace").stdout,
         }
     except ReceiptError:
         return None  # Not a git repo; skip tripwire verification
@@ -151,18 +182,36 @@ def _remove_throwaway_worktree(repo, wt):
         pass  # Best effort cleanup
 
 
-def run_matrix(repo, names, registry=None, jobs=1):
+def _default_wsl_status():
+    import linux_shape_check  # tools/ is on sys.path (see module header)
+    return linux_shape_check.wsl_status()
+
+
+def run_matrix(repo, names, registry=None, jobs=1, wsl_status_fn=None):
     """Run every runnable part (in parallel up to `jobs`) in a detached throwaway worktree;
-    return (parts, skipped). Caller tree is verified untouched via tripwire."""
+    return (parts, skipped). Caller tree is verified untouched via tripwire.
+
+    A part with requires_wsl is skipped (not failed) when the WSL probe reports `absent` or
+    `no-distro`. On `error` it still runs: its command (linux_shape_check --require-wsl) fails
+    closed, so a broken probe can never turn into a silent skip."""
     registry = DEFAULT_REGISTRY if registry is None else registry
     unknown = [n for n in names if n not in registry]
     if unknown:
         raise ReceiptError("unknown matrix part(s): %s (known: %s)" % (", ".join(unknown), ", ".join(sorted(registry))))
     skipped, runnable = [], []
+    wsl_status = None
     for n in names:
         spec = registry[n]
         if spec.cmd is None:
             skipped.append({"name": n, "reason": spec.skip_reason or "not runnable here"})
+        elif getattr(spec, "requires_wsl", False):
+            if wsl_status is None:
+                wsl_status = (wsl_status_fn or _default_wsl_status)()
+            if wsl_status in ("absent", "no-distro"):
+                skipped.append({"name": n, "reason": "not runnable here: WSL distro unavailable (%s); "
+                                                     "hosted Linux CI runs this leg" % wsl_status})
+            else:
+                runnable.append(n)
         else:
             runnable.append(n)
 
@@ -188,7 +237,10 @@ def run_matrix(repo, names, registry=None, jobs=1):
         # Run all parts in the throwaway worktree (or caller repo if not a git repo)
         parts = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, int(jobs))) as pool:
-            futs = {pool.submit(run_part, repo, n, registry[n], wt): n for n in runnable}
+            log_dir_sha = state_before["head"] if state_before is not None else None
+            futs = {pool.submit(run_part, repo, n, registry[n], wt,
+                                part_log_path(repo, log_dir_sha, n) if log_dir_sha else None): n
+                    for n in runnable}
             for fut in concurrent.futures.as_completed(futs):
                 parts.append(fut.result())
         parts.sort(key=lambda p: names.index(p["name"]))
@@ -353,6 +405,9 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
             Path(args.out).write_text(json.dumps(envelope, sort_keys=True, indent=1), encoding="utf-8")
         for p in parts:
             print("part %-28s exit=%d tests=%s %.1fs" % (p["name"], p["exit_code"], p["test_count"], p["duration_s"]))
+            log = part_log_path(repo, receipt["head_sha"], p["name"])
+            if p["exit_code"] != 0 and log.is_file():
+                print("log  %-28s %s" % (p["name"], log))
         for s in skipped:
             print("skip %-28s %s" % (s["name"], s["reason"]))
         print("conclusion=%s head=%s tree=%s scheme=%s" % (conclusion_for(parts), receipt["head_sha"][:12],

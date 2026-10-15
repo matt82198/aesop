@@ -152,10 +152,9 @@ class TestHeartbeatAndStaleness(unittest.TestCase):
         instance_id = "host1:1234:abc123"
         register_instance(self.store, instance_id, "host1", 1234)
 
-        # With a zero threshold, any instance whose last beat is older than the
-        # reference time is stale. Pass an explicit reference time 60s ahead instead of
-        # relying on time.time() advancing past the registration timestamp (same-tick
-        # registration/detection made this flaky on Windows' coarse clock).
+        # Keep F-02 rationale: real time.time() on Windows ticks ~15.6 ms, so a same-tick
+        # detect gives delta 0, which the strict '>' treats as not stale. Use an explicit
+        # reference time 60s ahead (main's #966 value) so the staleness delta is deterministic.
         stale = detect_stale_instances(
             self.store, stale_threshold_seconds=0.0, now=time.time() + 60.0)
         self.assertEqual(len(stale), 1)

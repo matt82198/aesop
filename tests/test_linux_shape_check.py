@@ -138,8 +138,63 @@ class TestLinuxShapeCheckPathConversion(unittest.TestCase):
         self.assertIn("/mnt/c/", wsl_path.lower())
 
 
+class TestWslStatus(unittest.TestCase):
+    """wsl_status() is tri-state: absent / no-distro are skips, error is a failure."""
+
+    @mock.patch("subprocess.run")
+    def test_absent_when_wsl_exe_missing(self, mock_run):
+        mock_run.side_effect = FileNotFoundError("wsl.exe")
+        self.assertEqual(lsc.wsl_status(), "absent")
+
+    @mock.patch("subprocess.run")
+    def test_no_distro_when_list_is_empty(self, mock_run):
+        mock_run.return_value = mock.Mock(returncode=0, stdout=b"", stderr=b"")
+        self.assertEqual(lsc.wsl_status(), "no-distro")
+
+    @mock.patch("subprocess.run")
+    def test_no_distro_when_output_is_only_message_text(self, mock_run):
+        msg = "Windows Subsystem for Linux has no installed distributions.\n"
+        mock_run.return_value = mock.Mock(returncode=0, stdout=msg.encode("utf-16-le"), stderr=b"")
+        self.assertEqual(lsc.wsl_status(), "no-distro")
+
+    @mock.patch("subprocess.run")
+    def test_error_when_list_call_times_out(self, mock_run):
+        import subprocess as sp
+        mock_run.side_effect = sp.TimeoutExpired(cmd="wsl.exe", timeout=5)
+        self.assertEqual(lsc.wsl_status(), "error")
+
+    @mock.patch("subprocess.run")
+    def test_error_when_list_call_exits_nonzero(self, mock_run):
+        mock_run.return_value = mock.Mock(returncode=1, stdout=b"", stderr=b"boom")
+        self.assertEqual(lsc.wsl_status(), "error")
+
+    @mock.patch("subprocess.run")
+    def test_error_when_distro_listed_but_exec_raises(self, mock_run):
+        mock_run.side_effect = [
+            mock.Mock(returncode=0, stdout="Ubuntu\n".encode("utf-16-le"), stderr=b""),
+            OSError("exec failed"),
+        ]
+        self.assertEqual(lsc.wsl_status(), "error")
+
+    @mock.patch("subprocess.run")
+    def test_ok_when_distro_listed_and_exec_succeeds(self, mock_run):
+        mock_run.side_effect = [
+            mock.Mock(returncode=0, stdout="Ubuntu\n".encode("utf-16-le"), stderr=b""),
+            mock.Mock(returncode=0, stdout=b"", stderr=b""),
+        ]
+        self.assertEqual(lsc.wsl_status(), "ok")
+
+
 class TestLinuxShapeCheckIntegration(unittest.TestCase):
     """Integration tests with mocked WSL calls."""
+
+    def setUp(self):
+        # Isolate from the caller's environment: an inherited AESOP_REQUIRE_LINUX_SHAPE=1
+        # (set in the shell or by a receipt run) must not leak into these cases.
+        env_patch = mock.patch.dict(os.environ)
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        os.environ.pop("AESOP_REQUIRE_LINUX_SHAPE", None)
 
     @mock.patch.dict(os.environ, {}, clear=False)
     @mock.patch("linux_shape_check.get_changed_files")

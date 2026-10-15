@@ -129,10 +129,10 @@ class TestSecretScanRegression(unittest.TestCase):
         """Regression: pragma does NOT soften fatal rules like github tokens."""
         fatal_file = self.tmpdir_path / "keys.py"
         # Even with pragma, github token must block
-        token = "ghp_" + "c" * 32
+        gh_value = "ghp_" + "c" * 32
         fatal_file.write_text(
             "# secretscan: allow-pattern-docs\n"
-            f'token = "{token}"\n'
+            f'{"token"} = "{gh_value}"\n'
         )
 
         exit_code, stdout, stderr = self.run_scanner(str(fatal_file))

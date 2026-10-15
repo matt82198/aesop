@@ -15,8 +15,9 @@ Output: one line per finding or summary (never prints full secrets)
 Pragma escape hatch (STRICTLY SCOPED to doc-shaped rules):
   If the literal string 'secretscan: allow-pattern-docs' appears in a file's first 10 lines
   (any comment syntax: #, //, <!-- -->), findings from the DOC-SHAPED rules ONLY
-  (generic_secret_assignment, env_access) are reported as
-  ALLOWED-DOC and do not cause exit 1. Fatal classes (PEM private keys, AWS/GitHub/Slack/OpenAI-Anthropic tokens,
+  (env_access only) are reported as ALLOWED-DOC and do not cause exit 1.
+  generic_secret_assignment and generic_credential_assignment are NOT pragma-softenable:
+  a real-shaped value is fatal regardless; only the rules' own placeholder checks excuse one. Fatal classes (PEM private keys, AWS/GitHub/Slack/OpenAI-Anthropic tokens,
   connection strings) and filename-based findings stay fatal REGARDLESS of the pragma.
   The pragma appears in git diffs and is a reviewable act.
 
@@ -130,11 +131,13 @@ CREDENTIAL_FILENAMES = [
 PLACEHOLDERS = {"xxx", "changeme", "your-key-here", "example", "test", "demo"}
 
 # Rules that CAN be softened by pragma (doc-shaped rules only)
-# generic_credential_assignment is deliberately NOT here: the pragma is self-asserted
-# by the scanned file, so it must never soften a real credential-shaped value (F-01
-# bypass, PR #971 regression). Doc examples are handled by the rule's own placeholder
-# check (_credential_value_is_placeholder), which runs regardless of the pragma.
-SOFTENED_BY_PRAGMA = {"generic_secret_assignment", "env_access"}
+# generic_credential_assignment and generic_secret_assignment are deliberately NOT
+# here: the pragma is self-asserted by the scanned file, so it must never soften a
+# real credential-shaped value (F-01 bypass, PR #971 regression; the same bypass for
+# `authorization = "<real>"` via generic_secret_assignment). Doc examples are handled
+# by each rule's own placeholder check (`<path>`, `<token>`, example, changeme, xxx),
+# which runs regardless of the pragma.
+SOFTENED_BY_PRAGMA = {"env_access"}
 
 # Rules that are ALWAYS fatal, pragma never applies
 FATAL_RULES = {
