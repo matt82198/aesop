@@ -256,7 +256,8 @@ class SubprocessVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
-ASCII_BASELINE_RELPATH = 'tools/encoding-ascii-baseline.json'
+ASCII_BASELINE_NAME = 'encoding-ascii-baseline.json'
+ASCII_BASELINE_RELPATH = 'tools/' + ASCII_BASELINE_NAME
 
 
 def _finding(filepath, line: int, col: int, message: str, code: str) -> Dict:
@@ -291,48 +292,56 @@ def scan_ascii(filepath: Path) -> List[Dict]:
     return findings
 
 
-def load_ascii_baseline(root: Path) -> set:
-    """Ratchet baseline: the tools/*.py files allowed to stay non-ASCII.
+def load_ascii_baseline(path: Path) -> set:
+    """Ratchet baseline at `path`: the tools/*.py files allowed to stay non-ASCII.
 
     A missing file is an empty baseline. A malformed one raises (fail closed).
     """
-    path = root / ASCII_BASELINE_RELPATH
     if not path.exists():
         return set()
     data = json.loads(path.read_text(encoding='utf-8'))
     files = data.get('files') if isinstance(data, dict) else None
     if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
-        raise ValueError(f'{ASCII_BASELINE_RELPATH}: expected {{"files": [str, ...]}}')
+        raise ValueError(f'{path}: expected {{"files": [str, ...]}}')
     return set(files)
 
 
-def ascii_findings(root: Path) -> List[Dict]:
+def _ascii_scope(root: Path) -> Dict[str, Path]:
+    """Repo-relative POSIX path -> Path for every tools/*.py (non-recursive)."""
+    return {
+        p.relative_to(root).as_posix(): p
+        for p in sorted((root / 'tools').glob('*.py'))
+    }
+
+
+def ascii_stale_entries(root: Path, baseline_path: Path) -> List[str]:
+    """Baselined paths that are out of scope, missing, or now ASCII-clean (sorted)."""
+    scope = _ascii_scope(root)
+    stale = []
+    for rel in sorted(load_ascii_baseline(baseline_path)):
+        if rel not in scope or not scan_ascii(scope[rel]):
+            stale.append(rel)
+    return stale
+
+
+def ascii_findings(root: Path, baseline_path: Optional[Path] = None) -> List[Dict]:
     """ASCII-only rule for tools/*.py (non-recursive), with a shrink-only ratchet.
 
-    A non-ASCII file not in the baseline is a finding. A baselined file that is
-    now clean, or no longer exists, is a stale entry the baseline must drop.
+    A non-ASCII file not in the baseline is a finding. A baselined entry that is
+    now clean, missing or out of scope is a stale entry the baseline must drop.
     """
-    baseline = load_ascii_baseline(root)
+    if baseline_path is None:
+        baseline_path = root / ASCII_BASELINE_RELPATH
+    baseline = load_ascii_baseline(baseline_path)
     findings = []
-    seen = set()
-    for pyfile in sorted((root / 'tools').glob('*.py')):
-        rel = pyfile.relative_to(root).as_posix()
-        seen.add(rel)
-        hits = scan_ascii(pyfile)
-        if hits and rel not in baseline:
-            findings.extend(hits)
-        elif not hits and rel in baseline:
-            findings.append(_finding(
-                pyfile, 0, 0,
-                f"{rel} is ASCII-clean but still listed in {ASCII_BASELINE_RELPATH}; "
-                f"remove it (the baseline only shrinks)",
-                '',
-            ))
-    for rel in sorted(baseline - seen):
+    for rel, pyfile in _ascii_scope(root).items():
+        if rel not in baseline:
+            findings.extend(scan_ascii(pyfile))
+    for rel in ascii_stale_entries(root, baseline_path):
         findings.append(_finding(
             root / rel, 0, 0,
-            f"{rel} is listed in {ASCII_BASELINE_RELPATH} but does not exist; "
-            f"remove the stale entry",
+            f"{rel} is listed in {baseline_path.name} but is ASCII-clean, missing or "
+            f"out of scope; remove the stale entry (the baseline only shrinks)",
             '',
         ))
     return findings
@@ -412,6 +421,7 @@ def run(
     paths: Optional[List[str]] = None,
     root: Optional[Path] = None,
     json_output: bool = False,
+    baseline: Optional[str] = None,
 ) -> int:
     """Main scan and report.
 
@@ -419,6 +429,8 @@ def run(
         paths: Specific directories to scan (or None for defaults)
         root: Repository root (for relative paths in output)
         json_output: If True, output JSON instead of text
+        baseline: Ratchet query (liveness protocol). Checks only the ASCII
+            ratchet against this file and reports {"stale": [...]} with --json.
 
     Returns: Exit code (0=clean, 1=findings, 2=error)
     """
@@ -426,6 +438,17 @@ def run(
         root = Path.cwd()
     else:
         root = Path(root).resolve()
+
+    if baseline is not None:
+        stale = ascii_stale_entries(root, Path(baseline).resolve())
+        if json_output:
+            print(json.dumps({'stale': stale, 'count': len(stale), 'baseline': baseline}, indent=2))
+        else:
+            for rel in stale:
+                print(f"stale: {rel}")
+            print("[OK] no stale ASCII baseline entries" if not stale else
+                  f"[FAIL] {len(stale)} stale ASCII baseline entries")
+        return 1 if stale else 0
 
     # Default scan directories
     if not paths:
@@ -520,6 +543,11 @@ def main():
         default=None,
         help='Repository root (default: cwd)'
     )
+    parser.add_argument(
+        '--baseline',
+        default=None,
+        help='Ratchet query: report stale entries of this ASCII baseline (with --json: {"stale": [...]})'
+    )
 
     args = parser.parse_args()
 
@@ -528,6 +556,7 @@ def main():
             paths=args.paths,
             root=args.root,
             json_output=args.json,
+            baseline=args.baseline,
         )
         sys.exit(exit_code)
     except Exception as e:

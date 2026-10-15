@@ -622,6 +622,38 @@ class AsciiScopeTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
 
+    def _baseline_query(self, baseline_path):
+        return subprocess.run(
+            [sys.executable, str(ROOT / "tools" / "encoding_lint.py"),
+             "--baseline", str(baseline_path), "--json", "--root", str(self.root)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=120,
+        )
+
+    def test_baseline_query_reports_stale_entries_as_json(self):
+        self._write("tools/x.py", "print('clean')\n")
+        self._baseline(["tools/x.py", "tools/gone.py"])
+        result = self._baseline_query(self.root / "tools" / "encoding-ascii-baseline.json")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)["stale"], ["tools/gone.py", "tools/x.py"])
+
+    def test_baseline_query_is_empty_when_every_entry_is_live(self):
+        self._write("tools/x.py", "# a — b\n")
+        self._baseline(["tools/x.py"])
+        result = self._baseline_query(self.root / "tools" / "encoding-ascii-baseline.json")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)["stale"], [])
+
+    def test_repo_baseline_is_fully_live(self):
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "tools" / "encoding_lint.py"),
+             "--baseline", str(ROOT / "tools" / "encoding-ascii-baseline.json"), "--json",
+             "--root", str(ROOT)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=120,
+        )
+        self.assertEqual(json.loads(result.stdout)["stale"], [])
+
     def test_repo_baseline_cannot_grow(self):
         baseline = json.loads(
             (ROOT / "tools" / "encoding-ascii-baseline.json").read_text(encoding="utf-8"))
