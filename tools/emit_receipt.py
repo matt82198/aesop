@@ -42,9 +42,12 @@ _TEST_COUNT_RES = (
 class PartSpec:
     """One matrix part: `cmd` builds argv from the repo path; `cmd is None` means not runnable here."""
 
-    def __init__(self, cmd, skip_reason=None):
+    def __init__(self, cmd, skip_reason=None, requires_wsl=False):
         self.cmd = cmd
         self.skip_reason = skip_reason
+        # requires_wsl: the Linux-shape leg. WSL probe absent/no-distro -> skipped-not-runnable;
+        # probe error -> the part runs and fails closed (see run_matrix).
+        self.requires_wsl = requires_wsl
 
 
 def _py(*rest):
@@ -63,6 +66,7 @@ DEFAULT_REGISTRY = {
     "encoding-lint": _py("tools/encoding_lint.py", "--check"),
     "import-resolution-check": _py("tools/import_resolution_check.py"),
     "sibling-import-check": _py("tools/sibling_import_check.py", "--check"),
+    "linux-shape": PartSpec(_py("tools/linux_shape_check.py", "--require-wsl"), requires_wsl=True),
     "browser-proofs": PartSpec(None, "not runnable here: hosted browsers + playwright matrix (ci.yml browser-proofs)"),
     "windows-shard": PartSpec(None, "not runnable here: hosted windows runner (ci.yml windows-shard)"),
 }
@@ -178,18 +182,36 @@ def _remove_throwaway_worktree(repo, wt):
         pass  # Best effort cleanup
 
 
-def run_matrix(repo, names, registry=None, jobs=1):
+def _default_wsl_status():
+    import linux_shape_check  # tools/ is on sys.path (see module header)
+    return linux_shape_check.wsl_status()
+
+
+def run_matrix(repo, names, registry=None, jobs=1, wsl_status_fn=None):
     """Run every runnable part (in parallel up to `jobs`) in a detached throwaway worktree;
-    return (parts, skipped). Caller tree is verified untouched via tripwire."""
+    return (parts, skipped). Caller tree is verified untouched via tripwire.
+
+    A part with requires_wsl is skipped (not failed) when the WSL probe reports `absent` or
+    `no-distro`. On `error` it still runs: its command (linux_shape_check --require-wsl) fails
+    closed, so a broken probe can never turn into a silent skip."""
     registry = DEFAULT_REGISTRY if registry is None else registry
     unknown = [n for n in names if n not in registry]
     if unknown:
         raise ReceiptError("unknown matrix part(s): %s (known: %s)" % (", ".join(unknown), ", ".join(sorted(registry))))
     skipped, runnable = [], []
+    wsl_status = None
     for n in names:
         spec = registry[n]
         if spec.cmd is None:
             skipped.append({"name": n, "reason": spec.skip_reason or "not runnable here"})
+        elif getattr(spec, "requires_wsl", False):
+            if wsl_status is None:
+                wsl_status = (wsl_status_fn or _default_wsl_status)()
+            if wsl_status in ("absent", "no-distro"):
+                skipped.append({"name": n, "reason": "not runnable here: WSL distro unavailable (%s); "
+                                                     "hosted Linux CI runs this leg" % wsl_status})
+            else:
+                runnable.append(n)
         else:
             runnable.append(n)
 

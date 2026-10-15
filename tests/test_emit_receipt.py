@@ -200,6 +200,63 @@ class TestRunMatrix(unittest.TestCase):
         self.assertEqual(emit.conclusion_for([{"exit_code": 0}, {"exit_code": 1}]), "failure")
 
 
+class TestWslRequiredPart(unittest.TestCase):
+    """A part marked requires_wsl is skipped (not failed) when no WSL distro exists,
+    and fails closed when the WSL probe itself errors."""
+
+    OK_CMD = [sys.executable, "-c", "import sys; sys.exit(0)"]
+    BAD_CMD = [sys.executable, "-c", "import sys; sys.exit(1)"]
+
+    def _registry(self):
+        return {
+            "good": emit.PartSpec(lambda repo: self.OK_CMD),
+            "linux-shape": emit.PartSpec(lambda repo: self.BAD_CMD, requires_wsl=True),
+        }
+
+    def _run(self, status):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            return emit.run_matrix(repo, ["good", "linux-shape"], registry=self._registry(), jobs=1,
+                                   wsl_status_fn=lambda: status)
+
+    def test_no_distro_skips_wsl_part_and_conclusion_stays_success(self):
+        parts, skipped = self._run("no-distro")
+        self.assertEqual([p["name"] for p in parts], ["good"])
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]["name"], "linux-shape")
+        self.assertIn("WSL", skipped[0]["reason"])
+        self.assertEqual(emit.conclusion_for(parts), "success")
+
+    def test_absent_wsl_also_skips_wsl_part(self):
+        parts, skipped = self._run("absent")
+        self.assertEqual([p["name"] for p in parts], ["good"])
+        self.assertEqual(skipped[0]["name"], "linux-shape")
+        self.assertEqual(emit.conclusion_for(parts), "success")
+
+    def test_probe_error_runs_wsl_part_and_fails_closed(self):
+        parts, skipped = self._run("error")
+        self.assertEqual(skipped, [])
+        by = {p["name"]: p for p in parts}
+        self.assertEqual(by["linux-shape"]["exit_code"], 1)
+        self.assertEqual(emit.conclusion_for(parts), "failure")
+
+    def test_ok_wsl_runs_part_and_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            registry = {"linux-shape": emit.PartSpec(lambda r: self.OK_CMD, requires_wsl=True)}
+            parts, skipped = emit.run_matrix(repo, ["linux-shape"], registry=registry, jobs=1,
+                                             wsl_status_fn=lambda: "ok")
+        self.assertEqual(skipped, [])
+        self.assertEqual(parts[0]["exit_code"], 0)
+        self.assertEqual(emit.conclusion_for(parts), "success")
+
+    def test_default_registry_declares_linux_shape_part_requiring_wsl(self):
+        spec = emit.DEFAULT_REGISTRY["linux-shape"]
+        self.assertTrue(spec.requires_wsl)
+        self.assertIsNotNone(spec.cmd)
+        self.assertIn("--require-wsl", spec.cmd(TOOLS.parent))
+
+
 class TestCliDryRunAndPost(unittest.TestCase):
     def _registry(self):
         ok = [sys.executable, "-c", "print('Ran 2 tests in 0.00s')"]
