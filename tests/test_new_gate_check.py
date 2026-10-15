@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
@@ -470,6 +471,120 @@ class TestDryPrepushHeadPreservation(unittest.TestCase):
                 porcelain_before, porcelain_after,
                 "check_dry_prepush must not modify the working tree"
             )
+
+
+class BaselineLivenessQueryTests(unittest.TestCase):
+    """The `--baseline FILE --json` protocol that tools/baseline_liveness_check.py
+    uses to ask "does this baseline carry stale entries?".
+
+    Incident 2026-10-15: that query ran the WHOLE new-gate checklist (pre-push
+    self-test ~41 s, gate inventory ~18 s, dry pre-push ~5 s) and so took 69 s,
+    against a hard 120 s subprocess timeout. The stale question only needs the
+    portability ratchet (one scan, ~1 s). These tests drive the real entry
+    point (ngc.main) and assert the observable answer.
+    """
+
+    _SHIPPED_TEXT = (
+        "see C:\\Users\\alice\\notes\n"
+        "and /home/bob/cache\n"
+    )
+
+    def _make_fixture_tree(self):
+        root = tempfile.mkdtemp(prefix="liveness-fixture-")
+        self.addCleanup(shutil.rmtree, root, True)
+        Path(root, "package.json").write_text('{"files": ["shipped/**/*"]}\n', encoding="utf-8")
+        Path(root, "shipped").mkdir()
+        Path(root, "shipped", "a.md").write_text(self._SHIPPED_TEXT, encoding="utf-8")
+        Path(root, "tools").mkdir()
+        shutil.copy(os.path.join(REPO_ROOT, "tools", "portability_check.py"),
+                    os.path.join(root, "tools", "portability_check.py"))
+        return root
+
+    def _write_baseline(self, root, violations):
+        path = Path(root, "baseline.json")
+        path.write_text(json.dumps({"violations": violations}), encoding="utf-8")
+        return str(path)
+
+    def _query(self, root, baseline):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = ngc.main(["--root", root, "--baseline", baseline, "--json"])
+        return rc, json.loads(buf.getvalue())
+
+    def test_liveness_query_answers_under_30s_on_real_tree(self):
+        baseline = os.path.join(REPO_ROOT, ".portability-baseline.json")
+        buf = io.StringIO()
+        start = time.perf_counter()
+        with redirect_stdout(buf):
+            ngc.main(["--baseline", baseline, "--json"])
+        wall = time.perf_counter() - start
+        self.assertLess(
+            wall, 30.0,
+            "liveness query took %.1f s; it must answer in under 30 s "
+            "(the consumer timeout is 120 s and must not be raised)" % wall,
+        )
+        payload = json.loads(buf.getvalue())
+        self.assertIsInstance(payload.get("stale_entries"), list)
+
+    def test_matching_baseline_reports_no_stale_or_new(self):
+        root = self._make_fixture_tree()
+        bpath = self._write_baseline(root, {
+            "shipped/a.md@windows_user_path": 1,
+            "shipped/a.md@posix_home_path": 1,
+        })
+        rc, payload = self._query(root, bpath)
+        self.assertEqual(rc, 0)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["stale"], [])
+        self.assertEqual(payload["new"], [])
+        self.assertEqual(payload["stale_entries"], [])
+
+    def test_inflated_baseline_entry_is_reported_stale(self):
+        root = self._make_fixture_tree()
+        bpath = self._write_baseline(root, {
+            "shipped/a.md@windows_user_path": 1,
+            "shipped/a.md@posix_home_path": 1,
+            "shipped/gone.md@posix_home_path": 2,
+        })
+        rc, payload = self._query(root, bpath)
+        self.assertEqual(rc, 1)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(
+            payload["stale"],
+            ["shipped/gone.md@posix_home_path (baseline 2, current 0)"],
+        )
+        self.assertEqual(payload["stale_entries"], payload["stale"])
+
+    def test_missing_baseline_entry_is_reported_new(self):
+        root = self._make_fixture_tree()
+        bpath = self._write_baseline(root, {"shipped/a.md@windows_user_path": 1})
+        rc, payload = self._query(root, bpath)
+        self.assertEqual(rc, 1)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["stale"], [])
+        self.assertEqual(
+            payload["new"],
+            ["shipped/a.md@posix_home_path (baseline 0, current 1)"],
+        )
+
+    def test_verdict_matches_portability_ratchet_oracle(self):
+        """The liveness answer must equal the portability ratchet's own verdict
+        (tools/portability_check.py check_ratchet over the same scan)."""
+        import portability_check as pc
+        root = self._make_fixture_tree()
+        bpath = self._write_baseline(root, {
+            "shipped/a.md@windows_user_path": 3,
+            "shipped/a.md@posix_home_path": 1,
+            "shipped/old.md@posix_home_path": 1,
+        })
+        findings = pc.scan_shipped_surface(root)
+        is_ok, stale, new = pc.check_ratchet(
+            pc.load_baseline(bpath), pc.findings_to_baseline_keys(findings))
+        rc, payload = self._query(root, bpath)
+        self.assertEqual(payload["ok"], is_ok)
+        self.assertEqual(payload["stale"], stale)
+        self.assertEqual(payload["new"], new)
+        self.assertEqual(rc, 0 if is_ok else 1)
 
 
 if __name__ == "__main__":

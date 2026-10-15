@@ -1879,6 +1879,22 @@ check_emit_receipt() {
   if [ -n "$receipt_output" ]; then
     printf '%s\n' "$receipt_output"
   fi
+  # A "spooled" receipt means its sha is not on GitHub yet (we are inside pre-push), so
+  # nothing would post it until a later push or the watchdog. Start a DETACHED poller
+  # that posts it as soon as the sha appears. --spawn forks and returns at once: the
+  # push never waits on it, and the poller's stdio goes to <sha>.flush.log.
+  # AESOP_RECEIPT_AUTOFLUSH=0 opts out. Fail-open like every branch here.
+  if [ "${AESOP_RECEIPT_AUTOFLUSH:-1}" != "0" ] && printf '%s' "$receipt_output" | grep -q "spooled receipt for"; then
+    local spool_sha=""
+    spool_sha=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+      git -C "$aesop_root" rev-parse HEAD 2>/dev/null) || spool_sha=""
+    if [ -n "$spool_sha" ] && [ -f "$aesop_root/tools/receipt_autoflush.py" ]; then
+      env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+        "$py_bin" "$aesop_root/tools/receipt_autoflush.py" --repo "$aesop_root" --sha "$spool_sha" --spawn \
+        < /dev/null 2>&1 || true
+      log_event "receipt_autoflush_spawned"
+    fi
+  fi
   log_event "receipt_emit_posted"
   return 0
 }
@@ -2860,12 +2876,73 @@ GENPATHS
     test_failed=$((test_failed + 1))
   fi
 
+  printf '\n=== Test 29: check_symbol_survival BLOCKS a merge that drops a branch symbol (main as first parent), passes a clean push ===\n'
+  (
+    sym_real_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+    sym_aesop_root="$tmpdir/symbol_survival_aesop"
+    rm -rf "$sym_aesop_root"
+    mkdir -p "$sym_aesop_root/tools"
+    cp "$sym_real_root/tools/pr_symbol_survival_check.py" "$sym_aesop_root/tools/"
+
+    sym_repo="$tmpdir/symbol_survival_repo"
+    rm -rf "$sym_repo"
+    git init -q -b main "$sym_repo"
+    git -C "$sym_repo" config user.email "test@example.com"
+    git -C "$sym_repo" config user.name "Test User"
+    git -C "$sym_repo" config core.autocrlf false
+    printf 'def existing():\n    pass\n' > "$sym_repo/mod.py"
+    git -C "$sym_repo" add -A
+    git -C "$sym_repo" commit -q -m base
+    sym_base=$(git -C "$sym_repo" rev-parse HEAD)
+
+    git -C "$sym_repo" checkout -q -b feature
+    printf 'def existing():\n    pass\n\n\ndef alpha():\n    pass\n' > "$sym_repo/mod.py"
+    git -C "$sym_repo" commit -qam "feat: add alpha"
+
+    git -C "$sym_repo" checkout -q main
+    printf 'def existing():\n    pass\n\n\ndef gamma():\n    pass\n' > "$sym_repo/mod.py"
+    git -C "$sym_repo" commit -qam "main: add gamma"
+
+    # Lossy merge with main as FIRST parent: resolution keeps main's whole file.
+    git -C "$sym_repo" merge -q --no-edit feature >/dev/null 2>&1 || true
+    git -C "$sym_repo" checkout -q --ours mod.py
+    git -C "$sym_repo" add mod.py
+    git -C "$sym_repo" commit -q -m "merge feature (resolution drops alpha)"
+    sym_tip=$(git -C "$sym_repo" rev-parse HEAD)
+
+    (
+      cd "$sym_repo" || exit 1
+      export AESOP_ROOT="$sym_aesop_root"
+      stdin_line="$sym_tip $sym_tip refs/heads/main $sym_base"
+      if printf '%s\n' "$stdin_line" | check_symbol_survival >/dev/null 2>&1; then
+        printf 'FAIL: check_symbol_survival should BLOCK a push whose merge dropped a branch symbol\n'
+        exit 1
+      fi
+
+      git checkout -q -b clean "$sym_base"
+      printf 'def existing():\n    pass\n\n\ndef beta():\n    pass\n' > mod.py
+      git commit -qam "feat: add beta (no merge)"
+      clean_tip=$(git rev-parse HEAD)
+      clean_line="$clean_tip $clean_tip refs/heads/clean $sym_base"
+      if ! printf '%s\n' "$clean_line" | check_symbol_survival >/dev/null 2>&1; then
+        printf 'FAIL: check_symbol_survival should PASS a clean non-merge push\n'
+        exit 1
+      fi
+      printf 'PASS: check_symbol_survival blocks the lossy merge and passes a clean push\n'
+    )
+  )
+  if [ $? -eq 0 ]; then
+    test_passed=$((test_passed + 1))
+  else
+    test_failed=$((test_failed + 1))
+  fi
+
   printf '\n=== Test Results ===\n'
   printf 'PASSED: %d\n' "$test_passed"
   printf 'FAILED: %d\n' "$test_failed"
 
   if [ "$test_failed" -eq 0 ]; then
-    printf '\nAll 28 tests passed.\n'
+    printf '\nAll 29 tests passed.\n'
     return 0
   else
     printf '\nSome tests failed.\n'

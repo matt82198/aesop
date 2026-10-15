@@ -84,8 +84,18 @@ def get_api_key() -> str:
     return key
 
 
-def make_api_runner(model_id: str, api_key: str):
-    """Create a runner that calls the Anthropic API directly."""
+def make_api_runner(model_id: str, api_key: str, confirm_spend: bool = False):
+    """Create a runner that calls the Anthropic API directly.
+
+    Live-spend guards, both checked before any client is constructed:
+    - AESOP_BENCH_OFFLINE=1 (the offline seam shared with bench/frontier_slice.py)
+      refuses unconditionally, even when confirm_spend is True.
+    - confirm_spend must be True (the explicit --confirm-spend gate).
+    """
+    if os.environ.get("AESOP_BENCH_OFFLINE") == "1":
+        raise RuntimeError("AESOP_BENCH_OFFLINE=1: live API bench disabled, no client constructed")
+    if not confirm_spend:
+        raise RuntimeError("live API bench requires --confirm-spend; no client constructed")
     if anthropic is None:
         print("ERROR: anthropic SDK not installed. Run: pip install anthropic")
         sys.exit(1)
@@ -149,6 +159,7 @@ def run_variant(
     variant: str,  # "v2" or "v3"
     model_alias: str,  # "haiku", "sonnet", "opus"
     api_key: str,
+    confirm_spend: bool = False,
 ) -> Tuple[List[dict], float, dict]:
     """Run one variant x model combo. Return (results, accuracy, cost_summary)."""
     tasks_file, gt_file, display_name = VARIANTS[variant]
@@ -158,7 +169,7 @@ def run_variant(
 
     tasks = load_tasks(tasks_file)
     ground_truth = load_ground_truth(gt_file)
-    runner = make_api_runner(model_id, api_key)
+    runner = make_api_runner(model_id, api_key, confirm_spend=confirm_spend)
 
     results, accuracy = run_bench(tasks, ground_truth, runner)
     summary = build_summary(model_alias, results, accuracy)
@@ -231,6 +242,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="Estimate cost without running",
     )
+    parser.add_argument(
+        "--confirm-spend",
+        action="store_true",
+        help="Required to make paid API calls (without it, exits 2 before any paid call)",
+    )
     args = parser.parse_args(argv)
 
     # Expand 'all' to v2 and v3
@@ -241,6 +257,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Parse models (comma-separated)
     models = [m.strip() for m in args.models.split(",")]
+
+    if not args.confirm_spend:
+        print("Use --confirm-spend to actually run (without it, exits 2 before any paid call).")
+        return 2
 
     api_key = get_api_key()
 
@@ -269,7 +289,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         for model_alias in models:
             try:
                 results, accuracy, summary = run_variant(
-                    variant, model_alias, api_key
+                    variant, model_alias, api_key, confirm_spend=args.confirm_spend
                 )
                 results_by_variant[variant][model_alias] = summary
 

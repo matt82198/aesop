@@ -17,6 +17,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from time import time
+from tests.sys_modules_restore import snapshot_sys_modules
 
 UI_DIR = Path(__file__).parent.parent / "ui"
 if str(UI_DIR) not in sys.path:
@@ -137,6 +138,7 @@ class TestHealthScorePerfect(HealthScoreTestCase):
 
     def test_perfect_score_all_checks_pass(self):
         """All checks passing yields score near 100."""
+        self.addCleanup(snapshot_sys_modules("health_score"))
         import sys
         if "health_score" in sys.modules:
             del sys.modules["health_score"]
@@ -166,6 +168,7 @@ class TestHealthScorePerfect(HealthScoreTestCase):
 
     def test_score_json_output_format(self):
         """Score output in JSON format is well-formed."""
+        self.addCleanup(snapshot_sys_modules("health_score"))
         import sys
         if "health_score" in sys.modules:
             del sys.modules["health_score"]
@@ -194,6 +197,7 @@ class TestHealthScorePerfect(HealthScoreTestCase):
 
     def test_score_human_output_format(self):
         """Score output in human format is readable."""
+        self.addCleanup(snapshot_sys_modules("health_score"))
         import sys
         if "health_score" in sys.modules:
             del sys.modules["health_score"]
@@ -222,6 +226,7 @@ class TestHealthScorePartial(HealthScoreTestCase):
 
     def test_missing_config_reduces_score(self):
         """Missing or invalid config reduces score."""
+        self.addCleanup(snapshot_sys_modules("health_score"))
         import sys
         if "health_score" in sys.modules:
             del sys.modules["health_score"]
@@ -249,6 +254,7 @@ class TestHealthScorePartial(HealthScoreTestCase):
 
     def test_missing_directories_reduces_score(self):
         """Missing required directories reduce score."""
+        self.addCleanup(snapshot_sys_modules("health_score"))
         import sys
         if "health_score" in sys.modules:
             del sys.modules["health_score"]
@@ -266,6 +272,7 @@ class TestHealthScorePartial(HealthScoreTestCase):
 
     def test_missing_hook_reduces_score(self):
         """Missing pre-push hook reduces score."""
+        self.addCleanup(snapshot_sys_modules("health_score"))
         import sys
         if "health_score" in sys.modules:
             del sys.modules["health_score"]
@@ -290,6 +297,7 @@ class TestHealthScorePartial(HealthScoreTestCase):
 
     def test_missing_claude_md_reduces_score(self):
         """Missing CLAUDE.md reduces score."""
+        self.addCleanup(snapshot_sys_modules("health_score"))
         import sys
         if "health_score" in sys.modules:
             del sys.modules["health_score"]
@@ -314,6 +322,7 @@ class TestHealthScorePartial(HealthScoreTestCase):
 
     def test_stale_heartbeats_reduce_score(self):
         """Stale heartbeats reduce score."""
+        self.addCleanup(snapshot_sys_modules("health_score"))
         import sys
         if "health_score" in sys.modules:
             del sys.modules["health_score"]
@@ -344,6 +353,7 @@ class TestHealthScoreWeighting(HealthScoreTestCase):
 
     def test_critical_checks_weighted_higher(self):
         """Critical checks (config, hooks) weighted more than informational checks."""
+        self.addCleanup(snapshot_sys_modules("health_score"))
         import sys
         if "health_score" in sys.modules:
             del sys.modules["health_score"]
@@ -381,6 +391,7 @@ class TestHealthScoreEdgeCases(HealthScoreTestCase):
 
     def test_handles_nonexistent_cwd(self):
         """Gracefully handles non-existent working directory."""
+        self.addCleanup(snapshot_sys_modules("health_score"))
         import sys
         if "health_score" in sys.modules:
             del sys.modules["health_score"]
@@ -395,6 +406,7 @@ class TestHealthScoreEdgeCases(HealthScoreTestCase):
 
     def test_handles_invalid_config_json(self):
         """Gracefully handles invalid JSON in config."""
+        self.addCleanup(snapshot_sys_modules("health_score"))
         import sys
         if "health_score" in sys.modules:
             del sys.modules["health_score"]
@@ -413,6 +425,7 @@ class TestHealthScoreEdgeCases(HealthScoreTestCase):
 
     def test_state_directory_not_writable(self):
         """Detects when state directory is not writable."""
+        self.addCleanup(snapshot_sys_modules("health_score"))
         import sys
         import platform
         if "health_score" in sys.modules:
@@ -443,6 +456,7 @@ class TestHealthScoreEdgeCases(HealthScoreTestCase):
 
     def test_git_identity_configured(self):
         """Confirms that git identity check passes when configured."""
+        self.addCleanup(snapshot_sys_modules("health_score"))
         import sys
         if "health_score" in sys.modules:
             del sys.modules["health_score"]
@@ -469,6 +483,7 @@ class TestHealthScoreCheckList(HealthScoreTestCase):
 
     def test_score_includes_all_required_checks(self):
         """Score output includes all required checks."""
+        self.addCleanup(snapshot_sys_modules("health_score"))
         import sys
         if "health_score" in sys.modules:
             del sys.modules["health_score"]
@@ -540,6 +555,21 @@ class TestHealthScoreHooksDirResolution(unittest.TestCase):
         import health_score
         return health_score._check_pre_push_hook(Path(cwd))
 
+    def _assert_carries_git_error(self, cwd, detail):
+        """Derive the expected git error from git itself, never a hard-coded wording.
+
+        Runs the same command the product runs (`git rev-parse --git-path hooks`) in the
+        broken fixture and requires the detail to carry its stderr (product truncates to 160).
+        """
+        probe = subprocess.run(["git", "rev-parse", "--git-path", "hooks"], cwd=str(cwd),
+                               capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=10)
+        self.assertNotEqual(probe.returncode, 0, "fixture must make git fail to answer")
+        git_error = probe.stderr.strip()
+        self.assertTrue(git_error, "git must write an error to stderr for the broken fixture")
+        self.assertTrue(detail.startswith("Cannot resolve git hooks dir: "), detail)
+        self.assertIn(git_error[:160], detail)
+
     def test_linked_worktree_with_hook_in_common_dir_passes(self):
         """Hook in the main repo's common hooks dir -> PASS from the linked worktree."""
         self._write_hook(self.main / ".git" / "hooks")
@@ -578,7 +608,7 @@ class TestHealthScoreHooksDirResolution(unittest.TestCase):
         bare_dir.mkdir()
         result = self._hooks_check(bare_dir)
         self.assertFalse(result["passed"], result["detail"])
-        self.assertIn("not a git repository", result["detail"])
+        self._assert_carries_git_error(bare_dir, result["detail"])
 
     def test_bogus_dot_git_dir_never_passes_blind(self):
         """A fake .git/hooks/pre-push in a non-repo must not pass: git cannot answer."""
@@ -586,7 +616,7 @@ class TestHealthScoreHooksDirResolution(unittest.TestCase):
         self._write_hook(fake / ".git" / "hooks")
         result = self._hooks_check(fake)
         self.assertFalse(result["passed"], result["detail"])
-        self.assertIn("not a git repository", result["detail"])
+        self._assert_carries_git_error(fake, result["detail"])
 
 
 if __name__ == "__main__":

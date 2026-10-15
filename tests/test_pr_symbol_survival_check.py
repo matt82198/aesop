@@ -296,6 +296,62 @@ class TestPrSymbolSurvivalCheck(unittest.TestCase):
         for name in ('fetch_fake_check_runs', 'fetch_fake_receipt', 'wrap_me'):
             self.assertIn(name, report['ok'])
 
+    def test_merge_with_main_as_first_parent_dropping_branch_symbol_fails(self):
+        """Regression (G13 any-parent drop): `git checkout main; git merge feature`
+        makes main the FIRST parent, which never had the branch's symbol. Resolving
+        the conflict by taking main's whole file drops alpha. The drop must still be
+        attributed to the merge (any parent that held it), so the check FAILS."""
+        repo = _init_repo(self._tmp_dir)
+
+        _write(repo, 'mod.py', 'def existing():\n    pass\n')
+        base_sha = _commit(repo, 'base: existing()')
+
+        _git(repo, 'checkout', '-q', '-b', 'feature')
+        _write(repo, 'mod.py', 'def existing():\n    pass\n\n\ndef alpha():\n    pass\n')
+        alpha_commit_sha = _commit(repo, 'feat: add alpha')
+
+        _git(repo, 'checkout', '-q', 'main')
+        _write(repo, 'mod.py', 'def existing():\n    pass\n\n\ndef gamma():\n    pass\n')
+        _commit(repo, 'main: add gamma')
+
+        merge = subprocess.run(
+            ['git', '-C', repo, 'merge', 'feature', '-q', '-m', 'merge attempt'],
+            capture_output=True, encoding='utf-8', errors='replace', timeout=30,
+        )
+        self.assertNotEqual(merge.returncode, 0, 'expected mod.py to conflict between the two sides')
+        # Lossy resolution: keep main's (current HEAD's) whole file, drop alpha.
+        _git(repo, 'checkout', '--ours', 'mod.py')
+        _git(repo, 'add', 'mod.py')
+        head_sha = _commit(repo, 'merge: resolve by taking main (drops alpha)')
+
+        rc, stdout, stderr = _run_tool(repo, '--base', base_sha, '--head', head_sha, '--json')
+        self.assertEqual(rc, 1, 'stdout={}\nstderr={}'.format(stdout, stderr))
+        report = json.loads(stdout)
+        alpha_entry = next((e for e in report['missing'] if e['symbol'] == 'alpha'), None)
+        self.assertIsNotNone(alpha_entry, 'alpha must be MISSING, not removed: {}'.format(stdout))
+        self.assertEqual(alpha_entry['added_by']['sha'], alpha_commit_sha)
+        self.assertIsNotNone(alpha_entry['dropped_by'], 'merge drop must be attributed')
+        self.assertEqual(alpha_entry['dropped_by']['sha'], head_sha)
+        self.assertNotIn('alpha', {e['symbol'] for e in report['removed']})
+
+    def test_text_output_lists_removed_entries(self):
+        """A symbol deliberately deleted by a later non-merge commit passes, and the
+        text report must show it as REMOVED so the pass is visible, not silent."""
+        repo = _init_repo(self._tmp_dir)
+        _write(repo, 'mod.py', 'def base_fn():\n    return 1\n')
+        base_sha = _commit(repo, 'base')
+
+        _git(repo, 'checkout', '-q', '-b', 'feature')
+        _write(repo, 'mod.py', 'def base_fn():\n    return 1\n\n\ndef helper():\n    return 2\n')
+        _commit(repo, 'feat: add helper')
+        _write(repo, 'mod.py', 'def base_fn():\n    return 1\n')
+        head_sha = _commit(repo, 'feat: remove helper again')
+
+        rc, stdout, stderr = _run_tool(repo, '--base', base_sha, '--head', head_sha)
+        self.assertEqual(rc, 0, 'stdout={}\nstderr={}'.format(stdout, stderr))
+        self.assertIn('REMOVED', stdout)
+        self.assertIn('helper', stdout)
+
 
 if __name__ == '__main__':
     unittest.main()

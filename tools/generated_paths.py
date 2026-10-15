@@ -109,12 +109,22 @@ path as touched only when HEAD's blob differs from the merge-base blob AND from
 origin/main's blob (`is_touched_by_push`). Identical-to-origin/main content
 passes without the override; a hand edit or a real regeneration still blocks.
 No origin/main or no merge-base fails closed (treated as touched).
+
+Regenerated-identical content is not a hand edit. A touched path is still
+allowed when the bytes HEAD carries are exactly what its registered generator
+writes from the HEAD tree (`regen_matches_head`). The generator runs in a
+throwaway detached worktree of HEAD, so the pusher's working tree is never
+written. Any failure to run, locate or compare the generator is a block.
+`AESOP_ALLOW_GENERATED=1` still bypasses the whole check, unchanged.
 """
 
 import fnmatch
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 from typing import Dict, List, Optional
 
 USAGE = (
@@ -321,10 +331,81 @@ def is_touched_by_push(path: str) -> bool:
     return not carried
 
 
+def _git_bytes(*args: str) -> Optional[bytes]:
+    """Raw stdout bytes of a git command, or None on any failure (callers fail closed)."""
+    try:
+        proc = subprocess.run(
+            ["git"] + list(args), capture_output=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout
+
+
+def _git_rc(*args: str) -> int:
+    """Exit code of a git command; non-zero (never raised) on any failure."""
+    try:
+        return subprocess.run(
+            ["git"] + list(args), capture_output=True, timeout=300).returncode
+    except (OSError, subprocess.SubprocessError):
+        return 127
+
+
+def regen_matches_head(path: str) -> bool:
+    """True when HEAD's bytes for ``path`` are exactly the registered generator's output.
+
+    The generator (the registry's ``regen`` argv) runs inside a throwaway
+    detached worktree of HEAD, never the pusher's tree. The worktree is checked
+    out with ``core.eol=lf`` so the generator sees the same LF bytes the blob
+    stores (a CRLF checkout on Windows would make byte equality meaningless). The
+    comparison is byte-for-byte against the raw HEAD blob. A hand edit, a stale
+    regeneration, a missing or crashing generator, or a worktree that cannot be
+    created all return False (fail closed).
+    """
+    argv = regenerator_for(path)
+    if not argv:
+        return False
+    blob = _git_bytes("cat-file", "blob", "HEAD:" + path)
+    if blob is None:
+        return False
+    tmp = Path(tempfile.mkdtemp(prefix="aesop-regen-check-"))
+    wt = tmp / "wt"
+    added = False
+    try:
+        if _git_rc("-c", "core.eol=lf", "-c", "core.autocrlf=false",
+                   "worktree", "add", "--detach", "-q", str(wt), "HEAD") != 0:
+            return False
+        added = True
+        script = wt / argv[0]
+        if not script.is_file():
+            return False
+        proc = subprocess.run(
+            [sys.executable, str(script)] + list(argv[1:]),
+            cwd=str(wt), capture_output=True, timeout=300)
+        if proc.returncode != 0:
+            return False
+        target = wt / path
+        if not target.is_file():
+            return False
+        return target.read_bytes() == blob
+    except (OSError, subprocess.SubprocessError):
+        return False
+    finally:
+        if added:
+            _git_rc("worktree", "remove", "--force", str(wt))
+        shutil.rmtree(tmp, ignore_errors=True)
+        _git_rc("worktree", "prune")
+
+
 def _emit_check(paths: List[str], as_json: bool) -> int:
     registered = check_paths(paths)
-    hits = [hit for hit in registered if is_touched_by_push(hit["path"])]
-    carried = [hit["path"] for hit in registered if hit not in hits]
+    touched = [hit for hit in registered if is_touched_by_push(hit["path"])]
+    touched_paths = {hit["path"] for hit in touched}
+    carried = [hit["path"] for hit in registered if hit["path"] not in touched_paths]
+    regenerated = [hit["path"] for hit in touched if regen_matches_head(hit["path"])]
+    regenerated_paths = set(regenerated)
+    hits = [hit for hit in touched if hit["path"] not in regenerated_paths]
     allowed = os.environ.get(ALLOW_ENV, "") == "1"
 
     if as_json:
@@ -332,7 +413,7 @@ def _emit_check(paths: List[str], as_json: bool) -> int:
 
         sys.stdout.write(json.dumps(
             {"hits": hits, "count": len(hits), "allowed": allowed,
-             "carried": carried}, indent=2) + "\n")
+             "carried": carried, "regenerated": regenerated}, indent=2) + "\n")
     elif hits:
         stream = sys.stdout if allowed else sys.stderr
         verb = "ALLOWED (%s=1)" % ALLOW_ENV if allowed else "BLOCKED"
@@ -349,6 +430,9 @@ def _emit_check(paths: List[str], as_json: bool) -> int:
     if carried and not as_json:
         sys.stdout.write("generated_paths: OK -- carried unchanged from %s by a merge, "
                          "not touched: %s\n" % (MAIN_REF, ", ".join(carried)))
+    if regenerated and not as_json:
+        sys.stdout.write("generated_paths: OK -- regenerated identically by its generator "
+                         "from the pushed tree: %s\n" % ", ".join(regenerated))
     if not hits or allowed:
         return 0
     return 1

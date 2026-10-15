@@ -18,6 +18,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from time import time
+from tests.sys_modules_restore import snapshot_sys_modules
 
 UI_DIR = Path(__file__).parent.parent / "ui"
 if str(UI_DIR) not in sys.path:
@@ -115,6 +116,7 @@ class TestHealthcheckGreen(HealthcheckTestCase):
     def test_green_all_heartbeats_fresh_no_alerts(self):
         """Green when all heartbeats fresh and no HIGH alerts."""
         # Import inside test so env is set
+        self.addCleanup(snapshot_sys_modules("healthcheck"))
         import sys
         if "healthcheck" in sys.modules:
             del sys.modules["healthcheck"]
@@ -142,6 +144,7 @@ class TestHealthcheckGreen(HealthcheckTestCase):
 
     def test_green_json_output(self):
         """Green status outputs valid JSON in --json mode."""
+        self.addCleanup(snapshot_sys_modules("healthcheck"))
         import sys
         if "healthcheck" in sys.modules:
             del sys.modules["healthcheck"]
@@ -167,6 +170,7 @@ class TestHealthcheckYellow(HealthcheckTestCase):
 
     def test_yellow_stale_watchdog_heartbeat(self):
         """Yellow when watchdog heartbeat is stale (>300s)."""
+        self.addCleanup(snapshot_sys_modules("healthcheck"))
         import sys
         if "healthcheck" in sys.modules:
             del sys.modules["healthcheck"]
@@ -185,6 +189,7 @@ class TestHealthcheckYellow(HealthcheckTestCase):
 
     def test_yellow_unreviewed_medium_alert(self):
         """Yellow when unreviewed MEDIUM severity alert present."""
+        self.addCleanup(snapshot_sys_modules("healthcheck"))
         import sys
         if "healthcheck" in sys.modules:
             del sys.modules["healthcheck"]
@@ -207,6 +212,7 @@ class TestHealthcheckYellow(HealthcheckTestCase):
 
     def test_yellow_ignores_reviewed_alerts(self):
         """Yellow should be avoided if alerts are marked NOTE: or RESOLVED-FP."""
+        self.addCleanup(snapshot_sys_modules("healthcheck"))
         import sys
         if "healthcheck" in sys.modules:
             del sys.modules["healthcheck"]
@@ -233,6 +239,7 @@ class TestHealthcheckRed(HealthcheckTestCase):
 
     def test_red_high_severity_alert(self):
         """Red when HIGH severity alert is unreviewed."""
+        self.addCleanup(snapshot_sys_modules("healthcheck"))
         import sys
         if "healthcheck" in sys.modules:
             del sys.modules["healthcheck"]
@@ -256,6 +263,7 @@ class TestHealthcheckRed(HealthcheckTestCase):
 
     def test_red_watchdog_dead_while_agents_running(self):
         """Red when watchdog dead (>300s) and agents appear active."""
+        self.addCleanup(snapshot_sys_modules("healthcheck"))
         import sys
         if "healthcheck" in sys.modules:
             del sys.modules["healthcheck"]
@@ -276,6 +284,7 @@ class TestHealthcheckRed(HealthcheckTestCase):
 
     def test_red_json_output(self):
         """Red status outputs valid JSON in --json mode."""
+        self.addCleanup(snapshot_sys_modules("healthcheck"))
         import sys
         if "healthcheck" in sys.modules:
             del sys.modules["healthcheck"]
@@ -301,6 +310,7 @@ class TestHealthcheckMissingFiles(HealthcheckTestCase):
 
     def test_missing_heartbeats_still_reports(self):
         """Missing heartbeat files don't crash, just report as unknown/missing."""
+        self.addCleanup(snapshot_sys_modules("healthcheck"))
         import sys
         if "healthcheck" in sys.modules:
             del sys.modules["healthcheck"]
@@ -322,6 +332,7 @@ class TestHealthcheckMissingFiles(HealthcheckTestCase):
 
     def test_missing_all_files_defaults_gracefully(self):
         """When all state files missing, tool reports health as best it can."""
+        self.addCleanup(snapshot_sys_modules("healthcheck"))
         import sys
         if "healthcheck" in sys.modules:
             del sys.modules["healthcheck"]
@@ -342,6 +353,7 @@ class TestHealthcheckTrackerCounts(HealthcheckTestCase):
 
     def test_tracker_items_counted_by_lane(self):
         """Tracker items are aggregated/reported by lane."""
+        self.addCleanup(snapshot_sys_modules("healthcheck"))
         import sys
         if "healthcheck" in sys.modules:
             del sys.modules["healthcheck"]
@@ -370,6 +382,7 @@ class TestHealthcheckTimezoneHandling(HealthcheckTestCase):
 
     def test_orchestrator_status_with_z_suffix(self):
         """Orchestrator status with Z-suffix (UTC) is parsed correctly."""
+        self.addCleanup(snapshot_sys_modules("healthcheck"))
         import sys
         if "healthcheck" in sys.modules:
             del sys.modules["healthcheck"]
@@ -388,6 +401,7 @@ class TestHealthcheckTimezoneHandling(HealthcheckTestCase):
 
     def test_orchestrator_status_with_plus_offset(self):
         """Orchestrator status with +05:00 offset is parsed correctly."""
+        self.addCleanup(snapshot_sys_modules("healthcheck"))
         import sys
         if "healthcheck" in sys.modules:
             del sys.modules["healthcheck"]
@@ -421,6 +435,7 @@ class TestHealthcheckTimezoneHandling(HealthcheckTestCase):
 
     def test_orchestrator_status_stale_with_offset(self):
         """Orchestrator status with offset that is stale is correctly identified."""
+        self.addCleanup(snapshot_sys_modules("healthcheck"))
         import sys
         if "healthcheck" in sys.modules:
             del sys.modules["healthcheck"]

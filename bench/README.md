@@ -1,5 +1,7 @@
 # bench/ — Held-out benchmark scaffold
 
+> Live-spend guard: `AESOP_BENCH_OFFLINE=1` blocks every paid path (`bench/frontier_slice.py`, `tools/bench_api_runner.py`) before any client is constructed; both paid paths also require `--confirm-spend`.
+
 ## Why this exists
 
 Wave-25's autonomy expansion (self-merging portfolio PRs on green CI) rests on a
