@@ -41,7 +41,6 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `dash.js` resolves `ui/serve.py` from the installed package (`PACKAGE_DIR = __dirname/..`), not `process.cwd()`, because init does not scaffold `ui/`. It passes `AESOP_STATE_ROOT` = env > `aesop.config.json` `state_root` > `<cwd>/state`. Test: `tests/dash-fresh-init.test.mjs`.
 
 ## Key tools
-
 - **tools/merge_queue.py**: Merge-queue advancer. Updated 2026-10-06: added AESOP_QUEUE_ROOT isolation guard (refuses to mint integrate/q-* branches unless running in dedicated queue checkout).
 - **tools/merge_train.py**: Transport layer. Updated 2026-10-06: git() helper now accepts optional cwd parameter for explicit working directory control.
 - **tools/auto_merge.py scoped verdict (F-03, 2026-10-14)**: `auto_merge.py <n>...` exits 0 only if every named PR is `gh pr view --json state,mergedAt` MERGED; nonexistent or closed-unmerged PRs exit 1 and are named on stderr. Tests: `tests/test_auto_merge_scoped_verdict.py`.
@@ -49,7 +48,6 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - **tools/regen_all.py**: Regenerator runner. Updated 2026-10-07: paths_with_real_diff() returns all modified paths for restoration in --check mode, preserving fixture byte-identity. EOL normalization delegated to gen_tool_index.py and git's comparison rules.
 
 ## Tool index
-
 Full one-liner index of every tool in this directory: see `tools/INDEX.md` (generated
 by `tools/gen_tool_index.py --regenerate` from each file's own `INDEX:` header line;
 never hand-edit it -- the byte-identity gate rejects drift). This file stays navigation
