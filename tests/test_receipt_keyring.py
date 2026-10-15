@@ -31,7 +31,14 @@ rc = _load("receipt_common")
 emit = _load("emit_receipt")
 vr = _load("verify_receipt")
 
-HAVE_CRYPTO = importlib.util.find_spec("cryptography.hazmat.primitives.asymmetric.ed25519") is not None
+def _have_crypto():
+    try:
+        return importlib.util.find_spec("cryptography.hazmat.primitives.asymmetric.ed25519") is not None
+    except Exception:  # parent package missing raises ModuleNotFoundError
+        return False
+
+
+HAVE_CRYPTO = _have_crypto()
 
 _GIT_ENV = {
     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@x", "GIT_COMMITTER_NAME": "t",
