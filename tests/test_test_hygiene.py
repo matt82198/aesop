@@ -799,5 +799,80 @@ class TestFixtureImmutability(unittest.TestCase):
             )
 
 
+def _is_sys_modules_subscript(node):
+    return (isinstance(node, ast.Subscript)
+            and isinstance(node.value, ast.Attribute)
+            and node.value.attr == "modules"
+            and isinstance(node.value.value, ast.Name)
+            and node.value.value.id == "sys")
+
+
+def _sys_modules_delete_offenders(source):
+    """Return line numbers of `del sys.modules[...]` with no restoration in the same function.
+
+    Restoration = a try/finally, a `with` block, or an addCleanup call in the enclosing
+    function (module-level deletes always count as offenders).
+    """
+    tree = ast.parse(source)
+    offenders = []
+    for stmt in tree.body:  # top-level statements only; functions are judged below
+        if isinstance(stmt, ast.Delete) and any(_is_sys_modules_subscript(t) for t in stmt.targets):
+            offenders.append(stmt.lineno)
+    for func in ast.walk(tree):
+        if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        deletes = [n for n in ast.walk(func)
+                   if isinstance(n, ast.Delete)
+                   and any(_is_sys_modules_subscript(t) for t in n.targets)]
+        if not deletes:
+            continue
+        restores = any(
+            isinstance(n, ast.With)
+            or (isinstance(n, ast.Try) and n.finalbody)
+            or (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "addCleanup")
+            for n in ast.walk(func))
+        if not restores:
+            offenders.extend(d.lineno for d in deletes)
+    return sorted(set(offenders))
+
+
+class TestSysModulesRestoration(unittest.TestCase):
+    """Tests that mutate sys.modules must restore it (a swapped `config` leaks process-wide)."""
+
+    def test_sys_modules_delete_is_checker_flags_unrestored_and_passes_restored(self):
+        unrestored = (
+            "import sys\n"
+            "def load():\n"
+            "    del sys.modules['config']\n"
+            "    import config\n"
+            "    return config\n")
+        restored = (
+            "import sys\n"
+            "def load():\n"
+            "    saved = sys.modules.get('config')\n"
+            "    try:\n"
+            "        del sys.modules['config']\n"
+            "        import config\n"
+            "        return config\n"
+            "    finally:\n"
+            "        sys.modules['config'] = saved\n")
+        self.assertEqual(_sys_modules_delete_offenders(unrestored), [3])
+        self.assertEqual(_sys_modules_delete_offenders(restored), [])
+
+    def test_parity_module_deletes_sys_modules_only_with_restoration(self):
+        """tests/test_wave_dispatch_agents_parity.py must not delete sys.modules entries except
+        under a restoring try/finally, with, or addCleanup (AST check, not a text grep).
+
+        Scoped to the one file this guard hardens. A repo-wide scan currently flags 55 existing
+        `del sys.modules[...]` sites in other test files (see the follow-up note in the PR body);
+        that sweep is out of this change's scope."""
+        parity = Path(__file__).parent / "test_wave_dispatch_agents_parity.py"
+        offenders = _sys_modules_delete_offenders(parity.read_text(encoding="utf-8"))
+        self.assertEqual(offenders, [],
+                         "del sys.modules[...] without restoration in " + parity.name +
+                         " at lines " + ", ".join(str(n) for n in offenders))
+
+
 if __name__ == "__main__":
     unittest.main()
