@@ -47,38 +47,70 @@ log_line() {
   fi
 }
 
-# Kill-switch check using halt.py as single source of truth.
-# Returns 0 (bash true) and logs when halted, 1 otherwise.
-# halt.py --status exit code: 1=halted, 0=not halted.
+# Kill-switch check. Returns 0 (bash true) when the pass must be skipped, 1 only
+# when halt.py positively reports "not halted". Mirrors run-watchdog.sh check_halt
+# (PR #957): fails CLOSED on any unknown halt status.
+#   1. Box-wide sentinel $CONDUCTOR_ROOT/state/.HALT: existence check, no interpreter.
+#   2. halt.py --status: exit 0 = not halted; exit 1 with a HALTED: line = halted;
+#      anything else (Store stub exit 49, traceback, no interpreter) = UNKNOWN.
+#   UNKNOWN is logged as HALT-CHECK-FAILED and treated as halted.
 check_halt() {
   local log_file="$1"
   local halt_py="${2:-${HALT_PY_PATH}}"
-
-  if [ -z "$PYTHON_EXE" ] || [ -z "$halt_py" ]; then
-    return 1
+  local box_sentinel=""
+  if [ -n "${CONDUCTOR_ROOT:-}" ]; then
+    box_sentinel="$CONDUCTOR_ROOT/state/.HALT"
   fi
 
-  # Query halt.py for halt status; exit code tells us: 1=halted, 0=not halted
-  local halt_output
-  halt_output=$("$PYTHON_EXE" "$halt_py" --status 2>&1)
-  local halt_exit=$?
-
-  if [ $halt_exit -eq 1 ]; then
-    # Halted: extract reason from output
-    # halt.py outputs: "HALTED: <reason> (since <timestamp>)"
-    local reason
-    reason=$(echo "$halt_output" | sed 's/^HALTED: //' | sed 's/ (since.*$//')
-    if [ -z "$reason" ]; then
-      reason="$halt_output"
+  # Trigger 1 (box-wide, operator kill switch): file existence only, needs no interpreter.
+  if [ -n "$box_sentinel" ] && [ -e "$box_sentinel" ]; then
+    local box_reason
+    box_reason=$(sed -n 's/.*"reason"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$box_sentinel" 2>/dev/null | head -n 1)
+    if [ -z "$box_reason" ]; then
+      box_reason="(unreadable sentinel)"
     fi
-
-    printf 'HALTED: %s\n' "$reason"
-    log_line "$log_file" "HALTED: $reason"
+    printf 'HALTED: %s [box-wide %s]\n' "$box_reason" "$box_sentinel"
+    log_line "$log_file" "HALTED: $box_reason [box-wide $box_sentinel]"
     return 0
   fi
 
-  # Not halted (exit 0 from halt.py)
-  return 1
+  # Trigger 2 (per-checkout): halt.py --status. Exit 0 = not halted; exit 1 with a
+  # HALTED: line = halted. Everything else is UNKNOWN and fails closed below.
+  local halt_output=""
+  local halt_exit=""
+  if [ -n "$PYTHON_EXE" ] && [ -n "$halt_py" ]; then
+    halt_output=$("$PYTHON_EXE" "$halt_py" --status 2>&1)
+    halt_exit=$?
+  else
+    halt_exit="no-interpreter"
+  fi
+
+  if [ "$halt_exit" = "0" ]; then
+    return 1
+  fi
+
+  case "$halt_output" in
+    HALTED:*)
+      if [ "$halt_exit" = "1" ]; then
+        # halt.py outputs: "HALTED: <reason> (since <timestamp>)"
+        local reason
+        reason=$(echo "$halt_output" | head -n 1 | sed 's/^HALTED: //' | sed 's/ (since.*$//')
+        if [ -z "$reason" ]; then
+          reason="$halt_output"
+        fi
+        printf 'HALTED: %s\n' "$reason"
+        log_line "$log_file" "HALTED: $reason"
+        return 0
+      fi
+      ;;
+  esac
+
+  # Unexpected result (no interpreter, Store stub exit 49, traceback, unknown code):
+  # the halt status is unknowable, so fail CLOSED and skip the cycle.
+  local fail_msg="HALT-CHECK-FAILED (exit $halt_exit); treating as HALTED, cycle skipped"
+  printf '%s\n' "$fail_msg"
+  log_line "$log_file" "$fail_msg"
+  return 0
 }
 
 main() {
@@ -87,14 +119,11 @@ main() {
     exit 2
   fi
 
-  if [ -z "$PYTHON_EXE" ]; then
-    printf 'MERGE-QUEUE: FAILED - no python interpreter on PATH\n' >&2
-    log_line "$LOG_FILE" "ERROR: no python interpreter on PATH"
-    exit 2
-  fi
-
   mkdir -p "$AESOP_STATE_ROOT" 2>/dev/null || true
 
+  # Halt check runs FIRST and fails closed: a missing or unusable interpreter is
+  # an UNKNOWN halt status (HALT-CHECK-FAILED), not a pass. The box-wide sentinel
+  # is honored by existence even with no interpreter.
   if check_halt "$LOG_FILE" "$HALT_PY_PATH"; then
     printf 'MERGE-QUEUE: HALTED\n'
     exit 0

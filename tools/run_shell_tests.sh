@@ -42,6 +42,40 @@ discover_tests() {
   fi
 }
 
+# Live fleet-state heartbeat tripwire (incident 2026-10-14: a test wrote the
+# placeholder "1234567890" into the LIVE fleet watchdog and monitor
+# heartbeats). Snapshot = "<content>|<mtime>". A change during the run is
+# clean ONLY if the new content is a daemon-style epoch inside the run window
+# [start-60, now+60]; anything else (placeholder, stale epoch, deletion) FAILS.
+live_hb_snapshot() {
+  local f="$1"
+  if [ -f "$f" ]; then
+    printf '%s|%s' "$(tr -d '[:space:]' < "$f" 2>/dev/null)" "$(stat -c %Y "$f" 2>/dev/null || echo 0)"
+  else
+    printf 'ABSENT|0'
+  fi
+}
+
+# $1 = before snapshot, $2 = live heartbeat path, $3 = run start epoch.
+# Returns 0 when clean, 1 (and prints FAIL to stderr) when a test polluted it.
+live_hb_verdict() {
+  local before="$1" f="$2" start="$3" after content now
+  after="$(live_hb_snapshot "$f")"
+  if [ "$after" = "$before" ]; then
+    echo "[LIVE-HB] unchanged: $f"
+    return 0
+  fi
+  content="${after%|*}"
+  now="$(date +%s)"
+  if [[ "$content" =~ ^[0-9]+$ ]] && [ "$content" -ge $((start - 60)) ] && [ "$content" -le $((now + 60)) ]; then
+    echo "[LIVE-HB] advanced to in-window epoch $content (daemon cycle, not a test write): $f"
+    return 0
+  fi
+  echo "[LIVE-HB] FAIL: live heartbeat $f changed during this run to '${content}' (before: ${before%|*})." >&2
+  echo "[LIVE-HB] A test reached the LIVE fleet-state heartbeat. Find the writer and pin its heartbeat path to its own TEST_DIR." >&2
+  return 1
+}
+
 # Run a single test file
 run_test() {
   local test_path="$1"
@@ -109,7 +143,7 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   # Deliberately NOT exported here: AESOP_ROOT / AESOP_STATE_ROOT /
   # CONDUCTOR_ROOT. Several already-hermetic tests (test-selfheal.sh, the
   # test-run-watchdog*.sh family, test-daemon-halt-sentinel.sh) rely on the
-  # daemon scripts' own default `${CONDUCTOR_ROOT:-$(dirname "$AESOP_ROOT")/conductor3}`
+  # daemon scripts' own CONDUCTOR_ROOT default (sibling of AESOP_ROOT)
   # fallback staying UNSET so it derives from THEIR OWN AESOP_ROOT fixture, and
   # test-daemon-halt-config-path.sh's Test 2 relies on AESOP_STATE_ROOT staying
   # UNSET so halt.py falls through to its aesop.config.json state_root check.
@@ -120,6 +154,17 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   # tests. The real, confirmed vulnerability (test-daemon-halt-config-path.sh
   # passing REPO_ROOT as AESOP_ROOT with CONDUCTOR_ROOT unpinned, so it derived
   # the REAL fleet-state root) is fixed directly in that file instead.
+  # Live-heartbeat tripwire: capture the REAL heartbeat before HOME is pinned.
+  # AESOP_LIVE_HEARTBEAT overrides the watched path (used only by the
+  # tripwire's own self-tests / red-first proofs).
+  LIVE_HB_PATH="${AESOP_LIVE_HEARTBEAT:-${HOME}/conductor3/state/.watchdog-heartbeat}"
+  LIVE_HB_START="$(date +%s)"
+  LIVE_HB_BEFORE="$(live_hb_snapshot "$LIVE_HB_PATH")"
+  export SHELL_TEST_LIVE_HEARTBEAT="$LIVE_HB_PATH"
+  if [ "${LIVE_HB_BEFORE%|*}" != "ABSENT" ] && [ "${LIVE_HB_BEFORE%|*}" -lt $((LIVE_HB_START - 86400)) ] 2>/dev/null; then
+    echo "[LIVE-HB] WARNING: live heartbeat already holds a stale/placeholder value (${LIVE_HB_BEFORE%|*}) before this run: $LIVE_HB_PATH"
+  fi
+
   SHELL_TEST_ISO_ROOT="$(mktemp -d)"
   export SHELL_TEST_ISO_ROOT
   export HOME="${SHELL_TEST_ISO_ROOT}/home"
@@ -148,6 +193,13 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   for hook in "${discovered_hooks[@]}"; do
     run_test_command "bash '$hook' --test" "$(basename "$hook") --test"
   done
+
+  # Live-heartbeat tripwire verdict: a test that polluted the live file FAILS the run.
+  live_hb_failed=0
+  live_hb_verdict "$LIVE_HB_BEFORE" "$LIVE_HB_PATH" "$LIVE_HB_START" || live_hb_failed=1
+  if [ "$live_hb_failed" -eq 1 ]; then
+    failed_tests+=("live-heartbeat tripwire ($LIVE_HB_PATH)")
+  fi
 
   echo ""
   echo "---"

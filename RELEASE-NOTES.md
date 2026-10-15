@@ -1,6 +1,14 @@
 # UNRELEASED
 
-(None yet; see v0.9.0 below for the shipped release.)
+(None yet; see v0.9.2 below for the shipped release.)
+
+---
+
+# aesop 0.9.2 — Release 2026-10-14
+
+**Headline**: Patch release hardening the fail-closed gates from the round-1 audit: secret-scan blind spots closed (F-01/F-02), MERGED-state verification in auto_merge (F-03), PR-sweep conflicts routed to needs-rebase, state-layer DB path unification, and CI aggregation that fails closed. 30 PRs since v0.9.1.
+
+See `CHANGELOG.md` section `[0.9.2]` for the full grouped list with PR numbers.
 
 ---
 
