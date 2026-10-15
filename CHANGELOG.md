@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Added `tools/goal_state.py` (orchestrator GOAL as append-only `goal_set` events in the event store) and `tools/boot_state.py` (one deterministic, byte-capped boot brief from the store, STATE.md ACTIVE, BUILDLOG tail and git; exits 2 on an unreadable store).
+- Fixed MCP server metadata drift: `mcp/package.json` author now matches the root package (Matt Culliton), and the `mcp/server.mjs` initialize response advertises protocolVersion `2025-11-25` (was `2024-11-05`); guarded by `tests/mcp-metadata.test.mjs`.
 
 ## [0.10.0] - 2026-10-15
 
