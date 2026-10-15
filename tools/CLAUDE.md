@@ -86,6 +86,7 @@ error. Allowlisted in `tools/gate-inventory-allowlist.json` (operator-invoked
 meta-tool, no file-content rule of its own to wire into CI). See
 `LANE-CONTRACT.md` section 5.
 
+Merge-carried copies (2026-10-14): `generated_paths.py --check` counts a registered path as touched only when HEAD's blob differs from both the merge-base blob and origin/main's (`is_touched_by_push`); unresolvable refs fail closed.
 The dry-range row (2026-10-06 follow-up): a branch that merged `origin/main`
 legitimately carries changes to registered generated paths (`generated_paths.py`
 `REGISTRY`, e.g. `tools/INDEX.md`) whose regeneration is the hook's designed
