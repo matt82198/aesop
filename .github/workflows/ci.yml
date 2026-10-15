@@ -103,7 +103,13 @@ jobs:
         id: windows-touched
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+            # Fail closed: a diff that cannot be computed means Windows runs.
+            if ! CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD) \
+               || ! ADDED=$(git diff --name-only --diff-filter=AR origin/${{ github.base_ref }}...HEAD); then
+              echo "::warning::could not compute PR diff; treating as Windows-touched (fail closed)"
+              echo "windows_touched=true" >> $GITHUB_OUTPUT
+              exit 0
+            fi
           else
             # On workflow_dispatch and schedule, run Windows (conservative)
             echo "windows_touched=true" >> $GITHUB_OUTPUT
@@ -122,7 +128,7 @@ jobs:
           #   remote_refs_tripwire.py, test_network_isolation.py,
           #   subprocess_common.py, encoding_lint.py, power_selftest.py,
           #   hook_preflight.py, task_cadence_check.py, build_static_dash.py
-          if echo "$CHANGED" | grep -qE '^(daemons/|hooks/|bin/|ui/web/|\.github/workflows/)|\.ps1$|\.sh$|^package(-lock)?\.json$|^tools/(ci_shard_runner|halt|test_isolation_tripwire|remote_refs_tripwire|test_network_isolation|subprocess_common|encoding_lint|power_selftest|hook_preflight|task_cadence_check|build_static_dash)\.py$'; then
+          if echo "$CHANGED" | grep -qE '^(daemons/|hooks/|bin/|ui/web/|\.github/workflows/)|\.ps1$|\.sh$|^package(-lock)?\.json$|^tools/(ci_shard_runner|halt|test_isolation_tripwire|remote_refs_tripwire|test_network_isolation|subprocess_common|encoding_lint|power_selftest|hook_preflight|task_cadence_check|build_static_dash)\.py$' || echo "$ADDED" | grep -qE '^tests/(test_[^/]*\.py|[^/]+\.test\.mjs|[^/]+\.sh)$'; then
             echo "windows_touched=true" >> $GITHUB_OUTPUT
           else
             echo "windows_touched=false" >> $GITHUB_OUTPUT

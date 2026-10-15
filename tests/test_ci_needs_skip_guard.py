@@ -233,5 +233,75 @@ class TestRequiredCheckNames(unittest.TestCase):
             self.assertEqual(guard.main(["--root", tmpdir]), 2)
 
 
+# Rendered-check-name fixtures (r975 adversarial pass 2): a `name:` override renders the
+# check name GitHub reports, and a matrix suffix ` (N)` must be a real matrix value.
+RENDER_CI_REQUIRED = ["ci (0)", "ci (1)", "ci (2)", "ci (3)", "windows"]
+RENDER_NAME_OVERRIDE = "    name: shard-${{ matrix.python-shard }}\n"
+RENDER_NAME_MATCHING = "    name: ci (${{ matrix.python-shard }})\n"
+RENDER_MATRIX_FULL = "      matrix:\n        python-shard: [0, 1, 2, 3]\n"
+RENDER_MATRIX_SHRUNK = "      matrix:\n        python-shard: [0, 1]\n"
+RENDER_MATRIX_EXPRESSION = "      matrix: ${{ fromJSON(needs.x.outputs.m) }}\n"
+
+
+def _render_fixture(name_line="", matrix_block=RENDER_MATRIX_FULL):
+    return (
+        "jobs:\n"
+        "  ci:\n"
+        "    if: always()\n"
+        + name_line +
+        "    runs-on: ubuntu-latest\n"
+        "    strategy:\n"
+        + matrix_block +
+        "    steps:\n"
+        "      - run: echo noop\n"
+        "  windows:\n"
+        "    if: always()\n"
+        "    runs-on: ubuntu-latest\n"
+        "    steps:\n"
+        "      - run: echo noop\n"
+    )
+
+
+class TestRequiredContextRendering(unittest.TestCase):
+    """A required context `job (N)` must resolve to a job whose RENDERED check name equals it."""
+
+    def _findings(self, content):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = _write_workflow(tmpdir, content, RENDER_CI_REQUIRED)
+            findings, _ = guard.check_workflow(path)
+        return findings
+
+    def test_name_override_that_renders_other_names_is_a_finding(self):
+        """r975 M1: `name: shard-${{ matrix.python-shard }}` never reports 'ci (N)' -- must FAIL."""
+        findings = self._findings(_render_fixture(RENDER_NAME_OVERRIDE))
+        flagged = {f["feeds_required_check"] for f in findings}
+        self.assertTrue({"ci (0)", "ci (1)", "ci (2)", "ci (3)"} <= flagged, findings)
+
+    def test_name_override_that_renders_other_names_cli_exits_1(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _write_workflow(tmpdir, _render_fixture(RENDER_NAME_OVERRIDE), RENDER_CI_REQUIRED)
+            self.assertEqual(guard.main(["--root", tmpdir]), 1)
+
+    def test_suffix_not_a_matrix_value_is_a_finding(self):
+        """r975 M2: matrix shrunk to [0, 1] -- 'ci (2)' and 'ci (3)' can never report -- must FAIL."""
+        flagged = {f["feeds_required_check"]
+                   for f in self._findings(_render_fixture(matrix_block=RENDER_MATRIX_SHRUNK))}
+        self.assertTrue({"ci (2)", "ci (3)"} <= flagged, flagged)
+        self.assertNotIn("ci (0)", flagged)
+
+    def test_matrix_expression_cannot_verify_suffixes(self):
+        flagged = {f["feeds_required_check"]
+                   for f in self._findings(_render_fixture(matrix_block=RENDER_MATRIX_EXPRESSION))}
+        self.assertTrue({"ci (0)", "ci (1)", "ci (2)", "ci (3)"} <= flagged, flagged)
+
+    def test_override_rendering_the_context_passes(self):
+        """Control: an override whose rendered form equals the context is clean."""
+        self.assertEqual(self._findings(_render_fixture(RENDER_NAME_MATCHING)), [])
+
+    def test_plain_matrix_job_passes(self):
+        """Control: the real shape (no override, full matrix) is clean."""
+        self.assertEqual(self._findings(_render_fixture()), [])
+
+
 if __name__ == "__main__":
     unittest.main()

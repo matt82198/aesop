@@ -27,6 +27,8 @@ Windows + Linux safe.
 
 import json
 import os
+import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -37,6 +39,25 @@ from unittest import mock
 REPO = Path(__file__).resolve().parent.parent
 DRIVER_DIR = REPO / "driver"
 TOOLS_DIR = REPO / "tools"
+
+_SHELL_OPERATOR_RE = re.compile(r"[|&;<>`]|\$\(")
+
+
+def _argv(command):
+    """Split a shell-syntax command string into an argv list (no shell).
+
+    The code under test builds git commands as shell strings (quoted with
+    driver.wave_loop._quote_arg). shlex undoes that quoting for the simple
+    commands used here. Any real shell operator fails loudly instead of
+    being silently reinterpreted, so the fake never diverges from what a
+    shell would have run.
+    """
+    if _SHELL_OPERATOR_RE.search(command):
+        raise ValueError(
+            "shell operator in command; refusing to run without a shell: "
+            + repr(command)
+        )
+    return shlex.split(command, posix=True)
 if str(DRIVER_DIR) not in sys.path:
     sys.path.insert(0, str(DRIVER_DIR))
 if str(TOOLS_DIR) not in sys.path:
@@ -278,9 +299,8 @@ class RealGitBlockDriver(ShipCapableFakeDriver):
     def run_command(self, command, cwd=None, shell=None):
         if command.strip().startswith("git"):
             completed = subprocess.run(
-                command,
+                _argv(command),
                 cwd=cwd,
-                shell=True,
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -297,18 +317,18 @@ def _init_temp_git_repo(td):
     """git init a temp repo with one committed tracked file. Identity is
     passed inline per-commit (-c): never touches user/global git config."""
     subprocess.run(
-        "git init -q", cwd=td, shell=True, check=True, timeout=60
+        ["git", "init", "-q"], cwd=td, check=True, timeout=60
     )
     tracked = Path(td) / "mod_hs2.py"
     tracked.write_text("ORIGINAL CONTENT\n", encoding="utf-8")
     subprocess.run(
-        "git add mod_hs2.py", cwd=td, shell=True, check=True, timeout=60
+        ["git", "add", "mod_hs2.py"], cwd=td, check=True, timeout=60
     )
     subprocess.run(
-        "git -c user.name=aesop-test -c user.email=t@example.invalid "
-        "commit -q -m baseline",
+        ["git", "-c", "user.name=aesop-test",
+         "-c", "user.email=t@example.invalid",
+         "commit", "-q", "-m", "baseline"],
         cwd=td,
-        shell=True,
         check=True,
         timeout=60,
     )
@@ -350,9 +370,8 @@ class TestBlockQuarantine(unittest.TestCase):
             self.assertFalse((Path(td) / "new_untracked.py").exists())
             # Tree left clean: git sees no modifications.
             status = subprocess.run(
-                "git status --porcelain",
+                ["git", "status", "--porcelain"],
                 cwd=td,
-                shell=True,
                 capture_output=True,
                 text=True,
                 timeout=60,
@@ -538,7 +557,7 @@ class TestDecisionFailedEvidenceArray(unittest.TestCase):
 # ========================================================================
 
 def _git(cmd, cwd):
-    subprocess.run(cmd, cwd=cwd, shell=True, check=True, timeout=60)
+    subprocess.run(_argv(cmd), cwd=cwd, check=True, timeout=60)
 
 
 def _commit_all(td):

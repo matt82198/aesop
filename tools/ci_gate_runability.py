@@ -38,10 +38,12 @@ from pathlib import Path
 from typing import Optional, Dict, List, Tuple
 import argparse
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling import (sanctioned guard)
+from ci_job_contexts import resolve_required_context  # noqa: E402
+
 
 REQUIRED_CHECKS_MANIFEST = Path("tools") / "required-checks.json"
 _BLOCK_SCALAR_RE = re.compile(r"^[|>][-+0-9]*$")
-_CHECK_SUFFIX_RE = re.compile(r"\s*\([^)]*\)\s*$")
 # A script path with at least one directory component (tools/x.py, ./tests/y.sh).
 _PATH_TOKEN_RE = re.compile(
     r"(?<![\w$./{-])((?:\.{1,2}/|/)?[\w.\-]+(?:/[\w.\-]+)+\.(?:py|sh|mjs))(?![\w./-])")
@@ -123,6 +125,82 @@ def _apply_step_prop(step: Dict, text: str, prop_indent: int, lines: List[str], 
     return i
 
 
+def _flow_item(text: str) -> str:
+    item = text.strip()
+    if len(item) >= 2 and item[0] == item[-1] and item[0] in "\"'":
+        item = item[1:-1]
+    return item
+
+
+def _matrix_from_lines(body: List[str]):
+    """strategy.matrix of one job body: None (absent), a str (expression), or {dim: values}.
+
+    Values are the literal list items; a scalar or empty block is kept as-is so the
+    resolver rejects it (fail closed). include/exclude keys are kept so they are rejected too.
+    """
+    matrix = None
+    strategy = False
+    in_matrix = False
+    dim = None
+    dim_indent = None
+    for raw in body:
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip())
+        key, _, val = stripped.partition(":")
+        key = key.strip()
+        val = val.split(" #")[0].strip()
+        if indent <= 4:
+            strategy = indent == 4 and key == "strategy"
+            in_matrix = False
+            dim = None
+            continue
+        if not strategy:
+            continue
+        if indent <= 6:
+            in_matrix = indent == 6 and key == "matrix"
+            dim = None
+            dim_indent = None
+            if in_matrix:
+                if val:
+                    return val  # inline expression or scalar: unverifiable
+                matrix = {}
+            continue
+        if not in_matrix or matrix is None:
+            continue
+        if dim_indent is None:
+            dim_indent = indent
+        if indent == dim_indent:
+            dim = key
+            if key in ("include", "exclude"):
+                matrix[key] = val or None
+                dim = None
+            elif val.startswith("[") and val.endswith("]"):
+                matrix[key] = [_flow_item(x) for x in val[1:-1].split(",") if x.strip()]
+            elif val:
+                matrix[key] = val
+            else:
+                matrix[key] = []
+            continue
+        if dim is not None and indent > dim_indent and stripped.startswith("-"):
+            matrix[dim].append(_flow_item(stripped[1:]))
+    return matrix
+
+
+def _attach_matrices(lines: List[str], jobs: Dict) -> None:
+    """Record each job's strategy.matrix from its own body lines (between job headers)."""
+    headers = sorted((job["line"] - 1, job) for job in jobs.values())
+    for pos, (start, job) in enumerate(headers):
+        end = headers[pos + 1][0] if pos + 1 < len(headers) else len(lines)
+        for k in range(start + 1, end):
+            raw = lines[k]
+            if raw.strip() and not raw.lstrip().startswith("#") and raw == raw.lstrip():
+                end = k  # a top-level (indent 0) key ends the jobs mapping
+                break
+        job["matrix"] = _matrix_from_lines(lines[start + 1:end])
+
+
 def parse_yaml_line_by_line(content: str) -> Dict:
     """
     Minimal YAML parser for CI workflow structures.
@@ -196,6 +274,7 @@ def parse_yaml_line_by_line(content: str) -> Dict:
         if in_steps and step is not None and marker_indent is not None and indent == marker_indent + 2:
             i = _apply_step_prop(step, stripped, indent, lines, i)
 
+    _attach_matrices(lines, jobs)
     return jobs
 
 
@@ -392,29 +471,29 @@ def check_workflow(repo_root: str, workflow_path: str) -> Tuple[int, List[str]]:
     return (1 if findings else 0, findings)
 
 
-def _job_identifiers(job_id: str, body: Dict) -> List[str]:
-    names = [job_id]
-    name = body.get('name') if isinstance(body, dict) else None
-    if isinstance(name, str) and name.strip():
-        names.append(name.strip().strip('"\''))
-    return names
-
-
 def check_required_jobs(required_contexts: List[str], jobs_by_workflow: Dict[str, Dict]) -> List[str]:
-    """Check (d): every required-check name must resolve to a job in some workflow (fail closed)."""
-    identifiers = set()
-    for jobs in jobs_by_workflow.values():
-        for job_id, body in jobs.items():
-            identifiers.update(_job_identifiers(job_id, body))
+    """Check (d): every required-check name must be the rendered check name of a job (fail closed).
 
+    Resolution is shared with tools/ci_needs_skip_guard.py via tools/ci_job_contexts.py: a
+    `job (N)` context needs a job whose rendered name (id, or name: override with matrix
+    substitution) equals it, and N must be a literal matrix value.
+    """
     findings = []
     for context in required_contexts:
-        base = _CHECK_SUFFIX_RE.sub('', context).strip()
-        if base not in identifiers:
+        reasons = []
+        for jobs in jobs_by_workflow.values():
+            job_id, why = resolve_required_context(context, jobs)
+            if job_id is not None:
+                break
+            reasons.append(why)
+        else:
+            reason = next((r for r in reasons if not r.startswith("no job renders")),
+                          reasons[0] if reasons else "no workflow defines any job")
             findings.append(
-                f"required check '{context}' has no job in .github/workflows: a required "
-                f"check that no job reports can never be satisfied, so the PR waits forever "
-                f"(renamed or removed job? update tools/required-checks.json or the workflow)"
+                f"required check '{context}' has no job rendering it in .github/workflows: {reason}. "
+                f"A required check that no job renders can never be satisfied, so the PR waits "
+                f"forever (renamed job, name: override, or matrix suffix out of range? "
+                f"update tools/required-checks.json or the workflow)"
             )
     return findings
 

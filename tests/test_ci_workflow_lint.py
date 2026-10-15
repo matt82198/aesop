@@ -1405,3 +1405,125 @@ class DocsOnlyClassifierBehaviourTest(unittest.TestCase):
 
     def test_code_change_is_not_docs_only(self):
         self.assertEqual(self._is_docs_only("pull_request", ["tools/foo.py"]), "false")
+
+
+class PullRequestWindowsTouchedDetectorTest(unittest.TestCase):
+    """Drive the REAL "Detect Windows-sensitive changes" run-script from ci.yml.
+
+    Regression (2026-10-14): tests/init_project_worktree_test.py renamed into the collected
+    tests/test_*.py pattern (PR #956) and tests/test_worktree_ownership_guard.py (PR #967) were
+    first run on Windows only AFTER merge to main, turning main-full red. Both PRs skipped
+    windows-shard because the detector only marked windows_touched for a fixed path set.
+    A PR that ADDS or RENAMES-IN a test file must now get its first Windows run before merge.
+    """
+
+    ROOT = Path(__file__).resolve().parent.parent
+    WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+    STEP_NAME = "Detect Windows-sensitive changes"
+
+    def _detector_script(self):
+        import yaml
+        text = self.WORKFLOW.read_text(encoding="utf-8").replace("\r\n", "\n")
+        jobs = yaml.safe_load(text)["jobs"]
+        for step in jobs["windows-sensitive-paths"]["steps"]:
+            if step.get("name") == self.STEP_NAME:
+                return step["run"]
+        self.fail("detector step not found in ci.yml")
+
+    def _run_detector(self, base_files, branch_changes, branch_deletes=(),
+                      publish_base_ref=True):
+        bash = WindowsAggregatorBehaviourTest._working_bash()
+        if bash is None:
+            self.skipTest("no working bash interpreter on this host")
+        git_env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+                       GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid")
+
+        def git(repo, *args):
+            return subprocess.run(["git", "-c", "core.autocrlf=false", *args], cwd=str(repo),
+                                  env=git_env, check=True, capture_output=True,
+                                  encoding="utf-8", errors="replace")
+
+        def write(repo, rel, content):
+            target = repo / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            git(repo, "init", "-q")
+            for rel, content in base_files.items():
+                write(repo, rel, content)
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", "base")
+            base_sha = git(repo, "rev-parse", "HEAD").stdout.strip()
+            if publish_base_ref:
+                git(repo, "update-ref", "refs/remotes/origin/main", base_sha)
+            git(repo, "checkout", "-q", "-b", "feature")
+            for rel in branch_deletes:
+                git(repo, "rm", "-q", rel)
+            for rel, content in branch_changes.items():
+                write(repo, rel, content)
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", "change")
+
+            out_file = Path(tmp) / "github_output"
+            out_file.write_text("", encoding="utf-8")
+            script = (self._detector_script()
+                      .replace("${{ github.event_name }}", "pull_request")
+                      .replace("${{ github.base_ref }}", "main"))
+            env = dict(os.environ, GITHUB_OUTPUT=out_file.as_posix())
+            # bash -e mirrors the GitHub Actions default shell for run: steps.
+            proc = subprocess.run([bash, "-e", "-c", script], cwd=str(repo), env=env,
+                                  capture_output=True, encoding="utf-8",
+                                  errors="replace", timeout=120)
+            outputs = out_file.read_text(encoding="utf-8")
+        return proc.returncode, outputs + proc.stdout + proc.stderr
+
+    BASE = {"README.md": "# repo\n", "docs/notes.md": "notes\n",
+            "tests/test_old.py": "def test_old():\n    pass\n"}
+
+    def _assert_touched(self, rc, out, expected):
+        self.assertEqual(rc, 0, out)
+        self.assertIn(f"windows_touched={expected}", out, out)
+
+    def test_added_python_test_file_marks_windows_touched(self):
+        rc, out = self._run_detector(self.BASE,
+                                     {"tests/test_new.py": "def test_new():\n    pass\n"})
+        self._assert_touched(rc, out, "true")
+
+    def test_renamed_in_python_test_file_marks_windows_touched(self):
+        # Shape of PR #956: a non-collected name renamed into the collected tests/test_*.py.
+        base = dict(self.BASE, **{"tests/init_project_worktree_test.py": "def test_x():\n    pass\n"})
+        rc, out = self._run_detector(
+            base,
+            {"tests/test_init_project_worktree.py": "def test_x():\n    pass\n"},
+            branch_deletes=["tests/init_project_worktree_test.py"])
+        self._assert_touched(rc, out, "true")
+
+    def test_added_node_test_file_marks_windows_touched(self):
+        rc, out = self._run_detector(self.BASE,
+                                     {"tests/new-thing.test.mjs": "export {};\n"})
+        self._assert_touched(rc, out, "true")
+
+    def test_added_shell_test_file_marks_windows_touched(self):
+        rc, out = self._run_detector(self.BASE,
+                                     {"tests/new-thing.sh": "#!/bin/sh\ntrue\n"})
+        self._assert_touched(rc, out, "true")
+
+    def test_docs_only_change_stays_untouched(self):
+        # Control: a docs-only change must not gain Windows coverage.
+        rc, out = self._run_detector(self.BASE, {"docs/new.md": "new doc\n"})
+        self._assert_touched(rc, out, "false")
+
+    def test_modified_existing_test_file_stays_untouched(self):
+        # Control: only ADDED or RENAMED-IN test files are forced; a plain edit is not.
+        rc, out = self._run_detector(
+            self.BASE, {"tests/test_old.py": "def test_old():\n    assert True\n"})
+        self._assert_touched(rc, out, "false")
+
+    def test_undeterminable_diff_fails_closed_as_touched(self):
+        # The base ref cannot be resolved, so the diff cannot be computed: treat as touched.
+        rc, out = self._run_detector(self.BASE, {"docs/new.md": "new doc\n"},
+                                     publish_base_ref=False)
+        self._assert_touched(rc, out, "true")
