@@ -44,6 +44,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from state_store.read_api import read_text_file  # noqa: E402
 from tools import goal_state  # noqa: E402
 
 DEFAULT_MAX_BYTES = 12000
@@ -82,10 +83,7 @@ def _one_line(text: str, limit: int) -> str:
 
 
 def _read_text(path: Path) -> str | None:
-    try:
-        return path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
+    return read_text_file(path)
 
 
 def state_active_block(text: str) -> list[str] | None:
