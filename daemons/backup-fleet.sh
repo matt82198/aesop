@@ -26,6 +26,10 @@ else
   CONDUCTOR_ROOT=""  # non-canonical AESOP_ROOT: no silent derivation
 fi
 HEARTBEAT="${CONDUCTOR_ROOT:+$CONDUCTOR_ROOT/state/.watchdog-heartbeat}"
+# Blocked-cycle marker (same CONDUCTOR_ROOT guard as HEARTBEAT): present while the
+# last completed cycle had >=1 BLOCKED repo, holding the blocked repo names one per
+# line. Lets consumers tell healthy from healthy-with-blocked. Removed by a clean cycle.
+BLOCKED_MARKER="${CONDUCTOR_ROOT:+$CONDUCTOR_ROOT/state/.watchdog-blocked}"
 LOG="$AESOP_ROOT/state/FLEET-BACKUP.log"
 REPOS_STATUS="$AESOP_ROOT/state/.watchdog-repos.json"
 
@@ -43,6 +47,27 @@ trap cleanup_temp_files EXIT INT TERM
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { echo "[$(ts)] $*" | tee -a "$LOG"; }
+
+# Heartbeat = attestation that a cycle COMPLETED (exit 0 or the WARN exit 3).
+# Hard failure paths (exit 1/2) never call this, so their staleness stays visible.
+write_heartbeat() {
+  if [ -n "$HEARTBEAT" ]; then
+    date +%s > "$HEARTBEAT" 2>/dev/null
+  fi
+}
+
+write_blocked_marker() {
+  if [ -n "$BLOCKED_MARKER" ]; then
+    printf '%s' "$1" > "$BLOCKED_MARKER" 2>/dev/null
+  fi
+}
+
+clear_blocked_marker() {
+  if [ -n "$BLOCKED_MARKER" ]; then
+    rm -f "$BLOCKED_MARKER" 2>/dev/null
+  fi
+}
+
 
 # P2 FIX: JSON escape function for safe string interpolation in JSON
 # Escapes backslash, quote, and control characters (newline, tab, carriage return, etc.)
@@ -143,12 +168,22 @@ scan_unpushed_commits() {
   # deleted files (git diff --diff-filter=d inside secret_scan.py already
   # excludes them from the file list it scans).
   if [ -f "$AESOP_ROOT/tools/secret_scan.py" ]; then
-    if command -v python3 >/dev/null 2>&1; then
-      python3 "$AESOP_ROOT/tools/secret_scan.py" --range "$range_expr" --repo "$repo" >/dev/null 2>&1
-      return $?
-    elif command -v python >/dev/null 2>&1; then
-      python "$AESOP_ROOT/tools/secret_scan.py" --range "$range_expr" --repo "$repo" >/dev/null 2>&1
-      return $?
+    local py=""
+    if command -v python3 >/dev/null 2>&1; then py=python3
+    elif command -v python >/dev/null 2>&1; then py=python; fi
+    if [ -n "$py" ]; then
+      # Scanner output goes to a file (process_repo's stdout is the NUL protocol);
+      # its HIGH/FOUND/FATAL lines are appended to FLEET-BACKUP.log so the BLOCKED
+      # repo is named with file:line + rule. secret_scan.py masks matched values.
+      local scan_out scan_rc
+      scan_out=$(mktemp) || { echo "[$(ts)] SECRET-SCAN $(basename "$repo"): cannot capture scanner output (fail-closed)" >> "$LOG"; return 1; }
+      "$py" "$AESOP_ROOT/tools/secret_scan.py" --range "$range_expr" --repo "$repo" > "$scan_out" 2>&1
+      scan_rc=$?
+      grep -E '^(HIGH |FOUND: |FATAL)' "$scan_out" 2>/dev/null | while IFS= read -r line; do
+        echo "[$(ts)] SECRET-SCAN $(basename "$repo"): $line" >> "$LOG"
+      done
+      rm -f "$scan_out"
+      return $scan_rc
     fi
   fi
 
@@ -197,12 +232,20 @@ EOF
   if [ -f "$AESOP_ROOT/tools/secret_scan.py" ]; then
     # ITEM 2 fix: use "${file_paths[@]}" to properly quote array elements
     # Defect (a) fix: use python3||python probe instead of bare python (portable to python3-only systems)
-    if command -v python3 >/dev/null 2>&1; then
-      python3 "$AESOP_ROOT/tools/secret_scan.py" "${file_paths[@]}" >/dev/null 2>&1
-      return $?
-    elif command -v python >/dev/null 2>&1; then
-      python "$AESOP_ROOT/tools/secret_scan.py" "${file_paths[@]}" >/dev/null 2>&1
-      return $?
+    local py=""
+    if command -v python3 >/dev/null 2>&1; then py=python3
+    elif command -v python >/dev/null 2>&1; then py=python; fi
+    if [ -n "$py" ]; then
+      # Same capture as scan_unpushed_commits: HIGH/FOUND/FATAL lines -> FLEET-BACKUP.log.
+      local scan_out scan_rc
+      scan_out=$(mktemp) || { echo "[$(ts)] SECRET-SCAN $(basename "$repo"): cannot capture scanner output (fail-closed)" >> "$LOG"; return 1; }
+      "$py" "$AESOP_ROOT/tools/secret_scan.py" "${file_paths[@]}" > "$scan_out" 2>&1
+      scan_rc=$?
+      grep -E '^(HIGH |FOUND: |FATAL)' "$scan_out" 2>/dev/null | while IFS= read -r line; do
+        echo "[$(ts)] SECRET-SCAN $(basename "$repo"): $line" >> "$LOG"
+      done
+      rm -f "$scan_out"
+      return $scan_rc
     fi
   fi
 
@@ -295,8 +338,14 @@ process_repo() {
 
 main() {
   log "=== cycle start ==="
-  temp_json=$(mktemp)
+  temp_json=$(mktemp) || {
+    # Hard failure: the cycle cannot stage its status file. Exit 1 WITHOUT a
+    # heartbeat so the failed cycle reads as stale.
+    log "ERROR: cannot create cycle scratch file; cycle aborted (exit 1, no heartbeat)"
+    exit 1
+  }
   echo "[" > "$temp_json"
+  blocked_names=""
   first=1
   processed_paths=""
   # FIX #5: track whether ANY repo was BLOCKED (secret-scan gate failure)
@@ -369,7 +418,7 @@ $real_dir"
         name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$temp_result" | tr -d '\n')
         rm -f "$temp_result"
         [ -z "$state" ] && continue
-        [ "$state" = "BLOCKED" ] && any_blocked=1
+        [ "$state" = "BLOCKED" ] && { any_blocked=1; blocked_names="$blocked_names$name"$'\n'; }
         if [ "$first" = 1 ]; then
           first=0
         else
@@ -409,7 +458,7 @@ $real_dir"
         name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$temp_result" | tr -d '\n')
         rm -f "$temp_result"
         [ -z "$state" ] && continue
-        [ "$state" = "BLOCKED" ] && any_blocked=1
+        [ "$state" = "BLOCKED" ] && { any_blocked=1; blocked_names="$blocked_names$name"$'\n'; }
         if [ "$first" = 1 ]; then
           first=0
         else
@@ -425,27 +474,37 @@ $real_dir"
 
   echo "" >> "$temp_json"
   echo "]" >> "$temp_json"
-  mv "$temp_json" "$REPOS_STATUS"
+  if ! mv "$temp_json" "$REPOS_STATUS"; then
+    # Hard failure: the per-repo snapshot could not be persisted. Exit 1 with no
+    # heartbeat -- a cycle whose state was not recorded did not complete.
+    log "ERROR: cannot persist $REPOS_STATUS; cycle aborted (exit 1, no heartbeat)"
+    exit 1
+  fi
 
   # FIX #5: exit 3 (not 0) when >=1 repo was BLOCKED this cycle, so a
   # supervisor keying on $? can distinguish "blocked cycle" from a fully
   # clean one. See the any_blocked contract comment at the top of main().
+  # Both completed outcomes (exit 0 and exit 3) write the heartbeat: the cycle
+  # DID complete work (other repos were snapshotted, .watchdog-repos.json written).
+  # A BLOCKED cycle additionally records the blocked repo names in
+  # .watchdog-blocked so consumers can tell healthy from healthy-with-blocked.
   if [ "$any_blocked" -eq 1 ]; then
     log "=== cycle end (BLOCKED: >=1 repo blocked by secret-scan gate; exit 3) ==="
+    write_blocked_marker "$blocked_names"
+    write_heartbeat
     exit 3
   fi
 
+  clear_blocked_marker
   log "=== cycle end ==="
   # Heartbeat is written HERE, after the cycle actually completed -- not before
   # main() runs. Written up front, a crash or hang inside main() still left a fresh
   # timestamp, so selfheal.sh saw a healthy age, never restarted the daemon, and
   # fleet backups halted silently. A heartbeat must attest to work DONE, not work
-  # attempted. Failure paths deliberately do not write it, so staleness is detected.
-  # HEARTBEAT is empty when CONDUCTOR_ROOT could not be safely resolved (see the
-  # heartbeat-pollution guard above) -- skip the write in that case too.
-  if [ -n "$HEARTBEAT" ]; then
-    date +%s > "$HEARTBEAT" 2>/dev/null
-  fi
+  # attempted. Hard failure paths (exit 1/2) deliberately do not write it.
+  # write_heartbeat is a no-op when CONDUCTOR_ROOT could not be safely resolved
+  # (see the heartbeat-pollution guard above).
+  write_heartbeat
   exit 0
 }
 
