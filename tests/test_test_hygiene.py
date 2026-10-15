@@ -747,7 +747,9 @@ class TestFixtureImmutability(unittest.TestCase):
 
             # Parse git status output and check for modified/new files in risky areas
             dirty_files = []
-            for line in status_output.strip().split("\n"):
+            # rstrip, not strip: porcelain lines start with a status column that may be a
+            # leading space (" M path"); strip() would eat it and shift line[3:] off by one.
+            for line in status_output.rstrip("\n").split("\n"):
                 if not line.strip():
                     continue
 
@@ -760,7 +762,13 @@ class TestFixtureImmutability(unittest.TestCase):
 
                 # Risky patterns: modified or new files in tests/fixtures/ or repo root
                 # but allow safe temp patterns (already cleaned up)
-                if "tests/fixtures/" in filepath:
+                if status_code != "??" and "/" not in filepath:
+                    # Any TRACKED root file modified or deleted by a test, dot-prefixed
+                    # ones included (e.g. .widget-baseline.json): a test may never edit a
+                    # committed root file. Untracked ("??") root files are left to the
+                    # cache/ignore allowlist below.
+                    dirty_files.append(filepath)
+                elif "tests/fixtures/" in filepath:
                     # tests/fixtures/ should NEVER be modified by tests
                     dirty_files.append(filepath)
                 elif filepath.count("/") == 0 and filepath not in [

@@ -6,6 +6,8 @@ consumers (stateapi_lint.py, portability_check.py, subprocess_guard.py) already 
 so the liveness checker is exercised against real subprocess invocations rather than
 mocks.
 """
+import contextlib
+import io
 import json
 import shutil
 import sys
@@ -93,6 +95,18 @@ if __name__ == "__main__":
 '''
 
 
+def _quiet_main(argv):
+    """Run main() with stdout/stderr captured.
+
+    main() prints the baseline entries it prunes or flags. Inside these tests those names
+    belong to the throwaway temp repo, but unredirected they land in CI logs and read as if
+    a real tracked file were being edited. Capture them so the logs stay honest.
+    """
+    sink = io.StringIO()
+    with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+        return main(argv)
+
+
 class BaselineLivenessCheckTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -151,7 +165,7 @@ class BaselineLivenessCheckTest(unittest.TestCase):
 
     def test_real_main_exits_1_and_names_dead_baseline(self):
         self._write_baseline(".orphan-baseline.json", ["nothing@here"])
-        rc = main(["--root", str(self.repo_root), "--json"])
+        rc = _quiet_main(["--root", str(self.repo_root), "--json"])
         self.assertEqual(rc, 1)
 
     # ---- consumer discovery via hardcoded usage ----------------------
@@ -216,7 +230,7 @@ class BaselineLivenessCheckTest(unittest.TestCase):
             encoding="utf-8",
         )
         self._write_baseline(".widget-baseline.json", ["widget.py:1", "widget.py:99"])
-        rc = main(["--root", str(self.repo_root)])
+        rc = _quiet_main(["--root", str(self.repo_root)])
         self.assertEqual(rc, 1)
 
     # ---- healthy baseline ---------------------------------------------
@@ -231,7 +245,7 @@ class BaselineLivenessCheckTest(unittest.TestCase):
             encoding="utf-8",
         )
         self._write_baseline(".widget-baseline.json", ["widget.py:1"])
-        rc = main(["--root", str(self.repo_root)])
+        rc = _quiet_main(["--root", str(self.repo_root)])
         self.assertEqual(rc, 0)
 
         result = check_repo(self.repo_root)
@@ -266,7 +280,7 @@ class BaselineLivenessCheckTest(unittest.TestCase):
             ".widget-baseline.json", ["widget.py:1", "widget.py:50", "widget.py:60"]
         )
 
-        rc = main(["--root", str(self.repo_root), "--prune"])
+        rc = _quiet_main(["--root", str(self.repo_root), "--prune"])
         self.assertEqual(rc, 0)
 
         data = json.loads(baseline_path.read_text(encoding="utf-8"))
