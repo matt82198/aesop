@@ -10,6 +10,8 @@ ro or foreign-owned markers).
 Fail closed: an unreadable or malformed marker raises MarkerError; callers must
 treat that as deny.
 
+INDEX: Worktree ownership marker (.aesop-worktree-owner) read/write with fail-closed parsing, consumed by merge_train and primary-branch-guard
+
 CLI:
   worktree_marker.py write --root <dir> --owner <id> --mode rw|ro
   worktree_marker.py read  --root <dir>   (exit 0 + JSON, 1 absent, 2 unreadable)
