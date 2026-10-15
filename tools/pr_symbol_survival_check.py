@@ -12,7 +12,7 @@ were dropped by commit 2e0a24e2 which took origin/main's tools/merge_queue.py wh
 resolving a conflict, and CI stayed green because only the PR's OWN tests exercised those symbols).
 CLI: `--base REF` (default origin/main) `--head REF` (default HEAD) `--original-head SHA` (optional:
 diff base..original-head as a single unit instead of walking each non-merge commit) `--json`.
-Exit 0=all survived (MOVED is advisory/INFO, still exit 0) / 1=symbols missing / 2=usage or git error.
+Exit 0=all survived (MOVED and REMOVED are advisory/INFO, still exit 0) / 1=symbols missing / 2=usage or git error.
 Read-only: no writes, no git state mutation.
 
 Usage:
@@ -252,17 +252,39 @@ def grep_repo_for_symbol(head, name, lang, exclude_file):
     return None
 
 
+def _has_symbol(rev, file_path, name, lang):
+    content = show_blob(rev, file_path)
+    return bool(content) and name in extract_symbols(content, lang)
+
+
 def find_drop_commit(base, head, name, file_path, lang):
-    """First merge commit in base..head where `name` was present in its first
-    parent's version of file_path but absent from the merge's own tree."""
+    """First merge commit in base..head whose tree lacks `name` although ANY of
+    its parents held it in file_path.
+
+    Any parent, not just parents[0]: `git checkout main; git merge feature` makes
+    main the first parent, which never had the branch's symbol, yet a lossy
+    resolution of that merge still drops it. Checking only the first parent let
+    that case through as a plain "removed" (G13 false pass)."""
     for commit in list_commits(base, head):
         if not commit['is_merge']:
             continue
-        parent_content = show_blob(commit['parents'][0], file_path)
-        present_before = bool(parent_content) and name in extract_symbols(parent_content, lang)
-        merge_content = show_blob(commit['sha'], file_path)
-        present_after = bool(merge_content) and name in extract_symbols(merge_content, lang)
-        if present_before and not present_after:
+        if _has_symbol(commit['sha'], file_path, name, lang):
+            continue
+        if any(_has_symbol(parent, file_path, name, lang) for parent in commit['parents']):
+            return commit
+    return None
+
+
+def find_plain_delete_commit(base, head, name, file_path, lang):
+    """First NON-merge commit in base..head that deleted `name` from file_path
+    (its parent held it, the commit's own tree does not). Only this kind of
+    deletion counts as an intentional removal (add-then-delete)."""
+    for commit in list_commits(base, head):
+        if commit['is_merge'] or not commit['parents']:
+            continue
+        if not _has_symbol(commit['parents'][0], file_path, name, lang):
+            continue
+        if not _has_symbol(commit['sha'], file_path, name, lang):
             return commit
     return None
 
@@ -312,15 +334,19 @@ def run_check(base_ref, head_ref, original_head_ref):
 
         drop_commit = find_drop_commit(base_sha, head_sha, name, file_path, lang)
         if drop_commit is None:
-            # No merge commit in range removed it, so the branch's own later commit
-            # deleted it on purpose (add-then-delete). Not a conflict-resolution loss.
-            removed.append({
-                'symbol': name,
-                'lang': lang,
-                'file': file_path,
-                'added_by': {'sha': info['commit'], 'subject': info['commit_subject']},
-            })
-            continue
+            # No merge commit dropped it. If a NON-merge commit in range deleted it,
+            # the branch removed it on purpose (add-then-delete): reported, passes.
+            # Anything else falls through to MISSING (fail closed).
+            deleted_by = find_plain_delete_commit(base_sha, head_sha, name, file_path, lang)
+            if deleted_by is not None:
+                removed.append({
+                    'symbol': name,
+                    'lang': lang,
+                    'file': file_path,
+                    'added_by': {'sha': info['commit'], 'subject': info['commit_subject']},
+                    'deleted_by': {'sha': deleted_by['sha'], 'subject': deleted_by['subject']},
+                })
+                continue
         missing.append({
             'symbol': name,
             'lang': lang,
@@ -351,14 +377,22 @@ def render_text(report):
         'pr_symbol_survival_check: base={} head={}'.format(report['base'][:8], report['head'][:8])
     )
     lines.append(
-        '  checked {} symbol(s) added by non-merge commits -- {} OK, {} MOVED, {} MISSING'.format(
-            report['symbols_checked'], len(report['ok']), len(report['moved']), len(report['missing'])
+        '  checked {} symbol(s) added by non-merge commits -- {} OK, {} MOVED, {} REMOVED, {} MISSING'.format(
+            report['symbols_checked'], len(report['ok']), len(report['moved']),
+            len(report['removed']), len(report['missing'])
         )
     )
     for entry in report['moved']:
         lines.append(
             '  INFO    MOVED    {}: {} -> {}'.format(
                 entry['symbol'], entry['old_file'], entry['new_file']
+            )
+        )
+    for entry in report['removed']:
+        lines.append(
+            '  INFO    REMOVED  {}: {} (deleted on purpose by {} {})'.format(
+                entry['symbol'], entry['file'],
+                entry['deleted_by']['sha'][:8], entry['deleted_by']['subject'],
             )
         )
     for entry in report['missing']:

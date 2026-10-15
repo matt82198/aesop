@@ -868,18 +868,21 @@ class TestSysModulesRestoration(unittest.TestCase):
         self.assertEqual(_sys_modules_delete_offenders(unrestored), [3])
         self.assertEqual(_sys_modules_delete_offenders(restored), [])
 
-    def test_parity_module_deletes_sys_modules_only_with_restoration(self):
-        """tests/test_wave_dispatch_agents_parity.py must not delete sys.modules entries except
-        under a restoring try/finally, with, or addCleanup (AST check, not a text grep).
-
-        Scoped to the one file this guard hardens. A repo-wide scan currently flags 55 existing
-        `del sys.modules[...]` sites in other test files (see the follow-up note in the PR body);
-        that sweep is out of this change's scope."""
-        parity = Path(__file__).parent / "test_wave_dispatch_agents_parity.py"
-        offenders = _sys_modules_delete_offenders(parity.read_text(encoding="utf-8"))
-        self.assertEqual(offenders, [],
-                         "del sys.modules[...] without restoration in " + parity.name +
-                         " at lines " + ", ".join(str(n) for n in offenders))
+    def test_repo_tests_delete_sys_modules_only_with_restoration(self):
+        """Every tests/**/*.py must delete sys.modules entries only under a restoring try/finally,
+        with, or addCleanup (AST check, not a text grep). A leaked deletion leaves a sibling
+        module's `config` binding stale for the rest of the shard process."""
+        tests_dir = Path(__file__).parent
+        offenders = {}
+        for path in sorted(tests_dir.rglob("*.py")):
+            lines = _sys_modules_delete_offenders(path.read_text(encoding="utf-8"))
+            if lines:
+                offenders[path.relative_to(tests_dir).as_posix()] = lines
+        self.assertEqual(
+            offenders, {},
+            "del sys.modules[...] without restoration (file: lines) -> "
+            + "; ".join(f"{name}: {', '.join(str(n) for n in lines)}"
+                        for name, lines in offenders.items()))
 
 
 if __name__ == "__main__":

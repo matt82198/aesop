@@ -141,6 +141,27 @@ check_monitor_staleness() {
   fi
 }
 
+# Receipt flush (tools/receipt_flush.py): posts any spooled receipt whose sha now
+# exists on GitHub. Runs on EVERY cycle (no throttle: an empty spool costs nothing,
+# and a spool entry is a pending hosted verify-receipt result). The pre-push hook
+# spawns a detached poller per spooled push (tools/receipt_autoflush.py); this is
+# the backstop for anything that poller missed (process killed, sha slow to appear,
+# gh outage). Fail-open: a flush failure is logged, never fails the cycle.
+run_receipt_flush() {
+  local aesop_root="$1"
+  local python_exe="$2"
+  local log_file="$3"
+  if [ -z "$python_exe" ] || [ ! -f "$aesop_root/tools/receipt_flush.py" ]; then
+    return 0
+  fi
+  local flush_out
+  flush_out=$("$python_exe" "$aesop_root/tools/receipt_flush.py" --repo "$aesop_root" < /dev/null 2>&1) || true
+  if [ -n "$flush_out" ]; then
+    echo "$flush_out" >> "$log_file"
+  fi
+  return 0
+}
+
 # Session-independent PR sweep (tools/pr_sweep.py, STATE.md item 9 residual):
 # arms missing GitHub native auto-merge, nudges BEHIND branches (capped at 2),
 # and signals stuck-red/DIRTY PRs to the signal-hub queue. Throttled to at
@@ -324,6 +345,7 @@ main() {
     if [ -n "$PYTHON_EXE" ]; then
       "$PYTHON_EXE" "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
     fi
+    run_receipt_flush "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log"
     run_pr_sweep_throttled "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log"
     ingest_rc=0
     run_task_ingest "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log" || ingest_rc=$?
@@ -367,6 +389,7 @@ main() {
     if [ -n "$PYTHON_EXE" ]; then
       "$PYTHON_EXE" "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
     fi
+    run_receipt_flush "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log"
     run_pr_sweep_throttled "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log"
     run_task_ingest "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log" || true
     sleep 150

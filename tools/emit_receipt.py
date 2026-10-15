@@ -214,6 +214,17 @@ def scrub_child_env(environ):
     return env, sorted(removed)
 
 
+# Restored from the PR branch's commit 946a75e5 (escape-hatch scrub). Main's #1021 superseded
+# the list and helper with SCRUBBED_ENV_VARS / scrub_child_env; these names are aliases over
+# that single source of truth so the escape-hatch behaviour is asserted in one place.
+_SCRUBBED_PART_ENV = SCRUBBED_ENV_VARS
+
+
+def scrubbed_part_env(environ):
+    """Return a copy of environ with the push-inherited variables removed (see scrub_child_env)."""
+    return scrub_child_env(environ)[0]
+
+
 def run_part(repo, name, spec, throwaway_wt=None, log_path=None):
     argv = spec.cmd(Path(throwaway_wt or repo))
     t0 = time.monotonic()
