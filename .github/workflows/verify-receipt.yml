@@ -103,17 +103,37 @@ jobs:
             summary "${msg}"
             exit 1
           fi
+          # One bounded retry: a lane's pre-push flusher (tools/receipt_autoflush.py) posts
+          # the receipt once GitHub knows the sha, which can be seconds after this job starts.
+          # Attempt 1 is immediate; attempt 2 is 60s later. Still fail-closed: two misses = MISSING.
           set +e
-          python base/tools/verify_receipt.py --fetch-for-head "$HEAD_SHA" --repo-slug "$GITHUB_REPOSITORY" \
-            --out-found receipt_found --out-envelope receipt.json
-          fetch_code=$?
+          fetch_code=1
+          found_attempt=0
+          for attempt in 1 2; do
+            if [ "$attempt" -eq 2 ]; then
+              echo "::notice title=verify-receipt::no receipt on attempt 1; re-checking once after 60s"
+              sleep 60
+            fi
+            python base/tools/verify_receipt.py --fetch-for-head "$HEAD_SHA" --repo-slug "$GITHUB_REPOSITORY" \
+              --out-found receipt_found --out-envelope receipt.json
+            fetch_code=$?
+            if [ "$fetch_code" -eq 0 ]; then
+              found_attempt=$attempt
+              break
+            fi
+          done
           set -e
           echo "found=$(cat receipt_found 2>/dev/null || echo false)" >> "$GITHUB_OUTPUT"
           if [ "$fetch_code" -ne 0 ]; then
-            echo "::error title=verify-receipt::MISSING receipt for ${HEAD_SHA} (see the step log for where it was looked for)."
-            summary "No \`verify-receipt-local\` receipt was found for \`${HEAD_SHA}\` (check-runs and commit comments)."
+            echo "::error title=verify-receipt::MISSING receipt for ${HEAD_SHA} after 2 attempts (immediate and +60s); see the step log for where it was looked for."
+            summary "No \`verify-receipt-local\` receipt was found for \`${HEAD_SHA}\` on 2 attempts (immediate and 60s later; check-runs and commit comments)."
             exit 1
           fi
+          {
+            echo "## verify-receipt: receipt found on attempt ${found_attempt} of 2"
+            echo ""
+            echo "Fetched the \`verify-receipt-local\` receipt for \`${HEAD_SHA}\`."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify the receipt offline
         if: steps.fetch.outputs.found == 'true'

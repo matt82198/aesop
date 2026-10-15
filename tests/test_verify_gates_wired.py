@@ -147,6 +147,11 @@ class TestVerifyGatesWired(unittest.TestCase):
         os.makedirs(os.path.join(self.test_dir, 'tests'))
         os.makedirs(tools_dir)
 
+        # Copy the real gate in, so the run exercises its own fail-closed path
+        import shutil
+        shutil.copy2(os.path.join(os.path.dirname(__file__), "..", "tools", "verify_gates_wired.py"),
+                     os.path.join(tools_dir, "verify_gates_wired.py"))
+
         # Create ci.yml but missing CLAUDE.md files
         ci_yml_path = os.path.join(self.test_dir, '.github', 'workflows', 'ci.yml')
         with open(ci_yml_path, 'w', encoding='utf-8') as f:
@@ -154,7 +159,7 @@ class TestVerifyGatesWired(unittest.TestCase):
 
         rc, stdout, stderr = self._run_gate(self.test_dir)
         # Should fail closed (exit 2 on error or exit 1)
-        self.assertNotEqual(rc, 0, "Expected non-zero exit when CLAUDE.md missing")
+        self.assertEqual(rc, 2, "Expected exit 2 (fail-closed) when CLAUDE.md missing, got %d: %s" % (rc, stderr))
 
     def test_guardrail_gate_marker(self):
         """Test: gates marked with (Guardrail Gx) are captured."""
@@ -241,6 +246,83 @@ jobs:
         rc, stdout, stderr = self._run_gate(self.test_dir)
         # Should pass (exit 0) because prepush_gate is not a CI gate
         self.assertEqual(rc, 0, f"Expected exit 0 when pre-push-only gate not in CI. stderr: {stderr}")
+
+    def _fixture(self, claudemd_line, ci_steps=()):
+        """Build a repo whose tools/CLAUDE.md carries one line and whose ci.yml runs ci_steps."""
+        import shutil
+        tools_dir = os.path.join(self.test_dir, 'tools')
+        tests_dir = os.path.join(self.test_dir, 'tests')
+        github_dir = os.path.join(self.test_dir, '.github', 'workflows')
+        for d in (tools_dir, tests_dir, github_dir):
+            os.makedirs(d)
+        script_src = os.path.join(os.path.dirname(__file__), '..', 'tools', 'verify_gates_wired.py')
+        shutil.copy2(script_src, os.path.join(tools_dir, 'verify_gates_wired.py'))
+        with open(os.path.join(tools_dir, 'CLAUDE.md'), 'w', encoding='utf-8') as f:
+            f.write("# tools/ — Build utilities\n\n## Core invariants\n" + claudemd_line + "\n")
+        with open(os.path.join(tests_dir, 'CLAUDE.md'), 'w', encoding='utf-8') as f:
+            f.write("# tests/ — Test suites\n")
+        ci_yml = "name: CI\njobs:\n  ci:\n    runs-on: ubuntu-latest\n    steps:\n"
+        for step in ci_steps:
+            ci_yml += f"      - run: {step}\n"
+        with open(os.path.join(github_dir, 'ci.yml'), 'w', encoding='utf-8') as f:
+            f.write(ci_yml)
+
+    def test_identifier_tokens_on_guardrail_line_are_not_gates(self):
+        """Bare identifiers and keywords in backticks on a Guardrail line are not gate names."""
+        self._fixture(
+            "- **Symbol survival (Guardrail G13)**: collects `def` and `class` names "
+            "such as `my_helper` and `build_bisect_batches`."
+        )
+        rc, stdout, stderr = self._run_gate(self.test_dir)
+        self.assertEqual(rc, 0, f"Identifiers must not be treated as gates. stderr: {stderr}")
+        self.assertNotIn('Unwired', stderr)
+        self.assertNotIn('ambiguous', stderr)
+
+    def test_directory_list_on_guardrail_line_is_not_a_gate(self):
+        """A directory reference such as `tools/` on a Guardrail line is not a gate."""
+        self._fixture("- pyflakes ratchet: `tools/ bin/ ui/ tests/` — Guardrail G15: wraps pyflakes")
+        rc, stdout, stderr = self._run_gate(self.test_dir)
+        self.assertEqual(rc, 0, f"Directory references must not be gates. stderr: {stderr}")
+
+    def test_glob_pattern_on_guardrail_line_is_not_a_gate(self):
+        """A glob such as `test_*.py` names a set of files, not a single gate script."""
+        self._fixture("- coverage: `tests/test_*.py` and `*.py` — Guardrail G2: globbed scan")
+        rc, stdout, stderr = self._run_gate(self.test_dir)
+        self.assertEqual(rc, 0, f"Glob patterns must not be gates. stderr: {stderr}")
+
+    def test_documented_script_path_not_wired_still_errors(self):
+        """A path-form gate script documented on a Guardrail line and not invoked in CI exits 1."""
+        self._fixture("- `tools/missing_gate.py` — Guardrail G7: a documented gate")
+        rc, stdout, stderr = self._run_gate(self.test_dir)
+        self.assertEqual(rc, 1, f"Unwired path-form gate must fail closed. stderr: {stderr}")
+        self.assertIn('missing_gate.py', stderr)
+        self.assertIn('Unwired', stderr)
+
+    def test_ambiguous_extensionless_path_errors(self):
+        """A path under a gate directory with no extension cannot be classified and errors."""
+        self._fixture("- `tools/foo` — Guardrail G7: a documented gate")
+        rc, stdout, stderr = self._run_gate(self.test_dir)
+        self.assertEqual(rc, 1, f"Ambiguous gate reference must fail closed. stderr: {stderr}")
+        self.assertIn('ambiguous gate reference', stderr)
+        self.assertIn('tools/foo', stderr)
+
+    def test_prefixed_script_wired_with_arguments_passes(self):
+        """An invocation prefix plus arguments still names the script; a CI invocation wires it."""
+        self._fixture(
+            "- `python tools/my_gate.py --check` — Guardrail G7: a documented gate",
+            ci_steps=["python tools/my_gate.py --check"],
+        )
+        rc, stdout, stderr = self._run_gate(self.test_dir)
+        self.assertEqual(rc, 0, f"Prefixed, wired gate must pass. stderr: {stderr}")
+
+    def test_node_script_gate_is_invoked_by_node(self):
+        """A .mjs gate documented on a Guardrail line is wired by a node invocation."""
+        self._fixture(
+            "- `hooks/check_thing.mjs` — Guardrail G7: a documented gate",
+            ci_steps=["node hooks/check_thing.mjs"],
+        )
+        rc, stdout, stderr = self._run_gate(self.test_dir)
+        self.assertEqual(rc, 0, f"node-invoked .mjs gate must count as wired. stderr: {stderr}")
 
 
 if __name__ == '__main__':
