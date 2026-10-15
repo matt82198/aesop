@@ -17,7 +17,7 @@ Rows marked (inferred) were classified from the commit subject because the commi
 
 | Class | What Happened | Resolution | Source |
 | --- | --- | --- | --- |
-| fake-green | fail-closed incident classification via commit trailer | Incident classification no longer guesses from commit bodies. An | commit b5d5e065 |
+| fake-green | fail-closed incident classification via commit trailer | Incident classification no longer guesses from commit bodies. An | commit 4cf489dc |
 | doc-invented (inferred) | doc-invented: lane claims relayed before CI verified them (unverifi... | ENFORCE: relay blocked until CI run id and merged state checked [ex... | commit 8205122c |
 | doc-invented (inferred) | doc-invented: state words not bound to checks (unverifiable) | ENFORCE: state claims must cite a check id; lint fails otherwise [e... | commit 98eb1a3a |
 | gate-activation (inferred) | gate-activation: orchestrator bypassed hook gates fired on two blocks | ENFORCE: deny = stop-and-report, machine-checked escape [exists: no] | commit b1f8a85a |
@@ -130,4 +130,4 @@ Rows marked (inferred) were classified from the commit subject because the commi
 | test-pollution (inferred) | isolate tracker writes to tempdir; guard verify_dash against pollut... | - tools/verify_dash.py now explicitly sets AESOP_STATE_ROOT to temp... | commit 29356d85 |
 | stall (inferred) | stall_check.py — silent-hang detection for the agent watchdog (wave... | Adds automated detection of stalled agents by scanning transcript m... | commit 17010688 |
 
-<!-- Latest incident: 2026-10-14T20:01:33-05:00 -->
+<!-- Latest incident: 2026-10-14T20:05:30-05:00 -->
