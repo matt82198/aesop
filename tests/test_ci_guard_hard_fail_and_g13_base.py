@@ -26,6 +26,21 @@ HOOK = REPO_ROOT / "hooks" / "pre-push-policy.sh"
 REAL_G13_TOOL = REPO_ROOT / "tools" / "pr_symbol_survival_check.py"
 
 _CI_VARS = ("CI", "GITHUB_ACTIONS")
+_GIT_BASH_WIN = r"C:\Program Files\Git\bin\bash.exe"
+
+
+def _bash():
+    """Return a POSIX bash for the hook. On Windows, PATH 'bash' can be the WSL launcher
+    (C:\\Windows\\System32\\bash.exe), which prints 'Windows Subsystem for Linux has no
+    installed distributions' and never runs the hook. Prefer Git Bash; fail closed if absent."""
+    if sys.platform == "win32":
+        found = shutil.which("bash")
+        if found and "system32" not in found.lower():
+            return found
+        if os.path.exists(_GIT_BASH_WIN):
+            return _GIT_BASH_WIN
+        raise AssertionError("no Git Bash found for the pre-push hook (looked on PATH and %s)" % _GIT_BASH_WIN)
+    return shutil.which("bash") or "bash"
 
 
 def _child_env(extra=None, drop=()):
@@ -144,7 +159,7 @@ class TestG13JudgedByBaseTool(unittest.TestCase):
         script = 'source "$1"; check_symbol_survival'
         # Bytes in: text-mode pipes on Windows rewrite "\n" as "\r\n", which corrupts the sha field.
         res = subprocess.run(
-            ["bash", "-c", script, "bash", HOOK.as_posix()],
+            [_bash(), "-c", script, "bash", HOOK.as_posix()],
             cwd=str(self.work), input=stdin.encode("utf-8"), env=env,
             capture_output=True, timeout=300,
         )
