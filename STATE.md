@@ -4,6 +4,19 @@
 
 **Current Version:** v0.9.0 (release/0.9.0 cut 2026-10-06 from main f41d6c40; 103 PRs since v0.8.0). Previous: v0.8.0 (2026-09-11).
 
+## CURRENT (2026-10-14 orchestrator checkpoint)
+
+**Checkpoint 2026-10-14 (orchestrator, Mattt box).** Facts verified by the orchestrator or lanes today:
+
+- **RED main - fix in flight:** scheduled run 38538275152 (main, c5b9babe, job `windows`) was RED. Root cause: the `windows` aggregator in `.github/workflows/ci.yml` treated a legitimate docs-only windows-shard skip on the `schedule` event as a failure; it only exempted the `pull_request` path. Fix = PR #944 (branch `fix/main-windows-red`, head ff535148), auto-merge armed, with `WindowsAggregatorBehaviourTest` in `tests/test_ci_workflow_lint.py` (red/green proof). Status at checkpoint: OPEN.
+- **PR #943 red is unrelated:** `tests/test_state_md_verifier.py` sets git `user.*` config outside a temp fixture, caught by `test_test_hygiene`. A lane is fixing it on the PR branch.
+- **Watchdog on the Mattt box:** scheduled task `AesopWatchdogDaemon` registered 2026-10-14 via `daemons/install-tasks.ps1 -Force` from runtime worktree `~/aesop-daemon-runtime` (detached at origin/main; each tick fetches and resets to origin/main, `CONDUCTOR_ROOT=$HOME/conductor3`). Status Ready. Heartbeat `~/conductor3/state/.watchdog-heartbeat` advanced 19:18:05 -> 19:20:15 local after `schtasks /run`. A legacy Disabled task `\Aesop\AesopWatchdogDaemon` (stale conductor3 fork) remains; the installer divergence check matches by name across folders (follow-up). `AesopRefinementMonitor` is not registered on this box. `AesopMergeQueue` untouched (retired).
+- **power_selftest:** the hooks `UnicodeDecodeError` was a stale local claude-scripts checkout; master already had the utf-8 fix. Remaining: 2 red tests in claude-scripts `tests/test_power_selftest.py` (aesop-root fixture assumes `~/aesop`; this box uses `~/Desktop/aesop`) and 12-14 hardcoded `C:/Users/Mattt` paths in brain hooks/docs. Lanes in flight for both.
+- **Brain hooks (changed 2026-10-07, docs corrected 2026-10-14):** `force-haiku-subagents.mjs` now refuses dispatches without an explicit model; `inject-lane-contract.mjs` refuses dispatches that do not reference LANE-CONTRACT. Open policy items: the hook suggests "sonnet" for untyped dispatches (doctrine is haiku); the inject-lane-contract refusal text hardcodes the matt8 path.
+- **Local checkouts (Mattt box):** `~/Desktop/aesop` primary on `guard/trigger-layer-selftest`, 246 behind origin/main (fetch-only). `~/aesop` exists but is not a git repo. `~/scripts` on `feat/shorts-prep-montage` (merge of origin/master in progress by a lane). conductor3 branch `chore/monitor-state-cycle-483` pushed (17 commits), master 264 behind.
+- **Matt decisions 2026-10-14:** WSL Ubuntu install approved (firmware-blocked, see Blocked). FLY_API_TOKEN set (psinasty deploy workflow re-run still needed, not run). dynastywrapped.com hosted (tunnel/healthz unverified). Per-box receipt keys DEFERRED. Orchestrator "sync" means fetch only; pushes come from lanes on instruction. Every Agent dispatch states `model: "haiku"` explicitly.
+- **Open question (Matt):** which "cap" the orchestrator should monitor. Candidates: GitHub Actions 20-concurrent-job cap (monitored by idle_tick / detect_red_ci_runs / pr_sweep); Anthropic usage runaway detector (usage_watchdog.py); Fly/Cloudflare free tiers (no monitor exists). Unresolved.
+
 ## Architectural Thesis
 
 Agent behavior is source code. Rules, memory, hooks, and checkpoints live as versioned, portable, diffable filesystem artifacts in git. This design enables code-review, versioning, and forensic replay of orchestration itself—not just the agents' output.
@@ -80,20 +93,19 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 ### Open / Queued
 
-18. **Promote pr_symbol_survival_check (G13) to blocking** (QUEUED). After 2026-10-14 (1 week clean runs since #865).
+18. **Promote pr_symbol_survival_check (G13) to blocking** (DUE TODAY 2026-10-14). Promote only if the one-week run window since #865 holds; verify the runs before promoting.
 19. **Extend hooks/no-polling.mjs** (QUEUED). Deny backgrounded whole-filesystem searches in lanes.
 20. **tests/test_test_hygiene.py lookback off-by-one** (QUEUED). Lookback window hardcoded as 19 lines; doc claims 20. Review window semantics + fix mismatch (2026-10-07 audit carried forward).
 21. **pyflakes ratchet G15 gate wiring** (OPEN/IN PROGRESS). A lane is wiring pyflakes to pre-push gate list; fixes ~50 remaining issues found during #890 sweep; do not claim merged until PR lands.
 22. **Receipt gate increments 4–6** (QUEUED). Increment 4 (agreement measurement via tools/receipt_agreement.py) gated on measurement completion; increments 6a–6c (signed ledger storage, lineage codec) per conductor3 plan.
 23. **AesopMergeQueue task lifecycle decision** (QUEUED, decision pending). Scheduled task `AesopMergeQueue` Status: Disabled since 2026-09-11; retire gracefully (cleanup PR) vs re-enable?
-24. **Second-box receipt key provisioning** (QUEUED). Mattt profile on macOS needs AESOP_RECEIPT_KEY env var + private key setup.
+24. **Second-box receipt key provisioning** (DEFERRED — Matt 2026-10-14; not queued). Mattt profile on macOS needs AESOP_RECEIPT_KEY env var + private key setup.
 25. **Closed unmerged: PR #921** (branch corrupted: fixture commits; salvaged as #923).
 
 ### Blocked / Deferred
 
-- **FLY_API_TOKEN** (BLOCKED — Matt). Needed for psinasty deploy.
-- **Cloudflare zone for dynastywrapped.com** (BLOCKED — Matt). GoDaddy NS cutover + `cloudflared tunnel login`, then signal-hub `deploy/install_tunnel.ps1`.
-- **WSL distro install decision** (BLOCKED — Matt). `wsl --install -d Ubuntu` or equivalent; #872's detection fix now correctly reports "no distro" either way.
+- **WSL distro install** (APPROVED by Matt 2026-10-14, firmware-blocked on this box). Virtualization is disabled in firmware; Virtual Machine Platform enable was attempted. Needs a BIOS change and reboot. #872's detection fix correctly reports "no distro" until then.
+- **Per-box receipt keys** (DEFERRED — Matt 2026-10-14). Not queued; see item 24.
 - **Merchant feed hosting choice** (BLOCKED — Matt). Where tannery-merchant-feed.tsv (claude-scripts #31) gets served from.
 
 **Merge actor session-independence — DONE (2026-10-06, PR #871):** GitHub native auto-merge (armed per-PR at open via `gh pr merge <n> --auto --squash`) is the session-independent merge actor; `AesopMergeQueue` Scheduled Task is correctly `Status: Disabled` — deliberate retirement of the old label+daemon regime. Real gap found and fixed: `tools/dispatch_lint.py` unconditionally forbade `--auto`/bare `gh pr merge`, blocking the exact command LANE-CONTRACT.md requires to arm the merge actor; now `gh pr merge <n> --auto --squash` is explicitly allowed while manual merge, bare `--auto` with no PR number, and `--admin` remain forbidden. 45/45 + 223/223 regression tests green.

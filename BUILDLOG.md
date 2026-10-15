@@ -255,3 +255,16 @@ NOT published to Medium; outward publishing stays user-gated.
 **Residual (separately tracked, not this item):** PRs that go RED after auto-merge is armed have no session-independent retry actor (live example: PR #784, already tracked as its own instrumentation-lane follow-up in STATE.md Follow-ups).
 
 **STATE.md item 9** moved from In Progress to Shipped, DONE.
+
+---
+
+## 2026-10-14 Orchestrator Checkpoint
+
+--- 2026-10-14 [checkpoint] orchestrator checkpoint (STATE.md ## CURRENT)
+
+- RED main (scheduled run 38538275152, job `windows`) traced to the `windows` aggregator treating a docs-only windows-shard skip on the schedule event as failure. Fix in PR #944 (fix/main-windows-red, ff535148), auto-merge armed; status at checkpoint OPEN.
+- PR #943 red is unrelated (test_state_md_verifier git config outside a temp fixture, caught by test_test_hygiene); lane fixing on its branch.
+- AesopWatchdogDaemon registered 2026-10-14 from runtime worktree ~/aesop-daemon-runtime; heartbeat advanced 19:18:05 -> 19:20:15 after schtasks /run. Legacy Disabled task remains (follow-up). AesopRefinementMonitor not registered on this box.
+- power_selftest: 2 red tests in claude-scripts plus 12-14 hardcoded C:/Users/Mattt paths; lanes in flight. Brain hooks now refuse dispatches without explicit model or LANE-CONTRACT reference.
+- Matt decisions: WSL Ubuntu approved (firmware-blocked); FLY_API_TOKEN set (psinasty deploy not re-run); dynastywrapped.com hosted (unverified); per-box receipt keys deferred; sync = fetch only; every dispatch states model haiku.
+- Open: which cap the orchestrator monitors (Actions concurrency, usage runaway, or Fly/Cloudflare free tiers). G13 promotion due today.
