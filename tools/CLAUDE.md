@@ -98,6 +98,7 @@ never reaching the hook.
 
 ## Recent additions (2026-10)
 
+- `bench_api_runner.py` live-spend guard: `AESOP_BENCH_OFFLINE=1` is checked before any Anthropic client is constructed in `make_api_runner`, even with `--confirm-spend`; `main()` requires `--confirm-spend` (exit 2 without it). Guard tests: `tests/test_bench_api_runner_guard.py`.
 - `generated_merge.py` / `generated_push_gate.py` / `install_merge_drivers.py` — the
   generated-artifact merge triangle (see § Tool index): regenerating merge driver, committed-
   bytes pre-push gate, idempotent per-clone driver registration. The gate runs each registered
