@@ -629,7 +629,10 @@ class TestMergeCarriedGeneratedPath(unittest.TestCase):
     INDEX = "tools/INDEX.md"
 
     def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
+        # Hosted Linux CI saw `Directory not empty: origin/.git` on rmtree in
+        # tearDown (one run, ci shard 0). Cleanup-only tolerance: every assertion
+        # still runs; a leftover temp dir is not a test failure.
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.tmp = Path(self._tmp.name)
         self.driver = self.tmp / "drive.sh"
         self.driver.write_text(
