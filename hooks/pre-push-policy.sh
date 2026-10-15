@@ -996,9 +996,13 @@ check_symbol_survival() {
   #
   # Fail-open ONLY when there is no aesop tools/ checkout at all (the same
   # rule as every other gate); a present-but-missing script fails closed.
-  local aesop_root
+  # Base-pinned (same rule as every other gate): the tool runs from the origin/main
+  # gate copy, never the pushed tree. A PR that weakens the tool to exit 0 must not
+  # pass a lossy merge it is judged on (lens L2 F2, G13 not base-pinned).
+  local aesop_root gate_dir
   aesop_root=$(resolve_aesop_root)
-  local symbol_script="$aesop_root/tools/pr_symbol_survival_check.py"
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_symbol_survival"; return 1; }
+  local symbol_script="$gate_dir/tools/pr_symbol_survival_check.py"
 
   local tool_status
   tool_status=$(gate_tool_status "$aesop_root" "$symbol_script")
