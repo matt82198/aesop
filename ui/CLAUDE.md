@@ -34,7 +34,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **csrf.py**: Session-token generation (atomic O_EXCL 0600 mode) + `validate_csrf_request()` (Origin/Referer check + X-Aesop-Token header). `init()` sets `SESSION_TOKEN` (43-char URL-safe base64). Token persisted to `state/.ui-session-token` (readable only by owner).
 
-**collectors.py**: Read-only data collectors (heartbeats, repos, events, alerts, messages, backlog parse), tracker CRUD via WriteAPI, queue status (exceptions.jsonl + heartbeat age), and SSE section snapshots. Functions: `_snapshot_data`, `_snapshot_tracker`, `_snapshot_orchestrator_status`, `drain_tracker_inbox`, `get_alerts`, `get_heartbeat_status`, `get_queue_status` (Q5 merge-queue operator panel), `get_agent_lifecycle_events` (wave-29), etc. **Inc 1 (2026-07-30):** Tracker CRUD routes through `state_store.write_api.WriteAPI` (atomic append + render). `load_tracker()` reads `tracker.json` cache.
+**collectors.py**: Read-only data collectors (heartbeats, repos, events, alerts, messages, backlog parse), tracker CRUD via WriteAPI, queue status (exceptions.jsonl + heartbeat age), and SSE section snapshots. Functions: `_snapshot_data`, `_snapshot_tracker`, `_snapshot_orchestrator_status`, `drain_tracker_inbox`, `get_alerts`, `get_heartbeat_status(clock=)` (injectable epoch clock for the 3s age buckets), `get_queue_status` (Q5 merge-queue operator panel), `get_agent_lifecycle_events` (wave-29), etc. **Inc 1 (2026-07-30):** Tracker CRUD routes through `state_store.write_api.WriteAPI` (atomic append + render). `load_tracker()` reads `tracker.json` cache.
 
 **agents.py**: Agent transcript reading (`get_fleet_agents`, `extract_agent_dispatch_prompt`, `get_agent_detail`), path-traversal-safe agent-id handling via `_AGENT_ID_FORBIDDEN`.
 
@@ -54,7 +54,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **wave_prs.py** â€” Wave PR board: `get_wave_prs()` gathers open PRs + PR-less `feat/*` branches, rolls CI checks into passing/failing/pending/none, derives top blocker, caches ~5s. Degrades to `{available:false, error}` when gh missing/un-authed. Subprocess reads use `encoding='utf-8', errors='replace'`. Override gh binary: `AESOP_GH_BIN` env var.
 
-**wave_telemetry.py** â€” Wave telemetry: `get_wave_telemetry()` extracts current phase (from `orchestrator-status` when fresh, `STATE.md` `## Phase:` fallback), top blocker (from `AUDIT-BACKLOG.md`), cost metrics (from ledger). Reads state at call time (no cache); degrades gracefully on missing files.
+**wave_telemetry.py** â€” Wave telemetry: `get_wave_telemetry()` extracts current phase (from `orchestrator-status` when fresh, `STATE.md` `## Phase:` fallback), top blocker (from `AUDIT-BACKLOG.md`), cost metrics (from ledger). Reads state at call time (no cache); degrades gracefully on missing files. `get_wave_telemetry(now=)` and `_read_orchestrator_status(now=)` take an injectable freshness clock (tests pin it; default is the wall clock).
 
 **wave_dispatch.py** â€” Wave dispatch (per-agent visibility): reads agent transcripts, infers phase (dispatch/thinking/tool-use/stall/done) from tail, estimates tokens from file size, computes activity age from mtime. Returns per-agent rows with phase badge, age, warnings (inactive >5min, stalled >10min). Degrades `{available:false}`. Polled 2-3s.
 

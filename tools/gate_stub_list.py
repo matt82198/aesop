@@ -37,7 +37,7 @@ from pathlib import Path
 
 CHECK_FUNC_RE = re.compile(r"^check_[a-z_]+\(\)\s*\{\s*$")
 VAR_ASSIGN_RE = re.compile(
-    r'local\s+(\w+)\s*=\s*"\$aesop_root/tools/([A-Za-z0-9_]+)\.py"'
+    r'local\s+(\w+)\s*=\s*"\$(?:aesop_root|gate_dir)/tools/([A-Za-z0-9_]+)\.py"'
 )
 GATE_TOOL_STATUS_RE = re.compile(
     r'gate_tool_status\s+"\$aesop_root"\s+"\$(\w+)"'

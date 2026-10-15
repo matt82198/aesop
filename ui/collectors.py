@@ -142,8 +142,11 @@ def parse_audit_backlog():
 
     return result
 
-def get_heartbeat_status():
+def get_heartbeat_status(clock=None):
     """Read daemon heartbeat age and status.
+
+    `clock` is a zero-arg callable returning epoch seconds; None uses time().
+    Injectable so tests pin the bucket boundary instead of racing the wall clock.
 
     Returns heartbeat status with honest staleness reporting:
     - "not configured" if heartbeat path is not available
@@ -179,7 +182,7 @@ def get_heartbeat_status():
                 return {"alive": "not configured", "age": -1, "threshold": 300}
 
         # Age in seconds: now_seconds - heartbeat_seconds
-        age_seconds = int(time()) - timestamp
+        age_seconds = int((clock or time)()) - timestamp
         # Bucket age to 3-second intervals to prevent hash churn
         age_bucketed = (age_seconds // 3) * 3
         alive = "ALIVE" if age_seconds < 300 else "STALE"

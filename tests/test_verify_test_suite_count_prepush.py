@@ -76,9 +76,27 @@ class TestVerifyTestSuiteCountPrepush(unittest.TestCase):
             check=True,
             capture_output=True,
         )
+        # Gate code is judged from origin/main:tools (hook gate_base_dir, fail-closed):
+        # publish the real tools/ tree as the fixture's origin/main.
+        self._base_tmp = tempfile.TemporaryDirectory()
+        base = Path(self._base_tmp.name) / "base"
+        shutil.copytree(
+            self.get_aesop_root() / "tools", base / "tools",
+            ignore=shutil.ignore_patterns("__pycache__"),
+        )
+        for cmd in (
+            ["git", "init", "-q", "-b", "main", str(base)],
+            ["git", "-C", str(base), "add", "-A"],
+            ["git", "-C", str(base), "-c", "user.email=t@example.com",
+             "-c", "user.name=t", "commit", "-q", "-m", "base tools"],
+            ["git", "-C", str(self.repo_root), "remote", "add", "origin", str(base)],
+            ["git", "-C", str(self.repo_root), "fetch", "-q", "origin", "main"],
+        ):
+            subprocess.run(cmd, check=True, capture_output=True)
 
     def tearDown(self):
         """Clean up temporary directories."""
+        self._base_tmp.cleanup()
         self.tmpdir.cleanup()
 
     def write_ci_shard_matrix(self, total: int, ids) -> None:
