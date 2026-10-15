@@ -45,7 +45,6 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - **tools/auto_merge.py scoped verdict (F-03, 2026-10-14)**: `auto_merge.py <n>...` exits 0 only if every named PR is `gh pr view --json state,mergedAt` MERGED; nonexistent or closed-unmerged PRs exit 1 and are named on stderr. Tests: `tests/test_auto_merge_scoped_verdict.py`.
 - **tools/gen_tool_index.py**: Generated INDEX.md builder. Updated 2026-10-07: --check mode uses `git hash-object --path` for EOL-agnostic comparison; generated content hash vs working-tree file hash both normalized through git's .gitattributes/core.eol rules. Fixes Windows false positives where CRLF/LF byte differences were misreported as stale. --regenerate writes LF-only (standard git storage format). Post-#925 fix (2026-10-07): when passing expected content to git hash-object via stdin, use binary encoding to avoid Python's platform-specific line-ending conversion on Windows (text=True was converting LF to CRLF). The check_via_git_hash() function now encodes strings as UTF-8 bytes before passing to subprocess, then decodes the hash output.
 - **tools/regen_all.py**: Regenerator runner. Updated 2026-10-07: paths_with_real_diff() returns all modified paths for restoration in --check mode, preserving fixture byte-identity. EOL normalization delegated to gen_tool_index.py and git's comparison rules.
-
 ## Tool index
 
 Full one-liner index of every tool in this directory: see `tools/INDEX.md` (generated
