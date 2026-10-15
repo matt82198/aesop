@@ -21,9 +21,7 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: write
-  pull-requests: write
-  actions: write
+  contents: read
 
 concurrency:
   # One lane at a time: two pushes landing close together must not both decide there is
@@ -35,11 +33,15 @@ concurrency:
 
 jobs:
   regen-on-main:
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - name: Checkout main
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: main
           # Full history: docs/INCIDENTS.md is derived from HEAD's whole log, and
@@ -63,7 +65,7 @@ jobs:
 
       - name: Set up Python
         if: steps.guard.outputs.skip == 'false'
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.12'
 
