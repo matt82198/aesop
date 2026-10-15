@@ -35,6 +35,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 
 ## dash.js — fresh-init resolution (F-09, 2026-10-14)
 
+- **common.get_state_dir() (F-07, 2026-10-14)**: precedence is `AESOP_STATE_ROOT` env > `aesop.config.json` `state_root` (relative values resolve against the config's dir, `AESOP_ROOT` or cwd; same as `ui/config.py`) > `<cwd>/state`. Test: `tests/test_state_dir_parity.py`.
 - `dash.js` resolves `ui/serve.py` from the installed package (`PACKAGE_DIR = __dirname/..`), not `process.cwd()`, because init does not scaffold `ui/`. It passes `AESOP_STATE_ROOT` = env > `aesop.config.json` `state_root` > `<cwd>/state`. Test: `tests/dash-fresh-init.test.mjs`.
 
 ## Key tools

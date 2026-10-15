@@ -108,6 +108,11 @@ def reload():
             config_data.get("state_root", str(AESOP_ROOT / "state"))
         )
     )
+    # A relative config state_root resolves against the config file's directory,
+    # matching tools/common.get_state_dir() (parity; env value is taken as given).
+    if not os.getenv("AESOP_STATE_ROOT") and "state_root" in config_data \
+            and not STATE_DIR.is_absolute():
+        STATE_DIR = AESOP_ROOT / STATE_DIR
 
     # TRANSCRIPTS_ROOT: env AESOP_TRANSCRIPTS_ROOT > config transcripts_root > ~/.claude/projects
     TRANSCRIPTS_ROOT = Path(
