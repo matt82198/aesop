@@ -51,6 +51,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import tools.generated_paths as generated_paths  # noqa: E402
+from tests.helpers import publish_origin_main_tools  # noqa: E402
 
 ZERO_SHA = "0" * 40
 
@@ -267,17 +268,7 @@ class TestPrePushGate(unittest.TestCase):
         """Gate code is judged from origin/main:tools (hook gate_base_dir).
 
         Publish the real tools/ tree (minus `skip`) as the fixture's origin/main."""
-        base = Path(str(repo) + ".base")
-        if base.exists():
-            shutil.rmtree(base)
-        shutil.copytree(REPO_ROOT / "tools", base / "tools",
-                        ignore=shutil.ignore_patterns("__pycache__", *skip))
-        self.git(base, "init", "-q", "-b", "main")
-        self.git(base, "add", "-A")
-        self.git(base, "-c", "user.email=test@example.com",
-                 "-c", "user.name=Test User", "commit", "-q", "-m", "base tools")
-        self.git(repo, "remote", "add", "origin", str(base))
-        self.git(repo, "fetch", "-q", "origin", "main")
+        publish_origin_main_tools(repo, skip=skip)
 
     def make_repo(self, changed_path, name="repo", base_skip=()):
         """Fixture repo: one base commit, then one commit touching changed_path."""
