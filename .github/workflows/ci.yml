@@ -75,9 +75,19 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Lightweight secret scan (docs-only)
+      # F-04 gate pinning (see the ci job): the scanner comes from the BASE branch.
+      - name: Materialize base gate copy (docs-only secret scanner from base)
         if: steps.is-docs-only.outputs.is_docs_only == 'true'
-        run: python tools/secret_scan.py .
+        run: |
+          BASE_REF="origin/${{ github.base_ref }}"
+          if [ "${{ github.event_name }}" != "pull_request" ]; then BASE_REF="HEAD"; fi
+          mkdir -p "$RUNNER_TEMP/gate-base"
+          git archive "$BASE_REF" -- tools | tar -x -C "$RUNNER_TEMP/gate-base"
+          test -f "$RUNNER_TEMP/gate-base/tools/secret_scan.py"
+
+      - name: Lightweight secret scan (docs-only, base scanner over the PR tree)
+        if: steps.is-docs-only.outputs.is_docs_only == 'true'
+        run: python "$RUNNER_TEMP/gate-base/tools/secret_scan.py" .
 
     outputs:
       is_docs_only: ${{ steps.is-docs-only.outputs.is_docs_only }}
@@ -376,9 +386,21 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/verify_multibox.py --check
 
-      - name: Secret scan
+      # F-04 gate pinning: the secret scanner is taken from the BASE branch, never the PR's
+      # own tools/, so a PR cannot weaken the scanner that judges it. Fail-closed: the
+      # materialize step fails if the base scanner cannot be read.
+      - name: Materialize base gate copy (secret scanner from base)
         if: matrix.python-shard == 0
-        run: python tools/secret_scan.py .
+        run: |
+          BASE_REF="origin/${{ github.base_ref }}"
+          if [ "${{ github.event_name }}" != "pull_request" ]; then BASE_REF="HEAD"; fi
+          mkdir -p "$RUNNER_TEMP/gate-base"
+          git archive "$BASE_REF" -- tools | tar -x -C "$RUNNER_TEMP/gate-base"
+          test -f "$RUNNER_TEMP/gate-base/tools/secret_scan.py"
+
+      - name: Secret scan (base scanner over the PR tree)
+        if: matrix.python-shard == 0
+        run: python "$RUNNER_TEMP/gate-base/tools/secret_scan.py" .
 
   windows-shard:
     needs: [docs-only-gate, windows-sensitive-paths]
