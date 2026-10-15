@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tail-ingest the brain's task-events.jsonl into the state store.
 
-INDEX: Idempotent tail-ingest of the brain's task-events.jsonl into the state store `task` stream (state_store WriteAPI/StateAPI, tracker_events.db); cursor file + event_id dedupe; malformed lines fail closed when last, else quarantined to <source>.quarantine.jsonl; --check asserts cursor == EOF.
+INDEX: Idempotent tail-ingest of the brain's task-events.jsonl into the state store `task` stream (state_store WriteAPI/StateAPI, tracker_events.db); cursor file + event_id dedupe; fail-closed on malformed lines; --check asserts cursor == EOF.
 
 Source: ~/.claude/state/task-events.jsonl, appended by the brain hook
 ~/.claude/hooks/task-event-projector.mjs (owned by another lane; this tool only
