@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -58,14 +59,37 @@ class WaveTelemetryPhaseCase(unittest.TestCase):
             env=env, cwd=str(self.elsewhere))
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
+        # Pin the reader's freshness clock to the instant the CLI recorded, so the
+        # outcome never depends on the test process's wall clock (a frozen or
+        # skewed in-process clock made the 24h freshness check reject a fresh record).
+        sys.path.insert(0, str(REPO_ROOT))
+        try:
+            from state_store.read_api import ReadAPI
+            record = ReadAPI(str(self.root / "state")).read_orchestrator_status()
+        finally:
+            sys.path.remove(str(REPO_ROOT))
+        self.assertIsNotNone(record, "CLI wrote no orchestrator status record")
+        written = datetime.fromisoformat(record["updated_at"].replace("Z", "+00:00"))
+        reference_now = written + timedelta(seconds=60)
+
+        # Bind config and wave_telemetry as one fresh pair. A sibling test in the same
+        # process may have deleted and reimported sys.modules["config"] after
+        # wave_telemetry bound the old object; reload() on the new module then never
+        # reaches the reader's stale STATE_DIR, and the phase reads as "unknown".
+        names = ("config", "wave_telemetry")
+        saved = {name: sys.modules.pop(name, None) for name in names}
         sys.path.insert(0, str(UI_PATH))
         try:
             config = importlib.import_module("config")
             config.reload()
             wave_telemetry = importlib.import_module("wave_telemetry")
-            telemetry = wave_telemetry.get_wave_telemetry()
+            telemetry = wave_telemetry.get_wave_telemetry(now=reference_now)
         finally:
             sys.path.remove(str(UI_PATH))
+            for name in names:
+                sys.modules.pop(name, None)
+                if saved[name] is not None:
+                    sys.modules[name] = saved[name]
         self.assertEqual(telemetry["phase"], PHASE.lower())
         self.assertNotEqual(telemetry["phase"], "unknown")
 
