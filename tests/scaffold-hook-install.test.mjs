@@ -32,9 +32,13 @@ function runCli(targetDir, args = []) {
   // --no-skills: this file doesn't test skill installation; without it every
   // scaffold call would write into the real ~/.claude/skills/ (isolation contract
   // documented in cli-skills-install.test.mjs) and contend with it on CI Windows.
+  // AESOP_SKIP_PUSH_GATE_ARTIFACTS: this file tests hook installation only and never pushes,
+  // so the push-gate artifact generation (five python generators per scaffold) is skipped.
+  // tests/scaffold-fresh-push.test.mjs covers that generation end to end.
   const res = spawnSync(process.execPath, [CLI, targetDir, ...args, '--no-skills'], {
     encoding: 'utf8',
     cwd: path.dirname(targetDir),
+    env: { ...process.env, AESOP_SKIP_PUSH_GATE_ARTIFACTS: '1' },
     timeout,
     killSignal: 'SIGKILL'
   });

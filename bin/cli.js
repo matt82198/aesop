@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const readline = require('readline');
-const { execSync, execFileSync } = require('child_process');
+const { execSync, execFile } = require('child_process');
 
 /**
  * Translate a spawnSync result into the exit code this CLI should propagate.
@@ -1189,32 +1189,48 @@ function pushGateRegenCommand(artifact) {
 // Runs after git init so `git ls-files tools/` (gen_tool_index) sees the scaffolded tree.
 // Failures never abort the scaffold: each one prints a WARN naming the file and its regenerate
 // command, and the pre-push hook plus `aesop doctor` fail closed until it is generated.
-function generatePushGateArtifacts(targetDir) {
+// The generators are independent (each reads the tree and writes its own file), so they run
+// concurrently; wall time is the slowest one, not the sum. AESOP_SKIP_PUSH_GATE_ARTIFACTS=1
+// skips generation for callers that never push (the hook-install contract tests set it).
+function runPushGateGenerator(py, artifact, targetDir) {
+  return new Promise((resolve) => {
+    execFile(py, [artifact.script, ...artifact.args], {
+      cwd: targetDir,
+      encoding: 'utf8',
+      timeout: 120000,
+      windowsHide: true
+    }, (err) => resolve(err || null));
+  });
+}
+
+async function generatePushGateArtifacts(targetDir) {
   const hint = (artifact) => `  regenerate with: cd ${targetDir} && ${pushGateRegenCommand(artifact)}`;
+  if (process.env.AESOP_SKIP_PUSH_GATE_ARTIFACTS === '1') {
+    console.log('  Push-gate artifacts skipped (AESOP_SKIP_PUSH_GATE_ARTIFACTS=1).');
+    return;
+  }
   if (!fs.existsSync(path.join(targetDir, '.git'))) {
     console.warn('⚠ No git repository: push-gate artifacts were not generated (the pre-push hook will block until they are).');
     PUSH_GATE_ARTIFACTS.forEach(a => console.warn(`  ${a.file}\n${hint(a)}`));
     return;
   }
   const py = resolvePythonInterpreter();
-  for (const artifact of PUSH_GATE_ARTIFACTS) {
-    if (!py) {
-      console.warn(`⚠ No python interpreter: could not generate ${artifact.file}.`);
-      console.warn(hint(artifact));
-      continue;
-    }
-    try {
-      execFileSync(py, [artifact.script, ...artifact.args], {
-        cwd: targetDir,
-        encoding: 'utf8',
-        stdio: 'pipe',
-        timeout: 120000,
-        windowsHide: true
-      });
-      console.log(`✓ Generated ${artifact.file} (regenerate: ${pushGateRegenCommand(artifact)})`);
-    } catch (e) {
-      console.warn(`⚠ Could not generate ${artifact.file}; the pre-push hook will block until it exists.`);
-      console.warn(hint(artifact));
+  if (!py) {
+    PUSH_GATE_ARTIFACTS.forEach(a => {
+      console.warn(`⚠ No python interpreter: could not generate ${a.file}.`);
+      console.warn(hint(a));
+    });
+    return;
+  }
+  const results = await Promise.all(
+    PUSH_GATE_ARTIFACTS.map(a => runPushGateGenerator(py, a, targetDir).then(err => ({ a, err })))
+  );
+  for (const { a, err } of results) {
+    if (err) {
+      console.warn(`⚠ Could not generate ${a.file}; the pre-push hook will block until it exists.`);
+      console.warn(hint(a));
+    } else {
+      console.log(`✓ Generated ${a.file} (regenerate: ${pushGateRegenCommand(a)})`);
     }
   }
   console.log('  Commit the generated push-gate files with your first commit: git add -A && git commit -m "Add aesop push-gate artifacts"');
@@ -1627,7 +1643,7 @@ if (!isRuntimeCommand) {
     initializeGitRepo(finalTargetDir, noGitFlag);
 
     // Generate the push-gate artifacts the hook reads (needs the git tree from the step above)
-    generatePushGateArtifacts(finalTargetDir);
+    await generatePushGateArtifacts(finalTargetDir);
 
     // Install the pre-push hook (only works if .git exists)
     installPrePushHook(finalTargetDir, templateRoot);

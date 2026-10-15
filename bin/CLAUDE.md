@@ -115,7 +115,7 @@ undiscoverable and the orchestrator cannot be invoked.
 
 - **Idempotent on empty targets**: Fails if `targetDir` exists and is non-empty (except `.git`, aesop scaffolded dirs). Safe to retry.
 - **Skill install never clobbers**: a divergent installed skill survives scaffold unless `--force`.
-- **Push-gate artifacts are generated, not shipped**: after git init, the scaffold runs the repo's own regenerate commands (`PUSH_GATE_ARTIFACTS` in cli.js) for `tools/INDEX.md` and `.pyflakes-baseline.json`, `.subprocess-guard-baseline.json`, `.portability-baseline.json`, `.stateapi-baseline.json`, one line each. They are left for the adopter's first commit; a failure prints a WARN with the regenerate command, and the hook and `doctor` fail closed until it is fixed.
+- **Push-gate artifacts are generated, not shipped**: after git init, the scaffold runs the repo's own regenerate commands (`PUSH_GATE_ARTIFACTS` in cli.js) for `tools/INDEX.md` and `.pyflakes-baseline.json`, `.subprocess-guard-baseline.json`, `.portability-baseline.json`, `.stateapi-baseline.json`, one line each. They are left for the adopter's first commit; a failure prints a WARN with the regenerate command, and the hook and `doctor` fail closed until it is fixed. The generators run concurrently; `AESOP_SKIP_PUSH_GATE_ARTIFACTS=1` skips them (used only by tests that never push).
 - **Symlink guard**: Rejects symlinks in target dir (lstat check, not stat); prevents escaping targetDir during copy.
 - **Portable paths**: No machine-specific paths; `path.join()` + `__dirname` handle cross-platform resolution. Config uses `~` form (`~/.claude`, `~/scripts`) expanded at load time.
 - **Async wizard**: Main execution is async IIFE to support readline prompts.
