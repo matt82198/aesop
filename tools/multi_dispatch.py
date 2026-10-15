@@ -47,6 +47,7 @@ from tools.multibox_config import (
     MultiboxConfigError,
     MultiboxPreflightRefused,
     build_backend,
+    load_multibox_config,
 )
 from state_store.instance_projection import (
     ClaimStateUnknown,
@@ -54,6 +55,27 @@ from state_store.instance_projection import (
     release_files,
     get_all_claimed_files_strict,
 )
+
+# Seconds added to --timeout for the atomic path-claim lease. The dispatch
+# subprocess is killed at --timeout, so a live dispatch never outlives
+# timeout + margin; the margin covers the gap between claim and subprocess start.
+CLAIM_TTL_MARGIN_SECONDS = 60
+
+
+def claim_ttl_seconds(timeout_seconds: float, lease_ttl_floor: float) -> float:
+    """Return the path-claim TTL for a dispatch.
+
+    The lease must cover the dispatch it guards (audit 2026-10-15: a hard-coded
+    300s TTL let a --timeout 1800 dispatch lose its claim at t=300). It is never
+    shorter than the configured multibox lease_ttl_seconds floor.
+
+    Expiry semantics: a live dispatcher finishes (and releases) before the TTL.
+    A CRASHED dispatcher never releases, so its lease expires at
+    claimed_at + max(lease_ttl_seconds, timeout + CLAIM_TTL_MARGIN_SECONDS),
+    after which other instances may claim the paths. Expiry is bounded by the
+    dispatch timeout; there is no renewal thread.
+    """
+    return max(float(lease_ttl_floor), float(timeout_seconds) + CLAIM_TTL_MARGIN_SECONDS)
 
 
 def check_conflict(store, file_paths: list[str], this_instance_id: str) -> str | None:
@@ -159,7 +181,9 @@ def main():
         if backend is not None:
             # Multibox enabled: use atomic ClaimBackend.claim()
             try:
-                lease_id = backend.claim(args.files, instance_id, ttl_seconds=300)
+                settings = load_multibox_config(config)
+                ttl = claim_ttl_seconds(args.timeout, settings["lease_ttl_seconds"])
+                lease_id = backend.claim(args.files, instance_id, ttl_seconds=ttl)
                 print(f"claimed {len(args.files)} files (atomic)", file=sys.stderr)
             except ClaimConflict as e:
                 print(
