@@ -158,12 +158,34 @@ class TestBehindCap(PrSweepTestCase):
             make_pr(203, merge_state="BEHIND", created_min_ago=100, updated_min_ago=60, now=self.now),
         ]
         fake = FakeGh(prs)
-        self.run_sweep(fake, behind_cap=2)
-        api_calls = fake.calls_matching("api")
-        self.assertEqual(len(api_calls), 2, api_calls)
-        touched = {c[1] for c in api_calls}
-        self.assertEqual(touched, {"repos/acme/repo/pulls/201/update-branch",
-                                    "repos/acme/repo/pulls/202/update-branch"})
+        log_path = Path(self._tmp.name) / "pr-sweep.log"
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = self.run_sweep(fake, behind_cap=2,
+                                extra_argv=["--json", "--log-path", str(log_path)])
+        self.assertEqual(rc, 0)
+        # New contract: a BEHIND PR is REFUSED, never updated server-side. A
+        # GitHub-authored merge head has no box that ran the gates, so no
+        # receipt can exist for it; the lane merges origin/main locally.
+        self.assertEqual(fake.calls_matching("api"), [], fake.calls)
+        self.assertEqual([c for c in fake.calls if any("update-branch" in str(a) for a in c)], [])
+        self.assertEqual([c for c in fake.calls if "PUT" in c], [])
+        out = buf.getvalue()
+        summary = json.loads(out[out.index("{"):])
+        self.assertEqual(summary["results"]["behind_refused"], 2, summary)
+        behind_lines = [l for l in summary["plan"] if l.startswith("BEHIND #")]
+        self.assertEqual([l.split()[1] for l in behind_lines], ["#201", "#202"], behind_lines)
+        # The newest (#203) is beyond the cap: neither refused nor touched.
+        self.assertNotIn("#203", out)
+        reads = {("auth", "status"), ("repo", "view"), ("pr", "list"), ("pr", "view"), ("pr", "checks")}
+        writes = [c for c in fake.calls if c[:2] not in reads]
+        self.assertEqual(writes, [], writes)
+        rows = [json.loads(l) for l in log_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+        self.assertEqual([(r["pr"], r["action"]) for r in rows], [(201, "behind"), (202, "behind")], rows)
+        for r in rows:
+            self.assertTrue(r["outcome"].startswith("refused:"), r)
 
     def test_throttles_recently_updated_behind_pr(self):
         pr = make_pr(204, merge_state="BEHIND", updated_min_ago=5, now=self.now)
