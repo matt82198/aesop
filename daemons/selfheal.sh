@@ -223,7 +223,7 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   AESOP_ROOT="${AESOP_ROOT:-$(dirname "$SCRIPT_DIR")}"
   # Same CONDUCTOR_ROOT resolution as daemons/backup-fleet.sh (heartbeat-pollution
-  # guard, 2026-10-07): explicit override wins; the sibling conductor3 is derived
+  # guard, 2026-10-07): explicit override wins; the sibling conductor root is derived
   # ONLY for the canonical "aesop" tree; any other AESOP_ROOT gets "" (unresolved).
   if [ -n "${CONDUCTOR_ROOT:-}" ]; then
     : # explicit override always wins
