@@ -516,34 +516,113 @@ class TestTrackerMigrationP0Fix(unittest.TestCase):
         self.assertIn("migration_completed", marker_types)
 
     def test_failed_backfill_does_not_write_completion_marker(self):
-        """If backfill fails, completion marker is NOT written (triggers retry)."""
-        from state_store import StateAPI
+        """An unreadable tracker.json (missing) must NOT write migration_completed.
 
-        # Create tracker.json
-        items = [
-            {"id": "item-1", "title": "Task 1"},
-        ]
-        self._create_tracker_json(items)
+        Writing the completion marker here would make a later repair of tracker.json
+        never backfill (projections are never patched; migrations are marker-AFTER-work).
+        """
+        from state_store import StateAPI
 
         # Create event DB and write migration_started marker
         api = StateAPI(str(self.temp_path / "tracker_events.db"))
         api.append("tracker", "migration_started", {"version": 1}, "system")
         api.close()
 
-        # Simulate a failed backfill by temporarily removing tracker.json
-        # so that the backfill loop encounters an error
-        config.TRACKER_FILE.unlink()
+        # tracker.json is missing: unreadable
+        self.assertFalse(config.TRACKER_FILE.exists())
 
-        # Run migration (backfill will fail to read tracker.json and skip backfill)
         from collectors import _ensure_tracker_migrated
         write_api = MagicMock()
         _ensure_tracker_migrated(write_api)
 
-        # Check: completion marker was still written (graceful failure handling)
-        # The implementation writes completion even on read-error to avoid retry loops
         markers = self._get_migration_events()
         marker_types = {m.get("type") for m in markers}
-        self.assertIn("migration_completed", marker_types)
+        self.assertNotIn("migration_completed", marker_types)
+
+    def test_unreadable_tracker_records_failure_reason_not_completion(self):
+        """Malformed tracker.json records migration_started + migration_failed(reason)."""
+        from state_store import StateAPI
+
+        config.TRACKER_FILE.write_text("{not valid json", encoding='utf-8')
+
+        from collectors import _ensure_tracker_migrated
+        _ensure_tracker_migrated(MagicMock())
+
+        api = StateAPI(str(self.temp_path / "tracker_events.db"))
+        events = api.get("tracker")
+        api.close()
+        types = [e.get("type") for e in events]
+        self.assertIn("migration_started", types)
+        self.assertNotIn("migration_completed", types)
+        failures = [e for e in events if e.get("type") == "migration_failed"]
+        self.assertEqual(len(failures), 1)
+        self.assertIn("tracker.json", failures[0]["payload"].get("reason", ""))
+
+    def test_unreadable_tracker_repeated_runs_record_one_failure(self):
+        """Repeated runs against the same unreadable tracker dedupe the failure event."""
+        from state_store import StateAPI
+
+        config.TRACKER_FILE.write_text("{not valid json", encoding='utf-8')
+
+        from collectors import _ensure_tracker_migrated
+        for _ in range(3):
+            _ensure_tracker_migrated(MagicMock())
+
+        api = StateAPI(str(self.temp_path / "tracker_events.db"))
+        events = api.get("tracker")
+        api.close()
+        failures = [e for e in events if e.get("type") == "migration_failed"]
+        self.assertEqual(len(failures), 1)
+        self.assertNotIn("migration_completed", [e.get("type") for e in events])
+
+    def test_repaired_tracker_backfills_on_next_run(self):
+        """After tracker.json is repaired, the next run backfills and only then completes."""
+        from state_store import StateAPI
+
+        config.TRACKER_FILE.write_text("{not valid json", encoding='utf-8')
+        from collectors import _ensure_tracker_migrated
+        _ensure_tracker_migrated(MagicMock())
+
+        # Repair the tracker
+        self._create_tracker_json([
+            {"id": "T-1", "title": "Task 1"},
+            {"id": "T-2", "title": "Task 2"},
+        ])
+        _ensure_tracker_migrated(MagicMock())
+
+        api = StateAPI(str(self.temp_path / "tracker_events.db"))
+        events = api.get("tracker")
+        api.close()
+
+        self.assertEqual(self._get_db_items(), {"T-1", "T-2"})
+        completed = [i for i, e in enumerate(events) if e.get("type") == "migration_completed"]
+        self.assertEqual(len(completed), 1)
+        created_idx = [i for i, e in enumerate(events) if e.get("type") == "item_created"]
+        self.assertTrue(created_idx and max(created_idx) < completed[0],
+                        "migration_completed must be written AFTER the backfill work")
+
+    def test_completed_migration_does_no_further_work(self):
+        """Once migration_completed exists, later runs do not backfill new disk items."""
+        from state_store import StateAPI
+
+        self._create_tracker_json([{"id": "T-1", "title": "Task 1"}])
+        from collectors import _ensure_tracker_migrated
+        _ensure_tracker_migrated(MagicMock())
+        self.assertEqual(self._get_db_items(), {"T-1"})
+
+        # Disk changes after completion; an already-completed migration must not touch it.
+        self._create_tracker_json([
+            {"id": "T-1", "title": "Task 1"},
+            {"id": "T-9", "title": "Late"},
+        ])
+        _ensure_tracker_migrated(MagicMock())
+
+        api = StateAPI(str(self.temp_path / "tracker_events.db"))
+        events = api.get("tracker")
+        api.close()
+        self.assertEqual(self._get_db_items(), {"T-1"})
+        completed = [e for e in events if e.get("type") == "migration_completed"]
+        self.assertEqual(len(completed), 1)
 
     def test_partial_backfill_recovery_on_retry(self):
         """If first backfill is partial, retry completes it (idempotent append)."""
