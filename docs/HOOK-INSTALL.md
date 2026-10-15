@@ -4,9 +4,24 @@
 
 ## What the Hook Does
 
-`hooks/pre-push-policy.sh` enforces:
-1. **Branch Policy** — No direct pushes to `main`/`master` (feature branches only)
+`hooks/pre-push-policy.sh` runs these checks in order on every push (17 `check_*` functions):
+1. **Branch Policy** — no direct pushes to `main`/`master` (feature branches only)
 2. **Secret Scan** — `tools/secret_scan.py --staged` blocks credentials
+3. **Tracker Guard**
+4. **Import Resolution**
+5. **Conflict Markers**
+6. **CLAUDE.md Sync**
+7. **Generated Tool Index**
+8. **Metrics**
+9. **Test Suite Count**
+10. **Pyflakes Ratchet**
+11. **CLAUDE.md Headroom**
+12. **Encoding Lint** — subprocess calls must set `encoding='utf-8'`
+13. **Test Coverage**
+14. **Linux Shape**
+15. **Generated Paths**
+16. **Generated Regen**
+17. **Emit Receipt** — runs last, after every check above has passed
 
 ## Security Model
 
@@ -16,7 +31,7 @@
 
 ## Auto-Installation
 
-Scaffold auto-installs the hook (symlink on Unix, copy on Windows):
+Scaffold auto-installs the hook. The installer always **copies** `hooks/pre-push-policy.sh` to `.git/hooks/pre-push` (it never creates a symlink) and refuses to overwrite an existing symlinked hook:
 
 ```bash
 npx @matt82198/aesop my-fleet

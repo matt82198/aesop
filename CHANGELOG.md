@@ -11,6 +11,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (None yet.)
 
+## [0.9.2] - 2026-10-14
+
+Patch release: a fail-closed hardening sweep from the round-1 audit. Fixes span the
+state layer, secret scanning, merge automation (MERGED-state verification), CI aggregation,
+PR sweep, and the hooks/pre-commit path, plus one new PR-sweep behaviour. 30 PRs merged
+since v0.9.1 (2026-10-09).
+
+### Added
+- **PR sweep CI retrigger** (#954): armed PRs with zero check runs are retriggered; disarmed after 24h.
+
+### Fixed
+- **Security**: `secret_scan` closes F-01 (generic-credential) and F-02 (NUL / UTF-16 / size blind spots) (#971).
+- **Merge automation**: `auto_merge` scoped verdict verifies MERGED state per PR (F-03) (#962).
+- **PR sweep**: conflicted PRs get `needs-rebase`, never a CI dispatch (#964).
+- **State**: one DB path resolver, `state_rebuild` round-trip, MCP reads the instance DB (F-02, F-06) (#953).
+- **Driver**: `wave_loop` bounded test/diff exec and `multi_dispatch` claim keyspace (F-03, F-04) (#952).
+- **CI**: windows aggregator anchors the docs-only regex and fails closed (F-01, F-02) (#958); accepts a deliberate docs-only skip, unblocking main (#944).
+- **Incident classification**: fail-closed via commit trailer (#960); deterministic ordering for multi-line commit bodies (#946).
+- **Init**: adopter traps F-09 (dash in a fresh repo) and F-10 (`state/` not git-ignored) (#963).
+- **Hooks**: pre-commit dispatch-lint keys on exit code and is installed (#968).
+- **Tools**: `state_md_verifier` claim precision, ref-shaped branch claims, origin tags, hermetic tag test (#943); ASCII-safe output and STATE/BUILDLOG drift guardrail, fail closed (#941).
+- **Lint and gates**: wave preset `testCmd` lint skips shell builtins (F-11) (#950); G13 nested and re-indented defs survive `pr_symbol_survival_check` (advisory) (#947).
+- **Bench**: unit tests can never reach the paid live API (#949).
+- **Tests**: serve, tracker, and instance tests isolated from the live state root env (#966).
+
+### Chore
+- **Receipts**: box signing key and verifier keyring, CRLF-invariant `key_id` (#965); push-time receipt emission verified on the Mattt box (#972).
+- **Docs**: Aesop Kernel rebrand, lineage and proper-noun corrections, recency pass (#937, #938, #939); README hooks fail-closed status notice (#940); typo fix (#942); checkpoints (#945, #961).
+- **Deps**: minor-and-patch group bump in `/ui/web` (#936).
+- **Stats**: scheduled stats refresh (#934).
+
 ## [0.9.1] - 2026-10-09
 
 Hotfix release centered on hooks. Ships two new adopter-facing Claude Code hooks, plus 40
