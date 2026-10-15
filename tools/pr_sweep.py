@@ -85,9 +85,11 @@ def _flush_receipts_if_possible():
     do not block the sweep."""
     try:
         import receipt_flush as rf  # noqa: F401, E402
-        # Flush receipts using the aesop repo (origin)
-        aesop_root = Path.home() / "aesop"
-        if aesop_root.exists() and (aesop_root / "tools" / "receipt_flush.py").exists():
+        # Flush for the repo this sweep runs from. The old hardcoded ~/aesop was a
+        # stale non-git copy on the dev box, so the spool (which lives in the
+        # pushing repo's git common dir) was never found and nothing was posted.
+        aesop_root = Path(__file__).resolve().parent.parent
+        if (aesop_root / "tools" / "receipt_flush.py").exists():
             rf.main(["--repo", str(aesop_root)])
     except Exception:
         # Flush errors are best-effort; do not block the sweep

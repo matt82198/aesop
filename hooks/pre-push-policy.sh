@@ -1783,6 +1783,22 @@ check_emit_receipt() {
   if [ -n "$receipt_output" ]; then
     printf '%s\n' "$receipt_output"
   fi
+  # A "spooled" receipt means its sha is not on GitHub yet (we are inside pre-push), so
+  # nothing would post it until a later push or the watchdog. Start a DETACHED poller
+  # that posts it as soon as the sha appears. --spawn forks and returns at once: the
+  # push never waits on it, and the poller's stdio goes to <sha>.flush.log.
+  # AESOP_RECEIPT_AUTOFLUSH=0 opts out. Fail-open like every branch here.
+  if [ "${AESOP_RECEIPT_AUTOFLUSH:-1}" != "0" ] && printf '%s' "$receipt_output" | grep -q "spooled receipt for"; then
+    local spool_sha=""
+    spool_sha=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+      git -C "$aesop_root" rev-parse HEAD 2>/dev/null) || spool_sha=""
+    if [ -n "$spool_sha" ] && [ -f "$aesop_root/tools/receipt_autoflush.py" ]; then
+      env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+        "$py_bin" "$aesop_root/tools/receipt_autoflush.py" --repo "$aesop_root" --sha "$spool_sha" --spawn \
+        < /dev/null 2>&1 || true
+      log_event "receipt_autoflush_spawned"
+    fi
+  fi
   log_event "receipt_emit_posted"
   return 0
 }

@@ -59,8 +59,21 @@ then flush it once the sha exists on GitHub. The flush runs automatically:
    if their shas now exist on GitHub. The flush runs with scrubbed environment (GIT_* vars
    unset) to maintain isolation. Fail-open: errors do not block the push.
 
-2. **In `tools/pr_sweep.py`** (session-independent watchdog actor): Once per sweep, `receipt_flush.py`
-   flushes any remaining spooled receipts.
+2. **Detached poller (`tools/receipt_autoflush.py --spawn`)**: when the hook's emit reports
+   "spooled", it forks a background poller that checks `gh api repos/<slug>/commits/<sha>` every
+   15s for up to 10 minutes and posts that sha's receipt the moment it exists. The push never
+   waits on it. Its outcome (posted / gave up with the reason) goes to `<spool>/<sha>.flush.log`.
+   `AESOP_RECEIPT_AUTOFLUSH=0` disables it.
+
+3. **Watchdog backstop (`daemons/run-watchdog.sh` `run_receipt_flush`)**: every cycle, on both the
+   `--once` and daemon paths, runs `receipt_flush.py --repo $AESOP_ROOT`. `tools/pr_sweep.py` also
+   flushes, but for its own repo. It used to target the hardcoded `~/aesop`, a stale non-git copy,
+   so the spool (which lives in the pushing repo's git common dir) was never found and nothing was
+   posted. That was the recurring gap: a spooled receipt sat until someone re-ran the flush by hand.
+
+4. **verify-receipt retry**: `verify-receipt.yml` fetches the receipt once, and if it is missing,
+   re-checks once after 60s before failing. It stays fail-closed on MISSING, and the job summary
+   names the attempt that found it.
 
 The flush tool is idempotent: it retries failed receipts indefinitely (up to `--max-age-days`,
 default 7 days), deletes them on success, and keeps them on transient errors (sha not yet pushed).

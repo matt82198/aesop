@@ -28,7 +28,14 @@ ReceiptError = rc.ReceiptError
 
 
 def _default_gh_runner(args):
-    res = subprocess.run(["gh"] + list(args), capture_output=True, encoding="utf-8", errors="replace", timeout=60)
+    # AESOP_GH_BIN overrides the gh executable (test seam: a stub gh on disk).
+    gh_bin = os.environ.get("AESOP_GH_BIN") or "gh"
+    try:
+        res = subprocess.run([gh_bin] + list(args), capture_output=True, encoding="utf-8", errors="replace", timeout=60)
+    except OSError as exc:
+        # gh missing or not executable: report it as a failed call, never crash the
+        # poller (the detached flusher must always reach its log line).
+        return 127, "", "gh not runnable: %s" % exc
     return res.returncode, res.stdout or "", res.stderr or ""
 
 
