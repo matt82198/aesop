@@ -480,13 +480,20 @@ check_branch_policy() {
     if [ "$saw_tuple" = "1" ] && [ "$saw_nondelete" = "0" ]; then
       return 0
     fi
+
+    # Stdin carried ref tuples and none targets refs/heads/main|master (checked
+    # above): the verdict is decided by the REMOTE refs being pushed. The local
+    # checkout is irrelevant, so `git push origin HEAD:refs/heads/checkpoint/x`
+    # from a local main checkout is allowed. Falling through to the current-branch
+    # check below would wrongly block it.
+    if [ "$saw_tuple" = "1" ]; then
+      return 0
+    fi
   fi
 
-  # If no protected branch in stdin, also check current branch as fallback
-  # (for safety, in case stdin is empty or hook runs without git pre-push).
-  # Note: this fallback is narrowed to apply only when stdin did not contain
-  # a pure tag push or delete-only push, since those are administrative operations
-  # independent of the currently checked-out branch.
+  # Reached only when stdin carried no ref tuples at all (empty stdin, or the
+  # tty path): fall back to the current branch for safety. Any push that supplied
+  # tuples was already judged above by its remote refs.
   local current_branch
   current_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 
@@ -1719,13 +1726,18 @@ check_emit_receipt() {
   # already passed, so the receipt is bound to a tree this hook itself just
   # verified.
   #
-  # ALWAYS fail-open, by construction: a missing tool, missing python,
-  # missing `gh`, missing signing-key material, or a red matrix part inside
-  # emit_receipt.py all print a one-line WARN and `return 0`. The receipt is
-  # an honesty signal, not a gate -- it must never be the reason a push is
-  # blocked (see increment 3 in docs/RECEIPT-GATE.md: the hosted verify-receipt
-  # check is itself non-required for the same reason). This function's return
-  # value is therefore always 0; main() calls it unconditionally.
+  # CONCLUSION GATE (2026-10-15, PR #990 pushed a known-red head): a matrix that
+  # RAN and came back red blocks the push (emit_receipt.py --fail-on-red exits 3;
+  # the failure receipt is still posted as the trace). An unreadable conclusion
+  # (timeout, emitter exit other than 0/3/4) also blocks: fail closed. A
+  # skipped-with-reason part is not in the matrix result and never blocks.
+  # AESOP_PUSH_RED=1 is the one recorded emergency override: emit_receipt exits 4,
+  # the receipt is stamped pushed_red: true, and the push is allowed loudly.
+  #
+  # Precondition skips still print a one-line WARN and `return 0`: a missing
+  # tool, missing python, missing `gh`, or missing signing-key material means the
+  # matrix never ran, so there is no conclusion to gate on (see hooks/CLAUDE.md).
+  # Return value: 0 = allowed, 1 = blocked. main() exits 1 on 1.
   #
   # BOUNDED, not just fail-open: the default matrix re-runs all 4 python
   # shards (the whole repo's test suite), which measured ~500s for the
@@ -1795,6 +1807,13 @@ check_emit_receipt() {
   fi
   local timeout_secs="${AESOP_RECEIPT_TIMEOUT:-900}"
 
+  # --fail-on-red: exit 3 on a red required part (the hook blocks). The override
+  # is only ever passed explicitly, so a default push cannot be red-allowed.
+  local receipt_flags=(--fail-on-red)
+  if [ "${AESOP_PUSH_RED:-}" = "1" ]; then
+    receipt_flags+=(--pushed-red)
+  fi
+
   local receipt_output
   local receipt_exit_code
   local receipt_tmpfile
@@ -1808,7 +1827,7 @@ check_emit_receipt() {
     # Unset GIT_* environment variables to prevent matrix parts from committing to this repo
     # via inherited GIT_DIR/GIT_WORK_TREE (see docs/RECEIPT-GATE.md for the mechanism).
     env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
-      "$timeout_bin" --kill-after=5 "$timeout_secs" "$py_bin" "$receipt_script" --repo "$aesop_root" --post \
+      "$timeout_bin" --kill-after=5 "$timeout_secs" "$py_bin" "$receipt_script" --repo "$aesop_root" --post "${receipt_flags[@]}" \
       < /dev/null > "$receipt_tmpfile" 2>&1
     receipt_exit_code=$?
   else
@@ -1818,7 +1837,7 @@ check_emit_receipt() {
     log_event "receipt_emit_unbounded_no_timeout_bin"
     # Unset GIT_* environment variables to prevent matrix parts from committing to this repo.
     env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
-      "$py_bin" "$receipt_script" --repo "$aesop_root" --post \
+      "$py_bin" "$receipt_script" --repo "$aesop_root" --post "${receipt_flags[@]}" \
       < /dev/null > "$receipt_tmpfile" 2>&1 &
     local receipt_pid=$!
     local elapsed=0
@@ -1861,19 +1880,42 @@ check_emit_receipt() {
   fi
   receipt_output=$(cat "$receipt_tmpfile" 2>/dev/null || true)
 
+  # Timeout: the matrix never reported a conclusion, so there is nothing to allow on.
   if [ $receipt_exit_code -eq 124 ]; then
-    printf 'WARN: receipt emission timed out after %ss; push continues without a receipt.\n' "$timeout_secs" >&2
-    log_event "receipt_emit_timed_out"
+    printf 'BLOCKED: receipt matrix timed out after %ss; conclusion unreadable, push blocked (fail closed). Raise AESOP_RECEIPT_TIMEOUT, or AESOP_RECEIPT_EMIT=0 to opt out.\n' "$timeout_secs" >&2
+    log_block "receipt_emit_timed_out"
+    return 1
+  fi
+
+  # Exit 4: a red matrix under the AESOP_PUSH_RED=1 override. Allowed, loudly; the
+  # receipt on GitHub carries pushed_red: true.
+  if [ $receipt_exit_code -eq 4 ]; then
+    if [ -n "$receipt_output" ]; then
+      printf '%s\n' "$receipt_output"
+    fi
+    printf 'WARN: AESOP_PUSH_RED=1: pushing a RED head. A required receipt part failed; the override allows this push and the receipt is stamped pushed_red: true.\n' >&2
+    log_event "receipt_push_red_override"
     return 0
   fi
 
-  if [ $receipt_exit_code -ne 0 ]; then
-    printf 'WARN: receipt emission failed (exit %d); push continues without a receipt.\n' "$receipt_exit_code" >&2
+  # Exit 3: a required part is red. This is the block that PR #990 slipped through.
+  if [ $receipt_exit_code -eq 3 ]; then
     if [ -n "$receipt_output" ]; then
       printf '%s\n' "$receipt_output" >&2
     fi
-    log_event "receipt_emit_failed"
-    return 0
+    printf 'BLOCKED: a required receipt part is RED; push blocked. Fix the failing part (the failure receipt is recorded on the head sha). Emergency only: AESOP_PUSH_RED=1 git push.\n' >&2
+    log_block "receipt_red_blocked"
+    return 1
+  fi
+
+  # Any other exit (2 = could not sign/publish, 1 = crash, ...): no readable conclusion.
+  if [ $receipt_exit_code -ne 0 ]; then
+    printf 'BLOCKED: receipt emission failed (exit %d); conclusion unreadable, push blocked (fail closed).\n' "$receipt_exit_code" >&2
+    if [ -n "$receipt_output" ]; then
+      printf '%s\n' "$receipt_output" >&2
+    fi
+    log_block "receipt_emit_unreadable_blocked"
+    return 1
   fi
 
   if [ -n "$receipt_output" ]; then
@@ -3107,11 +3149,13 @@ main() {
     exit 1
   fi
 
-  # Receipt auto-emission: ALWAYS fail-open by construction (see
-  # check_emit_receipt), so there is no exit-1 branch here unlike every check
-  # above -- it runs last, after every gate has already passed, and never
-  # blocks the push.
-  check_emit_receipt
+  # Receipt conclusion gate: runs last, after every gate has passed. A red
+  # required part or an unreadable conclusion blocks (see check_emit_receipt);
+  # check_emit_receipt has already logged the block reason to the audit log.
+  if ! check_emit_receipt; then
+    printf 'Error: receipt gate blocked the push (a required part is red, or the conclusion is unreadable).\n' >&2
+    exit 1
+  fi
 
   exit 0
 }

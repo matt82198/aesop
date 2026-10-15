@@ -230,7 +230,7 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   beats a collision and is a complete result, not a failure.
 - **REARCH sections 69+ are orchestrator-reserved.** Claim an unreserved number AT WRITE TIME and
   record it; ask before taking 69+.
-- **Python**, **ASCII** source.
+- **Python**, **ASCII** source (tools/*.py enforced by `encoding_lint.ascii_findings`; shrink-only ratchet `tools/encoding-ascii-baseline.json`).
 - **Dead-by-bug code must NOT be deleted — fixes wire it up.**
 - **Never disable git hooks** — no `core.hooksPath` override, no `--no-verify`/`-n` on commit or push,
   no tampering with `.git/hooks`. (Cardinal Rule 8: `python ~/scripts/secret_scan.py --staged`, exit 1 blocks)
@@ -278,13 +278,15 @@ Causal chain with `file:line` | gate output (literal) | the anti-vacuity run as 
 | gate counts | PR number | MERGED-state proof | worktree removed | **anything you refused to decide silently**.
 
 ## 9. Linux shape — cross-platform test gate
-- **Shell, workflow, and Node-test changes are proven on the Linux shape before push**
-  (detect Windows-only CI red via WSL local testing): `tools/linux_shape_check.py` runs
-  shell and Node test suites under WSL when commits touch `*.sh`, `hooks/*`,
-  `.github/workflows/*.yml`, or `tests/**/*.test.mjs`.
-- On Windows with WSL available: tests run automatically before push; failures block push
-- On Windows without WSL: NOTICE printed, exit 0 (CI gate remains); set `AESOP_REQUIRE_LINUX_SHAPE=1`
-  to enforce local testing
-- On non-Windows: automatically skip (native Linux tests run on CI)
-- Node tests run with `USERPROFILE` unset to catch environment variable assumptions
-  (e.g., isolated-home tripwire test failures on Windows-only CI shard #864)
+- **Shell, workflow, and Node-test changes are proven on the Linux shape before push.**
+  `tools/linux_shape_check.py` triggers on commits touching `*.sh`, `hooks/*`,
+  `tools/run_shell_tests.sh`, `.github/workflows/*.yml`, or `tests/**/*.test.mjs` (`should_check_linux_shape`).
+- Non-Windows host (`host_is_windows()` false): suites run NATIVELY (`run_native_leg`, `run_shell_tests_native`,
+  `run_node_tests_native`). WSL is never probed. Any suite failure is exit 1.
+- Windows host: `wsl_status()` is tri-state. `WSL_OK` runs the suites under WSL (`run_shell_tests_wsl`,
+  `run_node_tests_wsl`); a failure is exit 1 and blocks push.
+- Windows, `WSL_ABSENT` or `WSL_NO_DISTRO`: NOTICE printed, exit 0 (CI gate remains). With
+  `AESOP_REQUIRE_LINUX_SHAPE=1` (or `--require-wsl`) it is exit 1.
+- Windows, `WSL_ERROR` (the probe itself failed): exit 1, fail closed, with or without the require flag.
+- Node tests run with `USERPROFILE` unset (native and WSL) to catch environment variable assumptions
+  (e.g., isolated-home tripwire test failures on Windows-only CI shard #864).

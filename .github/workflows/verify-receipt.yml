@@ -26,6 +26,13 @@ name: verify-receipt
 #
 # Checkout pins the PR HEAD sha (not the synthetic merge commit) because the receipt's
 # tree_hash is the tree of the commit the lane actually tested.
+#
+# BASE TRUST (adversarial finding on #970): the verifier and its keyring (tools/receipt_pubkey.pub
+# and tools/receipt_pubkeys/*.pub) are read from the BASE tree -- the PR's base.sha (main for
+# workflow_dispatch), checked out into ./base -- never from the PR head. A PR that registers a
+# new signer key in its own checkout therefore cannot make its receipt verify; a key only takes
+# effect once its PR has merged (docs/RECEIPT-GATE.md "Key rotation"). The head tree is still the
+# tree whose hash is recomputed (--repo .).
 
 on:
   pull_request:
@@ -49,6 +56,14 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
+
+      - name: Checkout the BASE tree (verifier + keyring source of trust)
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha || 'main' }}
+          path: base
+          fetch-depth: 1
+          persist-credentials: false
 
       - name: Setup Python
         uses: actions/setup-python@v7
@@ -80,8 +95,10 @@ jobs:
               echo "Lanes post one with \`python tools/emit_receipt.py --post\`. Not required yet (docs/RECEIPT-GATE.md)."
             } >> "$GITHUB_STEP_SUMMARY"
           }
-          if [ ! -f tools/verify_receipt.py ]; then
-            msg="MISSING receipt: tools/verify_receipt.py is not present on this checkout (branch predates the receipt gate), so no receipt for ${HEAD_SHA} can be verified."
+          # The lookup tool comes from the BASE tree too (a PR head must not be able to
+          # make its own receipt lookup report "absent" or "found" on its own terms).
+          if [ ! -f base/tools/verify_receipt.py ]; then
+            msg="MISSING receipt: base/tools/verify_receipt.py is not present on the base checkout, so no receipt for ${HEAD_SHA} can be verified."
             echo "::error title=verify-receipt::${msg}"
             summary "${msg}"
             exit 1
@@ -97,7 +114,7 @@ jobs:
               echo "::notice title=verify-receipt::no receipt on attempt 1; re-checking once after 60s"
               sleep 60
             fi
-            python tools/verify_receipt.py --fetch-for-head "$HEAD_SHA" --repo-slug "$GITHUB_REPOSITORY" \
+            python base/tools/verify_receipt.py --fetch-for-head "$HEAD_SHA" --repo-slug "$GITHUB_REPOSITORY" \
               --out-found receipt_found --out-envelope receipt.json
             fetch_code=$?
             if [ "$fetch_code" -eq 0 ]; then
@@ -126,8 +143,10 @@ jobs:
         run: |
           git fetch --no-tags origin main:refs/remotes/origin/main
           set +e
-          python tools/verify_receipt.py --receipt receipt.json --repo . --head "$HEAD_SHA" \
-            --main-ref origin/main --max-behind 50 | tee verify.out
+          # Verifier, pubkey and keyring ALL from the base tree (see BASE TRUST above).
+          python base/tools/verify_receipt.py --receipt receipt.json --repo . --head "$HEAD_SHA" \
+            --main-ref origin/main --max-behind 50 \
+            --pubkey base/tools/receipt_pubkey.pub --keyring base/tools/receipt_pubkeys | tee verify.out
           code=${PIPESTATUS[0]}
           set -e
           {

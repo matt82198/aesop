@@ -441,6 +441,22 @@ def conclusion_for(parts):
     return "success" if parts and all(p.get("exit_code") == 0 for p in parts) else "failure"
 
 
+def exit_code_for(parts, args):
+    """Exit code the pre-push hook reads (docs/RECEIPT-GATE.md). Red = any part exit != 0.
+
+    0 = green, or red without --fail-on-red (legacy contract: the verifier judges red);
+    3 = red and --fail-on-red (the hook blocks the push; the failure receipt is already posted);
+    4 = red with --pushed-red (the emergency override was used; the receipt is stamped pushed_red).
+    """
+    if conclusion_for(parts) != "failure":
+        return 0
+    if args.pushed_red:
+        return 4
+    if args.fail_on_red:
+        return 3
+    return 0
+
+
 def wrap_receipt_text(envelope):
     """The exact text stored in check-run output.text / the commit comment body."""
     return rc.COMMENT_MARKER + "\n```json\n" + json.dumps(envelope, sort_keys=True) + "\n```\n"
@@ -527,6 +543,10 @@ def build_parser():
     p.add_argument("--out", default=None, help="also write the signed envelope JSON here")
     p.add_argument("--post", action="store_true", help="publish as check-run on the head sha (commit comment on 403)")
     p.add_argument("--dry-run", action="store_true", help="print the envelope; perform NO network call even with --post")
+    p.add_argument("--fail-on-red", action="store_true",
+                   help="exit 3 when any part is red (after the receipt is posted); the pre-push hook blocks on 3")
+    p.add_argument("--pushed-red", action="store_true",
+                   help="operator override (AESOP_PUSH_RED=1): a red receipt is stamped pushed_red: true and exits 4")
     return p
 
 
@@ -583,6 +603,9 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
 
         parts, skipped = run_matrix(repo, names, registry=registry, jobs=args.jobs)
         receipt = build_receipt(repo, parts, skipped, slug=args.slug, main_ref=args.main_ref, profile=profile)
+        if args.pushed_red and conclusion_for(parts) == "failure":
+            # Stamped BEFORE signing: the override is part of the signed record, not a label beside it.
+            receipt["pushed_red"] = True
         sig = rc.sign(rc.canonical_json(receipt), scheme, private_key_path=key_path, hmac_secret=secret)
         envelope = {"receipt": receipt, "sig": sig}
         if args.out:
@@ -601,7 +624,7 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
         if args.dry_run:
             print(json.dumps(envelope, sort_keys=True, indent=1))
             print("dry-run: nothing posted")
-            return 0
+            return exit_code_for(parts, args)
         if args.post:
             # Spool directory survives worktree removal via env override or git-common-dir
             spool_dir = rc.resolve_spool_dir(repo=str(repo), environ=environ)
@@ -610,7 +633,9 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
                 print("spooled receipt for %s (publish after push)" % receipt["head_sha"][:12])
             else:
                 print("posted via %s on %s as %s" % (channel, receipt["head_sha"][:12], rc.CHECK_NAME))
-        return 0
+        if receipt.get("pushed_red"):
+            print("pushed_red: true (red receipt stamped; override accepted by caller)")
+        return exit_code_for(parts, args)
     except ReceiptError as e:
         print("ERROR: %s" % e, file=sys.stderr)
         return 2
