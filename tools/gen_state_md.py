@@ -26,13 +26,14 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 
-def generate_state_md(state_dir=None, out_path=None, timestamp=None):
+def generate_state_md(state_dir=None, out_path=None, timestamp=None, api=None):
     """Generate STATE.md checkpoint from event-sourced state store.
 
     Args:
         state_dir: Path to state directory (default: AESOP_STATE_ROOT env var or ./state)
         out_path: Path to write output (default: return as string)
         timestamp: ISO timestamp to use in header (default: current UTC time)
+        api: optional open StateAPI to read from (default: open the tracker DB)
 
     Returns:
         str: The rendered checkpoint markdown
@@ -41,18 +42,21 @@ def generate_state_md(state_dir=None, out_path=None, timestamp=None):
         RuntimeError: If state store is malformed or unreadable
     """
     from state_store import StateAPI
+    from state_store.paths import resolve_db_path
 
     # Resolve state directory
     if state_dir is None:
         state_dir = os.environ.get("AESOP_STATE_ROOT", "./state")
     state_dir = Path(state_dir)
 
-    # Initialize or load the state store
-    db_path = state_dir / "events.db"
-    try:
-        api = StateAPI(str(db_path))
-    except Exception as e:
-        raise RuntimeError(f"Failed to open state store at {db_path}: {e}")
+    # Use the caller's open API when given (single connection, same DB the
+    # caller already resolved); otherwise open the canonical tracker DB.
+    if api is None:
+        db_path = resolve_db_path(state_dir, "tracker")
+        try:
+            api = StateAPI(str(db_path))
+        except Exception as e:
+            raise RuntimeError(f"Failed to open state store at {db_path}: {e}")
 
     # Get current timestamp (for determinism in tests, allow override)
     if timestamp is None:

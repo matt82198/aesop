@@ -56,7 +56,7 @@ class GenStateMdTest(unittest.TestCase):
     def _init_db(self, state_dir):
         """Initialize the event store database if needed."""
         from state_store import EventStore
-        db_path = state_dir / "events.db"
+        db_path = state_dir / "tracker_events.db"
         store = EventStore(str(db_path))
         self._stores.append(store)
 
@@ -82,7 +82,7 @@ class GenStateMdTest(unittest.TestCase):
 
         # Add tracker items to the state store
         from state_store import StateAPI
-        api = StateAPI(str(self.state_dir / "events.db"))
+        api = StateAPI(str(self.state_dir / "tracker_events.db"))
         self._stores.append(api)
 
         # Create some items in different lanes
@@ -144,7 +144,7 @@ class GenStateMdTest(unittest.TestCase):
 
         # Add some items
         from state_store import StateAPI
-        api = StateAPI(str(self.state_dir / "events.db"))
+        api = StateAPI(str(self.state_dir / "tracker_events.db"))
         self._stores.append(api)
 
         api.append("tracker", "item_created", {
@@ -168,7 +168,7 @@ class GenStateMdTest(unittest.TestCase):
 
         # Add an item with unicode
         from state_store import StateAPI
-        api = StateAPI(str(self.state_dir / "events.db"))
+        api = StateAPI(str(self.state_dir / "tracker_events.db"))
         self._stores.append(api)
 
         api.append("tracker", "item_created", {
@@ -205,7 +205,7 @@ class GenStateMdTest(unittest.TestCase):
         """Test that malformed store causes exit 1."""
         # Don't initialize the database; leave it corrupted or missing
         # Actually, create a directory where the db should be to simulate corruption
-        db_path = self.state_dir / "events.db"
+        db_path = self.state_dir / "tracker_events.db"
         db_path.mkdir(exist_ok=True)  # Create dir instead of db file
 
         # Should exit 1 on malformed store
