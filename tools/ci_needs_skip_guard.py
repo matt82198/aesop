@@ -7,9 +7,11 @@ CLI: ci_needs_skip_guard.py [--root DIR] [--workflow ci.yml] [--json] [--require
 
 import argparse
 import json
-import re
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling import (sanctioned guard)
+from ci_job_contexts import resolve_required_context, split_context  # noqa: E402
 
 try:
     import yaml
@@ -57,24 +59,21 @@ def load_required_contexts(manifest_path, protection_file=None):
     return list(dict.fromkeys(names))
 
 _STATUS_FUNCS = ("always(", "cancelled(", "failure(")
-_SUFFIX_RE = re.compile(r"\s*\([^)]*\)\s*$")
 
 
 class GuardError(Exception):
     """Raised for conditions that must fail closed (exit 2)."""
 
 
-def _job_id_for_check(check_name, jobs):
-    """Resolve a required-check context name (e.g. 'ci (0)') to a job id."""
-    base = _SUFFIX_RE.sub("", check_name).strip()
-    if base in jobs:
-        return base
-    # Fall back to matching a job's `name:` override, if any.
+def _resolver_jobs(jobs):
+    """Job bodies in the shape tools/ci_job_contexts.py resolves: rendered name + matrix."""
+    out = {}
     for job_id, body in jobs.items():
-        name = body.get("name") if isinstance(body, dict) else None
-        if isinstance(name, str) and name.strip() == base:
-            return job_id
-    return None
+        body = body if isinstance(body, dict) else {}
+        strategy = body.get("strategy")
+        matrix = strategy.get("matrix") if isinstance(strategy, dict) else None
+        out[job_id] = {"name": body.get("name"), "matrix": matrix}
+    return out
 
 
 def _needs_list(body):
@@ -146,18 +145,20 @@ def check_workflow(workflow_path, required_checks=None, protection_file=None):
     findings = []
     notes = []
     checked_lineage = set()
+    resolver_jobs = _resolver_jobs(jobs)
     for check in required_checks:
-        job_id = _job_id_for_check(check, jobs)
+        job_id, why = resolve_required_context(check, resolver_jobs)
         if job_id is None:
-            # Fail closed: a required check with no job can never report, so the PR waits
-            # forever, and the cascade check would otherwise silently verify nothing.
+            # Fail closed: a required check that no job renders can never report, so the PR
+            # waits forever, and the cascade check would otherwise silently verify nothing.
             findings.append({
-                "job": _SUFFIX_RE.sub("", check).strip(),
+                "job": split_context(check)[0],
                 "feeds_required_check": check,
                 "if": None,
-                "detail": "required check %r has no job in %s (renamed or removed job? "
+                "detail": "required check %r has no job rendering it in %s: %s "
+                          "(renamed job, name: override, or matrix suffix out of range? "
                           "update tools/required-checks.json or the workflow)"
-                          % (check, workflow_path.name),
+                          % (check, workflow_path.name, why),
             })
             continue
         for lineage_id in ancestry(job_id, jobs):
