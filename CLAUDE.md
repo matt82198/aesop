@@ -4,8 +4,8 @@
 
 ## RED CI Escape Detection
 
-RED CI runs (any FAILURE check on main or open PRs) are automatically detected every 20 minutes
-by `~/scripts/detect_red_ci_runs.py`, which runs as part of the orchestrator's idle_tick.
+RED CI runs (any FAILURE check on main or open PRs) are detected whenever the orchestrator runs idle_tick (no scheduled cadence)
+by `~/scripts/detect_red_ci_runs.py`, which idle_tick invokes.
 Detected escapes are queued to `~/.claude/gate-escapes-queue.json`; idle_tick surfaces them as HIGH
 priority; orchestrator's main thread invokes gate-escape-resolver workflow to fix + postmortem + enforce.
 No RED run is missed; deduplication prevents redundant queue entries (keys on run_id).
@@ -46,7 +46,7 @@ Thin CRLF-safe shell wrappers for repo maintenance. Currently: `verify-stats.sh`
 
 Workers read exactly ONE domain CLAUDE.md; this file is navigation only.
 
-- **LANE-CONTRACT.md** — injected into every dispatch by the lane-contract hook; read it before writing code.
+- **LANE-CONTRACT.md** — the lane-contract hook refuses any dispatch whose prompt does not reference it (it injects nothing); read it before writing code.
 
 ## Setup for development
 

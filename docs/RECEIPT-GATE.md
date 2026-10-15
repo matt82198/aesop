@@ -106,7 +106,7 @@ under the marker `<!-- aesop-receipt:verify-receipt-local -->`. The Action reads
    "head_sha": "...", "base_sha": "<merge-base with origin/main>",
    "tree_hash": "<git rev-parse HEAD^{tree}>",
    "parts":   [{"name": "py-shard-0", "exit_code": 0, "test_count": 212, "duration_s": 48.1}, ...],
-   "skipped": [{"name": "browser-proofs", "reason": "not runnable here: ..."}, {"name": "py-shard-1", "reason": "not in scope: no changed file maps to this shard (profile=scoped)"}],
+   "skipped": [{"name": "browser-proofs", "reason": "not runnable here: ..."}],
    "host": {"os": "windows", "python": "3.12.4", "hostname_hash": "<sha256[:16]>"},
    "timestamp": "2026-10-06T14:02:11Z"},
  "sig": {"scheme": "ed25519", "value": "<base64>", "key_id": "<sha256(pubkey)[:16]>"}}
@@ -118,7 +118,7 @@ the base) invalidates it. The optional `schema_version` field (default: absent, 
 
 ## Matrix profiles: default scoped, full available
 
-By default, the pre-push receipt emits using `profile: "scoped"`: it runs the fast pre-push gates always (`secret-scan`, `claudemd-sync-gate`, `gen-tool-index`, `verify-test-suite-count`, `encoding-lint`, `import-resolution-check`, `sibling-import-check`) PLUS only the python shards (`py-shard-0..3`) that own files changed in this push (derived from `git diff --name-only <base>..<tip>` mapped through the shard assignment in `ci_shard_runner.py`'s round-robin distribution). Shards not in scope are recorded under `skipped` with reason `"not in scope: no changed file maps to this shard (profile=scoped)"`.
+By default, the pre-push receipt emits using `profile: "scoped"`: it runs the fast pre-push gates always (`secret-scan`, `claudemd-sync-gate`, `gen-tool-index`, `verify-test-suite-count`, `encoding-lint`, `import-resolution-check`, `sibling-import-check`) PLUS only the python shards (`py-shard-0..3`) that own files changed in this push (derived from `git diff --name-only <base>..<tip>` mapped through the shard assignment in `ci_shard_runner.py`'s round-robin distribution). Shards not in scope are not recorded in the receipt today: `tools/emit_receipt.py` builds their skip reasons (`skipped_infos`, around line 607) but never writes them into `skipped`.
 
 The scoped profile is the default because the full matrix (`py-shard-0..3`) can exceed pre-push timeout budgets on slow boxes (measured ~1250s locally while the hook timeout is 900s); scoped runs reduce that to minutes when most changes are docs-only or touch a few test files. Parts that cannot run on a dev box (`browser-proofs`, `windows-shard`) remain always-skipped, and the verifier's required-parts list never changes.
 
