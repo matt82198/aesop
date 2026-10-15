@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added `tools/goal_state.py` (orchestrator GOAL as append-only `goal_set` events in the event store) and `tools/boot_state.py` (one deterministic, byte-capped boot brief from the store, STATE.md ACTIVE, BUILDLOG tail and git; exits 2 on an unreadable store).
 - Docs: corrected dependency and Python-floor claims to match the repo (no runtime npm dependencies; CI floor Python 3.11; PyYAML/cryptography/playwright/opentelemetry/anthropic/pyflakes listed in new `pyproject.toml`) and added a prompt-injection threat model to `docs/ARCHITECTURE.md`.
+- Fix (CLI): the final summary's `cp ... ~/.claude/CLAUDE.md` instructions now back up the existing global file first; the scaffold never performed that copy, but the printed text would have overwritten it silently (#1086).
+- Fix (CLI): `--repos` entries must be existing directories; a missing path, file, or URL now exits 2 before anything is written, instead of recording a nonexistent repo (#1086).
 
 ## [0.10.0] - 2026-10-15
 
