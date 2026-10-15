@@ -152,8 +152,13 @@ class TestHeartbeatAndStaleness(unittest.TestCase):
         instance_id = "host1:1234:abc123"
         register_instance(self.store, instance_id, "host1", 1234)
 
-        # With a very small threshold, the instance is immediately stale
-        stale = detect_stale_instances(self.store, stale_threshold_seconds=0.0)
+        # Inject the detection clock one second ahead of registration so the
+        # staleness delta is deterministic. Real time.time() on Windows ticks
+        # every ~15.6 ms and a same-tick detect gives delta 0, which the strict
+        # '>' in detect_stale_instances correctly treats as not stale (F-02).
+        stale = detect_stale_instances(
+            self.store, stale_threshold_seconds=0.0, now=time.time() + 1.0
+        )
         self.assertEqual(len(stale), 1)
         self.assertEqual(stale[0]["instance_id"], instance_id)
 
