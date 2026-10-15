@@ -1,6 +1,5 @@
 # tools/ — Build utilities
 Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
-
 ## Universal rules (every domain)
 - Feature branch only, never main; every push gated by `python tools/secret_scan.py --staged` exit 0.
 - Tests never pollute cwd or global git config; temp dirs only; dummy secrets are runtime-concatenated, never literal.
