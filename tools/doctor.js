@@ -205,6 +205,25 @@ function checkSkillsFiles() {
   };
 }
 
+// Push-gate artifacts the pre-push hook reads (fail-closed when absent). Each FAIL names
+// the file and its regenerate command. The same commands are printed by bin/cli.js at
+// scaffold time and by the hook's BOOTSTRAP FATAL.
+const PUSH_GATE_ARTIFACTS = [
+  { file: 'tools/INDEX.md', regen: 'python tools/gen_tool_index.py --regenerate' },
+  { file: '.pyflakes-baseline.json', regen: 'python tools/pyflakes_gate.py --root . --baseline .pyflakes-baseline.json --update-baseline' },
+  { file: '.subprocess-guard-baseline.json', regen: 'python tools/subprocess_guard.py --baseline .subprocess-guard-baseline.json --update-baseline' },
+  { file: '.portability-baseline.json', regen: 'python tools/portability_check.py --root . --baseline .portability-baseline.json --update-baseline' },
+  { file: '.stateapi-baseline.json', regen: 'python tools/stateapi_lint.py --root . --baseline .stateapi-baseline.json --update-baseline' }
+];
+
+function checkPushGateArtifact(artifact) {
+  const artifactPath = path.join(CURRENT_DIR, artifact.file);
+  if (fs.existsSync(artifactPath) && fs.statSync(artifactPath).isFile()) {
+    return { passed: true, hint: '' };
+  }
+  return { passed: false, hint: `Missing ${artifact.file}; regenerate with: ${artifact.regen}, then commit it` };
+}
+
 // Check required directories exist
 function checkDirectories() {
   const requiredDirs = ['daemons', 'dash', 'monitor', 'tools', 'ui'];
@@ -386,7 +405,11 @@ function formatRow(label, status, hint) {
       { label: 'Repository URLs (no placeholders)', fn: checkRepoURLs },
       { label: 'Skills files (power & buildsystem)', fn: checkSkillsFiles },
       { label: 'Required directories (daemons, dash, monitor, tools, ui)', fn: checkDirectories },
-      { label: 'Git pre-push hook installed', fn: checkPrePushHook }
+      { label: 'Git pre-push hook installed', fn: checkPrePushHook },
+      ...PUSH_GATE_ARTIFACTS.map(artifact => ({
+        label: `Push-gate artifact: ${artifact.file}`,
+        fn: () => checkPushGateArtifact(artifact)
+      }))
     ];
 
     const results = [];

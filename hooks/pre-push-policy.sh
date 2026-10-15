@@ -147,8 +147,45 @@ gate_tool_missing_block() {
   printf 'A gate that cannot run must not report success. Push blocked.\n' >&2
 }
 
+# Trunk ref on origin: origin/HEAD's target, else origin/main, else origin/master.
+# Prints the ref and returns 0; prints nothing and returns 1 when origin has no trunk
+# yet (a fresh remote), which is the BOOTSTRAP condition.
+gate_trunk_ref() {
+  local head_ref name
+  head_ref=$(git symbolic-ref -q refs/remotes/origin/HEAD 2>/dev/null) || head_ref=""
+  if [ -n "$head_ref" ]; then
+    name="origin/${head_ref#refs/remotes/origin/}"
+    if git rev-parse --verify -q "$name^{commit}" >/dev/null 2>&1; then
+      printf '%s\n' "$name"
+      return 0
+    fi
+  fi
+  for name in origin/main origin/master; do
+    if git rev-parse --verify -q "$name^{commit}" >/dev/null 2>&1; then
+      printf '%s\n' "$name"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Artifacts a bootstrap push must find committed at HEAD (the hook reads them).
+GATE_BOOTSTRAP_REQUIRED="tools/INDEX.md .pyflakes-baseline.json .subprocess-guard-baseline.json"
+
+# The regenerate command for a push-gate artifact (same strings scaffold and doctor print).
+gate_regen_command() {
+  case "$1" in
+    tools/INDEX.md) printf '%s' "python tools/gen_tool_index.py --regenerate" ;;
+    .pyflakes-baseline.json) printf '%s' "python tools/pyflakes_gate.py --root . --baseline .pyflakes-baseline.json --update-baseline" ;;
+    .subprocess-guard-baseline.json) printf '%s' "python tools/subprocess_guard.py --baseline .subprocess-guard-baseline.json --update-baseline" ;;
+    .portability-baseline.json) printf '%s' "python tools/portability_check.py --root . --baseline .portability-baseline.json --update-baseline" ;;
+    .stateapi-baseline.json) printf '%s' "python tools/stateapi_lint.py --root . --baseline .stateapi-baseline.json --update-baseline" ;;
+    *) printf '%s' "see tools/doctor.js" ;;
+  esac
+}
+
 gate_base_dir() {
-  # Prints a directory holding origin/main's tools/ and .pyflakes-baseline.json:
+  # Prints a directory holding the trunk's tools/ and .pyflakes-baseline.json:
   # the BASE gate copies. Every gate script this hook runs comes from here, never
   # from the pushed tree, so a branch that weakens a gate cannot judge its own
   # push (F-04 / adv-enforcement F-03). Gate DATA roots (--root) still point at
@@ -161,9 +198,23 @@ gate_base_dir() {
   # Every root package the base gates import is extracted: tools/ always, and
   # state_store/ whenever origin/main carries it (state_store/ itself imports
   # tools.*, which the same archive already provides).
-  # Fail-closed: prints nothing and returns 1 when origin/main cannot be read.
-  local base_sha tmp_root dir staging roots="" root
-  base_sha=$(git rev-parse --verify -q "origin/main^{commit}" 2>/dev/null) || return 1
+  # The base is the trunk on origin (gate_trunk_ref), never a hardcoded name. On a
+  # fresh remote with no trunk yet, the base is HEAD (BOOTSTRAP): every gate copy and
+  # baseline then comes from the local committed tree, and every bootstrap-required
+  # artifact must be committed at HEAD or the function fails closed, naming it.
+  # Fail-closed: prints nothing and returns 1 when the base cannot be read.
+  local base_ref base_sha tmp_root dir staging roots="" root f
+  if base_ref=$(gate_trunk_ref); then
+    base_sha=$(git rev-parse --verify -q "$base_ref^{commit}" 2>/dev/null) || return 1
+  else
+    base_sha=$(git rev-parse --verify -q "HEAD^{commit}" 2>/dev/null) || return 1
+    for f in $GATE_BOOTSTRAP_REQUIRED; do
+      if ! git cat-file -e "$base_sha:$f" 2>/dev/null; then
+        printf 'FATAL: BOOTSTRAP (no trunk on origin): %s is not committed at HEAD. Push blocked (fail-closed).\n  Regenerate with: %s\n  then commit it before pushing.\n' "$f" "$(gate_regen_command "$f")" >&2
+        return 1
+      fi
+    done
+  fi
   [ -n "$base_sha" ] || return 1
   tmp_root="${TMPDIR:-/tmp}"
   dir="$tmp_root/aesop-gate-base-v2-$base_sha"
@@ -197,7 +248,7 @@ gate_base_block() {
   # Shared fail-closed message: the base gate copy cannot be read, so no gate can judge the push.
   local label="$1"
   log_block "gate_base_unavailable"
-  printf 'FATAL: %s cannot run its base gate copy: origin/main:tools is unreadable. Push blocked (fail-closed).\n' "$label" >&2
+  printf 'FATAL: %s cannot run its base gate copy: the trunk (or HEAD in BOOTSTRAP) tools/ is unreadable. Push blocked (fail-closed).\n' "$label" >&2
 }
 
 check_gate_tamper() {
@@ -1295,7 +1346,18 @@ check_subprocess_guard_ratchet() {
   fi
 
   local baseline="$aesop_root/.subprocess-guard-baseline.json"
-  if [ ! -f "$baseline" ]; then
+  local baseline_arg=".subprocess-guard-baseline.json" head_copy=""
+  if ! gate_trunk_ref >/dev/null 2>&1; then
+    # BOOTSTRAP (no trunk on origin): judge against the committed HEAD copy, never the working tree.
+    head_copy=$(mktemp "${TMPDIR:-/tmp}/aesop-sg-baseline.XXXXXX" 2>/dev/null) || head_copy=""
+    if [ -z "$head_copy" ] || ! git show "HEAD:.subprocess-guard-baseline.json" > "$head_copy" 2>/dev/null; then
+      [ -n "$head_copy" ] && rm -f "$head_copy"
+      printf 'FATAL: .subprocess-guard-baseline.json is not committed at HEAD (BOOTSTRAP). Push blocked (fail-closed).\n  Regenerate with: %s\n  then commit it before pushing.\n' "$(gate_regen_command .subprocess-guard-baseline.json)" >&2
+      log_event "subprocess_guard_ratchet_baseline_missing"
+      return 1
+    fi
+    baseline_arg="$head_copy"
+  elif [ ! -f "$baseline" ]; then
     printf 'FATAL: .subprocess-guard-baseline.json not found at %s. A ratchet with no baseline cannot judge the push (fail-closed).\n' "$baseline" >&2
     log_event "subprocess_guard_ratchet_baseline_missing"
     return 1
@@ -1303,14 +1365,16 @@ check_subprocess_guard_ratchet() {
 
   local py_bin=""
   if ! py_bin=$(resolve_py_bin); then
+    [ -n "$head_copy" ] && rm -f "$head_copy"
     gate_no_python_block "subprocess guard ratchet"
     log_event "subprocess_guard_ratchet_no_python"
     return 1
   fi
 
   local sg_output
-  sg_output=$(cd "$aesop_root" && "$py_bin" tools/subprocess_guard.py --check --baseline .subprocess-guard-baseline.json 2>&1)
+  sg_output=$(cd "$aesop_root" && "$py_bin" tools/subprocess_guard.py --check --baseline "$baseline_arg" 2>&1)
   local sg_exit_code=$?
+  [ -n "$head_copy" ] && rm -f "$head_copy"
   if [ $sg_exit_code -eq 0 ]; then
     return 0
   fi
@@ -3101,9 +3165,15 @@ main() {
     exit 1
   fi
 
+  # BOOTSTRAP: no trunk on origin yet (fresh remote); the base is HEAD. Printed once per push.
+  if ! gate_trunk_ref >/dev/null 2>&1; then
+    printf 'BOOTSTRAP: no trunk on origin; base = HEAD\n' >&2
+    log_event "bootstrap_base_head"
+  fi
+
   # Base gate copies must be readable before any gate runs (fail-closed; see gate_base_dir).
   if ! gate_base_dir >/dev/null; then
-    printf 'FATAL: origin/main:tools is unreadable, so the base gate copies cannot run. Push blocked (fail-closed).\n' >&2
+    printf 'FATAL: the base gate copies cannot run (trunk or HEAD tools/ unreadable). Push blocked (fail-closed).\n' >&2
     log_block "gate_base_unavailable"
     exit 1
   fi
