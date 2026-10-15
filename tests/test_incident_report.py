@@ -476,5 +476,45 @@ class TestSecretScanning(unittest.TestCase):
             "Should accept commit reference")
 
 
+class TestIncidentPortabilityAndEol(unittest.TestCase):
+    """Generated log must pass the portability gate and be EOL-deterministic."""
+
+    def _table_with(self, what_happened, resolution):
+        from tools.incident_report import IncidentMarkdown
+        incidents = [{
+            "hash": "abc1234", "full_hash": "abc1234" + "0" * 33,
+            "class": "gate-activation", "what_happened": what_happened,
+            "resolution": resolution, "source_ref": "PR #856",
+            "date": "2026-10-14T00:00:00+00:00",
+        }]
+        return IncidentMarkdown().generate_table(incidents)
+
+    def test_generated_table_redacts_private_machine_tokens(self):
+        """Whole-word private tokens from old commit subjects must not reach docs/INCIDENTS.md."""
+        table = self._table_with(
+            "guard: isolate shell tests from real conductor3 state",
+            "matt8 box resolution text")
+        self.assertNotIn("conductor3", table)
+        self.assertNotIn("matt8 ", table)
+        self.assertIn("[redacted]", table)
+
+    def test_redaction_keeps_longer_identifiers(self):
+        """Redaction is whole-word only: matt82198 (GitHub user) stays intact."""
+        table = self._table_with("merge from matt82198/feat/x", "ok resolution text")
+        self.assertIn("matt82198", table)
+
+    def test_write_table_emits_lf_only(self):
+        """The writer must not depend on the host EOL (Windows text mode writes CRLF)."""
+        import os
+        import tempfile
+        from tools.incident_report import write_table
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "INCIDENTS.md")
+            write_table(path, "# Incidents\n\nrow\n")
+            with open(path, "rb") as fh:
+                data = fh.read()
+        self.assertEqual(data, b"# Incidents\n\nrow\n")
+
+
 if __name__ == '__main__':
     unittest.main()

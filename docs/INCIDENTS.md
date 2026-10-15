@@ -184,7 +184,7 @@ Operational failures tracked by class: detection, resolution, and source referen
 | gate-activation | fix: guard hook interpreters from silent failure | Adds interpreter health check (hook_preflight.py) to detect broken or | commit b84e640f |
 | conflict | Merge main into feature/reconcile-test-counts to resolve conflicts |  | commit 19bac22c |
 | gate-activation | fix: guard hook interpreters from silent failure | Adds interpreter health check (hook_preflight.py) to detect broken or | commit 15dc2e3a |
-| test-pollution | ﻿fix: isolate test conductor3 root to prevent heartbeat file pollution | Problem: test_ui_demo_mode.py's TestDefaultModeUnaffected class did... | PR #645 |
+| test-pollution | ﻿fix: isolate test [redacted] root to prevent heartbeat file pollution | Problem: test_ui_demo_mode.py's TestDefaultModeUnaffected class did... | PR #645 |
 | gate-activation | docs: GATES-FIRED.md — which guardrails actually fired, with citations | * docs: add GATES-FIRED.md — evidence-backed audit of guardrails | PR #665 |
 | conflict | merge: resolve conflict with main (test suite count drift) | origin/main and refactor/transcript-health-modules both touched | commit fbb46c2b |
 | test-pollution | fix: make CLAUDE.md linter scan tracked files, and stop test scaffo... | The runner failure was pollution, not a real violation. CI reported: | commit 33fb4a11 |
@@ -221,7 +221,7 @@ Operational failures tracked by class: detection, resolution, and source referen
 | gate-activation | chore: inert-code audit cleanup (priority #2) | * chore: inert-code audit cleanup (priority #2) | PR #2 |
 | conflict | bounded bisect — eviction-first red handling with culprit isolation... | * feat(queue): bounded bisect — eviction-first red handling with cu... | PR #745 |
 | conflict | guard: PR symbol survival check — catch conflict-resolution symbol ... | * guard: PR symbol survival check — catch conflict-resolution symbo... | PR #865 |
-| gate-activation | guard: isolate shell tests from real conductor3 state (GAP: live he... | * guard: isolate shell tests from real conductor3 state (GAP: live ... | PR #856 |
+| gate-activation | guard: isolate shell tests from real [redacted] state (GAP: live he... | * guard: isolate shell tests from real [redacted] state (GAP: live ... | PR #856 |
 | stall | skills check fails closed, and the installer installs skills itself | * fix(doctor): skills check fails closed; installer text names the ... | PR #784 |
 | gate-activation | feat: session-independent PR sweep (closes STATE.md item 9 residual) | * feat: session-independent PR sweep (tools/pr_sweep.py, STATE.md i... | PR #874 |
 | conflict | Merge origin/main: resolve conflict, keep both resolver + schema_ve... |  | commit 43e1b9a2 |
