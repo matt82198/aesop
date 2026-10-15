@@ -37,6 +37,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from state_store import StateAPI
+from state_store.paths import INSTANCES_DB_FILENAME, resolve_db_path as _state_db_path
 from state_store.instance_projection import (
     register_instance,
     heartbeat,
@@ -67,9 +68,9 @@ def resolve_db_path(cli_db_arg: str | None) -> str:
 
     env_root = os.environ.get("AESOP_STATE_ROOT")
     if env_root:
-        return os.path.join(env_root, "state.db")
+        return _state_db_path(env_root, "instances")
 
-    return "./state/state.db"
+    return f"./state/{INSTANCES_DB_FILENAME}"
 
 
 def main():

@@ -66,6 +66,13 @@ def _check_shape(envelope):
         raise CannotEvaluate("receipt.parts must be a list")
 
 
+def _signature_ok(canonical, sig, pubkey_path, hmac_secret):
+    """Ed25519 resolves by key_id across the keyring; HMAC keeps its single-secret check."""
+    if sig.get("scheme") == "ed25519":
+        return rc.verify_signature_keyring(canonical, sig, rc.keyring_paths(pubkey_path))
+    return rc.verify_signature(canonical, sig, pubkey_path=pubkey_path, hmac_secret=hmac_secret)
+
+
 def verify(envelope, repo, head, main_ref, max_behind, required, pubkey_path, hmac_secret):
     """Return (exit_code, reasons). 0 valid / 1 invalid / 2 cannot evaluate."""
     try:
@@ -81,7 +88,7 @@ def verify(envelope, repo, head, main_ref, max_behind, required, pubkey_path, hm
         elif not rc.has_key_material(scheme, pubkey_path=pubkey_path, hmac_secret=hmac_secret):
             raise CannotEvaluate("no key material to verify scheme %s (pubkey=%s, hmac=%s)" % (
                 scheme, pubkey_path, "set" if hmac_secret else "unset"))
-        elif not rc.verify_signature(rc.canonical_json(receipt), sig, pubkey_path=pubkey_path, hmac_secret=hmac_secret):
+        elif not _signature_ok(rc.canonical_json(receipt), sig, pubkey_path, hmac_secret):
             reasons.append("signature: does not verify under %s" % scheme)
 
         head_full = _git_ok(repo, "rev-parse", "--verify", head + "^{commit}")

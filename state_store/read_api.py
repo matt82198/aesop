@@ -30,6 +30,7 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
+from state_store.paths import resolve_db_path
 from tools.common import check_heartbeat_staleness
 from tools.fleet_ledger import parse_ledger_rows as parse_ledger_rows_impl
 
@@ -67,7 +68,7 @@ class ReadAPI:
         if self._api is None:
             try:
                 from state_store.api import StateAPI
-                db_path = str(self.state_dir / "tracker_events.db")
+                db_path = resolve_db_path(self.state_dir, "tracker")
                 if Path(db_path).exists():
                     self._api = StateAPI(db_path)
             except Exception:
