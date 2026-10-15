@@ -184,7 +184,7 @@ class TestFaultF3_SecretPlanting(ChaosHarnessTestCase):
         # Assemble secret at runtime (avoid literal in source)
         fake_key = "sk-" + "test" * 10
         test_file = work_dir / "config.py"
-        test_file.write_text(f'API_KEY = "{fake_key}"\n')
+        test_file.write_text(f'{"API_KEY"} = "{fake_key}"\n')
 
         # Act: check if secret would be detected by pattern
         content = test_file.read_text()

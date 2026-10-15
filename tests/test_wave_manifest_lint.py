@@ -597,5 +597,77 @@ class TestWavePreflight(unittest.TestCase):
         self.assertEqual(rc, 0)
 
 
+class TestEvalSourceResolution(unittest.TestCase):
+    """eval / source / . must not hide a missing real binary from the lint.
+
+    eval's argument is linted as a nested testCmd; source/. require the sourced
+    file to exist (relative to the manifest root) and lint its first command
+    line; anything unresolvable fails closed. Controls: a quoted builtin chain
+    under eval and a real binary behind eval still resolve.
+    """
+
+    MISSING = "definitely-missing-binary-aesop-evallint"
+
+    @classmethod
+    def setUpClass(cls):
+        tools = str(Path(REPO_ROOT) / "tools")
+        if tools not in sys.path:
+            sys.path.insert(0, tools)
+        import wave_manifest_lint
+        cls.lint = wave_manifest_lint
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = self._tmp.name
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _write(self, rel, text):
+        full = Path(self.root) / rel
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(text, encoding="utf-8", newline="\n")
+
+    def _resolves(self, cmd):
+        return self.lint._testcmd_binary_resolves(cmd, self.root)[0]
+
+    def test_eval_missing_binary_fails(self):
+        self.assertIs(self._resolves(f'eval "{self.MISSING} --x"'), False)
+
+    def test_eval_unquoted_missing_binary_fails(self):
+        self.assertIs(self._resolves(f"eval {self.MISSING} --x"), False)
+
+    def test_eval_nested_builtin_chain_passes(self):
+        self.assertIs(self._resolves('eval "cd docs && true"'), True)
+
+    def test_eval_real_binary_passes(self):
+        self.assertIs(self._resolves('eval "python --version"'), True)
+
+    def test_source_missing_file_fails_closed(self):
+        self.assertIs(self._resolves("source ./setup.sh && python --version"), False)
+
+    def test_dot_missing_file_fails_closed(self):
+        self.assertIs(self._resolves(". ./setup.sh"), False)
+
+    def test_source_file_with_missing_first_command_fails(self):
+        self._write("setup.sh", f"# setup\n{self.MISSING} --y\n")
+        self.assertIs(self._resolves(f"source ./setup.sh && {self.MISSING}"), False)
+
+    def test_source_file_with_real_first_command_passes(self):
+        self._write("setup.sh", "# setup\npython --version\n")
+        self.assertIs(self._resolves("source ./setup.sh"), True)
+
+    def test_source_file_with_no_command_line_fails_closed(self):
+        self._write("empty.sh", "# nothing here\n\n")
+        self.assertIs(self._resolves("source ./empty.sh"), False)
+
+    def test_source_self_recursion_fails_closed(self):
+        self._write("loop.sh", "source ./loop.sh\n")
+        self.assertIs(self._resolves("source ./loop.sh"), False)
+
+    def test_source_dynamic_path_fails_closed(self):
+        self.assertIs(self._resolves('source "$HOME/setup.sh"'), False)
+
+
 if __name__ == "__main__":
     unittest.main()

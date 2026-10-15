@@ -441,5 +441,43 @@ class TestZeroCheckRetrigger(PrSweepTestCase):
         self.assertTrue(zero[0]["reason"])
 
 
+class RefusingDispatchForBranchGh(FakeGh):
+    """FakeGh where `gh workflow run` is refused for one branch only."""
+
+    def __init__(self, prs, refused_branch, **kwargs):
+        super().__init__(prs, **kwargs)
+        self.refused_branch = refused_branch
+
+    def __call__(self, *args):
+        if args[:2] == ("workflow", "run") and self.refused_branch in args:
+            self.calls.append(args)
+            return {"error": "workflow dispatch refused", "rc": 1}
+        return super().__call__(*args)
+
+
+class TestPerPrIsolation(PrSweepTestCase):
+    def test_refused_dispatch_for_one_pr_does_not_starve_later_zero_check_pr(self):
+        first = make_pr(801, now=self.now)
+        second = make_pr(802, now=self.now)
+        fake = RefusingDispatchForBranchGh(
+            [first, second], "feature-801",
+            view_by_pr={801: zero_view(45), 802: zero_view(45)})
+        log_path = Path(self._tmp.name) / "pr-sweep.log"
+        rc = self.run_sweep(fake, extra_argv=["--log-path", str(log_path)])
+        dispatches = fake.calls_matching("workflow", "run")
+        self.assertEqual(len(dispatches), 2, "both zero-check PRs must be attempted")
+        self.assertIn("feature-802", dispatches[1])
+        comments = fake.calls_matching("pr", "comment")
+        self.assertEqual(len(comments), 1)
+        self.assertEqual(comments[0][2], "802")
+        self.assertNotEqual(rc, 0, "a failed PR action must fail the sweep at the end")
+        entries = [json.loads(line) for line in
+                   log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        by_pr = {e["pr"]: e for e in entries if e.get("action") == "zero-retrigger"}
+        self.assertIn("failed", by_pr[801]["outcome"])
+        self.assertIn("refused", by_pr[801]["outcome"])
+        self.assertIn("dispatched", by_pr[802]["outcome"])
+
+
 if __name__ == "__main__":
     unittest.main()
