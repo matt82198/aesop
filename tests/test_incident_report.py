@@ -297,6 +297,59 @@ class TestIncidentParser(unittest.TestCase):
         self.assertEqual(hashes1, hashes2,
             "Incident order should be deterministic across runs")
 
+    def test_multiline_body_keeps_real_dates_and_stable_order(self):
+        """Multi-line bodies and '|' in bodies must not lose commit dates.
+
+        Regression: git log records were split on newlines and '|', so the date
+        field was dropped and replaced by datetime.now(); the sort key then changed
+        on every run. Hermetic: builds a throwaway repo with known commit dates.
+        """
+        try:
+            from tools.incident_report import IncidentParser
+        except ImportError:
+            self.skipTest("incident_report module not yet implemented")
+        import os
+        import subprocess
+        import tempfile
+
+        env = dict(os.environ)
+        env.update({
+            "GIT_AUTHOR_NAME": "fixture",
+            "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+            "GIT_COMMITTER_NAME": "fixture",
+            "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+        })
+        message = "fix: stall check hung process\n\nfirst body line | with a pipe\nsecond line\nthird line"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            subprocess.run(["git", "init", "-q"], cwd=tmpdir, check=True, env=env)
+            for i in range(6):
+                with open(os.path.join(tmpdir, f"f{i}.txt"), "w", encoding="utf-8") as fh:
+                    fh.write(f"{i}\n")
+                commit_env = dict(env, GIT_COMMITTER_DATE=f"2026-03-0{i + 1}T12:00:00+00:00")
+                subprocess.run(["git", "add", "-A"], cwd=tmpdir, check=True, env=commit_env)
+                subprocess.run(["git", "commit", "-q", "-m", message], cwd=tmpdir, check=True,
+                               env=commit_env, encoding="utf-8", errors="replace")
+
+            listing = subprocess.run(
+                ["git", "log", "--format=%h %cI", "--all"],
+                cwd=tmpdir, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                check=True, env=env,
+            ).stdout
+            real_dates = dict(line.split(" ", 1) for line in listing.splitlines() if line.strip())
+
+            parser = IncidentParser(repo_root=tmpdir)
+            first = parser.find_all_incidents()
+            second = parser.find_all_incidents()
+
+            self.assertEqual([i["hash"] for i in first], [i["hash"] for i in second],
+                "Incident order must not change between runs on identical history")
+            self.assertEqual(len(first), 6, "Every commit should yield one incident")
+            for incident in first:
+                self.assertIn(incident["hash"], real_dates,
+                    f"Incident {incident['hash']!r} is not a real commit (record split)")
+                self.assertEqual(incident["date"], real_dates[incident["hash"]],
+                    "Commit date must come from git, not a fallback clock value")
+
 
 class TestIncidentMarkdownGeneration(unittest.TestCase):
     """Test Markdown output format."""

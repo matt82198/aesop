@@ -206,10 +206,12 @@ class IncidentParser:
         Ordered by date (newest first), then by hash for determinism.
         """
         # Get all commits with subject and first line of body
+        # Fields are separated by US (\x1f) and records by RS (\x1e), so multi-line
+        # bodies and '|' characters in bodies cannot split a record apart.
         try:
             output = self._run_git(
                 "log",
-                "--format=%H|%h|%s|%b|%cI",  # full hash | short hash | subject | body | date
+                "--format=%H%x1f%h%x1f%s%x1f%b%x1f%cI%x1e",  # full | short | subject | body | date
                 "--all",
                 check=False,
             )
@@ -222,17 +224,16 @@ class IncidentParser:
         incidents = []
         seen_hashes = set()
 
-        for line in output.split('\n'):
-            if not line.strip():
+        for record in output.split('\x1e'):
+            if not record.strip():
                 continue
 
-            parts = line.split('|', 4)
-            if len(parts) < 4:
+            parts = record.lstrip('\n').split('\x1f', 4)
+            if len(parts) < 5:
                 continue
 
             full_hash, short_hash, subject, body, date_iso = (
-                parts[0], parts[1], parts[2], parts[3],
-                parts[4] if len(parts) > 4 else ""
+                parts[0], parts[1], parts[2], parts[3], parts[4].strip()
             )
 
             # Skip duplicates
@@ -254,11 +255,12 @@ class IncidentParser:
             resolution = self._extract_resolution(body)
             source_ref = self._extract_source_ref(subject, short_hash)
 
-            # Parse date for sorting
+            # Parse date for sorting. Never fall back to the wall clock: a clock
+            # value changes between runs and makes the order nondeterministic.
             try:
                 date_obj = datetime.fromisoformat(date_iso.replace("Z", "+00:00"))
             except (ValueError, AttributeError):
-                date_obj = datetime.now(timezone.utc)
+                date_obj = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
             incidents.append({
                 'hash': short_hash,
