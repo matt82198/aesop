@@ -257,7 +257,24 @@ class TestPrePushGate(unittest.TestCase):
             ["git"] + list(args), cwd=str(repo),
             capture_output=True, text=True, encoding="utf-8", timeout=120)
 
-    def make_repo(self, changed_path, name="repo"):
+    def publish_gate_base(self, repo, skip=()):
+        """Gate code is judged from origin/main:tools (hook gate_base_dir).
+
+        Publish the real tools/ tree (minus `skip`) as the fixture's origin/main."""
+        base = Path(str(repo) + ".base")
+        if base.exists():
+            shutil.rmtree(base)
+        shutil.copytree(REPO_ROOT / "tools", base / "tools",
+                        ignore=shutil.ignore_patterns("__pycache__", *skip))
+        self.git(base, "init", "-q", "-b", "main")
+        self.git(base, "config", "user.email", "test@example.com")
+        self.git(base, "config", "user.name", "Test User")
+        self.git(base, "add", "-A")
+        self.git(base, "commit", "-q", "-m", "base tools")
+        self.git(repo, "remote", "add", "origin", str(base))
+        self.git(repo, "fetch", "-q", "origin", "main")
+
+    def make_repo(self, changed_path, name="repo", base_skip=()):
         """Fixture repo: one base commit, then one commit touching changed_path."""
         repo = self.tmp / name
         (repo / Path(changed_path).parent).mkdir(parents=True, exist_ok=True)
@@ -272,6 +289,7 @@ class TestPrePushGate(unittest.TestCase):
         self.git(repo, "add", "-A")
         self.git(repo, "commit", "-q", "-m", "change")
         head = self.git(repo, "rev-parse", "HEAD").stdout.strip()
+        self.publish_gate_base(repo, skip=base_skip)
         return repo, base, head
 
     def run_gate(self, repo, stdin_text, env=None):
@@ -336,7 +354,7 @@ class TestPrePushGate(unittest.TestCase):
         self.assertEqual(self.run_gate(repo, tuple_text).returncode, 0)
 
     def test_missing_tool_fails_open(self):
-        repo, base, head = self.make_repo("tools/INDEX.md", "gen6")
+        repo, base, head = self.make_repo("tools/INDEX.md", "gen6", base_skip=("generated_paths.py",))
         empty_root = self.tmp / "no-aesop"
         (empty_root / "state").mkdir(parents=True)
         res = self.run_gate(repo, self.tuple_for(base, head),

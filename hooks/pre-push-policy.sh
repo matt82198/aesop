@@ -607,8 +607,6 @@ get_commit_range() {
 }
 
 check_secret_scan() {
-  local gate_dir
-  gate_dir=$(gate_base_dir) || { gate_base_block "check_secret_scan"; return 1; }
   # tools/secret_scan.py is Python-3-only: resolve python3 BEFORE python
   # (mirrors daemons/*.sh and resolve_py_bin's own order) so a host where
   # `python` == Python 2 doesn't crash the scanner instead of running it.
@@ -646,8 +644,19 @@ check_secret_scan() {
     return 0
   fi
 
+  if [ $parse_exit_code -ne 0 ] || [ -z "$commit_ranges" ]; then
+    # Malformed stdin: fail-CLOSED (security P1 fix)
+    # Only fail-open for missing scanner tool, not for malformed input
+    # rc=1 is returned for malformed tuples (e.g., 3-field lines), which must fail-closed
+    log_block "secret_scan_stdin_parse_failed"
+    printf 'Error: Could not parse pre-push stdin for commit range (malformed tuple)\n' >&2
+    return 1
+  fi
+
   local aesop_root
   aesop_root=$(resolve_aesop_root)
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_secret_scan"; return 1; }
   local scan_script="$gate_dir/tools/secret_scan.py"
 
   if [ ! -f "$scan_script" ] || [ ! -x "$scan_script" ]; then
@@ -657,14 +666,6 @@ check_secret_scan() {
     return 1
   fi
 
-  if [ $parse_exit_code -ne 0 ] || [ -z "$commit_ranges" ]; then
-    # Malformed stdin: fail-CLOSED (security P1 fix)
-    # Only fail-open for missing scanner tool, not for malformed input
-    # rc=1 is returned for malformed tuples (e.g., 3-field lines), which must fail-closed
-    log_block "secret_scan_stdin_parse_failed"
-    printf 'Error: Could not parse pre-push stdin for commit range (malformed tuple)\n' >&2
-    return 1
-  fi
 
   local overall_exit_code=0
   local range
