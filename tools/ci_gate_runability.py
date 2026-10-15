@@ -270,6 +270,12 @@ def parse_yaml_line_by_line(content: str) -> Dict:
                 i = _apply_step_prop(step, rest, indent + 2, lines, i)
             continue
 
+        # `with: path:` of a step (checkout destination) sits four columns inside the marker.
+        if in_steps and step is not None and marker_indent is not None and indent == marker_indent + 4 \
+                and stripped.startswith("path:"):
+            step["checkout_path"] = stripped.partition(":")[2].strip() or None
+            continue
+
         # Step properties sit exactly two columns inside the marker.
         if in_steps and step is not None and marker_indent is not None and indent == marker_indent + 2:
             i = _apply_step_prop(step, stripped, indent, lines, i)
@@ -410,6 +416,15 @@ def find_file_on_disk(repo_root: str, pattern: str) -> bool:
     return abs_path.exists()
 
 
+def _strip_checkout_root(file_path: str, checkout_roots) -> str:
+    """Map `<checkout path>/x` to `x` when a checkout step of the same job lands there."""
+    for root in checkout_roots:
+        prefix = root.strip("/") + "/"
+        if prefix != "/" and file_path.startswith(prefix):
+            return file_path[len(prefix):]
+    return file_path
+
+
 def check_jobs(repo_root: str, workflow_path: str, jobs: Dict) -> List[str]:
     """Checks (a), (b) and (c) over one parsed workflow."""
     findings = []
@@ -422,6 +437,11 @@ def check_jobs(repo_root: str, workflow_path: str, jobs: Dict) -> List[str]:
                 f"Job '{job_name}' has PR-excluding if condition: {job_info['if_condition']}"
             )
 
+        # Destinations of this job's checkout steps (`with: path:`). A file under one is
+        # the checked-out tree of another ref (the verify-receipt job's `base/` is origin/main);
+        # it is resolved against the repo tree, which is that same ref for the gate's own checkout.
+        checkout_roots = [s["checkout_path"] for s in job_info['steps'] if s.get("checkout_path")]
+
         for step in job_info['steps']:
             step_name = step['name'] or '(unnamed)'
             run_text = step['run'] or ''
@@ -429,7 +449,7 @@ def check_jobs(repo_root: str, workflow_path: str, jobs: Dict) -> List[str]:
             # Check (c): every script the step invokes exists. Runs for every step,
             # over the whole run text, so a multi-file step cannot hide a missing file.
             for file_path in extract_script_paths(strip_shell_comments(run_text)):
-                if not find_file_on_disk(repo_root, file_path):
+                if not find_file_on_disk(repo_root, _strip_checkout_root(file_path, checkout_roots)):
                     findings.append(
                         f"{workflow_path}:{step['line']}: "
                         f"Step '{step_name}' references missing file: {file_path}"

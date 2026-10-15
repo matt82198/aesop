@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Linux shape checker — detect platform-specific failures via WSL before push.
+Linux shape checker -- detect platform-specific failures via WSL before push.
 INDEX: Linux shape check (cross-platform test runner, detects Windows-only red CI via WSL)
 
 Runs shell, Node, and workflow tests under WSL to catch platform-specific failures
@@ -15,10 +15,12 @@ Trigger rules:
   - Node: wsl bash -lc '... node --import ./tests/helpers/isolated-env.mjs --test <files>' + USERPROFILE unset
 
 Exit contract:
-  - Range without shell/node changes → exit 0 (skipped)
-  - With changes + WSL unavailable → print NOTICE + exit 0 (CI remains gate)
-  - With changes + WSL unavailable + AESOP_REQUIRE_LINUX_SHAPE=1 → exit 1
-  - With changes + WSL available + suite fails → exit 1 (with Linux output)
+  - Range without shell/node changes -> exit 0 (skipped)
+  - Non-Windows host -> run_native_leg runs the suites natively; WSL is never probed
+  - Windows, WSL probe error (wsl_status WSL_ERROR) -> exit 1 (fail closed)
+  - With changes + WSL unavailable -> print NOTICE + exit 0 (CI remains gate)
+  - With changes + WSL unavailable + AESOP_REQUIRE_LINUX_SHAPE=1 -> exit 1
+  - With changes + WSL available + suite fails -> exit 1 (with Linux output)
   - Mocked/test invocation: honesty on success/failure
 
 CLI:
@@ -83,7 +85,7 @@ def wsl_status() -> str:
     if result.returncode != 0:
         return WSL_ERROR
     # wsl.exe -l -q returns UTF-16LE (with BOM), not UTF-8: strip BOM and NULs
-    output_text = result.stdout.decode('utf-16-le', errors='replace').replace("﻿", "").replace("\x00", "")
+    output_text = result.stdout.decode('utf-16-le', errors='replace').replace("\ufeff", "").replace("\x00", "")
     distros = [d.strip() for d in output_text.splitlines() if _looks_like_distro_name(d.strip())]
     if not distros:
         return WSL_NO_DISTRO

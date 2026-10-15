@@ -23,9 +23,12 @@ is measured, the hosted re-run can become a sample instead of a tax.
 `tools/emit_receipt.py --post` on every push, once every gate above it has passed (see
 hooks/CLAUDE.md item 16). A day-1 measurement of the manual-only design found 41 merged
 PRs and ZERO receipts — lanes were never told to run the emitter and nothing ran it for
-them, so the honesty signal had no data. The hook step is ALWAYS fail-open: a missing
-tool/python/`gh`/signing-key, or a red matrix part, prints a one-line WARN and never
-blocks the push. `AESOP_RECEIPT_EMIT=0` opts out entirely. Manual invocation still works
+them, so the honesty signal had no data. The hook is a CONCLUSION GATE: a red required
+part (emitter exit 3 under `--fail-on-red`) or an unreadable conclusion (timeout, any other
+emitter exit) blocks the push, and the failure receipt is still posted as the trace; a
+missing tool/python/`gh`/signing-key (matrix never ran) still WARNs and proceeds, and a
+skipped-with-reason part never blocks. `AESOP_PUSH_RED=1` is the one recorded emergency
+override (emitter exit 4; the receipt is stamped `pushed_red: true`). `AESOP_RECEIPT_EMIT=0` opts out entirely. Manual invocation still works
 the same way, e.g. for a `--dry-run` preview or a narrower `--matrix`:
 
 ```
@@ -152,6 +155,20 @@ checked against the registered key whose key_id (`sha256(pem)[:16]`) equals `sig
 signature must still verify under that key. Provisioning a new box: generate its private key
 to `~/.aesop/receipt_key.pem` (outside any checkout) with `generate_ed25519_keypair`, then
 commit its public key as `tools/receipt_pubkeys/<name>-<key_id>.pub`. Never commit a private key.
+
+**Key rotation (base trust).** The verifier and keyring the Action uses come from the BASE tree
+(`base.sha`, or `main` on `workflow_dispatch`), never from the PR head: a PR that registers a
+signer key in its own checkout cannot make a receipt signed by that key verify (adversarial
+finding on #970). So adding or rotating a key is a two-step flow:
+
+1. Land the key in its own PR (`tools/receipt_pubkeys/<name>-<key_id>.pub`, or the rotated
+   `tools/receipt_pubkey.pub`) and merge it to `main`.
+2. Only after that merge do receipts signed by the new key verify. Until then such a receipt is
+   `INVALID` ("signature: does not verify under ed25519") on every PR, including the key's own PR.
+
+`verify_receipt.py --keyring DIR` names the registered-keys directory explicitly (the Action passes
+`base/tools/receipt_pubkeys`). An empty `--required` list is refused (exit 2) unless the deliberate
+local-only flag `--allow-no-required-parts` is given; CI never passes it.
 
 ## Trust boundary — what a valid receipt proves, and what it does not
 

@@ -323,5 +323,85 @@ class TestCliDryRunAndPost(unittest.TestCase):
             self.assertEqual(code, 2)
 
 
+class TestRedGateExitCodes(unittest.TestCase):
+    """--fail-on-red / --pushed-red: the exit code the pre-push hook reads (docs/RECEIPT-GATE.md).
+
+    0 = green (or red without --fail-on-red: legacy contract), 3 = red and blocked,
+    4 = red, override accepted, receipt stamped pushed_red: true. Red is any part exit != 0;
+    skipped parts (reason printed, never in `parts`) never make a receipt red.
+    """
+
+    OK = [sys.executable, "-c", "print('Ran 2 tests in 0.00s')"]
+    BAD = [sys.executable, "-c", "import sys; print('FAILED one'); sys.exit(1)"]
+
+    def _registry(self, red):
+        return {"py-shard-0": emit.PartSpec(lambda repo: self.OK),
+                "py-shard-1": emit.PartSpec(lambda repo: self.BAD if red else self.OK),
+                "browser-proofs": emit.PartSpec(None, "not runnable here: hosted browsers only")}
+
+    def _run(self, tmp, red, extra):
+        posted = []
+
+        def gh(args):
+            # The check-run payload file is deleted after the call: capture its JSON while it exists.
+            if "--input" in args:
+                posted.append(json.loads(Path(args[-1]).read_text(encoding="utf-8")))
+            return (0, "{}", "")
+
+        repo = _mk_repo(tmp)
+        out = Path(tmp) / "env.json"
+        argv = ["--repo", str(repo), "--matrix", "py-shard-0,py-shard-1,browser-proofs", "--scheme", "hmac-sha256",
+                "--slug", "o/r", "--post", "--out", str(out)] + extra
+        code = emit.main(argv, registry=self._registry(red), gh_runner=gh,
+                         environ={"AESOP_RECEIPT_HMAC_SECRET": _hmac_secret()})
+        return code, json.loads(out.read_text(encoding="utf-8")), posted
+
+    def test_red_required_part_blocks_with_exit_3_and_still_posts_failure_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, env_json, posted = self._run(tmp, red=True, extra=["--fail-on-red"])
+        self.assertEqual(code, 3)
+        # The red record is still published: the trace of the red push attempt survives.
+        self.assertEqual(len(posted), 1)
+        self.assertEqual(posted[0]["conclusion"], "failure")
+        self.assertNotIn("pushed_red", env_json["receipt"])
+
+    def test_all_green_is_allowed_exit_0(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, env_json, posted = self._run(tmp, red=False, extra=["--fail-on-red"])
+        self.assertEqual(code, 0)
+        self.assertEqual(posted[0]["conclusion"], "success")
+        self.assertNotIn("pushed_red", env_json["receipt"])
+
+    def test_skipped_with_reason_is_not_red_exit_0(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, env_json, _ = self._run(tmp, red=False, extra=["--fail-on-red"])
+        self.assertEqual(code, 0)
+        self.assertEqual([s["name"] for s in env_json["receipt"]["skipped"]], ["browser-proofs"])
+
+    def test_red_without_fail_on_red_keeps_legacy_exit_0(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, _, _ = self._run(tmp, red=True, extra=[])
+        self.assertEqual(code, 0)
+
+    def test_pushed_red_override_exit_4_and_stamps_signed_field(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, env_json, _ = self._run(tmp, red=True, extra=["--fail-on-red", "--pushed-red"])
+        self.assertEqual(code, 4)
+        self.assertIs(env_json["receipt"]["pushed_red"], True)
+        # The stamp is inside the signed bytes: the signature verifies over the stamped receipt...
+        self.assertTrue(rc.verify_signature(rc.canonical_json(env_json["receipt"]), env_json["sig"],
+                                            hmac_secret=_hmac_secret()))
+        # ...and flipping it breaks the signature (it is not a free-floating label).
+        tampered = dict(env_json["receipt"], pushed_red=False)
+        self.assertFalse(rc.verify_signature(rc.canonical_json(tampered), env_json["sig"],
+                                             hmac_secret=_hmac_secret()))
+
+    def test_pushed_red_on_green_is_exit_0_without_stamp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code, env_json, _ = self._run(tmp, red=False, extra=["--fail-on-red", "--pushed-red"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("pushed_red", env_json["receipt"])
+
+
 if __name__ == "__main__":
     unittest.main()
