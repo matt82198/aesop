@@ -221,10 +221,37 @@ function checkDirectories() {
 }
 
 // Check git pre-push hook installed
+// Resolve the hooks directory the way git does. In a linked worktree .git is a FILE
+// ("gitdir: <primary>/.git/worktrees/<name>") and hooks live in the common dir; core.hooksPath
+// moves them elsewhere. `git rev-parse --git-path hooks` honours both; `--git-common-dir`
+// is the fallback. If git cannot answer, return the git error (the caller FAILs closed).
+function resolveHooksDir() {
+  const runGit = (args) => spawnSync('git', args, {
+    cwd: CURRENT_DIR,
+    encoding: 'utf8',
+    timeout: 5000
+  });
+  const firstLine = (res) => ((res.stderr || '').trim() || (res.error && res.error.message) || '').split('\n')[0];
+
+  const hooksPath = runGit(['rev-parse', '--git-path', 'hooks']);
+  if (hooksPath.status === 0 && hooksPath.stdout.trim()) {
+    return { dir: path.resolve(CURRENT_DIR, hooksPath.stdout.trim()) };
+  }
+  const commonDir = runGit(['rev-parse', '--git-common-dir']);
+  if (commonDir.status === 0 && commonDir.stdout.trim()) {
+    return { dir: path.resolve(CURRENT_DIR, commonDir.stdout.trim(), 'hooks') };
+  }
+  return { error: firstLine(hooksPath) || firstLine(commonDir) || 'git rev-parse failed' };
+}
+
 function checkPrePushHook() {
-  const hookPath = path.join(CURRENT_DIR, '.git', 'hooks', 'pre-push');
+  const resolved = resolveHooksDir();
+  if (resolved.error) {
+    return { passed: false, hint: `Could not resolve git hooks directory: ${resolved.error}` };
+  }
+  const hookPath = path.join(resolved.dir, 'pre-push');
   const passed = fs.existsSync(hookPath);
-  const hint = passed ? '' : 'Pre-push hook not installed at .git/hooks/pre-push';
+  const hint = passed ? '' : `Pre-push hook not installed at ${hookPath}`;
   return { passed, hint };
 }
 

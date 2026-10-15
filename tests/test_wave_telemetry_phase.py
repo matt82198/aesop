@@ -82,6 +82,11 @@ class WaveTelemetryPhaseCase(unittest.TestCase):
             config = importlib.import_module("config")
             config.reload()
             wave_telemetry = importlib.import_module("wave_telemetry")
+            # wave_telemetry binds `config` once, at its own import. A sibling test
+            # (test_wave_dispatch_agents_parity) deletes sys.modules["config"] and
+            # re-imports it, so a cached wave_telemetry can hold a stale config that
+            # still points at the repo state dir. Reload the module the code reads.
+            wave_telemetry.config.reload()
             telemetry = wave_telemetry.get_wave_telemetry(now=reference_now)
         finally:
             sys.path.remove(str(UI_PATH))
