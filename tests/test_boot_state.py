@@ -215,6 +215,46 @@ class BootStateTests(unittest.TestCase):
         self.assertEqual(r.stdout, "")
         self.assertFalse(missing.exists(), "a read must not create the state dir")
 
+    # --- state root resolution: AESOP_STATE_ROOT beats <repo>/state -----------
+    def _seed_goal_at(self, state_dir, goal):
+        state_dir.mkdir(parents=True, exist_ok=True)
+        with StateAPI(resolve_db_path(state_dir, "tracker")) as api:
+            goal_state.record_goal(api, goal, phase="build", next_action="read the right store", refs=[])
+
+    def test_env_state_root_is_read_not_stale_repo_state(self):
+        # Live store lives at AESOP_STATE_ROOT; a stale <repo>/state store also exists.
+        # With no --state-dir, the brief must read the env-configured store only.
+        fixture = Path(self._tmp.name) / "fixture-store"
+        self._seed_goal_at(fixture, "Fixture goal from env root")
+        self._seed_goal_at(self.repo / "state", "STALE goal in repo state")
+        env = dict(os.environ)
+        env["AESOP_STATE_ROOT"] = str(fixture)
+        env["AESOP_TASK_EVENTS_JSONL"] = str(self.jsonl)
+        r = subprocess.run(
+            [sys.executable, str(TOOL), "--repo", str(self.repo), "--jsonl", str(self.jsonl)],
+            capture_output=True, encoding="utf-8", errors="replace", env=env, timeout=60,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("GOAL: Fixture goal from env root", r.stdout)
+        self.assertNotIn("STALE goal in repo state", r.stdout)
+
+    def test_state_dir_flag_beats_env_state_root(self):
+        flag_store = Path(self._tmp.name) / "flag-store"
+        env_store = Path(self._tmp.name) / "env-store"
+        self._seed_goal_at(flag_store, "Goal from the flag store")
+        self._seed_goal_at(env_store, "Goal from the env store")
+        env = dict(os.environ)
+        env["AESOP_STATE_ROOT"] = str(env_store)
+        env["AESOP_TASK_EVENTS_JSONL"] = str(self.jsonl)
+        r = subprocess.run(
+            [sys.executable, str(TOOL), "--repo", str(self.repo), "--state-dir", str(flag_store),
+             "--jsonl", str(self.jsonl)],
+            capture_output=True, encoding="utf-8", errors="replace", env=env, timeout=60,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("GOAL: Goal from the flag store", r.stdout)
+        self.assertNotIn("env store", r.stdout)
+
     # --- INGEST line: the brief ingests first and reports freshness ----------
     def _write_jsonl(self, lines, trailing_newline=True):
         body = "\n".join(lines) + ("\n" if trailing_newline else "")
