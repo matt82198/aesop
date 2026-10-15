@@ -39,6 +39,38 @@ import generated_paths  # noqa: E402
 from subprocess_common import gh, git, json_output, run
 
 
+def halt_reason():
+    """Return None when the box is not halted, else the active halt's reason. Fails closed.
+
+    Mirrors merge_train.halt_status() and merge_queue._halt_status(): consults the
+    box-wide .HALT that `halt.py set` writes and the checkout-scoped one via
+    halt.active_halt(). halt.py is imported here, not at module load, so an import
+    failure reads as HALTED at call time instead of breaking the whole tool.
+    """
+    try:
+        import halt as halt_module
+    except Exception as exc:  # any import failure must halt
+        return 'halt module unimportable (%s: %s)' % (type(exc).__name__, exc)
+    try:
+        active = halt_module.active_halt()
+    except Exception as exc:  # any reader failure must halt, never clear
+        return 'halt state unreadable (%s: %s)' % (type(exc).__name__, exc)
+    if active is None:
+        return None
+    label, info = active
+    reason = (info or {}).get('reason', '(unknown)')
+    return '%s [%s]' % (reason, label)
+
+
+def refuse_if_halted():
+    """True, with a stderr line naming the reason, when the box is halted. Callers stop on True."""
+    reason = halt_reason()
+    if reason is None:
+        return False
+    print('auto_merge.py: HALTED: %s' % reason, file=sys.stderr)
+    return True
+
+
 def get_open_prs():
     r = gh(['pr', 'list', '--state', 'open', '--limit', '50',
             '--json', 'number,title,headRefName'])
@@ -181,6 +213,10 @@ def main():
                         help='Seconds to wait for CI between loop rounds (default 180)')
     args = parser.parse_args()
 
+    # Box-wide kill switch first: a halted box makes no GitHub call and writes nothing to origin.
+    if refuse_if_halted():
+        return 1
+
     # Fail-closed: require explicit PR number(s) or --all flag
     if not args.pr_numbers and not args.all:
         print('auto_merge.py: error: must specify PR number(s) or use --all flag', file=sys.stderr)
@@ -220,6 +256,9 @@ def main():
                     round_results.append((num, 'MERGE', 'dry-run', title))
                     merged += 1
                 else:
+                    # Re-check before every merge: a halt set mid-run must stop the next merge.
+                    if refuse_if_halted():
+                        return 1
                     ok, msg = merge_pr(num)
                     round_results.append((num, 'MERGED' if ok else 'FAIL', msg, title))
                     if ok:
@@ -231,6 +270,9 @@ def main():
                     round_results.append((num, 'FIX', f'dry-run ({detail})', title))
                     fixed += 1
                 else:
+                    # fix_branch pushes to origin: re-check the kill switch before writing.
+                    if refuse_if_halted():
+                        return 1
                     ok, msg = fix_branch(branch)
                     round_results.append((num, 'FIXED' if ok else 'FAIL', msg, title))
                     if ok:
