@@ -100,13 +100,14 @@ def find_gate_invocations(workflows_dir):
         #  - python tools/ci_gate_runability.py
         #  - run: python tools/verify_test_coverage.py
         #  - bash tools/run_shell_tests.sh
+        #  - python base/tools/verify_receipt.py   (base-pinned checkout, verify-receipt.yml)
 
         # Match "python <path>/tool_name.py" or similar
         for pattern in [
-            r'python\s+tools/([a-z_][a-z0-9_]*\.py)',
-            r'bash\s+tools/([a-z_][a-z0-9_]*\.sh)',
+            r'python\s+(?:base/)?tools/([a-z_][a-z0-9_]*\.py)',
+            r'bash\s+(?:base/)?tools/([a-z_][a-z0-9_]*\.sh)',
             r'bash\s+([a-z_][a-z0-9_]*\.sh)',
-            r'run:\s*python\s+tools/([a-z_][a-z0-9_]*\.py)',
+            r'run:\s*python\s+(?:base/)?tools/([a-z_][a-z0-9_]*\.py)',
         ]:
             for match in re.finditer(pattern, content):
                 tool_name = match.group(1)

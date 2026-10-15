@@ -115,6 +115,19 @@ class TestVerifyGatesWired(unittest.TestCase):
         self.assertIn('test_gate_2.py', stderr)
         self.assertIn('Unwired', stderr)
 
+    def test_base_pinned_invocation_counts_as_wired(self):
+        """Test: a workflow running the base-tree copy (python base/tools/<gate>) still wires the gate."""
+        self._make_test_structure(
+            self.test_dir,
+            gates_in_claudemd=['test_gate_1.py'],
+            gates_wired_in_ci=[]
+        )
+        wf = os.path.join(self.test_dir, '.github', 'workflows', 'verify-receipt.yml')
+        with open(wf, 'w', encoding='utf-8') as f:
+            f.write("name: V\n\njobs:\n  v:\n    steps:\n      - run: python base/tools/test_gate_1.py --check\n")
+        rc, stdout, stderr = self._run_gate(self.test_dir)
+        self.assertEqual(rc, 0, f"Expected exit 0 for base-pinned invocation. stderr: {stderr}")
+
     def test_verify_gates_mandatory_ci_pattern(self):
         """Test: verify_*.py gates in mandatory CI gates section are captured."""
         gates = ['verify_dash.py', 'verify_submit_encoding.py']
