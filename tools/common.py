@@ -34,6 +34,7 @@ Constants:
     Multi-instance coordination requires all instances to point to the same file.
 """
 
+import json
 import os
 import time
 from pathlib import Path
@@ -44,15 +45,41 @@ from pathlib import Path
 STATE_DB_FILENAME = "tracker_events.db"
 
 
+def _config_state_root():
+    """Return the state_root from aesop.config.json, or None.
+
+    The config file lives in AESOP_ROOT (env) or the cwd, the same place the
+    ui/config.py loader reads it. A relative state_root resolves against that
+    config file's directory, not the process cwd (ui/config.py parity).
+    """
+    base = Path(os.environ["AESOP_ROOT"]) if os.environ.get("AESOP_ROOT") else Path.cwd()
+    try:
+        with open(base / "aesop.config.json", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    value = data.get("state_root") if isinstance(data, dict) else None
+    if not isinstance(value, str) or not value.strip():
+        return None
+    path = Path(value).expanduser()
+    return path if path.is_absolute() else base / path
+
+
 def get_state_dir():
-    """Resolve state directory from env var or current working directory.
+    """Resolve state directory: env > aesop.config.json state_root > cwd default.
+
+    Precedence matches ui/config.py (env AESOP_STATE_ROOT > config state_root), so
+    the dashboard and the tools read the same directory when a config is present.
 
     Returns:
-        Path: Directory path for state files. Either from AESOP_STATE_ROOT env var
-              or defaults to ./state relative to cwd.
+        Path: Directory path for state files. Either from AESOP_STATE_ROOT env var,
+              the config state_root, or defaults to ./state relative to cwd.
     """
     if os.environ.get("AESOP_STATE_ROOT"):
         return Path(os.environ["AESOP_STATE_ROOT"])
+    configured = _config_state_root()
+    if configured is not None:
+        return configured
     # Default to ./state (relative to cwd)
     return Path.cwd() / "state"
 
