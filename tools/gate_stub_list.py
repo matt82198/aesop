@@ -19,8 +19,9 @@ Algorithm (stdlib-only, regex over the shell source -- no bash execution):
      check_* functions).
   2. Within a body, find `local <var>="$aesop_root/tools/<script>.py"`
      assignments (the uniform script-path pattern every gate uses).
-  3. Within the same body, find `gate_tool_status "$aesop_root" "$<var>"`
-     calls -- this is the fail-closed resolution path (see hooks/CLAUDE.md
+  3. Within the same body, find `gate_tool_status "$aesop_root" "$<var>"` (or
+     `"$gate_dir"` for gates routed through the BASE gate copy) calls -- this is
+     the fail-closed resolution path (see hooks/CLAUDE.md
      "Gate tool resolution (fail-closed)"). Only script vars actually passed
      to gate_tool_status matter: some checks (check_claudemd_headroom,
      check_generated_paths) fail OPEN on a missing script by design and must
@@ -40,7 +41,7 @@ VAR_ASSIGN_RE = re.compile(
     r'local\s+(\w+)\s*=\s*"\$(?:aesop_root|gate_dir)/tools/([A-Za-z0-9_]+)\.py"'
 )
 GATE_TOOL_STATUS_RE = re.compile(
-    r'gate_tool_status\s+"\$aesop_root"\s+"\$(\w+)"'
+    r'gate_tool_status\s+"\$(?:aesop_root|gate_dir)"\s+"\$(\w+)"'
 )
 
 
