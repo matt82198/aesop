@@ -34,9 +34,11 @@ Options:
   --update-baseline: Regenerate baseline from current violations (CI must never use)
 """
 import ast
+import io
 import json
 import re
 import sys
+import tokenize
 from pathlib import Path
 
 
@@ -159,6 +161,60 @@ def tracker_raw_write_sites(source):
     return sorted(set(lines))
 
 
+def _byte_col_to_char(line, byte_col):
+    """Convert an ast (UTF-8 byte) column into a character index for `line`."""
+    return len(line.encode("utf-8")[:byte_col].decode("utf-8", errors="ignore"))
+
+
+def python_code_view(source):
+    """Return `source` with docstrings and comments blanked to spaces.
+
+    Line count and column positions are preserved, so the regex patterns below only
+    ever match code and non-docstring string literals: a state path named in a module,
+    class or function docstring, or in a ``#`` comment, is documentation, not an access.
+    Real accesses (open/Path/os calls, any other string literal) are left intact.
+
+    Falls back to the raw source when the file cannot be parsed or tokenized, so a
+    broken file keeps the old (stricter) raw-text detection instead of hiding accesses.
+    """
+    try:
+        tree = ast.parse(source)
+        lines = source.split("\n")
+        spans = []  # (start_row, start_char, end_row, end_char); end is exclusive
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not node.body:
+                continue
+            first = node.body[0]
+            if not (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                    and isinstance(first.value.value, str)):
+                continue
+            s_line = lines[first.lineno - 1]
+            e_line = lines[first.end_lineno - 1]
+            spans.append((
+                first.lineno,
+                _byte_col_to_char(s_line, first.col_offset),
+                first.end_lineno,
+                _byte_col_to_char(e_line, first.end_col_offset),
+            ))
+        for tok in tokenize.generate_tokens(io.StringIO(source).readline):
+            if tok.type == tokenize.COMMENT:
+                row, col = tok.start
+                spans.append((row, col, row, len(lines[row - 1])))
+    except Exception:
+        return source
+
+    grid = [list(line) for line in lines]
+    for r1, c1, r2, c2 in spans:
+        for row in range(r1, r2 + 1):
+            start = c1 if row == r1 else 0
+            end = c2 if row == r2 else len(grid[row - 1])
+            for col in range(start, min(end, len(grid[row - 1]))):
+                grid[row - 1][col] = " "
+    return "\n".join("".join(row) for row in grid)
+
+
 def find_direct_opens(repo_root):
     """Scan repo for direct opens/writes of protected state files outside the API.
 
@@ -235,17 +291,12 @@ def find_direct_opens(repo_root):
             if "from state_store import StateAPI" in content or "from state_store import (" in content and "StateAPI" in content:
                 continue
 
-            # Scan for violations
-            for line_num, line in enumerate(content.split("\n"), 1):
+            # Scan for violations over the code view: docstrings and comments are blanked
+            # (AST/tokenize-aware), so only code and non-docstring string literals match.
+            for line_num, line in enumerate(python_code_view(content).split("\n"), 1):
                 # Check read violations
                 for pattern, pattern_id in read_patterns:
                     if re.search(pattern, line):
-                        # Additional filter: skip comment lines and string literals in docstrings
-                        if line.strip().startswith("#"):
-                            continue
-                        if '"""' in line or "'''" in line:
-                            continue
-
                         # Key is file@pattern-id (stable across line edits)
                         # Use posix separators for cross-platform consistency
                         violation_key = f"{relative_path.as_posix()}@{pattern_id}"
@@ -256,12 +307,6 @@ def find_direct_opens(repo_root):
                 # Check write violations
                 for pattern, pattern_id in write_patterns:
                     if re.search(pattern, line):
-                        # Skip comment lines and docstrings
-                        if line.strip().startswith("#"):
-                            continue
-                        if '"""' in line or "'''" in line:
-                            continue
-
                         violation_key = f"{relative_path.as_posix()}@{pattern_id}"
                         if violation_key not in violations:
                             violations.append(violation_key)

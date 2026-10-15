@@ -122,6 +122,8 @@ class GateFixture(unittest.TestCase):
         git(self.repo, "add", "-A")
         git(self.repo, "commit", "-q", "-m", "base")
         self.base = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        # Gate code is judged from origin/main:tools (hook gate_base_dir): the base commit is origin/main.
+        git(self.repo, "update-ref", "refs/remotes/origin/main", self.base)
 
         # The lane's tool must sort AFTER main's: git's union keeps ours (the
         # lane) then theirs (main) for the one conflicting hunk, so lane=gamma
@@ -336,6 +338,8 @@ class TestAutoCRLFNormalization(unittest.TestCase):
         git(self.repo, "add", "-A")
         git(self.repo, "commit", "-q", "-m", "base with alpha")
         self.base = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        # Gate code is judged from origin/main:tools (hook gate_base_dir): the base commit is origin/main.
+        git(self.repo, "update-ref", "refs/remotes/origin/main", self.base)
 
     def tearDown(self):
         git(self.repo, "worktree", "prune")

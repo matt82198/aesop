@@ -18,6 +18,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from tests.helpers import publish_origin_main_tools  # noqa: E402
+
 
 def _find_bash():
     """Locate a usable bash cross-platform.
@@ -544,6 +547,13 @@ class TestPrePushHookWiring(_PushRangeFixture, unittest.TestCase):
     it with no arguments. This drives the real `check_import_resolution` bash
     function with simulated git pre-push stdin.
     """
+
+    def setUp(self):
+        super().setUp()
+        # The hook reads gate CODE from origin/main:tools (fail-closed), so the
+        # fixture remote must carry the real tools/ tree.
+        base = publish_origin_main_tools(self.repo_root)
+        self.addCleanup(shutil.rmtree, str(base), True)
 
     def _run_hook_check(self, stdin_text):
         bash = _find_bash()

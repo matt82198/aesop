@@ -9,20 +9,15 @@ Rows marked (inferred) were classified from the commit subject because the commi
 - **ci-drift** (1, 1 inferred): CI workflow state out of sync (missing deps, env setup, tools)
 - **conflict** (21, 21 inferred): Merge/rebase conflict, module shadowing, unintended override
 - **doc-invented** (2, 2 inferred): Documentation made unverifiable claims, hallucinated counts or proofs
-- **environment-shape** (2): defect caused by host or runner shape rather than logic: 8.3 vs resolved Windows paths, linked-worktree .git files, hooks dir resolution, WSL/distro absence; detector = the fix only changes path/platform resolution
-- **fake-green** (2, 1 inferred): Tests reported green but never ran or skipped real validation
+- **fake-green** (1, 1 inferred): Tests reported green but never ran or skipped real validation
 - **flake** (4, 4 inferred): Test timing/race condition, deflake required, logical time or retry
-- **gate-activation** (3, 3 inferred): Pre-push secret/verification gate caught an escape or bypass
+- **gate-activation** (4, 3 inferred): Pre-push secret/verification gate caught an escape or bypass
 - **stall** (4, 4 inferred): Agent/process hung or deadlocked, watchdog detected, restart required
-- **test-pollution** (7, 5 inferred): Test config leaked between shards, state not isolated, mock pollution
+- **test-pollution** (5, 5 inferred): Test config leaked between shards, state not isolated, mock pollution
 
 | Class | What Happened | Resolution | Source |
 | --- | --- | --- | --- |
-| test-pollution | test(isolation): parity test restores sys.modules config/agents/wav... | tests/test_wave_dispatch_agents_parity.py deleted sys.modules['conf... | PR #1004 |
-| test-pollution | keep baseline-liveness prune output out of CI logs; guard tracked r... | The reported incident (PR #970 ci (1) log: "removed widget.py:50 / ... | PR #1003 |
-| environment-shape | resolve pre-push hooks dir via git (worktrees + core.hooksPath) | * fix(health-score): resolve pre-push hooks dir via git (worktrees ... | PR #1002 |
-| environment-shape | pre-push hook check resolves hooks via git (worktrees, core.hooksPath) | * fix(doctor): pre-push hook check resolves hooks dir via git (work... | PR #1000 |
-| fake-green | fail-closed incident classification via commit trailer | * fix(tools): fail-closed incident classification via commit trailer | PR #960 |
+| gate-activation | environment-shape class, test-isolation alias, HEAD-scoped check, C... | main's incident gate went red after #1000 and #1002 merged with | commit 4bd101eb |
 | flake (inferred) | deflake windows-shard concurrency tests (proven under stress) | * fix(tests): deflake windows-shard concurrency tests (stress-proven) | PR #714 |
 | flake (inferred) | fix: deflake test_compact_preserves_ttl_for_expiry on slow CI runners | The "held right now" assertion re-read the wall clock AFTER appendi... | commit 3d47aa99 |
 | test-pollution (inferred) | fix: make CLAUDE.md linter scan tracked files, and stop test scaffo... | The runner failure was pollution, not a real violation. CI reported: | commit 33fb4a11 |
@@ -65,4 +60,4 @@ Rows marked (inferred) were classified from the commit subject because the commi
 | test-pollution (inferred) | isolate tracker writes to tempdir; guard verify_dash against pollut... | - tools/verify_dash.py now explicitly sets AESOP_STATE_ROOT to temp... | commit 29356d85 |
 | stall (inferred) | stall_check.py — silent-hang detection for the agent watchdog (wave... | Adds automated detection of stalled agents by scanning transcript m... | commit 17010688 |
 
-<!-- Latest incident: 2026-10-15T04:06:34Z -->
+<!-- Latest incident: 2026-10-14T23:23:53-05:00 -->

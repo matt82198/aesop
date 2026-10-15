@@ -583,6 +583,24 @@ class TestTrailerChannel(unittest.TestCase):
         for incident in incidents:
             self.assertFalse(incident.get("inferred", False), "trailer rows are explicit, not inferred")
 
+    def test_prose_wrapped_trailer_text_is_not_a_trailer(self):
+        """A prose line wrapping onto 'Incident-Class: x' in an earlier paragraph is ignored; the final trailer block wins."""
+        try:
+            from tools.incident_report import IncidentParser
+        except ImportError:
+            self.skipTest("incident_report module not yet implemented")
+        import tempfile
+        body = ("Causal chain notes.\n"
+                "Incident-Class: environment-shape, which was not one of the 12 documented\n"
+                "classes, so the gate went red.\n"
+                "\n"
+                "Incident-Class: gate-activation")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _FixtureRepo.build(tmpdir, [("fix(incident): taxonomy", body)])
+            incidents, errors = IncidentParser(repo_root=tmpdir).parse()
+        self.assertEqual(errors, [], f"prose text must not produce trailer errors: {errors}")
+        self.assertEqual([i["class"] for i in incidents], ["gate-activation"])
+
     def test_trailer_overrides_subject_keyword(self):
         """Trailer wins over a subject keyword that would have matched a different class."""
         try:

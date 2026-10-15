@@ -92,9 +92,16 @@ _SUBJECT_PREFIX_RE = re.compile(r"^([a-z][a-z-]*):")
 
 
 def parse_trailers(body: str) -> Dict[str, List[str]]:
-    """Return {trailer key: [values in order]} for the Incident-* trailers in a commit body."""
+    """Return {trailer key: [values in order]} for the Incident-* trailers in a commit body.
+
+    Only the final blank-line-separated paragraph is the trailer block (git interpret-trailers
+    convention). Earlier prose that happens to wrap onto a line starting with "Incident-Class:"
+    is not a trailer and must not fail the gate.
+    """
     found: Dict[str, List[str]] = {CLASS_TRAILER: [], CATEGORY_TRAILER: []}
-    for key, value in _TRAILER_RE.findall(body or ""):
+    paragraphs = [p for p in re.split(r"\n[ \t]*\n", (body or "").strip()) if p.strip()]
+    block = paragraphs[-1] if paragraphs else ""
+    for key, value in _TRAILER_RE.findall(block):
         found[key].append(value)
     return found
 
