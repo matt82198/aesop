@@ -43,7 +43,7 @@ discover_tests() {
 }
 
 # Live fleet-state heartbeat tripwire (incident 2026-10-14: a test wrote the
-# placeholder "1234567890" into the LIVE ~/conductor3 watchdog and monitor
+# placeholder "1234567890" into the LIVE fleet watchdog and monitor
 # heartbeats). Snapshot = "<content>|<mtime>". A change during the run is
 # clean ONLY if the new content is a daemon-style epoch inside the run window
 # [start-60, now+60]; anything else (placeholder, stale epoch, deletion) FAILS.
