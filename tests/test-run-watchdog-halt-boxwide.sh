@@ -76,7 +76,21 @@ operator_clear() {
 
 PATH_REAL="$(dirname "$REAL_PY"):/usr/bin:/bin"
 PATH_STUB="$STUB_DIR:/usr/bin:/bin"
-PATH_NOPY="/usr/bin:/bin"
+# Python-free PATH. A bare "/usr/bin:/bin" is NOT python-free on Ubuntu runners
+# (python3 lives in /usr/bin), so the precondition below failed in CI (ci (0),
+# 2026-10-15). Build a private bin dir: symlink every executable from /usr/bin and
+# /bin EXCEPT python interpreters. The precondition still proves python is absent.
+NOPY_BIN="$TMP_DIR/nopy-bin"
+mkdir -p "$NOPY_BIN"
+for src_dir in /usr/bin /bin; do
+  for f in "$src_dir"/*; do
+    [ -f "$f" ] && [ -x "$f" ] || continue
+    name="$(basename "$f")"
+    case "$name" in python|python[0-9]*|python-*|pydoc*|idle*) continue ;; esac
+    [ -e "$NOPY_BIN/$name" ] || ln -s "$f" "$NOPY_BIN/$name" 2>/dev/null || cp "$f" "$NOPY_BIN/$name" 2>/dev/null || true
+  done
+done
+PATH_NOPY="$NOPY_BIN"
 
 echo "=== Test 0: control - no halt anywhere, real python: the cycle RUNS ==="
 clear_sentinels

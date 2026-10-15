@@ -103,7 +103,7 @@ def resolve_state_dir(config=None):
 
 
 def resolve_conductor_root():
-    """Box-wide fleet state root: CONDUCTOR_ROOT env > sibling of AESOP_ROOT > ~/conductor3.
+    """Box-wide fleet state root: CONDUCTOR_ROOT env > sibling of AESOP_ROOT > home fleet root.
 
     Mirrors daemons/run-watchdog.sh's CONDUCTOR_ROOT default, so the operator's halt
     and a scheduled watchdog running from another checkout agree on one sentinel at
