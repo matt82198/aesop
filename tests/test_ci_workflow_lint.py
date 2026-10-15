@@ -12,7 +12,9 @@ Fixture-root isolated tests using tempfile to avoid pollution.
 
 import json
 import os
+import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -1182,3 +1184,79 @@ class TestActionlintIntegration(unittest.TestCase):
             capture_output=True, encoding="utf-8", errors="replace", env=env,
         )
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+
+class WindowsAggregatorBehaviourTest(unittest.TestCase):
+    """Drive the REAL `windows` aggregator run-script from .github/workflows/ci.yml.
+
+    Regression (main CI run 38538275152, 2026-10-14, event=schedule, HEAD=docs-only #942):
+    docs-only-gate succeeded with is_docs_only=true, so windows-shard's own if: skipped it,
+    and the aggregator treated that deliberate skip as a failure (exit 1). The only skip
+    the aggregator may accept is the docs-only-gate success + is_docs_only=true path.
+    """
+
+    ROOT = Path(__file__).resolve().parent.parent
+    WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+    STEP_NAME = "Resolve Windows run result"
+    EXPR_RE = re.compile(r"\$\{\{\s*(.+?)\s*\}\}")
+
+    def _aggregator_script(self):
+        import yaml
+        text = self.WORKFLOW.read_text(encoding="utf-8").replace("\r\n", "\n")
+        jobs = yaml.safe_load(text)["jobs"]
+        for step in jobs["windows"]["steps"]:
+            if step.get("name") == self.STEP_NAME:
+                return step["run"]
+        self.fail("aggregator step not found in ci.yml")
+
+    def _run(self, event, windows_touched, shard_result, docs_result, is_docs_only):
+        if not shutil.which("bash"):
+            self.skipTest("bash not available")
+        values = {
+            "github.event_name": event,
+            "needs.windows-sensitive-paths.outputs.windows_touched": windows_touched,
+            "needs.windows-shard.result": shard_result,
+            "needs.docs-only-gate.result": docs_result,
+            "needs.docs-only-gate.outputs.is_docs_only": is_docs_only,
+        }
+
+        def render(match):
+            key = match.group(1).strip()
+            self.assertIn(key, values, f"unexpected expression in aggregator: {key}")
+            return values[key]
+
+        script = self.EXPR_RE.sub(render, self._aggregator_script())
+        proc = subprocess.run(
+            ["bash", "-c", script],
+            capture_output=True, encoding="utf-8", errors="replace", timeout=60,
+        )
+        return proc.returncode, proc.stdout + proc.stderr
+
+    def test_schedule_docs_only_skip_is_green(self):
+        # The exact main-CI failure: docs-only HEAD on a schedule run.
+        rc, out = self._run("schedule", "true", "skipped", "success", "true")
+        self.assertEqual(rc, 0, out)
+
+    def test_schedule_windows_success_is_green(self):
+        rc, out = self._run("schedule", "true", "success", "success", "false")
+        self.assertEqual(rc, 0, out)
+
+    def test_schedule_windows_failure_is_red(self):
+        rc, out = self._run("schedule", "true", "failure", "success", "false")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("One or more Windows shards failed", out)
+
+    def test_schedule_code_change_with_windows_skipped_is_red(self):
+        # Windows-sensitive code landed but windows-shard never ran: must not be green.
+        rc, out = self._run("schedule", "true", "skipped", "success", "false")
+        self.assertEqual(rc, 1, out)
+
+    def test_upstream_docs_gate_failed_skip_is_red(self):
+        # Fail-closed: a skip caused by docs-only-gate not concluding success is a
+        # Windows run that never happened, not a deliberate docs-only skip.
+        rc, out = self._run("schedule", "true", "skipped", "failure", "")
+        self.assertEqual(rc, 1, out)
+
+    def test_pull_request_untouched_skip_is_green(self):
+        rc, out = self._run("pull_request", "false", "skipped", "success", "true")
+        self.assertEqual(rc, 0, out)

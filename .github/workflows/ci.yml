@@ -446,7 +446,7 @@ jobs:
     # Aggregator job: enforces that all windows-shard shards succeeded or were skipped.
     # Keeps the required check name for branch protection (no config change needed).
     # Always reports a conclusion (success when matrix was intentionally skipped on pull_request).
-    needs: [windows-shard, windows-sensitive-paths]
+    needs: [windows-shard, windows-sensitive-paths, docs-only-gate]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -456,6 +456,14 @@ jobs:
           # (via job-level if:). Report success for the aggregator in that case.
           if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.windows-sensitive-paths.outputs.windows_touched }}" != "true" ]; then
             echo "Windows-sensitive paths not touched on PR; skipped (expected)"
+            exit 0
+          fi
+          # On a docs-only HEAD (push/schedule), windows-shard's own if: deliberately skips it
+          # once docs-only-gate concluded success with is_docs_only=true. Accept ONLY that exact
+          # path. Any other skip (e.g. docs-only-gate failed/cancelled) means Windows never ran
+          # and must stay red, never a false green.
+          if [ "${{ needs.windows-shard.result }}" = "skipped" ] && [ "${{ needs.docs-only-gate.result }}" = "success" ] && [ "${{ needs.docs-only-gate.outputs.is_docs_only }}" = "true" ]; then
+            echo "Docs-only change; windows-shard skipped by design (expected)"
             exit 0
           fi
           # Otherwise, windows-shard ran: check its result
