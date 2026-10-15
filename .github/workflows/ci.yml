@@ -613,9 +613,16 @@ jobs:
 
       - name: Run pr_symbol_survival_check.py (advisory)
         run: |
+          # Advisory: the step always exits 0 (continue-on-error + no required check), so the
+          # rc is recorded for audit, not used for gating. Output goes to the job log AND summary.
+          out="$RUNNER_TEMP/g13-advisory.txt"
+          rc=0
+          python tools/pr_symbol_survival_check.py --base "origin/${{ github.base_ref }}" --head HEAD > "$out" 2>&1 || rc=$?
+          cat "$out"
           {
             echo "### PR symbol survival check (Guardrail G13, advisory/non-blocking)"
+            echo "G13 advisory rc=$rc"
             echo '```'
-            python tools/pr_symbol_survival_check.py --base "origin/${{ github.base_ref }}" --head HEAD || true
+            cat "$out"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

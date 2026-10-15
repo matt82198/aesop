@@ -93,7 +93,7 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 ### Open / Queued
 
-18. **Promote pr_symbol_survival_check (G13) to blocking** (DUE TODAY 2026-10-14). Promote only if the one-week run window since #865 holds; verify the runs before promoting.
+18. **Promote pr_symbol_survival_check (G13) to blocking** (false positive found 2026-10-14 in the window: nested defs; fixed in this PR; new clean window starts at merge date; promotion requires adding required check `pr-symbol-survival` to branch protection). Orchestrator does the protection change, not the lane.
 19. **Extend hooks/no-polling.mjs** (QUEUED). Deny backgrounded whole-filesystem searches in lanes.
 20. **tests/test_test_hygiene.py lookback off-by-one** (QUEUED). Lookback window hardcoded as 19 lines; doc claims 20. Review window semantics + fix mismatch (2026-10-07 audit carried forward).
 21. **pyflakes ratchet G15 gate wiring** (OPEN/IN PROGRESS). A lane is wiring pyflakes to pre-push gate list; fixes ~50 remaining issues found during #890 sweep; do not claim merged until PR lands.
