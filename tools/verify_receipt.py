@@ -233,16 +233,21 @@ def poll_receipt_for_head(sha, repo_slug, api=None, *, window_s=DEFAULT_FETCH_WI
     if interval_s <= 0:
         raise ValueError("interval_s must be > 0 (got %r)" % (interval_s,))
     start = clock()
+    # Structurally bounded: the loop cannot outlive max_lookups even if the injected clock
+    # stalls. The window (clock-driven) is the normal exit; max_lookups is only a backstop.
+    max_lookups = max(1, int(window_s // interval_s) + 2)
     lookups = 0
-    while True:
+    note = "MISSING receipt: no lookup ran"
+    for _ in range(max_lookups):
         env, note = fetch_receipt_for_head(sha, repo_slug, api=api)
         lookups += 1
         if env is not None:
             return env, note
         remaining = window_s - (clock() - start)
         if remaining <= 0:
-            return None, "%s (polled %d times over a %ds window)" % (note, lookups, window_s)
+            break
         sleep(min(interval_s, remaining))
+    return None, "%s (polled %d times over a %ds window)" % (note, lookups, window_s)
 
 
 def build_parser():
