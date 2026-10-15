@@ -216,6 +216,10 @@ def parse_test_count(text):
 SCRUBBED_ENV_VARS = (
     "AESOP_ALLOW_GENERATED", "AESOP_PUSH_RED", "AESOP_RECEIPT_EMIT", "AESOP_REQUIRE_LINUX_SHAPE",
     "AESOP_STATE_ROOT", "AESOP_ROOT", "AESOP_CONDUCTOR3_ROOT", "CONDUCTOR_ROOT",
+    # Receipt SIGNING material: a part runs the pushed head's test code, so an inherited HMAC
+    # secret (or key path) would let that code forge an accepted receipt. Only the parent
+    # signing call in main() reads these; matrix parts never do.
+    "AESOP_RECEIPT_KEY", "AESOP_RECEIPT_HMAC_SECRET",
     "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
 )
 
@@ -243,10 +247,10 @@ def scrubbed_part_env(environ):
     return scrub_child_env(environ)[0]
 
 
-def run_part(repo, name, spec, throwaway_wt=None, log_path=None):
+def run_part(repo, name, spec, throwaway_wt=None, log_path=None, environ=None):
     argv = spec.cmd(Path(throwaway_wt or repo))
     t0 = time.monotonic()
-    env, _removed = scrub_child_env(os.environ)
+    env, _removed = scrub_child_env(os.environ if environ is None else environ)
 
     with tempfile.TemporaryDirectory(prefix="receipt-%s-" % name) as tmp:
         env["TMPDIR"] = tmp  # per-part temp dir, mirrors ci.yml's shard-specific TMPDIR
@@ -580,8 +584,12 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
                     base_sha = _git(repo, "merge-base", "HEAD", args.main_ref)
                     changed_output = _git(repo, "diff", "--name-only", base_sha + "..HEAD")
                     changed_files = [f.strip() for f in changed_output.split("\n") if f.strip()]
-                except ReceiptError:
-                    changed_files = []  # Fallback: no changes detected
+                except ReceiptError as exc:
+                    # Fail closed: an underivable change set must never narrow the matrix to
+                    # nothing (an empty scope passes with zero Python tests run). Run everything.
+                    changed_files = None
+                    print("scope: cannot derive changed files (%s); running the full matrix (fail closed)"
+                          % " ".join(str(exc).split()))
 
                 # Build shard map and find owning shards
                 shard_map = _build_shard_map(sorted(_PY_SHARDS), timing=_load_ci_timing(repo))
@@ -589,7 +597,7 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
                     # Underivable mapping: fall back to full matrix
                     names = list(DEFAULT_MATRIX)
                 else:
-                    owning_shards = _find_owning_shards(changed_files, shard_map)
+                    owning_shards = None if changed_files is None else _find_owning_shards(changed_files, shard_map)
                     if owning_shards is None:
                         # Underivable: fall back to full
                         names = list(DEFAULT_MATRIX)

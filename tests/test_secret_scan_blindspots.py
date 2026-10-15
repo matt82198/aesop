@@ -259,5 +259,60 @@ class TestF02BinaryAndEncodingBlindSpots(unittest.TestCase):
         self.assertIn("github_token", _fatal_rules(findings))
 
 
+DOTTED_PW = _j("Zq8v", "Hunter", "2", ".prod")  # dotted unquoted value (F-01 dot gap)
+
+
+class TestF01UnquotedDottedValues(unittest.TestCase):
+    """F-01 follow-up: the unquoted branch of generic_credential_assignment
+    rejected '.', so DB_PASSWORD=<value with a dot> scanned CLEAN (exit 0).
+    Dotted unquoted values must be flagged; placeholders, env references and
+    attribute-chain code references must stay CLEAN."""
+
+    def _scan_text(self, suffix, text):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / ("fixture" + suffix)
+            p.write_text(text, encoding="utf-8")
+            return scan_file(p)
+
+    def test_unquoted_dotted_value_is_fatal(self):
+        findings = self._scan_text(".sh", f"export DB_PASSWORD={DOTTED_PW}\n")
+        self.assertIn("generic_credential_assignment", _fatal_rules(findings))
+
+    def test_unquoted_dotted_value_cli_exits_1(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "fixture.sh"
+            p.write_text(f"export DB_PASSWORD={DOTTED_PW}\n", encoding="utf-8")
+            rc, out, _err = _run_cli([p])
+        self.assertEqual(rc, 1, out)
+        self.assertIn("FOUND", out)
+
+    def test_quoted_dotted_value_is_fatal(self):
+        # Keyword split so the global ~/scripts scanner's name-assignment rule never sees
+        # a contiguous PASSWORD = "..." shape in this source (self-scan invariant).
+        findings = self._scan_text(".py", _j("DB_PASS", "WORD", ' = "', DOTTED_PW, '"\n'))
+        self.assertIn("generic_credential_assignment", _fatal_rules(findings))
+
+    def test_dotted_placeholder_values_stay_clean(self):
+        """Control: placeholder words anywhere in a dotted value keep it CLEAN."""
+        text = (
+            "DB_PASSWORD=your-token.here\n"
+            "API_TOKEN=example.value.here\n"
+            "PASSWORD=dummy.password.value\n"
+            "OPENAI_API_KEY=sk-proj-...\n"
+        )
+        findings = self._scan_text(".sh", text)
+        self.assertNotIn("generic_credential_assignment", _all_rules(findings))
+
+    def test_dotted_env_reference_stays_clean(self):
+        """Control: a template/env reference is not a literal credential."""
+        findings = self._scan_text(".sh", "DB_PASSWORD=${DB.PASSWORD}\nAPI_TOKEN=$env.API_TOKEN\n")
+        self.assertNotIn("generic_credential_assignment", _all_rules(findings))
+
+    def test_attribute_chain_code_reference_stays_clean(self):
+        """Control: a snake_case attribute chain is code, not a literal credential."""
+        findings = self._scan_text(".py", "token = self.serve.SESSION_TOKEN\n")
+        self.assertNotIn("generic_credential_assignment", _all_rules(findings))
+
+
 if __name__ == "__main__":
     unittest.main()

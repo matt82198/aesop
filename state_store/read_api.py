@@ -35,6 +35,18 @@ from tools.common import check_heartbeat_staleness
 from tools.fleet_ledger import parse_ledger_rows as parse_ledger_rows_impl
 
 
+def read_text_file(path):
+    """Return the UTF-8 text of a control file (STATE.md, BUILDLOG.md) or None if unreadable.
+
+    Read-only; fails open to None on OSError. Markdown control-file reads go through this
+    facade so callers stay clear of the stateapi_lint write patterns.
+    """
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
 class ReadAPI:
     """Read-only facade over state surfaces (tracker, orchestrator-status, heartbeats, ledger).
 

@@ -65,7 +65,7 @@ def print(*args, **kwargs):
 
 # Import halt.py with FAIL CLOSED on import failure
 try:
-    from halt import is_halted, get_halt_info
+    from halt import is_halted, get_halt_info, active_halt
 except ImportError:
     try:
         # Fallback for when called from tools/ directory or via importlib
@@ -79,6 +79,7 @@ except ImportError:
                 spec.loader.exec_module(halt_module)
                 is_halted = halt_module.is_halted
                 get_halt_info = halt_module.get_halt_info
+                active_halt = halt_module.active_halt
             else:
                 raise ImportError("Could not load halt.py spec")
         else:
@@ -105,6 +106,27 @@ RETRIABLE_RERUN_ERRORS = [
 GREEN_CONCLUSIONS = frozenset({"SUCCESS", "NEUTRAL", "SKIPPED"})
 
 
+def halt_status():
+    """Return (halted, info) across BOTH kill-switch sentinels.
+
+    Consults the checkout-scoped .HALT and the box-wide .HALT that `halt.py set`
+    writes (active_halt honours halt.py's AESOP_STATE_ROOT isolation rule). Fails
+    closed: an error reading either reader reports HALTED, with the error as the
+    reason, never a clear state.
+    """
+    try:
+        local_halted = is_halted()
+        active = active_halt()
+        if active is not None:
+            return True, active[1] or {}
+        if local_halted:
+            return True, get_halt_info() or {}
+    except Exception as exc:  # any reader failure must halt, never clear
+        return True, {"reason": f"halt state unreadable ({type(exc).__name__}: {exc})",
+                      "timestamp": ""}
+    return False, None
+
+
 def _check_halt(context=""):
     """Check if halt is set. If so, print reason and exit with code 1.
 
@@ -114,8 +136,8 @@ def _check_halt(context=""):
     Returns:
         None if not halted; otherwise exits with code 1.
     """
-    if is_halted():
-        info = get_halt_info()
+    halted, info = halt_status()
+    if halted:
         reason = info.get("reason", "(unknown)") if info else "(unknown)"
         timestamp = info.get("timestamp", "") if info else ""
         msg = f"HALTED: {reason}"
@@ -428,6 +450,27 @@ def create_integration_branch(batch_name: str, cwd: str = None, owner: str = Non
     return wt
 
 
+def head_ref_problem(name: str, cwd: str = None) -> str:
+    """Return why a PR headRefName must not be fetched, or "" when it is a safe name.
+
+    headRefName is fork-controlled. An option-shaped name reached `git fetch` as an
+    option (`--upload-pack=<cmd>` executed <cmd> on a file-transport origin), so it is
+    refused before any git call. Every other name must pass `git check-ref-format
+    --branch` and come back unchanged.
+    """
+    if not name:
+        return "empty headRefName"
+    if name.startswith("-"):
+        return "headRefName starts with '-' (option-shaped, refused)"
+    if "@{" in name:
+        # --branch would expand revision syntax such as @{-1} to another branch name.
+        return "headRefName contains '@{' (revision syntax, refused)"
+    ok, _ = git("check-ref-format", "--branch", name, cwd=cwd)
+    if not ok:
+        return "headRefName is not a valid branch name"
+    return ""
+
+
 def merge_pr_into_integration(n: int, cwd: str = None) -> bool:
     raw = gh("pr", "view", str(n), "--json", "headRefOid,headRefName,title")
     if isinstance(raw, dict) and "error" in raw:
@@ -441,9 +484,15 @@ def merge_pr_into_integration(n: int, cwd: str = None) -> bool:
         print(f"  [FAIL] PR #{n} has no headRefOid")
         return False
 
-    ok, _ = git("fetch", "origin", f"{branch}", cwd=cwd)
+    problem = head_ref_problem(branch, cwd=cwd)
+    if problem:
+        print(f"  [FAIL] PR #{n} refused: {problem}")
+        return False
+
+    # `--` ends option parsing so the fork-controlled name is always a refspec.
+    ok, _ = git("fetch", "origin", "--", branch, cwd=cwd)
     if not ok:
-        ok, _ = git("fetch", "origin", sha, cwd=cwd)
+        ok, _ = git("fetch", "origin", "--", sha, cwd=cwd)
         if not ok:
             print(f"  [FAIL] cannot fetch PR #{n} ref")
             return False

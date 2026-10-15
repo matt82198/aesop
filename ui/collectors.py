@@ -679,6 +679,21 @@ def _reconcile_status_updates(api, events, disk_items):
     return errors
 
 
+def _record_migration_failure(api, events, reason):
+    """Record a migration_failed marker with the reason, once per distinct reason.
+
+    Never writes migration_completed. Dedupes on reason so a persistently
+    unreadable tracker.json does not grow the event log on every call.
+    """
+    already_recorded = any(
+        e.get("type") == "migration_failed"
+        and e.get("payload", {}).get("reason") == reason
+        for e in events
+    )
+    if not already_recorded:
+        api.append("tracker", "migration_failed", {"version": 1, "reason": reason}, "system")
+
+
 def _ensure_tracker_migrated(write_api):
     """Backfill the event log from the existing tracker.json once (idempotent).
 
@@ -736,20 +751,26 @@ def _ensure_tracker_migrated(write_api):
             if e.get("type") == "item_created" and e.get("payload", {}).get("id")
         )
 
-        # Load items from tracker.json
+        # Load items from tracker.json. An unreadable tracker (missing, malformed,
+        # permission error) must NOT be marked complete: projections are never
+        # patched, so a completion marker here would stop a later repair of
+        # tracker.json from ever being backfilled. Record the failure and retry
+        # on the next run; completion is written only after the backfill succeeds.
         disk_items = []
-        if config.TRACKER_FILE.exists():
-            try:
-                data = json.loads(config.TRACKER_FILE.read_text(encoding='utf-8'))
-                disk_items = [
-                    item for item in data.get("items", [])
-                    if isinstance(item, dict) and item.get("id")
-                ]
-            except Exception as e:
-                print(f"[tracker] Failed to read tracker.json: {e}", file=sys.stderr)
-                # If we can't read the file, don't fail; just mark migration as done to avoid retry loops
-                api.append("tracker", "migration_completed", {"version": 1}, "system")
-                return
+        if not config.TRACKER_FILE.exists():
+            _record_migration_failure(api, events, "tracker.json missing")
+            return
+        try:
+            data = json.loads(config.TRACKER_FILE.read_text(encoding='utf-8'))
+            disk_items = [
+                item for item in data.get("items", [])
+                if isinstance(item, dict) and item.get("id")
+            ]
+        except Exception as e:
+            reason = f"tracker.json unreadable: {e}"
+            print(f"[tracker] Failed to read tracker.json: {e}", file=sys.stderr)
+            _record_migration_failure(api, events, reason)
+            return
 
         # Direction 1: Backfill missing items
         backfill_errors = _backfill_missing_items(api, db_item_ids, disk_items)
