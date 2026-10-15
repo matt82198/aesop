@@ -189,15 +189,35 @@ def parse_test_count(text):
     return None
 
 
+# Variables that are inputs to the pre-push HOOK (push-time overrides and lane-control state),
+# never to the test parts. A part that inherits one can see a push-time escape hatch or a lane's
+# state root and fail tests that assert those are unset (incident 2026-10-15, PR #1008: a lane's
+# AESOP_ALLOW_GENERATED=1 turned two TestBatchRegeneration tests red on a false receipt).
+# Defense in depth also covers the GIT_* hook variables: inherited GIT_DIR/GIT_WORK_TREE let a
+# matrix part commit into the caller's repo. See RECEIPT-GATE.md and hooks/CLAUDE.md.
+SCRUBBED_ENV_VARS = (
+    "AESOP_ALLOW_GENERATED", "AESOP_PUSH_RED", "AESOP_RECEIPT_EMIT", "AESOP_REQUIRE_LINUX_SHAPE",
+    "AESOP_STATE_ROOT", "AESOP_ROOT", "AESOP_CONDUCTOR3_ROOT", "CONDUCTOR_ROOT",
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+)
+
+
+def scrub_child_env(environ):
+    """Return (child_env, removed_names): a copy of `environ` with SCRUBBED_ENV_VARS removed.
+    Only NAMES are returned, for the receipt; values never leave this function."""
+    env = dict(environ)
+    removed = []
+    for var in SCRUBBED_ENV_VARS:
+        if var in env:
+            del env[var]
+            removed.append(var)
+    return env, sorted(removed)
+
+
 def run_part(repo, name, spec, throwaway_wt=None, log_path=None):
     argv = spec.cmd(Path(throwaway_wt or repo))
     t0 = time.monotonic()
-    env = dict(os.environ)
-    # Defense in depth: scrub git hook environment variables to prevent matrix parts
-    # from accidentally committing to a repo via inherited GIT_DIR/GIT_WORK_TREE.
-    # See RECEIPT-GATE.md and hooks/CLAUDE.md for the mechanism.
-    for var in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"):
-        env.pop(var, None)
+    env, _removed = scrub_child_env(os.environ)
 
     with tempfile.TemporaryDirectory(prefix="receipt-%s-" % name) as tmp:
         env["TMPDIR"] = tmp  # per-part temp dir, mirrors ci.yml's shard-specific TMPDIR
@@ -383,6 +403,7 @@ def build_receipt(repo, parts, skipped, slug=None, main_ref="origin/main", profi
             "python": platform.python_version(),
             "hostname_hash": hashlib.sha256(socket.gethostname().encode("utf-8")).hexdigest()[:16],
         },
+        "env": {"scrubbed": scrub_child_env(os.environ)[1]},  # names only: what the parts did not see
         "timestamp": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
@@ -567,6 +588,8 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
                 print("log  %-28s %s" % (p["name"], log))
         for s in skipped:
             print("skip %-28s %s" % (s["name"], s["reason"]))
+        if receipt["env"]["scrubbed"]:
+            print("scrub env for parts: %s" % ", ".join(receipt["env"]["scrubbed"]))
         print("conclusion=%s head=%s tree=%s scheme=%s" % (conclusion_for(parts), receipt["head_sha"][:12],
                                                            receipt["tree_hash"][:12], scheme))
         if args.dry_run:

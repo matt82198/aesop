@@ -10,21 +10,35 @@ consumes the JSONL). One JSON object per line:
 
 Behavior:
   - Each complete line becomes one event on stream "task", type "task_event",
-    payload = the record + "event_id" (sha256 of the raw line) + "kind".
+    payload = the record + "event_id" + "kind". event_id = sha256 of
+    "<byte offset>:" + raw line. The schema has no event id, and two
+    byte-identical lines at distinct offsets are distinct events. Rows written
+    before this key (event_id = sha256 of the raw line alone) still suppress
+    replay, so a lost cursor cannot double-ingest old data.
   - kind = "internal" for harness-internal stops (see INTERNAL_SUMMARY_PATTERNS
     below: records with empty agent_type whose summary is user-voice or a
     slash-command echo); kind = "agent" otherwise.
   - Idempotent: a cursor file (byte offset) skips lines already consumed, and
     event_id dedupe against the stream prevents duplicates even if the cursor
     write was lost after the appends.
-  - Fail closed: a malformed line is counted, the cursor is not advanced past
-    it, and the run exits 3. A JSONL that shrank below the cursor exits 3.
-    A trailing partial line (hook mid-write, no newline) is left for next run.
+  - Malformed line, last in the file (nothing after its newline): fail closed.
+    It is counted, the cursor is held before it, and the run exits 3. This is
+    ambiguous (a slow writer may still be finishing it), so it is not
+    quarantined. Once newer bytes follow it, it is quarantined on the next run.
+  - Malformed line with bytes after it (a torn record glued to the next one,
+    so it can never parse): quarantined. The raw line, byte offset, timestamp
+    and parse error go to <source>.quarantine.jsonl, the cursor advances past
+    it, and the run still exits 0. Quarantine rows are keyed by offset, so a
+    lost cursor cannot quarantine the same line twice. A glued record is
+    preserved only as raw text in the quarantine file, not ingested.
+  - A trailing partial line (hook mid-write, no newline) is held for next run.
+  - A JSONL that shrank below the cursor exits 3 (fail closed, nothing written).
   - Heartbeat: state/.task-ingest-heartbeat (epoch seconds) is written only on
-    a clean run (exit 0), per the completed-cycle heartbeat contract.
+    a clean run (exit 0, quarantined lines allowed), per the completed-cycle
+    heartbeat contract. The receipt line on stdout reports quarantined=N.
 
-Exit codes: 0 clean; 1 --check failed (pending lines); 2 usage/IO error;
-3 malformed line(s) or truncated source (fail-closed).
+Exit codes: 0 clean (quarantined lines included); 1 --check failed (pending
+lines); 2 usage/IO error; 3 held malformed last line or truncated source.
 
 Usage:
   python tools/ingest_task_events.py [--jsonl PATH] [--state-dir DIR]
@@ -90,8 +104,37 @@ def classify_kind(record: dict) -> str:
     return "agent"
 
 
-def _event_id(raw_line: bytes) -> str:
+QUARANTINE_SUFFIX = ".quarantine.jsonl"
+
+
+def _event_id(raw_line: bytes, offset: int) -> str:
+    return hashlib.sha256(f"{offset}:".encode("ascii") + raw_line).hexdigest()
+
+
+def _legacy_event_id(raw_line: bytes) -> str:
     return hashlib.sha256(raw_line).hexdigest()
+
+
+def _quarantine_path(jsonl_path: Path) -> Path:
+    return jsonl_path.with_name(jsonl_path.name + QUARANTINE_SUFFIX)
+
+
+def _quarantined_offsets(path: Path) -> set:
+    if not path.exists():
+        return set()
+    offsets = set()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            offsets.add(json.loads(line)["offset"])
+    return offsets
+
+
+def _append_quarantine(path: Path, rows: list) -> None:
+    with open(path, "a", encoding="utf-8", newline="\n") as fh:
+        for row in rows:
+            fh.write(json.dumps(row, ensure_ascii=True) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
 
 
 def _read_cursor(cursor_path: Path) -> int:
@@ -116,8 +159,8 @@ def _scan(jsonl_path: Path, offset: int):
     """Split the unconsumed tail into complete lines.
 
     Returns (complete, size) where complete is a list of
-    (end_offset, raw_bytes_without_newline, parse_error_or_None, record_or_None).
-    A trailing partial line (no newline yet) is excluded.
+    (start_offset, end_offset, raw_bytes_without_newline, parse_error_or_None,
+    record_or_None). A trailing partial line (no newline yet) is excluded.
     """
     with open(jsonl_path, "rb") as fh:
         fh.seek(offset)
@@ -130,9 +173,8 @@ def _scan(jsonl_path: Path, offset: int):
         if nl == -1:
             break
         raw = blob[start:nl].rstrip(b"\r")
-        end = offset + nl + 1
         record, error = _parse_line(raw)
-        complete.append((end, raw, error, record))
+        complete.append((offset + start, offset + nl + 1, raw, error, record))
         start = nl + 1
     return complete, size
 
@@ -164,7 +206,7 @@ def check(jsonl_path, state_dir) -> int:
         return EXIT_CHECK_PENDING
     complete, _ = _scan(jsonl_path, offset)
     pending = len(complete)
-    malformed = sum(1 for _, _, err, _ in complete if err)
+    malformed = sum(1 for _, _, _, err, _ in complete if err)
     if pending == 0:
         print(f"task-events check: OK cursor={offset} source_bytes={size}")
         return EXIT_OK
@@ -182,7 +224,7 @@ def ingest(jsonl_path, state_dir) -> dict:
     state_dir = Path(state_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
     cursor_path = state_dir / CURSOR_FILENAME
-    result = {"ingested": 0, "duplicates": 0, "malformed": 0, "cursor": 0, "exit_code": EXIT_OK}
+    result = {"ingested": 0, "duplicates": 0, "malformed": 0, "quarantined": 0, "cursor": 0, "exit_code": EXIT_OK}
 
     if not jsonl_path.exists():
         # No brain hook on this box (or a CI runner): nothing to ingest is a clean
@@ -199,30 +241,52 @@ def ingest(jsonl_path, state_dir) -> dict:
         )
         return result
 
-    complete, _ = _scan(jsonl_path, offset)
+    complete, size = _scan(jsonl_path, offset)
+    quarantine_path = _quarantine_path(jsonl_path)
+    quarantined_offsets = _quarantined_offsets(quarantine_path)
+    new_quarantine_rows = []
     api = StateAPI(resolve_db_path(state_dir, "tracker"))
     try:
         seen = {e["payload"].get("event_id") for e in api.get(STREAM)}
         cursor = offset
         contiguous = True
-        for end, raw, error, record in complete:
+        for start, end, raw, error, record in complete:
             if error:
-                result["malformed"] += 1
-                contiguous = False
-                continue
-            event_id = _event_id(raw)
-            if event_id in seen:
-                result["duplicates"] += 1
+                if end == size:
+                    # Last bytes in the file and newline-terminated with no newer
+                    # data: ambiguous (a slow writer may still be finishing it).
+                    # Hold the cursor; do not punish the writer by quarantining.
+                    result["malformed"] += 1
+                    contiguous = False
+                    continue
+                # Bytes follow the malformed line, so it can never become valid
+                # (a torn record glued to the next one). Quarantine it and move on.
+                if start not in quarantined_offsets:
+                    quarantined_offsets.add(start)
+                    new_quarantine_rows.append({
+                        "offset": start,
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "error": error,
+                        "raw": raw.decode("utf-8", errors="replace"),
+                        "source": str(jsonl_path),
+                    })
+                    result["quarantined"] += 1
             else:
-                payload = dict(record)
-                payload["event_id"] = event_id
-                payload["kind"] = classify_kind(record)
-                payload.setdefault("agent_type", "")
-                api.append(STREAM, EVENT_TYPE, payload, ACTOR)
-                seen.add(event_id)
-                result["ingested"] += 1
+                event_id = _event_id(raw, start)
+                if event_id in seen or _legacy_event_id(raw) in seen:
+                    result["duplicates"] += 1
+                else:
+                    payload = dict(record)
+                    payload["event_id"] = event_id
+                    payload["kind"] = classify_kind(record)
+                    payload.setdefault("agent_type", "")
+                    api.append(STREAM, EVENT_TYPE, payload, ACTOR)
+                    seen.add(event_id)
+                    result["ingested"] += 1
             if contiguous:
                 cursor = end
+        if new_quarantine_rows:
+            _append_quarantine(quarantine_path, new_quarantine_rows)
         result["cursor"] = cursor
         _write_cursor(cursor_path, cursor, str(jsonl_path))
     finally:
@@ -265,7 +329,7 @@ def main(argv=None) -> int:
         return EXIT_FAIL_CLOSED
     print(
         f"task-events ingest: ingested={result['ingested']} duplicates={result['duplicates']} "
-        f"malformed={result['malformed']} cursor={result['cursor']}"
+        f"malformed={result['malformed']} quarantined={result['quarantined']} cursor={result['cursor']}"
     )
     if result.get("error"):
         print(f"task-events ingest: FAILED: {result['error']}", file=sys.stderr)
