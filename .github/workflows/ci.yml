@@ -705,24 +705,26 @@ jobs:
       # G13 is base-pinned (same as F-04 for the secret scanner, hooks/pre-push-policy.sh
       # check_symbol_survival): the tool comes from the BASE branch, never the PR tree, so a
       # PR cannot weaken the gate that judges its own merge.
-      - name: Materialize base gate copy (G13 tool from base)
-        env:
-          BASE_REF: origin/${{ github.base_ref }}
-        run: |
-          # Lives under .git/ (untracked, never scanned as repo content). The path is
-          # literal so tools/verify_gates_wired.py can see the invocation below.
-          mkdir -p .git/gate-base-g13
-          git archive "$BASE_REF" -- tools | tar -x -C .git/gate-base-g13
-          test -f .git/gate-base-g13/tools/pr_symbol_survival_check.py
+      # The BASE tree is a separate checkout at path base/ (same shape as verify-receipt.yml),
+      # so the invocation is a literal base/tools/... path that both the wiring check and the
+      # runability check resolve. A quoted or $VAR path is invisible to verify_gates_wired.py.
+      - name: Checkout the BASE tree (G13 tool source of trust)
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.base_ref }}
+          path: base
+          fetch-depth: 1
+          persist-credentials: false
 
       - name: Run pr_symbol_survival_check.py (blocking, G13, base copy)
         env:
           BASE_REF: origin/${{ github.base_ref }}
         run: |
           # Blocking: rc is propagated. Output goes to the job log AND the step summary.
+          test -f base/tools/pr_symbol_survival_check.py
           out="$RUNNER_TEMP/g13-check.txt"
           rc=0
-          python .git/gate-base-g13/tools/pr_symbol_survival_check.py --base "$BASE_REF" --head HEAD > "$out" 2>&1 || rc=$?
+          python base/tools/pr_symbol_survival_check.py --base "$BASE_REF" --head HEAD > "$out" 2>&1 || rc=$?
           cat "$out"
           {
             echo "### PR symbol survival check (Guardrail G13, blocking)"
