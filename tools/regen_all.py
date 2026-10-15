@@ -44,6 +44,13 @@ from merge_queue import REGENERATORS, REGEN_TIMEOUT_S, dirty_paths  # noqa: E402
 
 GIT_TIMEOUT_S = 60
 
+# Generators whose --stdout output is compared with a committed file in --check mode.
+# Keys are REGENERATORS script paths; values are the repo-relative file each one writes.
+_STDOUT_TARGETS = {
+    "tools/gen_tool_index.py": "tools/INDEX.md",
+    "tools/incident_report.py": "docs/INCIDENTS.md",
+}
+
 
 def git_status(repo_root) -> str:
     """Raw `git status --porcelain` text for `repo_root`. Raises on git failure
@@ -228,11 +235,11 @@ def run(repo_root, fix: bool) -> RegenResult:
                 failed.append({"argv": list(argv_check), "output": output})
             else:
                 # Check if the generated content matches the on-disk file.
-                # gen_tool_index.py generates tools/INDEX.md
-                if "gen_tool_index.py" in argv[0]:
-                    target_file = repo_root / "tools" / "INDEX.md"
+                target_rel = _STDOUT_TARGETS.get(argv[0])
+                if target_rel is not None:
+                    target_file = repo_root / target_rel
                     if target_file.exists() and not check_stdout_drift(output, target_file, repo_root):
-                        drifted.append("tools/INDEX.md")
+                        drifted.append(target_rel)
         else:
             # In --fix mode, run with --regenerate to write to disk
             ok, output = run_one_regenerator(argv, repo_root)

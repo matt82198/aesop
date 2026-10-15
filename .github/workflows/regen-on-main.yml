@@ -42,7 +42,9 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: main
-          fetch-depth: 2
+          # Full history: docs/INCIDENTS.md is derived from HEAD's whole log, and
+          # incident_report.py refuses to write from a shallow clone.
+          fetch-depth: 0
 
       - name: Loop guard
         id: guard

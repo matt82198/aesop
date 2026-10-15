@@ -21,6 +21,8 @@ TOOLS = REPO_ROOT / "tools"
 REGEN_ALL = TOOLS / "regen_all.py"
 GEN_SUITE_COUNTS = TOOLS / "gen_suite_counts.py"
 GEN_TOOL_INDEX = TOOLS / "gen_tool_index.py"
+INCIDENT_REPORT = TOOLS / "incident_report.py"
+SUBPROCESS_COMMON = TOOLS / "subprocess_common.py"
 
 
 def _run(argv, cwd):
@@ -56,6 +58,11 @@ class RegenAllFixture(unittest.TestCase):
             GEN_SUITE_COUNTS.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
         (self.root / "tools" / "gen_tool_index.py").write_text(
             GEN_TOOL_INDEX.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+        # docs/INCIDENTS.md is a registered regenerator too (merge_queue.REGENERATORS).
+        (self.root / "tools" / "incident_report.py").write_text(
+            INCIDENT_REPORT.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+        (self.root / "tools" / "subprocess_common.py").write_text(
+            SUBPROCESS_COMMON.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
 
         (self.root / "tests" / "dummy.test.mjs").write_text(
             "// dummy node suite\n", encoding="utf-8", newline="\n")
@@ -71,6 +78,9 @@ class RegenAllFixture(unittest.TestCase):
         # repo starts with generated artifacts correct and committed. Note: suite counts
         # were removed by PR #830; only gen_tool_index.py remains as a regenerator.
         self.assertEqual(self.regenerate_tool_index().returncode, 0)
+        self.assertEqual(
+            _run([self.root / "tools" / "incident_report.py", "--regenerate", "--repo", self.root],
+                 self.root).returncode, 0)
         self.assertEqual(_git(["add", "-A"], self.root).returncode, 0)
         self.assertEqual(
             _git(["commit", "-m", "baseline"], self.root).returncode, 0)

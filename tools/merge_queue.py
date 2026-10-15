@@ -224,6 +224,7 @@ BATCH_LABEL_DESC = "Integration batch opened by the merge-queue advancer"
 #   regenerate for them.
 REGENERATORS = (
     ("tools/gen_tool_index.py", "--regenerate"),
+    ("tools/incident_report.py", "--regenerate"),
 )
 
 # Q3: Bounded bisect for red batches. When all members of a red batch are
