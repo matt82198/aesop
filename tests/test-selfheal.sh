@@ -102,14 +102,17 @@ echo "=== Test 2: Fresh heartbeat ignored ==="
 rm -f "$SELFHEAL_LOG"
 mkdir -p "$AESOP_STATE" "$CONDUCTOR_MONITOR"
 
-WATCHDOG_HB="$AESOP_STATE/.watchdog-heartbeat"
+CONDUCTOR_ROOT_FIXTURE="$TMP_DIR/conductor3"
+WATCHDOG_HB="$CONDUCTOR_ROOT_FIXTURE/state/.watchdog-heartbeat"
 MONITOR_HB="$CONDUCTOR_MONITOR/.monitor-heartbeat"
 CURRENT_TS=$(date +%s)
 
+mkdir -p "$CONDUCTOR_ROOT_FIXTURE/state"
 echo "$CURRENT_TS" > "$WATCHDOG_HB"
 echo "$CURRENT_TS" > "$MONITOR_HB"
 
-AESOP_ROOT="$TMP_DIR/aesop" \
+CONDUCTOR_ROOT="$CONDUCTOR_ROOT_FIXTURE" \
+  AESOP_ROOT="$TMP_DIR/aesop" \
   AESOP_SELFHEAL_SKIP_RESTART=1 \
   bash "$REPO_ROOT/daemons/selfheal.sh" --once >/dev/null 2>&1 || true
 

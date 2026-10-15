@@ -9,9 +9,24 @@ set -uo pipefail
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." && pwd )"
 BACKUP_FLEET_SCRIPT="$SCRIPT_DIR/daemons/backup-fleet.sh"
 
-TEST_DIR="${SHELL_TEST_ISO_ROOT:-/tmp}/aesop-conductor-root-$$"
+TEST_DIR="${SHELL_TEST_ISO_ROOT:-${TMPDIR:-/tmp}}/aesop-conductor-root-$$"
 PASSED=0
 FAILED=0
+
+# Isolation guard (incident 2026-10-14: a heartbeat write reached the LIVE
+# ~/conductor3/state/.watchdog-heartbeat). Any heartbeat path this test writes
+# must live under TEST_DIR and must never resolve under $HOME/conductor3.
+guard_fixture_path() {
+  local p="$1"
+  case "$p" in
+    "$TEST_DIR"/*) ;;
+    *) echo "GUARD: path escaped TEST_DIR ($TEST_DIR): $p" >&2; exit 2 ;;
+  esac
+  case "$p" in
+    "$HOME/conductor3"|"$HOME/conductor3"/*)
+      echo "GUARD: path resolves under the LIVE conductor3 root: $p" >&2; exit 2 ;;
+  esac
+}
 
 cleanup() {
   rm -rf "$TEST_DIR" 2>/dev/null || true
@@ -79,8 +94,9 @@ test_heartbeat_path_construction() {
   local AESOP_ROOT="$TEST_DIR/aesop"
   local CONDUCTOR_ROOT="$TEST_DIR/conductor"
   local HEARTBEAT="$CONDUCTOR_ROOT/state/.watchdog-heartbeat"
+  guard_fixture_path "$HEARTBEAT"
 
-  # Write a test heartbeat
+  # Write a test heartbeat (fixture-only, guarded above)
   echo "1234567890" > "$HEARTBEAT"
 
   # Verify it's in the right place

@@ -17,10 +17,20 @@ import argparse
 import datetime
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+# Worktree ownership marker (create_integration_branch guard). Loaded by path so this
+# module works from any cwd; an import failure aborts the module (fail closed).
+_wt_spec = importlib.util.spec_from_file_location(
+    "worktree_marker", Path(__file__).resolve().parent / "worktree_marker.py")
+_wt_marker = importlib.util.module_from_spec(_wt_spec)
+_wt_spec.loader.exec_module(_wt_marker)
+read_worktree_marker = _wt_marker.read_marker
+MarkerError = _wt_marker.MarkerError
 
 # Ensure stdout can encode UTF-8 (fixes Windows cp1252 UnicodeEncodeError on PR titles
 # containing characters like U+FEFF).
@@ -328,13 +338,53 @@ def run_regenerators(branch: str) -> bool:
     return True
 
 
-def create_integration_branch(batch_name: str) -> bool:
+def _integration_cwd_authorised(cwd: str, owner: str) -> tuple[bool, str]:
+    """Worktree-ownership guard for `checkout -B integrate/*` (fail closed).
+
+    Authorised only when cwd carries an rw `.aesop-worktree-owner` marker owned by
+    `owner`, or when cwd is the AESOP_QUEUE_ROOT (the dedicated queue checkout,
+    same contract as merge_queue.build_batch). Anything else -- no cwd, no owner,
+    unmarked, ro, foreign-owned, or unreadable marker -- is refused.
+    """
+    if not cwd:
+        return False, "no cwd given (refusing implicit process-cwd branch mutation)"
+    target = str(Path(cwd).resolve())
+    queue_root = os.environ.get("AESOP_QUEUE_ROOT")
+    if queue_root and str(Path(queue_root).resolve()) == target:
+        return True, ""
+    if not owner:
+        return False, "no owner given (set AESOP_WORKTREE_OWNER or pass owner=)"
+    try:
+        marker = read_worktree_marker(target)
+    except MarkerError as exc:
+        return False, f"{exc} (cwd {target})"
+    if marker is None:
+        return False, f"no .aesop-worktree-owner marker in {target}"
+    if marker["mode"] != "rw":
+        return False, f"worktree {target} is mode={marker['mode']}, not rw"
+    if marker["owner"] != owner:
+        return False, f"worktree {target} is owned by {marker['owner']!r}, not {owner!r}"
+    return True, ""
+
+
+def create_integration_branch(batch_name: str, cwd: str = None, owner: str = None) -> bool:
+    """Create integrate/<batch_name> from origin/main inside `cwd` (guarded).
+
+    `cwd` must be an authorised worktree for `owner` (see _integration_cwd_authorised).
+    Every git call is pinned to that cwd, so the process cwd can never be mutated.
+    """
+    if owner is None:
+        owner = os.environ.get("AESOP_WORKTREE_OWNER")
+    ok_cwd, why = _integration_cwd_authorised(cwd, owner)
+    if not ok_cwd:
+        print(f"  [REFUSED] create integrate/{batch_name} in {cwd!r}: {why}")
+        return False
     branch = f"integrate/{batch_name}"
-    ok, out = git("fetch", "origin", "main")
+    ok, out = git("fetch", "origin", "main", cwd=cwd)
     if not ok:
         print(f"  [FAIL] fetch origin main: {out[:120]}")
         return False
-    ok, out = git("checkout", "-B", branch, "origin/main")
+    ok, out = git("checkout", "-B", branch, "origin/main", cwd=cwd)
     if not ok:
         print(f"  [FAIL] checkout {branch}: {out[:120]}")
         return False
@@ -469,9 +519,12 @@ def cleanup_integration_branch(branch: str):
     print(f"  [ok] cleaned up {branch}")
 
 
+# The integration branch is created only inside an authorised `cwd` (see
+# _integration_cwd_authorised); otherwise the train refuses before touching git.
 def run_integration_train(prs: list[int], batch_name: str = "",
                           poll_interval: int = 45, max_polls: int = 60,
-                          dry_run: bool = False) -> bool:
+                          dry_run: bool = False, cwd: str = None,
+                          owner: str = None) -> bool:
     """B1: Integration-batch merges by default + stacked-PR chains + landed-content close
     guard. B1.1: --integration DEFAULT, batch_name auto-generated. B1.2: stacked-PR chain
     graph, drop chain on conflict. B1.3: ancestor-verify before close. B1.4: enforce_admins
@@ -494,7 +547,7 @@ def run_integration_train(prs: list[int], batch_name: str = "",
     if not check_enforce_admins():
         return False
 
-    if not create_integration_branch(batch_name):
+    if not create_integration_branch(batch_name, cwd=cwd, owner=owner):
         return False
 
     included = []
@@ -728,6 +781,13 @@ def main():
     parser.add_argument("-i", "--integration", nargs="?", const="",
                         default=None, metavar="BATCH_NAME",
                         help="Integration-branch mode with optional batch name")
+    parser.add_argument("--cwd", default=None, metavar="WORKTREE",
+                        help="Integration mode: worktree to create integrate/* in; must carry "
+                             "an rw .aesop-worktree-owner marker owned by --owner (or the "
+                             "AESOP_QUEUE_ROOT). Refused otherwise.")
+    parser.add_argument("--owner", default=None, metavar="ID",
+                        help="Integration mode: owner id the worktree marker must name "
+                             "(default: AESOP_WORKTREE_OWNER env)")
     args = parser.parse_args()
 
     prs = list(args.prs)
@@ -753,7 +813,7 @@ def main():
         print(f"PRs: {', '.join(f'#{n}' for n in prs)}")
         success = run_integration_train(
             prs, batch_name=batch_name, poll_interval=args.poll,
-            dry_run=args.dry_run)
+            dry_run=args.dry_run, cwd=args.cwd, owner=args.owner)
     sys.exit(0 if success else 1)
 
 

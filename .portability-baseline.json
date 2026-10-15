@@ -23,6 +23,7 @@
     "tools/shadow_adjudication.py@posix_home_path": 1,
     "tools/shadow_adjudication.py@private_token": 1,
     "tools/shadow_adjudication.py@windows_user_path": 1,
+    "tools/run_shell_tests.sh@private_token": 1,
     "tools/transcript_digest.py@private_token": 2,
     "tools/verify_ui_trio.py@posix_home_path": 2,
     "tools/verify_ui_trio_redaction_proof.py@posix_home_path": 6,
