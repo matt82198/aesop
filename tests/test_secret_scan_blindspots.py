@@ -143,6 +143,56 @@ class TestF01GenericCredentialAssignment(unittest.TestCase):
         self.assertNotIn("generic_credential_assignment", _all_rules(findings))
 
 
+class TestCredentialNameClass(unittest.TestCase):
+    """Name class of generic_credential_assignment: CREDENTIAL(S), CRED, PWD and
+    BEARER are credential words, so a token-shaped value under them is fatal.
+    Every fixture value is assembled at runtime (self-scan + no-literal invariant)."""
+
+    def _scan_text(self, suffix, text):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / ("fixture" + suffix)
+            p.write_text(text, encoding="utf-8")
+            return scan_file(p)
+
+    def test_api_credential_quoted_token_is_fatal(self):
+        findings = self._scan_text(".py", _j('api_credential = "', TOK_VALUE, '"\n'))
+        self.assertIn("generic_credential_assignment", _fatal_rules(findings))
+
+    def test_api_credential_unquoted_token_is_fatal(self):
+        findings = self._scan_text(".sh", f"export API_CREDENTIAL={TOK_VALUE}\n")
+        self.assertIn("generic_credential_assignment", _fatal_rules(findings))
+
+    def test_credential_suffix_yaml_is_fatal(self):
+        findings = self._scan_text(".yml", f"service:\n  db_credential: {TOK_VALUE}\n")
+        self.assertIn("generic_credential_assignment", _fatal_rules(findings))
+
+    def test_credentials_fetch_option_stays_clean(self):
+        """Control: the plural CREDENTIALS word is NOT matched, so a fetch option
+        like credentials: 'same-origin' (ui/web/src/lib/api.ts) stays CLEAN."""
+        findings = self._scan_text(".ts", "fetch(url, { credentials: 'same-origin' });\n")
+        self.assertNotIn("generic_credential_assignment", _all_rules(findings))
+
+    def test_cred_pwd_bearer_siblings_are_fatal(self):
+        findings = self._scan_text(
+            ".py",
+            _j('db_cred = "', TOK_VALUE, '"\n')
+            + _j('db_pwd = "', PW_VALUE, '"\n')
+            + _j('bearer = "', TOK_VALUE, '"\n'),
+        )
+        self.assertIn("generic_credential_assignment", _fatal_rules(findings))
+        self.assertEqual(len([f for f in findings if f[1] == "generic_credential_assignment"]), 3)
+
+    def test_credentials_file_path_stays_clean(self):
+        """Control: a credential-named PATH setting with no token-shaped value is CLEAN."""
+        findings = self._scan_text(".py", 'credentials_file = "path/to/file"\n')
+        self.assertNotIn("generic_credential_assignment", _all_rules(findings))
+
+    def test_pragma_does_not_soften_api_credential(self):
+        """The doc pragma must not launder a real token-shaped api_credential value."""
+        findings = self._scan_text(".md", PRAGMA_LINE + "\n" + _j('api_credential = "', TOK_VALUE, '"\n'))
+        self.assertIn("generic_credential_assignment", _fatal_rules(findings))
+
+
 class TestF02BinaryAndEncodingBlindSpots(unittest.TestCase):
     """F-02: NUL bytes, UTF-16 and large files must not downgrade scanning."""
 

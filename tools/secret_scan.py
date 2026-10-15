@@ -86,7 +86,8 @@ PATTERNS = {
     # value only, never the whole match) and must be >= 8 chars.
     "generic_credential_assignment": (
         r"(?<![A-Za-z0-9_\-])[A-Za-z0-9_\-]*"
-        r"(?:PASSWORD|PASSWD|SECRET|TOKEN|API[_\-]?KEY|PRIVATE[_\-]?KEY|ACCESS[_\-]?KEY)"
+        r"(?:PASSWORD|PASSWD|PWD|SECRET|TOKEN|CREDENTIAL|CRED|BEARER"
+        r"|API[_\-]?KEY|PRIVATE[_\-]?KEY|ACCESS[_\-]?KEY)"
         r"(?:[_\-]?KEY)?(?![A-Za-z0-9_\-])"
         r"\s*[:=]\s*"
         r"(?:(?P<q>[\"'])(?P<v>[^\"'\n]{8,})(?P=q)"
