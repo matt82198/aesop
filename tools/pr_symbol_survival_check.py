@@ -285,6 +285,7 @@ def run_check(base_ref, head_ref, original_head_ref):
     ok = []
     moved = []
     missing = []
+    removed = []
 
     for name in sorted(added):
         info = added[name]
@@ -310,6 +311,16 @@ def run_check(base_ref, head_ref, original_head_ref):
             continue
 
         drop_commit = find_drop_commit(base_sha, head_sha, name, file_path, lang)
+        if drop_commit is None:
+            # No merge commit in range removed it, so the branch's own later commit
+            # deleted it on purpose (add-then-delete). Not a conflict-resolution loss.
+            removed.append({
+                'symbol': name,
+                'lang': lang,
+                'file': file_path,
+                'added_by': {'sha': info['commit'], 'subject': info['commit_subject']},
+            })
+            continue
         missing.append({
             'symbol': name,
             'lang': lang,
@@ -329,6 +340,7 @@ def run_check(base_ref, head_ref, original_head_ref):
         'symbols_checked': len(added),
         'ok': ok,
         'moved': moved,
+        'removed': removed,
         'missing': missing,
     }
 

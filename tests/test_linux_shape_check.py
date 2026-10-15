@@ -206,14 +206,19 @@ class TestLinuxShapeCheckIntegration(unittest.TestCase):
         env_patch.start()
         self.addCleanup(env_patch.stop)
         os.environ.pop("AESOP_REQUIRE_LINUX_SHAPE", None)
+        # These cases exercise the Windows/WSL leg; pin the host so a Linux CI
+        # runner never executes the real native shell/Node suites from inside a test.
+        host_patch = mock.patch("linux_shape_check.host_is_windows", return_value=True)
+        host_patch.start()
+        self.addCleanup(host_patch.stop)
 
     @mock.patch.dict(os.environ, {}, clear=False)
     @mock.patch("linux_shape_check.get_changed_files")
-    @mock.patch("linux_shape_check.wsl_available")
+    @mock.patch("linux_shape_check.wsl_status")
     def test_skip_on_no_changes(self, mock_wsl, mock_changed):
         """No changes -> skip (exit 0)."""
         mock_changed.return_value = ["src/main.ts"]
-        mock_wsl.return_value = True
+        mock_wsl.return_value = lsc.WSL_OK
         with mock.patch("sys.argv", ["linux_shape_check.py", "--range", "origin/main..HEAD"]):
             with mock.patch("linux_shape_check.get_repo_root", return_value=Path(".")):
                 rc, _out = _main_captured()
@@ -221,11 +226,11 @@ class TestLinuxShapeCheckIntegration(unittest.TestCase):
 
     @mock.patch.dict(os.environ, {}, clear=False)
     @mock.patch("linux_shape_check.get_changed_files")
-    @mock.patch("linux_shape_check.wsl_available")
+    @mock.patch("linux_shape_check.wsl_status")
     def test_notice_on_wsl_unavailable(self, mock_wsl, mock_changed):
         """WSL unavailable -> NOTICE exit 0 (unless AESOP_REQUIRE_LINUX_SHAPE)."""
         mock_changed.return_value = ["tools/helper.sh"]
-        mock_wsl.return_value = False
+        mock_wsl.return_value = lsc.WSL_ABSENT
         with mock.patch("sys.argv", ["linux_shape_check.py", "--range", "origin/main..HEAD"]):
             with mock.patch("linux_shape_check.get_repo_root", return_value=Path(".")):
                 rc, _out = _main_captured()
@@ -233,24 +238,24 @@ class TestLinuxShapeCheckIntegration(unittest.TestCase):
 
     @mock.patch.dict(os.environ, {"AESOP_REQUIRE_LINUX_SHAPE": "1"})
     @mock.patch("linux_shape_check.get_changed_files")
-    @mock.patch("linux_shape_check.wsl_available")
+    @mock.patch("linux_shape_check.wsl_status")
     def test_fail_on_wsl_unavailable_with_require_flag(self, mock_wsl, mock_changed):
         """WSL unavailable + AESOP_REQUIRE_LINUX_SHAPE=1 -> exit 1."""
         mock_changed.return_value = ["tools/helper.sh"]
-        mock_wsl.return_value = False
+        mock_wsl.return_value = lsc.WSL_ABSENT
         with mock.patch("sys.argv", ["linux_shape_check.py", "--range", "origin/main..HEAD"]):
             with mock.patch("linux_shape_check.get_repo_root", return_value=Path(".")):
                 rc, _out = _main_captured()
         self.assertEqual(rc, 1)
 
     @mock.patch("linux_shape_check.get_changed_files")
-    @mock.patch("linux_shape_check.wsl_available")
+    @mock.patch("linux_shape_check.wsl_status")
     @mock.patch("linux_shape_check.compute_wsl_path")
     @mock.patch("linux_shape_check.run_shell_tests_wsl")
     def test_fail_on_shell_test_failure(self, mock_run_shell, mock_path, mock_wsl, mock_changed):
         """Shell tests fail -> exit 1 with output."""
         mock_changed.return_value = ["tools/helper.sh"]
-        mock_wsl.return_value = True
+        mock_wsl.return_value = lsc.WSL_OK
         mock_path.return_value = "/mnt/c/Users/matt8/aesop"
         mock_run_shell.return_value = (1, "Shell test error output")
         with mock.patch("sys.argv", ["linux_shape_check.py", "--range", "origin/main..HEAD"]):
@@ -259,13 +264,13 @@ class TestLinuxShapeCheckIntegration(unittest.TestCase):
         self.assertEqual(rc, 1)
 
     @mock.patch("linux_shape_check.get_changed_files")
-    @mock.patch("linux_shape_check.wsl_available")
+    @mock.patch("linux_shape_check.wsl_status")
     @mock.patch("linux_shape_check.compute_wsl_path")
     @mock.patch("linux_shape_check.run_node_tests_wsl")
     def test_fail_on_node_test_failure(self, mock_run_node, mock_path, mock_wsl, mock_changed):
         """Node tests fail -> exit 1 with output."""
         mock_changed.return_value = ["tests/test.test.mjs"]
-        mock_wsl.return_value = True
+        mock_wsl.return_value = lsc.WSL_OK
         mock_path.return_value = "/mnt/c/Users/matt8/aesop"
         mock_run_node.return_value = (1, "Node test error output")
         with mock.patch("sys.argv", ["linux_shape_check.py", "--range", "origin/main..HEAD"]):
@@ -274,13 +279,13 @@ class TestLinuxShapeCheckIntegration(unittest.TestCase):
         self.assertEqual(rc, 1)
 
     @mock.patch("linux_shape_check.get_changed_files")
-    @mock.patch("linux_shape_check.wsl_available")
+    @mock.patch("linux_shape_check.wsl_status")
     @mock.patch("linux_shape_check.compute_wsl_path")
     @mock.patch("linux_shape_check.run_shell_tests_wsl")
     def test_pass_on_shell_test_success(self, mock_run_shell, mock_path, mock_wsl, mock_changed):
         """Shell tests pass -> exit 0."""
         mock_changed.return_value = ["tools/helper.sh"]
-        mock_wsl.return_value = True
+        mock_wsl.return_value = lsc.WSL_OK
         mock_path.return_value = "/mnt/c/Users/matt8/aesop"
         mock_run_shell.return_value = (0, "All tests passed")
         with mock.patch("sys.argv", ["linux_shape_check.py", "--range", "origin/main..HEAD"]):
@@ -314,6 +319,70 @@ class TestIntegrationOutputIsCaptured(unittest.TestCase):
         self.assertNotIn("FAIL: Node tests exited 1", combined)
         self.assertNotIn("FAIL: Shell tests exited 1", combined)
         self.assertNotIn("ERROR: WSL required", combined)
+
+
+class TestLinuxShapeCheckHostPlatform(unittest.TestCase):
+    """Red-first: on Linux the leg runs natively (no WSL probe); on Windows a probe error fails closed."""
+
+    def setUp(self):
+        env_patch = mock.patch.dict(os.environ)
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        os.environ.pop("AESOP_REQUIRE_LINUX_SHAPE", None)
+
+    def _run_main(self, changed, host_windows):
+        # Capture stdout: the mocked sub-step FAIL fixtures must not reach the suite log.
+        with mock.patch("sys.argv", ["linux_shape_check.py", "--range", "origin/main..HEAD"]), \
+                mock.patch("linux_shape_check.get_changed_files", return_value=changed), \
+                mock.patch("linux_shape_check.get_repo_root", return_value=Path(".")), \
+                mock.patch("linux_shape_check.host_is_windows", return_value=host_windows), \
+                contextlib.redirect_stdout(io.StringIO()):
+            return lsc.main()
+
+    def test_linux_host_runs_shell_leg_natively_without_probing_wsl(self):
+        """Linux runner: shell suites run natively; wsl_status is never consulted."""
+        with mock.patch("linux_shape_check.wsl_status", side_effect=AssertionError("WSL probed on Linux")) as probe, \
+                mock.patch("linux_shape_check.run_shell_tests_native", return_value=(0, "ok")) as native:
+            rc = self._run_main(["tools/helper.sh"], host_windows=False)
+        self.assertEqual(rc, 0)
+        native.assert_called_once()
+        probe.assert_not_called()
+
+    def test_linux_host_native_shell_failure_exits_1(self):
+        with mock.patch("linux_shape_check.run_shell_tests_native", return_value=(1, "boom")):
+            rc = self._run_main(["tools/helper.sh"], host_windows=False)
+        self.assertEqual(rc, 1)
+
+    def test_linux_host_runs_node_leg_natively(self):
+        with mock.patch("linux_shape_check.run_node_tests_native", return_value=(0, "ok")) as native:
+            rc = self._run_main(["tests/x.test.mjs"], host_windows=False)
+        self.assertEqual(rc, 0)
+        native.assert_called_once()
+
+    def test_native_node_leg_unsets_userprofile(self):
+        """Node suites run with USERPROFILE unset, natively, as on the WSL leg."""
+        completed = mock.Mock(returncode=0, stdout=b"", stderr=b"")
+        with mock.patch.dict(os.environ, {"USERPROFILE": "C:\\Users\\x"}), \
+                mock.patch("linux_shape_check.subprocess.run", return_value=completed) as run:
+            rc, _ = lsc.run_node_tests_native(Path("."), ["tests/x.test.mjs"])
+        self.assertEqual(rc, 0)
+        self.assertNotIn("USERPROFILE", run.call_args.kwargs["env"])
+
+    def test_windows_probe_error_fails_closed_without_require_flag(self):
+        """WSL probe error is a failure, not a silent skip."""
+        with mock.patch("linux_shape_check.wsl_status", return_value=lsc.WSL_ERROR), \
+                mock.patch("linux_shape_check.run_shell_tests_wsl") as wsl_run:
+            rc = self._run_main(["tools/helper.sh"], host_windows=True)
+        self.assertEqual(rc, 1)
+        wsl_run.assert_not_called()
+
+    def test_windows_no_distro_skips_with_reason(self):
+        """WSL present but no distro: skip (exit 0) with an install reason."""
+        with mock.patch("linux_shape_check.wsl_status", return_value=lsc.WSL_NO_DISTRO), \
+                mock.patch("linux_shape_check.run_shell_tests_wsl") as wsl_run:
+            rc = self._run_main(["tools/helper.sh"], host_windows=True)
+        self.assertEqual(rc, 0)
+        wsl_run.assert_not_called()
 
 
 if __name__ == "__main__":
