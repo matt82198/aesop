@@ -406,7 +406,19 @@ echo "0" > "${CYCLE_COUNTER}"
 # Create lock dir with ONLY pid file (no timestamp) - should be treated as stale-eligible
 BROKEN_LOCK="${TEST_STATE_DIR}/.watchdog-lock"
 mkdir -p "$BROKEN_LOCK"
-echo "9999" > "$BROKEN_LOCK/pid"
+# The reclaim path only fires when the recorded pid is DEAD (kill -0 fails).
+# A hardcoded "9999" is live on some CI runners (ubuntu shard 0 failed on
+# 3b0479d4 and 618951c2 with "watchdog already running"), so the lock was
+# correctly honoured and the test went red. Use the pid of a child we have
+# already reaped: a reaped pid is dead by construction.
+( exit 0 ) &
+DEAD_PID=$!
+wait "$DEAD_PID" 2>/dev/null
+if kill -0 "$DEAD_PID" 2>/dev/null; then
+  echo "FAIL: fixture pid ${DEAD_PID} still alive after reap"
+  exit 1
+fi
+echo "$DEAD_PID" > "$BROKEN_LOCK/pid"
 # NOTE: no timestamp file!
 
 echo "Created broken lock with pid but no timestamp:"

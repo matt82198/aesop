@@ -2167,6 +2167,57 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+# ===== Gate base must carry every root package the base gates import =====
+# Regression: gate_base_dir extracted only origin/main:tools, but tools/tracker_guard.py
+# imports the sibling package state_store/. The base copy then raised
+# ModuleNotFoundError and the tracker gate failed closed on EVERY push.
+printf '\n=== Test: tracker_guard runs from the base gate copy with state_store importable ===\n'
+(
+  export TMPDIR="$TEST_ROOT/gate_base_tmp"
+  mkdir -p "$TMPDIR"
+  base="$TEST_ROOT/tracker_base_src.base"
+  rm -rf "$base"
+  mkdir -p "$base"
+  cp -R "$REPO_ROOT/tools" "$base/tools"
+  cp -R "$REPO_ROOT/state_store" "$base/state_store"
+  git -C "$base" init -q -b main
+  git -C "$base" add -A
+  git -C "$base" -c user.email=t@example.com -c user.name=t -c core.autocrlf=false commit -q -m base
+  clone="$TEST_ROOT/tracker_clone"
+  rm -rf "$clone"
+  mkdir -p "$clone"
+  git -C "$clone" init -q -b main
+  git -C "$clone" config user.email t@example.com
+  git -C "$clone" config user.name t
+  git -C "$clone" config core.autocrlf false
+  printf 'base\n' > "$clone/README.md"
+  git -C "$clone" add -A
+  git -C "$clone" commit -q -m base
+  git -C "$clone" remote add origin "$base"
+  git -C "$clone" fetch -q origin main
+  git -C "$clone" checkout -q -b feature/test
+  cd "$clone" || exit 1
+  export AESOP_ROOT="$clone"
+  mkdir -p "$AESOP_ROOT/state"
+
+  guard_out=$(check_tracker_guard 2>&1)
+  guard_rc=$?
+  if printf '%s\n' "$guard_out" | grep -q "ModuleNotFoundError"; then
+    printf 'FAIL: tracker_guard base copy cannot import state_store:\n%s\n' "$guard_out"
+    exit 1
+  fi
+  if [ "$guard_rc" -ne 0 ]; then
+    printf 'FAIL: check_tracker_guard returned %s from the base gate copy:\n%s\n' "$guard_rc" "$guard_out"
+    exit 1
+  fi
+  printf 'PASS: check_tracker_guard exits 0 from the extracted base gate copy (state_store importable)\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Test Summary ===\n'
 printf 'Tests PASSED: %d\n' "$test_passed"
 printf 'Tests FAILED: %d\n' "$test_failed"

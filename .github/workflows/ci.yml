@@ -127,8 +127,9 @@ jobs:
           #   ci_shard_runner.py, halt.py, test_isolation_tripwire.py,
           #   remote_refs_tripwire.py, test_network_isolation.py,
           #   subprocess_common.py, encoding_lint.py, power_selftest.py,
-          #   hook_preflight.py, task_cadence_check.py, build_static_dash.py
-          if echo "$CHANGED" | grep -qE '^(daemons/|hooks/|bin/|ui/web/|\.github/workflows/)|\.ps1$|\.sh$|^package(-lock)?\.json$|^tools/(ci_shard_runner|halt|test_isolation_tripwire|remote_refs_tripwire|test_network_isolation|subprocess_common|encoding_lint|power_selftest|hook_preflight|task_cadence_check|build_static_dash)\.py$' || echo "$ADDED" | grep -qE '^tests/(test_[^/]*\.py|[^/]+\.test\.mjs|[^/]+\.sh)$'; then
+          #   hook_preflight.py, task_cadence_check.py, build_static_dash.py,
+          #   init_project.py (git-dir path resolution; Windows main-full red 38673452130)
+          if echo "$CHANGED" | grep -qE '^(daemons/|hooks/|bin/|ui/web/|\.github/workflows/)|\.ps1$|\.sh$|^package(-lock)?\.json$|^tools/(ci_shard_runner|halt|test_isolation_tripwire|remote_refs_tripwire|test_network_isolation|subprocess_common|encoding_lint|power_selftest|hook_preflight|task_cadence_check|build_static_dash|init_project)\.py$' || echo "$ADDED" | grep -qE '^tests/(test_[^/]*\.py|[^/]+\.test\.mjs|[^/]+\.sh)$'; then
             echo "windows_touched=true" >> $GITHUB_OUTPUT
           else
             echo "windows_touched=false" >> $GITHUB_OUTPUT
