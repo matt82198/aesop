@@ -2,74 +2,67 @@
 
 **What this file is:** The live durable checkpoint that Aesop itself uses during its own `/buildsystem` loop. It records the current system version, architectural decisions, known limitations, and the next milestone. This is not historical archive; it is read by the orchestrator to understand operational state.
 
-**Current Version:** v0.9.1 (tag 5026195d, cut 2026-10-09; GitHub release published 2026-10-10; npm @matt82198/aesop 0.9.1; 40 PRs since v0.9.0). Previous: v0.9.0 (2026-10-07).
+**Current Version:** v0.9.2 (PRE-PUBLISH: package.json 0.9.2 on origin/main since #978 merged 2026-10-15 01:54Z; tag v0.9.2 is NOT cut yet; latest origin tag v0.9.1 = 5026195d; release is USER-gated). Previous: v0.9.1 (tag 5026195d, cut 2026-10-09; GitHub release 2026-10-10; npm @matt82198/aesop 0.9.1). v0.9.0 (2026-10-07).
 
-## CURRENT (2026-10-14 mid-wave checkpoint)
+## CURRENT (2026-10-15 late-wave checkpoint 03:00Z)
 
-**Mid-wave checkpoint, round 1 audit + fix wave.** Every fact below was verified with `gh`/`git` at write time (2026-10-15 ~01:07Z, Mattt box). PR states move; re-verify before acting. Companion ledger: BUILDLOG.md section "2026-10-14 mid-wave checkpoint".
+**Late-wave checkpoint.** Every fact below was verified with `gh`/`git` at 2026-10-15 ~03:01Z on the Mattt box (shas as observed; PR states move, re-verify before acting). Supersedes the 2026-10-14 mid-wave block. Ledger: BUILDLOG.md "2026-10-15 03:00Z late-wave checkpoint".
 
-- **origin/main = `769cd103`** (#952). Latest completed main-full on main: success on `2c59d40f7d` (2026-10-15 00:59Z). main-full for `b17b899136`, `a2d98c449b`, `769cd103` was still in progress at verification. Regenerate On Main and Deploy Dashboard green on every completed head.
-- **Earlier RED main fixed:** scheduled run 38538275152 (windows aggregator treated a docs-only schedule skip as failure) is closed by #944.
+- **origin/main = a6dce61d** (#993, merged 02:54:16Z). **main-full is RED.** The last 5 completed main-full runs on main are all `failure`: edf028db (02:22Z), c43e156e (02:26Z), 0fffaa2c (02:31Z), 9cf9202f (02:41Z), a6dce61d (02:54Z, run 38673452130). Last green main-full: 2c59d40f (00:59Z).
+- **Red cause:** `tests/test_init_project_worktree.py:93` (`test_resolve_real_git_dir_regular_repo`) on windows-latest shard 3/4. AssertionError: the actual path is the long form (`C:/Users/runneradmin/...`) and the expected path is the 8.3 short form (`C:/Users/RUNNER~1/...`). First Windows run after #956's rename.
+- **Fix status (verified):** `fix/init-worktree-test-windows-paths` is NOT on origin and has no PR. `feat/new-tests-run-windows-shard` is NOT on origin and has no PR. Neither fix is in flight as of 03:01Z. Main stays red until a fix lane is dispatched and merges.
 
-**Shipped today (state verified with gh):**
-- aesop: #943 (state_md_verifier claim precision), #944 (windows aggregator docs-only skip), #945 (orchestrator checkpoint), #946 (incident commit-body ordering), #947 (G13 nested defs, advisory), #949 (bench unit tests cannot reach the paid live API), #950 (wave preset testCmd lint, F-11), #952 (wave_loop bounded exec and multi_dispatch claim keyspace, F-03/F-04), #954 (pr-sweep retriggers CI on armed PRs with zero check runs).
-- claude-scripts (`matt82198/claude-scripts`): #37 (power_selftest fixture), #38 (power_sync.py), #39 (secret_scan doc false positive), #40 (secret_scan --staged scans the index blob), #41 (fail-closed red-CI queue, main coverage, brain ahead/behind, $HOME expansion).
+**Shipped today (aesop: 43 PRs merged 2026-10-15 00:23Z to 02:54Z, `gh pr list --search merged:>=2026-10-14`):** #934 #943 #944 #945 #946 #947 #948 #949 #950 #951 #952 #953 #954 #955 #956 #958 #959 #960 #961 #962 #963 #964 #965 #966 #967 #968 #969 #971 #972 #976 #977 #978 #979 #980 #981 #984 #986 #987 #989 #991 #992 #993 #994.
+**claude-scripts** (`matt82198/claude-scripts`) merged: #37 #38 #39 #40 #41 #42 #43.
+- #978 = 0.9.2 version bump (origin/main package.json = 0.9.2). #986 = hermetic state_md_verifier tests with the PRE-PUBLISH release window (merged 02:21:09Z).
 
-**In flight, open PRs (verified OPEN):**
-- aesop #948 chore/incidents-2026-10-14 (head cebb5d43): incident ledger entries.
-- aesop #951 fix/wave-scheduler-tracker-writeapi (head 19607fde): F-01.
-- aesop #953 fix/state-db-path-resolver (head 2580d3ca): F-02, F-06.
-- aesop #955 fix/watchdog-heartbeat-blocked (head 5959ccae): blocked cycles write heartbeat.
-- aesop #956 fix/test-collection-and-flake (head dffdb953): misnamed TestCase module, coverage gate fails closed.
-- aesop #957 fix/watchdog-halt-boxwide (head 7ce40f7f): box-wide halt sentinel, fail closed.
-- aesop #932 perf/receipt-matrix-scoped and #934 chore/stats-refresh: auto-merge armed, zero check runs ever (defect 17).
-- **Lanes not yet on origin (no branch at verification):** fix/docs-only-anchor-windows-gate, fix/auto-merge-verify-merged, feat/verify-receipt-fail-closed, feat/incident-class-trailer, feat/worktree-ownership-guard, fix/shard3-serve-tests.
-- **Key lane:** chore/receipt-key-mattt-box is on origin at `050ea764`; no open request yet.
+**Open PRs (11, mergeStateStatus at 03:01Z):**
+- DIRTY (conflicts, needs rebase): #932 receipt matrix scoped, #975 ci-lint renamed gates, #982 gates judged by base copy (F-04), #995 bench API offline seam + confirm-spend.
+- BLOCKED (checks or review pending), one per line:
+  - #957 box-wide watchdog halt.
+  - #970 verify-receipt fail-closed.
+  - #974 test-isolation tripwire.
+  - #983 secret-scan pragma (paired with the landed #987 fix).
+  - #985 tools/CLAUDE.md headroom.
+  - #988 task-events ingest into state store (head f1bba156).
+  - #990 claim-read fail-closed.
 
-**Machinery on the Mattt box (verified 2026-10-14 20:07 CDT):**
-- `AesopWatchdogDaemon` Status Ready, next run 20:10. Heartbeat `~/conductor3/state/.watchdog-heartbeat` mtime 20:04:36 (about 3 minutes old at check). Blocked cycles skip the heartbeat until #955 lands.
-- `AesopRefinementMonitor` is not registered on this box. A legacy Disabled `\Aesop\AesopWatchdogDaemon` task remains (defect 6).
-- Brain hooks changed today. `claim-binding.mjs` is wired in settings.json. `no-grep-on-main-thread.mjs` is wired. Fail-closed conformance harness `_failclosed.test.mjs` is in progress (defect 19).
-- Receipts: signed receipts run on the matt8 box. Mattt box key provisioning is in progress (see above). verify-receipt fail-closed is not yet pushed.
+**Audit round 1 (2026-10-14, reports in ~/conductor3/audits/2026-10-14-r1/):** 9 lenses. 7 refuter reports on disk. 109 findings in the 7 refuted lenses: 2 REFUTED (1.8%), 62 CONFIRMED, 37 DOWNGRADED (34%, mostly P1 claims reachable only from operator-only paths), 7 IN-FLIGHT, 1 already filed. The analyst lens (13 findings) has no refuter. orchestrator-drift is analysis only. Lens model caveat: 12 of 24 Opus dispatches were spawned as claude-haiku-5-5 by the harness (feedback receipt f49b6043).
 
-**Audit round 1 (2026-10-14, reports in ~/conductor3/audits/2026-10-14-r1/):**
-- 9 lenses done: adv-enforcement, adv-reliability, analyst, architecture, brain-tooling, guardrails, regression, security, orchestrator-drift (plus model-rewrite investigation).
-- Refuters done for adv-reliability, architecture, brain-tooling, guardrails, regression. Refuters for security and adv-enforcement were in flight at checkpoint. analyst and orchestrator-drift have no refuter report on disk.
-- Lens model caveat: 12 of 24 Opus dispatches were spawned as Haiku by the harness. Feedback filed. Round 2 must check each lens's real model.
+**Audit round 2 (adv-fixers, 2026-10-14 21:42):** 19 merged PRs re-attacked: 11 SOUND, 7 INCOMPLETE, 1 REGRESSION.
+- INCOMPLETE fix status: #943 -> fix #986 landed. #950 -> fix #984 landed. #954 -> fix #981 landed. #952 -> fix #994 landed, plus #990 still open (BLOCKED). #949 -> fix #995 still open (DIRTY). #944 (non-ASCII path, multi-commit push) and #966 (test weakness): no fix PR observed.
+- REGRESSION #971 (new generic_credential rule silenced by a self-asserted pragma): fix #987 landed 02:21:49Z; its paired pragma fix #983 is still open. The round-2 re-attack has not been rerun on the fix.
 
-**Verified defects awaiting fix (short; severities after refuter adjustment where refuted):**
-1. `tools/incident_report.py --check`: docs/INCIDENTS.md drift on origin/main (latent red if the check is a CI gate).
-2. `incident_report.py --regenerate --output <abs path>` crashes.
-3. `incident_report.py` print mode crashes on Windows cp1252 (needs utf-8 stdout).
-4. `find_all_incidents` sort order contradicts its docstring.
-5. #946 classifies full commit bodies (182 rows vs 113). Review when INCIDENTS.md is regenerated.
-6. `daemons/install-tasks.ps1` divergence check matches task names across folders.
-7. Registered watchdog command carries a literal `$HOME` that power_selftest cannot resolve on Windows.
-8. Unwired hooks: capture-open-findings.mjs, main-context-ceiling.mjs, plus one more (selftest hooks-wired:3).
-9. auto-commit-brain.mjs pushes to master per save without secret-scan. Lane claim, not re-run by this checkpoint.
-10. sync_repos.py fast_forward_repo non-default path runs `fetch origin <default>:<default>`. Lane claim, not re-run.
-11. power_selftest whitelist strays in ~/.claude root (cleanup decision).
-12. MEMORY.md index 25.5 KB, over the 24 KB warning.
-13. Hook policy text suggests "sonnet" for untyped dispatch (doctrine is haiku). User wording decision.
-14. Primary checkout root has untracked junk (m.html, pp.json, q.json, r2.json, rc.json, sub.json, subs.json, `$HOME/`). Left untouched (no-delete rule). Listed for Matt.
-15. ~/.claude/hooks/session-end-log.mjs fails schema validation, so it silently fails at every session end.
-16. no-grep-on-main-thread.mjs fires for subagents in sibling worktrees. It must detect the orchestrator main thread only.
-17. PRs armed for auto-merge with zero CI runs have no retry actor (#932, #934).
-18. primary-branch-guard.mjs matches substrings of the command, not the git verb or resolved repo. Also blocks text that merely contains a phrase.
-19. Wave item: fail-closed conformance test for ALL hooks in ~/.claude/hooks (malformed JSON, empty stdin, missing cwd, forced throw; assert deny or exit 2).
+**Machinery on the Mattt box (observed):**
+- Watchdog heartbeat `~/conductor3/state/.watchdog-heartbeat`: mtime 2026-10-14 22:00:19 CDT (03:00:19Z), read at 03:01Z. Blocked cycles now write the heartbeat and name the blocked repo (#955 MERGED). Watchdog cycle was clean at 21:45 CDT per the orchestrator notes. The scheduled-task query from this shell returned no output, so task state is not claimed here.
+- Receipts live from this box: key `00946e62ea15ecd4`, pubkey `tools/receipt_pubkeys/mattt-box-00946e62ea15ecd4.pub` (landed via #965 at 01:16:48Z). Proof PR #972 landed at 01:31:41Z. Fail-closed verify-receipt is #970, still open.
+- SQLite task-stream ingest: #988 still open. The existing `state/tracker_events.db` is stale (last event 2026-08-19).
+- Brain hooks (reported live in the orchestrator notes, not re-measured here): fail-closed hook harness 29/29; claim-binding Stop hook; task-event projector tags internal vs lane; primary-branch-guard and no-grep hooks rewritten; pile-on hook is state-based.
+- CI pacing: at 02:40Z, `gh run list --status in_progress` = 4 and queued = 0. The CI concurrency cap is NOT the pacing factor (earlier claim withdrawn). Pacing is the DIRTY/BLOCKED PRs above.
 
-**Receipts gap (design vs implementation).** Design: harness-constructed intent; signed write-ahead receipt per action; measured action from artifacts the agent cannot write; zombie gate that kills a lane whose measured action diverges from intent; partial receipts; key outside the agent's reach; meta-gate that blocks. Implemented: one receipt per push, spool/flush, verify-receipt (neutral on missing), claim-binding Stop hook, hooks_wired_gate (reports, does not block). Gaps: no per-action receipts; intent not bound into the receipt; no zombie-gate kill; no partial receipts; verify takes key and verifier from the PR checkout (security F-07); meta-gate does not block. Filed as incidents plus a plan lane (not yet pushed).
+**Rules recorded 2026-10-14 (durable, from the orchestrator notes):**
+- Sync is fetch-only. Explicit `model:"haiku"` on every dispatch. Opus 5.5 for audit lenses only, for this audit.
+- All hooks fail closed: malformed or missing stdin, unresolvable cwd or repo, internal exception = deny. WAVE ITEM 19 is the conformance test over every hook.
+- A hook denial on the main thread is stop-and-report, never a detour. The only exception is the documented escape token with a logged reason.
+- Incidents are recorded through commit trailers (#960), not .md files.
+- Gate strengthening proceeds without asking. Gate weakening never does.
+- Durable state over narration: every pacing or throughput claim needs `gh run list` counts.
+- The GitHub Actions concurrent-job count is the monitored CI cap (/afk decision, reversible; Matt names another cap if he wants one).
+- Never restart the user's browser. Chrome bridge: Matt relaunches Chrome himself.
+- Orchestrator never runs merge_train.py or any merge-queue polling. Merge trains are dispatched, and the orchestrator verifies `state == MERGED`.
 
-**Decisions (Matt 2026-10-14 and /afk rulings):**
-- All hooks fail closed. A hook denial on the main thread is stop-and-report, never a detour.
-- Incidents go to the incident log through the commit-trailer convention. Prose .md rules are banned.
-- Receipt keys are no longer deferred (provisioning in progress on the Mattt box).
-- Audit lenses stay on Opus; fix lanes stay Haiku. Every dispatch states `model` explicitly.
-- Cap question resolved by /afk ruling (reversible): GitHub Actions concurrent-job cap is THE cap, monitored by idle_tick, detect_red_ci_runs and pr_sweep.
-- Release: patch 0.9.2 (CI and machinery fixes only), cut once main is green. Reversible if Matt names a version.
-- WSL is approved but blocked by firmware virtualization (BIOS change and reboot needed).
+**Release gate (USER-gated, not run):**
+- Blocked on main-full green (above). Tag v0.9.2 does NOT exist on origin (`git ls-remote --tags origin`: v0.9.0 = 5dffb81f, v0.9.1 = 5026195d).
+- Release = `git tag v0.9.2` then `gh release create v0.9.2`. The release:published workflow publishes to npm via OIDC. Matt's standing order: cut the release once main CI is green.
 
-**Release gate status: NOT MET.** Current release v0.9.1. Done: #944, #945, #946 (see Shipped). Still open at verification: #948, #951, #953, #955, #956, #957, #932, #934, plus the unpushed lanes above. Main-full green on the release head is not yet confirmed. The release is blocked until those land.
+**Open defects carried (not fixed in this checkpoint):**
+- DEFECT 15 (brain): `~/.claude/hooks/session-end-log.mjs` fails schema validation at every session end.
+- DEFECT 16 (brain): `no-grep-on-main-thread.mjs` fires for subagents in sibling worktrees.
+- DEFECT 18 (brain): `primary-branch-guard.mjs` matches substrings, not the git verb or resolved toplevel.
+- Receipts gap: no per-action receipts; intent not bound into the receipt; no zombie-gate kill; no partial receipts; verify-receipt key boundary (F-07) not enforced; meta-gate does not block.
+- F-03 gate tamper: CODEOWNERS on enforcement paths is in #969 (MERGED). Required code-owner review needs a second reviewer account (Matt decision).
+- Junk files in the primary root (`m.html`, `pp.json`, `q.json`, `r2.json`, `rc.json`, `sub.json`, `subs.json`, `$HOME/`) left untouched under the no-delete rule. Matt decides.
+- Box setup: WSL blocked by firmware virtualization (BIOS, Matt action). The Chrome native-host bridge needs Matt to relaunch Chrome.
 
 ## Architectural Thesis
 
