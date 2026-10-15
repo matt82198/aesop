@@ -140,6 +140,15 @@ class TaskEventIngestTests(unittest.TestCase):
         self.assertEqual(result["malformed"], 0)
         self.assertEqual(result["exit_code"], 0)
 
+    def test_missing_source_is_clean_noop(self):
+        # A box/CI runner without the brain's task-events hook has no source file.
+        # That is "nothing to ingest", not a failure: --once must not exit non-zero.
+        self.assertFalse(self.jsonl.exists())
+        result = self._ingest()
+        self.assertEqual(result["exit_code"], 0)
+        self.assertEqual(result["ingested"], 0)
+        self.assertNotIn("error", result)
+
     def test_truncated_jsonl_fails_closed(self):
         self._write([_rec("a1", "general-purpose"), _rec("a2", "general-purpose")])
         self._ingest()

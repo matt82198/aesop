@@ -185,7 +185,8 @@ def ingest(jsonl_path, state_dir) -> dict:
     result = {"ingested": 0, "duplicates": 0, "malformed": 0, "cursor": 0, "exit_code": EXIT_OK}
 
     if not jsonl_path.exists():
-        result.update(exit_code=EXIT_USAGE, error=f"source missing: {jsonl_path}")
+        # No brain hook on this box (or a CI runner): nothing to ingest is a clean
+        # no-op, never a failure -- otherwise run-watchdog --once exits non-zero.
         return result
 
     offset = _read_cursor(cursor_path)
