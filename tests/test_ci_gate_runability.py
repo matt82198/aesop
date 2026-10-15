@@ -711,6 +711,27 @@ jobs:
         self.assertEqual(exit_code, 1, stdout)
         self.assertIn('tools/totally_new_check.py', stdout)
 
+    def test_path_mentioned_in_shell_comment_is_not_a_finding(self):
+        """A `# ...` comment inside a run block naming a missing path is not a gate invocation (main CI red)."""
+        yaml = """
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Detect docs-only change
+        run: |
+          # Anchored: an unanchored docs/ matched hooks/docs/pre-push.sh, which does not exist here.
+          echo ok
+"""
+        exit_code, stdout, _, _ = self.run_tool(yaml, stub_files=[])
+        self.assertEqual(exit_code, 0, stdout)
+
     def test_missing_manifest_fails_closed(self):
         """Without a readable required-checks manifest the tool must exit 2, never pass."""
         with tempfile.TemporaryDirectory() as tmpdir:

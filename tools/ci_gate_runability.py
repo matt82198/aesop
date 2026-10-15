@@ -290,6 +290,16 @@ def get_suite_family(run_text: Optional[str]) -> Optional[str]:
     return None
 
 
+def strip_shell_comments(run_text: str) -> str:
+    """Drop shell comments so a path named in a comment is not treated as invoked."""
+    kept = []
+    for line in run_text.split("\n"):
+        if line.strip().startswith("#"):
+            continue
+        kept.append(re.sub(r"(^|\s)#.*$", "", line))
+    return "\n".join(kept)
+
+
 def extract_script_paths(run_text: str) -> List[str]:
     """Every script path a run block invokes, in order, de-duplicated.
 
@@ -339,7 +349,7 @@ def check_jobs(repo_root: str, workflow_path: str, jobs: Dict) -> List[str]:
 
             # Check (c): every script the step invokes exists. Runs for every step,
             # over the whole run text, so a multi-file step cannot hide a missing file.
-            for file_path in extract_script_paths(run_text):
+            for file_path in extract_script_paths(strip_shell_comments(run_text)):
                 if not find_file_on_disk(repo_root, file_path):
                     findings.append(
                         f"{workflow_path}:{step['line']}: "

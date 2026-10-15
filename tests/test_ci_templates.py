@@ -75,6 +75,12 @@ class TestScaffoldModes(unittest.TestCase):
     def _assert_linters_pass(self, td):
         lint = _run_tool("ci_workflow_lint.py", td)
         self.assertEqual(lint.returncode, 0, "ci_workflow_lint: " + lint.stdout + lint.stderr)
+        # The scaffolded repo declares its own required checks: every job in its ci.yml.
+        # The guard fails closed without a manifest (exit 2), so write one.
+        ci_doc = yaml.safe_load((Path(td) / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+        manifest = Path(td) / "tools" / "required-checks.json"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text(json.dumps({"required_contexts": list(ci_doc["jobs"])}), encoding="utf-8")
         guard = _run_tool("ci_needs_skip_guard.py", td)
         self.assertEqual(guard.returncode, 0, "ci_needs_skip_guard: " + guard.stdout + guard.stderr)
 
