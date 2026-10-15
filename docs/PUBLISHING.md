@@ -93,7 +93,7 @@ python3 tools/secret_scan.py .
 
 This scans the entire package tree for credentials (API keys, tokens, PEM files, etc.). **If any are found, the publish will fail.** This is a safety gate — credentials should never appear in published npm packages.
 
-If a false positive occurs (e.g., pattern documentation), add the pragma to the file's first 10 lines:
+If a false positive occurs (e.g., pattern documentation), add the pragma to the file's first 10 lines. The pragma only softens doc-shaped rules (generic_secret_assignment, env_access); a credential-shaped `KEY_NAME=value` line still blocks, so use a placeholder value in docs instead:
 
 ```python
 # secretscan: allow-pattern-docs

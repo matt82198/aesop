@@ -793,7 +793,7 @@ class TestCSRFTokenFileSecurity(unittest.TestCase):
         """If file exists during creation (race), must fall back to reading it."""
         # Pre-create a token file with a known value
         token_file = os.path.join(self.state_dir, ".ui-session-token")
-        preexisting_token = "preexisting-token-1234567890123456789012345678901"
+        preexisting_token = "x" * 49
 
         with open(token_file, "w") as f:
             f.write(preexisting_token)

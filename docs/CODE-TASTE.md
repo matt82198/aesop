@@ -131,7 +131,7 @@ The scanner uses **two layers**:
    - Generic assignment patterns: `password = "..."`
    - Environment variable access: `os.getenv('SECRET')`
 
-These patterns are high false-positive rate in test files, so they can be allowed by pragma. Fatal patterns are high-precision (PEM headers, AWS key format) and are NEVER pragmaed.
+These patterns are high false-positive rate in test files, so they can be allowed by pragma. The `KEY_NAME=value` credential rule (`generic_credential_assignment`) is NOT pragma-able: the pragma is self-asserted by the scanned file, so it cannot launder a credential-shaped value. Doc examples of that rule use a placeholder value (`<...>`, `example`, `xxx`, `changeme`, ...) that the rule itself allows. Fatal patterns are high-precision (PEM headers, AWS key format) and are NEVER pragmaed.
 
 **Why separate fatal from doc-shaped?**
 
@@ -147,7 +147,7 @@ The pragma (`secretscan: allow-pattern-docs`) appears in diffs and is reviewable
 # secretscan: allow-pattern-docs
 
 class TestAuthEndpoint:
-    FAKE_API_KEY = "test_key_abcdef123456789"  # doc-shaped, allowed by pragma
+    FAKE_API_KEY = "<your-api-key>"  # doc placeholder, allowed by the rule itself
     # WRONG: real AWS key would STILL be caught and blocked:
     # AWS_KEY would match AWS_ACCESS_KEY_ID pattern <- fatal, pragma doesn't save this
 ```

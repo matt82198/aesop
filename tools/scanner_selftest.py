@@ -81,7 +81,7 @@ def main():
         cases = [
             (
                 "tp_ghp_token",
-                f"{'# GitHub token:'}\\ntoken = '{'ghp_' + 'a' * 32}'\\n",
+                f"{'# GitHub token:'}\\n{'token'} = '{'ghp_' + 'a' * 32}'\\n",
                 "test.py",
                 1,
                 "token"
