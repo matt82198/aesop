@@ -134,6 +134,11 @@ class TestVerifyGatesWired(unittest.TestCase):
         os.makedirs(os.path.join(self.test_dir, 'tests'))
         os.makedirs(tools_dir)
 
+        # Copy the real gate in, so the run exercises its own fail-closed path
+        import shutil
+        shutil.copy2(os.path.join(os.path.dirname(__file__), "..", "tools", "verify_gates_wired.py"),
+                     os.path.join(tools_dir, "verify_gates_wired.py"))
+
         # Create ci.yml but missing CLAUDE.md files
         ci_yml_path = os.path.join(self.test_dir, '.github', 'workflows', 'ci.yml')
         with open(ci_yml_path, 'w', encoding='utf-8') as f:
@@ -141,7 +146,7 @@ class TestVerifyGatesWired(unittest.TestCase):
 
         rc, stdout, stderr = self._run_gate(self.test_dir)
         # Should fail closed (exit 2 on error or exit 1)
-        self.assertNotEqual(rc, 0, "Expected non-zero exit when CLAUDE.md missing")
+        self.assertEqual(rc, 2, "Expected exit 2 (fail-closed) when CLAUDE.md missing, got %d: %s" % (rc, stderr))
 
     def test_guardrail_gate_marker(self):
         """Test: gates marked with (Guardrail Gx) are captured."""

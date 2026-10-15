@@ -73,7 +73,7 @@ def discover_gates(claudemd_path, ambiguous=None):
     gates = {}
 
     if not os.path.isfile(claudemd_path):
-        return gates
+        return None  # Missing CLAUDE.md is fail-closed, never a silent pass
 
     try:
         with open(claudemd_path, 'r', encoding='utf-8') as f:
