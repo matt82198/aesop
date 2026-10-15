@@ -108,7 +108,7 @@
     "tests/test_status_publish.py@RedefinedWhileUnused": 1,
     "tests/test_symlink_guard.py@UnusedVariable": 1,
     "tests/test_test_discovery.py@UnusedVariable": 1,
-    "tests/test_test_hygiene.py@UnusedVariable": 3,
+    "tests/test_test_hygiene.py@UnusedVariable": 2,
     "tests/test_test_network_isolation.py@UnusedVariable": 1,
     "tests/test_todo_tracker.py@UnusedVariable": 1,
     "tests/test_toolchain_health.py@UnusedIndirectAssignment": 1,

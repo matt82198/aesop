@@ -8,12 +8,18 @@ Run: python -m pytest tests/test_tracker_create_empty_state.py -xvs
 import json
 import os
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 
 SERVE_PATH = Path(__file__).parent.parent / "ui" / "serve.py"
+UI_DIR = Path(__file__).parent.parent / "ui"
+if str(UI_DIR) not in sys.path:
+    sys.path.insert(0, str(UI_DIR))
+
+_FIXTURE_ENV_KEYS = ("AESOP_ROOT", "AESOP_STATE_ROOT", "AESOP_TRANSCRIPTS_ROOT", "AESOP_UI_COLLECT_INTERVAL")
 
 
 def load_serve(fixture_root):
@@ -39,17 +45,29 @@ class TrackerCreateEmptyStateTest(unittest.TestCase):
         (self.fixture_root / "state").mkdir()
         (self.fixture_root / "transcripts").mkdir()
 
+        # api.tracker reads config.TRACKER_FILE live, so the fixture must rebind config to
+        # its own state root (env first, then reload) -- otherwise writes land in whatever
+        # root an earlier test in this process left bound (see the isolation test below).
+        import config as ui_config
+        self._saved_env = {k: os.environ.get(k) for k in _FIXTURE_ENV_KEYS}
+        os.environ["AESOP_STATE_ROOT"] = str(self.fixture_root / "state")
         self.serve = load_serve(self.fixture_root)
+        ui_config.reload()
 
         # Import the API module after serve initializes config
         import api.tracker
-        import config as ui_config
         self.tracker_api = api.tracker
         self.config = ui_config
         self.token = self.serve.SESSION_TOKEN
 
     def tearDown(self):
-        """Clean up fixture."""
+        """Restore env, rebind config away from the removed fixture, clean up."""
+        for k, v in self._saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        self.config.reload()
         shutil.rmtree(self.fixture_root, ignore_errors=True)
 
     def test_create_item_from_empty_state(self):
@@ -132,6 +150,47 @@ class TrackerCreateEmptyStateTest(unittest.TestCase):
         titles = {item["title"] for item in items}
         self.assertIn("Existing item", titles)
         self.assertIn("New item after migration", titles)
+
+
+class TrackerStateIsolationFromForeignBindingTest(unittest.TestCase):
+    """Regression: api.tracker reads config.TRACKER_FILE live, so a fixture that does not
+    config.reload() writes into whichever state root an earlier test left bound in the
+    shard process. Items then pile up across tests (5 != 3, 7 != 2, 10 != 3)."""
+
+    KEYS = ("AESOP_ROOT", "AESOP_STATE_ROOT", "AESOP_TRANSCRIPTS_ROOT", "AESOP_UI_COLLECT_INTERVAL")
+
+    def test_create_lands_in_own_fixture_after_foreign_config_binding(self):
+        import config as ui_config
+        saved = {k: os.environ.get(k) for k in self.KEYS}
+        decoy = Path(tempfile.mkdtemp(prefix="tracker-decoy-"))
+        (decoy / "state").mkdir()
+        (decoy / "transcripts").mkdir()
+        try:
+            # Simulate an earlier test leaving config bound to its own state root.
+            os.environ["AESOP_ROOT"] = str(decoy)
+            os.environ["AESOP_STATE_ROOT"] = str(decoy / "state")
+            os.environ["AESOP_TRANSCRIPTS_ROOT"] = str(decoy / "transcripts")
+            ui_config.reload()
+            case = TrackerCreateEmptyStateTest("test_create_multiple_items_from_empty_state")
+            case.setUp()
+            try:
+                body = json.dumps({"title": "Isolation probe"}).encode("utf-8")
+                headers = {"X-Aesop-Token": case.token, "Content-Length": str(len(body))}
+                status, result = case.tracker_api.create(headers, body)
+                self.assertEqual(status, 201, f"Expected 201, got {status}: {result}")
+                self.assertTrue((case.fixture_root / "state" / "tracker.json").exists())
+                self.assertFalse((decoy / "state" / "tracker.json").exists(),
+                                 "item leaked into the foreign bound state root")
+            finally:
+                case.tearDown()
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            ui_config.reload()
+            shutil.rmtree(decoy, ignore_errors=True)
 
 
 if __name__ == "__main__":

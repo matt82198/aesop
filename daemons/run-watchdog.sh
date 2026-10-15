@@ -6,9 +6,10 @@
 # Configuration: export AESOP_ROOT=/path/to/aesop before running (defaults to script directory's parent).
 # Testing: export AESOP_WATCHDOG_CYCLE_CMD to override backup-fleet.sh invocation
 #
-# Kill switch (wave-26 safety brake): if AESOP_ROOT/state/.HALT exists (see
-# tools/halt.py), every cycle logs "HALTED: <reason>" and skips all work — no
-# backup, no push, no scan — until cleared via `python tools/halt.py --clear`.
+# Kill switch (wave-26 safety brake): if $CONDUCTOR_ROOT/state/.HALT (box-wide, written by
+# tools/halt.py set) or the per-checkout state/.HALT exists, every cycle logs "HALTED: <reason>"
+# and skips all work — no backup, no push, no scan — until cleared via `python tools/halt.py --clear`.
+# Fails closed: if the halt status cannot be determined, the cycle is skipped too.
 
 # Atomic lock acquire: mkdir is atomic (POSIX guarantees)
 # Returns 0 if lock acquired, 1 if held by another process, 2 if stale lock reclaimed
@@ -170,6 +171,29 @@ run_pr_sweep_throttled() {
   fi
 }
 
+# Session-independent task-event ingest (tools/ingest_task_events.py): tails
+# ~/.claude/state/task-events.jsonl into the state store `task` stream. Fail
+# closed: a non-zero exit is logged as ERROR to FLEET-BACKUP.log and returned
+# to the caller, which reports it (--once exits 1; daemon keeps its cadence).
+# The tool itself writes the heartbeat only on a clean run.
+run_task_ingest() {
+  local aesop_root="$1"
+  local python_exe="$2"
+  local log_file="$3"
+  if [ -z "$python_exe" ] || [ ! -f "$aesop_root/tools/ingest_task_events.py" ]; then
+    return 0
+  fi
+  local ingest_out ingest_rc
+  ingest_out=$("$python_exe" "$aesop_root/tools/ingest_task_events.py" --state-dir "$aesop_root/state" 2>&1)
+  ingest_rc=$?
+  echo "$ingest_out" >> "$log_file"
+  if [ $ingest_rc -ne 0 ]; then
+    echo "[$(date '+%F %T')] ERROR: task-event ingest failed (exit $ingest_rc)" >> "$log_file"
+    return $ingest_rc
+  fi
+  return 0
+}
+
 # Kill switch check (wave-26 safety brake). Returns 0 (bash true) and logs
 # "HALTED: <reason>" if halt sentinel exists; returns 1 otherwise.
 # Never runs backup/push/scan work when halted — caller must skip the cycle.
@@ -181,34 +205,66 @@ run_pr_sweep_throttled() {
 check_halt() {
   local log_file="$1"
   local halt_py="${2:-${HALT_PY_PATH}}"
-
-  if [ -z "$PYTHON_EXE" ] || [ -z "$halt_py" ]; then
-    return 1
+  local box_sentinel=""
+  if [ -n "${CONDUCTOR_ROOT:-}" ]; then
+    box_sentinel="$CONDUCTOR_ROOT/state/.HALT"
   fi
 
-  # Query halt.py for halt status; exit code tells us: 1=halted, 0=not halted
-  local halt_output
-  halt_output=$("$PYTHON_EXE" "$halt_py" --status 2>&1)
-  local halt_exit=$?
-
-  if [ $halt_exit -eq 1 ]; then
-    # Halted: extract reason from output
-    # halt.py outputs: "HALTED: <reason> (since <timestamp>)"
-    local reason
-    reason=$(echo "$halt_output" | sed 's/^HALTED: //' | sed 's/ (since.*$//')
-    if [ -z "$reason" ]; then
-      reason="$halt_output"
+  # Trigger 1 (box-wide, operator kill switch): file existence only, needs no interpreter.
+  if [ -n "$box_sentinel" ] && [ -e "$box_sentinel" ]; then
+    local box_reason
+    box_reason=$(sed -n 's/.*"reason"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' "$box_sentinel" 2>/dev/null | head -n 1)
+    if [ -z "$box_reason" ]; then
+      box_reason="(unreadable sentinel)"
     fi
-
-    echo "HALTED: $reason"
+    echo "HALTED: $box_reason [box-wide $box_sentinel]"
     if [ -n "$log_file" ]; then
-      echo "[$(date '+%F %T')] HALTED: $reason" >> "$log_file"
+      echo "[$(date '+%F %T')] HALTED: $box_reason [box-wide $box_sentinel]" >> "$log_file"
     fi
     return 0
   fi
 
-  # Not halted (exit 0 from halt.py)
-  return 1
+  # Trigger 2 (per-checkout): halt.py --status. Exit 0 = not halted; exit 1 with a
+  # HALTED: line = halted. Everything else is UNKNOWN and fails closed below.
+  local halt_output=""
+  local halt_exit=""
+  if [ -n "$PYTHON_EXE" ] && [ -n "$halt_py" ]; then
+    halt_output=$("$PYTHON_EXE" "$halt_py" --status 2>&1)
+    halt_exit=$?
+  else
+    halt_exit="no-interpreter"
+  fi
+
+  if [ "$halt_exit" = "0" ]; then
+    return 1
+  fi
+
+  case "$halt_output" in
+    HALTED:*)
+      if [ "$halt_exit" = "1" ]; then
+        # halt.py outputs: "HALTED: <reason> (since <timestamp>) [<label>]"
+        local reason
+        reason=$(echo "$halt_output" | head -n 1 | sed 's/^HALTED: //' | sed 's/ (since.*$//')
+        if [ -z "$reason" ]; then
+          reason="$halt_output"
+        fi
+        echo "HALTED: $reason"
+        if [ -n "$log_file" ]; then
+          echo "[$(date '+%F %T')] HALTED: $reason" >> "$log_file"
+        fi
+        return 0
+      fi
+      ;;
+  esac
+
+  # Unexpected result (no interpreter, Store stub exit 49, traceback, unknown code):
+  # the halt status is unknowable, so fail CLOSED and skip the cycle.
+  local fail_msg="HALT-CHECK-FAILED (exit $halt_exit); treating as HALTED, cycle skipped"
+  echo "$fail_msg"
+  if [ -n "$log_file" ]; then
+    echo "[$(date '+%F %T')] $fail_msg" >> "$log_file"
+  fi
+  return 0
 }
 
 # Main execution — guarded below so sourcing this file (e.g. from tests, to
@@ -269,6 +325,13 @@ main() {
       "$PYTHON_EXE" "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
     fi
     run_pr_sweep_throttled "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log"
+    ingest_rc=0
+    run_task_ingest "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log" || ingest_rc=$?
+    if [ $ingest_rc -ne 0 ]; then
+      release_lock "$LOCK_DIR"
+      printf 'WATCHDOG SMOKE: FAILED — [task-event ingest exit %d]\n' "$ingest_rc" >&2
+      exit 1
+    fi
     release_lock "$LOCK_DIR"
     printf 'WATCHDOG SMOKE: PASSED\n'
     exit 0
@@ -305,6 +368,7 @@ main() {
       "$PYTHON_EXE" "$AESOP_ROOT/tools/alert_bridge.py" --scan || true
     fi
     run_pr_sweep_throttled "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log"
+    run_task_ingest "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log" || true
     sleep 150
   done
 }

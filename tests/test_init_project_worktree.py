@@ -11,6 +11,7 @@ Worktree scenario:
 - Hooks MUST be installed in the common git dir (../repo/.git/hooks), not worktree
 """
 
+import os
 import sys
 import tempfile
 import shutil
@@ -83,6 +84,41 @@ class TestInitProjectWorktree(unittest.TestCase):
         self.assertIsNotNone(resolved_git_dir, 'Should resolve git dir for worktree')
         self.assertTrue(resolved_git_dir.exists(), f'Resolved git dir should exist: {resolved_git_dir}')
         self.assertTrue((resolved_git_dir / 'hooks').exists(), 'Hooks dir should exist in resolved git dir')
+        # The product's RETURN VALUE must already be resolved (no resolve() on our side)
+        self.assertEqual(resolved_git_dir, (self.repo_dir / '.git').resolve(), 'Common git dir should be the primary .git (as returned, unresolved-by-test)')
+        self.assertEqual(resolved_git_dir, resolved_git_dir.resolve(), 'resolve_real_git_dir must return an already-resolved path')
+
+    def test_resolve_real_git_dir_worktree_pointer_fallback_is_resolved(self):
+        """Gitdir-pointer fallback (git unavailable) must return a resolved path.
+
+        The worktree .git pointer is rewritten to contain a '..' segment. Pre-fix the
+        fallback returned that raw pointer string unchanged (unresolved); post-fix it
+        returns the resolved worktree gitdir. PATH is emptied so 'git rev-parse' fails
+        and the real fallback branch runs (no mock).
+        """
+        fb_dir = Path(self.temp_dir) / 'fallback-wt'
+        subprocess.run(['git', '-C', str(self.repo_dir), 'worktree', 'add', str(fb_dir)], check=True, capture_output=True, cwd=str(self.repo_dir))
+        try:
+            pointer = str(self.repo_dir / '.git' / 'hooks' / '..' / 'worktrees' / 'fallback-wt')
+            git_file = fb_dir / '.git'
+            os.chmod(git_file, 0o644)  # git marks linked-worktree .git files read-only on Windows
+            git_file.unlink()
+            git_file.write_text('gitdir: ' + pointer + '\n', encoding='utf-8')
+
+            saved_path = os.environ.get('PATH')
+            os.environ['PATH'] = ''
+            try:
+                resolved_git_dir = init_project.resolve_real_git_dir(str(fb_dir))
+            finally:
+                os.environ['PATH'] = saved_path
+
+            self.assertIsNotNone(resolved_git_dir, 'Fallback should resolve the worktree gitdir')
+            self.assertEqual(resolved_git_dir, (self.repo_dir / '.git' / 'worktrees' / 'fallback-wt').resolve(),
+                             'Fallback must return the resolved worktree gitdir')
+            self.assertEqual(resolved_git_dir, resolved_git_dir.resolve(),
+                             'Fallback must return an already-resolved path')
+        finally:
+            subprocess.run(['git', '-C', str(self.repo_dir), 'worktree', 'remove', '--force', str(fb_dir)], capture_output=True, cwd=str(self.repo_dir))
 
     def test_resolve_real_git_dir_regular_repo(self):
         """Test resolve_real_git_dir function with regular repo"""
@@ -90,7 +126,8 @@ class TestInitProjectWorktree(unittest.TestCase):
 
         self.assertIsNotNone(resolved_git_dir, 'Should resolve git dir for regular repo')
         self.assertTrue(resolved_git_dir.exists(), f'Resolved git dir should exist: {resolved_git_dir}')
-        self.assertEqual(resolved_git_dir, self.repo_dir / '.git', 'Should resolve to .git for regular repo')
+        self.assertEqual(resolved_git_dir, (self.repo_dir / '.git').resolve(), 'Should resolve to .git for regular repo')
+        self.assertEqual(resolved_git_dir, resolved_git_dir.resolve(), 'resolve_real_git_dir must return an already-resolved path')
 
     def test_resolve_real_git_dir_nonexistent(self):
         """Test resolve_real_git_dir with non-git directory"""

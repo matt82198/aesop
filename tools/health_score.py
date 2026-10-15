@@ -26,9 +26,9 @@ import sys
 from pathlib import Path
 
 try:
-    from common import check_heartbeat_staleness
+    from common import check_heartbeat_staleness, resolve_hooks_dir
 except ImportError:
-    from tools.common import check_heartbeat_staleness
+    from tools.common import check_heartbeat_staleness, resolve_hooks_dir
 
 
 def calculate_score(cwd=None):
@@ -151,8 +151,16 @@ def _check_config(cwd_path):
 
 
 def _check_pre_push_hook(cwd_path):
-    """Check if .git/hooks/pre-push exists and is executable."""
-    hook_path = cwd_path / ".git" / "hooks" / "pre-push"
+    """Check that a pre-push hook is installed where git will run it.
+
+    The hooks dir is asked from git (linked worktrees keep hooks in the common
+    dir; core.hooksPath is honoured). If git cannot answer, FAIL with git's own
+    error text rather than passing or guessing.
+    """
+    hooks_dir, error = resolve_hooks_dir(cwd_path)
+    if hooks_dir is None:
+        return {"passed": False, "detail": f"Cannot resolve git hooks dir: {error[:160]}"}
+    hook_path = hooks_dir / "pre-push"
 
     if not hook_path.exists():
         return {"passed": False, "detail": "Pre-push hook not installed"}

@@ -292,3 +292,91 @@ test('DEFECT 6: scaffold NEXT STEPS should guide customization (domains, URLs, s
   assert.ok(output.includes('CLAUDE.md') || output.includes('domains'),
     `Output should guide on CLAUDE.md/domains. stdout: ${res.stdout}`);
 });
+
+// DEFECT 7: the pre-push hook check must resolve the hooks directory through git.
+// In a linked worktree .git is a FILE ("gitdir: <primary>/.git/worktrees/<name>") and
+// hooks live in the common dir; core.hooksPath moves them elsewhere entirely.
+function runDoctorJsonHookRow(cwd) {
+  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
+  const res = spawnSync(process.execPath, [DOCTOR, '--json'], {
+    encoding: 'utf8',
+    cwd,
+    timeout,
+    killSignal: 'SIGKILL'
+  });
+  let parsed;
+  try {
+    parsed = JSON.parse(res.stdout);
+  } catch (e) {
+    assert.fail(`doctor --json must emit JSON. stdout: ${res.stdout} stderr: ${res.stderr}`);
+  }
+  const row = parsed.checks.find(c => c.label === 'Git pre-push hook installed');
+  assert.ok(row, `hook check row missing from doctor output: ${JSON.stringify(parsed.checks)}`);
+  return row;
+}
+
+function makePrimaryWithLinkedWorktree() {
+  const root = fs.realpathSync.native(createTestDir());
+  const primary = path.join(root, 'primary');
+  const wt = path.join(root, 'wt');
+  fs.mkdirSync(primary, { recursive: true });
+  gitCmd(primary, ['init']);
+  gitCmd(primary, ['config', 'user.email', 'test@example.com']);
+  gitCmd(primary, ['config', 'user.name', 'Test User']);
+  gitCmd(primary, ['commit', '--allow-empty', '-m', 'init']);
+  gitCmd(primary, ['worktree', 'add', wt, '-b', 'wt-branch']);
+  return { root, primary, wt };
+}
+
+test('DEFECT 7: doctor finds the pre-push hook from a linked worktree (hook in common hooks dir)', () => {
+  const { primary, wt } = makePrimaryWithLinkedWorktree();
+  // Precondition: a linked worktree's .git is a file, not a directory.
+  assert.ok(fs.statSync(path.join(wt, '.git')).isFile(), 'linked worktree .git must be a file');
+
+  fs.mkdirSync(path.join(primary, '.git', 'hooks'), { recursive: true });
+  fs.writeFileSync(path.join(primary, '.git', 'hooks', 'pre-push'), '#!/bin/sh\nexit 0\n');
+
+  const wtRow = runDoctorJsonHookRow(wt);
+  assert.equal(wtRow.passed, true,
+    `worktree doctor must PASS the hook check. hint: ${wtRow.hint}`);
+
+  const primaryRow = runDoctorJsonHookRow(primary);
+  assert.equal(primaryRow.passed, true,
+    `primary doctor must PASS the hook check. hint: ${primaryRow.hint}`);
+});
+
+test('DEFECT 7: doctor honours core.hooksPath for a linked worktree', () => {
+  const { root, primary, wt } = makePrimaryWithLinkedWorktree();
+  const custom = path.join(root, 'custom-hooks');
+  fs.mkdirSync(custom, { recursive: true });
+  fs.writeFileSync(path.join(custom, 'pre-push'), '#!/bin/sh\nexit 0\n');
+  gitCmd(primary, ['config', 'core.hooksPath', custom]);
+
+  const row = runDoctorJsonHookRow(wt);
+  assert.equal(row.passed, true,
+    `worktree doctor must PASS when core.hooksPath holds the hook. hint: ${row.hint}`);
+});
+
+test('DEFECT 7: core.hooksPath set to an empty dir FAILS even if .git/hooks has a hook (no blind common-dir lookup)', () => {
+  const { root, primary, wt } = makePrimaryWithLinkedWorktree();
+  fs.mkdirSync(path.join(primary, '.git', 'hooks'), { recursive: true });
+  fs.writeFileSync(path.join(primary, '.git', 'hooks', 'pre-push'), '#!/bin/sh\nexit 0\n');
+  const empty = path.join(root, 'empty-hooks');
+  fs.mkdirSync(empty, { recursive: true });
+  gitCmd(primary, ['config', 'core.hooksPath', empty]);
+
+  const row = runDoctorJsonHookRow(wt);
+  assert.equal(row.passed, false,
+    'doctor must FAIL: git will not run .git/hooks/pre-push once core.hooksPath points elsewhere');
+});
+
+test('DEFECT 7: when git cannot answer the hook check FAILS with the git error (fail closed)', () => {
+  const root = fs.realpathSync.native(createTestDir());
+  // A .git FILE pointing at nothing: checkGitRepo sees a .git entry, git cannot resolve it.
+  fs.writeFileSync(path.join(root, '.git'), `gitdir: ${path.join(root, 'missing-gitdir')}\n`);
+
+  const row = runDoctorJsonHookRow(root);
+  assert.equal(row.passed, false, 'an unanswerable git lookup must FAIL, never PASS');
+  assert.match(row.hint, /not a git repository/i,
+    `hint must carry the git error text. hint: ${row.hint}`);
+});

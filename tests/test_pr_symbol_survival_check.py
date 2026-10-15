@@ -181,6 +181,26 @@ class TestPrSymbolSurvivalCheck(unittest.TestCase):
         self.assertEqual(moved_entry['old_file'], 'a.py')
         self.assertEqual(moved_entry['new_file'], 'b.py')
 
+    def test_branch_that_adds_then_deletes_its_own_helper_passes(self):
+        """False-positive regression: a clean PR adds a helper in one commit and
+        deliberately deletes it in a later commit. No merge commit lost it, so the
+        head tree lacking it is intentional and must NOT fail the check."""
+        repo = _init_repo(self._tmp_dir)
+        _write(repo, 'mod.py', 'def base_fn():\n    return 1\n')
+        base_sha = _commit(repo, 'base')
+
+        _git(repo, 'checkout', '-q', '-b', 'feature')
+        _write(repo, 'mod.py', 'def base_fn():\n    return 1\n\n\ndef helper():\n    return 2\n')
+        _commit(repo, 'feat: add helper')
+        _write(repo, 'mod.py', 'def base_fn():\n    return 1\n')
+        head_sha = _commit(repo, 'feat: remove helper again')
+
+        rc, stdout, stderr = _run_tool(repo, '--base', base_sha, '--head', head_sha, '--json')
+        self.assertEqual(rc, 0, 'stdout={}\nstderr={}'.format(stdout, stderr))
+        report = json.loads(stdout)
+        self.assertEqual(report['missing'], [])
+        self.assertEqual(report['symbols_checked'], 1)
+
     def test_no_symbols_added_is_a_trivial_pass(self):
         repo = _init_repo(self._tmp_dir)
         _write(repo, 'README.md', 'hello\n')
