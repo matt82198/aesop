@@ -59,6 +59,11 @@ class WaveTelemetryPhaseCase(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
         sys.path.insert(0, str(UI_PATH))
+        # Drop modules other tests may have cached: test_wave_dispatch_agents_parity
+        # deletes and re-binds sys.modules["config"] to a fixture and never restores it,
+        # so a stale wave_telemetry.config would read a dead STATE_DIR -> "unknown".
+        for mod in ("config", "wave_telemetry", "cost"):
+            sys.modules.pop(mod, None)
         try:
             config = importlib.import_module("config")
             config.reload()
