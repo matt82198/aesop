@@ -114,7 +114,8 @@ never reaching the hook.
   shell/workflow/Node files, runs test suites under WSL to catch Windows-only CI reds
   (e.g., isolated-home USERPROFILE assumptions, shell failures on Ubuntu). Wired into
   pre-push-policy.sh after generated_paths check. Tests: 17 unit cases covering skip/
-  notice/fail/require-wsl scenarios.
+  notice/fail/require-wsl scenarios. Receipt matrix part `linux-shape` (emit_receipt.py,
+  `requires_wsl`) is skipped-not-runnable when `wsl_status()` is absent/no-distro; a probe error runs it and fails closed.
 
 ## Gates & tests
 - `secret_scan.py --staged` — pre-push gate (exit 0=clean/1=findings/2=error; `# secretscan: allow-pattern-docs` pragma; `generic_credential_assignment` flags `KEY_NAME=value`/`KEY: value`/`KEY = "value"` outside .env files; NUL/UTF-16 files are decoded and scanned in full; files over 16 MiB fail closed)
