@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Guardrail G10: encoding lint — explicit encoding AND an explicit error handler.
+"""Guardrail G10: encoding lint -- explicit encoding AND an explicit error handler.
 INDEX: Encoding lint: flags `open()` without `encoding=`; `subprocess.run/check_output/Popen` with `text=True`/`universal_newlines=True` and no `encoding=` (the Windows cp1252 trap that crashed metrics_gate on a binary diff); and `subprocess.*` that sets `encoding=` without a safe `errors=` handler (strict decoding of one 0x97 byte killed the reader thread and crashed the merge queue on 24+ consecutive passes)
 
 Scans Python files for:
@@ -17,14 +17,16 @@ Flags:
   - `subprocess.run(..., encoding='utf-8')` WITHOUT `errors=`, or with
     `errors='ignore'` / `errors='strict'`
 
-Allows: binary mode (`'rb'`, `'wb'`) — no encoding needed.
+Allows: binary mode (`'rb'`, `'wb'`) -- no encoding needed.
 Suppression: `# encoding-ok` inline comment.
+ASCII rule: tools/*.py must be ASCII-only (LANE-CONTRACT section 6). Ratcheted by
+tools/encoding-ascii-baseline.json, which may only shrink (see ascii_findings).
 
 This guardrail prevents cp1252/locale-encoding surprises on Windows
 (e.g., tracker.json UnicodeDecodeError, subprocess text=True failure) AND the
 strict-decoding crash class: `encoding='utf-8'` with the default strict handler
 raises UnicodeDecodeError inside subprocess's reader THREAD, which never
-propagates to the caller — stdout comes back None and the caller dies on a
+propagates to the caller -- stdout comes back None and the caller dies on a
 misleading `.strip()` AttributeError. Requiring `encoding=` without requiring
 `errors=` is why this lint passed while the merge queue was hard down.
 
@@ -254,6 +256,88 @@ class SubprocessVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+ASCII_BASELINE_RELPATH = 'tools/encoding-ascii-baseline.json'
+
+
+def _finding(filepath, line: int, col: int, message: str, code: str) -> Dict:
+    """Build a finding whose strings are pure ASCII (safe on a cp1252 console)."""
+    return {
+        'file': str(filepath),
+        'line': line,
+        'col': col,
+        'message': message,
+        'code': code.encode('ascii', 'backslashreplace').decode('ascii').strip(),
+    }
+
+
+def scan_ascii(filepath: Path) -> List[Dict]:
+    """One finding per source line of `filepath` holding a non-ASCII character.
+
+    Decodes as UTF-8 with replacement, so a BOM (U+FEFF) or an invalid byte is
+    still reported rather than silently passing.
+    """
+    text = filepath.read_bytes().decode('utf-8', errors='replace')
+    findings = []
+    for lineno, line in enumerate(text.split('\n'), 1):
+        for col, ch in enumerate(line):
+            if ord(ch) > 127:
+                findings.append(_finding(
+                    filepath, lineno, col,
+                    f"non-ASCII character U+{ord(ch):04X} in tools/*.py; "
+                    f"Python in tools/ must be ASCII (use -- and ->, or \\uXXXX escapes)",
+                    line,
+                ))
+                break
+    return findings
+
+
+def load_ascii_baseline(root: Path) -> set:
+    """Ratchet baseline: the tools/*.py files allowed to stay non-ASCII.
+
+    A missing file is an empty baseline. A malformed one raises (fail closed).
+    """
+    path = root / ASCII_BASELINE_RELPATH
+    if not path.exists():
+        return set()
+    data = json.loads(path.read_text(encoding='utf-8'))
+    files = data.get('files') if isinstance(data, dict) else None
+    if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
+        raise ValueError(f'{ASCII_BASELINE_RELPATH}: expected {{"files": [str, ...]}}')
+    return set(files)
+
+
+def ascii_findings(root: Path) -> List[Dict]:
+    """ASCII-only rule for tools/*.py (non-recursive), with a shrink-only ratchet.
+
+    A non-ASCII file not in the baseline is a finding. A baselined file that is
+    now clean, or no longer exists, is a stale entry the baseline must drop.
+    """
+    baseline = load_ascii_baseline(root)
+    findings = []
+    seen = set()
+    for pyfile in sorted((root / 'tools').glob('*.py')):
+        rel = pyfile.relative_to(root).as_posix()
+        seen.add(rel)
+        hits = scan_ascii(pyfile)
+        if hits and rel not in baseline:
+            findings.extend(hits)
+        elif not hits and rel in baseline:
+            findings.append(_finding(
+                pyfile, 0, 0,
+                f"{rel} is ASCII-clean but still listed in {ASCII_BASELINE_RELPATH}; "
+                f"remove it (the baseline only shrinks)",
+                '',
+            ))
+    for rel in sorted(baseline - seen):
+        findings.append(_finding(
+            root / rel, 0, 0,
+            f"{rel} is listed in {ASCII_BASELINE_RELPATH} but does not exist; "
+            f"remove the stale entry",
+            '',
+        ))
+    return findings
+
+
 def scan_file(filepath: Path) -> List[Dict]:
     """Scan a single Python file for encoding issues.
 
@@ -373,6 +457,10 @@ def run(
         else:
             findings = scan_directory(scan_dir, root)
             all_findings.extend(findings)
+
+    # tools/*.py is held to the ASCII-only rule whenever tools/ is scanned.
+    if (root / 'tools').resolve() in scan_dirs:
+        all_findings.extend(ascii_findings(root))
 
     # Output results
     if json_output:
