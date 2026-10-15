@@ -3,7 +3,7 @@
 Tests for secret_scan.py — security audit for pragma abuse and secret categories.
 
 TDD tests for:
-- ITEM 1: Pragma should only soften generic_secret_assignment and env_access,
+- ITEM 1: Pragma should only soften env_access (generic_secret_assignment stays fatal),
   NOT fatal classes like pem_private_key, aws_access_key, etc.
 - ITEM 2: (Covered by pre-push hook self-test "Test 6" in hooks/pre-push-policy.sh)
 
@@ -172,8 +172,9 @@ class TestPragmaNotSoftensFatalSecrets(unittest.TestCase):
         finally:
             os.unlink(temp_path)
 
-    def test_pragma_softens_generic_secret_only(self):
-        """Pragma SHOULD soften generic_secret_assignment (non-fatal)."""
+    def test_pragma_does_not_soften_generic_secret(self):
+        """Pragma must NOT soften generic_secret_assignment: the pragma is
+        self-asserted by the scanned file, so a real-shaped value stays fatal."""
         # Keyword split so the assignment shape never appears in this source file
         kw = _j("pass", "word")
         temp_path = _write_fixture(
@@ -191,10 +192,10 @@ class TestPragmaNotSoftensFatalSecrets(unittest.TestCase):
                 len(generic_findings) > 0,
                 "Should detect generic_secret_assignment",
             )
-            # With pragma, this should be non-fatal
+            # With pragma, this must still be fatal
             self.assertTrue(
-                generic_findings[0][3] is False,
-                "generic_secret_assignment should be non-fatal with pragma",
+                generic_findings[0][3] is True,
+                "generic_secret_assignment must stay fatal even with pragma",
             )
         finally:
             os.unlink(temp_path)
