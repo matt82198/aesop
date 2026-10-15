@@ -19,9 +19,13 @@ for _p in (str(REPO / "driver"), str(REPO / "tools"), str(REPO / "state_store"),
 
 import wave_loop  # noqa: E402
 
-GRANDCHILD_SECONDS = 40
-TIMEOUT_S = 2
-WALL_BOUND_S = 5.0
+# Injected slow command: a grandchild that holds the inherited pipes for 12s.
+# Under a 1s bound the wrapper must return in well under 3s. A plain
+# subprocess.run(shell=True, timeout=1) blocks the full 12s on this host
+# (measured: the unbounded mutant fails at 12.0s against the 3s bound).
+GRANDCHILD_SECONDS = 12
+TIMEOUT_S = 1
+WALL_BOUND_S = 3.0
 
 
 class TestPreDispatchTestTimeoutBounded(unittest.TestCase):

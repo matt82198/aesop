@@ -48,6 +48,7 @@ KNOWN_FAIL_CLOSED_GATES = sorted([
     "conflict_marker_check",
     "linux_shape_check",
     "generated_push_gate",
+    "pr_symbol_survival_check",
 ])
 
 DUMMY_FAIL_CLOSED_GATE = """

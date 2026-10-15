@@ -58,14 +58,27 @@ class WaveTelemetryPhaseCase(unittest.TestCase):
             env=env, cwd=str(self.elsewhere))
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
+        # Sibling tests (tests/test_ui_wave_context.py) leave a stub `config` in sys.modules and
+        # wave_telemetry binds to whichever `config` was live at its import. Import both fresh so
+        # this test reads the root it just configured, then restore whatever was cached.
         sys.path.insert(0, str(UI_PATH))
+        saved = {name: sys.modules.pop(name, None) for name in ("config", "wave_telemetry")}
         try:
             config = importlib.import_module("config")
             config.reload()
             wave_telemetry = importlib.import_module("wave_telemetry")
+            # wave_telemetry binds `config` once, at its own import. A sibling test
+            # (test_wave_dispatch_agents_parity) deletes sys.modules["config"] and
+            # re-imports it, so a cached wave_telemetry can hold a stale config that
+            # still points at the repo state dir. Reload the module the code reads.
+            wave_telemetry.config.reload()
             telemetry = wave_telemetry.get_wave_telemetry()
         finally:
             sys.path.remove(str(UI_PATH))
+            for name, module in saved.items():
+                sys.modules.pop(name, None)
+                if module is not None:
+                    sys.modules[name] = module
         self.assertEqual(telemetry["phase"], PHASE.lower())
         self.assertNotEqual(telemetry["phase"], "unknown")
 

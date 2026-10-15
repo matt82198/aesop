@@ -710,9 +710,14 @@ def _load_repo_config() -> Optional[dict]:
 
 
 def _advisory_file_conflict(store, file_paths: List[str], this_instance_id: str) -> Optional[str]:
-    """Mirror of tools/multi_dispatch.check_conflict over the instances stream."""
+    """Mirror of tools/multi_dispatch.check_conflict over the instances stream.
+
+    Fail-closed: an unreadable claims store raises instance_projection.ClaimStateUnknown
+    (logged with the store path) rather than reporting "no conflict"; the caller
+    skips the item.
+    """
     wanted = set(file_paths)
-    for other_instance, other_files in instance_projection.get_all_claimed_files(store).items():
+    for other_instance, other_files in instance_projection.get_all_claimed_files_strict(store).items():
         if other_instance == this_instance_id:
             continue
         if wanted & set(other_files):

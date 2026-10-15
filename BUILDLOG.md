@@ -300,3 +300,67 @@ Convergence for the five refuted lenses: 78 findings in, 2 refuted (2.6 percent)
 Lens model caveat: 12 of 24 Opus dispatches were spawned as Haiku by the harness (model-rewrite investigation). Refuters on Opus were a user grant for this audit only. Round 2 must check each lens's model from its first line.
 
 Defects 1-19 and the receipts gap are listed in STATE.md CURRENT. Hook workarounds by the orchestrator (install-tasks -Force, worktree remove+add around a primary-branch-guard block) are logged here for review and are not repeated; per the user rule, a hook denial is stop-and-report.
+
+--- 2026-10-15 03:00Z [checkpoint] late-wave checkpoint (STATE.md ## CURRENT)
+
+2026-10-15 03:00Z late-wave checkpoint
+
+Verified with gh/git at 2026-10-15 ~03:01Z. Shas and PR states as observed; re-verify before acting.
+
+- origin/main = a6dce61d (#993, merged 02:54:16Z). main-full RED: the last 5 completed runs on main are all failure (edf028db, c43e156e, 0fffaa2c, 9cf9202f, a6dce61d; run 38673452130 on a6dce61d).
+- Red cause: tests/test_init_project_worktree.py:93 test_resolve_real_git_dir_regular_repo on windows-latest shard 3/4. Actual path is the long form; expected is the 8.3 short form (RUNNER~1).
+- Fix lanes named in the brief are NOT on origin: fix/init-worktree-test-windows-paths and feat/new-tests-run-windows-shard have no branch and no PR at 03:01Z.
+- Release: 0.9.2 bump merged (#978; origin/main package.json = 0.9.2). Tag v0.9.2 absent on origin (origin tags v0.9.0 5dffb81f, v0.9.1 5026195d). Release is USER-gated and blocked on main-full green.
+
+Ledger (gh pr list --search merged:>=2026-10-14, and gh pr list --state open):
+- aesop merged 2026-10-15 00:23Z to 02:54Z: 43 PRs (#934 #943 #944 #945 #946 #947 #948 #949 #950 #951 #952 #953 #954 #955 #956 #958 #959 #960 #961 #962 #963 #964 #965 #966 #967 #968 #969 #971 #972 #976 #977 #978 #979 #980 #981 #984 #986 #987 #989 #991 #992 #993 #994).
+- claude-scripts (matt82198/claude-scripts) merged: #37 #38 #39 #40 #41 #42 #43.
+- aesop open: 11. DIRTY 4 (#932 #975 #982 #995). BLOCKED 7 (#957 #970 #974 #983 #985 #988 #990).
+- Machinery: heartbeat ~/conductor3/state/.watchdog-heartbeat mtime 03:00:19Z, read 03:01Z. Receipt key 00946e62ea15ecd4 landed via #965 (01:16:48Z); proof #972 (01:31:41Z). Task-stream ingest #988 open.
+- CI pacing: gh run list in_progress 4, queued 0 at 02:40Z. The concurrency cap is not the pacing factor. Earlier claim withdrawn.
+
+Audit round 1 (reports in ~/conductor3/audits/2026-10-14-r1/; counts are verdict-table rows or headings in each *.REFUTED.md, reconciled with the prior mid-wave ledger for the first five lenses):
+
+| Lens | Findings | Refuter report | Confirmed | Downgraded | In-flight or filed | Refuted |
+|---|---|---|---|---|---|---|
+| adv-reliability | 17 | yes | 5 | 8 | 3 | 1 |
+| architecture | 13 | yes | 9 | 4 | 0 | 0 |
+| brain-tooling | 27 | yes | 20 | 5 | 2 | 0 |
+| guardrails | 15 | yes | 12 | 2 | 0 | 1 |
+| regression | 6 | yes | 4 | 1 | 1 | 0 |
+| security | 16 | yes (new this checkpoint) | 9 | 7 | 0 | 0 |
+| adv-enforcement | 15 | yes (new this checkpoint) | 3 | 10 | 2 | 0 |
+| Total, 7 refuted lenses | 109 | 7 of 7 | 62 | 37 | 8 | 2 |
+
+- Convergence: 2 of 109 refuted. 107 of 109 kept: 62 confirmed, 37 downgraded, 8 in-flight or filed. Downgrades are 37 of 109 findings, the largest correction class: most P1 claims were reachable only from operator-only paths.
+- analyst (13 findings) has no refuter report. orchestrator-drift is analysis only, not a findings table.
+- Lens model caveat (orchestrator notes): 12 of 24 Opus dispatches were spawned as claude-haiku-5-5 by the harness, no discriminator in the hooks. Feedback receipt f49b6043.
+
+Audit round 2 (adv-fixers, 2026-10-14 21:42, adv-fixers.md; header states Model: claude-haiku-5-5):
+- 19 merged PRs re-attacked. Result: 11 SOUND, 7 INCOMPLETE, 1 REGRESSION (11 + 7 + 1 = 19).
+- SOUND: #946 #947 #953 #958 #960 #962 #963 #964 #965 #968 #972.
+- INCOMPLETE and fix status (observed at 03:01Z):
+  - #943 -> fix #986 MERGED 02:21:09Z.
+  - #944 (non-ASCII path, multi-commit push) -> no fix PR observed.
+  - #949 -> fix #995 OPEN, DIRTY.
+  - #950 -> fix #984 MERGED 02:10:28Z.
+  - #952 -> fix #994 MERGED 02:41:04Z; #990 OPEN, BLOCKED.
+  - #954 -> fix #981 MERGED 02:02:16Z.
+  - #966 (test weakness) -> no fix PR observed.
+- REGRESSION #971 (new generic_credential rule silenced by a self-asserted pragma): fix #987 MERGED 02:21:49Z; paired #983 OPEN, BLOCKED. Re-attack not rerun on the fix.
+- Discrepancy recorded: the orchestrator notes say round 2 lenses stay on Opus 5.5. The adv-fixers header says claude-haiku-5-5. Not reconciled here; the lens model needs a verified first-line check on every round-2 lens.
+
+Decisions and rules (from the orchestrator notes, 2026-10-14):
+- Sync = fetch only. model:"haiku" explicit on every dispatch. Opus 5.5 for audit lenses only, for this audit.
+- All hooks fail closed. Hook denial on the main thread = stop and report, never a detour (escape token with logged reason only). WAVE ITEM 19 is the fail-closed conformance test over every hook.
+- Incidents recorded via commit trailers (#960), not .md files. Gate strengthening proceeds without asking; gate weakening never does.
+- Durable state over narration. Every pacing or throughput claim needs gh counts.
+- /afk decisions (reversible): CAP = GitHub Actions concurrent-job count. RELEASE = cut 0.9.2 once main CI is green (Matt ordered it). HOOK WORDING = untyped dispatch text in force-haiku-subagents.mjs to haiku in the wave. JUNK FILES in primary root = untouched, listed for Matt. WSL = hard gate (BIOS), parked. MERGE QUEUE task = retire (unregister, no delete) on the box that has it.
+
+Open for Matt:
+- Release: the approved version is 0.9.2 (orchestrator decision). Tag and gh release create are not run.
+- CODEOWNERS required review needs a second reviewer account (F-03).
+- Junk files in the primary root (m.html, pp.json, q.json, r2.json, rc.json, sub.json, subs.json, $HOME/).
+- WSL: enable virtualization in BIOS and reboot.
+- Chrome: relaunch Chrome yourself. The orchestrator must not.
+2026-10-15 04:05Z RELEASE v0.9.2 -- tag a29208b5, GitHub release by the orchestrator under Matt's 2026-10-15 grant ("you can cut releases thru github"), publish.yml 38679550874 success (OIDC, sigstore provenance), npm @matt82198/aesop@0.9.2 published (publish step printed "+ @matt82198/aesop@0.9.2"); npm dist-tags.latest = 0.9.2 first seen 04:09:43Z (5th 30s poll). Gates at a29208b5: main-full-verify 8/8 jobs SUCCESS + main-full-browser-proofs SUCCESS (check-runs API); package.json 0.9.2; CHANGELOG [0.9.2] dated 2026-10-14; doctor 9/9 in the primary project tree (aesop.config.json is gitignored, so a worktree reports 8/9); secret_scan --range v0.9.1..a29208b5 CLEAN (exit 0). Post-release merges so far (gh pr view, MERGED): #970 0e096a94, #975 8f7bbe1c, #983 719161f0, #1000 bbc04036, #1002 92e59df6.
