@@ -25,7 +25,7 @@ The design lineage spans 50 years: Unix kernel/user-space boundaries and fail-cl
 
 **Self-learning.** The kernel dogfoods itself (it builds itself via its own /buildsystem loop) and categorizes failure modes into enforcement: the gate-escape-resolver skill turns CI failures into postmortems and audit cycles extract repeated issues and wire them into verification gates.
 
-**Due to anthropics recent changes preventing clean implementations of fail closed hooks, the project is currently not fully firing all hooks, this is actively being solved v0.9.1 starts fixing some of the largest issues.**
+**Due to anthropics recent changes preventing clean implementations of fail closed hooks, the project is currently not fully firing all hooks, this is actively being solved, and v0.9.1 shipped fixes for some of the largest issues.**
 
 ## Credibility: The Trap Tests
 
@@ -109,8 +109,8 @@ See the Learn More section for setup and architecture guides.
 - **[docs/how-i-built-aesop.md](./docs/how-i-built-aesop.md)** — Technical narrative of the orchestration design
 - **[CARDINAL-RULES.md](./docs/CARDINAL-RULES.md)** — 10 foundational principles for safe autonomous code
 - **[autonomous-swe.md](./docs/autonomous-swe.md)** — What "autonomous" means and doesn't. Honest limits.
-- **[docs/INCIDENTS.md](./docs/INCIDENTS.md)** — All 41 incidents: fake-green, gate-activation, test-pollution, stalls, conflicts, flakes, CI drift, hallucinations.
-- **[RELEASE-NOTES.md](./RELEASE-NOTES.md)** — Version 0.7.2: bug fixes & compliance, encoding hardening, fake-green gate fixes.
+- **[docs/INCIDENTS.md](./docs/INCIDENTS.md)** — All 98 incidents: fake-green, gate-activation, test-pollution, stalls, conflicts, flakes, CI drift, hallucinations.
+- **[RELEASE-NOTES.md](./RELEASE-NOTES.md)** — Release notes for the latest version (full per-PR list in [CHANGELOG.md](./CHANGELOG.md)).
 
 ## Contributing
 
@@ -124,9 +124,9 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for details. The repo develops itself v
 
 ## License
 
-Aesop Kernel is licensed under the **[PolyForm Noncommercial License 1.0.0](./LICENSE)** from this version forward: free for personal, research, and noncommercial use; commercial use is prohibited without a separate agreement.
+Aesop Kernel is licensed under the **[PolyForm Noncommercial License 1.0.0](./LICENSE)** from 0.8.0 forward: free for personal, research, and noncommercial use; commercial use is prohibited without a separate agreement.
 
-Versions **0.7.0 and earlier** (released as Aesop) were under the MIT License and remain available under those terms — the relicense is not retroactive.
+Versions **0.7.2 and earlier** (released as Aesop) were under the MIT License and remain available under those terms — the relicense is not retroactive.
 
 For commercial licensing, contact the author (Matt Culliton).
 
