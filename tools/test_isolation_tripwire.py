@@ -395,7 +395,10 @@ def take_snapshot(root: Path) -> dict:
         "conductor_static_json": {},        # Hash checks for static files
         "scheduled_tasks": snapshot_scheduled_tasks(),
         "snapshot_time": now,
+        "conductor_file_count": 0,
     }
+    if conductor_present:
+        snap["conductor_file_count"] = sum(1 for p in conductor_root.rglob("*") if p.is_file())
     if profile_present:
         for name, rel in SENSITIVE_RELPATHS.items():
             snap["paths"][name] = snapshot_path(root / rel)
@@ -473,8 +476,20 @@ def diff_snapshots(before: dict, after: dict):
                 changes.append(f"fleet-state/{rel} ({name}) invalid: {a_snap.get('error', 'unknown')}")
                 continue
 
-            # If before was ABSENT but after is present, that's OK (file created during run)
+            # If before was ABSENT but after is present, the file was CREATED during the
+            # run. A legitimate daemon creates it with a fresh epoch; a test writing a
+            # far-past placeholder epoch must still fail, not pass as "new file".
             if b_val == ABSENT and a_val != ABSENT:
+                rel = CONDUCTOR_DAEMON_HEARTBEAT_RELPATHS.get(name, name)
+                before_time = before.get("snapshot_time", now)
+                try:
+                    created_epoch = int(a_val)
+                except (ValueError, TypeError):
+                    created_epoch = -1
+                if not (before_time - 60 <= created_epoch <= now + 60):
+                    changes.append(
+                        f"fleet-state/{rel} ({name}) created with stale/placeholder epoch: {a_val}"
+                    )
                 continue
 
             # If before was present but after is ABSENT, that's an escape
@@ -555,10 +570,16 @@ def diff_snapshots(before: dict, after: dict):
                     changes.append(f"fleet-state/{rel} (fleet-state root) changed")
 
     elif before["conductor_present"] != after["conductor_present"]:
-        changes.append(
-            "fleet-state root " + ("appeared" if after["conductor_present"] else "disappeared")
-            + " during the run"
-        )
+        # A bare, EMPTY fleet-state root being created is inert: it holds no state
+        # the tripwire could not check, and CI runners have no fleet-state root at all.
+        # Any FILE created under it is drift, because its content is unvalidated.
+        if not after["conductor_present"]:
+            changes.append("fleet-state root disappeared during the run")
+        elif after.get("conductor_file_count", 0) > 0:
+            changes.append(
+                "fleet-state root appeared during the run with "
+                f"{after['conductor_file_count']} file(s) created under it"
+            )
 
     if before["scheduled_tasks"] != after["scheduled_tasks"]:
         b_tasks = before["scheduled_tasks"] if isinstance(before["scheduled_tasks"], dict) else {}
