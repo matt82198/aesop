@@ -622,6 +622,73 @@ class AsciiScopeTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
 
+    def _count_baseline(self, counts):
+        (self.root / "tools" / "encoding-ascii-baseline.json").write_text(
+            json.dumps({"files": counts}), encoding="utf-8")
+
+    def test_list_shape_exempts_whole_file_regardless_of_count(self):
+        # Shape 1 (today's behaviour, unchanged): a listed file may hold any
+        # number of non-ASCII characters.
+        self._write("tools/x.py", "# — → — → —\n")
+        self._baseline(["tools/x.py"])
+        self.assertEqual(el.ascii_findings(self.root), [])
+
+    def test_count_baseline_allows_count_at_ceiling(self):
+        self._write("tools/x.py", "# — →\n")
+        self._count_baseline({"tools/x.py": 2})
+        self.assertEqual(el.ascii_findings(self.root), [])
+
+    def test_count_baseline_blocks_a_count_rise(self):
+        self._write("tools/x.py", "# — →\n")
+        self._count_baseline({"tools/x.py": 1})
+        findings = el.ascii_findings(self.root)
+        self.assertTrue(findings, "a count rise above the baselined count must be a finding")
+        self.assertTrue(any("allows 1" in f["message"] for f in findings), findings)
+
+    def test_count_baseline_allows_a_count_fall(self):
+        self._write("tools/x.py", "# —\n")
+        self._count_baseline({"tools/x.py": 3})
+        self.assertEqual(el.ascii_findings(self.root), [])
+
+    def test_count_baseline_file_absent_from_baseline_allows_zero(self):
+        self._write("tools/x.py", "# —\n")
+        self._count_baseline({"tools/other.py": 5})
+        findings = el.ascii_findings(self.root)
+        self.assertTrue(findings, "a file absent from a count baseline allows zero non-ASCII")
+        self.assertTrue(any(f["file"].endswith("x.py") for f in findings), findings)
+
+    def test_count_baseline_zero_for_clean_file_is_a_stale_entry(self):
+        self._write("tools/x.py", "print('clean')\n")
+        self._count_baseline({"tools/x.py": 0})
+        findings = el.ascii_findings(self.root)
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("remove", findings[0]["message"])
+
+    def test_unknown_baseline_shape_is_rejected_with_the_existing_error(self):
+        self._write("tools/x.py", "print('clean')\n")
+        for bad in ({"files": 5}, {"files": "tools/x.py"}, ["tools/x.py"]):
+            with self.subTest(bad=bad):
+                (self.root / "tools" / "encoding-ascii-baseline.json").write_text(
+                    json.dumps(bad), encoding="utf-8")
+                with self.assertRaises(ValueError) as ctx:
+                    el.ascii_findings(self.root)
+                self.assertIn('expected {"files": [str, ...]}', str(ctx.exception))
+
+    def test_count_baseline_rejects_bad_counts_fail_closed(self):
+        self._write("tools/x.py", "print('clean')\n")
+        for bad in ({"tools/x.py": -1}, {"tools/x.py": True}, {"tools/x.py": 1.5}):
+            with self.subTest(bad=bad):
+                self._count_baseline(bad)
+                with self.assertRaises(ValueError):
+                    el.ascii_findings(self.root)
+
+    def test_count_baseline_rejects_duplicate_keys_fail_closed(self):
+        self._write("tools/x.py", "# —\n")
+        (self.root / "tools" / "encoding-ascii-baseline.json").write_text(
+            '{"files": {"tools/x.py": 1, "tools/x.py": 9}}', encoding="utf-8")
+        with self.assertRaises(ValueError):
+            el.ascii_findings(self.root)
+
     def _baseline_query(self, baseline_path):
         return subprocess.run(
             [sys.executable, str(ROOT / "tools" / "encoding_lint.py"),

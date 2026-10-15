@@ -292,18 +292,52 @@ def scan_ascii(filepath: Path) -> List[Dict]:
     return findings
 
 
-def load_ascii_baseline(path: Path) -> set:
-    """Ratchet baseline at `path`: the tools/*.py files allowed to stay non-ASCII.
+def _count_non_ascii(filepath: Path) -> int:
+    """Number of non-ASCII characters in `filepath` -- the count-shape ratchet's unit.
 
-    A missing file is an empty baseline. A malformed one raises (fail closed).
+    Decodes as UTF-8 with replacement, so a BOM (U+FEFF) or an invalid byte is
+    counted rather than silently passing. Matches what scan_ascii reports.
+    """
+    text = filepath.read_bytes().decode('utf-8', errors='replace')
+    return sum(1 for ch in text if ord(ch) > 127)
+
+
+def _reject_duplicate_keys(pairs: List) -> Dict:
+    """json object_pairs_hook: a repeated key would silently drop an earlier count."""
+    out: Dict = {}
+    for key, value in pairs:
+        if key in out:
+            raise ValueError(f'duplicate key {key!r} in ASCII baseline')
+        out[key] = value
+    return out
+
+
+def load_ascii_baseline(path: Path) -> Dict[str, Optional[int]]:
+    """Ratchet baseline at `path`: tools/*.py path -> allowed non-ASCII allowance.
+
+    Two shapes are accepted:
+      * list shape  {"files": [str, ...]}: each listed file is exempt whole;
+        its value is None (any count is allowed, today's behaviour).
+      * count shape {"files": {str: int, ...}}: each listed file may hold at most
+        its count of non-ASCII characters; the value is that count.
+    A missing file is an empty baseline. Anything else malformed raises ValueError
+    (fail closed): an unknown top-level shape, a non-integer, boolean or negative
+    count, or a duplicate key (which would hide a raised count).
     """
     if not path.exists():
-        return set()
-    data = json.loads(path.read_text(encoding='utf-8'))
+        return {}
+    text = path.read_text(encoding='utf-8')
+    data = json.loads(text)
     files = data.get('files') if isinstance(data, dict) else None
-    if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
-        raise ValueError(f'{path}: expected {{"files": [str, ...]}}')
-    return set(files)
+    if isinstance(files, list) and all(isinstance(f, str) for f in files):
+        return {f: None for f in files}
+    if isinstance(files, dict):
+        counts = json.loads(text, object_pairs_hook=_reject_duplicate_keys)['files']
+        for rel, count in counts.items():
+            if not isinstance(rel, str) or type(count) is not int or count < 0:
+                raise ValueError(f'{path}: bad non-ASCII count for {rel!r}: {count!r}')
+        return dict(counts)
+    raise ValueError(f'{path}: expected {{"files": [str, ...]}}')
 
 
 def _ascii_scope(root: Path) -> Dict[str, Path]:
@@ -327,8 +361,11 @@ def ascii_stale_entries(root: Path, baseline_path: Path) -> List[str]:
 def ascii_findings(root: Path, baseline_path: Optional[Path] = None) -> List[Dict]:
     """ASCII-only rule for tools/*.py (non-recursive), with a shrink-only ratchet.
 
-    A non-ASCII file not in the baseline is a finding. A baselined entry that is
-    now clean, missing or out of scope is a stale entry the baseline must drop.
+    A non-ASCII file not in the baseline is a finding (a file absent from a
+    count-shape baseline allows zero non-ASCII characters). A list-shape entry is
+    exempt whole. A count-shape entry may hold at most its baselined count: a rise
+    is a finding, a fall or an equal count passes. A baselined entry that is now
+    clean, missing or out of scope is a stale entry the baseline must drop.
     """
     if baseline_path is None:
         baseline_path = root / ASCII_BASELINE_RELPATH
@@ -337,6 +374,20 @@ def ascii_findings(root: Path, baseline_path: Optional[Path] = None) -> List[Dic
     for rel, pyfile in _ascii_scope(root).items():
         if rel not in baseline:
             findings.extend(scan_ascii(pyfile))
+            continue
+        allowed = baseline[rel]
+        if allowed is None:
+            continue
+        actual = _count_non_ascii(pyfile)
+        if actual > allowed:
+            findings.extend(scan_ascii(pyfile))
+            findings.append(_finding(
+                pyfile, 0, 0,
+                f"{rel} has {actual} non-ASCII characters but {baseline_path.name} "
+                f"allows {allowed}; the ratchet only lets a count stay or fall "
+                f"(use -- and ->, or \\uXXXX escapes)",
+                '',
+            ))
     for rel in ascii_stale_entries(root, baseline_path):
         findings.append(_finding(
             root / rel, 0, 0,
