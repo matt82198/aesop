@@ -29,6 +29,21 @@ TEST_DIR="${TMPDIR:-/tmp}/aesop-hb-guard-$$"
 PASSED=0
 FAILED=0
 
+# Isolation guard (incident 2026-10-14): every fixture path this test writes or
+# runs backup-fleet.sh against must live under TEST_DIR, never under the live
+# $HOME/conductor3 fleet state.
+guard_fixture_path() {
+  local p="$1"
+  case "$p" in
+    "$TEST_DIR"/*) ;;
+    *) echo "GUARD: fixture path escaped TEST_DIR ($TEST_DIR): $p" >&2; exit 2 ;;
+  esac
+  case "$p" in
+    "$HOME/conductor3"|"$HOME/conductor3"/*)
+      echo "GUARD: fixture path resolves under the LIVE conductor3 root: $p" >&2; exit 2 ;;
+  esac
+}
+
 cleanup() {
   rm -rf "$TEST_DIR" 2>/dev/null || true
 }
@@ -68,6 +83,7 @@ test_non_canonical_aesop_root_does_not_derive_sibling_heartbeat() {
   local aesop_root="$fake_home/aesop-wt-fixture"   # worktree-shaped, basename != "aesop"
   local sibling_conductor_hb="$fake_home/conductor3/state/.watchdog-heartbeat"
 
+  guard_fixture_path "$sibling_conductor_hb"
   mkdir -p "$aesop_root/state" "$fake_home/conductor3/state"
   echo "PRE-EXISTING-REAL-VALUE" > "$sibling_conductor_hb"
   write_scoped_config "$aesop_root"
@@ -120,6 +136,7 @@ test_canonical_aesop_root_still_derives_sibling_heartbeat() {
 
   local fake_home="$TEST_DIR/home2"
   local aesop_root="$fake_home/aesop"   # canonical basename
+  guard_fixture_path "$fake_home/conductor3/state/.watchdog-heartbeat"
   mkdir -p "$aesop_root/state" "$fake_home/conductor3/state"
   write_scoped_config "$aesop_root"
 

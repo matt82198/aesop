@@ -96,6 +96,53 @@ def _build_v1_tag_fixture_repo(tmpdir_path, env=None):
     return state_md
 
 
+def _git_isolated_run(args, cwd):
+    subprocess.run(["git"] + args, cwd=cwd, capture_output=True, check=True,
+                   env=_git_isolated_env())
+
+
+def _build_version_fixture(tmpdir_path, pkg_version, origin_tags, state_version):
+    """Build a hermetic repo: bare origin + work clone on main. Origin carries one
+    v-tag per entry in origin_tags (ascending); package.json is pkg_version;
+    STATE.md claims state_version. Returns the STATE.md path."""
+    origin_dir = tmpdir_path / "origin.git"
+    work_dir = tmpdir_path / "work"
+    work_dir.mkdir()
+    _git_isolated_run(["init", "--bare", str(origin_dir)], tmpdir_path)
+    _git_isolated_run(["init"], work_dir)
+    _git_isolated_run(["symbolic-ref", "HEAD", "refs/heads/main"], work_dir)
+    _git_isolated_run(["config", "user.email", "test@example.com"], work_dir)
+    _git_isolated_run(["config", "user.name", "Test User"], work_dir)
+    _git_isolated_run(["config", "commit.gpgsign", "false"], work_dir)
+    _git_isolated_run(["remote", "add", "origin", str(origin_dir)], work_dir)
+    (work_dir / "README.md").write_text("fixture\n")
+    _git_isolated_run(["add", "."], work_dir)
+    _git_isolated_run(["commit", "-m", "Initial"], work_dir)
+    _git_isolated_run(["push", "origin", "HEAD:refs/heads/main"], work_dir)
+    for tag in origin_tags:
+        _git_isolated_run(["commit", "--allow-empty", "-m", f"release {tag}"], work_dir)
+        _git_isolated_run(["tag", f"v{tag}"], work_dir)
+        _git_isolated_run(["push", "origin", f"v{tag}"], work_dir)
+    (work_dir / "package.json").write_text(json.dumps({"version": pkg_version}) + "\n")
+    state_md = work_dir / "STATE.md"
+    state_md.write_text(
+        f"# STATE\n\n**Current Version:** v{state_version}\n\nNo conflicts to report.\n")
+    _git_isolated_run(["add", "."], work_dir)
+    _git_isolated_run(["commit", "-m", "checkpoint"], work_dir)
+    _git_isolated_run(["push", "origin", "HEAD:refs/heads/main"], work_dir)
+    return state_md
+
+
+def _run_version_verifier(state_md):
+    """Run the verifier CLI on state_md (cwd = its repo); return (rc, parsed JSON)."""
+    proc = subprocess.run(
+        [sys.executable, str(tools_path / "state_md_verifier.py"),
+         "--state-md", str(state_md), "--json"],
+        cwd=state_md.parent, capture_output=True, encoding="utf-8", errors="replace",
+        env=_git_isolated_env(), timeout=120)
+    return proc.returncode, json.loads(proc.stdout)
+
+
 class TestStatemdVerifierEscapeRepro(unittest.TestCase):
     """
     ESCAPE REPRO: verifier MUST flag when STATE.md claims "resolved" but git status shows UU.
@@ -528,7 +575,7 @@ class TestStatemdVerifierIntegration(unittest.TestCase):
         fixture_path = Path(__file__).parent / "fixtures" / "state_md_stale.md"
 
         if not fixture_path.exists():
-            self.skipTest(f"Fixture not found: {fixture_path}")
+            self.fail(f"Fixture not found: {fixture_path}")
 
         # Run verifier on the fixture
         rc, stdout, stderr = state_md_verifier.run_command(
@@ -556,50 +603,20 @@ class TestStatemdVerifierIntegration(unittest.TestCase):
             self.fail(f"Could not parse JSON output: {stdout}")
 
     def test_current_version_passes(self):
-        """
-        Test that a STATE.md claiming v0.7.0 passes when repo is v0.7.0.
-        """
-        # The fixture hardcodes a version, so it goes stale the moment package.json is
-        # bumped. Compare against package.json (always present) rather than git tags --
-        # CI clones without tags, so a tag-based guard silently never fires and the test
-        # fails on a healthy repo mid-release.
-        import json as _json, re as _re
-        _root = Path(__file__).parent.parent
-        _pkg = _json.loads((_root / "package.json").read_text(encoding="utf-8"))["version"]
-        _fx = Path(__file__).parent / "fixtures" / "state_md_current.md"
-        if not _fx.exists():
-            self.skipTest("fixture not found: %s" % _fx)
-        _m = _re.search(r"\*\*Current Version:\*\*\s*v?([0-9]+\.[0-9]+\.[0-9]+)",
-                        _fx.read_text(encoding="utf-8"))
-        if not _m or _m.group(1) != _pkg:
-            self.skipTest(
-                "fixture claims v%s but package.json is %s (stale mid-release)"
-                % (_m.group(1) if _m else "?", _pkg)
-            )
-
-        fixture_path = Path(__file__).parent / "fixtures" / "state_md_current.md"
-
-        if not fixture_path.exists():
-            self.skipTest(f"Fixture not found: {fixture_path}")
-
-        # Run verifier on the fixture
-        rc, stdout, stderr = state_md_verifier.run_command(
-            [sys.executable, str(tools_path / "state_md_verifier.py"),
-             "--state-md", str(fixture_path), "--json"]
-        )
-
-        # Must exit 0 (success) for current version
-        self.assertEqual(rc, 0,
-            f"Expected exit 0 for current STATE.md, got {rc}. stdout: {stdout}")
-
-        # Contradiction count should be 0
-        try:
-            result = json.loads(stdout)
-            contradiction_count = result.get("contradiction_count", 0)
-            self.assertEqual(contradiction_count, 0,
-                f"Expected no contradictions for current version, got {contradiction_count}. findings: {result.get('findings', [])}")
-        except json.JSONDecodeError:
-            self.fail(f"Could not parse JSON output: {stdout}")
+        """A STATE.md whose "Current Version" matches package.json and the
+        latest origin tag must exit 0 with zero contradictions. Hermetic: the
+        fixture repo (package.json, origin tag, STATE.md) is built in a temp
+        dir, so the pass path always runs regardless of the real tree's version."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_md = _build_version_fixture(
+                Path(tmpdir), pkg_version="0.9.1",
+                origin_tags=["0.9.0", "0.9.1"], state_version="0.9.1")
+            self.assertEqual(len(state_md_verifier.parse_state_md(state_md)["version"]), 1,
+                             "the version claim must be extracted, or the pass case is vacuous")
+            rc, result = _run_version_verifier(state_md)
+            self.assertEqual(rc, 0, f"expected exit 0, got {rc}: {result}")
+            self.assertEqual(result["contradiction_count"], 0, result["findings"])
+            self.assertEqual([f for f in result["findings"] if f["status"] != "SKIP"], [], result["findings"])
 
     def test_zero_claims_fails_closed(self):
         """
@@ -609,7 +626,7 @@ class TestStatemdVerifierIntegration(unittest.TestCase):
         fixture_path = Path(__file__).parent / "fixtures" / "state_md_empty.md"
 
         if not fixture_path.exists():
-            self.skipTest(f"Fixture not found: {fixture_path}")
+            self.fail(f"Fixture not found: {fixture_path}")
 
         # Run verifier on the fixture
         rc, stdout, stderr = state_md_verifier.run_command(
@@ -620,6 +637,73 @@ class TestStatemdVerifierIntegration(unittest.TestCase):
         # Must exit non-zero (failure) because there's nothing to verify
         self.assertNotEqual(rc, 0,
             f"Expected non-zero exit for STATE.md with zero verifiable claims (fail-closed), got {rc}")
+
+
+class TestStatemdVersionStatesHermetic(unittest.TestCase):
+    """Hermetic version-claim states. Every case builds its own throwaway repo
+    (origin bare repo + work clone with package.json, pushed tags and STATE.md)
+    so the outcome never depends on the real tree's version or tags.
+
+    Verdict table for a "Current Version" claim C, with P = package.json version
+    and O = highest v-tag on origin:
+      C == P == O      -> pass (no findings)
+      C != P           -> CONTRADICTION (package.json disagrees)
+      C == P, C < O   -> CONTRADICTION (claim behind the published tag)
+      C == P, C > O   -> PRE-PUBLISH (release window: bumped, not yet tagged).
+                         Named and non-failing (exit 0). Only the exact package.json
+                         version qualifies; any other claim stays a contradiction.
+    """
+
+    def test_claim_matching_package_and_tag_passes(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_md = _build_version_fixture(
+                Path(tmpdir), pkg_version="0.9.1",
+                origin_tags=["0.9.0", "0.9.1"], state_version="0.9.1")
+            rc, result = _run_version_verifier(state_md)
+            self.assertEqual(rc, 0, result)
+            self.assertEqual([f for f in result["findings"] if f["status"] != "SKIP"], [], result["findings"])
+
+    def test_claim_disagreeing_with_package_json_is_contradiction(self):
+        """Wrong-fixture control: the claim (0.8.0) is not package.json's 0.9.1."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_md = _build_version_fixture(
+                Path(tmpdir), pkg_version="0.9.1",
+                origin_tags=["0.9.0", "0.9.1"], state_version="0.8.0")
+            rc, result = _run_version_verifier(state_md)
+            self.assertEqual(rc, 1, result)
+            self.assertGreaterEqual(result["contradiction_count"], 1)
+            details = " ".join(f["detail"] for f in result["findings"]
+                               if f["status"] == "CONTRADICTION")
+            self.assertIn("package.json has 0.9.1", details)
+
+    def test_release_window_bump_not_tagged_is_named_pre_publish(self):
+        """package.json bumped to 0.9.2, claim says v0.9.2, origin still has
+        v0.9.1. Must be the named PRE-PUBLISH state: exit 0, zero contradictions."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_md = _build_version_fixture(
+                Path(tmpdir), pkg_version="0.9.2",
+                origin_tags=["0.9.0", "0.9.1"], state_version="0.9.2")
+            rc, result = _run_version_verifier(state_md)
+            self.assertEqual(rc, 0, result)
+            self.assertEqual(result["contradiction_count"], 0, result["findings"])
+            pre = [f for f in result["findings"] if f["status"] == "PRE-PUBLISH"]
+            self.assertEqual(len(pre), 1, result["findings"])
+            self.assertIn("pre-publish", pre[0]["detail"].lower())
+            self.assertIn("v0.9.1", pre[0]["detail"])
+
+    def test_claim_behind_published_tag_stays_contradiction(self):
+        """Control: the release-window rule must not swallow a real downgrade.
+        Origin has v0.9.2, package.json and claim are 0.9.1 -> CONTRADICTION."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_md = _build_version_fixture(
+                Path(tmpdir), pkg_version="0.9.1",
+                origin_tags=["0.9.1", "0.9.2"], state_version="0.9.1")
+            rc, result = _run_version_verifier(state_md)
+            self.assertEqual(rc, 1, result)
+            self.assertFalse([f for f in result["findings"] if f["status"] == "PRE-PUBLISH"])
+            details = " ".join(f["detail"] for f in result["findings"]
+                               if f["status"] == "CONTRADICTION")
+            self.assertIn("latest tag", details)
 
 
 class TestStatemdFreshness(unittest.TestCase):

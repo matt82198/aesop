@@ -7,7 +7,9 @@ This tool prevents the "fake-green" bug class: test files that exist on disk but
 CI job/script runs them, making tests appear to pass when they never execute.
 
 Discovers test files across all suites (Python, Node, Shell, Playwright) and verifies
-each is covered by at least one runner.
+each is covered by at least one runner. Python discovery enumerates every tests/**/*.py
+that defines a unittest.TestCase or a test_ function (AST), not just the collected
+tests/test_*.py glob, so a misnamed test module fails the gate closed (F-03, 2026-10-14).
 
 Usage:
   python tools/verify_test_coverage.py --check     # Exit 1 if orphans found
@@ -19,6 +21,7 @@ Exit codes:
   1: Orphaned test files found
   2: Error running the tool
 """
+import ast
 import json
 import re
 import subprocess
@@ -161,10 +164,56 @@ def get_playwright_test_coverage():
     return covered
 
 
+PYTHON_FIXTURE_PREFIXES = ("tests/fixtures/",)
+
+
+def _defines_tests(source_path):
+    """True if the module defines a unittest.TestCase subclass or a module-level test_ function.
+
+    Fail closed: a file that cannot be read or parsed is treated as a test module,
+    so it cannot hide outside the collected glob.
+    """
+    try:
+        tree = ast.parse(source_path.read_text(encoding="utf-8", errors="replace"), filename=str(source_path))
+    except (OSError, SyntaxError, ValueError):
+        return True
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef):
+            for base in node.bases:
+                base_name = base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", "")
+                if base_name.endswith("TestCase"):
+                    return True
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+            return True
+    return False
+
+
+def find_python_test_modules():
+    """Every tests/**/*.py that defines tests, regardless of its file name.
+
+    Enumerates the filesystem rather than the collected glob, so a misnamed test
+    module (e.g. tests/foo_test.py) is visible to the coverage comparison.
+    """
+    repo_root = Path.cwd()
+    tests_dir = repo_root / "tests"
+    if not tests_dir.exists():
+        return set()
+    modules = set()
+    for p in tests_dir.rglob("*.py"):
+        rel = str(p.relative_to(repo_root)).replace("\\", "/")
+        # Fixture trees are sample data consumed by tests (e.g. a sample repo's own
+        # test_sample.py), never runner modules, so they are excluded by name.
+        if rel.startswith(PYTHON_FIXTURE_PREFIXES):
+            continue
+        if p.is_file() and _defines_tests(p):
+            modules.add(rel)
+    return modules
+
+
 def get_all_test_files():
     """Discover all test files on disk."""
     all_tests = {
-        "python": find_disk_files("test_*.py"),
+        "python": find_python_test_modules(),
         "node": find_disk_files("*.test.mjs"),
         "shell": find_disk_files("test_*.sh") | find_disk_files("test-*.sh") | find_disk_files("*.test.sh"),
         "playwright": find_disk_files("*.spec.ts"),
@@ -201,6 +250,9 @@ def format_fix_suggestion(test_type, file_path):
     """Format a suggestion for how to add an orphaned test to the runners."""
     if test_type == "python":
         # For Python, tests are auto-discovered by ci_shard_runner.py via git ls-files
+        # ci_shard_runner collects only tests/test_*.py (git ls-files); anything else is dormant.
+        if not Path(file_path).name.startswith("test_"):
+            return f"Rename to tests/test_<name>.py (collected glob) and git add: {file_path}"
         return f"Add to git: git add {file_path}"
     elif test_type == "node":
         # For Node, they're auto-discovered by npm test:node (tests/*.test.mjs)
