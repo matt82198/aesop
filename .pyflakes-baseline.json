@@ -65,7 +65,6 @@
     "tests/test_generated_paths.py@RedefinedWhileUnused": 2,
     "tests/test_git_integrity_check.py@UnusedVariable": 2,
     "tests/test_hs2_swap_proof.py@UnusedVariable": 1,
-    "tests/test_incident_report.py@UnusedVariable": 1,
     "tests/test_init_project.py@UnusedVariable": 3,
     "tests/test_install_tasks.py@FStringMissingPlaceholders": 1,
     "tests/test_install_tasks.py@UnusedVariable": 2,
