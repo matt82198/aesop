@@ -49,6 +49,7 @@ import csv
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -100,6 +101,29 @@ CONDUCTOR_DAEMON_REPOS_JSON_RELPATH = "state/.watchdog-repos.json"
 # These use hash comparisons since they should never be touched by running daemons
 # during a test suite. Pattern is relative to the conductor root.
 CONDUCTOR_STATIC_JSON_GLOB = "state/*.json"
+
+# LIVE-WRITER allowlist -- the ONE place a live daemon's watched output is
+# registered (2026-10-15 incident: the usage-watchdog daemon rewrites its status
+# JSON every tick, so a test run that overlapped it failed the push). Keys are
+# fleet-state-relative paths. `evidence` are fleet-state-relative globs for the
+# writer's pidfile or heartbeat. An entry is honoured ONLY when an evidence file
+# has an mtime inside the run window; an allowlisted file WITHOUT that evidence
+# still FAILS. Names enumerated from daemons/, tools/ and the live fleet-state
+# root on 2026-10-15:
+#  - state/.watchdog-heartbeat and monitor/.monitor-heartbeat are NOT listed:
+#    they already use epoch VALIDITY checks, which a live tick passes.
+#  - state/FLEET-BACKUP.log and state/cron-*.log are NOT listed: growth checks.
+#  - Task-event and receipt-spool logs are NOT listed: the receipt spool lives
+#    under the git common dir and task-events.jsonl is outside the watched set,
+#    so an entry here would be dead allowance.
+LIVE_WRITER_ALLOWLIST = {
+    "state/usage-watchdog.status.json": {
+        "writer": "~/scripts/usage_watchdog.py (status table rewritten every tick)",
+        "evidence": ("state/usage-watchdog*.pid", "state/usage-watchdog*heartbeat*"),
+    },
+}
+
+_REFLOG_TS_RE = re.compile(r"HEAD@\{(\d+)\}")
 
 
 def _hash_file(path: Path) -> str:
@@ -339,6 +363,170 @@ def snapshot_scheduled_tasks():
     return result
 
 
+def _git_checkout_query(checkout: Path, *args: str):
+    """Run `git -C <checkout> <args>`; return stdout, or None on ANY failure
+    (git missing, non-zero exit, timeout). AESOP_TRIPWIRE_GIT_CMD lets tests
+    stub the git binary, so the fail-closed path is provable."""
+    override = os.environ.get("AESOP_TRIPWIRE_GIT_CMD")
+    base = shlex.split(override) if override else ["git"]
+    try:
+        res = subprocess.run(
+            base + ["-C", str(checkout), *args],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=60,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if res.returncode != 0:
+        return None
+    return res.stdout
+
+
+def snapshot_git_checkout(checkout: Path):
+    """Describe a watched root that is its own git checkout (has .git), or return
+    None when it is not one. Records HEAD, the porcelain status map (path -> XY)
+    and the tracked-file set. Any git failure yields {"error": ...}, which makes
+    the attribution fail closed."""
+    if not (checkout / ".git").exists():
+        return None
+    top = _git_checkout_query(checkout, "rev-parse", "--show-toplevel")
+    head = _git_checkout_query(checkout, "rev-parse", "HEAD")
+    status_out = _git_checkout_query(
+        checkout, "status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all")
+    tracked_out = _git_checkout_query(checkout, "ls-files", "-z")
+    if top is None or head is None or status_out is None or tracked_out is None:
+        return {"error": f"git could not answer for {checkout}"}
+    try:
+        if Path(top.strip()).resolve() != checkout.resolve():
+            return {"error": f"{checkout} is not its own git toplevel"}
+    except OSError as e:
+        return {"error": f"toplevel unresolvable: {e}"}
+    status = {}
+    for entry in status_out.split("\0"):
+        if len(entry) > 3:
+            status[entry[3:]] = entry[:2]
+    tracked = {t for t in tracked_out.split("\0") if t}
+    return {"head": head.strip(), "status": status, "tracked": tracked, "error": None}
+
+
+def _sensitive_changed_rels(name: str, b, a):
+    """Profile-relative paths (e.g. '.claude/hooks/a.py') whose content differs
+    between two snapshots of one SENSITIVE_RELPATHS entry. Returns [] when
+    unchanged, or None when the change cannot be enumerated file by file."""
+    if b == a:
+        return []
+    base = SENSITIVE_RELPATHS[name]
+
+    def full(key):
+        return base if key == "<file>" else f"{base}/{key}"
+
+    if isinstance(b, dict) and isinstance(a, dict):
+        rels = [k for k in set(b) | set(a) if b.get(k) != a.get(k)]
+    elif isinstance(b, dict):
+        rels = list(b)
+    elif isinstance(a, dict):
+        rels = list(a)
+    else:
+        return None
+    if not rels:
+        return None
+    return [full(k) for k in sorted(rels)]
+
+
+def _reflog_times_in_window(checkout: Path, start: int, end: int) -> list:
+    """Unix times of HEAD reflog entries of `checkout` inside the run window
+    [start-1, end+1] (+/-1s for integer truncation). [] when git cannot answer."""
+    out = _git_checkout_query(
+        checkout, "log", "-g", "-n", "200", "--date=unix", "--format=%gd", "HEAD")
+    if out is None:
+        return []
+    stamps = [int(m.group(1)) for m in _REFLOG_TS_RE.finditer(out)]
+    return sorted(t for t in stamps if start - 1 <= t <= end + 1)
+
+
+def _evidence_in_window(conductor_root, globs, start: int, end: int) -> list:
+    """(fleet-state-relative path, mtime) for each pidfile/heartbeat matching
+    `globs` whose mtime falls inside the run window. [] when none does."""
+    hits = []
+    if conductor_root is None:
+        return hits
+    for pattern in globs:
+        for p in sorted(conductor_root.glob(pattern)):
+            try:
+                if not p.is_file():
+                    continue
+                mtime = int(p.stat().st_mtime)
+            except OSError:
+                continue
+            if start - 1 <= mtime <= end + 1:
+                hits.append((str(p.relative_to(conductor_root)).replace("\\", "/"), mtime))
+    return hits
+
+
+def build_attributor(before: dict, after: dict):
+    """Return attribute(scope, rel) -> (classification, detail) for one run.
+
+    scope "profile": rel is profile-relative ('.claude/hooks/a.py').
+    scope "fleet":   rel is fleet-state-relative ('state/usage-watchdog.status.json').
+    Classifications:
+      "git-deploy"  profile file inside a git checkout whose HEAD moved during the
+                    run (reflog entry inside the window) and which is now a clean
+                    tracked file: another lane's `git pull`/checkout, not a test.
+      "live-writer" fleet file registered in LIVE_WRITER_ALLOWLIST with a
+                    pidfile/heartbeat mtime inside the window.
+      "unrelated"   everything else; it FAILS the run.
+    """
+    start = int(before.get("snapshot_time", 0))
+    end = int(after.get("snapshot_time", start))
+    cp = after.get("conductor_root")
+    conductor_root = Path(cp) if cp else None
+    b_co, a_co = before.get("git_checkout"), after.get("git_checkout")
+    git_ok = (
+        isinstance(b_co, dict) and isinstance(a_co, dict)
+        and not b_co.get("error") and not a_co.get("error")
+        and b_co["head"] != a_co["head"]
+    )
+    reflog, differs = [], set()
+    if git_ok:
+        checkout = Path(after["claude_root"])
+        reflog = _reflog_times_in_window(checkout, start, end)
+        head_diff = _git_checkout_query(checkout, "diff", "--name-only", "-z", "HEAD")
+        if head_diff is None or not reflog:
+            git_ok = False
+        else:
+            differs = {p for p in head_diff.split("\0") if p}
+    old = b_co["head"][:12] if git_ok else ""
+    new = a_co["head"][:12] if git_ok else ""
+
+    def attribute_profile(rel: str):
+        if not git_ok or not rel.startswith(".claude/"):
+            return "unrelated", "no attributable git HEAD advance"
+        co_rel = rel[len(".claude/"):]
+        tracked = a_co["tracked"] | b_co["tracked"]
+        if co_rel not in tracked or co_rel in a_co["status"] or co_rel in differs:
+            return "unrelated", "not a clean tracked file at the advanced HEAD"
+        return "git-deploy", f"changed by git ({old}..{new}, reflog {reflog[-1]})"
+
+    def attribute_fleet(rel: str):
+        spec = LIVE_WRITER_ALLOWLIST.get(rel)
+        if spec is None:
+            return "unrelated", "not a registered live-writer file"
+        hits = _evidence_in_window(conductor_root, spec["evidence"], start, end)
+        if not hits:
+            return "unrelated", (
+                f"registered live writer ({spec['writer']}) but no pidfile or "
+                "heartbeat mtime inside the run window")
+        ev_rel, mtime = hits[0]
+        return "live-writer", (
+            f"written by live writer {spec['writer']} "
+            f"(evidence fleet-state/{ev_rel} mtime {mtime})")
+
+    def attribute(scope: str, rel: str):
+        return attribute_profile(rel) if scope == "profile" else attribute_fleet(rel)
+
+    return attribute
+
+
 def snapshot_git_global_config(root: Path):
     """Return a fingerprint of `git config --global -l`, run with HOME/USERPROFILE
     pinned to `root` so --root fixtures fully sandbox this check too."""
@@ -396,12 +584,16 @@ def take_snapshot(root: Path) -> dict:
         "scheduled_tasks": snapshot_scheduled_tasks(),
         "snapshot_time": now,
         "conductor_file_count": 0,
+        "claude_root": str(claude_root),
+        "conductor_root": str(conductor_root) if conductor_present else None,
+        "git_checkout": None,  # ~/.claude git state, when it is its own checkout
     }
     if conductor_present:
         snap["conductor_file_count"] = sum(1 for p in conductor_root.rglob("*") if p.is_file())
     if profile_present:
         for name, rel in SENSITIVE_RELPATHS.items():
             snap["paths"][name] = snapshot_path(root / rel)
+        snap["git_checkout"] = snapshot_git_checkout(claude_root)
     if conductor_present:
         # DAEMON-WRITTEN heartbeats: snapshot for epoch bounds checking
         for name, rel in CONDUCTOR_DAEMON_HEARTBEAT_RELPATHS.items():
@@ -427,8 +619,13 @@ def take_snapshot(root: Path) -> dict:
     return snap
 
 
-def diff_snapshots(before: dict, after: dict):
-    """Return a list of human-readable changed-path descriptions, or [] if clean.
+def diff_snapshots(before: dict, after: dict, attributor=None, ledger=None):
+    """Return a list of human-readable FAILURE descriptions, or [] if clean.
+
+    attributor: callable from build_attributor(); when given, each changed
+    profile file or fleet-state static JSON file is classified before judging.
+    Only "unrelated" paths become failures. ledger: optional list that receives
+    one (path, classification, detail) tuple per attributed-or-unrelated path.
 
     DAEMON-WRITTEN files use VALIDITY checks (not hash comparisons):
     - Heartbeats: epoch integer must be >= before and within [before, now+60s]
@@ -438,14 +635,28 @@ def diff_snapshots(before: dict, after: dict):
     STATIC files continue to use hash comparisons."""
     changes = []
 
+    def classify(scope: str, rel: str):
+        if attributor is None:
+            cls, detail = "unrelated", "no attribution requested"
+        else:
+            cls, detail = attributor(scope, rel)
+        return cls, detail
+
     if before["profile_present"] and after["profile_present"]:
         names = sorted(set(before["paths"]) | set(after["paths"]))
         for name in names:
             b = before["paths"].get(name, ABSENT)
             a = after["paths"].get(name, ABSENT)
             if b != a:
-                rel = SENSITIVE_RELPATHS.get(name, name)
-                changes.append(f"~/{rel} ({name}) changed")
+                rels = _sensitive_changed_rels(name, b, a)
+                if rels is None:
+                    rels = [SENSITIVE_RELPATHS.get(name, name)]
+                for full in rels:
+                    cls, detail = classify("profile", full)
+                    if ledger is not None:
+                        ledger.append((f"~/{full}", cls, detail))
+                    if cls == "unrelated":
+                        changes.append(f"~/{full} ({name}) changed")
     elif before["profile_present"] != after["profile_present"]:
         changes.append(
             "~/.claude " + ("appeared" if after["profile_present"] else "disappeared")
@@ -567,7 +778,12 @@ def diff_snapshots(before: dict, after: dict):
             a_files = after_static if isinstance(after_static, dict) else {}
             for rel in sorted(set(b_files) | set(a_files)):
                 if b_files.get(rel) != a_files.get(rel):
-                    changes.append(f"fleet-state/{rel} (fleet-state root) changed")
+                    cls, detail = classify("fleet", rel)
+                    if ledger is not None:
+                        ledger.append((f"fleet-state/{rel}", cls, detail))
+                    if cls == "unrelated":
+                        note = f" [{detail}]" if rel in LIVE_WRITER_ALLOWLIST else ""
+                        changes.append(f"fleet-state/{rel} (fleet-state root) changed{note}")
 
     elif before["conductor_present"] != after["conductor_present"]:
         # A bare, EMPTY fleet-state root being created is inert: it holds no state
@@ -681,7 +897,17 @@ def main(argv=None):
     cmd_exit = proc.returncode if proc.returncode is not None else 1
 
     after = take_snapshot(root)
-    changes = diff_snapshots(before, after)
+    ledger = []
+    changes = diff_snapshots(
+        before, after, attributor=build_attributor(before, after), ledger=ledger)
+    for path, cls, detail in ledger:
+        if cls in ("git-deploy", "live-writer"):
+            print(f"[test_isolation_tripwire] INFO: {path} {detail}, not a test",
+                  file=sys.stderr)
+    if ledger:
+        verdict = "; ".join(f"{path}={cls}" for path, cls, _ in ledger)
+        print(f"[test_isolation_tripwire] VERDICT: {len(ledger)} changed path(s) "
+              f"classified: {verdict}", file=sys.stderr)
 
     if changes:
         print(

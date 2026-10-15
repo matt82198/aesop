@@ -761,5 +761,196 @@ class TestCreatedFleetStateIsValidated(unittest.TestCase):
             self.assertIn("created with stale/placeholder epoch", proc.stderr)
 
 
+def _git(path: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", "-C", str(path), "-c", "user.name=tripwire-test",
+         "-c", "user.email=tripwire-test@example.invalid", *args],
+        check=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+
+
+def make_profile_checkout(tmp: Path) -> Path:
+    """A fake profile whose .claude is a git checkout (mirrors the brain repo).
+    Branch `next` holds a second commit changing hooks/a.py, so a
+    `git checkout next` during a run is a real HEAD advance. Every git call
+    lives in a throwaway temp repo, never the developer's profile."""
+    root = tmp / "fake-home"
+    claude = root / ".claude"
+    (claude / "hooks").mkdir(parents=True)
+    (claude / "hooks" / "a.py").write_text("v1\n", encoding="utf-8")
+    _git(claude, "init", "-q", "-b", "main")
+    _git(claude, "add", "-A")
+    _git(claude, "commit", "-q", "-m", "v1")
+    _git(claude, "checkout", "-q", "-b", "next")
+    (claude / "hooks" / "a.py").write_text("v2\n", encoding="utf-8")
+    _git(claude, "add", "-A")
+    _git(claude, "commit", "-q", "-m", "v2")
+    _git(claude, "checkout", "-q", "main")
+    return root
+
+
+def _advance_script(claude: Path, extra: str = "") -> str:
+    """Python run as the wrapped command: advance the profile checkout by git
+    (a HEAD move, as `git pull --ff-only` would), then optionally write one
+    extra file under the profile (a test write)."""
+    script = (
+        "import subprocess; "
+        f"subprocess.run(['git', '-C', {str(claude)!r}, 'checkout', '-q', 'next'], check=True)"
+    )
+    if extra:
+        script += f"; open({str(claude / extra)!r}, 'w').write('written by a test')"
+    return script
+
+
+def _fail_bullets(stderr: str) -> list:
+    """The `  - <path>` lines of the FAIL block (the findings, not the INFO notes)."""
+    return [line for line in stderr.splitlines() if line.startswith("  - ")]
+
+
+class TestGitDeployAndLiveWriterAttribution(unittest.TestCase):
+    """2026-10-15 incident: two honest pushes were blocked because the tripwire
+    failed on changes that were not tests. (1) ~/.claude is a git checkout whose
+    HEAD another lane fast-forwarded during the shard. (2) the usage-watchdog
+    daemon rewrites its status JSON every tick. Attribution: a HEAD move with a
+    reflog entry inside the run window explains a clean tracked file (INFO); a
+    registered live writer with a pidfile/heartbeat inside the window explains
+    its file (INFO). Anything else still fails, and a mixed run names only the
+    unexplained path."""
+
+    STATUS = "state/usage-watchdog.status.json"
+
+    def _seed_status(self, root: Path) -> Path:
+        status = root / "conductor3" / self.STATUS
+        status.write_text('{"v": 1}', encoding="utf-8")
+        return status
+
+    def test_a_git_deploy_during_run_is_info_not_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_profile_checkout(Path(tmp))
+            claude = root / ".claude"
+            proc = run_tripwire(root, [sys.executable, "-c", _advance_script(claude)])
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("INFO", proc.stderr)
+            self.assertIn("~/.claude/hooks/a.py changed by git", proc.stderr)
+            self.assertIn("reflog", proc.stderr)
+            self.assertIn("not a test", proc.stderr)
+            self.assertNotIn("FAIL", proc.stderr)
+            self.assertIn("~/.claude/hooks/a.py=git-deploy", proc.stderr)
+            self.assertEqual((claude / "hooks" / "a.py").read_text(), "v2\n")
+
+    def test_b_live_writer_with_evidence_is_info_not_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home"
+            make_fake_conductor(root)
+            self._seed_status(root)
+            status = root / "conductor3" / self.STATUS
+            evidence = root / "conductor3" / "state" / "usage-watchdog.heartbeat"
+            script = (
+                f"open(r'{status}', 'w').write('{{\"v\": 2}}'); "
+                f"open(r'{evidence}', 'w').write('1')"
+            )
+            proc = run_tripwire(root, [sys.executable, "-c", script])
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("INFO", proc.stderr)
+            self.assertIn("usage-watchdog.status.json", proc.stderr)
+            self.assertIn("written by live writer", proc.stderr)
+            self.assertIn("not a test", proc.stderr)
+            self.assertNotIn("FAIL", proc.stderr)
+            self.assertIn("fleet-state/state/usage-watchdog.status.json=live-writer",
+                          proc.stderr)
+
+    def test_c_live_writer_file_without_evidence_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home"
+            make_fake_conductor(root)
+            self._seed_status(root)
+            status = root / "conductor3" / self.STATUS
+            proc = run_tripwire(root, [sys.executable, "-c",
+                                       f"open(r'{status}', 'w').write('{{\"v\": 2}}')"])
+            self.assertEqual(proc.returncode, 1, proc.stderr)
+            self.assertIn("FAIL", proc.stderr)
+            self.assertIn("usage-watchdog.status.json", proc.stderr)
+            self.assertIn("no pidfile or heartbeat", proc.stderr)
+
+    def test_c2_live_writer_evidence_from_before_the_run_does_not_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home"
+            make_fake_conductor(root)
+            self._seed_status(root)
+            status = root / "conductor3" / self.STATUS
+            evidence = root / "conductor3" / "state" / "usage-watchdog.heartbeat"
+            evidence.write_text("1", encoding="utf-8")
+            os.utime(evidence, (1000, 1000))  # stale: far before the run window
+            proc = run_tripwire(root, [sys.executable, "-c",
+                                       f"open(r'{status}', 'w').write('{{\"v\": 2}}')"])
+            self.assertEqual(proc.returncode, 1, proc.stderr)
+            self.assertIn("usage-watchdog.status.json", proc.stderr)
+            self.assertIn("FAIL", proc.stderr)
+
+    def test_d_unrelated_fleet_state_write_during_run_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home"
+            make_fake_conductor(root)
+            new_file = root / "conductor3" / "state" / "orchestrator-status.json"
+            proc = run_tripwire(root, [sys.executable, "-c",
+                                       f"open(r'{new_file}', 'w').write('{{}}')"])
+            self.assertEqual(proc.returncode, 1, proc.stderr)
+            self.assertIn("FAIL", proc.stderr)
+            self.assertIn("orchestrator-status.json", proc.stderr)
+            self.assertNotIn("live writer", proc.stderr)
+
+    def test_e_unrelated_profile_write_during_run_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_profile_checkout(Path(tmp))
+            claude = root / ".claude"
+            stray = claude / "hooks" / "stray.py"
+            proc = run_tripwire(root, [sys.executable, "-c",
+                                       f"open(r'{stray}', 'w').write('stray')"])
+            self.assertEqual(proc.returncode, 1, proc.stderr)
+            self.assertIn("FAIL", proc.stderr)
+            self.assertIn("hooks", proc.stderr)
+            self.assertIn("stray.py", proc.stderr)
+
+    def test_f_mixed_deploy_and_unrelated_write_names_only_the_unrelated_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_profile_checkout(Path(tmp))
+            claude = root / ".claude"
+            proc = run_tripwire(root, [sys.executable, "-c",
+                                       _advance_script(claude, extra="hooks/extra.py")])
+            self.assertEqual(proc.returncode, 1, proc.stderr)
+            bullets = _fail_bullets(proc.stderr)
+            self.assertEqual(len(bullets), 1, proc.stderr)
+            self.assertIn("hooks/extra.py", bullets[0])
+            self.assertNotIn("hooks/a.py", bullets[0])
+            self.assertIn("INFO", proc.stderr)
+            self.assertIn("~/.claude/hooks/a.py changed by git", proc.stderr)
+            self.assertIn("~/.claude/hooks/a.py=git-deploy", proc.stderr)
+            self.assertIn("~/.claude/hooks/extra.py=unrelated", proc.stderr)
+
+    def test_g_tracked_tamper_without_a_head_move_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_profile_checkout(Path(tmp))
+            claude = root / ".claude"
+            script = f"open(r'{claude / 'hooks' / 'a.py'}', 'w').write('tampered')"
+            proc = run_tripwire(root, [sys.executable, "-c", script])
+            self.assertEqual(proc.returncode, 1, proc.stderr)
+            self.assertIn("FAIL", proc.stderr)
+            self.assertIn("hooks", proc.stderr)
+            self.assertNotIn("changed by git", proc.stderr)
+
+    def test_h_git_unavailable_for_checkout_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_profile_checkout(Path(tmp))
+            claude = root / ".claude"
+            proc = run_tripwire(
+                root, [sys.executable, "-c", _advance_script(claude)],
+                env={"AESOP_TRIPWIRE_GIT_CMD": "aesop-tripwire-git-missing"},
+            )
+            self.assertEqual(proc.returncode, 1, proc.stderr)
+            self.assertIn("FAIL", proc.stderr)
+            self.assertIn("hooks", proc.stderr)
+            self.assertNotIn("changed by git", proc.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
