@@ -76,7 +76,9 @@ def generate_ed25519_keypair(private_path, public_path) -> None:
 
 
 def key_id_for_pubkey(pub_pem: bytes) -> str:
-    return hashlib.sha256(pub_pem.strip()).hexdigest()[:16]
+    # Normalize CRLF: Windows autocrlf checkouts rewrite the committed LF PEM to CRLF,
+    # and the key_id must be the same on every checkout (the emitter hashes LF output).
+    return hashlib.sha256(pub_pem.replace(b"\r\n", b"\n").strip()).hexdigest()[:16]
 
 
 def sign(canonical: bytes, scheme: str, private_key_path=None, hmac_secret=None) -> dict:

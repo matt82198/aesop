@@ -101,6 +101,16 @@ class TestKeyring(unittest.TestCase):
         sig = self._sig_by(self.key_b, canon)
         self.assertFalse(rc.verify_signature_keyring(rc.canonical_json({"x": 2}), sig, [self.pub_b]))
 
+    def test_crlf_working_copy_has_same_key_id_as_lf_blob(self):
+        """Windows autocrlf checkouts rewrite the PEM to CRLF; the key_id must not change."""
+        lf = self.pub_b.read_bytes()
+        crlf = self.dir / "b_crlf.pub"
+        crlf.write_bytes(lf.replace(b"\n", b"\r\n"))
+        self.assertEqual(rc.key_id_for_pubkey(crlf.read_bytes()), rc.key_id_for_pubkey(lf))
+        canon = rc.canonical_json({"x": 1})
+        sig = self._sig_by(self.key_b, canon)
+        self.assertTrue(rc.verify_signature_keyring(canon, sig, [crlf]))
+
     def test_keyring_paths_includes_committed_key_and_registered_dir(self):
         tools = self.dir / "tools"
         (tools / "receipt_pubkeys").mkdir(parents=True)
