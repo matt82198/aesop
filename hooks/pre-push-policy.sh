@@ -217,7 +217,7 @@ gate_base_dir() {
   fi
   [ -n "$base_sha" ] || return 1
   tmp_root="${TMPDIR:-/tmp}"
-  dir="$tmp_root/aesop-gate-base-v2-$base_sha"
+  dir="$tmp_root/aesop-gate-base-v3-$base_sha"
   if [ ! -f "$dir/.complete" ]; then
     for root in tools state_store; do
       if git cat-file -e "$base_sha:$root" 2>/dev/null; then
@@ -230,6 +230,10 @@ gate_base_dir() {
       rm -rf "$staging"
       return 1
     fi
+    # git records tools/*.py as 100644, and POSIX `[ -x ]` (check_secret_scan) then rejects the
+    # scanner on Linux. The base copy is private to this hook and content-addressed, so its
+    # gate scripts are made executable here; the -x check itself is unchanged.
+    find "$staging/tools" -maxdepth 1 -name '*.py' -exec chmod +x {} + 2>/dev/null
     if git cat-file -e "$base_sha:.pyflakes-baseline.json" 2>/dev/null; then
       if ! git show "$base_sha:.pyflakes-baseline.json" > "$staging/.pyflakes-baseline.json" 2>/dev/null; then
         rm -rf "$staging"
