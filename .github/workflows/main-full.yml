@@ -66,7 +66,11 @@ jobs:
         # (tests/scaffold-fresh-push.test.mjs, tests/doctor-baseline-checks.test.mjs):
         # a fresh scaffold runs tools/pyflakes_gate.py --update-baseline, which exits 2
         # without pyflakes and leaves .pyflakes-baseline.json ungenerated. Mirrors ci.yml.
-        run: pip install pyyaml pytest pytest-timeout pyflakes
+        # cryptography (pinned, same pin as ci.yml) runs the verify-receipt base-keyring
+        # guard tests/test_verify_receipt_base_trust.py on every shard. Under CI
+        # (CI/GITHUB_ACTIONS set) that guard FAILS when cryptography is absent, so
+        # omitting it here turned shard 3 red on run 38818655874 (4 failures).
+        run: pip install pyyaml pytest pytest-timeout pyflakes cryptography==50.0.2
 
       - name: Set shard-specific temporary directory (Windows)
         if: runner.os == 'Windows'
