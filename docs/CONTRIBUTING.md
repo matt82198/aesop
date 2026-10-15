@@ -46,9 +46,9 @@ See [docs/ARCHITECTURE.md](./ARCHITECTURE.md) for the wave cycle diagram and [do
 
 ## Code Style
 
-**Python**: Stdlib-first (no external deps except asyncio). Docstrings required; snake_case for functions and variables. See `tools/secret_scan.py` and `state_store/` for examples.
+**Python**: Stdlib-first. Non-stdlib imports that already exist are listed in the README "Dependencies" section and declared in `pyproject.toml`; add a new third-party import only with a stated reason and a declared entry there. Docstrings required; snake_case for functions and variables. See `tools/secret_scan.py` and `state_store/` for examples.
 
-**Node.js/JavaScript**: Node stdlib for tooling only (no external packages). Use async/await. See `daemons/`, `monitor/`, and `bin/` for patterns.
+**Node.js/JavaScript**: Node built-ins only at runtime (no runtime npm dependencies; the root `package.json` has only the devDependency `@playwright/test`). Use async/await. See `daemons/`, `monitor/`, and `bin/` for patterns.
 
 **Bash**: POSIX-safe (no Bashisms; works in Git Bash on Windows). Sourceable scripts must guard with `[[ "${BASH_SOURCE[0]}" == "${0}" ]]`. See `hooks/pre-push-policy.sh` for structure.
 

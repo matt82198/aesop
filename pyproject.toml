@@ -1,0 +1,52 @@
+# Declarative metadata for the Python tooling (tools/, daemons/, state_store/).
+# This file does not define a build backend: the distributed artifact is the
+# npm package @matt82198/aesop (see package.json). Keep `version` equal to
+# package.json `version`.
+#
+# Dependency pins mirror requirements.txt. CI installs packages with its own
+# explicit `pip install` lines (.github/workflows/ci.yml); this file does not
+# change those.
+#
+# No ruff, pytest or mypy configuration exists in this repo (no ruff.toml,
+# pytest.ini, setup.cfg, tox.ini or [tool.*] table), so none is referenced here.
+
+[project]
+name = "aesop-kernel"
+version = "0.10.0"
+description = "Orchestration kernel for autonomous software development: multi-agent coordination on git and plain text, with fail-closed verification gates."
+readme = "README.md"
+# Lowest Python any workflow in .github/workflows/ runs (3.11; see crossos-drift.yml and stats-refresh.yml).
+requires-python = ">=3.11"
+# PyYAML is imported by tools/ci_workflow_lint.py, tools/ci_needs_skip_guard.py and tools/ci_job_execution_verifier.py.
+dependencies = [
+    "PyYAML==6.0.3",
+]
+
+[project.optional-dependencies]
+# Browser verification scripts (tools/verify_*.py) import playwright.
+browser = [
+    "playwright==1.61.0",
+]
+# Receipt signing (tools/receipt_common.py); falls back to HMAC-SHA256 when absent.
+receipts = [
+    "cryptography==50.0.2",
+]
+# Optional telemetry sink (tools/otel_sink.py, import-guarded).
+telemetry = [
+    "opentelemetry-sdk",
+    "opentelemetry-exporter-otlp-proto-grpc",
+]
+# Bench API runner (tools/bench_api_runner.py).
+bench = [
+    "anthropic==0.120.0",
+]
+# Gate and test tooling: tools/pyflakes_gate.py imports pyflakes; CI runs tests/ with pytest.
+dev = [
+    "pytest~=9.1.1",
+    "pytest-timeout",
+    "pyflakes",
+]
+
+[project.urls]
+Homepage = "https://github.com/matt82198/aesop"
+Repository = "https://github.com/matt82198/aesop"

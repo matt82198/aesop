@@ -51,7 +51,13 @@ In wave-11, a hierarchical dispatch architecture was built: orchestrator → Son
 
 ## Quick Try (2 min, no API keys)
 
-Just Node.js >= 18 and git. No API keys needed.
+Node.js >= 18, git, and Python 3.11+ (`npm run test:all` invokes Python test runners; `test:sh` also needs bash). No API keys needed.
+
+### Dependencies (what is literally true)
+
+- **npm runtime dependencies: none.** The root `package.json` has no `dependencies` key. Its only entry is the devDependency `@playwright/test`. `mcp/package.json` declares `"dependencies": {}`. The Node runtime code in `bin/`, `daemons/`, `monitor/`, `dash/`, `mcp/`, `hooks/claude/` and `scan/` imports only Node built-in modules.
+- **Python**: the tooling under `tools/` and `daemons/` is mostly standard library. The non-stdlib imports are PyYAML (CI workflow linters), `cryptography` (receipt signing, with an HMAC fallback when absent), `playwright` (browser verification scripts), `opentelemetry` (optional, import-guarded telemetry sink), `anthropic` (bench API runner), and `pyflakes` (imported by `tools/pyflakes_gate.py`). CI also installs `pytest` to run `tests/`; no file under `tools/` or `daemons/` imports it. The declared list is in [`pyproject.toml`](./pyproject.toml).
+- **CI floor**: the lowest Python version any workflow in `.github/workflows/` runs is 3.11.
 
 ```bash
 git clone https://github.com/matt82198/aesop.git && cd aesop
@@ -66,7 +72,7 @@ Explore the CLI, verify the test infrastructure, and study [examples/first-wave-
 To run the actual multi-agent orchestration loop you need:
 
 - **Claude Code CLI** (or another supported backend) with a valid API key
-- **Python 3.10+** for guardrails, secret scanning, and the dashboard
+- **Python 3.11+** for guardrails, secret scanning, and the dashboard
 - **Bash 4+** (or Git Bash on Windows) for daemon scripts
 
 ```bash
