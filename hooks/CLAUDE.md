@@ -117,7 +117,7 @@ memories (advisory, read after the fact), and both fail open on malformed stdin.
 
 ## pre-commit-dispatch-lint.sh
 
-Pre-commit hook running `tools/dispatch_lint.py` on staged files. Blocks commits containing dispatch policy violations (forbidden flags like `--admin`, `--no-verify`, `git stash`, credential hunting). BASH_SOURCE guarded. Fail-open when no violations detected.
+Pre-commit hook running `tools/dispatch_lint.py` on staged files. Blocks commits containing dispatch policy violations (forbidden flags like `--admin`, `--no-verify`, `git stash`, credential hunting). BASH_SOURCE guarded. Blocks on the linter's exit code (1 = violations, printed findings; 2 = error) and fails CLOSED when python or `tools/dispatch_lint.py` is missing. Installed chained after the waveguard step in `.git/hooks/pre-commit` by `hooks/install-waveguard.sh` and the scaffolder (`bin/cli.js` installPreCommitWaveguard); an existing wrapper is skipped by the installer, so delete `.git/hooks/pre-commit` and re-run it to pick this step up. Test: `bash tests/test_pre_commit_dispatch_hook.sh`.
 
 ## Key Invariants
 - Bash required (explicit shebang), CRLF-safe

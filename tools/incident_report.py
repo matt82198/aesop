@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """
-Incident log generator: mines committed record for operational failures.
-INDEX: Incident log generator: mines git history for operational failures (fake-green, ci-drift, test-pollution, flake, conflict, stall, gate-activation, doc-invented); generates docs/INCIDENTS.md table; CLI: `[--repo PATH]` (print) | `--regenerate [--output FILE]` | `--check` (drift exit 1); uses subprocess_common.git() with 60s timeout (critical fix: no prior timeout); all output deterministic, idempotent
+Incident log generator: mines git history for operational failures.
+INDEX: Incident log generator: mines git history for operational failures; Incident-Class / Incident-Category commit trailers are authoritative and unknown values fail closed (non-zero exit naming the commit); subject-only keyword fallback is flagged inferred; 12 classes (incl. daemon-liveness, hook-fail-open, sync-drift, conduct); generates docs/INCIDENTS.md; CLI: `[--repo PATH]` (print) | `--regenerate [--output FILE]` | `--check` (drift exit 1); uses subprocess_common.git() with 60s timeout; all output deterministic, idempotent
 
-Parses git history (commit messages, BUILDLOG, CHANGELOG, PR titles) and
-extracts failure events classified by type (fake-green, ci-drift, test-pollution,
-flake, conflict, stall, gate-activation, doc-invented).
+Parses git history and extracts failure events, each classified by class.
+
+Classification channels, in precedence order:
+  1. Explicit trailer `Incident-Class: <class>` (optional `Incident-Category: <A..E name>`).
+     Authoritative. An unknown class or category is an ERROR that names the commit;
+     the run fails closed (non-zero exit, no log written) rather than dropping the commit.
+  2. Fallback for commits WITHOUT the trailer: subject only. A subject prefix of a known
+     class name (e.g. "stall: ...") or a subject keyword match. Fallback rows are marked
+     "(inferred)" in the generated table. Body text is never keyword-matched, and merge
+     commits are never fallback incidents.
 
 Generates docs/INCIDENTS.md: a deterministic, idempotent failure taxonomy table
 with columns: class, what_happened, resolution, source_ref.
@@ -18,7 +25,8 @@ Usage:
 Output modes:
   default  - Human-readable table
   --regenerate - Regenerate docs/INCIDENTS.md from live git state
-  --check - Exit 0 if docs/INCIDENTS.md matches current state, 1 if drift
+  --check - Exit 0 if docs/INCIDENTS.md matches current state, 1 if drift or an
+            unclassifiable trailer (fail closed)
 
 All output is deterministic: stable ordering, no generated timestamps, idempotent regeneration.
 """
@@ -49,7 +57,34 @@ INCIDENT_CLASSES = {
     "stall": "Agent/process hung or deadlocked, watchdog detected, restart required",
     "gate-activation": "Pre-push secret/verification gate caught an escape or bypass",
     "doc-invented": "Documentation made unverifiable claims, hallucinated counts or proofs",
+    "daemon-liveness": "Daemon or watchdog not running, heartbeat stale, or liveness check blind",
+    "hook-fail-open": "Hook exited 0 or passed on malformed input or internal error",
+    "sync-drift": "Checkout or brain state out of sync with origin (stale branch, unpulled state)",
+    "conduct": "Orchestrator conduct: relayed unverified claims or routed around gates by hand",
 }
+
+# Incident category taxonomy (value of the Incident-Category trailer: "<letter> <name>")
+INCIDENT_CATEGORIES = {
+    "A": "CI/gates",
+    "B": "daemons/fleet",
+    "C": "brain hooks",
+    "D": "sync/state",
+    "E": "orchestrator conduct",
+}
+
+CLASS_TRAILER = "Incident-Class"
+CATEGORY_TRAILER = "Incident-Category"
+_TRAILER_RE = re.compile(r"^(Incident-Class|Incident-Category)[ \t]*:[ \t]*(.*?)[ \t]*$", re.MULTILINE)
+_CATEGORY_VALUE_RE = re.compile(r"^([A-E])(?:[ \t]+(.+))?$")
+_SUBJECT_PREFIX_RE = re.compile(r"^([a-z][a-z-]*):")
+
+
+def parse_trailers(body: str) -> Dict[str, List[str]]:
+    """Return {trailer key: [values in order]} for the Incident-* trailers in a commit body."""
+    found: Dict[str, List[str]] = {CLASS_TRAILER: [], CATEGORY_TRAILER: []}
+    for key, value in _TRAILER_RE.findall(body or ""):
+        found[key].append(value)
+    return found
 
 
 # Whole-word private-machine tokens (same set as tools/portability_check.py).
@@ -75,7 +110,7 @@ def write_table(path, text: str) -> None:
 
 
 class IncidentClassifier:
-    """Classify incidents from commit subjects and bodies."""
+    """Classify incidents. Subject-only fallback; explicit trailers are resolved by the parser."""
 
     def __init__(self):
         """Initialize classifier with patterns."""
@@ -129,31 +164,23 @@ class IncidentClassifier:
         }
 
     def classify_commit_subject(self, subject: str) -> str:
-        """Classify incident from commit subject.
+        """Classify incident from the commit subject alone (fallback channel).
 
+        A subject that starts with a known class name ("stall: ...") is that class.
+        Otherwise the keyword patterns are tried in order.
         Returns the class name (e.g., 'fake-green') or 'unknown'.
         """
-        subject_lower = subject.lower()
+        prefix = _SUBJECT_PREFIX_RE.match(subject.strip().lower())
+        if prefix and prefix.group(1) in INCIDENT_CLASSES:
+            return prefix.group(1)
 
-        # Check each class in order of specificity
+        subject_lower = subject.lower()
         for class_name, patterns in self.patterns.items():
             for pattern in patterns:
                 if re.search(pattern, subject_lower, re.IGNORECASE):
                     return class_name
 
-        # Default to unknown if no pattern matches
         return "unknown"
-
-    def classify_from_body(self, body: str) -> Optional[str]:
-        """Classify incident from full commit body if subject didn't match."""
-        body_lower = body.lower()
-
-        for class_name, patterns in self.patterns.items():
-            for pattern in patterns:
-                if re.search(pattern, body_lower, re.IGNORECASE):
-                    return class_name
-
-        return None
 
 
 class IncidentParser:
@@ -205,8 +232,10 @@ class IncidentParser:
         for line in lines:
             line = line.strip()
             if line and len(line) > 10:
-                # Skip co-author lines
+                # Skip co-author lines and Incident-* trailers
                 if 'Co-Authored-By' in line or 'Authored-By' in line:
+                    continue
+                if _TRAILER_RE.match(line):
                     continue
                 # Take first substantial line as resolution
                 if len(resolution_lines) == 0 and line:
@@ -221,29 +250,66 @@ class IncidentParser:
         # Fallback: extract from subject
         return self._extract_what_happened(body[:100], "")
 
-    def find_all_incidents(self, limit: Optional[int] = None) -> List[Dict[str, str]]:
-        """Find all incidents in git history.
+    def _resolve_trailers(self, short_hash: str, subject: str, body: str) -> Tuple[Optional[str], bool, List[str]]:
+        """Resolve explicit trailers for one commit.
 
-        Returns list of dicts with keys: hash, class, what_happened, resolution, source_ref, date
-        Ordered by date (newest first), then by hash for determinism.
+        Returns (class or None, explicit, errors). Errors name the commit and make the run fail closed.
         """
-        # Get all commits with subject and first line of body
+        errors: List[str] = []
+        trailers = parse_trailers(body)
+
+        class_values = trailers[CLASS_TRAILER]
+        category_values = trailers[CATEGORY_TRAILER]
+
+        if len(set(class_values)) > 1:
+            errors.append(f"{short_hash} ({subject!r}): conflicting {CLASS_TRAILER} values {sorted(set(class_values))}")
+        for value in class_values[:1]:
+            if value not in INCIDENT_CLASSES:
+                errors.append(
+                    f"{short_hash} ({subject!r}): unknown {CLASS_TRAILER} {value!r} "
+                    f"(valid: {', '.join(sorted(INCIDENT_CLASSES))})"
+                )
+
+        for value in category_values:
+            match = _CATEGORY_VALUE_RE.match(value)
+            if not match:
+                errors.append(f"{short_hash} ({subject!r}): invalid {CATEGORY_TRAILER} {value!r} (expected A..E)")
+                continue
+            letter, name = match.group(1), match.group(2)
+            if name is not None and name != INCIDENT_CATEGORIES[letter]:
+                errors.append(
+                    f"{short_hash} ({subject!r}): invalid {CATEGORY_TRAILER} {value!r} "
+                    f"(expected {letter} {INCIDENT_CATEGORIES[letter]})"
+                )
+
+        if category_values and not class_values:
+            errors.append(f"{short_hash} ({subject!r}): {CATEGORY_TRAILER} given without {CLASS_TRAILER}")
+
+        if class_values:
+            value = class_values[0]
+            return (value if value in INCIDENT_CLASSES else None), True, errors
+        return None, False, errors
+
+    def parse(self) -> Tuple[List[Dict[str, str]], List[str]]:
+        """Parse the full history.
+
+        Returns (incidents, errors). Errors are never swallowed: any error means the
+        log must not be regenerated or checked as current (fail closed).
+        Incidents are ordered by date (newest first), then by hash for determinism.
+        """
         # Fields are separated by US (\x1f) and records by RS (\x1e), so multi-line
         # bodies and '|' characters in bodies cannot split a record apart.
-        try:
-            output = self._run_git(
-                "log",
-                "--format=%H%x1f%h%x1f%s%x1f%b%x1f%cI%x1e",  # full | short | subject | body | date
-                "--all",
-                check=False,
-            )
-        except Exception:
-            return []
-
+        output = self._run_git(
+            "log",
+            "--format=%H%x1f%h%x1f%s%x1f%b%x1f%cI%x1e",  # full | short | subject | body | date
+            "--all",
+            check=False,
+        )
         if not output:
-            return []
+            return [], []
 
         incidents = []
+        errors: List[str] = []
         seen_hashes = set()
 
         for record in output.split('\x1e'):
@@ -263,16 +329,24 @@ class IncidentParser:
                 continue
             seen_hashes.add(full_hash)
 
-            # Classify
-            incident_class = self.classifier.classify_commit_subject(subject)
-            if incident_class == "unknown" or incident_class is None:
-                incident_class = self.classifier.classify_from_body(body)
+            explicit_class, explicit, trailer_errors = self._resolve_trailers(short_hash, subject, body)
+            errors.extend(trailer_errors)
 
-            # Skip if still unknown or None
-            if incident_class == "unknown" or incident_class is None:
+            if explicit:
+                incident_class = explicit_class
+                inferred = False
+            elif subject.startswith("Merge "):
+                # A merge commit is never an incident by its subject alone
+                # (branch names in merge subjects otherwise match keywords).
+                continue
+            else:
+                incident_class = self.classifier.classify_commit_subject(subject)
+                inferred = True
+
+            # Unknown or erroneous rows are never emitted; the error above fails the run.
+            if incident_class is None or incident_class == "unknown":
                 continue
 
-            # Extract metadata
             what_happened = self._extract_what_happened(subject, body)
             resolution = self._extract_resolution(body)
             source_ref = self._extract_source_ref(subject, short_hash)
@@ -288,6 +362,7 @@ class IncidentParser:
                 'hash': short_hash,
                 'full_hash': full_hash,
                 'class': incident_class,
+                'inferred': inferred,
                 'what_happened': what_happened,
                 'resolution': resolution,
                 'source_ref': source_ref,
@@ -296,20 +371,21 @@ class IncidentParser:
             })
 
         # Sort by date (newest first), then by hash for determinism
-        incidents.sort(
-            key=lambda x: (-x['date_obj'].timestamp(), x['hash']),
-            reverse=False
-        )
-        incidents.reverse()  # Newest first
+        incidents.sort(key=lambda x: (-x['date_obj'].timestamp(), x['hash']))
 
-        # Optionally limit
-        if limit:
-            incidents = incidents[:limit]
-
-        # Remove internal date_obj field for output
         for incident in incidents:
             del incident['date_obj']
 
+        return incidents, errors
+
+    def find_all_incidents(self, limit: Optional[int] = None) -> List[Dict[str, str]]:
+        """Return the incidents from parse(), optionally limited (errors are dropped here).
+
+        Callers that must fail closed use parse() and check its errors.
+        """
+        incidents, _errors = self.parse()
+        if limit:
+            incidents = incidents[:limit]
         return incidents
 
 
@@ -323,6 +399,7 @@ class IncidentMarkdown:
         lines.append("# Incidents")
         lines.append("")
         lines.append("Operational failures tracked by class: detection, resolution, and source reference.")
+        lines.append("Rows marked (inferred) were classified from the commit subject because the commit carries no Incident-Class trailer.")
         lines.append("")
 
         if not incidents:
@@ -331,12 +408,15 @@ class IncidentMarkdown:
             return "\n".join(lines)
 
         # Generate summary counts by class
-        class_counts = {}
+        class_counts: Dict[str, int] = {}
+        inferred_counts: Dict[str, int] = {}
         for incident in incidents:
             class_name = incident.get('class') or 'unknown'
             if class_name == 'unknown' or class_name is None:
                 continue
             class_counts[class_name] = class_counts.get(class_name, 0) + 1
+            if incident.get('inferred'):
+                inferred_counts[class_name] = inferred_counts.get(class_name, 0) + 1
 
         if class_counts:
             lines.append("**Summary**")
@@ -344,7 +424,9 @@ class IncidentMarkdown:
             for class_name in sorted(class_counts.keys()):
                 count = class_counts[class_name]
                 description = INCIDENT_CLASSES.get(class_name, "Unknown")
-                lines.append(f"- **{class_name}** ({count}): {description}")
+                inferred = inferred_counts.get(class_name, 0)
+                suffix = f", {inferred} inferred" if inferred else ""
+                lines.append(f"- **{class_name}** ({count}{suffix}): {description}")
             lines.append("")
 
         # Generate table
@@ -353,6 +435,8 @@ class IncidentMarkdown:
 
         for incident in incidents:
             class_name = incident['class']
+            if incident.get('inferred'):
+                class_name = f"{class_name} (inferred)"
             what_happened = incident['what_happened']
             resolution = incident['resolution']
             source_ref = incident['source_ref']
@@ -441,10 +525,15 @@ class IncidentChecker:
         """Check if INCIDENTS.md matches generated state.
 
         Returns (match_status, message):
+        - (False, message) on any classification error (fail closed, names the commit)
         - (True, None) if they match
         - (False, reason_msg) if they don't match
-        - (True, skip_msg) if shallow clone (skipped for safety)
+        - (True, skip_msg) if shallow clone (drift skipped for safety; errors never skipped)
         """
+        incidents, errors = self.parser.parse()
+        if errors:
+            return (False, "FAIL-CLOSED: unclassifiable incident commit(s):\n  " + "\n  ".join(errors))
+
         incidents_path = self.repo_root / incidents_file
         if not incidents_path.exists():
             return (False, "File does not exist; need to regenerate")
@@ -463,7 +552,6 @@ class IncidentChecker:
             return (False, "Cannot read INCIDENTS.md")
 
         # Generate expected content
-        incidents = self.parser.find_all_incidents()
         expected_content = self.markdown.generate_table(incidents)
 
         # Compare (normalize whitespace)
@@ -477,8 +565,25 @@ class IncidentChecker:
             return (False, "DRIFT: docs/INCIDENTS.md does not match current state")
 
 
+def _report_errors(errors: List[str]) -> None:
+    """Print classification errors to stderr (fail-closed path)."""
+    print("FAIL-CLOSED: unclassifiable incident commit(s); nothing written:", file=sys.stderr)
+    for error in errors:
+        print(f"  {error}", file=sys.stderr)
+
+
+def _configure_stdio() -> None:
+    """Never crash on a non-UTF-8 console (e.g. cp1252 with U+FEFF in a commit subject)."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main():
     """CLI entry point."""
+    _configure_stdio()
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -491,7 +596,7 @@ def main():
     parser.add_argument(
         "--output",
         default="docs/INCIDENTS.md",
-        help="Output file path (default: docs/INCIDENTS.md)"
+        help="Output file path (default: docs/INCIDENTS.md; relative to --repo, or absolute)"
     )
 
     mode_group = parser.add_mutually_exclusive_group()
@@ -503,7 +608,7 @@ def main():
     mode_group.add_argument(
         "--check",
         action="store_true",
-        help="Check if docs/INCIDENTS.md matches current state (exit 0=match, 1=drift)"
+        help="Check if docs/INCIDENTS.md matches current state (exit 0=match, 1=drift or classification error)"
     )
 
     args = parser.parse_args()
@@ -512,14 +617,17 @@ def main():
     markdown_gen = IncidentMarkdown()
 
     if args.regenerate:
-        # Parse all incidents
-        incidents = incident_parser.find_all_incidents()
+        incidents, errors = incident_parser.parse()
+        if errors:
+            _report_errors(errors)
+            return 1
 
-        # Generate markdown
         markdown_output = markdown_gen.generate_table(incidents)
 
-        # Write to file
-        output_path = Path(args.repo) / args.output if not Path(args.output).is_absolute() else args.output
+        # Relative --output is taken from --repo; absolute --output is used as-is.
+        output_path = Path(args.output)
+        if not output_path.is_absolute():
+            output_path = Path(args.repo) / output_path
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         write_table(output_path, markdown_output)
@@ -543,7 +651,10 @@ def main():
             return 1
 
     # Default: print incidents
-    incidents = incident_parser.find_all_incidents()
+    incidents, errors = incident_parser.parse()
+    if errors:
+        _report_errors(errors)
+        return 1
     markdown_output = markdown_gen.generate_table(incidents)
     print(markdown_output)
 

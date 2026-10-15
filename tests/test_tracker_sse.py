@@ -23,6 +23,26 @@ def load_serve(fixture_root, extra_env=None):
     return serve
 
 
+# Scrub the state-root env vars for this whole module so the snapshot reads only the
+# fixture state dir, never a live AESOP_STATE_ROOT / CONDUCTOR_ROOT from the shell.
+_STATE_ENV_KEYS = ("AESOP_STATE_ROOT", "CONDUCTOR_ROOT")
+_SAVED_STATE_ENV = {}
+
+
+def setUpModule():
+    for env_name in _STATE_ENV_KEYS:
+        _SAVED_STATE_ENV[env_name] = os.environ.pop(env_name, None)
+
+
+def tearDownModule():
+    for env_name, value in _SAVED_STATE_ENV.items():
+        if value is None:
+            os.environ.pop(env_name, None)
+        else:
+            os.environ[env_name] = value
+    _SAVED_STATE_ENV.clear()
+
+
 class EnvFixtureCase(unittest.TestCase):
     def setUp(self):
         self.fixture_root = Path(tempfile.mkdtemp(prefix="aesop-tracker-test-"))
