@@ -1,6 +1,6 @@
 # bench/ — Held-out benchmark scaffold
 
-> Live-spend guard: `AESOP_BENCH_OFFLINE=1` blocks every paid path (`bench/frontier_slice.py`, `tools/bench_api_runner.py`) before any client is constructed; both paid paths also require `--confirm-spend`.
+> Live-spend guard: `AESOP_BENCH_OFFLINE=1` blocks every paid path (`bench/frontier_slice.py`, `tools/bench_api_runner.py`, and the `claude`-CLI runners `--runner haiku|sonnet|opus` in `tools/bench_runner.py`) before any client is constructed or command is spawned; the first two also require `--confirm-spend` (the CLI runners have no such flag).
 
 ## Why this exists
 
