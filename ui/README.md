@@ -85,7 +85,7 @@ POST `/submit` appends timestamped line to `state/ui-inbox.md`:
 
 ## Requirements
 
-- **Python 3.10+**: stdlib-only (no external dependencies)
+- **Python 3.11+** (the repo floor, per the root README's Dependencies section): the dashboard server imports only the standard library and in-repo modules. The repo's Python tooling declares PyYAML, `cryptography`, `playwright`, `opentelemetry` (optional), `anthropic` and `pyflakes` in `pyproject.toml`; the dashboard does not import them.
 - **Node.js v18+** (optional): required for agent detection via `dash/dash-extra.mjs`
 
 ## Robustness
