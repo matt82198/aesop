@@ -646,16 +646,15 @@ jobs:
       - name: Run pr_footprint_gate (Guardrail G2.7)
         run: python tools/pr_footprint_gate.py --base "origin/${{ github.base_ref }}" --head HEAD --labels '${{ toJson(github.event.pull_request.labels) }}'
 
-  # Guardrail G13 (tools/CLAUDE.md). ADVISORY ONLY: continue-on-error + no required-check
-  # registration, so it can never deadlock or block a merge -- this is the first
-  # invocation of pr_symbol_survival_check.py (gate-inventory rule: every documented
-  # gate needs an invoker) while it earns trust against real PR history before anyone
-  # considers making it required. Standalone job, no docs-only-gate dependency: it is
-  # cheap, read-only, and never a required context, so skipping-cascade deadlock risk
-  # (see docs-only-gate's header comment above) does not apply here.
+  # Guardrail G13 (tools/CLAUDE.md). BLOCKING: a PR whose own commits add a symbol that
+  # a merge commit in range dropped (conflict-resolution loss, PR #745 class) fails this
+  # job, and the job is a required status check (branch protection). Promoted from
+  # advisory after a 30-PR dry-run over merged history (0 fail / 0 error) and the
+  # nested/re-indented-def false positive fix (#947) and add-then-delete false positive
+  # fix (this PR). Standalone job, no docs-only-gate dependency: cheap and read-only.
+  # The step propagates the tool's exit code (0 pass, 1 missing symbol, 2 tool/git error).
   pr-symbol-survival:
     if: github.event_name == 'pull_request'
-    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -668,18 +667,18 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Run pr_symbol_survival_check.py (advisory)
+      - name: Run pr_symbol_survival_check.py (blocking, G13)
         run: |
-          # Advisory: the step always exits 0 (continue-on-error + no required check), so the
-          # rc is recorded for audit, not used for gating. Output goes to the job log AND summary.
-          out="$RUNNER_TEMP/g13-advisory.txt"
+          # Blocking: rc is propagated. Output goes to the job log AND the step summary.
+          out="$RUNNER_TEMP/g13-check.txt"
           rc=0
           python tools/pr_symbol_survival_check.py --base "origin/${{ github.base_ref }}" --head HEAD > "$out" 2>&1 || rc=$?
           cat "$out"
           {
-            echo "### PR symbol survival check (Guardrail G13, advisory/non-blocking)"
-            echo "G13 advisory rc=$rc"
+            echo "### PR symbol survival check (Guardrail G13, blocking)"
+            echo "G13 rc=$rc"
             echo '```'
             cat "$out"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"

@@ -19,6 +19,7 @@
     "tools/health_score.py@monitor-hb",
     "tools/health_score.py@watchdog-hb",
     "tools/heartbeat.py@state-heartbeat",
+    "tools/ingest_task_events.py@state-heartbeat",
     "tools/reconcile.py@state-md-write",
     "tools/status_publish.py@buildlog-md-write",
     "tools/verify_cost_forecast.py@ledger-md",
