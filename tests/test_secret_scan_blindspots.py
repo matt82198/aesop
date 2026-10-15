@@ -97,11 +97,19 @@ class TestF01GenericCredentialAssignment(unittest.TestCase):
         findings = self._scan_text(".py", "h = self._headers(valid_token=resolved_token_value, extra=extra)\n")
         self.assertNotIn("generic_credential_assignment", _all_rules(findings))
 
-    def test_pragma_still_softens_generic_credential_in_docs(self):
-        """The documented doc-pragma escape keeps working for the new rule."""
+    def test_pragma_does_not_soften_real_credential(self):
+        """A self-asserted doc pragma must NOT launder a real credential-shaped
+        value: the pragma is file-controlled, so it cannot be the escape hatch
+        for F-01. Inverse of the pre-fix pinning test (PR #971 regression)."""
         findings = self._scan_text(".md", f"{PRAGMA_LINE}\nDB_PASSWORD={PW_VALUE}\n")
-        self.assertIn("generic_credential_assignment", _all_rules(findings))
-        self.assertNotIn("generic_credential_assignment", _fatal_rules(findings))
+        self.assertIn("generic_credential_assignment", _fatal_rules(findings))
+
+    def test_pragma_with_placeholder_example_stays_clean(self):
+        """Control: under the same pragma, a placeholder doc example is CLEAN
+        (the rule's own placeholder check handles doc examples)."""
+        findings = self._scan_text(".md", f"{PRAGMA_LINE}\nDB_PASSWORD=<changeme>\nAPI_TOKEN=your-token-here\n")
+        self.assertNotIn("generic_credential_assignment", _all_rules(findings))
+        self.assertEqual(_fatal_rules(findings), set())
 
     def test_placeholder_values_are_not_flagged(self):
         """Control: placeholder values in a non-env file stay CLEAN."""
