@@ -265,7 +265,7 @@ check_gate_tamper() {
     [ -z "$local_sha" ] && continue
     [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue
     changed=$(git diff --name-only "origin/main...$local_sha" 2>/dev/null) || changed=""
-    hits+=$(printf '%s\n' "$changed" | grep -E '^(tools/[^/]*gate[^/]*\.py|tools/secret_scan\.py|hooks/pre-push-policy\.sh|\.github/workflows/)' || true)
+    hits+=$(printf '%s\n' "$changed" | grep -E '^(tools/[^/]*gate[^/]*\.py|tools/secret_scan\.py|tools/gen_[^/]*\.py|tools/generated_[^/]*\.py|hooks/pre-push-policy\.sh|\.github/workflows/)' || true)
     hits+=$'\n'
   done <<< "$tuples"
   hits=$(printf '%s\n' "$hits" | sed '/^$/d' | sort -u)
@@ -1842,7 +1842,7 @@ check_generated_regen() {
   fi
 
   local gate_output
-  gate_output=$("$py_bin" "$gate_script" "${range_args[@]}" 2>&1)
+  gate_output=$("$py_bin" "$gate_script" --base-dir "$gate_dir" "${range_args[@]}" 2>&1)
   local gate_exit_code=$?
   if [ $gate_exit_code -ne 0 ]; then
     if [ -n "$gate_output" ]; then
