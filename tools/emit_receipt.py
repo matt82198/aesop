@@ -92,15 +92,27 @@ def parse_test_count(text):
     return None
 
 
+# Variables a matrix part must never inherit from the push that spawned it.
+# GIT_*: defense in depth against committing into the lane's repo (see
+# RECEIPT-GATE.md). AESOP_ALLOW_GENERATED: the push-policy escape hatch for a
+# generator push; a generator push's matrix ran tests asserting it was absent
+# (test_merge_queue, receipt e197fa08 shard-1), so the matrix must not see it.
+_SCRUBBED_PART_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_COMMON_DIR",
+                      "GIT_OBJECT_DIRECTORY", "AESOP_ALLOW_GENERATED")
+
+
+def scrubbed_part_env(environ):
+    """Return a copy of environ with the push-inherited variables removed."""
+    env = dict(environ)
+    for var in _SCRUBBED_PART_ENV:
+        env.pop(var, None)
+    return env
+
+
 def run_part(repo, name, spec, throwaway_wt=None, log_path=None):
     argv = spec.cmd(Path(throwaway_wt or repo))
     t0 = time.monotonic()
-    env = dict(os.environ)
-    # Defense in depth: scrub git hook environment variables to prevent matrix parts
-    # from accidentally committing to a repo via inherited GIT_DIR/GIT_WORK_TREE.
-    # See RECEIPT-GATE.md and hooks/CLAUDE.md for the mechanism.
-    for var in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"):
-        env.pop(var, None)
+    env = scrubbed_part_env(os.environ)
 
     with tempfile.TemporaryDirectory(prefix="receipt-%s-" % name) as tmp:
         env["TMPDIR"] = tmp  # per-part temp dir, mirrors ci.yml's shard-specific TMPDIR
