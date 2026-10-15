@@ -18,6 +18,7 @@ Exit codes:
 """
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -27,7 +28,9 @@ if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
 from state_store import StateAPI
+from state_store.paths import resolve_db_path
 from state_store.materialize import (
+    latest_stored_state_md,
     materialize_tracker,
     materialize_orchestrator_status,
     materialize_state_md,
@@ -70,7 +73,7 @@ def main():
         state_dir = Path(os.environ.get("AESOP_STATE_ROOT", "./state"))
 
     state_dir.mkdir(parents=True, exist_ok=True)
-    db_path = str(state_dir / "tracker_events.db")
+    db_path = resolve_db_path(state_dir, "tracker")
 
     # Open the event store
     try:
@@ -234,8 +237,18 @@ def _check_tracker(api, state_dir: Path) -> bool:
         return True
 
 
+_ISO_TIMESTAMP_RE = re.compile(
+    rb"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:\+00:00|Z)"
+)
+
+
 def _check_state_md(api, state_dir: Path) -> bool:
-    """Check STATE.md for drift. Return True if drift detected."""
+    """Check STATE.md for drift. Return True if drift detected.
+
+    A stored STATE.md body is compared exactly. The generated fallback embeds a
+    wall-clock timestamp, so only that case compares with ISO timestamps masked;
+    otherwise every --all run would look like drift.
+    """
     state_file = state_dir / "STATE.md"
     if not state_file.exists():
         return True
@@ -243,7 +256,9 @@ def _check_state_md(api, state_dir: Path) -> bool:
     try:
         expected = materialize_state_md(api, state_dir)
         actual = state_file.read_bytes()
-        return expected != actual
+        if latest_stored_state_md(api) is not None:
+            return expected != actual
+        return _ISO_TIMESTAMP_RE.sub(b"<ts>", expected) != _ISO_TIMESTAMP_RE.sub(b"<ts>", actual)
     except Exception:
         return True
 

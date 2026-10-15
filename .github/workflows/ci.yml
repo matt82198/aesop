@@ -575,6 +575,30 @@ jobs:
       - name: Run watchdog GUI tests
         run: bash tests/dash-watchdog-gui.test.sh
 
+  # State drift gate (state_store/CLAUDE.md): `state_rebuild --check` is the CI drift gate.
+  # FAIL-CLOSED: no continue-on-error, no event filter, no skip. Builds a fresh state root,
+  # materializes every view with --all, then requires --check to pass on that same root.
+  # A non-deterministic view (e.g. a wall-clock stamp leaking into a materialized file)
+  # or a rebuild that clobbers a stored STATE.md turns this job red.
+  state-drift-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: state_rebuild --all then --check (fail-closed drift gate)
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATE_ROOT="$(mktemp -d)"
+          python tools/state_rebuild.py --all --state-root "$STATE_ROOT"
+          python tools/state_rebuild.py --check --state-root "$STATE_ROOT"
+
   # Guardrail G2.7 (tools/CLAUDE.md): PR footprint gate — detects oversized PRs (>100 files
   # or >5000 deletions) or fixture-polluted branches (test fixtures committed into lanes).
   # REQUIRED: blocks auto-merge of oversized/polluted PRs unless labeled 'big-change' or
