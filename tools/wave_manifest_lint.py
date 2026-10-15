@@ -14,6 +14,7 @@ import argparse
 import fnmatch
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -275,48 +276,65 @@ def check_git_history_churn(items: List[Dict[str, Any]], repo_root: str) -> List
     return checks
 
 
-def _testcmd_binary_resolves(test_cmd: str, repo_root: str) -> Tuple[bool, str]:
-    """Resolve the leading binary of a testCmd. Returns (resolved, binary).
-    
-    Skips past leading shell negation (!) and environment assignments (FOO=value)
-    to find the actual binary.
-    """
-    tokens = test_cmd.split()
-    if not tokens:
-        return False, ""
+# Shell builtins run inside the shell itself, so they are never looked up on
+# PATH. A testCmd that starts with one (e.g. ``cd docs && sphinx-build ...``)
+# is judged by the first command after it, not by the builtin.
+SHELL_BUILTINS = frozenset({
+    "cd", "pushd", "popd", "export", "unset", "set", "shopt", "alias", "readonly",
+    "echo", "printf", "read", "true", "false", "test", "[", ":", "exit", "return",
+    "source", ".", "eval", "umask", "ulimit",
+})
 
-    # Skip leading shell negation and env assignments to find the real binary
-    idx = 0
-    while idx < len(tokens):
-        token = tokens[idx]
-        # Skip shell negation
+# Command separators that start a new command in a shell chain.
+_SHELL_SEPARATOR = re.compile(r"\s*(?:&&|\|\||;|\|)\s*")
+
+
+def _leading_command_token(segment: str) -> Optional[str]:
+    """Return the command word of one shell segment, skipping ! and VAR=value."""
+    tokens = segment.split()
+    for token in tokens:
         if token == "!":
-            idx += 1
             continue
-        # Skip environment assignments (FOO=value pattern)
+        # Environment assignment (FOO=value): valid env var name before '='
         if "=" in token and not os.path.isabs(token) and not token.startswith("-"):
-            # Check if it matches VAR=value pattern (valid env var name before =)
             var_part = token.split("=", 1)[0]
-            # Valid env var: starts with letter/underscore, contains only alphanumeric/underscore
             if var_part and var_part.replace("_", "").isalnum() and (var_part[0].isalpha() or var_part[0] == "_"):
-                idx += 1
                 continue
-        # Found the binary
-        break
+        return token
+    return None
 
-    if idx >= len(tokens):
-        return False, ""
 
-    binary = tokens[idx]
-
-    # Repo-relative script?
+def _binary_on_path_or_repo(binary: str, repo_root: str) -> bool:
+    """True if the binary is a repo-relative script, an existing absolute path, or on PATH."""
     if not os.path.isabs(binary):
         if (Path(repo_root) / binary).exists():
-            return True, binary
+            return True
     elif Path(binary).exists():
-        return True, binary
+        return True
+    return bool(shutil.which(binary))
 
-    return bool(shutil.which(binary)), binary
+
+def _testcmd_binary_resolves(test_cmd: str, repo_root: str) -> Tuple[bool, str]:
+    """Resolve the first real command of a testCmd. Returns (resolved, binary).
+
+    Skips leading shell negation (!) and environment assignments (FOO=value).
+    Shell builtins (SHELL_BUILTINS) are skipped across &&, ||, ; and | chains,
+    so the first non-builtin command is the one checked. A chain made only of
+    builtins resolves (the shell runs it); a missing real binary behind a
+    builtin still fails.
+    """
+    first_builtin = ""
+    for segment in _SHELL_SEPARATOR.split(test_cmd):
+        token = _leading_command_token(segment)
+        if token is None:
+            continue
+        if token in SHELL_BUILTINS:
+            first_builtin = first_builtin or token
+            continue
+        return _binary_on_path_or_repo(token, repo_root), token
+    if first_builtin:
+        return True, first_builtin
+    return False, ""
 
 
 def check_testcmd_validity(manifest: Dict[str, Any], repo_root: str) -> List[Check]:

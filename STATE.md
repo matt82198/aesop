@@ -4,18 +4,72 @@
 
 **Current Version:** v0.9.1 (tag 5026195d, cut 2026-10-09; GitHub release published 2026-10-10; npm @matt82198/aesop 0.9.1; 40 PRs since v0.9.0). Previous: v0.9.0 (2026-10-07).
 
-## CURRENT (2026-10-14 orchestrator checkpoint)
+## CURRENT (2026-10-14 mid-wave checkpoint)
 
-**Checkpoint 2026-10-14 (orchestrator, Mattt box).** Facts verified by the orchestrator or lanes today:
+**Mid-wave checkpoint, round 1 audit + fix wave.** Every fact below was verified with `gh`/`git` at write time (2026-10-15 ~01:07Z, Mattt box). PR states move; re-verify before acting. Companion ledger: BUILDLOG.md section "2026-10-14 mid-wave checkpoint".
 
-- **RED main - fix in flight:** scheduled run 38538275152 (main, c5b9babe, job `windows`) was RED. Root cause: the `windows` aggregator in `.github/workflows/ci.yml` treated a legitimate docs-only windows-shard skip on the `schedule` event as a failure; it only exempted the `pull_request` path. Fix = PR #944 (branch `fix/main-windows-red`, head 3a99e03f), auto-merge armed, with `WindowsAggregatorBehaviourTest` in `tests/test_ci_workflow_lint.py` (red/green proof). Status at checkpoint: OPEN.
-- **PR #943 red is unrelated:** `tests/test_state_md_verifier.py` sets git `user.*` config outside a temp fixture, caught by `test_test_hygiene`. A lane is fixing it on the PR branch.
-- **Watchdog on the Mattt box:** scheduled task `AesopWatchdogDaemon` registered 2026-10-14 via `daemons/install-tasks.ps1 -Force` from runtime worktree `~/aesop-daemon-runtime` (detached at origin/main; each tick fetches and resets to origin/main, `CONDUCTOR_ROOT=$HOME/conductor3`). Status Ready. Heartbeat `~/conductor3/state/.watchdog-heartbeat` advanced 19:18:05 -> 19:20:15 local after `schtasks /run`. A legacy Disabled task `\Aesop\AesopWatchdogDaemon` (stale conductor3 fork) remains; the installer divergence check matches by name across folders (follow-up). `AesopRefinementMonitor` is not registered on this box. `AesopMergeQueue` untouched (retired).
-- **power_selftest:** the hooks `UnicodeDecodeError` was a stale local claude-scripts checkout; master already had the utf-8 fix. Remaining: 2 red tests in claude-scripts `tests/test_power_selftest.py` (aesop-root fixture assumes `~/aesop`; this box uses `~/Desktop/aesop`) and 12-14 hardcoded `C:/Users/Mattt` paths in brain hooks/docs. Lanes in flight for both.
-- **Brain hooks (changed 2026-10-07, docs corrected 2026-10-14):** `force-haiku-subagents.mjs` now refuses dispatches without an explicit model; `inject-lane-contract.mjs` refuses dispatches that do not reference LANE-CONTRACT. Open policy items: the hook suggests "sonnet" for untyped dispatches (doctrine is haiku); the inject-lane-contract refusal text hardcodes the matt8 path.
-- **Local checkouts (Mattt box):** `~/Desktop/aesop` primary on `guard/trigger-layer-selftest`, 246 behind origin/main (fetch-only). `~/aesop` exists but is not a git repo. `~/scripts` on `feat/shorts-prep-montage` (merge of origin/master in progress by a lane). conductor3 branch `chore/monitor-state-cycle-483` pushed (17 commits), master 264 behind.
-- **Matt decisions 2026-10-14:** WSL Ubuntu install approved (firmware-blocked, see Blocked). FLY_API_TOKEN set (psinasty deploy workflow re-run still needed, not run). dynastywrapped.com hosted (tunnel/healthz unverified). Per-box receipt keys DEFERRED. Orchestrator "sync" means fetch only; pushes come from lanes on instruction. Every Agent dispatch states `model: "haiku"` explicitly.
-- **Open question (Matt):** which "cap" the orchestrator should monitor. Candidates: GitHub Actions 20-concurrent-job cap (monitored by idle_tick / detect_red_ci_runs / pr_sweep); Anthropic usage runaway detector (usage_watchdog.py); Fly/Cloudflare free tiers (no monitor exists). Unresolved.
+- **origin/main = `769cd103`** (#952). Latest completed main-full on main: success on `2c59d40f7d` (2026-10-15 00:59Z). main-full for `b17b899136`, `a2d98c449b`, `769cd103` was still in progress at verification. Regenerate On Main and Deploy Dashboard green on every completed head.
+- **Earlier RED main fixed:** scheduled run 38538275152 (windows aggregator treated a docs-only schedule skip as failure) is closed by #944.
+
+**Shipped today (state verified with gh):**
+- aesop: #943 (state_md_verifier claim precision), #944 (windows aggregator docs-only skip), #945 (orchestrator checkpoint), #946 (incident commit-body ordering), #947 (G13 nested defs, advisory), #949 (bench unit tests cannot reach the paid live API), #950 (wave preset testCmd lint, F-11), #952 (wave_loop bounded exec and multi_dispatch claim keyspace, F-03/F-04), #954 (pr-sweep retriggers CI on armed PRs with zero check runs).
+- claude-scripts (`matt82198/claude-scripts`): #37 (power_selftest fixture), #38 (power_sync.py), #39 (secret_scan doc false positive), #40 (secret_scan --staged scans the index blob), #41 (fail-closed red-CI queue, main coverage, brain ahead/behind, $HOME expansion).
+
+**In flight, open PRs (verified OPEN):**
+- aesop #948 chore/incidents-2026-10-14 (head cebb5d43): incident ledger entries.
+- aesop #951 fix/wave-scheduler-tracker-writeapi (head 19607fde): F-01.
+- aesop #953 fix/state-db-path-resolver (head 2580d3ca): F-02, F-06.
+- aesop #955 fix/watchdog-heartbeat-blocked (head 5959ccae): blocked cycles write heartbeat.
+- aesop #956 fix/test-collection-and-flake (head dffdb953): misnamed TestCase module, coverage gate fails closed.
+- aesop #957 fix/watchdog-halt-boxwide (head 7ce40f7f): box-wide halt sentinel, fail closed.
+- aesop #932 perf/receipt-matrix-scoped and #934 chore/stats-refresh: auto-merge armed, zero check runs ever (defect 17).
+- **Lanes not yet on origin (no branch at verification):** fix/docs-only-anchor-windows-gate, fix/auto-merge-verify-merged, feat/verify-receipt-fail-closed, feat/incident-class-trailer, feat/worktree-ownership-guard, fix/shard3-serve-tests.
+- **Key lane:** chore/receipt-key-mattt-box is on origin at `050ea764`; no open request yet.
+
+**Machinery on the Mattt box (verified 2026-10-14 20:07 CDT):**
+- `AesopWatchdogDaemon` Status Ready, next run 20:10. Heartbeat `~/conductor3/state/.watchdog-heartbeat` mtime 20:04:36 (about 3 minutes old at check). Blocked cycles skip the heartbeat until #955 lands.
+- `AesopRefinementMonitor` is not registered on this box. A legacy Disabled `\Aesop\AesopWatchdogDaemon` task remains (defect 6).
+- Brain hooks changed today. `claim-binding.mjs` is wired in settings.json. `no-grep-on-main-thread.mjs` is wired. Fail-closed conformance harness `_failclosed.test.mjs` is in progress (defect 19).
+- Receipts: signed receipts run on the matt8 box. Mattt box key provisioning is in progress (see above). verify-receipt fail-closed is not yet pushed.
+
+**Audit round 1 (2026-10-14, reports in ~/conductor3/audits/2026-10-14-r1/):**
+- 9 lenses done: adv-enforcement, adv-reliability, analyst, architecture, brain-tooling, guardrails, regression, security, orchestrator-drift (plus model-rewrite investigation).
+- Refuters done for adv-reliability, architecture, brain-tooling, guardrails, regression. Refuters for security and adv-enforcement were in flight at checkpoint. analyst and orchestrator-drift have no refuter report on disk.
+- Lens model caveat: 12 of 24 Opus dispatches were spawned as Haiku by the harness. Feedback filed. Round 2 must check each lens's real model.
+
+**Verified defects awaiting fix (short; severities after refuter adjustment where refuted):**
+1. `tools/incident_report.py --check`: docs/INCIDENTS.md drift on origin/main (latent red if the check is a CI gate).
+2. `incident_report.py --regenerate --output <abs path>` crashes.
+3. `incident_report.py` print mode crashes on Windows cp1252 (needs utf-8 stdout).
+4. `find_all_incidents` sort order contradicts its docstring.
+5. #946 classifies full commit bodies (182 rows vs 113). Review when INCIDENTS.md is regenerated.
+6. `daemons/install-tasks.ps1` divergence check matches task names across folders.
+7. Registered watchdog command carries a literal `$HOME` that power_selftest cannot resolve on Windows.
+8. Unwired hooks: capture-open-findings.mjs, main-context-ceiling.mjs, plus one more (selftest hooks-wired:3).
+9. auto-commit-brain.mjs pushes to master per save without secret-scan. Lane claim, not re-run by this checkpoint.
+10. sync_repos.py fast_forward_repo non-default path runs `fetch origin <default>:<default>`. Lane claim, not re-run.
+11. power_selftest whitelist strays in ~/.claude root (cleanup decision).
+12. MEMORY.md index 25.5 KB, over the 24 KB warning.
+13. Hook policy text suggests "sonnet" for untyped dispatch (doctrine is haiku). User wording decision.
+14. Primary checkout root has untracked junk (m.html, pp.json, q.json, r2.json, rc.json, sub.json, subs.json, `$HOME/`). Left untouched (no-delete rule). Listed for Matt.
+15. ~/.claude/hooks/session-end-log.mjs fails schema validation, so it silently fails at every session end.
+16. no-grep-on-main-thread.mjs fires for subagents in sibling worktrees. It must detect the orchestrator main thread only.
+17. PRs armed for auto-merge with zero CI runs have no retry actor (#932, #934).
+18. primary-branch-guard.mjs matches substrings of the command, not the git verb or resolved repo. Also blocks text that merely contains a phrase.
+19. Wave item: fail-closed conformance test for ALL hooks in ~/.claude/hooks (malformed JSON, empty stdin, missing cwd, forced throw; assert deny or exit 2).
+
+**Receipts gap (design vs implementation).** Design: harness-constructed intent; signed write-ahead receipt per action; measured action from artifacts the agent cannot write; zombie gate that kills a lane whose measured action diverges from intent; partial receipts; key outside the agent's reach; meta-gate that blocks. Implemented: one receipt per push, spool/flush, verify-receipt (neutral on missing), claim-binding Stop hook, hooks_wired_gate (reports, does not block). Gaps: no per-action receipts; intent not bound into the receipt; no zombie-gate kill; no partial receipts; verify takes key and verifier from the PR checkout (security F-07); meta-gate does not block. Filed as incidents plus a plan lane (not yet pushed).
+
+**Decisions (Matt 2026-10-14 and /afk rulings):**
+- All hooks fail closed. A hook denial on the main thread is stop-and-report, never a detour.
+- Incidents go to the incident log through the commit-trailer convention. Prose .md rules are banned.
+- Receipt keys are no longer deferred (provisioning in progress on the Mattt box).
+- Audit lenses stay on Opus; fix lanes stay Haiku. Every dispatch states `model` explicitly.
+- Cap question resolved by /afk ruling (reversible): GitHub Actions concurrent-job cap is THE cap, monitored by idle_tick, detect_red_ci_runs and pr_sweep.
+- Release: patch 0.9.2 (CI and machinery fixes only), cut once main is green. Reversible if Matt names a version.
+- WSL is approved but blocked by firmware virtualization (BIOS change and reboot needed).
+
+**Release gate status: NOT MET.** Current release v0.9.1. Done: #944, #945, #946 (see Shipped). Still open at verification: #948, #951, #953, #955, #956, #957, #932, #934, plus the unpushed lanes above. Main-full green on the release head is not yet confirmed. The release is blocked until those land.
 
 ## Architectural Thesis
 
@@ -93,19 +147,20 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 
 ### Open / Queued
 
-18. **Promote pr_symbol_survival_check (G13) to blocking** (DUE TODAY 2026-10-14). Promote only if the one-week run window since #865 holds; verify the runs before promoting.
+18. **Promote pr_symbol_survival_check (G13) to blocking** (false positive found 2026-10-14 in the window: nested defs; fixed in this PR; new clean window starts at merge date; promotion requires adding required check `pr-symbol-survival` to branch protection). Orchestrator does the protection change, not the lane.
 19. **Extend hooks/no-polling.mjs** (QUEUED). Deny backgrounded whole-filesystem searches in lanes.
 20. **tests/test_test_hygiene.py lookback off-by-one** (QUEUED). Lookback window hardcoded as 19 lines; doc claims 20. Review window semantics + fix mismatch (2026-10-07 audit carried forward).
 21. **pyflakes ratchet G15 gate wiring** (OPEN/IN PROGRESS). A lane is wiring pyflakes to pre-push gate list; fixes ~50 remaining issues found during #890 sweep; do not claim merged until PR lands.
 22. **Receipt gate increments 4–6** (QUEUED). Increment 4 (agreement measurement via tools/receipt_agreement.py) gated on measurement completion; increments 6a–6c (signed ledger storage, lineage codec) per conductor3 plan.
 23. **AesopMergeQueue task lifecycle decision** (QUEUED, decision pending). Scheduled task `AesopMergeQueue` Status: Disabled since 2026-09-11; retire gracefully (cleanup PR) vs re-enable?
-24. **Second-box receipt key provisioning** (DEFERRED — Matt 2026-10-14; not queued). Mattt profile on macOS needs AESOP_RECEIPT_KEY env var + private key setup.
+24. **Receipt keys, Mattt box** (IN PROGRESS — Matt 2026-10-14 lifted the deferral; branch chore/receipt-key-mattt-box, origin 050ea764, no PR at checkpoint). Second-box (macOS) key provisioning follows once it lands.
+25. **Mid-wave defects 1-19** (see CURRENT block) — queued for fix lanes; PR-tracked items are listed under In Progress.
 25. **PR #921 CLOSED without merging** (branch corrupted: fixture commits; salvaged as #923).
 
 ### Blocked / Deferred
 
 - **WSL distro install** (APPROVED by Matt 2026-10-14, firmware-blocked on this box). Virtualization is disabled in firmware; Virtual Machine Platform enable was attempted. Needs a BIOS change and reboot. #872's detection fix correctly reports "no distro" until then.
-- **Per-box receipt keys** (DEFERRED — Matt 2026-10-14). Not queued; see item 24.
+- **Receipt keys:** no longer deferred (Matt 2026-10-14). Mattt-box provisioning in progress; see item 24.
 - **Merchant feed hosting choice** (BLOCKED — Matt). Where tannery-merchant-feed.tsv (claude-scripts #31) gets served from.
 
 **Merge actor session-independence — DONE (2026-10-06, PR #871):** GitHub native auto-merge (armed per-PR at open via `gh pr merge <n> --auto --squash`) is the session-independent merge actor; `AesopMergeQueue` Scheduled Task is correctly `Status: Disabled` — deliberate retirement of the old label+daemon regime. Real gap found and fixed: `tools/dispatch_lint.py` unconditionally forbade `--auto`/bare `gh pr merge`, blocking the exact command LANE-CONTRACT.md requires to arm the merge actor; now `gh pr merge <n> --auto --squash` is explicitly allowed while manual merge, bare `--auto` with no PR number, and `--admin` remain forbidden. 45/45 + 223/223 regression tests green.

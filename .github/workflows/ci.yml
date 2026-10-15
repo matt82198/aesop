@@ -61,7 +61,9 @@ jobs:
           else
             CHANGED=$(git diff --name-only HEAD~1...HEAD)
           fi
-          if echo "$CHANGED" | grep -qvE '(\.md$|docs/|^CHANGELOG|^LICENSE|\.gitignore)'; then
+          # Anchored (F-02, 2026-10-14): an unanchored `docs/` matched hooks/docs/pre-push.sh and
+          # classified a Windows-sensitive hooks/ change as docs-only. Only top-level docs roots count.
+          if echo "$CHANGED" | grep -qvE '(^docs/|\.md$|^CHANGELOG|^LICENSE|^\.gitignore$)'; then
             echo "is_docs_only=false" >> $GITHUB_OUTPUT
           else
             echo "is_docs_only=true" >> $GITHUB_OUTPUT
@@ -384,9 +386,14 @@ jobs:
     # failed (fail-open on upstream failure). On workflow_dispatch/schedule, always run
     # (Windows matrix must verify all paths in those triggers). The leading always() is required
     # to prevent implicit success()-gating when we have a `needs:` entry.
+    # On pull_request the docs-only classification must NOT suppress the shard when Windows-sensitive
+    # paths were touched (F-02: a docs-classified hooks/ change would otherwise be skipped and then
+    # reported as an accepted skip). Schedule/dispatch keep the docs-only skip.
     if: |
-      always() && (needs.docs-only-gate.result != 'success' || needs.docs-only-gate.outputs.is_docs_only != 'true') &&
-      (github.event_name != 'pull_request' || needs.windows-sensitive-paths.outputs.windows_touched == 'true')
+      always() && (
+        (github.event_name == 'pull_request' && needs.windows-sensitive-paths.outputs.windows_touched == 'true') ||
+        (github.event_name != 'pull_request' && (needs.docs-only-gate.result != 'success' || needs.docs-only-gate.outputs.is_docs_only != 'true'))
+      )
     # Sharded test suite: runs Node tests (shard 0 only) and Python tests distributed 4-way
     # Excludes: shell test suite (Git Bash variance on Windows), browser proofs (Playwright setup cost)
     runs-on: windows-latest
@@ -452,17 +459,35 @@ jobs:
     steps:
       - name: Resolve Windows run result
         run: |
+          # Fail closed first (F-01, 2026-10-14). Green is only allowed when this aggregator can PROVE
+          # Windows was not required or ran green. A detector that failed, or emitted no usable
+          # windows_touched value, leaves that unprovable, so it is red. Previously an empty value
+          # fell through the `!= "true"` test on PR and exited 0 with Windows never running.
+          if [ "${{ needs.windows-sensitive-paths.result }}" != "success" ]; then
+            echo "windows-sensitive-paths detector did not succeed (result=${{ needs.windows-sensitive-paths.result }}); cannot decide, failing closed"
+            exit 1
+          fi
+          WT="${{ needs.windows-sensitive-paths.outputs.windows_touched }}"
+          case "$WT" in
+            true|false) ;;
+            *) echo "windows-sensitive-paths produced no usable windows_touched output (got '$WT'); failing closed"; exit 1 ;;
+          esac
           # On pull_request with no Windows-sensitive changes, windows-shard is skipped
-          # (via job-level if:). Report success for the aggregator in that case.
-          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.windows-sensitive-paths.outputs.windows_touched }}" != "true" ]; then
+          # (via job-level if:). Accept ONLY that exact skip.
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "$WT" = "false" ] && [ "${{ needs.windows-shard.result }}" = "skipped" ]; then
             echo "Windows-sensitive paths not touched on PR; skipped (expected)"
             exit 0
           fi
           # On a docs-only HEAD (push/schedule), windows-shard's own if: deliberately skips it
           # once docs-only-gate concluded success with is_docs_only=true. Accept ONLY that exact
           # path. Any other skip (e.g. docs-only-gate failed/cancelled) means Windows never ran
-          # and must stay red, never a false green.
+          # and must stay red, never a false green. On pull_request, windows_touched=true means
+          # Windows-sensitive code changed even if docs-only classified it, so that skip is red.
           if [ "${{ needs.windows-shard.result }}" = "skipped" ] && [ "${{ needs.docs-only-gate.result }}" = "success" ] && [ "${{ needs.docs-only-gate.outputs.is_docs_only }}" = "true" ]; then
+            if [ "${{ github.event_name }}" = "pull_request" ] && [ "$WT" = "true" ]; then
+              echo "windows-shard skipped on a pull request while windows_touched=true; Windows never ran, failing closed"
+              exit 1
+            fi
             echo "Docs-only change; windows-shard skipped by design (expected)"
             exit 0
           fi
@@ -575,6 +600,30 @@ jobs:
       - name: Run watchdog GUI tests
         run: bash tests/dash-watchdog-gui.test.sh
 
+  # State drift gate (state_store/CLAUDE.md): `state_rebuild --check` is the CI drift gate.
+  # FAIL-CLOSED: no continue-on-error, no event filter, no skip. Builds a fresh state root,
+  # materializes every view with --all, then requires --check to pass on that same root.
+  # A non-deterministic view (e.g. a wall-clock stamp leaking into a materialized file)
+  # or a rebuild that clobbers a stored STATE.md turns this job red.
+  state-drift-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: state_rebuild --all then --check (fail-closed drift gate)
+        shell: bash
+        run: |
+          set -euo pipefail
+          STATE_ROOT="$(mktemp -d)"
+          python tools/state_rebuild.py --all --state-root "$STATE_ROOT"
+          python tools/state_rebuild.py --check --state-root "$STATE_ROOT"
+
   # Guardrail G2.7 (tools/CLAUDE.md): PR footprint gate — detects oversized PRs (>100 files
   # or >5000 deletions) or fixture-polluted branches (test fixtures committed into lanes).
   # REQUIRED: blocks auto-merge of oversized/polluted PRs unless labeled 'big-change' or
@@ -621,9 +670,16 @@ jobs:
 
       - name: Run pr_symbol_survival_check.py (advisory)
         run: |
+          # Advisory: the step always exits 0 (continue-on-error + no required check), so the
+          # rc is recorded for audit, not used for gating. Output goes to the job log AND summary.
+          out="$RUNNER_TEMP/g13-advisory.txt"
+          rc=0
+          python tools/pr_symbol_survival_check.py --base "origin/${{ github.base_ref }}" --head HEAD > "$out" 2>&1 || rc=$?
+          cat "$out"
           {
             echo "### PR symbol survival check (Guardrail G13, advisory/non-blocking)"
+            echo "G13 advisory rc=$rc"
             echo '```'
-            python tools/pr_symbol_survival_check.py --base "origin/${{ github.base_ref }}" --head HEAD || true
+            cat "$out"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

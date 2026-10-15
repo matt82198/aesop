@@ -85,6 +85,10 @@ const STATE_ROOT = path.resolve(
   )
 );
 
+// SQLite file the instances-claims helper reads. Must equal INSTANCES_DB_FILENAME in
+// state_store/paths.py (the file tools/instance_manager.py writes).
+const INSTANCES_DB_FILENAME = 'state.db';
+
 const TRANSCRIPTS_ROOT = path.resolve(
   expandPath(
     process.env.AESOP_TRANSCRIPTS_ROOT ||
@@ -850,7 +854,7 @@ async function getCIJobStatus(args) {
 async function getFleetInstances() {
   return new Promise((resolve) => {
     const helperPath = path.join(AESOP_ROOT, 'mcp', 'instances-claims.py');
-    const dbPath = path.join(STATE_ROOT, 'aesop.db');
+    const dbPath = path.join(STATE_ROOT, INSTANCES_DB_FILENAME);
 
     // If helper or DB doesn't exist, return empty result
     if (!fs.existsSync(helperPath) || !fs.existsSync(dbPath)) {
@@ -941,7 +945,7 @@ async function getFleetInstances() {
 async function getFleetClaims() {
   return new Promise((resolve) => {
     const helperPath = path.join(AESOP_ROOT, 'mcp', 'instances-claims.py');
-    const dbPath = path.join(STATE_ROOT, 'aesop.db');
+    const dbPath = path.join(STATE_ROOT, INSTANCES_DB_FILENAME);
 
     if (!fs.existsSync(helperPath) || !fs.existsSync(dbPath)) {
       resolve({
@@ -1023,7 +1027,7 @@ async function getFleetClaims() {
 async function getFleetMultiboxSummary() {
   return new Promise((resolve) => {
     const helperPath = path.join(AESOP_ROOT, 'mcp', 'instances-claims.py');
-    const dbPath = path.join(STATE_ROOT, 'aesop.db');
+    const dbPath = path.join(STATE_ROOT, INSTANCES_DB_FILENAME);
     const configPath = path.join(AESOP_ROOT, 'aesop.config.json');
     // Absent/failure shape. backend.kind is 'unknown' -- NOT 'advisory' --
     // because the config was never resolved, and a status surface must not
