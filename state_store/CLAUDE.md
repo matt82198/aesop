@@ -108,6 +108,9 @@ Run from repo root. `npm run test:py` runs ALL Python suites (includes state_sto
 
 **Pyflakes cleanup (2026-10-06, Guardrail G15)**: removed genuinely-unused imports/locals flagged by `tools/pyflakes_gate.py` from `api.py`, `identity.py`, `lease_claims.py`, `write_api.py`; zero behavior change, full suite green.
 
+## Orchestrator goal stream (2026-10-15)
+`tools/goal_state.py` appends `goal_set` events to stream `orchestrator_goal` (append-only, never patched); its `project_goal` folds the latest one, and `tools/boot_state.py` reads it as the GOAL section of the canonical boot brief.
+
 ## Task-event stream (2026-10-15)
 `tools/ingest_task_events.py` tails the brain's `~/.claude/state/task-events.jsonl` (written by the brain hook; this code only consumes it) into stream `task`, event type `task_event`, in the tracker DB (`resolve_db_path(state, "tracker")`). Idempotent via cursor `state/task_events.cursor.json` plus sha256 `event_id` dedupe; fail-closed (exit 3) on malformed or truncated input; `kind: "internal"` tags harness suggestion echoes (empty `agent_type` AND user-voice or slash-command summary). The store `ts` is the ingest time; the source time is `payload.ts`.
 
