@@ -98,6 +98,81 @@ def wsl_available() -> bool:
     return wsl_status() == WSL_OK
 
 
+def host_is_windows() -> bool:
+    """True on the Windows host, where the Linux shape is reached through WSL.
+
+    On any other host (the ubuntu CI runner) the shape IS the host, so the leg
+    runs natively and never probes for WSL.
+    """
+    return sys.platform == "win32"
+
+
+def _decode(raw: bytes) -> str:
+    return raw.decode("utf-8", errors="replace")
+
+
+def run_shell_tests_native(repo_root: Path, timeout: int = 120) -> Tuple[int, str]:
+    """Run the shell test suites on the host (Linux shape without WSL)."""
+    try:
+        result = subprocess.run(
+            ["bash", "tools/run_shell_tests.sh"],
+            cwd=str(repo_root),
+            capture_output=True,
+            timeout=timeout,
+        )
+        return result.returncode, _decode(result.stdout) + _decode(result.stderr)
+    except subprocess.TimeoutExpired:
+        return 124, f"Shell tests timed out after {timeout}s"
+    except Exception as e:
+        return 2, f"Error running shell tests: {e}"
+
+
+def run_node_tests_native(repo_root: Path, test_files: List[str], timeout: int = 120) -> Tuple[int, str]:
+    """Run Node test files on the host with USERPROFILE unset."""
+    env = {k: v for k, v in os.environ.items() if k != "USERPROFILE"}
+    try:
+        result = subprocess.run(
+            ["node", "--import", "./tests/helpers/isolated-env.mjs", "--test", *test_files],
+            cwd=str(repo_root),
+            env=env,
+            capture_output=True,
+            timeout=timeout,
+        )
+        return result.returncode, _decode(result.stdout) + _decode(result.stderr)
+    except subprocess.TimeoutExpired:
+        return 124, f"Node tests timed out after {timeout}s"
+    except Exception as e:
+        return 2, f"Error running Node tests: {e}"
+
+
+def run_native_leg(repo_root: Path, changed_files: List[str]) -> int:
+    """Linux host: run the owning suites natively. Failure of a suite is exit 1."""
+    print("Running tests natively (Linux host; no WSL needed)")
+    exit_code = 0
+    if any(re.search(r"\.sh$|^hooks/|^tools/run_shell_tests\.sh$|^\.github/workflows/.*\.yml$", f)
+           for f in changed_files):
+        print("\nRunning shell tests...")
+        rc, output = run_shell_tests_native(repo_root)
+        if rc != 0:
+            print(f"FAIL: Shell tests exited {rc}")
+            print(output)
+            exit_code = 1
+        else:
+            print("PASS: Shell tests")
+    test_files = [f for f in changed_files if re.search(r"^tests/.*\.test\.mjs$", f)]
+    if test_files:
+        print(f"\nRunning Node tests ({len(test_files)} file(s))...")
+        rc, output = run_node_tests_native(repo_root, test_files)
+        if rc != 0:
+            print(f"FAIL: Node tests exited {rc}")
+            print(output)
+            exit_code = 1
+        else:
+            print("PASS: Node tests")
+    print("\nLinux shape check: PASS" if exit_code == 0 else "\nLinux shape check: FAIL (see output above)")
+    return exit_code
+
+
 def compute_wsl_path(windows_path: Path) -> str:
     """Convert Windows path to WSL path using wslpath -a."""
     try:
@@ -232,11 +307,18 @@ def main():
 
     print(f"TRIGGER: {len(changed_files)} changed file(s) include shell/workflow/Node changes")
 
-    # Check WSL availability
-    is_wsl_available = wsl_available()
-    require_wsl = args.require_wsl or os.environ.get("AESOP_REQUIRE_LINUX_SHAPE") == "1"
+    if not host_is_windows():
+        # Ubuntu/Linux host: the Linux shape is the host itself. Never probe for WSL here.
+        return run_native_leg(repo_root, changed_files)
 
-    if not is_wsl_available:
+    require_wsl = args.require_wsl or os.environ.get("AESOP_REQUIRE_LINUX_SHAPE") == "1"
+    status = wsl_status()
+    if status == WSL_ERROR:
+        # The probe itself failed: we cannot tell whether the Linux shape was tested. Fail closed.
+        print("ERROR: WSL probe failed; cannot verify the Linux shape (fail closed)")
+        return 1
+
+    if status != WSL_OK:
         if require_wsl:
             print("ERROR: WSL required (AESOP_REQUIRE_LINUX_SHAPE=1) but unavailable")
             print("  WSL present but no distro installed? Run: wsl --install -d Ubuntu")
