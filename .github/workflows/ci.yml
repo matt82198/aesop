@@ -709,9 +709,11 @@ jobs:
         env:
           BASE_REF: origin/${{ github.base_ref }}
         run: |
-          mkdir -p "$RUNNER_TEMP/gate-base"
-          git archive "$BASE_REF" -- tools | tar -x -C "$RUNNER_TEMP/gate-base"
-          test -f "$RUNNER_TEMP/gate-base/tools/pr_symbol_survival_check.py"
+          # Lives under .git/ (untracked, never scanned as repo content). The path is
+          # literal so tools/verify_gates_wired.py can see the invocation below.
+          mkdir -p .git/gate-base-g13
+          git archive "$BASE_REF" -- tools | tar -x -C .git/gate-base-g13
+          test -f .git/gate-base-g13/tools/pr_symbol_survival_check.py
 
       - name: Run pr_symbol_survival_check.py (blocking, G13, base copy)
         env:
@@ -720,7 +722,7 @@ jobs:
           # Blocking: rc is propagated. Output goes to the job log AND the step summary.
           out="$RUNNER_TEMP/g13-check.txt"
           rc=0
-          python "$RUNNER_TEMP/gate-base/tools/pr_symbol_survival_check.py" --base "$BASE_REF" --head HEAD > "$out" 2>&1 || rc=$?
+          python .git/gate-base-g13/tools/pr_symbol_survival_check.py --base "$BASE_REF" --head HEAD > "$out" 2>&1 || rc=$?
           cat "$out"
           {
             echo "### PR symbol survival check (Guardrail G13, blocking)"
