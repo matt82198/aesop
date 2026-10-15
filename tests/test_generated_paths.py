@@ -653,6 +653,10 @@ class TestMergeCarriedGeneratedPath(unittest.TestCase):
         self.origin.mkdir()
         self.git(self.origin, "init", "-q", "-b", "main")
         self._write(self.origin, "seed.txt", "seed\n")
+        # The hook judges gate code from origin/main:tools (gate_base_dir), so the
+        # fixture's origin/main must carry the real tools/ tree.
+        shutil.copytree(REPO_ROOT / "tools", self.origin / "tools",
+                        ignore=shutil.ignore_patterns("__pycache__"))
         self._write(self.origin, self.INDEX, "index v1\n")
         self.git(self.origin, "add", "-A")
         self.git(self.origin, "commit", "-q", "-m", "base")
