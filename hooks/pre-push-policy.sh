@@ -210,7 +210,7 @@ gate_base_dir() {
     base_sha=$(git rev-parse --verify -q "HEAD^{commit}" 2>/dev/null) || return 1
     for f in $GATE_BOOTSTRAP_REQUIRED; do
       if ! git cat-file -e "$base_sha:$f" 2>/dev/null; then
-        printf 'FATAL: BOOTSTRAP (no trunk on origin): %s is not committed at HEAD. Push blocked (fail-closed).\n  Regenerate with: %s\n  then commit it before pushing.\n' "$f" "$(gate_regen_command "$f")" >&2
+        printf 'FATAL: BOOTSTRAP (no trunk on origin: checked origin/HEAD, origin/main, origin/master): %s is not committed at HEAD. Push blocked (fail-closed).\n  Regenerate with: %s\n  then commit it before pushing.\n' "$f" "$(gate_regen_command "$f")" >&2
         return 1
       fi
     done
