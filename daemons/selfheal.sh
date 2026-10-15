@@ -123,6 +123,14 @@ is_heartbeat_stale() {
 restart_watchdog() {
   ensure_log_dir
 
+  # An unresolved heartbeat path (non-canonical AESOP_ROOT, no CONDUCTOR_ROOT)
+  # must not read as a stale watchdog: a missing file is "stale" to
+  # is_heartbeat_stale, which would restart the daemon on every cycle.
+  if [ -z "$WATCHDOG_HB" ]; then
+    log_heal "SKIP: watchdog heartbeat path unresolved (CONDUCTOR_ROOT not set for non-canonical AESOP_ROOT)"
+    return 1
+  fi
+
   if is_heartbeat_stale "$WATCHDOG_HB" "$WATCHDOG_STALE_THRESHOLD"; then
     if [ -z "${AESOP_SELFHEAL_SKIP_RESTART:-}" ]; then
       log_heal "ACTION: run-watchdog heartbeat stale, restarting..."
@@ -214,14 +222,24 @@ main() {
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   AESOP_ROOT="${AESOP_ROOT:-$(dirname "$SCRIPT_DIR")}"
-  CONDUCTOR_ROOT="${CONDUCTOR_ROOT:-$(dirname "$AESOP_ROOT")/conductor3}"
+  # Same CONDUCTOR_ROOT resolution as daemons/backup-fleet.sh (heartbeat-pollution
+  # guard, 2026-10-07): explicit override wins; the sibling conductor3 is derived
+  # ONLY for the canonical "aesop" tree; any other AESOP_ROOT gets "" (unresolved).
+  if [ -n "${CONDUCTOR_ROOT:-}" ]; then
+    : # explicit override always wins
+  elif [ "$(basename "$AESOP_ROOT")" = "aesop" ]; then
+    CONDUCTOR_ROOT="$(dirname "$AESOP_ROOT")/conductor3"
+  else
+    CONDUCTOR_ROOT=""
+  fi
   MODE="${1:-daemon}"
 
   SELFHEAL_LOCK_DIR="$AESOP_ROOT/state/.selfheal-lock"
   SELFHEAL_LOG="$AESOP_ROOT/state/SELFHEAL.log"
   SELFHEAL_STALE_THRESHOLD=600
 
-  WATCHDOG_HB="$AESOP_ROOT/state/.watchdog-heartbeat"
+  # backup-fleet.sh writes the watchdog heartbeat under CONDUCTOR_ROOT, never AESOP_ROOT.
+  WATCHDOG_HB="${CONDUCTOR_ROOT:+$CONDUCTOR_ROOT/state/.watchdog-heartbeat}"
   WATCHDOG_STALE_THRESHOLD=600
 
   MONITOR_HB="$CONDUCTOR_ROOT/monitor/.monitor-heartbeat"
