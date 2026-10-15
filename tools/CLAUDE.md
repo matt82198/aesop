@@ -37,9 +37,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - **state/ git-ignore (F-10, 2026-10-14)**: `ensure_state_gitignore()` appends a marker-delimited block (`state/*` + `!state/.gitkeep`) to the scaffolded `.gitignore`, idempotent on re-init. Without it `git add -A` staged the SQLite event store and tracker json. Tests: `tests/test_init_gitignore.py`.
 
 ## dash.js — fresh-init resolution (F-09, 2026-10-14)
-
 - `dash.js` resolves `ui/serve.py` from the installed package (`PACKAGE_DIR = __dirname/..`), not `process.cwd()`, because init does not scaffold `ui/`. It passes `AESOP_STATE_ROOT` = env > `aesop.config.json` `state_root` > `<cwd>/state`. Test: `tests/dash-fresh-init.test.mjs`.
-
 ## Key tools
 
 - **tools/merge_queue.py**: Merge-queue advancer. Updated 2026-10-06: added AESOP_QUEUE_ROOT isolation guard (refuses to mint integrate/q-* branches unless running in dedicated queue checkout).
