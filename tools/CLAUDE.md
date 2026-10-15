@@ -124,14 +124,16 @@ never reaching the hook.
 - **Templates**: `templates/aesop-dispatch-template.yml` — ready-to-fork GitHub Actions dispatch workflow (workflow_dispatch + cron); adopter guide `docs/ACTIONS-TEMPLATE.md`; verified by `tests/test_actions_template.py` (YAML validity, CLI commands checked against `bin/cli.js --help`, no invented flags/fabricated output). `templates/wave-presets/*.json` is the unrelated wave-manifest-preset set consumed by `wave_templates.py`.
 - **wave_manifest_lint.py**: Validates wave manifests for file-ownership disjointness, path existence, prompt sanity, git-history churn heuristics, and per-item testCmd binary resolution. Binary resolution now skips leading shell negation (`!`) and environment assignments (`FOO=value`) to find the actual executable; tested against both negation and env-var patterns.
 - **PR symbol survival (Guardrail G13)**: `pr_symbol_survival_check.py` collects top-level symbols
-  (Python `def`/`class`/`async def`, JS/MJS `export function|const|class` + top-level `function name(`,
+  (Python `def`/`class`/`async def` at ANY indentation, matched by bare name so a helper nested in a
+  method or block, or re-indented, still counts as surviving; JS/MJS `export function|const|class` + top-level `function name(`,
   shell `name() {`) ADDED by a PR branch's own non-merge commits and verifies each still exists in the
   final head tree (same file, or anywhere in the repo if renamed — reported as INFO); catches the
   "resolved a merge conflict by taking the other side's whole file" class (PR #745: `build_bisect_batches`/
   `parse_bisect_lineage`/`bisect_is_exhausted` silently dropped by a conflict-resolution merge, CI stayed
   green). CLI `--base REF` (default `origin/main`) `--head REF` (default `HEAD`) `--original-head SHA`
   `--json`; exit 0=survived/1=missing/2=error; read-only, stdlib-only. Wired into `ci.yml` as a
-  non-blocking (`continue-on-error: true`) advisory job that prints findings to the job summary.
+  non-blocking (`continue-on-error: true`) advisory job that tees findings to the job log and records
+  `G13 advisory rc=<n>` in the job summary.
 - `pr_footprint_gate.py` — Guardrail G2.7: fails PRs with >100 files or >5000 deletions unless labeled `big-change`, or PRs with fixture-pattern commits (test fixtures committed into lane worktrees); pass on chore(stats)-only commits. CLI: `--base <sha> --head <sha> [--labels JSON]` (labels from PR event); exit 0=pass/1=fail/2=error; stdlib-only
 - **pr_sweep.py (STATE.md item 9 residual, PR #871 gap)**: the session-independent PR actor -- arms missing native auto-merge, nudges BEHIND branches (capped at 2/run, oldest first, 20-min throttle), and signals stuck-red (required check failing, head >30 min old) / DIRTY PRs as `pr.red`/`pr.dirty` rows to `<conductor_root>/state/signal-hub-queue.jsonl` (`common.get_conductor_root()`, never a hardcoded path), deduped on `(pr, head, type)`. Never rebases/pushes/merges. Invoked on a 15-min throttle from the watchdog daemon so the nudge does not depend on a live orchestrator session noticing via the Monitor tool.
 - **shadow_adjudication.py**: `build_finding_context_pack(enriched=True)` attaches evidence via `driver/context_pack.py`'s `add_evidence_to_pack()` (pure in-memory, never touches the filesystem or repo_root/conductor_root) — never re-derive the already-built brief through `build_context_pack()` with a fake `brief:<name>` source: that resolves the placeholder name as a literal relative path against the process cwd, which only happens to equal repo_root by coincidence (2026-10-06 incident: a prior test's tearDown leaking a polluted process cwd made that placeholder resolve outside the allowlist and raise ContextPackViolation for a perfectly legitimate in-memory brief).
