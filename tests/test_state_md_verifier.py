@@ -41,6 +41,18 @@ def _git_isolated_env(base_env=None):
     return {k: v for k, v in source.items() if not k.startswith("GIT_")}
 
 
+def _set_fixture_identity(repo_path, git_env):
+    """Set the git identity of the THROWAWAY fixture repo only.
+
+    Called exclusively with a tempdir path, so the identity write is scoped
+    to the temp repo (cwd= + isolated env) and never touches the live repo.
+    """
+    subprocess.run(["git", "config", "user.email", "test@example.com"],
+                    cwd=repo_path, capture_output=True, check=True, env=git_env)
+    subprocess.run(["git", "config", "user.name", "Test User"],
+                    cwd=repo_path, capture_output=True, check=True, env=git_env)
+
+
 def _build_v1_tag_fixture_repo(tmpdir_path, env=None):
     """Build the throwaway git repo used by the "claimed version matches"
     fixture: an "Initial commit" by "Test User", tagged v1.0.0, with a
@@ -63,10 +75,7 @@ def _build_v1_tag_fixture_repo(tmpdir_path, env=None):
 
     subprocess.run(["git", "init"], cwd=tmpdir_path, capture_output=True,
                     check=True, env=git_env)
-    subprocess.run(["git", "config", "user.email", "test@example.com"],
-                    cwd=tmpdir_path, capture_output=True, check=True, env=git_env)
-    subprocess.run(["git", "config", "user.name", "Test User"],
-                    cwd=tmpdir_path, capture_output=True, check=True, env=git_env)
+    _set_fixture_identity(tmpdir_path, git_env)
 
     test_file = tmpdir_path / "tools" / "clean.py"
     test_file.parent.mkdir(parents=True, exist_ok=True)
