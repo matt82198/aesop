@@ -33,6 +33,7 @@ Options:
   --json: Output JSON instead of text
   --update-baseline: Regenerate baseline from current violations (CI must never use)
 """
+import ast
 import json
 import re
 import sys
@@ -81,7 +82,81 @@ MARKDOWN_FILES_TO_PROTECT = [
 ]
 
 # Directories to scan for violations
-SCAN_DIRS = ["ui", "tools", "state_store"]  # Include state_store to catch internal issues
+SCAN_DIRS = ["ui", "tools", "state_store", "driver"]  # Include state_store to catch internal issues
+
+# Directories where a raw tracker.json WRITE is a violation (F-01). The write check is
+# AST-based and runs even when a file imports the WriteAPI facade: a facade import
+# exempts a file from the string-literal read patterns, which must not also exempt a
+# regression that writes tracker.json directly (the driver/wave_scheduler.py bug).
+TRACKER_WRITE_GATE_DIRS = ["driver"]
+_TRACKER_TOKENS = ("tracker.json", "tracker_path", "tracker_file")
+
+
+def _mentions_tracker(node):
+    """True if the expression's source text names tracker.json or a tracker path var."""
+    try:
+        src = ast.unparse(node)
+    except Exception:
+        return False
+    return any(tok in src for tok in _TRACKER_TOKENS)
+
+
+def tracker_raw_write_sites(source):
+    """Return line numbers of raw writes whose target is a tracker.json path.
+
+    Taint-lite: a name is tracked if it is a tracker_path/tracker_file parameter or is
+    assigned from an expression naming tracker.json or a tracked name. Sinks:
+    os.replace/os.rename/shutil.move destination, Path.write_text receiver, and
+    open() in a write/append/create mode on a tracked path.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    tracked = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.arg) and node.arg in ("tracker_path", "tracker_file"):
+            tracked.add(node.arg)
+
+    def _is_tracked(expr):
+        if isinstance(expr, ast.Name) and expr.id in tracked:
+            return True
+        return _mentions_tracker(expr)
+
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            if not _is_tracked(node.value):
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id not in tracked:
+                    tracked.add(target.id)
+                    changed = True
+
+    lines = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+        if name in ("replace", "rename", "move") and len(node.args) >= 2 and _is_tracked(node.args[1]):
+            lines.append(node.lineno)
+        elif name == "write_text" and isinstance(func, ast.Attribute) and _is_tracked(func.value):
+            lines.append(node.lineno)
+        elif name == "open" and node.args and _is_tracked(node.args[0]):
+            mode = ""
+            if len(node.args) > 1 and isinstance(node.args[1], ast.Constant):
+                mode = str(node.args[1].value)
+            for kw in node.keywords:
+                if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
+                    mode = str(kw.value.value)
+            if any(ch in mode for ch in "wax"):
+                lines.append(node.lineno)
+    return sorted(set(lines))
 
 
 def find_direct_opens(repo_root):
@@ -142,6 +217,12 @@ def find_direct_opens(repo_root):
                 content = py_file.read_text(encoding="utf-8", errors="replace")
             except Exception:
                 continue
+
+            # F-01: raw tracker.json writes are checked BEFORE the facade-import skip below.
+            if scan_dir in TRACKER_WRITE_GATE_DIRS and tracker_raw_write_sites(content):
+                violation_key = f"{relative_path.as_posix()}@tracker-json-raw-write"
+                if violation_key not in violations:
+                    violations.append(violation_key)
 
             # Skip if file imports read_api or write_api (it's using the facade correctly)
             if "from state_store.read_api import" in content or "import state_store.read_api" in content:

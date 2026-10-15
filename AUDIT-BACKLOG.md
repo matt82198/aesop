@@ -43,8 +43,16 @@ historical context, not open work. Wave-25 findings are listed at the end of thi
   unnoticed. Branch fix/ci-run-all-suites.
 - ✅ **[sec] /submit CSRF — drive-by write into orchestrator inbox** — origin check + session
   token. PR #21.
-- ✅ **[sec] Scanner size/binary skip bypassed ALL rules** — >1MB or NUL-byte file with real key
-  scanned CLEAN; now bounded fatal-rule scan + SKIPPED-* notes. PR #22.
+- ⬜ **[sec] Scanner size/binary skip bypassed ALL rules** — >1MB or NUL-byte file with real key
+  scanned CLEAN; now bounded fatal-rule scan + SKIPPED-* notes. PR #22. **REOPENED 2026-10-14
+  (audit 2026-10-14-r1, F-02, confirmed by refuter):** the PR #22 residual is still open. A single
+  NUL byte, a UTF-16 BOM, or a file past 2 MiB downgraded the file to FATAL-only (latin-1) or
+  skipped its tail, so generic and UTF-16 secrets passed CLEAN. Evidence: `python -I
+  tools/secret_scan.py` on a NUL-prefixed `password = "..."` file, a UTF-16LE (BOM) `ghp_` token,
+  a BOM-less UTF-16LE `DB_PASSWORD=` line, and a token after 3 MiB all returned CLEAN rc=0 before
+  the fix. Fix lane fix/secret-scan-blind-spots: BOM-decoded UTF-16 and NUL-tolerant text get every
+  rule; BOM-less UTF-16 is scanned at both alignments; over-cap (16 MiB) files fail closed, never
+  skipped.
 - ✅ **[sec] reconstitute validates URL but not TARGET path** — arbitrary-path repo planting;
   branch fix/reconstitute-target-validation (+ real-script e2e, legacy space fallback).
 

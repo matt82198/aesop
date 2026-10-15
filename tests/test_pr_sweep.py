@@ -286,6 +286,7 @@ class TestGhAuthMissing(PrSweepTestCase):
 
 RETRY_MARK = "<!-- pr-sweep:zero-check-retry sha=%s -->"
 DISARM_MARK = "<!-- pr-sweep:zero-check-disarm sha=%s -->"
+REBASE_MARK = "<!-- pr-sweep:needs-rebase sha=%s -->"
 HEAD = "a" * 40
 
 
@@ -367,6 +368,37 @@ class TestZeroCheckRetrigger(PrSweepTestCase):
         self.assertEqual(fake.calls_matching("workflow", "run"), [])
         self.assertEqual(fake.calls_matching("pr", "comment"), [])
         self.assertEqual(fake.calls_matching("pr", "merge"), [])
+
+    def test_dirty_zero_run_pr_is_labelled_needs_rebase_not_dispatched(self):
+        pr = make_pr(801, merge_state="DIRTY", now=self.now)
+        fake = FakeGh([pr], view_by_pr={801: zero_view(45)})
+        self.assertEqual(self.run_sweep(fake), 0)
+        self.assertEqual(fake.calls_matching("workflow", "run"), [])
+        edits = fake.calls_matching("pr", "edit", "801")
+        self.assertEqual(len(edits), 1)
+        self.assertIn("needs-rebase", " ".join(edits[0]))
+        rebase_comments = [c for c in fake.calls_matching("pr", "comment")
+                           if REBASE_MARK % HEAD in " ".join(c)]
+        self.assertEqual(len(rebase_comments), 1)
+        self.assertIn("conflict", " ".join(rebase_comments[0]).lower())
+        self.assertEqual(fake.calls_matching("pr", "merge", "801", "--disable-auto"), [])
+
+    def test_conflicting_mergeable_is_treated_as_dirty(self):
+        pr = make_pr(802, merge_state="UNKNOWN", now=self.now)
+        pr["mergeable"] = "CONFLICTING"
+        fake = FakeGh([pr], view_by_pr={802: zero_view(45)})
+        self.assertEqual(self.run_sweep(fake), 0)
+        self.assertEqual(fake.calls_matching("workflow", "run"), [])
+        self.assertEqual(len(fake.calls_matching("pr", "edit", "802")), 1)
+
+    def test_dirty_rebase_is_idempotent_and_never_disarmed(self):
+        pr = make_pr(803, merge_state="DIRTY", now=self.now)
+        comments = [{"body": REBASE_MARK % HEAD, "createdAt": iso(25 * 60)}]
+        fake = FakeGh([pr], view_by_pr={803: zero_view(26 * 60, comments)})
+        self.assertEqual(self.run_sweep(fake), 0)
+        self.assertEqual(fake.calls_matching("pr", "edit"), [])
+        self.assertEqual(fake.calls_matching("pr", "comment"), [])
+        self.assertEqual(fake.calls_matching("pr", "merge", "803", "--disable-auto"), [])
 
     def test_dry_run_does_not_flush_receipts(self):
         pr = make_pr(712, now=self.now)

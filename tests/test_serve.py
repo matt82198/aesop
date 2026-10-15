@@ -16,6 +16,27 @@ import unittest
 from pathlib import Path
 
 
+# Scrub the state-root env vars for this whole module. A lane shell (or a daemon)
+# that exports AESOP_STATE_ROOT / CONDUCTOR_ROOT would otherwise make serve.py read
+# the live box state instead of each test's fixture (test-process-isolation hygiene).
+_STATE_ENV_KEYS = ("AESOP_STATE_ROOT", "CONDUCTOR_ROOT")
+_SAVED_STATE_ENV = {}
+
+
+def setUpModule():
+    for env_name in _STATE_ENV_KEYS:
+        _SAVED_STATE_ENV[env_name] = os.environ.pop(env_name, None)
+
+
+def tearDownModule():
+    for env_name, value in _SAVED_STATE_ENV.items():
+        if value is None:
+            os.environ.pop(env_name, None)
+        else:
+            os.environ[env_name] = value
+    _SAVED_STATE_ENV.clear()
+
+
 class TestServeAlertPath(unittest.TestCase):
     """Test cases for ui/serve.py alert path resolution."""
 

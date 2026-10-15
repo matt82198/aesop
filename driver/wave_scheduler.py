@@ -40,7 +40,6 @@ import hashlib
 import json
 import os
 import sys
-import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -58,6 +57,14 @@ if str(TOOLS_DIR) not in sys.path:
 # Import core modules
 from wave_loop import run_wave
 from agent_driver import AgentDriver
+
+# Tracker writes go through the event-sourced WriteAPI (F-01); repo root must be importable.
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+from state_store import EventStore
+from state_store.ingest import ingest_tracker_json
+from state_store.projections import project_tracker
+from state_store.write_api import WriteAPI, WriteConflict
 
 # Import safety gates (P1-3: fail-closed if unavailable)
 try:
@@ -416,7 +423,7 @@ def _write_tracker_status_atomic(
             except IOError:
                 return False, "tracker_conflict"
 
-        # Load tracker for mutation
+        # Load tracker for reading the current item set and notes
         with open(p, "r", encoding="utf-8") as f:
             data = json.load(f)
 
@@ -433,44 +440,68 @@ def _write_tracker_status_atomic(
         status_map = {item_id: new_status for item_id in items_to_update}
         if status_by_id:
             status_map.update(status_by_id)
+        updates = []
         for item in items:
             if item.get("id") in status_map:
-                item["status"] = status_map[item.get("id")]
-                notes = item.get("notes", "")
-                item["notes"] = f"{notes} [wave {wave_id[:8]}]".strip()
+                notes = item.get("notes") or ""
+                updates.append((
+                    item["id"],
+                    {
+                        "status": status_map[item["id"]],
+                        "notes": f"{notes} [wave {wave_id[:8]}]".strip(),
+                    },
+                ))
 
-        # P1-5, HIGH: Write atomically using tempfile.NamedTemporaryFile (TOCTOU safe)
-        # Do NOT use predictable .tmp suffix (symlink vulnerability)
-        temp_fd = None
-        try:
-            temp_fd, temp_path = tempfile.mkstemp(dir=p.parent, prefix=".tracker-", suffix=".tmp")
-            temp_path = Path(temp_path)
-
-            # Write to temp file
-            with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
-                if isinstance(data, dict):
-                    data["items"] = items
-                    json.dump(data, f, indent=2)
-                else:
-                    json.dump(items, f, indent=2)
-            temp_fd = None
-
-            # Atomic replace
-            os.replace(temp_path, p)
+        # F-01: tracker.json is a materialized view of the event log. Writing it
+        # directly reverts any mark on the next WriteAPI write (the projection is
+        # re-rendered from the log), so every mark goes through WriteAPI as an
+        # item_updated event. Fail-closed on drift: a tracker.json item absent from
+        # the log would be dropped by the re-render, so refuse instead.
+        if not updates:
             return True, None
-
-        except Exception as e:
-            if temp_fd is not None:
-                os.close(temp_fd)
-            # Clean up temp file if it exists
-            try:
-                temp_path.unlink(missing_ok=True)
-            except Exception:
-                pass
-            return False, f"Failed to update tracker: {e}"
+        return _apply_status_via_writeapi(p, updates)
 
     except Exception as e:
         return False, f"Failed to update tracker: {e}"
+
+
+def _apply_status_via_writeapi(
+    tracker_file: Path, updates: List[Tuple[str, Dict[str, Any]]],
+) -> Tuple[bool, Optional[str]]:
+    """Journal per-item status patches through WriteAPI (F-01).
+
+    Args:
+        tracker_file: tracker.json whose sibling event store is the source of truth
+        updates: (item_id, patch) pairs
+
+    Returns:
+        (success, error_reason). error_reason is "tracker_event_log_drift" when the
+        event log and tracker.json disagree on the item set (nothing is written).
+    """
+    state_dir = tracker_file.parent
+    api = WriteAPI(state_dir)
+    store = EventStore(str(state_dir / "tracker_events.db"))
+    try:
+        logged_ids = {it.get("id") for it in project_tracker(store.read("tracker")).get("items", [])}
+        if not logged_ids:
+            # Pre-event-sourcing tracker: backfill one item_created per item first.
+            ingest_tracker_json(store, str(tracker_file), actor="wave_scheduler")
+            api.rebuild_projection()  # render the canonical view from the backfilled log
+        else:
+            with open(tracker_file, "r", encoding="utf-8") as f:
+                on_disk = json.load(f)
+            disk_items = on_disk.get("items", []) if isinstance(on_disk, dict) else on_disk
+            disk_ids = {it.get("id") for it in disk_items}
+            if disk_ids != logged_ids:
+                return False, "tracker_event_log_drift"
+        for item_id, patch in updates:
+            api.tracker_update_item(item_id, patch, actor="wave_scheduler")
+        return True, None
+    except WriteConflict as e:
+        return False, f"tracker_write_conflict: {e}"
+    finally:
+        store.close()
+        api.close()
 
 
 # ========================================================================
