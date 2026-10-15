@@ -154,15 +154,27 @@ gate_base_dir() {
   # push (F-04 / adv-enforcement F-03). Gate DATA roots (--root) still point at
   # the pushed tree; only gate code and gate baselines are pinned to base.
   # Content-addressed by the base commit, so one base is extracted once.
+  # The directory name carries a cache-format version (v2): v1 extractions held
+  # only tools/ and are never reused, because the base gates import state_store/
+  # too (tools/tracker_guard.py -> state_store.read_api) and a v1 copy fails
+  # with ModuleNotFoundError on every push.
+  # Every root package the base gates import is extracted: tools/ always, and
+  # state_store/ whenever origin/main carries it (state_store/ itself imports
+  # tools.*, which the same archive already provides).
   # Fail-closed: prints nothing and returns 1 when origin/main cannot be read.
-  local base_sha tmp_root dir staging
+  local base_sha tmp_root dir staging roots="" root
   base_sha=$(git rev-parse --verify -q "origin/main^{commit}" 2>/dev/null) || return 1
   [ -n "$base_sha" ] || return 1
   tmp_root="${TMPDIR:-/tmp}"
-  dir="$tmp_root/aesop-gate-base-$base_sha"
+  dir="$tmp_root/aesop-gate-base-v2-$base_sha"
   if [ ! -f "$dir/.complete" ]; then
+    for root in tools state_store; do
+      if git cat-file -e "$base_sha:$root" 2>/dev/null; then
+        roots="$roots $root"
+      fi
+    done
     staging=$(mktemp -d "$tmp_root/aesop-gate-stage.XXXXXX" 2>/dev/null) || return 1
-    if ! git archive "$base_sha" -- tools 2>/dev/null | tar -x -C "$staging" 2>/dev/null \
+    if ! git archive "$base_sha" -- $roots 2>/dev/null | tar -x -C "$staging" 2>/dev/null \
        || [ ! -d "$staging/tools" ]; then
       rm -rf "$staging"
       return 1
