@@ -14,9 +14,9 @@ Output: one line per finding or summary (never prints full secrets)
 
 Pragma escape hatch (STRICTLY SCOPED to doc-shaped rules):
   If the literal string 'secretscan: allow-pattern-docs' appears in a file's first 10 lines
-  (any comment syntax: #, //, <!-- -->), findings from the two DOC-SHAPED rules ONLY
-  (generic_secret_assignment, env_access) are reported as ALLOWED-DOC and do not cause
-  exit 1. Fatal classes (PEM private keys, AWS/GitHub/Slack/OpenAI-Anthropic tokens,
+  (any comment syntax: #, //, <!-- -->), findings from the DOC-SHAPED rules ONLY
+  (generic_secret_assignment, generic_credential_assignment, env_access) are reported as
+  ALLOWED-DOC and do not cause exit 1. Fatal classes (PEM private keys, AWS/GitHub/Slack/OpenAI-Anthropic tokens,
   connection strings) and filename-based findings stay fatal REGARDLESS of the pragma.
   The pragma appears in git diffs and is a reviewable act.
 
@@ -77,6 +77,21 @@ PATTERNS = {
         r"\b(password|passwd|secret|api[_-]?key|token|authorization)\b\s*(?::=|=)\s*(?:[\"'](?!.*(?:xxx|changeme|your-|<|$\{|example)\b).{8,}[\"']|(?!['\"]|xxx|changeme|your-|example)[^\s\$\<\{\n\(\)\.\"']{8,}(?=\s|$))",
         re.IGNORECASE,
     ),
+    # F-01 (audit 2026-10-14-r1): KEY_NAME=value / KEY_NAME: value /
+    # KEY_NAME = "value" outside .env files (DB_PASSWORD=, API_TOKEN=,
+    # STRIPE_SECRET_KEY=). The name must END in a credential word (optionally
+    # followed by _KEY), so `token_count = x` is not a name match. The value is
+    # checked for placeholders by _credential_value_is_placeholder() (captured
+    # value only, never the whole match) and must be >= 8 chars.
+    "generic_credential_assignment": (
+        r"(?<![A-Za-z0-9_\-])[A-Za-z0-9_\-]*"
+        r"(?:PASSWORD|PASSWD|SECRET|TOKEN|API[_\-]?KEY|PRIVATE[_\-]?KEY|ACCESS[_\-]?KEY)"
+        r"(?:[_\-]?KEY)?(?![A-Za-z0-9_\-])"
+        r"\s*[:=]\s*"
+        r"(?:(?P<q>[\"'])(?P<v>[^\"'\n]{8,})(?P=q)"
+        r"|(?P<u>[^\s'\"`$<{}()\[\].,;:]{8,})(?=\s|$|[;,]))",
+        re.IGNORECASE,
+    ),
     "connection_string": (
         (r"://"
          r"[^:]+:[^@/\s]+@"
@@ -115,7 +130,7 @@ CREDENTIAL_FILENAMES = [
 PLACEHOLDERS = {"xxx", "changeme", "your-key-here", "example", "test", "demo"}
 
 # Rules that CAN be softened by pragma (doc-shaped rules only)
-SOFTENED_BY_PRAGMA = {"generic_secret_assignment", "env_access"}
+SOFTENED_BY_PRAGMA = {"generic_secret_assignment", "generic_credential_assignment", "env_access"}
 
 # Rules that are ALWAYS fatal, pragma never applies
 FATAL_RULES = {
@@ -259,6 +274,151 @@ def is_env_file(filepath):
     )
 
 
+MAX_SCAN_BYTES = 16 * 1024 * 1024  # F-02: a file over this cap FAILS CLOSED (never skipped)
+SIZE_NOTICE_BYTES = 1024 * 1024  # informational SKIPPED-LARGE notice threshold
+# Bytes that never appear in text: C0 controls except TAB/LF/CR, and DEL.
+_CONTROL_BYTES = bytes([b for b in range(32) if b not in (9, 10, 13)] + [127])
+
+
+def _credential_value_is_placeholder(value):
+    """Placeholder check for generic_credential_assignment. Applied to the
+    CAPTURED value only, never the whole match. The placeholder words are
+    rule-local on purpose: adding them to PLACEHOLDERS would relax every rule."""
+    if not value:
+        return True
+    low = value.lower()
+    for word in ("example", "changeme", "placeholder", "dummy", "xxx", "your-"):
+        if word in low:
+            return True
+    if re.search(r"<[^>]*>|\$\{[^}]*\}|\$[A-Za-z_]", value):
+        return True
+    return is_placeholder(value)
+
+
+def _is_code_identifier(value, rest_of_line):
+    """True for a bare identifier (letters/underscore only, no digits) that reads
+    as a code or prose reference rather than a literal credential: snake_case or
+    camelCase (`api_key: resolved_key`, `valid_token=x,`), or a word followed by more
+    text on the same line (`api_key: word pre-resolved ...`). A value that ends its
+    line (`DB_PASSWORD=supersecret`) stays flagged, as does any value with a digit."""
+    if not re.fullmatch(r"[A-Za-z_]+", value):
+        return False
+    if "_" in value or re.search(r"[a-z][A-Z]", value) is not None:
+        return True
+    return rest_of_line[:1] in (" ", "\t") and rest_of_line.strip() != ""
+
+
+def _pragma_in_bytes(raw):
+    """Same contract as has_pragma(): the marker must appear in the first 10 lines
+    of the UTF-8 decode. A UTF-16 file (NUL-interleaved) never matches, as before."""
+    head = raw.decode("utf-8", errors="ignore").split("\n")[:10]
+    return any("secretscan: allow-pattern-docs" in line for line in head)
+
+
+def _utf16_no_bom_codec(raw):
+    """Detect BOM-less UTF-16 from NUL placement: ASCII-range text encoded as
+    UTF-16LE puts a NUL in every odd byte (BE: every even byte). Returns the
+    codec name or None."""
+    if len(raw) < 4:
+        return None
+    evens = raw[0::2]
+    odds = raw[1::2]
+    even_nul = evens.count(0) / len(evens)
+    odd_nul = odds.count(0) / len(odds)
+    if odd_nul >= 0.3 and even_nul <= 0.1:
+        return "utf-16-le"
+    if even_nul >= 0.3 and odd_nul <= 0.1:
+        return "utf-16-be"
+    return None
+
+
+def _content_views(raw):
+    """Decode raw bytes into scan views. Returns (views, nul_tagged) where views
+    is a list of (text, full_rules). full_rules=True runs every PATTERNS rule on
+    that view; False runs FATAL_RULES only (binary-looking content).
+
+    - UTF-16 BOM: decode by the BOM and run every rule on the decoded text.
+    - Text with stray NUL bytes (e.g. a leading NUL): NULs become spaces and every
+      rule runs. A single NUL no longer downgrades the file (F-02).
+    - BOM-less UTF-16: the UTF-16LE and UTF-16BE decodes at both byte alignments
+      run every rule.
+    - Binary-looking content (control bytes >= 5%): latin-1 and NUL-stripped
+      ASCII views plus UTF-16 views run FATAL_RULES only (provider tokens)."""
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        codec = "utf-16-le" if raw[:2] == b"\xff\xfe" else "utf-16-be"
+        return [(raw[2:].decode(codec, errors="replace"), True)], True
+    nul_tagged = b"\x00" in raw[:8192]
+    sample = raw[:65536].replace(b"\x00", b" ")
+    control = len(sample) - len(sample.translate(None, _CONTROL_BYTES))
+    if sample and control / len(sample) >= 0.05:
+        views = [
+            (raw.decode("latin-1"), False),
+            (raw.replace(b"\x00", b"").decode("latin-1"), False),
+        ]
+        for codec in ("utf-16-le", "utf-16-be"):
+            for offset in (0, 1):
+                views.append((raw[offset:].decode(codec, errors="ignore"), False))
+        return views, nul_tagged
+    views = [(raw.replace(b"\x00", b" ").decode("utf-8", errors="ignore"), True)]
+    codec = _utf16_no_bom_codec(raw)
+    if codec:
+        for offset in (0, 1):
+            views.append((raw[offset:].decode(codec, errors="ignore"), True))
+    return views, nul_tagged
+
+
+def _scan_views(label, views, env_file, has_file_pragma, scan_path):
+    """Run PATTERNS over every view. Returns list of (line_num, rule, match_str, is_fatal).
+    Duplicate (line, rule, match) hits across views are reported once."""
+    findings = []
+    seen = set()
+    for text, full_rules in views:
+        lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+        for line_num, line in enumerate(lines, start=1):
+            for rule_name, (pattern, flags) in PATTERNS.items():
+                if not full_rules and rule_name not in FATAL_RULES:
+                    continue
+                if rule_name == "env_assignment" and not env_file:
+                    continue
+                for match in re.finditer(pattern, line, flags):
+                    match_str = match.group(0)
+                    if rule_name == "generic_credential_assignment":
+                        if match.group("v") is not None:
+                            value = match.group("v")
+                        else:
+                            value = match.group("u")
+                            if _is_code_identifier(value, line[match.end():]):
+                                continue
+                        if _credential_value_is_placeholder(value):
+                            continue
+                    elif is_placeholder(match_str):
+                        continue
+                    key = (line_num, rule_name, match_str)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    is_fatal = _classify_finding(rule_name, has_file_pragma, scan_path)
+                    findings.append((line_num, rule_name, match_str, is_fatal))
+    return findings
+
+
+def _credential_filename_findings(filepath):
+    filename = filepath.name.lower()
+    for pattern in CREDENTIAL_FILENAMES:
+        if re.match(pattern, filename, re.IGNORECASE):
+            return [(0, "credential_filename", f"File name matches credential pattern: {filepath.name}", True)]
+    return []
+
+
+def _check_scan_cap(label, size):
+    """F-02 fail-closed: an over-cap file is refused, never skipped or sampled."""
+    if size > MAX_SCAN_BYTES:
+        raise ScanError(
+            f"{label} is {size} bytes, over the {MAX_SCAN_BYTES}-byte scan cap; "
+            "refusing to report CLEAN (fail closed)"
+        )
+
+
 def scan_file(filepath):
     """
     Scan a single file for secrets.
@@ -266,215 +426,63 @@ def scan_file(filepath):
     is_fatal=True for credential filenames and fatal rule categories;
     is_fatal=False only if pragma present AND rule is in SOFTENED_BY_PRAGMA.
 
-    Large files (>1MB) and binary files are scanned for FATAL_RULES patterns:
-    - Large files: scan first 1MB; emit SKIPPED-LARGE to stderr if file is larger
-    - Binary files: decode as latin-1; emit SKIPPED-BINARY to stderr if not fully scanned
+    Every file is scanned in full (see _content_views for how NUL bytes,
+    UTF-16 and binary-looking content are decoded). A file over MAX_SCAN_BYTES
+    raises ScanError (fail closed) instead of being skipped.
 
-    Raises ScanError if file cannot be read (permission denied, vanished, etc.)
+    Raises ScanError if file cannot be read (permission denied, vanished, over cap, etc.)
     to fail CLOSED rather than reporting the file clean.
     """
-    SIZE_THRESHOLD = 1024 * 1024  # 1MB
-    MAX_READ_SIZE = 2 * 1024 * 1024  # 2MB max to read
-
-    findings = []
-
     if should_skip_file(filepath):
-        return findings
+        return []
 
-    # Check for pragma (applies only to specific rule-based findings, not filename findings)
-    # has_pragma() already swallows its own exceptions, so safe to call
-    has_file_pragma = has_pragma(filepath)
+    findings = _credential_filename_findings(filepath)
 
-    # Check if filename matches credential patterns (always fatal, pragma does NOT apply)
-    filename = filepath.name.lower()
-    for pattern in CREDENTIAL_FILENAMES:
-        if re.match(pattern, filename, re.IGNORECASE):
-            findings.append(
-                (0, "credential_filename", f"File name matches credential pattern: {filepath.name}", True)
-            )
-            break
-
-    # File stat and type detection — not wrapped in try/except so errors propagate
     try:
-        stat = filepath.stat()
-        file_size = stat.st_size
+        size = filepath.stat().st_size
     except (OSError, PermissionError, FileNotFoundError) as e:
         raise ScanError(f"Cannot stat {filepath}: {e}")
+    _check_scan_cap(filepath, size)
+    if size > SIZE_NOTICE_BYTES:
+        print(f"SKIPPED-LARGE {filepath} (over 1MB; scanned in full)", file=sys.stderr)
 
     try:
-        is_binary = is_binary_file(filepath)
-    except (OSError, PermissionError, FileNotFoundError) as e:
-        raise ScanError(f"Cannot check if binary {filepath}: {e}")
-
-    is_large = file_size > SIZE_THRESHOLD
-
-    try:
-        if is_binary:
-            # Binary file (any size): scan as-is for FATAL_RULES only
-            with open(filepath, "rb") as f:
-                content = f.read(MAX_READ_SIZE)
-
-            # Decode as latin-1 (preserves all bytes)
-            try:
-                content_str = content.decode("latin-1")
-            except Exception:
-                content_str = content.decode("utf-8", errors="ignore")
-
-            # Emit skip notice to stderr
-            print(f"SKIPPED-BINARY {filepath} (scanned via latin-1)", file=sys.stderr)
-
-            # Scan content for FATAL_RULES only
-            for line_num, line in enumerate(content_str.split("\n"), start=1):
-                for rule_name in FATAL_RULES:
-                    if rule_name not in PATTERNS:
-                        continue
-                    pattern, flags = PATTERNS[rule_name]
-                    matches = re.finditer(pattern, line, flags)
-                    for match in matches:
-                        match_str = match.group(0)
-                        if is_placeholder(match_str):
-                            continue
-                        findings.append((line_num, rule_name, match_str, True))
-
-        elif is_large:
-            # Large text file: scan entire file in chunks for all rules
-            print(f"SKIPPED-LARGE {filepath} (scanned in chunks)", file=sys.stderr)
-            line_num = 0
-            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-                # Read in 1MB chunks to avoid loading entire large file into memory
-                for chunk in iter(lambda: f.read(1024 * 1024), ""):
-                    for chunk_line in chunk.split("\n"):
-                        line_num += 1
-                        for rule_name, (pattern, flags) in PATTERNS.items():
-                            # Skip env_assignment rule if not an .env-like file
-                            if rule_name == "env_assignment" and not is_env_file(filepath):
-                                continue
-
-                            matches = re.finditer(pattern, chunk_line, flags)
-                            for match in matches:
-                                match_str = match.group(0)
-
-                                # Skip if it's a placeholder
-                                if is_placeholder(match_str):
-                                    continue
-
-                                is_fatal = _classify_finding(rule_name, has_file_pragma, filepath)
-                                findings.append((line_num, rule_name, match_str, is_fatal))
-
-        else:
-            # Normal small text file: scan all rules
-            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
-                for line_num, line in enumerate(f, start=1):
-                    for rule_name, (pattern, flags) in PATTERNS.items():
-                        # Skip env_assignment rule if not an .env-like file
-                        if rule_name == "env_assignment" and not is_env_file(filepath):
-                            continue
-
-                        matches = re.finditer(pattern, line, flags)
-                        for match in matches:
-                            match_str = match.group(0)
-
-                            # Skip if it's a placeholder
-                            if is_placeholder(match_str):
-                                continue
-
-                            is_fatal = _classify_finding(rule_name, has_file_pragma, filepath)
-                            findings.append((line_num, rule_name, match_str, is_fatal))
-
+        raw = filepath.read_bytes()
     except (OSError, PermissionError, FileNotFoundError, IOError) as e:
-        # FAIL CLOSED: if file cannot be read, raise error (not return clean)
         raise ScanError(f"Cannot scan file {filepath}: {e}")
 
-    return findings
+    views, nul_tagged = _content_views(raw)
+    if nul_tagged:
+        print(f"SKIPPED-BINARY {filepath} (NUL bytes present; scanned as text, latin-1 and UTF-16 views)", file=sys.stderr)
+    return findings + _scan_views(filepath, views, is_env_file(filepath), _pragma_in_bytes(raw), filepath)
 
 
 def scan_blob(label, content_bytes):
     """
     Scan raw blob bytes for secrets, reporting findings against `label` as the
-    display path. Mirrors scan_file()'s rule/fatality logic, but reads content
-    already fetched from a git object (via get_git_blob) instead of opening the
-    working-tree disk file. Used by --staged (the STAGED INDEX blob) and
-    --range (the blob at the TIP of the range) so a secret present only in the
-    git object being pushed -- but absent from an out-of-sync working copy --
-    is not missed (wave-25 P2 fix; see module docstring "Scan contract").
+    display path. Applies the same rule, fatality and decoding logic as scan_file(),
+    on content already fetched from a git object (via get_git_blob) instead of the
+    working-tree disk file. Used by --staged (the STAGED INDEX blob) and --range
+    (the blob at the TIP of the range) so a secret present only in the git object
+    being pushed -- but absent from an out-of-sync working copy -- is not missed
+    (wave-25 P2 fix; see module docstring "Scan contract").
 
     Returns list of (line_num, rule, match_str, is_fatal), like scan_file().
+    Raises ScanError when the blob is over MAX_SCAN_BYTES (fail closed).
     """
     filepath = Path(label)
-    SIZE_THRESHOLD = 1024 * 1024  # 1MB
-    MAX_READ_SIZE = 2 * 1024 * 1024  # 2MB max to read (matches scan_file's binary cap)
-
-    findings = []
-
     if should_skip_file(filepath):
-        return findings
+        return []
 
-    filename = filepath.name.lower()
-    for pattern in CREDENTIAL_FILENAMES:
-        if re.match(pattern, filename, re.IGNORECASE):
-            findings.append(
-                (0, "credential_filename", f"File name matches credential pattern: {filepath.name}", True)
-            )
-            break
+    findings = _credential_filename_findings(filepath)
+    _check_scan_cap(label, len(content_bytes))
+    if len(content_bytes) > SIZE_NOTICE_BYTES:
+        print(f"SKIPPED-LARGE {filepath} (over 1MB; scanned in full from git object)", file=sys.stderr)
 
-    # Pragma check over the first 10 lines, mirroring has_pragma() but reading
-    # from the in-memory blob instead of opening a path from disk.
-    has_file_pragma = False
-    try:
-        probe = content_bytes.decode("utf-8", errors="ignore")
-        for i, line in enumerate(probe.split("\n")):
-            if i >= 10:
-                break
-            if "secretscan: allow-pattern-docs" in line:
-                has_file_pragma = True
-                break
-    except Exception:
-        pass
-
-    is_binary = b"\x00" in content_bytes[:8192]
-    is_large = len(content_bytes) > SIZE_THRESHOLD
-
-    if is_binary:
-        raw = content_bytes[:MAX_READ_SIZE]
-        try:
-            content_str = raw.decode("latin-1")
-        except Exception:
-            content_str = raw.decode("utf-8", errors="ignore")
-
-        print(f"SKIPPED-BINARY {filepath} (scanned via latin-1)", file=sys.stderr)
-
-        for line_num, line in enumerate(content_str.split("\n"), start=1):
-            for rule_name in FATAL_RULES:
-                pattern, flags = PATTERNS[rule_name]
-                for match in re.finditer(pattern, line, flags):
-                    match_str = match.group(0)
-                    if is_placeholder(match_str):
-                        continue
-                    findings.append((line_num, rule_name, match_str, True))
-        return findings
-
-    if is_large:
-        print(f"SKIPPED-LARGE {filepath} (scanned in full from git object)", file=sys.stderr)
-
-    try:
-        content_str = content_bytes.decode("utf-8", errors="ignore")
-    except Exception:
-        content_str = content_bytes.decode("latin-1", errors="ignore")
-
-    env_file = is_env_file(filepath)
-    for line_num, line in enumerate(content_str.split("\n"), start=1):
-        for rule_name, (pattern, flags) in PATTERNS.items():
-            if rule_name == "env_assignment" and not env_file:
-                continue
-
-            for match in re.finditer(pattern, line, flags):
-                match_str = match.group(0)
-                if is_placeholder(match_str):
-                    continue
-                is_fatal = _classify_finding(rule_name, has_file_pragma, label)
-                findings.append((line_num, rule_name, match_str, is_fatal))
-
-    return findings
+    views, nul_tagged = _content_views(content_bytes)
+    if nul_tagged:
+        print(f"SKIPPED-BINARY {filepath} (NUL bytes present; scanned as text, latin-1 and UTF-16 views)", file=sys.stderr)
+    return findings + _scan_views(label, views, is_env_file(filepath), _pragma_in_bytes(content_bytes), label)
 
 
 def _range_tip_ref(commit_range):
@@ -772,7 +780,11 @@ def main():
                 print("Failing CLOSED: refusing to report CLEAN when a staged object cannot be read.", file=sys.stderr)
                 sys.exit(1)
             label = str(Path(args.repo) / relpath)
-            findings = scan_blob(label, content)
+            try:
+                findings = scan_blob(label, content)
+            except ScanError as e:
+                print(f"FATAL: cannot scan staged blob {relpath}: {e}", file=sys.stderr)
+                sys.exit(1)
             for line_num, rule, match_str, is_fatal in findings:
                 all_findings.append((label, line_num, rule, match_str, is_fatal))
                 if is_fatal:
@@ -805,7 +817,11 @@ def main():
                 print("Failing CLOSED: refusing to report CLEAN when a committed object cannot be read.", file=sys.stderr)
                 sys.exit(1)
             label = str(Path(args.repo) / relpath)
-            findings = scan_blob(label, content)
+            try:
+                findings = scan_blob(label, content)
+            except ScanError as e:
+                print(f"FATAL: cannot scan blob {tip_ref}:{relpath}: {e}", file=sys.stderr)
+                sys.exit(1)
             for line_num, rule, match_str, is_fatal in findings:
                 all_findings.append((label, line_num, rule, match_str, is_fatal))
                 if is_fatal:

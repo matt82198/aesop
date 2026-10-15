@@ -9,14 +9,36 @@ Covers:
 """
 
 import json
+import os
 import unittest
 from pathlib import Path
 import sys
 import subprocess
+import types
+from unittest import mock
 
 # Add bench to path
 bench_dir = Path(__file__).parent.parent / "bench"
 sys.path.insert(0, str(bench_dir))
+
+# Unit tests must never spend. AESOP_BENCH_OFFLINE=1 is the bench seam that makes
+# the live path return before any API client is constructed, even with
+# --confirm-spend. It is set for every subprocess this module starts.
+_SEAM_ENV = "AESOP_BENCH_OFFLINE"
+_saved_seam = None
+
+
+def setUpModule():
+    global _saved_seam
+    _saved_seam = os.environ.get(_SEAM_ENV)
+    os.environ[_SEAM_ENV] = "1"
+
+
+def tearDownModule():
+    if _saved_seam is None:
+        os.environ.pop(_SEAM_ENV, None)
+    else:
+        os.environ[_SEAM_ENV] = _saved_seam
 
 
 # ============================================================================
@@ -452,29 +474,31 @@ class TestBenchHardeningFixes(unittest.TestCase):
         pass  # Covered by integration test below
 
     def test_frontier_fallback_pricing_labeled_in_output(self):
-        """Cost estimate should label fallback pricing clearly."""
-        import tempfile
-        output_path = None
-        try:
-            output_path = Path(tempfile.NamedTemporaryFile(delete=False, suffix=".txt").name)
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(bench_dir / "frontier_slice.py"),
-                    "--mode", "live",
-                    "--model", "unknown-model-should-not-crash",
-                    "--confirm-spend",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            # Should exit with 2 (cost estimate exit) or error, not crash
-            self.assertIn("FALLBACK", result.stdout + result.stderr,
-                         "Unknown model pricing should be labeled FALLBACK")
-        finally:
-            if output_path and output_path.exists():
-                output_path.unlink()
+        """Cost estimate should label fallback pricing clearly.
+
+        Intent: the FALLBACK label is printed by the COST ESTIMATE, which runs
+        before any spend. Without --confirm-spend the bench prints the estimate
+        and exits 2 before any API client exists. --confirm-spend is deliberately
+        NOT passed: passing it would send the run into the paid live path.
+        """
+        env = os.environ.copy()
+        for key in ("ANTHROPIC_API_KEY", "BENCH_API_KEY", "OPENAI_API_KEY"):
+            env.pop(key, None)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(bench_dir / "frontier_slice.py"),
+                "--mode", "live",
+                "--model", "unknown-model-should-not-crash",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=env,
+        )
+        self.assertEqual(result.returncode, 2, "Cost gate must exit 2 without --confirm-spend")
+        self.assertIn("FALLBACK", result.stdout + result.stderr,
+                      "Unknown model pricing should be labeled FALLBACK")
 
     def test_missing_anthropic_api_key_skips_cleanly(self):
         """frontier_slice with missing ANTHROPIC_API_KEY should skip, not crash."""
@@ -529,7 +553,7 @@ class TestBenchHardeningFixes(unittest.TestCase):
             env = os.environ.copy()
             env["AESOP_STATE_ROOT"] = str(state_dir)
             # Keep API key so HALT check is actually reached
-            if "ANTHROPIC_API_KEY" not in env:
+            if not env.get("ANTHROPIC_API_KEY"):
                 env["ANTHROPIC_API_KEY"] = "dummy-key-for-test"
 
             result = subprocess.run(
@@ -552,6 +576,53 @@ class TestBenchHardeningFixes(unittest.TestCase):
             import shutil
             shutil.rmtree(state_dir, ignore_errors=True)
 
+
+class _ClientConstructed(Exception):
+    """Raised by the stub anthropic.Anthropic when the live path builds a client."""
+
+
+class TestLiveNetworkGuard(unittest.TestCase):
+    """The live path must never construct an API client when the offline seam is set.
+
+    Driven in-process with a stub `anthropic` module: no network, no key needed.
+    """
+
+    def _stub_anthropic(self):
+        stub = types.ModuleType("anthropic")
+
+        def _construct(*args, **kwargs):
+            raise _ClientConstructed("anthropic.Anthropic() was constructed")
+
+        stub.Anthropic = _construct
+        return stub
+
+    def _run_live(self, seam_value):
+        import tempfile
+        from frontier_slice import load_frontier_tasks, run_live_frontier_benchmark
+
+        tasks = load_frontier_tasks(str(bench_dir / "tasks_frontier.jsonl"))
+        state_dir = tempfile.mkdtemp()
+        env = {"ANTHROPIC_API_KEY": "dummy-key-for-test", "AESOP_STATE_ROOT": state_dir}
+        if seam_value is None:
+            env.pop(_SEAM_ENV, None)
+        else:
+            env[_SEAM_ENV] = seam_value
+        with mock.patch.dict(os.environ, env, clear=False), \
+                mock.patch.dict(sys.modules, {"anthropic": self._stub_anthropic()}):
+            if seam_value is None:
+                os.environ.pop(_SEAM_ENV, None)
+            return run_live_frontier_benchmark(tasks, confirm_spend=True)
+
+    def test_seam_blocks_client_construction_even_with_confirm_spend(self):
+        """Seam set + --confirm-spend: returns empty, never builds a client."""
+        scores, accuracy = self._run_live(seam_value="1")
+        self.assertEqual(scores, [])
+        self.assertEqual(accuracy, 0.0)
+
+    def test_seam_unset_reaches_client_construction(self):
+        """Control: without the seam the same call does reach the client (stub raises)."""
+        with self.assertRaises(_ClientConstructed):
+            self._run_live(seam_value=None)
 
 # ============================================================================
 # Test Hygiene (from test_test_hygiene.py pattern)

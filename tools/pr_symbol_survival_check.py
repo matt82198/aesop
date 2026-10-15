@@ -2,7 +2,8 @@
 """
 PR symbol survival check — detects conflict-resolution symbol loss.
 INDEX: Guardrail G13: PR symbol survival check — collects top-level symbols ADDED by a PR branch's
-own non-merge commits (Python def/class/async def at column 0 or one indent inside a class; JS/MJS
+own non-merge commits (Python def/class/async def at any indentation, matched by bare name so a
+re-indented or nested helper still counts as surviving; JS/MJS
 export function|const|class and top-level function name(; shell name() {{ }}) and verifies each
 still exists in the final head tree (same file, or anywhere in the repo if renamed/moved, reported
 as INFO) -- catching the "took origin/main's whole file, silently dropped the PR's functions" merge-
@@ -108,8 +109,9 @@ def show_blob(rev, path):
 def extract_symbols(content, lang):
     """Top-level symbol names defined in `content` for the given language.
 
-    Python: def/class/async def at column 0, OR indented exactly one level (4
-    spaces) -- the "method directly inside a top-level class" case.
+    Python: def/class/async def at ANY indentation (module level, class methods,
+    helpers nested inside methods or blocks). Names are bare (not qualified), so
+    a symbol that is re-indented but keeps its name still counts as present.
     JS/MJS: `export function|const|class NAME` or top-level `function NAME(`.
     Shell:  `name() {` at column 0.
     """
@@ -117,10 +119,7 @@ def extract_symbols(content, lang):
     for lineno, raw_line in enumerate(content.splitlines(), start=1):
         line = raw_line.rstrip('\r')
         if lang == 'py':
-            indent = len(line) - len(line.lstrip(' '))
-            if indent not in (0, 4):
-                continue
-            stripped = line[indent:]
+            stripped = line.lstrip(' \t')
             match = PY_DEF_RE.match(stripped)
             if match:
                 symbols.setdefault(match.group(2), lineno)
@@ -221,7 +220,7 @@ def grep_repo_for_symbol(head, name, lang, exclude_file):
     path it's found in (excluding exclude_file), or None."""
     escaped = re.escape(name)
     if lang == 'py':
-        pattern = r'^(async[ \t]+def|def|class)[ \t]+{0}\b|^[ ]{{4}}(async[ \t]+def|def)[ \t]+{0}\b'.format(escaped)
+        pattern = r'^[ \t]*(async[ \t]+def|def|class)[ \t]+{0}\b'.format(escaped)
         pathspecs = ['*.py']
     elif lang == 'js':
         pattern = r'^export[ \t]+(function|const|class)[ \t]+{0}\b|^function[ \t]+{0}[ \t]*\('.format(escaped)

@@ -59,15 +59,24 @@ class FakeGh:
     """Dispatches on (args[0], args[1]) exactly like the real gh CLI's
     subcommand shape, recording every call for assertions."""
 
-    def __init__(self, prs, checks_by_pr=None, repo="acme/repo", auth_ok=True):
+    def __init__(self, prs, checks_by_pr=None, repo="acme/repo", auth_ok=True,
+                 view_by_pr=None, fail_on=None):
         self.prs = prs
         self.checks_by_pr = checks_by_pr or {}
         self.repo = repo
         self.auth_ok = auth_ok
+        # Per-PR `gh pr view --json statusCheckRollup,commits,comments` answers.
+        # Default: a green-checked PR, so pre-existing tests never hit the
+        # zero-check path (their PRs carry no commit timestamps).
+        self.view_by_pr = view_by_pr or {}
+        # Subcommand prefixes (e.g. ("workflow", "run")) that fail with an error.
+        self.fail_on = fail_on or {}
         self.calls = []
 
     def __call__(self, *args):
         self.calls.append(args)
+        if args[:2] in self.fail_on:
+            return {"error": self.fail_on[args[:2]], "rc": 1}
         if args[:2] == ("auth", "status"):
             if self.auth_ok:
                 return ""
@@ -76,10 +85,17 @@ class FakeGh:
             return {"nameWithOwner": self.repo}
         if args[:2] == ("pr", "list"):
             return self.prs
+        if args[:2] == ("pr", "view"):
+            pr_num = int(args[2])
+            return self.view_by_pr.get(pr_num, {
+                "statusCheckRollup": [{"name": "ci (0)", "conclusion": "SUCCESS"}],
+                "commits": [], "comments": [],
+            })
         if args[:2] == ("pr", "checks"):
             pr_num = int(args[2])
             return self.checks_by_pr.get(pr_num, [])
-        if args[:2] == ("pr", "merge"):
+        if args[:2] in (("pr", "merge"), ("pr", "comment"), ("pr", "edit"),
+                        ("workflow", "run"), ("label", "create")):
             return ""
         if args[0] == "api":
             return ""
@@ -266,6 +282,163 @@ class TestGhAuthMissing(PrSweepTestCase):
         rc = self.run_sweep(fake)
         self.assertEqual(rc, 2)
         self.assertEqual(fake.calls_matching("pr", "list"), [])
+
+
+RETRY_MARK = "<!-- pr-sweep:zero-check-retry sha=%s -->"
+DISARM_MARK = "<!-- pr-sweep:zero-check-disarm sha=%s -->"
+REBASE_MARK = "<!-- pr-sweep:needs-rebase sha=%s -->"
+HEAD = "a" * 40
+
+
+def zero_view(head_age_min, comments=None, rollup=None):
+    """A `gh pr view` answer for an armed PR whose head has no check runs."""
+    return {
+        "statusCheckRollup": rollup or [],
+        "commits": [{"oid": HEAD, "committedDate": iso(head_age_min)}],
+        "comments": comments or [],
+    }
+
+
+class TestZeroCheckRetrigger(PrSweepTestCase):
+    def test_zero_run_armed_pr_gets_ci_dispatched_and_commented(self):
+        pr = make_pr(701, now=self.now)
+        fake = FakeGh([pr], view_by_pr={701: zero_view(45)})
+        rc = self.run_sweep(fake)
+        self.assertEqual(rc, 0)
+        dispatches = fake.calls_matching("workflow", "run")
+        self.assertEqual(len(dispatches), 1)
+        self.assertIn("ci.yml", dispatches[0])
+        self.assertIn("feature-701", dispatches[0])
+        comments = fake.calls_matching("pr", "comment")
+        self.assertEqual(len(comments), 1)
+        self.assertIn(RETRY_MARK % HEAD, " ".join(comments[0]))
+        self.assertEqual(fake.calls_matching("pr", "merge", "701", "--disable-auto"), [])
+
+    def test_pr_with_check_runs_is_untouched(self):
+        pr = make_pr(702, now=self.now)
+        view = zero_view(45, rollup=[{"name": "ci (0)", "conclusion": "SUCCESS"}])
+        fake = FakeGh([pr], view_by_pr={702: view})
+        self.assertEqual(self.run_sweep(fake), 0)
+        self.assertEqual(fake.calls_matching("workflow", "run"), [])
+        self.assertEqual(fake.calls_matching("pr", "comment"), [])
+
+    def test_head_younger_than_threshold_is_untouched(self):
+        pr = make_pr(703, now=self.now)
+        fake = FakeGh([pr], view_by_pr={703: zero_view(5)})
+        self.assertEqual(self.run_sweep(fake), 0)
+        self.assertEqual(fake.calls_matching("workflow", "run"), [])
+
+    def test_retrigger_is_idempotent_within_24h(self):
+        pr = make_pr(704, now=self.now)
+        comments = [{"body": RETRY_MARK % HEAD, "createdAt": iso(10)}]
+        fake = FakeGh([pr], view_by_pr={704: zero_view(60, comments)})
+        self.assertEqual(self.run_sweep(fake), 0)
+        self.assertEqual(fake.calls_matching("workflow", "run"), [])
+        self.assertEqual(fake.calls_matching("pr", "comment"), [])
+        self.assertEqual(fake.calls_matching("pr", "merge", "704", "--disable-auto"), [])
+
+    def test_disarms_and_labels_after_24h_still_zero(self):
+        pr = make_pr(705, now=self.now)
+        comments = [{"body": RETRY_MARK % HEAD, "createdAt": iso(25 * 60)}]
+        fake = FakeGh([pr], view_by_pr={705: zero_view(26 * 60, comments)})
+        self.assertEqual(self.run_sweep(fake), 0)
+        self.assertEqual(len(fake.calls_matching("pr", "merge", "705", "--disable-auto")), 1)
+        self.assertEqual(fake.calls_matching("workflow", "run"), [])
+        edits = fake.calls_matching("pr", "edit", "705")
+        self.assertEqual(len(edits), 1)
+        self.assertIn("needs-ci-trigger", " ".join(edits[0]))
+        self.assertEqual(len(fake.calls_matching("label", "create")), 1)
+        disarm_comments = [c for c in fake.calls_matching("pr", "comment")
+                           if DISARM_MARK % HEAD in " ".join(c)]
+        self.assertEqual(len(disarm_comments), 1)
+
+    def test_disarm_is_idempotent(self):
+        pr = make_pr(706, now=self.now)
+        comments = [{"body": RETRY_MARK % HEAD, "createdAt": iso(25 * 60)},
+                    {"body": DISARM_MARK % HEAD, "createdAt": iso(60)}]
+        fake = FakeGh([pr], view_by_pr={706: zero_view(26 * 60, comments)})
+        self.assertEqual(self.run_sweep(fake), 0)
+        self.assertEqual(fake.calls_matching("pr", "merge", "706", "--disable-auto"), [])
+        self.assertEqual(fake.calls_matching("pr", "comment"), [])
+
+    def test_dry_run_mutates_nothing(self):
+        pr = make_pr(707, now=self.now)
+        fake = FakeGh([pr], view_by_pr={707: zero_view(45)})
+        self.assertEqual(self.run_sweep(fake, dry_run=True), 0)
+        self.assertEqual(fake.calls_matching("workflow", "run"), [])
+        self.assertEqual(fake.calls_matching("pr", "comment"), [])
+        self.assertEqual(fake.calls_matching("pr", "merge"), [])
+
+    def test_dirty_zero_run_pr_is_labelled_needs_rebase_not_dispatched(self):
+        pr = make_pr(801, merge_state="DIRTY", now=self.now)
+        fake = FakeGh([pr], view_by_pr={801: zero_view(45)})
+        self.assertEqual(self.run_sweep(fake), 0)
+        self.assertEqual(fake.calls_matching("workflow", "run"), [])
+        edits = fake.calls_matching("pr", "edit", "801")
+        self.assertEqual(len(edits), 1)
+        self.assertIn("needs-rebase", " ".join(edits[0]))
+        rebase_comments = [c for c in fake.calls_matching("pr", "comment")
+                           if REBASE_MARK % HEAD in " ".join(c)]
+        self.assertEqual(len(rebase_comments), 1)
+        self.assertIn("conflict", " ".join(rebase_comments[0]).lower())
+        self.assertEqual(fake.calls_matching("pr", "merge", "801", "--disable-auto"), [])
+
+    def test_conflicting_mergeable_is_treated_as_dirty(self):
+        pr = make_pr(802, merge_state="UNKNOWN", now=self.now)
+        pr["mergeable"] = "CONFLICTING"
+        fake = FakeGh([pr], view_by_pr={802: zero_view(45)})
+        self.assertEqual(self.run_sweep(fake), 0)
+        self.assertEqual(fake.calls_matching("workflow", "run"), [])
+        self.assertEqual(len(fake.calls_matching("pr", "edit", "802")), 1)
+
+    def test_dirty_rebase_is_idempotent_and_never_disarmed(self):
+        pr = make_pr(803, merge_state="DIRTY", now=self.now)
+        comments = [{"body": REBASE_MARK % HEAD, "createdAt": iso(25 * 60)}]
+        fake = FakeGh([pr], view_by_pr={803: zero_view(26 * 60, comments)})
+        self.assertEqual(self.run_sweep(fake), 0)
+        self.assertEqual(fake.calls_matching("pr", "edit"), [])
+        self.assertEqual(fake.calls_matching("pr", "comment"), [])
+        self.assertEqual(fake.calls_matching("pr", "merge", "803", "--disable-auto"), [])
+
+    def test_dry_run_does_not_flush_receipts(self):
+        pr = make_pr(712, now=self.now)
+        fake = FakeGh([pr], view_by_pr={712: zero_view(45)})
+        with patch.object(self.module, "_flush_receipts_if_possible") as flush:
+            self.assertEqual(self.run_sweep(fake, dry_run=True), 0)
+        flush.assert_not_called()
+
+    def test_read_failure_fails_closed_before_any_write(self):
+        actionable = make_pr(708, now=self.now)
+        unreadable = make_pr(709, now=self.now)
+        fake = FakeGh([actionable, unreadable], view_by_pr={
+            708: zero_view(45),
+            709: {"error": "HTTP 502", "rc": 1},
+        })
+        rc = self.run_sweep(fake)
+        self.assertNotEqual(rc, 0)
+        writes = [c for c in fake.calls if c[:2] in
+                  (("workflow", "run"), ("pr", "comment"), ("pr", "merge"), ("pr", "edit"))]
+        self.assertEqual(writes, [])
+
+    def test_dispatch_failure_stops_before_comment(self):
+        pr = make_pr(710, now=self.now)
+        fake = FakeGh([pr], view_by_pr={710: zero_view(45)},
+                      fail_on={("workflow", "run"): "workflow dispatch refused"})
+        rc = self.run_sweep(fake)
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(fake.calls_matching("pr", "comment"), [])
+
+    def test_action_is_logged_with_pr_and_reason(self):
+        pr = make_pr(711, now=self.now)
+        fake = FakeGh([pr], view_by_pr={711: zero_view(45)})
+        log_path = Path(self._tmp.name) / "pr-sweep.log"
+        self.assertEqual(self.run_sweep(fake, extra_argv=["--log-path", str(log_path)]), 0)
+        entries = [json.loads(line) for line in
+                   log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        zero = [e for e in entries if e.get("action") == "zero-retrigger"]
+        self.assertEqual(len(zero), 1)
+        self.assertEqual(zero[0]["pr"], 711)
+        self.assertTrue(zero[0]["reason"])
 
 
 if __name__ == "__main__":

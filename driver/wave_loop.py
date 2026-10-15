@@ -57,7 +57,6 @@ import os
 import posixpath
 import re
 import shlex
-import subprocess
 import sys
 import threading
 import time
@@ -73,6 +72,7 @@ if str(DRIVER_DIR) not in sys.path:
     sys.path.insert(0, str(DRIVER_DIR))
 
 from agent_driver import AgentDriver
+from proc_util import run_shell_bounded
 from wave_bridge import build_manifest_item, dispatch_item
 from verification_policy import verification_policy
 
@@ -124,6 +124,18 @@ try:
     import coordination
 except ImportError:
     coordination = None
+
+# File-claim keyspace shared with tools/multi_dispatch.py (multibox.enabled
+# selects the atomic ClaimBackend; off selects the advisory instances stream).
+try:
+    import multibox_config
+except ImportError:
+    multibox_config = None
+
+try:
+    import instance_projection
+except ImportError:
+    instance_projection = None
 
 
 # ========================================================================
@@ -510,17 +522,11 @@ def _get_owned_files_diff(workdir: str, owned_files: List[str], max_chars: int =
             diff_cmd += f" {_quote_arg(f)}"
 
         # Run git diff in the workdir
-        result = subprocess.run(
-            diff_cmd,
-            cwd=workdir,
-            shell=True,
-            capture_output=True,
-            text=True,
-            encoding='utf-8', errors='replace',
-            timeout=10,
-        )
+        # Bounded via proc_util: subprocess.run(shell=True, timeout=) is not a
+        # wall-clock bound on Windows (see driver/proc_util.py).
+        result = run_shell_bounded(diff_cmd, cwd=workdir, timeout_s=10)
 
-        if result.returncode != 0:
+        if result.exit_code != 0:
             # No diff or git error (not a repo, files not tracked, etc.)
             return ""
 
@@ -571,31 +577,27 @@ def _run_and_capture_test_output(
         return "", False
 
     try:
-        result = subprocess.run(
-            test_cmd,
-            cwd=workdir,
-            shell=True,
-            capture_output=True,
-            text=True,
-            encoding='utf-8', errors='replace',
-            timeout=timeout_sec,
-        )
+        # Bounded via proc_util: the whole process tree is killed at
+        # timeout_sec (exit 124). A plain subprocess.run(shell=True, timeout=)
+        # blocked for the full grandchild lifetime on Windows.
+        result = run_shell_bounded(test_cmd, cwd=workdir, timeout_s=timeout_sec)
 
         # Test passed: strict no-op (empty output, don't enrich)
-        if result.returncode == 0:
+        if result.exit_code == 0:
             return "", True
 
+        # Timeout (124): silent fail-closed (no-op, no enrichment)
+        if result.exit_code == 124:
+            return "", False
+
         # Exit 5 (pytest no tests collected): no-op, silent fail
-        if result.returncode == 5:
+        if result.exit_code == 5:
             return "", False
 
         # Test failed (other non-zero exit): cap and return the failure output
         failure_output = _cap_test_output(result.stdout, result.stderr)
         return failure_output, False
 
-    except subprocess.TimeoutExpired:
-        # Timeout: silent fail-closed (no-op, no enrichment)
-        return "", False
     except Exception:
         # Any other exception (subprocess not found, shell error, etc.): silent fail
         return "", False
@@ -694,6 +696,30 @@ def _claim_ttl_for_driver(driver: Any) -> float:
     return max(_CLAIM_TTL_FLOOR_S, best * _CLAIM_TTL_TIMEOUT_MULTIPLE)
 
 
+def _load_repo_config() -> Optional[dict]:
+    """Parsed <repo>/aesop.config.json, or None when the file is absent.
+
+    An unreadable or malformed config raises (fail-closed): the caller's
+    claim attempt fails and the item is skipped, never dispatched unclaimed.
+    """
+    path = REPO / "aesop.config.json"
+    if not path.is_file():
+        return None
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _advisory_file_conflict(store, file_paths: List[str], this_instance_id: str) -> Optional[str]:
+    """Mirror of tools/multi_dispatch.check_conflict over the instances stream."""
+    wanted = set(file_paths)
+    for other_instance, other_files in instance_projection.get_all_claimed_files(store).items():
+        if other_instance == this_instance_id:
+            continue
+        if wanted & set(other_files):
+            return other_instance
+    return None
+
+
 class _ClaimContext:
     """Per-wave claim registry: acquire in build, fence before repair/ship,
     release exactly once at the true end of the lifecycle (RS5 F1/F3).
@@ -718,6 +744,10 @@ class _ClaimContext:
         self._held: Dict[str, bool] = {}
         self._lock = threading.Lock()
         self._cached_store = None
+        # slug -> ("lease", backend, lease_id, files) | ("advisory", None, None, files)
+        self._file_claims: Dict[str, Tuple[Any, Any, Any, List[str]]] = {}
+        self._file_backend: Any = None
+        self._file_backend_resolved = False
 
     def _enabled(self) -> bool:
         return coordination is not None and self.state_dir is not None
@@ -728,8 +758,16 @@ class _ClaimContext:
             self._cached_store = store.EventStore(str(Path(self.state_dir) / "state.db"))
         return self._cached_store
 
-    def acquire(self, slug: str) -> bool:
-        """Claim slug for this wave; True only if the claim is held."""
+    def acquire(self, slug: str, owned_files: Optional[List[str]] = None) -> bool:
+        """Claim slug for this wave, and its owned files; True only if all held.
+
+        File claims use the SAME keyspace multi_dispatch checks, selected by
+        multibox.enabled: the atomic ClaimBackend (LeaseStore) when on, the
+        advisory instances stream when off. Any file conflict releases the
+        slug claim and returns False (fail-closed). Exceptions (e.g. a refused
+        multibox preflight) release the slug claim and propagate, so the item
+        is skipped by _try_claim_item.
+        """
         if not self._enabled():
             return False
         won = coordination.try_claim(
@@ -738,10 +776,67 @@ class _ClaimContext:
             instance_id=self.instance_id,
             ttl=self.ttl,
         )
-        if won:
+        if not won:
+            return False
+        try:
+            files = [str(f) for f in (owned_files or []) if f]
+            if files and not self._claim_files(slug, files):
+                self._release_slug(slug)
+                return False
+        except BaseException:
+            self._release_slug(slug)
+            raise
+        with self._lock:
+            self._held[slug] = True
+        return True
+
+    def _release_slug(self, slug: str) -> None:
+        try:
+            coordination.release(
+                self._event_store(),
+                resource=slug,
+                instance_id=self.instance_id,
+            )
+        except Exception:
+            pass
+
+    def _resolve_file_backend(self):
+        """Resolve the active file-claim backend once per context (None = advisory)."""
+        with self._lock:
+            if self._file_backend_resolved:
+                return self._file_backend
+            if multibox_config is None:
+                raise RuntimeError("multibox_config unavailable; file claims fail closed")
+            config = _load_repo_config()
+            self._file_backend = multibox_config.build_backend(
+                str(Path(self.state_dir) / "state.db"),
+                config,
+                repo_root=str(REPO),
+            )
+            self._file_backend_resolved = True
+            return self._file_backend
+
+    def _claim_files(self, slug: str, files: List[str]) -> bool:
+        backend = self._resolve_file_backend()
+        if backend is not None:
+            from state_store.claim_backend import ClaimConflict
+            try:
+                lease_id = backend.claim(files, self.instance_id, ttl_seconds=self.ttl)
+            except ClaimConflict:
+                return False
             with self._lock:
-                self._held[slug] = True
-        return bool(won)
+                self._file_claims[slug] = ("lease", backend, lease_id, files)
+            return True
+        if instance_projection is None:
+            raise RuntimeError("instance_projection unavailable; file claims fail closed")
+        store = self._event_store()
+        if _advisory_file_conflict(store, files, self.instance_id) is not None:
+            return False
+        if not instance_projection.claim_files(store, self.instance_id, files):
+            return False
+        with self._lock:
+            self._file_claims[slug] = ("advisory", None, None, files)
+        return True
 
     def holds(self, slug: str) -> bool:
         with self._lock:
@@ -772,6 +867,8 @@ class _ClaimContext:
         with self._lock:
             slugs = list(self._held)
             self._held.clear()
+            file_claims = dict(self._file_claims)
+            self._file_claims.clear()
         if coordination is None or self.state_dir is None:
             self._close_store()
             return
@@ -782,6 +879,25 @@ class _ClaimContext:
                     resource=slug,
                     instance_id=self.instance_id,
                 )
+            except Exception:
+                pass
+        for kind, backend, lease_id, files in file_claims.values():
+            try:
+                if kind == "lease":
+                    backend.release(lease_id, self.instance_id)
+                elif instance_projection is not None:
+                    instance_projection.release_files(
+                        self._event_store(), self.instance_id, files
+                    )
+            except Exception:
+                pass
+        with self._lock:
+            file_backend = self._file_backend
+            self._file_backend = None
+            self._file_backend_resolved = False
+        if file_backend is not None:
+            try:
+                file_backend.close()
             except Exception:
                 pass
         self._close_store()
@@ -1675,6 +1791,7 @@ def _try_claim_item(
     slug: str,
     claim_ctx: "_ClaimContext",
     state_dir: Optional[str],
+    owned_files: Optional[List[str]] = None,
 ) -> Optional[Tuple[int, Dict[str, Any]]]:
     """Try to claim the item if state_dir is given (fail-closed on claim failure).
 
@@ -1691,7 +1808,7 @@ def _try_claim_item(
     if coordination is None or state_dir is None:
         return None
     try:
-        if not claim_ctx.acquire(slug):
+        if not claim_ctx.acquire(slug, owned_files):
             # Item is claimed by another instance; skip it.
             return (
                 item_index,
@@ -1874,7 +1991,10 @@ def _dispatch_single_item(
 
     # Try to claim the item if state_dir is given (fail-closed on claim failure).
     instance_id = claim_ctx.instance_id
-    claim_failure = _try_claim_item(item_index, slug, claim_ctx, state_dir)
+    claim_failure = _try_claim_item(
+        item_index, slug, claim_ctx, state_dir,
+        owned_files=list(item.get("ownsFiles") or []),
+    )
     if claim_failure is not None:
         return claim_failure
 
