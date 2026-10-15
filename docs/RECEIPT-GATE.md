@@ -23,9 +23,12 @@ is measured, the hosted re-run can become a sample instead of a tax.
 `tools/emit_receipt.py --post` on every push, once every gate above it has passed (see
 hooks/CLAUDE.md item 16). A day-1 measurement of the manual-only design found 41 merged
 PRs and ZERO receipts — lanes were never told to run the emitter and nothing ran it for
-them, so the honesty signal had no data. The hook step is ALWAYS fail-open: a missing
-tool/python/`gh`/signing-key, or a red matrix part, prints a one-line WARN and never
-blocks the push. `AESOP_RECEIPT_EMIT=0` opts out entirely. Manual invocation still works
+them, so the honesty signal had no data. The hook is a CONCLUSION GATE: a red required
+part (emitter exit 3 under `--fail-on-red`) or an unreadable conclusion (timeout, any other
+emitter exit) blocks the push, and the failure receipt is still posted as the trace; a
+missing tool/python/`gh`/signing-key (matrix never ran) still WARNs and proceeds, and a
+skipped-with-reason part never blocks. `AESOP_PUSH_RED=1` is the one recorded emergency
+override (emitter exit 4; the receipt is stamped `pushed_red: true`). `AESOP_RECEIPT_EMIT=0` opts out entirely. Manual invocation still works
 the same way, e.g. for a `--dry-run` preview or a narrower `--matrix`:
 
 ```
