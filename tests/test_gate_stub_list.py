@@ -42,6 +42,7 @@ KNOWN_FAIL_CLOSED_GATES = sorted([
     "gen_tool_index",
     "metrics_gate",
     "pyflakes_gate",
+    "subprocess_guard",
     "verify_test_suite_count",
     "encoding_lint",
     "verify_test_coverage",

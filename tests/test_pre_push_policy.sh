@@ -999,6 +999,8 @@ import sys
 sys.exit(0)
 SCANNER
   chmod +x "$AESOP_ROOT/tools/secret_scan.py"
+  # The G6 subprocess ratchet is fail-closed without its committed baseline (a real repo has one).
+  printf '{"violations": {}}\n' > "$AESOP_ROOT/.subprocess-guard-baseline.json"
 
   # Stub the remaining gate scripts. A tools/ directory holding only
   # secret_scan.py is a PARTIAL aesop install, and the gates now fail closed on
@@ -1823,6 +1825,8 @@ printf '\n=== Test: main() emits a receipt only after every gate above it passed
   build_repo "$REPO_A"
   build_tools "$AESOP_ROOT_A" 0
   publish_base_tools "$REPO_A" "$AESOP_ROOT_A/tools"
+  # G6 subprocess ratchet reads the pushed tree's baseline (fail-closed when absent).
+  printf '{"violations": {}}\n' > "$AESOP_ROOT_A/.subprocess-guard-baseline.json"
   export AESOP_RECEIPT_KEY="$AESOP_ROOT_A/dummy_key.pem"
   touch "$AESOP_ROOT_A/dummy_key.pem"
   unset AESOP_RECEIPT_EMIT
@@ -1962,6 +1966,146 @@ printf '\n=== Test 32: check_pyflakes_ratchet honors AESOP_PYFLAKES_SKIP=1 ===\n
     exit 1
   fi
   printf 'PASS: check_pyflakes_ratchet honors AESOP_PYFLAKES_SKIP=1 opt-out\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+# ===== Tests 33-36: subprocess_guard ratchet (G6, pre-push parity with ci.yml) =====
+
+# make_sg_clone <clone> <baseline_json|MISSING> <shell_true_count>
+# Clone whose origin/main:tools holds the real subprocess_guard.py, with a working
+# tree containing tests/test_fixture_sg.py (N shell=True calls) and the baseline.
+make_sg_clone() {
+  local clone="$1" baseline="$2" nshell="$3"
+  local sg_src="$TEST_ROOT/sg_src_$(basename "$clone")"
+  rm -rf "$sg_src"
+  mkdir -p "$sg_src"
+  cp "$REPO_ROOT/tools/subprocess_guard.py" "$sg_src/subprocess_guard.py"
+  make_clone_with_base "$clone" "$sg_src"
+  mkdir -p "$clone/tests" "$clone/tools"
+  cp "$REPO_ROOT/tools/subprocess_guard.py" "$clone/tools/subprocess_guard.py"
+  {
+    printf 'import subprocess\n'
+    local i=0
+    while [ "$i" -lt "$nshell" ]; do
+      printf 'subprocess.run("true", shell=True)\n'
+      i=$((i + 1))
+    done
+  } > "$clone/tests/test_fixture_sg.py"
+  if [ "$baseline" != "MISSING" ]; then
+    printf '%s\n' "$baseline" > "$clone/.subprocess-guard-baseline.json"
+  fi
+}
+
+SG_BASE_ONE='{"violations": {"tests/test_fixture_sg.py@SHELL_TRUE": 1}}'
+
+printf '\n=== Test 33: check_subprocess_guard_ratchet blocks a new shell=True above baseline ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/sg_t33_clone"
+  mkdir -p "$AESOP_ROOT/state"
+  if [ "$(type -t check_subprocess_guard_ratchet)" != "function" ]; then
+    printf 'FAIL: check_subprocess_guard_ratchet is not defined in the hook\n'
+    exit 1
+  fi
+  make_sg_clone "$AESOP_ROOT" "$SG_BASE_ONE" 2
+  cd "$AESOP_ROOT" || exit 1
+  if check_subprocess_guard_ratchet >/dev/null 2>&1; then
+    printf 'FAIL: check_subprocess_guard_ratchet should block a shell=True above baseline\n'
+    exit 1
+  fi
+  printf 'PASS: check_subprocess_guard_ratchet blocks a shell=True above baseline\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test 34: check_subprocess_guard_ratchet passes when findings equal baseline ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/sg_t34_clone"
+  mkdir -p "$AESOP_ROOT/state"
+  if [ "$(type -t check_subprocess_guard_ratchet)" != "function" ]; then
+    printf 'FAIL: check_subprocess_guard_ratchet is not defined in the hook\n'
+    exit 1
+  fi
+  make_sg_clone "$AESOP_ROOT" "$SG_BASE_ONE" 1
+  cd "$AESOP_ROOT" || exit 1
+  if ! check_subprocess_guard_ratchet >/dev/null 2>&1; then
+    printf 'FAIL: check_subprocess_guard_ratchet should pass when findings equal baseline\n'
+    exit 1
+  fi
+  printf 'PASS: check_subprocess_guard_ratchet passes at baseline\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test 35: check_subprocess_guard_ratchet fails closed when baseline is missing ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/sg_t35_clone"
+  mkdir -p "$AESOP_ROOT/state"
+  if [ "$(type -t check_subprocess_guard_ratchet)" != "function" ]; then
+    printf 'FAIL: check_subprocess_guard_ratchet is not defined in the hook\n'
+    exit 1
+  fi
+  make_sg_clone "$AESOP_ROOT" MISSING 1
+  cd "$AESOP_ROOT" || exit 1
+  if check_subprocess_guard_ratchet >/dev/null 2>&1; then
+    printf 'FAIL: check_subprocess_guard_ratchet should fail closed when the baseline is missing\n'
+    exit 1
+  fi
+  printf 'PASS: check_subprocess_guard_ratchet fails closed without a baseline\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test 36: pre-push ratchet and the ci.yml invocation agree on the same fixtures ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/sg_t36_clone"
+  mkdir -p "$AESOP_ROOT/state"
+  if [ "$(type -t check_subprocess_guard_ratchet)" != "function" ]; then
+    printf 'FAIL: check_subprocess_guard_ratchet is not defined in the hook\n'
+    exit 1
+  fi
+  # The exact run line ci.yml executes for the subprocess guard ratchet.
+  ci_line=$(sed -n 's/^[[:space:]]*run:[[:space:]]*\(python tools\/subprocess_guard\.py --check --baseline [^[:space:]]*\)[[:space:]]*$/\1/p' "$REPO_ROOT/.github/workflows/ci.yml" | head -1)
+  if [ -z "$ci_line" ]; then
+    printf 'FAIL: could not locate the subprocess_guard ratchet run line in ci.yml\n'
+    exit 1
+  fi
+  py_bin=$(resolve_py_bin) || { printf 'FAIL: no python on PATH\n'; exit 1; }
+  ci_cmd="${ci_line/#python/$py_bin}"
+  parity_ok=1
+  # Case A: 2 findings above a baseline of 1 -> both must fail.
+  # Case B: 1 finding equal to a baseline of 1 -> both must pass.
+  for case in "2:fail" "1:pass"; do
+    nshell="${case%%:*}"
+    want="${case##*:}"
+    make_sg_clone "$AESOP_ROOT" "$SG_BASE_ONE" "$nshell"
+    cd "$AESOP_ROOT" || exit 1
+    if (bash -c "$ci_cmd") >/dev/null 2>&1; then ci_rc=0; else ci_rc=1; fi
+    if check_subprocess_guard_ratchet >/dev/null 2>&1; then hook_rc=0; else hook_rc=1; fi
+    if [ "$want" = "fail" ]; then
+      if [ "$ci_rc" -ne 1 ] || [ "$hook_rc" -ne 1 ]; then parity_ok=0; fi
+    else
+      if [ "$ci_rc" -ne 0 ] || [ "$hook_rc" -ne 0 ]; then parity_ok=0; fi
+    fi
+    printf '  nshell=%s want=%s ci_rc=%s hook_rc=%s\n' "$nshell" "$want" "$ci_rc" "$hook_rc"
+  done
+  if [ "$parity_ok" -ne 1 ]; then
+    printf 'FAIL: pre-push ratchet and ci.yml invocation disagree\n'
+    exit 1
+  fi
+  printf 'PASS: pre-push ratchet and ci.yml invocation agree\n'
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))

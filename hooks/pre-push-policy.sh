@@ -1248,6 +1248,61 @@ check_pyflakes_ratchet() {
 }
 
 
+check_subprocess_guard_ratchet() {
+  # Subprocess anti-pattern ratchet (guardrail G6, tools/subprocess_guard.py).
+  # Runs the EXACT invocation ci.yml runs, from the repo root, against the pushed
+  # tree: `python tools/subprocess_guard.py --check --baseline .subprocess-guard-baseline.json`.
+  # One command, one baseline path, one message: a push that adds a shell=True above
+  # the baseline fails here with the same output CI prints. Not pinned to origin/main
+  # on purpose: pinning needs a flag the base copy may not have yet (bootstrap), and
+  # CI judges the pushed script the same way. tests/test_pre_push_policy.sh Test 36
+  # asserts the ci.yml line and this function agree on the same fixtures.
+  # Fail-closed: missing baseline, missing tool (when tools/ exists), no python, or
+  # any non-zero exit blocks the push. Skip only when there is no aesop checkout.
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local sg_script="$aesop_root/tools/subprocess_guard.py"
+
+  local tool_status
+  tool_status=$(gate_tool_status "$aesop_root" "$sg_script")
+  if [ "$tool_status" = "skip" ]; then
+    log_event "subprocess_guard_ratchet_skipped_no_aesop_tools"
+    return 0
+  fi
+  if [ "$tool_status" = "missing" ]; then
+    gate_tool_missing_block "subprocess_guard.py" "$sg_script"
+    log_event "subprocess_guard_ratchet_tool_missing"
+    return 1
+  fi
+
+  local baseline="$aesop_root/.subprocess-guard-baseline.json"
+  if [ ! -f "$baseline" ]; then
+    printf 'FATAL: .subprocess-guard-baseline.json not found at %s. A ratchet with no baseline cannot judge the push (fail-closed).\n' "$baseline" >&2
+    log_event "subprocess_guard_ratchet_baseline_missing"
+    return 1
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    gate_no_python_block "subprocess guard ratchet"
+    log_event "subprocess_guard_ratchet_no_python"
+    return 1
+  fi
+
+  local sg_output
+  sg_output=$(cd "$aesop_root" && "$py_bin" tools/subprocess_guard.py --check --baseline .subprocess-guard-baseline.json 2>&1)
+  local sg_exit_code=$?
+  if [ $sg_exit_code -eq 0 ]; then
+    return 0
+  fi
+  if [ -n "$sg_output" ]; then
+    printf '%s\n' "$sg_output" >&2
+  fi
+  log_event "subprocess_guard_ratchet_failure"
+  return 1
+}
+
+
 check_claudemd_headroom() {
   local gate_dir
   gate_dir=$(gate_base_dir) || { gate_base_block "check_claudemd_headroom"; return 1; }
@@ -3070,6 +3125,13 @@ main() {
   if ! check_pyflakes_ratchet; then
     printf 'Error: Pyflakes ratchet check failed (new or stale findings). Push blocked.\n' >&2
     log_block "pyflakes_ratchet_failure"
+    exit 1
+  fi
+
+  # G6 subprocess ratchet: the same invocation ci.yml runs, judged locally (see check_subprocess_guard_ratchet).
+  if ! check_subprocess_guard_ratchet; then
+    printf 'Error: Subprocess anti-pattern ratchet failed (new finding above baseline). Push blocked.\n' >&2
+    log_block "subprocess_guard_ratchet_failure"
     exit 1
   fi
 
