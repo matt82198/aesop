@@ -141,6 +141,10 @@ Stdlib-only backend (ThreadingHTTPServer for SSE). Collector fail-open. Config: 
 successful backfill -- skip requires BOTH, so a failed or partial migration retries instead of
 being permanently blocked by a stale claim.
 
+An unreadable `tracker.json` (missing, malformed, permission error) never writes `migration_completed`.
+It records `migration_failed` with the reason (once per distinct reason), so a later repair of
+`tracker.json` is backfilled by the next run, and completion is written only after that backfill.
+
 It reconciles in BOTH directions. Items missing from the log are backfilled from disk; and where
 disk holds a status the log never recorded (historical closes were written straight to the
 projection without emitting events), an `item_updated` event is emitted so replay cannot resurrect
