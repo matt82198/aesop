@@ -35,6 +35,12 @@ CLI:
   python tools/halt.py --clear          -> removes sentinel if present, exit 0
 
 Sentinel location: <state_dir>/.HALT
+Box-wide sentinel: <CONDUCTOR_ROOT>/state/.HALT (see resolve_conductor_root). The CLI
+  `set` writes it and `--status` / `--clear` honor it, unless AESOP_STATE_ROOT is set
+  (an explicit isolated override never touches the shared box-wide root). Every
+  checkout's run-watchdog.sh honors the box-wide sentinel regardless of which
+  checkout it runs from (2026-10-14 N-01: operator halt in primary was not honored
+  by the runtime-worktree daemon).
 """
 
 import json
@@ -96,20 +102,35 @@ def resolve_state_dir(config=None):
     return get_state_dir()
 
 
+def resolve_conductor_root():
+    """Box-wide fleet state root: CONDUCTOR_ROOT env > sibling of AESOP_ROOT > ~/conductor3.
+
+    Mirrors daemons/run-watchdog.sh's CONDUCTOR_ROOT default, so the operator's halt
+    and a scheduled watchdog running from another checkout agree on one sentinel at
+    <conductor_root>/state/.HALT.
+    """
+    if os.environ.get("CONDUCTOR_ROOT"):
+        return Path(os.environ["CONDUCTOR_ROOT"])
+    if os.environ.get("AESOP_ROOT"):
+        return Path(os.environ["AESOP_ROOT"]).parent / "conductor3"
+    home = os.environ.get("USERPROFILE") or str(Path.home())
+    return Path(home) / "conductor3"
+
+
+def box_wide_sentinel_path(conductor_root=None):
+    """Path of the box-wide kill switch, honored by every checkout's watchdog."""
+    root = Path(conductor_root) if conductor_root is not None else resolve_conductor_root()
+    return root / "state" / SENTINEL_NAME
+
+
 def _sentinel_path(state_dir=None):
     if state_dir is None:
         state_dir = resolve_state_dir()
     return Path(state_dir) / SENTINEL_NAME
 
 
-def halt(reason, state_dir=None):
-    """Write the .HALT sentinel. Returns the sentinel Path."""
-    if state_dir is None:
-        state_dir = resolve_state_dir()
-    state_dir = Path(state_dir)
-    state_dir.mkdir(parents=True, exist_ok=True)
-
-    sentinel = state_dir / SENTINEL_NAME
+def _write_sentinel(sentinel, reason):
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "reason": str(reason),
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -118,14 +139,8 @@ def halt(reason, state_dir=None):
     return sentinel
 
 
-def is_halted(state_dir=None):
-    """True iff the .HALT sentinel exists."""
-    return _sentinel_path(state_dir).exists()
-
-
-def get_halt_info(state_dir=None):
-    """Return parsed sentinel dict, or None if not halted / unreadable."""
-    sentinel = _sentinel_path(state_dir)
+def _read_sentinel(sentinel):
+    """Parsed sentinel dict for an existing file, or None if absent."""
     if not sentinel.exists():
         return None
     try:
@@ -135,6 +150,28 @@ def get_halt_info(state_dir=None):
         return {"reason": "(unreadable sentinel)", "timestamp": None}
 
 
+def halt(reason, state_dir=None):
+    """Write the .HALT sentinel. Returns the sentinel Path."""
+    if state_dir is None:
+        state_dir = resolve_state_dir()
+    return _write_sentinel(Path(state_dir) / SENTINEL_NAME, reason)
+
+
+def halt_box_wide(reason, conductor_root=None):
+    """Write the box-wide .HALT sentinel. Returns the sentinel Path."""
+    return _write_sentinel(box_wide_sentinel_path(conductor_root), reason)
+
+
+def is_halted(state_dir=None):
+    """True iff the .HALT sentinel exists."""
+    return _sentinel_path(state_dir).exists()
+
+
+def get_halt_info(state_dir=None):
+    """Return parsed sentinel dict, or None if not halted / unreadable."""
+    return _read_sentinel(_sentinel_path(state_dir))
+
+
 def clear_halt(state_dir=None):
     """Remove the sentinel if present. Returns True if removed, False if absent."""
     sentinel = _sentinel_path(state_dir)
@@ -142,6 +179,40 @@ def clear_halt(state_dir=None):
         sentinel.unlink()
         return True
     return False
+
+
+def _box_wide_applies():
+    """The box-wide sentinel is in scope unless AESOP_STATE_ROOT explicitly scopes the halt.
+
+    An explicit AESOP_STATE_ROOT is a deliberate isolated override (tests, relocated
+    state), so it must never write to or read the shared box-wide root.
+    """
+    return not os.environ.get("AESOP_STATE_ROOT")
+
+
+def active_halt():
+    """First active halt as (label, info), box-wide before per-checkout; None if not halted."""
+    if _box_wide_applies():
+        box = box_wide_sentinel_path()
+        info = _read_sentinel(box)
+        if info is not None:
+            return ("box-wide " + str(box), info)
+    local = _sentinel_path()
+    info = _read_sentinel(local)
+    if info is not None:
+        return ("checkout " + str(local), info)
+    return None
+
+
+def clear_all_halts():
+    """Clear the scoped sentinel and, when in scope, the box-wide one. True if any removed."""
+    removed = clear_halt()
+    if _box_wide_applies():
+        box = box_wide_sentinel_path()
+        if box.exists():
+            box.unlink()
+            removed = True
+    return removed
 
 
 def main(argv=None):
@@ -163,18 +234,23 @@ def main(argv=None):
         sentinel = halt(reason)
         print(f"HALTED: {reason}")
         print(f"sentinel: {sentinel}")
+        if _box_wide_applies():
+            # Operator kill switch: the box-wide sentinel is what every checkout's
+            # watchdog honors, including a runtime worktree running from elsewhere.
+            print(f"sentinel: {halt_box_wide(reason)} (box-wide)")
         return 0
 
     if argv[0] == "--status":
-        info = get_halt_info()
-        if info:
-            print(f"HALTED: {info.get('reason')} (since {info.get('timestamp')})")
+        active = active_halt()
+        if active is not None:
+            label, info = active
+            print(f"HALTED: {info.get('reason')} (since {info.get('timestamp')}) [{label}]")
             return 1
         print("not halted")
         return 0
 
     if argv[0] == "--clear":
-        cleared = clear_halt()
+        cleared = clear_all_halts()
         print("cleared" if cleared else "not halted (nothing to clear)")
         return 0
 
