@@ -51,6 +51,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import tools.generated_paths as generated_paths  # noqa: E402
+from tests.helpers import publish_origin_main_tools  # noqa: E402
 
 ZERO_SHA = "0" * 40
 
@@ -143,16 +144,22 @@ class CliTestCase(unittest.TestCase):
         run_env.pop(generated_paths.ALLOW_ENV, None)
         if env:
             run_env.update(env)
-        return subprocess.run(  # subprocess-ok
-            [sys.executable, str(TOOL)] + list(args),
-            cwd=str(REPO_ROOT),
-            input=stdin_text if stdin_text is not None else "",
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=60,
-            env=run_env,
-        )
+        # The registry CLI contract must not depend on the live checkout's git
+        # state: in a live repo, a merge-carried origin/main copy is exempt, which
+        # is the push-context rule under test in TestMergeCarriedGeneratedPath.
+        # Outside any repository there is no origin/main, so the exemption fails
+        # closed and these assertions keep their meaning.
+        with tempfile.TemporaryDirectory() as neutral:
+            return subprocess.run(  # subprocess-ok
+                [sys.executable, str(TOOL)] + list(args),
+                cwd=neutral,
+                input=stdin_text if stdin_text is not None else "",
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=60,
+                env=run_env,
+            )
 
 
 class TestCliContract(CliTestCase):
@@ -257,7 +264,13 @@ class TestPrePushGate(unittest.TestCase):
             ["git"] + list(args), cwd=str(repo),
             capture_output=True, text=True, encoding="utf-8", timeout=120)
 
-    def make_repo(self, changed_path, name="repo"):
+    def publish_gate_base(self, repo, skip=()):
+        """Gate code is judged from origin/main:tools (hook gate_base_dir).
+
+        Publish the real tools/ tree (minus `skip`) as the fixture's origin/main."""
+        publish_origin_main_tools(repo, skip=skip)
+
+    def make_repo(self, changed_path, name="repo", base_skip=()):
         """Fixture repo: one base commit, then one commit touching changed_path."""
         repo = self.tmp / name
         (repo / Path(changed_path).parent).mkdir(parents=True, exist_ok=True)
@@ -272,6 +285,7 @@ class TestPrePushGate(unittest.TestCase):
         self.git(repo, "add", "-A")
         self.git(repo, "commit", "-q", "-m", "change")
         head = self.git(repo, "rev-parse", "HEAD").stdout.strip()
+        self.publish_gate_base(repo, skip=base_skip)
         return repo, base, head
 
     def run_gate(self, repo, stdin_text, env=None):
@@ -336,7 +350,7 @@ class TestPrePushGate(unittest.TestCase):
         self.assertEqual(self.run_gate(repo, tuple_text).returncode, 0)
 
     def test_missing_tool_fails_open(self):
-        repo, base, head = self.make_repo("tools/INDEX.md", "gen6")
+        repo, base, head = self.make_repo("tools/INDEX.md", "gen6", base_skip=("generated_paths.py",))
         empty_root = self.tmp / "no-aesop"
         (empty_root / "state").mkdir(parents=True)
         res = self.run_gate(repo, self.tuple_for(base, head),
@@ -604,6 +618,136 @@ class TestRegistryContract(unittest.TestCase):
         self.assertEqual(tuple(merge_queue.GENERATED_PATHS),
                          tuple(generated_paths.GENERATED_PATHS))
 
+
+
+class TestMergeCarriedGeneratedPath(unittest.TestCase):
+    """A registered generated path that reaches the push only because the branch
+    MERGED origin/main is not a touched path: its blob at the push head equals
+    origin/main's (or the merge-base's). A hand edit or a real regeneration still
+    blocks. Red-first: the pre-fix gate blocked the merge-carried case."""
+
+    INDEX = "tools/INDEX.md"
+
+    def setUp(self):
+        # Hosted Linux CI saw `Directory not empty: origin/.git` on rmtree in
+        # tearDown (one run, ci shard 0). Cleanup-only tolerance: every assertion
+        # still runs; a leftover temp dir is not a test failure.
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        self.tmp = Path(self._tmp.name)
+        self.driver = self.tmp / "drive.sh"
+        self.driver.write_text(
+            '#!/usr/bin/env bash\n'
+            '. "%s"\n'
+            'check_generated_paths\n'
+            'exit $?\n' % HOOK.as_posix(),
+            encoding="utf-8", newline="\n")
+        self.origin = self.tmp / "origin"
+        self.work = self.tmp / "work"
+        self.origin.mkdir()
+        self.git(self.origin, "init", "-q", "-b", "main")
+        self._write(self.origin, "seed.txt", "seed\n")
+        # The hook judges gate code from origin/main:tools (gate_base_dir), so the
+        # fixture's origin/main must carry the real tools/ tree.
+        shutil.copytree(REPO_ROOT / "tools", self.origin / "tools",
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        self._write(self.origin, self.INDEX, "index v1\n")
+        self.git(self.origin, "add", "-A")
+        self.git(self.origin, "commit", "-q", "-m", "base")
+        self.git(self.tmp, "clone", "-q", str(self.origin), str(self.work))
+        self.git(self.work, "checkout", "-q", "-b", "feature/lane")
+        self._write(self.work, "feature.txt", "feature\n")
+        self.git(self.work, "add", "-A")
+        self.git(self.work, "commit", "-q", "-m", "feature work")
+        self.base = self.rev(self.work, "HEAD")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def git(self, repo, *args):
+        # Identity per invocation (-c), never written into any git config.
+        proc = subprocess.run(  # subprocess-ok
+            ["git", "-c", "user.email=test@example.invalid",
+             "-c", "user.name=Test User"] + list(args), cwd=str(repo),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=120)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return proc.stdout.strip()
+
+    def rev(self, repo, ref):
+        return self.git(repo, "rev-parse", ref)
+
+    @staticmethod
+    def _write(repo, rel, text):
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8", newline="\n")
+
+    def advance_main(self, text):
+        """origin/main moves: commit new INDEX.md bytes on main, fetch into work."""
+        self._write(self.origin, self.INDEX, text)
+        self.git(self.origin, "add", "-A")
+        self.git(self.origin, "commit", "-q", "-m", "main regenerates index")
+        self.git(self.work, "fetch", "-q", "origin")
+
+    def merge_main(self):
+        """The lane merges origin/main into its branch; returns the push head."""
+        self.git(self.work, "merge", "-q", "--no-edit", "origin/main")
+        return self.rev(self.work, "HEAD")
+
+    def commit_index(self, text):
+        self._write(self.work, self.INDEX, text)
+        self.git(self.work, "add", "-A")
+        self.git(self.work, "commit", "-q", "-m", "lane edits index")
+        return self.rev(self.work, "HEAD")
+
+    def run_gate(self, head, env_extra=None):
+        run_env = dict(os.environ)
+        run_env.pop(generated_paths.ALLOW_ENV, None)
+        run_env["AESOP_ROOT"] = REPO_ROOT.as_posix()
+        if env_extra:
+            run_env.update(env_extra)
+        stdin_text = "refs/heads/feature/lane %s refs/heads/feature/lane %s\n" % (
+            head, self.base)
+        stdin_path = self.tmp / "prepush-stdin.txt"
+        stdin_path.write_bytes(stdin_text.encode("utf-8"))
+        with open(stdin_path, "rb") as handle:
+            return subprocess.run(  # subprocess-ok
+                [BASH, str(self.driver)], cwd=str(self.work),
+                stdin=handle, capture_output=True, text=True,
+                encoding="utf-8", timeout=120, env=run_env)
+
+    def test_merge_carried_index_is_not_blocked(self):
+        """Main changed INDEX.md; the branch merged main and nothing else touched it."""
+        self.advance_main("index v2 from main\n")
+        head = self.merge_main()
+        res = self.run_gate(head)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertNotIn("BLOCKED", res.stderr)
+
+    def test_control_hand_edit_after_merge_is_still_blocked(self):
+        self.advance_main("index v2 from main\n")
+        self.merge_main()
+        head = self.commit_index("index v3 hand edited\n")
+        res = self.run_gate(head)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertIn(self.INDEX, res.stderr)
+
+    def test_control_real_regeneration_still_needs_the_override(self):
+        self.advance_main("index v2 from main\n")
+        self.merge_main()
+        head = self.commit_index("index v4 regenerated with real changes\n")
+        blocked = self.run_gate(head)
+        self.assertEqual(blocked.returncode, 1, blocked.stdout + blocked.stderr)
+        self.assertIn(self.INDEX, blocked.stderr)
+        allowed = self.run_gate(head, {generated_paths.ALLOW_ENV: "1"})
+        self.assertEqual(allowed.returncode, 0, allowed.stdout + allowed.stderr)
+
+    def test_no_origin_main_fails_closed(self):
+        """Without origin/main the carried-exemption cannot be proven: still blocked."""
+        self.git(self.work, "update-ref", "-d", "refs/remotes/origin/main")
+        head = self.commit_index("index v5 no origin ref\n")
+        res = self.run_gate(head)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
 
 
 if __name__ == "__main__":

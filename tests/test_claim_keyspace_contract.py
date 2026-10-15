@@ -89,5 +89,42 @@ class TestClaimKeyspaceAtomicPath(unittest.TestCase):
                     backend.close()
 
 
+class _UnreadableClaimsStore:
+    """Claims store whose read path fails (locked/corrupt instances DB)."""
+
+    db_path = "unreadable-claims-test.db"
+
+    def get(self, stream):
+        raise OSError("claims store unreadable (test)")
+
+    def read(self, stream):
+        raise OSError("claims store unreadable (test)")
+
+
+class TestClaimReadFailClosed(unittest.TestCase):
+    """A claims-store read error must never read as 'no conflict'."""
+
+    def test_advisory_check_reports_unknown_not_clean_on_read_error(self):
+        ip = wave_loop.instance_projection
+        self.assertIsNotNone(ip, "instance_projection must import for the advisory path")
+        with self.assertRaises(ip.ClaimStateUnknown):
+            wave_loop._advisory_file_conflict(_UnreadableClaimsStore(), ["a.py"], "me")
+
+    def test_acquire_does_not_grant_claim_when_claim_state_unknown(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            os.environ, {"AESOP_MULTIBOX_ENABLED": "0"}
+        ):
+            ctx = _ctx(tmp)
+            try:
+                with mock.patch.object(ctx, "_event_store", return_value=_UnreadableClaimsStore()):
+                    try:
+                        granted = ctx.acquire("item-B", ["a.py"])
+                    except Exception:
+                        granted = None  # refused by raising: fail-closed
+                self.assertIsNot(granted, True, "claim granted on unknown claim state")
+            finally:
+                ctx.release_all()
+
+
 if __name__ == "__main__":
     unittest.main()

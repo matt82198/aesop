@@ -49,9 +49,10 @@ from tools.multibox_config import (
     build_backend,
 )
 from state_store.instance_projection import (
+    ClaimStateUnknown,
     claim_files,
     release_files,
-    get_all_claimed_files,
+    get_all_claimed_files_strict,
 )
 
 
@@ -65,8 +66,13 @@ def check_conflict(store, file_paths: list[str], this_instance_id: str) -> str |
 
     Returns:
         None if no conflict, otherwise conflicting instance_id
+
+    Raises:
+        ClaimStateUnknown: the claims store could not be read. Fail-closed:
+            an unreadable store is never "no conflict". The error names the
+            store path; main() turns it into a refused dispatch.
     """
-    claimed = get_all_claimed_files(store)
+    claimed = get_all_claimed_files_strict(store)
     for other_instance, other_files in claimed.items():
         if other_instance == this_instance_id:
             continue
@@ -164,7 +170,16 @@ def main():
         else:
             # Multibox disabled (default): use legacy advisory path
             # Check for conflicts (advisory, has TOCTOU window)
-            conflicting_instance = check_conflict(store, args.files, instance_id)
+            # Fail-closed: an unreadable claims store is "state unknown", which
+            # refuses the dispatch rather than reading as "no conflict".
+            try:
+                conflicting_instance = check_conflict(store, args.files, instance_id)
+            except ClaimStateUnknown as e:
+                print(
+                    f"error: claim state unknown, refusing dispatch: {e}",
+                    file=sys.stderr,
+                )
+                return 1
             if conflicting_instance:
                 print(
                     f"error: files are claimed by {conflicting_instance}",

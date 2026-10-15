@@ -29,6 +29,15 @@ TRIPWIRE = REPO_ROOT / "tools" / "test_isolation_tripwire.py"
 
 def run_tripwire(root, command, env=None):
     full_env = dict(os.environ)
+    # Hermetic: the watched conductor3 root is the fixture under --root. Without this,
+    # an inherited CONDUCTOR_ROOT (or the default ~/conductor3) makes the tripwire watch
+    # the box-global fleet state that live daemons write while a shard runs.
+    full_env["CONDUCTOR_ROOT"] = str(Path(root) / "conductor3")
+    full_env.pop("AESOP_ROOT", None)
+    # Scheduled-task snapshot is box-global too (Windows Aesop* tasks). Point the
+    # override at a command that cannot run, so the snapshot is "undeterminable"
+    # on both sides of the window and compares equal.
+    full_env["AESOP_TRIPWIRE_SCHTASKS_CMD"] = "aesop-tripwire-schtasks-stub-unavailable"
     if env:
         full_env.update(env)
     proc = subprocess.run(

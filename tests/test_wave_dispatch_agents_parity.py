@@ -11,6 +11,7 @@ Failure indicates:
 
 Run: python -m unittest tests.test_wave_dispatch_agents_parity
 """
+import contextlib
 import importlib.util
 import json
 import os
@@ -26,6 +27,26 @@ UI_PATH = REPO / "ui"
 WAVE_DISPATCH_PATH = UI_PATH / "wave_dispatch.py"
 
 
+# sys.modules entries the loaders below delete and re-import. Modules that bind
+# `config` at import time (wave_dispatch, agents, wave_telemetry) must keep seeing the
+# ORIGINAL object after a loader returns, so every loader restores these on exit.
+_TOUCHED_MODULES = ("config", "agents", "wave_dispatch")
+
+
+@contextlib.contextmanager
+def _restored_sys_modules(names=_TOUCHED_MODULES):
+    """Snapshot the named sys.modules entries; restore them (or drop them) on exit."""
+    saved = {name: sys.modules.get(name) for name in names}
+    try:
+        yield
+    finally:
+        for name, module in saved.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
+
+
 def load_wave_dispatch_module(fixture_root):
     """Import fresh wave_dispatch module bound to fixture."""
     os.environ["AESOP_ROOT"] = str(fixture_root)
@@ -35,17 +56,19 @@ def load_wave_dispatch_module(fixture_root):
     if str(UI_PATH) not in sys.path:
         sys.path.insert(0, str(UI_PATH))
 
-    # Force reimport for isolation
-    if "wave_dispatch" in sys.modules:
-        del sys.modules["wave_dispatch"]
-    if "config" in sys.modules:
-        del sys.modules["config"]
+    with _restored_sys_modules():
+        # Force reimport for isolation
+        sys.modules.pop("wave_dispatch", None)
+        sys.modules.pop("config", None)
 
-    spec = importlib.util.spec_from_file_location(
-        f"wave_dispatch_parity_{id(fixture_root)}", WAVE_DISPATCH_PATH)
-    wave_dispatch = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = wave_dispatch
-    spec.loader.exec_module(wave_dispatch)
+        spec = importlib.util.spec_from_file_location(
+            f"wave_dispatch_parity_{id(fixture_root)}", WAVE_DISPATCH_PATH)
+        wave_dispatch = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = wave_dispatch
+        try:
+            spec.loader.exec_module(wave_dispatch)
+        finally:
+            sys.modules.pop(spec.name, None)
     return wave_dispatch
 
 
@@ -58,24 +81,24 @@ def load_agents_module(fixture_root):
     if str(UI_PATH) not in sys.path:
         sys.path.insert(0, str(UI_PATH))
 
-    # Force reimport to pick up new config
-    if "agents" in sys.modules:
-        del sys.modules["agents"]
-    if "config" in sys.modules:
-        del sys.modules["config"]
+    try:
+        with _restored_sys_modules():
+            # Force reimport to pick up new config
+            sys.modules.pop("agents", None)
+            sys.modules.pop("config", None)
 
-    import config
-    import agents
+            import config
+            import agents
 
-    # Reload config to ensure fresh paths
-    importlib.reload(config)
-    importlib.reload(agents)
-
-    # Restore old environ
-    if old_root is not None:
-        os.environ["AESOP_TRANSCRIPTS_ROOT"] = old_root
-    else:
-        os.environ.pop("AESOP_TRANSCRIPTS_ROOT", None)
+            # Reload config to ensure fresh paths
+            importlib.reload(config)
+            importlib.reload(agents)
+    finally:
+        # Restore old environ
+        if old_root is not None:
+            os.environ["AESOP_TRANSCRIPTS_ROOT"] = old_root
+        else:
+            os.environ.pop("AESOP_TRANSCRIPTS_ROOT", None)
 
     return agents
 
@@ -194,6 +217,23 @@ class CrossArtifactParityCase(unittest.TestCase):
         # (at least 3 recent ones across all projects)
         self.assertGreaterEqual(len(dispatch_agents), 3,
                                f"expected >=3 agents from nested structure, got {dispatch_agents}")
+
+    def test_reload_path_restores_original_config_in_sys_modules(self):
+        """The import/reload dance must not leave a replacement `config` in sys.modules.
+
+        ui/wave_telemetry.py and other siblings bind `config` at import time; a stale
+        or swapped sys.modules['config'] makes their binding diverge for the rest of
+        the process (order-dependent failures, see PR #1001).
+        """
+        sys.path.insert(0, str(UI_PATH))
+        try:
+            importlib.import_module("config")  # establish the live binding
+            original = sys.modules["config"]
+            load_agents_module(self.fixture_root)
+            self.assertIs(sys.modules.get("config"), original,
+                          "load_agents_module left a replacement 'config' in sys.modules")
+        finally:
+            sys.path.remove(str(UI_PATH))
 
     def test_agents_discovery_consistency(self):
         """agents.py glob discovers all files; wave_dispatch filters consistently."""

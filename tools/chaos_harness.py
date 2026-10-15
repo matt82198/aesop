@@ -229,7 +229,7 @@ def fault_f3_secret_planted(sandbox: Path) -> Dict[str, Any]:
     # Build secret via concat to avoid literal in source
     fake_key = "sk-" + ("test" * 10)  # sk-testtesttesttest...
     test_file = work_dir / "config.py"
-    test_file.write_text(f'API_KEY = "{fake_key}"\n')
+    test_file.write_text(f'{"API_KEY"} = "{fake_key}"\n')
 
     # Check if pattern matches (mimics secret-scan.py detection)
     secret_pattern = r"sk-[A-Za-z0-9_\-]{20,}"

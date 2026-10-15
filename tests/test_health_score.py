@@ -495,5 +495,99 @@ class TestHealthScoreCheckList(HealthScoreTestCase):
             )
 
 
+class TestHealthScoreHooksDirResolution(unittest.TestCase):
+    """The pre-push hook check must resolve the hooks dir via git, not <cwd>/.git/hooks.
+
+    In a linked worktree `.git` is a FILE and hooks live in the common dir;
+    under core.hooksPath the hook lives wherever that points. Each case runs
+    against a real git repo so the proof is behavioural, not text-matching.
+    """
+
+    def setUp(self):
+        self.base = Path(tempfile.mkdtemp(prefix="aesop-health-hooks-test-"))
+        self._saved_cwd = os.getcwd()
+        self.main = self.base / "main"
+        self.main.mkdir()
+        self._git(self.main, "init", "-q")
+        self._git(self.main, "config", "user.email", "test@example.com")
+        self._git(self.main, "config", "user.name", "Test User")
+        self._git(self.main, "commit", "-q", "--allow-empty", "-m", "init")
+        self.worktree = self.base / "wt"
+        self._git(self.main, "worktree", "add", "-q", str(self.worktree), "-b", "wt-branch")
+
+    def tearDown(self):
+        try:
+            os.chdir(self._saved_cwd)
+        except Exception:
+            pass
+        shutil.rmtree(self.base, ignore_errors=True)
+
+    @staticmethod
+    def _git(cwd, *args):
+        return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", check=True)
+
+    @staticmethod
+    def _write_hook(hooks_dir):
+        hooks_dir.mkdir(parents=True, exist_ok=True)
+        hook = hooks_dir / "pre-push"
+        hook.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+        hook.chmod(0o755)
+        return hook
+
+    @staticmethod
+    def _hooks_check(cwd):
+        import health_score
+        return health_score._check_pre_push_hook(Path(cwd))
+
+    def test_linked_worktree_with_hook_in_common_dir_passes(self):
+        """Hook in the main repo's common hooks dir -> PASS from the linked worktree."""
+        self._write_hook(self.main / ".git" / "hooks")
+        result = self._hooks_check(self.worktree)
+        self.assertTrue(result["passed"], result["detail"])
+
+    def test_main_repo_with_hook_passes(self):
+        """Control: the same hook is found from the main working tree."""
+        self._write_hook(self.main / ".git" / "hooks")
+        result = self._hooks_check(self.main)
+        self.assertTrue(result["passed"], result["detail"])
+
+    def test_linked_worktree_without_hook_fails(self):
+        """No hook anywhere -> FAIL (the pass above is not unconditional)."""
+        result = self._hooks_check(self.worktree)
+        self.assertFalse(result["passed"], result["detail"])
+
+    def test_core_hooks_path_elsewhere_passes_from_worktree(self):
+        """core.hooksPath pointing outside .git/hooks -> PASS when the hook is there."""
+        hooks_elsewhere = self.base / "custom-hooks"
+        self._write_hook(hooks_elsewhere)
+        self._git(self.main, "config", "core.hooksPath", str(hooks_elsewhere))
+        result = self._hooks_check(self.worktree)
+        self.assertTrue(result["passed"], result["detail"])
+
+    def test_core_hooks_path_elsewhere_without_hook_fails(self):
+        """core.hooksPath set, hook absent there -> FAIL, even if .git/hooks has one."""
+        self._write_hook(self.main / ".git" / "hooks")
+        self._git(self.main, "config", "core.hooksPath", str(self.base / "empty-hooks"))
+        result = self._hooks_check(self.worktree)
+        self.assertFalse(result["passed"], result["detail"])
+
+    def test_unanswerable_git_fails_with_git_error(self):
+        """Not a git repo at all -> FAIL and the detail carries git's own error text."""
+        bare_dir = self.base / "not-a-repo"
+        bare_dir.mkdir()
+        result = self._hooks_check(bare_dir)
+        self.assertFalse(result["passed"], result["detail"])
+        self.assertIn("not a git repository", result["detail"])
+
+    def test_bogus_dot_git_dir_never_passes_blind(self):
+        """A fake .git/hooks/pre-push in a non-repo must not pass: git cannot answer."""
+        fake = self.base / "fake-repo"
+        self._write_hook(fake / ".git" / "hooks")
+        result = self._hooks_check(fake)
+        self.assertFalse(result["passed"], result["detail"])
+        self.assertIn("not a git repository", result["detail"])
+
+
 if __name__ == "__main__":
     unittest.main()

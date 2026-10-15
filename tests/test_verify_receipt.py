@@ -212,8 +212,9 @@ class TestCli(VerifyBase):
         self.assertEqual(vr.main(args, environ=environ), 0)
         self.assertEqual(vr.main(args + ["--head", self.base], environ=environ), 1)
         self.assertEqual(vr.main(args, environ={}), 2)
+        # A receipt FILE that does not exist is a MISSING receipt (fail-closed, exit 1).
         self.assertEqual(vr.main(["--receipt", str(Path(self.tmp.name) / "missing.json"),
-                                  "--repo", str(self.repo)], environ=environ), 2)
+                                  "--repo", str(self.repo)], environ=environ), 1)
 
 
 class TestFetchReceiptForHead(VerifyBase):
@@ -295,9 +296,10 @@ class TestFetchForHeadCli(VerifyBase):
             vr._gh_api = orig
         return code, found_path, env_path
 
-    def test_cli_absent_exits_0_and_writes_false(self):
+    def test_cli_absent_exits_1_and_writes_false(self):
+        # Missing receipt is fail-closed: the job must go RED, not neutral.
         code, found_path, env_path = self._run(lambda path: None)
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 1)
         self.assertEqual(found_path.read_text(encoding="utf-8"), "false")
         self.assertFalse(env_path.exists())
 
@@ -320,8 +322,65 @@ class TestFetchForHeadCli(VerifyBase):
         found_path2 = Path(self.tmp.name) / "receipt_found2"
         args = ["--fetch-for-head", self.head, "--out-found", str(found_path2),
                 "--out-envelope", str(Path(self.tmp.name) / "r2.json")]
-        self.assertEqual(vr.main(args, environ={}), 0)
+        self.assertEqual(vr.main(args, environ={}), 1)
         self.assertEqual(found_path2.read_text(encoding="utf-8"), "false")
+
+
+class TestMissingReceiptFailsClosed(VerifyBase):
+    """Missing receipt => exit 1 with a one-line reason naming the sha and where it was
+    looked for. Present-but-invalid => 1. Present-and-valid => 0. (verify-receipt was
+    neutral on a missing receipt, which hid the gap.)"""
+
+    def _main(self, args, environ=None):
+        import io
+        from contextlib import redirect_stdout
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = vr.main(args, environ=environ or {"AESOP_RECEIPT_HMAC_SECRET": _secret()})
+        return code, buf.getvalue()
+
+    def test_missing_receipt_file_exits_1_and_names_sha(self):
+        code, out = self._main(["--receipt", str(Path(self.tmp.name) / "nope.json"),
+                                "--repo", str(self.repo), "--head", self.head])
+        self.assertEqual(code, 1)
+        self.assertIn("MISSING", out)
+        self.assertIn(self.head[:12], out)
+
+    def test_extract_payload_without_receipt_exits_1(self):
+        path = Path(self.tmp.name) / "payload.json"
+        path.write_text(json.dumps({"check_runs": []}), encoding="utf-8")
+        code, out = self._main(["--receipt", str(path), "--extract", "check-runs",
+                                "--repo", str(self.repo), "--head", self.head])
+        self.assertEqual(code, 1)
+        self.assertIn("MISSING", out)
+
+    def test_fetch_no_receipt_names_sha_and_lookup_location(self):
+        args = ["--fetch-for-head", self.head, "--repo-slug", "o/r",
+                "--out-found", str(Path(self.tmp.name) / "found"),
+                "--out-envelope", str(Path(self.tmp.name) / "e.json")]
+        orig = vr._gh_api
+        vr._gh_api = lambda path: None
+        try:
+            code, out = self._main(args)
+        finally:
+            vr._gh_api = orig
+        self.assertEqual(code, 1)
+        self.assertIn(self.head, out)
+        self.assertIn(rc.CHECK_NAME, out)
+
+    def test_valid_receipt_file_exits_0(self):
+        path = Path(self.tmp.name) / "good.json"
+        path.write_text(json.dumps(self.envelope()), encoding="utf-8")
+        code, _ = self._main(["--receipt", str(path), "--repo", str(self.repo), "--head", self.head,
+                              "--required", ",".join(REQUIRED), "--pubkey", str(Path(self.tmp.name) / "absent.pub")])
+        self.assertEqual(code, 0)
+
+    def test_invalid_receipt_file_exits_1(self):
+        path = Path(self.tmp.name) / "bad.json"
+        path.write_text(json.dumps(self.envelope()), encoding="utf-8")
+        code, _ = self._main(["--receipt", str(path), "--repo", str(self.repo), "--head", self.base,
+                              "--required", ",".join(REQUIRED), "--pubkey", str(Path(self.tmp.name) / "absent.pub")])
+        self.assertEqual(code, 1)
 
 
 class TestExtractFromCheckRuns(unittest.TestCase):

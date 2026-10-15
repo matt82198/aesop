@@ -144,6 +144,18 @@ def run_work_proof(pw, failures):
             return
 
         # (d) Cost tile shows tokens, model, OK rate
+        # The tile mounts immediately in its loading state ("Loading wave cost...")
+        # and fills in once telemetry arrives. Wait for the loaded state before
+        # reading, otherwise a slow CI runner reads the placeholder (CI red,
+        # 2026-10-15). The assertion itself is unchanged.
+        try:
+            page.wait_for_function(
+                "() => { const el = document.querySelector(\"[data-testid='wave-telemetry-cost']\");"
+                " return !!el && !el.innerText.includes('Loading wave cost'); }",
+                timeout=SEL_TIMEOUT_MS,
+            )
+        except Exception:
+            pass  # fall through: the assertion below reports whatever text is on screen
         try:
             cost_text = page.inner_text("[data-testid='wave-telemetry-cost']")
             # Should contain cost-related text (tokens, model, rate)
