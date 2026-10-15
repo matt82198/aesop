@@ -1,0 +1,45 @@
+# CODEOWNERS -- enforcement surface. Step one toward required code-owner review.
+# GitHub auto-requests the owner's review on any PR touching these paths.
+# Required code-owner approval is DEFERRED until a second reviewer identity exists
+# (GitHub forbids self-approval on a single-collaborator repo). Do not turn on
+# "require review from code owners" in branch protection until then.
+# Every gate-shaped tool (tools/*_lint.py, *_check.py, *_gate.py, verify_*.py) must
+# have an owner line here: tests/test_codeowners.py fails when one does not.
+
+# CI and workflow enforcement
+.github/workflows/ @matt82198
+.github/CODEOWNERS @matt82198
+
+# Git hook and Claude Code hook enforcement
+hooks/ @matt82198
+
+# Gate tools (gate-inventory class)
+tools/*gate*.py @matt82198
+tools/*_lint.py @matt82198
+tools/*_check.py @matt82198
+tools/verify_*.py @matt82198
+
+# Named enforcement tools
+tools/secret_scan.py @matt82198
+tools/subprocess_guard.py @matt82198
+tools/pyflakes_gate.py @matt82198
+tools/verify_receipt.py @matt82198
+tools/emit_receipt.py @matt82198
+tools/receipt_common.py @matt82198
+tools/receipt_pubkey* @matt82198
+tools/required-checks.json @matt82198
+tools/ci_*.py @matt82198
+tools/dispatch_lint.py @matt82198
+tools/pr_sweep.py @matt82198
+tools/auto_merge.py @matt82198
+tools/merge_tr*.py @matt82198
+
+# Watchdog and daemon enforcement
+daemons/ @matt82198
+
+# Lane contract and ratchet baselines
+LANE-CONTRACT.md @matt82198
+.portability-baseline.json @matt82198
+.pyflakes-baseline.json @matt82198
+.stateapi-baseline.json @matt82198
+.subprocess-guard-baseline.json @matt82198

@@ -54,7 +54,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **wave_prs.py** â€” Wave PR board: `get_wave_prs()` gathers open PRs + PR-less `feat/*` branches, rolls CI checks into passing/failing/pending/none, derives top blocker, caches ~5s. Degrades to `{available:false, error}` when gh missing/un-authed. Subprocess reads use `encoding='utf-8', errors='replace'`. Override gh binary: `AESOP_GH_BIN` env var.
 
-**wave_telemetry.py** â€” Wave telemetry: `get_wave_telemetry()` extracts current phase (from `STATE.md`), top blocker (from `AUDIT-BACKLOG.md`), cost metrics (from ledger). Reads state at call time (no cache); degrades gracefully on missing files.
+**wave_telemetry.py** â€” Wave telemetry: `get_wave_telemetry()` extracts current phase (from `orchestrator-status` when fresh, `STATE.md` `## Phase:` fallback), top blocker (from `AUDIT-BACKLOG.md`), cost metrics (from ledger). Reads state at call time (no cache); degrades gracefully on missing files.
 
 **wave_dispatch.py** â€” Wave dispatch (per-agent visibility): reads agent transcripts, infers phase (dispatch/thinking/tool-use/stall/done) from tail, estimates tokens from file size, computes activity age from mtime. Returns per-agent rows with phase badge, age, warnings (inactive >5min, stalled >10min). Degrades `{available:false}`. Polled 2-3s.
 

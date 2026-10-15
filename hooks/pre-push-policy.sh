@@ -1021,6 +1021,75 @@ check_test_suite_count() {
   return 0
 }
 
+check_pyflakes_ratchet() {
+  # Pyflakes ratchet gate (guardrail G15, tools/pyflakes_gate.py).
+  # Wraps `python -m pyflakes` to enforce a baseline: never let unused-import /
+  # unused-variable debt grow. A new finding blocks the push; a stale entry
+  # (burned down) also blocks until the baseline is regenerated. Scans tools/,
+  # bin/, ui/, state_store/, driver/, monitor/, daemons/, tests/, bench/.
+  #
+  # Pyflakes is a dev-only lint dependency (not installed by default;
+  # CI installs it in the "Install Python test dependencies" step).
+  # Exit codes: 0 = clean/baselined, 1 = new-or-stale findings (fail-CLOSED),
+  # 2 = error (pyflakes not installed, baseline unreadable, etc; fail-OPEN with WARN).
+  #
+  # Opt-out: AESOP_PYFLAKES_SKIP=1 (exact match "1", not just truthy).
+  # Fail-open when the pyflakes package is not installed or the gate tool is
+  # absent; actual baseline mismatches stay fail-closed.
+  if [ "${AESOP_PYFLAKES_SKIP:-}" = "1" ]; then
+    log_event "pyflakes_ratchet_skipped_env_opt_out"
+    return 0
+  fi
+
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local pyflakes_script="$aesop_root/tools/pyflakes_gate.py"
+
+  local tool_status
+  tool_status=$(gate_tool_status "$aesop_root" "$pyflakes_script")
+  if [ "$tool_status" = "skip" ]; then
+    log_event "pyflakes_ratchet_skipped_no_aesop_tools"
+    return 0
+  fi
+  if [ "$tool_status" = "missing" ]; then
+    # Pyflakes is a dev-only dependency: tool missing => fail-open with a WARN
+    printf 'Warning: pyflakes_gate.py not found; pyflakes ratchet check skipped (fail-open)\n' >&2
+    log_event "pyflakes_ratchet_tool_missing_dev_only"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    gate_no_python_block "pyflakes ratchet"
+    log_event "pyflakes_ratchet_no_python"
+    return 1
+  fi
+
+  local pyflakes_output
+  pyflakes_output=$("$py_bin" "$pyflakes_script" --root "$aesop_root" --baseline "$aesop_root/.pyflakes-baseline.json" 2>&1)
+  local pyflakes_exit_code=$?
+
+  if [ $pyflakes_exit_code -eq 0 ]; then
+    return 0
+  fi
+
+  if [ -n "$pyflakes_output" ]; then
+    printf '%s\n' "$pyflakes_output" >&2
+  fi
+
+  # Exit code 2 is an environment condition (pyflakes not installed, etc.):
+  # fail-open with a warning audit event, not a push-block
+  if [ $pyflakes_exit_code -eq 2 ]; then
+    printf 'Warning: pyflakes ratchet check unavailable (pyflakes not installed or other error); skipping (fail-open)\n' >&2
+    log_event "pyflakes_ratchet_skipped_tool_error"
+    return 0
+  fi
+
+  # Exit code 1: new-or-stale findings => fail-CLOSED, block the push
+  return 1
+}
+
+
 check_claudemd_headroom() {
   # CLAUDE.md merge-union cap gate (tools/claudemd_lint.py --headroom).
   #
@@ -2687,6 +2756,12 @@ main() {
   if ! check_test_suite_count; then
     printf 'Error: CI shard matrix would silently drop tracked test file(s). Push blocked.\n' >&2
     log_block "test_suite_count_drift"
+    exit 1
+  fi
+
+  if ! check_pyflakes_ratchet; then
+    printf 'Error: Pyflakes ratchet check failed (new or stale findings). Push blocked.\n' >&2
+    log_block "pyflakes_ratchet_failure"
     exit 1
   fi
 

@@ -18,6 +18,7 @@ Uses the existing StateAPI + EventStore pattern; interoperable with other projec
 """
 from __future__ import annotations
 
+import sys
 import time
 from typing import Any
 
@@ -242,10 +243,34 @@ def get_all_claimed_files(store) -> dict[str, list[str]]:
         dict mapping instance_id to list of claimed file paths
     """
     try:
+        return get_all_claimed_files_strict(store)
+    except ClaimStateUnknown:
+        return {}
+
+
+class ClaimStateUnknown(RuntimeError):
+    """The claims store could not be read, so the held-file set is unknown.
+
+    Raised by get_all_claimed_files_strict. Callers that gate dispatch on
+    claims (wave_loop) must treat it as a conflict / refusal, never as "no claims".
+    """
+
+
+def get_all_claimed_files_strict(store) -> dict[str, list[str]]:
+    """Fail-closed variant of get_all_claimed_files.
+
+    Returns the same map, but a read or projection error raises ClaimStateUnknown
+    (after logging the store path to stderr) instead of reporting an empty claim
+    set. Use this wherever "no claims" would let a dispatch proceed.
+    """
+    try:
         events = _read_instances_events(store)
         return _project_all_claimed_files(events)
-    except Exception:
-        return {}
+    except Exception as exc:
+        where = getattr(store, "db_path", None) or type(store).__name__
+        msg = "instance_projection: claims store unreadable at %s: %r" % (where, exc)
+        sys.stderr.write(msg + "\n")
+        raise ClaimStateUnknown(msg) from exc
 
 
 def detect_stale_instances(

@@ -10,14 +10,14 @@
 
 ## Ancestors: Naming the Ideas
 
-Aesop does not invent crash-recoverable orchestration. It **composes and measures** four proven ideas from distributed systems research:
+Aesop Kernel does not invent crash-recoverable orchestration. It **composes and measures** four proven ideas from distributed systems research:
 
 1. **Temporal** (Czezatke & Stengel, 2019) — durable execution via plain-text event logs, essential for crash recovery without external state.
 2. **Crash-only software** (Candea & Fox, 2003) — design every component as stateless; recovery is the normal startup path.
 3. **Erlang/OTP supervision trees** (Armstrong et al., 1996) — organize fault tolerance as a hierarchy of restarts, each with a bounded retry policy.
 4. **Kubernetes controller reconciliation** (Burns et al., 2015) — durable desired state + controllers that converge reality to it via append-only logs.
 
-Aesop ports these patterns to agent orchestration: the wave loop is a reconciliation controller; STATE.md + BUILDLOG.md are the durable event log; workers are supervised processes with retry caps; crashes trigger re-reads from disk. The contribution is not any single idea, but the composition, measurement (benchmarks with committed artifacts), and the discipline of naming ancestors instead of claiming novelty.
+Aesop Kernel ports these patterns to agent orchestration: the wave loop is a reconciliation controller; STATE.md + BUILDLOG.md are the durable event log; workers are supervised processes with retry caps; crashes trigger re-reads from disk. The contribution is not any single idea, but the composition, measurement (benchmarks with committed artifacts), and the discipline of naming ancestors instead of claiming novelty.
 
 ---
 
@@ -29,7 +29,7 @@ This hypothesis rests on five pillars:
 4. **Guardrails in code, not prose** — pre-push secret gates, kill-switches, cost ceilings: all executable.
 5. **Observable signals** — heartbeats, append-only logs, drift detectors, crash-recovery as the normal startup path.
 
-The bet is this: **a small, crash-recoverable system running on git and plain text outperforms a distributed one** in latency, debuggability, cost, and trust — because the simpler system fails loudly and often, learns from every failure, and never hides state in a database you can't grep.
+The bet is this: **a small, crash-recoverable kernel running on git and plain text outperforms a distributed one** in latency, debuggability, cost, and trust — because the simpler system fails loudly and often, learns from every failure, and never hides state in a database you can't grep.
 
 ---
 
@@ -37,13 +37,13 @@ The bet is this: **a small, crash-recoverable system running on git and plain te
 
 **Why not Postgres? Why not vector DBs?**
 
-Aesop's core state lives in git-committed files: `STATE.md` (intent, phase, NEXT STEPS), `BUILDLOG.md` (append-only progress snapshots), Python scripts (cost rules, dispatch logic), shell hooks (pre-push gates). This is not a limitation. It is the whole idea.
+Aesop Kernel's core state lives in git-committed files: `STATE.md` (intent, phase, NEXT STEPS), `BUILDLOG.md` (append-only progress snapshots), Python scripts (cost rules, dispatch logic), shell hooks (pre-push gates). This is not a limitation. It is the whole idea.
 
 **Durability.** Postgres fails when the connection pool is exhausted or the database is unreachable. Git fails when the filesystem is corrupted — a far rarer event on any modern machine. State committed to git survives machine wipes, container restarts, session loss. You clone a repository from 2026-07-18, and you know *exactly* what the system was doing on that date. No migration scripts, no schema versioning, no eventual consistency.
 
 **Human-diffable forensics.** When something goes wrong, you run `git log -p` and read the actual changes that led to the broken state. You see not just what happened, but *why* the system made each decision (because the humans who designed it wrote it in code and commit messages). A vector DB stores embeddings; a BUILDLOG.md stores human-readable decisions.
 
-**Single-box by explicit design choice.** Aesop is not "not distributed yet." Multi-instance coordination is *deliberately unscheduled*. The system runs on one machine. When team scale requires multi-instance support, the real work is not "add Postgres"; it is "redesign state to support leases and event-sourcing on SQLite." That redesign is on the roadmap, not an architectural gap. Postgres is a refactoring target *after* the single-box proves the core loop works. Premature distribution is premature optimization.
+**Single-box by explicit design choice.** Aesop Kernel is not "not distributed yet." Multi-instance coordination is *deliberately unscheduled*. The system runs on one machine. When team scale requires multi-instance support, the real work is not "add Postgres"; it is "redesign state to support leases and event-sourcing on SQLite." That redesign is on the roadmap, not an architectural gap. Postgres is a refactoring target *after* the single-box proves the core loop works. Premature distribution is premature optimization.
 
 **Cite:** [`docs/CHECKPOINTING.md`](./CHECKPOINTING.md) — the durable state strategy; [`docs/CARDINAL-RULES.md`](./CARDINAL-RULES.md) § 5 — handoff discipline.
 

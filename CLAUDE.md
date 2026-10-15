@@ -1,6 +1,6 @@
-# Aesop — Project CLAUDE.md
+# Aesop Kernel — Project CLAUDE.md
 
-**What**: PolyForm Noncommercial 1.0.0-licensed multi-agent orchestration harness for autonomous software development (versions ≤0.7.0 remain MIT).
+**What**: PolyForm Noncommercial 1.0.0-licensed orchestration kernel for autonomous software development (versions ≤0.7.0 remain MIT).
 
 ## RED CI Escape Detection
 

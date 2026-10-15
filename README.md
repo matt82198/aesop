@@ -19,11 +19,17 @@
 
 ## What It Is
 
-**Aesop is a multi-agent orchestration harness for autonomous software development.** It runs fleets of LLM coding agents across ranked backlog items, verifies their output locally, and ships merge-ready code to CI. Crash-only by design: workers are stateless, state lives in git + SQLite + durable files, and restart is the only recovery path.
+**Aesop Kernel is a multi-agent orchestration kernel for autonomous software development.** A kernel, not a harness: it owns the boundary between the model and your codebase, enforces one invariant (fail-closed verification), and refuses what it cannot verify rather than steering the model. It runs fleets of LLM coding agents across ranked backlog items, verifies their output locally, and ships merge-ready code to CI. Crash-only by design: workers are stateless, state lives in git + SQLite + durable files, and restart is the only recovery path.
+
+The design lineage spans 50 years: Unix kernel/user-space boundaries and fail-closed composable tools (1975), through crash-only software (Candea & Fox, 2003), to the agentic loop — the Ralph technique of running a coding agent in a tight reconciliation loop (2025). Aesop Kernel implements this: the wave cycle is a reconciliation controller; STATE.md + BUILDLOG.md are the durable event log; workers are supervised processes; crashes trigger re-reads from disk.
+
+**Self-learning.** The kernel dogfoods itself (it builds itself via its own /buildsystem loop) and categorizes failure modes into enforcement: the gate-escape-resolver skill turns CI failures into postmortems and audit cycles extract repeated issues and wire them into verification gates.
+
+**Due to anthropics recent changes preventing clean implementations of fail closed hooks, the project is currently not fully firing all hooks, this is actively being solved, and v0.9.1 shipped fixes for some of the largest issues.**
 
 ## Credibility: The Trap Tests
 
-Aesop does not trust itself. Every agent writes code claiming to be correct, and [the trap tests](./tests/test_traps.py) deliberately reproduce patterns of agent deception:
+Aesop Kernel does not trust itself. Every agent writes code claiming to be correct, and [the trap tests](./tests/test_traps.py) deliberately reproduce patterns of agent deception:
 
 - **Fake-green trap**: Tests that skip real validation (caught incident #464: playwright browser-proofs reported green without actually running). Prevention: counts are computed live from git ls-files (no stored artifact to drift) and `python tools/verify_test_suite_count.py --check` verifies the CI shard matrix actually covers every tracked test file.
 - **Gate-activation trap**: Forbidden flags (--admin, --no-verify, --auto) in dispatch templates (caught 7+ incidents). Pre-push secret scan blocks leaks with fail-closed exit on read errors.
@@ -103,12 +109,12 @@ See the Learn More section for setup and architecture guides.
 - **[docs/how-i-built-aesop.md](./docs/how-i-built-aesop.md)** — Technical narrative of the orchestration design
 - **[CARDINAL-RULES.md](./docs/CARDINAL-RULES.md)** — 10 foundational principles for safe autonomous code
 - **[autonomous-swe.md](./docs/autonomous-swe.md)** — What "autonomous" means and doesn't. Honest limits.
-- **[docs/INCIDENTS.md](./docs/INCIDENTS.md)** — All 41 incidents: fake-green, gate-activation, test-pollution, stalls, conflicts, flakes, CI drift, hallucinations.
-- **[RELEASE-NOTES.md](./RELEASE-NOTES.md)** — Version 0.7.2: bug fixes & compliance, encoding hardening, fake-green gate fixes.
+- **[docs/INCIDENTS.md](./docs/INCIDENTS.md)** — All 98 incidents: fake-green, gate-activation, test-pollution, stalls, conflicts, flakes, CI drift, hallucinations.
+- **[RELEASE-NOTES.md](./RELEASE-NOTES.md)** — Release notes for the latest version (full per-PR list in [CHANGELOG.md](./CHANGELOG.md)).
 
 ## Contributing
 
-Aesop is **source-available** under the PolyForm Noncommercial License 1.0.0. Patches and contributions are welcome.
+Aesop Kernel is **source-available** under the PolyForm Noncommercial License 1.0.0. Patches and contributions are welcome.
 
 - **Issues and bug reports** — tell us what's broken or confusing.
 - **Discussion and ideas** — feature requests, design critiques, use-case questions.
@@ -118,9 +124,9 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) for details. The repo develops itself v
 
 ## License
 
-Aesop is licensed under the **[PolyForm Noncommercial License 1.0.0](./LICENSE)** from this version forward: free for personal, research, and noncommercial use; commercial use is prohibited without a separate agreement.
+Aesop Kernel is licensed under the **[PolyForm Noncommercial License 1.0.0](./LICENSE)** from 0.8.0 forward: free for personal, research, and noncommercial use; commercial use is prohibited without a separate agreement.
 
-Versions **0.7.0 and earlier** were released under the MIT License and remain available under those terms — the relicense is not retroactive.
+Versions **0.7.2 and earlier** (released as Aesop) were under the MIT License and remain available under those terms — the relicense is not retroactive.
 
 For commercial licensing, contact the author (Matt Culliton).
 
@@ -128,7 +134,7 @@ Copyright 2026 Matt Culliton.
 
 ## Citing
 
-If you use Aesop, please cite it using the metadata in [CITATION.cff](./CITATION.cff) (GitHub
+If you use Aesop Kernel, please cite it using the metadata in [CITATION.cff](./CITATION.cff) (GitHub
 renders a "Cite this repository" button from this file). It also lists the preferred research
 citation, *The Receipts Loop* (manuscript draft, arXiv submission pending).
 
@@ -140,4 +146,4 @@ citation, *The Receipts Loop* (manuscript draft, arXiv submission pending).
 
 ---
 
-**Aesop**: Autonomous developer for any repository, built by Aesop itself. May your orchestrator be wise and your subagents swift.
+**Aesop Kernel**: Autonomous developer for any repository, built by itself. May your kernel be honest and your workers swift.

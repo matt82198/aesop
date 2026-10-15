@@ -301,6 +301,62 @@ class TestVerifyTestCoverage(unittest.TestCase):
             f"Unexpected exit code: {result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}",
         )
 
+    def test_misnamed_testcase_file_fails_closed(self):
+        """Regression (F-03, 2026-10-14): a TestCase file outside the collected
+        glob must be reported as an orphan, not silently treated as covered.
+
+        Before the fix the Python disk set was built from the same tests/test_*.py
+        glob the runner uses, so a misnamed file (init_project_worktree_test.py,
+        7 tests) could never be flagged. Hermetic fixture: a real git repo whose
+        tracked tests/ holds one collected module, one misnamed TestCase module,
+        and one helper with no tests (which must NOT be flagged).
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            subprocess.run(["git", "init", "-q", str(tmpdir_path)], check=True)
+            tests_dir = tmpdir_path / "tests"
+            tests_dir.mkdir()
+            tools_dir = tmpdir_path / "tools"
+            tools_dir.mkdir()
+
+            (tests_dir / "test_covered.py").write_text(
+                "import unittest\n"
+                "class TestCovered(unittest.TestCase):\n"
+                "    def test_ok(self):\n"
+                "        self.assertTrue(True)\n"
+            )
+            (tests_dir / "misnamed_check.py").write_text(
+                "import unittest\n"
+                "class TestMisnamed(unittest.TestCase):\n"
+                "    def test_hidden(self):\n"
+                "        self.assertTrue(True)\n"
+            )
+            (tests_dir / "helper_fixture.py").write_text("VALUE = 1\n")
+            subprocess.run(["git", "-C", str(tmpdir_path), "add", "-A"], check=True)
+
+            tools_dir.joinpath("verify_test_coverage.py").write_text(
+                self.tool_path.read_text()
+            )
+
+            result = subprocess.run(
+                ["python", str(tools_dir / "verify_test_coverage.py"), "--check"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=20,
+                cwd=str(tmpdir_path),
+            )
+
+            self.assertEqual(
+                result.returncode, 1,
+                f"Misnamed TestCase file must fail the gate closed:\n"
+                f"{result.stdout}\n{result.stderr}",
+            )
+            self.assertIn("tests/misnamed_check.py", result.stdout)
+            self.assertNotIn("tests/test_covered.py", result.stdout)
+            self.assertNotIn("tests/helper_fixture.py", result.stdout)
+
     def test_fix_mode_suggests_commands(self):
         """Test that --fix mode suggests how to add orphaned tests."""
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -84,7 +84,7 @@ class TestSecretScanRegression(unittest.TestCase):
         secret_file = self.tmpdir_path / "config.py"
         # Construct secret by concatenation so it's not a literal that trips the push gate
         fake_token = "ghp_" + "a" * 32
-        secret_file.write_text(f"# GitHub token:\ntoken = '{fake_token}'\n")
+        secret_file.write_text(f"# GitHub token:\n{'token'} = '{fake_token}'\n")
 
         exit_code, stdout, stderr = self.run_scanner(str(secret_file))
 
@@ -109,28 +109,30 @@ class TestSecretScanRegression(unittest.TestCase):
         self.assertEqual(exit_code, 1, "File with AWS key should exit 1")
         self.assertIn("aws_access_key", stdout, "Should identify AWS key")
 
-    def test_pragma_still_softens_doc_rules(self):
-        """Regression: pragma still softens doc-shaped rules (exit 0) but not fatal rules."""
-        # Doc rule with pragma should soften to ALLOWED-DOC
+    def test_pragma_does_not_soften_credential_assignment(self):
+        """Inverse of the pre-fix pinning test (PR #971 regression): the doc
+        pragma is self-asserted by the file, so it must NOT soften a
+        credential-shaped password. Exit must be 1 with a HIGH finding."""
         doc_file = self.tmpdir_path / "docs.py"
+        doc_value = "this_" + "is_a_" + "real_" + "shaped_12345"
         doc_file.write_text(
             "# secretscan: allow-pattern-docs\n"
-            'password = "this_is_documentation_value_12345"\n'
+            f'{"password"} = "{doc_value}"\n'
         )
 
         exit_code, stdout, stderr = self.run_scanner(str(doc_file))
 
-        self.assertEqual(exit_code, 0, "Doc file with pragma should exit 0")
-        self.assertIn("ALLOWED-DOC", stdout, "Should report ALLOWED-DOC")
+        self.assertEqual(exit_code, 1, stdout + stderr)
+        self.assertIn("HIGH", stdout, stdout)
 
     def test_pragma_does_not_soften_fatal_rules(self):
         """Regression: pragma does NOT soften fatal rules like github tokens."""
         fatal_file = self.tmpdir_path / "keys.py"
         # Even with pragma, github token must block
-        token = "ghp_" + "c" * 32
+        gh_value = "ghp_" + "c" * 32
         fatal_file.write_text(
             "# secretscan: allow-pattern-docs\n"
-            f'token = "{token}"\n'
+            f'{"token"} = "{gh_value}"\n'
         )
 
         exit_code, stdout, stderr = self.run_scanner(str(fatal_file))

@@ -14,6 +14,7 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
 const CURRENT_DIR = process.cwd();
+const PACKAGE_DIR = path.resolve(__dirname, '..');
 
 // Resolve Python interpreter portably (prefer python3, fallback to python)
 function resolvePythonInterpreter() {
@@ -41,11 +42,13 @@ function loadConfig() {
 
 (async function main() {
   try {
-    // Verify dashboard script exists
-    const dashScript = path.join(CURRENT_DIR, 'ui', 'serve.py');
+    // The dashboard ships inside the aesop package (ui/serve.py beside tools/),
+    // not inside the user's repo: init does not scaffold ui/. Resolve it from
+    // the package, and point state at the user's repo (F-09).
+    const dashScript = path.join(PACKAGE_DIR, 'ui', 'serve.py');
     if (!fs.existsSync(dashScript)) {
       console.error(`Error: dashboard script not found at ${dashScript}`);
-      console.error('Are you running this from the aesop root directory?');
+      console.error('The aesop package install is incomplete; reinstall @matt82198/aesop.');
       process.exitCode = 1;
       return;
     }
@@ -73,6 +76,11 @@ function loadConfig() {
     // through to ui/serve.py, which owns the flag.
     const demoMode = process.argv.includes('--demo');
 
+    // State lives in the user's repo: AESOP_STATE_ROOT env > config state_root > <cwd>/state.
+    const repoConfig = loadConfig();
+    const stateRoot = process.env.AESOP_STATE_ROOT
+      || path.resolve(CURRENT_DIR, (repoConfig && repoConfig.state_root) || 'state');
+
     console.log(`Launching aesop dashboard on http://localhost:${port}${demoMode ? ' (DEMO DATA)' : ''}\n`);
 
     // Resolve Python interpreter
@@ -89,7 +97,7 @@ function loadConfig() {
     const proc = spawn(pythonExe, serveArgs, {
       cwd: CURRENT_DIR,
       stdio: 'inherit',
-      env: { ...process.env, PORT: port.toString() },
+      env: { ...process.env, PORT: port.toString(), AESOP_STATE_ROOT: stateRoot },
       shell: process.platform === 'win32'
     });
 

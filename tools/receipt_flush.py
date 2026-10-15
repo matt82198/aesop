@@ -32,9 +32,12 @@ def _default_gh_runner(args):
     return res.returncode, res.stdout or "", res.stderr or ""
 
 
-def spool_dir_path(repo_path):
-    """Resolve the spool directory path from a repo path."""
-    return Path(repo_path).resolve() / "state" / "receipts" / "spool"
+def spool_dir_path(repo_path, environ=None):
+    """Resolve the primary spool directory path from a repo path.
+
+    Uses the new worktree-durable location via rc.resolve_spool_dir().
+    """
+    return Path(rc.resolve_spool_dir(repo=repo_path, environ=environ))
 
 
 def sha_exists_on_github(sha, slug, gh_runner):
@@ -101,10 +104,18 @@ def main(argv=None, gh_runner=None, environ=None):
 
     args = parser.parse_args(argv)
     repo = Path(args.repo).resolve()
-    spool = spool_dir_path(repo)
 
-    if not spool.exists():
-        # No spool directory yet; nothing to flush
+    # Collect spool files from all search paths (primary + legacy fallback)
+    spool_search_paths = rc.get_spool_search_paths(repo=str(repo), environ=environ)
+    spool_files_dict = {}  # basename -> path, to deduplicate if same file in multiple locations
+    for spool_dir in spool_search_paths:
+        if spool_dir.exists():
+            for f in spool_dir.glob("*.json"):
+                if f.name not in spool_files_dict:
+                    spool_files_dict[f.name] = f
+
+    spool_files = sorted(spool_files_dict.values())
+    if not spool_files:
         return 0
 
     slug = emit.repo_slug(repo)
@@ -120,11 +131,6 @@ def main(argv=None, gh_runner=None, environ=None):
     dropped = 0
     kept = 0
     errors = []
-
-    # List all spool files and process them
-    spool_files = sorted(spool.glob("*.json"))
-    if not spool_files:
-        return 0
 
     for spool_file in spool_files:
         # Check age; drop if older than max_age_days

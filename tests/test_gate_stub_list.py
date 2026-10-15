@@ -41,6 +41,7 @@ KNOWN_FAIL_CLOSED_GATES = sorted([
     "claudemd_sync_gate",
     "gen_tool_index",
     "metrics_gate",
+    "pyflakes_gate",
     "verify_test_suite_count",
     "encoding_lint",
     "verify_test_coverage",

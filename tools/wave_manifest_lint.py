@@ -14,6 +14,7 @@ import argparse
 import fnmatch
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -275,48 +276,160 @@ def check_git_history_churn(items: List[Dict[str, Any]], repo_root: str) -> List
     return checks
 
 
-def _testcmd_binary_resolves(test_cmd: str, repo_root: str) -> Tuple[bool, str]:
-    """Resolve the leading binary of a testCmd. Returns (resolved, binary).
-    
-    Skips past leading shell negation (!) and environment assignments (FOO=value)
-    to find the actual binary.
-    """
-    tokens = test_cmd.split()
-    if not tokens:
-        return False, ""
+# Shell builtins run inside the shell itself, so they are never looked up on
+# PATH. A testCmd that starts with one (e.g. ``cd docs && sphinx-build ...``)
+# is judged by the first command after it, not by the builtin.
+SHELL_BUILTINS = frozenset({
+    "cd", "pushd", "popd", "export", "unset", "set", "shopt", "alias", "readonly",
+    "echo", "printf", "read", "true", "false", "test", "[", ":", "exit", "return",
+    "umask", "ulimit",
+})
 
-    # Skip leading shell negation and env assignments to find the real binary
-    idx = 0
-    while idx < len(tokens):
-        token = tokens[idx]
-        # Skip shell negation
-        if token == "!":
-            idx += 1
+# eval and source/. are NOT builtins to skip: they hide a real command.
+# eval's argument is a nested command and is linted as one. source/. names a
+# file whose commands run in this shell, so the file must exist and its first
+# command line is linted. Anything that cannot be resolved fails closed.
+_NESTED_COMMAND_WORDS = frozenset({"eval"})
+_SOURCE_WORDS = frozenset({"source", "."})
+_MAX_NESTING = 8
+
+
+def _split_chain(test_cmd: str) -> List[str]:
+    """Split a shell chain on && || ; | that sit OUTSIDE single or double quotes."""
+    segments: List[str] = []
+    buf: List[str] = []
+    quote = ""
+    i = 0
+    while i < len(test_cmd):
+        ch = test_cmd[i]
+        if quote:
+            buf.append(ch)
+            if ch == quote:
+                quote = ""
+            i += 1
             continue
-        # Skip environment assignments (FOO=value pattern)
-        if "=" in token and not os.path.isabs(token) and not token.startswith("-"):
-            # Check if it matches VAR=value pattern (valid env var name before =)
-            var_part = token.split("=", 1)[0]
-            # Valid env var: starts with letter/underscore, contains only alphanumeric/underscore
-            if var_part and var_part.replace("_", "").isalnum() and (var_part[0].isalpha() or var_part[0] == "_"):
-                idx += 1
-                continue
-        # Found the binary
-        break
+        if ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+            i += 1
+            continue
+        if test_cmd[i:i + 2] in ("&&", "||"):
+            segments.append("".join(buf))
+            buf = []
+            i += 2
+            continue
+        if ch in ";|":
+            segments.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    segments.append("".join(buf))
+    return segments
 
-    if idx >= len(tokens):
-        return False, ""
 
-    binary = tokens[idx]
+def _is_assignment(token: str) -> bool:
+    """True for an environment assignment prefix such as FOO=value."""
+    if "=" not in token or os.path.isabs(token) or token.startswith("-"):
+        return False
+    var_part = token.split("=", 1)[0]
+    return bool(var_part) and var_part.replace("_", "").isalnum() and (
+        var_part[0].isalpha() or var_part[0] == "_")
 
-    # Repo-relative script?
+
+def _split_command(segment: str) -> Tuple[Optional[str], str]:
+    """Return (command word, raw remainder) after skipping ! and VAR=value prefixes."""
+    rest = segment.strip()
+    while rest:
+        match = re.match(r"(\S+)\s*(.*)", rest, re.DOTALL)
+        word, after = match.group(1), match.group(2)
+        if word == "!" or _is_assignment(word):
+            rest = after
+            continue
+        return word, after
+    return None, ""
+
+
+def _unquote(text: str) -> Tuple[str, bool]:
+    """Strip one matching pair of surrounding quotes. Returns (text, was_quoted)."""
+    text = text.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+        return text[1:-1], True
+    return text, False
+
+
+def _binary_on_path_or_repo(binary: str, repo_root: str) -> bool:
+    """True if the binary is a repo-relative script, an existing absolute path, or on PATH."""
     if not os.path.isabs(binary):
         if (Path(repo_root) / binary).exists():
-            return True, binary
+            return True
     elif Path(binary).exists():
-        return True, binary
+        return True
+    return bool(shutil.which(binary))
 
-    return bool(shutil.which(binary)), binary
+
+def _sourced_file_resolves(word: str, rest: str, repo_root: str, depth: int) -> Tuple[bool, str]:
+    """Resolve source/. : the file must exist and its first command line must resolve."""
+    target, quoted = _unquote(rest)
+    if not quoted:
+        words = target.split()
+        target = words[0] if words else ""
+    if not target or any(c in target for c in "$`*?"):
+        return False, f"unresolvable command: {word} {rest.strip() or '<no file>'}"
+    path = Path(target) if os.path.isabs(target) else Path(repo_root) / target
+    if not path.is_file():
+        return False, f"unresolvable command: {word} {target} (file not found)"
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False, f"unresolvable command: {word} {target} (unreadable)"
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        return _testcmd_binary_resolves(stripped, repo_root, depth + 1)
+    return False, f"unresolvable command: {word} {target} (no command line)"
+
+
+def _testcmd_binary_resolves(test_cmd: str, repo_root: str, depth: int = 0) -> Tuple[bool, str]:
+    """Resolve the first real command of a testCmd. Returns (resolved, binary).
+
+    Skips leading shell negation (!) and environment assignments (FOO=value).
+    Shell builtins (SHELL_BUILTINS) are skipped across &&, ||, ; and | chains
+    (quote-aware), so the first non-builtin command is the one checked. A chain
+    made only of builtins resolves. eval's argument is resolved as a nested
+    testCmd; source/. require the sourced file to exist and lint its first
+    command line. Unresolvable input fails closed with "unresolvable command".
+    """
+    if depth > _MAX_NESTING:
+        return False, "unresolvable command: nesting too deep"
+    first_builtin = ""
+    for segment in _split_chain(test_cmd):
+        word, rest = _split_command(segment)
+        if word is None:
+            continue
+        if word in _NESTED_COMMAND_WORDS:
+            inner, _ = _unquote(rest)
+            if inner:
+                ok, binary = _testcmd_binary_resolves(inner, repo_root, depth + 1)
+                if not ok:
+                    return False, binary
+            first_builtin = first_builtin or word
+            continue
+        if word in _SOURCE_WORDS:
+            ok, label = _sourced_file_resolves(word, rest, repo_root, depth)
+            if not ok:
+                return False, label
+            first_builtin = first_builtin or word
+            continue
+        if word in SHELL_BUILTINS:
+            first_builtin = first_builtin or word
+            continue
+        return _binary_on_path_or_repo(word, repo_root), word
+    if first_builtin:
+        return True, first_builtin
+    return False, ""
 
 
 def check_testcmd_validity(manifest: Dict[str, Any], repo_root: str) -> List[Check]:

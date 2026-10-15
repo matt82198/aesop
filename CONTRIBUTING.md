@@ -1,17 +1,17 @@
-# Contributing to Aesop
+# Contributing to Aesop Kernel
 
-Thank you for your interest in Aesop! Your feedback, questions, and bug reports genuinely help make the orchestration harness more reliable and observable.
+Thank you for your interest in Aesop Kernel! Your feedback, questions, and bug reports genuinely help make the orchestration kernel more reliable and observable.
 
 ## A note on the license
 
-Aesop is licensed under the [PolyForm Noncommercial License 1.0.0](./LICENSE) as of this version (versions ≤0.7.0 remain MIT). This means contributions via pull requests are warmly welcome.
+Aesop Kernel is licensed under the [PolyForm Noncommercial License 1.0.0](./LICENSE) as of this version (versions ≤0.7.0 remain MIT). This means contributions via pull requests are warmly welcome.
 
 What that means in practice:
 
 - **Issues, bug reports, and discussion are warmly welcome** — they're the best way to contribute and shape the project.
 - **Code patches via pull request are welcome** — open a PR with your changes, and the maintainer will review it.
 
-The rest of this guide documents how to run and test Aesop locally (useful for anyone using it) and how the maintainer's own development loop works.
+The rest of this guide documents how to run and test Aesop Kernel locally (useful for anyone using it) and how the maintainer's own development loop works.
 
 ## Getting Started
 

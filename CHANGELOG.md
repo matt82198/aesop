@@ -11,6 +11,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (None yet.)
 
+## [0.9.2] - 2026-10-14
+
+Patch release: a fail-closed hardening sweep from the round-1 audit. Fixes span the
+state layer, secret scanning, merge automation (MERGED-state verification), CI aggregation,
+PR sweep, and the hooks/pre-commit path, plus one new PR-sweep behaviour. 30 PRs merged
+since v0.9.1 (2026-10-09).
+
+### Added
+- **PR sweep CI retrigger** (#954): armed PRs with zero check runs are retriggered; disarmed after 24h.
+
+### Fixed
+- **Security**: `secret_scan` closes F-01 (generic-credential) and F-02 (NUL / UTF-16 / size blind spots) (#971).
+- **Merge automation**: `auto_merge` scoped verdict verifies MERGED state per PR (F-03) (#962).
+- **PR sweep**: conflicted PRs get `needs-rebase`, never a CI dispatch (#964).
+- **State**: one DB path resolver, `state_rebuild` round-trip, MCP reads the instance DB (F-02, F-06) (#953).
+- **Driver**: `wave_loop` bounded test/diff exec and `multi_dispatch` claim keyspace (F-03, F-04) (#952).
+- **CI**: windows aggregator anchors the docs-only regex and fails closed (F-01, F-02) (#958); accepts a deliberate docs-only skip, unblocking main (#944).
+- **Incident classification**: fail-closed via commit trailer (#960); deterministic ordering for multi-line commit bodies (#946).
+- **Init**: adopter traps F-09 (dash in a fresh repo) and F-10 (`state/` not git-ignored) (#963).
+- **Hooks**: pre-commit dispatch-lint keys on exit code and is installed (#968).
+- **Tools**: `state_md_verifier` claim precision, ref-shaped branch claims, origin tags, hermetic tag test (#943); ASCII-safe output and STATE/BUILDLOG drift guardrail, fail closed (#941).
+- **Lint and gates**: wave preset `testCmd` lint skips shell builtins (F-11) (#950); G13 nested and re-indented defs survive `pr_symbol_survival_check` (advisory) (#947).
+- **Bench**: unit tests can never reach the paid live API (#949).
+- **Tests**: serve, tracker, and instance tests isolated from the live state root env (#966).
+
+### Chore
+- **Receipts**: box signing key and verifier keyring, CRLF-invariant `key_id` (#965); push-time receipt emission verified on the Mattt box (#972).
+- **Docs**: Aesop Kernel rebrand, lineage and proper-noun corrections, recency pass (#937, #938, #939); README hooks fail-closed status notice (#940); typo fix (#942); checkpoints (#945, #961).
+- **Deps**: minor-and-patch group bump in `/ui/web` (#936).
+- **Stats**: scheduled stats refresh (#934).
+
+## [0.9.1] - 2026-10-09
+
+Hotfix release centered on hooks. Ships two new adopter-facing Claude Code hooks, plus 40
+PRs merged since v0.9.0 (2026-10-06): receipt spool/flush durability, pre-push gate
+hardening, and Windows/CRLF correctness fixes.
+
+### Added
+- **`hooks/claude/no-heredoc-file-authoring.mjs`**: PreToolUse hook (matcher `Bash`) that
+  denies authoring file content through any shell heredoc form, including the
+  interpreter-piped forms (`python - <<PY`, `node <<JS`, `sh <<SH`) that kept failing
+  silently on quoting. Escape hatch `[[ALLOW-HEREDOC-WRITE]]`, logged, never silent.
+- **`hooks/claude/no-scrollback-as-record.mjs`**: PreToolUse hook (matcher
+  `Bash|Read|Grep|Glob`) that denies reading session transcripts
+  (`~/.claude/projects/**/*.jsonl`) as if they were the system of record — the durable
+  record is STATE.md/BUILDLOG.md/MEMORY.md/git/artifacts; the `memory/` subtree stays
+  readable. Escape hatch `[[ALLOW-TRANSCRIPT-READ]]`, logged, never silent.
+- **Receipts**: `receipt_agreement.py` measures local-receipt vs. hosted-CI agreement
+  (#911); `verify_receipt` registered in `gate_inventory` (#910); receipt schema
+  versioning (#909); receipts now spool at pre-push and flush once the commit sha exists
+  on GitHub, via the pre-push hook and `pr_sweep.py` (#923).
+- **Gates**: `pr_footprint_gate` fails oversized or fixture-polluted PRs (#922); a pyflakes
+  unused-import/variable ratchet (G15) runs before push, fail-open when the tool is absent
+  (#890, #929).
+
+### Fixed
+- **Receipts**: signing-key path resolution falls back to the default key path before
+  warning instead of failing silently (#913, #916); matrix isolation via a detached
+  worktree with scrubbed `GIT_*` env vars so matrix parts can't commit into a lane's repo
+  (#924); the spool now lives outside the worktree so it survives lane cleanup (#931);
+  spool paths are compared by identity so Windows 8.3 short paths match their long-form
+  counterparts (#933).
+- **Windows / CRLF correctness**: `--check` modes are read-only and EOL-normalized,
+  closing a false-stale report under Windows CRLF line endings (#925);
+  `generated_push_gate` compares generated artifacts through git EOL normalization
+  instead of tripping on autocrlf (#918), restored after a regression (#928); dry pre-push
+  range checks run in a detached throwaway worktree and never move the caller's HEAD
+  (#892), and verify generated paths the same way the real hook does (#887);
+  `wave_manifest_lint` resolves the `testCmd` binary past shell negation and env
+  assignments (#893); commit-lint hook-path isolation fixed (#919); test fixtures (gantt,
+  the rs3 wave-loop, packaging-portability) no longer leak or depend on ambient git
+  identity or timing budgets (#894, #897, #901, #904).
+- **Guards**: `generated_push_gate` compares generator output to the pushed tree, not just
+  the touched paths (#896); `tools/INDEX.md`'s push gate regenerates rather than unions
+  (#882); `merge_queue` refuses to mint `integrate/batch-*` branches outside the dedicated
+  queue checkout (#899); `backup-fleet.sh` no longer derives `CONDUCTOR_ROOT` for a
+  non-canonical `AESOP_ROOT` (#898).
+
 ## [0.9.0] - 2026-10-06
 
 103 pull requests merged since v0.8.0 (2026-09-11). The release theme is event-driven

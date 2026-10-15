@@ -21,6 +21,8 @@ truth, proven correct against a zero-cost mock runner. Producing an actual verdi
 tokens against real models and should be reported as its own dated result, not
 folded into this scaffold.
 
+Offline seam: `AESOP_BENCH_OFFLINE=1` makes `frontier_slice.py --mode live` return before any API client is constructed, even with `--confirm-spend`. Unit tests set it so they can never spend.
+
 ## Fixture intent manifest
 
 Deliberately-broken fixtures used for AI bug-detection benchmarks and mutation-testing validation are tracked in `fixtures-intent.json`. Each entry documents:

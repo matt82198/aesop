@@ -24,8 +24,7 @@
   at all phase boundaries (PHASE 3/5/5.75/6/7) mirror cost-ceiling pattern, abort cleanly
   when _check_halt() detects sentinel. Supports optional orchestrator_backend for
   live-seat swap (see driver/orchestrator-swap/). RS3-W + RS5 claim lifecycle: fail-CLOSED
-  gate, fingerprint-bound journal, deterministic claim state. Tests: test_wave_loop_rs3,
-  test_wave_loop_halt_enforcement.
+  gate, fingerprint-bound journal, deterministic claim state. Pre-test and owned-files diff run through proc_util.run_shell_bounded (never shell=True timeout=); item file claims use the multi_dispatch keyspace (LeaseStore when multibox.enabled, instances stream when off); the advisory check is fail-closed (unreadable claims store raises ClaimStateUnknown, item skipped). Tests: test_wave_loop_rs3, test_wave_loop_halt_enforcement, test_wave_loop_pretest_bounded, test_claim_keyspace_contract.
 - **wave_bridge.py** — Phase 3: bridges AgentDriver backends to wave manifest items
   (build_manifest_item / dispatch_item; green ONLY from test exit code, see below).
 - **anthropic_driver.py** — Anthropic Messages API driver for bench seam (direct HTTP, no SDK).
@@ -38,7 +37,7 @@
   evidence-capping logic (2026-10-06 incident: `tools/shadow_adjudication.py` did, resolving
   the placeholder name as a literal relative path against the process cwd — harmless only by
   coincidence when cwd == repo_root, `ContextPackViolation` otherwise).
-- **wave_scheduler.py** — Wave-manifest scheduler: builds worker driver from config, dispatches wave items.
+- **wave_scheduler.py** — Wave-manifest scheduler: builds worker driver from config, dispatches wave items. Tracker status marks are journaled via `WriteAPI.tracker_update_item` (F-01); never write tracker.json directly, and `tools/stateapi_lint.py` (scans driver/) fails closed on any raw tracker.json write here.
 - **decisions/** — Decision type schema registry (sibling lane owns schemas; absent = optional).
   Test corpora (corpus-*.jsonl) use profile-agnostic paths in evidence/examples (~/aesop, testuser, not hardcoded machine-specific paths) to support multi-profile shared checkouts.
 - **../tests/** — test_agent_driver (contract), test_codex_driver_e2e (offline + gated

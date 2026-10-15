@@ -49,6 +49,15 @@ if [ -f "$waveguard_hook" ]; then
   fi
 fi
 
+dispatch_hook="$repo_root/hooks/pre-commit-dispatch-lint.sh"
+if [ -f "$dispatch_hook" ]; then
+  bash "$dispatch_hook"
+  dispatch_exit=$?
+  if [ $dispatch_exit -ne 0 ]; then
+    exit $dispatch_exit
+  fi
+fi
+
 backup_hook="$repo_root/.git/hooks/pre-commit.waveguard-backup"
 if [ -f "$backup_hook" ] && [ -x "$backup_hook" ]; then
   bash "$backup_hook"

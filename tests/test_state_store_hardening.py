@@ -174,6 +174,19 @@ class TestIngestValidation(unittest.TestCase):
         self.assertEqual(rows[0]["payload"], items[0])
         self.assertEqual(rows[1]["payload"], items[1])
 
+    def test_ingest_accepts_legacy_bare_list_tracker(self):
+        """A pre-migration tracker.json is a bare JSON list of items (the shape the
+        wave scheduler loader accepts); ingest must backfill it, not reject it."""
+        tracker_path = Path(self.tmpdir.name) / "tracker.json"
+        items = [{"id": "1", "title": "Task 1"}, {"id": "2", "title": "Task 2"}]
+        tracker_path.write_text(json.dumps(items))
+
+        count = ingest_tracker_json(self.api, str(tracker_path))
+        self.assertEqual(count, 2)
+
+        rows = self.store.read("tracker")
+        self.assertEqual([r["payload"] for r in rows], items)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -227,6 +227,55 @@ class TestPrSymbolSurvivalCheck(unittest.TestCase):
         self.assertEqual(report['symbols_checked'], 1)
         self.assertIn('alpha', report['ok'])
 
+    def test_reindented_and_nested_helpers_survive(self):
+        """Regression for the 2026-10-14 G13 false positive (PR ba4f55c23c).
+
+        Commit 1 adds three top-level helpers at column 0. Commit 2 re-indents
+        them -- two into a test method (8 spaces) and one into a nested block
+        (12 spaces) -- without changing their names or bodies. The symbols still
+        exist in the head tree, so the check must PASS with nothing MISSING.
+        Before the fix, extract_symbols only looked at indent 0 and 4, so these
+        names were reported MISSING although they survived.
+        """
+        repo = _init_repo(self._tmp_dir)
+
+        _write(repo, 'mod.py', 'def existing():\n    pass\n')
+        base_sha = _commit(repo, 'base: existing()')
+
+        _write(
+            repo, 'mod.py',
+            'def existing():\n    pass\n\n\n'
+            'def fetch_fake_check_runs():\n    return 1\n\n\n'
+            'def fetch_fake_receipt():\n    return 2\n\n\n'
+            'def wrap_me():\n    return 3\n',
+        )
+        _commit(repo, 'feat: add three helpers at column 0')
+
+        _write(
+            repo, 'mod.py',
+            'def existing():\n    pass\n\n\n'
+            'class Tests:\n'
+            '    def test_a(self):\n'
+            '        def fetch_fake_check_runs():\n'
+            '            return 1\n'
+            '\n'
+            '        if True:\n'
+            '            def fetch_fake_receipt():\n'
+            '                return 2\n'
+            '\n'
+            '        def wrap_me():\n'
+            '            return 3\n'
+            '        return fetch_fake_check_runs, fetch_fake_receipt, wrap_me\n',
+        )
+        head_sha = _commit(repo, 'refactor: re-indent helpers into test method and nested block')
+
+        rc, stdout, stderr = _run_tool(repo, '--base', base_sha, '--head', head_sha, '--json')
+        self.assertEqual(rc, 0, 'stdout={}\nstderr={}'.format(stdout, stderr))
+        report = json.loads(stdout)
+        self.assertEqual(report['missing'], [])
+        for name in ('fetch_fake_check_runs', 'fetch_fake_receipt', 'wrap_me'):
+            self.assertIn(name, report['ok'])
+
 
 if __name__ == '__main__':
     unittest.main()

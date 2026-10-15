@@ -589,9 +589,12 @@ class TestIntegrationMode(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
 
     def test_create_integration_branch_calls_git(self):
-        with patch.object(self.module, 'git') as mock_git:
+        # The worktree guard is covered by tests/test_worktree_ownership_guard.py; here we
+        # pin only the git call shape, so the guard is stubbed as authorised.
+        with patch.object(self.module, '_integration_cwd_authorised', return_value=(True, "")), \
+             patch.object(self.module, 'git') as mock_git:
             mock_git.return_value = (True, "")
-            ok = self.module.create_integration_branch("batch-wave")
+            ok = self.module.create_integration_branch("batch-wave", cwd="/sandbox/rw", owner="o")
             self.assertTrue(ok)
             calls = [c[0] for c in mock_git.call_args_list]
             fetch_call = [c for c in calls if "fetch" in c]
@@ -600,9 +603,10 @@ class TestIntegrationMode(unittest.TestCase):
             self.assertTrue(len(checkout_call) > 0, "Should checkout the integration branch")
 
     def test_create_integration_branch_name_format(self):
-        with patch.object(self.module, 'git') as mock_git:
+        with patch.object(self.module, '_integration_cwd_authorised', return_value=(True, "")), \
+             patch.object(self.module, 'git') as mock_git:
             mock_git.return_value = (True, "")
-            self.module.create_integration_branch("my-batch")
+            self.module.create_integration_branch("my-batch", cwd="/sandbox/rw", owner="o")
             checkout_calls = [c for c in mock_git.call_args_list
                               if "checkout" in c[0]]
             found = any("integrate/my-batch" in " ".join(c[0]) for c in checkout_calls)
@@ -735,7 +739,7 @@ class TestIntegrationMode(unittest.TestCase):
             result = m.run_integration_train([10, 11, 12], "batch-wave")
             self.assertTrue(result)
 
-            mock_create.assert_called_once_with("batch-wave")
+            mock_create.assert_called_once_with("batch-wave", cwd=None, owner=None)
             self.assertEqual(mock_merge_pr.call_count, 3)
             mock_push.assert_called_once()
             mock_create_pr.assert_called_once()

@@ -1,12 +1,12 @@
-# Aesop Documentation
+# Aesop Kernel Documentation
 
-Aesop is an autonomous developer system that crawls into any repository and orchestrates intelligent work. It ranks tasks, dispatches parallel Haiku agents, verifies merges, audits the work, and feeds the next iteration. **State is durable and single-instance by design** — git-tracked checkpoints plus an event-sourced SQLite log that survives crashes and machine wipes. Multi-instance team coordination is on the roadmap, not shipped; see [TEAM-STATE.md](TEAM-STATE.md) for the current model and the plan.
+Aesop Kernel is an autonomous developer system that crawls into any repository and orchestrates intelligent work. It ranks tasks, dispatches parallel Haiku agents, verifies merges, audits the work, and feeds the next iteration. **State is durable and single-instance by design** — git-tracked checkpoints plus an event-sourced SQLite log that survives crashes and machine wipes. Multi-instance team coordination is on the roadmap, not shipped; see [TEAM-STATE.md](TEAM-STATE.md) for the current model and the plan.
 
 ---
 
 ## Adopter Journey (Start Here)
 
-If you're new to Aesop, follow this 4-stage path:
+If you're new to Aesop Kernel, follow this 4-stage path:
 
 ### Stage 1: Install
 **[INSTALL.md](INSTALL.md)** — Prerequisites, `npx` scaffold, what gets created

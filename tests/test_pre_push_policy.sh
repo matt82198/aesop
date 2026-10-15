@@ -1831,6 +1831,90 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+printf '\n=== Test 29: check_pyflakes_ratchet blocks on baseline mismatch ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_pyflakes_mismatch"
+  mkdir -p "$AESOP_ROOT/tools"
+  mkdir -p "$AESOP_ROOT/state"
+
+  # Stub pyflakes_gate.py that returns 1 (baseline mismatch)
+  printf 'import sys\nsys.exit(1)\n' > "$AESOP_ROOT/tools/pyflakes_gate.py"
+
+  if check_pyflakes_ratchet >/dev/null 2>&1; then
+    printf 'FAIL: check_pyflakes_ratchet should block on baseline mismatch (exit 1)\n'
+    exit 1
+  fi
+  printf 'PASS: check_pyflakes_ratchet blocks on baseline mismatch\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test 30: check_pyflakes_ratchet fails open when pyflakes not installed ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_pyflakes_missing"
+  mkdir -p "$AESOP_ROOT/tools"
+  mkdir -p "$AESOP_ROOT/state"
+
+  # Stub pyflakes_gate.py that returns 2 (pyflakes not installed / error condition)
+  printf 'import sys\nsys.exit(2)\n' > "$AESOP_ROOT/tools/pyflakes_gate.py"
+
+  if ! check_pyflakes_ratchet >/dev/null 2>&1; then
+    printf 'FAIL: check_pyflakes_ratchet should fail-open when pyflakes is missing (return 0)\n'
+    exit 1
+  fi
+  printf 'PASS: check_pyflakes_ratchet fails open when pyflakes is missing\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test 31: check_pyflakes_ratchet skipped when tool missing from aesop repo ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_pyflakes_tool_missing"
+  mkdir -p "$AESOP_ROOT/tools"
+  mkdir -p "$AESOP_ROOT/state"
+
+  # Do NOT create pyflakes_gate.py; the tool should be considered missing
+
+  if ! check_pyflakes_ratchet >/dev/null 2>&1; then
+    printf 'FAIL: check_pyflakes_ratchet should fail-open (return 0) when tool missing\n'
+    exit 1
+  fi
+  printf 'PASS: check_pyflakes_ratchet fails open when tool is missing\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test 32: check_pyflakes_ratchet honors AESOP_PYFLAKES_SKIP=1 ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_pyflakes_skip"
+  export AESOP_PYFLAKES_SKIP=1
+  mkdir -p "$AESOP_ROOT/tools"
+  mkdir -p "$AESOP_ROOT/state"
+
+  # Stub pyflakes_gate.py that would return 1 (blocked), but should be skipped
+  printf 'import sys\nsys.exit(1)\n' > "$AESOP_ROOT/tools/pyflakes_gate.py"
+
+  if ! check_pyflakes_ratchet >/dev/null 2>&1; then
+    printf 'FAIL: check_pyflakes_ratchet should be skipped when AESOP_PYFLAKES_SKIP=1\n'
+    exit 1
+  fi
+  printf 'PASS: check_pyflakes_ratchet honors AESOP_PYFLAKES_SKIP=1 opt-out\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Test Summary ===\n'
 printf 'Tests PASSED: %d\n' "$test_passed"
 printf 'Tests FAILED: %d\n' "$test_failed"
