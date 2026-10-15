@@ -555,6 +555,21 @@ class TestHealthScoreHooksDirResolution(unittest.TestCase):
         import health_score
         return health_score._check_pre_push_hook(Path(cwd))
 
+    def _assert_carries_git_error(self, cwd, detail):
+        """Derive the expected git error from git itself, never a hard-coded wording.
+
+        Runs the same command the product runs (`git rev-parse --git-path hooks`) in the
+        broken fixture and requires the detail to carry its stderr (product truncates to 160).
+        """
+        probe = subprocess.run(["git", "rev-parse", "--git-path", "hooks"], cwd=str(cwd),
+                               capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=10)
+        self.assertNotEqual(probe.returncode, 0, "fixture must make git fail to answer")
+        git_error = probe.stderr.strip()
+        self.assertTrue(git_error, "git must write an error to stderr for the broken fixture")
+        self.assertTrue(detail.startswith("Cannot resolve git hooks dir: "), detail)
+        self.assertIn(git_error[:160], detail)
+
     def test_linked_worktree_with_hook_in_common_dir_passes(self):
         """Hook in the main repo's common hooks dir -> PASS from the linked worktree."""
         self._write_hook(self.main / ".git" / "hooks")
@@ -593,7 +608,7 @@ class TestHealthScoreHooksDirResolution(unittest.TestCase):
         bare_dir.mkdir()
         result = self._hooks_check(bare_dir)
         self.assertFalse(result["passed"], result["detail"])
-        self.assertIn("not a git repository", result["detail"])
+        self._assert_carries_git_error(bare_dir, result["detail"])
 
     def test_bogus_dot_git_dir_never_passes_blind(self):
         """A fake .git/hooks/pre-push in a non-repo must not pass: git cannot answer."""
@@ -601,7 +616,7 @@ class TestHealthScoreHooksDirResolution(unittest.TestCase):
         self._write_hook(fake / ".git" / "hooks")
         result = self._hooks_check(fake)
         self.assertFalse(result["passed"], result["detail"])
-        self.assertIn("not a git repository", result["detail"])
+        self._assert_carries_git_error(fake, result["detail"])
 
 
 if __name__ == "__main__":

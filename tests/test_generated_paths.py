@@ -750,5 +750,94 @@ class TestMergeCarriedGeneratedPath(unittest.TestCase):
         self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
 
 
+class TestRegeneratedIdenticalGeneratedPath(TestMergeCarriedGeneratedPath):
+    """A registered generated path whose pushed bytes ARE the registered
+    generator's output is not a hand edit, even when the push touches it.
+
+    The defect (PR #1018): a lane merged origin/main, the merge carried main's
+    tools/INDEX.md, and the lane then left the file at the generator's output
+    (working tree == HEAD == generator output). The bytes equal neither the
+    merge-base nor origin/main, so the carried-exemption did not apply and the
+    gate blocked a push whose content is exactly what tools/gen_tool_index.py
+    produces. The fix runs the registered generator on the pushed tree in a
+    throwaway checkout and allows the path when the pushed bytes match. A hand
+    edit, a missing or crashing generator, and an unverifiable path are still
+    blocked; AESOP_ALLOW_GENERATED=1 is unchanged.
+
+    Inherits the fixture (origin/main carries the real tools/ tree) and the
+    helpers from TestMergeCarriedGeneratedPath.
+    """
+
+    def generated_index(self):
+        """Bytes the registered generator writes for the fixture origin tree."""
+        proc = subprocess.run(  # subprocess-ok
+            [sys.executable, "tools/gen_tool_index.py", "--regenerate"],
+            cwd=str(self.origin), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=120)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        return (self.origin / self.INDEX).read_bytes()
+
+    def commit_bytes(self, repo, data):
+        (repo / self.INDEX).write_bytes(data)
+        self.git(repo, "add", "-A")
+        self.git(repo, "commit", "-q", "-m", "lane regenerates index")
+        return self.rev(repo, "HEAD")
+
+    def test_merged_then_regenerated_index_is_allowed(self):
+        """Red on the pre-fix gate: merge carried main, lane left generator output."""
+        generated = self.generated_index()
+        self.advance_main("index v2 from main\n")
+        self.merge_main()
+        head = self.commit_bytes(self.work, generated)
+        res = self.run_gate(head)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertNotIn("BLOCKED", res.stderr)
+
+    def test_regenerated_generator_output_on_branch_is_allowed(self):
+        generated = self.generated_index()
+        head = self.commit_bytes(self.work, generated)
+        res = self.run_gate(head)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+    def test_hand_edit_of_generator_output_is_blocked(self):
+        generated = self.generated_index()
+        self.advance_main("index v2 from main\n")
+        self.merge_main()
+        head = self.commit_bytes(self.work, generated + b"hand edit\n")
+        res = self.run_gate(head)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertIn(self.INDEX, res.stderr)
+
+    def test_generator_missing_in_pushed_tree_fails_closed(self):
+        generated = self.generated_index()
+        self.advance_main("index v2 from main\n")
+        self.merge_main()
+        self.git(self.work, "rm", "-q", "tools/gen_tool_index.py")
+        head = self.commit_bytes(self.work, generated)
+        res = self.run_gate(head)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertIn(self.INDEX, res.stderr)
+
+    def test_generator_crash_in_pushed_tree_fails_closed(self):
+        generated = self.generated_index()
+        self.advance_main("index v2 from main\n")
+        self.merge_main()
+        self._write(self.work, "tools/gen_tool_index.py",
+                    "import sys\nsys.exit(3)\n")
+        head = self.commit_bytes(self.work, generated)
+        res = self.run_gate(head)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertIn(self.INDEX, res.stderr)
+
+    def test_allow_generated_override_still_passes_an_unverifiable_generator(self):
+        generated = self.generated_index()
+        self.advance_main("index v2 from main\n")
+        self.merge_main()
+        self.git(self.work, "rm", "-q", "tools/gen_tool_index.py")
+        head = self.commit_bytes(self.work, generated)
+        res = self.run_gate(head, {generated_paths.ALLOW_ENV: "1"})
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
