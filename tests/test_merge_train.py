@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Unit tests for tools/merge_train.py serial merge train."""
+import contextlib
+import io
 import os
 import sys
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
@@ -591,25 +594,33 @@ class TestIntegrationMode(unittest.TestCase):
     def test_create_integration_branch_calls_git(self):
         # The worktree guard is covered by tests/test_worktree_ownership_guard.py; here we
         # pin only the git call shape, so the guard is stubbed as authorised.
+        scratch = tempfile.mkdtemp(prefix="mt-unit-")
+        self.addCleanup(shutil.rmtree, scratch, True)
         with patch.object(self.module, '_integration_cwd_authorised', return_value=(True, "")), \
+             patch.object(self.module.tempfile, 'mkdtemp', return_value=scratch), \
              patch.object(self.module, 'git') as mock_git:
             mock_git.return_value = (True, "")
-            ok = self.module.create_integration_branch("batch-wave", cwd="/sandbox/rw", owner="o")
-            self.assertTrue(ok)
+            wt = self.module.create_integration_branch("batch-wave", cwd="/sandbox/rw", owner="o")
+            self.assertTrue(wt)
             calls = [c[0] for c in mock_git.call_args_list]
             fetch_call = [c for c in calls if "fetch" in c]
             self.assertTrue(len(fetch_call) > 0, "Should fetch origin before branching")
-            checkout_call = [c for c in calls if "checkout" in c]
-            self.assertTrue(len(checkout_call) > 0, "Should checkout the integration branch")
+            worktree_call = [c for c in calls if "worktree" in c and "add" in c]
+            self.assertTrue(len(worktree_call) > 0, "Should add a dedicated worktree")
+            self.assertFalse([c for c in calls if "checkout" in c],
+                             "Must never checkout in cwd (no checkout -B)")
 
     def test_create_integration_branch_name_format(self):
+        scratch = tempfile.mkdtemp(prefix="mt-unit-")
+        self.addCleanup(shutil.rmtree, scratch, True)
         with patch.object(self.module, '_integration_cwd_authorised', return_value=(True, "")), \
+             patch.object(self.module.tempfile, 'mkdtemp', return_value=scratch), \
              patch.object(self.module, 'git') as mock_git:
             mock_git.return_value = (True, "")
             self.module.create_integration_branch("my-batch", cwd="/sandbox/rw", owner="o")
-            checkout_calls = [c for c in mock_git.call_args_list
-                              if "checkout" in c[0]]
-            found = any("integrate/my-batch" in " ".join(c[0]) for c in checkout_calls)
+            worktree_calls = [c for c in mock_git.call_args_list
+                              if "worktree" in c[0]]
+            found = any("integrate/my-batch" in " ".join(c[0]) for c in worktree_calls)
             self.assertTrue(found, "Branch name should be integrate/<batch-name>")
 
     def test_merge_pr_into_integration_success(self):
@@ -635,7 +646,7 @@ class TestIntegrationMode(unittest.TestCase):
                 "headRefName": "feat/conflict",
                 "title": "Conflicts",
             }
-            def git_side_effect(*args):
+            def git_side_effect(*args, **kwargs):
                 if "merge" in args and "--abort" not in args:
                     return (False, "CONFLICT (content): Merge conflict in file.py")
                 return (True, "")
@@ -651,7 +662,7 @@ class TestIntegrationMode(unittest.TestCase):
                 "headRefName": "feat/conflict",
                 "title": "Conflicts",
             }
-            def git_side_effect(*args):
+            def git_side_effect(*args, **kwargs):
                 if "merge" in args and "--abort" not in args:
                     return (False, "CONFLICT")
                 return (True, "")
@@ -664,10 +675,18 @@ class TestIntegrationMode(unittest.TestCase):
     def test_push_integration_branch(self):
         with patch.object(self.module, 'git') as mock_git:
             mock_git.return_value = (True, "")
-            ok = self.module.push_integration_branch("integrate/batch-wave")
+            ok = self.module.push_integration_branch("integrate/batch-wave", allow_origin=True)
             self.assertTrue(ok)
             push_calls = [c for c in mock_git.call_args_list if "push" in c[0]]
             self.assertTrue(len(push_calls) > 0)
+
+    def test_push_integration_branch_refused_without_origin_authority(self):
+        with patch.object(self.module, 'git') as mock_git:
+            mock_git.return_value = (True, "")
+            ok = self.module.push_integration_branch("integrate/batch-wave")
+            self.assertFalse(ok)
+            self.assertFalse([c for c in mock_git.call_args_list if "push" in c[0]],
+                             "No git push may run without --push-origin + AESOP_QUEUE_ROOT")
 
     def test_create_integration_pr(self):
         with patch.object(self.module, 'gh') as mock_gh:
@@ -676,7 +695,7 @@ class TestIntegrationMode(unittest.TestCase):
                 "https://github.com/org/repo/pull/99",
             ]
             url = self.module.create_integration_pr(
-                "integrate/batch-wave", [10, 11, 12])
+                "integrate/batch-wave", [10, 11, 12], allow_origin=True)
             self.assertIn("pull", url)
             create_calls = [c for c in mock_gh.call_args_list
                             if "pr" in c[0] and "create" in c[0]]
@@ -686,8 +705,14 @@ class TestIntegrationMode(unittest.TestCase):
         with patch.object(self.module, 'gh') as mock_gh:
             mock_gh.return_value = [{"number": 99, "url": "https://github.com/org/repo/pull/99"}]
             url = self.module.create_integration_pr(
-                "integrate/batch-wave", [10, 11])
+                "integrate/batch-wave", [10, 11], allow_origin=True)
             self.assertIn("99", url)
+
+    def test_create_integration_pr_refused_without_origin_authority(self):
+        with patch.object(self.module, 'gh') as mock_gh:
+            url = self.module.create_integration_pr("integrate/batch-wave", [10])
+            self.assertEqual(url, "")
+            mock_gh.assert_not_called()
 
     def test_close_superseded_prs(self):
         with patch.object(self.module, 'gh') as mock_gh, \
@@ -703,16 +728,24 @@ class TestIntegrationMode(unittest.TestCase):
                            if "pr" in c[0] and "close" in c[0]]
             self.assertEqual(len(close_calls), 3)
 
-    def test_cleanup_integration_branch(self):
-        with patch.object(self.module, 'git') as mock_git:
+    def test_cleanup_local_integration_removes_worktree_and_local_branch_only(self):
+        with patch.object(self.module, 'git') as mock_git, \
+             patch.object(self.module.shutil, 'rmtree'):
             mock_git.return_value = (True, "")
-            self.module.cleanup_integration_branch("integrate/batch-wave")
-            delete_calls = [c for c in mock_git.call_args_list
-                            if "branch" in c[0] and "-D" in c[0]]
-            self.assertTrue(len(delete_calls) > 0)
-            push_delete_calls = [c for c in mock_git.call_args_list
-                                 if "push" in c[0] and "--delete" in c[0]]
-            self.assertTrue(len(push_delete_calls) > 0)
+            self.module.cleanup_local_integration("/base", "/scratch/tree", "integrate/batch-wave")
+            calls = [c[0] for c in mock_git.call_args_list]
+            self.assertIn(("worktree", "remove", "--force", "/scratch/tree"), calls)
+            self.assertIn(("branch", "-D", "integrate/batch-wave"), calls)
+            self.assertFalse([c for c in calls if "push" in c],
+                             "local cleanup must never touch origin")
+            self.assertFalse([c for c in calls if "checkout" in c],
+                             "local cleanup must never check out anything")
+
+    def test_discard_remote_branch_refused_without_origin_authority(self):
+        with patch.object(self.module, 'git') as mock_git:
+            ok = self.module.discard_remote_branch("integrate/batch-wave", "a" * 40, "test")
+            self.assertFalse(ok)
+            mock_git.assert_not_called()
 
     def test_run_integration_train_happy_path(self):
         m = self.module
@@ -725,7 +758,10 @@ class TestIntegrationMode(unittest.TestCase):
              patch.object(m, 'merge_integration_pr') as mock_merge_int, \
              patch.object(m, 'run_regenerators') as mock_regen, \
              patch.object(m, 'close_superseded_prs') as mock_close, \
-             patch.object(m, 'cleanup_integration_branch') as mock_cleanup:
+             patch.object(m, 'cleanup_local_integration') as mock_cleanup, \
+             patch.object(m, 'origin_push_authorised', return_value=(True, "")), \
+             patch.object(m, 'git', return_value=(True, "abc123")), \
+             patch.object(m, 'discard_remote_branch'):
 
             mock_enforce.return_value = True
             mock_create.return_value = True
@@ -736,7 +772,7 @@ class TestIntegrationMode(unittest.TestCase):
             mock_merge_int.return_value = True
             mock_regen.return_value = True
 
-            result = m.run_integration_train([10, 11, 12], "batch-wave")
+            result = m.run_integration_train([10, 11, 12], "batch-wave", push_origin=True)
             self.assertTrue(result)
 
             mock_create.assert_called_once_with("batch-wave", cwd=None, owner=None)
@@ -759,7 +795,10 @@ class TestIntegrationMode(unittest.TestCase):
              patch.object(m, 'merge_integration_pr') as mock_merge_int, \
              patch.object(m, 'run_regenerators') as mock_regen, \
              patch.object(m, 'close_superseded_prs') as mock_close, \
-             patch.object(m, 'cleanup_integration_branch') as mock_cleanup:
+             patch.object(m, 'cleanup_local_integration') as mock_cleanup, \
+             patch.object(m, 'origin_push_authorised', return_value=(True, "")), \
+             patch.object(m, 'git', return_value=(True, "abc123")), \
+             patch.object(m, 'discard_remote_branch'):
 
             mock_enforce.return_value = True
             mock_create.return_value = True
@@ -770,7 +809,7 @@ class TestIntegrationMode(unittest.TestCase):
             mock_merge_int.return_value = True
             mock_regen.return_value = True
 
-            result = m.run_integration_train([10, 11, 12], "batch-wave")
+            result = m.run_integration_train([10, 11, 12], "batch-wave", push_origin=True)
             self.assertTrue(result)
             mock_close.assert_called_once_with([10, 12])
 
@@ -779,7 +818,10 @@ class TestIntegrationMode(unittest.TestCase):
         with patch.object(m, 'check_enforce_admins') as mock_enforce, \
              patch.object(m, 'create_integration_branch') as mock_create, \
              patch.object(m, 'merge_pr_into_integration') as mock_merge_pr, \
-             patch.object(m, 'cleanup_integration_branch') as mock_cleanup:
+             patch.object(m, 'cleanup_local_integration') as mock_cleanup, \
+             patch.object(m, 'origin_push_authorised', return_value=(True, "")), \
+             patch.object(m, 'git', return_value=(True, "abc123")), \
+             patch.object(m, 'discard_remote_branch'):
 
             mock_enforce.return_value = True
             mock_create.return_value = True
@@ -791,12 +833,16 @@ class TestIntegrationMode(unittest.TestCase):
 
     def test_run_integration_train_ci_fails_aborts(self):
         m = self.module
-        with patch.object(m, 'create_integration_branch') as mock_create, \
+        with patch.object(m, 'check_enforce_admins', return_value=True), \
+             patch.object(m, 'create_integration_branch') as mock_create, \
              patch.object(m, 'merge_pr_into_integration') as mock_merge_pr, \
              patch.object(m, 'push_integration_branch') as mock_push, \
              patch.object(m, 'create_integration_pr') as mock_create_pr, \
              patch.object(m, 'wait_for_integration_ci') as mock_wait, \
-             patch.object(m, 'cleanup_integration_branch') as mock_cleanup:
+             patch.object(m, 'cleanup_local_integration') as mock_cleanup, \
+             patch.object(m, 'origin_push_authorised', return_value=(True, "")), \
+             patch.object(m, 'git', return_value=(True, "abc123")), \
+             patch.object(m, 'discard_remote_branch') as mock_discard:
 
             mock_create.return_value = True
             mock_merge_pr.return_value = True
@@ -804,8 +850,9 @@ class TestIntegrationMode(unittest.TestCase):
             mock_create_pr.return_value = "https://github.com/org/repo/pull/99"
             mock_wait.return_value = False
 
-            result = m.run_integration_train([10, 11], "batch-wave")
+            result = m.run_integration_train([10, 11], "batch-wave", push_origin=True)
             self.assertFalse(result)
+            mock_discard.assert_called_once()
 
     def test_run_integration_train_branch_create_fails(self):
         m = self.module
@@ -1055,6 +1102,174 @@ class TestTransportDecodesUndecodableBytes(unittest.TestCase):
         self.assertEqual(seen.get("errors"), "replace")
         self.assertIsInstance(out, str)
         self.assertIn("�", out)
+
+
+class TestIntegrationOriginGuard(unittest.TestCase):
+    """Behavioural: real git against a throwaway bare origin. Never a real remote.
+
+    `queue` is a clone of the bare origin and is the AESOP_QUEUE_ROOT for these runs.
+    Scratch worktrees are created under this test's own temp root, so nothing outside the
+    sandbox is written. `gh` is patched, so no network call can happen.
+    """
+
+    GIT_ID = ["-c", "user.name=sandbox", "-c", "user.email=sandbox@example.invalid"]
+
+    def _git(self, cwd, *args):
+        result = subprocess.run(["git"] + self.GIT_ID + list(args), cwd=str(cwd),
+                                capture_output=True, encoding="utf-8",
+                                errors="replace", timeout=60)
+        return result.returncode, (result.stdout + result.stderr).strip()
+
+    def setUp(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "merge_train", Path(__file__).parent.parent / "tools" / "merge_train.py")
+        self.m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.m)
+        self.root = Path(tempfile.mkdtemp(prefix="mt-origin-guard-"))
+        self.addCleanup(shutil.rmtree, str(self.root), True)
+        self.origin = self.root / "origin.git"
+        seed = self.root / "seed"
+        self.queue = self.root / "queue"
+        seed.mkdir()
+        self._git(self.root, "init", "-q", "--bare", "-b", "main", str(self.origin))
+        self._git(seed, "init", "-q", "-b", "main")
+        (seed / "README").write_text("seed\n", encoding="utf-8")
+        self._git(seed, "add", "README")
+        self._git(seed, "commit", "-q", "-m", "seed")
+        self._git(seed, "checkout", "-q", "-b", "feat/one")
+        (seed / "feat.txt").write_text("feature\n", encoding="utf-8")
+        self._git(seed, "add", "feat.txt")
+        self._git(seed, "commit", "-q", "-m", "feat")
+        self.feat_sha = self._git(seed, "rev-parse", "HEAD")[1]
+        self._git(seed, "push", "-q", str(self.origin), "main", "feat/one")
+        self._git(self.root, "clone", "-q", str(self.origin), str(self.queue))
+        self.out = io.StringIO()
+
+        env = patch.dict(os.environ, {
+            "AESOP_QUEUE_ROOT": str(self.queue),
+            "GIT_AUTHOR_NAME": "sandbox", "GIT_AUTHOR_EMAIL": "sandbox@example.invalid",
+            "GIT_COMMITTER_NAME": "sandbox", "GIT_COMMITTER_EMAIL": "sandbox@example.invalid",
+        })
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("AESOP_WORKTREE_OWNER", None)
+
+        # Scratch worktrees land under this test's root, not the shared temp dir.
+        real_mkdtemp = tempfile.mkdtemp
+        scratch = patch.object(tempfile, "mkdtemp", side_effect=lambda prefix="tmp": real_mkdtemp(
+            prefix=prefix, dir=str(self.root)))
+        scratch.start()
+        self.addCleanup(scratch.stop)
+
+    def _origin_has(self, branch):
+        _, out = self._git(self.queue, "ls-remote", "--heads", str(self.origin), branch)
+        return f"refs/heads/{branch}" in out
+
+    def _gh_pr_view(self, *args, **kwargs):
+        return {"headRefOid": self.feat_sha, "headRefName": "feat/one", "title": "one"}
+
+    def _train(self, batch, pr_hook=None, ci=None, **kwargs):
+        """Run one integration train against the sandbox. Returns (result, PR-time origin checks)."""
+        m = self.m
+        seen = []
+
+        def create_pr(branch, included, allow_origin=False):
+            seen.append(self._origin_has(branch))
+            return pr_hook() if pr_hook else "https://github.com/org/repo/pull/7"
+
+        with patch.object(m, "check_enforce_admins", return_value=True), \
+             patch.object(m, "_check_halt", return_value=None), \
+             patch.object(m, "gh", side_effect=self._gh_pr_view), \
+             patch.object(m, "create_integration_pr", side_effect=create_pr), \
+             patch.object(m, "wait_for_integration_ci", side_effect=ci or (lambda *a, **k: True)), \
+             patch.object(m, "merge_integration_pr", return_value=True), \
+             patch.object(m, "close_superseded_prs"), \
+             contextlib.redirect_stdout(self.out):
+            result = m.run_integration_train([42], batch, cwd=str(self.queue), **kwargs)
+        return result, seen
+
+    def _head(self, cwd):
+        return self._git(cwd, "rev-parse", "--abbrev-ref", "HEAD")[1]
+
+    def test_default_invocation_pushes_nothing(self):
+        result, seen = self._train("dflt")
+        self.assertTrue(result)
+        self.assertIn("DRY: would push integrate/dflt", self.out.getvalue())
+        self.assertEqual(seen, [], "no PR may be opened without --push-origin")
+        self.assertFalse(self._origin_has("integrate/dflt"))
+
+    def test_flag_with_queue_root_pushes_then_cleans_origin_after_merge(self):
+        result, seen = self._train("flagok", push_origin=True)
+        self.assertTrue(result)
+        self.assertEqual(seen, [True], "branch must be on origin when the PR is opened")
+        self.assertFalse(self._origin_has("integrate/flagok"),
+                         "a merged batch's remote branch is deleted (sha-verified)")
+        self.assertEqual(self._head(self.queue), "main", "queue checkout must never switch")
+
+    def test_exception_after_push_deletes_our_remote_branch(self):
+        def boom(*a, **k):
+            raise RuntimeError("simulated crash after push")
+        with self.assertRaises(RuntimeError):
+            self._train("crash", push_origin=True, ci=boom)
+        self.assertFalse(self._origin_has("integrate/crash"))
+        self.assertIn("deleted origin/integrate/crash (run aborted by RuntimeError",
+                      self.out.getvalue())
+        rc, _ = self._git(self.queue, "rev-parse", "--verify", "--quiet",
+                          "refs/heads/integrate/crash")
+        self.assertNotEqual(rc, 0, "the local integration branch must be removed too")
+
+    def test_keyboard_interrupt_after_push_deletes_our_remote_branch(self):
+        def ctrl_c(*a, **k):
+            raise KeyboardInterrupt()
+        with self.assertRaises(KeyboardInterrupt):
+            self._train("intr", push_origin=True, ci=ctrl_c)
+        self.assertFalse(self._origin_has("integrate/intr"))
+        self.assertIn("run aborted by KeyboardInterrupt", self.out.getvalue())
+
+    def test_red_ci_after_push_deletes_our_remote_branch(self):
+        result, _ = self._train("redci", push_origin=True, ci=lambda *a, **k: False)
+        self.assertFalse(result)
+        self.assertFalse(self._origin_has("integrate/redci"))
+        self.assertIn("integration PR #7 CI did not pass", self.out.getvalue())
+
+    def test_discard_never_deletes_a_branch_this_run_did_not_push(self):
+        self._git(self.queue, "push", "-q", str(self.origin),
+                  f"{self.feat_sha}:refs/heads/integrate/foreign")
+        ok = self.m.discard_remote_branch("integrate/foreign", "0" * 40, "test",
+                                          allow_origin=True, cwd=str(self.queue))
+        self.assertFalse(ok)
+        self.assertTrue(self._origin_has("integrate/foreign"),
+                        "a sha mismatch means the branch is not ours: it must survive")
+
+    def test_origin_gate_needs_flag_and_a_valid_queue_root(self):
+        self.assertFalse(self.m.origin_push_authorised(False)[0])
+        self.assertTrue(self.m.origin_push_authorised(True)[0])
+        with patch.dict(os.environ, {"AESOP_QUEUE_ROOT": str(self.root / "not-there")}):
+            self.assertFalse(self.m.origin_push_authorised(True)[0])
+        plain = self.root / "plain-dir"
+        plain.mkdir()
+        with patch.dict(os.environ, {"AESOP_QUEUE_ROOT": str(plain)}):
+            self.assertFalse(self.m.origin_push_authorised(True)[0],
+                             "a directory that is not a repo toplevel is refused")
+        os.environ.pop("AESOP_QUEUE_ROOT", None)
+        self.assertFalse(self.m.origin_push_authorised(True)[0])
+
+    def test_integration_branch_is_created_in_a_worktree_not_the_base_checkout(self):
+        cwd_before = os.getcwd()
+        with contextlib.redirect_stdout(self.out):
+            wt = self.m.create_integration_branch("wtcheck", cwd=str(self.queue))
+        self.assertTrue(wt)
+        try:
+            self.assertEqual(self._head(self.queue), "main", "base checkout must not switch")
+            self.assertEqual(self._head(wt), "integrate/wtcheck")
+            self.assertEqual(os.getcwd(), cwd_before)
+        finally:
+            with contextlib.redirect_stdout(self.out):
+                self.m.cleanup_local_integration(str(self.queue), wt, "integrate/wtcheck")
+        rc, _ = self._git(self.queue, "rev-parse", "--verify", "--quiet",
+                          "refs/heads/integrate/wtcheck")
+        self.assertNotEqual(rc, 0)
 
 
 if __name__ == "__main__":
