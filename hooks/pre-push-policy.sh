@@ -840,6 +840,82 @@ check_conflict_markers() {
   return $overall_exit_code
 }
 
+check_symbol_survival() {
+  # PR symbol survival gate (Guardrail G13, tools/pr_symbol_survival_check.py).
+  # BLOCKING since the G13 promotion: a symbol the pushed branch added that a
+  # merge commit in range dropped (conflict-resolution loss, PR #745 class)
+  # fails the push. Exit 1 = symbols missing; exit 2 = tool/git error. Both
+  # block. Same range mechanism as check_conflict_markers (one remote..local
+  # range per ref tuple from get_commit_range()).
+  #
+  # Fail-open ONLY when there is no aesop tools/ checkout at all (the same
+  # rule as every other gate); a present-but-missing script fails closed.
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local symbol_script="$aesop_root/tools/pr_symbol_survival_check.py"
+
+  local tool_status
+  tool_status=$(gate_tool_status "$aesop_root" "$symbol_script")
+  if [ "$tool_status" = "skip" ]; then
+    log_event "symbol_survival_skipped_no_aesop_tools"
+    return 0
+  fi
+  if [ "$tool_status" = "missing" ]; then
+    gate_tool_missing_block "pr_symbol_survival_check.py" "$symbol_script"
+    log_event "symbol_survival_tool_missing"
+    return 1
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    gate_no_python_block "PR symbol survival check"
+    log_event "symbol_survival_no_python"
+    return 1
+  fi
+
+  local commit_ranges
+  commit_ranges=$(get_commit_range)
+  local parse_exit_code=$?
+
+  if [ $parse_exit_code -eq 2 ]; then
+    log_event "symbol_survival_skipped_delete_only_push"
+    return 0
+  fi
+
+  if [ $parse_exit_code -eq 3 ]; then
+    log_event "symbol_survival_skipped_empty_stdin"
+    return 0
+  fi
+
+  if [ $parse_exit_code -ne 0 ] || [ -z "$commit_ranges" ]; then
+    # Malformed stdin: fail-CLOSED.
+    log_block "symbol_survival_stdin_parse_failed"
+    printf 'Error: Could not parse pre-push stdin for commit range (symbol survival check)\n' >&2
+    return 1
+  fi
+
+  local overall_exit_code=0
+  local range
+  while IFS= read -r range || [ -n "$range" ]; do
+    [ -z "$range" ] && continue
+    local base_ref="${range%%..*}"
+    local head_ref="${range##*..}"
+
+    local check_output
+    check_output=$("$py_bin" "$symbol_script" --base "$base_ref" --head "$head_ref" 2>&1)
+    local check_exit_code=$?
+
+    if [ $check_exit_code -ne 0 ]; then
+      if [ -n "$check_output" ]; then
+        printf '%s\n' "$check_output" >&2
+      fi
+      overall_exit_code=$check_exit_code
+    fi
+  done <<< "$commit_ranges"
+
+  return $overall_exit_code
+}
+
 check_claudemd_sync() {
   # CLAUDE.md synchronization gate (tools/claudemd_sync_gate.py --check).
   # Ensures code changes are accompanied by domain CLAUDE.md updates.
@@ -2720,6 +2796,13 @@ main() {
   if ! check_conflict_markers <<< "$prepush_stdin"; then
     printf 'Error: Literal conflict marker found in pushed content. Push blocked.\n' >&2
     log_block "conflict_marker_check_failure"
+    exit 1
+  fi
+
+  # G13 symbol survival (BLOCKING). Same captured stdin, same range mechanism.
+  if ! check_symbol_survival <<< "$prepush_stdin"; then
+    printf 'Error: PR symbol survival check failed (a merge commit dropped a symbol this branch added). Push blocked.\n' >&2
+    log_block "symbol_survival_failure"
     exit 1
   fi
 
