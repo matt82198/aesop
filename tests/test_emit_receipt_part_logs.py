@@ -101,7 +101,7 @@ class TestFailingPartLog(unittest.TestCase):
             repo = _mk_repo(tmp)
             registry = {"stub-fail": _py_part("print('secret-tail-text'); raise SystemExit(1)")}
             parts, skipped = emit.run_matrix(repo, ["stub-fail"], registry=registry, jobs=1)
-            receipt = emit.build_receipt(repo, parts, skipped, slug="o/r")
+            receipt = emit.build_receipt(repo, parts, skipped, slug="o/r", main_ref="HEAD")
             self.assertNotIn("secret-tail-text", repr(receipt))
 
 

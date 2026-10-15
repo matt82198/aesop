@@ -128,16 +128,22 @@ def _write_part_log(log_path, res):
     log_path.write_text(body, encoding="utf-8")
 
 
+PART_LOG_DIR_REL = "state/receipts/parts"  # the emitter's own writes; never a matrix mutation
+
+
 def _capture_caller_state(repo):
     """Capture the caller repo's git state for tripwire verification.
-    Returns None if repo is not a git repository (e.g., test temp directory)."""
+    Returns None if repo is not a git repository (e.g., test temp directory).
+    The emitter's own part-log directory is excluded: writing it is the emitter's
+    job, and state/ is not guaranteed git-ignored in adopter repos."""
     repo = Path(repo)
     try:
         return {
             "head": _git(repo, "rev-parse", "HEAD"),
             "tree": _git(repo, "write-tree"),
-            "porcelain": subprocess.run(["git", "-C", str(repo), "status", "--porcelain"],
-                                        capture_output=True, encoding="utf-8", errors="replace").stdout,
+            "porcelain": subprocess.run(
+                ["git", "-C", str(repo), "status", "--porcelain", "--", ".", ":(exclude)" + PART_LOG_DIR_REL],
+                capture_output=True, encoding="utf-8", errors="replace").stdout,
         }
     except ReceiptError:
         return None  # Not a git repo; skip tripwire verification
