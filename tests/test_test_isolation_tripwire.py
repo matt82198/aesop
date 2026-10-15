@@ -13,11 +13,13 @@ Every test points --root at a throwaway temp directory standing in for "the
 real profile" (never the developer's actual ~/.claude or global git config),
 per tools/test_isolation_tripwire.py's own --root contract.
 """
+import json
 import os
 import shlex
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -601,6 +603,106 @@ class TestIsolationTripwireScheduledTasks(unittest.TestCase):
             )
             self.assertEqual(proc.returncode, 0, proc.stderr)
             self.assertNotIn("FAIL", proc.stderr)
+
+
+PLACEHOLDER_WRITE = (
+    "import os, pathlib; r = pathlib.Path(os.environ['CONDUCTOR_ROOT']); "
+    "(r / 'state' / '.watchdog-heartbeat').write_text('1234567890', encoding='utf-8')"
+)
+
+
+def make_conductor_fixture(tmp_path: Path) -> Path:
+    """Fake conductor root with both daemon heartbeats present and fresh, so the
+    tripwire has a real baseline to compare a placeholder write against."""
+    conductor = tmp_path / "conductor3"
+    (conductor / "state").mkdir(parents=True)
+    (conductor / "monitor").mkdir(parents=True)
+    now = str(int(time.time()))
+    (conductor / "state" / ".watchdog-heartbeat").write_text(now, encoding="utf-8")
+    (conductor / "monitor" / ".monitor-heartbeat").write_text(now, encoding="utf-8")
+    return conductor
+
+
+class TestPyWrapperArmsIsolationTripwire(unittest.TestCase):
+    """Proves the Python test entry points run under the isolation tripwire and
+    fail closed on a placeholder live heartbeat (incident 2026-10-14: a Python
+    test wrote 1234567890 into both live heartbeats and `npm run test:py`
+    stayed green)."""
+
+    def test_test_py_command_fails_closed_on_placeholder_heartbeat(self):
+        """Executes the exact argv that package.json's test:py runs, differing
+        only in the discover directory, which points at a throwaway module."""
+        repo_root = Path(__file__).resolve().parent.parent
+        with open(repo_root / "package.json", encoding="utf-8") as f:
+            test_py = json.load(f)["scripts"]["test:py"]
+        argv = shlex.split(test_py)
+        self.assertEqual(argv[0], "python")
+        argv[0] = sys.executable
+        argv[argv.index("discover") + 2] = "{DISCOVER_DIR}"  # the token after "-s"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            conductor = make_conductor_fixture(tmp_path)
+            discover_dir = tmp_path / "tests"
+            discover_dir.mkdir()
+            (discover_dir / "test_throwaway_placeholder.py").write_text(
+                "import os, pathlib, unittest\n"
+                "class T(unittest.TestCase):\n"
+                "    def test_write(self):\n"
+                "        r = pathlib.Path(os.environ['CONDUCTOR_ROOT'])\n"
+                "        (r / 'state' / '.watchdog-heartbeat').write_text('1234567890')\n"
+                "        (r / 'monitor' / '.monitor-heartbeat').write_text('1234567890')\n",
+                encoding="utf-8",
+            )
+            argv = [str(discover_dir) if tok == "{DISCOVER_DIR}" else tok for tok in argv]
+            env = dict(os.environ)
+            env["CONDUCTOR_ROOT"] = str(conductor)
+            env.pop("AESOP_CI_SHARD_TRIPWIRE_ARMED", None)
+            proc = subprocess.run(
+                argv, cwd=str(repo_root), capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=300, env=env,
+            )
+            self.assertEqual(proc.returncode, 1, proc.stderr)
+            self.assertIn("FAIL: the real profile changed", proc.stderr)
+            self.assertIn("watchdog_heartbeat", proc.stderr)
+
+    def test_shard_runner_arms_tripwire_and_passes_through_when_armed(self):
+        """ci_shard_runner's arming helper: unarmed -> wrapped and fails closed on
+        a placeholder write; already armed (child of the wrapper) -> runs the
+        target directly with no second wrap."""
+        tools_dir = Path(__file__).resolve().parent.parent / "tools"
+        driver = (
+            "import sys; sys.path.insert(0, sys.argv[1]); "
+            "import ci_shard_runner as r; "
+            "r._arm_isolation_tripwire([sys.executable, '-c', sys.argv[2]]); "
+            "print('PASSTHROUGH')"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            conductor = make_conductor_fixture(Path(tmp))
+            base_env = dict(os.environ)
+            base_env["CONDUCTOR_ROOT"] = str(conductor)
+
+            unarmed_env = dict(base_env)
+            unarmed_env.pop("AESOP_CI_SHARD_TRIPWIRE_ARMED", None)
+            armed = subprocess.run(
+                [sys.executable, "-c", driver, str(tools_dir), PLACEHOLDER_WRITE],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=120, env=unarmed_env,
+            )
+            self.assertEqual(armed.returncode, 1, armed.stderr)
+            self.assertIn("FAIL: the real profile changed", armed.stderr)
+            self.assertNotIn("PASSTHROUGH", armed.stdout)
+
+            armed_env = dict(base_env)
+            armed_env["AESOP_CI_SHARD_TRIPWIRE_ARMED"] = "1"
+            passthrough = subprocess.run(
+                [sys.executable, "-c", driver, str(tools_dir), PLACEHOLDER_WRITE],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=120, env=armed_env,
+            )
+            self.assertEqual(passthrough.returncode, 0, passthrough.stderr)
+            self.assertIn("PASSTHROUGH", passthrough.stdout)
+            self.assertNotIn("tripwire", passthrough.stderr)
 
 
 if __name__ == "__main__":

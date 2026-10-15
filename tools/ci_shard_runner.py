@@ -175,10 +175,35 @@ def _parse_args(argv):
     return shard_id, total_shards, timing_file, emit_timing
 
 
+_ISOLATION_ARMED_ENV = "AESOP_CI_SHARD_TRIPWIRE_ARMED"
+
+
+def _arm_isolation_tripwire(target_argv):
+    """Re-run target_argv under tools/test_isolation_tripwire.py (fail closed).
+
+    Without this, a Python test writing to the live ~/conductor3 heartbeats or
+    the real ~/.claude profile passed every CI shard silently (the tripwire only
+    wrapped the Node and shell suites). The child is marked armed via env so it
+    never re-wraps itself. Exit = max(shard exit, tripwire finding), per the
+    tripwire's own contract.
+    """
+    if os.environ.get(_ISOLATION_ARMED_ENV):
+        return
+    env = dict(os.environ)
+    env[_ISOLATION_ARMED_ENV] = "1"
+    tripwire = _TOOLS_DIR / "test_isolation_tripwire.py"
+    proc = subprocess.run(
+        [sys.executable, str(tripwire), "--", *target_argv],
+        env=env,
+    )
+    sys.exit(proc.returncode)
+
+
 def main():
     """Run Python tests for the assigned shard."""
     # sys.path already carries _REPO_ROOT/_TOOLS_DIR from module import time
     # (see the module-level guard above).
+    _arm_isolation_tripwire([sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]])
 
     # Defense-in-depth: tests/__init__.py already applies this on first import of
     # the `tests` package (the universal hook, reached by every path below), but
