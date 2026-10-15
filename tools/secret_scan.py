@@ -91,7 +91,7 @@ PATTERNS = {
         r"(?:[_\-]?KEY)?(?![A-Za-z0-9_\-])"
         r"\s*[:=]\s*"
         r"(?:(?P<q>[\"'])(?P<v>[^\"'\n]{8,})(?P=q)"
-        r"|(?P<u>[^\s'\"`$<{}()\[\].,;:]{8,})(?=\s|$|[;,]))",
+        r"|(?P<u>[^\s'\"`$<{}()\[\],;:]{8,})(?=\s|$|[;,]))",
         re.IGNORECASE,
     ),
     "connection_string": (
@@ -298,20 +298,29 @@ def _credential_value_is_placeholder(value):
     for word in ("example", "changeme", "placeholder", "dummy", "xxx", "your-"):
         if word in low:
             return True
+    # F-01 follow-up: "..." is a doc ellipsis (`OPENAI_API_KEY=sk-proj-...`), not a
+    # literal. Dots are now part of the unquoted value class, so this keeps the
+    # widened class from flagging elided doc examples.
+    if "..." in value:
+        return True
     if re.search(r"<[^>]*>|\$\{[^}]*\}|\$[A-Za-z_]", value):
         return True
     return is_placeholder(value)
 
 
 def _is_code_identifier(value, rest_of_line):
-    """True for a bare identifier (letters/underscore only, no digits) that reads
-    as a code or prose reference rather than a literal credential: snake_case or
-    camelCase (`api_key: resolved_key`, `valid_token=x,`), or a word followed by more
+    """True for a bare identifier or dotted attribute chain (every segment letters/
+    underscore only, no digits) that reads as a code or prose reference rather than a
+    literal credential: snake_case or camelCase (`api_key: resolved_key`,
+    `valid_token=x,`, `token = self.serve.SESSION_TOKEN`), or a word followed by more
     text on the same line (`api_key: word pre-resolved ...`). A value that ends its
-    line (`DB_PASSWORD=supersecret`) stays flagged, as does any value with a digit."""
-    if not re.fullmatch(r"[A-Za-z_]+", value):
+    line (`DB_PASSWORD=supersecret`, `DB_PASSWORD=hunter.prod`) stays flagged, as does
+    any value with a digit. Dots are accepted in the unquoted value class (F-01
+    follow-up) so this guard is what keeps attribute chains from flagging."""
+    segments = value.split(".")
+    if not all(re.fullmatch(r"[A-Za-z_]+", seg) for seg in segments):
         return False
-    if "_" in value or re.search(r"[a-z][A-Z]", value) is not None:
+    if any("_" in seg or re.search(r"[a-z][A-Z]", seg) is not None for seg in segments):
         return True
     return rest_of_line[:1] in (" ", "\t") and rest_of_line.strip() != ""
 

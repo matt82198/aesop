@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -355,6 +356,18 @@ def mock_runner(prompt: str) -> str:
 # Gracefully unavailable if `claude` is not on PATH.
 # ---------------------------------------------------------------------------
 
+# Offline seam shared with bench/frontier_slice.py and tools/bench_api_runner.py.
+OFFLINE_ENV = "AESOP_BENCH_OFFLINE"
+OFFLINE_REFUSAL = (
+    f"{OFFLINE_ENV}=1: claude-CLI runner refused (paid path), no command built or spawned"
+)
+
+
+def _offline_seam_set() -> bool:
+    """True when AESOP_BENCH_OFFLINE=1 blocks paid paths."""
+    return os.environ.get(OFFLINE_ENV) == "1"
+
+
 def _make_claude_runner(model_alias: str) -> ModelRunner:
     """Create a runner that shells the local `claude` CLI.
 
@@ -369,6 +382,9 @@ def _make_claude_runner(model_alias: str) -> ModelRunner:
         Raises RuntimeError if claude is not available.
     """
     def runner(prompt: str) -> tuple:
+        # Refuse before shutil.which or subprocess: no paid command is built or spawned offline.
+        if _offline_seam_set():
+            raise RuntimeError(OFFLINE_REFUSAL)
         if not shutil.which("claude"):
             raise RuntimeError(
                 "claude CLI not found on PATH: install it or check your PATH. "
@@ -426,6 +442,7 @@ def _make_claude_runner(model_alias: str) -> ModelRunner:
         except Exception as e:
             raise RuntimeError(f"claude CLI error: {e}")
 
+    runner.is_cli = True  # main() refuses CLI runners under AESOP_BENCH_OFFLINE=1
     return runner
 
 
@@ -524,9 +541,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--ground-truth", default=None, help="Override path to ground_truth.jsonl")
     args = parser.parse_args(argv)
 
+    runner = RUNNERS[args.runner]
+    if getattr(runner, "is_cli", False) and _offline_seam_set():
+        print(OFFLINE_REFUSAL, file=sys.stderr)
+        return 2
+
     tasks = load_tasks(args.tasks)
     ground_truth = load_ground_truth(args.ground_truth)
-    runner = RUNNERS[args.runner]
 
     results, accuracy = run_bench(tasks, ground_truth, runner)
     print_table(args.runner, results, accuracy)

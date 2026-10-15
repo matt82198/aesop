@@ -85,12 +85,13 @@ sys.path.insert(0, str(_TOOLS_DIR))
 # merge-pipeline plan owns that addition -- and this daemon must not depend on
 # an unlanded symbol, so the guard is defined locally over the shared `git`.)
 from merge_train import gh, git  # noqa: E402
+import merge_train  # noqa: E402  (head_ref_problem: module access keeps the transport import list gh/git only)
 from common import get_state_dir  # noqa: E402
 from generated_paths import GENERATED_PATHS, ALLOW_ENV  # noqa: E402
 
 # Import halt.py with FAIL CLOSED on import failure
 try:
-    from halt import is_halted, get_halt_info
+    from halt import is_halted, get_halt_info, active_halt
 except ImportError:
     try:
         # Fallback for when called from tools/ directory or via importlib
@@ -104,6 +105,7 @@ except ImportError:
                 spec.loader.exec_module(halt_module)
                 is_halted = halt_module.is_halted
                 get_halt_info = halt_module.get_halt_info
+                active_halt = halt_module.active_halt
             else:
                 raise ImportError("Could not load halt.py spec")
         else:
@@ -316,17 +318,37 @@ def record_exception(pr, kind: str, detail: str, run_url: str = "") -> dict:
     return row
 
 
+def _halt_status() -> tuple:
+    """Return (halted, info) across BOTH kill-switch sentinels.
+
+    Mirrors merge_train.halt_status(). The box-wide .HALT that `halt.py set` writes
+    was honoured by no merge path, so reading only the checkout-scoped sentinel let
+    a fleet-wide halt be ignored. Fails closed: a reader error reads as HALTED.
+    """
+    try:
+        local_halted = is_halted()
+        active = active_halt()
+        if active is not None:
+            return True, active[1] or {}
+        if local_halted:
+            return True, get_halt_info() or {}
+    except Exception as exc:  # any reader failure must halt, never clear
+        return True, {"reason": "halt state unreadable (%s: %s)" % (type(exc).__name__, exc),
+                      "timestamp": ""}
+    return False, None
+
+
 def _check_halt_and_record(summary: dict = None) -> bool:
     """Check if halt is set. If halted, record exception row and return True.
 
     This function matches merge_queue's exception-row convention. Returns True if halted
     (so caller can exit early), False if not halted.
     """
-    if is_halted():
-        info = get_halt_info()
+    halted, info = _halt_status()
+    if halted:
         reason = info.get("reason", "(unknown)") if info else "(unknown)"
         record_exception(0, "halted", reason)
-        if summary:
+        if summary is not None:  # an empty summary dict is still a summary to update
             summary["status"] = "halted"
         return True
     return False
@@ -881,7 +903,7 @@ def members_from_branch(branch: str) -> list:
     """
     if not branch:
         return []
-    git("fetch", "origin", branch)
+    git("fetch", "origin", "--", branch)
     ok, out = git("log", "--pretty=%s",
                   "origin/%s..origin/%s" % (base_branch(), branch))
     if not ok:
@@ -1353,9 +1375,14 @@ def build_batch(members: list, summary: dict, epoch: int = None) -> str:
             sha = info["headRefOid"]
             head_ref = info.get("headRefName", "")
             if head_ref:
-                git("fetch", "origin", head_ref, cwd=str(queue_root_resolved))
+                problem = merge_train.head_ref_problem(head_ref, cwd=str(queue_root_resolved))
+                if problem:
+                    record_exception(number, "pr_read_failed",
+                                     "headRefName refused while building %s: %s" % (branch, problem))
+                    continue
+                git("fetch", "origin", "--", head_ref, cwd=str(queue_root_resolved))
             else:
-                git("fetch", "origin", sha, cwd=str(queue_root_resolved))
+                git("fetch", "origin", "--", sha, cwd=str(queue_root_resolved))
             ok, out = git("merge", sha, "--no-edit",
                           "-m", "integrate #%d into %s" % (number, branch),
                           cwd=str(queue_root_resolved))
@@ -1550,9 +1577,14 @@ def build_bisect_batches(members: list, parent_pr: int, generation: int,
             sha = info["headRefOid"]
             head_ref = info.get("headRefName", "")
             if head_ref:
-                git("fetch", "origin", head_ref)
+                problem = merge_train.head_ref_problem(head_ref)
+                if problem:
+                    record_exception(number, "pr_read_failed",
+                                     "headRefName refused while building bisect %s: %s" % (branch, problem))
+                    continue
+                git("fetch", "origin", "--", head_ref)
             else:
-                git("fetch", "origin", sha)
+                git("fetch", "origin", "--", sha)
             ok, out = git("merge", sha, "--no-edit",
                         "-m", "integrate #%d into %s" % (number, branch))
             if not ok:

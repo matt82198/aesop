@@ -19,6 +19,7 @@ Release-prep minor: receipt and verify-receipt hardening, pre-push policy fixes,
 corrections, and test-isolation race fixes. 56 PRs merged since v0.9.2 (2026-10-14).
 
 ### Fixed
+- **CLI flags**: `aesop --version` and `-v` now print the package version and exit 0 without touching the filesystem, and any unknown `-` flag exits 2 with `unknown option: <arg>` instead of scaffolding a project into the current directory and touching `~/.claude/skills`.
 - **Receipts**: `verify-receipt` trusts the base-tree verifier and keyring, not the PR head (#1020); fails closed on a missing receipt (#970); polls for a 300s window instead of one 60s retry (#1040); spooled receipts post automatically after push (#1012); scoped shard map follows `ci_shard_runner` (#1035).
 - **Pre-push policy**: branch policy judges the remote ref, not the local branch (#1034); the hook blocks on a red required receipt part (#1011); the generated-path guard allows a touched path that is exactly generator output (#1028); base extracts include `state_store` alongside `tools` (#1039).
 - **Incident report gate**: `environment-shape` class, `test-isolation` alias, HEAD-scoped check and CI gate (#1008); `docs/INCIDENTS.md` regenerated on lane push and in the merge queue (#1036) so the committed log no longer drifts from main's history (#1029, #1030).
