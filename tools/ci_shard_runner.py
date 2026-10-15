@@ -181,8 +181,8 @@ _ISOLATION_ARMED_ENV = "AESOP_CI_SHARD_TRIPWIRE_ARMED"
 def _arm_isolation_tripwire(target_argv):
     """Re-run target_argv under tools/test_isolation_tripwire.py (fail closed).
 
-    Without this, a Python test writing to the live ~/conductor3 heartbeats or
-    the real ~/.claude profile passed every CI shard silently (the tripwire only
+    Without this, a Python test writing to the live fleet-state heartbeats or
+    the real home profile passed every CI shard silently (the tripwire only
     wrapped the Node and shell suites). The child is marked armed via env so it
     never re-wraps itself. Exit = max(shard exit, tripwire finding), per the
     tripwire's own contract.

@@ -705,5 +705,52 @@ class TestPyWrapperArmsIsolationTripwire(unittest.TestCase):
             self.assertNotIn("tripwire", passthrough.stderr)
 
 
+class TestCreatedFleetStateIsValidated(unittest.TestCase):
+    """Regression for the Windows CI shard red (PR #974): an EMPTY fleet-state
+    root appearing during a run must stay inert, while a placeholder heartbeat
+    written into a created file must still fail closed."""
+
+    def _write_heartbeat_cmd(self, conductor: Path, value: str):
+        script = (
+            "import pathlib; p = pathlib.Path(r'%s') / 'state'; "
+            "p.mkdir(parents=True, exist_ok=True); "
+            "(p / '.watchdog-heartbeat').write_text('%s', encoding='utf-8')"
+        ) % (conductor, value)
+        return [sys.executable, "-c", script]
+
+    def test_empty_fleet_state_root_creation_is_inert(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conductor = Path(tmp) / "conductor3"
+            root = Path(tmp) / "fake-home"
+            root.mkdir()
+            script = "import pathlib; pathlib.Path(r'%s').mkdir(parents=True)" % conductor
+            proc = run_tripwire(root, [sys.executable, "-c", script],
+                                env={"CONDUCTOR_ROOT": str(conductor)})
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertNotIn("FAIL", proc.stderr)
+
+    def test_placeholder_heartbeat_in_created_root_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conductor = Path(tmp) / "conductor3"
+            root = Path(tmp) / "fake-home"
+            root.mkdir()
+            proc = run_tripwire(root, self._write_heartbeat_cmd(conductor, "1234567890"),
+                                env={"CONDUCTOR_ROOT": str(conductor)})
+            self.assertEqual(proc.returncode, 1, proc.stderr)
+            self.assertIn("FAIL: the real profile changed", proc.stderr)
+
+    def test_placeholder_heartbeat_created_in_existing_root_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conductor = Path(tmp) / "conductor3"
+            (conductor / "state").mkdir(parents=True)
+            (conductor / "monitor").mkdir(parents=True)
+            root = Path(tmp) / "fake-home"
+            root.mkdir()
+            proc = run_tripwire(root, self._write_heartbeat_cmd(conductor, "1234567890"),
+                                env={"CONDUCTOR_ROOT": str(conductor)})
+            self.assertEqual(proc.returncode, 1, proc.stderr)
+            self.assertIn("created with stale/placeholder epoch", proc.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
