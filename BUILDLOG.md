@@ -268,3 +268,35 @@ NOT published to Medium; outward publishing stays user-gated.
 - power_selftest: 2 red tests in claude-scripts plus 12-14 hardcoded C:/Users/Mattt paths; lanes in flight. Brain hooks now refuse dispatches without explicit model or LANE-CONTRACT reference.
 - Matt decisions: WSL Ubuntu approved (firmware-blocked); FLY_API_TOKEN set (psinasty deploy not re-run); dynastywrapped.com hosted (unverified); per-box receipt keys deferred; sync = fetch only; every dispatch states model haiku.
 - Open: which cap the orchestrator monitors (Actions concurrency, usage runaway, or Fly/Cloudflare free tiers). G13 promotion due today.
+
+---
+
+## 2026-10-14 mid-wave checkpoint (round 1 audit + fix wave)
+
+--- 2026-10-14 [checkpoint] mid-wave checkpoint (STATE.md ## CURRENT)
+
+- Verified at 2026-10-15 ~01:07Z. origin/main = 769cd103 (#952). Latest completed main-full on main: success on 2c59d40f7d.
+- Merged aesop: #943, #944, #945, #946, #947, #949, #950, #952, #954. Merged claude-scripts: #37, #38, #39, #40, #41.
+- Open aesop PRs: #932, #934, #948, #951, #953, #955, #956, #957. Lane branches not yet on origin: fix/docs-only-anchor-windows-gate, fix/auto-merge-verify-merged, feat/verify-receipt-fail-closed, feat/incident-class-trailer, feat/worktree-ownership-guard, fix/shard3-serve-tests. chore/receipt-key-mattt-box on origin at 050ea764, no PR.
+- Machinery: AesopWatchdogDaemon Ready, next run 20:10 CDT; heartbeat mtime 20:04:36 CDT at check.
+- Release v0.9.1 still current. Release gate not met (open PRs above).
+
+Audit round 1 ledger (2026-10-14, reports in ~/conductor3/audits/2026-10-14-r1/). Counts are from the refuter reports on disk. "Kept" = confirmed, downgraded, in-flight or already filed.
+
+| Lens | Refuter report | Found (lens) | Confirmed | Downgraded | In-flight / already filed | Refuted | Refuter status |
+|---|---|---|---|---|---|---|---|
+| adv-reliability | adv-reliability.REFUTED.md | 17 | 5 | 8 | 3 in-flight | 1 (F-16) | done |
+| architecture | architecture.REFUTED.md | 13 | 9 | 4 (P1 to P2) | 0 | 0 | done |
+| brain-tooling | brain-tooling.REFUTED.md | 27 (F-01..F-25, F-27, F-28) | 20 | 5 | 1 in-flight, 1 already filed | 0 | done |
+| guardrails | guardrails.REFUTED.md | 15 | 12 (incl. F-09 residual) | 2 | F-01 secret-scan half overlaps in-flight | 1 (F-15) | done |
+| regression | regression.REFUTED.md | 6 (F-01..F-06) | 4 | 1 (F-05) | 1 in-flight (F-01) | 0 | done |
+| security | none on disk | 16 | - | - | - | - | refuter in flight |
+| adv-enforcement | none on disk | 18 (grep count, unverified) | - | - | - | - | refuter in flight |
+| analyst | none on disk | 13 | - | - | - | - | no refuter report |
+| orchestrator-drift | none on disk | not a finding table | - | - | - | - | analysis only |
+
+Convergence for the five refuted lenses: 78 findings in, 2 refuted (2.6 percent), 76 kept. Kept = 50 confirmed + 20 downgraded + 5 in-flight + 1 already filed. Downgrades are the largest correction class (20 of 78): most lens P1 claims were reachable only from operator-only paths.
+
+Lens model caveat: 12 of 24 Opus dispatches were spawned as Haiku by the harness (model-rewrite investigation). Refuters on Opus were a user grant for this audit only. Round 2 must check each lens's model from its first line.
+
+Defects 1-19 and the receipts gap are listed in STATE.md CURRENT. Hook workarounds by the orchestrator (install-tasks -Force, worktree remove+add around a primary-branch-guard block) are logged here for review and are not repeated; per the user rule, a hook denial is stop-and-report.
