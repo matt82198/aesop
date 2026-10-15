@@ -30,6 +30,11 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - **Fallback git dir resolution**: Manual parsing of `.git` file's `gitdir:` pointer if git command fails.
 - **Hook installation**: `install_pre_push_hook()` uses resolved git dir to place hooks in the common directory (not worktree), preventing ENOTDIR errors in worktree scenarios.
 - **Security**: symlink checks preserved throughout resolution.
+- **state/ git-ignore (F-10, 2026-10-14)**: `ensure_state_gitignore()` appends a marker-delimited block (`state/*` + `!state/.gitkeep`) to the scaffolded `.gitignore`, idempotent on re-init. Without it `git add -A` staged the SQLite event store and tracker json. Tests: `tests/test_init_gitignore.py`.
+
+## dash.js — fresh-init resolution (F-09, 2026-10-14)
+
+- `dash.js` resolves `ui/serve.py` from the installed package (`PACKAGE_DIR = __dirname/..`), not `process.cwd()`, because init does not scaffold `ui/`. It passes `AESOP_STATE_ROOT` = env > `aesop.config.json` `state_root` > `<cwd>/state`. Test: `tests/dash-fresh-init.test.mjs`.
 
 ## Key tools
 
