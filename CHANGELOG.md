@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (None yet.)
 
+## [0.10.0] - 2026-10-15
+
+> **Status notice:** Aesop Kernel is mid-way through a major event-based overhaul whose goal is restoring fully fail-closed hooks. The 0.9.x and 0.10.x minor releases may show some degradation versus earlier versions while that lands.
+
+Release-prep minor: receipt and verify-receipt hardening, pre-push policy fixes, incident-report gate
+corrections, and test-isolation race fixes. 56 PRs merged since v0.9.2 (2026-10-14).
+
+### Fixed
+- **Receipts**: `verify-receipt` trusts the base-tree verifier and keyring, not the PR head (#1020); fails closed on a missing receipt (#970); polls for a 300s window instead of one 60s retry (#1040); spooled receipts post automatically after push (#1012); scoped shard map follows `ci_shard_runner` (#1035).
+- **Pre-push policy**: branch policy judges the remote ref, not the local branch (#1034); the hook blocks on a red required receipt part (#1011); the generated-path guard allows a touched path that is exactly generator output (#1028); base extracts include `state_store` alongside `tools` (#1039).
+- **Incident report gate**: `environment-shape` class, `test-isolation` alias, HEAD-scoped check and CI gate (#1008); `docs/INCIDENTS.md` regenerated on lane push and in the merge queue (#1036) so the committed log no longer drifts from main's history (#1029, #1030).
+- **Windows-sensitive detector**: covers `tools/init_project.py` (#1033) and runs Windows for added or renamed test files (#997).
+- **Subprocess / ASCII gates**: ASCII-only `tools/*.py` ratchet and linux-shape contract matching the native leg (#1014).
+- **Secret scan**: `generic_credential_assignment` name class adds CREDENTIAL, CRED, PWD, BEARER (#1025).
+- **G13 / CI**: any-parent merge drop detected; REMOVED only for non-merge deletes (#1017); required check must render exactly and matrix suffixes must be matrix values (#1018); `verify_gates_wired` classifies documented gate tokens (#1015).
+- **Test isolation races**: detached git maintenance no longer races the `test_verify_test_suite_count_prepush` teardown (#1041); `sys.modules` restored after every del-and-reimport (#1022); UI test servers bind port 0 with a pinned tracker state root (#1023); incident gate tests fail loudly instead of skipping (#1031); watchdog test uses a reaped pid (#1038); `init_project` worktree test discriminates resolved values (#1019).
+- **Other**: merge-train origin writes gated and pushed branches cleaned up on failure (#1013); `ingest_task_events` quarantines glued torn lines instead of wedging (#1016); box-wide halt sentinel honored from any checkout and fail-closed on halt-check errors (#957); claim-read errors fail closed (#990); `auto_merge` scoped verdict and bench API runner honor the offline seam and require `--confirm-spend` (#995); baseline `--json` protocol answers the portability ratchet only, 69s to 1s (#1024).
+
+### Added
+- **Pre-push G6 subprocess ratchet**: the pre-push hook runs the G6 subprocess ratchet exactly as `ci.yml` does (#1037).
+- **Linux-shape native leg** runs Node and Shell suites through the isolation tripwire (#1010).
+- **Tripwire coverage**: `test_isolation_tripwire` armed around `test:py` and the CI Python shards (#974).
+
+### Changed
+- **Receipt scrubbing**: receipt matrix parts scrub push and lane-control env so a lane's push-time override cannot turn a test red (#1021).
+- **Scoped receipt profile**: pre-push matrix is scoped by default (#932).
+- **Config tests**: `ui` config tests scrub config-resolution env in `setUp` (#1007).
+- **Docs**: `tools/CLAUDE.md` bullets folded to one line each (#985).
+
 ## [0.9.2] - 2026-10-14
 
 Patch release: a fail-closed hardening sweep from the round-1 audit. Fixes span the

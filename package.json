@@ -1,7 +1,7 @@
 {
   "name": "@matt82198/aesop",
-  "version": "0.9.2",
-  "description": "Orchestration kernel for autonomous software development \u2014 crash-only multi-agent coordination on git and plain text, fail-closed verification gates, self-learning guardrails.",
+  "version": "0.10.0",
+  "description": "Orchestration kernel for autonomous software development — crash-only multi-agent coordination on git and plain text, fail-closed verification gates, self-learning guardrails.",
   "bin": {
     "aesop": "bin/cli.js"
   },
