@@ -123,7 +123,9 @@ printf '{"reason": "stub-case halt", "timestamp": "2026-10-14T00:00:00Z"}\n' > "
 run_runtime_once "$PATH_STUB"; rc=$?
 if grep -q "CYCLE-RAN" "$OUT"; then fail "CYCLE-RAN with present .HALT and exit-49 python (fail-open)"; cat "$OUT"; else pass "no cycle under exit-49 python stub"; fi
 if grep -q "HALT-CHECK-FAILED (exit 49)" "$OUT"; then pass "unexpected exit logged with its code"; else fail "HALT-CHECK-FAILED (exit 49) not logged"; cat "$OUT"; fi
-if [ "$rc" = "0" ]; then pass "fail-closed --once exits 0"; else fail "fail-closed --once exit $rc (want 0)"; fi
+if [ "$rc" != "0" ]; then pass "fail-closed --once exits non-zero (smoke verdict is FAILED, not a lie)"; else fail "fail-closed --once exit 0 (want non-zero: a halt-check error is not a PASSED smoke)"; fi
+if grep -q "WATCHDOG SMOKE: FAILED (halt check error, exit 49)" "$OUT"; then pass "fail-closed --once prints SMOKE: FAILED (halt check error, exit 49)"; else fail "fail-closed --once smoke verdict missing"; cat "$OUT"; fi
+if grep -q "WATCHDOG SMOKE: PASSED" "$OUT"; then fail "fail-closed --once printed SMOKE: PASSED"; cat "$OUT"; else pass "fail-closed --once did not print SMOKE: PASSED"; fi
 
 echo "=== Test 5 (F-02): no python on PATH + present .HALT => treated as HALTED ==="
 clear_sentinels

@@ -158,4 +158,105 @@ fi
 rm -f "$OUT_HALT"
 
 echo ""
+echo "=== Test 4: --once with a halt-CHECK ERROR (python exit 49) prints WATCHDOG SMOKE: FAILED and exits non-zero ==="
+# A failed halt check fails CLOSED (cycle skipped), but the smoke verdict must not lie.
+rm -rf "${TEST_STATE_DIR}"
+mkdir -p "${TEST_STATE_DIR}"
+STUB_DIR="${TMP_DIR}/py-stub"
+mkdir -p "${STUB_DIR}"
+printf '#!/bin/sh\necho "Python was not found; run without arguments to install" >&2\nexit 49\n' > "${STUB_DIR}/python3"
+chmod +x "${STUB_DIR}/python3"
+
+OUT_ERR=$(mktemp)
+set +e
+PATH="${STUB_DIR}:${PATH}" \
+  CONDUCTOR_ROOT="${TMP_DIR}/conductor3" \
+  AESOP_ROOT="${AESOP_ROOT}" \
+  AESOP_WATCHDOG_CYCLE_CMD="${MOCK_CYCLE_SUCCESS}" \
+  bash "${REPO_ROOT}/daemons/run-watchdog.sh" --once > "$OUT_ERR" 2>&1
+EXIT_ERR=$?
+set -e
+
+echo "Exit code: $EXIT_ERR"
+echo "Output:"
+cat "$OUT_ERR"
+echo ""
+
+if grep -q "HALT-CHECK-FAILED (exit 49)" "$OUT_ERR"; then
+  echo "PASS: halt-check error was reported (fail-closed path reached)"
+else
+  echo "FAIL: halt-check error was not reported; the test did not reach the path under test"
+  exit 1
+fi
+
+if grep -q "mock-cycle" "$OUT_ERR"; then
+  echo "FAIL: cycle ran despite a failed halt check (fail-open)"
+  exit 1
+else
+  echo "PASS: cycle skipped on halt-check error (fail closed)"
+fi
+
+if grep -q "WATCHDOG SMOKE: PASSED" "$OUT_ERR"; then
+  echo "FAIL: halt-check error printed 'WATCHDOG SMOKE: PASSED' (verdict lies)"
+  exit 1
+else
+  echo "PASS: halt-check error did not print 'WATCHDOG SMOKE: PASSED'"
+fi
+
+if grep -q "WATCHDOG SMOKE: FAILED (halt check error, exit 49)" "$OUT_ERR"; then
+  echo "PASS: halt-check error printed 'WATCHDOG SMOKE: FAILED (halt check error, exit 49)'"
+else
+  echo "FAIL: halt-check error did not print 'WATCHDOG SMOKE: FAILED (halt check error, exit 49)'"
+  exit 1
+fi
+
+if [ "$EXIT_ERR" -ne 0 ]; then
+  echo "PASS: halt-check error exited non-zero ($EXIT_ERR)"
+else
+  echo "FAIL: halt-check error exited 0 (expected non-zero)"
+  exit 1
+fi
+
+rm -f "$OUT_ERR"
+
+echo ""
+echo "=== Test 5: --once with a REAL .HALT sentinel prints an explicit halted PASSED verdict and exits 0 ==="
+rm -rf "${TEST_STATE_DIR}"
+mkdir -p "${TEST_STATE_DIR}"
+cat > "${TEST_STATE_DIR}/.HALT" << 'EOFHALT2'
+{"reason": "real sentinel test", "timestamp": "2026-10-15T00:00:00Z"}
+EOFHALT2
+
+OUT_REAL=$(mktemp)
+set +e
+PATH="/usr/bin:/bin:${PATH}" \
+  CONDUCTOR_ROOT="${TMP_DIR}/conductor3" \
+  AESOP_ROOT="${AESOP_ROOT}" \
+  AESOP_WATCHDOG_CYCLE_CMD="${MOCK_CYCLE_SUCCESS}" \
+  bash "${REPO_ROOT}/daemons/run-watchdog.sh" --once > "$OUT_REAL" 2>&1
+EXIT_REAL=$?
+set -e
+
+echo "Exit code: $EXIT_REAL"
+echo "Output:"
+cat "$OUT_REAL"
+echo ""
+
+if grep -q "WATCHDOG SMOKE: PASSED (halted: HALT sentinel honored, no cycle run)" "$OUT_REAL"; then
+  echo "PASS: real sentinel printed explicit halted PASSED verdict"
+else
+  echo "FAIL: real sentinel did not print 'WATCHDOG SMOKE: PASSED (halted: HALT sentinel honored, no cycle run)'"
+  exit 1
+fi
+
+if [ "$EXIT_REAL" -eq 0 ]; then
+  echo "PASS: real sentinel exited 0"
+else
+  echo "FAIL: real sentinel exited $EXIT_REAL (expected 0)"
+  exit 1
+fi
+
+rm -f "$OUT_REAL"
+
+echo ""
 echo "=== All smoke signal tests passed ==="

@@ -223,9 +223,13 @@ run_task_ingest() {
 # of truth. This respects all halt.py resolution precedence (AESOP_STATE_ROOT env >
 # aesop.config.json state_root > default). Bash never re-derives the sentinel path
 # — doing so creates drift when state_root is overridden.
+# Global HALT_CHECK_ERROR: set to the halt.py exit label ONLY when check_halt fails
+# closed (status unknowable). A genuine sentinel leaves it empty. --once reads it so
+# the smoke verdict can tell "halted on purpose" apart from "halt check broke".
 check_halt() {
   local log_file="$1"
   local halt_py="${2:-${HALT_PY_PATH}}"
+  HALT_CHECK_ERROR=""
   local box_sentinel=""
   if [ -n "${CONDUCTOR_ROOT:-}" ]; then
     box_sentinel="$CONDUCTOR_ROOT/state/.HALT"
@@ -281,6 +285,7 @@ check_halt() {
   # Unexpected result (no interpreter, Store stub exit 49, traceback, unknown code):
   # the halt status is unknowable, so fail CLOSED and skip the cycle.
   local fail_msg="HALT-CHECK-FAILED (exit $halt_exit); treating as HALTED, cycle skipped"
+  HALT_CHECK_ERROR="$halt_exit"
   echo "$fail_msg"
   if [ -n "$log_file" ]; then
     echo "[$(date '+%F %T')] $fail_msg" >> "$log_file"
@@ -321,7 +326,16 @@ main() {
   if [ "$MODE" = "--once" ]; then
     if check_halt "$AESOP_ROOT/state/FLEET-BACKUP.log"; then
       release_lock "$LOCK_DIR"
-      printf 'WATCHDOG SMOKE: PASSED\n'
+      # Halt check ERROR (fail-closed, status unknowable): the cycle was skipped
+      # because we could not verify the halt state. That is a FAILED smoke, exit 1
+      # (same exit convention as the task-event ingest failure below).
+      if [ -n "${HALT_CHECK_ERROR:-}" ]; then
+        printf 'WATCHDOG SMOKE: FAILED (halt check error, exit %s)\n' "$HALT_CHECK_ERROR" >&2
+        exit 1
+      fi
+      # Genuine HALT sentinel: a halted cycle is a clean no-op by design (the daemon
+      # obeyed the kill switch), so PASSED with exit 0. The wording says so explicitly.
+      printf 'WATCHDOG SMOKE: PASSED (halted: HALT sentinel honored, no cycle run)\n'
       exit 0
     fi
     full_out=$("${CYCLE_CMD_ARRAY[@]}" 2>&1)
