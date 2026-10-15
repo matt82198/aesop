@@ -1227,7 +1227,7 @@ class WindowsAggregatorBehaviourTest(unittest.TestCase):
 
         script = self.EXPR_RE.sub(render, self._aggregator_script())
         proc = subprocess.run(
-            ["bash", "-c", script],
+            ["bash", "-c", script], cwd=str(self.ROOT),
             capture_output=True, encoding="utf-8", errors="replace", timeout=60,
         )
         return proc.returncode, proc.stdout + proc.stderr
