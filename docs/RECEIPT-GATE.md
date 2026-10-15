@@ -171,7 +171,7 @@ Does **not** prove:
 
 | Receipt on head sha | Result |
 |---|---|
-| none | **succeeds** with a `::notice` + step summary "no receipt" — not required yet, never blocks a PR |
+| none | **fails** (exit 1, fail-closed: `MISSING receipt` names the sha and where it was looked for). Still non-required, so it does not block merges until promotion |
 | present, valid | succeeds, prints `receipt VALID` |
 | present, invalid (tree/head/base/signature/required part) | **fails** — a bad receipt is a real defect even while non-required |
 | present, cannot evaluate (malformed, unknown scheme, no key material) | **fails** (exit 2, fail-closed) |
@@ -182,8 +182,8 @@ Exit codes of `tools/verify_receipt.py`: `0` valid, `1` invalid, `2` cannot eval
 (`tools/verify_receipt.py --fetch-for-head`) only ever LOOKS for a receipt; a failure
 while looking -- a `gh api` error, a malformed check-run payload, or the PR's own tree
 predating this tool entirely (the job checks out the PR head, not main) -- is
-indistinguishable from "no receipt was posted" and always degrades to the "none" row,
-never to a crash. Only a receipt the fetch step actually extracted and then handed to
+indistinguishable from "no receipt was posted" and lands on the "none" row (fails
+closed, exit 1), never on a crash. Only a receipt the fetch step actually extracted and then handed to
 `verify()` can land on the "invalid" or "cannot evaluate" rows. (2026-10-06 incident:
 PRs #856/#857 showed FAILURE because the inline fetch script raised
 `ModuleNotFoundError` on branches cut before this file existed -- fixed by making the

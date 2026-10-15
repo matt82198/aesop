@@ -10,9 +10,10 @@ name: verify-receipt
 # signature against the committed public key, and binds freshness to origin/main.
 #
 # Behaviour during the measurement period (see docs/RECEIPT-GATE.md):
-#   - no receipt on the head sha   -> job SUCCEEDS with a notice ("no receipt"); this
-#                                     check is not required yet, so a missing receipt
-#                                     must never block a PR.
+#   - no receipt on the head sha   -> job FAILS (fail-closed, exit 1, "MISSING receipt"
+#                                     with the sha and where it was looked for). A green
+#                                     check must mean a receipt was verified, not that
+#                                     none was posted. Stays non-required (see below).
 #   - receipt present and valid    -> job succeeds ("receipt VALID").
 #   - receipt present but INVALID  -> job FAILS. A lane that posts a wrong/stale/forged
 #                                     receipt is a real defect even while non-required.
@@ -66,36 +67,36 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -u
-          # Guard at the shell level, before touching python: a PR branch cut before
-          # this tool existed has no tools/verify_receipt.py on its checked-out tree
-          # (this job pins the PR HEAD sha, not main -- see header). That must read as
-          # "no receipt" (absent), never a crash: absent is neutral, only a
-          # found-but-invalid receipt fails this job (docs/RECEIPT-GATE.md).
-          # tools/verify_receipt.py's own --fetch-for-head mode is ALSO defensive
-          # (never raises, always exits 0) against every other lookup failure (gh api
-          # errors, malformed payloads); this check only covers the one failure mode
-          # that happens before any python of ours can run at all.
+          # Fail-closed: a missing receipt exits 1 ("MISSING receipt: ..." names the sha
+          # and where it was looked for). A PR branch cut before this tool existed has no
+          # tools/verify_receipt.py on its checked-out tree (this job pins the PR HEAD sha,
+          # not main -- see header); that is also a missing receipt, not a pass.
+          summary() {
+            {
+              echo "## verify-receipt: MISSING receipt"
+              echo ""
+              echo "$1"
+              echo ""
+              echo "Lanes post one with \`python tools/emit_receipt.py --post\`. Not required yet (docs/RECEIPT-GATE.md)."
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
           if [ ! -f tools/verify_receipt.py ]; then
-            echo "::notice title=verify-receipt::tools/verify_receipt.py is not present on this checkout (branch predates the receipt gate); treating as no receipt."
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            msg="MISSING receipt: tools/verify_receipt.py is not present on this checkout (branch predates the receipt gate), so no receipt for ${HEAD_SHA} can be verified."
+            echo "::error title=verify-receipt::${msg}"
+            summary "${msg}"
+            exit 1
           fi
+          set +e
           python tools/verify_receipt.py --fetch-for-head "$HEAD_SHA" --repo-slug "$GITHUB_REPOSITORY" \
             --out-found receipt_found --out-envelope receipt.json
-          echo "found=$(cat receipt_found)" >> "$GITHUB_OUTPUT"
-
-      - name: No receipt (not required during the measurement period)
-        if: steps.fetch.outputs.found != 'true'
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          echo "::notice title=verify-receipt::No local receipt posted for ${HEAD_SHA}. Lanes may emit one with: python tools/emit_receipt.py --post (not required yet)."
-          {
-            echo "## verify-receipt: no receipt"
-            echo ""
-            echo "No \`verify-receipt-local\` receipt was found for \`${HEAD_SHA}\`."
-            echo "This check is NOT required during the measurement period (docs/RECEIPT-GATE.md)."
-          } >> "$GITHUB_STEP_SUMMARY"
+          fetch_code=$?
+          set -e
+          echo "found=$(cat receipt_found 2>/dev/null || echo false)" >> "$GITHUB_OUTPUT"
+          if [ "$fetch_code" -ne 0 ]; then
+            echo "::error title=verify-receipt::MISSING receipt for ${HEAD_SHA} (see the step log for where it was looked for)."
+            summary "No \`verify-receipt-local\` receipt was found for \`${HEAD_SHA}\` (check-runs and commit comments)."
+            exit 1
+          fi
 
       - name: Verify the receipt offline
         if: steps.fetch.outputs.found == 'true'
