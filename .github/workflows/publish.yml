@@ -6,24 +6,26 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   publish:
+    permissions:
+      contents: read
+      id-token: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version-file: .nvmrc
           registry-url: 'https://registry.npmjs.org'
 
       - name: Ensure npm supports OIDC trusted publishing
         run: |
-          npm install -g npm@latest
+          npm install -g npm@12.2.0
           npm --version
 
       - name: Scan for secrets before publish

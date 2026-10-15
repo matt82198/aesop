@@ -25,6 +25,9 @@ concurrency:
   group: main-full-${{ github.sha }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   main-full-verify:
     runs-on: ${{ matrix.os }}
@@ -43,15 +46,15 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python-shard: [0, 1, 2, 3]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version-file: .nvmrc
 
       - name: Setup Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.12'
 
@@ -59,7 +62,15 @@ jobs:
         # PyYAML is required by tools/ci_workflow_lint.py (fail-closed without it)
         # and its test suite tests/test_ci_workflow_lint.py.
         # pytest is required by tests/test_seam_s_e2e_oracle.py subprocess tests.
-        run: pip install pyyaml pytest pytest-timeout
+        # pyflakes is required by the scaffold tests in the Node step below
+        # (tests/scaffold-fresh-push.test.mjs, tests/doctor-baseline-checks.test.mjs):
+        # a fresh scaffold runs tools/pyflakes_gate.py --update-baseline, which exits 2
+        # without pyflakes and leaves .pyflakes-baseline.json ungenerated. Mirrors ci.yml.
+        # cryptography (pinned, same pin as ci.yml) runs the verify-receipt base-keyring
+        # guard tests/test_verify_receipt_base_trust.py on every shard. Under CI
+        # (CI/GITHUB_ACTIONS set) that guard FAILS when cryptography is absent, so
+        # omitting it here turned shard 3 red on run 38818655874 (4 failures).
+        run: pip install pyyaml pytest pytest-timeout pyflakes cryptography==50.0.2
 
       - name: Set shard-specific temporary directory (Windows)
         if: runner.os == 'Windows'
@@ -110,15 +121,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version-file: .nvmrc
 
       - name: Setup Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.12'
 
@@ -129,7 +140,7 @@ jobs:
           npm run build
 
       - name: Cache Playwright browsers
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('**/package.json') }}

@@ -266,7 +266,7 @@ To verify this playbook works end-to-end, run a recovery on a clean machine (or 
 
 - Git is installed and configured with access to your remotes (SSH keys or credentials available).
 - Bash is available (Git Bash on Windows, bash on Unix).
-- Python 3.10+ is available (for secret-scan, optional for testing the watchdog).
+- Python 3.11+ is available (for secret-scan, optional for testing the watchdog).
 - Node.js 18+ is available (optional; dashboard requires it but is not essential for the watchdog).
 
 ### Drill Steps

@@ -152,6 +152,21 @@ class TestUnitHelpers(unittest.TestCase):
         )
         self.assertEqual(gate_stub_list.derive_stub_scripts(text), [])
 
+    def test_gate_routed_through_base_copy_dir_is_derived(self):
+        # check_symbol_survival and check_emit_receipt resolve their script from
+        # the BASE gate copy: `local gate_dir=$(gate_base_dir)` and
+        # gate_tool_status "$gate_dir" "$var". Such a gate is still fail-closed
+        # and must be stubbed by the TTY fixture like any other.
+        text = (
+            "check_d() {\n"
+            '  local gate_dir\n'
+            '  gate_dir=$(gate_base_dir) || return 1\n'
+            '  local d_script="$gate_dir/tools/d_check.py"\n'
+            '  tool_status=$(gate_tool_status "$gate_dir" "$d_script")\n'
+            "}\n"
+        )
+        self.assertEqual(gate_stub_list.derive_stub_scripts(text), ["d_check"])
+
     def test_empty_source_yields_empty_list(self):
         self.assertEqual(gate_stub_list.derive_stub_scripts(""), [])
 

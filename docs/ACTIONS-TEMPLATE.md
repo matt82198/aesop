@@ -168,7 +168,7 @@ jobs:
 Verify the **Setup Node.js** step completes successfully. Check the workflow log for errors.
 
 ### "python: command not found" or "module not found"
-Verify the **Setup Python** step completes successfully. Orchestration tools require Python 3.11+ and standard library modules (no external dependencies).
+Verify the **Setup Python** step completes successfully. Orchestration tools require Python 3.11+. Most are standard-library only; the CI workflow linters (`tools/ci_workflow_lint.py`, `tools/ci_needs_skip_guard.py`, `tools/ci_job_execution_verifier.py`) also import PyYAML, so install it in the same step.
 
 ### Workflow does not trigger on schedule
 Check the cron expression at [crontab.guru](https://crontab.guru/). GitHub Actions uses UTC timezone.

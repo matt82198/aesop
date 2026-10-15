@@ -26,19 +26,21 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  # Needed to open/inspect the rolling snapshot PR and arm auto-merge via `gh`.
-  pull-requests: write
-  # crossos_drift.py shells out to `gh run list`; the defensive `gh workflow run` dispatch
-  # below needs write too.
-  actions: write
+  contents: read
 
 jobs:
   crossos-drift:
+    permissions:
+      contents: write
+      # Needed to open/inspect the rolling snapshot PR and arm auto-merge via `gh`.
+      pull-requests: write
+      # crossos_drift.py shells out to `gh run list`; the defensive `gh workflow run` dispatch
+      # below needs write too.
+      actions: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Persisted credentials are used by the push below. The plain default token is
           # sufficient (see SELF-LANDING note above); DRIFT_PR_TOKEN is accepted if ever
@@ -46,7 +48,7 @@ jobs:
           token: ${{ secrets.DRIFT_PR_TOKEN || github.token }}
 
       - name: Set up Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.11'
 

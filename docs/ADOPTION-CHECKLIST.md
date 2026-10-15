@@ -40,7 +40,7 @@ node --version
 ```bash
 python3 --version
 ```
-**Required Gate**: Output shows Python 3.10 or higher
+**Required Gate**: Output shows Python 3.11 or higher
 **CI Tool**: N/A (manual verification)
 
 ---
