@@ -93,8 +93,7 @@ writer path (`AESOP_ALLOW_GENERATED=1`) -- running the real hook without that
 var set made this row false-red (9/10 on a clean branch, PR #882). The row now
 pre-checks changed registered paths against their generator's own `--check`
 (`GENERATED_FRESHNESS_CHECKS` in `new_gate_check.py`); fresh -> PASS with the
-escape hatch set for the dry run; stale -> FAIL with the exact regen command,
-never reaching the hook.
+escape hatch set for the dry run; stale -> FAIL with the exact regen command, never reaching the hook.
 
 ## Recent additions (2026-10)
 
@@ -113,8 +112,7 @@ never reaching the hook.
 - `linux_shape_check.py` — WSL-based cross-platform test gate: detects commits touching
   shell/workflow/Node files, runs test suites under WSL to catch Windows-only CI reds
   (e.g., isolated-home USERPROFILE assumptions, shell failures on Ubuntu). Wired into
-  pre-push-policy.sh after generated_paths check. Tests: 17 unit cases covering skip/
-  notice/fail/require-wsl scenarios.
+  pre-push-policy.sh after generated_paths check. Tests: 17 unit cases covering skip/ notice/fail/require-wsl scenarios.
 
 ## Gates & tests
 - `secret_scan.py --staged` — pre-push gate (exit 0=clean/1=findings/2=error; `# secretscan: allow-pattern-docs` pragma; `generic_credential_assignment` flags `KEY_NAME=value`/`KEY: value`/`KEY = "value"` outside .env files; NUL/UTF-16 files are decoded and scanned in full; files over 16 MiB fail closed)
@@ -144,8 +142,7 @@ never reaching the hook.
   `parse_bisect_lineage`/`bisect_is_exhausted` silently dropped by a conflict-resolution merge, CI stayed
   green). CLI `--base REF` (default `origin/main`) `--head REF` (default `HEAD`) `--original-head SHA`
   `--json`; exit 0=survived/1=missing/2=error; read-only, stdlib-only. Wired into `ci.yml` as a
-  non-blocking (`continue-on-error: true`) advisory job that tees findings to the job log and records
-  `G13 advisory rc=<n>` in the job summary.
+  non-blocking (`continue-on-error: true`) advisory job that tees findings to the job log and records `G13 advisory rc=<n>` in the job summary.
 - `pr_footprint_gate.py` — Guardrail G2.7: fails PRs with >100 files or >5000 deletions unless labeled `big-change`, or PRs with fixture-pattern commits (test fixtures committed into lane worktrees); pass on chore(stats)-only commits. CLI: `--base <sha> --head <sha> [--labels JSON]` (labels from PR event); exit 0=pass/1=fail/2=error; stdlib-only
 - **pr_sweep.py (STATE.md item 9 residual, PR #871 gap)**: the session-independent PR actor -- arms missing native auto-merge, nudges BEHIND branches (capped at 2/run, oldest first, 20-min throttle), and signals stuck-red (required check failing, head >30 min old) / DIRTY PRs as `pr.red`/`pr.dirty` rows to `<conductor_root>/state/signal-hub-queue.jsonl` (`common.get_conductor_root()`, never a hardcoded path), deduped on `(pr, head, type)`. Never rebases/pushes/merges. Zero-check retrigger (PR #932/#934 class): armed PR with empty `statusCheckRollup` and a head >=20 min old gets `gh workflow run ci.yml --ref <head>` + a `sha=` marker comment (a DIRTY/CONFLICTING PR with zero runs instead gets `needs-rebase` + a sha-keyed conflict comment: no dispatch, auto-merge left armed, never disarmed); still zero 24 h later (non-conflicted) it is disarmed (`--disable-auto`) and labelled `needs-ci-trigger`; reads fail closed (exit 3, nothing acted on); actions log to `<conductor_root>/state/pr-sweep.log`. Invoked on a 15-min throttle from the watchdog daemon so the nudge does not depend on a live orchestrator session noticing via the Monitor tool.
 - **shadow_adjudication.py**: `build_finding_context_pack(enriched=True)` attaches evidence via `driver/context_pack.py`'s `add_evidence_to_pack()` (pure in-memory, never touches the filesystem or repo_root/conductor_root) — never re-derive the already-built brief through `build_context_pack()` with a fake `brief:<name>` source: that resolves the placeholder name as a literal relative path against the process cwd, which only happens to equal repo_root by coincidence (2026-10-06 incident: a prior test's tearDown leaking a polluted process cwd made that placeholder resolve outside the allowlist and raise ContextPackViolation for a perfectly legitimate in-memory brief).
