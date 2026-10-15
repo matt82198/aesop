@@ -29,7 +29,6 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - **Inert-code cleanup (2026-10-06, audit #2)**: `state_md_verifier.py` had an unreachable duplicate `return` after the real one; `humanize_lint.py` imported `CLIBuilder`/`OutputFormatter`/`Callable` and never used any of them; `audit_report.py` imported `Path` unused. `test_battery.py`'s `AESOP_BATTERY_HARNESS_TIMEOUT_S`/`AESOP_BATTERY_LOGDIR` env overrides had no setter anywhere (no workflow/script/settings.json) and the tool itself has no automation caller — removed in favor of the hardcoded defaults they always resolved to. Verified each via `pyflakes`/`grep` before touching; `audit_report.py --strict` was checked and kept (implemented, tested, documented — just not yet wired into any CI gate, which is a feature decision, not dead code).
 
 ## init_project.py — Worktree support
-
 - **Worktree .git handling**: `resolve_real_git_dir()` detects when `.git` is a FILE (worktree case) and uses `git rev-parse --git-common-dir` to locate the actual git directory.
 - **Fallback git dir resolution**: Manual parsing of `.git` file's `gitdir:` pointer if git command fails.
 - **Hook installation**: `install_pre_push_hook()` uses resolved git dir to place hooks in the common directory (not worktree), preventing ENOTDIR errors in worktree scenarios.
@@ -41,7 +40,6 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - `dash.js` resolves `ui/serve.py` from the installed package (`PACKAGE_DIR = __dirname/..`), not `process.cwd()`, because init does not scaffold `ui/`. It passes `AESOP_STATE_ROOT` = env > `aesop.config.json` `state_root` > `<cwd>/state`. Test: `tests/dash-fresh-init.test.mjs`.
 
 ## Key tools
-
 - **tools/merge_queue.py**: Merge-queue advancer. Updated 2026-10-06: added AESOP_QUEUE_ROOT isolation guard (refuses to mint integrate/q-* branches unless running in dedicated queue checkout).
 - **tools/merge_train.py**: Transport layer. Updated 2026-10-06: git() helper now accepts optional cwd parameter for explicit working directory control.
 - **tools/auto_merge.py scoped verdict (F-03, 2026-10-14)**: `auto_merge.py <n>...` exits 0 only if every named PR is `gh pr view --json state,mergedAt` MERGED; nonexistent or closed-unmerged PRs exit 1 and are named on stderr. Tests: `tests/test_auto_merge_scoped_verdict.py`.
