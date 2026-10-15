@@ -40,8 +40,9 @@ orchestrator's own main thread, per the merge-train dispatch rule) consumes
 the signal-hub queue.
 
 Fail closed: every gh read that decides an action runs BEFORE any write; a
-failed read exits 3 having acted on nothing. A failed write during execution
-stops the sweep and exits 1. Every real action is appended to the sweep log
+failed read exits 3 having acted on nothing. A failed write is isolated to its
+PR: it is logged with the PR number and reason, counted, and the sweep moves on
+to the next PR; the sweep exits 1 at the END if any PR action failed. Every real action is appended to the sweep log
 (`<conductor_root>/state/pr-sweep.log`, override --log-path or
 AESOP_PR_SWEEP_LOG) with the PR number, reason, and outcome. --dry-run prints
 the plan and touches neither GitHub nor the log.
@@ -56,8 +57,8 @@ Usage:
     python tools/pr_sweep.py [--dry-run] [--json] [--repo OWNER/NAME]
                               [--queue-path FILE] [--behind-cap N] [--log-path FILE]
 
-Exit codes: 0 = swept (incl. no-op), 1 = a write failed mid-execution (sweep
-stopped), 2 = gh auth missing or PR listing failed, 3 = a zero-check read
+Exit codes: 0 = swept (incl. no-op), 1 = one or more PR actions failed (all PRs
+still attempted; failures listed on stderr), 2 = gh auth missing or PR listing failed, 3 = a zero-check read
 failed (nothing was acted on).
 """
 import argparse
@@ -428,6 +429,15 @@ def build_plan(open_prs, repo, now, queue_path, behind_cap=DEFAULT_BEHIND_CAP):
     return actions
 
 
+def record_pr_failure(results, lines, log_path, pr_number, kind, reason, err):
+    """Per-PR write failure: logged with PR number + reason, counted, and the
+    sweep continues with the next PR. main() exits non-zero after the summary."""
+    message = "#%s %s failed: %s" % (pr_number, kind, err)
+    results["errors"].append(message)
+    lines.append("FAILED " + message)
+    append_sweep_log(log_path, pr_number, kind, reason, "failed: %s" % err)
+
+
 def execute_plan(actions, repo, dry_run, queue_path, log_path=None):
     lines = []
     results = {"armed": 0, "updated": 0, "signaled": 0, "retriggered": 0,
@@ -440,7 +450,8 @@ def execute_plan(actions, repo, dry_run, queue_path, log_path=None):
                 if ok:
                     results["armed"] += 1
                 else:
-                    results["errors"].append("#%s arm failed: %s" % (a["pr"], err))
+                    record_pr_failure(results, lines, log_path, a["pr"], "arm",
+                                      "auto-merge missing", err)
         elif a["kind"] == "update-branch":
             lines.append("UPDATE-BRANCH #%s (BEHIND) %s" % (a["pr"], a.get("url", "")))
             if not dry_run:
@@ -448,7 +459,8 @@ def execute_plan(actions, repo, dry_run, queue_path, log_path=None):
                 if ok:
                     results["updated"] += 1
                 else:
-                    results["errors"].append("#%s update-branch failed: %s" % (a["pr"], err))
+                    record_pr_failure(results, lines, log_path, a["pr"], "update-branch",
+                                      "branch behind base", err)
         elif a["kind"] == "signal":
             checks_str = ",".join(a.get("checks") or [])
             lines.append("SIGNAL %s #%s head=%s checks=[%s] %s" % (
@@ -527,8 +539,9 @@ def execute_plan(actions, repo, dry_run, queue_path, log_path=None):
                     results["disarmed"] += 1
                     outcome = "auto-merge disarmed; labelled %s" % ZERO_CHECK_LABEL
             except GhError as exc:
-                append_sweep_log(log_path, a["pr"], a["kind"], a["reason"], "failed: %s" % exc)
-                raise
+                record_pr_failure(results, lines, log_path, a["pr"], a["kind"],
+                                  a["reason"], exc)
+                continue
             append_sweep_log(log_path, a["pr"], a["kind"], a["reason"], outcome)
     return lines, results
 
@@ -596,6 +609,16 @@ def main(argv=None):
             "dry_run": args.dry_run, "repo": repo, "open_prs": len(open_prs),
             "draft_skipped": draft_count, "plan": lines, "results": results,
         }, indent=2))
+
+    # Per-PR failures never stop the loop; the exit code reflects the whole
+    # summary, so one refused PR cannot hide later PRs' outcomes and a failure
+    # cannot pass silently.
+    if results["errors"]:
+        print("ERROR: %d PR action(s) failed (every other PR was still processed):"
+              % len(results["errors"]), file=sys.stderr)
+        for message in results["errors"]:
+            print("ERROR: " + message, file=sys.stderr)
+        return 1
 
     return 0
 
