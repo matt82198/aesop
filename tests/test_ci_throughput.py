@@ -17,6 +17,7 @@ These tests pin down the four mechanisms that reduce per-PR job count:
 Hermetic: parses .github/workflows/ci.yml and main-full.yml YAML, no network/gh.
 """
 
+import re
 import unittest
 from pathlib import Path
 
@@ -164,6 +165,38 @@ class CIThroughputTests(unittest.TestCase):
         ]
         for file in expected_tools_files:
             self.assertIn(file, pattern, f"Pattern must explicitly list tools/{file}.py")
+
+    def _windows_detector_pattern(self):
+        """Return the ERE the windows-touched step applies to changed paths."""
+        jobs = self.ci_workflow.get("jobs", {})
+        steps = jobs.get("windows-sensitive-paths", {}).get("steps", [])
+        detect_step = next(
+            (s for s in steps if s.get("name") == "Detect Windows-sensitive changes"), None
+        )
+        self.assertIsNotNone(detect_step, "Missing 'Detect Windows-sensitive changes' step")
+        grep_lines = [l for l in detect_step.get("run", "").split("\n") if "grep -qE '" in l]
+        self.assertEqual(len(grep_lines), 1, "Expected exactly one grep -qE classifier line")
+        line = grep_lines[0]
+        start = line.index("grep -qE '") + len("grep -qE '")
+        return line[start:line.index("'", start)]
+
+    def test_windows_detector_treats_init_project_as_windows_sensitive(self):
+        """Behavioural: changes to tools/init_project.py must trigger the Windows shard.
+
+        init_project resolves git-dir paths with Windows path semantics; its PR #996
+        was merged with windows-shard SKIPPED, and the Windows-only red it fixed
+        (run 38673452130) only surfaced post-merge in main-full. The detector regex
+        is applied to a changed path exactly as the workflow's grep does.
+        """
+        pattern = self._windows_detector_pattern()
+        self.assertIsNotNone(
+            re.search(pattern, "tools/init_project.py"),
+            "tools/init_project.py must classify as Windows-sensitive (pattern: %s)" % pattern,
+        )
+        self.assertIsNone(
+            re.search(pattern, "tools/gen_tool_index.py"),
+            "narrowness: a generic tools/ file must NOT classify as Windows-sensitive",
+        )
 
     def test_ci_job_uses_pr_head_sha(self):
         """ci job must check out PR HEAD commit for pull_request events."""
