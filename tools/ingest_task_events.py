@@ -38,11 +38,23 @@ Behavior:
     heartbeat contract. The receipt line on stdout reports quarantined=N.
 
 Exit codes: 0 clean (quarantined lines included); 1 --check failed (pending
-lines); 2 usage/IO error; 3 held malformed last line or truncated source.
+lines) or --status STALE; 2 usage/IO error; 3 held malformed last line or
+truncated source.
+
+--max-bytes N bounds one run to the complete lines that start within the next N
+bytes of the JSONL (0 = unbounded). The cursor advances only over what was read,
+so repeated bounded runs catch up without re-ingesting.
+
+--status is read-only. It prints one INGEST line with the cursor, source size,
+lag bytes and heartbeat age, and exits 1 with the word STALE when the heartbeat
+is older than STALE_HEARTBEAT_SECONDS (900), the lag exceeds STALE_LAG_BYTES
+(256 KiB), the heartbeat is missing, or the cursor is past the source end. A
+missing source is NO-SOURCE, not stale (no brain hook on this box).
 
 Usage:
-  python tools/ingest_task_events.py [--jsonl PATH] [--state-dir DIR]
+  python tools/ingest_task_events.py [--jsonl PATH] [--state-dir DIR] [--max-bytes N]
   python tools/ingest_task_events.py --check [--jsonl PATH] [--state-dir DIR]
+  python tools/ingest_task_events.py --status [--jsonl PATH] [--state-dir DIR]
 """
 from __future__ import annotations
 
@@ -76,6 +88,11 @@ EXIT_OK = 0
 EXIT_CHECK_PENDING = 1
 EXIT_USAGE = 2
 EXIT_FAIL_CLOSED = 3
+
+# Freshness thresholds for status(). The heartbeat is written on every clean run,
+# and the watchdog runs the ingest every 150s (loop) or every few minutes (--once).
+STALE_HEARTBEAT_SECONDS = 15 * 60
+STALE_LAG_BYTES = 256 * 1024
 
 # Harness-internal helper stops (prompt-suggestion echoes) carry agent_type ""
 # AND a summary in user voice or a slash-command echo. Verified 2026-10-15 on
@@ -155,17 +172,19 @@ def _write_cursor(cursor_path: Path, offset: int, source: str) -> None:
     os.replace(tmp, cursor_path)
 
 
-def _scan(jsonl_path: Path, offset: int):
+def _scan(jsonl_path: Path, offset: int, max_bytes: int = 0):
     """Split the unconsumed tail into complete lines.
 
     Returns (complete, size) where complete is a list of
     (start_offset, end_offset, raw_bytes_without_newline, parse_error_or_None,
     record_or_None). A trailing partial line (no newline yet) is excluded.
+    size is the true source size. max_bytes > 0 reads at most that many bytes
+    past offset, so only lines that end inside the window are returned.
     """
     with open(jsonl_path, "rb") as fh:
+        size = os.fstat(fh.fileno()).st_size
         fh.seek(offset)
-        blob = fh.read()
-        size = offset + len(blob)
+        blob = fh.read(max_bytes) if max_bytes > 0 else fh.read()
     complete = []
     start = 0
     while True:
@@ -214,11 +233,64 @@ def check(jsonl_path, state_dir) -> int:
     return EXIT_CHECK_PENDING
 
 
-def ingest(jsonl_path, state_dir) -> dict:
+def status(jsonl_path, state_dir, now=None, stale_after_s=STALE_HEARTBEAT_SECONDS,
+           lag_cap_bytes=STALE_LAG_BYTES) -> dict:
+    """Read-only freshness report for the ingest. Writes nothing.
+
+    STALE when any of: heartbeat missing or unreadable; heartbeat age > stale_after_s
+    (age exactly equal to the threshold is fresh); lag (source bytes minus cursor)
+    > lag_cap_bytes; cursor past the source end. A missing source is NO-SOURCE and
+    not stale. Raises on an unreadable cursor file (callers fail closed).
+    """
+    jsonl_path = Path(jsonl_path)
+    state_dir = Path(state_dir)
+    now = time.time() if now is None else now
+    if not jsonl_path.exists():
+        return {
+            "state": "NO-SOURCE", "stale": False, "source": str(jsonl_path), "source_bytes": None,
+            "cursor": None, "lag_bytes": None, "heartbeat_age_s": None, "reasons": [],
+            "line": f"INGEST: NO-SOURCE (no task-events source at {jsonl_path})",
+        }
+    size = jsonl_path.stat().st_size
+    cursor = _read_cursor(state_dir / CURSOR_FILENAME)
+    lag = size - cursor
+    reasons = []
+    if cursor > size:
+        reasons.append(f"cursor {cursor} is past source end {size}")
+    if lag > lag_cap_bytes:
+        reasons.append(f"lag {lag} bytes exceeds cap {lag_cap_bytes}")
+    heartbeat_age = None
+    hb_path = state_dir / HEARTBEAT_FILENAME
+    if hb_path.exists():
+        try:
+            heartbeat_age = int(now) - int(hb_path.read_text(encoding="utf-8").strip())
+        except ValueError:
+            heartbeat_age = None
+    if heartbeat_age is None:
+        reasons.append("heartbeat missing or unreadable")
+    elif heartbeat_age > stale_after_s:
+        reasons.append(f"heartbeat {heartbeat_age}s old exceeds {stale_after_s}s")
+    stale = bool(reasons)
+    age_text = "none" if heartbeat_age is None else str(heartbeat_age)
+    line = (
+        f"INGEST: {'STALE' if stale else 'fresh'} cursor={cursor} source_bytes={size} "
+        f"lag_bytes={lag} heartbeat_age_s={age_text}"
+    )
+    if stale:
+        line += " reasons=[" + "; ".join(reasons) + "]"
+    return {
+        "state": "STALE" if stale else "fresh", "stale": stale, "source": str(jsonl_path),
+        "source_bytes": size, "cursor": cursor, "lag_bytes": lag,
+        "heartbeat_age_s": heartbeat_age, "reasons": reasons, "line": line,
+    }
+
+
+def ingest(jsonl_path, state_dir, max_bytes: int = 0) -> dict:
     """Ingest unconsumed complete lines from ``jsonl_path`` into the task stream.
 
-    Returns a result dict with keys: ingested, duplicates, malformed, cursor,
-    exit_code, and optionally error.
+    max_bytes > 0 bounds this run to the lines that end within that many bytes
+    of the cursor; a later run picks up the rest. Returns a result dict with
+    keys: ingested, duplicates, malformed, cursor, exit_code, and optionally error.
     """
     jsonl_path = Path(jsonl_path)
     state_dir = Path(state_dir)
@@ -241,7 +313,7 @@ def ingest(jsonl_path, state_dir) -> dict:
         )
         return result
 
-    complete, size = _scan(jsonl_path, offset)
+    complete, size = _scan(jsonl_path, offset, max_bytes)
     quarantine_path = _quarantine_path(jsonl_path)
     quarantined_offsets = _quarantined_offsets(quarantine_path)
     new_quarantine_rows = []
@@ -312,7 +384,12 @@ def main(argv=None) -> int:
     parser.add_argument("--jsonl", default=DEFAULT_JSONL, help="path to task-events.jsonl")
     parser.add_argument("--state-dir", default=None, help="state directory (default: AESOP_STATE_ROOT or ./state)")
     parser.add_argument("--check", action="store_true", help="assert cursor == EOF; no writes")
+    parser.add_argument("--status", action="store_true", help="print the INGEST freshness line; exit 1 when STALE; no writes")
+    parser.add_argument("--max-bytes", type=int, default=0, help="bound this run to N bytes of JSONL (0 = unbounded)")
     args = parser.parse_args(argv)
+    if args.max_bytes < 0:
+        print("task-events ingest: --max-bytes must be >= 0", file=sys.stderr)
+        return EXIT_USAGE
 
     state_dir = args.state_dir or os.environ.get("AESOP_STATE_ROOT") or str(REPO_ROOT / "state")
     if args.check:
@@ -322,8 +399,17 @@ def main(argv=None) -> int:
             print(f"task-events check: FAILED: internal error: {exc}", file=sys.stderr)
             return EXIT_CHECK_PENDING
 
+    if args.status:
+        try:
+            st = status(args.jsonl, state_dir)
+        except Exception as exc:
+            print(f"INGEST: STALE (status unreadable: {exc})")
+            return EXIT_CHECK_PENDING
+        print(st["line"])
+        return EXIT_CHECK_PENDING if st["stale"] else EXIT_OK
+
     try:
-        result = ingest(args.jsonl, state_dir)
+        result = ingest(args.jsonl, state_dir, args.max_bytes)
     except Exception as exc:  # fail closed: any internal error is a reported failure
         print(f"task-events ingest: FAILED: internal error: {exc}", file=sys.stderr)
         return EXIT_FAIL_CLOSED

@@ -201,7 +201,14 @@ run_task_ingest() {
   local aesop_root="$1"
   local python_exe="$2"
   local log_file="$3"
-  if [ -z "$python_exe" ] || [ ! -f "$aesop_root/tools/ingest_task_events.py" ]; then
+  # No interpreter means the ingest did not run: fail closed and say so in the log,
+  # never a silent return 0. A checkout without the tool is a logged skip.
+  if [ -z "$python_exe" ]; then
+    echo "[$(date '+%F %T')] ERROR: task-event ingest not run: no python interpreter" >> "$log_file"
+    return 1
+  fi
+  if [ ! -f "$aesop_root/tools/ingest_task_events.py" ]; then
+    echo "[$(date '+%F %T')] task-event ingest skipped: $aesop_root/tools/ingest_task_events.py missing" >> "$log_file"
     return 0
   fi
   local ingest_out ingest_rc

@@ -4,7 +4,7 @@
 INDEX: Canonical deterministic boot brief (GOAL from the event store, STATE.md ACTIVE block, BUILDLOG tail, event-store projections, git) with a byte cap; exit 2 when the store is unreadable.
 
 Usage:
-    python tools/boot_state.py [--repo DIR] [--state-dir DIR] [--max-bytes N]
+    python tools/boot_state.py [--repo DIR] [--state-dir DIR] [--jsonl PATH] [--max-bytes N]
                                [--buildlog-lines N] [--json]
 
 Sections, in this order:
@@ -12,8 +12,15 @@ Sections, in this order:
                  the single line "GOAL: none recorded" and nothing else for that section.
     STATE.md     the "## ACTIVE" block of <repo>/STATE.md only.
     BUILDLOG.md  the last N lines (default 25) of <repo>/BUILDLOG.md.
-    EVENT STORE  open tracker lanes via StateAPI.project("tracker") (project_tracker) and the
-                 last task_event rows of stream "task" (StateAPI.get). Goal via project_goal.
+    EVENT STORE  first line is the INGEST line; then open tracker lanes via
+                 StateAPI.project("tracker") (project_tracker) and the last task_event rows of
+                 stream "task" (StateAPI.get). Goal via project_goal.
+                 Before projecting, an existing store gets one bounded ingest run
+                 (tools/ingest_task_events.py via run_ingest: 5 s timeout, 4 MiB cap). The
+                 INGEST line then reports the ingest run outcome and freshness (cursor, source
+                 bytes, lag bytes, heartbeat age) and says STALE when the heartbeat is older
+                 than 15 min, lag exceeds 256 KiB, or the ingest could not run. A missing
+                 source is NO-SOURCE. A STALE projection is printed as STALE, never silently.
     GIT          `git log --oneline -5` and the first 20 lines of `git status --short`.
 
 Cap: the markdown brief is at most --max-bytes (default 12000) UTF-8 bytes and always holds.
@@ -22,14 +29,17 @@ BUILDLOG lines, then ACTIVE, event-store and git lines (tail first). The GOAL se
 never line-trimmed. --json carries the same section texts as one object; the cap applies to
 the markdown.
 
-Determinism: no wall-clock values are printed; the same store, STATE.md, BUILDLOG.md and git
-state give byte-identical output.
+Determinism: the same store, STATE.md, BUILDLOG.md and git state give byte-identical output,
+with one documented exception. The INGEST line's heartbeat_age_s and its fresh/STALE word are
+functions of the clock. Every other line is a function of the disk state alone.
 
-Store: --state-dir, else $AESOP_STATE_ROOT, else <repo>/state (the tracker DB). The store is
-read, never created. A missing, empty or unreadable store exits 2 with one stderr line and
-prints NOTHING on stdout (fail closed: no partial brief that looks complete).
+Store: --state-dir, else $AESOP_STATE_ROOT, else <repo>/state (the tracker DB). A missing,
+empty or unreadable store exits 2 with one stderr line and prints NOTHING on stdout (fail
+closed: no partial brief that looks complete). The ingest runs only against a store that
+already exists, so a brief never creates one.
 
-Exit codes: 0 ok; 2 store unreadable or brief unavailable.
+Exit codes: 0 ok (a STALE INGEST line is still exit 0: it is printed, not hidden); 2 store
+unreadable or brief unavailable.
 """
 from __future__ import annotations
 
@@ -44,11 +54,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from state_store.paths import resolve_db_path  # noqa: E402
 from state_store.read_api import read_text_file  # noqa: E402
 from tools import goal_state  # noqa: E402
+from tools import ingest_task_events as ite  # noqa: E402
 
 DEFAULT_MAX_BYTES = 12000
 DEFAULT_BUILDLOG_LINES = 25
+INGEST_TIMEOUT_S = 5
+INGEST_MAX_BYTES = 4 * 1024 * 1024
+INGEST_SCRIPT = str(REPO_ROOT / "tools" / "ingest_task_events.py")
 TASK_LIMIT = 5
 LANE_LIMIT = 15
 GIT_STATUS_LIMIT = 20
@@ -140,11 +155,50 @@ def _git_lines(repo: Path) -> list[str]:
     return lines
 
 
-def _event_store_lines(store: dict) -> list[str]:
+def run_ingest(state_dir: Path, jsonl: Path | None, *, timeout_s: int = INGEST_TIMEOUT_S,
+               max_bytes: int = INGEST_MAX_BYTES, argv_prefix: list[str] | None = None) -> str:
+    """Run one bounded task-event ingest against ``state_dir``. Never raises.
+
+    Returns "ok", "failed exit N", "timed out after Ns", or "could not run: <reason>".
+    A non-ok outcome leaves the heartbeat unrefreshed, so status() reports STALE.
+    ``argv_prefix`` replaces the interpreter and script (tests use it to force a hang).
+    """
+    argv = list(argv_prefix) if argv_prefix else [sys.executable, INGEST_SCRIPT]
+    argv += ["--state-dir", str(state_dir), "--max-bytes", str(max_bytes)]
+    if jsonl is not None:
+        argv += ["--jsonl", str(jsonl)]
+    try:
+        proc = subprocess.run(
+            argv, capture_output=True, encoding="utf-8", errors="replace",
+            timeout=timeout_s, check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return f"timed out after {timeout_s}s"
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"could not run: {exc}"
+    if proc.returncode == 0:
+        return "ok"
+    return f"failed exit {proc.returncode}"
+
+
+def _ingest_line(state_dir: Path, jsonl: Path | None, outcome: str | None) -> str:
+    """The INGEST line: freshness numbers from status(), plus the ingest run outcome."""
+    try:
+        st = ite.status(jsonl if jsonl is not None else ite.DEFAULT_JSONL, state_dir)
+    except Exception as exc:  # fail closed: an unreadable status is STALE, never fresh
+        return f"INGEST: STALE (status unreadable: {exc})"
+    line = st["line"]
+    if outcome is not None:
+        line += f" | ingest run: {outcome}"
+    return line
+
+
+def _event_store_lines(store: dict, ingest_line: str) -> list[str]:
     lanes = [it for it in store["tracker_items"] if it.get("status") not in CLOSED_STATUSES]
     tasks = store["tasks"]
     lines = [
         "## EVENT STORE",
+        ingest_line,
         "projections: StateAPI.project('tracker') -> project_tracker (open lanes); "
         "StateAPI.get('task') type task_event (last task events); "
         "StateAPI.get('orchestrator_goal') -> project_goal (GOAL)",
@@ -166,7 +220,7 @@ def _event_store_lines(store: dict) -> list[str]:
     return lines
 
 
-def gather(repo: Path, state_dir: Path, buildlog_lines: int) -> list[list[str]]:
+def gather(repo: Path, state_dir: Path, buildlog_lines: int, ingest_line: str) -> list[list[str]]:
     """Build the five sections as line lists, in canonical order. Raises StoreUnreadable."""
     store = read_store(state_dir)
     goal_block = goal_state.render_goal_block(store["goal"]).rstrip("\n").splitlines()
@@ -189,7 +243,7 @@ def gather(repo: Path, state_dir: Path, buildlog_lines: int) -> list[list[str]]:
         entries = build_text.splitlines()[-buildlog_lines:] if buildlog_lines > 0 else []
         build_lines = [heading] + entries
 
-    return [goal_block, state_lines, build_lines, _event_store_lines(store),
+    return [goal_block, state_lines, build_lines, _event_store_lines(store, ingest_line),
             ["## GIT"] + _git_lines(repo)]
 
 
@@ -292,6 +346,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Print the canonical orchestrator boot brief.")
     parser.add_argument("--repo", default=str(REPO_ROOT), help="git repo holding STATE.md and BUILDLOG.md (default: this checkout)")
     parser.add_argument("--state-dir", default=None, help="state directory (default: AESOP_STATE_ROOT or <repo>/state)")
+    parser.add_argument("--jsonl", default=None, help="task-events JSONL to ingest (default: the ingest tool's default)")
     parser.add_argument("--max-bytes", type=_positive, default=DEFAULT_MAX_BYTES, help="byte cap (default 12000)")
     parser.add_argument("--buildlog-lines", type=int, default=DEFAULT_BUILDLOG_LINES, help="BUILDLOG tail lines (default 25)")
     parser.add_argument("--json", action="store_true", help="print one JSON object with the same sections")
@@ -306,8 +361,14 @@ def main(argv=None) -> int:
     state_dir = Path(args.state_dir) if args.state_dir else (
         Path(os.environ["AESOP_STATE_ROOT"]) if os.environ.get("AESOP_STATE_ROOT") else repo / "state"
     )
+    jsonl = Path(args.jsonl) if args.jsonl else None
+    # Ingest only into a store that already exists: a brief must never create one.
+    outcome = None
+    if state_dir.is_dir() and Path(resolve_db_path(state_dir, "tracker")).exists():
+        outcome = run_ingest(state_dir, jsonl)
+    ingest_line = _ingest_line(state_dir, jsonl, outcome)
     try:
-        sections = gather(repo, state_dir, args.buildlog_lines)
+        sections = gather(repo, state_dir, args.buildlog_lines, ingest_line)
     except StoreUnreadable as exc:
         print(f"boot_state: {exc}", file=sys.stderr)
         return 2

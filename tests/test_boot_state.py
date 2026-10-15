@@ -62,6 +62,8 @@ class BootStateTests(unittest.TestCase):
         self.repo.mkdir()
         self.state_dir = root / "state"
         self.state_dir.mkdir()
+        # Pinned: the brief ingests this JSONL, so it must never be the live ~/.claude source.
+        self.jsonl = root / "task-events.jsonl"
         _git(self.repo, "init", "-q")
         (self.repo / "STATE.md").write_text(STATE_MD, encoding="utf-8")
         buildlog = "".join(f"### [2026-10-15 00:{i:02d}] buildlog entry {i}\n" for i in range(40))
@@ -75,8 +77,10 @@ class BootStateTests(unittest.TestCase):
     def _brief(self, *extra):
         env = dict(os.environ)
         env["AESOP_STATE_ROOT"] = str(self.state_dir)
+        env["AESOP_TASK_EVENTS_JSONL"] = str(self.jsonl)
         return subprocess.run(
-            [sys.executable, str(TOOL), "--repo", str(self.repo), "--state-dir", str(self.state_dir), *extra],
+            [sys.executable, str(TOOL), "--repo", str(self.repo), "--state-dir", str(self.state_dir),
+             "--jsonl", str(self.jsonl), *extra],
             capture_output=True, encoding="utf-8", errors="replace", env=env, timeout=60,
         )
 
@@ -210,6 +214,82 @@ class BootStateTests(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertEqual(r.stdout, "")
         self.assertFalse(missing.exists(), "a read must not create the state dir")
+
+    # --- INGEST line: the brief ingests first and reports freshness ----------
+    def _write_jsonl(self, lines, trailing_newline=True):
+        body = "\n".join(lines) + ("\n" if trailing_newline else "")
+        self.jsonl.write_text(body, encoding="utf-8", newline="\n")
+
+    @staticmethod
+    def _rec(agent_id, summary):
+        return json.dumps({
+            "ts": "2026-10-15T01:00:00.000Z", "session_id": "s1", "agent_id": agent_id,
+            "agent_type": "general-purpose", "stop_reason": None, "summary": summary,
+            "context_used_pct": 10,
+        })
+
+    def test_brief_ingests_before_projecting(self):
+        self._seed_goal()  # the ingest only runs against an existing store
+        self._write_jsonl([self._rec("a1", "first lane event"), self._rec("a2", "second lane event")])
+        r = self._brief()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("last task events: 2 of 2", r.stdout)
+        self.assertIn("INGEST: fresh", r.stdout)
+
+    def test_failed_ingest_surfaces_stale_in_the_brief(self):
+        # A complete record, then a malformed last line: ingest holds the cursor and
+        # exits 3, so no heartbeat is written. The brief must say STALE, not serve silently.
+        self._seed_goal()
+        self._write_jsonl([self._rec("a1", "good event"), "{not json"])
+        r = self._brief()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ingest_line = [ln for ln in r.stdout.splitlines() if ln.startswith("INGEST:")]
+        self.assertEqual(len(ingest_line), 1, r.stdout)
+        self.assertIn("STALE", ingest_line[0])
+        self.assertIn("ingest run: failed exit 3", ingest_line[0])
+
+    def test_no_source_reports_no_source_not_stale(self):
+        self._seed_goal()
+        r = self._brief()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("INGEST: NO-SOURCE", r.stdout)
+        self.assertNotIn("STALE", r.stdout)
+
+    def test_ingest_run_is_bounded_by_timeout(self):
+        # A child that sleeps far longer than the bound must be cut off and reported, not waited on.
+        import time
+        from tools import boot_state as bs
+        started = time.monotonic()
+        outcome = bs.run_ingest(
+            self.state_dir, self.jsonl, timeout_s=1,
+            argv_prefix=[sys.executable, "-c", "import time; time.sleep(60)"],
+        )
+        elapsed = time.monotonic() - started
+        self.assertTrue(outcome.startswith("timed out after 1s"), outcome)
+        self.assertLess(elapsed, 20)
+
+    def test_ingest_run_outcome_ok_on_clean_run(self):
+        from tools import boot_state as bs
+        self._write_jsonl([self._rec("a1", "clean")])
+        self.assertEqual(bs.run_ingest(self.state_dir, self.jsonl), "ok")
+
+    def test_absent_store_is_not_ingested_into(self):
+        # Ingest creates state dirs; the brief must not run it against an absent store.
+        missing = self.state_dir.parent / "absent-state"
+        self._write_jsonl([self._rec("a1", "should not be ingested")])
+        r = self._brief_at(missing)
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(r.stdout, "")
+        self.assertFalse(missing.exists())
+
+    def _brief_at(self, state_dir):
+        env = dict(os.environ)
+        env["AESOP_TASK_EVENTS_JSONL"] = str(self.jsonl)
+        return subprocess.run(
+            [sys.executable, str(TOOL), "--repo", str(self.repo), "--state-dir", str(state_dir),
+             "--jsonl", str(self.jsonl)],
+            capture_output=True, encoding="utf-8", errors="replace", env=env, timeout=60,
+        )
 
 
 if __name__ == "__main__":
