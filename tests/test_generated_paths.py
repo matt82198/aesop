@@ -51,6 +51,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 import tools.generated_paths as generated_paths  # noqa: E402
+from tests.helpers import publish_origin_main_tools  # noqa: E402
 
 ZERO_SHA = "0" * 40
 
@@ -263,7 +264,13 @@ class TestPrePushGate(unittest.TestCase):
             ["git"] + list(args), cwd=str(repo),
             capture_output=True, text=True, encoding="utf-8", timeout=120)
 
-    def make_repo(self, changed_path, name="repo"):
+    def publish_gate_base(self, repo, skip=()):
+        """Gate code is judged from origin/main:tools (hook gate_base_dir).
+
+        Publish the real tools/ tree (minus `skip`) as the fixture's origin/main."""
+        publish_origin_main_tools(repo, skip=skip)
+
+    def make_repo(self, changed_path, name="repo", base_skip=()):
         """Fixture repo: one base commit, then one commit touching changed_path."""
         repo = self.tmp / name
         (repo / Path(changed_path).parent).mkdir(parents=True, exist_ok=True)
@@ -278,6 +285,7 @@ class TestPrePushGate(unittest.TestCase):
         self.git(repo, "add", "-A")
         self.git(repo, "commit", "-q", "-m", "change")
         head = self.git(repo, "rev-parse", "HEAD").stdout.strip()
+        self.publish_gate_base(repo, skip=base_skip)
         return repo, base, head
 
     def run_gate(self, repo, stdin_text, env=None):
@@ -342,7 +350,7 @@ class TestPrePushGate(unittest.TestCase):
         self.assertEqual(self.run_gate(repo, tuple_text).returncode, 0)
 
     def test_missing_tool_fails_open(self):
-        repo, base, head = self.make_repo("tools/INDEX.md", "gen6")
+        repo, base, head = self.make_repo("tools/INDEX.md", "gen6", base_skip=("generated_paths.py",))
         empty_root = self.tmp / "no-aesop"
         (empty_root / "state").mkdir(parents=True)
         res = self.run_gate(repo, self.tuple_for(base, head),
@@ -621,7 +629,10 @@ class TestMergeCarriedGeneratedPath(unittest.TestCase):
     INDEX = "tools/INDEX.md"
 
     def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory()
+        # Hosted Linux CI saw `Directory not empty: origin/.git` on rmtree in
+        # tearDown (one run, ci shard 0). Cleanup-only tolerance: every assertion
+        # still runs; a leftover temp dir is not a test failure.
+        self._tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.tmp = Path(self._tmp.name)
         self.driver = self.tmp / "drive.sh"
         self.driver.write_text(
@@ -635,6 +646,10 @@ class TestMergeCarriedGeneratedPath(unittest.TestCase):
         self.origin.mkdir()
         self.git(self.origin, "init", "-q", "-b", "main")
         self._write(self.origin, "seed.txt", "seed\n")
+        # The hook judges gate code from origin/main:tools (gate_base_dir), so the
+        # fixture's origin/main must carry the real tools/ tree.
+        shutil.copytree(REPO_ROOT / "tools", self.origin / "tools",
+                        ignore=shutil.ignore_patterns("__pycache__"))
         self._write(self.origin, self.INDEX, "index v1\n")
         self.git(self.origin, "add", "-A")
         self.git(self.origin, "commit", "-q", "-m", "base")

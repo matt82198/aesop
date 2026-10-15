@@ -2,7 +2,7 @@
 
 **What this file is:** The live durable checkpoint that Aesop itself uses during its own `/buildsystem` loop. It records the current system version, architectural decisions, known limitations, and the next milestone. This is not historical archive; it is read by the orchestrator to understand operational state.
 
-**Current Version:** v0.9.2 (PRE-PUBLISH: package.json 0.9.2 on origin/main since #978 merged 2026-10-15 01:54Z; tag v0.9.2 is NOT cut yet; latest origin tag v0.9.1 = 5026195d; release is USER-gated). Previous: v0.9.1 (tag 5026195d, cut 2026-10-09; GitHub release 2026-10-10; npm @matt82198/aesop 0.9.1). v0.9.0 (2026-10-07).
+**Current Version:** v0.9.2 released 2026-10-15 (tag a29208b5, publish run 38679550874, GitHub release 2026-10-15T04:04:32Z, npm @matt82198/aesop 0.9.2 visible 04:09:43Z). Previous: v0.9.1 (tag 5026195d, cut 2026-10-09; GitHub release 2026-10-10; npm @matt82198/aesop 0.9.1). v0.9.0 (2026-10-07).
 
 ## CURRENT (2026-10-15 late-wave checkpoint 03:00Z)
 
@@ -93,6 +93,13 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 **Wave-31+:** State-layer multi-instance lifecycle (crash-orphan recovery, liveness detection, monotonic expiry); unsupervised failure-recovery loop; frontier live-run capability; external-benchmark validation.
 
 **NEXT STEPS (post-0.7.2, ranked):**
+- (a) Receipts design: an update-branch merge head has no signer (seen on #970's merge 0e096a94, verify-receipt red, non-required). Either the harness signs after re-running gates, or lanes merge main locally. Decide in receipts-plan increment I1.
+- (b) Repo-wide sys.modules restoration sweep: 55 `del sys.modules[` sites in test_health_score, test_healthcheck, test_orchestration_core, test_serve, test_ui_config. Run after PR #1004 merges.
+- (c) #985 update onto main after #1001 merges.
+- (d) Brain auto-commit hook has no quiet period, so lane fixes land as trailer-less fragments. Decide per-path debounce or claim-aware skip.
+- (e) rotate_logs.py tail semantics now fixed (claude-scripts #44).
+- (f) AUDIT-PRIMER duplicate field reconciled (done in the v0.9.2 checkpoint PR; primer committed in conductor3 34b245d).
+
 
 ### Shipped (Most Recent)
 

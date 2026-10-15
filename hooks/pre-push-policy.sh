@@ -147,6 +147,69 @@ gate_tool_missing_block() {
   printf 'A gate that cannot run must not report success. Push blocked.\n' >&2
 }
 
+gate_base_dir() {
+  # Prints a directory holding origin/main's tools/ and .pyflakes-baseline.json:
+  # the BASE gate copies. Every gate script this hook runs comes from here, never
+  # from the pushed tree, so a branch that weakens a gate cannot judge its own
+  # push (F-04 / adv-enforcement F-03). Gate DATA roots (--root) still point at
+  # the pushed tree; only gate code and gate baselines are pinned to base.
+  # Content-addressed by the base commit, so one base is extracted once.
+  # Fail-closed: prints nothing and returns 1 when origin/main cannot be read.
+  local base_sha tmp_root dir staging
+  base_sha=$(git rev-parse --verify -q "origin/main^{commit}" 2>/dev/null) || return 1
+  [ -n "$base_sha" ] || return 1
+  tmp_root="${TMPDIR:-/tmp}"
+  dir="$tmp_root/aesop-gate-base-$base_sha"
+  if [ ! -f "$dir/.complete" ]; then
+    staging=$(mktemp -d "$tmp_root/aesop-gate-stage.XXXXXX" 2>/dev/null) || return 1
+    if ! git archive "$base_sha" -- tools 2>/dev/null | tar -x -C "$staging" 2>/dev/null \
+       || [ ! -d "$staging/tools" ]; then
+      rm -rf "$staging"
+      return 1
+    fi
+    if git cat-file -e "$base_sha:.pyflakes-baseline.json" 2>/dev/null; then
+      if ! git show "$base_sha:.pyflakes-baseline.json" > "$staging/.pyflakes-baseline.json" 2>/dev/null; then
+        rm -rf "$staging"
+        return 1
+      fi
+    fi
+    touch "$staging/.complete"
+    rm -rf "$dir"
+    mv "$staging" "$dir" 2>/dev/null || rm -rf "$staging"
+    [ -f "$dir/.complete" ] || return 1
+  fi
+  printf '%s\n' "$dir"
+}
+
+gate_base_block() {
+  # Shared fail-closed message: the base gate copy cannot be read, so no gate can judge the push.
+  local label="$1"
+  log_block "gate_base_unavailable"
+  printf 'FATAL: %s cannot run its base gate copy: origin/main:tools is unreadable. Push blocked (fail-closed).\n' "$label" >&2
+}
+
+check_gate_tamper() {
+  # GATE-TAMPER banner (non-blocking). A push that edits a gate file is still judged
+  # by the BASE gate copy (gate_base_dir), so the edit cannot pass itself; the banner
+  # makes the gate change loud in the push log. Gate improvements still push.
+  local tuples local_ref local_sha remote_ref remote_sha changed hits=""
+  tuples=$(cat)
+  while IFS=' ' read -r local_ref local_sha remote_ref remote_sha || [ -n "$local_ref" ]; do
+    [ -z "$local_sha" ] && continue
+    [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue
+    changed=$(git diff --name-only "origin/main...$local_sha" 2>/dev/null) || changed=""
+    hits+=$(printf '%s\n' "$changed" | grep -E '^(tools/[^/]*gate[^/]*\.py|tools/secret_scan\.py|hooks/pre-push-policy\.sh|\.github/workflows/)' || true)
+    hits+=$'\n'
+  done <<< "$tuples"
+  hits=$(printf '%s\n' "$hits" | sed '/^$/d' | sort -u)
+  if [ -n "$hits" ]; then
+    printf '\n*** GATE-CHANGED: this push modifies gate files. They are judged by the BASE (origin/main) copies; the pushed copies do not judge this push. ***\n' >&2
+    printf '%s\n' "$hits" | sed 's/^/***   gate file: /' >&2
+    log_event "gate_changed_in_push"
+  fi
+  return 0
+}
+
 gate_no_python_block() {
   # Shared fail-closed message for a gate whose interpreter is unavailable.
   # The top-of-file guard already requires python, so reaching this means the
@@ -581,17 +644,6 @@ check_secret_scan() {
     return 0
   fi
 
-  local aesop_root
-  aesop_root=$(resolve_aesop_root)
-  local scan_script="$aesop_root/tools/secret_scan.py"
-
-  if [ ! -f "$scan_script" ] || [ ! -x "$scan_script" ]; then
-    # Scanner not found or not executable: fail-closed (cannot verify => deny)
-    log_block "secret_scan_unavailable"
-    printf 'FATAL: secret_scan.py not found or not executable at %s\n' "$scan_script" >&2
-    return 1
-  fi
-
   if [ $parse_exit_code -ne 0 ] || [ -z "$commit_ranges" ]; then
     # Malformed stdin: fail-CLOSED (security P1 fix)
     # Only fail-open for missing scanner tool, not for malformed input
@@ -600,6 +652,20 @@ check_secret_scan() {
     printf 'Error: Could not parse pre-push stdin for commit range (malformed tuple)\n' >&2
     return 1
   fi
+
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_secret_scan"; return 1; }
+  local scan_script="$gate_dir/tools/secret_scan.py"
+
+  if [ ! -f "$scan_script" ] || [ ! -x "$scan_script" ]; then
+    # Scanner not found or not executable: fail-closed (cannot verify => deny)
+    log_block "secret_scan_unavailable"
+    printf 'FATAL: secret_scan.py not found or not executable at %s\n' "$scan_script" >&2
+    return 1
+  fi
+
 
   local overall_exit_code=0
   local range
@@ -625,6 +691,8 @@ check_secret_scan() {
 }
 
 check_tracker_guard() {
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_tracker_guard"; return 1; }
   # Tracker zombie-resurrection gate (tools/tracker_guard.py --check).
   # Runs against the LIVE runtime state (AESOP_STATE_ROOT, default
   # $AESOP_ROOT/state). This gate is wired here -- not in CI -- because
@@ -639,7 +707,7 @@ check_tracker_guard() {
   # the push. tracker_guard itself exits 0 when tracker.json is absent.
   local aesop_root
   aesop_root=$(resolve_aesop_root)
-  local guard_script="$aesop_root/tools/tracker_guard.py"
+  local guard_script="$gate_dir/tools/tracker_guard.py"
 
   local tool_status
   tool_status=$(gate_tool_status "$aesop_root" "$guard_script")
@@ -675,6 +743,8 @@ check_tracker_guard() {
 }
 
 check_import_resolution() {
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_import_resolution"; return 1; }
   # Python import resolution validator (guardrail G5).
   # AST-parses the pushed .py files, resolves each import against repo
   # structure and sys.stdlib_module_names. Fail-closed if any cannot resolve.
@@ -695,7 +765,7 @@ check_import_resolution() {
   # actual resolution failures and malformed stdin stay fail-closed.
   local aesop_root
   aesop_root=$(resolve_aesop_root)
-  local import_check_script="$aesop_root/tools/import_resolution_check.py"
+  local import_check_script="$gate_dir/tools/import_resolution_check.py"
 
   local tool_status
   tool_status=$(gate_tool_status "$aesop_root" "$import_check_script")
@@ -760,6 +830,8 @@ check_import_resolution() {
 }
 
 check_conflict_markers() {
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_conflict_markers"; return 1; }
   # Literal conflict-marker gate (tools/conflict_marker_check.py --staged).
   # Catches a clean-merge landing a literal <<<<<<<< / ======= / >>>>>>>>
   # block in a tracked text file (PR #834 incident, merge commit b2c4db77 --
@@ -776,7 +848,7 @@ check_conflict_markers() {
   # malformed stdin stay fail-closed.
   local aesop_root
   aesop_root=$(resolve_aesop_root)
-  local marker_script="$aesop_root/tools/conflict_marker_check.py"
+  local marker_script="$gate_dir/tools/conflict_marker_check.py"
 
   local tool_status
   tool_status=$(gate_tool_status "$aesop_root" "$marker_script")
@@ -840,7 +912,85 @@ check_conflict_markers() {
   return $overall_exit_code
 }
 
+check_symbol_survival() {
+  # PR symbol survival gate (Guardrail G13, tools/pr_symbol_survival_check.py).
+  # BLOCKING since the G13 promotion: a symbol the pushed branch added that a
+  # merge commit in range dropped (conflict-resolution loss, PR #745 class)
+  # fails the push. Exit 1 = symbols missing; exit 2 = tool/git error. Both
+  # block. Same range mechanism as check_conflict_markers (one remote..local
+  # range per ref tuple from get_commit_range()).
+  #
+  # Fail-open ONLY when there is no aesop tools/ checkout at all (the same
+  # rule as every other gate); a present-but-missing script fails closed.
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local symbol_script="$aesop_root/tools/pr_symbol_survival_check.py"
+
+  local tool_status
+  tool_status=$(gate_tool_status "$aesop_root" "$symbol_script")
+  if [ "$tool_status" = "skip" ]; then
+    log_event "symbol_survival_skipped_no_aesop_tools"
+    return 0
+  fi
+  if [ "$tool_status" = "missing" ]; then
+    gate_tool_missing_block "pr_symbol_survival_check.py" "$symbol_script"
+    log_event "symbol_survival_tool_missing"
+    return 1
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    gate_no_python_block "PR symbol survival check"
+    log_event "symbol_survival_no_python"
+    return 1
+  fi
+
+  local commit_ranges
+  commit_ranges=$(get_commit_range)
+  local parse_exit_code=$?
+
+  if [ $parse_exit_code -eq 2 ]; then
+    log_event "symbol_survival_skipped_delete_only_push"
+    return 0
+  fi
+
+  if [ $parse_exit_code -eq 3 ]; then
+    log_event "symbol_survival_skipped_empty_stdin"
+    return 0
+  fi
+
+  if [ $parse_exit_code -ne 0 ] || [ -z "$commit_ranges" ]; then
+    # Malformed stdin: fail-CLOSED.
+    log_block "symbol_survival_stdin_parse_failed"
+    printf 'Error: Could not parse pre-push stdin for commit range (symbol survival check)\n' >&2
+    return 1
+  fi
+
+  local overall_exit_code=0
+  local range
+  while IFS= read -r range || [ -n "$range" ]; do
+    [ -z "$range" ] && continue
+    local base_ref="${range%%..*}"
+    local head_ref="${range##*..}"
+
+    local check_output
+    check_output=$("$py_bin" "$symbol_script" --base "$base_ref" --head "$head_ref" 2>&1)
+    local check_exit_code=$?
+
+    if [ $check_exit_code -ne 0 ]; then
+      if [ -n "$check_output" ]; then
+        printf '%s\n' "$check_output" >&2
+      fi
+      overall_exit_code=$check_exit_code
+    fi
+  done <<< "$commit_ranges"
+
+  return $overall_exit_code
+}
+
 check_claudemd_sync() {
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_claudemd_sync"; return 1; }
   # CLAUDE.md synchronization gate (tools/claudemd_sync_gate.py --check).
   # Ensures code changes are accompanied by domain CLAUDE.md updates.
   # Runs at push time so authors see drift immediately.
@@ -848,7 +998,7 @@ check_claudemd_sync() {
   # Fail-open for missing optional tooling; fail-closed for actual drift.
   local aesop_root
   aesop_root=$(resolve_aesop_root)
-  local sync_script="$aesop_root/tools/claudemd_sync_gate.py"
+  local sync_script="$gate_dir/tools/claudemd_sync_gate.py"
 
   local tool_status
   tool_status=$(gate_tool_status "$aesop_root" "$sync_script")
@@ -884,6 +1034,8 @@ check_claudemd_sync() {
 }
 
 check_gen_tool_index() {
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_gen_tool_index"; return 1; }
   # Tool index synchronization gate (tools/gen_tool_index.py --check).
   # Ensures tools/INDEX.md stays in sync with per-tool INDEX: docstring lines.
   # Any new tool without an INDEX: line fails closed to prevent undocumented tools.
@@ -891,7 +1043,7 @@ check_gen_tool_index() {
   # Fail-open for missing optional tooling; fail-closed for actual drift or missing INDEX lines.
   local aesop_root
   aesop_root=$(resolve_aesop_root)
-  local index_script="$aesop_root/tools/gen_tool_index.py"
+  local index_script="$gate_dir/tools/gen_tool_index.py"
 
   local tool_status
   tool_status=$(gate_tool_status "$aesop_root" "$index_script")
@@ -927,6 +1079,8 @@ check_gen_tool_index() {
 }
 
 check_metrics() {
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_metrics"; return 1; }
   # Metrics verification gate (tools/metrics_gate.py).
   # Ensures hard numeric claims in markdown are verified with source markers.
   # Runs at push time so authors see unverified metrics immediately.
@@ -934,7 +1088,7 @@ check_metrics() {
   # Fail-open for missing optional tooling; fail-closed for unverified metrics.
   local aesop_root
   aesop_root=$(resolve_aesop_root)
-  local metrics_script="$aesop_root/tools/metrics_gate.py"
+  local metrics_script="$gate_dir/tools/metrics_gate.py"
 
   local tool_status
   tool_status=$(gate_tool_status "$aesop_root" "$metrics_script")
@@ -970,6 +1124,8 @@ check_metrics() {
 }
 
 check_test_suite_count() {
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_test_suite_count"; return 1; }
   # CI-shard-coverage gate (tools/verify_test_suite_count.py --check).
   # Verifies the CI workflow's shard matrix (.github/workflows/ci.yml) actually
   # covers every git-tracked tests/test_*.py file -- a gap there means some
@@ -986,7 +1142,7 @@ check_test_suite_count() {
   # no shard matrix), 1 on a coverage gap, 2 if it cannot evaluate.
   local aesop_root
   aesop_root=$(resolve_aesop_root)
-  local verify_script="$aesop_root/tools/verify_test_suite_count.py"
+  local verify_script="$gate_dir/tools/verify_test_suite_count.py"
 
   local tool_status
   tool_status=$(gate_tool_status "$aesop_root" "$verify_script")
@@ -1022,6 +1178,8 @@ check_test_suite_count() {
 }
 
 check_pyflakes_ratchet() {
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_pyflakes_ratchet"; return 1; }
   # Pyflakes ratchet gate (guardrail G15, tools/pyflakes_gate.py).
   # Wraps `python -m pyflakes` to enforce a baseline: never let unused-import /
   # unused-variable debt grow. A new finding blocks the push; a stale entry
@@ -1043,7 +1201,7 @@ check_pyflakes_ratchet() {
 
   local aesop_root
   aesop_root=$(resolve_aesop_root)
-  local pyflakes_script="$aesop_root/tools/pyflakes_gate.py"
+  local pyflakes_script="$gate_dir/tools/pyflakes_gate.py"
 
   local tool_status
   tool_status=$(gate_tool_status "$aesop_root" "$pyflakes_script")
@@ -1066,7 +1224,7 @@ check_pyflakes_ratchet() {
   fi
 
   local pyflakes_output
-  pyflakes_output=$("$py_bin" "$pyflakes_script" --root "$aesop_root" --baseline "$aesop_root/.pyflakes-baseline.json" 2>&1)
+  pyflakes_output=$("$py_bin" "$pyflakes_script" --root "$aesop_root" --baseline "$gate_dir/.pyflakes-baseline.json" 2>&1)
   local pyflakes_exit_code=$?
 
   if [ $pyflakes_exit_code -eq 0 ]; then
@@ -1091,6 +1249,8 @@ check_pyflakes_ratchet() {
 
 
 check_claudemd_headroom() {
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_claudemd_headroom"; return 1; }
   # CLAUDE.md merge-union cap gate (tools/claudemd_lint.py --headroom).
   #
   # The working-tree line-cap check only ever sees the BRANCH. A branch can sit
@@ -1106,7 +1266,7 @@ check_claudemd_headroom() {
   # missing-tool fail-open below.
   local aesop_root
   aesop_root=$(resolve_aesop_root)
-  local lint_script="$aesop_root/tools/claudemd_lint.py"
+  local lint_script="$gate_dir/tools/claudemd_lint.py"
 
   if [ ! -f "$lint_script" ]; then
     log_event "claudemd_headroom_skipped_tool_missing"
@@ -1222,6 +1382,8 @@ log_block() {
 }
 
 check_encoding_lint() {
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_encoding_lint"; return 1; }
   # Guardrail G10 extension: encoding lint for subprocess calls.
   # Runs tools/encoding_lint.py --check against staged Python files.
   # Skips only when there is no aesop checkout; fail-closed when tools/ exists
@@ -1232,7 +1394,7 @@ check_encoding_lint() {
   # the gate entirely on any machine without ~/aesop.
   local aesop_root
   aesop_root=$(resolve_aesop_root)
-  local lint_script="$aesop_root/tools/encoding_lint.py"
+  local lint_script="$gate_dir/tools/encoding_lint.py"
 
   local tool_status
   tool_status=$(gate_tool_status "$aesop_root" "$lint_script")
@@ -1268,6 +1430,8 @@ check_encoding_lint() {
 }
 
 check_test_coverage() {
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_test_coverage"; return 1; }
   # Guardrail G2 extension: verify all on-disk test files are run by CI.
   # Runs tools/verify_test_coverage.py --check to detect orphaned tests.
   # Skips only when there is no aesop checkout; fail-closed when tools/ exists
@@ -1275,7 +1439,7 @@ check_test_coverage() {
   # resolve_aesop_root(), not $HOME/aesop -- see check_encoding_lint.
   local aesop_root
   aesop_root=$(resolve_aesop_root)
-  local coverage_script="$aesop_root/tools/verify_test_coverage.py"
+  local coverage_script="$gate_dir/tools/verify_test_coverage.py"
 
   local tool_status
   tool_status=$(gate_tool_status "$aesop_root" "$coverage_script")
@@ -1311,6 +1475,8 @@ check_test_coverage() {
 }
 
 check_linux_shape() {
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_linux_shape"; return 1; }
   # Linux shape checker: run shell/Node tests under WSL to catch platform-specific
   # failures before push (e.g., isolated-home USERPROFILE assumption, shell test
   # failures on Ubuntu). Detects changes to *.sh, hooks/*, .github/workflows/*.yml,
@@ -1330,7 +1496,7 @@ check_linux_shape() {
   #   - AESOP_REQUIRE_LINUX_SHAPE=1 and WSL unavailable
   local aesop_root
   aesop_root=$(resolve_aesop_root)
-  local shape_script="$aesop_root/tools/linux_shape_check.py"
+  local shape_script="$gate_dir/tools/linux_shape_check.py"
 
   local tool_status
   tool_status=$(gate_tool_status "$aesop_root" "$shape_script")
@@ -1377,6 +1543,8 @@ check_linux_shape() {
 }
 
 check_generated_paths() {
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_generated_paths"; return 1; }
   # Generated-path registry gate (tools/generated_paths.py --check).
   # Machine-generated files have exactly ONE legitimate writer -- their
   # generator. A hand edit is silently reverted on the next regeneration AND
@@ -1398,7 +1566,7 @@ check_generated_paths() {
   # means there is no diff to classify.
   local aesop_root
   aesop_root=$(resolve_aesop_root)
-  local gen_script="$aesop_root/tools/generated_paths.py"
+  local gen_script="$gate_dir/tools/generated_paths.py"
 
   if [ ! -f "$gen_script" ]; then
     log_event "generated_paths_skipped_tool_missing"
@@ -1450,6 +1618,8 @@ check_generated_paths() {
 }
 
 ensure_merge_drivers() {
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "ensure_merge_drivers"; return 1; }
   # Register aesop's custom git merge drivers (tools/install_merge_drivers.py)
   # in this clone's config, idempotently. `.gitattributes` names the drivers
   # but git never reads a driver COMMAND out of the repository, so each clone
@@ -1458,7 +1628,7 @@ ensure_merge_drivers() {
   # convenience, the byte-identity gate below is the enforcement.
   local aesop_root
   aesop_root=$(resolve_aesop_root)
-  local install_script="$aesop_root/tools/install_merge_drivers.py"
+  local install_script="$gate_dir/tools/install_merge_drivers.py"
   if [ ! -f "$install_script" ]; then
     return 0
   fi
@@ -1473,6 +1643,8 @@ ensure_merge_drivers() {
 }
 
 check_generated_regen() {
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_generated_regen"; return 1; }
   # Generated-artifact byte-identity gate on COMMITTED content
   # (tools/generated_push_gate.py). check_gen_tool_index() above verifies the
   # WORKING TREE; CI verifies the pushed COMMIT. The two differ exactly when a
@@ -1488,7 +1660,7 @@ check_generated_regen() {
   # exists but the gate script or python is missing.
   local aesop_root
   aesop_root=$(resolve_aesop_root)
-  local gate_script="$aesop_root/tools/generated_push_gate.py"
+  local gate_script="$gate_dir/tools/generated_push_gate.py"
 
   local tool_status
   tool_status=$(gate_tool_status "$aesop_root" "$gate_script")
@@ -1712,6 +1884,30 @@ check_emit_receipt() {
 }
 
 run_test_mode() {
+  # Gate code is judged from origin/main (gate_base_dir). A fixture that needs a
+  # specific gate script publishes its tools/ as origin/main:tools/ (below).
+  test_publish_base() {
+    local repo="$1" tools_src="$2" base="$1.base"
+    rm -rf "$base"
+    mkdir -p "$base/tools"
+    if [ -d "$tools_src" ]; then cp -R "$tools_src"/. "$base/tools/"; fi
+    : > "$base/tools/.keep"
+    git -C "$base" init -q -b main
+    git -C "$base" add -A
+    git -C "$base" -c user.email=t@example.com -c user.name=t -c core.autocrlf=false commit -q -m base
+    git -C "$repo" remote remove origin >/dev/null 2>&1 || true
+    git -C "$repo" remote add origin "$base"
+    git -C "$repo" fetch -q origin main
+  }
+  test_clone_base() {
+    local clone="$1" tools_src="$2"
+    rm -rf "$clone"
+    mkdir -p "$clone"
+    git -C "$clone" init -q -b main
+    git -C "$clone" -c user.email=t@example.com -c user.name=t -c core.autocrlf=false commit -q --allow-empty -m seed
+    test_publish_base "$clone" "$tools_src"
+    git -C "$clone" symbolic-ref HEAD refs/heads/feature/test
+  }
   local test_passed=0
   local test_failed=0
   local tmpdir
@@ -1883,6 +2079,8 @@ run_test_mode() {
   printf '\n=== Test 7: Secret scan unavailable logs audit event ===\n'
   (
     export AESOP_ROOT="$tmpdir/aesop_no_scanner"
+    test_clone_base "$tmpdir/noscan_clone" ""
+    cd "$tmpdir/noscan_clone" || exit 1
     mkdir -p "$AESOP_ROOT/state"
 
     # Provide a valid 4-field tuple to test the scanner-missing condition
@@ -2154,6 +2352,7 @@ SCANNER
     cd "$tmpdir" || exit 1
     git checkout -q feature/test 2>/dev/null || git checkout -q -b feature/stdin_double 2>/dev/null
     local_sha=$(git rev-parse HEAD 2>/dev/null || echo "0000000")
+    test_publish_base "$tmpdir" "$AESOP_ROOT/tools"
 
     stdin_input="refs/heads/feature/test $local_sha refs/heads/feature/test 0000000000000000000000000000000000000000"
 
@@ -2291,6 +2490,8 @@ refs/heads/feature/test $local_sha refs/heads/main 00000000000000000000000000000
   (
     export AESOP_ROOT="$tmpdir/aesop_tools_no_claudemd"
     mkdir -p "$AESOP_ROOT/tools"
+    test_clone_base "$tmpdir/tn19_clone" "$AESOP_ROOT/tools"
+    cd "$tmpdir/tn19_clone" || exit 1
 
     if check_claudemd_sync >/dev/null 2>&1; then
       printf 'FAIL: check_claudemd_sync fail-opened despite tools/ being present\n'
@@ -2309,6 +2510,8 @@ refs/heads/feature/test $local_sha refs/heads/main 00000000000000000000000000000
   (
     export AESOP_ROOT="$tmpdir/aesop_tools_no_metrics"
     mkdir -p "$AESOP_ROOT/tools"
+    test_clone_base "$tmpdir/tn20_clone" "$AESOP_ROOT/tools"
+    cd "$tmpdir/tn20_clone" || exit 1
 
     if check_metrics >/dev/null 2>&1; then
       printf 'FAIL: check_metrics fail-opened despite tools/ being present\n'
@@ -2327,6 +2530,8 @@ refs/heads/feature/test $local_sha refs/heads/main 00000000000000000000000000000
   (
     export AESOP_ROOT="$tmpdir/aesop_tools_empty"
     mkdir -p "$AESOP_ROOT/tools"
+    test_clone_base "$tmpdir/tn21_clone" "$AESOP_ROOT/tools"
+    cd "$tmpdir/tn21_clone" || exit 1
 
     if check_tracker_guard >/dev/null 2>&1; then
       printf 'FAIL: check_tracker_guard fail-opened despite tools/ being present\n'
@@ -2352,6 +2557,8 @@ refs/heads/feature/test $local_sha refs/heads/main 00000000000000000000000000000
     mkdir -p "$AESOP_ROOT/tools"
     printf 'import sys\nsys.exit(1)\n' > "$AESOP_ROOT/tools/metrics_gate.py"
     chmod -x "$AESOP_ROOT/tools/metrics_gate.py" 2>/dev/null
+    test_clone_base "$tmpdir/tn22_clone" "$AESOP_ROOT/tools"
+    cd "$tmpdir/tn22_clone" || exit 1
 
     if check_metrics >/dev/null 2>&1; then
       printf 'FAIL: non-executable gate script was skipped instead of run\n'
@@ -2370,6 +2577,8 @@ refs/heads/feature/test $local_sha refs/heads/main 00000000000000000000000000000
   (
     export AESOP_ROOT="$tmpdir/aesop_headroom"
     mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+    test_clone_base "$tmpdir/hr_clone_a" "$AESOP_ROOT/tools"
+    cd "$tmpdir/hr_clone_a" || exit 1
 
     # 23a: tool absent -> fail-open (hook installs into repos without an aesop checkout)
     if ! check_claudemd_headroom >/dev/null 2>&1; then
@@ -2384,6 +2593,8 @@ import sys
 print("Error: merge union unreadable: ref 'origin/main' does not resolve", file=sys.stderr)
 sys.exit(2)
 HEADROOM_UNREADABLE
+    test_clone_base "$tmpdir/hr_clone_b" "$AESOP_ROOT/tools"
+    cd "$tmpdir/hr_clone_b" || exit 1
     if ! check_claudemd_headroom >/dev/null 2>&1; then
       printf 'FAIL: exit 2 (unreadable) must fail-open, not block the push\n'
       exit 1
@@ -2396,6 +2607,8 @@ import sys
 print("1. [headroom-line-count] tools/CLAUDE.md: merge union is 151 lines, exceeds max 150")
 sys.exit(1)
 HEADROOM_BUST
+    test_clone_base "$tmpdir/hr_clone_c" "$AESOP_ROOT/tools"
+    cd "$tmpdir/hr_clone_c" || exit 1
     if check_claudemd_headroom >/dev/null 2>&1; then
       printf 'FAIL: exit 1 (union busts cap) must fail-closed and block the push\n'
       exit 1
@@ -2470,6 +2683,7 @@ GENPATHS
     git commit -q -m "ordinary change"
     head_sha=$(git rev-parse HEAD)
 
+    git -C "$REPO" update-ref refs/remotes/origin/main "$head_sha"
     tuple="refs/heads/feature/y $head_sha refs/heads/feature/y $base_sha"
     if printf '%s\n' "$tuple" | check_generated_paths >/dev/null 2>&1; then
       printf 'PASS: ordinary push allowed through the generated-path gate\n'
@@ -2701,6 +2915,16 @@ main() {
     exit 1
   fi
 
+  # Base gate copies must be readable before any gate runs (fail-closed; see gate_base_dir).
+  if ! gate_base_dir >/dev/null; then
+    printf 'FATAL: origin/main:tools is unreadable, so the base gate copies cannot run. Push blocked (fail-closed).\n' >&2
+    log_block "gate_base_unavailable"
+    exit 1
+  fi
+
+  # GATE-CHANGED banner for pushes that edit gate files (non-blocking; see check_gate_tamper).
+  check_gate_tamper <<< "$prepush_stdin"
+
   if ! check_secret_scan <<< "$prepush_stdin"; then
     printf 'Error: Secret scan failed. Push blocked.\n' >&2
     log_block "secret_scan_failure"
@@ -2720,6 +2944,13 @@ main() {
   if ! check_conflict_markers <<< "$prepush_stdin"; then
     printf 'Error: Literal conflict marker found in pushed content. Push blocked.\n' >&2
     log_block "conflict_marker_check_failure"
+    exit 1
+  fi
+
+  # G13 symbol survival (BLOCKING). Same captured stdin, same range mechanism.
+  if ! check_symbol_survival <<< "$prepush_stdin"; then
+    printf 'Error: PR symbol survival check failed (a merge commit dropped a symbol this branch added). Push blocked.\n' >&2
+    log_block "symbol_survival_failure"
     exit 1
   fi
 
