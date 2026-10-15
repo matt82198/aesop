@@ -143,13 +143,16 @@ def verify_signature(canonical: bytes, sig: dict, pubkey_path=None, hmac_secret=
 KEYRING_DIR_NAME = "receipt_pubkeys"  # Extra registered public keys, next to the committed key.
 
 
-def keyring_paths(pubkey_path) -> list:
-    """Registered Ed25519 public keys: the committed key plus <its dir>/receipt_pubkeys/*.pub."""
+def keyring_paths(pubkey_path, extra_dir=None) -> list:
+    """Registered Ed25519 public keys: the committed key plus <its dir>/receipt_pubkeys/*.pub.
+
+    `extra_dir` overrides the registered-keys directory (the verifier passes the BASE
+    keyring from origin/main so a PR head cannot register its own signer)."""
     if not pubkey_path:
         return []
     base = Path(pubkey_path)
     paths = [base] if base.is_file() else []
-    extra = base.parent / KEYRING_DIR_NAME
+    extra = Path(extra_dir) if extra_dir is not None else base.parent / KEYRING_DIR_NAME
     if extra.is_dir():
         paths += sorted(p for p in extra.glob("*.pub") if p.is_file())
     return paths

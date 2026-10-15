@@ -66,16 +66,24 @@ def _check_shape(envelope):
         raise CannotEvaluate("receipt.parts must be a list")
 
 
-def _signature_ok(canonical, sig, pubkey_path, hmac_secret):
+def _signature_ok(canonical, sig, pubkey_path, hmac_secret, keyring=None):
     """Ed25519 resolves by key_id across the keyring; HMAC keeps its single-secret check."""
     if sig.get("scheme") == "ed25519":
-        return rc.verify_signature_keyring(canonical, sig, rc.keyring_paths(pubkey_path))
+        return rc.verify_signature_keyring(canonical, sig, rc.keyring_paths(pubkey_path, extra_dir=keyring))
     return rc.verify_signature(canonical, sig, pubkey_path=pubkey_path, hmac_secret=hmac_secret)
 
 
-def verify(envelope, repo, head, main_ref, max_behind, required, pubkey_path, hmac_secret):
-    """Return (exit_code, reasons). 0 valid / 1 invalid / 2 cannot evaluate."""
+def verify(envelope, repo, head, main_ref, max_behind, required, pubkey_path, hmac_secret,
+           keyring=None, allow_no_required=False):
+    """Return (exit_code, reasons). 0 valid / 1 invalid / 2 cannot evaluate.
+
+    `keyring` is the registered-keys directory to trust (the CI gate passes the BASE tree's).
+    An empty `required` list proves nothing, so it is refused (exit 2) unless the caller
+    explicitly sets `allow_no_required` (--allow-no-required-parts; CI never does)."""
     try:
+        if not required and not allow_no_required:
+            raise CannotEvaluate("no required parts: an empty --required proves nothing "
+                                 "(pass --allow-no-required-parts only for a deliberate local check)")
         _check_shape(envelope)
         receipt, sig = envelope["receipt"], envelope["sig"]
         scheme = sig.get("scheme")
@@ -88,7 +96,7 @@ def verify(envelope, repo, head, main_ref, max_behind, required, pubkey_path, hm
         elif not rc.has_key_material(scheme, pubkey_path=pubkey_path, hmac_secret=hmac_secret):
             raise CannotEvaluate("no key material to verify scheme %s (pubkey=%s, hmac=%s)" % (
                 scheme, pubkey_path, "set" if hmac_secret else "unset"))
-        elif not _signature_ok(rc.canonical_json(receipt), sig, pubkey_path, hmac_secret):
+        elif not _signature_ok(rc.canonical_json(receipt), sig, pubkey_path, hmac_secret, keyring):
             reasons.append("signature: does not verify under %s" % scheme)
 
         head_full = _git_ok(repo, "rev-parse", "--verify", head + "^{commit}")
@@ -212,6 +220,11 @@ def build_parser():
     p.add_argument("--max-behind", type=int, default=50)
     p.add_argument("--required", default=",".join(rc.DEFAULT_REQUIRED_PARTS), help="comma-separated part names")
     p.add_argument("--pubkey", default=None, help="Ed25519 public key (default: <repo>/%s)" % rc.DEFAULT_PUBKEY_REL)
+    p.add_argument("--keyring", default=None,
+                   help="registered-keys dir trusted besides --pubkey (default: <pubkey dir>/receipt_pubkeys). "
+                        "The CI gate points this at the BASE tree (origin/main), never the PR head.")
+    p.add_argument("--allow-no-required-parts", action="store_true",
+                   help="accept an empty --required list (refused by default; CI never passes this)")
     p.add_argument("--extract", choices=("check-runs", "comments"), default=None,
                    help="treat --receipt as a GitHub API payload and extract the newest receipt first")
     p.add_argument("--fetch-for-head", metavar="SHA", default=None,
@@ -272,8 +285,10 @@ def main(argv=None, environ=None):
         print("CANNOT EVALUATE: %s" % e, file=sys.stderr)
         return 2
     required = [n.strip() for n in args.required.split(",") if n.strip()]
+    keyring = Path(args.keyring) if args.keyring else None
     code, reasons = verify(envelope, repo=repo, head=args.head, main_ref=args.main_ref, max_behind=args.max_behind,
-                           required=required, pubkey_path=pubkey, hmac_secret=environ.get(rc.HMAC_ENV))
+                           required=required, pubkey_path=pubkey, hmac_secret=environ.get(rc.HMAC_ENV),
+                           keyring=keyring, allow_no_required=args.allow_no_required_parts)
     label = {0: "VALID", 1: "INVALID", 2: "CANNOT EVALUATE"}[code]
     print("receipt %s (head=%s scheme=%s parts=%d)" % (
         label, str(envelope.get("receipt", {}).get("head_sha", "?"))[:12],
