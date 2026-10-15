@@ -152,8 +152,12 @@ class TestHeartbeatAndStaleness(unittest.TestCase):
         instance_id = "host1:1234:abc123"
         register_instance(self.store, instance_id, "host1", 1234)
 
-        # With a very small threshold, the instance is immediately stale
-        stale = detect_stale_instances(self.store, stale_threshold_seconds=0.0)
+        # With a zero threshold, any instance whose last beat is older than the
+        # reference time is stale. Pass an explicit reference time 60s ahead instead of
+        # relying on time.time() advancing past the registration timestamp (same-tick
+        # registration/detection made this flaky on Windows' coarse clock).
+        stale = detect_stale_instances(
+            self.store, stale_threshold_seconds=0.0, now=time.time() + 60.0)
         self.assertEqual(len(stale), 1)
         self.assertEqual(stale[0]["instance_id"], instance_id)
 
@@ -177,9 +181,12 @@ class TestHeartbeatAndStaleness(unittest.TestCase):
         # Heartbeat only the first two
         heartbeat(self.store, ids[0])
         heartbeat(self.store, ids[1])
-        # Third has no heartbeat, is immediately stale with threshold 0
+        # Third has no heartbeat, is stale with threshold 0 at a reference time past its
+        # registration. Explicit reference time (same flake class as
+        # test_detect_stale_after_timeout: same-tick timestamps on Windows' coarse clock).
 
-        stale = detect_stale_instances(self.store, stale_threshold_seconds=0.0)
+        stale = detect_stale_instances(
+            self.store, stale_threshold_seconds=0.0, now=time.time() + 60.0)
         stale_ids = [inst["instance_id"] for inst in stale]
         self.assertIn(ids[2], stale_ids)
 

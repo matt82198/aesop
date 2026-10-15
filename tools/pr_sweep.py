@@ -101,6 +101,8 @@ ZERO_CHECK_LABEL = "needs-ci-trigger"
 CI_WORKFLOW_FILE = "ci.yml"  # has workflow_dispatch (ci.yml `on:`)
 RETRY_MARK = "<!-- pr-sweep:zero-check-retry sha=%s -->"
 DISARM_MARK = "<!-- pr-sweep:zero-check-disarm sha=%s -->"
+REBASE_MARK = "<!-- pr-sweep:needs-rebase sha=%s -->"
+LABEL_NEEDS_REBASE = "needs-rebase"
 
 
 class GhError(Exception):
@@ -162,7 +164,7 @@ def default_queue_path():
 
 PR_LIST_FIELDS = (
     "number,title,isDraft,autoMergeRequest,mergeStateStatus,updatedAt,"
-    "createdAt,headRefOid,headRefName,url"
+    "createdAt,headRefOid,headRefName,url,mergeable"
 )
 
 
@@ -238,6 +240,10 @@ def head_commit_time(state, head):
     return None
 
 
+def is_conflicted(pr):
+    return pr.get("mergeStateStatus") == "DIRTY" or pr.get("mergeable") == "CONFLICTING"
+
+
 def decide_zero_check(pr, state, now):
     """Pure decision for one armed PR. Returns ("retrigger", reason),
     ("disarm", reason), or None (leave the PR alone).
@@ -250,6 +256,17 @@ def decide_zero_check(pr, state, now):
     age = minutes_since(head_commit_time(state, head), now)
     if age is None or age < ZERO_CHECK_MIN_AGE_MIN:
         return None
+    # A conflicted PR gets no CI run because GitHub cannot build the merge
+    # commit. Dispatching cannot fix that, and a 24h disarm would hide a
+    # merge conflict as a CI problem, so it takes its own path: label
+    # needs-rebase once, keep auto-merge armed (a rebase triggers runs).
+    if is_conflicted(pr):
+        for comment in state.get("comments") or []:
+            if REBASE_MARK % head in (comment.get("body") or ""):
+                return None
+        return ("needs-rebase", "head %s conflicts with the base (merge state %s, mergeable %s); "
+                "no CI run is expected until it is rebased"
+                % (head[:12], pr.get("mergeStateStatus"), pr.get("mergeable")))
     retry_at = None
     for comment in state.get("comments") or []:
         body = comment.get("body") or ""
@@ -444,8 +461,9 @@ def execute_plan(actions, repo, dry_run, queue_path, log_path=None):
                 }
                 append_signal_event(queue_path, event)
                 results["signaled"] += 1
-        elif a["kind"] in ("zero-retrigger", "zero-disarm"):
-            prefix_word = "ZERO-RETRIGGER" if a["kind"] == "zero-retrigger" else "ZERO-DISARM"
+        elif a["kind"] in ("zero-retrigger", "zero-disarm", "zero-needs-rebase"):
+            prefix_word = {"zero-retrigger": "ZERO-RETRIGGER", "zero-disarm": "ZERO-DISARM",
+                           "zero-needs-rebase": "NEEDS-REBASE"}[a["kind"]]
             lines.append("%s #%s (%s) %s" % (prefix_word, a["pr"], a["reason"], a.get("url", "")))
             if dry_run:
                 continue
@@ -465,6 +483,26 @@ def execute_plan(actions, repo, dry_run, queue_path, log_path=None):
                     results["retriggered"] += 1
                     outcome = "dispatched %s on %s; marker comment posted" % (
                         CI_WORKFLOW_FILE, a["branch"])
+                elif a["kind"] == "zero-needs-rebase":
+                    label_args = ["label", "create", LABEL_NEEDS_REBASE, "--force",
+                                  "--color", "D93F0B",
+                                  "--description", "PR conflicts with main; rebase needed"]
+                    if repo:
+                        label_args += ["--repo", repo]
+                    gh_write(*label_args)
+                    edit_args = ["pr", "edit", str(a["pr"]), "--add-label", LABEL_NEEDS_REBASE]
+                    if repo:
+                        edit_args += ["--repo", repo]
+                    gh_write(*edit_args)
+                    body = (REBASE_MARK % a["head"]) + "\n" + (
+                        "pr-sweep: head `%s` conflicts with the base branch, so GitHub creates no "
+                        "CI run for it. Labelled `%s`; rebase onto main to resolve the conflict. "
+                        "Auto-merge stays armed and will proceed once the rebase produces runs."
+                        % (a["head"][:12], LABEL_NEEDS_REBASE))
+                    post_pr_comment(a["pr"], repo, body)
+                    results["rebase_flagged"] = results.get("rebase_flagged", 0) + 1
+                    outcome = "labelled %s; conflict comment posted; auto-merge left armed" % (
+                        LABEL_NEEDS_REBASE)
                 else:
                     disarm_args = ["pr", "merge", str(a["pr"]), "--disable-auto"]
                     if repo:

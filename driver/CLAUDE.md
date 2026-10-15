@@ -37,7 +37,7 @@
   evidence-capping logic (2026-10-06 incident: `tools/shadow_adjudication.py` did, resolving
   the placeholder name as a literal relative path against the process cwd — harmless only by
   coincidence when cwd == repo_root, `ContextPackViolation` otherwise).
-- **wave_scheduler.py** — Wave-manifest scheduler: builds worker driver from config, dispatches wave items.
+- **wave_scheduler.py** — Wave-manifest scheduler: builds worker driver from config, dispatches wave items. Tracker status marks are journaled via `WriteAPI.tracker_update_item` (F-01); never write tracker.json directly, and `tools/stateapi_lint.py` (scans driver/) fails closed on any raw tracker.json write here.
 - **decisions/** — Decision type schema registry (sibling lane owns schemas; absent = optional).
   Test corpora (corpus-*.jsonl) use profile-agnostic paths in evidence/examples (~/aesop, testuser, not hardcoded machine-specific paths) to support multi-profile shared checkouts.
 - **../tests/** — test_agent_driver (contract), test_codex_driver_e2e (offline + gated

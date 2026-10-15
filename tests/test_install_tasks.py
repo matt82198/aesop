@@ -16,11 +16,84 @@ SKIP on non-Windows platforms.
 """
 
 import os
+import re
 import sys
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+
+
+_PS_STUB_PRELUDE = r"""
+$global:AesopStubDb = '@@DB@@'
+$global:AesopStubLog = '@@LOG@@'
+function Add-AesopStubLog([string]$Line) {
+    Add-Content -LiteralPath $global:AesopStubLog -Value $Line -Encoding UTF8
+}
+function Get-AesopStubStore {
+    $store = @{}
+    if (Test-Path -LiteralPath $global:AesopStubDb) {
+        foreach ($line in (Get-Content -LiteralPath $global:AesopStubDb -Encoding UTF8)) {
+            $parts = $line -split "`t", 2
+            if ($parts.Count -eq 2) { $store[$parts[0]] = $parts[1] }
+        }
+    }
+    return $store
+}
+function Save-AesopStubStore($store) {
+    $lines = @()
+    foreach ($key in $store.Keys) { $lines += ($key + "`t" + $store[$key]) }
+    Set-Content -LiteralPath $global:AesopStubDb -Value $lines -Encoding UTF8
+}
+function Get-ScheduledTask {
+    [CmdletBinding()]
+    param([string]$TaskName)
+    Add-AesopStubLog ("GET " + $TaskName)
+    $store = Get-AesopStubStore
+    if (-not $store.ContainsKey($TaskName)) {
+        Write-Error "No MSFT_ScheduledTask objects found with property 'TaskName' equal to '$TaskName'"
+        return $null
+    }
+    return [pscustomobject]@{
+        TaskName = $TaskName
+        Actions  = @([pscustomobject]@{ Arguments = $store[$TaskName] })
+    }
+}
+function Register-ScheduledTask {
+    [CmdletBinding()]
+    param([string]$TaskName, $Action, $Trigger, $Settings, [switch]$Force)
+    Add-AesopStubLog ("REGISTER " + $TaskName)
+    $store = Get-AesopStubStore
+    $store[$TaskName] = [string]$Action.Arguments
+    Save-AesopStubStore $store
+    return $null
+}
+function Unregister-ScheduledTask {
+    [CmdletBinding()]
+    param([string]$TaskName)
+    Add-AesopStubLog ("UNREGISTER " + $TaskName)
+    $store = Get-AesopStubStore
+    if ($store.ContainsKey($TaskName)) {
+        $store.Remove($TaskName)
+        Save-AesopStubStore $store
+    } else {
+        Write-Error "No MSFT_ScheduledTask objects found with property 'TaskName' equal to '$TaskName'"
+    }
+}
+"""
+
+
+def _action_args(command):
+    """Task action Arguments as the installer writes them: wscript launcher + bash -lc."""
+    return f"//B //Nologo x.vbs bash.exe -lc {command}"
+
+
+def _ps_literal(value):
+    """PowerShell literal for one installer argument: bare -Switch tokens pass through,
+    everything else becomes a single-quoted string with quotes doubled."""
+    if re.fullmatch(r"-[A-Za-z]+", value):
+        return value
+    return "'" + value.replace("'", "''") + "'"
 
 
 @unittest.skipUnless(sys.platform == "win32", "Windows-only tests")
@@ -878,26 +951,55 @@ class TestInstallTasks(unittest.TestCase):
             "Should NOT register AesopDefaultScopeTestRefinementMonitor without -MonitorCommand",
         )
 
-    def _register_throwaway_task(self, task_name, command):
+    def _run_installer_stubbed(self, tmp, installer_args, tasks=None):
         """
-        Register a REAL scheduled task under a disposable name so the divergence /
-        idempotency branches are exercised against a live CIM action object.
-
-        `command` must not contain quote characters: it is embedded in a PowerShell
-        single-quoted string, and the installer only substring-matches it.
-        Never used against the real Aesop* daemon tasks.
+        Run daemons/install-tasks.ps1 with its Task Scheduler cmdlets replaced by the
+        recording stub in _PS_STUB_PRELUDE, so the real scheduler is never reached.
+        `tasks` seeds the stub store as {task_name: action_arguments}.
+        Returns (CompletedProcess, stub_call_lines, final_store_text).
         """
-        assert '"' not in command and "'" not in command, "fixture command must be quote-free"
-        register = (
-            "$a = New-ScheduledTaskAction -Execute 'wscript.exe' "
-            f"-Argument '//B //Nologo x.vbs bash.exe -lc {command}'; "
-            "$t = New-ScheduledTaskTrigger -Once -At (Get-Date); "
-            f"Register-ScheduledTask -TaskName '{task_name}' -Action $a -Trigger $t -Force "
-            "| Out-Null"
+        db = tmp / "scheduler-stub-tasks.tsv"
+        log = tmp / "scheduler-stub-calls.log"
+        rows = [f"{name}\t{args}\n" for name, args in (tasks or {}).items()]
+        db.write_text("".join(rows), encoding="utf-8")
+        prelude = _PS_STUB_PRELUDE.replace("@@DB@@", str(db)).replace("@@LOG@@", str(log))
+        call = " ".join(_ps_literal(arg) for arg in installer_args)
+        wrapper = tmp / "run-installer-with-scheduler-stub.ps1"
+        wrapper.write_text(
+            prelude + f"\n& {_ps_literal(str(self.script_path))} {call}\nexit $LASTEXITCODE\n",
+            encoding="utf-8",
         )
-        subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", register],
-            capture_output=True, text=True, timeout=60, check=True,
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(wrapper)],
+            cwd=str(self.worktree_root),
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+        )
+        calls = log.read_text(encoding="utf-8-sig").splitlines() if log.exists() else []
+        return result, calls, db.read_text(encoding="utf-8-sig")
+
+    def test_stubbed_run_never_reaches_real_scheduler(self):
+        """
+        Hermeticity guard (red-first). A seeded probe task must stay OFF the REAL Windows
+        Task Scheduler: the installer's scheduler cmdlets go to the recording stub, so the
+        stub log shows the probe lookup and a live `schtasks /query /tn` finds nothing.
+        """
+        prefix = "AesopHermeticProbe"
+        task_name = prefix + "WatchdogDaemon"
+        with tempfile.TemporaryDirectory() as tmp:
+            result, calls, _store = self._run_installer_stubbed(
+                Path(tmp), ["-DryRun", "-TaskPrefix", prefix],
+                tasks={task_name: _action_args("bash /c/probe/x.sh --once")},
+            )
+        out = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, out)
+        self.assertIn(f"GET {task_name}", calls, "stub seam was not used for the probe lookup")
+        probe = subprocess.run(
+            ["schtasks", "/query", "/tn", task_name],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+        )
+        self.assertNotEqual(
+            probe.returncode, 0,
+            f"probe task leaked into the REAL scheduler:\n{probe.stdout}",
         )
 
     def test_divergent_path_warning_and_skip(self):
@@ -908,71 +1010,46 @@ class TestInstallTasks(unittest.TestCase):
         what this script would install: DO NOT re-register. Leave it alone and emit a LOUD warning.
 
         This test:
-        1. Creates a task with one command (e.g., pointing to /old/path/script.sh)
+        1. Seeds the stub store with one command (e.g., pointing to /old/path/script.sh)
         2. Runs the installer with -DryRun to point it to /new/path/script.sh
         3. Asserts:
            - Script exits 0 (not a fatal error)
            - Output contains a LOUD warning about the path divergence
            - Output names the task, the existing path, and the would-be-new path
-           - Task is NOT actually re-registered in DryRun
+           - Task is NOT actually re-registered (no REGISTER/UNREGISTER stub call)
         """
-        # This test registers a REAL throwaway task under a disposable prefix, so the
-        # divergence branch is genuinely exercised against a live CIM action object.
-        # It never touches AesopWatchdogDaemon / AesopMergeQueue / AesopRefinementMonitor.
         prefix = "AesopDivergeTest"
         task_name = prefix + "WatchdogDaemon"
         old_command = "bash /c/old/tree/daemons/run-watchdog.sh --once"
-        self._register_throwaway_task(task_name, old_command)
+        with tempfile.TemporaryDirectory() as tmp:
+            result, calls, store = self._run_installer_stubbed(
+                Path(tmp), ["-DryRun", "-TaskPrefix", prefix],
+                tasks={task_name: _action_args(old_command)},
+            )
+        out = result.stdout + result.stderr
 
-        try:
-            result = subprocess.run(
-                [
-                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                    "-File", str(self.script_path),
-                    "-DryRun", "-TaskPrefix", prefix,
-                ],
-                cwd=str(self.worktree_root),
-                capture_output=True, text=True, timeout=60,
-            )
-            out = result.stdout + result.stderr
+        self.assertEqual(
+            result.returncode, 0,
+            f"Divergence must be non-fatal, got {result.returncode}\n{out}",
+        )
+        # LOUD warning naming the task
+        self.assertIn("DIFFERENT action path", out, f"missing divergence warning:\n{out}")
+        self.assertIn(task_name, out, f"warning must name the task:\n{out}")
+        # Regression guard: the EXISTING path must actually be reported. Reading the
+        # wrong CIM property ('Argument' vs 'Arguments') silently printed an empty
+        # value here and made every task look divergent forever.
+        self.assertIn(
+            old_command, out,
+            f"existing action path must be reported, not empty:\n{out}",
+        )
+        self.assertIn("NOT re-registering", out, f"must skip, not repoint:\n{out}")
 
-            self.assertEqual(
-                result.returncode, 0,
-                f"Divergence must be non-fatal, got {result.returncode}\n{out}",
-            )
-            # LOUD warning naming the task
-            self.assertIn("DIFFERENT action path", out, f"missing divergence warning:\n{out}")
-            self.assertIn(task_name, out, f"warning must name the task:\n{out}")
-            # Regression guard: the EXISTING path must actually be reported. Reading the
-            # wrong CIM property ('Argument' vs 'Arguments') silently printed an empty
-            # value here and made every task look divergent forever.
-            self.assertIn(
-                old_command, out,
-                f"existing action path must be reported, not empty:\n{out}",
-            )
-            self.assertIn("NOT re-registering", out, f"must skip, not repoint:\n{out}")
-
-            # The live task must be untouched
-            verify = subprocess.run(
-                [
-                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-                    f"(Get-ScheduledTask -TaskName '{task_name}').Actions[0].Arguments",
-                ],
-                capture_output=True, text=True, timeout=60,
-            )
-            self.assertIn(
-                old_command, verify.stdout.replace("\n", " "),
-                "existing task was silently repointed",
-            )
-        finally:
-            subprocess.run(
-                [
-                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-                    f"Unregister-ScheduledTask -TaskName '{task_name}' -Confirm:$false "
-                    "-ErrorAction SilentlyContinue",
-                ],
-                capture_output=True, text=True, timeout=60,
-            )
+        # The stored task must be untouched: no register/unregister, same action.
+        self.assertFalse(
+            [c for c in calls if c.startswith(("REGISTER", "UNREGISTER"))],
+            f"divergent task must not be re-registered; stub calls: {calls}",
+        )
+        self.assertIn(old_command, store, "existing task was silently repointed")
 
     def test_idempotent_same_path_is_noop(self):
         """
@@ -985,35 +1062,23 @@ class TestInstallTasks(unittest.TestCase):
         prefix = "AesopIdemTest"
         task_name = prefix + "WatchdogDaemon"
         command = "bash /c/idem/tree/daemons/run-watchdog.sh --once"
-        self._register_throwaway_task(task_name, command)
-
-        try:
-            result = subprocess.run(
-                [
-                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                    "-File", str(self.script_path),
-                    "-DryRun", "-TaskPrefix", prefix,
-                    "-WatchdogCommand", command,
-                ],
-                cwd=str(self.worktree_root),
-                capture_output=True, text=True, timeout=60,
+        with tempfile.TemporaryDirectory() as tmp:
+            result, calls, _store = self._run_installer_stubbed(
+                Path(tmp),
+                ["-DryRun", "-TaskPrefix", prefix, "-WatchdogCommand", command],
+                tasks={task_name: _action_args(command)},
             )
-            out = result.stdout + result.stderr
-            self.assertEqual(result.returncode, 0, f"expected success:\n{out}")
-            self.assertIn("idempotent", out, f"same path must be a quiet no-op:\n{out}")
-            self.assertNotIn(
-                "DIFFERENT action path", out,
-                f"matching path must NOT be reported as divergent:\n{out}",
-            )
-        finally:
-            subprocess.run(
-                [
-                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-                    f"Unregister-ScheduledTask -TaskName '{task_name}' -Confirm:$false "
-                    "-ErrorAction SilentlyContinue",
-                ],
-                capture_output=True, text=True, timeout=60,
-            )
+        out = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, f"expected success:\n{out}")
+        self.assertIn("idempotent", out, f"same path must be a quiet no-op:\n{out}")
+        self.assertNotIn(
+            "DIFFERENT action path", out,
+            f"matching path must NOT be reported as divergent:\n{out}",
+        )
+        self.assertFalse(
+            [c for c in calls if c.startswith(("REGISTER", "UNREGISTER"))],
+            f"idempotent task must not be re-registered; stub calls: {calls}",
+        )
 
     def test_force_overrides_divergent_skip(self):
         """
@@ -1024,34 +1089,18 @@ class TestInstallTasks(unittest.TestCase):
         """
         prefix = "AesopForceTest"
         task_name = prefix + "WatchdogDaemon"
-        self._register_throwaway_task(task_name, "bash /c/old/x.sh --once")
-
-        try:
-            result = subprocess.run(
-                [
-                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-                    "-File", str(self.script_path),
-                    "-DryRun", "-Force", "-TaskPrefix", prefix,
-                ],
-                cwd=str(self.worktree_root),
-                capture_output=True, text=True, timeout=60,
+        with tempfile.TemporaryDirectory() as tmp:
+            result, calls, _store = self._run_installer_stubbed(
+                Path(tmp), ["-DryRun", "-Force", "-TaskPrefix", prefix],
+                tasks={task_name: _action_args("bash /c/old/x.sh --once")},
             )
-            out = result.stdout + result.stderr
-            self.assertEqual(result.returncode, 0, f"expected success:\n{out}")
-            self.assertNotIn(
-                "NOT re-registering", out,
-                f"-Force must bypass the divergent skip:\n{out}",
-            )
-            self.assertIn("DRYRUN", out, f"-Force must proceed to registration:\n{out}")
-        finally:
-            subprocess.run(
-                [
-                    "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
-                    f"Unregister-ScheduledTask -TaskName '{task_name}' -Confirm:$false "
-                    "-ErrorAction SilentlyContinue",
-                ],
-                capture_output=True, text=True, timeout=60,
-            )
+        out = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, f"expected success:\n{out}")
+        self.assertNotIn(
+            "NOT re-registering", out,
+            f"-Force must bypass the divergent skip:\n{out}",
+        )
+        self.assertIn("DRYRUN", out, f"-Force must proceed to registration:\n{out}")
 
     def test_enable_all_flag_registers_all_tasks(self):
         """
