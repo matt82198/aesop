@@ -70,27 +70,29 @@ def poll_and_flush(repo, sha, slug, gh_runner, interval, timeout, log_path,
 
     Returns one of "posted", "gone", "timeout", "failed" (the reason is logged).
     The spool file is deleted only on a successful post; every other outcome keeps it.
+
+    The loop is BOUNDED: at most ``timeout // interval + 1`` polls (one poll at t=0 and one
+    per interval up to the timeout), so it can never spin forever. ``clock`` is accepted for
+    call-site compatibility; the bound is a poll count, not a wall-clock read.
     """
-    deadline = clock() + timeout
-    attempts = 0
-    while True:
+    max_polls = max(1, timeout // interval + 1) if interval > 0 else 1
+    for attempt in range(1, max_polls + 1):
         spool = spool_file_for(repo, sha)
         if spool is None:
             _log(log_path, "no spool file for %s (already posted or dropped); nothing to do" % sha)
             return "gone"
-        attempts += 1
         if rf.sha_exists_on_github(sha, slug, gh_runner):
             ok, reason = rf.flush_spooled_receipt(spool, slug, gh_runner, strict=False)
             if ok:
-                _log(log_path, "posted receipt for %s after %d poll(s): %s" % (sha, attempts, reason))
+                _log(log_path, "posted receipt for %s after %d poll(s): %s" % (sha, attempt, reason))
                 return "posted"
             _log(log_path, "sha %s is on GitHub but post failed: %s (spool kept; watchdog flush retries)" % (sha, reason))
             return "failed"
-        if clock() >= deadline:
-            _log(log_path, "gave up: sha %s not on GitHub after %ds and %d poll(s); spool kept, "
-                           "watchdog receipt_flush will retry" % (sha, timeout, attempts))
-            return "timeout"
-        sleep(interval)
+        if attempt < max_polls:
+            sleep(interval)
+    _log(log_path, "gave up: sha %s not on GitHub after %ds and %d poll(s); spool kept, "
+                   "watchdog receipt_flush will retry" % (sha, timeout, max_polls))
+    return "timeout"
 
 
 def _detached_popen_kwargs(stdout_handle):

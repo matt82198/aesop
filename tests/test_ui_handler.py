@@ -58,24 +58,22 @@ class HostHeaderTestCase(unittest.TestCase):
         self._saved_env = {k: os.environ.get(k) for k in ENV_KEYS}
         os.environ["AESOP_TRANSCRIPTS_ROOT"] = str(self.fixture_root / "transcripts")
         os.environ["AESOP_UI_COLLECT_INTERVAL"] = "0.2"
-        # Use a fixed test port to match config.PORT in Host header validation
-        os.environ["PORT"] = "18770"
+        os.environ.pop("PORT", None)
 
-        # Load serve with fixed port
         self.serve = load_serve(self.fixture_root)
         self.token = self.serve.SESSION_TOKEN
         self.assertTrue(self.token, "fixture must produce a session token")
-        self.config_port = self.serve.PORT
 
         # Load handler module
         if str(UI_PATH) not in sys.path:
             sys.path.insert(0, str(UI_PATH))
         import handler
 
-        # Use QuietThreadingHTTPServer with the same port as config.PORT
-        # so Host header validation passes
+        # Port 0: kernel-assigned per process. Host validation checks the live
+        # socket port (handler._is_valid_host_header(host, server_address[1])),
+        # so a fixed port is neither needed nor safe under parallel shards.
         self.httpd = handler.QuietThreadingHTTPServer(
-            ("127.0.0.1", self.config_port), self.serve.DashboardHandler)
+            ("127.0.0.1", 0), self.serve.DashboardHandler)
         self.httpd.daemon_threads = True
         self.actual_port = self.httpd.server_address[1]
         self.server_thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)

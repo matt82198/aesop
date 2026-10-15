@@ -33,6 +33,7 @@ Usage in hook:
 import argparse
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -111,11 +112,34 @@ def _decode(raw: bytes) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
+TRIPWIRE_SCRIPT = "tools/test_isolation_tripwire.py"
+
+
+def node_suite_argv(test_files: List[str]) -> List[str]:
+    """The Node suite argv, identical to the WSL leg and package.json test:node (before the wrap)."""
+    return ["node", "--import", "./tests/helpers/isolated-env.mjs", "--test", *test_files]
+
+
+def shell_suite_argv() -> List[str]:
+    """The shell suite argv, identical to package.json test:sh (before the wrap)."""
+    return ["bash", "tools/run_shell_tests.sh"]
+
+
+def tripwired_argv(suite_argv: List[str], interpreter: str) -> List[str]:
+    """Wrap a suite in the test-isolation tripwire. Fails closed on any real-profile drift.
+
+    The ONE command builder for both legs. Native and WSL differ only in the host prefix
+    (direct exec vs `wsl.exe bash -lc`) and the interpreter token (sys.executable on the
+    host, `python` inside WSL). Nothing else may differ.
+    """
+    return [interpreter, TRIPWIRE_SCRIPT, "--", *suite_argv]
+
+
 def run_shell_tests_native(repo_root: Path, timeout: int = 120) -> Tuple[int, str]:
-    """Run the shell test suites on the host (Linux shape without WSL)."""
+    """Run the shell test suites on the host (Linux shape without WSL), tripwire-wrapped."""
     try:
         result = subprocess.run(
-            ["bash", "tools/run_shell_tests.sh"],
+            tripwired_argv(shell_suite_argv(), sys.executable),
             cwd=str(repo_root),
             capture_output=True,
             timeout=timeout,
@@ -128,11 +152,11 @@ def run_shell_tests_native(repo_root: Path, timeout: int = 120) -> Tuple[int, st
 
 
 def run_node_tests_native(repo_root: Path, test_files: List[str], timeout: int = 120) -> Tuple[int, str]:
-    """Run Node test files on the host with USERPROFILE unset."""
+    """Run Node test files on the host with USERPROFILE unset, tripwire-wrapped."""
     env = {k: v for k, v in os.environ.items() if k != "USERPROFILE"}
     try:
         result = subprocess.run(
-            ["node", "--import", "./tests/helpers/isolated-env.mjs", "--test", *test_files],
+            tripwired_argv(node_suite_argv(test_files), sys.executable),
             cwd=str(repo_root),
             env=env,
             capture_output=True,
@@ -237,8 +261,8 @@ def should_check_linux_shape(changed_files: List[str]) -> bool:
 
 
 def run_shell_tests_wsl(repo_root: Path, wsl_path: str, timeout: int = 120) -> Tuple[int, str]:
-    """Run shell tests under WSL."""
-    cmd = f"cd '{wsl_path}' && bash tools/run_shell_tests.sh"
+    """Run shell tests under WSL, tripwire-wrapped (same builder as the native leg)."""
+    cmd = f"cd '{wsl_path}' && " + shlex.join(tripwired_argv(shell_suite_argv(), "python"))
     try:
         result = subprocess.run(
             ["wsl.exe", "bash", "-lc", cmd],
@@ -257,12 +281,11 @@ def run_shell_tests_wsl(repo_root: Path, wsl_path: str, timeout: int = 120) -> T
 
 
 def run_node_tests_wsl(repo_root: Path, wsl_path: str, test_files: List[str], timeout: int = 120) -> Tuple[int, str]:
-    """Run Node tests under WSL with USERPROFILE unset."""
-    files_str = " ".join(f"'{f}'" for f in test_files)
+    """Run Node tests under WSL with USERPROFILE unset, tripwire-wrapped (same builder as native)."""
     cmd = (
         f"cd '{wsl_path}' && "
         f"unset USERPROFILE && "
-        f"node --import ./tests/helpers/isolated-env.mjs --test {files_str}"
+        + shlex.join(tripwired_argv(node_suite_argv(test_files), "python"))
     )
     try:
         result = subprocess.run(
