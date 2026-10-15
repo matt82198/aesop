@@ -136,14 +136,10 @@ Stdlib-only backend (ThreadingHTTPServer for SSE). Collector fail-open. Config: 
 
 ## Tracker event-log migration (collectors.py)
 
-`_ensure_tracker_migrated()` backfills the event log from an existing `tracker.json`. Two markers:
-`migration_started` claims the attempt, `migration_completed` is written only after a fully
-successful backfill -- skip requires BOTH, so a failed or partial migration retries instead of
-being permanently blocked by a stale claim.
-
-An unreadable `tracker.json` (missing, malformed, permission error) never writes `migration_completed`.
-It records `migration_failed` with the reason (once per distinct reason), so a later repair of
-`tracker.json` is backfilled by the next run, and completion is written only after that backfill.
+`_ensure_tracker_migrated()` backfills the event log from `tracker.json`: `migration_started` claims
+an attempt, `migration_completed` only after a full backfill (skip requires both). An unreadable file
+(missing/malformed/permission) records `migration_failed` with the reason, never `migration_completed`,
+so a repaired `tracker.json` is backfilled on the next run.
 
 It reconciles in BOTH directions. Items missing from the log are backfilled from disk; and where
 disk holds a status the log never recorded (historical closes were written straight to the
