@@ -375,8 +375,23 @@ test('DEFECT 7: when git cannot answer the hook check FAILS with the git error (
   // A .git FILE pointing at nothing: checkGitRepo sees a .git entry, git cannot resolve it.
   fs.writeFileSync(path.join(root, '.git'), `gitdir: ${path.join(root, 'missing-gitdir')}\n`);
 
+  // Derive the expectation from git itself: run the same command the product runs
+  // (tools/doctor.js resolveHooksDir -> `git rev-parse --git-path hooks`) in the broken
+  // fixture and take its stderr. Git's wording varies by platform and version, so the
+  // test must not hard-code it.
+  const gitSays = spawnSync('git', ['rev-parse', '--git-path', 'hooks'], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: 5000
+  });
+  assert.notEqual(gitSays.status, 0, 'fixture must make git fail to answer');
+  const gitError = (gitSays.stderr || '').trim().split('\n')[0];
+  assert.ok(gitError.length > 0, 'git must write an error to stderr for the broken fixture');
+
   const row = runDoctorJsonHookRow(root);
   assert.equal(row.passed, false, 'an unanswerable git lookup must FAIL, never PASS');
-  assert.match(row.hint, /not a git repository/i,
-    `hint must carry the git error text. hint: ${row.hint}`);
+  assert.ok(row.hint.startsWith('Could not resolve git hooks directory: '),
+    `hint must start with the product prefix. hint: ${row.hint}`);
+  assert.ok(row.hint.includes(gitError),
+    `hint must carry git's own error text (${JSON.stringify(gitError)}). hint: ${row.hint}`);
 });

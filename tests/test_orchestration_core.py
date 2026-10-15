@@ -38,6 +38,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest import mock
+from tests.sys_modules_restore import snapshot_sys_modules
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TOOLS_DIR = REPO_ROOT / "tools"
@@ -62,6 +63,7 @@ class HealthcheckCoreTestCase(unittest.TestCase):
     """Isolated-state base class, same pattern as tests/test_healthcheck.py."""
 
     def setUp(self):
+        self.addCleanup(snapshot_sys_modules("healthcheck"))
         self.fixture_root = Path(tempfile.mkdtemp(prefix="aesop-orch-core-hc-"))
         self.state_dir = self.fixture_root / "state"
         self.state_dir.mkdir(parents=True)

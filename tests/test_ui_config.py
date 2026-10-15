@@ -16,6 +16,8 @@ import sys
 import tempfile
 import shutil
 import unittest
+
+from tests.sys_modules_restore import snapshot_sys_modules
 from pathlib import Path
 
 # Env the config module resolves paths from. A shell that exports any of these (lane
@@ -44,6 +46,7 @@ class TestAesopRootResolution(unittest.TestCase):
     """Test cases for AESOP_ROOT fallback tier resolution."""
 
     def setUp(self):
+        self.addCleanup(snapshot_sys_modules("ui.config", "ui"))
         """Create temporary fixture directory structure."""
         self.fixture_root = tempfile.mkdtemp(prefix="aesop-config-test-")
         self.state_dir = os.path.join(self.fixture_root, "state")
@@ -60,12 +63,6 @@ class TestAesopRootResolution(unittest.TestCase):
         # Clean up temp dir
         if os.path.exists(self.fixture_root):
             shutil.rmtree(self.fixture_root)
-
-        # Remove cached config module if it exists
-        if "ui.config" in sys.modules:
-            del sys.modules["ui.config"]
-        if "ui" in sys.modules:
-            del sys.modules["ui"]
 
     def _load_config_module(self, fixture_root=None):
         """Dynamically import config.py, optionally with fixture AESOP_ROOT and UI location.
@@ -88,6 +85,7 @@ class TestAesopRootResolution(unittest.TestCase):
             with open(fixture_config_py, "w") as f:
                 f.write(config_content)
 
+        self.addCleanup(snapshot_sys_modules("ui.config", "ui"))
         # Remove cached config module if it exists
         if "ui.config" in sys.modules:
             del sys.modules["ui.config"]
@@ -283,6 +281,7 @@ class TestHeartbeatPathResolution(unittest.TestCase):
     """Test cases for heartbeat path fallback chain resolution."""
 
     def setUp(self):
+        self.addCleanup(snapshot_sys_modules("ui.config", "ui"))
         """Create temporary fixture directory structure."""
         self.fixture_root = tempfile.mkdtemp(prefix="aesop-hb-test-")
         self.state_dir = os.path.join(self.fixture_root, "state")
@@ -303,10 +302,6 @@ class TestHeartbeatPathResolution(unittest.TestCase):
         if os.path.exists(self.fixture_root):
             shutil.rmtree(self.fixture_root)
 
-        # Remove cached config module
-        if "ui.config" in sys.modules:
-            del sys.modules["ui.config"]
-
     def _load_config_module_with_conductor3(self, fixture_root):
         """Load config with AESOP_ROOT set to fixture_root and conductor3 in fixture."""
         # Set AESOP_ROOT to point to fixture (parent of ui/)
@@ -326,6 +321,7 @@ class TestHeartbeatPathResolution(unittest.TestCase):
         with open(fixture_config_py, "w") as f:
             f.write(config_content)
 
+        self.addCleanup(snapshot_sys_modules("ui.config", "ui"))
         # Remove cached config module
         if "ui.config" in sys.modules:
             del sys.modules["ui.config"]
