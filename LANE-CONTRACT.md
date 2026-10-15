@@ -204,8 +204,9 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
 - **Merge automation: arm native auto-merge at PR open time.** After `gh pr create`, immediately run `gh pr merge <N> --auto --squash`
   to arm GitHub's native auto-merge. Never use `--admin`. A PR must never wait for a session daemon or manual merge to complete.
   Native auto-merge is the merge actor; AesopMergeQueue is disabled. To re-run required checks on an armed PR without code
-  changes, use `gh api repos/<owner>/<repo>/pulls/<N>/update-branch -X PUT`; a `gh workflow run` dispatch creates a separate
-  check suite that branch protection ignores.
+  changes, re-push the branch (a plain push, or a local merge of origin/main per section 3 when the PR is BEHIND). Never ask
+  GitHub to update a PR branch server-side: that creates a merge head no box ran the gates on, so no receipt can exist for it.
+  A `gh workflow run` dispatch creates a separate check suite that branch protection ignores.
 - **Fully machine-generated paths (`tools/INDEX.md`, `state/ledger/*.jsonl`, etc. — `tools/generated_paths.py::REGISTRY`)
   are push-blocked by `hooks/pre-push-policy.sh check_generated_paths()`.** The only override is
   `AESOP_ALLOW_GENERATED=1` — the DESIGNED writer path for a generator/regeneration push (a seated session re-running

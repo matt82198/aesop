@@ -52,6 +52,55 @@ def _git_ok(repo, *args):
     return out
 
 
+# A GitHub-authored merge head is created server-side. No box ran the gates on its tree,
+# so no receipt can honestly exist for it: the MISSING message must say so.
+SERVER_MERGE_CAUSE = "server-authored update-branch merge; no box ran the gates; merge main locally and push"
+SERVER_COMMITTER_NAME = "GitHub"
+SERVER_COMMITTER_EMAIL = "noreply@github.com"
+
+
+def server_authored_merge(parents, committer_name, committer_email):
+    """True for a GitHub-authored merge head: two parents and committer GitHub <noreply@github.com>."""
+    return (len(parents) == 2
+            and (committer_name or "") == SERVER_COMMITTER_NAME
+            and (committer_email or "").strip().lower() == SERVER_COMMITTER_EMAIL)
+
+
+def _commit_meta_from_git(repo, sha):
+    """(parents, committer_name, committer_email) for `sha` from `git cat-file`, or None."""
+    code, out, _err = _git(repo, "cat-file", "commit", sha)
+    if code != 0:
+        return None
+    parents, name, email = [], "", ""
+    for line in out.splitlines():
+        if not line:
+            break
+        if line.startswith("parent "):
+            parents.append(line.split(" ", 1)[1].strip())
+        elif line.startswith("committer "):
+            m = re.match(r"committer (.*?) <([^>]*)>", line)
+            if m:
+                name, email = m.group(1), m.group(2)
+    return parents, name, email
+
+
+def _server_merge_suffix(repo, sha):
+    """' -- <cause>' when `sha` is a server-authored merge in `repo`, else ''.
+
+    Read from the local object database (`git cat-file`), never from the API: the fetch
+    loop calls the API on every poll, and a per-poll commit lookup would multiply those
+    calls. The object is the PR head itself, so it is present in the Action's checkout.
+    Never raises: an unreadable commit simply names no cause, and the MISSING stays fail-closed.
+    """
+    try:
+        meta = _commit_meta_from_git(repo, sha)
+    except Exception:  # noqa: BLE001 -- a failed cause lookup is just no cause, never a crash
+        return ""
+    if meta and server_authored_merge(*meta):
+        return " -- " + SERVER_MERGE_CAUSE
+    return ""
+
+
 def load_envelope(path_or_dash):
     try:
         text = sys.stdin.read() if path_or_dash == "-" else Path(path_or_dash).read_text(encoding="utf-8")
@@ -292,6 +341,8 @@ def _run_fetch_for_head(args):
         else:
             env, note = poll_receipt_for_head(args.fetch_for_head, args.repo_slug,
                                               window_s=args.fetch_window_s, interval_s=args.fetch_interval_s)
+        if env is None:
+            note += _server_merge_suffix(Path(args.repo).resolve(), args.fetch_for_head)
         print(note)
         Path(args.out_found).write_text("true" if env is not None else "false", encoding="utf-8")
         if env is not None:
@@ -321,7 +372,8 @@ def main(argv=None, environ=None):
     head_label = _git(repo, "rev-parse", "--verify", args.head + "^{commit}")[1] or args.head
     if args.receipt != "-" and not Path(args.receipt).is_file():
         # Missing receipt is fail-closed (exit 1), distinct from an unreadable/malformed one (exit 2).
-        print("MISSING receipt: no receipt file %s for head %s (%s)" % (args.receipt, head_label, rc.CHECK_NAME))
+        print("MISSING receipt: no receipt file %s for head %s (%s)%s" % (
+            args.receipt, head_label, rc.CHECK_NAME, _server_merge_suffix(repo, head_label)))
         return 1
     try:
         envelope = load_envelope(args.receipt)
@@ -330,7 +382,8 @@ def main(argv=None, environ=None):
         elif args.extract == "comments":
             envelope = extract_receipt_from_comments(envelope)
         if envelope is None:
-            print("MISSING receipt: no %s receipt in the supplied payload for head %s" % (rc.CHECK_NAME, head_label))
+            print("MISSING receipt: no %s receipt in the supplied payload for head %s%s" % (
+                rc.CHECK_NAME, head_label, _server_merge_suffix(repo, head_label)))
             return 1
     except CannotEvaluate as e:
         print("CANNOT EVALUATE: %s" % e, file=sys.stderr)

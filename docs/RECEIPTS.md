@@ -45,7 +45,7 @@ At 8.9 runs/PR, roughly two-thirds of PR-event CI (order of 250–300 runs) was 
 
 | Fix | PR(s) | Impact |
 |-----|-------|--------|
-| strict=false on branch protection | (config) | Kills the update-branch re-run treadmill. |
+| strict=false on branch protection | (config) | Kills the re-run treadmill after a BEHIND PR. Server-side branch updates are banned (they create receipt-less merge heads); lanes merge origin/main locally. |
 | Integration PR batching | #518 (batch of G1/G2/G3/G4/G6 + linter) | Reduced 5 conflicting lanes to 1 train slot; merged 02:00Z. |
 | merge_train.py (deterministic serial merge) | #512 | Replaced agent-based trains with Python script; no polling burn, verified MERGED state, fail-closed. |
 | tests/CLAUDE.md conflict resolution | (in-flight at capture) | Isolated file from rapid churn; reduces magnet collisions. |

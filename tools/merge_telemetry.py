@@ -2,7 +2,7 @@
 """Merge-pipeline contention telemetry baseline.
 INDEX: D0 telemetry (CI-attempts/fix-rounds/contended-files per merged PR; --since/--until/--append/--json; exit 2=fatal)
 
-Per merged PR via gh api: time-to-merge wall, CI attempts, fix rounds, update-branch
+Per merged PR via gh api: time-to-merge wall, CI attempts, fix rounds, server-authored merge
 amplification, contended-file flag, merge route, red rate.
 
 Derived metrics: CI-runs/merged-PR, fix-rounds/PR, contended-touch rate, median TTM,
@@ -147,7 +147,7 @@ def get_merge_commits_on_head(pr_head_oid: str, pr_base_oid: str) -> int:
     Uses git rev-list to find commits on head that contain 'Merge' in subject line
     and are not reachable from base.
 
-    Returns count of merge commits (update-branch amplification).
+    Returns count of merge commits (server-authored merge amplification).
     """
     try:
         # Get all commits on head that are not on base
@@ -296,7 +296,7 @@ def telemetry_for_pr(pr: dict) -> dict | None:
     # Contended file flag
     contended = check_contended_files(pr_number, head_oid)
 
-    # Merge route (infer from uba: >0 = update-branch, 0 = rebase/integration)
+    # Merge route (infer from uba: >0 = server-authored merge, 0 = rebase/integration)
     merge_route = "serial" if uba > 0 else "integration"
 
     # Red flag (any run failed)

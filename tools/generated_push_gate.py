@@ -5,7 +5,7 @@ INDEX: Pre-push byte-identity gate for registered generated artifacts on COMMITT
 The existing check_gen_tool_index() runs `gen_tool_index.py --check` against the
 WORKING TREE. Three ways that is not the pushed content: the lane regenerated
 but did not commit; the merge commit carries a `union`-stale index while the
-tree was fixed afterwards; a server-side update-branch merge was fetched and
+tree was fixed afterwards; a server-authored merge was fetched and
 pushed on. CI runs the gate on the commit, so the hook must too. This tool
 materialises the tip in a detached worktree (`git worktree add --detach`), runs
 the registered generator from THAT tree (the tip's own copy of the generator,

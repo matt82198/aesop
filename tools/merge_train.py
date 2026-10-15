@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Merge train -- integration-batch (default) or serial merge for GitHub PRs.
-INDEX: Merge train (debottleneck B1): integration mode is the DEFAULT — batches PRs into an `integrate/<batch-name>` branch, runs CI once, squash-merges, closes superseded PRs with ancestor verification (B1.3 correctness guard blocks unlanded content). B1.1: auto-named batches, --dry-run trials, --serial escape hatch. B1.2: stacked PR chains (baseRefName graph). B1.4: enforce_admins runtime check. B1.5: no update_branch in integration (FLAG 1 APPROVED); serial --rebase-behind flag. B1.6: regeneration hook stub (A1/A2/A3 generators). Serial mode (legacy `--serial`) processes PRs one-at-a-time with update-branch on --rebase-behind. Check classification is fail-closed via the `GREEN_CONCLUSIONS` allow-list (`SUCCESS`/`NEUTRAL`/`SKIPPED` only) and `check_outcome()`, which reads `conclusion` on CheckRun entries and `state` on legacy StatusContext entries — CANCELLED/TIMED_OUT/ACTION_REQUIRED/unknown are never green. Keep it an allow-list: a deny-list lets COMPLETED-but-not-FAILURE outcomes fall through to a merge. All modes: MERGED state verification mandatory; no --admin/--auto emitted
+INDEX: Merge train (debottleneck B1): integration mode is the DEFAULT — batches PRs into an `integrate/<batch-name>` branch, runs CI once, squash-merges, closes superseded PRs with ancestor verification (B1.3 correctness guard blocks unlanded content). B1.1: auto-named batches, --dry-run trials, --serial escape hatch. B1.2: stacked PR chains (baseRefName graph). B1.4: enforce_admins runtime check. B1.5: no update_branch in integration (FLAG 1 APPROVED); serial --rebase-behind flag. B1.6: regeneration hook stub (A1/A2/A3 generators). Serial mode (legacy `--serial`) processes PRs one-at-a-time; on --rebase-behind a BEHIND PR is refused (server-side branch update banned, merge main locally). Check classification is fail-closed via the `GREEN_CONCLUSIONS` allow-list (`SUCCESS`/`NEUTRAL`/`SKIPPED` only) and `check_outcome()`, which reads `conclusion` on CheckRun entries and `state` on legacy StatusContext entries — CANCELLED/TIMED_OUT/ACTION_REQUIRED/unknown are never green. Keep it an allow-list: a deny-list lets COMPLETED-but-not-FAILURE outcomes fall through to a merge. All modes: MERGED state verification mandatory; no --admin/--auto emitted
 
 Integration mode (DEFAULT): batch PRs into a single integration branch,
 test once, merge to main, close superseded PRs; handles stacked PRs and chains.
-Serial mode (--serial): update-branch, wait for CI, merge one at a time (legacy).
+Serial mode (--serial): wait for CI, merge one at a time (legacy). BEHIND PRs are refused, never updated server-side.
 
 Usage:
     python tools/merge_train.py 492 493 494          # integration batch mode (default)
@@ -210,12 +210,15 @@ def pr_state(n: int) -> dict:
 
 
 def update_branch(n: int) -> bool:
-    result = gh("pr", "update-branch", str(n))
-    if isinstance(result, dict) and "error" in result:
-        print(f"  [WARN] update-branch #{n} failed: {result['error'][:120]}")
-        return False
-    print(f"  [ok] #{n} updated to latest main")
-    return True
+    """REFUSED: never asks GitHub to merge main into a PR branch server-side.
+
+    A server-authored merge head is created with no box running the gates on its tree,
+    so no signed receipt can exist for it. The lane merges origin/main LOCALLY (three-way,
+    keep both intents, regenerate, explicit-refspec push) instead. No gh call is made.
+    """
+    print(f"  [REFUSED] #{n} is BEHIND: server-authored merge heads are banned "
+          f"(no box ran the gates); merge main locally and push")
+    return False
 
 
 def merge_pr(n: int) -> bool:
@@ -891,7 +894,7 @@ def main():
     parser.add_argument("--serial", action="store_true",
                         help="Serial mode (legacy): merge one PR at a time")
     parser.add_argument("--rebase-behind", action="store_true",
-                        help="Serial mode: update-branch for BEHIND PRs (default: off)")
+                        help="Serial mode: report BEHIND PRs as refused (server-side update is banned; default: off)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Trial merge in scratch worktree, print partition, push nothing")
     parser.add_argument("-i", "--integration", nargs="?", const="",

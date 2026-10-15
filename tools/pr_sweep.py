@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """PR sweep: session-independent nudger for armed-but-stuck PRs.
-INDEX: Session-independent PR sweep (closes STATE.md item 9 residual, PR #871 gap): per open non-draft PR, arms missing GitHub native auto-merge (`gh pr merge <N> --auto --squash`, never an admin-override merge), updates BEHIND branches capped at 2/run oldest-first (skips PRs touched in the last 20 min), and signals stuck-red (required check failing, head older than 30 min) or DIRTY PRs as `pr.red`/`pr.dirty` events to the conductor signal-hub queue, deduped per (pr, head, type); retriggers CI (`gh workflow run ci.yml`) for armed PRs whose head has zero check runs 20+ min after push, and disarms + labels `needs-ci-trigger` if still zero 24 h later; `--dry-run` prints the plan only, `--json` adds a machine summary; exit 2 if `gh auth` is missing; never rebases, pushes code, or merges.
+INDEX: Session-independent PR sweep (closes STATE.md item 9 residual, PR #871 gap): per open non-draft PR, arms missing GitHub native auto-merge (`gh pr merge <N> --auto --squash`, never an admin-override merge), reports BEHIND branches capped at 2/run oldest-first (skips PRs touched in the last 20 min; never server-updated, lanes merge main locally), and signals stuck-red (required check failing, head older than 30 min) or DIRTY PRs as `pr.red`/`pr.dirty` events to the conductor signal-hub queue, deduped per (pr, head, type); retriggers CI (`gh workflow run ci.yml`) for armed PRs whose head has zero check runs 20+ min after push, and disarms + labels `needs-ci-trigger` if still zero 24 h later; `--dry-run` prints the plan only, `--json` adds a machine summary; exit 2 if `gh auth` is missing; never rebases, pushes code, or merges.
 
 Gap this closes: a PR that goes RED (or falls BEHIND, or loses its auto-merge
 arming) after auto-merge is armed previously had no session-independent actor --
@@ -12,10 +12,11 @@ tools/merge_queue.py is the scheduled actor for merging.
 What it does, per open non-draft PR of the target repo:
   (a) autoMergeRequest is null  -> arm native auto-merge:
       `gh pr merge <N> --auto --squash` (literal PR number, never an admin-override merge).
-  (b) mergeStateStatus == BEHIND -> `gh api repos/<repo>/pulls/<N>/update-branch
-      -X PUT`. At most 2 per run (hosted-runner capacity), oldest PR
-      (by createdAt) first, skipping any PR whose `updatedAt` is under 20
-      minutes old (avoids hammering a PR an update-branch call just touched).
+  (b) mergeStateStatus == BEHIND -> REPORTED, never server-updated. A server-side
+      branch update creates a merge head no box ran the gates on, so no receipt
+      can exist for it; the lane merges origin/main locally instead. At most 2
+      reported per run, oldest PR (by createdAt) first, skipping any PR whose
+      `updatedAt` is under 20 minutes old.
   (c) a REQUIRED check (gh's own `--required` filter, i.e. whatever branch
       protection marks required) is failing on the current head AND that
       check's own startedAt/completedAt timestamp is older than 30 minutes
@@ -209,12 +210,14 @@ def arm_auto_merge(pr_number, repo=None):
     return True, ""
 
 
-def update_branch(pr_number, repo):
-    endpoint = "repos/%s/pulls/%s/update-branch" % (repo, pr_number)
-    result = gh("api", endpoint, "-X", "PUT")
-    if isinstance(result, dict) and "error" in result:
-        return False, result["error"]
-    return True, ""
+BEHIND_REFUSAL = ("server-side branch update refused: server-authored merge heads are banned "
+                  "(no box ran the gates); merge origin/main locally and push")
+
+
+def behind_refusal(pr_number):
+    """Refuse a BEHIND PR without any GitHub call. Returns (False, reason) so the caller
+    records a refusal row; a server-side update is never issued by this tool."""
+    return False, "#%s: %s" % (pr_number, BEHIND_REFUSAL)
 
 
 def read_zero_check_state(pr_number, repo=None):
@@ -387,7 +390,7 @@ def build_plan(open_prs, repo, now, queue_path, behind_cap=DEFAULT_BEHIND_CAP):
         behind_eligible.append(p)
     behind_eligible.sort(key=lambda p: p.get("createdAt") or "")
     for p in behind_eligible[:behind_cap]:
-        actions.append({"kind": "update-branch", "pr": p["number"], "url": p.get("url", "")})
+        actions.append({"kind": "behind", "pr": p["number"], "url": p.get("url", "")})
 
     # (c) stuck red, (d) DIRTY
     red_keys = read_existing_keys(queue_path, "pr.red")
@@ -442,7 +445,7 @@ def record_pr_failure(results, lines, log_path, pr_number, kind, reason, err):
 
 def execute_plan(actions, repo, dry_run, queue_path, log_path=None):
     lines = []
-    results = {"armed": 0, "updated": 0, "signaled": 0, "retriggered": 0,
+    results = {"armed": 0, "behind_refused": 0, "signaled": 0, "retriggered": 0,
                "disarmed": 0, "errors": []}
     for a in actions:
         if a["kind"] == "arm":
@@ -454,15 +457,12 @@ def execute_plan(actions, repo, dry_run, queue_path, log_path=None):
                 else:
                     record_pr_failure(results, lines, log_path, a["pr"], "arm",
                                       "auto-merge missing", err)
-        elif a["kind"] == "update-branch":
-            lines.append("UPDATE-BRANCH #%s (BEHIND) %s" % (a["pr"], a.get("url", "")))
+        elif a["kind"] == "behind":
+            lines.append("BEHIND #%s (refused: lane merges main locally) %s" % (a["pr"], a.get("url", "")))
             if not dry_run:
-                ok, err = update_branch(a["pr"], repo)
-                if ok:
-                    results["updated"] += 1
-                else:
-                    record_pr_failure(results, lines, log_path, a["pr"], "update-branch",
-                                      "branch behind base", err)
+                _ok, reason = behind_refusal(a["pr"])
+                results["behind_refused"] += 1
+                append_sweep_log(log_path, a["pr"], "behind", "branch behind base", "refused: " + reason)
         elif a["kind"] == "signal":
             checks_str = ",".join(a.get("checks") or [])
             lines.append("SIGNAL %s #%s head=%s checks=[%s] %s" % (
@@ -555,7 +555,7 @@ def main(argv=None):
     parser.add_argument("--repo", help="owner/name (default: resolved via `gh repo view`)")
     parser.add_argument("--queue-path", help="override signal-hub queue path (testing)")
     parser.add_argument("--behind-cap", type=int, default=DEFAULT_BEHIND_CAP,
-                         help="max update-branch calls per run (default 2)")
+                         help="max BEHIND PRs reported per run (default 2; never server-updated)")
     parser.add_argument("--log-path", help="override sweep log path (testing)")
     args = parser.parse_args(argv)
 
