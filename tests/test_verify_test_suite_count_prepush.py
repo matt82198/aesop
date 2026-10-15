@@ -59,6 +59,7 @@ class TestVerifyTestSuiteCountPrepush(unittest.TestCase):
             check=True,
             capture_output=True,
         )
+        self._disable_detached_git_maintenance(self.repo_root)
 
         (self.repo_root / "README.md").write_text("# Test Repo\n")
         subprocess.run(
@@ -80,12 +81,19 @@ class TestVerifyTestSuiteCountPrepush(unittest.TestCase):
         # publish the real tools/ tree as the fixture's origin/main.
         self._base_tmp = tempfile.TemporaryDirectory()
         base = Path(self._base_tmp.name) / "base"
+        self._base_repo = base
         shutil.copytree(
             self.get_aesop_root() / "tools", base / "tools",
             ignore=shutil.ignore_patterns("__pycache__"),
         )
-        for cmd in (
+        subprocess.run(
             ["git", "init", "-q", "-b", "main", str(base)],
+            check=True, capture_output=True,
+        )
+        # Must precede the commit below: `git commit` spawns a detached
+        # `git maintenance run --auto --detach` that nothing waits for.
+        self._disable_detached_git_maintenance(base)
+        for cmd in (
             ["git", "-C", str(base), "add", "-A"],
             ["git", "-C", str(base), "-c", "user.email=t@example.com",
              "-c", "user.name=t", "commit", "-q", "-m", "base tools"],
@@ -94,10 +102,53 @@ class TestVerifyTestSuiteCountPrepush(unittest.TestCase):
         ):
             subprocess.run(cmd, check=True, capture_output=True)
 
+    @staticmethod
+    def _disable_detached_git_maintenance(repo: Path) -> None:
+        """Stop git from spawning a detached child that can outlive the test.
+
+        Without this, `git commit` launches `git maintenance run --auto --detach`
+        in the background; tearDown's TemporaryDirectory.cleanup() can then race
+        it and fail with OSError [Errno 39] Directory not empty.
+        """
+        for key, value in (
+            ("maintenance.auto", "false"),
+            ("gc.auto", "0"),
+            ("gc.autoDetach", "false"),
+        ):
+            subprocess.run(
+                ["git", "-C", str(repo), "config", key, value],
+                check=True, capture_output=True,
+            )
+
     def tearDown(self):
         """Clean up temporary directories."""
         self._base_tmp.cleanup()
         self.tmpdir.cleanup()
+
+    def test_fixture_repos_disable_detached_git_maintenance(self):
+        """RED-FIRST teardown race guard.
+
+        `git commit` spawns `git maintenance run --auto --quiet --detach`, a
+        detached child that nothing waits for. On CI it can still be writing
+        under base/.git when tearDown's TemporaryDirectory.cleanup() runs, which
+        raises OSError [Errno 39] Directory not empty. Both fixture repos must
+        disable auto-maintenance and detaching so no child outlives the test.
+        """
+        for repo in (self.repo_root, self._base_repo):
+            for key, expected in (
+                ("maintenance.auto", "false"),
+                ("gc.auto", "0"),
+                ("gc.autoDetach", "false"),
+            ):
+                result = subprocess.run(
+                    ["git", "-C", str(repo), "config", "--get", key],
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(
+                    result.stdout.strip(), expected,
+                    f"{repo}: git config {key} must be {expected!r} so no detached "
+                    f"git child outlives the test (stdout={result.stdout!r})",
+                )
 
     def write_ci_shard_matrix(self, total: int, ids) -> None:
         """Write a minimal .github/workflows/ci.yml with one shard job.
