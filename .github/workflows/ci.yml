@@ -683,3 +683,24 @@ jobs:
             cat "$out"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Incident taxonomy gate (tools/incident_report.py). Fail-closed: an unknown Incident-Class
+  # trailer in HEAD's history (the PR merge commit = main + PR) or a drifted docs/INCIDENTS.md
+  # fails this job. Not a required context (tools/required-checks.json is unchanged); the job
+  # is red and visible on the PR, but branch protection does not gate on it yet.
+  incident-report-gate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Check incident taxonomy and docs/INCIDENTS.md (fail closed)
+        run: python tools/incident_report.py --check --repo .

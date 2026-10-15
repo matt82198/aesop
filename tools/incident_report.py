@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
 Incident log generator: mines git history for operational failures.
-INDEX: Incident log generator: mines git history for operational failures; Incident-Class / Incident-Category commit trailers are authoritative and unknown values fail closed (non-zero exit naming the commit); subject-only keyword fallback is flagged inferred; 12 classes (incl. daemon-liveness, hook-fail-open, sync-drift, conduct); generates docs/INCIDENTS.md; CLI: `[--repo PATH]` (print) | `--regenerate [--output FILE]` | `--check` (drift exit 1); uses subprocess_common.git() with 60s timeout; all output deterministic, idempotent
+INDEX: Incident log generator: mines git history for operational failures; Incident-Class / Incident-Category commit trailers are authoritative and unknown values fail closed (non-zero exit naming the commit); test-isolation is a documented alias of test-pollution; subject-only keyword fallback is flagged inferred; 13 classes (incl. environment-shape, daemon-liveness, hook-fail-open, sync-drift, conduct); scans HEAD's history (--all opts into every ref, forensics only); generates docs/INCIDENTS.md; CLI: `[--repo PATH] [--all]` (print) | `--regenerate [--output FILE] [--all]` | `--check [--all]` (drift exit 1); uses subprocess_common.git() with 60s timeout; all output deterministic, idempotent
 
 Parses git history and extracts failure events, each classified by class.
 
 Classification channels, in precedence order:
   1. Explicit trailer `Incident-Class: <class>` (optional `Incident-Category: <A..E name>`).
+     `test-isolation` is an alias of `test-pollution` and is normalized on read.
      Authoritative. An unknown class or category is an ERROR that names the commit;
      the run fails closed (non-zero exit, no log written) rather than dropping the commit.
   2. Fallback for commits WITHOUT the trailer: subject only. A subject prefix of a known
@@ -17,10 +18,14 @@ Classification channels, in precedence order:
 Generates docs/INCIDENTS.md: a deterministic, idempotent failure taxonomy table
 with columns: class, what_happened, resolution, source_ref.
 
+Scope: by default only the history reachable from HEAD is scanned, so a PR checkout
+covers its own commits plus main, and an unrelated local or remote branch can never
+fail the gate. `--all` scans every ref (forensic use only).
+
 Usage:
-  python tools/incident_report.py [--repo PATH]
-  python tools/incident_report.py --regenerate [--repo PATH] [--output docs/INCIDENTS.md]
-  python tools/incident_report.py --check [--repo PATH]
+  python tools/incident_report.py [--repo PATH] [--all]
+  python tools/incident_report.py --regenerate [--repo PATH] [--output docs/INCIDENTS.md] [--all]
+  python tools/incident_report.py --check [--repo PATH] [--all]
 
 Output modes:
   default  - Human-readable table
@@ -61,6 +66,13 @@ INCIDENT_CLASSES = {
     "hook-fail-open": "Hook exited 0 or passed on malformed input or internal error",
     "sync-drift": "Checkout or brain state out of sync with origin (stale branch, unpulled state)",
     "conduct": "Orchestrator conduct: relayed unverified claims or routed around gates by hand",
+    "environment-shape": "defect caused by host or runner shape rather than logic: 8.3 vs resolved Windows paths, linked-worktree .git files, hooks dir resolution, WSL/distro absence; detector = the fix only changes path/platform resolution",
+}
+
+# Documented aliases: an alias trailer value is normalized to its class on read and reported
+# under that class (never as its own row).
+INCIDENT_CLASS_ALIASES = {
+    "test-isolation": "test-pollution",
 }
 
 # Incident category taxonomy (value of the Incident-Category trailer: "<letter> <name>")
@@ -186,9 +198,10 @@ class IncidentClassifier:
 class IncidentParser:
     """Parse incidents from git history."""
 
-    def __init__(self, repo_root: str = "."):
-        """Initialize with repo root."""
+    def __init__(self, repo_root: str = ".", all_refs: bool = False):
+        """Initialize with repo root. all_refs=False scans HEAD's history only."""
         self.repo_root = Path(repo_root)
+        self.all_refs = all_refs
         self.classifier = IncidentClassifier()
 
     def _run_git(self, *args, check=True) -> str:
@@ -223,7 +236,7 @@ class IncidentParser:
 
         return summary
 
-    def _extract_resolution(self, body: str) -> str:
+    def _extract_resolution(self, subject: str, body: str) -> str:
         """Extract resolution from commit body."""
         lines = body.split('\n')
 
@@ -248,7 +261,7 @@ class IncidentParser:
             return resolution
 
         # Fallback: extract from subject
-        return self._extract_what_happened(body[:100], "")
+        return self._extract_what_happened(subject, "")
 
     def _resolve_trailers(self, short_hash: str, subject: str, body: str) -> Tuple[Optional[str], bool, List[str]]:
         """Resolve explicit trailers for one commit.
@@ -258,7 +271,7 @@ class IncidentParser:
         errors: List[str] = []
         trailers = parse_trailers(body)
 
-        class_values = trailers[CLASS_TRAILER]
+        class_values = [INCIDENT_CLASS_ALIASES.get(v, v) for v in trailers[CLASS_TRAILER]]
         category_values = trailers[CATEGORY_TRAILER]
 
         if len(set(class_values)) > 1:
@@ -302,7 +315,7 @@ class IncidentParser:
         output = self._run_git(
             "log",
             "--format=%H%x1f%h%x1f%s%x1f%b%x1f%cI%x1e",  # full | short | subject | body | date
-            "--all",
+            "--all" if self.all_refs else "HEAD",
             check=False,
         )
         if not output:
@@ -348,7 +361,7 @@ class IncidentParser:
                 continue
 
             what_happened = self._extract_what_happened(subject, body)
-            resolution = self._extract_resolution(body)
+            resolution = self._extract_resolution(subject, body)
             source_ref = self._extract_source_ref(subject, short_hash)
 
             # Parse date for sorting. Never fall back to the wall clock: a clock
@@ -496,10 +509,10 @@ class IncidentValidator:
 class IncidentChecker:
     """Check if docs/INCIDENTS.md matches current git state."""
 
-    def __init__(self, repo_root: str = "."):
+    def __init__(self, repo_root: str = ".", all_refs: bool = False):
         """Initialize checker."""
         self.repo_root = Path(repo_root)
-        self.parser = IncidentParser(repo_root)
+        self.parser = IncidentParser(repo_root, all_refs=all_refs)
         self.markdown = IncidentMarkdown()
 
     def _is_shallow_clone(self) -> bool:
@@ -599,6 +612,12 @@ def main():
         help="Output file path (default: docs/INCIDENTS.md; relative to --repo, or absolute)"
     )
 
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Scan every ref, not only HEAD's history (forensic use; unrelated branches can fail the gate)"
+    )
+
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument(
         "--regenerate",
@@ -613,7 +632,7 @@ def main():
 
     args = parser.parse_args()
 
-    incident_parser = IncidentParser(repo_root=args.repo)
+    incident_parser = IncidentParser(repo_root=args.repo, all_refs=args.all)
     markdown_gen = IncidentMarkdown()
 
     if args.regenerate:
@@ -638,7 +657,7 @@ def main():
         return 0
 
     if args.check:
-        checker = IncidentChecker(repo_root=args.repo)
+        checker = IncidentChecker(repo_root=args.repo, all_refs=args.all)
         match, message = checker.check_incidents_file(args.output)
         if match:
             if message:
