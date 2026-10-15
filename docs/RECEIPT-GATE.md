@@ -83,11 +83,12 @@ under the marker `<!-- aesop-receipt:verify-receipt-local -->`. The Action reads
 
 ```json
 {"receipt": {
-   "schema": 1, "schema_version": 1, "repo": "owner/name",
+   "schema": 1, "schema_version": 1, "profile": "scoped",
+   "repo": "owner/name",
    "head_sha": "...", "base_sha": "<merge-base with origin/main>",
    "tree_hash": "<git rev-parse HEAD^{tree}>",
    "parts":   [{"name": "py-shard-0", "exit_code": 0, "test_count": 212, "duration_s": 48.1}, ...],
-   "skipped": [{"name": "browser-proofs", "reason": "not runnable here: ..."}],
+   "skipped": [{"name": "browser-proofs", "reason": "not runnable here: ..."}, {"name": "py-shard-1", "reason": "not in scope: no changed file maps to this shard (profile=scoped)"}],
    "host": {"os": "windows", "python": "3.12.4", "hostname_hash": "<sha256[:16]>"},
    "timestamp": "2026-10-06T14:02:11Z"},
  "sig": {"scheme": "ed25519", "value": "<base64>", "key_id": "<sha256(pubkey)[:16]>"}}
@@ -95,13 +96,23 @@ under the marker `<!-- aesop-receipt:verify-receipt-local -->`. The Action reads
 
 Canonical form: `json.dumps(receipt, sort_keys=True, separators=(",", ":"))`. The
 signature covers the canonical bytes, so changing **any** field (an exit code, the tree,
-the base) invalidates it. The optional `schema_version` field (default: absent, treated as version 1 for backward compatibility) enables forward-compatible extensions without breaking existing verifiers.
+the base) invalidates it. The optional `schema_version` field (default: absent, treated as version 1 for backward compatibility) enables forward-compatible extensions without breaking existing verifiers. The optional `profile` field (default: absent, treated as "scoped" for backward compatibility) records which profile was used to select the matrix.
+
+## Matrix profiles: default scoped, full available
+
+By default, the pre-push receipt emits using `profile: "scoped"`: it runs the fast pre-push gates always (`secret-scan`, `claudemd-sync-gate`, `gen-tool-index`, `verify-test-suite-count`, `encoding-lint`, `import-resolution-check`, `sibling-import-check`) PLUS only the python shards (`py-shard-0..3`) that own files changed in this push (derived from `git diff --name-only <base>..<tip>` mapped through the shard assignment in `ci_shard_runner.py`'s round-robin distribution). Shards not in scope are recorded under `skipped` with reason `"not in scope: no changed file maps to this shard (profile=scoped)"`.
+
+The scoped profile is the default because the full matrix (`py-shard-0..3`) can exceed pre-push timeout budgets on slow boxes (measured ~1250s locally while the hook timeout is 900s); scoped runs reduce that to minutes when most changes are docs-only or touch a few test files. Parts that cannot run on a dev box (`browser-proofs`, `windows-shard`) remain always-skipped, and the verifier's required-parts list never changes.
+
+- **Scoped (default):** `AESOP_RECEIPT_PROFILE=scoped` or unset. Run fast parts + owning shards only.
+- **Full:** `AESOP_RECEIPT_PROFILE=full`. Run fast parts + all shards (today's behavior). Available for explicit measurement or CI runs; set on the command line when you want the old behavior.
+- **Manual override:** `python tools/emit_receipt.py --matrix py-shard-0,secret-scan --post` always respects an explicit `--matrix` argument regardless of profile.
+- **Underivable mapping:** If the shard assignment cannot be determined (e.g., `git ls-files` fails), the profile falls back to `full` to stay safe.
 
 Default matrix: `py-shard-0..3` (`tools/ci_shard_runner.py n 4`) plus the pre-push gate
-set (`secret-scan`, `claudemd-sync-gate`, `gen-tool-index`, `verify-test-suite-count`,
-`encoding-lint`, `import-resolution-check`, `sibling-import-check`). Parts that cannot
-run on a dev box (`browser-proofs`, `windows-shard`) are recorded under `skipped` with a
-reason — never silently dropped — and are *not* in the verifier's required list.
+set, with scoping applied per the profile above. Parts that cannot run on a dev box
+(`browser-proofs`, `windows-shard`) are recorded under `skipped` with a reason —
+never silently dropped — and are *not* in the verifier's required list.
 
 ## Signing scheme
 
