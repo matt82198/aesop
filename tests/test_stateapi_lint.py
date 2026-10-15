@@ -176,5 +176,72 @@ new_violation = Path("state/tracker.json").read_text()
         self.assertEqual(len(new), 0, "Should have no new violations after normalization")
 
 
+class StateLintDocstringAwareTest(unittest.TestCase):
+    """A state path named only in a docstring or comment is documentation, not an access."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.repo_root = Path(self.tmp)
+        (self.repo_root / "tools").mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _scan(self, name, content):
+        (self.repo_root / "tools" / name).write_text(content, encoding="utf-8")
+        from tools.stateapi_lint import find_direct_opens
+
+        return find_direct_opens(str(self.repo_root))
+
+    def test_path_only_in_docstring_and_comment_is_not_flagged(self):
+        """A module whose only mention of a state path is in its docstring and a # comment passes."""
+        content = (
+            '"""Writes state/.task-ingest-heartbeat on a clean run."""\n'
+            "import json\n"
+            "# heartbeat contract: state/.task-ingest-heartbeat\n"
+            "VALUE = 1  # see state/.task-ingest-heartbeat\n"
+            "\n"
+            "def describe():\n"
+            '    """Mentions state/.task-ingest-heartbeat in a function docstring."""\n'
+            '    return "ok"\n'
+        )
+        violations = self._scan("doc_only_reader.py", content)
+        found = [v for v in violations if "doc_only_reader.py" in v]
+        self.assertEqual(found, [], f"Docstring/comment-only mention must not be flagged: {violations}")
+
+    def test_same_path_in_real_open_call_is_flagged(self):
+        """The same state path used in a real open() call in code is still flagged."""
+        content = (
+            '"""Module docstring that mentions state/.task-ingest-heartbeat."""\n'
+            "from pathlib import Path\n"
+            "\n"
+            "def touch():\n"
+            '    """Docstring also mentions state/.task-ingest-heartbeat."""\n'
+            '    open(Path("state/.task-ingest-heartbeat"), "w").close()\n'
+        )
+        violations = self._scan("real_heartbeat_writer.py", content)
+        self.assertIn(
+            "tools/real_heartbeat_writer.py@state-heartbeat",
+            violations,
+            f"A real open() of the heartbeat path must be flagged: {violations}",
+        )
+
+    def test_real_access_after_docstring_is_still_flagged(self):
+        """Blanking a docstring must not hide a real access on the next code line."""
+        content = (
+            '"""Reads tracker.json through a docstring example only."""\n'
+            "import json\n"
+            "from pathlib import Path\n"
+            'data = json.loads(Path("state/tracker.json").read_text())\n'
+        )
+        violations = self._scan("post_docstring_reader.py", content)
+        self.assertIn(
+            "tools/post_docstring_reader.py@state-tracker-json",
+            violations,
+            f"A real read after a docstring must still be flagged: {violations}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -22,6 +22,42 @@ source "$HOOK_SCRIPT"
 test_passed=0
 test_failed=0
 
+# Gate code is judged from origin/main (hooks/pre-push-policy.sh gate_base_dir).
+# publish_base_tools <clone> <tools_src>: origin/main:tools/ becomes <tools_src>
+# (empty src -> only a placeholder), via a separate base repo fetched as origin.
+publish_base_tools() {
+  local clone="$1" src="$2" base="$1.base"
+  rm -rf "$base"
+  mkdir -p "$base/tools"
+  if [ -n "$src" ] && [ -d "$src" ]; then
+    cp -R "$src"/. "$base/tools/"
+  fi
+  : > "$base/tools/.keep"
+  git -C "$base" init -q -b main
+  git -C "$base" add -A
+  git -C "$base" -c user.email=t@example.com -c user.name=t -c core.autocrlf=false commit -q -m base
+  git -C "$clone" remote remove origin >/dev/null 2>&1 || true
+  git -C "$clone" remote add origin "$base"
+  git -C "$clone" fetch -q origin main
+}
+
+# make_clone_with_base <clone> <tools_src>: fresh clone on feature/test with a base published.
+make_clone_with_base() {
+  local clone="$1" src="$2"
+  rm -rf "$clone"
+  mkdir -p "$clone"
+  git -C "$clone" init -q -b main
+  git -C "$clone" config user.email t@example.com
+  git -C "$clone" config user.name t
+  git -C "$clone" config core.autocrlf false
+  printf 'base\n' > "$clone/README.md"
+  git -C "$clone" add -A
+  git -C "$clone" commit -q -m base
+  publish_base_tools "$clone" "$src"
+  git -C "$clone" checkout -q -b feature/test
+}
+
+
 # ===== NEW TESTS FOR 6 FINDINGS =====
 
 printf '\n=== Finding 1: Race condition in hash-chain (concurrent writes) ===\n'
@@ -274,6 +310,8 @@ printf '\n=== Test 7 (existing): Secret scan unavailable fails-CLOSED ===\n'
 (
   export AESOP_ROOT="$TEST_ROOT/aesop_no_scanner"
   mkdir -p "$AESOP_ROOT/state"
+  make_clone_with_base "$TEST_ROOT/no_scanner_clone" ""
+  cd "$TEST_ROOT/no_scanner_clone" || exit 1
 
   # Provide a valid 4-field tuple to get past empty-stdin check
   # This tests that when scanner is missing, it fails-closed (not when stdin is empty)
@@ -1005,6 +1043,7 @@ SCANNER
     git commit -q -m "initial"
     git checkout -q -b feature/isolated-empty-stdin
   )
+  publish_base_tools "$ISOLATED_MAIN_REPO" "$AESOP_ROOT/tools"  # gate code is pinned to origin/main
   stderr_output=$( { printf '' | ( cd "$ISOLATED_MAIN_REPO" && bash "$HOOK_SCRIPT" ); } 2>&1 1>/dev/null )
   exit_code=$?
 
@@ -1177,6 +1216,8 @@ sys.exit(0)
 SCANNER
   chmod +x "$AESOP_ROOT/tools/secret_scan.py"
 
+  make_clone_with_base "$TEST_ROOT/shim_clone" "$AESOP_ROOT/tools"
+  pushd "$TEST_ROOT/shim_clone" >/dev/null || exit 1
   shim_dir="$TEST_ROOT/py2shim_bin"
   mkdir -p "$shim_dir"
   # Broken `python`: simulates a Python-2-only interpreter hitting the
@@ -1205,6 +1246,7 @@ SHIM
         check_secret_scan
       ' <<< "$stdin_input" 2>&1
   )
+  popd >/dev/null
   rc=$?
 
   if [ $rc -eq 124 ]; then
@@ -1307,6 +1349,8 @@ if "--check" in sys.argv:
 sys.exit(0)
 SCRIPT
   chmod +x "$AESOP_ROOT/tools/gen_tool_index.py"
+  make_clone_with_base "$TEST_ROOT/gen_clone_1" "$AESOP_ROOT/tools"
+  cd "$TEST_ROOT/gen_clone_1" || exit 1
 
   # Create stub scripts for other gates so check_gen_tool_index doesn't fail before we test it
   for gate in tracker_guard import_resolution_check claudemd_sync_gate metrics_gate \
@@ -1343,6 +1387,8 @@ if "--check" in sys.argv:
 sys.exit(1)
 SCRIPT
   chmod +x "$AESOP_ROOT/tools/gen_tool_index.py"
+  make_clone_with_base "$TEST_ROOT/gen_clone_2" "$AESOP_ROOT/tools"
+  cd "$TEST_ROOT/gen_clone_2" || exit 1
 
   # Create stub scripts for other gates
   for gate in tracker_guard import_resolution_check claudemd_sync_gate metrics_gate \
@@ -1857,6 +1903,7 @@ printf '\n=== Test: main() emits a receipt only after every gate above it passed
   AESOP_ROOT_A="$TEST_ROOT/receipt_main_green_tools"
   build_repo "$REPO_A"
   build_tools "$AESOP_ROOT_A" 0
+  publish_base_tools "$REPO_A" "$AESOP_ROOT_A/tools"
   export AESOP_RECEIPT_KEY="$AESOP_ROOT_A/dummy_key.pem"
   touch "$AESOP_ROOT_A/dummy_key.pem"
   unset AESOP_RECEIPT_EMIT
@@ -1885,6 +1932,7 @@ printf '\n=== Test: main() emits a receipt only after every gate above it passed
   AESOP_ROOT_B="$TEST_ROOT/receipt_main_red_tools"
   build_repo "$REPO_B"
   build_tools "$AESOP_ROOT_B" 1
+  publish_base_tools "$REPO_B" "$AESOP_ROOT_B/tools"
   export AESOP_RECEIPT_KEY="$AESOP_ROOT_B/dummy_key.pem"
   touch "$AESOP_ROOT_B/dummy_key.pem"
 
@@ -1921,6 +1969,8 @@ printf '\n=== Test 29: check_pyflakes_ratchet blocks on baseline mismatch ===\n'
   # Stub pyflakes_gate.py that returns 1 (baseline mismatch)
   printf 'import sys\nsys.exit(1)\n' > "$AESOP_ROOT/tools/pyflakes_gate.py"
 
+  make_clone_with_base "$TEST_ROOT/pyflakes_t29_clone" "$AESOP_ROOT/tools"
+  cd "$TEST_ROOT/pyflakes_t29_clone" || exit 1
   if check_pyflakes_ratchet >/dev/null 2>&1; then
     printf 'FAIL: check_pyflakes_ratchet should block on baseline mismatch (exit 1)\n'
     exit 1
@@ -1942,6 +1992,8 @@ printf '\n=== Test 30: check_pyflakes_ratchet fails open when pyflakes not insta
   # Stub pyflakes_gate.py that returns 2 (pyflakes not installed / error condition)
   printf 'import sys\nsys.exit(2)\n' > "$AESOP_ROOT/tools/pyflakes_gate.py"
 
+  make_clone_with_base "$TEST_ROOT/pyflakes_t30_clone" "$AESOP_ROOT/tools"
+  cd "$TEST_ROOT/pyflakes_t30_clone" || exit 1
   if ! check_pyflakes_ratchet >/dev/null 2>&1; then
     printf 'FAIL: check_pyflakes_ratchet should fail-open when pyflakes is missing (return 0)\n'
     exit 1
@@ -1962,6 +2014,8 @@ printf '\n=== Test 31: check_pyflakes_ratchet skipped when tool missing from aes
 
   # Do NOT create pyflakes_gate.py; the tool should be considered missing
 
+  make_clone_with_base "$TEST_ROOT/pyflakes_t31_clone" "$AESOP_ROOT/tools"
+  cd "$TEST_ROOT/pyflakes_t31_clone" || exit 1
   if ! check_pyflakes_ratchet >/dev/null 2>&1; then
     printf 'FAIL: check_pyflakes_ratchet should fail-open (return 0) when tool missing\n'
     exit 1
