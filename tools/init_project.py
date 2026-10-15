@@ -440,6 +440,31 @@ def install_pre_push_hook(target_dir, force=False):
     return True, "installed"
 
 
+STATE_IGNORE_BEGIN = "# >>> aesop:state-ignore-begin (runtime state; do not commit) >>>"
+STATE_IGNORE_END = "# <<< aesop:state-ignore-end <<<"
+STATE_IGNORE_BLOCK = (
+    f"{STATE_IGNORE_BEGIN}\n"
+    "state/*\n"
+    "!state/.gitkeep\n"
+    f"{STATE_IGNORE_END}\n"
+)
+
+
+def ensure_state_gitignore(target_dir):
+    """Append a marker-delimited block ignoring state/ runtime files.
+
+    Idempotent: returns False and leaves the file untouched when the block is
+    already present. Creates .gitignore when absent, appends otherwise.
+    """
+    gitignore = Path(target_dir) / ".gitignore"
+    existing = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
+    if STATE_IGNORE_BEGIN in existing:
+        return False
+    sep = "" if (not existing or existing.endswith("\n")) else "\n"
+    gitignore.write_text(existing + sep + STATE_IGNORE_BLOCK, encoding="utf-8")
+    return True
+
+
 def init_project(target_dir, project_name=None, force=False, ci_mode="hosted",
                  self_hosted_labels=None, aesop_root=None):
     """
@@ -529,6 +554,11 @@ def init_project(target_dir, project_name=None, force=False, ci_mode="hosted",
         files_created.append("state/.gitkeep")
     else:
         files_skipped.append("state/.gitkeep")
+    # Runtime state (SQLite event store, tracker json) must never be committed.
+    if ensure_state_gitignore(str(target)):
+        files_created.append(".gitignore (state/ block)")
+    else:
+        files_skipped.append(".gitignore (state/ block already present)")
 
     # 5. CI workflow(s) for the chosen mode (rendered above, before any write)
     for rel, content in workflows.items():

@@ -76,7 +76,9 @@ def generate_ed25519_keypair(private_path, public_path) -> None:
 
 
 def key_id_for_pubkey(pub_pem: bytes) -> str:
-    return hashlib.sha256(pub_pem.strip()).hexdigest()[:16]
+    # Normalize CRLF: Windows autocrlf checkouts rewrite the committed LF PEM to CRLF,
+    # and the key_id must be the same on every checkout (the emitter hashes LF output).
+    return hashlib.sha256(pub_pem.replace(b"\r\n", b"\n").strip()).hexdigest()[:16]
 
 
 def sign(canonical: bytes, scheme: str, private_key_path=None, hmac_secret=None) -> dict:
@@ -135,6 +137,39 @@ def verify_signature(canonical: bytes, sig: dict, pubkey_path=None, hmac_secret=
             return True
         except Exception:
             return False
+    return False
+
+
+KEYRING_DIR_NAME = "receipt_pubkeys"  # Extra registered public keys, next to the committed key.
+
+
+def keyring_paths(pubkey_path) -> list:
+    """Registered Ed25519 public keys: the committed key plus <its dir>/receipt_pubkeys/*.pub."""
+    if not pubkey_path:
+        return []
+    base = Path(pubkey_path)
+    paths = [base] if base.is_file() else []
+    extra = base.parent / KEYRING_DIR_NAME
+    if extra.is_dir():
+        paths += sorted(p for p in extra.glob("*.pub") if p.is_file())
+    return paths
+
+
+def verify_signature_keyring(canonical: bytes, sig: dict, pubkey_paths) -> bool:
+    """Ed25519 verify against the registered key whose key_id equals sig['key_id'].
+
+    The key_id is a lookup hint only: the signature must still verify under that
+    key. Fails closed (False) when no registered key matches or the signature is bad.
+    """
+    if not isinstance(sig, dict) or sig.get("scheme") != "ed25519":
+        return False
+    for path in pubkey_paths:
+        try:
+            pem = Path(path).read_bytes()
+        except OSError:
+            continue
+        if key_id_for_pubkey(pem) == sig.get("key_id") and verify_signature(canonical, sig, pubkey_path=path):
+            return True
     return False
 
 

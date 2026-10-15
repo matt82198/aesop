@@ -19,7 +19,7 @@ Usage:
     python tools/auto_merge.py 806 807 809   Merge PRs #806, #807, #809
     python tools/auto_merge.py --all         Merge all open green PRs
 
-Exit codes: 0=all merged, 1=some blocked, 2=error
+Exit codes: 0=all merged, 1=some blocked (scoped mode: 0 only if every named PR is gh-verified MERGED), 2=error
 """
 import argparse
 import json
@@ -87,6 +87,34 @@ def merge_pr(pr_num):
     if state != 'MERGED':
         return False, f'state={state}'
     return True, 'MERGED'
+
+
+def pr_merge_state(pr_num):
+    """Return (state, mergedAt) for one PR from `gh pr view --json state,mergedAt`.
+
+    Fail closed: any gh failure or unparseable output yields ('UNKNOWN', None),
+    so a nonexistent PR or a gh outage can never read as merged.
+    """
+    r = gh(['pr', 'view', str(pr_num), '--json', 'state,mergedAt'], check=False)
+    if r.returncode != 0:
+        return 'UNKNOWN', None
+    try:
+        data = json.loads(r.stdout)
+    except ValueError:
+        return 'UNKNOWN', None
+    if not isinstance(data, dict):
+        return 'UNKNOWN', None
+    return data.get('state') or 'UNKNOWN', data.get('mergedAt')
+
+
+def scoped_verdict(pr_numbers):
+    """Return [(n, state)] for every requested PR not verified MERGED via GitHub."""
+    unverified = []
+    for n in dict.fromkeys(pr_numbers):
+        state, merged_at = pr_merge_state(n)
+        if state != 'MERGED' or not merged_at:
+            unverified.append((n, state))
+    return unverified
 
 
 def fix_branch(branch):
@@ -223,7 +251,8 @@ def main():
         # For scoped mode, check if all target PRs are done
         remaining = target_prs if not args.all else get_open_prs()
         if not remaining:
-            if not args.json:
+            # Scoped mode is decided by scoped_verdict() after the loop, never here.
+            if args.all and not args.json:
                 print('\nAll targeted PRs merged!')
             break
 
@@ -240,9 +269,15 @@ def main():
 
     if args.all:
         remaining = get_open_prs()
-    else:
-        remaining = [pr for pr in get_open_prs() if pr['number'] in args.pr_numbers]
-    return 0 if not remaining else 1
+        return 0 if not remaining else 1
+
+    # Scoped mode: success means every named PR is verified MERGED on GitHub.
+    unverified = scoped_verdict(args.pr_numbers)
+    for n, state in unverified:
+        print(f'auto_merge.py: #{n} is NOT MERGED (state={state})', file=sys.stderr)
+    if not unverified and not args.json:
+        print('\nAll targeted PRs merged!')
+    return 0 if not unverified else 1
 
 
 if __name__ == '__main__':

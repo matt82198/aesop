@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """PR sweep: session-independent nudger for armed-but-stuck PRs.
-INDEX: Session-independent PR sweep (closes STATE.md item 9 residual, PR #871 gap): per open non-draft PR, arms missing GitHub native auto-merge (`gh pr merge <N> --auto --squash`, never an admin-override merge), updates BEHIND branches capped at 2/run oldest-first (skips PRs touched in the last 20 min), and signals stuck-red (required check failing, head older than 30 min) or DIRTY PRs as `pr.red`/`pr.dirty` events to the conductor signal-hub queue, deduped per (pr, head, type); `--dry-run` prints the plan only, `--json` adds a machine summary; exit 2 if `gh auth` is missing; never rebases, pushes code, or merges.
+INDEX: Session-independent PR sweep (closes STATE.md item 9 residual, PR #871 gap): per open non-draft PR, arms missing GitHub native auto-merge (`gh pr merge <N> --auto --squash`, never an admin-override merge), updates BEHIND branches capped at 2/run oldest-first (skips PRs touched in the last 20 min), and signals stuck-red (required check failing, head older than 30 min) or DIRTY PRs as `pr.red`/`pr.dirty` events to the conductor signal-hub queue, deduped per (pr, head, type); retriggers CI (`gh workflow run ci.yml`) for armed PRs whose head has zero check runs 20+ min after push, and disarms + labels `needs-ci-trigger` if still zero 24 h later; `--dry-run` prints the plan only, `--json` adds a machine summary; exit 2 if `gh auth` is missing; never rebases, pushes code, or merges.
 
 Gap this closes: a PR that goes RED (or falls BEHIND, or loses its auto-merge
 arming) after auto-merge is armed previously had no session-independent actor --
@@ -24,10 +24,27 @@ What it does, per open non-draft PR of the target repo:
       `pr.red` event to the signal-hub queue, deduped on (pr, head).
   (d) mergeStateStatus == DIRTY -> append ONE `pr.dirty` event the same way,
       deduped on (pr, head).
+  (e) ZERO-CHECK (verified class, PR #932/#934 2026-10-14): auto-merge is armed
+      but the head has NO check rollup entries (`statusCheckRollup` empty) and
+      the head commit is >= 20 minutes old. First sighting -> `gh workflow run
+      ci.yml --ref <head-branch>` (ci.yml has workflow_dispatch) plus a
+      marker comment carrying `sha=<head>`. Still zero check runs 24 h after
+      that marker -> `gh pr merge <N> --disable-auto` (disarm, never merge)
+      and label the PR `needs-ci-trigger` so it cannot merge silently. Both
+      steps are idempotent on the marker comments, so a repeat sweep never
+      re-dispatches or re-disarms the same head.
 
 Never rebases, never pushes code, never merges -- purely observe + arm + nudge
-+ signal. A human or a dispatched fix lane (never the orchestrator's own main
-thread, per the merge-train dispatch rule) consumes the signal-hub queue.
++ signal + (e) retrigger/disarm. A human or a dispatched fix lane (never the
+orchestrator's own main thread, per the merge-train dispatch rule) consumes
+the signal-hub queue.
+
+Fail closed: every gh read that decides an action runs BEFORE any write; a
+failed read exits 3 having acted on nothing. A failed write during execution
+stops the sweep and exits 1. Every real action is appended to the sweep log
+(`<conductor_root>/state/pr-sweep.log`, override --log-path or
+AESOP_PR_SWEEP_LOG) with the PR number, reason, and outcome. --dry-run prints
+the plan and touches neither GitHub nor the log.
 
 The signal-hub queue path defaults to
 `<conductor_root>/state/signal-hub-queue.jsonl` (tools/common.py::
@@ -37,9 +54,11 @@ AESOP_SIGNAL_QUEUE env var.
 
 Usage:
     python tools/pr_sweep.py [--dry-run] [--json] [--repo OWNER/NAME]
-                              [--queue-path FILE] [--behind-cap N]
+                              [--queue-path FILE] [--behind-cap N] [--log-path FILE]
 
-Exit codes: 0 = swept (incl. no-op), 2 = gh auth missing or PR listing failed.
+Exit codes: 0 = swept (incl. no-op), 1 = a write failed mid-execution (sweep
+stopped), 2 = gh auth missing or PR listing failed, 3 = a zero-check read
+failed (nothing was acted on).
 """
 import argparse
 import json
@@ -75,6 +94,15 @@ def _flush_receipts_if_possible():
 BEHIND_THROTTLE_MIN = 20
 RED_MIN_AGE_MIN = 30
 GH_TIMEOUT = 60
+# Zero-check retrigger (plan step e).
+ZERO_CHECK_MIN_AGE_MIN = 20
+ZERO_CHECK_DISARM_AFTER_MIN = 24 * 60
+ZERO_CHECK_LABEL = "needs-ci-trigger"
+CI_WORKFLOW_FILE = "ci.yml"  # has workflow_dispatch (ci.yml `on:`)
+RETRY_MARK = "<!-- pr-sweep:zero-check-retry sha=%s -->"
+DISARM_MARK = "<!-- pr-sweep:zero-check-disarm sha=%s -->"
+REBASE_MARK = "<!-- pr-sweep:needs-rebase sha=%s -->"
+LABEL_NEEDS_REBASE = "needs-rebase"
 
 
 class GhError(Exception):
@@ -136,7 +164,7 @@ def default_queue_path():
 
 PR_LIST_FIELDS = (
     "number,title,isDraft,autoMergeRequest,mergeStateStatus,updatedAt,"
-    "createdAt,headRefOid,headRefName,url"
+    "createdAt,headRefOid,headRefName,url,mergeable"
 )
 
 
@@ -184,6 +212,110 @@ def update_branch(pr_number, repo):
     if isinstance(result, dict) and "error" in result:
         return False, result["error"]
     return True, ""
+
+
+def read_zero_check_state(pr_number, repo=None):
+    """Fail-closed read for the zero-check decision. Any gh error, or a
+    response without a statusCheckRollup list, raises GhError: an unreadable
+    PR must never be treated as "zero checks" (that would dispatch or disarm
+    on a guess).
+    """
+    args = ["pr", "view", str(pr_number), "--json", "statusCheckRollup,commits,comments"]
+    if repo:
+        args += ["--repo", repo]
+    result = gh(*args)
+    if not isinstance(result, dict):
+        raise GhError("pr view #%s returned no JSON: %r" % (pr_number, result))
+    if "error" in result:
+        raise GhError("pr view #%s failed: %s" % (pr_number, result["error"]))
+    if not isinstance(result.get("statusCheckRollup"), list):
+        raise GhError("pr view #%s has no statusCheckRollup list" % pr_number)
+    return result
+
+
+def head_commit_time(state, head):
+    for commit in state.get("commits") or []:
+        if commit.get("oid") == head:
+            return commit.get("committedDate")
+    return None
+
+
+def is_conflicted(pr):
+    return pr.get("mergeStateStatus") == "DIRTY" or pr.get("mergeable") == "CONFLICTING"
+
+
+def decide_zero_check(pr, state, now):
+    """Pure decision for one armed PR. Returns ("retrigger", reason),
+    ("disarm", reason), or None (leave the PR alone).
+    """
+    if state.get("statusCheckRollup"):
+        return None
+    head = pr.get("headRefOid") or ""
+    if not head:
+        return None
+    age = minutes_since(head_commit_time(state, head), now)
+    if age is None or age < ZERO_CHECK_MIN_AGE_MIN:
+        return None
+    # A conflicted PR gets no CI run because GitHub cannot build the merge
+    # commit. Dispatching cannot fix that, and a 24h disarm would hide a
+    # merge conflict as a CI problem, so it takes its own path: label
+    # needs-rebase once, keep auto-merge armed (a rebase triggers runs).
+    if is_conflicted(pr):
+        for comment in state.get("comments") or []:
+            if REBASE_MARK % head in (comment.get("body") or ""):
+                return None
+        return ("needs-rebase", "head %s conflicts with the base (merge state %s, mergeable %s); "
+                "no CI run is expected until it is rebased"
+                % (head[:12], pr.get("mergeStateStatus"), pr.get("mergeable")))
+    retry_at = None
+    for comment in state.get("comments") or []:
+        body = comment.get("body") or ""
+        if DISARM_MARK % head in body:
+            return None
+        if retry_at is None and RETRY_MARK % head in body:
+            retry_at = comment.get("createdAt")
+    if retry_at is None:
+        return ("retrigger", "head %s has zero check runs %dm after push" % (head[:12], int(age)))
+    since = minutes_since(retry_at, now)
+    if since is None:
+        return None
+    if since >= ZERO_CHECK_DISARM_AFTER_MIN:
+        return ("disarm", "still zero check runs %dm after CI dispatch on head %s"
+                % (int(since), head[:12]))
+    return None
+
+
+def post_pr_comment(pr_number, repo, body):
+    args = ["pr", "comment", str(pr_number), "--body", body]
+    if repo:
+        args += ["--repo", repo]
+    result = gh(*args)
+    if isinstance(result, dict) and "error" in result:
+        raise GhError("pr comment #%s failed: %s" % (pr_number, result["error"]))
+
+
+def gh_write(*args):
+    result = gh(*args)
+    if isinstance(result, dict) and "error" in result:
+        raise GhError("gh %s failed: %s" % (" ".join(args[:2]), result["error"]))
+    return result
+
+
+def default_sweep_log_path():
+    env = os.environ.get("AESOP_PR_SWEEP_LOG")
+    if env:
+        return Path(env)
+    return get_conductor_root() / "state" / "pr-sweep.log"
+
+
+def append_sweep_log(log_path, pr_number, action, reason, outcome):
+    if log_path is None:
+        return
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    entry = {"ts": iso_now(), "pr": pr_number, "action": action,
+             "reason": reason, "outcome": outcome}
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, sort_keys=False) + "\n")
 
 
 def iso_now():
@@ -278,12 +410,28 @@ def build_plan(open_prs, repo, now, queue_path, behind_cap=DEFAULT_BEHIND_CAP):
         actions.append({"kind": "signal", "type": "pr.red", "pr": num, "head": head,
                          "url": p.get("url", ""), "checks": [c.get("name", "") for c in failing]})
 
+    # (e) zero-check armed PRs: reads only here, writes happen in execute_plan.
+    for p in open_prs:
+        if not p.get("autoMergeRequest"):
+            continue
+        state = read_zero_check_state(p["number"], repo)
+        decision = decide_zero_check(p, state, now)
+        if decision is None:
+            continue
+        kind, reason = decision
+        actions.append({
+            "kind": "zero-" + kind, "pr": p["number"], "url": p.get("url", ""),
+            "head": p.get("headRefOid", "") or "", "branch": p.get("headRefName", "") or "",
+            "reason": reason,
+        })
+
     return actions
 
 
-def execute_plan(actions, repo, dry_run, queue_path):
+def execute_plan(actions, repo, dry_run, queue_path, log_path=None):
     lines = []
-    results = {"armed": 0, "updated": 0, "signaled": 0, "errors": []}
+    results = {"armed": 0, "updated": 0, "signaled": 0, "retriggered": 0,
+               "disarmed": 0, "errors": []}
     for a in actions:
         if a["kind"] == "arm":
             lines.append("ARM #%s (auto-merge missing) %s" % (a["pr"], a.get("url", "")))
@@ -313,6 +461,75 @@ def execute_plan(actions, repo, dry_run, queue_path):
                 }
                 append_signal_event(queue_path, event)
                 results["signaled"] += 1
+        elif a["kind"] in ("zero-retrigger", "zero-disarm", "zero-needs-rebase"):
+            prefix_word = {"zero-retrigger": "ZERO-RETRIGGER", "zero-disarm": "ZERO-DISARM",
+                           "zero-needs-rebase": "NEEDS-REBASE"}[a["kind"]]
+            lines.append("%s #%s (%s) %s" % (prefix_word, a["pr"], a["reason"], a.get("url", "")))
+            if dry_run:
+                continue
+            try:
+                if a["kind"] == "zero-retrigger":
+                    gh_write_args = ["workflow", "run", CI_WORKFLOW_FILE, "--ref", a["branch"]]
+                    if repo:
+                        gh_write_args += ["--repo", repo]
+                    gh_write(*gh_write_args)
+                    body = (RETRY_MARK % a["head"]) + "\n" + (
+                        "pr-sweep: head `%s` had zero check runs after %d+ min; dispatched "
+                        "`%s` on `%s`. If still no check runs 24h from now, auto-merge is "
+                        "disarmed and this PR is labelled `%s`." % (
+                            a["head"][:12], ZERO_CHECK_MIN_AGE_MIN, CI_WORKFLOW_FILE,
+                            a["branch"], ZERO_CHECK_LABEL))
+                    post_pr_comment(a["pr"], repo, body)
+                    results["retriggered"] += 1
+                    outcome = "dispatched %s on %s; marker comment posted" % (
+                        CI_WORKFLOW_FILE, a["branch"])
+                elif a["kind"] == "zero-needs-rebase":
+                    label_args = ["label", "create", LABEL_NEEDS_REBASE, "--force",
+                                  "--color", "D93F0B",
+                                  "--description", "PR conflicts with main; rebase needed"]
+                    if repo:
+                        label_args += ["--repo", repo]
+                    gh_write(*label_args)
+                    edit_args = ["pr", "edit", str(a["pr"]), "--add-label", LABEL_NEEDS_REBASE]
+                    if repo:
+                        edit_args += ["--repo", repo]
+                    gh_write(*edit_args)
+                    body = (REBASE_MARK % a["head"]) + "\n" + (
+                        "pr-sweep: head `%s` conflicts with the base branch, so GitHub creates no "
+                        "CI run for it. Labelled `%s`; rebase onto main to resolve the conflict. "
+                        "Auto-merge stays armed and will proceed once the rebase produces runs."
+                        % (a["head"][:12], LABEL_NEEDS_REBASE))
+                    post_pr_comment(a["pr"], repo, body)
+                    results["rebase_flagged"] = results.get("rebase_flagged", 0) + 1
+                    outcome = "labelled %s; conflict comment posted; auto-merge left armed" % (
+                        LABEL_NEEDS_REBASE)
+                else:
+                    disarm_args = ["pr", "merge", str(a["pr"]), "--disable-auto"]
+                    if repo:
+                        disarm_args += ["--repo", repo]
+                    gh_write(*disarm_args)
+                    label_args = ["label", "create", ZERO_CHECK_LABEL, "--force",
+                                  "--color", "FBCA04",
+                                  "--description", "PR has zero CI runs; auto-merge disarmed"]
+                    if repo:
+                        label_args += ["--repo", repo]
+                    gh_write(*label_args)
+                    edit_args = ["pr", "edit", str(a["pr"]), "--add-label", ZERO_CHECK_LABEL]
+                    if repo:
+                        edit_args += ["--repo", repo]
+                    gh_write(*edit_args)
+                    body = (DISARM_MARK % a["head"]) + "\n" + (
+                        "pr-sweep: no check runs for head `%s` 24h after CI dispatch; "
+                        "auto-merge disarmed and labelled `%s`. Re-arm with "
+                        "`gh pr merge <N> --auto --squash` once CI runs are visible." % (
+                            a["head"][:12], ZERO_CHECK_LABEL))
+                    post_pr_comment(a["pr"], repo, body)
+                    results["disarmed"] += 1
+                    outcome = "auto-merge disarmed; labelled %s" % ZERO_CHECK_LABEL
+            except GhError as exc:
+                append_sweep_log(log_path, a["pr"], a["kind"], a["reason"], "failed: %s" % exc)
+                raise
+            append_sweep_log(log_path, a["pr"], a["kind"], a["reason"], outcome)
     return lines, results
 
 
@@ -324,6 +541,7 @@ def main(argv=None):
     parser.add_argument("--queue-path", help="override signal-hub queue path (testing)")
     parser.add_argument("--behind-cap", type=int, default=DEFAULT_BEHIND_CAP,
                          help="max update-branch calls per run (default 2)")
+    parser.add_argument("--log-path", help="override sweep log path (testing)")
     args = parser.parse_args(argv)
 
     if not gh_auth_ok():
@@ -332,8 +550,10 @@ def main(argv=None):
 
     # Flush any spooled receipts from prior pushes. This is the
     # session-independent actor that completes receipt publication.
-    # Errors are logged but do not block the sweep.
-    _flush_receipts_if_possible()
+    # Errors are logged but do not block the sweep. A dry run posts
+    # nothing, so it skips the flush (receipts post to GitHub commits).
+    if not args.dry_run:
+        _flush_receipts_if_possible()
 
     repo = resolve_repo(args.repo)
     queue_path = Path(args.queue_path) if args.queue_path else default_queue_path()
@@ -348,8 +568,20 @@ def main(argv=None):
     draft_count = sum(1 for p in prs if p.get("isDraft"))
     open_prs = [p for p in prs if not p.get("isDraft")]
 
-    actions = build_plan(open_prs, repo, now, queue_path, behind_cap=args.behind_cap)
-    lines, results = execute_plan(actions, repo, args.dry_run, queue_path)
+    log_path = Path(args.log_path) if args.log_path else default_sweep_log_path()
+
+    # All gh reads happen inside build_plan; a failed read stops here, before
+    # any write (fail closed: exit 3, nothing acted on).
+    try:
+        actions = build_plan(open_prs, repo, now, queue_path, behind_cap=args.behind_cap)
+    except GhError as exc:
+        print("ERROR: read failed, acted on nothing: %s" % exc, file=sys.stderr)
+        return 3
+    try:
+        lines, results = execute_plan(actions, repo, args.dry_run, queue_path, log_path)
+    except GhError as exc:
+        print("ERROR: write failed, sweep stopped: %s" % exc, file=sys.stderr)
+        return 1
 
     prefix = "[DRY-RUN] " if args.dry_run else ""
     for line in lines:

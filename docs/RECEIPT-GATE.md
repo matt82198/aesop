@@ -122,6 +122,13 @@ exists. A receipt names its scheme; the verifier fails closed on an unknown one.
 
 Rotation: `receipt_common.generate_ed25519_keypair(priv, pub)`, commit the new `.pub`.
 
+**Keyring (per-box keys).** The verifier accepts several registered Ed25519 public keys: the
+committed `tools/receipt_pubkey.pub` plus every `tools/receipt_pubkeys/*.pub`. A receipt is
+checked against the registered key whose key_id (`sha256(pem)[:16]`) equals `sig.key_id`; the
+signature must still verify under that key. Provisioning a new box: generate its private key
+to `~/.aesop/receipt_key.pem` (outside any checkout) with `generate_ed25519_keypair`, then
+commit its public key as `tools/receipt_pubkeys/<name>-<key_id>.pub`. Never commit a private key.
+
 ## Trust boundary — what a valid receipt proves, and what it does not
 
 Proves (checked by `verify_receipt.py`, each independently, fail-closed):
@@ -198,3 +205,5 @@ lookup exception-safe and guarding the module's own absence at the shell level.)
 # Hook test
 # Another test
 # Test 4 after unset hooks path
+
+2026-10-14: verified on the Mattt box - pre-push hook resynced from hooks/pre-push-policy.sh and a signed receipt emitted on push.
