@@ -70,16 +70,44 @@ def materialize_orchestrator_status(orch_projection: dict | None) -> bytes:
     return json.dumps(view, indent=2).encode("utf-8") + b"\n"
 
 
+_STATE_MD_EVENT_TYPES = ("state_md_written", "state_md_rebuilt")
+
+
+def latest_stored_state_md(api) -> str | None:
+    """Return the content of the newest state_md_written/state_md_rebuilt event.
+
+    WriteAPI.write_state_md and rebuild_state_md append the full STATE.md body to
+    the ``state_markdown`` stream. That stored body is the source of truth, so a
+    rebuild must reproduce it byte-for-byte rather than regenerate a stub.
+    """
+    latest = None
+    for event in api.get("state_markdown") or []:
+        if event.get("type") in _STATE_MD_EVENT_TYPES:
+            content = (event.get("payload") or {}).get("content")
+            if isinstance(content, str):
+                latest = content
+    return latest
+
+
 def materialize_state_md(api, state_dir: Path | str) -> bytes:
-    """Render STATE.md from state store (delegates to gen_state_md).
+    """Render STATE.md from the state store.
+
+    Source of truth order:
+      1. The newest stored body in the ``state_markdown`` stream (returned verbatim).
+      2. Only when no body was ever stored: the generated checkpoint from
+         gen_state_md, rendered from the same ``api`` (no second DB open).
 
     Args:
         api: StateAPI instance
-        state_dir: Path to state directory (unused for now; gen_state_md uses api)
+        state_dir: Path to state directory
 
     Returns:
         bytes: Markdown content, UTF-8 encoded
     """
+    stored = latest_stored_state_md(api)
+    if stored is not None:
+        return stored.encode("utf-8")
+
     # Lazy import to avoid circular dependency
     try:
         from tools.gen_state_md import generate_state_md
@@ -88,7 +116,7 @@ def materialize_state_md(api, state_dir: Path | str) -> bytes:
         return b"# STATE\n\nGenerated from event store.\n"
 
     try:
-        content = generate_state_md(state_dir=str(state_dir))
+        content = generate_state_md(state_dir=str(state_dir), api=api)
         return content.encode("utf-8")
     except Exception as e:
         # Fail-closed: if generation fails, return stub with error

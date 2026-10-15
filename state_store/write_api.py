@@ -29,6 +29,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .paths import resolve_db_path
+
 # Platform-specific file locking
 if sys.platform == "win32":
     import msvcrt
@@ -96,7 +98,7 @@ class WriteAPI:
         """
         self.state_dir = Path(state_dir)
         self.state_dir.mkdir(parents=True, exist_ok=True)
-        self.db_path = str(self.state_dir / "tracker_events.db")
+        self.db_path = resolve_db_path(self.state_dir, "tracker")
         self.tracker_file = self.state_dir / "tracker.json"
         self._stores: list = []  # track EventStore instances for close()
 

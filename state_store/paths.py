@@ -20,6 +20,41 @@ import posixpath
 import unicodedata
 from typing import Optional, Literal
 
+# ---------------------------------------------------------------------------
+# SQLite database path resolver (single source for every reader and writer).
+#
+# Two roles exist on disk today and their filenames are deliberately NOT
+# unified here (on-disk data stays where it is; the consolidation decision is
+# scheduled separately):
+#   "tracker"   -> tracker_events.db : WriteAPI, StateAPI readers, state_rebuild,
+#                  gen_state_md, ReadAPI.
+#   "instances" -> state.db          : instance_manager writer, instances-claims
+#                  helper read by mcp/server.mjs (fleet_instances, fleet_claims).
+# Every caller resolves through resolve_db_path(); no module may hardcode a
+# database filename literal.
+# ---------------------------------------------------------------------------
+
+TRACKER_DB_FILENAME = "tracker_events.db"
+INSTANCES_DB_FILENAME = "state.db"
+_DB_FILENAMES = {"tracker": TRACKER_DB_FILENAME, "instances": INSTANCES_DB_FILENAME}
+
+
+def resolve_db_path(state_dir, role: str = "tracker") -> str:
+    """Return the SQLite database path for ``role`` under ``state_dir``.
+
+    Args:
+        state_dir: state directory (str or os.PathLike).
+        role: "tracker" (default) or "instances".
+
+    Raises:
+        ValueError: if ``role`` is unknown.
+    """
+    try:
+        filename = _DB_FILENAMES[role]
+    except KeyError:
+        raise ValueError(f"unknown state db role: {role!r}") from None
+    return os.path.join(os.fspath(state_dir), filename)
+
 
 def canonical_claim_path(
     path: str,

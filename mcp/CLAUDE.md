@@ -100,6 +100,8 @@ Query GitHub Actions run history for a CI job: status, conclusion, duration, fla
 
 **File**: `mcp/instances-claims.py` (`--db <db> [--root <aesop_root>] [--config <path>]`) — spawned by the three `fleet_instances`/`fleet_claims`/`fleet_multibox_summary` tools above; resolves coordination backend config via the same precedence as `tools/multibox_config` (env → aesop.config.json → default) and reports mode (`advisory`|`local-lease`|`fs-claim-log`), transport, shared dir, TTL; read-only, structured `absent`/`reason` on error.
 
+**DB resolution (F-06, 2026-10-14)**: the instances/claims tools open `state.db` via `INSTANCES_DB_FILENAME` (`mcp/server.mjs`, mirrors `state_store/paths.py`), the file `tools/instance_manager.py` writes. `aesop.db` had no writer and always reported `absent`. Tracker DB paths resolve through `state_store/paths.py::resolve_db_path`.
+
 ## Core Invariants
 
 1. **Strictly read-only** — all tools are read-only; zero state mutations, zero file writes (except dash-extra.mjs invocation, which is sandboxed with timeout).
