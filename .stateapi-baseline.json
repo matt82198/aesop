@@ -1,5 +1,9 @@
 {
   "violations": [
+    "driver/context_pack.py@buildlog-md-write",
+    "driver/context_pack.py@state-md-write",
+    "driver/context_pack.py@state-tracker-json",
+    "driver/context_pack.py@tracker-json",
     "tools/alert_bridge.py@watchdog-hb",
     "tools/claudemd_lint.py@buildlog-md-write",
     "tools/claudemd_lint.py@ledger-md",
