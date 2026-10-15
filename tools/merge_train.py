@@ -377,7 +377,10 @@ def create_integration_branch(batch_name: str, cwd: str = None, owner: str = Non
         owner = os.environ.get("AESOP_WORKTREE_OWNER")
     ok_cwd, why = _integration_cwd_authorised(cwd, owner)
     if not ok_cwd:
-        print(f"  [REFUSED] create integrate/{batch_name} in {cwd!r}: {why}")
+        # Name the RESOLVED path (8.3 / subst / junction aliases collapse to the real
+        # location) and keep the message ASCII-only: a cp1252 console renders no em dash.
+        shown = str(Path(cwd).resolve()) if cwd else "<no cwd>"
+        print(f"  [REFUSED] create integrate/{batch_name} in {shown}: {why}")
         return False
     branch = f"integrate/{batch_name}"
     ok, out = git("fetch", "origin", "main", cwd=cwd)

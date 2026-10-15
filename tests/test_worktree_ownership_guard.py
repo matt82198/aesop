@@ -123,7 +123,10 @@ class TestCreateIntegrationBranchGuard(WorktreeOwnershipFixture):
         with patch.object(self.mt, "print", side_effect=lambda *a, **k: printed.append(" ".join(map(str, a)))):
             ok = self.mt.create_integration_branch("b-ro", cwd=str(self.ro), owner="lane-ro")
         self.assertFalse(ok)
-        self.assertTrue(any(str(self.ro) in line for line in printed), printed)
+        # Windows: TEMP may be an 8.3 or subst/junction alias. The refusal must name the
+        # resolved path in the location slot ("... in <path>"), not a repr'd alias.
+        real_ro = str(Path(self.ro).resolve())
+        self.assertTrue(any(f"in {real_ro}" in line for line in printed), printed)
 
     def test_unmarked_worktree_is_refused(self):
         with patch.object(self.mt, "print"):
