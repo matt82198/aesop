@@ -119,6 +119,34 @@ const pythonNamespaces = {
   }
 };
 
+// Every flag the Node-level CLI documents (see printHelp and the runtime commands).
+// Anything else starting with "-" is a typo and is rejected before any filesystem work.
+// Python namespace dispatch (`aesop <namespace> <verb> ...`) is exempt: its arguments
+// pass through untouched to the tool.
+const DOCUMENTED_FLAGS = new Set([
+  '--help', '-h', '--version', '-v',
+  '--force', '--yes', '--no-skills', '--install-deps', '--no-git',
+  '--name', '--domains', '--repos', '--repo-urls',
+  '--ci-mode', '--self-hosted-labels', '--json', '--demo',
+  '--repo', '--labels', '--instances', '--install-root', '--dry-run', '--set-fork-policy'
+]);
+
+// Top-level gate: --version/-v and unknown-flag rejection. Runs before any filesystem work.
+const VERSION = require('../package.json').version;
+const isNamespaceDispatch = args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]);
+if (!isNamespaceDispatch) {
+  if (args.includes('--version') || args.includes('-v')) {
+    console.log(VERSION);
+    process.exit(0);
+  }
+  const unknownOption = args.find((arg) => arg.startsWith('-') && !DOCUMENTED_FLAGS.has(arg));
+  if (unknownOption !== undefined) {
+    console.error(`unknown option: ${unknownOption}`);
+    printHelp(console.error);
+    process.exit(2);
+  }
+}
+
 // Helper: resolve Python interpreter (try python3 then python)
 function resolvePythonInterpreter() {
   for (const interpreter of ['python3', 'python']) {
@@ -477,8 +505,9 @@ function resolveRealGitDir(targetDir) {
   }
 }
 
-if (helpFlag) {
-  console.log(`
+// Help text. Takes a writer so the unknown-option path can send it to stderr.
+function printHelp(write) {
+  write(`
 aesop — Multi-agent orchestration template scaffolder
 
 Usage:
@@ -535,6 +564,7 @@ Arguments:
 
 Options:
   --help, -h              Show this help message
+  --version, -v           Print the aesop version and exit
   --force                 Replace any existing .git/hooks/pre-push and overwrite installed skills
   --yes                   Skip interactive prompts, use defaults (CI-safe)
   --no-skills             Do not install skills into ~/.claude/skills/ (scaffold only)
@@ -579,6 +609,10 @@ After scaffolding, cd into the directory and:
   3. Run: aesop watch (or bash daemons/run-watchdog.sh)
   4. Launch dashboard: aesop dash (or python3 ui/serve.py)
 `);
+}
+
+if (helpFlag) {
+  printHelp(console.log);
   process.exit(0);
 }
 
