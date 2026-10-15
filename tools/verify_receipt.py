@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 _TOOLS_DIR = Path(__file__).resolve().parent
@@ -24,6 +25,14 @@ import receipt_common as rc  # noqa: E402  (sys.path adjusted above)
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _FENCE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
+
+# Bounded poll for the fetch step. The pre-push autoflush posts the receipt only after the
+# push lands on GitHub, so a single immediate lookup loses the race on fast CI starts.
+# Default: keep looking for 5 minutes, every 20 seconds. Hard cap on the window so a bad
+# argument cannot turn the Action into an unbounded wait.
+DEFAULT_FETCH_WINDOW_S = 300
+DEFAULT_FETCH_INTERVAL_S = 20
+MAX_FETCH_WINDOW_S = 900
 
 
 class CannotEvaluate(Exception):
@@ -211,6 +220,31 @@ def fetch_receipt_for_head(sha, repo_slug, api=None):
         return None, "MISSING receipt: lookup for %s failed unexpectedly (%s) (looked in %s)" % (sha, e, where)
 
 
+def poll_receipt_for_head(sha, repo_slug, api=None, *, window_s=DEFAULT_FETCH_WINDOW_S,
+                          interval_s=DEFAULT_FETCH_INTERVAL_S, sleep=time.sleep, clock=time.monotonic):
+    """Keep looking up the receipt for `sha` until found or `window_s` seconds have passed.
+
+    Lookups run at t=0, then every `interval_s`; the final sleep is clipped to the time left
+    in the window, so the total wall time is exactly `window_s` plus the duration of the last
+    lookup. A failed lookup is just another miss and does not end the window. Returns the same
+    (envelope_or_None, note) pair as fetch_receipt_for_head; None means MISSING after the full
+    window. `window_s=0` is a single lookup. `sleep` and `clock` are injectable for tests.
+    """
+    if interval_s <= 0:
+        raise ValueError("interval_s must be > 0 (got %r)" % (interval_s,))
+    start = clock()
+    lookups = 0
+    while True:
+        env, note = fetch_receipt_for_head(sha, repo_slug, api=api)
+        lookups += 1
+        if env is not None:
+            return env, note
+        remaining = window_s - (clock() - start)
+        if remaining <= 0:
+            return None, "%s (polled %d times over a %ds window)" % (note, lookups, window_s)
+        sleep(min(interval_s, remaining))
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="verify_receipt.py", description=__doc__.split("\n")[0])
     p.add_argument("--receipt", default=None, help="envelope JSON file, or - for stdin")
@@ -230,6 +264,12 @@ def build_parser():
     p.add_argument("--fetch-for-head", metavar="SHA", default=None,
                    help="look up (don't verify) the newest local receipt for this head sha via `gh api`; "
                         "writes --out-found/--out-envelope and always exits 0 (see fetch_receipt_for_head)")
+    p.add_argument("--fetch-window-s", type=int, default=DEFAULT_FETCH_WINDOW_S,
+                   help="with --fetch-for-head: keep polling for this many seconds before reporting MISSING "
+                        "(default %d, 0 = one lookup, max %d)" % (DEFAULT_FETCH_WINDOW_S, MAX_FETCH_WINDOW_S))
+    p.add_argument("--fetch-interval-s", type=int, default=DEFAULT_FETCH_INTERVAL_S,
+                   help="with --fetch-for-head: seconds between lookups (default %d, must be >= 1)"
+                        % DEFAULT_FETCH_INTERVAL_S)
     p.add_argument("--repo-slug", default=None, help="owner/repo, required with --fetch-for-head")
     p.add_argument("--out-found", default="receipt_found", help="file to write true/false into (--fetch-for-head)")
     p.add_argument("--out-envelope", default="receipt.json", help="file to write the envelope into if found")
@@ -245,7 +285,8 @@ def _run_fetch_for_head(args):
             env = None
             note = "MISSING receipt: --repo-slug not given, cannot look up a receipt for %s" % args.fetch_for_head
         else:
-            env, note = fetch_receipt_for_head(args.fetch_for_head, args.repo_slug)
+            env, note = poll_receipt_for_head(args.fetch_for_head, args.repo_slug,
+                                              window_s=args.fetch_window_s, interval_s=args.fetch_interval_s)
         print(note)
         Path(args.out_found).write_text("true" if env is not None else "false", encoding="utf-8")
         if env is not None:
@@ -259,7 +300,12 @@ def _run_fetch_for_head(args):
 
 def main(argv=None, environ=None):
     environ = os.environ if environ is None else environ
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not 0 <= args.fetch_window_s <= MAX_FETCH_WINDOW_S:
+        parser.error("--fetch-window-s must be between 0 and %d" % MAX_FETCH_WINDOW_S)
+    if args.fetch_interval_s < 1:
+        parser.error("--fetch-interval-s must be >= 1")
     if args.fetch_for_head:
         return _run_fetch_for_head(args)
     if not args.receipt:

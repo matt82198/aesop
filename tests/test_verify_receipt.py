@@ -286,7 +286,7 @@ class TestFetchForHeadCli(VerifyBase):
     def _run(self, api_patch):
         found_path = Path(self.tmp.name) / "receipt_found"
         env_path = Path(self.tmp.name) / "receipt.json"
-        args = ["--fetch-for-head", self.head, "--repo-slug", "o/r",
+        args = ["--fetch-for-head", self.head, "--repo-slug", "o/r", "--fetch-window-s", "0",
                 "--out-found", str(found_path), "--out-envelope", str(env_path)]
         orig = vr._gh_api
         vr._gh_api = api_patch
@@ -355,7 +355,7 @@ class TestMissingReceiptFailsClosed(VerifyBase):
         self.assertIn("MISSING", out)
 
     def test_fetch_no_receipt_names_sha_and_lookup_location(self):
-        args = ["--fetch-for-head", self.head, "--repo-slug", "o/r",
+        args = ["--fetch-for-head", self.head, "--repo-slug", "o/r", "--fetch-window-s", "0",
                 "--out-found", str(Path(self.tmp.name) / "found"),
                 "--out-envelope", str(Path(self.tmp.name) / "e.json")]
         orig = vr._gh_api
@@ -404,6 +404,116 @@ class TestExtractFromCheckRuns(unittest.TestCase):
         self.assertEqual(vr.extract_receipt_from_comments(comments)["receipt"]["n"], "a")
         self.assertIsNone(vr.extract_receipt_from_comments([{"body": "x"}]))
         self.assertIsNone(vr.extract_receipt_from_check_runs({"check_runs": []}))
+
+
+class _FakeClock:
+    """Deterministic time: sleep() advances the clock; nothing real waits."""
+
+    def __init__(self):
+        self.t = 0.0
+        self.sleeps = []
+
+    def clock(self):
+        return self.t
+
+    def sleep(self, s):
+        self.sleeps.append(s)
+        self.t += s
+
+
+class TestBoundedPollWindow(VerifyBase):
+    """The Action's fetch step must keep polling for a receipt for a bounded window
+    (default >= 5 min, ~20s interval) before reporting MISSING. The autoflush posts the
+    receipt only after the push lands, so one immediate lookup plus one +60s lookup loses
+    the race on fast CI starts (PR #1035, hosted run 38753687250)."""
+
+    def _api_receipt_at(self, fake, appear_at, env):
+        def api(path):
+            if "check-runs" in path:
+                if fake.t >= appear_at:
+                    return {"check_runs": [{"name": rc.CHECK_NAME, "completed_at": "2026-10-06T10:00:00Z",
+                                            "output": {"text": emit.wrap_receipt_text(env)}}]}
+                return {"check_runs": []}
+            return []
+        return api
+
+    def test_default_window_is_at_least_five_minutes_at_twenty_second_interval(self):
+        self.assertGreaterEqual(vr.DEFAULT_FETCH_WINDOW_S, 300)
+        self.assertEqual(vr.DEFAULT_FETCH_INTERVAL_S, 20)
+
+    def test_absent_receipt_reports_missing_only_after_the_full_window(self):
+        fake = _FakeClock()
+        calls = []
+
+        def api(path):
+            calls.append(path)
+            return {"check_runs": []} if "check-runs" in path else []
+
+        env, note = vr.poll_receipt_for_head(self.head, "o/r", api=api, window_s=300, interval_s=20,
+                                             sleep=fake.sleep, clock=fake.clock)
+        self.assertIsNone(env)
+        self.assertIn("MISSING receipt", note)
+        self.assertEqual(fake.t, 300, "must wait the whole window before giving up, and no longer")
+        self.assertLessEqual(len(calls), 2 * 20, "poll count must be bounded")
+
+    def test_receipt_appearing_mid_window_is_found_and_verified(self):
+        good = self.envelope()
+        fake = _FakeClock()
+        env, note = vr.poll_receipt_for_head(self.head, "o/r", api=self._api_receipt_at(fake, 100, good),
+                                             window_s=300, interval_s=20, sleep=fake.sleep, clock=fake.clock)
+        self.assertIsNotNone(env, "a receipt that lands mid-window must be found")
+        self.assertLess(fake.t, 300, "polling must stop as soon as the receipt is found")
+        code, reasons = self.run_verify(env)
+        self.assertEqual((code, reasons), (0, []), "a receipt found mid-window must still verify VALID")
+
+    def test_transient_lookup_failure_does_not_end_the_window(self):
+        good = self.envelope()
+        fake = _FakeClock()
+        appear = self._api_receipt_at(fake, 40, good)
+
+        def flaky(path):
+            if fake.t == 0:
+                raise RuntimeError("simulated gh outage")
+            return appear(path)
+
+        env, _ = vr.poll_receipt_for_head(self.head, "o/r", api=flaky, window_s=300, interval_s=20,
+                                          sleep=fake.sleep, clock=fake.clock)
+        self.assertIsNotNone(env, "one failed lookup must not stop the poll; later lookups still count")
+
+    def test_zero_window_is_a_single_lookup_with_no_sleep(self):
+        fake = _FakeClock()
+        calls = []
+
+        def api(path):
+            calls.append(path)
+            return {"check_runs": []} if "check-runs" in path else []
+
+        env, _ = vr.poll_receipt_for_head(self.head, "o/r", api=api, window_s=0, interval_s=20,
+                                          sleep=fake.sleep, clock=fake.clock)
+        self.assertIsNone(env)
+        self.assertEqual(fake.sleeps, [])
+        self.assertEqual(len(calls), 2, "one lookup = check-runs + commit comments")
+
+    def test_nonpositive_interval_is_rejected_so_the_loop_cannot_spin(self):
+        with self.assertRaises(ValueError):
+            vr.poll_receipt_for_head(self.head, "o/r", api=lambda p: None, window_s=300, interval_s=0)
+
+    def test_cli_window_flags_are_honoured_and_validated(self):
+        calls = []
+        orig = vr._gh_api
+        vr._gh_api = lambda path: calls.append(path) or None
+        try:
+            base_args = ["--fetch-for-head", self.head, "--repo-slug", "o/r",
+                         "--out-found", str(Path(self.tmp.name) / "f"),
+                         "--out-envelope", str(Path(self.tmp.name) / "e.json")]
+            self.assertEqual(vr.main(base_args + ["--fetch-window-s", "0"], environ={}), 1)
+            self.assertEqual(len(calls), 2, "--fetch-window-s 0 must mean exactly one lookup")
+            with self.assertRaises(SystemExit):
+                vr.main(base_args + ["--fetch-window-s", "100000"], environ={})
+            with self.assertRaises(SystemExit):
+                vr.main(base_args + ["--fetch-interval-s", "0"], environ={})
+        finally:
+            vr._gh_api = orig
 
 
 if __name__ == "__main__":

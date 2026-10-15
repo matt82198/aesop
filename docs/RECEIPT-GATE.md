@@ -74,8 +74,10 @@ then flush it once the sha exists on GitHub. The flush runs automatically:
    so the spool (which lives in the pushing repo's git common dir) was never found and nothing was
    posted. That was the recurring gap: a spooled receipt sat until someone re-ran the flush by hand.
 
-4. **verify-receipt retry**: `verify-receipt.yml` fetches the receipt once, and if it is missing,
-   re-checks once after 60s before failing. It stays fail-closed on MISSING, and the job summary
+4. **verify-receipt poll window**: `verify-receipt.yml` polls for the receipt for up to 300s (every
+   20s, `--fetch-window-s` / `--fetch-interval-s` on `verify_receipt.py --fetch-for-head`), stopping as
+   soon as it appears. The autoflush posts only after the push lands, so a single immediate lookup lost
+   the race on fast CI starts (PR #1035). It stays fail-closed on MISSING, and the job summary
    names the attempt that found it.
 
 The flush tool is idempotent: it retries failed receipts indefinitely (up to `--max-age-days`,
