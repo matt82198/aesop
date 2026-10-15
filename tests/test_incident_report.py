@@ -583,6 +583,24 @@ class TestTrailerChannel(unittest.TestCase):
         for incident in incidents:
             self.assertFalse(incident.get("inferred", False), "trailer rows are explicit, not inferred")
 
+    def test_prose_wrapped_trailer_text_is_not_a_trailer(self):
+        """A prose line wrapping onto 'Incident-Class: x' in an earlier paragraph is ignored; the final trailer block wins."""
+        try:
+            from tools.incident_report import IncidentParser
+        except ImportError:
+            self.skipTest("incident_report module not yet implemented")
+        import tempfile
+        body = ("Causal chain notes.\n"
+                "Incident-Class: environment-shape, which was not one of the 12 documented\n"
+                "classes, so the gate went red.\n"
+                "\n"
+                "Incident-Class: gate-activation")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _FixtureRepo.build(tmpdir, [("fix(incident): taxonomy", body)])
+            incidents, errors = IncidentParser(repo_root=tmpdir).parse()
+        self.assertEqual(errors, [], f"prose text must not produce trailer errors: {errors}")
+        self.assertEqual([i["class"] for i in incidents], ["gate-activation"])
+
     def test_trailer_overrides_subject_keyword(self):
         """Trailer wins over a subject keyword that would have matched a different class."""
         try:
@@ -740,3 +758,71 @@ class TestCliCrashes(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestTaxonomyEnvironmentShapeAndAlias(unittest.TestCase):
+    """environment-shape is a documented class; test-isolation is an alias of test-pollution;
+    the --check scan covers HEAD's history only, so unrelated branches cannot fail the gate."""
+
+    def test_environment_shape_is_documented_and_renders(self):
+        """A commit tagged environment-shape parses cleanly and renders its own row."""
+        from tools.incident_report import IncidentParser, IncidentMarkdown
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _FixtureRepo.build(tmpdir, [("fix: 8.3 path resolves wrong on runner", "Incident-Class: environment-shape")])
+            incidents, errors = IncidentParser(repo_root=tmpdir).parse()
+        self.assertEqual(errors, [], f"environment-shape must be a valid class: {errors}")
+        self.assertEqual([i["class"] for i in incidents], ["environment-shape"])
+        self.assertFalse(incidents[0]["inferred"])
+        table = IncidentMarkdown().generate_table(incidents)
+        self.assertIn("| environment-shape | ", table)
+        self.assertIn("host or runner shape", table)
+
+    def test_test_isolation_alias_normalizes_to_test_pollution(self):
+        """Incident-Class: test-isolation is reported under test-pollution, never as its own row."""
+        from tools.incident_report import IncidentParser, IncidentMarkdown
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _FixtureRepo.build(tmpdir, [("fix: shard leak into state root", "Incident-Class: test-isolation")])
+            incidents, errors = IncidentParser(repo_root=tmpdir).parse()
+        self.assertEqual(errors, [], f"test-isolation alias must be accepted: {errors}")
+        self.assertEqual([i["class"] for i in incidents], ["test-pollution"])
+        self.assertFalse(incidents[0]["inferred"])
+        table = IncidentMarkdown().generate_table(incidents)
+        self.assertIn("| test-pollution | ", table)
+        self.assertNotIn("test-isolation", table)
+
+    def _repo_with_unrelated_bad_branch(self, tmpdir):
+        """HEAD carries one valid commit; a side branch carries a commit with an unknown class."""
+        import subprocess
+        _FixtureRepo.build(tmpdir, [("fix: valid flake deflake", "Incident-Class: flake")])
+        subprocess.run(["git", "checkout", "-q", "-b", "unrelated-bad"], cwd=tmpdir, check=True)
+        _FixtureRepo.build(tmpdir, [("fix: side branch work", "Incident-Class: not-a-class")])
+        bad_short = _FixtureRepo.short_head(tmpdir)
+        subprocess.run(["git", "checkout", "-q", "-"], cwd=tmpdir, check=True)
+        return bad_short
+
+    def test_unrelated_branch_does_not_affect_check_for_head(self):
+        """A bad trailer on an unrelated local branch must not fail --check for HEAD."""
+        import os
+        import tempfile
+        from tools.incident_report import IncidentChecker, IncidentParser, IncidentMarkdown, write_table
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._repo_with_unrelated_bad_branch(tmpdir)
+            incidents, errors = IncidentParser(repo_root=tmpdir).parse()
+            self.assertEqual(errors, [], f"HEAD scope must not see the side branch: {errors}")
+            os.makedirs(os.path.join(tmpdir, "docs"), exist_ok=True)
+            write_table(os.path.join(tmpdir, "docs", "INCIDENTS.md"), IncidentMarkdown().generate_table(incidents))
+            ok, message = IncidentChecker(repo_root=tmpdir).check_incidents_file("docs/INCIDENTS.md")
+            cli = _run_incident_cli(["--check", "--repo", tmpdir], cwd=tmpdir)
+        self.assertTrue(ok, message)
+        self.assertEqual(cli.returncode, 0, cli.stdout + cli.stderr)
+
+    def test_all_flag_scans_unrelated_branches_for_forensics(self):
+        """--all restores the whole-repo scan, so the side-branch commit is reported by name."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bad_short = self._repo_with_unrelated_bad_branch(tmpdir)
+            cli = _run_incident_cli(["--check", "--all", "--repo", tmpdir], cwd=tmpdir)
+        self.assertEqual(cli.returncode, 1, cli.stdout + cli.stderr)
+        self.assertIn(bad_short, cli.stdout + cli.stderr)
