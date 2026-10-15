@@ -403,5 +403,32 @@ class TestRedGateExitCodes(unittest.TestCase):
         self.assertNotIn("pushed_red", env_json["receipt"])
 
 
+class TestShardEnvScrubsTripwireArmed(unittest.TestCase):
+    """The shard env emit_receipt builds must not inherit AESOP_CI_SHARD_TRIPWIRE_ARMED.
+
+    ci_shard_runner._arm_isolation_tripwire() returns early (no tripwire) when that variable
+    is set, so an inherited value would run the receipt matrix with the isolation tripwire
+    disabled. Driven through run_part() (the real env builder) with a part that inspects its
+    own environment.
+    """
+
+    VAR = "AESOP_CI_SHARD_TRIPWIRE_ARMED"
+    CHECK = [sys.executable, "-c",
+             "import os, sys; sys.exit(1 if 'AESOP_CI_SHARD_TRIPWIRE_ARMED' in os.environ else 0)"]
+
+    def test_part_env_does_not_inherit_tripwire_armed(self):
+        spec = emit.PartSpec(lambda repo: self.CHECK)
+        with tempfile.TemporaryDirectory() as tmp:
+            caller_env = dict(os.environ)
+            caller_env[self.VAR] = "1"
+            result = emit.run_part(Path(tmp), "py-shard-0", spec, environ=caller_env)
+        self.assertEqual(result["exit_code"], 0, "shard part saw %s from the caller env" % self.VAR)
+
+    def test_scrub_child_env_removes_tripwire_armed(self):
+        child, removed = emit.scrub_child_env({self.VAR: "1", "PATH": os.environ.get("PATH", "")})
+        self.assertNotIn(self.VAR, child)
+        self.assertIn(self.VAR, removed)
+
+
 if __name__ == "__main__":
     unittest.main()

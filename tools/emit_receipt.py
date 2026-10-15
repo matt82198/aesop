@@ -220,6 +220,9 @@ SCRUBBED_ENV_VARS = (
     # secret (or key path) would let that code forge an accepted receipt. Only the parent
     # signing call in main() reads these; matrix parts never do.
     "AESOP_RECEIPT_KEY", "AESOP_RECEIPT_HMAC_SECRET",
+    # ci_shard_runner._arm_isolation_tripwire() returns without running the isolation tripwire when
+    # this is set, so an inherited value would run the receipt matrix with the tripwire disabled.
+    "AESOP_CI_SHARD_TRIPWIRE_ARMED",
     "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
 )
 
