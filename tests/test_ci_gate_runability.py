@@ -621,6 +621,9 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-shard: [0, 1]
     steps:
       - uses: actions/checkout@v4
       - name: Shard tests
@@ -820,6 +823,65 @@ class TestDocsOnlyDetectorFailClosed(unittest.TestCase):
         job_if = windows_job.get('if', '')
         self.assertIn('is_docs_only', job_if,
             "windows-shard must use is_docs_only output in its if condition")
+
+
+# Rendered-check-name cases (r975 adversarial pass 2): see test_ci_needs_skip_guard.py.
+_RENDER_REQUIRED = ['ci (0)', 'ci (1)', 'ci (2)', 'ci (3)']
+_RENDER_HEAD = "jobs:\n  ci:\n    runs-on: ubuntu-latest\n"
+_RENDER_TAIL = "    steps:\n      - run: echo noop\n"
+_RENDER_FULL = "    strategy:\n      matrix:\n        python-shard: [0, 1, 2, 3]\n"
+
+
+def _render_yaml(name_line='', strategy=_RENDER_FULL):
+    return _RENDER_HEAD + name_line + strategy + _RENDER_TAIL
+
+
+class TestRequiredContextRendering(unittest.TestCase):
+    """A required context `job (N)` must resolve to a job whose RENDERED check name equals it."""
+
+    def _run(self, content, required=_RENDER_REQUIRED):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            workflows_dir = tmppath / '.github' / 'workflows'
+            workflows_dir.mkdir(parents=True)
+            (workflows_dir / 'test.yml').write_text(content, encoding='utf-8')
+            _write_manifest(tmppath, required)
+            result = subprocess.run(
+                [sys.executable,
+                 str(Path(__file__).parent.parent / 'tools' / 'ci_gate_runability.py'),
+                 '--root', str(tmppath)],
+                capture_output=True, text=True, encoding='utf-8', errors='replace')
+        return result.returncode, result.stdout
+
+    def test_name_override_that_renders_other_names_is_a_finding(self):
+        """r975 M1: `name: shard-${{ matrix.python-shard }}` never reports 'ci (N)' -- must FAIL."""
+        code, out = self._run(_render_yaml("    name: shard-${{ matrix.python-shard }}\n"))
+        self.assertEqual(code, 1, out)
+        self.assertIn("required check 'ci (0)'", out)
+
+    def test_suffix_not_a_matrix_value_is_a_finding(self):
+        """r975 M2: matrix shrunk to [0, 1] -- 'ci (2)' can never report -- must FAIL."""
+        shrunk = "    strategy:\n      matrix:\n        python-shard: [0, 1]\n"
+        code, out = self._run(_render_yaml(strategy=shrunk))
+        self.assertEqual(code, 1, out)
+        self.assertIn("required check 'ci (2)'", out)
+        self.assertNotIn("required check 'ci (0)'", out)
+
+    def test_matrix_expression_cannot_verify_suffixes(self):
+        expr = "    strategy:\n      matrix: ${{ fromJSON(needs.x.outputs.m) }}\n"
+        code, out = self._run(_render_yaml(strategy=expr))
+        self.assertEqual(code, 1, out)
+        self.assertIn("required check 'ci (0)'", out)
+
+    def test_override_rendering_the_context_passes(self):
+        """Control: an override whose rendered form equals the context is clean."""
+        code, out = self._run(_render_yaml("    name: ci (${{ matrix.python-shard }})\n"))
+        self.assertEqual(code, 0, out)
+
+    def test_plain_matrix_job_passes(self):
+        """Control: the real shape (no override, full matrix) is clean."""
+        code, out = self._run(_render_yaml())
+        self.assertEqual(code, 0, out)
 
 
 if __name__ == '__main__':
