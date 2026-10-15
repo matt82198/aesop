@@ -98,7 +98,7 @@ Append-only control files grow over time. When a file exceeds **~200 lines or ~2
 - Daily work on infrastructure repos (e.g., `~/.claude`): use `work/session-<date>` branches (e.g., `work/session-2026-07-11`)
 - Auto-commit hooks commit to the current branch, so housekeeping changes land on the session branch automatically
 - On checkpoint, open a PR from session branch → main
-- Orchestrator performs final-catch review and merges when ready
+- Orchestrator performs final-catch review; the merge is delegated to a dispatched agent (`python tools/auto_merge.py <n>`) and verified by `state == MERGED`
 
 ### Backup branches
 

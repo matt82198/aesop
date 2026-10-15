@@ -50,6 +50,23 @@ def _have_crypto():
 
 HAVE_CRYPTO = _have_crypto()
 
+
+def _in_ci():
+    return any(os.environ.get(k, "").strip().lower() in ("1", "true") for k in ("CI", "GITHUB_ACTIONS"))
+
+
+def _crypto_guard(cls):
+    """Locally: skip when cryptography is absent. Under CI: FAIL. A skipped base-keyring
+    guard cannot catch the rogue-key attack, so a missing dependency must turn red there."""
+    if HAVE_CRYPTO:
+        return cls
+    if _in_ci():
+        def setUp(self):
+            self.fail("cryptography not installed under CI: the base-keyring guard would be silently skipped")
+        cls.setUp = setUp
+        return cls
+    return unittest.skip("cryptography not installed")(cls)
+
 _GIT_ENV = {
     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@x", "GIT_COMMITTER_NAME": "t",
     "GIT_COMMITTER_EMAIL": "t@x", "GIT_CONFIG_NOSYSTEM": "1",
@@ -88,7 +105,7 @@ def _run_cli(argv):
     return code, buf.getvalue()
 
 
-@unittest.skipUnless(HAVE_CRYPTO, "cryptography not installed")
+@_crypto_guard
 class TestBaseKeyringRejectsHeadOnlyKey(unittest.TestCase):
     """Committed key A is on main. A PR adds rogue key B under tools/receipt_pubkeys/ and signs with B."""
 

@@ -26,10 +26,12 @@ Proved failing-first against fixture git repos:
     blocks the stale push and passes the repaired one.
 """
 
+import io
 import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -401,6 +403,83 @@ class TestAutoCRLFNormalization(unittest.TestCase):
         self.assertIn("tools/INDEX.md", proc.stderr)
 
 
+EDIT_FROM = '"# tools/ index (generated -- do not hand-edit)",'
+EDIT_TO = '"# tools/ index (generated -- do not hand-edit) LANE-EDIT",'
+
+
+def extract_base_tools(repo, rev, dest):
+    """Materialise REV's tools/ under DEST, as the hook's gate_base_dir() does."""
+    proc = subprocess.run(  # subprocess-ok
+        ["git", "archive", rev, "--", "tools"], cwd=str(repo),
+        capture_output=True, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    with tarfile.open(fileobj=io.BytesIO(proc.stdout)) as tar:
+        if hasattr(tarfile, "data_filter"):
+            tar.extractall(str(dest), filter="data")
+        else:
+            tar.extractall(str(dest))
+    return dest
+
+
+class TestGeneratorEditCannotBlessItself(GateFixture):
+    """A push that edits a generator must not be judged by its own edited copy.
+
+    The lane changes tools/gen_tool_index.py so it emits different bytes,
+    regenerates tools/INDEX.md with that edited generator, and commits both.
+    The committed index is then consistent with the PUSHED generator but not
+    with the BASE (origin/main) generator. The gate must not accept it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        git(self.repo, "checkout", "-q", "-b", "feature/gen-edit", self.base)
+        gen = self.repo / "tools" / "gen_tool_index.py"
+        text = gen.read_text(encoding="utf-8")
+        assert text.count(EDIT_FROM) == 1, "render() header line moved; update EDIT_FROM"
+        gen.write_text(text.replace(EDIT_FROM, EDIT_TO), encoding="utf-8", newline="\n")
+        regenerate(self.repo)
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "lane edits generator header and regenerates index")
+        self.edited_tip = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        index = (self.repo / "tools" / "INDEX.md").read_text(encoding="utf-8")
+        assert "LANE-EDIT" in index, "precondition: the edited generator emitted new bytes"
+        self.base_dir = extract_base_tools(self.repo, self.base, self.tmp / "base")
+
+    def gate_with_base(self, *ranges):
+        args = [str(GATE), "--base-dir", str(self.base_dir)]
+        for r in ranges:
+            args += ["--range", r]
+        return py(self.repo, *args)
+
+    def test_edited_generator_fails_closed_without_base_copy(self):
+        proc = self.gate("%s..%s" % (self.base, self.edited_tip))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("gen_tool_index.py", proc.stderr)
+        self.assertEqual(self.leaked_worktrees(), [], "temp worktree must be removed")
+
+    def test_edited_generator_is_judged_by_base_copy_when_provided(self):
+        proc = self.gate_with_base("%s..%s" % (self.base, self.edited_tip))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("tools/INDEX.md", proc.stderr)
+        self.assertEqual(self.leaked_worktrees(), [], "temp worktree must be removed")
+
+    def test_unchanged_generator_still_passes_with_base_copy(self):
+        # Control: a normal regenerated push must still pass once the base copy is used.
+        git(self.repo, "checkout", "-q", "-b", "feature/plain", self.base)
+        add_tool(self.repo, "delta.py", "delta purpose")
+        regenerate(self.repo)
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "plain tool add")
+        tip = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        proc = self.gate_with_base("%s..%s" % (self.base, tip))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+
+    @unittest.skipIf(BASH is None, "usable bash unavailable")
+    def test_hook_blocks_generator_edit_that_blesses_itself(self):
+        res = TestPrePushWiring.run_hook_fn(self, self.base, self.edited_tip)
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+
+
 def return_suite():
     """Required by test runner."""
     suite = unittest.TestSuite()
@@ -408,6 +487,7 @@ def return_suite():
     suite.addTest(unittest.makeSuite(TestPrePushWiring))
     suite.addTest(unittest.makeSuite(TestGeneratorOutputDriftWithoutTouchingPath))
     suite.addTest(unittest.makeSuite(TestAutoCRLFNormalization))
+    suite.addTest(unittest.makeSuite(TestGeneratorEditCannotBlessItself))
     return suite
 
 

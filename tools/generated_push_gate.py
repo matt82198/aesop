@@ -16,7 +16,13 @@ driver's stamp. An empty range with no stamp is a no-op, so an ordinary push
 pays nothing.
 
 CLI:
-    generated_push_gate.py --range BASE..TIP [--range ...] [--root DIR] [--json]
+    generated_push_gate.py --range BASE..TIP [--range ...] [--root DIR]
+                           [--base-dir DIR] [--json]
+
+--base-dir DIR is the trunk's tools/ copy (the hook passes gate_base_dir). When
+given, every generator is run from DIR, never from the pushed tree, so an edit to
+a generator cannot bless its own output. When absent, a generator changed by the
+push (relative to the range base or origin/main) fails closed.
 Exit codes: 0 = every triggered artifact matches its generator (or nothing to
 verify); 1 = at least one is stale, or its generator failed (cannot verify =>
 deny); 2 = usage or git error.
@@ -29,16 +35,18 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))  # sibling imports below resolve when loaded by file path
 
 import generated_paths  # noqa: E402
 
-USAGE = "usage: generated_push_gate.py --range BASE..TIP [--range ...] [--root DIR] [--json]\n"
+USAGE = ("usage: generated_push_gate.py --range BASE..TIP [--range ...] [--root DIR] "
+         "[--base-dir DIR] [--json]\n")
 STAMP_NAME = "aesop-needs-regen"
 RANGE_RE = re.compile(r"^([^.\s]+)\.\.([^.\s]+)$")
+TRUNK_REF = "origin/main"  # the gate-code base the hook pins (hooks/pre-push-policy.sh gate_base_dir)
 
 
 def _git(root: Path, *args: str, timeout: int = 120) -> Tuple[int, str, str]:
@@ -100,6 +108,11 @@ def parse_range(text: str) -> Optional[Tuple[str, str]]:
     return m.group(1), m.group(2)
 
 
+def _rev_resolves(root: Path, rev: str) -> bool:
+    rc, _, _ = _git(root, "rev-parse", "--verify", "--quiet", rev + "^{commit}")
+    return rc == 0
+
+
 def changed_paths(root: Path, base: str, tip: str) -> Optional[List[str]]:
     rc, out, _ = _git(root, "diff", "--name-only", base, tip)
     if rc != 0:
@@ -118,15 +131,26 @@ def _remove_worktree(root: Path, wt: Path, tmp: Path) -> None:
     _git(root, "worktree", "prune")
 
 
-def verify_tip(root: Path, tip: str, paths: List[str]) -> Tuple[List[Dict[str, str]], List[str]]:
-    """Regenerate each path from TIP's own sources in a detached worktree.
+def verify_tip(root: Path, tip: str, paths: List[str],
+               base_dir: Optional[Path] = None,
+               edited: FrozenSet[str] = frozenset()) -> Tuple[List[Dict[str, object]], List[str]]:
+    """Regenerate each path from TIP's sources in a detached worktree.
 
+    The GENERATOR that judges the committed bytes is never the pushed copy when
+    it could be the one the push edited:
+      * base_dir given: the generator is run from base_dir (the trunk's tools/
+        copy the hook extracts) against the tip's data tree. The pushed
+        generator is never executed, so an edit to it cannot bless its output.
+      * base_dir absent: a generator named in `edited` (changed by this push) is
+        reported stale and not run, because nothing independent can judge it.
     Returns (stale_records, verified_paths). A generator that fails to run is
     reported as stale: a gate that cannot verify must not report success.
     Comparison is done through git diff, which applies EOL normalization
     (core.autocrlf, .gitattributes) so the gate works correctly on all platforms.
+    A record with repair=False names a generator edit; the regenerate command
+    cannot fix it, so no repair line is printed for it.
     """
-    stale: List[Dict[str, str]] = []
+    stale: List[Dict[str, object]] = []
     verified: List[str] = []
     tmp = Path(tempfile.mkdtemp(prefix="aesop-regen-"))
     wt = tmp / "wt"
@@ -141,11 +165,25 @@ def verify_tip(root: Path, tip: str, paths: List[str]) -> Tuple[List[Dict[str, s
             argv = generated_paths.regenerator_for(path)
             if not argv:
                 continue
-            script = wt / argv[0]
-            if not script.exists():
-                sys.stdout.write("generated_push_gate: %s has no %s at %s; nothing to verify\n"
-                                 % (path, argv[0], tip[:7]))
+            generator_edited = argv[0] in edited
+            if base_dir is not None:
+                script = base_dir / argv[0]
+                if not script.is_file():
+                    stale.append({"path": path, "tip": tip, "repair": False,
+                                  "reason": "generator %s is absent from the base copy; "
+                                            "cannot verify" % argv[0]})
+                    continue
+            elif generator_edited:
+                stale.append({"path": path, "tip": tip, "repair": False,
+                              "reason": "generator %s changed in this push and no base gate "
+                                        "copy was given; cannot verify it" % argv[0]})
                 continue
+            else:
+                script = wt / argv[0]
+                if not script.exists():
+                    sys.stdout.write("generated_push_gate: %s has no %s at %s; nothing to verify\n"
+                                     % (path, argv[0], tip[:7]))
+                    continue
             # Capture the state of the file at tip (committed state).
             # We do NOT use raw bytes; instead we'll use git diff which applies
             # EOL normalization and .gitattributes rules.
@@ -155,10 +193,11 @@ def verify_tip(root: Path, tip: str, paths: List[str]) -> Tuple[List[Dict[str, s
                     capture_output=True, text=True, encoding="utf-8", errors="replace",
                     timeout=300)
             except (OSError, subprocess.SubprocessError) as exc:
-                stale.append({"path": path, "tip": tip, "reason": "generator failed: %s" % exc})
+                stale.append({"path": path, "tip": tip, "repair": not generator_edited,
+                              "reason": "generator failed: %s" % exc})
                 continue
             if proc.returncode != 0:
-                stale.append({"path": path, "tip": tip,
+                stale.append({"path": path, "tip": tip, "repair": not generator_edited,
                               "reason": "generator exited %d: %s"
                               % (proc.returncode, (proc.stderr or proc.stdout).strip())})
                 continue
@@ -169,8 +208,12 @@ def verify_tip(root: Path, tip: str, paths: List[str]) -> Tuple[List[Dict[str, s
             if diff_rc != 0:
                 # Diff exit code 0 = no changes, 1 = changes exist, 2+ = error.
                 # Only 0 means the regenerated file matches the committed version.
-                stale.append({"path": path, "tip": tip,
-                              "reason": "committed bytes differ from the generator's output"})
+                reason = "committed bytes differ from the generator's output"
+                if generator_edited:
+                    reason += (" (%s changed in this push: revert that edit or land it in its"
+                               " own reviewed change)" % argv[0])
+                stale.append({"path": path, "tip": tip, "repair": not generator_edited,
+                              "reason": reason})
             else:
                 verified.append(path)
     finally:
@@ -185,6 +228,7 @@ def main(argv: List[str]) -> int:
     as_json = "--json" in argv
     ranges: List[str] = []
     root_arg: Optional[str] = None
+    base_arg: Optional[str] = None
     it = iter(argv)
     for arg in it:
         if arg == "--json":
@@ -202,11 +246,24 @@ def main(argv: List[str]) -> int:
                 sys.stderr.write("generated_push_gate: --root needs a value\n" + USAGE)
                 return 2
             continue
+        if arg == "--base-dir":
+            base_arg = next(it, None)
+            if base_arg is None:
+                sys.stderr.write("generated_push_gate: --base-dir needs a value\n" + USAGE)
+                return 2
+            continue
         sys.stderr.write("generated_push_gate: unexpected argument %r\n%s" % (arg, USAGE))
         return 2
     if not ranges:
         sys.stderr.write("generated_push_gate: at least one --range is required\n" + USAGE)
         return 2
+    base_dir: Optional[Path] = None
+    if base_arg is not None:
+        base_dir = Path(base_arg).resolve()
+        if not (base_dir / "tools").is_dir():
+            sys.stderr.write("generated_push_gate: --base-dir %s has no tools/ directory\n"
+                             % base_arg)
+            return 2
 
     root = resolve_root(root_arg)
     if root is None:
@@ -215,6 +272,7 @@ def main(argv: List[str]) -> int:
 
     stamped = [p for p in read_stamp(root) if generated_paths.regenerator_for(p)]
     per_tip: Dict[str, List[str]] = {}
+    edited_by_tip: Dict[str, Set[str]] = {}
     for text in ranges:
         parsed = parse_range(text)
         if parsed is None:
@@ -230,6 +288,17 @@ def main(argv: List[str]) -> int:
         if changed is None:
             sys.stderr.write("generated_push_gate: git diff failed for %r\n" % text)
             return 2
+        edited = edited_by_tip.setdefault(tip, set())
+        edited.update(changed)
+        if base_dir is None and _rev_resolves(root, TRUNK_REF):
+            # No base copy: a generator this push changed relative to trunk is not
+            # independently verifiable either, even if the range itself did not touch it.
+            vs_trunk = changed_paths(root, TRUNK_REF, tip)
+            if vs_trunk is None:
+                sys.stderr.write("generated_push_gate: git diff failed for %s..%s\n"
+                                 % (TRUNK_REF, tip))
+                return 2
+            edited.update(vs_trunk)
         # Collect all regenerable paths: those changed in the range, plus stamped, plus all
         # regenerable paths that exist at the tip (to catch generator output drift even when
         # the artifact itself wasn't touched in this push range, e.g., a tool docstring changed
@@ -257,7 +326,8 @@ def main(argv: List[str]) -> int:
     stale_all: List[Dict[str, str]] = []
     verified_all: List[str] = []
     for tip, paths in per_tip.items():
-        stale, verified = verify_tip(root, tip, paths)
+        stale, verified = verify_tip(root, tip, paths, base_dir,
+                                     frozenset(edited_by_tip.get(tip, set())))
         stale_all.extend(stale)
         verified_all.extend(verified)
 
@@ -267,8 +337,9 @@ def main(argv: List[str]) -> int:
     if stale_all:
         for rec in stale_all:
             sys.stderr.write("ERROR: %s committed at %s is stale (%s)\n"
-                             % (rec["path"], rec["tip"][:7], rec["reason"]))
-            sys.stderr.write(instruction_for(rec["path"]) + "\n")
+                             % (rec["path"], str(rec["tip"])[:7], rec["reason"]))
+            if rec.get("repair", True):
+                sys.stderr.write(instruction_for(str(rec["path"])) + "\n")
         return 1
     if verified_all:
         consume_stamp(root, verified_all)

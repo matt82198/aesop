@@ -1349,7 +1349,10 @@ class TestLock(StateIsolatedTestCase):
         lock = self.state_root / self.module.LOCK_DIRNAME
         lock.mkdir(parents=True)
         (lock / "timestamp").write_text(str(int(_time.time())), encoding="utf-8")
-        (lock / "pid").write_text("999999", encoding="utf-8")
+        # A LIVE holder: a dead holder's lock is reclaimable regardless of age
+        # (tests/test_merge_queue_lock_liveness.py), so "never stolen" must be
+        # asserted against a holder that is still running.
+        (lock / "pid").write_text(str(os.getpid()), encoding="utf-8")
         self.assertFalse(self.module.acquire_lock(lock, stale_s=600))
 
     def test_release_does_not_remove_someone_elses_lock(self):

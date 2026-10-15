@@ -265,7 +265,7 @@ check_gate_tamper() {
     [ -z "$local_sha" ] && continue
     [ "$local_sha" = "0000000000000000000000000000000000000000" ] && continue
     changed=$(git diff --name-only "origin/main...$local_sha" 2>/dev/null) || changed=""
-    hits+=$(printf '%s\n' "$changed" | grep -E '^(tools/[^/]*gate[^/]*\.py|tools/secret_scan\.py|hooks/pre-push-policy\.sh|\.github/workflows/)' || true)
+    hits+=$(printf '%s\n' "$changed" | grep -E '^(tools/[^/]*gate[^/]*\.py|tools/secret_scan\.py|tools/gen_[^/]*\.py|tools/generated_[^/]*\.py|hooks/pre-push-policy\.sh|\.github/workflows/)' || true)
     hits+=$'\n'
   done <<< "$tuples"
   hits=$(printf '%s\n' "$hits" | sed '/^$/d' | sort -u)
@@ -1001,6 +1001,9 @@ check_symbol_survival() {
   # Fail-closed: the base copy's tools/ always exists (gate_base_dir), so a missing
   # script in it blocks the push. There is no skip branch here: skipping on a pushed
   # tools/ deletion would reopen the bypass this function closes.
+  # Base-pinned (same rule as every other gate): the tool runs from the origin/main
+  # gate copy, never the pushed tree. A PR that weakens the tool to exit 0 must not
+  # pass a lossy merge it is judged on (lens L2 F2, G13 not base-pinned).
   local symbol_script="$gate_dir/tools/pr_symbol_survival_check.py"
 
   local tool_status
@@ -1841,7 +1844,7 @@ check_generated_regen() {
   fi
 
   local gate_output
-  gate_output=$("$py_bin" "$gate_script" "${range_args[@]}" 2>&1)
+  gate_output=$("$py_bin" "$gate_script" --base-dir "$gate_dir" "${range_args[@]}" 2>&1)
   local gate_exit_code=$?
   if [ $gate_exit_code -ne 0 ]; then
     if [ -n "$gate_output" ]; then
@@ -3073,6 +3076,11 @@ GENPATHS
     mkdir -p "$sym_repo/tools"
     cp "$sym_real_root/tools/pr_symbol_survival_check.py" "$sym_repo/tools/"
     printf 'def existing():\n    pass\n' > "$sym_repo/mod.py"
+    # The G13 tool is base-pinned: the hook runs origin/main's copy, so the trunk must
+    # carry it and origin/main must exist (gate_base_dir fails closed on a bare repo,
+    # which would make the BLOCK assertion pass for the wrong reason).
+    mkdir -p "$sym_repo/tools"
+    cp "$sym_real_root/tools/pr_symbol_survival_check.py" "$sym_repo/tools/"
     git -C "$sym_repo" add -A
     git -C "$sym_repo" commit -q -m base
     sym_base=$(git -C "$sym_repo" rev-parse HEAD)
@@ -3098,10 +3106,15 @@ GENPATHS
       cd "$sym_repo" || exit 1
       export AESOP_ROOT="$sym_aesop_root"
       stdin_line="$sym_tip $sym_tip refs/heads/main $sym_base"
-      if printf '%s\n' "$stdin_line" | check_symbol_survival >/dev/null 2>&1; then
+      sym_block_out=$(printf '%s\n' "$stdin_line" | check_symbol_survival 2>&1)
+      if [ $? -eq 0 ]; then
         printf 'FAIL: check_symbol_survival should BLOCK a push whose merge dropped a branch symbol\n'
         exit 1
       fi
+      case "$sym_block_out" in
+        *MISSING*) ;;
+        *) printf 'FAIL: block did not come from the symbol-survival verdict (no MISSING): %s\n' "$sym_block_out"; exit 1 ;;
+      esac
 
       git checkout -q -b clean "$sym_base"
       printf 'def existing():\n    pass\n\n\ndef beta():\n    pass\n' > mod.py

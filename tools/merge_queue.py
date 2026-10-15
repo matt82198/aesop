@@ -391,6 +391,60 @@ def beat_heartbeat(path: Path = None) -> Path:
 # Single-instance lock (fail-closed on contention, mkdir-atomic)
 # ---------------------------------------------------------------------------
 
+def _pid_alive(pid: int) -> bool:
+    """True iff a process with this pid currently exists. Never signals it.
+
+    POSIX: `os.kill(pid, 0)` only probes. Windows: `os.kill` TERMINATES the
+    process, so it is never used there; OpenProcess + GetExitCodeProcess reads
+    the state instead. Fail closed: any probe result we cannot interpret reads
+    as ALIVE, which keeps the lock held (a delay, never a theft).
+    """
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        query_limited_information = 0x1000
+        still_active = 259
+        error_invalid_parameter = 87  # no such pid
+        handle = kernel32.OpenProcess(query_limited_information, False, pid)
+        if not handle:
+            # ERROR_ACCESS_DENIED means the process exists but is not ours: alive.
+            return ctypes.get_last_error() != error_invalid_parameter
+        try:
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True
+            return code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        # PermissionError: the process exists under another user. Anything
+        # else is uninterpretable, so fail closed.
+        return True
+    return True
+
+
+def _holder_pid(raw):
+    """Parse the holder pid recorded in a lock's pid file; None when unusable."""
+    try:
+        pid = int(raw)
+    except (TypeError, ValueError):
+        return None
+    return pid if pid > 0 else None
+
+
 def _lock_fingerprint(lock_dir: Path) -> tuple:
     """Identity of whatever lock currently occupies lock_dir.
 
@@ -441,20 +495,29 @@ def _reclaim_stale_lock(lock_dir: Path, stale_s: int) -> bool:
     """
     before = _lock_fingerprint(lock_dir)
 
-    age = None
-    if before[1] is not None:
-        try:
-            age = int(time.time()) - int(before[1])
-        except (TypeError, ValueError):
-            age = None
-    # Unreadable/absent timestamp is treated as stale ONLY once the directory
-    # mtime is itself older than the threshold.
-    if age is None:
-        if before[2] is None:
+    # The holder's pid decides. A live holder keeps its lock however old the
+    # timestamp is: a long-running pass must never have its lock stolen. A dead
+    # holder's lock is reclaimable regardless of age.
+    holder = _holder_pid(before[0])
+    if holder is not None:
+        if _pid_alive(holder):
             return False
-        age = int(time.time() - (before[2] / 1e9))
-    if age < stale_s:
-        return False
+    else:
+        # No usable pid recorded: age is the only reclaim path. An unreadable or
+        # absent timestamp is treated as stale ONLY once the directory mtime is
+        # itself older than the threshold.
+        age = None
+        if before[1] is not None:
+            try:
+                age = int(time.time()) - int(before[1])
+            except (TypeError, ValueError):
+                age = None
+        if age is None:
+            if before[2] is None:
+                return False
+            age = int(time.time() - (before[2] / 1e9))
+        if age < stale_s:
+            return False
 
     graveyard = lock_dir.parent / ("%s.stale-%d-%d"
                                    % (lock_dir.name, os.getpid(), time.time_ns()))

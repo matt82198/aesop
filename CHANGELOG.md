@@ -16,10 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Status notice:** Aesop Kernel is mid-way through a major event-based overhaul whose goal is restoring fully fail-closed hooks. The 0.9.x and 0.10.x minor releases may show some degradation versus earlier versions while that lands.
 
 Release-prep minor: receipt and verify-receipt hardening, pre-push policy fixes, incident-report gate
-corrections, and test-isolation race fixes. 56 PRs merged since v0.9.2 (2026-10-14).
+corrections, and test-isolation race fixes. 71 PRs merged since v0.9.2 (2026-10-14).
 
 ### Fixed
-- **CLI flags**: `aesop --version` and `-v` now print the package version and exit 0 without touching the filesystem, and any unknown `-` flag exits 2 with `unknown option: <arg>` instead of scaffolding a project into the current directory and touching `~/.claude/skills`.
+- **CLI flags**: `aesop --version` and `-v` print the package version and exit 0 without touching the filesystem; any unknown `-` flag exits 2 with `unknown option: <arg>` instead of scaffolding into the current directory (#1044).
+- **Scaffold**: a fresh scaffold can push to a fresh remote, covered by the pre-push hook and doctor baseline checks (#1050).
+- **Bench**: `bench_runner` refuses the claude-CLI runner when `AESOP_BENCH_OFFLINE=1` (#1048).
+- **Merge actors**: `merge_queue` and `merge_train` honour the box-wide halt, and PR head fetches are option-safe (#1049).
+- **UI collectors**: an unreadable `tracker.json` no longer marks the migration complete (#1052).
+- **Watchdog `--once` smoke**: prints `WATCHDOG SMOKE: FAILED (halt check error, exit N)` and exits 1 when the halt check fails closed; a genuine `.HALT` still passes (#1054).
+- **Multi-dispatch path claims**: the claim lease TTL is `max(multibox lease_ttl, --timeout + 60s)` instead of a hard-coded 300s, so a `--timeout 1800` dispatch keeps its claim (#1056).
+- **auto_merge**: refuses to run while the box is halted (box-wide `.HALT` or checkout `.HALT`), before any GitHub call, merge or origin write; a halt-check error also halts (#1058).
 - **Receipts**: `verify-receipt` trusts the base-tree verifier and keyring, not the PR head (#1020); fails closed on a missing receipt (#970); polls for a 300s window instead of one 60s retry (#1040); spooled receipts post automatically after push (#1012); scoped shard map follows `ci_shard_runner` (#1035).
 - **Pre-push policy**: branch policy judges the remote ref, not the local branch (#1034); the hook blocks on a red required receipt part (#1011); the generated-path guard allows a touched path that is exactly generator output (#1028); base extracts include `state_store` alongside `tools` (#1039).
 - **Incident report gate**: `environment-shape` class, `test-isolation` alias, HEAD-scoped check and CI gate (#1008); `docs/INCIDENTS.md` regenerated on lane push and in the merge queue (#1036) so the committed log no longer drifts from main's history (#1029, #1030).
@@ -31,15 +38,25 @@ corrections, and test-isolation race fixes. 56 PRs merged since v0.9.2 (2026-10-
 - **Other**: merge-train origin writes gated and pushed branches cleaned up on failure (#1013); `ingest_task_events` quarantines glued torn lines instead of wedging (#1016); box-wide halt sentinel honored from any checkout and fail-closed on halt-check errors (#957); claim-read errors fail closed (#990); `auto_merge` scoped verdict and bench API runner honor the offline seam and require `--confirm-spend` (#995); baseline `--json` protocol answers the portability ratchet only, 69s to 1s (#1024).
 
 ### Added
+- **Boot brief from the event store**: `tools/boot_state.py` projects one canonical boot brief from the event store, with `tools/goal_state.py` for goal events (#1053).
 - **Pre-push G6 subprocess ratchet**: the pre-push hook runs the G6 subprocess ratchet exactly as `ci.yml` does (#1037).
 - **Linux-shape native leg** runs Node and Shell suites through the isolation tripwire (#1010).
 - **Tripwire coverage**: `test_isolation_tripwire` armed around `test:py` and the CI Python shards (#974).
 
 ### Changed
+- **Task-event ingest and boot brief**: `ingest_task_events.py --status` reports freshness read-only; the boot brief runs one bounded ingest before projecting; the watchdog logs a missing python interpreter as ERROR (#1057).
+- **Lane contract**: `LANE-CONTRACT.md` puts domain docs always in scope and lists the push gates (#1046).
+- **Test isolation tripwire**: attributes tripwire changes to git deploys and live writers (#1051).
 - **Receipt scrubbing**: receipt matrix parts scrub push and lane-control env so a lane's push-time override cannot turn a test red (#1021).
 - **Scoped receipt profile**: pre-push matrix is scoped by default (#932).
 - **Config tests**: `ui` config tests scrub config-resolution env in `setUp` (#1007).
 - **Docs**: `tools/CLAUDE.md` bullets folded to one line each (#985).
+
+### Security
+- **secret_scan**: flags unquoted credential values that contain a dot (#1045).
+- **Receipts**: signing secrets are kept out of receipt matrix parts, and receipt emission fails closed when scope cannot be derived (#1047).
+
+**Known gaps**: the `verify-receipt` check is non-required and was red on #1056 through #1058 because the scoped emitter covers fewer shards than the verifier requires; receipt coverage is tracked for 0.10.1.
 
 ## [0.9.2] - 2026-10-14
 
