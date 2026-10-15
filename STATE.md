@@ -27,7 +27,7 @@
   - #988 task-events ingest into state store (head f1bba156).
   - #990 claim-read fail-closed.
 
-**Audit round 1 (2026-10-14, reports in ~/conductor3/audits/2026-10-14-r1/):** 9 lenses. 7 refuter reports on disk. 109 findings in the 7 refuted lenses: 2 REFUTED (1.8%), 62 CONFIRMED, 37 DOWNGRADED (34%, mostly P1 claims reachable only from operator-only paths), 7 IN-FLIGHT, 1 already filed. The analyst lens (13 findings) has no refuter. orchestrator-drift is analysis only. Lens model caveat: 12 of 24 Opus dispatches were spawned as claude-haiku-5-5 by the harness (feedback receipt f49b6043).
+**Audit round 1 (2026-10-14, reports in ~/conductor3/audits/2026-10-14-r1/):** 9 lenses. 7 refuter reports on disk. 109 findings in the 7 refuted lenses: 2 REFUTED, 62 CONFIRMED, 37 DOWNGRADED (mostly P1 claims reachable only from operator-only paths), 7 IN-FLIGHT, 1 already filed. The analyst lens (13 findings) has no refuter. orchestrator-drift is analysis only. Lens model caveat: 12 of 24 Opus dispatches were spawned as claude-haiku-5-5 by the harness (feedback receipt f49b6043).
 
 **Audit round 2 (adv-fixers, 2026-10-14 21:42):** 19 merged PRs re-attacked: 11 SOUND, 7 INCOMPLETE, 1 REGRESSION.
 - INCOMPLETE fix status: #943 -> fix #986 landed. #950 -> fix #984 landed. #954 -> fix #981 landed. #952 -> fix #994 landed, plus #990 still open (BLOCKED). #949 -> fix #995 still open (DIRTY). #944 (non-ASCII path, multi-commit push) and #966 (test weakness): no fix PR observed.

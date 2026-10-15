@@ -332,12 +332,12 @@ Audit round 1 (reports in ~/conductor3/audits/2026-10-14-r1/; counts are verdict
 | adv-enforcement | 15 | yes (new this checkpoint) | 3 | 10 | 2 | 0 |
 | Total, 7 refuted lenses | 109 | 7 of 7 | 62 | 37 | 8 | 2 |
 
-- Convergence: 2 of 109 refuted (1.8%). 107 kept (98.2%): 62 confirmed, 37 downgraded, 8 in-flight or filed. Downgrades are 34% of findings, the largest correction class: most P1 claims were reachable only from operator-only paths.
+- Convergence: 2 of 109 refuted. 107 of 109 kept: 62 confirmed, 37 downgraded, 8 in-flight or filed. Downgrades are 37 of 109 findings, the largest correction class: most P1 claims were reachable only from operator-only paths.
 - analyst (13 findings) has no refuter report. orchestrator-drift is analysis only, not a findings table.
 - Lens model caveat (orchestrator notes): 12 of 24 Opus dispatches were spawned as claude-haiku-5-5 by the harness, no discriminator in the hooks. Feedback receipt f49b6043.
 
 Audit round 2 (adv-fixers, 2026-10-14 21:42, adv-fixers.md; header states Model: claude-haiku-5-5):
-- 19 merged PRs re-attacked. Result: 11 SOUND (58%), 7 INCOMPLETE (37%), 1 REGRESSION (5%).
+- 19 merged PRs re-attacked. Result: 11 SOUND, 7 INCOMPLETE, 1 REGRESSION (11 + 7 + 1 = 19).
 - SOUND: #946 #947 #953 #958 #960 #962 #963 #964 #965 #968 #972.
 - INCOMPLETE and fix status (observed at 03:01Z):
   - #943 -> fix #986 MERGED 02:21:09Z.
