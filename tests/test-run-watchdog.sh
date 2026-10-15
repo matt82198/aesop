@@ -312,13 +312,16 @@ echo "0" > "${CYCLE_COUNTER}"
 
 # Create a path with spaces
 AESOP_ROOT_WITH_SPACES="${TMP_DIR}/aesop with spaces"
-mkdir -p "$AESOP_ROOT_WITH_SPACES"
-cp "${REPO_ROOT}/daemons/run-watchdog.sh" "$AESOP_ROOT_WITH_SPACES/"
+# Real install layout: the daemon halt-checks via tools/halt.py (fail-closed when
+# the tool is missing), so the fixture must ship daemons/ and tools/ together.
+mkdir -p "$AESOP_ROOT_WITH_SPACES/daemons" "$AESOP_ROOT_WITH_SPACES/tools"
+cp "${REPO_ROOT}/daemons/run-watchdog.sh" "$AESOP_ROOT_WITH_SPACES/daemons/"
+cp "${REPO_ROOT}/tools/halt.py" "${REPO_ROOT}/tools/common.py" "$AESOP_ROOT_WITH_SPACES/tools/"
 
 OUT_SPACES=$(mktemp)
 AESOP_ROOT="${AESOP_ROOT_WITH_SPACES}" \
   AESOP_WATCHDOG_CYCLE_CMD="${MOCK_CYCLE} ${CYCLE_COUNTER}" \
-  bash "${AESOP_ROOT_WITH_SPACES}/run-watchdog.sh" --once > "$OUT_SPACES" 2>&1
+  bash "${AESOP_ROOT_WITH_SPACES}/daemons/run-watchdog.sh" --once > "$OUT_SPACES" 2>&1
 EXIT_SPACES=$?
 
 echo "Output from AESOP_ROOT with spaces:"
