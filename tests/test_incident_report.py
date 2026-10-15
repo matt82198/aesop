@@ -17,11 +17,7 @@ class TestIncidentClassifier(unittest.TestCase):
 
     def test_classify_fake_green_from_commit_subject(self):
         """ci(browser-proofs): never-ran or green-never-ran pattern."""
-        # Import here to avoid issues if module doesn't exist yet
-        try:
-            from tools.incident_report import IncidentClassifier
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentClassifier
 
         classifier = IncidentClassifier()
 
@@ -34,10 +30,7 @@ class TestIncidentClassifier(unittest.TestCase):
 
     def test_classify_ci_drift_from_subject(self):
         """CI workflow file drift (missing dependencies, env setup)."""
-        try:
-            from tools.incident_report import IncidentClassifier
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentClassifier
 
         classifier = IncidentClassifier()
 
@@ -50,10 +43,7 @@ class TestIncidentClassifier(unittest.TestCase):
 
     def test_classify_test_pollution_from_subject(self):
         """Test pollution (config leaks, mock state, isolation)."""
-        try:
-            from tools.incident_report import IncidentClassifier
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentClassifier
 
         classifier = IncidentClassifier()
 
@@ -66,10 +56,7 @@ class TestIncidentClassifier(unittest.TestCase):
 
     def test_classify_flake_from_subject(self):
         """Flaky test (timing, race, deflake)."""
-        try:
-            from tools.incident_report import IncidentClassifier
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentClassifier
 
         classifier = IncidentClassifier()
 
@@ -82,10 +69,7 @@ class TestIncidentClassifier(unittest.TestCase):
 
     def test_classify_conflict_from_subject(self):
         """Merge conflict or module shadowing."""
-        try:
-            from tools.incident_report import IncidentClassifier
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentClassifier
 
         classifier = IncidentClassifier()
 
@@ -98,10 +82,7 @@ class TestIncidentClassifier(unittest.TestCase):
 
     def test_classify_gate_activation_from_subject(self):
         """Secret gate or verification bypass caught."""
-        try:
-            from tools.incident_report import IncidentClassifier
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentClassifier
 
         classifier = IncidentClassifier()
 
@@ -118,10 +99,7 @@ class TestIncidentParser(unittest.TestCase):
 
     def test_parse_commit_hash(self):
         """Extract commit hash from git log output."""
-        try:
-            from tools.incident_report import IncidentParser
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentParser
 
         parser = IncidentParser()
 
@@ -143,12 +121,9 @@ class TestIncidentParser(unittest.TestCase):
 
         Verifies the parser correctly classifies each type.
         """
-        try:
-            from tools.incident_report import IncidentParser
-            import subprocess
-            import os
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentParser
+        import subprocess
+        import os
 
         # Create isolated temp directory for test repo (hygiene rule: no cwd pollution)
         import tempfile
@@ -251,11 +226,8 @@ class TestIncidentParser(unittest.TestCase):
         Only runs when full history is available. This test validates that
         the parser works against real incident patterns in actual repo history.
         """
-        try:
-            from tools.incident_report import IncidentParser
-            import subprocess
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentParser
+        import subprocess
 
         # Check if this is a shallow clone
         result = subprocess.run(
@@ -280,10 +252,7 @@ class TestIncidentParser(unittest.TestCase):
 
     def test_deterministic_ordering(self):
         """Entries should be stable-ordered (date, then hash)."""
-        try:
-            from tools.incident_report import IncidentParser
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentParser
 
         parser = IncidentParser(repo_root=".")
 
@@ -304,10 +273,7 @@ class TestIncidentParser(unittest.TestCase):
         field was dropped and replaced by datetime.now(); the sort key then changed
         on every run. Hermetic: builds a throwaway repo with known commit dates.
         """
-        try:
-            from tools.incident_report import IncidentParser
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentParser
         import os
         import subprocess
         import tempfile
@@ -356,10 +322,7 @@ class TestIncidentMarkdownGeneration(unittest.TestCase):
 
     def test_generate_markdown_table(self):
         """Generate deterministic Markdown table."""
-        try:
-            from tools.incident_report import IncidentMarkdown
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentMarkdown
 
         markdown = IncidentMarkdown()
 
@@ -391,10 +354,7 @@ class TestIncidentMarkdownGeneration(unittest.TestCase):
 
     def test_markdown_deterministic(self):
         """Markdown output should be byte-identical across runs."""
-        try:
-            from tools.incident_report import IncidentMarkdown
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentMarkdown
 
         markdown = IncidentMarkdown()
 
@@ -418,28 +378,36 @@ class TestIncidentMarkdownGeneration(unittest.TestCase):
 class TestCheckMode(unittest.TestCase):
     """Test --check mode for CI drift detection."""
 
+    def _fixture_with_log(self, tmpdir, log_text):
+        """Write docs/INCIDENTS.md under tmpdir (the repo must already exist)."""
+        import os
+        from tools.incident_report import write_table
+        os.makedirs(os.path.join(tmpdir, "docs"), exist_ok=True)
+        write_table(os.path.join(tmpdir, "docs", "INCIDENTS.md"), log_text)
+
     def test_check_mode_valid_file(self):
-        """--check should return 0 if docs/INCIDENTS.md matches generated output."""
-        try:
-            from tools.incident_report import IncidentChecker
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
-
-        # This would be an integration test in a real setup
-        checker = IncidentChecker()
-
-        # Placeholder: real check would compare file to generated
-        self.assertTrue(True, "Check mode test placeholder")
+        """--check exits 0 when docs/INCIDENTS.md equals the generated output."""
+        from tools.incident_report import IncidentChecker, IncidentMarkdown, IncidentParser
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _FixtureRepo.build(tmpdir, [("fix: stall check hung process", "")])
+            incidents, errors = IncidentParser(repo_root=tmpdir).parse()
+            self.assertEqual(errors, [])
+            self._fixture_with_log(tmpdir, IncidentMarkdown().generate_table(incidents))
+            ok, message = IncidentChecker(repo_root=tmpdir).check_incidents_file("docs/INCIDENTS.md")
+            cli = _run_incident_cli(["--check", "--repo", tmpdir], cwd=tmpdir)
+        self.assertTrue(ok, message)
+        self.assertEqual(cli.returncode, 0, cli.stdout + cli.stderr)
 
     def test_check_mode_drift_detected(self):
-        """--check should return 1 if docs/INCIDENTS.md drifts from git."""
-        try:
-            pass
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
-
-        # Placeholder: real check would detect drift
-        self.assertTrue(True, "Check mode drift test placeholder")
+        """--check exits 1 with a DRIFT message when docs/INCIDENTS.md is stale."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _FixtureRepo.build(tmpdir, [("fix: stall check hung process", "")])
+            self._fixture_with_log(tmpdir, "# Incidents\n\n*(No incidents recorded)*\n")
+            cli = _run_incident_cli(["--check", "--repo", tmpdir], cwd=tmpdir)
+        self.assertEqual(cli.returncode, 1, cli.stdout + cli.stderr)
+        self.assertIn("DRIFT", cli.stdout + cli.stderr)
 
 
 class TestSecretScanning(unittest.TestCase):
@@ -447,10 +415,7 @@ class TestSecretScanning(unittest.TestCase):
 
     def test_no_secrets_in_commit_hashes(self):
         """Commit hashes should never contain sensitive patterns."""
-        try:
-            from tools.incident_report import IncidentValidator
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentValidator
 
         validator = IncidentValidator()
 
@@ -462,10 +427,7 @@ class TestSecretScanning(unittest.TestCase):
 
     def test_no_secrets_in_pr_refs(self):
         """PR references should be #NNN format only."""
-        try:
-            from tools.incident_report import IncidentValidator
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentValidator
 
         validator = IncidentValidator()
 
@@ -564,10 +526,7 @@ class TestTrailerChannel(unittest.TestCase):
 
     def test_trailer_class_is_authoritative_for_new_classes(self):
         """A commit carrying Incident-Class: hook-fail-open classifies as hook-fail-open."""
-        try:
-            from tools.incident_report import IncidentParser
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentParser
         import tempfile
         commits = [
             ("fix: hooks exit 0 on malformed stdin", "Incident-Class: hook-fail-open\nIncident-Category: C brain hooks"),
@@ -583,12 +542,24 @@ class TestTrailerChannel(unittest.TestCase):
         for incident in incidents:
             self.assertFalse(incident.get("inferred", False), "trailer rows are explicit, not inferred")
 
+    def test_prose_wrapped_trailer_text_is_not_a_trailer(self):
+        """A prose line wrapping onto 'Incident-Class: x' in an earlier paragraph is ignored; the final trailer block wins."""
+        from tools.incident_report import IncidentParser
+        import tempfile
+        body = ("Causal chain notes.\n"
+                "Incident-Class: environment-shape, which was not one of the 12 documented\n"
+                "classes, so the gate went red.\n"
+                "\n"
+                "Incident-Class: gate-activation")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _FixtureRepo.build(tmpdir, [("fix(incident): taxonomy", body)])
+            incidents, errors = IncidentParser(repo_root=tmpdir).parse()
+        self.assertEqual(errors, [], f"prose text must not produce trailer errors: {errors}")
+        self.assertEqual([i["class"] for i in incidents], ["gate-activation"])
+
     def test_trailer_overrides_subject_keyword(self):
         """Trailer wins over a subject keyword that would have matched a different class."""
-        try:
-            from tools.incident_report import IncidentParser
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentParser
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
             _FixtureRepo.build(tmpdir, [("fix(ci): add pytest to main-full workflow (post-#450 drift)",
@@ -598,10 +569,7 @@ class TestTrailerChannel(unittest.TestCase):
 
     def test_unknown_trailer_value_fails_closed_in_parser(self):
         """An unknown Incident-Class value is reported as an error naming the commit, never dropped."""
-        try:
-            from tools.incident_report import IncidentParser
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentParser
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
             _FixtureRepo.build(tmpdir, [("fix: something happened", "Incident-Class: hook-fial-open")])
@@ -629,10 +597,7 @@ class TestTrailerChannel(unittest.TestCase):
 
     def test_unknown_category_fails_closed(self):
         """An Incident-Category outside A..E is an error, not silently accepted."""
-        try:
-            from tools.incident_report import IncidentParser
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentParser
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
             _FixtureRepo.build(tmpdir, [("fix: stall check hung process",
@@ -642,10 +607,7 @@ class TestTrailerChannel(unittest.TestCase):
 
     def test_check_mode_fails_closed_naming_commit(self):
         """--check reports the unknown trailer and the commit, not a generic drift message."""
-        try:
-            from tools.incident_report import IncidentChecker
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentChecker
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
             _FixtureRepo.build(tmpdir, [("fix: something happened", "Incident-Class: not-a-class")])
@@ -660,10 +622,7 @@ class TestFallbackClassification(unittest.TestCase):
 
     def test_body_keywords_do_not_classify(self):
         """'feat: port dash-extra.mjs' with gate/deadlock words in the body is NOT an incident."""
-        try:
-            from tools.incident_report import IncidentParser
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentParser
         import tempfile
         body = "Adds the secret-scan gate wiring. Notes: stall check, deadlock, --no-verify mentioned."
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -673,10 +632,7 @@ class TestFallbackClassification(unittest.TestCase):
 
     def test_subject_fallback_is_marked_inferred(self):
         """Subject keyword match without trailer classifies, and the row is flagged inferred."""
-        try:
-            from tools.incident_report import IncidentParser
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentParser
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
             _FixtureRepo.build(tmpdir, [("fix: stall check hung process", "")])
@@ -686,10 +642,7 @@ class TestFallbackClassification(unittest.TestCase):
 
     def test_merge_commit_subject_is_not_an_incident(self):
         """A merge whose branch name contains a keyword is not an incident by itself."""
-        try:
-            from tools.incident_report import IncidentParser
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentParser
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
             _FixtureRepo.build(tmpdir, [("Merge pull request #100 from x/feat/wave12-stall-check", "")])
@@ -698,10 +651,7 @@ class TestFallbackClassification(unittest.TestCase):
 
     def test_generated_table_marks_inferred_rows(self):
         """Fallback rows read 'class (inferred)'; trailer rows read the bare class."""
-        try:
-            from tools.incident_report import IncidentMarkdown
-        except ImportError:
-            self.skipTest("incident_report module not yet implemented")
+        from tools.incident_report import IncidentMarkdown
         output = IncidentMarkdown().generate_table([
             {"hash": "aaaaaaa", "class": "stall", "what_happened": "x", "resolution": "y",
              "source_ref": "commit aaaaaaa", "inferred": True},
@@ -736,6 +686,99 @@ class TestCliCrashes(unittest.TestCase):
             result = _run_incident_cli(["--repo", tmpdir], tmpdir, extra_env={"PYTHONIOENCODING": "cp1252"})
             self.assertEqual(result.returncode, 0, f"stderr: {result.stderr}")
             self.assertIn("stall", result.stdout)
+
+
+class TestTaxonomyEnvironmentShapeAndAlias(unittest.TestCase):
+    """environment-shape is a documented class; test-isolation is an alias of test-pollution;
+    the --check scan covers HEAD's history only, so unrelated branches cannot fail the gate."""
+
+    def test_environment_shape_is_documented_and_renders(self):
+        """A commit tagged environment-shape parses cleanly and renders its own row."""
+        from tools.incident_report import IncidentParser, IncidentMarkdown
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _FixtureRepo.build(tmpdir, [("fix: 8.3 path resolves wrong on runner", "Incident-Class: environment-shape")])
+            incidents, errors = IncidentParser(repo_root=tmpdir).parse()
+        self.assertEqual(errors, [], f"environment-shape must be a valid class: {errors}")
+        self.assertEqual([i["class"] for i in incidents], ["environment-shape"])
+        self.assertFalse(incidents[0]["inferred"])
+        table = IncidentMarkdown().generate_table(incidents)
+        self.assertIn("| environment-shape | ", table)
+        self.assertIn("host or runner shape", table)
+
+    def test_test_isolation_alias_normalizes_to_test_pollution(self):
+        """Incident-Class: test-isolation is reported under test-pollution, never as its own row."""
+        from tools.incident_report import IncidentParser, IncidentMarkdown
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _FixtureRepo.build(tmpdir, [("fix: shard leak into state root", "Incident-Class: test-isolation")])
+            incidents, errors = IncidentParser(repo_root=tmpdir).parse()
+        self.assertEqual(errors, [], f"test-isolation alias must be accepted: {errors}")
+        self.assertEqual([i["class"] for i in incidents], ["test-pollution"])
+        self.assertFalse(incidents[0]["inferred"])
+        table = IncidentMarkdown().generate_table(incidents)
+        self.assertIn("| test-pollution | ", table)
+        self.assertNotIn("test-isolation", table)
+
+    def _repo_with_unrelated_bad_branch(self, tmpdir):
+        """HEAD carries one valid commit; a side branch carries a commit with an unknown class."""
+        import subprocess
+        _FixtureRepo.build(tmpdir, [("fix: valid flake deflake", "Incident-Class: flake")])
+        subprocess.run(["git", "checkout", "-q", "-b", "unrelated-bad"], cwd=tmpdir, check=True)
+        _FixtureRepo.build(tmpdir, [("fix: side branch work", "Incident-Class: not-a-class")])
+        bad_short = _FixtureRepo.short_head(tmpdir)
+        subprocess.run(["git", "checkout", "-q", "-"], cwd=tmpdir, check=True)
+        return bad_short
+
+    def test_unrelated_branch_does_not_affect_check_for_head(self):
+        """A bad trailer on an unrelated local branch must not fail --check for HEAD."""
+        import os
+        import tempfile
+        from tools.incident_report import IncidentChecker, IncidentParser, IncidentMarkdown, write_table
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._repo_with_unrelated_bad_branch(tmpdir)
+            incidents, errors = IncidentParser(repo_root=tmpdir).parse()
+            self.assertEqual(errors, [], f"HEAD scope must not see the side branch: {errors}")
+            os.makedirs(os.path.join(tmpdir, "docs"), exist_ok=True)
+            write_table(os.path.join(tmpdir, "docs", "INCIDENTS.md"), IncidentMarkdown().generate_table(incidents))
+            ok, message = IncidentChecker(repo_root=tmpdir).check_incidents_file("docs/INCIDENTS.md")
+            cli = _run_incident_cli(["--check", "--repo", tmpdir], cwd=tmpdir)
+        self.assertTrue(ok, message)
+        self.assertEqual(cli.returncode, 0, cli.stdout + cli.stderr)
+
+    def test_all_flag_scans_unrelated_branches_for_forensics(self):
+        """--all restores the whole-repo scan, so the side-branch commit is reported by name."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bad_short = self._repo_with_unrelated_bad_branch(tmpdir)
+            cli = _run_incident_cli(["--check", "--all", "--repo", tmpdir], cwd=tmpdir)
+        self.assertEqual(cli.returncode, 1, cli.stdout + cli.stderr)
+        self.assertIn(bad_short, cli.stdout + cli.stderr)
+
+
+class TestIncidentOrdering(unittest.TestCase):
+    """parse() documents newest-first ordering with a hash tiebreak; find_all_incidents()
+    must return exactly that order (it is a limit-only wrapper, never a re-sort)."""
+
+    def test_find_all_incidents_matches_documented_newest_first_order(self):
+        """Rows are sorted by (commit date desc, short hash asc) and find_all_incidents agrees."""
+        import tempfile
+        from datetime import datetime
+        from tools.incident_report import IncidentParser
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _FixtureRepo.build(tmpdir, [
+                ("fix: stall check hung process", "Incident-Class: stall"),
+                ("fix: flaky deflake test", "Incident-Class: flake"),
+                ("fix: shard leak into state root", "Incident-Class: test-pollution"),
+            ])
+            parser = IncidentParser(repo_root=tmpdir)
+            incidents, errors = parser.parse()
+            wrapped = parser.find_all_incidents()
+        self.assertEqual(errors, [])
+        self.assertEqual(len(incidents), 3)
+        self.assertEqual([i["hash"] for i in wrapped], [i["hash"] for i in incidents])
+        keys = [(-datetime.fromisoformat(i["date"]).timestamp(), i["hash"]) for i in incidents]
+        self.assertEqual(keys, sorted(keys), "rows must be newest first, then hash ascending")
 
 
 if __name__ == '__main__':

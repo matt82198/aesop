@@ -435,6 +435,58 @@ CHECKS = [
 ]
 
 
+def run_baseline_liveness(repo_root, env, baseline):
+    """Answer the `--baseline FILE --json` protocol (tools/baseline_liveness_check.py).
+
+    The liveness gate asks one question of this tool: does the portability
+    baseline carry stale or new entries? That is exactly the portability
+    ratchet, which is one scan (~1 s) via tools/portability_check.py. Running
+    the full checklist here instead (pre-push self-test ~41 s, gate inventory
+    ~18 s, dry pre-push ~5 s) pushed the liveness query to 69 s against its
+    120 s subprocess timeout (2026-10-15). The full checklist is unchanged for
+    the default invocation; only this protocol is narrowed.
+
+    Returns a dict with the same ratchet verdict portability_check.py gives
+    (ok, stale, new) plus the stale list under both keys the liveness gate
+    reads ("stale" and "stale_entries").
+    """
+    py = _py(repo_root, env)
+    cmd = [py, str(repo_root / "tools" / "portability_check.py"),
+           "--root", str(repo_root), "--baseline", str(baseline), "--json"]
+    proc = _run(cmd, repo_root, env, timeout=120)
+    try:
+        data = json.loads(proc.stdout or "")
+    except ValueError:
+        return {
+            "ok": False,
+            "mode": "baseline-liveness",
+            "error": "portability_check emitted no JSON (exit %s): %s"
+                     % (proc.returncode, (proc.stderr or "").strip()[:300]),
+            "stale": [],
+            "new": [],
+            "stale_entries": [],
+            "results": [],
+        }
+    ok = proc.returncode == 0
+    stale = list(data.get("stale", []))
+    new = list(data.get("new", []))
+    return {
+        "ok": ok,
+        "mode": "baseline-liveness",
+        "baseline": str(baseline),
+        "stale": stale,
+        "new": new,
+        "stale_entries": stale,
+        "results": [{
+            "key": "portability",
+            "label": "portability_check (ratchet, liveness protocol)",
+            "ok": ok,
+            "detail": "stale=%d new=%d" % (len(stale), len(new)),
+            "fix": None if ok else "python tools/portability_check.py --root . --baseline %s" % baseline,
+        }],
+    }
+
+
 def run_all(repo_root, env, baseline=None):
     results = []
     for key, label, fn in CHECKS:
@@ -487,6 +539,12 @@ def main(argv=None):
     env = dict(os.environ)
     env["AESOP_ROOT"] = str(repo_root)
 
+    if args.baseline is not None and args.json:
+        # Liveness protocol: one ratchet scan, no full checklist (see run_baseline_liveness).
+        payload = run_baseline_liveness(repo_root, env, Path(args.baseline))
+        print(json.dumps(payload, indent=2))
+        return 0 if payload["ok"] else 1
+
     results = run_all(repo_root, env, baseline=args.baseline)
     failed = [r for r in results if not r.ok]
 
@@ -494,11 +552,6 @@ def main(argv=None):
         # When invoked with --baseline by the liveness gate for JSON output,
         # emit the stale_entries structure expected by baseline_liveness_check.py
         output = {"ok": not failed, "results": [r.to_dict() for r in results]}
-        # The liveness gate checks for "stale" or "stale_entries"; this tool
-        # doesn't have baseline-specific stale entries (that's for portability_check.py),
-        # so we emit an empty list to signal success when --baseline is used.
-        if args.baseline is not None:
-            output["stale_entries"] = []
         print(json.dumps(output, indent=2))
     else:
         print(render_table(results))

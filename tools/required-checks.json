@@ -8,12 +8,14 @@
     "ci (2)",
     "ci (3)",
     "windows",
-    "pr-footprint-gate"
+    "pr-footprint-gate",
+    "pr-symbol-survival"
   ],
   "notes": {
     "ci (0..3)": "The 4-way python shard matrix from .github/workflows/ci.yml. All four shards gate; a shard missing here would let its slice of the suite fail silently.",
     "windows": "The Windows aggregator job. Never rename it -- the required-check context is matched by name, so a rename silently drops the gate.",
-    "pr-footprint-gate": "Required on purpose since 2026-10-07 (STATE.md). Declared here after the 2026-10-14 drift audit (adv-enforcement F-11) found it enforced by branch protection but undeclared."
+    "pr-footprint-gate": "Required on purpose since 2026-10-07 (STATE.md). Declared here after the 2026-10-14 drift audit (adv-enforcement F-11) found it enforced by branch protection but undeclared.",
+    "pr-symbol-survival": "Guardrail G13 blocking gate (ci.yml job pr-symbol-survival, tools/pr_symbol_survival_check.py). Required in branch protection since 2026-10-15; declared here so the drift gate sees it. The job has no name: key, so its check context is the job id."
   },
   "snapshot": {
     "captured": "2026-10-14",
@@ -25,7 +27,8 @@
       "ci (2)",
       "ci (3)",
       "windows",
-      "pr-footprint-gate"
+      "pr-footprint-gate",
+      "pr-symbol-survival"
     ]
   }
 }

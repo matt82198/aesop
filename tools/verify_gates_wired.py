@@ -22,18 +22,58 @@ import sys
 from pathlib import Path
 
 
-def discover_gates(claudemd_path):
+# A documented gate token is a gate SCRIPT: a path or bare name ending in one of these.
+GATE_EXTENSIONS = ('.py', '.sh', '.mjs', '.js', '.ps1')
+# Path prefixes where a gate script lives. An extensionless path under one of these is
+# a gate reference we cannot classify, so it is reported as ambiguous and fails closed.
+GATE_DIRS = ('tools/', 'hooks/', 'daemons/', 'scripts/')
+INVOCATION_PREFIXES = ('python', 'python3', 'bash', 'sh', 'node', 'pwsh', 'powershell')
+# Each pattern captures the script basename of an invocation in a workflow step.
+INVOCATION_PATTERNS = (
+    r'\bpython3?\s+(?:[\w.\-]+/)*([\w.\-]+\.py)\b',
+    r'\bbash\s+(?:[\w.\-]+/)*([\w.\-]+\.sh)\b',
+    r'\bnode\s+(?:[\w.\-]+/)*([\w.\-]+\.(?:mjs|js))\b',
+    r'\bpwsh\s+(?:-\S+\s+)*(?:[\w.\-]+/)*([\w.\-]+\.ps1)\b',
+)
+
+
+def classify_token(token):
+    """Classify one backticked token from a Guardrail line.
+
+    Returns ('gate', basename), ('ambiguous', token), or None for a token that is
+    not a gate reference (bare identifiers, keywords, flags, non-script paths).
+    """
+    words = token.split()
+    if not words:
+        return None
+    if len(words) > 1 and words[0] in INVOCATION_PREFIXES:
+        words = words[1:]
+    path = words[0]
+    basename = path.rsplit('/', 1)[-1]
+    if not basename:
+        return None  # a directory reference such as `tools/` is not a script
+    if any(ch in path for ch in '*?['):
+        return None  # a glob such as `test_*.py` names a set of files, not one gate
+    if basename.endswith(GATE_EXTENSIONS):
+        return ('gate', basename)
+    if path.startswith(GATE_DIRS) and '.' not in basename:
+        return ('ambiguous', token)
+    return None
+
+
+def discover_gates(claudemd_path, ambiguous=None):
     """Parse CLAUDE.md for documented CI gates.
 
-    Returns dict of {tool_name: True, ...}
-    Only captures tools explicitly documented as CI gates:
-    - Marked with "(Guardrail Gx)" and NOT pre-push-only
-    - Listed in "verify_*.py are mandatory CI gates" section
+    Returns dict of {gate_basename: True, ...}
+    Only captures tokens explicitly documented as CI gates:
+    - Backticked gate script on a line marked "(Guardrail Gx)" and NOT pre-push-only
+    - Backticked verify_*.py in the "verify_*.py are mandatory CI gates" section
+    Unclassifiable gate references are appended to `ambiguous` (a list) when given.
     """
     gates = {}
 
     if not os.path.isfile(claudemd_path):
-        return gates
+        return None  # Missing CLAUDE.md is fail-closed, never a silent pass
 
     try:
         with open(claudemd_path, 'r', encoding='utf-8') as f:
@@ -55,10 +95,15 @@ def discover_gates(claudemd_path):
         if 'pre-push' in line and 'CI' not in line:
             continue
 
-        # Extract all backtick-quoted tool names from this line
-        for match in re.finditer(r'`([a-z_][a-z0-9_]*(?:\.py|\.sh)?)`', line):
-            tool_name = match.group(1)
-            gates[tool_name] = True
+        # Classify every backtick-quoted token on this line; identifiers are not gates
+        for match in re.finditer(r'`([^`\n]+)`', line):
+            kind = classify_token(match.group(1))
+            if kind is None:
+                continue
+            if kind[0] == 'gate':
+                gates[kind[1]] = True
+            elif ambiguous is not None:
+                ambiguous.append(kind[1])
 
     # Second pass: find the "verify_*.py are mandatory CI gates" section
     if 'verify_*.py are mandatory CI gates' in full_text:
@@ -101,13 +146,8 @@ def find_gate_invocations(workflows_dir):
         #  - run: python tools/verify_test_coverage.py
         #  - bash tools/run_shell_tests.sh
 
-        # Match "python <path>/tool_name.py" or similar
-        for pattern in [
-            r'python\s+tools/([a-z_][a-z0-9_]*\.py)',
-            r'bash\s+tools/([a-z_][a-z0-9_]*\.sh)',
-            r'bash\s+([a-z_][a-z0-9_]*\.sh)',
-            r'run:\s*python\s+tools/([a-z_][a-z0-9_]*\.py)',
-        ]:
+        # Match "python <path>/tool_name.py", "bash <path>/x.sh", "node <path>/x.mjs", etc.
+        for pattern in INVOCATION_PATTERNS:
             for match in re.finditer(pattern, content):
                 tool_name = match.group(1)
                 invoked.add(tool_name)
@@ -123,7 +163,8 @@ def main():
 
     # Parse tools/CLAUDE.md
     tools_claudemd = os.path.join(repo_root, 'tools', 'CLAUDE.md')
-    tools_gates = discover_gates(tools_claudemd)
+    ambiguous = []
+    tools_gates = discover_gates(tools_claudemd, ambiguous)
     if tools_gates is None:
         print(f"ERROR: Cannot read {tools_claudemd}", file=sys.stderr)
         return 2
@@ -131,11 +172,18 @@ def main():
 
     # Parse tests/CLAUDE.md
     tests_claudemd = os.path.join(repo_root, 'tests', 'CLAUDE.md')
-    tests_gates = discover_gates(tests_claudemd)
+    tests_gates = discover_gates(tests_claudemd, ambiguous)
     if tests_gates is None:
         print(f"ERROR: Cannot read {tests_claudemd}", file=sys.stderr)
         return 2
     gates.update(tests_gates)
+
+    # A gate-directory reference that cannot be classified is never silently ignored
+    if ambiguous:
+        print("ERROR: ambiguous gate reference (gate directory path with no script extension):", file=sys.stderr)
+        for token in ambiguous:
+            print(f"  - {token}", file=sys.stderr)
+        return 1
 
     if not gates:
         # No documented CI gates - this is OK, nothing needs to be wired

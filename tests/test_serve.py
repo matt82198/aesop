@@ -14,6 +14,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from tests.sys_modules_restore import snapshot_sys_modules
 
 
 # Scrub the state-root env vars for this whole module. A lane shell (or a daemon)
@@ -67,6 +68,7 @@ class TestServeAlertPath(unittest.TestCase):
     def _load_serve_module(self):
         """Dynamically import serve.py with fixture AESOP_ROOT."""
         # Set fixture AESOP_ROOT before importing
+        self.addCleanup(snapshot_sys_modules("ui.serve", "ui"))
         os.environ["AESOP_ROOT"] = self.fixture_root
 
         # Remove cached serve module if it exists
@@ -169,6 +171,7 @@ class TestBacklogEndpoint(unittest.TestCase):
 
     def _load_serve_module(self):
         """Dynamically import serve.py with fixture AESOP_ROOT."""
+        self.addCleanup(snapshot_sys_modules("ui.serve", "ui"))
         os.environ["AESOP_ROOT"] = self.fixture_root
 
         if "ui.serve" in sys.modules:
@@ -239,6 +242,7 @@ class TestConfigPrecedence(unittest.TestCase):
 
     def _load_serve_module(self):
         """Dynamically import serve.py with fixture AESOP_ROOT."""
+        self.addCleanup(snapshot_sys_modules("ui.serve", "ui"))
         os.environ["AESOP_ROOT"] = self.fixture_root
 
         if "ui.serve" in sys.modules:
@@ -311,6 +315,7 @@ class TestAuditBacklogParser(unittest.TestCase):
     def _load_serve_module(self):
         """Dynamically import serve.py with fixture AESOP_ROOT."""
         # Set fixture AESOP_ROOT before importing
+        self.addCleanup(snapshot_sys_modules("ui.serve", "ui"))
         os.environ["AESOP_ROOT"] = self.fixture_root
 
         # Remove cached serve module if it exists
@@ -539,6 +544,7 @@ class TestCSRFProtection(unittest.TestCase):
 
     def _load_serve_module(self):
         """Dynamically import serve.py with fixture AESOP_ROOT."""
+        self.addCleanup(snapshot_sys_modules("ui.serve", "ui"))
         os.environ["AESOP_ROOT"] = self.fixture_root
 
         if "ui.serve" in sys.modules:
@@ -702,6 +708,7 @@ class TestCSRFTokenFileSecurity(unittest.TestCase):
 
     def _load_serve_module(self):
         """Dynamically import serve.py with fixture AESOP_ROOT."""
+        self.addCleanup(snapshot_sys_modules("ui.serve", "ui"))
         os.environ["AESOP_ROOT"] = self.fixture_root
 
         if "ui.serve" in sys.modules:
@@ -770,6 +777,7 @@ class TestCSRFTokenFileSecurity(unittest.TestCase):
     def test_token_reused_from_existing_file(self):
         """If token file already exists, second import must reuse it (no overwrite)."""
         # First, generate a token
+        self.addCleanup(snapshot_sys_modules("ui.serve", "ui"))
         serve1 = self._load_serve_module()
         token1 = serve1.SESSION_TOKEN
 

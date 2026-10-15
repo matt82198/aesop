@@ -46,24 +46,28 @@ class AcceptanceCriteriaTestCase(unittest.TestCase):
         os.environ["AESOP_TRANSCRIPTS_ROOT"] = str(self.fixture_root / "transcripts")
         os.environ["AESOP_UI_COLLECT_INTERVAL"] = "0.2"
         os.environ["AESOP_CONDUCTOR3_ROOT"] = str(self._conductor_root)
-        os.environ["PORT"] = "18771"
+        # Pin the tracker state root to this fixture: never inherit a shared one.
+        os.environ["AESOP_STATE_ROOT"] = str(self.fixture_root / "state")
+        os.environ.pop("PORT", None)
 
         self.serve = load_serve(self.fixture_root)
         self.token = self.serve.SESSION_TOKEN
         self.assertTrue(self.token, "fixture must produce a session token")
-        self.config_port = self.serve.PORT
 
         if str(UI_PATH) not in sys.path:
             sys.path.insert(0, str(UI_PATH))
         import handler
 
+        # Port 0: the kernel assigns a free port to THIS process. A fixed port
+        # collides across parallel shards (Windows SO_REUSEADDR lets a second
+        # process bind the same port silently, so requests land on the other
+        # process's server and get reset).
         self.httpd = handler.QuietThreadingHTTPServer(
-            ("127.0.0.1", self.config_port), self.serve.DashboardHandler)
+            ("127.0.0.1", 0), self.serve.DashboardHandler)
         self.httpd.daemon_threads = True
         self.actual_port = self.httpd.server_address[1]
         self.server_thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.server_thread.start()
-        threading.Event().wait(0.1)  # Let server start
 
     def tearDown(self):
         try:
