@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - CI hardening: every GitHub Actions `uses:` pinned to a full commit SHA with a version comment; top-level `permissions: contents: read` in every workflow, with write grants moved to the jobs that need them; npm pinned to 12.2.0 in publish.yml (the version the last green publish used).
 - Docs: `SECURITY.md` supported-versions table now lists 0.10.x (older lines not supported); `ui/README.md` Python floor and dependency statement aligned with the root README (Python 3.11+).
+- Docs: README adopter step now runs `npx @matt82198/aesop doctor` instead of `npx . doctor` (the scaffold writes no `package.json`, so `npx .` failed with ENOENT) (#1080).
 
 - Added `tools/goal_state.py` (orchestrator GOAL as append-only `goal_set` events in the event store) and `tools/boot_state.py` (one deterministic, byte-capped boot brief from the store, STATE.md ACTIVE, BUILDLOG tail and git; exits 2 on an unreadable store).
 - Docs: corrected dependency and Python-floor claims to match the repo (no runtime npm dependencies; CI floor Python 3.11; PyYAML/cryptography/playwright/opentelemetry/anthropic/pyflakes listed in new `pyproject.toml`) and added a prompt-injection threat model to `docs/ARCHITECTURE.md`.
