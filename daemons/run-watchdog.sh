@@ -6,9 +6,10 @@
 # Configuration: export AESOP_ROOT=/path/to/aesop before running (defaults to script directory's parent).
 # Testing: export AESOP_WATCHDOG_CYCLE_CMD to override backup-fleet.sh invocation
 #
-# Kill switch (wave-26 safety brake): if AESOP_ROOT/state/.HALT exists (see
-# tools/halt.py), every cycle logs "HALTED: <reason>" and skips all work — no
-# backup, no push, no scan — until cleared via `python tools/halt.py --clear`.
+# Kill switch (wave-26 safety brake): if $CONDUCTOR_ROOT/state/.HALT (box-wide, written by
+# tools/halt.py set) or the per-checkout state/.HALT exists, every cycle logs "HALTED: <reason>"
+# and skips all work — no backup, no push, no scan — until cleared via `python tools/halt.py --clear`.
+# Fails closed: if the halt status cannot be determined, the cycle is skipped too.
 
 # Atomic lock acquire: mkdir is atomic (POSIX guarantees)
 # Returns 0 if lock acquired, 1 if held by another process, 2 if stale lock reclaimed
@@ -225,34 +226,66 @@ run_task_ingest() {
 check_halt() {
   local log_file="$1"
   local halt_py="${2:-${HALT_PY_PATH}}"
-
-  if [ -z "$PYTHON_EXE" ] || [ -z "$halt_py" ]; then
-    return 1
+  local box_sentinel=""
+  if [ -n "${CONDUCTOR_ROOT:-}" ]; then
+    box_sentinel="$CONDUCTOR_ROOT/state/.HALT"
   fi
 
-  # Query halt.py for halt status; exit code tells us: 1=halted, 0=not halted
-  local halt_output
-  halt_output=$("$PYTHON_EXE" "$halt_py" --status 2>&1)
-  local halt_exit=$?
-
-  if [ $halt_exit -eq 1 ]; then
-    # Halted: extract reason from output
-    # halt.py outputs: "HALTED: <reason> (since <timestamp>)"
-    local reason
-    reason=$(echo "$halt_output" | sed 's/^HALTED: //' | sed 's/ (since.*$//')
-    if [ -z "$reason" ]; then
-      reason="$halt_output"
+  # Trigger 1 (box-wide, operator kill switch): file existence only, needs no interpreter.
+  if [ -n "$box_sentinel" ] && [ -e "$box_sentinel" ]; then
+    local box_reason
+    box_reason=$(sed -n 's/.*"reason"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' "$box_sentinel" 2>/dev/null | head -n 1)
+    if [ -z "$box_reason" ]; then
+      box_reason="(unreadable sentinel)"
     fi
-
-    echo "HALTED: $reason"
+    echo "HALTED: $box_reason [box-wide $box_sentinel]"
     if [ -n "$log_file" ]; then
-      echo "[$(date '+%F %T')] HALTED: $reason" >> "$log_file"
+      echo "[$(date '+%F %T')] HALTED: $box_reason [box-wide $box_sentinel]" >> "$log_file"
     fi
     return 0
   fi
 
-  # Not halted (exit 0 from halt.py)
-  return 1
+  # Trigger 2 (per-checkout): halt.py --status. Exit 0 = not halted; exit 1 with a
+  # HALTED: line = halted. Everything else is UNKNOWN and fails closed below.
+  local halt_output=""
+  local halt_exit=""
+  if [ -n "$PYTHON_EXE" ] && [ -n "$halt_py" ]; then
+    halt_output=$("$PYTHON_EXE" "$halt_py" --status 2>&1)
+    halt_exit=$?
+  else
+    halt_exit="no-interpreter"
+  fi
+
+  if [ "$halt_exit" = "0" ]; then
+    return 1
+  fi
+
+  case "$halt_output" in
+    HALTED:*)
+      if [ "$halt_exit" = "1" ]; then
+        # halt.py outputs: "HALTED: <reason> (since <timestamp>) [<label>]"
+        local reason
+        reason=$(echo "$halt_output" | head -n 1 | sed 's/^HALTED: //' | sed 's/ (since.*$//')
+        if [ -z "$reason" ]; then
+          reason="$halt_output"
+        fi
+        echo "HALTED: $reason"
+        if [ -n "$log_file" ]; then
+          echo "[$(date '+%F %T')] HALTED: $reason" >> "$log_file"
+        fi
+        return 0
+      fi
+      ;;
+  esac
+
+  # Unexpected result (no interpreter, Store stub exit 49, traceback, unknown code):
+  # the halt status is unknowable, so fail CLOSED and skip the cycle.
+  local fail_msg="HALT-CHECK-FAILED (exit $halt_exit); treating as HALTED, cycle skipped"
+  echo "$fail_msg"
+  if [ -n "$log_file" ]; then
+    echo "[$(date '+%F %T')] $fail_msg" >> "$log_file"
+  fi
+  return 0
 }
 
 # Main execution — guarded below so sourcing this file (e.g. from tests, to

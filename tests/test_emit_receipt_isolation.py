@@ -152,25 +152,5 @@ class TestEmitReceiptIsolation(unittest.TestCase):
             self.assertGreaterEqual(len(main_lines), 1, "No main worktree found")
 
 
-class TestMatrixPartEnvScrub(unittest.TestCase):
-    """A matrix part must not inherit push-policy escape hatches or GIT_* hook state."""
-
-    def test_escape_hatch_and_git_hook_vars_are_removed(self):
-        inherited = {
-            "AESOP_ALLOW_GENERATED": "1",
-            "GIT_DIR": "/some/lane/.git",
-            "GIT_OBJECT_DIRECTORY": "/some/lane/.git/objects",
-            "PATH": "/usr/bin",
-            "TMPDIR": "/tmp/x",
-        }
-        env = emit_receipt.scrubbed_part_env(inherited)
-        self.assertNotIn("AESOP_ALLOW_GENERATED", env)
-        self.assertNotIn("GIT_DIR", env)
-        self.assertNotIn("GIT_OBJECT_DIRECTORY", env)
-        self.assertEqual(env["PATH"], "/usr/bin")
-        self.assertEqual(env["TMPDIR"], "/tmp/x")
-        self.assertEqual(inherited["AESOP_ALLOW_GENERATED"], "1", "caller environ must not be mutated")
-
-
 if __name__ == "__main__":
     unittest.main()

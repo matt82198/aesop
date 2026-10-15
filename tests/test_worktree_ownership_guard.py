@@ -155,25 +155,36 @@ class TestCreateIntegrationBranchGuard(WorktreeOwnershipFixture):
         self.assertFalse(ok)
         self.assertFalse(self._branch_exists("integrate/b-bad"))
 
+    def _track_worktree(self, wt):
+        """Remove the scratch dir a successful create left behind (outside the sandbox root)."""
+        if wt:
+            self.addCleanup(shutil.rmtree, os.path.dirname(wt), True)
+
     def test_rw_marker_owned_by_caller_proceeds(self):
         with patch.object(self.mt, "print"):
-            ok = self.mt.create_integration_branch("b-rw", cwd=str(self.rw), owner="lane-rw")
-        self.assertTrue(ok)
+            wt = self.mt.create_integration_branch("b-rw", cwd=str(self.rw), owner="lane-rw")
+        self._track_worktree(wt)
+        self.assertTrue(wt)
         self.assertTrue(self._branch_exists("integrate/b-rw"))
+        # The branch is checked out in its own throwaway worktree, never in the lane cwd.
         rc, head = _git(self.rw, "rev-parse", "--abbrev-ref", "HEAD")
-        self.assertEqual(head, "integrate/b-rw")
+        self.assertEqual(head, "lane-rw")
+        rc, head_wt = _git(wt, "rev-parse", "--abbrev-ref", "HEAD")
+        self.assertEqual(head_wt, "integrate/b-rw")
 
     def test_owner_defaults_from_env(self):
         with patch.dict(os.environ, {"AESOP_WORKTREE_OWNER": "lane-rw"}):
             with patch.object(self.mt, "print"):
-                ok = self.mt.create_integration_branch("b-env", cwd=str(self.rw))
-        self.assertTrue(ok)
+                wt = self.mt.create_integration_branch("b-env", cwd=str(self.rw))
+        self._track_worktree(wt)
+        self.assertTrue(wt)
 
     def test_queue_root_env_is_accepted(self):
         with patch.dict(os.environ, {"AESOP_QUEUE_ROOT": str(self.unmarked)}):
             with patch.object(self.mt, "print"):
-                ok = self.mt.create_integration_branch("b-queue", cwd=str(self.unmarked))
-        self.assertTrue(ok)
+                wt = self.mt.create_integration_branch("b-queue", cwd=str(self.unmarked))
+        self._track_worktree(wt)
+        self.assertTrue(wt)
         self.assertTrue(self._branch_exists("integrate/b-queue"))
 
     def test_run_integration_train_without_authorised_cwd_mutates_nothing(self):

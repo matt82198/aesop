@@ -41,7 +41,13 @@ FIXTURE_BACKLOG = """# Audit backlog — test fixture
 """
 
 ENV_KEYS = ("AESOP_ROOT", "AESOP_TRANSCRIPTS_ROOT", "AESOP_STATE_ROOT",
-            "AESOP_UI_COLLECT_INTERVAL", "PORT")
+            "AESOP_UI_COLLECT_INTERVAL", "PORT", "CONDUCTOR_ROOT",
+            "AESOP_WATCHDOG_HEARTBEAT")
+
+# Pinned epoch for heartbeat-age tests: the age is computed against an injected
+# clock, never the process wall clock (a 3s bucket boundary crossed between two
+# real-time reads made the age bucket change under parallel shard load).
+FIXED_NOW = 1_800_000_000
 
 
 def load_serve(fixture_root, extra_env=None):
@@ -173,7 +179,14 @@ class TestSSERealtime(EnvFixtureCase):
 
         self.backlog_file = self.fixture_root / "AUDIT-BACKLOG.md"
         self.backlog_file.write_text(FIXTURE_BACKLOG, encoding="utf-8")
+        # Hermetic heartbeat: a fixture file, never the box-global conductor3 one
+        # (CONDUCTOR_ROOT would otherwise resolve the live daemon heartbeat).
+        os.environ.pop("CONDUCTOR_ROOT", None)
+        self.heartbeat = self.fixture_root / "state" / ".watchdog-heartbeat"
+        self.heartbeat.write_text(str(FIXED_NOW - 100), encoding="utf-8")
+        os.environ["AESOP_WATCHDOG_HEARTBEAT"] = str(self.heartbeat)
         self.serve = load_serve(self.fixture_root)
+        self.serve.config.reload()  # re-read the env-resolved heartbeat path
 
         # Load handler module to get QuietThreadingHTTPServer
         if str(UI_PATH) not in sys.path:
@@ -299,18 +312,17 @@ class TestSSERealtime(EnvFixtureCase):
 
     def test_age_bucketing_reduces_hash_churn(self):
         """Heartbeat age must be bucketed to prevent every-tick hash change."""
-        # Check that get_heartbeat_status() buckets age
         serve = self.serve
+        # Heartbeat written 100s before FIXED_NOW. Two reads 1s apart share the
+        # 99s bucket (100//3*3 == 99, 101//3*3 == 99): the snapshot must not churn.
+        status1 = serve.get_heartbeat_status(clock=lambda: FIXED_NOW)
+        status2 = serve.get_heartbeat_status(clock=lambda: FIXED_NOW + 1)
 
-        # Call it twice in quick succession; age should bucket to 3-second intervals
-        status1 = serve.get_heartbeat_status()
-        time.sleep(0.1)
-        status2 = serve.get_heartbeat_status()
-
-        # If age were unbucketed, status2["age"] would be higher (0.1s difference)
-        # With bucketing, they should be the same (both in same 3-second bucket)
+        self.assertNotEqual(status1["alive"], "not configured",
+                            "fixture heartbeat must be read, or the bucketing check is vacuous")
+        self.assertEqual(status1["age"], 99, "age must bucket to the 3-second floor")
         self.assertEqual(status1["age"], status2["age"],
-                        "Age must bucket to reduce hash churn from per-tick updates")
+                         "Age must bucket to reduce hash churn from per-tick updates")
 
     def test_dist_index_serves_successfully(self):
         """Wave-14 U9: GET / serves the built dist/index.html with CSRF token."""

@@ -14,6 +14,7 @@ Runs on `git push` via `.git/hooks/pre-push` (symlink on Unix/macOS/Git Bash; co
 
 **Checks & Exit Contract**:
 1. `main()` TTY guard — rejects interactive hook invocation (tty stdin) with exit 1 before any checks (fail-closed); logs `interactive_invocation_blocked`. Real `git push` always pipes stdin; tty means human ran hook directly.
+2a. **Gate pinning (F-04):** every gate script runs from `origin/main`'s `tools/` (`gate_base_dir`, fail-closed when origin/main is unreadable), never the pushed branch's copy; a push editing gate files prints a non-blocking GATE-CHANGED banner (`check_gate_tamper`). Tests: `tests/test_pre_push_gate_base.sh`.
 2. `check_branch_policy()` — blocks direct pushes to main/master; exit 1 on violation
 3. `check_secret_scan()` — runs `tools/secret_scan.py --range` for each ref tuple on git pre-push stdin; exit 1 on findings. Scans all branches in multi-ref pushes (e.g., `git push --all`).
    **Commit range fix**: For NEW branches (remote ref all-zeros), `get_commit_range()` now computes the base using `git merge-base <local-sha> origin/main` (falling back to origin/master, then local main/master), not the local main ref. This ensures correctness in worktrees where local main is checked out from a stale commit far behind origin/main; the remote reference is authoritative.
