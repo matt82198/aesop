@@ -45,7 +45,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 **handler.py** (HTTP routing + GET/POST endpoints):
 - `DashboardHandler` class (extends `http.server.BaseHTTPRequestHandler`).
 - `run_server(host, port, app_handler_fn)` â€” ThreadingHTTPServer required (SSE holds one connection per client).
-- Reads `config.X` / `csrf.SESSION_TOKEN` at call time.
+- Reads `config.X` / `csrf.SESSION_TOKEN` at call time. Tracker delete splits the path from the query before `item_id` (else archive 404s).
 - `serve_api_state` (`GET /api/state`): a cached section that is **empty** counts as not-yet-snapshotted and is recomputed inline. The "data" source seeds `{}` and is mtime-gated, so a quiet collector leaves that default cached; testing only for `None` let `{}` through and produced an empty first paint.
 
 **cost.py**: Parser for `state/ledger/OUTCOMES-LEDGER.md` (markdown table); returns per-model + per-day aggregates, verdict scorecards, optional dollar estimates (if `aesop.config.json` supplies `pricing` map).
@@ -56,7 +56,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **wave_telemetry.py** â€” Wave telemetry: `get_wave_telemetry()` extracts current phase (from `orchestrator-status` when fresh, `STATE.md` `## Phase:` fallback), top blocker (from `AUDIT-BACKLOG.md`), cost metrics (from ledger). Reads state at call time (no cache); degrades gracefully on missing files. `get_wave_telemetry(now=)` and `_read_orchestrator_status(now=)` take an injectable freshness clock (tests pin it; default is the wall clock).
 
-**wave_dispatch.py** â€” Wave dispatch (per-agent visibility): reads agent transcripts, infers phase (dispatch/thinking/tool-use/stall/done) from tail, estimates tokens from file size, computes activity age from mtime. Returns per-agent rows with phase badge, age, warnings (inactive >5min, stalled >10min). Degrades `{available:false}`. Polled 2-3s.
+**wave_dispatch.py** â€” Wave dispatch (per-agent visibility): reads agent transcripts, infers phase (dispatch/thinking/tool-use/stall/done, else unknown) from structured tail fields only (record type, message.stop_reason, content block types, API-error marker; free text never inspected), estimates tokens from file size, computes activity age from mtime. Returns per-agent rows with phase badge, age, warnings (inactive >5min, stalled >10min). Degrades `{available:false}`. Polled 2-3s.
 
 **wave_failure.py** â€” Wave PR failure drill-down: `get_wave_failure(pr_number)` shells `gh run view --json jobs` for jobs on PR branch, then `gh api .../jobs/{id}/logs` for failing jobs; extracts ~100-line log tails. Caches ~5s per PR; degrades to `{available:false, error}` when gh missing/un-authed. Override gh binary: `AESOP_GH_BIN` env var.
 
@@ -70,7 +70,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **wave_audit_tail.py** â€” Wave audit tail: streams recent audit findings for live dashboard display.
 
-**wave_gantt.py** â€” Wave Gantt chart data: per-agent timeline for wave execution visualization.
+**wave_gantt.py** â€” Wave Gantt chart data: per-agent timeline for wave execution visualization. Timestamps are RFC 3339 `Z` only; duration is end minus start, or `null` (unknown) when start is missing, never idle age.
 
 **wave_reasoning_tail.py** â€” Wave reasoning tail: streams orchestrator reasoning for live display.
 

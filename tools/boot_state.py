@@ -24,10 +24,11 @@ Sections, in this order:
     GIT          `git log --oneline -5` and the first 20 lines of `git status --short`.
 
 Cap: the markdown brief is at most --max-bytes (default 12000) UTF-8 bytes and always holds.
-When over the cap, the ACTIVE block is trimmed to half the cap first, then the oldest
-BUILDLOG lines, then ACTIVE, event-store and git lines (tail first). The GOAL section is
-never line-trimmed. --json carries the same section texts as one object; the cap applies to
-the markdown.
+The GOAL section is first bounded to a quarter of the cap; a longer goal is cut at the start
+with a "[GOAL truncated N bytes]" marker. When over the cap, the ACTIVE block is trimmed to
+half the cap, then the oldest BUILDLOG lines, then ACTIVE, event-store and git lines (tail
+first). Every section keeps its heading. --json carries the same section texts as one
+object; the cap applies to the markdown.
 
 Determinism: the same store, STATE.md, BUILDLOG.md and git state give byte-identical output,
 with one documented exception. The INGEST line's heartbeat_age_s and its fresh/STALE word are
@@ -80,6 +81,7 @@ CLOSED_STATUSES = frozenset({
 SECTION_KEYS = ("goal", "state_active", "buildlog_tail", "event_store", "git")
 GOAL, STATE, BUILD, EVENT, GIT = range(5)
 
+GOAL_SHARE_DIVISOR = 4  # GOAL is bounded to max_bytes // 4 bytes, marked "[GOAL truncated N bytes]"
 MARK_STATE = "... (ACTIVE block trimmed to --max-bytes)"
 MARK_BUILD = "... (older BUILDLOG lines trimmed to --max-bytes)"
 MARK_EVENT = "... (event-store lines trimmed to --max-bytes)"
@@ -191,6 +193,9 @@ def _ingest_line(state_dir: Path, jsonl: Path | None, outcome: str | None) -> st
         return f"INGEST: STALE (status unreadable: {exc})"
     line = st["line"]
     if outcome is not None:
+        if outcome != "ok" and line.startswith("INGEST: fresh"):
+            # A failed or timed-out run leaves the projection behind the source, whatever the heartbeat says.
+            line = "INGEST: STALE" + line[len("INGEST: fresh"):]
         line += f" | ingest run: {outcome}"
     return line
 
@@ -293,11 +298,34 @@ def _fit_drop_head(block: list[str], allow: int, marker: str) -> list[str]:
     return head + [marker] + keep
 
 
+def _bound_goal(block: list[str], allow: int) -> list[str]:
+    """Cut the GOAL section to ``allow`` bytes, keeping its start, with an explicit marker.
+
+    The marker carries the number of bytes removed; its own digits change the budget, so the
+    cut is re-derived until the count settles (a few passes at most).
+    """
+    if _nbytes(block) <= allow:
+        return block
+    data = "\n".join(block).encode("utf-8")
+    removed = len(data)
+    for _ in range(10):
+        marker = f"[GOAL truncated {removed} bytes]"
+        budget = allow - len(("\n" + marker).encode("utf-8"))
+        kept = data[:max(budget, 0)].decode("utf-8", errors="ignore")
+        new_removed = len(data) - len(kept.encode("utf-8"))
+        if new_removed == removed:
+            break
+        removed = new_removed
+    return [kept, marker] if kept else [marker]
+
+
 def fit_to_cap(sections: list[list[str]], max_bytes: int) -> list[list[str]]:
     """Deterministically shrink ``sections`` so the assembled brief is <= ``max_bytes``."""
-    if _size(sections) <= max_bytes:
-        return sections
     out = [list(s) for s in sections]
+    # 0. GOAL gets at most a quarter of the cap, so an oversized goal never crowds out the rest.
+    out[GOAL] = _bound_goal(out[GOAL], max_bytes // GOAL_SHARE_DIVISOR)
+    if _size(out) <= max_bytes:
+        return out
     # 1. ACTIVE gets its share (half the cap), never more than what is left.
     allow = min(max_bytes // 2, max_bytes - _size_with(out, STATE, []))
     out[STATE] = _fit_drop_tail(out[STATE], allow, MARK_STATE)
