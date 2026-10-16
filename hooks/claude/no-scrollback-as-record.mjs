@@ -80,9 +80,53 @@ const TRANSCRIPT = /\.claude[\/\\]projects[\/\\][^\s"']*?(\.jsonl|\*\.jsonl|[\/\
 const PROJECTS_DIR = /\.claude[\/\\]projects\b/i;
 const READS_JSONL = /\b(cat|grep|rg|egrep|fgrep|head|tail|sed|awk|less|more|strings|python[0-9.]*|node|jq)\b[^\n]*\.jsonl/i;
 
+// Bypass forms (fail closed). The literal `.claude/projects` anchor above misses references
+// that reach the transcript tree without spelling it out, so two more checks run:
+//  - Bash: the command references a .claude directory (literal, ~, $HOME, $USERPROFILE, or
+//    CLAUDE_CONFIG_DIR -- the `~`/env forms still contain the literal `.claude`), or cd's into a
+//    `projects` directory, AND targets a .jsonl (or a .json glob such as `*.json?`).
+//  - File tools: a path whose parent segments include `projects` and whose final segment ends in
+//    .jsonl, absolute or relative, slash or backslash; or a `projects` path alongside a .jsonl
+//    glob in the same call (Grep path=projects, glob=*.jsonl).
+const CLAUDE_DIR_REF = /\.claude(?![A-Za-z0-9_-])|CLAUDE_CONFIG_DIR/i;
+const JSONL_TARGET = /\.json[l?*\[{]/i;
+const CD_TARGET = /(?:^|[;&|(\n])\s*cd\s+([^;&|\n]+)/gi;
+const PROJECTS_SEGMENT = /(^|[\/\\"'=])projects([\/\\"'\s]|$)/i;
+
+function cdIntoProjects(command) {
+  for (const m of command.matchAll(CD_TARGET)) {
+    if (PROJECTS_SEGMENT.test(m[1].trim())) return true;
+  }
+  return false;
+}
+
+export function bashReadsClaudeJsonl(toolName, command) {
+  if (toolName !== 'Bash' || typeof command !== 'string') return false;
+  if (!JSONL_TARGET.test(command)) return false;
+  return CLAUDE_DIR_REF.test(command) || cdIntoProjects(command);
+}
+
+function pathSegments(p) {
+  return p.replace(/\\/g, '/').split('/').filter(Boolean);
+}
+
+export function fileToolReadsTranscript(toolName, paths) {
+  if (toolName === 'Bash' || !Array.isArray(paths) || paths.length === 0) return false;
+  for (const p of paths) {
+    const segs = pathSegments(p);
+    const last = segs[segs.length - 1] || '';
+    if (segs.slice(0, -1).some((s) => /^projects$/i.test(s)) && /\.jsonl$/i.test(last)) return true;
+  }
+  const anyProjects = paths.some((p) => pathSegments(p).some((s) => /^projects$/i.test(s)));
+  const anyJsonlGlob = paths.some((p) => JSONL_TARGET.test(p));
+  return anyProjects && anyJsonlGlob;
+}
+
 export function verdictFor({ toolName, command, paths }) {
   const haystacks = [command, ...(paths || [])].filter(Boolean);
+  let hit = bashReadsClaudeJsonl(toolName, command) || fileToolReadsTranscript(toolName, paths);
   for (const h of haystacks) {
+    if (hit) break;
     const hitsTranscript = TRANSCRIPT.test(h);
     const hitsSplit = PROJECTS_DIR.test(h) && /\.jsonl/i.test(h);
     const hitsReader = toolName === 'Bash' && READS_JSONL.test(h) && PROJECTS_DIR.test(h);
@@ -90,28 +134,27 @@ export function verdictFor({ toolName, command, paths }) {
     // the path never spells ".jsonl" -- that directory holds transcripts. The one exception is
     // the memory subtree, which lives there and IS part of the durable record.
     const hitsTree = toolName !== 'Bash' && PROJECTS_DIR.test(h) && !/[\/\\]memory\b|MEMORY\.md/i.test(h);
-    if (hitsTranscript || hitsSplit || hitsReader || hitsTree) {
-      return (
-        'Reading session transcripts is blocked — scrollback is not the system of record.\n\n' +
-        'The durable record is STATE.md, BUILDLOG.md, MEMORY.md, git, and the artifacts the work ' +
-        'produced. Conversation history is the thing a filesystem-as-brain architecture exists so ' +
-        'you do not have to depend on it, and the standing rule limiting an orchestrator to its ' +
-        'own control files follows directly from that.\n\n' +
-        'Three reasons this is denied rather than merely discouraged:\n' +
-        '  1. Unbounded context — these files are tens of MB and a grep can flood the main thread.\n' +
-        '  2. Circular evidence — a transcript holds your OWN prior output, so a hit proves only ' +
-        'that you once said it. This rule exists because a search for a production event name ' +
-        'once returned the searcher\'s own words and was nearly reported as data.\n' +
-        '  3. It hides the real defect — if the fact mattered and is not in a control file, the ' +
-        'bug is the MISSING CHECKPOINT. Mining scrollback fixes the symptom and leaves the brain ' +
-        'still missing it.\n\n' +
-        'Do instead, in order: STATE.md -> BUILDLOG.md -> MEMORY.md -> git log / artifacts -> ' +
-        're-run the measurement. If none of them hold it, write the checkpoint now.\n\n' +
-        'Deliberate exception: add [[ALLOW-TRANSCRIPT-READ]] to the command (logged, never silent).'
-      );
-    }
+    hit = hitsTranscript || hitsSplit || hitsReader || hitsTree;
   }
-  return null;
+  if (!hit) return null;
+  return (
+    'Reading session transcripts is blocked — scrollback is not the system of record.\n\n' +
+    'The durable record is STATE.md, BUILDLOG.md, MEMORY.md, git, and the artifacts the work ' +
+    'produced. Conversation history is the thing a filesystem-as-brain architecture exists so ' +
+    'you do not have to depend on it, and the standing rule limiting an orchestrator to its ' +
+    'own control files follows directly from that.\n\n' +
+    'Three reasons this is denied rather than merely discouraged:\n' +
+    '  1. Unbounded context — these files are tens of MB and a grep can flood the main thread.\n' +
+    '  2. Circular evidence — a transcript holds your OWN prior output, so a hit proves only ' +
+    'that you once said it. This rule exists because a search for a production event name ' +
+    'once returned the searcher\'s own words and was nearly reported as data.\n' +
+    '  3. It hides the real defect — if the fact mattered and is not in a control file, the ' +
+    'bug is the MISSING CHECKPOINT. Mining scrollback fixes the symptom and leaves the brain ' +
+    'still missing it.\n\n' +
+    'Do instead, in order: STATE.md -> BUILDLOG.md -> MEMORY.md -> git log / artifacts -> ' +
+    're-run the measurement. If none of them hold it, write the checkpoint now.\n\n' +
+    'Deliberate exception: add [[ALLOW-TRANSCRIPT-READ]] to the command (logged, never silent).'
+  );
 }
 
 function emit(decision, reason) {

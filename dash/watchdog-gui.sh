@@ -15,10 +15,20 @@ B=$'\e[1m'
 D=$'\e[2m'
 X=$'\e[0m'
 
+# Watchdog heartbeat lives under CONDUCTOR_ROOT, the same location the daemons write it
+# (never under AESOP_ROOT). The resolution rule is shared with the daemons through
+# daemons/conductor-root.sh (resolve_conductor_root), so the GUI and the daemon cannot
+# disagree. The resolved AESOP_ROOT is canonicalised first, as before. An unresolvable
+# root yields no heartbeat path, so the watchdog reads STALE (fail closed).
+DASH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=../daemons/conductor-root.sh
+. "$DASH_DIR/../daemons/conductor-root.sh"
+CONDUCTOR_ROOT="$(resolve_conductor_root "$(cd "$AESOP_ROOT" 2>/dev/null && pwd -P)")"
+HB="${CONDUCTOR_ROOT:+$CONDUCTOR_ROOT/state/.watchdog-heartbeat}"
+
 # State files
 BLOG="$AESOP_ROOT/state/FLEET-BACKUP.log"
 SLOG="$AESOP_ROOT/state/SECURITY-ALERTS.log"
-HB="$AESOP_ROOT/state/.watchdog-heartbeat"
 REPOS_FILE="$AESOP_ROOT/state/.watchdog-repos.json"
 HB_DIR="$AESOP_ROOT/state/.heartbeats"
 CONFIG_FILE="$AESOP_ROOT/aesop.config.json"
