@@ -28,6 +28,7 @@ Invariants:
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
@@ -36,6 +37,46 @@ from typing import Dict, Any, List, Tuple
 TOOLS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = TOOLS_DIR.parent
 PRESETS_DIR = REPO_ROOT / "templates" / "wave-presets"
+
+# testCmd scanners. A pipe into head/tail reports the LAST stage's exit status,
+# so a failing stage before it is masked unless pipefail is set.
+_PIPE_TO_HEAD_TAIL = re.compile(r"\|\s*(head|tail)\b")
+# `import X` / `--cov=X` targets. Placeholder tokens ({...}) are skipped: presets are checked unresolved.
+_IMPORT_TARGET = re.compile(r"\bimport\s+([^\s;\"'()]+)")
+_COV_TARGET = re.compile(r"--cov[= ]([^\s;\"'()]+)")
+
+
+def module_name_for(project_name: str) -> str:
+    """Derive a Python-importable module name from a display name (e.g. 'payment-api' -> 'payment_api')."""
+    name = re.sub(r"[^0-9A-Za-z_]", "_", project_name)
+    if name and name[0].isdigit():
+        name = "_" + name
+    return name
+
+
+def _is_identifier_path(value: str) -> bool:
+    return all(part.isidentifier() for part in value.split("."))
+
+
+def testcmd_findings(testcmd: str) -> List[str]:
+    """Return defect descriptions for one testCmd string (empty list = clean)."""
+    findings = []
+    if _PIPE_TO_HEAD_TAIL.search(testcmd) and "pipefail" not in testcmd:
+        findings.append("pipes into head/tail without 'set -o pipefail' (a failing stage is masked by the pipe's exit status)")
+    for match in _IMPORT_TARGET.finditer(testcmd):
+        target = match.group(1)
+        if "{" in target:
+            continue
+        if not _is_identifier_path(target):
+            findings.append(f"import target {target!r} must be a Python identifier")
+    for match in _COV_TARGET.finditer(testcmd):
+        target = match.group(1)
+        # --cov=src/pipeline is a path; only dotted module names are checked.
+        if "{" in target or "/" in target or target == ".":
+            continue
+        if not _is_identifier_path(target):
+            findings.append(f"--cov target {target!r} must be a Python identifier (module name) or a path")
+    return findings
 
 
 def load_preset(preset_name: str) -> Dict[str, Any]:
@@ -80,10 +121,14 @@ def instantiate_template(
     # Deep copy to avoid mutating the original preset.
     manifest = json.loads(json.dumps(preset))
 
+    module_name = module_name_for(project_name)
+
     # Utility to substitute placeholders recursively.
     def substitute(obj):
         if isinstance(obj, str):
-            return obj.replace("{project_name}", project_name).replace("{base_dir}", base_dir)
+            return (obj.replace("{module_name}", module_name)
+                       .replace("{project_name}", project_name)
+                       .replace("{base_dir}", base_dir))
         elif isinstance(obj, dict):
             return {k: substitute(v) for k, v in obj.items()}
         elif isinstance(obj, list):
@@ -156,6 +201,11 @@ def validate_manifest(
         # Check required testCmd if flag is set.
         if require_testcmd and "testCmd" not in item:
             errors.append(f"Item {item_idx} ({item.get('slug', 'unknown')}): missing required field 'testCmd'")
+
+        # Check testCmd content: fail-closed pipes and identifier-valued import/--cov targets.
+        if isinstance(item.get("testCmd"), str):
+            for finding in testcmd_findings(item["testCmd"]):
+                errors.append(f"Item {item_idx} ({item.get('slug', 'unknown')}): testCmd {finding}")
 
         slug = item.get("slug")
         if slug is not None:

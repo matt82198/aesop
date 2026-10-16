@@ -45,7 +45,7 @@
         "requirements-dash.txt"
       ],
       "prompt": "Build the {project_name} analytics dashboard using Streamlit or Plotly Dash. Create interactive visualizations for: daily revenue trends, user acquisition cohorts, product performance leaderboard. Connect to the data warehouse for live queries. Add filters and date pickers. Deploy instructions for local and cloud. Responsive and accessible design.",
-      "testCmd": "python -m pytest tests/dashboard/ -v && streamlit run src/dashboard/app.py --logger.level=debug 2>&1 | head -50",
+      "testCmd": "set -o pipefail && python -m pytest tests/dashboard/ -v && streamlit run src/dashboard/app.py --logger.level=debug 2>&1 | head -50",
       "workDir": "{base_dir}"
     },
     {
