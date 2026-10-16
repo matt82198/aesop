@@ -182,7 +182,7 @@ class TestInstallTasksStubbed(unittest.TestCase):
             f"probe task leaked into the REAL scheduler:\n{probe.stdout}",
         )
 
-    def test_interval_change_reregisters_not_idempotent(self):
+    def test_interval_change_reports_update_not_idempotent(self):
         """
         An existing task with the SAME command but a DIFFERENT trigger interval must be
         re-registered, not reported as idempotent.
