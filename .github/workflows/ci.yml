@@ -681,8 +681,22 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Run pr_footprint_gate (Guardrail G2.7)
-        run: python tools/pr_footprint_gate.py --base "origin/${{ github.base_ref }}" --head HEAD --labels '${{ toJson(github.event.pull_request.labels) }}'
+      # G2.7 is base-pinned (same pattern as pr-symbol-survival below): the tool comes from the
+      # BASE branch, never the PR tree, so a PR cannot edit its own footprint limits or bypass
+      # logic and turn its own required check green. The diff it measures is still the PR's
+      # (--base origin/<base> --head HEAD against the PR merge checkout).
+      - name: Checkout the BASE tree (G2.7 tool source of trust)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.base_ref }}
+          path: base
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Run pr_footprint_gate (Guardrail G2.7, base copy)
+        run: |
+          test -f base/tools/pr_footprint_gate.py
+          python base/tools/pr_footprint_gate.py --base "origin/${{ github.base_ref }}" --head HEAD --labels '${{ toJson(github.event.pull_request.labels) }}'
 
   # Guardrail G13 (tools/CLAUDE.md). BLOCKING: a PR whose own commits add a symbol that
   # a merge commit in range dropped (conflict-resolution loss, PR #745 class) fails this

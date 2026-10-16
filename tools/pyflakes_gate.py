@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Pyflakes ratchet gate: never let unused-import/unused-variable debt grow.
-INDEX: Pyflakes ratchet gate wrapping `python -m pyflakes` over tools/bin/ui/state_store/driver/monitor/daemons/tests/bench; keys findings as "file@MessageClass" against a committed baseline (.pyflakes-baseline.json); fail-closed on NEW findings above baseline, fail-closed on STALE entries (burn-down must regenerate the baseline), fail-closed (exit 2) if the optional `pyflakes` package is not installed; --update-baseline is review-only, CI must never pass it
+INDEX: Pyflakes ratchet gate wrapping `python -m pyflakes` over tools/bin/ui/state_store/driver/monitor/daemons/tests/bench; keys findings as "file@MessageClass" against a committed baseline (.pyflakes-baseline.json); fail-closed on NEW findings above baseline, fail-closed on STALE entries (single-baseline mode), --trunk-baseline (pre-push) passes a branch burn-down of the trunk baseline and blocks additions, fail-closed (exit 2) if the optional `pyflakes` package is not installed; --update-baseline is review-only, CI must never pass it
 
 Pyflakes is a dev-only lint dependency (NOT a runtime dependency of aesop
 itself -- see tools/CLAUDE.md "stdlib-only" policy). Install it with:
@@ -181,6 +181,57 @@ def check_ratchet(baseline_keys: Dict[str, int], current_keys: Dict[str, int]):
     return (not stale and not new), stale, new
 
 
+def load_baseline_strict(baseline_file: Path) -> Dict[str, int]:
+    """Load a baseline or raise ValueError when it is missing, unreadable or malformed.
+
+    Used for the pre-push trunk mode, where a branch baseline that cannot be
+    read must block (never be treated as empty).
+    """
+    p = Path(baseline_file)
+    if not p.is_file():
+        raise ValueError(f"baseline missing: {p}")
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"baseline unreadable or malformed: {p} ({exc})")
+    violations = data.get("violations") if isinstance(data, dict) else None
+    if not isinstance(violations, dict):
+        raise ValueError(f"baseline malformed (no violations object): {p}")
+    out: Dict[str, int] = {}
+    for key, count in violations.items():
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            raise ValueError(f"baseline malformed (bad count for {key}): {p}")
+        out[_normalize(key)] = count
+    return out
+
+
+def find_additions(trunk_keys: Dict[str, int], branch_keys: Dict[str, int]) -> List[str]:
+    """Branch entries the trunk baseline does not record, or records at a lower count."""
+    out = []
+    for key in sorted(branch_keys):
+        trunk_count = trunk_keys.get(key, 0)
+        branch_count = branch_keys[key]
+        if branch_count > trunk_count:
+            out.append(f"{key} (trunk {trunk_count}, branch {branch_count})")
+    return out
+
+
+def burned_down_count(trunk_keys: Dict[str, int], branch_keys: Dict[str, int]) -> int:
+    """Findings the branch baseline removed from the trunk baseline (0 = no burn-down)."""
+    return sum(max(0, count - branch_keys.get(key, 0)) for key, count in trunk_keys.items())
+
+
+def find_new_over_baseline(baseline_keys: Dict[str, int], current_keys: Dict[str, int]) -> List[str]:
+    """Current findings above the branch baseline (a finding the baseline does not record)."""
+    out = []
+    for key in sorted(current_keys):
+        baseline_count = baseline_keys.get(key, 0)
+        current_count = current_keys[key]
+        if current_count > baseline_count:
+            out.append(f"{key} (baseline {baseline_count}, current {current_count})")
+    return out
+
+
 def category_counts(findings: List[dict]) -> Dict[str, int]:
     counts: Dict[str, int] = {}
     for f in findings:
@@ -194,6 +245,7 @@ def main(argv=None) -> int:
     parser.add_argument("--paths", nargs="+", default=None, help="Override scanned directories/files (default: %s)" % ", ".join(DEFAULT_PATHS))
     parser.add_argument("--json", action="store_true", help="Output machine-readable JSON")
     parser.add_argument("--baseline", default=DEFAULT_BASELINE, help=f"Ratchet baseline file (default: {DEFAULT_BASELINE}; pass empty string to disable ratchet mode)")
+    parser.add_argument("--trunk-baseline", default=None, help="Pre-push trunk mode: the trunk's baseline. --baseline (the branch copy) must be a burn-down of it (strict subset, scan within it) or the gate fails; additions and missing/malformed baselines fail")
     parser.add_argument("--update-baseline", action="store_true", help="Regenerate --baseline from the current scan (review-only; CI must never pass this)")
     parser.add_argument("--check", action="store_true", help="(default behavior) run the gate check")
     args = parser.parse_args(argv)
@@ -234,8 +286,32 @@ def main(argv=None) -> int:
 
     if args.baseline:
         current_keys = findings_to_baseline_keys(findings)
-        baseline_keys = load_baseline(baseline_path)
-        is_ok, stale, new = check_ratchet(baseline_keys, current_keys)
+        burned = 0
+        if args.trunk_baseline:
+            # D40 trunk mode: the branch baseline must be readable, must not add
+            # anything the trunk does not record, and may only burn the trunk down.
+            try:
+                baseline_keys = load_baseline_strict(baseline_path)
+                trunk_path = root / args.trunk_baseline
+                trunk_keys = load_baseline_strict(trunk_path) if trunk_path.exists() else {}
+            except ValueError as exc:
+                print(f"pyflakes_gate: FAIL: {exc}", file=sys.stderr)
+                return 1
+            additions = find_additions(trunk_keys, baseline_keys)
+            if additions:
+                print("pyflakes_gate: FAIL: branch baseline adds entries the trunk baseline does not record:", file=sys.stderr)
+                for item in additions:
+                    print(f"  ADDED {item}", file=sys.stderr)
+                return 1
+            burned = burned_down_count(trunk_keys, baseline_keys)
+        else:
+            baseline_keys = load_baseline(baseline_path)
+        if burned:
+            stale = []
+            new = find_new_over_baseline(baseline_keys, current_keys)
+            is_ok = not new
+        else:
+            is_ok, stale, new = check_ratchet(baseline_keys, current_keys)
         if args.json:
             print(json.dumps({
                 "ok": is_ok,
@@ -243,6 +319,7 @@ def main(argv=None) -> int:
                 "baseline": str(args.baseline),
                 "stale": stale,
                 "new": new,
+                "burned_down": burned,
                 "by_category": category_counts(findings),
                 "findings": findings,
             }, indent=2))
@@ -252,6 +329,8 @@ def main(argv=None) -> int:
                     f"pyflakes_gate: PASS (ratchet: {len(findings)} baselined "
                     f"finding(s) across {len(baseline_keys)} entries)"
                 )
+                if burned:
+                    print(f"pyflakes baseline burned down: {burned} entries removed")
             else:
                 if new:
                     print(f"pyflakes_gate: {len(new)} NEW violation key(s) above baseline:", file=sys.stderr)
