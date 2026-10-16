@@ -759,6 +759,117 @@ class TestMentionVersusInstruction(unittest.TestCase):
         self.assertIn("lane_ci_polling_merge_train", patterns)
         self.assertNotIn("gh_pr_merge", patterns)
 
+    def test_ci_to_green_auto_merge_lane_step_passes(self):
+        body = ("Merge these green, mergeable PRs in ${REPO}: ${readyToMerge.join(', ')}\n"
+                "\n"
+                "USE THE REPO'S DETERMINISTIC SCRIPT, never 'gh pr merge' by hand:\n"
+                "    cd ${REPO} && python tools/auto_merge.py <n>\n"
+                "(<n> = each PR number above, one at a time, in order: run the script once per PR and nothing else)\n"
+                "\n"
+                "You are the merge lane for these PRs. No escape token applies: the script runs under its normal gates,\n"
+                "and the orchestrator never runs a merge train.\n")
+        self.assertEqual(set(), self._patterns(body))
+
+
+class TestDispatchLintRulings(unittest.TestCase):
+    """Precision rulings: 'not to', 'avoid', 'without', bare no/not before a
+    backticked flag, clause scope, threat/bypass prose, and angle-bracket
+    placeholders. Each ruling has a mention case (passes) and an imperative
+    case (still fails)."""
+
+    @staticmethod
+    def _patterns(body):
+        content = "Agent()\n" + body
+        return {v["pattern"] for v in find_violations(Path("doc.md"), content)}
+
+    def test_not_to_marker_covers_flags_in_its_clause(self):
+        body = ("`LANE-CONTRACT.md` tells agents not to merge, not to use `--admin`, `--no-verify`"
+                " or `--force`, not to self-grant `--@gate-allow`.\n")
+        self.assertEqual(set(), self._patterns(body))
+
+    def test_not_to_marker_after_flag_still_fails(self):
+        self.assertIn("admin_flag", self._patterns("--admin is not to be used by agents\n"))
+
+    def test_avoid_marker_is_a_mention(self):
+        self.assertNotIn("admin_flag", self._patterns("avoid --admin on every merge\n"))
+
+    def test_avoid_marker_after_flag_still_fails(self):
+        self.assertIn("admin_flag", self._patterns("--admin to avoid waiting\n"))
+
+    def test_without_marker_is_a_mention(self):
+        self.assertNotIn("no_verify_flag", self._patterns("push without --no-verify ever\n"))
+
+    def test_without_marker_after_flag_still_fails(self):
+        self.assertIn("no_verify_flag", self._patterns("--no-verify without asking anyone\n"))
+
+    def test_bare_no_before_backtick_flag_is_a_mention(self):
+        # GOVERNANCE.md:133 shape.
+        self.assertNotIn("no_verify_flag",
+                         self._patterns("3. Re-push (no `--no-verify` or workarounds)\n"))
+
+    def test_bare_not_before_backtick_flag_is_a_mention(self):
+        self.assertNotIn("no_verify_flag", self._patterns("not `--no-verify` on push\n"))
+
+    def test_bare_no_before_backtick_in_imperative_still_fails(self):
+        self.assertIn("no_verify_flag", self._patterns("run `--no-verify` now\n"))
+
+    def test_bare_no_as_word_elsewhere_still_fails(self):
+        self.assertIn("no_verify_flag", self._patterns("no fixes here, run --no-verify\n"))
+
+    def test_marker_does_not_cross_semicolon(self):
+        self.assertIn("no_verify_flag", self._patterns("never skip tests; run --no-verify\n"))
+
+    def test_marker_does_not_cross_period(self):
+        self.assertIn("no_verify_flag", self._patterns("- FORBIDDEN: git stash. Then --no-verify\n"))
+
+    def test_placeholder_auto_merge_is_documentation(self):
+        # GOVERNANCE.md:101 shape.
+        body = ("- Orchestrator delegates the merge to a dispatched agent (`python tools/auto_merge.py <n>`)"
+                " and verifies `state == MERGED`\n")
+        self.assertNotIn("auto_merge_bare_invocation", self._patterns(body))
+
+    def test_placeholder_gh_pr_merge_auto_is_documentation(self):
+        self.assertNotIn("gh_pr_merge_auto_bare", self._patterns("gh pr merge --auto <n>\n"))
+
+    def test_auto_merge_without_placeholder_or_number_still_fails(self):
+        self.assertIn("auto_merge_bare_invocation",
+                      self._patterns("run python tools/auto_merge.py --json\n"))
+
+    def test_placeholder_does_not_exempt_manual_merge(self):
+        self.assertIn("gh_pr_merge", self._patterns("gh pr merge <n>\n"))
+
+    def test_threat_prose_line_is_a_mention(self):
+        # ARCHITECTURE.md:301 shape.
+        body = ("- **Local hook bypass.** The pre-push hook runs on the developer's machine and "
+                "`git push --no-verify` skips it.\n")
+        self.assertNotIn("no_verify_flag", self._patterns(body))
+
+    def test_adversary_prose_line_is_a_mention(self):
+        # AUDIT-BACKLOG.md:242 shape.
+        body = "  adversary with `--no-verify` / `state/` write already owns it\n"
+        self.assertNotIn("no_verify_flag", self._patterns(body))
+
+    def test_threat_word_on_item_first_line_covers_continuation(self):
+        body = "- adversary model: tamper detection only\n  with `--no-verify` already owned\n"
+        self.assertNotIn("no_verify_flag", self._patterns(body))
+
+    def test_threat_word_does_not_leak_into_next_item(self):
+        body = "- adversary model: tamper detection only\n- run `--no-verify` on push\n"
+        self.assertIn("no_verify_flag", self._patterns(body))
+
+    def test_non_threat_imperative_line_still_fails(self):
+        self.assertIn("no_verify_flag", self._patterns("Run `git push --no-verify` to skip the hook.\n"))
+
+    def test_threat_word_on_command_line_still_fails(self):
+        self.assertIn("no_verify_flag", self._patterns("git push --no-verify  # bypass the hook\n"))
+
+    def test_architecture_lane_rules_sentence_passes(self):
+        # ARCHITECTURE.md:279 shape: 'not to' sits in the same clause as each flag.
+        body = ("1. **Lane rules (text, not enforcement).** `LANE-CONTRACT.md` tells dispatched agents "
+                "not to merge, not to use `--admin`, `--no-verify` or `--force`, not to self-grant "
+                "`--@gate-allow`, and not to hand-edit generated files (sections 3, 4 and 6).\n")
+        self.assertEqual(set(), self._patterns(body))
+
 
 if __name__ == "__main__":
     unittest.main()

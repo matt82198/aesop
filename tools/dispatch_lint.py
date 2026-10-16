@@ -248,12 +248,28 @@ def is_comment_only(line: str, pattern: str) -> bool:
 
 
 # Prohibition markers. A forbidden flag or command that comes AFTER one of these
-# on the same line, or inside the same list item, is a MENTION (a rule about the
-# command), not an instruction to run it. Case-insensitive, whole words/phrases.
+# in the same clause (same line, or earlier in its list item, with no ';' or '.'
+# between marker and flag) is a MENTION (a rule about the command), not an
+# instruction to run it. Case-insensitive, whole words/phrases.
 PROHIBITION_MARKER_RE = re.compile(
-    r"\b(?:never|forbidden|do\s+not|don['" + chr(0x2019) + r"]t|banned|prohibited|must\s+not|disallowed)\b",
+    r"\b(?:never|forbidden|do\s+not|don['" + chr(0x2019) + r"]t|banned|prohibited|must\s+not|"
+    r"disallowed|not\s+to|avoid|without)\b",
     re.IGNORECASE,
 )
+# A bare `no` or `not` immediately before a backticked flag: "no `--no-verify`".
+BACKTICK_NEGATION_RE = re.compile(r"\b(?:no|not)\s+`\s*$", re.IGNORECASE)
+# Clause boundaries: a marker only covers a flag that follows it in the same clause.
+CLAUSE_BOUNDARY_RE = re.compile(r"[;.]")
+# Prose describing a threat or a bypass (not an instruction). A line containing one
+# of these words is a mention of the forbidden token it carries.
+THREAT_CONTEXT_RE = re.compile(
+    r"\b(?:threats?|bypass\w*|attacks?|adversar\w*|escap\w*|incidents?|would|could)\b",
+    re.IGNORECASE,
+)
+# An angle-bracket placeholder argument (`auto_merge.py <n>`) is a documentation
+# example, not an invocation. Only the sanctioned merge-automation commands use it.
+PLACEHOLDER_ARG_RE = re.compile(r"\s+<[A-Za-z][\w .|-]*>")
+PLACEHOLDER_EXEMPT_PATTERNS = {"auto_merge_bare_invocation", "gh_pr_merge_auto_bare"}
 # A Markdown bullet or numbered item start. Indented lines after it belong to it.
 LIST_ITEM_START_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 # Leading decoration stripped before deciding whether a line is a command line.
@@ -308,14 +324,21 @@ def _in_code_literal(line: str, pos: int) -> bool:
 def is_prohibition_mention(line: str, match_start: int, item_lines_before: List[str]) -> bool:
     """True when a forbidden match is a mention of a rule, not an instruction.
 
-    Passes only when a prohibition marker precedes the match on the same line or
-    earlier in its list item, and the match is not imperative: not on a command
-    line, and not inside a code string passed to exec/spawn or assigned in code.
+    Passes when a prohibition marker (or a bare `no`/`not` before a backtick) sits
+    in the same clause as the match, on the same line or earlier in its list item,
+    with no ';' or '.' between them. It also passes for a line that describes a
+    threat or bypass. The match is never a mention when it is imperative: on a
+    command line, or inside a code string passed to exec/spawn or assigned in code.
     """
     if _is_command_line(line) or _in_code_literal(line, match_start):
         return False
+    # Threat/bypass prose is judged over the whole sentence-bearing item, so a
+    # threat word on the item's first line covers a flag on its continuation line.
+    if THREAT_CONTEXT_RE.search("\n".join(item_lines_before + [line])):
+        return True
     preceding = "\n".join(item_lines_before + [line[:match_start]])
-    return PROHIBITION_MARKER_RE.search(preceding) is not None
+    clause = CLAUSE_BOUNDARY_RE.split(preceding)[-1]
+    return bool(PROHIBITION_MARKER_RE.search(clause) or BACKTICK_NEGATION_RE.search(clause))
 
 
 def find_violations(
@@ -350,6 +373,12 @@ def find_violations(
                 # spans and markdown fences are NOT exemptions: a command in
                 # a dispatch prompt is an instruction wherever it is quoted.
                 if is_comment_only(line, pattern_info["pattern"]):
+                    continue
+
+                # A documentation example with a placeholder argument (`<n>`) is not
+                # an invocation of the command it names.
+                if (pattern_key in PLACEHOLDER_EXEMPT_PATTERNS
+                        and PLACEHOLDER_ARG_RE.match(line, match.end())):
                     continue
 
                 # Skip a mention of the rule (prohibition marker before it).
