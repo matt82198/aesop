@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- CI: the CI Python test dependencies are single-sourced in a root `requirements-ci.txt` (versions unchanged from ci.yml; cryptography stays pinned to 50.0.2). Every workflow pip step runs `pip install -r requirements-ci.txt`, and `tools/ci_workflow_lint.py` fails any step that re-lists those packages inline, so the shard job can no longer drift from ci.yml.
+
 - Doctor layout detection: an init'd repo (no scaffold directories) reports the five-directory check as n/a instead of failing, and the `~/.claude/skills` check runs only with `--global` (#1092).
 - Added `tools/lane_ab_report.py` (stdlib; reports the lane-contract A/B experiment from `lane-ab.jsonl` and the hook-denial ledger: per-arm dispatches, forced count, denials per dispatch, arm B page-fault relaunches, rules_by_fault_count; exits 2 on unreadable input) and `LANE-CONTRACT-MIN.md` (walls-only arm B brief).
 - CI hardening: every GitHub Actions `uses:` pinned to a full commit SHA with a version comment; top-level `permissions: contents: read` in every workflow, with write grants moved to the jobs that need them; npm pinned to 12.2.0 in publish.yml (the version the last green publish used).
