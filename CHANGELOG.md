@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Added the `state_root` config key as the single live event-store root (`tools/state_root.py`: `--state-dir` > `AESOP_STATE_ROOT` > `aesop.config.json` `state_root` > fail closed); `tools/boot_state.py` and the watchdog ingest now read the same store instead of a silent `<repo>/state` default. (#1090)
+- Added `tools/pr_trigger_check.py`, a read-only single-shot detector that reports open PRs whose current head sha has no `pull_request` workflow run (exit 1 if any open non-draft PR lacks one, 2 on gh error); detects only, never remediates (#1088).
 - Receipt honesty: a scoped push that selects zero python shards now posts check-run conclusion `neutral` instead of `success`; red stays `failure` and the verifier is unchanged (#1085).
 - Fix: `baseline_liveness_check.py` no longer probes writer/seed tables. A `tools/*.py` file that only quotes a baseline filename is a consumer only if it also declares `--baseline`; otherwise it is skipped with one INFO line instead of failing closed as a "consumer error".
 - Fix: the no-timeout receipt branch of the pre-push hook now propagates the child's real exit code (red receipt matrix blocks the push on hosts without timeout/gtimeout) (#1091).
