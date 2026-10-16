@@ -13,8 +13,10 @@ import sqlite3
 import sys
 import tempfile
 import time
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -29,7 +31,14 @@ from state_store.projections import (  # noqa: E402
 )
 from state_store.export import export_tracker  # noqa: E402
 from state_store.write_api import WriteAPI  # noqa: E402
-from state_store.coordination import compact_claims, fold_claims  # noqa: E402
+from state_store.coordination import (  # noqa: E402
+    _read_claims_compacted,
+    compact_claims,
+    current_holder,
+    fold_claims,
+    release,
+    try_claim,
+)
 
 
 class SnapshotCorrectnessTest(unittest.TestCase):
@@ -540,6 +549,82 @@ class WiredPathInvarianceTest(unittest.TestCase):
             self.assertEqual(by_id[f"item_{i}"]["lane"], "in-progress")
         for i in range(5, 10):
             self.assertEqual(by_id[f"item_{i}"]["lane"], "proposed")
+
+
+class _FakeClock:
+    """Injectable wall clock: stands in for the ``time`` module in store and coordination."""
+
+    def __init__(self, now):
+        self.now = now
+
+    def time(self):
+        return self.now
+
+
+class CompactClaimsLiveHolderTest(unittest.TestCase):
+    """compact_claims must keep the claim that establishes the live holder.
+
+    Regression (item 71b37d195787): compaction snapshotted the FIRST claim_requested
+    event for the holder. After a release + re-claim, the first claim's TTL lapses
+    while the re-claim is still live, so the compacted fold showed no holder and a
+    rival could claim a resource the first instance still held.
+    """
+
+    T0 = 1_000_000.0
+    TTL = 100.0
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.db = os.path.join(self.tmp, "events.db")
+        self.api = StateAPI(self.db)
+        self.clock = _FakeClock(self.T0)
+        self._patches = [
+            mock.patch("state_store.store.time", types.SimpleNamespace(time=self.clock.time, sleep=time.sleep)),
+            mock.patch("state_store.coordination.time", self.clock),
+        ]
+        for p in self._patches:
+            p.start()
+
+    def tearDown(self):
+        import shutil
+        for p in self._patches:
+            p.stop()
+        self.api.close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_compacted_log_keeps_reclaim_and_blocks_rival_after_first_ttl(self):
+        # I claims R (v1 @ T0), releases (v2 @ T0+1), re-claims (v3 @ T0+50).
+        self.clock.now = self.T0
+        self.assertTrue(try_claim(self.api, "R", "I", ttl=self.TTL))
+        self.clock.now = self.T0 + 1
+        release(self.api, "R", "I")
+        self.clock.now = self.T0 + 50
+        self.assertTrue(try_claim(self.api, "R", "I", ttl=self.TTL))
+
+        self.assertTrue(compact_claims(self.api))
+
+        # The compacted log must still fold to I, carried by the v3 claim's own ts.
+        compacted = _read_claims_compacted(self.api)
+        self.assertEqual(fold_claims(compacted, now=self.T0 + 60), {"R": "I"})
+        holder_events = [ev for ev in compacted if ev.get("payload", {}).get("instance_id") == "I"]
+        self.assertEqual([ev["ts"] for ev in holder_events], [self.T0 + 50])
+
+        # Past v1's ts+ttl but before v3's: I still holds R, so J must be refused.
+        self.clock.now = self.T0 + 120
+        self.assertEqual(current_holder(self.api, "R"), "I")
+        self.assertFalse(try_claim(self.api, "R", "J", ttl=self.TTL))
+        self.assertEqual(current_holder(self.api, "R"), "I")
+
+    def test_released_resource_carries_no_claim_after_compaction(self):
+        self.clock.now = self.T0
+        self.assertTrue(try_claim(self.api, "R", "I", ttl=self.TTL))
+        self.clock.now = self.T0 + 1
+        release(self.api, "R", "I")
+
+        self.assertTrue(compact_claims(self.api))
+
+        self.assertEqual(_read_claims_compacted(self.api), [])
+        self.assertTrue(try_claim(self.api, "R", "J", ttl=self.TTL))
 
 
 if __name__ == "__main__":
