@@ -109,6 +109,7 @@ Once you've completed the adopter journey, use these for operational reference:
 
 ### Operational Governance
 - **[GOVERNANCE.md](GOVERNANCE.md)** — Single-instance loops, single-writer files, heartbeat protocol, inbox pattern, AUTO/PROPOSE action tiers
+- **[MACHINERY-MAP.md](MACHINERY-MAP.md)** — Evidence-bound map of every gate, daemon, store, lane contract, monitor and UI surface, with known gaps
 
 ### Reliability Guarantees
 - **[RELIABILITY.md](RELIABILITY.md)** — Reliability core (inputs always produce outputs, no silent waits, pride bar for completion), failure scenarios, recovery patterns
