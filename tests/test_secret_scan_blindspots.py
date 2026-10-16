@@ -375,6 +375,31 @@ class TestItem3ConnectionStringPlaceholderOnPassword(unittest.TestCase):
         self.assertNotIn("connection_string", _all_rules(findings))
 
 
+class TestConnectionPasswordRegexShape(unittest.TestCase):
+    """A connection_string hit whose password component is a regex construct (a
+    character class / quantifier / escape, as in a scanner's own rule-table literal)
+    is not a credential. A password with literal alphanumerics still fires."""
+
+    def test_regex_rule_literal_line_is_clean(self):
+        """The scanner's own connection_string rule literal (tools/transcript_digest.py)."""
+        line = r'"connection_string": (r"://[^:]+:[^@/\s]+@(?!localhost|127\.|example|test)[^\s]+", 0),'
+        findings = scan_blob("tools/transcript_digest.py", line.encode())
+        self.assertNotIn("connection_string", _all_rules(findings))
+
+    def test_plain_password_is_still_fatal(self):
+        findings = scan_blob("app.py", _j("url = 'postgres://user:", "hunter2", "@db.internal/x'").encode())
+        self.assertIn("connection_string", _fatal_rules(findings))
+
+    def test_bracketed_password_with_literal_alnum_is_still_fatal(self):
+        findings = scan_blob("app.py", _j("url = 'postgres://user:p[ss]", "w0rd@db.internal/x'").encode())
+        self.assertIn("connection_string", _fatal_rules(findings))
+
+    def test_symbol_only_password_is_still_fatal(self):
+        """No regex construct and no alphanumerics: not excused by the regex-shape rule."""
+        findings = scan_blob("app.py", _j("url = 'postgres://user:", "!!!!!!", "@db.internal/x'").encode())
+        self.assertIn("connection_string", _fatal_rules(findings))
+
+
 class TestItem4GenericHeuristics(unittest.TestCase):
     """Tracker a108e72018bf (P2): placeholder words matched as substrings, and a
     trailing comment made a real value look like a code reference."""

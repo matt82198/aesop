@@ -418,6 +418,27 @@ def _connection_password_is_placeholder(url):
     return is_placeholder(match.group(1))
 
 
+# A regex construct inside a password component: an escape (`\s`), a bracket class
+# (`[^@/\s]`, `[ss]`), or a quantifier (`+`, `*`, `?`, `{n,m}`).
+_REGEX_CONSTRUCT = re.compile(r"\\.|\[\^[^\]]*\]|\[\\[^\]]*\]|\{[0-9]*,?[0-9]*\}|[+*?]")
+_LITERAL_ALNUM = re.compile(r"[A-Za-z0-9]")
+
+
+def _connection_password_is_regex_shape(url):
+    """True when the password component is made only of regex constructs and no
+    literal alphanumeric character: the shape of a scanner's own rule-table literal
+    (a character class plus quantifier), not a credential. Real passwords carry
+    literal alphanumerics, so a value with one is never excused here. A password
+    with no regex construct at all (e.g. symbols only) is never excused either."""
+    match = _CONNECTION_PASSWORD.search(url)
+    if not match:
+        return False
+    password = match.group(1)
+    if not _REGEX_CONSTRUCT.search(password):
+        return False
+    return _LITERAL_ALNUM.search(_REGEX_CONSTRUCT.sub("", password)) is None
+
+
 def _scan_views(label, views, env_file, has_file_pragma, scan_path):
     """Run PATTERNS over every view. Returns list of (line_num, rule, match_str, is_fatal).
     Duplicate (line, rule, match) hits across views are reported once."""
@@ -446,6 +467,10 @@ def _scan_views(label, views, env_file, has_file_pragma, scan_path):
                         # Tracker b0937071216e: the placeholder check applies to the
                         # credential component (the password), never the DB name/host.
                         if _connection_password_is_placeholder(match_str):
+                            continue
+                        # The scanner's own regex rule-table literals (character class +
+                        # quantifier, no literal alphanumerics) are not credentials.
+                        if _connection_password_is_regex_shape(match_str):
                             continue
                     elif is_placeholder(match_str):
                         continue
