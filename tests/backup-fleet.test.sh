@@ -93,6 +93,9 @@ test_item1_nul_protocol_real_loop() {
   # We'll extract and run just the per-repo processing
   AESOP_ROOT="$AESOP_FIXTURE" bash -c '
     source_backup_functions() {
+      LOG="'"$AESOP_FIXTURE"'/state/FLEET-BACKUP.log"
+      eval "$(sed -n "/^ts()/p" '"$BACKUP_FLEET_SCRIPT"')"
+      eval "$(sed -n "/^resolve_scanner()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
       eval "$(sed -n "/^is_touched()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
       eval "$(sed -n "/^json_escape()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
       eval "$(sed -n "/^scan_unpushed_commits()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
@@ -940,6 +943,146 @@ EOFCONFIG
   fi
 }
 
+# ===== FAIL-CLOSED SECRET GATE (2026-10-15 scan, P1 00fa6e4cb68b) =====
+# Behavioural proofs: each drives the real backup-fleet.sh against a throwaway
+# fixture (mktemp tree, local bare origin, HOME pinned to the fixture) and asserts
+# what reached the remote. A backup/* ref on the bare origin = a push that the
+# gate should have refused.
+
+BARE_REMOTE=""
+
+setup_bare_origin() {
+  BARE_REMOTE="$TEST_DIR/remote.git"
+  rm -rf "$BARE_REMOTE"
+  git init -q --bare "$BARE_REMOTE"
+  git -C "$REPO_DIR" remote set-url origin "$BARE_REMOTE"
+}
+
+bare_backup_refs() {
+  git -C "$BARE_REMOTE" for-each-ref --format='%(refname)' refs/heads/backup/ 2>/dev/null
+}
+
+test_fail_closed_missing_scanner_refuses_push() {
+  log "TEST FAIL-CLOSED: dirty repo with NO scanner present is refused, never pushed"
+
+  setup_fixture
+  setup_bare_origin
+  rm -rf "$TOOLS_DIR"   # no tools/secret_scan.py under AESOP_FIXTURE
+  mkdir -p "$TOOLS_DIR"
+  echo "wip work" > "$REPO_DIR/wip.txt"
+  cat > "$AESOP_FIXTURE/aesop.config.json" << EOFCONFIG
+{
+  "repos": [
+    {"path": "$REPO_DIR", "name": "repo1"}
+  ]
+}
+EOFCONFIG
+
+  AESOP_ROOT="$AESOP_FIXTURE" bash "$BACKUP_FLEET_SCRIPT" > "$TEST_DIR/no-scanner.log" 2>&1
+  local ec=$?
+  local refs
+  refs=$(bare_backup_refs)
+
+  if [ -z "$refs" ]; then
+    pass "FAIL-CLOSED: no backup/* ref reached origin without a scanner"
+  else
+    fail "FAIL-CLOSED: backup ref pushed with no scanner present: $refs"
+  fi
+  if [ "$ec" -eq 3 ] && grep -q "BLOCKED: fixture-repo" "$TEST_DIR/no-scanner.log"; then
+    pass "FAIL-CLOSED: missing scanner marks the repo BLOCKED (exit 3)"
+  else
+    fail "FAIL-CLOSED: expected BLOCKED exit 3 without scanner, got exit $ec"
+    cat "$TEST_DIR/no-scanner.log"
+  fi
+  if grep -q "scanner missing" "$AESOP_FIXTURE/state/FLEET-BACKUP.log" 2>/dev/null; then
+    pass "FAIL-CLOSED: refusal reason is logged to FLEET-BACKUP.log"
+  else
+    fail "FAIL-CLOSED: no 'scanner missing' reason in FLEET-BACKUP.log"
+  fi
+}
+
+test_fail_closed_unset_aesop_root_refuses_to_run() {
+  log "TEST FAIL-CLOSED: AESOP_ROOT unset makes backup-fleet.sh exit non-zero"
+
+  setup_fixture
+  local home_fx="$TEST_DIR/home"
+  local cwd_fx="$TEST_DIR/cwd"
+  mkdir -p "$home_fx" "$cwd_fx/state"
+
+  (cd "$cwd_fx" && env -u AESOP_ROOT -u CONDUCTOR_ROOT HOME="$home_fx" \
+     bash "$BACKUP_FLEET_SCRIPT" > "$TEST_DIR/unset-root.log" 2>&1)
+  local ec=$?
+
+  if [ "$ec" -ne 0 ]; then
+    pass "FAIL-CLOSED: unset AESOP_ROOT exits non-zero (exit $ec)"
+  else
+    fail "FAIL-CLOSED: unset AESOP_ROOT exited 0 (would scan relative to cwd)"
+    cat "$TEST_DIR/unset-root.log"
+  fi
+}
+
+test_nonascii_dirty_file_is_scanned_and_blocked() {
+  log "TEST FAIL-CLOSED: non-ASCII (C-quoted by git) secret file is scanned and blocks the push"
+
+  setup_fixture
+  setup_bare_origin
+  create_mock_scanner
+  # Dummy secret, assembled at runtime so no literal marker lives in this file.
+  printf 'KEY=%s\n' "AK""IA0123456789FAKEDUMMY" > "$REPO_DIR/caf$(printf '\303\251')-keys.env"
+  cat > "$AESOP_FIXTURE/aesop.config.json" << EOFCONFIG
+{
+  "repos": [
+    {"path": "$REPO_DIR", "name": "repo1"}
+  ]
+}
+EOFCONFIG
+
+  AESOP_ROOT="$AESOP_FIXTURE" bash "$BACKUP_FLEET_SCRIPT" > "$TEST_DIR/nonascii.log" 2>&1
+  local ec=$?
+  local refs
+  refs=$(bare_backup_refs)
+
+  if [ -z "$refs" ]; then
+    pass "NON-ASCII: secret in non-ASCII-named file never reached origin"
+  else
+    fail "NON-ASCII: secret file was pushed to origin unscanned: $refs"
+  fi
+  if [ "$ec" -eq 3 ]; then
+    pass "NON-ASCII: cycle reports BLOCKED (exit 3)"
+  else
+    fail "NON-ASCII: expected exit 3 (BLOCKED), got $ec"
+    cat "$TEST_DIR/nonascii.log"
+  fi
+}
+
+test_control_clean_work_still_snapshots() {
+  log "TEST FAIL-CLOSED control: clean dirty repo with scanner present still snapshots and pushes"
+
+  setup_fixture
+  setup_bare_origin
+  create_mock_scanner
+  echo "harmless" > "$REPO_DIR/notes.txt"
+  cat > "$AESOP_FIXTURE/aesop.config.json" << EOFCONFIG
+{
+  "repos": [
+    {"path": "$REPO_DIR", "name": "repo1"}
+  ]
+}
+EOFCONFIG
+
+  AESOP_ROOT="$AESOP_FIXTURE" bash "$BACKUP_FLEET_SCRIPT" > "$TEST_DIR/control.log" 2>&1
+  local ec=$?
+  local refs
+  refs=$(bare_backup_refs)
+
+  if [ "$ec" -eq 0 ] && [ -n "$refs" ]; then
+    pass "CONTROL: clean work snapshots to origin (exit 0, ref: $refs)"
+  else
+    fail "CONTROL: clean work should snapshot and exit 0, got exit $ec refs='$refs'"
+    cat "$TEST_DIR/control.log"
+  fi
+}
+
 # ===== Run all tests =====
 
 echo "=================================================="
@@ -1006,6 +1149,13 @@ echo ""
 log "Running FIX #5 tests (blocked-cycle exit code contract)..."
 test_fix5_blocked_cycle_exit_code
 test_fix5_clean_cycle_exit_code
+echo ""
+
+log "Running FAIL-CLOSED secret gate tests (P1 00fa6e4cb68b)..."
+test_fail_closed_missing_scanner_refuses_push
+test_fail_closed_unset_aesop_root_refuses_to_run
+test_nonascii_dirty_file_is_scanned_and_blocked
+test_control_clean_work_still_snapshots
 echo ""
 
 echo "=================================================="

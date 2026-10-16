@@ -12,7 +12,9 @@
 //     (visible in the transcript) AND appended as a JSON-line audit record to
 //     ${AESOP_ROOT:-~/aesop}/state/MODEL-POLICY-ESCAPES.log so every use is
 //     reviewable — prompts are untrusted text and can smuggle the marker.
-//   - anything else (compliant, other tools, malformed input) -> no output
+//   - malformed or unreadable input, empty/timed-out stdin, or an internal
+//     error -> permissionDecision "deny" with a one-line reason (fail-closed)
+//   - anything else (compliant, other tools) -> no output
 //
 // Output contract source: Claude Code hooks reference ("PreToolUse Decision
 // Control", https://docs.anthropic.com/en/docs/claude-code/hooks) — a hook may
@@ -22,12 +24,13 @@
 // where updatedInput replaces tool_input for the dispatched call. Emitting
 // nothing (exit 0) means "no opinion" and the call proceeds unchanged.
 //
-// Reliability rule: this hook NEVER crashes the harness. Any parse or IO
-// failure results in no output and exit 0 (fail-open), and nothing from the
-// payload is ever logged on failure paths. stdin is raced against a 2s timer
-// so a never-closing pipe cannot hang Agent/Task dispatch (fail-open, no
-// rewrite). The only deliberate exception to "log nothing" is the escape-hatch
-// audit record above.
+// Reliability rule: this hook NEVER crashes the harness, and it FAILS CLOSED
+// (user rule 2026-10-14: all hooks fail closed). Any parse, input, or internal
+// error results in a "deny" decision with exit 0, and the deny reason is a
+// fixed string that never echoes payload content. stdin is raced against a 2s
+// timer so a never-closing pipe cannot hang Agent/Task dispatch; the timeout
+// resolves to empty stdin, which is denied. The only deliberate exception to
+// "log nothing" is the escape-hatch audit record above.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -86,7 +89,7 @@ function policyModel() {
 }
 
 /** Read stdin raced against a timer: a pipe that never closes must not hang
- *  Agent/Task dispatch. On timeout, resolve '' (fail-open, no rewrite). */
+ *  Agent/Task dispatch. On timeout, resolve '' (main() then denies: fail-closed). */
 function readStdin(timeoutMs = STDIN_TIMEOUT_MS) {
   return new Promise((resolve) => {
     let settled = false;
@@ -105,6 +108,18 @@ function readStdin(timeoutMs = STDIN_TIMEOUT_MS) {
   });
 }
 
+/** Fail-closed: deny the dispatch with a fixed one-line reason. The reason
+ *  names the failure class only; it never includes payload text. */
+function deny(failure) {
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: `Model policy fail-closed: ${failure}; dispatch denied.`
+    }
+  }) + '\n');
+}
+
 async function main() {
   const raw = await readStdin();
 
@@ -112,13 +127,15 @@ async function main() {
   try {
     payload = JSON.parse(raw);
   } catch {
-    return; // malformed input: fail-open, no output, log nothing
+    return deny('stdin is empty, unreadable, or not valid JSON');
   }
-  if (!payload || typeof payload !== 'object') return;
+  if (!payload || typeof payload !== 'object') return deny('payload is not a JSON object');
   if (!GOVERNED_TOOLS.has(payload.tool_name)) return;
 
   const input = payload.tool_input;
-  if (!input || typeof input !== 'object') return;
+  if (!input || typeof input !== 'object') {
+    return deny('governed dispatch has no tool_input object');
+  }
 
   const model = policyModel();
 
@@ -156,4 +173,6 @@ async function main() {
   }) + '\n');
 }
 
-main().catch(() => { /* never crash the harness */ }).finally(() => process.exit(0));
+// Internal error: deny (fail-closed) rather than silently allowing; still exit 0
+// so the harness is never crashed.
+main().catch(() => deny('internal error')).finally(() => process.exit(0));

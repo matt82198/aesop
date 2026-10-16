@@ -119,8 +119,10 @@ test('wizard subcommand works with explicit target dir', () => {
   gitCmd(tempDir, ['config', 'user.name', 'Test User']);
 
   // Run: aesop my-wizard-fleet wizard --yes
+  // --no-git: this test asserts only the scaffolded files; the git init/add -A over the
+  // template is the slow step (about 3s locally) and is not under test here.
   const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
-  const res = spawnSync(process.execPath, [CLI, 'my-wizard-fleet', 'wizard', '--yes'], {
+  const res = spawnSync(process.execPath, [CLI, 'my-wizard-fleet', 'wizard', '--yes', '--no-git'], {
     encoding: 'utf8',
     cwd: tempDir,
     timeout,
