@@ -4,7 +4,9 @@ TDD: Scoped receipt profile tests.
 Tests the new AESOP_RECEIPT_PROFILE="scoped" default that runs only changed-file-owning shards.
 """
 import json
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -319,6 +321,93 @@ class TestShardSetSingleDeclaration(unittest.TestCase):
     def test_emitter_shards_equal_verifier_required_parts(self):
         import receipt_common as rc
         self.assertEqual(set(emit_receipt._PY_SHARDS), set(rc.DEFAULT_REQUIRED_PARTS))
+
+
+def _zero_shard_secret():
+    # Runtime-assembled dummy secret (never a literal credential shape).
+    return "unit" + "-" + "zero" + "-" + "shard" + "-" + "value" + "-" + "0" * 16
+
+
+class TestZeroShardConclusionIsNotSuccess(unittest.TestCase):
+    """A scoped push that selects ZERO python shards ran no tests of the changed code. Its
+    check-run conclusion must not read "success": the receipt is posted, not blocking, but the
+    conclusion is distinct from a real pass."""
+
+    OK = [sys.executable, "-c", "import sys; sys.exit(0)"]
+
+    def _git(self, cwd, *args):
+        subprocess.run(["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                       check=True, capture_output=True, encoding="utf-8", errors="replace")
+
+    def _repo(self, tmp):
+        # origin/main holds tools/emit_receipt.py; the feature branch changes a docs file (#1122 fails a
+        # tools/ change with no owning shard closed to the full set, so a docs-only push is the zero-shard case).
+        # No test file is touched, so the scoped profile maps the change to no shard.
+        repo = Path(tmp) / "repo"
+        (repo / "tools").mkdir(parents=True)
+        self._git(repo, "init", "-q", "-b", "main")
+        (repo / "tools" / "emit_receipt.py").write_text("X = 1\n", encoding="utf-8")
+        self._git(repo, "add", "tools/emit_receipt.py")
+        self._git(repo, "commit", "-q", "-m", "base")
+        self._git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+        self._git(repo, "checkout", "-q", "-b", "feat")
+        (repo / "docs").mkdir()
+        (repo / "docs" / "receipt-note.md").write_text("note\n", encoding="utf-8")
+        self._git(repo, "add", "docs/receipt-note.md")
+        self._git(repo, "commit", "-q", "-m", "feat")
+        return repo
+
+    def _registry(self):
+        registry = {"secret-scan": emit_receipt.PartSpec(lambda repo: self.OK)}
+        for i in range(4):
+            registry["py-shard-%d" % i] = emit_receipt.PartSpec(lambda repo: self.OK)
+        return registry
+
+    def _run(self, profile, extra):
+        posted = []
+
+        def gh(args):
+            # The check-run payload file is deleted after the call: capture its JSON while it exists.
+            if "--input" in args:
+                posted.append(json.loads(Path(args[-1]).read_text(encoding="utf-8")))
+            return (0, "{}", "")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(tmp)
+            out = Path(tmp) / "env.json"
+            argv = ["--repo", str(repo), "--scheme", "hmac-sha256", "--slug", "o/r", "--main-ref",
+                    "origin/main", "--post", "--out", str(out)] + extra
+            code = emit_receipt.main(argv, registry=self._registry(), gh_runner=gh,
+                                     environ={"AESOP_RECEIPT_PROFILE": profile,
+                                              "AESOP_RECEIPT_HMAC_SECRET": _zero_shard_secret()})
+            envelope = json.loads(out.read_text(encoding="utf-8"))
+        return code, envelope, posted
+
+    def test_scoped_zero_shard_push_posts_non_success_conclusion(self):
+        code, envelope, posted = self._run("scoped", [])
+        names = [p["name"] for p in envelope["receipt"]["parts"]]
+        # Premise: the scoped profile selected no shard for a change to tools/emit_receipt.py.
+        self.assertFalse([n for n in names if n.startswith("py-shard-")], names)
+        self.assertEqual(len(posted), 1)
+        self.assertNotEqual(posted[0]["conclusion"], "success")
+        self.assertEqual(posted[0]["conclusion"], "neutral")
+        # Honesty only: a zero-shard receipt does not block the push (exit 0), as before.
+        self.assertEqual(code, 0)
+
+    def test_run_with_a_shard_still_posts_success(self):
+        # Guard: the change must not reach runs that really ran a shard.
+        code, envelope, posted = self._run("full", ["--matrix", "secret-scan,py-shard-0"])
+        self.assertEqual(len(posted), 1)
+        self.assertEqual(posted[0]["conclusion"], "success")
+        self.assertEqual(code, 0)
+
+    def test_zero_shard_failure_stays_failure(self):
+        self.assertEqual(emit_receipt.conclusion_for([{"name": "secret-scan", "exit_code": 1}],
+                                                     shards_ran=False), "failure")
+
+    def test_zero_shard_all_green_is_neutral(self):
+        self.assertEqual(emit_receipt.conclusion_for([{"name": "secret-scan", "exit_code": 0}],
+                                                     shards_ran=False), "neutral")
 
 
 if __name__ == "__main__":
