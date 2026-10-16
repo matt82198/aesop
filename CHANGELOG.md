@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- `tools/ingest_task_events.py` appends one `agent_done` (or `agent_stalled` on an error stop_reason) event per lane task_event to stream `agent_lifecycle`, deduped on the task event_id (#1083).
 - CI: the CI Python test dependencies are single-sourced in a root `requirements-ci.txt` (versions unchanged from ci.yml; cryptography stays pinned to 50.0.2). Every workflow pip step runs `pip install -r requirements-ci.txt`, and `tools/ci_workflow_lint.py` fails any step that re-lists those packages inline, so the shard job can no longer drift from ci.yml.
 
 - Doctor layout detection: an init'd repo (no scaffold directories) reports the five-directory check as n/a instead of failing, and the `~/.claude/skills` check runs only with `--global` (#1092).
