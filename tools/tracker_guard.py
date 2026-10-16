@@ -8,7 +8,16 @@ re-enter an active lane (ranked/proposed/in-progress/accepted).
 
 Usage:
   tracker_guard.py [--seed | --enforce | --check | --reconcile-journal]
+  tracker_guard.py --adopt-disk-items --reason "<text>" [--ids a,b] [--dry-run]
   tracker_guard.py --help
+
+  --adopt-disk-items
+    Explicit, provenance-stamped adoption of tracker items present in tracker.json
+    but absent from the event log (the disk-only items that make the OCC guard
+    refuse every render). Delegates to WriteAPI.tracker_adopt_disk_items. --reason
+    is required for any non-empty adoption; --ids must cover every disk-only item
+    (partial adoption is refused); --dry-run plans and verifies without writing.
+    Prints the plan/result as JSON. Exit 0 on success, 2 on any refusal.
 
 Modes:
   --seed
@@ -464,6 +473,46 @@ def cmd_reconcile_journal(args):
     return 0
 
 
+def cmd_adopt_disk_items(argv):
+    """Explicitly adopt disk-only tracker items into the event log (WriteAPI).
+
+    Plan/result is printed as JSON on stdout. Exit 0 on success (including a
+    dry run), 2 on any refusal (missing --reason, ids not disk-only, partial
+    adoption, verification mismatch, unreadable tracker.json).
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="tracker_guard.py --adopt-disk-items", add_help=False)
+    parser.add_argument("--adopt-disk-items", action="store_true")
+    parser.add_argument("--reason", default=None)
+    parser.add_argument("--ids", default=None, help="comma-separated ids (default: all disk-only)")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args(argv)
+
+    ids = None
+    if args.ids is not None:
+        ids = [part.strip() for part in args.ids.split(",") if part.strip()]
+
+    write_api = WriteAPI(common.get_state_dir())
+    try:
+        result = write_api.tracker_adopt_disk_items(
+            actor="tracker_guard",
+            reason=args.reason,
+            ids=ids,
+            dry_run=args.dry_run,
+        )
+    except Exception as e:
+        print(json.dumps({"ok": False, "dry_run": args.dry_run, "error": str(e),
+                          "adopted_ids": []}, indent=2, sort_keys=True))
+        print(f"REFUSED: {e}", file=sys.stderr)
+        return 2
+    finally:
+        write_api.close()
+
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
 def print_help():
     """Print usage information."""
     print(__doc__)
@@ -473,6 +522,9 @@ def main(argv=None):
     """Main entry point."""
     if argv is None:
         argv = sys.argv[1:]
+
+    if "--adopt-disk-items" in argv and "--help" not in argv and "-h" not in argv:
+        return cmd_adopt_disk_items(argv)
 
     # Parse flags
     mode = "check"  # default mode

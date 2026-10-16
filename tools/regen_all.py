@@ -200,8 +200,9 @@ class RegenResult:
             payload["failed"] = self.failed
         if self.drifted:
             payload["drifted"] = self.drifted
-        if self.fixed:
-            payload["fixed"] = self.fixed
+        # Always present (an empty list when nothing drifted): regen-on-main.yml
+        # reads 'fixed' and treats exit_code 0 with fixed == [] as success-nothing-to-do.
+        payload["fixed"] = list(self.fixed)
         payload["exit_code"] = self.code
         return payload
 

@@ -64,7 +64,7 @@ Installs Node.js 20 LTS and caches npm dependencies.
 Installs Python 3.11 and caches pip dependencies (required for orchestration tools like state_store, tracker, cost analysis).
 
 ### Orchestration
-Runs the selected operation via `npx aesop@latest`. All invoked commands are verified to exist in the aesop CLI.
+Runs the selected operation via `npx @matt82198/aesop`. All invoked commands are verified to exist in the aesop CLI.
 
 **Supported commands:**
 - `aesop doctor` — Preflight check (config, hooks, CLAUDE.md, state, heartbeats, git identity, secret-scan)
@@ -77,8 +77,8 @@ Runs the selected operation via `npx aesop@latest`. All invoked commands are ver
 **Customize the command:**
 Edit the Orchestration step's `run:` field to invoke a different command or pass additional flags:
 ```bash
-npx aesop@latest wave preflight --json
-npx aesop@latest status --json
+npx @matt82198/aesop wave preflight --json
+npx @matt82198/aesop status --json
 ```
 
 ### Cost Summary (Pull Requests)
@@ -120,7 +120,7 @@ If your orchestration tools require API keys (e.g., `ANTHROPIC_API_KEY`), store 
 - name: Orchestration
   env:
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-  run: npx aesop@latest doctor
+  run: npx @matt82198/aesop doctor
 ```
 
 ## Examples
@@ -137,7 +137,7 @@ jobs:
     steps:
       # ... (checkout, setup steps)
       - name: Orchestration
-        run: npx aesop@latest doctor
+        run: npx @matt82198/aesop doctor
 ```
 
 ### Example 2: Wave Scorecard with Cost Summary
@@ -145,7 +145,7 @@ jobs:
 ```yaml
 - name: Orchestration
   id: orchestration
-  run: npx aesop@latest wave scorecard --json > wave-score.json
+  run: npx @matt82198/aesop wave scorecard --json > wave-score.json
 
 - name: Cost Summary
   if: success()
@@ -159,7 +159,7 @@ jobs:
   run: |
     export AESOP_CONCURRENCY=8
     export AESOP_COST_CEILING=100
-    npx aesop@latest wave preflight
+    npx @matt82198/aesop wave preflight
 ```
 
 ## Troubleshooting
@@ -190,8 +190,8 @@ A: The template runs a single operation per workflow run. To parallelize, create
 **Q: Can I pass custom flags to aesop commands?**
 A: Yes. Edit the Orchestration step's `run:` field:
 ```bash
-npx aesop@latest doctor --json
-npx aesop@latest wave preflight --root /path/to/repo
+npx @matt82198/aesop doctor --json
+npx @matt82198/aesop wave preflight --root /path/to/repo
 ```
 
 **Q: How do I integrate with my existing CI/CD pipeline?**

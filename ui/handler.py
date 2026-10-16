@@ -929,8 +929,10 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"error": "CSRF protection: " + reason}).encode('utf-8'))
                 return
 
-            # Extract item_id from path
-            path_parts = self.path.strip("/").split("/")
+            # Split path from query BEFORE extracting item_id: the UI sends
+            # /api/tracker/<id>?action=delete and the query must not leak into id.
+            parsed_url = urllib.parse.urlparse(self.path)
+            path_parts = parsed_url.path.strip("/").split("/")
             if len(path_parts) < 3:
                 self.send_response(404)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -941,8 +943,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             item_id = path_parts[2]
 
             # Parse query for action (update or delete)
-            query = urllib.parse.urlparse(self.path).query
-            params = urllib.parse.parse_qs(query)
+            params = urllib.parse.parse_qs(parsed_url.query)
             action = params.get('action', ['update'])[0]
 
             if action == "delete":
