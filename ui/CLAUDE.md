@@ -45,7 +45,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 **handler.py** (HTTP routing + GET/POST endpoints):
 - `DashboardHandler` class (extends `http.server.BaseHTTPRequestHandler`).
 - `run_server(host, port, app_handler_fn)` â€” ThreadingHTTPServer required (SSE holds one connection per client).
-- Reads `config.X` / `csrf.SESSION_TOKEN` at call time.
+- Reads `config.X` / `csrf.SESSION_TOKEN` at call time. Tracker delete splits the path from the query before `item_id` (else archive 404s).
 - `serve_api_state` (`GET /api/state`): a cached section that is **empty** counts as not-yet-snapshotted and is recomputed inline. The "data" source seeds `{}` and is mtime-gated, so a quiet collector leaves that default cached; testing only for `None` let `{}` through and produced an empty first paint.
 
 **cost.py**: Parser for `state/ledger/OUTCOMES-LEDGER.md` (markdown table); returns per-model + per-day aggregates, verdict scorecards, optional dollar estimates (if `aesop.config.json` supplies `pricing` map).
