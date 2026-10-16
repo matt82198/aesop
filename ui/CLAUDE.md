@@ -70,7 +70,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **wave_audit_tail.py** â€” Wave audit tail: streams recent audit findings for live dashboard display.
 
-**wave_gantt.py** â€” Wave Gantt chart data: per-agent timeline for wave execution visualization.
+**wave_gantt.py** â€” Wave Gantt chart data: per-agent timeline for wave execution visualization. Timestamps are RFC 3339 `Z` only; duration is end minus start, or `null` (unknown) when start is missing, never idle age.
 
 **wave_reasoning_tail.py** â€” Wave reasoning tail: streams orchestrator reasoning for live display.
 
