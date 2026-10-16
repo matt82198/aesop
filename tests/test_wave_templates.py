@@ -13,7 +13,11 @@ Tests:
 """
 
 import json
+import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -396,6 +400,102 @@ class TestValidateOutputIntegrity(unittest.TestCase):
         allowed = {chr(13), chr(10), chr(9)}
         bad = [c for c in combined if (ord(c) < 32 and c not in allowed) or ord(c) == 127]
         self.assertFalse(bad, f"control bytes in validate output: {[hex(ord(c)) for c in bad]}")
+
+class TestPipefailFailClosed(unittest.TestCase):
+    """A pipeline into head/tail must not mask a failing stage (exit status of head is not the test's)."""
+
+    def _dashboard_cmd(self):
+        preset = load_preset("data")
+        manifest = instantiate_template(preset, project_name="my-data", base_dir="/tmp/test")
+        item = next(i for i in manifest["items"] if i["slug"] == "analytics-dashboard")
+        return item["testCmd"]
+
+    def test_dashboard_testcmd_fails_when_streamlit_missing(self):
+        """With streamlit missing (exit 127), the shipped dashboard testCmd must exit nonzero."""
+        cmd = self._dashboard_cmd()
+        cmd = cmd.replace("python -m pytest tests/dashboard/ -v", "true")
+        cmd = cmd.replace("streamlit run", "aesop_no_such_streamlit_binary run")
+        r = subprocess.run(
+            [shutil.which("bash") or "bash", "-c", cmd],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        self.assertNotEqual(r.returncode, 0,
+            f"failing stage masked by head: rc={r.returncode} stderr={r.stderr!r}")
+
+    def test_validator_rejects_head_pipe_without_pipefail(self):
+        manifest = {"items": [{"slug": "dash", "prompt": "p", "ownsFiles": ["a.py"],
+            "testCmd": "python -m pytest tests/ && streamlit run app.py 2>&1 | head -50"}]}
+        with self.assertRaises(ValueError) as ctx:
+            validate_manifest(manifest)
+        self.assertIn("pipefail", str(ctx.exception).lower())
+
+    def test_validator_rejects_tail_pipe_without_pipefail(self):
+        manifest = {"items": [{"slug": "dash", "prompt": "p", "ownsFiles": ["a.py"],
+            "testCmd": "python -m pytest tests/ | tail -5"}]}
+        with self.assertRaises(ValueError) as ctx:
+            validate_manifest(manifest)
+        self.assertIn("pipefail", str(ctx.exception).lower())
+
+    def test_validator_accepts_head_pipe_with_pipefail(self):
+        manifest = {"items": [{"slug": "dash", "prompt": "p", "ownsFiles": ["a.py"],
+            "testCmd": "set -o pipefail && python -m pytest tests/ && streamlit run app.py 2>&1 | head -50"}]}
+        validate_manifest(manifest)
+
+
+class TestHyphenatedModuleName(unittest.TestCase):
+    """A hyphenated project name must yield importable identifiers in import/--cov positions."""
+
+    def test_library_hyphenated_core_import_runs(self):
+        """The core-module import stage must import the package for project 'payment-api'."""
+        preset = load_preset("library")
+        manifest = instantiate_template(preset, project_name="payment-api", base_dir="/tmp/test")
+        core = next(i for i in manifest["items"] if i["slug"] == "core-module")
+        import_stage = core["testCmd"].split(" && ")[0]
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = Path(tmp) / "src" / "payment_api"
+            pkg.mkdir(parents=True)
+            (pkg / "__init__.py").write_text("", encoding="utf-8")
+            env = {**os.environ, "PYTHONPATH": str(Path(tmp) / "src")}
+            r = subprocess.run(
+                [shutil.which("bash") or "bash", "-c", import_stage],
+                cwd=tmp, env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            )
+        self.assertEqual(r.returncode, 0, f"core import failed: {r.stderr!r}")
+
+    def test_library_hyphenated_owns_importable_package_dir(self):
+        """Package directories must match the importable module name, not the hyphenated display name."""
+        preset = load_preset("library")
+        manifest = instantiate_template(preset, project_name="payment-api", base_dir="/tmp/test")
+        for item in manifest["items"]:
+            for f in item["ownsFiles"]:
+                if f.startswith("src/"):
+                    self.assertEqual(f.split("/")[1], "payment_api", f)
+
+    def test_library_hyphenated_manifest_passes_instantiated_validation(self):
+        preset = load_preset("library")
+        manifest = instantiate_template(preset, project_name="payment-api", base_dir="/tmp/test")
+        validate_manifest(manifest, allow_placeholders=False, require_testcmd=True)
+
+    def test_validator_rejects_hyphenated_import(self):
+        manifest = {"items": [{"slug": "core", "prompt": "p", "ownsFiles": ["src/payment_api/core.py"],
+            "testCmd": 'python -c "import payment-api"'}]}
+        with self.assertRaises(ValueError) as ctx:
+            validate_manifest(manifest, allow_placeholders=False)
+        self.assertIn("identifier", str(ctx.exception).lower())
+
+    def test_validator_rejects_hyphenated_cov_module(self):
+        manifest = {"items": [{"slug": "tests", "prompt": "p", "ownsFiles": ["tests/x.py"],
+            "testCmd": "python -m pytest tests/ --cov=payment-api"}]}
+        with self.assertRaises(ValueError) as ctx:
+            validate_manifest(manifest, allow_placeholders=False)
+        self.assertIn("identifier", str(ctx.exception).lower())
+
+    def test_validator_accepts_cov_path(self):
+        """--cov=src/pipeline is a path, not a module name, and must stay valid."""
+        manifest = {"items": [{"slug": "pipe", "prompt": "p", "ownsFiles": ["src/pipeline/x.py"],
+            "testCmd": "python -m pytest tests/pipeline/ -v --cov=src/pipeline"}]}
+        validate_manifest(manifest, allow_placeholders=False)
+
 
 if __name__ == "__main__":
     unittest.main()
