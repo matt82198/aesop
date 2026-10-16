@@ -1,6 +1,7 @@
 """Tests for tools/init_project.py -- project initialization scaffolder."""
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -454,6 +455,140 @@ class TestCLI(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertIn("cli-test", result.stdout)
             self.assertTrue((Path(td) / "CLAUDE.md").exists())
+
+
+ZERO_SHA = "0" * 40
+
+# Runtime-assembled dummy GitHub-style token (matches secret_scan github_token rule).
+# Never a literal credential in this file.
+DUMMY_GH_TOKEN = "ghp_" + "A" * 36
+
+
+def _bash_exe():
+    """Git-for-Windows bash when present (System32 bash.exe is WSL), else PATH bash."""
+    pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+    candidate = os.path.join(pf, "Git", "bin", "bash.exe")
+    if os.path.isfile(candidate):
+        return candidate
+    return shutil.which("bash") or "bash"
+
+
+def _git(cwd, *args):
+    return subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=30,
+    )
+
+
+def _make_feature_repo(td):
+    """Scratch repo on feat/x with one clean commit, scan script and pre-push hook installed."""
+    assert _git(td, "init", "-q", "-b", "feat/x").returncode == 0
+    _git(td, "config", "user.email", "test@example.com")
+    _git(td, "config", "user.name", "Test User")
+    ok, status = copy_secret_scan_script(td)
+    assert ok, status
+    ok, status = install_pre_push_hook(td)
+    assert ok, status
+    Path(td, "README.md").write_text("clean\n", encoding="utf-8")
+    _git(td, "add", "README.md")
+    assert _git(td, "commit", "-q", "-m", "clean").returncode == 0
+    return Path(td) / ".git" / "hooks" / "pre-push"
+
+
+def _head_sha(td):
+    return _git(td, "rev-parse", "HEAD").stdout.strip()
+
+
+def _run_pre_push(td, hook, stdin_line):
+    """Execute the generated hook the way git does: args (remote, url), ref lines on stdin."""
+    return subprocess.run(
+        [_bash_exe(), hook.as_posix(), "origin", "https://example.invalid/aesop-test.git"],
+        cwd=td, input=stdin_line, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=120,
+    )
+
+
+class TestPrePushHookExecutes(unittest.TestCase):
+    """Run the generated pre-push hook in a scratch repo with a fake git stdin line."""
+
+    def test_push_to_remote_main_from_feature_branch_is_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            hook = _make_feature_repo(td)
+            head = _head_sha(td)
+            res = _run_pre_push(td, hook, f"refs/heads/feat/x {head} refs/heads/main {ZERO_SHA}\n")
+            self.assertEqual(res.returncode, 1, f"stdout={res.stdout!r} stderr={res.stderr!r}")
+            self.assertIn("blocked", res.stdout)
+
+    def test_clean_feature_push_is_allowed(self):
+        with tempfile.TemporaryDirectory() as td:
+            hook = _make_feature_repo(td)
+            head = _head_sha(td)
+            res = _run_pre_push(td, hook, f"refs/heads/feat/x {head} refs/heads/feat/x {ZERO_SHA}\n")
+            self.assertEqual(res.returncode, 0, f"stdout={res.stdout!r} stderr={res.stderr!r}")
+
+    def test_committed_secret_in_pushed_range_is_blocked(self):
+        """The secret is COMMITTED, so the staged index is empty; only the pushed range shows it."""
+        with tempfile.TemporaryDirectory() as td:
+            hook = _make_feature_repo(td)
+            Path(td, "config.txt").write_text(f"token={DUMMY_GH_TOKEN}\n", encoding="utf-8")
+            _git(td, "add", "config.txt")
+            assert _git(td, "commit", "-q", "-m", "add config").returncode == 0
+            self.assertEqual(_git(td, "diff", "--cached", "--name-only").stdout.strip(), "")
+            head = _head_sha(td)
+            res = _run_pre_push(td, hook, f"refs/heads/feat/x {head} refs/heads/feat/x {ZERO_SHA}\n")
+            self.assertEqual(res.returncode, 1, f"stdout={res.stdout!r} stderr={res.stderr!r}")
+
+    def test_missing_scan_script_fails_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            hook = _make_feature_repo(td)
+            (Path(td) / "tools" / "secret_scan.py").unlink()
+            head = _head_sha(td)
+            res = _run_pre_push(td, hook, f"refs/heads/feat/x {head} refs/heads/feat/x {ZERO_SHA}\n")
+            self.assertEqual(res.returncode, 1, f"stdout={res.stdout!r} stderr={res.stderr!r}")
+
+
+class TestInitForceRefreshesScanScript(unittest.TestCase):
+    """init --force must replace a stale tools/secret_scan.py; plain init must keep it."""
+
+    def _stale_repo(self, td):
+        subprocess.run(["git", "init", "-q"], cwd=td, capture_output=True, timeout=10)
+        init_project(td, project_name="proj")
+        scan = Path(td) / "tools" / "secret_scan.py"
+        scan.write_text("# stale copy\n", encoding="utf-8")
+        return scan
+
+    def test_force_replaces_stale_scan_script(self):
+        with tempfile.TemporaryDirectory() as td:
+            scan = self._stale_repo(td)
+            source = (Path(__file__).parent.parent / "tools" / "secret_scan.py").read_text(encoding="utf-8")
+            result = init_project(td, project_name="proj", force=True)
+            self.assertEqual(scan.read_text(encoding="utf-8"), source)
+            self.assertIn("tools/secret_scan.py", result["files_created"])
+
+    def test_without_force_stale_scan_script_is_kept_and_reported(self):
+        with tempfile.TemporaryDirectory() as td:
+            scan = self._stale_repo(td)
+            result = init_project(td, project_name="proj", force=False)
+            self.assertEqual(scan.read_text(encoding="utf-8"), "# stale copy\n")
+            self.assertTrue(any(f.startswith("tools/secret_scan.py") for f in result["files_skipped"]))
+
+
+class TestFreshConfigPassesDoctor(unittest.TestCase):
+    """A freshly scaffolded aesop.config.json must pass doctor's config field check."""
+
+    def test_fresh_init_config_passes_doctor_config_check(self):
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run(["git", "init", "-q"], cwd=td, capture_output=True, timeout=10)
+            init_project(td, project_name="doctor-test")
+            doctor = Path(__file__).parent.parent / "tools" / "doctor.js"
+            res = subprocess.run(
+                [shutil.which("node") or "node", str(doctor), "--json"], cwd=td,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+            )
+            report = json.loads(res.stdout)
+            rows = [c for c in report["checks"] if c["label"].startswith("aesop.config.json")]
+            self.assertEqual(len(rows), 1, report["checks"])
+            self.assertTrue(rows[0]["passed"], f"doctor config check failed: {rows[0]['hint']}")
 
 
 if __name__ == "__main__":

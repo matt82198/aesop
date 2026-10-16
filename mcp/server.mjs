@@ -35,7 +35,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
 // ============================================================================
@@ -847,6 +847,73 @@ async function getCIJobStatus(args) {
   });
 }
 
+// ============================================================================
+// Python interpreter resolution for the fleet helper (instances-claims.py)
+// ============================================================================
+
+const PYTHON_PROBE_TIMEOUT_MS = 5000;
+const IS_WINDOWS = process.platform === 'win32';
+// Characters that would let an AESOP_PYTHON override smuggle shell syntax into a Windows command line.
+const UNSAFE_PYTHON_OVERRIDE = /["&|<>^%\r\n]/;
+let pythonResolution = null; // probed once per process, cached (success or failure)
+
+function pythonCandidates() {
+  const candidates = [];
+  const override = (process.env.AESOP_PYTHON || '').trim();
+  if (override) {
+    candidates.push(UNSAFE_PYTHON_OVERRIDE.test(override)
+      ? { label: 'AESOP_PYTHON', invalid: true }
+      : { label: 'AESOP_PYTHON', cmd: override, prefix: [] });
+  }
+  candidates.push({ label: 'python3', cmd: 'python3', prefix: [] });
+  candidates.push({ label: 'python', cmd: 'python', prefix: [] });
+  candidates.push({ label: 'py -3', cmd: 'py', prefix: ['-3'] });
+  return candidates;
+}
+
+// Windows .cmd/.bat shims only run through the shell, so the Windows command line is built quoted.
+function interpreterInvocation(candidate, extraArgs) {
+  if (IS_WINDOWS) {
+    const line = [`"${candidate.cmd}"`, ...candidate.prefix, ...extraArgs.map((a) => `"${a}"`)].join(' ');
+    return { file: line, args: [], shell: true };
+  }
+  return { file: candidate.cmd, args: [...candidate.prefix, ...extraArgs], shell: false };
+}
+
+// Returns { candidate } for the first interpreter that runs `--version` with exit 0, or { error }.
+function resolvePython() {
+  if (pythonResolution) return pythonResolution;
+  const tried = [];
+  for (const candidate of pythonCandidates()) {
+    if (candidate.invalid) {
+      tried.push(`${candidate.label} (rejected: unsafe characters)`);
+      continue;
+    }
+    const inv = interpreterInvocation(candidate, ['--version']);
+    const probe = spawnSync(inv.file, inv.args, {
+      encoding: 'utf-8',
+      errors: 'replace',
+      timeout: PYTHON_PROBE_TIMEOUT_MS,
+      shell: inv.shell,
+      windowsHide: true,
+    });
+    if (!probe.error && probe.status === 0) {
+      pythonResolution = { candidate };
+      return pythonResolution;
+    }
+    tried.push(candidate.label);
+  }
+  pythonResolution = {
+    error: `no working python interpreter found (tried: ${tried.join(', ')}); set AESOP_PYTHON to a python executable`,
+  };
+  return pythonResolution;
+}
+
+function spawnFleetHelper(resolved, helperArgs, options) {
+  const inv = interpreterInvocation(resolved.candidate, helperArgs);
+  return spawn(inv.file, inv.args, { ...options, shell: inv.shell });
+}
+
 /**
  * fleet_instances: Get active instances and stale instances with heartbeat info
  * Spawns instances-claims.py helper to read from state_store
@@ -867,8 +934,14 @@ async function getFleetInstances() {
       return;
     }
 
+    const py = resolvePython();
+    if (py.error) {
+      resolve({ absent: false, error: py.error, instances: [], stale_threshold_seconds: 300 });
+      return;
+    }
+
     try {
-      const proc = spawn('python3', [helperPath, '--db', dbPath, '--root', AESOP_ROOT], {
+      const proc = spawnFleetHelper(py, [helperPath, '--db', dbPath, '--root', AESOP_ROOT], {
         cwd: AESOP_ROOT,
         env: {
           ...process.env,
@@ -956,8 +1029,14 @@ async function getFleetClaims() {
       return;
     }
 
+    const py = resolvePython();
+    if (py.error) {
+      resolve({ absent: false, error: py.error, by_instance: {} });
+      return;
+    }
+
     try {
-      const proc = spawn('python3', [helperPath, '--db', dbPath, '--root', AESOP_ROOT], {
+      const proc = spawnFleetHelper(py, [helperPath, '--db', dbPath, '--root', AESOP_ROOT], {
         cwd: AESOP_ROOT,
         env: {
           ...process.env,
@@ -1053,8 +1132,22 @@ async function getFleetMultiboxSummary() {
       return;
     }
 
+    const py = resolvePython();
+    if (py.error) {
+      resolve({
+        absent: false,
+        error: py.error,
+        instance_count: 0,
+        active_count: 0,
+        stale_count: 0,
+        claim_count: 0,
+        backend: UNKNOWN_BACKEND
+      });
+      return;
+    }
+
     try {
-      const proc = spawn('python3', [helperPath, '--db', dbPath, '--root', AESOP_ROOT, '--config', configPath], {
+      const proc = spawnFleetHelper(py, [helperPath, '--db', dbPath, '--root', AESOP_ROOT, '--config', configPath], {
         cwd: AESOP_ROOT,
         env: {
           ...process.env,
