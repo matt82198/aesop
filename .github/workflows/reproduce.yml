@@ -35,7 +35,7 @@ jobs:
         # pytest is a hard import for several tracked test modules (test_cli_base,
         # test_status_publish, ...). Omitting it made the full-suite discover step
         # below fail on "No module named 'pytest'". Matches ci.yml / main-full.yml.
-        run: pip install pyyaml pytest
+        run: pip install -r requirements-ci.txt
 
       - name: Configure git (required for hook installation tests)
         run: |
