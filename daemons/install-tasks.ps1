@@ -18,6 +18,9 @@ param(
 # Enable strict error handling
 $ErrorActionPreference = 'Stop'
 
+# Repetition duration every aesop trigger is registered with (compared on reinstall too).
+$TriggerDurationDays = 3650
+
 function ConvertTo-PosixPath {
     param([string]$WindowsPath)
     # Convert C:\foo\bar to /c/foo/bar
@@ -42,21 +45,54 @@ function Get-WorktreeRoot {
 
 function Get-TaskActionPath {
     param(
-        [string]$TaskName
+        $Task
     )
 
     try {
-        $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-        if ($task) {
+        if ($Task) {
             # Return the action's Arguments (plural -- the CIM property name).
             # Execute is always "wscript.exe" for every aesop task, so it can never
             # distinguish one worktree from another; the worktree path lives in Arguments.
-            $action = $task.Actions[0]
+            $action = $Task.Actions[0]
             if ($action) {
                 return $action.Arguments
             }
         }
         return $null
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-TaskRepetition {
+    param(
+        $Task
+    )
+
+    # The Repetition object of the task's first trigger (Interval / Duration), or $null.
+    try {
+        $trigger = $Task.Triggers[0]
+        if ($trigger) {
+            return $trigger.Repetition
+        }
+        return $null
+    }
+    catch {
+        return $null
+    }
+}
+
+function ConvertTo-TaskTimeSpan {
+    param(
+        $Value
+    )
+
+    # CIM reports repetition Interval/Duration as ISO-8601 duration strings (PT1H, P3650D).
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [TimeSpan]) { return $Value }
+    try {
+        return [System.Xml.XmlConvert]::ToTimeSpan([string]$Value)
     }
     catch {
         return $null
@@ -137,17 +173,33 @@ function Register-DaemonTask {
         # every existing task look divergent and render the idempotent branch unreachable.
 
         # Extract the command from existing task's action
-        $existingAction = $existingTask.Actions[0]
-        if ($existingAction) {
-            $existingArgument = $existingAction.Arguments
-
+        $existingArgument = Get-TaskActionPath -Task $existingTask
+        if ($null -ne $existingArgument) {
             # Check if our desired command is already in the arguments
             # The format is: //B //Nologo "<path>" "<bashexe>" -lc "<command>"
             if ($existingArgument -match [regex]::Escape($Command)) {
-                # Existing task has the same command; idempotent
-                Write-Host "Task already exists with same action: $TaskName (idempotent)"
-                Append-AuditLog -AesopRoot $AesopRoot -Action 'register' -TaskName $TaskName -Outcome 'idempotent'
-                return
+                # Same command. The trigger must match too: a task registered at a different
+                # interval (or duration) keeps that cadence unless we re-register it.
+                $repetition = Get-TaskRepetition -Task $existingTask
+                $existingInterval = $null
+                $existingDuration = $null
+                if ($repetition) {
+                    $existingInterval = ConvertTo-TaskTimeSpan -Value $repetition.Interval
+                    $existingDuration = ConvertTo-TaskTimeSpan -Value $repetition.Duration
+                }
+                $requestedInterval = New-TimeSpan -Minutes $IntervalMinutes
+                $requestedDuration = New-TimeSpan -Days $TriggerDurationDays
+
+                if (($existingInterval -eq $requestedInterval) -and ($existingDuration -eq $requestedDuration)) {
+                    # Same command and same trigger; idempotent
+                    Write-Host "Task already exists with same action: $TaskName (idempotent)"
+                    Append-AuditLog -AesopRoot $AesopRoot -Action 'register' -TaskName $TaskName -Outcome 'idempotent'
+                    return
+                }
+
+                # Same command, different trigger: re-register below with the requested trigger.
+                Write-Host "Task '$TaskName' has the same action but a different trigger (existing interval: $existingInterval, requested: $requestedInterval). Re-registering (update)."
+                Append-AuditLog -AesopRoot $AesopRoot -Action 'register' -TaskName $TaskName -Outcome 'update'
             } else {
                 # Existing task has a different action path; warn and skip
                 Write-Host "WARNING: Task '$TaskName' already exists with a DIFFERENT action path." -ForegroundColor Yellow
@@ -169,7 +221,7 @@ function Register-DaemonTask {
         -Once `
         -At $startTime `
         -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes) `
-        -RepetitionDuration (New-TimeSpan -Days 3650)
+        -RepetitionDuration (New-TimeSpan -Days $TriggerDurationDays)
 
     # Build the settings: Hidden, IgnoreNew for multiple instances, 1-hour timeout
     $settings = New-ScheduledTaskSettingsSet `
