@@ -201,6 +201,11 @@ fi
 scan_script="$repo_root/tools/secret_scan.py"
 if [ -f "$scan_script" ]; then
   while read -r local_ref local_sha remote_ref remote_sha; do
+    # Fail closed on a malformed line (fewer than four fields): never fall back to a whole-tree scan
+    if [ -z "$local_ref" ] || [ -z "$local_sha" ] || [ -z "$remote_ref" ] || [ -z "$remote_sha" ]; then
+      echo "ERROR: Malformed pre-push stdin line (expected: <local_ref> <local_sha> <remote_ref> <remote_sha>). Push blocked."
+      exit 1
+    fi
     # Protected remote refs are blocked whatever branch is checked out
     case "$remote_ref" in
       refs/heads/main|refs/heads/master)
@@ -230,6 +235,42 @@ else
   echo "This is likely a setup error: tools/secret_scan.py must be present in the repo."
   exit 1
 fi
+
+# Pushed-range secret scan: --staged only sees the index, so committed secrets
+# would pass. git feeds one line per ref on stdin:
+#   <local_ref> <local_sha> <remote_ref> <remote_sha>
+# Every non-deletion line scans the pushed commits with --range (fail closed).
+zero_sha=0000000000000000000000000000000000000000
+empty_tree_sha=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -z "${local_ref:-}" ] && continue
+  if [ -z "${remote_sha:-}" ] || [ -z "${local_sha:-}" ]; then
+    echo "ERROR: Malformed pre-push input line for $local_ref. Push blocked."
+    exit 1
+  fi
+  # Branch deletion pushes no commits.
+  [ "$local_sha" = "$zero_sha" ] && continue
+  if [ "$remote_sha" = "$zero_sha" ]; then
+    # New branch: scan from the merge-base with the default branch, else the whole history.
+    base_sha=""
+    for default_ref in origin/HEAD origin/main origin/master main master; do
+      if git rev-parse --verify -q "$default_ref^{commit}" >/dev/null 2>&1; then
+        base_sha=$(git merge-base "$local_sha" "$default_ref" 2>/dev/null || echo "")
+        break
+      fi
+    done
+    [ -z "$base_sha" ] && base_sha="$empty_tree_sha"
+    pushed_range="$base_sha..$local_sha"
+  else
+    pushed_range="$remote_sha..$local_sha"
+  fi
+  python3 "$scan_script" --range "$pushed_range" --repo "$repo_root" </dev/null
+  range_exit=$?
+  if [ $range_exit -ne 0 ]; then
+    echo "ERROR: Secret scan found issues in pushed commits ($pushed_range). Push blocked."
+    exit 1
+  fi
+done
 
 exit 0
 """
@@ -450,7 +491,8 @@ def install_pre_push_hook(target_dir, force=False):
             return False, "existing pre-push is a symlink (security risk)"
         return False, "pre-push hook already exists (use --force to replace)"
 
-    hook_path.write_text(PRE_PUSH_HOOK, encoding="utf-8")
+    # Write bytes so the POSIX hook keeps LF endings on Windows (write_text would emit CRLF).
+    hook_path.write_bytes(PRE_PUSH_HOOK.encode("utf-8"))
 
     # Make executable (no-op on Windows, matters on POSIX)
     try:

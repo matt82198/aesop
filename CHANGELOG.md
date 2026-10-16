@@ -30,11 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added supply-chain hygiene: `requirements.lock.txt` (hash-locked runtime deps from `requirements.txt` via `pip-compile --generate-hashes`, verified with `--require-hashes`), `.github/workflows/scorecard.yml` (OpenSSF Scorecard) and `.github/workflows/codeql.yml` (CodeQL for javascript-typescript and python), all actions SHA-pinned.
 - Fixed MCP server metadata drift: `mcp/package.json` author now matches the root package (Matt Culliton), and the `mcp/server.mjs` initialize response advertises protocolVersion `2025-11-25` (was `2024-11-05`); guarded by `tests/mcp-metadata.test.mjs`.
 - Docs: corrected dependency and Python-floor claims to match the repo (no runtime npm dependencies; CI floor Python 3.11; PyYAML/cryptography/playwright/opentelemetry/anthropic/pyflakes listed in new `pyproject.toml`) and added a prompt-injection threat model to `docs/ARCHITECTURE.md`.
+- Security: the pre-push hook installed by `aesop init` now scans the pushed commit range (`secret_scan.py --range` over the pre-push stdin refs), not only the index, so committed secrets are blocked; fails closed on findings, scanner error, or missing scanner (#1087).
 - CI: `.github/shard-timing.json` populated with per-file test counts (a proxy, not measured runtime) so the timing-balanced shard path engages; balanced 4-shard split measured 1674/1673/1673/1673 (was 1607/1583/1520/1983 round-robin) (#1089).
 - Added the refuted ledger: `docs/refuted.jsonl` (committed record of measured-and-killed ideas, gate-bounced claims and REFUTED lanes), `tools/refuted_ledger.py` (validate, add, stats, redact; fail-closed) and `docs/REFUTED.md`.
 - Fix (CLI): the final summary's `cp ... ~/.claude/CLAUDE.md` instructions now back up the existing global file first; the scaffold never performed that copy, but the printed text would have overwritten it silently (#1086).
 - Fix (CLI): `--repos` entries must be existing directories; a missing path, file, or URL now exits 2 before anything is written, instead of recording a nonexistent repo (#1086).
 - Fix (receipt emitter): both fail-closed fallbacks in the scoped shard selection (underivable shard map, unowned `tools/` change) now run the injected `registry` instead of `DEFAULT_MATRIX`, so a caller with a different registry no longer gets "unknown matrix part(s)"; production is unchanged because the injected registry equals `DEFAULT_REGISTRY`.
+- Fix (init pre-push hook): a malformed stdin line (fewer than four fields, or an empty ref or sha) now prints a one-line diagnostic and exits 1 instead of falling back to a whole-tree scan and passing; the zero-sha new-branch and deleted-ref paths are unchanged.
 
 ## [0.10.0] - 2026-10-15
 
