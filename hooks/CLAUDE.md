@@ -87,7 +87,7 @@ Claude Code **PreToolUse** hook enforcing "subagents are always Haiku" cardinal 
 - Subagent dispatch (Agent/Task): enforce Haiku or `cardinal_rules.subagent_model` from `aesop.config.json` (searched in `$AESOP_ROOT`, then cwd). Non-compliant model rewritten before dispatch.
 - **Escape hatch**: Prompt containing `[[ALLOW-NON-HAIKU]]` bypasses rewrite; escape logged to `state/MODEL-POLICY-ESCAPES.log` (JSON-lines: ts, event, tool, session_id, cwd, description, requested_model, prompt_head).
 
-**Fail-open reliability**: Malformed stdin → no output, exit 0. Hook never crashes harness or logs payload contents. Stdin read raced against 2s timeout.
+**Fail-closed reliability**: Malformed, empty, or timed-out stdin (2s race), or an internal error → `permissionDecision: "deny"` with a fixed one-line reason, exit 0. Hook never crashes harness or logs payload contents.
 
 **Registration (`.claude/settings.json`)**:
 ```json

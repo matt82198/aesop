@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Fix: the pre-push hook no longer hangs when a `python3` on PATH blocks. `resolve_py_bin` probes each candidate with a bounded `timeout 5` run, skips an unusable one with a WARN line, and fails closed (`Error: no usable python interpreter; push blocked.`, non-zero exit) when none is usable. The interpreter is resolved once per push, so the probe costs at most one bound.
+- Fixed: the subagent model-policy hook (`hooks/claude/force-model-policy.mjs`) now fails closed on malformed, empty, timed-out, or errored input (permissionDecision deny) instead of allowing the dispatch unchanged (#1082).
 - Added `tools/pr_trigger_check.py`, a read-only single-shot detector that reports open PRs whose current head sha has no `pull_request` workflow run (exit 1 if any open non-draft PR lacks one, 2 on gh error); detects only, never remediates (#1088).
 - Receipt honesty: a scoped push that selects zero python shards now posts check-run conclusion `neutral` instead of `success`; red stays `failure` and the verifier is unchanged (#1085).
 - Fix: `baseline_liveness_check.py` no longer probes writer/seed tables. A `tools/*.py` file that only quotes a baseline filename is a consumer only if it also declares `--baseline`; otherwise it is skipped with one INFO line instead of failing closed as a "consumer error".
