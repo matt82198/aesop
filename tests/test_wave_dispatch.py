@@ -9,7 +9,6 @@ Contract under test (ui/wave_dispatch.py::_infer_agent_phase_from_transcript):
 Run: python -I tests/test_wave_dispatch.py
 """
 import json
-import os
 import shutil
 import sys
 import tempfile
