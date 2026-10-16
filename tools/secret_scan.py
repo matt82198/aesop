@@ -286,6 +286,17 @@ MAX_SCAN_BYTES = 16 * 1024 * 1024  # F-02: a file over this cap FAILS CLOSED (ne
 SIZE_NOTICE_BYTES = 1024 * 1024  # informational SKIPPED-LARGE notice threshold
 # Bytes that never appear in text: C0 controls except TAB/LF/CR, and DEL.
 _CONTROL_BYTES = bytes([b for b in range(32) if b not in (9, 10, 13)] + [127])
+# CSI sequences (ESC [ ... final) and two-byte ESC Fe escapes.
+_ANSI_ESCAPE = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-Z\\-_]")
+_PRINTABLE_RUN = re.compile(rb"[\x20-\x7e\t]{4,}")
+
+
+_CREDENTIAL_PLACEHOLDER_TOKEN = re.compile(
+    # Whole-token match only (tracker a108e72018bf): a placeholder word must not be
+    # a substring of a real value (`Hunter2xxxRealPw` is not a placeholder).
+    r"(?<![a-z0-9])(?:example|changeme|placeholder|dummy|xxx+)(?![a-z0-9])"
+    r"|(?<![a-z0-9])your-"
+)
 
 
 def _credential_value_is_placeholder(value):
@@ -295,9 +306,8 @@ def _credential_value_is_placeholder(value):
     if not value:
         return True
     low = value.lower()
-    for word in ("example", "changeme", "placeholder", "dummy", "xxx", "your-"):
-        if word in low:
-            return True
+    if _CREDENTIAL_PLACEHOLDER_TOKEN.search(low):
+        return True
     # F-01 follow-up: "..." is a doc ellipsis (`OPENAI_API_KEY=sk-proj-...`), not a
     # literal. Dots are now part of the unquoted value class, so this keeps the
     # widened class from flagging elided doc examples.
@@ -317,6 +327,11 @@ def _is_code_identifier(value, rest_of_line):
     line (`DB_PASSWORD=supersecret`, `DB_PASSWORD=hunter.prod`) stays flagged, as does
     any value with a digit. Dots are accepted in the unquoted value class (F-01
     follow-up) so this guard is what keeps attribute chains from flagging."""
+    # A trailing comment is not code: a literal value followed by a comment must
+    # still read as a literal (tracker a108e72018bf).
+    comment = re.search(r"\s(?:#|//)", rest_of_line)
+    if comment:
+        rest_of_line = rest_of_line[:comment.start()]
     segments = value.split(".")
     if not all(re.fullmatch(r"[A-Za-z_]+", seg) for seg in segments):
         return False
@@ -366,6 +381,9 @@ def _content_views(raw):
         return [(raw[2:].decode(codec, errors="replace"), True)], True
     nul_tagged = b"\x00" in raw[:8192]
     sample = raw[:65536].replace(b"\x00", b" ")
+    # ANSI escape sequences (colour codes, cursor moves) are ordinary terminal text,
+    # not binary content: strip them before counting control bytes (tracker e346b3e442e8).
+    sample = _ANSI_ESCAPE.sub(b"", sample)
     control = len(sample) - len(sample.translate(None, _CONTROL_BYTES))
     if sample and control / len(sample) >= 0.05:
         views = [
@@ -375,6 +393,10 @@ def _content_views(raw):
         for codec in ("utf-16-le", "utf-16-be"):
             for offset in (0, 1):
                 views.append((raw[offset:].decode(codec, errors="ignore"), False))
+        # A binary blob can still carry a plaintext credential: run every rule over
+        # its printable runs (tracker e346b3e442e8).
+        printable = b"\n".join(_PRINTABLE_RUN.findall(raw))
+        views.append((printable.decode("latin-1"), True))
         return views, nul_tagged
     views = [(raw.replace(b"\x00", b" ").decode("utf-8", errors="ignore"), True)]
     codec = _utf16_no_bom_codec(raw)
@@ -382,6 +404,39 @@ def _content_views(raw):
         for offset in (0, 1):
             views.append((raw[offset:].decode(codec, errors="ignore"), True))
     return views, nul_tagged
+
+
+_CONNECTION_PASSWORD = re.compile(r"//[^:/\s]+:([^@/\s]+)@")
+
+
+def _connection_password_is_placeholder(url):
+    """True when the URL's password component is a placeholder. The DB name, path
+    and host are never checked (tracker b0937071216e: `.../test` is a DB name)."""
+    match = _CONNECTION_PASSWORD.search(url)
+    if not match:
+        return is_placeholder(url)
+    return is_placeholder(match.group(1))
+
+
+# A regex construct inside a password component: an escape (`\s`), a bracket class
+# (`[^@/\s]`, `[ss]`), or a quantifier (`+`, `*`, `?`, `{n,m}`).
+_REGEX_CONSTRUCT = re.compile(r"\\.|\[\^[^\]]*\]|\[\\[^\]]*\]|\{[0-9]*,?[0-9]*\}|[+*?]")
+_LITERAL_ALNUM = re.compile(r"[A-Za-z0-9]")
+
+
+def _connection_password_is_regex_shape(url):
+    """True when the password component is made only of regex constructs and no
+    literal alphanumeric character: the shape of a scanner's own rule-table literal
+    (a character class plus quantifier), not a credential. Real passwords carry
+    literal alphanumerics, so a value with one is never excused here. A password
+    with no regex construct at all (e.g. symbols only) is never excused either."""
+    match = _CONNECTION_PASSWORD.search(url)
+    if not match:
+        return False
+    password = match.group(1)
+    if not _REGEX_CONSTRUCT.search(password):
+        return False
+    return _LITERAL_ALNUM.search(_REGEX_CONSTRUCT.sub("", password)) is None
 
 
 def _scan_views(label, views, env_file, has_file_pragma, scan_path):
@@ -407,6 +462,15 @@ def _scan_views(label, views, env_file, has_file_pragma, scan_path):
                             if _is_code_identifier(value, line[match.end():]):
                                 continue
                         if _credential_value_is_placeholder(value):
+                            continue
+                    elif rule_name == "connection_string":
+                        # Tracker b0937071216e: the placeholder check applies to the
+                        # credential component (the password), never the DB name/host.
+                        if _connection_password_is_placeholder(match_str):
+                            continue
+                        # The scanner's own regex rule-table literals (character class +
+                        # quantifier, no literal alphanumerics) are not credentials.
+                        if _connection_password_is_regex_shape(match_str):
                             continue
                     elif is_placeholder(match_str):
                         continue
@@ -486,11 +550,12 @@ def scan_blob(label, content_bytes):
 
     Returns list of (line_num, rule, match_str, is_fatal), like scan_file().
     Raises ScanError when the blob is over MAX_SCAN_BYTES (fail closed).
+
+    NO path-class skip here (tracker 1af7eda7fa11): a staged or ranged blob is the
+    object being pushed, so a vendored or .pyc path does not exempt it. Only the
+    working-tree walk (scan_file / scan_paths) skips vendored and compiled paths.
     """
     filepath = Path(label)
-    if should_skip_file(filepath):
-        return []
-
     findings = _credential_filename_findings(filepath)
     _check_scan_cap(label, len(content_bytes))
     if len(content_bytes) > SIZE_NOTICE_BYTES:

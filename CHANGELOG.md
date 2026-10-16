@@ -11,10 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - CI: the CI Python test dependencies are single-sourced in a root `requirements-ci.txt` (versions unchanged from ci.yml; cryptography stays pinned to 50.0.2). Every workflow pip step runs `pip install -r requirements-ci.txt`, and `tools/ci_workflow_lint.py` fails any step that re-lists those packages inline, so the shard job can no longer drift from ci.yml.
 
+- Doctor layout detection: an init'd repo (no scaffold directories) reports the five-directory check as n/a instead of failing, and the `~/.claude/skills` check runs only with `--global` (#1092).
+- Added `tools/lane_ab_report.py` (stdlib; reports the lane-contract A/B experiment from `lane-ab.jsonl` and the hook-denial ledger: per-arm dispatches, forced count, denials per dispatch, arm B page-fault relaunches, rules_by_fault_count; exits 2 on unreadable input) and `LANE-CONTRACT-MIN.md` (walls-only arm B brief).
 - CI hardening: every GitHub Actions `uses:` pinned to a full commit SHA with a version comment; top-level `permissions: contents: read` in every workflow, with write grants moved to the jobs that need them; npm pinned to 12.2.0 in publish.yml (the version the last green publish used).
+- Docs: `LANE-CONTRACT.md` §4a item 8 no longer tells lanes to push with `AESOP_RECEIPT_EMIT=0` (interim ended with #924); receipts are emitted on every push. (#1081)
+- Docs: `SECURITY.md` supported-versions table now lists 0.10.x (older lines not supported); `ui/README.md` Python floor and dependency statement aligned with the root README (Python 3.11+).
+- Docs: README adopter step now runs `npx @matt82198/aesop doctor` instead of `npx . doctor` (the scaffold writes no `package.json`, so `npx .` failed with ENOENT) (#1080).
 
 - Added `tools/goal_state.py` (orchestrator GOAL as append-only `goal_set` events in the event store) and `tools/boot_state.py` (one deterministic, byte-capped boot brief from the store, STATE.md ACTIVE, BUILDLOG tail and git; exits 2 on an unreadable store).
+- Fixed MCP server metadata drift: `mcp/package.json` author now matches the root package (Matt Culliton), and the `mcp/server.mjs` initialize response advertises protocolVersion `2025-11-25` (was `2024-11-05`); guarded by `tests/mcp-metadata.test.mjs`.
 - Docs: corrected dependency and Python-floor claims to match the repo (no runtime npm dependencies; CI floor Python 3.11; PyYAML/cryptography/playwright/opentelemetry/anthropic/pyflakes listed in new `pyproject.toml`) and added a prompt-injection threat model to `docs/ARCHITECTURE.md`.
+- Fix (CLI): the final summary's `cp ... ~/.claude/CLAUDE.md` instructions now back up the existing global file first; the scaffold never performed that copy, but the printed text would have overwritten it silently (#1086).
+- Fix (CLI): `--repos` entries must be existing directories; a missing path, file, or URL now exits 2 before anything is written, instead of recording a nonexistent repo (#1086).
 
 ## [0.10.0] - 2026-10-15
 

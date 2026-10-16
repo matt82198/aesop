@@ -227,6 +227,23 @@ class TestTrackerMutateStillGated(TrackerCSRFTestCase):
             headers={"X-Aesop-Token": self.token})
         self.assertEqual(status, 200, body)
 
+    def test_delete_with_valid_token_archives_item(self):
+        # Regression (tracker d0ee986312fe): the UI sends ?action=delete. The
+        # handler used to take item_id from the raw path including the query,
+        # so archive looked up '<id>?action=delete' and always 404'd.
+        item_id = self._create_item()
+        con = self._conn()
+        try:
+            con.request("POST", f"/api/tracker/{item_id}?action=delete",
+                        body=b"", headers={"Content-Length": "0",
+                                           "X-Aesop-Token": self.token})
+            resp = con.getresponse()
+            body = resp.read()
+        finally:
+            con.close()
+        self.assertEqual(resp.status, 200, body)
+        self.assertEqual(json.loads(body.decode("utf-8")).get("status"), "archived", body)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -62,6 +62,15 @@ function createTestDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-onboard-test-'));
 }
 
+/** Create real repo directories under dir and return them comma-joined for --repos (must exist). */
+function repoDirsArg(dir, names) {
+  return names.map((name) => {
+    const p = path.join(dir, name);
+    fs.mkdirSync(p, { recursive: true });
+    return p;
+  }).join(',');
+}
+
 
 test('CLAUDE-TEMPLATE.md has no "[Your " style bare placeholders', () => {
   const template = fs.readFileSync(CLAUDE_TEMPLATE, 'utf8');
@@ -109,7 +118,7 @@ test('--name --domains --repos scaffolds without errors', () => {
   const res = runCli(targetDir, [
     '--name', 'my-service',
     '--domains', 'api,worker,monitoring',
-    '--repos', '/path/to/repo1,/path/to/repo2'
+    '--repos', repoDirsArg(tempDir, ['repo1', 'repo2'])
   ]);
   assert.equal(res.status, 0, `Scaffold with full flags should succeed. stderr: ${res.stderr}`);
 });
@@ -165,7 +174,7 @@ test('scaffold generates valid aesop.config.json', () => {
 
   const res = runCli(targetDir, [
     '--name', 'my-api',
-    '--repos', '/path/to/api,/path/to/worker'
+    '--repos', repoDirsArg(tempDir, ['api', 'worker'])
   ]);
   assert.equal(res.status, 0);
 
@@ -221,7 +230,7 @@ test('full headless scaffold is complete and valid', () => {
   const res = runCli(targetDir, [
     '--name', 'production-api',
     '--domains', 'api,worker,security,monitoring',
-    '--repos', '/home/user/my-api,/home/user/my-worker'
+    '--repos', repoDirsArg(tempDir, ['my-api', 'my-worker'])
   ]);
   assert.equal(res.status, 0, `Full scaffold should succeed. stderr: ${res.stderr}`);
 
@@ -275,11 +284,11 @@ test('targetDir defaults to aesop-fleet when --repos provided without positional
 
   // NO explicit target dir, only --repos flag
   // Should NOT scaffold into /tmp/x; should create ./aesop-fleet (default)
-  const res = runCliInDir(tempDir, ['--repos', '/tmp/test-repos']);
+  const res = runCliInDir(tempDir, ['--repos', repoDirsArg(tempDir, ['test-repos'])]);
   assert.equal(res.status, 0, `Scaffold with --repos only should succeed. stderr: ${res.stderr}`);
 
-  // Verify created at default location, NOT at /tmp/test-repos
-  assert.ok(fs.existsSync(targetDir), `Default target dir "aesop-fleet" should be created, not /tmp/test-repos`);
+  // Verify created at default location, NOT at the --repos directory
+  assert.ok(fs.existsSync(targetDir), `Default target dir "aesop-fleet" should be created, not the --repos directory`);
   assert.ok(fs.existsSync(path.join(targetDir, 'daemons')), 'daemons/ should exist in default location');
 });
 
