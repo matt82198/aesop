@@ -1778,12 +1778,18 @@ RECEIPT_STUB_PRELUDE='import sys,os; open(os.environ["STUB_ARGV"],"w").write(" "
 
 receipt_gate_case() {
   # $1 label  $2 stub python body  $3 expected return  $4 expected audit reason  $5 optional VAR=val
-  local label="$1" body="$2" want_rc="$3" want_reason="$4" extra="${5:-}"
+  # $6 optional "no_timeout": shadow timeout/gtimeout so the hook takes its no-timeout (background-job) branch
+  local label="$1" body="$2" want_rc="$3" want_reason="$4" extra="${5:-}" no_timeout="${6:-}"
   local root="$TEST_ROOT/receipt_gate_$label"
   mkdir -p "$root/state" "$root/tools" "$root/stub-bin"
   printf '%s\n' "$body" > "$root/tools/emit_receipt.py"
   printf '#!/bin/sh\nexit 0\n' > "$root/stub-bin/gh"
   chmod +x "$root/stub-bin/gh"
+  if [ -n "$no_timeout" ]; then
+    printf '#!/bin/sh\nexit 127\n' > "$root/stub-bin/timeout"
+    printf '#!/bin/sh\nexit 127\n' > "$root/stub-bin/gtimeout"
+    chmod +x "$root/stub-bin/timeout" "$root/stub-bin/gtimeout"
+  fi
   touch "$root/dummy_key.pem"
   emit_fixture_base "$root"
   (
@@ -1820,6 +1826,16 @@ print("part py-shard-3 exit=1"); print("conclusion=failure"); sys.exit(3)' 1 rec
     printf 'FAIL: red case must pass --fail-on-red and no --pushed-red, got: %s\n' "$(cat "$TEST_ROOT/receipt_gate_red_blocks/argv.txt")"
     test_failed=$((test_failed + 1))
   fi
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test: a RED required part blocks the push in the NO-TIMEOUT branch (child exit code must propagate) ===\n'
+# Fail-open regression: the no-timeout branch did `wait $pid || true; rc=$?`, which always read 0,
+# so a red matrix passed. The child exits 3 (red); the hook must still block with rc 1.
+if receipt_gate_case red_no_timeout "$RECEIPT_STUB_PRELUDE"'
+print("part py-shard-3 exit=1"); print("conclusion=failure"); sys.exit(3)' 1 receipt_red_blocked "" no_timeout; then
+  test_passed=$((test_passed + 1))
 else
   test_failed=$((test_failed + 1))
 fi
@@ -2388,6 +2404,95 @@ printf '\n=== Test: tracker_guard runs from the base gate copy with state_store 
     exit 1
   fi
   printf 'PASS: check_tracker_guard exits 0 from the extracted base gate copy (state_store importable)\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test: a HUNG python3 on PATH fails fast (bounded probe), never a multi-minute push hang ===\n'
+(
+  pp_root="$TEST_ROOT/pyprobe_hang"
+  pp_stub_bin="$pp_root/stub-bin"
+  pp_pid_file="$pp_root/stub.pids"
+  pp_remote="$pp_root/remote.git"
+  pp_clone="$pp_root/clone"
+  rm -rf "$pp_root"
+  mkdir -p "$pp_stub_bin" "$pp_root/state"
+
+  # Stub python3 that blocks forever. It records its PID and exec's sleep so
+  # the recorded PID is the sleeper itself; `timeout` kills it directly.
+  printf '#!/bin/sh\necho $$ >> "%s"\nexec sleep 600\n' "$pp_pid_file" > "$pp_stub_bin/python3"
+  chmod +x "$pp_stub_bin/python3"
+
+  # Kill only the stub PIDs this test recorded (never an untargeted kill).
+  pp_kill_stubs() {
+    local p
+    [ -f "$pp_pid_file" ] || return 0
+    while IFS= read -r p; do
+      [ -n "$p" ] && kill "$p" 2>/dev/null
+    done < "$pp_pid_file"
+    return 0
+  }
+  trap 'pp_kill_stubs' EXIT
+
+  # Fixture: a trunk carrying this repo's committed tree (so every gate artifact
+  # the hook checks is present), published to a bare remote. A feature branch is
+  # published first so the hooked push is a normal update, not a new-branch push.
+  git init -q --bare "$pp_remote"
+  git init -q -b main "$pp_clone"
+  git -C "$pp_clone" config user.email t@example.com
+  git -C "$pp_clone" config user.name t
+  git -C "$pp_clone" config core.autocrlf false
+  git -C "$REPO_ROOT" archive HEAD | tar -x -C "$pp_clone"
+  git -C "$pp_clone" add -A
+  git -C "$pp_clone" commit -q -m trunk
+  git -C "$pp_clone" remote add origin "$pp_remote"
+  git -C "$pp_clone" push -q origin HEAD:refs/heads/main
+  git -C "$pp_clone" checkout -q -b feature/pyprobe
+  printf 'one\n' > "$pp_clone/PYPROBE.txt"
+  git -C "$pp_clone" add -A
+  git -C "$pp_clone" commit -q -m one
+  git -C "$pp_clone" push -q origin feature/pyprobe
+  printf 'two\n' > "$pp_clone/PYPROBE.txt"
+  git -C "$pp_clone" add -A
+  git -C "$pp_clone" commit -q -m two
+  # The real pre-push hook, installed the way git runs it.
+  printf '#!/bin/sh\nexec bash "%s" "$@"\n' "$HOOK_SCRIPT" > "$pp_clone/.git/hooks/pre-push"
+  chmod +x "$pp_clone/.git/hooks/pre-push"
+
+  # Output goes to a FILE, not $(...): an orphaned stub would hold a command-
+  # substitution pipe open until it exits. Stubs are killed right after the push.
+  pp_start=$(date +%s)
+  (cd "$pp_clone" && PATH="$pp_stub_bin:$PATH" AESOP_ROOT="$pp_clone" \
+    AESOP_STATE_ROOT="$pp_root/state" AESOP_RECEIPT_EMIT=0 \
+    timeout 40 git push -q origin HEAD:refs/heads/feature/pyprobe </dev/null >"$pp_root/push.out" 2>&1)
+  pp_rc=$?
+  pp_elapsed=$(( $(date +%s) - pp_start ))
+  pp_kill_stubs
+  pp_out=$(cat "$pp_root/push.out")
+
+  if [ "$pp_elapsed" -ge 30 ]; then
+    printf 'FAIL: push with a hung python3 on PATH took %ss (rc=%s, bound <30s). Output: %s\n' "$pp_elapsed" "$pp_rc" "$pp_out"
+    exit 1
+  fi
+  if [ "$pp_rc" -eq 0 ]; then
+    pp_remote_head=$(git -C "$pp_remote" rev-parse --verify -q refs/heads/feature/pyprobe || true)
+    pp_local_head=$(git -C "$pp_clone" rev-parse HEAD)
+    if [ "$pp_remote_head" != "$pp_local_head" ]; then
+      printf 'FAIL: push reported rc=0 but remote head (%s) != local head (%s)\n' "$pp_remote_head" "$pp_local_head"
+      exit 1
+    fi
+    printf 'PASS: push succeeded via the next candidate in %ss (hung python3 skipped)\n' "$pp_elapsed"
+    exit 0
+  fi
+  if printf '%s' "$pp_out" | grep -qF 'Error: no usable python interpreter; push blocked.'; then
+    printf 'PASS: push failed closed in %ss with the no-usable-interpreter error\n' "$pp_elapsed"
+    exit 0
+  fi
+  printf 'FAIL: push rc=%s in %ss without the fail-closed error. Output: %s\n' "$pp_rc" "$pp_elapsed" "$pp_out"
+  exit 1
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))

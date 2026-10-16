@@ -6,8 +6,8 @@
 //  - prompt containing [[ALLOW-NON-HAIKU]]               -> no rewrite, but the bypass
 //    is announced via permissionDecisionReason AND appended to
 //    state/MODEL-POLICY-ESCAPES.log under the AESOP_ROOT state root
-//  - malformed stdin                                     -> no output, exit 0 (fail-open)
-//  - never-closing stdin                                 -> exits 0 within ~2s (fail-open)
+//  - malformed stdin                                     -> permissionDecision "deny", exit 0 (fail-closed)
+//  - empty or never-closing stdin                        -> permissionDecision "deny" within ~2s, exit 0 (fail-closed)
 //  - aesop.config.json cardinal_rules.subagent_model     -> overrides the "haiku" default
 //
 // Run: node --test tests/force-model-policy.test.mjs
@@ -180,7 +180,7 @@ test('normal dispatch (no escape hatch) writes no escape log', () => {
   assert.ok(!fs.existsSync(path.join(res.root, ESCAPE_LOG)));
 });
 
-test('never-closing stdin: hook exits 0 within the timeout window (fail-open)', async () => {
+test('never-closing stdin: hook exits 0 within the timeout window and denies (fail-closed)', async () => {
   const root = makeRoot();
   const child = spawn(process.execPath, [HOOK], {
     cwd: root,
@@ -196,7 +196,8 @@ test('never-closing stdin: hook exits 0 within the timeout window (fail-open)', 
   child.stdin.write(payload('Agent', { description: 'x', prompt: 'y', model: 'opus' }));
   const exitCode = await new Promise((resolve) => {
     const killer = setTimeout(() => { child.kill('SIGKILL'); resolve('HUNG'); }, 5000);
-    child.on('exit', (code) => {
+    // 'close' (not 'exit') so all stdout has been flushed before we read it.
+    child.on('close', (code) => {
       clearTimeout(killer);
       // Clean up streams to prevent lingering handles on Linux
       child.stdout?.destroy();
@@ -207,13 +208,27 @@ test('never-closing stdin: hook exits 0 within the timeout window (fail-open)', 
   });
   assert.notEqual(exitCode, 'HUNG', 'hook must not hang when stdin never closes');
   assert.equal(exitCode, 0, 'timeout path must exit 0');
-  assert.equal(stdout.trim(), '', 'timeout path must fail-open with no rewrite');
+  const out = JSON.parse(stdout);
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny', 'timeout path must fail-closed');
+  assert.equal(out.hookSpecificOutput.updatedInput, undefined);
 });
 
-test('malformed stdin: no output, exit 0 (fail-open, never crash)', () => {
+test('malformed stdin: permissionDecision deny, exit 0 (fail-closed, never crash)', () => {
   const res = runHook('this is { not json');
   assert.equal(res.status, 0, 'hook must never crash the harness');
-  assert.equal(res.stdout.trim(), '');
+  const hso = JSON.parse(res.stdout).hookSpecificOutput;
+  assert.equal(hso.permissionDecision, 'deny');
+  assert.match(hso.permissionDecisionReason, /fail-closed/);
+  assert.doesNotMatch(hso.permissionDecisionReason, /not json/, 'reason must not echo payload content');
+});
+
+test('empty stdin payload: permissionDecision deny, exit 0 (fail-closed)', () => {
+  const res = runHook('');
+  assert.equal(res.status, 0, 'hook must never crash the harness');
+  const hso = JSON.parse(res.stdout).hookSpecificOutput;
+  assert.equal(hso.permissionDecision, 'deny');
+  assert.equal(hso.updatedInput, undefined);
+  assert.match(hso.permissionDecisionReason, /fail-closed/);
 });
 
 test('unrelated tool names are ignored', () => {

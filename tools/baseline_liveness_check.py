@@ -31,7 +31,10 @@ A baseline's consumer is found two ways (either is sufficient):
      immediately after `/` (path-join), `(` (a call argument -- open(/Path(/
      joinpath(), or `=` (assignment) -- i.e. CODE usage. A markdown/docstring
      mention (backtick-quoted prose, or a bare entry in a protected-literals
-     list) never matches this and does NOT count as a reader.
+     list) never matches this and does NOT count as a reader. A file that only
+     quotes the filename (a writer/seed table) is probed only if it also declares
+     a `--baseline` option (the literal text `--baseline`); otherwise it is skipped
+     with one INFO line, because probing it would fail closed.
   2. An actual `.github/workflows/*.yml` or `hooks/*.sh` SCRIPT (never a .md
      doc) has a line invoking `tools/<tool>.py` together with the baseline's
      filename (the CLI-arg-driven wiring used by portability_check.py /
@@ -105,9 +108,34 @@ def _is_real_usage_line(line, filename):
     return bool(_real_usage_pattern(filename).search(line))
 
 
-def find_consumer(baseline_name, repo_root):
+_BASELINE_OPTION = "--baseline"
+# A real declaration of the option: an argparse add_argument call whose leading
+# string flags end in '--baseline' (add_argument("--baseline") or
+# add_argument("-b", "--baseline", ...)), or a hand-rolled argv parse
+# (`arg == "--baseline"`). A bare "--baseline" inside an argv string list (a
+# writer table) is deliberately NOT a declaration.
+_BASELINE_DECL_RE = re.compile(
+    r"add_argument\(\s*(?:['\"][^'\"\n]*['\"]\s*,\s*)*['\"]--baseline['\"]"
+    r"|==\s*['\"]--baseline['\"]"
+)
+
+
+def _declares_baseline_option(text):
+    """True if `text` declares the --baseline command-line option."""
+    return bool(_BASELINE_DECL_RE.search(text))
+
+
+def find_consumer(baseline_name, repo_root, writer_skips=None):
     """Return the repo-relative (POSIX-style) path to the tool that reads this
-    baseline, or None if no consumer exists (the dead-baseline case)."""
+    baseline, or None if no consumer exists (the dead-baseline case).
+
+    A `tools/*.py` file is a consumer only when it BOTH uses the baseline filename
+    as code AND DECLARES the `--baseline` option (an argparse add_argument flag or
+    an argv `== "--baseline"` parse; see _BASELINE_DECL_RE). A file that only
+    quotes the filename, or lists `--baseline` inside a string table -- a
+    writer/seed table -- does not accept `--baseline`, so probing it would fail
+    closed; such files are skipped and, when `writer_skips` is a list, their
+    repo-relative paths are appended to it."""
     repo_root = Path(repo_root)
     tools_dir = repo_root / "tools"
     if tools_dir.is_dir():
@@ -116,9 +144,14 @@ def find_consumer(baseline_name, repo_root):
                 text = py_file.read_text(encoding="utf-8", errors="replace")
             except OSError:
                 continue
-            for line in text.splitlines():
-                if _is_real_usage_line(line, baseline_name):
-                    return str(py_file.relative_to(repo_root)).replace("\\", "/")
+            if not any(_is_real_usage_line(line, baseline_name) for line in text.splitlines()):
+                continue
+            rel = str(py_file.relative_to(repo_root)).replace("\\", "/")
+            if not _declares_baseline_option(text):
+                if writer_skips is not None:
+                    writer_skips.append(rel)
+                continue
+            return rel
 
     # Wiring-based discovery: an actual CI workflow or pre-push hook SCRIPT
     # (never a .md doc, which only talks about tools, it doesn't invoke them)
@@ -239,14 +272,24 @@ def check_repo(repo_root, prune=False):
         "errors": [{"baseline": name, "error": msg}],
         "pruned": [{"baseline": name, "changes": [desc, ...]}],
         "ok_baselines": [{"baseline": name, "consumer": path, "entry_count": N}],
+        "writer_skips": [{"baseline": name, "file": path}],
       }
     """
     repo_root = Path(repo_root)
-    result = {"dead": [], "stale": [], "errors": [], "pruned": [], "ok_baselines": []}
+    result = {
+        "dead": [],
+        "stale": [],
+        "errors": [],
+        "pruned": [],
+        "ok_baselines": [],
+        "writer_skips": [],
+    }
 
     for baseline_path in discover_baseline_files(repo_root):
         baseline_name = baseline_path.name
-        consumer = find_consumer(baseline_name, repo_root)
+        skipped = []
+        consumer = find_consumer(baseline_name, repo_root, writer_skips=skipped)
+        result["writer_skips"].extend({"baseline": baseline_name, "file": f} for f in skipped)
         if consumer is None:
             result["dead"].append(baseline_name)
             continue
@@ -272,6 +315,14 @@ def check_repo(repo_root, prune=False):
 
 def _render_text(result, prune):
     lines = []
+    if result.get("writer_skips"):
+        skipped_files = sorted({item["file"] for item in result["writer_skips"]})
+        lines.append(
+            "INFO: skipped writer/seed table(s) that do not declare --baseline (not probed): "
+            + ", ".join(skipped_files)
+        )
+        lines.append("")
+
     if result["dead"]:
         lines.append("DEAD (no consumer found -- fail-closed):")
         for name in result["dead"]:

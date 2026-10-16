@@ -37,14 +37,18 @@ function expandPath(pathStr) {
   });
 }
 
-const AESOP_ROOT = process.env.AESOP_ROOT || path.join(process.env.HOME || '.', 'aesop');
+// Home comes from os.homedir() (USERPROFILE on Windows, HOME on POSIX, passwd
+// fallback), never from process.env.HOME alone: HOME is unset on native Windows
+// when launched from PowerShell or a scheduled task, and a '.' fallback silently
+// points every default at the cwd.
+const AESOP_ROOT = process.env.AESOP_ROOT || path.join(os.homedir(), 'aesop');
 const config = loadConfigFile(AESOP_ROOT);
 
 const TRANSCRIPTS_ROOT = path.resolve(
   expandPath(
     process.env.AESOP_TRANSCRIPTS_ROOT ||
     config.transcripts_root ||
-    path.join(process.env.HOME || '.', '.claude', 'projects')
+    path.join(os.homedir(), '.claude', 'projects')
   )
 );
 
