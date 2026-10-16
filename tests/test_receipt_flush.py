@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 """
-Behavioral tests for tools/receipt_flush.py (receipt gate, spool-and-flush design).
+Behavioral tests for tools/emit_receipt.py post_receipt and tools/receipt_flush.py
+(receipt gate, spool-and-flush design).
 
-Red-first: post_receipt spools on 422 (commit not found); flush retries spooled
-receipts and clears successful ones; sha-missing receipts are kept; stale
-receipts are dropped on --max-age-days.
+Red-first: post_receipt spools on 422 (commit not found); flush posts spooled
+receipts whose sha exists and deletes their spool file; sha-missing receipts are
+kept (never deleted); stale receipts are dropped on --max-age-days.
 """
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -30,7 +34,7 @@ def _load(name):
 
 rc = _load("receipt_common")
 emit = _load("emit_receipt")
-# Note: receipt_flush.py does not exist yet; import will be added when tool is created
+flush = _load("receipt_flush")
 
 
 def _hmac_secret():
@@ -94,89 +98,123 @@ class TestPostReceiptSpoolsOn422(unittest.TestCase):
             self.assertEqual(spooled_envelope["sig"]["scheme"], envelope["sig"]["scheme"])
 
 
+def _make_git_repo(root):
+    """Local temp git repo with an origin remote (repo_slug reads it). Never the live repo."""
+    repo = Path(root) / "repo"
+    repo.mkdir()
+    for args in (["init", "-q"], ["remote", "add", "origin", "https://github.com/owner/repo.git"]):
+        res = subprocess.run(["git", "-C", str(repo)] + args, capture_output=True,
+                             encoding="utf-8", errors="replace", timeout=60)
+        if res.returncode != 0:
+            raise RuntimeError("git %s failed: %s" % (args[0], res.stderr))
+    return repo
+
+
+class _FakeGh(object):
+    """Stands in for `gh`. Answers the commit-exists lookup, records every call,
+    and captures the JSON payload of each check-run POST (the file is deleted
+    by post_receipt right after the call, so it is read here, during the call)."""
+
+    def __init__(self, commit_code, check_run_code=0):
+        self.commit_code = commit_code
+        self.check_run_code = check_run_code
+        self.calls = []
+        self.posted_payloads = []
+
+    def __call__(self, args):
+        self.calls.append(list(args))
+        if any(a.endswith("/check-runs") for a in args):
+            payload_path = args[args.index("--input") + 1]
+            with open(payload_path, encoding="utf-8") as fh:
+                self.posted_payloads.append(json.load(fh))
+            if self.check_run_code == 0:
+                return 0, json.dumps({"id": 123}), ""
+            return self.check_run_code, "", "403 Forbidden"
+        if len(args) == 2 and args[0] == "api" and "/commits/" in args[1]:
+            if self.commit_code == 0:
+                return 0, json.dumps({"sha": args[1].rsplit("/", 1)[1]}), ""
+            return self.commit_code, "", "404 Not Found"
+        return 0, "", ""
+
+
+def _write_spool(spool_dir, envelope, age_days=0):
+    spool_dir.mkdir(parents=True, exist_ok=True)
+    path = spool_dir / (envelope["receipt"]["head_sha"] + ".json")
+    path.write_text(json.dumps(envelope, sort_keys=True), encoding="utf-8")
+    if age_days:
+        old = (datetime.now(timezone.utc) - timedelta(days=age_days)).timestamp()
+        os.utime(path, (old, old))
+    return path
+
+
+def _run_flush(repo, spool_dir, gh, extra_args=()):
+    """Run receipt_flush.main() in-process against the fake gh. Returns (exit code, stdout)."""
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        code = flush.main(["--repo", str(repo)] + list(extra_args),
+                          gh_runner=gh, environ={rc.SPOOL_ENV: str(spool_dir)})
+    return code, out.getvalue()
+
+
 class TestReceiptFlushIntegration(unittest.TestCase):
     """receipt_flush should post spooled receipts and manage spool files."""
 
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.repo = _make_git_repo(self.root)
+        self.spool_dir = self.root / "receipts" / "spool"
+
     def test_flush_posted_receipt_removes_spool_file(self):
         """When sha exists on GitHub, flush should post and remove spool file."""
-        # This test will pass once receipt_flush.py is created
-        # It verifies that flush checks sha-exists via gh api, posts via post_receipt,
-        # and deletes the spool file on success
-
         envelope = _dummy_envelope("def456" + "0" * 34)
+        head_sha = envelope["receipt"]["head_sha"]
+        spool_file = _write_spool(self.spool_dir, envelope)
+        gh = _FakeGh(commit_code=0, check_run_code=0)
 
-        with tempfile.TemporaryDirectory() as tmp_root:
-            spool_dir = Path(tmp_root) / "receipts" / "spool"
-            spool_dir.mkdir(parents=True)
+        code, out = _run_flush(self.repo, self.spool_dir, gh)
 
-            head_sha = envelope["receipt"]["head_sha"]
-            spool_file = spool_dir / (head_sha + ".json")
-            spool_file.write_text(json.dumps(envelope, sort_keys=True), encoding="utf-8")
-
-            # Mock gh that reports sha exists
-            def mock_gh_runner(args):
-                if "commits" in args and "check-runs" not in args and "comments" not in args:
-                    # SHA exists check (gh api repos/.../commits/<sha>)
-                    return 0, json.dumps({"sha": head_sha}), ""
-                elif "check-runs" in args:
-                    # Publish check-run
-                    return 0, json.dumps({"id": 123}), ""
-                return 0, "", ""
-
-            # After the fix, receipt_flush should:
-            # 1. Check sha exists: 200
-            # 2. Post receipt: 0
-            # 3. Remove spool file
-            #
-            # This test placeholder verifies the structure
+        self.assertEqual(code, 0)
+        self.assertFalse(spool_file.exists(), "a posted spool file must be deleted")
+        self.assertEqual(len(gh.posted_payloads), 1, "exactly one check-run POST expected")
+        self.assertEqual(gh.posted_payloads[0]["head_sha"], head_sha)
+        self.assertIn("posted=1", out)
 
     def test_flush_missing_sha_keeps_spool_file(self):
         """When sha does not exist, flush should keep the spool file."""
         envelope = _dummy_envelope("fedcba" + "0" * 34)
+        spool_file = _write_spool(self.spool_dir, envelope)
+        before = spool_file.read_bytes()
+        gh = _FakeGh(commit_code=404)
 
-        with tempfile.TemporaryDirectory() as tmp_root:
-            spool_dir = Path(tmp_root) / "receipts" / "spool"
-            spool_dir.mkdir(parents=True)
+        code, out = _run_flush(self.repo, self.spool_dir, gh)
 
-            head_sha = envelope["receipt"]["head_sha"]
-            spool_file = spool_dir / (head_sha + ".json")
-            spool_file.write_text(json.dumps(envelope, sort_keys=True), encoding="utf-8")
-
-            # Mock gh that reports sha NOT found
-            def mock_gh_runner(args):
-                if "commits" in args and "check-runs" not in args and "comments" not in args:
-                    # SHA not found
-                    return 404, "", "404 Not Found"
-                return 0, "", ""
-
-            # After the fix, receipt_flush should:
-            # 1. Check sha exists: 404
-            # 2. Skip posting
-            # 3. Keep spool file
-            #
-            # This test placeholder verifies the structure
+        self.assertEqual(code, 0)
+        self.assertTrue(spool_file.exists(), "a spool whose sha is absent must survive the flush")
+        self.assertEqual(spool_file.read_bytes(), before, "kept spool must be byte-identical")
+        self.assertEqual(gh.posted_payloads, [], "no receipt may be posted for an absent sha")
+        self.assertEqual(len(gh.calls), 1, "only the commit-exists lookup should reach gh")
+        self.assertIn("posted=0", out)
+        self.assertIn("kept=1", out)
 
     def test_flush_stale_spool_file_dropped(self):
         """When spool file exceeds --max-age-days, flush should delete it."""
-        envelope = _dummy_envelope("111111" + "0" * 34)
+        stale = _dummy_envelope("111111" + "0" * 34)
+        fresh = _dummy_envelope("222222" + "0" * 34)
+        stale_file = _write_spool(self.spool_dir, stale, age_days=10)
+        fresh_file = _write_spool(self.spool_dir, fresh)
+        gh = _FakeGh(commit_code=404)
 
-        with tempfile.TemporaryDirectory() as tmp_root:
-            spool_dir = Path(tmp_root) / "receipts" / "spool"
-            spool_dir.mkdir(parents=True)
+        code, out = _run_flush(self.repo, self.spool_dir, gh, ["--max-age-days", "7"])
 
-            head_sha = envelope["receipt"]["head_sha"]
-            spool_file = spool_dir / (head_sha + ".json")
-            spool_file.write_text(json.dumps(envelope, sort_keys=True), encoding="utf-8")
-
-            # Make spool file old (10 days ago)
-            old_mtime = (datetime.now(timezone.utc) - timedelta(days=10)).timestamp()
-            os.utime(spool_file, (old_mtime, old_mtime))
-
-            # After the fix, receipt_flush --max-age-days 7 should:
-            # 1. See file is older than 7 days
-            # 2. Delete it
-            #
-            # This test placeholder verifies the structure
+        self.assertEqual(code, 0)
+        self.assertFalse(stale_file.exists(), "a spool older than --max-age-days must be dropped")
+        self.assertTrue(fresh_file.exists(), "a fresh spool must not be dropped by the age sweep")
+        stale_sha = stale["receipt"]["head_sha"]
+        self.assertFalse(any(stale_sha in a for call in gh.calls for a in call),
+                         "a dropped stale spool must never reach gh")
+        self.assertIn("dropped=1", out)
 
 
 def suite():
