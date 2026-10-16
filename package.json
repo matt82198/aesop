@@ -16,6 +16,7 @@
     "monitor/collect-signals.mjs",
     "monitor/CHARTER.md",
     "mcp/*.mjs",
+    "mcp/*.py",
     "mcp/package.json",
     "tools/*.py",
     "tools/*.sh",
