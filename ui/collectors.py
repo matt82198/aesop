@@ -7,7 +7,7 @@ import re
 import secrets
 import sys
 from datetime import datetime, timezone
-from time import time
+from time import perf_counter, time
 
 import config
 
@@ -802,6 +802,28 @@ def _ensure_tracker_migrated(write_api):
                 pass
 
 
+TRACKER_SLOW_DEFAULT_SECONDS = 1.0
+
+
+def _tracker_slow_threshold():
+    """Seconds above which a tracker create logs its stage timings (env AESOP_TRACKER_SLOW_SECONDS)."""
+    try:
+        return float(os.environ.get("AESOP_TRACKER_SLOW_SECONDS", TRACKER_SLOW_DEFAULT_SECONDS))
+    except ValueError:
+        return TRACKER_SLOW_DEFAULT_SECONDS
+
+
+def _log_tracker_create_timing(total, migrate, append, render, state_dir):
+    """Emit ONE stderr line when a tracker create exceeds the slow threshold; silent otherwise."""
+    if total <= _tracker_slow_threshold():
+        return
+    print(
+        f"tracker-create slow: total={total:.3f} migrate={migrate:.3f} "
+        f"append={append:.3f} render={render:.3f} state_dir={state_dir}",
+        file=sys.stderr,
+    )
+
+
 def create_tracker_item(data):
     """Create a new tracker item (event-sourced via WriteAPI).
 
@@ -809,9 +831,24 @@ def create_tracker_item(data):
     Authored AC always stored as-is; no derivation happens here (orchestrator handles derivation).
 
     Uses WriteAPI which provides atomic append + render under OCC protection.
+    Stage timings are logged to stderr only when the create is slow (see _log_tracker_create_timing).
     """
+    t_start = perf_counter()
     write_api = _write_api()
+    render_seconds = [0.0]
+    real_render = write_api._render_tracker_atomic
+
+    def _timed_render(*args, **kwargs):
+        t_render = perf_counter()
+        try:
+            return real_render(*args, **kwargs)
+        finally:
+            render_seconds[0] += perf_counter() - t_render
+
+    write_api._render_tracker_atomic = _timed_render
+    t_migrate = perf_counter()
     _ensure_tracker_migrated(write_api)
+    t_after_migrate = perf_counter()
 
     item = {
         "title": data.get("title", ""),
@@ -829,8 +866,18 @@ def create_tracker_item(data):
     if ac is not None and isinstance(ac, list) and len(ac) > 0:
         item["acceptanceCriteria"] = ac
 
+    t_append = perf_counter()
     result = write_api.tracker_append_item(item, actor=item.get("source", "manual"))
+    append_total = perf_counter() - t_append
     write_api.close()
+    total = perf_counter() - t_start
+    _log_tracker_create_timing(
+        total=total,
+        migrate=t_after_migrate - t_migrate,
+        append=max(0.0, append_total - render_seconds[0]),
+        render=render_seconds[0],
+        state_dir=config.STATE_DIR,
+    )
     return result
 
 def update_tracker_item(item_id, update_data):
