@@ -1527,3 +1527,74 @@ class PullRequestWindowsTouchedDetectorTest(unittest.TestCase):
         rc, out = self._run_detector(self.BASE, {"docs/new.md": "new doc\n"},
                                      publish_base_ref=False)
         self._assert_touched(rc, out, "true")
+
+
+class PipInstallSingleSourceTest(unittest.TestCase):
+    """requirements-ci.txt is the single source for CI Python test dependencies.
+
+    Drift class: main-full.yml went red repeatedly because its inline `pip install`
+    list lagged ci.yml (missing pyflakes, then missing cryptography==50.0.2). A workflow
+    pip step that lists a requirements-ci.txt package inline must fail the lint.
+    """
+
+    REQUIREMENTS = "pyyaml\npytest\npytest-timeout\npyflakes\ncryptography==50.0.2\n"
+
+    def setUp(self):
+        self.fixture_root = Path(tempfile.mkdtemp(prefix="ci-pip-single-source-"))
+        self.workflows_dir = self.fixture_root / ".github" / "workflows"
+        self.workflows_dir.mkdir(parents=True)
+        (self.fixture_root / "requirements-ci.txt").write_text(self.REQUIREMENTS, encoding="utf-8")
+
+    def tearDown(self):
+        shutil.rmtree(self.fixture_root, ignore_errors=True)
+
+    def _lint_run(self, run):
+        """Lint one workflow whose only step runs `run`; return (exit_code, all findings)."""
+        workflow = {
+            "name": "CI",
+            "on": "push",
+            "permissions": {"contents": "read"},
+            "jobs": {"deps": {"runs-on": "ubuntu-latest",
+                              "steps": [{"name": "Install", "run": run}]}},
+        }
+        (self.workflows_dir / "wf.yml").write_text(json.dumps(workflow), encoding="utf-8")
+        return ci_workflow_lint.lint_workflows(str(self.fixture_root))
+
+    def test_full_inline_list_of_shared_packages_fails(self):
+        exit_code, findings = self._lint_run("pip install pyyaml pytest pytest-timeout pyflakes cryptography==50.0.2")
+        self.assertEqual(exit_code, 1, findings)
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("wf.yml", findings[0])
+        self.assertIn("requirements-ci.txt", findings[0])
+
+    def test_partial_inline_list_drift_fails(self):
+        # The exact drift shape: an inline list that lags the single source (no pyflakes).
+        exit_code, findings = self._lint_run("pip install pyyaml pytest")
+        self.assertEqual(exit_code, 1, findings)
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("requirements-ci.txt", findings[0])
+
+    def test_pinned_inline_shared_package_fails(self):
+        exit_code, findings = self._lint_run("pip install cryptography==50.0.2")
+        self.assertEqual(exit_code, 1, findings)
+        self.assertIn("requirements-ci.txt", findings[0])
+
+    def test_python_dash_m_pip_inline_shared_package_fails(self):
+        exit_code, findings = self._lint_run("python -m pip install pyflakes")
+        self.assertEqual(exit_code, 1, findings)
+        self.assertIn("requirements-ci.txt", findings[0])
+
+    def test_inline_shared_package_on_later_line_of_multiline_run_fails(self):
+        exit_code, findings = self._lint_run("echo start\npip install pyyaml\necho done")
+        self.assertEqual(exit_code, 1, findings)
+        self.assertIn("requirements-ci.txt", findings[0])
+
+    def test_single_source_reference_passes(self):
+        # Control: the compliant form must produce no finding at all.
+        exit_code, findings = self._lint_run("pip install -r requirements-ci.txt")
+        self.assertEqual((exit_code, findings), (0, []))
+
+    def test_unrelated_package_install_passes(self):
+        # Control: packages outside requirements-ci.txt (playwright) stay inline by design.
+        exit_code, findings = self._lint_run("pip install playwright && playwright install chromium")
+        self.assertEqual((exit_code, findings), (0, []))
