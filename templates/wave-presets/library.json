@@ -6,13 +6,13 @@
     {
       "slug": "core-module",
       "ownsFiles": [
-        "src/{project_name}/__init__.py",
-        "src/{project_name}/core.py",
-        "src/{project_name}/utils.py",
-        "src/{project_name}/types.py"
+        "src/{module_name}/__init__.py",
+        "src/{module_name}/core.py",
+        "src/{module_name}/utils.py",
+        "src/{module_name}/types.py"
       ],
       "prompt": "Build the core module for the {project_name} library. Implement the primary API/functions with clear interfaces. Export public functions in __init__.py. Include type hints using Python typing module. Add docstrings to all public functions (Google/NumPy style). Ensure the module is importable and has zero external dependencies (only stdlib or pinned minimal deps).",
-      "testCmd": "python -c \"import {project_name}; print(dir({project_name}))\" && python -m pytest tests/unit/ -v",
+      "testCmd": "python -c \"import {module_name}; print(dir({module_name}))\" && python -m pytest tests/unit/ -v",
       "workDir": "{base_dir}"
     },
     {
@@ -27,7 +27,7 @@
         "tests/README.md"
       ],
       "prompt": "Write comprehensive test suite for {project_name}. Create unit tests for all core functions (happy path, edge cases, error conditions). Write integration tests for end-to-end flows. Aim for >90% code coverage. Use pytest framework with fixtures for reusable test data. Include performance benchmarks. Generate coverage reports in XML and HTML formats. Document test patterns.",
-      "testCmd": "python -m pytest tests/ -v --cov={project_name} --cov-report=term-missing --cov-report=html",
+      "testCmd": "python -m pytest tests/ -v --cov={module_name} --cov-report=term-missing --cov-report=html",
       "workDir": "{base_dir}"
     },
     {
