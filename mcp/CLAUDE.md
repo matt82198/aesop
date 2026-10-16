@@ -9,6 +9,8 @@
 
 **File**: `mcp/server.mjs` — Stdio-transport JSON-RPC 2.0 server, Node.js (no npm dependencies, stdlib only).
 
+**Protocol version**: `initialize` advertises `protocolVersion` `2025-11-25` (the `LATEST_PROTOCOL_VERSION` of `@modelcontextprotocol/sdk` 1.32.1). Metadata author in `mcp/package.json` matches the root package. Guarded by `tests/mcp-metadata.test.mjs`.
+
 **Launch**:
 ```bash
 node mcp/server.mjs [--root /path/to/aesop]
@@ -137,6 +139,7 @@ Server registers these tools for `tools/list` and `tools/call`:
 **Test files**:
 - `tests/mcp-fleet.test.mjs` — Spawns server over stdio, drives JSON-RPC initialize + tools/list/call round-trips, validates read-only behavior (11 test cases).
 - `tests/mcp-ci-status.test.mjs` — Tests ci_job_status tool with mocked gh subprocess: normal history, empty history (never_executed), gh failure → structured error (4 test cases).
+- `tests/mcp-metadata.test.mjs` — Asserts `mcp/package.json` author equals root package author and that the live server's initialize `protocolVersion` is `2025-11-25`.
 
 Run: `npm run test:node` or `node --test tests/mcp*.test.mjs`.
 

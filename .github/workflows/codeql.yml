@@ -1,0 +1,43 @@
+# CodeQL static analysis for JavaScript/TypeScript and Python.
+# Actions are pinned to full commit SHAs (resolved via gh api repos/<owner>/<repo>/git/ref/tags/<tag>):
+#   actions/checkout       v7      -> 3d3c42e5aac5ba805825da76410c181273ba90b1
+#   github/codeql-action   v4.39.0 -> 6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee (tag object 48870fdd...)
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '30 6 * * 1'
+
+permissions:
+  security-events: write
+  contents: read
+  actions: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, python]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          category: "/language:${{ matrix.language }}"
