@@ -134,7 +134,6 @@
     "tests/test_wave_loop.py@UnusedIndirectAssignment": 2,
     "tests/test_wave_loop.py@UnusedVariable": 5,
     "tests/test_wave_loop_cli.py@UnusedImport": 3,
-    "tests/test_wave_loop_cli.py@UnusedVariable": 1,
     "tests/test_wave_loop_halt_enforcement.py@UnusedIndirectAssignment": 2,
     "tests/test_wave_loop_rs3.py@UnusedIndirectAssignment": 2,
     "tests/test_wave_loop_rs3.py@UnusedVariable": 1,
