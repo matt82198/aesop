@@ -334,6 +334,37 @@ def _read_claims_compacted(store) -> list:
     return active_events + tail
 
 
+def _live_claim_events(events: list, now: float) -> list:
+    """Return the claim_requested events fold_claims would still count at ``now``.
+
+    A claim is counted when it has not expired and no claim_released from the
+    same instance for the same resource was appended after it (fold_claims
+    treats any later release as superseding it). Each event is returned as the
+    original dict, so its own ts/ttl survive compaction. Never returns just the
+    first claim per holder: after a release and re-claim, the first claim's TTL
+    can lapse while the re-claim is still live.
+    """
+    last_release = {}  # (resource, instance_id) -> highest released version
+    for ev in events:
+        if ev.get("type") == "claim_released":
+            payload = ev.get("payload") or {}
+            key = (payload.get("resource"), payload.get("instance_id"))
+            if None not in key:
+                last_release[key] = max(last_release.get(key, 0), ev.get("version", 0))
+
+    live = []
+    for ev in events:
+        if ev.get("type") != "claim_requested":
+            continue
+        payload = ev.get("payload") or {}
+        key = (payload.get("resource"), payload.get("instance_id"))
+        if None in key or _claim_expired(ev, payload, now):
+            continue
+        if ev.get("version", 0) > last_release.get(key, 0):
+            live.append(ev)
+    return live
+
+
 def compact_claims(store) -> bool:
     """Snapshot the current claims fold state for faster future reads.
 
@@ -362,33 +393,10 @@ def compact_claims(store) -> bool:
     if not events:
         return False
 
-    # Fold to find current holders
-    holders = fold_claims(events)
-    if not holders:
-        # All claims released/expired; snapshot an empty state at current max version
-        max_version = max(e.get("version", 0) for e in events)
-        es.save_snapshot("claims", max_version, {"active_claims": []})
-        return True
-
-    # For each held resource, find the winning claim_requested event.
-    # The winner is the instance with the lowest active claim version for
-    # that resource. We need the original event dict to preserve ts/ttl
-    # for correct TTL checks after compaction.
-    active_events = []
-    for resource, winner_id in holders.items():
-        # Find the active (winning) claim_requested event for this holder
-        for ev in events:
-            if (
-                ev.get("type") == "claim_requested"
-                and ev.get("payload", {}).get("resource") == resource
-                and ev.get("payload", {}).get("instance_id") == winner_id
-            ):
-                # Check this is the active claim (not released after it)
-                # Simple heuristic: take the last un-released claim from this
-                # instance for this resource, matching fold_claims behavior.
-                active_events.append(ev)
-                break  # first match is lowest version (events are version-ordered)
-
+    # Keep every claim the fold would still count right now, with its own
+    # ts/ttl. Released resources contribute nothing; an empty list is a valid
+    # snapshot ("nothing held").
+    active_events = _live_claim_events(events, time.time())
     max_version = max(e.get("version", 0) for e in events)
     es.save_snapshot("claims", max_version, {"active_claims": active_events})
     return True

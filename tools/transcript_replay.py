@@ -25,6 +25,29 @@ def apply_edit(text, old_string, new_string, replace_all=False):
     return text[:idx] + new_string + text[idx + len(old_string) :]
 
 
+OUTPUT_MARKER = ".transcript-replay-output"
+
+
+def output_dir_refusal(output_dir):
+    """Return a refusal message if output_dir must not be cleared, else None.
+
+    An existing -o directory may be cleared only when it is empty or carries
+    OUTPUT_MARKER, which this tool writes into every output directory it creates.
+    """
+    if not output_dir.exists():
+        return None
+    if not output_dir.is_dir():
+        return f"refusing: -o path {output_dir} exists and is not a directory"
+    if not any(output_dir.iterdir()):
+        return None
+    if (output_dir / OUTPUT_MARKER).is_file():
+        return None
+    return (
+        f"refusing: -o directory {output_dir} is non-empty and has no "
+        f"{OUTPUT_MARKER} marker from a previous replay run; nothing was deleted"
+    )
+
+
 def count_lines(text):
     """Count lines in text."""
     return len(text.split("\n"))
@@ -63,10 +86,18 @@ def main():
     commit_ms = int(datetime.fromisoformat(args.commit_time.replace("Z", "+00:00")).timestamp() * 1000)
 
     output_dir = pathlib.Path(args.output)
+    refusal = output_dir_refusal(output_dir)
+    if refusal:
+        print(refusal, file=sys.stderr)
+        sys.exit(2)
     if output_dir.exists():
         import shutil
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / OUTPUT_MARKER).write_text(
+        "written by tools/transcript_replay.py; safe to clear on rerun\n",
+        encoding="utf-8",
+    )
 
     # Gather .jsonl files
     files = []
