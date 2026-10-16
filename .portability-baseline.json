@@ -1,6 +1,7 @@
 {
   "_comment": "Portability-gate ratchet baseline (see tools/portability_check.py --help). Regenerate ONLY via --update-baseline after reviewing the diff; CI must never pass --update-baseline.",
   "violations": {
+    "daemons/run-merge-queue.sh@private_token": 1,
     "daemons/run-watchdog.sh@private_token": 2,
     "daemons/selfheal.sh@private_token": 1,
     "docs/CONFIGURE.md@posix_home_path": 15,
@@ -17,13 +18,13 @@
     "tools/launch_tui.py@posix_home_path": 2,
     "tools/launch_tui.py@windows_user_path": 2,
     "tools/portability_check.py@private_token": 4,
+    "tools/run_shell_tests.sh@private_token": 1,
     "tools/seated_shadow_adjudication.py@posix_home_path": 1,
     "tools/seated_shadow_adjudication.py@private_token": 8,
     "tools/seated_shadow_adjudication.py@windows_user_path": 1,
     "tools/shadow_adjudication.py@posix_home_path": 1,
     "tools/shadow_adjudication.py@private_token": 1,
     "tools/shadow_adjudication.py@windows_user_path": 1,
-    "tools/run_shell_tests.sh@private_token": 1,
     "tools/transcript_digest.py@private_token": 2,
     "tools/verify_ui_trio.py@posix_home_path": 2,
     "tools/verify_ui_trio_redaction_proof.py@posix_home_path": 6,
