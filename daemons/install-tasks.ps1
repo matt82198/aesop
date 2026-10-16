@@ -20,6 +20,9 @@ param(
 # Enable strict error handling
 $ErrorActionPreference = 'Stop'
 
+# Repetition duration every aesop trigger is registered with (compared on reinstall too).
+$TriggerDurationDays = 3650
+
 # Every Aesop task lives in the ROOT folder. Get-ScheduledTask -TaskName matches a name in
 # EVERY folder when no -TaskPath is given, so the disabled \Aesop\<name> copy would be returned
 # alongside the root task. All scheduler calls therefore pass $TaskFolder explicitly.
@@ -89,6 +92,35 @@ function Ensure-HiddenLauncher {
     return $exe
 }
 
+function ConvertTo-TaskTimeSpan {
+    param(
+        $Value
+    )
+
+    # CIM reports repetition Interval/Duration as ISO-8601 duration strings (PT1H, P3650D).
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [TimeSpan]) { return $Value }
+    try {
+        return [System.Xml.XmlConvert]::ToTimeSpan([string]$Value)
+    }
+    catch {
+        return $null
+    }
+}
+
+function ConvertTo-WholeMinutes {
+    # Whole minutes of an ISO-8601 duration, or -1 when absent, unparseable, or not a whole
+    # minute count. -1 never equals a declared spec value, so it always diverges.
+    param(
+        $Value
+    )
+
+    $span = ConvertTo-TaskTimeSpan -Value $Value
+    if ($null -eq $span) { return -1 }
+    if ($span.TotalMinutes -ne [math]::Floor($span.TotalMinutes)) { return -1 }
+    return [int]$span.TotalMinutes
+}
+
 function Get-TaskSpec {
     # The declared spec for one task. Execute and Arguments are what the scheduler runs;
     # LogonType and IntervalMinutes are what the installer sets. Plan and the real path
@@ -103,6 +135,7 @@ function Get-TaskSpec {
         Arguments       = '"' + $BashExe + '" -lc "' + $Command + '"'
         LogonType       = 'Interactive'
         IntervalMinutes = $IntervalMinutes
+        DurationMinutes = $TriggerDurationDays * 1440
     }
 }
 
@@ -113,9 +146,11 @@ function ConvertTo-TaskRecord {
 
     $action = $Task.Actions | Select-Object -First 1
     $trigger = $Task.Triggers | Select-Object -First 1
-    $interval = ''
-    if ($trigger -and $trigger.Repetition -and ([string]$trigger.Repetition.Interval) -match '^PT(\d+)M$') {
-        $interval = [int]$Matches[1]
+    $interval = -1
+    $duration = -1
+    if ($trigger -and $trigger.Repetition) {
+        $interval = ConvertTo-WholeMinutes -Value $trigger.Repetition.Interval
+        $duration = ConvertTo-WholeMinutes -Value $trigger.Repetition.Duration
     }
     return [pscustomobject]@{
         TaskName        = [string]$Task.TaskName
@@ -124,6 +159,7 @@ function ConvertTo-TaskRecord {
         Arguments       = [string]$action.Arguments
         LogonType       = [string]$Task.Principal.LogonType
         IntervalMinutes = $interval
+        DurationMinutes = $duration
     }
 }
 
@@ -146,6 +182,9 @@ function Get-TaskDivergence {
     }
     if ([string]$Existing.IntervalMinutes -ne [string]$Spec.IntervalMinutes) {
         $diff += 'trigger.interval'
+    }
+    if ([string]$Existing.DurationMinutes -ne [string]$Spec.DurationMinutes) {
+        $diff += 'trigger.duration'
     }
     return ,$diff
 }
@@ -258,7 +297,7 @@ function Register-DaemonTask {
         -Once `
         -At $startTime `
         -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes) `
-        -RepetitionDuration (New-TimeSpan -Days 3650)
+        -RepetitionDuration (New-TimeSpan -Days $TriggerDurationDays)
 
     # Build the settings: Hidden, IgnoreNew for multiple instances, 1-hour timeout
     $settings = New-ScheduledTaskSettingsSet `
@@ -427,6 +466,7 @@ function Write-InstallPlan {
             execute         = $spec.Execute
             arguments       = $spec.Arguments
             intervalMinutes = $spec.IntervalMinutes
+            durationMinutes = $spec.DurationMinutes
             logonType       = $spec.LogonType
             decision        = $decision
             divergedFields  = @($verdict.DivergedFields)

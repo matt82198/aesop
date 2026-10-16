@@ -97,7 +97,7 @@ class InstallTasksPlanTests(unittest.TestCase):
         self.assertEqual(len(matches), 1, plan)
         return matches[0]
 
-    def _root_record(self, execute, arguments, logon="Interactive", interval=5):
+    def _root_record(self, execute, arguments, logon="Interactive", interval=5, duration=3650 * 1440):
         return {
             "TaskName": WATCHDOG_NAME,
             "TaskPath": ROOT_FOLDER,
@@ -105,6 +105,7 @@ class InstallTasksPlanTests(unittest.TestCase):
             "Arguments": arguments,
             "LogonType": logon,
             "IntervalMinutes": interval,
+            "DurationMinutes": duration,
         }
 
     def test_no_existing_task_registers(self):
@@ -132,6 +133,13 @@ class InstallTasksPlanTests(unittest.TestCase):
         item = self._watchdog_item(plan)
         self.assertEqual(item["decision"], "re-register-because-trigger.interval-diverged")
         self.assertEqual(item["divergedFields"], ["trigger.interval"])
+
+    def test_duration_divergence_reregisters(self):
+        spec = self._watchdog_item(self._plan([]))
+        record = self._root_record(spec["execute"], spec["arguments"], duration=60 * 24)
+        item = self._watchdog_item(self._plan([record]))
+        self.assertEqual(item["decision"], "re-register-because-trigger.duration-diverged")
+        self.assertEqual(item["divergedFields"], ["trigger.duration"])
 
     def test_command_divergence_reregisters(self):
         spec = self._watchdog_item(self._plan([]))

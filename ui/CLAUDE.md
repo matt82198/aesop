@@ -56,7 +56,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **wave_telemetry.py** â€” Wave telemetry: `get_wave_telemetry()` extracts current phase (from `orchestrator-status` when fresh, `STATE.md` `## Phase:` fallback), top blocker (from `AUDIT-BACKLOG.md`), cost metrics (from ledger). Reads state at call time (no cache); degrades gracefully on missing files. `get_wave_telemetry(now=)` and `_read_orchestrator_status(now=)` take an injectable freshness clock (tests pin it; default is the wall clock).
 
-**wave_dispatch.py** â€” Wave dispatch (per-agent visibility): reads agent transcripts, infers phase (dispatch/thinking/tool-use/stall/done) from tail, estimates tokens from file size, computes activity age from mtime. Returns per-agent rows with phase badge, age, warnings (inactive >5min, stalled >10min). Degrades `{available:false}`. Polled 2-3s.
+**wave_dispatch.py** â€” Wave dispatch (per-agent visibility): reads agent transcripts, infers phase (dispatch/thinking/tool-use/stall/done, else unknown) from structured tail fields only (record type, message.stop_reason, content block types, API-error marker; free text never inspected), estimates tokens from file size, computes activity age from mtime. Returns per-agent rows with phase badge, age, warnings (inactive >5min, stalled >10min). Degrades `{available:false}`. Polled 2-3s.
 
 **wave_failure.py** â€” Wave PR failure drill-down: `get_wave_failure(pr_number)` shells `gh run view --json jobs` for jobs on PR branch, then `gh api .../jobs/{id}/logs` for failing jobs; extracts ~100-line log tails. Caches ~5s per PR; degrades to `{available:false, error}` when gh missing/un-authed. Override gh binary: `AESOP_GH_BIN` env var.
 
@@ -92,7 +92,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
   - FailureDrilldown: drawer showing CI job list + ~100-line log excerpts on expand; fetches `/api/wave/failure?pr=N`.
   - ToolingPanel: compact card grid showing repo tooling health (TODO count, coverage, dead code, import cycles, encoding issues); fetches `/api/tooling/summary`; green/yellow/red severity coding; refresh button; responsive grid.
 - **lib/api.ts**: Typed fetch helpers + CSRF header injection + `/api/session` fallback for dev server.
-- **lib/useSSE.ts**: EventSource hook with reconnect logic, per-section state, connection status.
+- **lib/useSSE.ts**: EventSource hook with reconnect logic, per-section state, connection status. Cleanup clears the EventSource ref so a same-instance re-run (StrictMode double effect) opens a fresh source; covered by `lib/useSSE.test.tsx`.
 - **lib/types.ts**: TypeScript types for all API payloads (backend contract).
 - **lib/sanitizeUrl.ts**: XSS-safe URL parsing (inerts PR links on bad schemes).
 - **vite.config.ts**: Vite config with API proxy to :8770.

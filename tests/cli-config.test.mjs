@@ -410,7 +410,9 @@ test('scaffold never writes to an existing ~/.claude/CLAUDE.md in the home direc
     fs.writeFileSync(globalClaude, sentinel);
     const env = { ...process.env, HOME: home, USERPROFILE: home };
     delete env.AESOP_SKILLS_HOME;
-    const res = spawnSync(process.execPath, [CLI, targetDir, '--name', 'home-guard', '--no-skills'], {
+    // --no-git: this test guards the global CLAUDE.md, not git. The git add -A over the
+    // template is what ran into the 30s spawnSync cap on CI (sync git, no per-file cost bug).
+    const res = spawnSync(process.execPath, [CLI, targetDir, '--name', 'home-guard', '--no-git', '--no-skills'], {
       encoding: 'utf8',
       cwd: tempDir,
       env,
