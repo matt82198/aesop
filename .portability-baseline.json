@@ -11,6 +11,7 @@
     "docs/ab-cost-dataset.md@private_token": 8,
     "driver/agent_driver.py@private_token": 1,
     "driver/context_pack.py@private_token": 4,
+    "monitor/collect-signals.mjs@private_token": 1,
     "scan/fleet-scan.example.mjs@private_token": 1,
     "state_store/__init__.py@private_token": 1,
     "tools/claudemd_drift.py@private_token": 1,
