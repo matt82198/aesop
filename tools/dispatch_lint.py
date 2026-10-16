@@ -247,6 +247,77 @@ def is_comment_only(line: str, pattern: str) -> bool:
     return True
 
 
+# Prohibition markers. A forbidden flag or command that comes AFTER one of these
+# on the same line, or inside the same list item, is a MENTION (a rule about the
+# command), not an instruction to run it. Case-insensitive, whole words/phrases.
+PROHIBITION_MARKER_RE = re.compile(
+    r"\b(?:never|forbidden|do\s+not|don['" + chr(0x2019) + r"]t|banned|prohibited|must\s+not|disallowed)\b",
+    re.IGNORECASE,
+)
+# A Markdown bullet or numbered item start. Indented lines after it belong to it.
+LIST_ITEM_START_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+# Leading decoration stripped before deciding whether a line is a command line.
+LEADING_DECORATION_RE = re.compile(r"^\s*(?:(?:[-*+]|\d+[.)])\s+)?[`$>\s]*")
+# A line whose first token is a shell command is an instruction, whatever it says.
+COMMAND_LINE_RE = re.compile(r"(?:git|gh|python3?|cd|npm|node|bash|sh|pip|make)\b", re.IGNORECASE)
+# Quoted spans on a line. A match inside one is code only when the quote is a
+# string passed to an exec/spawn-style call, or assigned to a variable.
+QUOTED_LITERAL_RE = re.compile(r"\"[^\"\n]*\"|'[^'\n]*'|`[^`\n]*`")
+CODE_CALL_BEFORE_QUOTE_RE = re.compile(
+    r"(?:\bexec\w*|\bspawn\w*|\bPopen|\bsystem|\bcheck_output|\bcheck_call|\bsubprocess\.\w+)"
+    r"\s*\((?:[^()]*,)?\s*\[?\s*$",
+    re.IGNORECASE,
+)
+CODE_ASSIGN_BEFORE_QUOTE_RE = re.compile(r"\b[A-Za-z_$][\w$]*\s*=\s*\[?\s*$")
+
+
+def list_item_owners(lines: List[str]) -> List[object]:
+    """For each line, the index of the list item (bullet line) it belongs to, or None.
+
+    A bullet starts an item; following lines indented under it are its
+    continuation; a blank line or an unindented non-bullet line ends the item.
+    """
+    owners: List[object] = []
+    owner = None
+    for idx, raw in enumerate(lines):
+        if LIST_ITEM_START_RE.match(raw):
+            owner = idx
+        elif not raw.strip():
+            owner = None
+        elif not (raw[:1] in (" ", "\t") and owner is not None):
+            owner = None
+        owners.append(owner)
+    return owners
+
+
+def _is_command_line(line: str) -> bool:
+    """True when the line's first token is a shell command (an instruction)."""
+    return bool(COMMAND_LINE_RE.match(LEADING_DECORATION_RE.sub("", line, count=1)))
+
+
+def _in_code_literal(line: str, pos: int) -> bool:
+    """True when position `pos` sits inside a quoted string that is code."""
+    for quoted in QUOTED_LITERAL_RE.finditer(line):
+        if quoted.start() < pos < quoted.end():
+            before = line[:quoted.start()]
+            return bool(CODE_CALL_BEFORE_QUOTE_RE.search(before)
+                        or CODE_ASSIGN_BEFORE_QUOTE_RE.search(before))
+    return False
+
+
+def is_prohibition_mention(line: str, match_start: int, item_lines_before: List[str]) -> bool:
+    """True when a forbidden match is a mention of a rule, not an instruction.
+
+    Passes only when a prohibition marker precedes the match on the same line or
+    earlier in its list item, and the match is not imperative: not on a command
+    line, and not inside a code string passed to exec/spawn or assigned in code.
+    """
+    if _is_command_line(line) or _in_code_literal(line, match_start):
+        return False
+    preceding = "\n".join(item_lines_before + [line[:match_start]])
+    return PROHIBITION_MARKER_RE.search(preceding) is not None
+
+
 def find_violations(
     file_path: Path, content: str
 ) -> List[Dict]:
@@ -258,6 +329,7 @@ def find_violations(
         return violations
 
     lines = content.split("\n")
+    owners = list_item_owners(lines)
 
     for line_num, line in enumerate(lines, 1):
         # Skip suppressed lines
@@ -269,12 +341,19 @@ def find_violations(
         if is_index_summary_line(line):
             continue
 
+        owner = owners[line_num - 1]
+        item_lines_before = lines[owner:line_num - 1] if owner is not None else []
+
         for pattern_key, pattern_info in FORBIDDEN_PATTERNS.items():
             for match in re.finditer(pattern_info["pattern"], line, re.IGNORECASE):
                 # Skip if pattern only appears in comments. Inline backtick
                 # spans and markdown fences are NOT exemptions: a command in
                 # a dispatch prompt is an instruction wherever it is quoted.
                 if is_comment_only(line, pattern_info["pattern"]):
+                    continue
+
+                # Skip a mention of the rule (prohibition marker before it).
+                if is_prohibition_mention(line, match.start(), item_lines_before):
                     continue
 
                 violations.append({

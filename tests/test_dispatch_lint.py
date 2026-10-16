@@ -687,5 +687,78 @@ class TestTightenedDispatchLint(unittest.TestCase):
                             violations_by_file)
 
 
+class TestMentionVersusInstruction(unittest.TestCase):
+    """A forbidden flag or command is a MENTION (passes) when the same line, or
+    the list item it belongs to, carries a prohibition marker BEFORE it. Imperative
+    use still fails: a command line, a code string passed to exec/spawn or
+    assigned in code, and any line with no marker before the match."""
+
+    @staticmethod
+    def _patterns(body):
+        content = "Agent()\n" + body
+        return {v["pattern"] for v in find_violations(Path("lane.md"), content)}
+
+    def test_marker_before_flag_on_same_line_is_mention(self):
+        self.assertNotIn("no_verify_flag", self._patterns("never use --no-verify\n"))
+
+    def test_every_prohibition_marker_is_recognised(self):
+        markers = ["never", "FORBIDDEN:", "do not use", "don't use",
+                   "don" + chr(0x2019) + "t use", "banned:", "prohibited:", "must not use",
+                   "disallowed:"]
+        for marker in markers:
+            with self.subTest(marker=marker):
+                self.assertNotIn("no_verify_flag",
+                                 self._patterns(marker + " --no-verify\n"))
+
+    def test_marker_after_flag_does_not_make_mention(self):
+        self.assertIn("no_verify_flag",
+                      self._patterns("--no-verify is forbidden\n"))
+
+    def test_bare_command_without_marker_still_fails(self):
+        self.assertIn("no_verify_flag", self._patterns("git push --no-verify\n"))
+
+    def test_code_string_fails_even_with_comment_marker_above(self):
+        body = '// never do this\nconst cmd = "gh pr merge --admin"\n'
+        self.assertIn("admin_flag", self._patterns(body))
+
+    def test_marker_on_same_line_does_not_exempt_exec_string(self):
+        body = 'never run: exec("gh pr merge --admin")\n'
+        self.assertIn("admin_flag", self._patterns(body))
+
+    def test_list_item_marker_covers_its_continuation_lines(self):
+        body = ("- FORBIDDEN: git stash (shared across worktrees),\n"
+                "  --no-verify, --admin, --auto, force-push,\n"
+                "  manual 'gh pr merge', credential hunting.\n")
+        self.assertEqual(set(), self._patterns(body))
+
+    def test_new_list_item_does_not_inherit_marker(self):
+        body = "- FORBIDDEN: git stash\n- run --no-verify on push\n"
+        self.assertIn("no_verify_flag", self._patterns(body))
+
+    def test_blank_line_ends_list_item(self):
+        body = "- FORBIDDEN: git stash\n\n  --no-verify\n"
+        self.assertIn("no_verify_flag", self._patterns(body))
+
+    def test_marker_in_plain_line_does_not_cover_next_line(self):
+        body = "never do this\nsee --no-verify\n"
+        self.assertIn("no_verify_flag", self._patterns(body))
+
+    def test_ci_to_green_prohibition_list_passes(self):
+        body = ("HARD RULES\n"
+                "- FORBIDDEN: git stash (the stash stack is shared across worktrees),\n"
+                "  --no-verify, --admin, --auto, force-push, 'git commit --amend' on an\n"
+                "  already-pushed commit, manual 'gh pr merge', credential hunting.\n"
+                "- NEVER weaken a gate.\n")
+        self.assertEqual(set(), self._patterns(body))
+
+    def test_ci_to_green_merge_train_instruction_still_fails(self):
+        body = ("USE THE REPO'S DETERMINISTIC SCRIPT, never 'gh pr merge' by hand:\n"
+                "    cd ${REPO} && python tools/merge_train.py -u ${readyToMerge.join(' ')}"
+                " [[ALLOW-MERGE-TRAIN]]\n")
+        patterns = self._patterns(body)
+        self.assertIn("lane_ci_polling_merge_train", patterns)
+        self.assertNotIn("gh_pr_merge", patterns)
+
+
 if __name__ == "__main__":
     unittest.main()
