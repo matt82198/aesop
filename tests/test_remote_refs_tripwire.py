@@ -384,5 +384,94 @@ class TestSnapshotFunctions(unittest.TestCase):
         self.assertEqual(self.mod.diff_prs(None, [1]), [])
 
 
+KILL_MARK = "AESOP_TEST_SIGKILL_MARK"
+
+
+class TestSignalKilledWrappedCommand(unittest.TestCase):
+    """A wrapped command killed by a signal reports a NEGATIVE returncode. It must
+    never exit 0: the ubuntu OOM shard case was returncode -9 with tripwire 0, and
+    max(-9, 0) == 0 reported the shard green with its tests unrun."""
+
+    def setUp(self):
+        sys.path.insert(0, str(REPO_ROOT / "tools"))
+        import remote_refs_tripwire as mod
+        self.mod = mod
+
+    def test_sigkill_returncode_yields_137_in_process(self):
+        from unittest import mock
+        real_run = subprocess.run
+
+        def fake_run(cmd, *args, **kwargs):
+            if isinstance(cmd, list) and KILL_MARK in cmd:
+                return subprocess.CompletedProcess(cmd, -9)
+            return real_run(cmd, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work, _bare = _make_repo_with_bare_origin(Path(tmp))
+            with mock.patch.object(subprocess, "run", side_effect=fake_run), \
+                    mock.patch.object(self.mod, "snapshot_open_prs",
+                                      return_value=(None, "stubbed")):
+                rc = self.mod.main(["--repo", str(work), "--attributed", "--",
+                                    sys.executable, "-c", KILL_MARK])
+        self.assertEqual(rc, 137)
+
+    @unittest.skipUnless(os.name == "posix", "a real SIGKILL needs POSIX")
+    def test_real_sigkill_child_yields_137_via_cli(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work, _bare = _make_repo_with_bare_origin(Path(tmp))
+            proc = subprocess.run(
+                [sys.executable, str(TRIPWIRE), "--repo", str(work), "--",
+                 sys.executable, "-c",
+                 "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"],
+                capture_output=True, text=True, timeout=60,
+            )
+        self.assertEqual(proc.returncode, 137, proc.stderr)
+
+    def test_combine_rule_is_nonzero_if_either_side_is_nonzero(self):
+        self.assertEqual(self.mod._combine_exit(0, 0), 0)
+        self.assertEqual(self.mod._combine_exit(0, 1), 1)
+        self.assertEqual(self.mod._combine_exit(7, 0), 7)
+        self.assertEqual(self.mod._exit_code(-9), 137)
+        self.assertEqual(self.mod._exit_code(None), 1)
+
+
+class TestNewPrAttribution(unittest.TestCase):
+    """Attributed (CI) mode must not fail on a PR opened mid-run unless the PR's
+    head branch is one the tripwire attributes to the run -- the same rule the
+    branch check applies. Strict (local) mode keeps failing on any new PR."""
+
+    def setUp(self):
+        sys.path.insert(0, str(REPO_ROOT / "tools"))
+        import remote_refs_tripwire as mod
+        self.mod = mod
+
+    def test_new_pr_on_unattributable_branch_is_observed_not_failed_when_attributed(self):
+        self.assertEqual(
+            self.mod.diff_prs({}, {7: "feature/fix-x"}, mode="attributed"), [])
+        observed = self.mod.diff_prs_observed({}, {7: "feature/fix-x"}, mode="attributed")
+        self.assertEqual(len(observed), 1, observed)
+        self.assertIn("#7", observed[0])
+
+    def test_new_pr_on_attributable_branch_fails_when_attributed(self):
+        findings = self.mod.diff_prs({}, {8: "integrate/batch-42"}, mode="attributed")
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("#8", findings[0])
+
+    def test_new_pr_on_any_branch_fails_in_strict_mode(self):
+        findings = self.mod.diff_prs({}, {9: "feature/x"}, mode="strict")
+        self.assertEqual(len(findings), 1, findings)
+        self.assertIn("#9", findings[0])
+
+    def test_attributed_run_with_unrelated_new_pr_exits_0(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            work, _bare = _make_repo_with_bare_origin(Path(tmp))
+            with mock.patch.object(self.mod, "snapshot_open_prs",
+                                   side_effect=[({}, None), ({7: "feature/fix-x"}, None)]):
+                rc = self.mod.main(["--repo", str(work), "--attributed", "--",
+                                    sys.executable, "-c", "pass"])
+        self.assertEqual(rc, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
