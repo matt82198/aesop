@@ -29,7 +29,7 @@ const cases = [
   [DENY, 'Bash', 'cat ~/.claude/p*/x/abc.jsonl', null, 'bypass: glob in place of the projects segment'],
   [DENY, 'Bash', 'cat "$HOME"/.claude/p*/x/abc.jsonl', null, 'bypass: $HOME-prefixed glob'],
   [DENY, 'Bash', 'cat $USERPROFILE/.claude/projects/x/abc.jsonl', null, 'bypass: $USERPROFILE-prefixed transcript path'],
-  [DENY, 'Bash', 'cd C:/Users/dev/.claude && grep -l foo projects/*/*.jsonl', null, 'bypass: cd .claude then relative projects glob'],
+  [DENY, 'Bash', 'cd C:/Users/dev/.claude && grep -l foo projects/*/*.jsonl', null, 'bypass: cd .claude then relative projects glob'], // e.g.
   [DENY, 'Bash', 'cd projects/x && cat abc.jsonl', null, 'bypass: cd into a projects segment then .jsonl'],
   [DENY, 'Read', '', ['projects/x/abc.jsonl'], 'bypass: Read of relative projects/ .jsonl'],
   [DENY, 'Read', '', ['projects\\x\\abc.JSONL'], 'bypass: Read of relative Windows-style projects path, uppercase ext'],
