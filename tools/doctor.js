@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// INDEX: Preflight checklist for adopter onboarding (diagnostic checks: Node/Python versions, git repo, aesop.config.json structure incl. the `ci` block via tools/ci_config.js, placeholder repo URLs, dirs, pre-push hook, port; exit 0=all pass, 1=failed) plus a REPORT-ONLY `CI capability` section from tools/ci_capability.py (OS, cores/RAM, Smart App Control / UMCI, WSL/Docker, gh auth, cloudflared, and the table mode -> runnable here: yes/no + why for hosted | self-hosted-runner | local-receipt-gate) that never fails the doctor; `--json` emits {checks, summary, ci_capability}. Skills check is FAIL-CLOSED: `power` and `buildsystem` must exist under `~/.claude/skills/` (the only path Claude Code scans — a scaffolded `./skills/` is never discovered), so a green doctor means the orchestrator can actually invoke them
+// INDEX: Preflight checklist for adopter onboarding (diagnostic checks: Node/Python versions, git repo, aesop.config.json structure incl. the `ci` block via tools/ci_config.js, placeholder repo URLs, dirs, pre-push hook, port; exit 0=all pass, 1=failed) plus a REPORT-ONLY `CI capability` section from tools/ci_capability.py (OS, cores/RAM, Smart App Control / UMCI, WSL/Docker, gh auth, cloudflared, and the table mode -> runnable here: yes/no + why for hosted | self-hosted-runner | local-receipt-gate) that never fails the doctor; `--json` emits {checks, summary, ci_capability}. Layout detection (`layout` key in aesop.config.json, else inferred): an init'd repo (no scaffold directories) reports the five-directory check as n/a and fails on nothing else it does not promise. The `~/.claude/skills` check is FAIL-CLOSED (`power` and `buildsystem` must exist there) but runs only with `--global`, so the default verdict is repo-local
 
 /**
  * Aesop doctor — preflight checklist for adopter onboarding
@@ -16,6 +16,9 @@ const net = require('net');
 
 const CURRENT_DIR = process.cwd();
 const JSON_MODE = process.argv.includes('--json');
+// --global also checks machine-level state (~/.claude/skills). The default run is repo-local,
+// so its verdict does not depend on what is installed in the home directory.
+const GLOBAL_MODE = process.argv.includes('--global');
 const ciConfig = require('./ci_config.js');
 
 // ANSI color helpers
@@ -170,11 +173,49 @@ function checkRepoURLs() {
   }
 }
 
+// Layout detection (D32). A scaffold (daemons/, dash/, monitor/, tools/, ui/) keeps the
+// five-directory rule. An init'd repo (aesop.config.json only, written by tools/init_project.py
+// with "layout":"init") does not have those directories and must not fail for lacking them.
+// An explicit "layout" key wins; an unknown value fails closed as a scaffold. Without the key:
+// any scaffold directory means scaffold, a config alone means init, and neither means scaffold.
+const SCAFFOLD_DIRS = ['daemons', 'dash', 'monitor', 'tools', 'ui'];
+
+function isDirectory(rel) {
+  const p = path.join(CURRENT_DIR, rel);
+  return fs.existsSync(p) && fs.statSync(p).isDirectory();
+}
+
+function detectLayout() {
+  const configPath = path.join(CURRENT_DIR, 'aesop.config.json');
+  let config = null;
+  try {
+    config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  } catch (e) {
+    config = null;  // missing or unparseable: checkConfig reports that; layout is inferred
+  }
+  if (config && typeof config === 'object' && 'layout' in config) {
+    return config.layout === 'init'
+      ? { name: 'init', reason: 'aesop.config.json "layout":"init"' }
+      : { name: 'scaffold', reason: `aesop.config.json "layout":${JSON.stringify(config.layout)} (not "init", so scaffold rules apply)` };
+  }
+  if (['daemons', 'dash', 'monitor', 'ui'].some(isDirectory)) {
+    return { name: 'scaffold', reason: 'scaffold directories present' };
+  }
+  if (fs.existsSync(configPath)) {
+    return { name: 'init', reason: 'aesop.config.json present, no scaffold directories' };
+  }
+  return { name: 'scaffold', reason: 'no aesop.config.json and no scaffold directories (fail closed)' };
+}
+
 // Check if ~/.claude/skills/power/SKILL.md and ~/.claude/skills/buildsystem/SKILL.md exist.
 // Claude Code only discovers skills under ~/.claude/skills/ (or a project's .claude/skills/);
 // the scaffolded ./skills/ directory is never scanned, so an uncopied skill is an unusable one.
 // Fail-closed: the orchestrator cannot run without these, so a green doctor must mean installed.
+// Global: the home directory is read only under --global, never in the default repo-local run.
 function checkSkillsFiles() {
+  if (!GLOBAL_MODE) {
+    return { passed: true, na: true, hint: 'n/a (global checks skipped; run doctor --global to check ~/.claude/skills)' };
+  }
   const homeDir = os.homedir();
   const skillsDir = path.join(homeDir, '.claude', 'skills');
   const powerSkill = path.join(skillsDir, 'power', 'SKILL.md');
@@ -224,9 +265,12 @@ function checkPushGateArtifact(artifact) {
   return { passed: false, hint: `Missing ${artifact.file}; regenerate with: ${artifact.regen}, then commit it` };
 }
 
-// Check required directories exist
-function checkDirectories() {
-  const requiredDirs = ['daemons', 'dash', 'monitor', 'tools', 'ui'];
+// Check required directories exist (scaffold layout only; an init'd repo reports n/a)
+function checkDirectories(layout) {
+  if (layout.name === 'init') {
+    return { passed: true, na: true, hint: 'n/a (init layout)' };
+  }
+  const requiredDirs = SCAFFOLD_DIRS;
   const missing = requiredDirs.filter(dir => {
     const dirPath = path.join(CURRENT_DIR, dir);
     return !fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory();
@@ -385,18 +429,22 @@ function formatCiCapability(cap) {
   return lines.join('\n');
 }
 
-// Format a row in the readiness table
-function formatRow(label, status, hint) {
-  const statusStr = status ? colorPass() : colorFail();
-  const hintStr = hint ? ` — ${hint}` : '';
+// Format a row in the readiness table. A n/a row prints its reason in place of a status.
+function formatRow(label, status, hint, na = false) {
   // Pad label to 35 chars for alignment
   const paddedLabel = label.padEnd(35);
+  if (na) {
+    return `  ${paddedLabel} ${hint}`;
+  }
+  const statusStr = status ? colorPass() : colorFail();
+  const hintStr = hint ? ` — ${hint}` : '';
   return `  ${paddedLabel} ${statusStr}${hintStr}`;
 }
 
 // Main execution
 (async function main() {
   try {
+    const layout = detectLayout();
     const syncChecks = [
       { label: 'Node.js version >=18', fn: checkNodeVersion },
       { label: 'Python version >=3.10', fn: checkPython },
@@ -404,7 +452,7 @@ function formatRow(label, status, hint) {
       { label: 'aesop.config.json (structure & required fields)', fn: checkConfig },
       { label: 'Repository URLs (no placeholders)', fn: checkRepoURLs },
       { label: 'Skills files (power & buildsystem)', fn: checkSkillsFiles },
-      { label: 'Required directories (daemons, dash, monitor, tools, ui)', fn: checkDirectories },
+      { label: 'Required directories (daemons, dash, monitor, tools, ui)', fn: () => checkDirectories(layout) },
       { label: 'Git pre-push hook installed', fn: checkPrePushHook },
       ...PUSH_GATE_ARTIFACTS.map(artifact => ({
         label: `Push-gate artifact: ${artifact.file}`,
@@ -415,37 +463,52 @@ function formatRow(label, status, hint) {
     const results = [];
     for (const check of syncChecks) {
       const result = check.fn();
-      results.push({ label: check.label, passed: result.passed, hint: result.hint || '' });
+      results.push({ label: check.label, passed: result.passed, hint: result.hint || '', na: result.na === true });
     }
 
     try {
       const portResult = await checkPort8770();
-      results.push({ label: 'Port 8770 available', passed: portResult.passed, hint: portResult.hint || '' });
+      results.push({ label: 'Port 8770 available', passed: portResult.passed, hint: portResult.hint || '', na: false });
     } catch (e) {
-      results.push({ label: 'Port 8770 available', passed: false, hint: 'Port check failed' });
+      results.push({ label: 'Port 8770 available', passed: false, hint: 'Port check failed', na: false });
     }
 
     // Report-only section: probed after the checks, counted in none of them.
     const ciCapability = probeCiCapability();
 
-    const allPassed = results.every(r => r.passed);
-    const passCount = results.filter(r => r.passed).length;
-    const failCount = results.length - passCount;
-    const summary = { total: results.length, passed: passCount, failed: failCount };
+    // n/a rows are reported but neither pass nor fail: total = passed + failed + na.
+    const counted = results.filter(r => !r.na);
+    const allPassed = counted.every(r => r.passed);
+    const passCount = counted.filter(r => r.passed).length;
+    const failCount = counted.length - passCount;
+    const naCount = results.length - counted.length;
+    const summary = { total: results.length, passed: passCount, failed: failCount, na: naCount };
 
     if (JSON_MODE) {
-      process.stdout.write(JSON.stringify({ checks: results, summary, ci_capability: ciCapability }, null, 2) + '\n');
+      process.stdout.write(JSON.stringify({
+        checks: results,
+        summary,
+        layout,
+        global: GLOBAL_MODE,
+        ci_capability: ciCapability
+      }, null, 2) + '\n');
       process.exitCode = allPassed ? 0 : 1;
       return;
     }
 
     console.log(`\n${COLORS.BOLD}Aesop Readiness Check${COLORS.RESET}\n`);
+    console.log(`  Layout: ${layout.name} (${layout.reason})`);
+    if (!GLOBAL_MODE) {
+      console.log('  Global checks skipped (default run is repo-local). Enable with: aesop doctor --global');
+    }
+    console.log('');
     for (const r of results) {
-      console.log(formatRow(r.label, r.passed, r.hint));
+      console.log(formatRow(r.label, r.passed, r.hint, r.na));
     }
     console.log(formatCiCapability(ciCapability));
 
-    console.log(`\n${COLORS.BOLD}Summary: ${passCount}/${results.length} checks passed${COLORS.RESET}`);
+    const naNote = naCount > 0 ? ` (${naCount} n/a)` : '';
+    console.log(`\n${COLORS.BOLD}Summary: ${passCount}/${counted.length} checks passed${naNote}${COLORS.RESET}`);
 
     if (allPassed) {
       console.log(`${COLORS.GREEN}\u2713 You are ready to run: bash daemons/run-watchdog.sh --once${COLORS.RESET}\n`);
