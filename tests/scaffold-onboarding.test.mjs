@@ -354,24 +354,23 @@ function scaffoldRerunFixture(label) {
   return { targetDir, args, configPath, claudePath };
 }
 
-test('re-running a headless named scaffold keeps existing CLAUDE.md and aesop.config.json', () => {
-  const { targetDir, args, configPath, claudePath } = scaffoldRerunFixture('keep');
-  const res = runCli(targetDir, args);
-  assert.equal(res.status, 0, `rerun should succeed. stderr: ${res.stderr}`);
+// One fixture serves both the keep and the --force rerun. Every scaffold is a real CLI
+// spawn (~1.5s locally); two separate tests (4 spawns) pushed this file over the 60s
+// shard cap on the Windows CI runner ("test timed out after 60000ms", ci (3)).
+test('re-running a headless named scaffold keeps user files, and --force overwrites them', () => {
+  const { targetDir, args, configPath, claudePath } = scaffoldRerunFixture('keep-force');
 
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  assert.equal(config.description, 'USER-EDIT-CONFIG', 'aesop.config.json must not be rewritten without --force');
+  const keep = runCli(targetDir, args);
+  assert.equal(keep.status, 0, `rerun should succeed. stderr: ${keep.stderr}`);
+  const kept = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  assert.equal(kept.description, 'USER-EDIT-CONFIG', 'aesop.config.json must not be rewritten without --force');
   assert.ok(fs.readFileSync(claudePath, 'utf8').includes('USER-EDIT-CLAUDE'), 'CLAUDE.md must not be rewritten without --force');
-  assert.match(res.stdout, /Kept existing CLAUDE\.md/, 'skipped CLAUDE.md must be reported');
-  assert.match(res.stdout, /Kept existing aesop\.config\.json/, 'skipped aesop.config.json must be reported');
-});
+  assert.match(keep.stdout, /Kept existing CLAUDE\.md/, 'skipped CLAUDE.md must be reported');
+  assert.match(keep.stdout, /Kept existing aesop\.config\.json/, 'skipped aesop.config.json must be reported');
 
-test('re-running a headless named scaffold with --force overwrites CLAUDE.md and aesop.config.json', () => {
-  const { targetDir, args, configPath, claudePath } = scaffoldRerunFixture('force');
-  const res = runCli(targetDir, [...args, '--force']);
-  assert.equal(res.status, 0, `forced rerun should succeed. stderr: ${res.stderr}`);
-
-  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-  assert.notEqual(config.description, 'USER-EDIT-CONFIG', '--force must regenerate aesop.config.json');
+  const forced = runCli(targetDir, [...args, '--force']);
+  assert.equal(forced.status, 0, `forced rerun should succeed. stderr: ${forced.stderr}`);
+  const overwritten = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  assert.notEqual(overwritten.description, 'USER-EDIT-CONFIG', '--force must regenerate aesop.config.json');
   assert.ok(!fs.readFileSync(claudePath, 'utf8').includes('USER-EDIT-CLAUDE'), '--force must regenerate CLAUDE.md');
 });
