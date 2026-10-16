@@ -16,12 +16,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gitCmd } from './helpers/git-helpers.mjs';
+import { timedSpawnSync } from './helpers/timed-spawn.mjs';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(ROOT, 'bin', 'cli.js');
@@ -50,13 +50,13 @@ function sandbox() {
 }
 
 function scaffold(base, env, name) {
-  const res = spawnSync(process.execPath, [CLI, name, '--no-skills'], {
+  const res = timedSpawnSync(process.execPath, [CLI, name, '--no-skills'], {
     cwd: base,
     encoding: 'utf8',
     env,
     timeout: timeoutMs(),
     killSignal: 'SIGKILL'
-  });
+  }, 'scaffold');
   assert.equal(res.status, 0, `scaffold failed. stdout: ${res.stdout}\nstderr: ${res.stderr}`);
   return path.join(base, name);
 }
@@ -70,19 +70,19 @@ function adopterFirstCommit(target) {
 
 function bareRemote(base) {
   const remote = path.join(base, 'remote.git');
-  const res = spawnSync('git', ['init', '--bare', '-q', remote], { encoding: 'utf8' });
+  const res = timedSpawnSync('git', ['init', '--bare', '-q', remote], { encoding: 'utf8' }, 'bare-remote');
   assert.equal(res.status, 0, res.stderr);
   return remote;
 }
 
-function push(target, env, branch) {
-  return spawnSync('git', ['push', 'origin', `HEAD:refs/heads/${branch}`], {
+function push(target, env, branch, label) {
+  return timedSpawnSync('git', ['push', 'origin', `HEAD:refs/heads/${branch}`], {
     cwd: target,
     encoding: 'utf8',
     env,
     timeout: timeoutMs(),
     killSignal: 'SIGKILL'
-  });
+  }, label);
 }
 
 function output(res) {
@@ -97,7 +97,7 @@ test('fresh scaffold generates every push-gate artifact and the adopter commit c
   }
   adopterFirstCommit(target);
   for (const file of GENERATED) {
-    const inHead = spawnSync('git', ['cat-file', '-e', `HEAD:${file}`], { cwd: target });
+    const inHead = timedSpawnSync('git', ['cat-file', '-e', `HEAD:${file}`], { cwd: target }, 'cat-file');
     assert.equal(inHead.status, 0, `${file} must be in the adopter's first commit`);
   }
 });
@@ -109,11 +109,11 @@ test('fresh scaffold pushes a feature branch to an empty remote (bootstrap mode)
   const remote = bareRemote(base);
   gitCmd(target, ['remote', 'add', 'origin', remote]);
 
-  const res = push(target, env, 'feature/smoke');
+  const res = push(target, env, 'feature/smoke', 'bootstrap-push');
   assert.equal(res.status, 0, `push must succeed on a fresh remote.\n${output(res)}`);
   assert.ok(output(res).includes(BOOTSTRAP_BANNER), `bootstrap banner expected.\n${output(res)}`);
 
-  const branches = spawnSync('git', ['ls-remote', '--heads', remote, 'feature/smoke'], { encoding: 'utf8' });
+  const branches = timedSpawnSync('git', ['ls-remote', '--heads', remote, 'feature/smoke'], { encoding: 'utf8' }, 'ls-remote');
   assert.match(branches.stdout, /refs\/heads\/feature\/smoke/, 'branch must exist on the remote');
 });
 
@@ -126,7 +126,7 @@ test('bootstrap fails closed when a required baseline is absent from HEAD, namin
   gitCmd(target, ['rm', '-q', '.subprocess-guard-baseline.json']);
   gitCmd(target, ['commit', '-q', '-m', 'drop subprocess baseline']);
 
-  const res = push(target, env, 'feature/smoke');
+  const res = push(target, env, 'feature/smoke', 'blocked-push');
   assert.notEqual(res.status, 0, `push must be blocked without the baseline.\n${output(res)}`);
   assert.ok(
     output(res).includes('.subprocess-guard-baseline.json'),
@@ -149,7 +149,7 @@ test('trunk master on origin: base resolution uses it and bootstrap does not app
   // empty commit so the trunk sha differs from the adopter's HEAD: the base gate copy
   // is keyed by the base sha, which lets the test observe which commit was used.
   const seed = path.join(base, 'seed');
-  const cloned = spawnSync('git', ['clone', '-q', target, seed], { encoding: 'utf8', env });
+  const cloned = timedSpawnSync('git', ['clone', '-q', target, seed], { encoding: 'utf8', env }, 'clone-seed');
   assert.equal(cloned.status, 0, cloned.stderr);
   gitCmd(seed, ['-c', 'user.email=seed@example.com', '-c', 'user.name=Seed', 'commit', '-q', '--allow-empty', '-m', 'trunk']);
   gitCmd(seed, ['push', '-q', remote, 'HEAD:refs/heads/master']);
@@ -162,7 +162,7 @@ test('trunk master on origin: base resolution uses it and bootstrap does not app
 
   const tmpRoot = path.join(base, 'tmp');
   fs.mkdirSync(tmpRoot, { recursive: true });
-  const res = push(target, { ...env, TMPDIR: tmpRoot }, 'feature/smoke');
+  const res = push(target, { ...env, TMPDIR: tmpRoot }, 'feature/smoke', 'trunk-push');
   assert.equal(res.status, 0, `push must succeed with master as trunk.\n${output(res)}`);
   assert.ok(!output(res).includes(BOOTSTRAP_BANNER), `bootstrap must not apply once a trunk exists.\n${output(res)}`);
   // The base gate copies were extracted from the trunk commit, not from HEAD.
