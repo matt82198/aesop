@@ -189,9 +189,9 @@ function checkHeartbeats() {
   }
   const legacyBeats = [
     path.join(MON, '.monitor-heartbeat'),
-    path.join(STATE_DIR, '.watchdog-heartbeat'),
+    resolveWatchdogHeartbeat(),
   ];
-  beatFiles = beatFiles.concat(legacyBeats.filter(f => fs.existsSync(f)));
+  beatFiles = beatFiles.concat(legacyBeats.filter(f => f && fs.existsSync(f)));
   for (const fp of beatFiles) {
     try {
       const content = fs.readFileSync(fp, 'utf8').trim();
@@ -210,6 +210,34 @@ function checkHeartbeats() {
     }
   }
   return staleLoops;
+}
+
+// Watchdog heartbeat location. This MUST mirror daemons/backup-fleet.sh, the only writer:
+// CONDUCTOR_ROOT env wins; otherwise the sibling conductor3 is used only when AESOP_ROOT's
+// basename is exactly "aesop". Anything else resolves to null: the daemon writes no beat.
+function resolveWatchdogHeartbeat() {
+  let conductorRoot = null;
+  if (process.env.CONDUCTOR_ROOT) {
+    conductorRoot = process.env.CONDUCTOR_ROOT;
+  } else if (path.basename(AESOP_ROOT) === 'aesop') {
+    conductorRoot = path.join(path.dirname(AESOP_ROOT), 'conductor3');
+  }
+  return conductorRoot ? path.join(conductorRoot, 'state', '.watchdog-heartbeat') : null;
+}
+
+// A missing, unresolvable, or unparseable watchdog beat is a GAP, never fresh.
+// Returns null when the beat is readable and parses to an epoch.
+function checkWatchdogGap() {
+  const hbPath = resolveWatchdogHeartbeat();
+  if (!hbPath) return { state: 'UNRESOLVED', path: null };
+  if (!fs.existsSync(hbPath)) return { state: 'MISSING', path: hbPath };
+  try {
+    const epoch = parseInt(fs.readFileSync(hbPath, 'utf8').trim().split('\n')[0], 10);
+    if (epoch) return null;
+  } catch {
+    // fall through to UNREADABLE
+  }
+  return { state: 'UNREADABLE', path: hbPath };
 }
 
 // 2) Git state check
@@ -990,6 +1018,7 @@ try {
 }
 
 const staleLoops = checkHeartbeats();
+const watchdogGap = checkWatchdogGap();
 const gitState = checkGitState();
 const memory = checkMemoryFreshness();
 const logFiles = checkLogFiles(securityAlertsContent);
@@ -1034,7 +1063,7 @@ if (!junk.skipped && junk._scripts && junk.quarantinable > 0) {
 const signals = {
   timestamp: new Date(now).toISOString(),
   cycleCount,
-  heartbeats: { staleCount: staleLoops.length, details: staleLoops },
+  heartbeats: { staleCount: staleLoops.length, details: staleLoops, watchdogGap },
   git: gitState,
   memory,
   logs: logFiles,
@@ -1053,12 +1082,23 @@ const brief = [];
 brief.push(`# Aesop Monitor Brief — ${signals.timestamp}`);
 brief.push('');
 brief.push('## Heartbeat check');
-if (staleLoops.length === 0) {
+if (staleLoops.length === 0 && !watchdogGap) {
   brief.push('✓ All heartbeats fresh (watchdog 300s, monitor 3600s, others 1800s).');
 } else {
-  brief.push(`✗ **${staleLoops.length} stale loop(s)** detected:`);
-  for (const sl of staleLoops) {
-    brief.push(`  - ${sl.name}: ${age(sl.ageMs)} (threshold: ${age(sl.threshold)})`);
+  if (staleLoops.length > 0) {
+    brief.push(`✗ **${staleLoops.length} stale loop(s)** detected:`);
+    for (const sl of staleLoops) {
+      brief.push(`  - ${sl.name}: ${age(sl.ageMs)} (threshold: ${age(sl.threshold)})`);
+    }
+  }
+  if (watchdogGap) {
+    const where = watchdogGap.path ? ` at ${watchdogGap.path}` : '';
+    const why = {
+      MISSING: 'no beat written there (daemon not running, or CONDUCTOR_ROOT points elsewhere)',
+      UNREADABLE: 'beat file does not contain an epoch',
+      UNRESOLVED: 'CONDUCTOR_ROOT unset and AESOP_ROOT is not the canonical "aesop" tree, so the daemon writes no beat',
+    }[watchdogGap.state];
+    brief.push(`✗ **watchdog heartbeat ${watchdogGap.state}**${where}: ${why}. Reported as a gap, not as fresh.`);
   }
 }
 brief.push('');
