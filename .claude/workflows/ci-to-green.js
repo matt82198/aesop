@@ -294,11 +294,11 @@ if (readyToMerge.length === 0) {
     `Merge these green, mergeable PRs in ${REPO}: ${readyToMerge.join(', ')}
 
 USE THE REPO'S DETERMINISTIC SCRIPT, never 'gh pr merge' by hand:
-    cd ${REPO} && python tools/merge_train.py -u ${readyToMerge.join(' ')} [[ALLOW-MERGE-TRAIN]]
+    cd ${REPO} && python tools/auto_merge.py <n>
+(<n> = each PR number above, one at a time, in order: run the script once per PR and nothing else)
 
-A PreToolUse hook denies that script by default because the ORCHESTRATOR must never run it. You are
-an agent, so appending the documented token [[ALLOW-MERGE-TRAIN]] is its SANCTIONED use and is logged.
-Do not wrap the command in python -c/subprocess to evade any hook.
+You are the merge lane for these PRs. No escape token applies: the script runs under its normal gates,
+and the orchestrator never runs a merge train.
 
 THE TREADMILL — expect it: if the queue shares a hand-maintained counter (e.g. a test-suite count in
 tests/CLAUDE.md), each merge invalidates the remaining branches. Between merges, bring the next PR up
