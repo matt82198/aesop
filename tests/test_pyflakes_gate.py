@@ -198,6 +198,142 @@ class TestPyflakesGate(unittest.TestCase):
         self.assertIn("pip install pyflakes", result.stderr)
 
 
+class TestPyflakesBurnDownAgainstTrunk(unittest.TestCase):
+    """D40: the pre-push ratchet judges a branch against the TRUNK baseline.
+
+    --trunk-baseline is the trunk's .pyflakes-baseline.json (the gate authority);
+    --baseline is the branch's own copy. A burn-down (branch baseline is a strict
+    subset of trunk, current findings within the branch baseline) passes with a
+    note line. An addition, a finding outside the trunk, or a missing/malformed
+    branch baseline still blocks.
+    """
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def _write(self, relative_path, content):
+        full_path = os.path.join(self.test_dir, relative_path)
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        with open(full_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        return full_path
+
+    def _baseline(self, name, violations):
+        path = os.path.join(self.test_dir, name)
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump({'violations': violations}, f)
+        return path
+
+    def _run_gate(self, branch_baseline, trunk_baseline):
+        cmd = [sys.executable, GATE_SCRIPT, '--root', self.test_dir, '--paths', 'pkg',
+               '--baseline', branch_baseline, '--trunk-baseline', trunk_baseline]
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
+        return result.returncode, result.stdout, result.stderr
+
+    def _two_file_trunk(self):
+        return self._baseline('trunk.json', {
+            'pkg/mod.py@UnusedImport': 1,
+            'pkg/other.py@UnusedImport': 1,
+        })
+
+    # --- GREEN: a burn-down passes and says so ---
+
+    @REQUIRES_PYFLAKES
+    def test_burn_down_passes_with_note(self):
+        """pkg/other.py was fixed on the branch; its trunk entry is removed. Must PASS."""
+        self._write('pkg/mod.py', 'import os\n\n\ndef f():\n    return 1\n')
+        self._write('pkg/other.py', 'def g():\n    return 2\n')
+        trunk = self._two_file_trunk()
+        branch = self._baseline('branch.json', {'pkg/mod.py@UnusedImport': 1})
+
+        exit_code, stdout, stderr = self._run_gate(branch, trunk)
+        self.assertEqual(exit_code, 0, f"burn-down must pass (exit 0), got {exit_code}: {stderr}")
+        self.assertIn('pyflakes baseline burned down: 1 entries removed', stdout)
+        self.assertIn('PASS', stdout)
+
+    # --- RED: additions and new findings still block ---
+
+    @REQUIRES_PYFLAKES
+    def test_addition_to_branch_baseline_blocks(self):
+        """The branch baseline adds an entry the trunk lacks -> exit 1 even if the scan matches it."""
+        self._write('pkg/mod.py', 'import os\n\n\ndef f():\n    return 1\n')
+        self._write('pkg/extra.py', 'import sys\n\n\ndef h():\n    return 3\n')
+        trunk = self._baseline('trunk.json', {'pkg/mod.py@UnusedImport': 1})
+        branch = self._baseline('branch.json', {
+            'pkg/mod.py@UnusedImport': 1,
+            'pkg/extra.py@UnusedImport': 1,
+        })
+
+        exit_code, stdout, stderr = self._run_gate(branch, trunk)
+        self.assertEqual(exit_code, 1, f"addition must block (exit 1), got {exit_code}: {stderr}")
+        self.assertIn('pkg/extra.py@UnusedImport', stderr)
+
+    @REQUIRES_PYFLAKES
+    def test_new_finding_outside_trunk_blocks_even_with_burn_down(self):
+        """Branch burns down pkg/other.py but a NEW finding appears in pkg/x.py -> exit 1."""
+        self._write('pkg/mod.py', 'import os\n\n\ndef f():\n    return 1\n')
+        self._write('pkg/x.py', 'import json\n\n\ndef k():\n    return 4\n')
+        trunk = self._two_file_trunk()
+        branch = self._baseline('branch.json', {'pkg/mod.py@UnusedImport': 1})
+
+        exit_code, stdout, stderr = self._run_gate(branch, trunk)
+        self.assertEqual(exit_code, 1, f"new finding must block (exit 1), got {exit_code}: {stderr}")
+        self.assertIn('NEW', stderr)
+        self.assertIn('pkg/x.py@UnusedImport', stderr)
+
+    @REQUIRES_PYFLAKES
+    def test_current_finding_above_branch_baseline_blocks(self):
+        """Branch baseline shrinks pkg/other.py to 0 but the scan still finds it -> exit 1."""
+        self._write('pkg/mod.py', 'import os\n\n\ndef f():\n    return 1\n')
+        self._write('pkg/other.py', 'import sys\n\n\ndef g():\n    return 2\n')
+        trunk = self._two_file_trunk()
+        branch = self._baseline('branch.json', {'pkg/mod.py@UnusedImport': 1})
+
+        exit_code, stdout, stderr = self._run_gate(branch, trunk)
+        self.assertEqual(exit_code, 1, f"unrecorded finding must block (exit 1), got {exit_code}: {stderr}")
+        self.assertIn('pkg/other.py@UnusedImport', stderr)
+
+    # --- RED: missing or malformed branch baseline blocks (never fail open) ---
+
+    @REQUIRES_PYFLAKES
+    def test_missing_branch_baseline_blocks(self):
+        """Branch baseline file absent -> exit 1, even with a clean tree."""
+        self._write('pkg/mod.py', 'def f():\n    return 1\n')
+        trunk = self._two_file_trunk()
+        branch = os.path.join(self.test_dir, 'does-not-exist.json')
+
+        exit_code, stdout, stderr = self._run_gate(branch, trunk)
+        self.assertEqual(exit_code, 1, f"missing branch baseline must block (exit 1), got {exit_code}: {stderr}")
+
+    @REQUIRES_PYFLAKES
+    def test_malformed_branch_baseline_blocks(self):
+        """Branch baseline is not valid JSON -> exit 1, even with a clean tree."""
+        self._write('pkg/mod.py', 'def f():\n    return 1\n')
+        trunk = self._two_file_trunk()
+        branch = os.path.join(self.test_dir, 'branch.json')
+        with open(branch, 'w', encoding='utf-8') as f:
+            f.write('{not json')
+
+        exit_code, stdout, stderr = self._run_gate(branch, trunk)
+        self.assertEqual(exit_code, 1, f"malformed branch baseline must block (exit 1), got {exit_code}: {stderr}")
+
+    def test_pyflakes_unavailable_with_trunk_still_exit_2(self):
+        """Unavailable pyflakes stays exit 2 in trunk mode (runs everywhere, forced via python -S)."""
+        self._write('pkg/mod.py', 'def f():\n    return 1\n')
+        trunk = self._two_file_trunk()
+        branch = self._baseline('branch.json', {'pkg/mod.py@UnusedImport': 1})
+        result = subprocess.run(
+            [sys.executable, '-S', GATE_SCRIPT, '--root', self.test_dir, '--paths', 'pkg',
+             '--baseline', branch, '--trunk-baseline', trunk],
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+        )
+        self.assertEqual(result.returncode, 2, f"expected exit 2, got {result.returncode}: {result.stderr}")
+
+
 class TestPyflakesGateAgainstRealBaseline(unittest.TestCase):
     """Regression: run the real gate against the real repo + committed baseline.
 
