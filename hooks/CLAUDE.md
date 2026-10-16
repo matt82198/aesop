@@ -116,7 +116,7 @@ memories (advisory, read after the fact), and both fail open on malformed stdin.
 
 **Registration**: same `.claude/settings.json` `hooks.PreToolUse` shape as `force-model-policy.mjs` above — one entry per hook, each with its own `matcher` from the table and `command` pointing at that hook's path under `hooks/claude/`.
 
-**Test Command**: `node hooks/claude/no-heredoc-file-authoring.test.mjs` and `node hooks/claude/no-scrollback-as-record.test.mjs` — 19 co-located behavioral cases each (`verdictFor` exported directly; no `--test` mode). Exit 0 = pass; exit 1 = fail.
+**Test Command**: `node hooks/claude/no-heredoc-file-authoring.test.mjs` and `node hooks/claude/no-scrollback-as-record.test.mjs` — 19 co-located behavioral cases (no-heredoc) and 34 (no-scrollback-as-record, incl. the transcript-read bypass forms: `cd ~/.claude && cat projects/...`, globs, `$HOME`/`CLAUDE_CONFIG_DIR` paths, relative Read/Grep paths) (`verdictFor` exported directly; no `--test` mode). Exit 0 = pass; exit 1 = fail.
 
 ## pre-commit-dispatch-lint.sh
 
