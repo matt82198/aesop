@@ -217,9 +217,11 @@ class TestScopedFallbackFailsClosed(unittest.TestCase):
         _code, root_receipt, _ = self._run_main(repo, ["--main-ref", "refs/heads/main"])
         root_ran = {p["name"] for p in root_receipt["parts"] if p["name"] in _PY_SHARDS}
         old_cwd = os.getcwd()
-        os.chdir(str(sub))
-        self.addCleanup(os.chdir, old_cwd)
-        code, receipt, _stdout = self._run_main(None, ["--main-ref", "refs/heads/main"])
+        try:
+            os.chdir(str(sub))
+            code, receipt, _stdout = self._run_main(None, ["--main-ref", "refs/heads/main"])
+        finally:
+            os.chdir(old_cwd)
         self.assertEqual(code, 0)
         sub_ran = {p["name"] for p in receipt["parts"] if p["name"] in _PY_SHARDS}
         self.assertGreaterEqual(len(sub_ran), 1, "a subdirectory run must still select the owning shard")
