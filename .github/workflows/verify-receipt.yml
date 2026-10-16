@@ -75,7 +75,7 @@ jobs:
       - name: Install optional Ed25519 support
         # tools/ stays stdlib-only; `cryptography` is an optional runtime import that
         # lets the verifier accept ed25519 receipts (hmac-sha256 needs nothing).
-        run: pip install cryptography
+        run: pip install -r requirements-ci.txt
 
       - name: Fetch the local receipt for the head sha
         id: fetch

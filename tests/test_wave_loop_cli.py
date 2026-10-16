@@ -35,6 +35,7 @@ from agent_driver import (  # noqa: E402
     WORKER_FAILED,
     ROLE_WORKER,
 )
+import wave_loop as wave_loop_mod  # noqa: E402
 from wave_loop import run_wave  # noqa: E402
 from verification_policy import verification_policy  # noqa: E402
 
@@ -277,25 +278,26 @@ class TestWaveLoopCLI(unittest.TestCase):
         self.assertEqual(len(result["built"]), 0)
 
     def test_wave_loop_cost_ceiling_gate(self):
-        """Test that cost ceiling is respected (requires cost_ceiling module)."""
+        """A tripped cost ceiling must abort the wave before any dispatch."""
         manifest_file = self._create_test_manifest(num_items=1)
 
         driver = FakeDriver(tokens_per_call=10000)  # High token usage
 
-        with open(manifest_file) as f:
+        with open(manifest_file, encoding="utf-8") as f:
             manifest = json.load(f)
 
-        # Mock cost_ceiling check to simulate exceeded ceiling.
-        try:
-            import cost_ceiling
-            with mock.patch.object(cost_ceiling, 'check') as mock_check:
-                mock_check.return_value = {"exceeded": True}
-                result = run_wave(driver, manifest, state_dir=str(self.state_dir))
-                # Should be aborted due to cost ceiling.
-                # Note: Only if cost_ceiling module is available and mocked.
-        except ImportError:
-            # Skip if cost_ceiling is not available.
-            pass
+        # Stub the module-level cost_ceiling that wave_loop itself consults,
+        # so the gate under test is the one run_wave uses.
+        stub = mock.Mock()
+        stub.check.return_value = {"exceeded": True, "reason": "ceiling exceeded (stub)"}
+        with mock.patch.object(wave_loop_mod, "cost_ceiling", stub):
+            result = run_wave(driver, manifest, state_dir=str(self.state_dir))
+
+        self.assertTrue(stub.check.called, "run_wave must consult cost_ceiling.check")
+        self.assertTrue(result["aborted"])
+        self.assertEqual(result["abort_reason"], "cost_ceiling_exceeded")
+        self.assertIn("ceiling", result["abort_reason"])
+        self.assertEqual(driver.dispatch_count, 0, "no worker may dispatch past a tripped ceiling")
 
     def test_report_json_serializable(self):
         """Test that Report JSON is valid JSON and serializable."""
@@ -408,6 +410,82 @@ class TestWaveLoopCLIEntrypoint(unittest.TestCase):
             except json.JSONDecodeError:
                 # If JSON parsing fails, __main__ is not yet implemented properly.
                 pass
+
+
+# Entries that would break out of a cmd.exe/sh argument if ever handed to a shell.
+_INJECTION_ENTRIES = [
+    'a" & echo pwned > pwned.txt & "b',
+    "a' & echo pwned > pwned.txt & 'b",
+    "a & echo pwned > pwned.txt",
+    "a | echo pwned > pwned.txt",
+    "a; echo pwned > pwned.txt",
+    "a\necho pwned > pwned.txt",
+    "a\x00b",
+    "a > pwned.txt",
+    "a%PATH%b",
+    "a`echo pwned > pwned.txt`b",
+]
+
+
+class TestOwnsFilesShellSafety(unittest.TestCase):
+    """ownsFiles entries are data, never shell syntax (Windows cmd.exe injection)."""
+
+    def setUp(self):
+        """Create a scratch workdir; the injected command would write pwned.txt here."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.sentinel = Path(self.temp_dir) / "pwned.txt"
+
+    def tearDown(self):
+        """Remove the scratch workdir."""
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_injected_owns_file_is_rejected_and_never_executed(self):
+        """An injected ownsFiles entry raises ValueError and runs no command."""
+        for entry in _INJECTION_ENTRIES:
+            with self.subTest(entry=entry):
+                with self.assertRaises(ValueError):
+                    wave_loop_mod._get_owned_files_diff(self.temp_dir, [entry])
+                self.assertFalse(self.sentinel.exists(), "injected command executed")
+
+    def test_wave_aborts_before_dispatch_on_injected_owns_file(self):
+        """preflight refuses the wave: no dispatch, no sentinel side effect."""
+        manifest = {
+            "items": [{
+                "slug": "inject-0",
+                "ownsFiles": [_INJECTION_ENTRIES[0]],
+                "prompt": "noop",
+                "testCmd": "echo ok",
+                "workDir": self.temp_dir,
+            }]
+        }
+        driver = FakeDriver()
+        result = run_wave(driver, manifest)
+
+        self.assertTrue(result["aborted"])
+        self.assertEqual(result["abort_reason"], "invalid_owns_file")
+        self.assertEqual(driver.dispatch_count, 0)
+        self.assertFalse(self.sentinel.exists(), "injected command executed")
+
+    def test_plain_relative_owns_file_still_yields_diff(self):
+        """A safe relative path (with a space) still produces its git diff."""
+        repo = Path(self.temp_dir)
+
+        def git(*args):
+            subprocess.run(
+                ["git", *args], cwd=str(repo), capture_output=True,
+                encoding="utf-8", errors="replace", check=True,
+            )
+
+        git("init", "-q")
+        (repo / "sub dir").mkdir()
+        tracked = repo / "sub dir" / "f.txt"
+        tracked.write_text("one\n", encoding="utf-8")
+        git("add", "--", "sub dir/f.txt")
+        tracked.write_text("two\n", encoding="utf-8")
+
+        diff = wave_loop_mod._get_owned_files_diff(str(repo), ["sub dir/f.txt"])
+        self.assertIn("+two", diff)
 
 
 if __name__ == "__main__":
