@@ -25,6 +25,10 @@ from pathlib import Path
 
 
 _PS_STUB_PRELUDE = r"""
+# Import the real module FIRST, then define the stubs in this script scope so they shadow it.
+# Without this, the installer's first New-ScheduledTask* call auto-imports the ScheduledTasks
+# module into the installer scope, and Register-ScheduledTask then resolves to the REAL cmdlet.
+Import-Module ScheduledTasks -ErrorAction Stop
 $global:AesopStubDb = '@@DB@@'
 $global:AesopStubLog = '@@LOG@@'
 function Add-AesopStubLog([string]$Line) {
@@ -54,9 +58,14 @@ function Get-ScheduledTask {
         Write-Error "No MSFT_ScheduledTask objects found with property 'TaskName' equal to '$TaskName'"
         return $null
     }
+    # CIM reports the repetition interval as an ISO-8601 duration string (e.g. PT1H).
+    # Seeded per task via "<name>|interval"; defaults to the installer's 5-minute watchdog default.
+    $interval = 'PT5M'
+    if ($store.ContainsKey($TaskName + '|interval')) { $interval = $store[$TaskName + '|interval'] }
     return [pscustomobject]@{
         TaskName = $TaskName
         Actions  = @([pscustomobject]@{ Arguments = $store[$TaskName] })
+        Triggers = @([pscustomobject]@{ Repetition = [pscustomobject]@{ Interval = $interval; Duration = 'P3650D' } })
     }
 }
 function Register-ScheduledTask {
@@ -951,16 +960,18 @@ class TestInstallTasks(unittest.TestCase):
             "Should NOT register AesopDefaultScopeTestRefinementMonitor without -MonitorCommand",
         )
 
-    def _run_installer_stubbed(self, tmp, installer_args, tasks=None):
+    def _run_installer_stubbed(self, tmp, installer_args, tasks=None, intervals=None):
         """
         Run daemons/install-tasks.ps1 with its Task Scheduler cmdlets replaced by the
         recording stub in _PS_STUB_PRELUDE, so the real scheduler is never reached.
-        `tasks` seeds the stub store as {task_name: action_arguments}.
+        `tasks` seeds the stub store as {task_name: action_arguments};
+        `intervals` seeds {task_name: ISO-8601 repetition interval} (e.g. "PT1H").
         Returns (CompletedProcess, stub_call_lines, final_store_text).
         """
         db = tmp / "scheduler-stub-tasks.tsv"
         log = tmp / "scheduler-stub-calls.log"
         rows = [f"{name}\t{args}\n" for name, args in (tasks or {}).items()]
+        rows += [f"{name}|interval\t{iv}\n" for name, iv in (intervals or {}).items()]
         db.write_text("".join(rows), encoding="utf-8")
         prelude = _PS_STUB_PRELUDE.replace("@@DB@@", str(db)).replace("@@LOG@@", str(log))
         call = " ".join(_ps_literal(arg) for arg in installer_args)
@@ -1075,6 +1086,66 @@ class TestInstallTasks(unittest.TestCase):
             "DIFFERENT action path", out,
             f"matching path must NOT be reported as divergent:\n{out}",
         )
+        self.assertFalse(
+            [c for c in calls if c.startswith(("REGISTER", "UNREGISTER"))],
+            f"idempotent task must not be re-registered; stub calls: {calls}",
+        )
+
+    def test_interval_change_reports_update_not_idempotent(self):
+        """
+        Test that an existing task with the SAME command but a DIFFERENT trigger interval
+        is re-registered, not reported as idempotent.
+
+        Repro: a task registered at 60 minutes, reinstalled with -WatchdogIntervalMinutes 20.
+        The command matches, so the old comparison (command only) said 'idempotent' and kept
+        the 60-minute cadence. Expected: 'update' and a re-registration at the requested interval.
+        """
+        prefix = "AesopIntervalTest"
+        task_name = prefix + "WatchdogDaemon"
+        command = "bash /c/iv/tree/daemons/run-watchdog.sh --once"
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_bash = tmp_path / "fake-bash.exe"
+            fake_bash.write_bytes(b"")
+            result, calls, _store = self._run_installer_stubbed(
+                tmp_path,
+                ["-WatchdogIntervalMinutes", "20", "-BashExe", str(fake_bash),
+                 "-WatchdogCommand", command, "-TaskPrefix", prefix],
+                tasks={task_name: _action_args(command)},
+                intervals={task_name: "PT1H"},
+            )
+        out = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, f"expected success:\n{out}")
+        self.assertIn("(update)", out, f"interval mismatch must be reported as update:\n{out}")
+        self.assertNotIn(
+            "idempotent", out,
+            f"60-minute task requested at 20 minutes must NOT be idempotent:\n{out}",
+        )
+        self.assertIn(
+            f"REGISTER {task_name}", calls,
+            f"interval mismatch must re-register the task; stub calls: {calls}",
+        )
+
+    def test_same_interval_and_command_is_idempotent(self):
+        """
+        Test that an existing task whose command AND trigger interval both match is a quiet
+        idempotent no-op (the counterpart of the interval-change update test).
+        """
+        prefix = "AesopIntervalSameTest"
+        task_name = prefix + "WatchdogDaemon"
+        command = "bash /c/ivsame/tree/daemons/run-watchdog.sh --once"
+        with tempfile.TemporaryDirectory() as tmp:
+            result, calls, _store = self._run_installer_stubbed(
+                Path(tmp),
+                ["-WatchdogIntervalMinutes", "20", "-WatchdogCommand", command,
+                 "-TaskPrefix", prefix, "-DryRun"],
+                tasks={task_name: _action_args(command)},
+                intervals={task_name: "PT20M"},
+            )
+        out = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, f"expected success:\n{out}")
+        self.assertIn("idempotent", out, f"same command and interval must be a no-op:\n{out}")
+        self.assertNotIn("(update)", out, f"same interval must not be an update:\n{out}")
         self.assertFalse(
             [c for c in calls if c.startswith(("REGISTER", "UNREGISTER"))],
             f"idempotent task must not be re-registered; stub calls: {calls}",

@@ -1778,12 +1778,18 @@ RECEIPT_STUB_PRELUDE='import sys,os; open(os.environ["STUB_ARGV"],"w").write(" "
 
 receipt_gate_case() {
   # $1 label  $2 stub python body  $3 expected return  $4 expected audit reason  $5 optional VAR=val
-  local label="$1" body="$2" want_rc="$3" want_reason="$4" extra="${5:-}"
+  # $6 optional "no_timeout": shadow timeout/gtimeout so the hook takes its no-timeout (background-job) branch
+  local label="$1" body="$2" want_rc="$3" want_reason="$4" extra="${5:-}" no_timeout="${6:-}"
   local root="$TEST_ROOT/receipt_gate_$label"
   mkdir -p "$root/state" "$root/tools" "$root/stub-bin"
   printf '%s\n' "$body" > "$root/tools/emit_receipt.py"
   printf '#!/bin/sh\nexit 0\n' > "$root/stub-bin/gh"
   chmod +x "$root/stub-bin/gh"
+  if [ -n "$no_timeout" ]; then
+    printf '#!/bin/sh\nexit 127\n' > "$root/stub-bin/timeout"
+    printf '#!/bin/sh\nexit 127\n' > "$root/stub-bin/gtimeout"
+    chmod +x "$root/stub-bin/timeout" "$root/stub-bin/gtimeout"
+  fi
   touch "$root/dummy_key.pem"
   emit_fixture_base "$root"
   (
@@ -1820,6 +1826,16 @@ print("part py-shard-3 exit=1"); print("conclusion=failure"); sys.exit(3)' 1 rec
     printf 'FAIL: red case must pass --fail-on-red and no --pushed-red, got: %s\n' "$(cat "$TEST_ROOT/receipt_gate_red_blocks/argv.txt")"
     test_failed=$((test_failed + 1))
   fi
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test: a RED required part blocks the push in the NO-TIMEOUT branch (child exit code must propagate) ===\n'
+# Fail-open regression: the no-timeout branch did `wait $pid || true; rc=$?`, which always read 0,
+# so a red matrix passed. The child exits 3 (red); the hook must still block with rc 1.
+if receipt_gate_case red_no_timeout "$RECEIPT_STUB_PRELUDE"'
+print("part py-shard-3 exit=1"); print("conclusion=failure"); sys.exit(3)' 1 receipt_red_blocked "" no_timeout; then
+  test_passed=$((test_passed + 1))
 else
   test_failed=$((test_failed + 1))
 fi
