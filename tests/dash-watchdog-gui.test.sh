@@ -140,6 +140,38 @@ test_heartbeat_derives_sibling_for_canonical_aesop_root() {
   fi
 }
 
+# The GUI must read the heartbeat file the daemon writes. The daemon's own derivation
+# is taken from daemons/backup-fleet.sh by sourcing it (its main is guarded) and reading
+# the HEARTBEAT it computes; the GUI is then given the same AESOP_ROOT and must report
+# ALIVE for a fresh file at exactly that path.
+test_heartbeat_path_matches_daemon_derivation() {
+  local scratch daemon_hb line canon_aesop
+  scratch="$(mktemp -d)"
+  mkdir -p "$scratch/aesop/state"
+  canon_aesop="$(cd "$scratch/aesop" && pwd -P)"
+
+  daemon_hb="$(env -u CONDUCTOR_ROOT AESOP_ROOT="$canon_aesop" \
+    bash -c 'source "$1"; printf "%s" "$HEARTBEAT"' _ "$PROJECT_ROOT/daemons/backup-fleet.sh")"
+  if [ -z "$daemon_hb" ] || [ "${daemon_hb%/conductor3/state/.watchdog-heartbeat}" = "$daemon_hb" ]; then
+    rm -rf "$scratch"
+    echo "FAIL: daemon derivation did not yield a conductor3 heartbeat; got: '$daemon_hb'"
+    return 1
+  fi
+
+  mkdir -p "$(dirname "$daemon_hb")"
+  date +%s > "$daemon_hb"
+  line="$(render_daemon_line "$scratch" -u CONDUCTOR_ROOT AESOP_ROOT="$canon_aesop")"
+  rm -rf "$scratch"
+
+  if printf '%s' "$line" | grep -q 'ALIVE'; then
+    echo "PASS: GUI reads the heartbeat path the daemon derives ($daemon_hb)"
+    return 0
+  else
+    echo "FAIL: GUI did not read the daemon-derived heartbeat; Daemon line was: $line"
+    return 1
+  fi
+}
+
 main() {
   local pass=0
   local fail=0
@@ -179,9 +211,13 @@ main() {
   if test_heartbeat_derives_sibling_for_canonical_aesop_root; then ((pass++)); else ((fail++)); fi
   echo
 
+  echo "Running: test_heartbeat_path_matches_daemon_derivation"
+  if test_heartbeat_path_matches_daemon_derivation; then ((pass++)); else ((fail++)); fi
+  echo
+
   echo "${C}=== Test Summary ===${X}"
-  echo "Passed: $pass / 8"
-  echo "Failed: $fail / 8"
+  echo "Passed: $pass / 9"
+  echo "Failed: $fail / 9"
   echo
 
   if [ "$fail" -eq 0 ]; then

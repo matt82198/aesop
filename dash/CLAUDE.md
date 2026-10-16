@@ -14,7 +14,7 @@
 ## State contracts
 
 **watchdog-gui.sh reads** (configured via `AESOP_ROOT`, default: `.`; all paths relative to it):
-- `$CONDUCTOR_ROOT/state/.watchdog-heartbeat` — watchdog heartbeat (epoch seconds), the path backup-fleet.sh writes; `CONDUCTOR_ROOT` env wins, else sibling `conductor3` when resolved AESOP_ROOT basename is `aesop`, else no path → STALE (fail closed). Never `AESOP_ROOT/state`.
+- `$CONDUCTOR_ROOT/state/.watchdog-heartbeat` — watchdog heartbeat (epoch seconds), the path backup-fleet.sh writes; resolved by `resolve_conductor_root` in `daemons/conductor-root.sh` (the daemons' rule: `CONDUCTOR_ROOT` env wins, else sibling of the canonical `aesop` tree, else no path → STALE, fail closed). watchdog-gui.sh sources that helper and never re-derives the path itself (keeps the portability ratchet clean). Never `AESOP_ROOT/state`.
 - `state/FLEET-BACKUP.log` — append-only recent events (tail -3 displayed)
 - `state/SECURITY-ALERTS.log` — all lines; counts HIGH/MED (filters RESOLVED-FP); displayed as badge
 - `state/.watchdog-repos.json` — JSON array of repo status (jq-parsed)
