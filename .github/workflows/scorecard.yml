@@ -1,0 +1,39 @@
+# OpenSSF Scorecard supply-chain analysis.
+# Actions are pinned to full commit SHAs. Resolution (gh api repos/<owner>/<repo>/git/ref/tags/<tag>,
+# annotated tags dereferenced via git/tags/<sha>):
+#   actions/checkout        v7     -> 3d3c42e5aac5ba805825da76410c181273ba90b1 (lightweight tag, commit)
+#   ossf/scorecard-action   v2.5.0 -> fa7117db83c52d787ae5a89f350999701505d78e (tag object 46dc3187...)
+#   github/codeql-action    v4.39.0 -> 6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee (tag object 48870fdd...)
+name: Scorecard supply-chain security
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '20 7 * * 1'
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          sarif_file: results.sarif
