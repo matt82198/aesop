@@ -34,75 +34,110 @@ _CACHE_TTL_SECONDS = 5.0
 _cache = {"expires": 0.0, "payload": None, "transcripts_root": None}
 
 
-def _infer_agent_phase_from_transcript(transcript_path):
-    """Infer agent phase from transcript tail.
+# Bytes read from the end of a transcript. Large enough to hold a final record that
+# carries a big tool_use input; the previous 2KB tail cut such records in half.
+_TAIL_BYTES = 64 * 1024
 
-    Reads the last ~10 lines of an NDJSON transcript to infer phase state.
-    Returns one of: 'dispatch', 'thinking', 'tool-use', 'stall', 'done'.
+
+def _read_tail_records(transcript_path):
+    """Parse the dict records at the end of an NDJSON transcript, oldest first.
+
+    Returns None for an empty file, else (records, last_line_parsed). Unparseable
+    lines are skipped; a partial first line (the seek landed mid-record) is dropped.
+    last_line_parsed is False when the final non-empty line did not parse, which
+    means the newest record is still being written and its state is unknowable.
+    """
+    with open(transcript_path, 'rb') as f:
+        f.seek(0, 2)
+        file_size = f.tell()
+        if file_size == 0:
+            return None
+        read_size = min(_TAIL_BYTES, file_size)
+        f.seek(file_size - read_size)
+        raw = f.read()
+    lines = raw.decode('utf-8', errors='replace').split('\n')
+    if read_size < file_size:
+        lines = lines[1:]
+    records = []
+    last_line_parsed = True
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            last_line_parsed = False
+            continue
+        last_line_parsed = isinstance(entry, dict)
+        if isinstance(entry, dict):
+            records.append(entry)
+    return records, last_line_parsed
+
+
+def _content_blocks(message):
+    """Return the structured content-block list of a message, or []."""
+    content = message.get("content")
+    if not isinstance(content, list):
+        return []
+    return [b for b in content if isinstance(b, dict)]
+
+
+def _infer_agent_phase_from_transcript(transcript_path):
+    """Infer agent phase from the structured fields of the transcript tail.
+
+    Decisions use only structured fields: record type, message.stop_reason, content
+    block types, and a structured API-error marker. Free text is never inspected,
+    so prose such as '0 errors' or '[error]' cannot change the phase.
+
+    Returns one of: 'dispatch', 'thinking', 'tool-use', 'stall', 'done', 'unknown'.
+    'unknown' means the structured signal is absent; it is never a guess.
 
     Args:
         transcript_path: Path to agent-*.jsonl file
 
     Returns:
-        str: phase label, or 'unknown' if inference fails
+        str: phase label
     """
     try:
         if not transcript_path.exists():
             return "unknown"
 
-        # Read last ~10 lines to infer phase
-        with open(transcript_path, 'rb') as f:
-            # Seek to end and read backwards to get tail
-            f.seek(0, 2)
-            file_size = f.tell()
-            if file_size == 0:
-                return "dispatch"  # Empty file, likely just dispatched
-
-            # Read last ~2KB to capture ~10 lines
-            read_size = min(2048, file_size)
-            f.seek(max(0, file_size - read_size))
-            tail = f.read().decode('utf-8', errors='replace')
-
-        # Count message types to infer phase
-        lines = tail.strip().split('\n')
-        message_types = []
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                entry = json.loads(line)
-                if isinstance(entry, dict) and 'type' in entry:
-                    message_types.append(entry['type'].lower())
-            except (json.JSONDecodeError, ValueError):
-                pass
-
-        # Phase inference logic:
-        # - If last message is user: dispatch
-        # - If last message is assistant: thinking or tool-use
-        # - If we see [tool_use: ...]: tool-use
-        # - If we see [error] or timestamp recent: stall
-        # - If multiple completions: done
-        if not message_types:
+        tail = _read_tail_records(transcript_path)
+        if tail is None:
+            return "dispatch"  # Empty file: nothing emitted yet, so the agent was just dispatched
+        records, last_line_parsed = tail
+        if not records or not last_line_parsed:
             return "unknown"
 
-        last_type = message_types[-1] if message_types else "unknown"
-
-        # Simple heuristic: check for tool_use markers in tail
-        tail_lower = tail.lower()
-        if '[tool_use:' in tail_lower or 'tool_use' in last_type:
-            return "tool-use"
-        elif '[error]' in tail_lower or 'error' in tail_lower:
+        # Structured API-error marker on the newest record -> stall
+        newest = records[-1]
+        if newest.get("isApiErrorMessage") is True or newest.get("type") == "error":
             return "stall"
-        elif last_type == 'assistant':
-            # Check if we have many completions (indicates done)
-            completion_count = tail.count('"type": "assistant"') + tail.count('"type":"assistant"')
-            if completion_count >= 3:
+
+        conversational = [r for r in records if r.get("type") in ("user", "assistant")]
+        if not conversational:
+            return "unknown"
+        latest = conversational[-1]
+        message = latest.get("message")
+        if not isinstance(message, dict):
+            return "unknown"
+        block_types = {b.get("type") for b in _content_blocks(message)}
+
+        if latest.get("type") == "assistant":
+            stop_reason = message.get("stop_reason")
+            if "tool_use" in block_types or stop_reason == "tool_use":
+                return "tool-use"
+            if stop_reason == "end_turn":
                 return "done"
-            return "thinking"
-        elif last_type == 'user':
-            return "dispatch"
-        else:
-            return "thinking"
+            if stop_reason is None:
+                return "thinking"  # Turn still streaming, no stop reason written yet
+            return "unknown"
+
+        # latest is a user record
+        if "tool_result" in block_types:
+            return "thinking"  # Tool output delivered, model has not replied yet
+        return "dispatch"  # Plain prompt with no reply yet
     except Exception as e:
         print(f"[wave_dispatch] Error inferring phase from {transcript_path}: {e}", file=sys.stderr)
         return "unknown"
