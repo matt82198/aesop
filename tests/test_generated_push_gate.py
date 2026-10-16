@@ -480,6 +480,149 @@ class TestGeneratorEditCannotBlessItself(GateFixture):
         self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
 
 
+INHERITED_NOTE = ("generated path tools/INDEX.md inherited unchanged from base; "
+                  "regeneration belongs to main")
+
+
+class TestInheritedUnchangedFromStaleMain(unittest.TestCase):
+    """D46: a branch cut from a main whose registered artifact is stale must not be
+    refused for a file it never touched. origin/main carries a tool added WITHOUT
+    regeneration, so tools/INDEX.md is stale at main's own head. A branch cut from
+    that head and touching only notes.txt inherits the stale bytes unchanged."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.repo = self.tmp / "repo"
+        (self.repo / "tools").mkdir(parents=True)
+        for name in FIXTURE_TOOLS:
+            shutil.copy(TOOLS / name, self.repo / "tools" / name)
+        git(self.repo, "init", "-q", "-b", "main")
+        git(self.repo, "config", "user.email", "test@example.com")
+        git(self.repo, "config", "user.name", "Test User")
+        git(self.repo, "config", "core.autocrlf", "false")
+        git(self.repo, "add", "-A")
+        add_tool(self.repo, "alpha.py", "alpha purpose")
+        regenerate(self.repo)
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "base")
+        self.base = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        # main gains a tool WITHOUT regenerating: the artifact is stale at main's head.
+        add_tool(self.repo, "beta.py", "beta purpose")
+        git(self.repo, "commit", "-q", "-m", "main adds beta without regenerating")
+        self.main_tip = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        git(self.repo, "update-ref", "refs/remotes/origin/main", self.main_tip)
+        # Branch cut from the stale head; it never touches the artifact.
+        git(self.repo, "checkout", "-q", "-b", "feature/unrelated")
+        (self.repo / "notes.txt").write_text("unrelated\n", encoding="utf-8", newline="\n")
+        git(self.repo, "add", "notes.txt")
+        git(self.repo, "commit", "-q", "-m", "unrelated notes")
+        self.tip = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        # Precondition: the artifact really is stale at main's head.
+        git(self.repo, "checkout", "-q", "--detach", self.main_tip)
+        proc = py(self.repo, str(self.repo / "tools" / "gen_tool_index.py"), "--check")
+        assert proc.returncode == 1, "fixture must reproduce main's stale index: " + proc.stderr
+        git(self.repo, "checkout", "-q", "feature/unrelated")
+
+    def tearDown(self):
+        git(self.repo, "worktree", "prune")
+        self._tmp.cleanup()
+
+    def gate(self, *ranges):
+        args = [str(GATE)]
+        for r in ranges:
+            args += ["--range", r]
+        return py(self.repo, *args)
+
+    def leaked_worktrees(self):
+        out = git(self.repo, "worktree", "list", "--porcelain").stdout
+        return [l for l in out.splitlines() if l.startswith("worktree ")][1:]
+
+    def commit_on_branch(self, message):
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", message)
+        return git(self.repo, "rev-parse", "HEAD").stdout.strip()
+
+    def test_inherited_unchanged_stale_artifact_passes_with_note(self):
+        proc = self.gate("%s..%s" % (self.main_tip, self.tip))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn(INHERITED_NOTE, proc.stdout)
+        self.assertEqual(self.leaked_worktrees(), [], "temp worktree must be removed")
+
+    @unittest.skipIf(BASH is None, "usable bash unavailable")
+    def test_hook_passes_inherited_stale_artifact_and_prints_note(self):
+        res = TestPrePushWiring.run_hook_fn(self, self.main_tip, self.tip)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        self.assertIn(INHERITED_NOTE, res.stdout + res.stderr)
+
+    def test_touched_stale_artifact_still_blocks(self):
+        # A hand edit to the artifact on the branch is a touch: byte-match applies.
+        with open(self.repo / "tools" / "INDEX.md", "a", encoding="utf-8", newline="\n") as fh:
+            fh.write("# hand edit\n")
+        tip = self.commit_on_branch("hand-edit the generated index")
+        proc = self.gate("%s..%s" % (self.main_tip, tip))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn(INSTRUCTION, proc.stderr)
+        self.assertNotIn(INHERITED_NOTE, proc.stdout)
+
+    def test_generator_touched_stale_artifact_still_blocks(self):
+        # The generator changed on the branch: its output may differ, so no inheritance.
+        gen = self.repo / "tools" / "gen_tool_index.py"
+        gen.write_text(gen.read_text(encoding="utf-8") + "\n# lane tweak\n",
+                       encoding="utf-8", newline="\n")
+        tip = self.commit_on_branch("lane touches the generator")
+        proc = self.gate("%s..%s" % (self.main_tip, tip))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("gen_tool_index.py", proc.stderr)
+        self.assertNotIn(INHERITED_NOTE, proc.stdout)
+
+    def test_missing_generator_still_blocks(self):
+        # Deleting the generator is a touch AND leaves nothing to verify with: fail closed.
+        git(self.repo, "rm", "-q", "tools/gen_tool_index.py")
+        tip = self.commit_on_branch("lane deletes the generator")
+        proc = self.gate("%s..%s" % (self.main_tip, tip))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("gen_tool_index.py", proc.stderr)
+
+
+class TestMissingGeneratorFailsClosed(unittest.TestCase):
+    """A registered artifact whose generator is absent everywhere cannot be verified
+    and must block, even on an otherwise inherited, untouched path (never fail open)."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.repo = self.tmp / "repo"
+        (self.repo / "tools").mkdir(parents=True)
+        for name in FIXTURE_TOOLS:
+            if name != "gen_tool_index.py":
+                shutil.copy(TOOLS / name, self.repo / "tools" / name)
+        git(self.repo, "init", "-q", "-b", "main")
+        git(self.repo, "config", "user.email", "test@example.com")
+        git(self.repo, "config", "user.name", "Test User")
+        git(self.repo, "config", "core.autocrlf", "false")
+        (self.repo / "tools" / "INDEX.md").write_text("# index\n", encoding="utf-8", newline="\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "base with index but no generator")
+        self.base = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        git(self.repo, "update-ref", "refs/remotes/origin/main", self.base)
+        git(self.repo, "checkout", "-q", "-b", "feature/unrelated")
+        (self.repo / "notes.txt").write_text("unrelated\n", encoding="utf-8", newline="\n")
+        git(self.repo, "add", "notes.txt")
+        git(self.repo, "commit", "-q", "-m", "unrelated notes")
+        self.tip = git(self.repo, "rev-parse", "HEAD").stdout.strip()
+
+    def tearDown(self):
+        git(self.repo, "worktree", "prune")
+        self._tmp.cleanup()
+
+    def test_untouched_artifact_with_absent_generator_blocks(self):
+        proc = py(self.repo, str(GATE), "--range", "%s..%s" % (self.base, self.tip))
+        self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)
+        self.assertIn("gen_tool_index.py", proc.stderr)
+        self.assertNotIn("inherited unchanged", proc.stdout)
+
+
 def return_suite():
     """Required by test runner."""
     suite = unittest.TestSuite()
@@ -488,6 +631,8 @@ def return_suite():
     suite.addTest(unittest.makeSuite(TestGeneratorOutputDriftWithoutTouchingPath))
     suite.addTest(unittest.makeSuite(TestAutoCRLFNormalization))
     suite.addTest(unittest.makeSuite(TestGeneratorEditCannotBlessItself))
+    suite.addTest(unittest.makeSuite(TestInheritedUnchangedFromStaleMain))
+    suite.addTest(unittest.makeSuite(TestMissingGeneratorFailsClosed))
     return suite
 
 
