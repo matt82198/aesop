@@ -31,22 +31,22 @@ SLOW_LINE = re.compile(
     r"append=(\d+\.\d{3}) render=(\d+\.\d{3}) state_dir=(.+)$",
     re.MULTILINE,
 )
-ENV_KEY = "AESOP_TRACKER_SLOW_SECONDS"
+SLOW_ENV_VAR = "AESOP_TRACKER_SLOW_SECONDS"
 
 
 class TrackerCreateTimingTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="aesop-trk-timing-")
-        self._saved_env = os.environ.get(ENV_KEY)
+        self._saved_env = os.environ.get(SLOW_ENV_VAR)
         self._state_patch = mock.patch.object(config, "STATE_DIR", Path(self.tmp))
         self._state_patch.start()
 
     def tearDown(self):
         self._state_patch.stop()
         if self._saved_env is None:
-            os.environ.pop(ENV_KEY, None)
+            os.environ.pop(SLOW_ENV_VAR, None)
         else:
-            os.environ[ENV_KEY] = self._saved_env
+            os.environ[SLOW_ENV_VAR] = self._saved_env
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def _create_captured(self):
@@ -56,7 +56,7 @@ class TrackerCreateTimingTests(unittest.TestCase):
         return item, buf.getvalue()
 
     def test_migrate_stage_over_threshold_emits_one_line_with_all_fields(self):
-        os.environ[ENV_KEY] = "0.1"
+        os.environ[SLOW_ENV_VAR] = "0.1"
         real_migrate = collectors._ensure_tracker_migrated
 
         def slow_migrate(write_api):
@@ -79,7 +79,7 @@ class TrackerCreateTimingTests(unittest.TestCase):
         self.assertEqual(m.group(5), str(Path(self.tmp)))
 
     def test_render_stage_over_threshold_is_reported_in_render_field(self):
-        os.environ[ENV_KEY] = "0.1"
+        os.environ[SLOW_ENV_VAR] = "0.1"
         from state_store.write_api import WriteAPI
 
         real_render = WriteAPI._render_tracker_atomic
@@ -99,7 +99,7 @@ class TrackerCreateTimingTests(unittest.TestCase):
         self.assertGreaterEqual(render, 0.3)
 
     def test_nothing_emitted_under_threshold(self):
-        os.environ[ENV_KEY] = "60"
+        os.environ[SLOW_ENV_VAR] = "60"
         _item, err = self._create_captured()
         self.assertNotIn("tracker-create slow", err)
         self.assertEqual(err, "")
