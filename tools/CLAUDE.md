@@ -37,6 +37,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - **Security**: symlink checks preserved throughout resolution.
 - **Pre-push hook scans pushed refs**: the hook `init_project.py` installs reads git's per-ref stdin, blocks pushes to `refs/heads/main|master`, and runs `secret_scan.py --range <remote-tip>..<local-tip>` per ref (whole tree for a new ref); `copy_secret_scan_script(force=)` refreshes a stale scan script only under `--force`. Tests: `tests/test_init_project.py`.
 - **state/ git-ignore (F-10, 2026-10-14)**: `ensure_state_gitignore()` appends a marker-delimited block (`state/*` + `!state/.gitkeep`) to the scaffolded `.gitignore`, idempotent on re-init. Without it `git add -A` staged the SQLite event store and tracker json. Tests: `tests/test_init_gitignore.py`.
+- **Push-gate artifacts (0.10.1)**: `generate_push_gate_artifacts()` runs the five generators `doctor` requires (`tools/INDEX.md`, `.pyflakes-baseline.json`, `.subprocess-guard-baseline.json`, `.portability-baseline.json`, `.stateapi-baseline.json`) from this tools dir with cwd set to the target repo, in parallel, after the hook install. Existing artifacts are kept unless `--force`; `AESOP_SKIP_PUSH_GATE_ARTIFACTS=1` skips. `DEFAULT_CONFIG` writes `"repos": []`. Tests: `TestInitWritesPushGateArtifacts` in `tests/test_init_project.py`.
 
 ## dash.js — fresh-init resolution (F-09, 2026-10-14)
 

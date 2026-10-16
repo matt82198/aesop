@@ -475,6 +475,47 @@ class TestCLI(unittest.TestCase):
             self.assertTrue((Path(td) / "CLAUDE.md").exists())
 
 
+PUSH_GATE_ARTIFACT_FILES = [
+    "tools/INDEX.md",
+    ".pyflakes-baseline.json",
+    ".subprocess-guard-baseline.json",
+    ".portability-baseline.json",
+    ".stateapi-baseline.json",
+]
+
+
+class TestInitWritesPushGateArtifacts(unittest.TestCase):
+    """`aesop init` must leave the push-gate artifacts doctor requires and a `repos` key."""
+
+    def _git_repo(self, td):
+        subprocess.run(["git", "init", "-q"], cwd=td, capture_output=True, timeout=30, check=True)
+
+    def test_init_generates_push_gate_artifacts(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as td:
+            self._git_repo(td)
+            env = {k: v for k, v in os.environ.items() if k != "AESOP_SKIP_PUSH_GATE_ARTIFACTS"}
+            with mock.patch.dict(os.environ, env, clear=True):
+                init_project(td, project_name="gate-test")
+            for rel in PUSH_GATE_ARTIFACT_FILES:
+                self.assertTrue((Path(td) / rel).is_file(), f"missing push-gate artifact: {rel}")
+
+    def test_init_skip_env_suppresses_generation(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as td:
+            self._git_repo(td)
+            with mock.patch.dict(os.environ, {"AESOP_SKIP_PUSH_GATE_ARTIFACTS": "1"}):
+                init_project(td, project_name="skip-test")
+            for rel in PUSH_GATE_ARTIFACT_FILES:
+                self.assertFalse((Path(td) / rel).exists(), f"unexpected artifact: {rel}")
+
+    def test_init_config_has_repos_key(self):
+        with tempfile.TemporaryDirectory() as td:
+            init_project(td, project_name="repos-test")
+            config = json.loads((Path(td) / "aesop.config.json").read_text(encoding="utf-8"))
+            self.assertIn("repos", config)
+            self.assertIsInstance(config["repos"], list)
+
 def _git_text(cwd, *args):
     """Run a git command in cwd and return its stripped stdout."""
     result = subprocess.run(
