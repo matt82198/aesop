@@ -97,16 +97,27 @@ test('CLAUDE-TEMPLATE.md is a filled worked example, not bare template', () => {
   assert.ok(template.length > 500, 'Template should be a substantial worked example');
 });
 
+// One `--name test-service` scaffold, shared by the four read-only checks that use it
+// (--name flag, state/ dir, CLAUDE.md tokens, memory seed). Every scaffold is a real CLI
+// spawn; re-spawning the identical command per test pushed this file past the 60s
+// per-file cap on CI (ubuntu, ci (3): "test timed out after 60000ms", duration 60009ms).
+// The checks only read the output, so sharing one spawn changes no assertion.
+let sharedTestService = null;
+function sharedTestServiceScaffold() {
+  if (!sharedTestService) {
+    const tempDir = createTestDir();
+    const targetDir = path.join(tempDir, 'fleet-onboard-shared');
+    fs.mkdirSync(targetDir, { recursive: true });
+    gitCmd(targetDir, ['init']);
+    gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+    gitCmd(targetDir, ['config', 'user.name', 'Test User']);
+    sharedTestService = { targetDir, res: runCli(targetDir, ['--name', 'test-service']) };
+  }
+  return sharedTestService;
+}
+
 test('--name flag scaffolds without errors', () => {
-  const tempDir = createTestDir();
-  const targetDir = path.join(tempDir, 'fleet-onboard-1');
-
-  fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, ['init']);
-  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
-  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
-
-  const res = runCli(targetDir, ['--name', 'test-service']);
+  const { res } = sharedTestServiceScaffold();
   assert.equal(res.status, 0, `Scaffold with --name should succeed. stderr: ${res.stderr}`);
 });
 
@@ -128,15 +139,7 @@ test('--name --domains --repos scaffolds without errors', () => {
 });
 
 test('scaffold creates state/ directory', () => {
-  const tempDir = createTestDir();
-  const targetDir = path.join(tempDir, 'fleet-onboard-3');
-
-  fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, ['init']);
-  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
-  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
-
-  const res = runCli(targetDir, ['--name', 'test-service']);
+  const { targetDir, res } = sharedTestServiceScaffold();
   assert.equal(res.status, 0);
 
   const stateDir = path.join(targetDir, 'state');
@@ -145,15 +148,7 @@ test('scaffold creates state/ directory', () => {
 });
 
 test('scaffold generates CLAUDE.md with no {{UNSUBSTITUTED}} placeholders', () => {
-  const tempDir = createTestDir();
-  const targetDir = path.join(tempDir, 'fleet-onboard-4');
-
-  fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, ['init']);
-  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
-  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
-
-  const res = runCli(targetDir, ['--name', 'test-service']);
+  const { targetDir, res } = sharedTestServiceScaffold();
   assert.equal(res.status, 0);
 
   const claudeMdPath = path.join(targetDir, 'CLAUDE.md');
@@ -201,15 +196,7 @@ test('scaffold generates valid aesop.config.json', () => {
 });
 
 test('scaffold copies MEMORY-TEMPLATE.md as memory seed', () => {
-  const tempDir = createTestDir();
-  const targetDir = path.join(tempDir, 'fleet-onboard-6');
-
-  fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, ['init']);
-  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
-  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
-
-  const res = runCli(targetDir, ['--name', 'test-service']);
+  const { targetDir, res } = sharedTestServiceScaffold();
   assert.equal(res.status, 0);
 
   const memorySeedPath = path.join(targetDir, 'MEMORY-SEED.md');
