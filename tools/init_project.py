@@ -532,6 +532,7 @@ def init_project(target_dir, project_name=None, force=False, ci_mode="hosted",
     config = dict(DEFAULT_CONFIG)
     config["identity"] = identity
     config["ci"] = ci_block
+    config["layout"] = "init"  # tools/doctor.js: an init'd repo has no scaffold directories
     ci_findings = validate_ci_config(config, str(target))
     if ci_findings:
         raise ScaffoldRefused("scaffolded ci block is invalid: " + "; ".join(f["message"] for f in ci_findings))
