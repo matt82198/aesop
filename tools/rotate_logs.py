@@ -19,7 +19,9 @@ Exit codes:
 """
 import argparse
 import os
+import shutil
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -62,22 +64,29 @@ def read_lines(filepath):
 
 
 def write_lines(filepath, lines):
-    """Write lines to file.
+    """Write lines to a NEW file.
 
     Accepts either a list of ``str`` lines (written as UTF-8 text) or a list of
-    ``bytes`` lines (written verbatim). rotate_log() operates on bytes so that
-    archived content is byte-identical to what was read, but the str form is
-    kept for callers/tests that pass text.
+    ``bytes`` lines (written verbatim). The file is created exclusively, so an
+    existing file at ``filepath`` raises FileExistsError and is never overwritten;
+    callers pick another name on that error. A partially written new file is
+    removed before the error is raised.
     """
     binary = bool(lines) and isinstance(lines[0], bytes)
     try:
         if binary:
-            with open(filepath, 'wb') as f:
+            with open(filepath, 'xb') as f:
                 f.writelines(lines)
         else:
-            with open(filepath, 'w', encoding='utf-8') as f:
+            with open(filepath, 'x', encoding='utf-8') as f:
                 f.writelines(lines)
+    except FileExistsError:
+        raise
     except IOError as e:
+        try:
+            os.unlink(filepath)
+        except OSError:
+            pass
         raise IOError(f"Failed to write {filepath}: {e}")
 
 
@@ -110,45 +119,121 @@ def release_lock(fd):
 
 
 # How many times rotate_log() re-checks the file size for late external appends
-# before it commits the truncate+rewrite. Bounded so a log under continuous
-# append pressure still completes rather than spinning forever.
+# before it commits the swap. Bounded so a log under continuous append pressure
+# still completes rather than spinning forever.
 PRESERVE_ATTEMPTS = 5
+
+# Archive names carry a one-second UTC stamp. Rotations inside the same second
+# take ".<n>" suffixes; this bounds how many are tried before giving up.
+MAX_ARCHIVE_COLLISIONS = 1000
+
+# Suffix of the temp file that replaces the live log. It is removed on failure.
+TEMP_SUFFIX = ".rotate.tmp"
+
+
+def exceeds_thresholds(line_count, byte_count, max_lines, max_bytes):
+    """True when either configured threshold is exceeded."""
+    if max_lines and line_count > max_lines:
+        return True
+    if max_bytes and byte_count > max_bytes:
+        return True
+    return False
 
 
 def needs_rotation(filepath, max_lines, max_bytes):
-    """Check if file exceeds any threshold."""
-    current_lines = count_lines(filepath)
-    current_bytes = get_file_size(filepath)
+    """Check if file exceeds any threshold (unlocked snapshot; advisory only)."""
+    return exceeds_thresholds(count_lines(filepath), get_file_size(filepath),
+                              max_lines, max_bytes)
 
-    if max_lines and current_lines > max_lines:
-        return True
-    if max_bytes and current_bytes > max_bytes:
-        return True
-    return False
+
+def lock_path_for(logfile):
+    """Sidecar lock file for a log.
+
+    The lock lives beside the log rather than on it, because the log itself is
+    replaced by rename while the lock is held. A lock on a replaced inode would
+    not serialise anything. The sidecar is never removed; it is empty.
+    """
+    return logfile.with_name(logfile.name + ".rotate.lock")
+
+
+def replace_file_atomically(target, data):
+    """Make ``target`` hold exactly ``data``, or leave it untouched.
+
+    The bytes go to a temp file in the same directory, are fsynced, and are then
+    swapped in with os.replace, so readers see either the old file or the new one,
+    never a truncated mix. Any failure, including a kill modelled as a
+    BaseException, removes the temp file and propagates; the target is unchanged.
+    """
+    target = Path(target)
+    fd, tmp_name = tempfile.mkstemp(dir=str(target.parent),
+                                    prefix="." + target.name + ".",
+                                    suffix=TEMP_SUFFIX)
+    try:
+        with os.fdopen(fd, 'wb') as tmp:
+            tmp.write(data)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+        try:
+            shutil.copymode(str(target), tmp_name)
+        except OSError:
+            pass  # Keeping the mode is best effort; the content is what matters.
+        os.replace(tmp_name, str(target))
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def create_archive(archive_path, stem, archive_lines):
+    """Write archive_lines to a brand-new archive file and return its path.
+
+    Never replaces an existing file: the exclusive create fails on collision and
+    the next free ``<stem>.<stamp>.<n>.log`` name is used.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    for n in range(MAX_ARCHIVE_COLLISIONS):
+        suffix = "" if n == 0 else f".{n}"
+        candidate = archive_path / f"{stem}.{stamp}{suffix}.log"
+        try:
+            write_lines(str(candidate), archive_lines)
+            return candidate
+        except FileExistsError:
+            continue
+    raise IOError(f"no free archive name for {stem}.{stamp} in {archive_path}")
 
 
 def rotate_log(logfile, max_lines, max_bytes, archive_dir, check_only=False):
     """Rotate log file by archiving oldest lines atomically.
 
-    Uses exclusive file locking to serialize rotations against other lock-takers.
-    However, this is an ADVISORY lock: it only protects against other processes
-    that voluntarily take the lock. External writers (e.g., shell scripts using >>
-    or tee -a) that do NOT take the lock are NOT protected by this mechanism.
+    Uses exclusive file locking (on a sidecar lock file) to serialize rotations
+    against other lock-takers. The lock is ADVISORY: external writers (e.g. shell
+    scripts using >> or tee -a) that do NOT take it are not blocked by it.
+
+    The rotation decision is made under the lock, from the bytes read under the
+    lock. An unlocked threshold check runs first only as a cheap early exit; a
+    reading taken before the lock can be stale, so it never decides on its own.
 
     To prevent data loss from non-locking O_APPEND writers:
     - Bytes appended past the extent this rotation consumed are detected by
       comparing the live file size against that extent, read back at the exact
-      byte offset, and folded into the retained content before the truncate.
+      byte offset, and folded into the retained content before the swap.
     - The size check is repeated (bounded by PRESERVE_ATTEMPTS) until the file
-      stops growing, and the last check is the operation immediately preceding
-      the truncate, so the unprotected window is a single seek rather than a
-      full file re-read.
+      stops growing.
+
+    The kept half is written to a temp file in the same directory and swapped in
+    with os.replace, so a crash at any point leaves either the original log or
+    the complete rotated log. Archives are created exclusively and never
+    overwritten.
 
     NOTE: This narrows but cannot close the race: an append landing between the
-    final size observation and the truncate is still lost, because no portable
-    primitive makes "check size, then truncate" atomic against a writer that
-    declines to take the lock. For complete safety, all writers (including
-    external processes) must cooperate on locking.
+    final size observation and the swap is still lost, because no portable
+    primitive makes "check size, then replace" atomic against a writer that
+    declines to take the lock. Writers that hold the log open across rotations
+    (e.g. a daemon's long-lived >> fd) keep appending to the replaced inode after
+    a swap; they must reopen the log. For complete safety, all writers must
+    cooperate on locking.
 
     Args:
         logfile: Path to log file to rotate.
@@ -164,147 +249,136 @@ def rotate_log(logfile, max_lines, max_bytes, archive_dir, check_only=False):
     """
     logfile = Path(logfile)
 
-    # Check if rotation is needed
+    if check_only:
+        return 3 if needs_rotation(str(logfile), max_lines, max_bytes) else 0
+
+    # Cheap unlocked early exit. Not a decision: _rotate_locked() re-decides.
     if not needs_rotation(str(logfile), max_lines, max_bytes):
         return 0
 
-    # If check-only mode, report that rotation is needed
-    if check_only:
-        return 3
+    try:
+        lock_fd = os.open(str(lock_path_for(logfile)), os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError as e:
+        print(f"ERROR: Failed to open rotation lock for {logfile}: {e}",
+              file=sys.stderr)
+        return 1
+    try:
+        acquire_lock(lock_fd)
+        try:
+            return _rotate_locked(logfile, max_lines, max_bytes, archive_dir)
+        finally:
+            release_lock(lock_fd)
+    finally:
+        os.close(lock_fd)
 
-    # Determine archive directory
+
+def _rotate_locked(logfile, max_lines, max_bytes, archive_dir):
+    """Decide and perform one rotation. The caller holds the rotation lock."""
     if archive_dir:
         archive_path = Path(archive_dir)
     else:
         archive_path = logfile.parent / "archive"
 
-    # Create archive directory if needed
+    # Binary mode is deliberate: it makes the byte offset of everything consumed
+    # exact, which is what the external-append preservation below keys off. Text
+    # mode's newline translation would desynchronise character counts from
+    # on-disk byte offsets (CRLF on Windows) and silently rewrite line endings.
     try:
-        archive_path.mkdir(parents=True, exist_ok=True)
-    except OSError as e:
-        print(f"ERROR: Failed to create archive directory {archive_path}: {e}",
-              file=sys.stderr)
-        return 1
+        with open(str(logfile), 'rb') as f:
+            # `consumed` is the exact on-disk extent this rotation is responsible for.
+            data = f.read()
+            consumed = len(data)
+            lines = data.splitlines(keepends=True)
 
-    # Perform rotation with exclusive lock to prevent concurrent write races.
-    # Binary mode is deliberate: it makes the byte offset of everything we have
-    # consumed exact, which is what the external-append preservation below keys
-    # off. Text mode's newline translation would desynchronise character counts
-    # from on-disk byte offsets (CRLF on Windows) and silently rewrite the line
-    # endings of every log it touches.
-    try:
-        with open(str(logfile), 'rb+') as f:
-            # Acquire exclusive lock to guard read-compute-write sequence
-            acquire_lock(f.fileno())
+            # The decision is made here, on what was read under the lock.
+            if not lines or not exceeds_thresholds(len(lines), consumed,
+                                                   max_lines, max_bytes):
+                return 0
+
+            current_lines = len(lines)
+            current_bytes = consumed
+
+            keep_count = current_lines // 2  # Default: keep ~half
+
+            # If max_lines exceeded, keep lines just under threshold
+            if max_lines and current_lines > max_lines:
+                keep_count = min(keep_count, max_lines)
+
+            # If max_bytes exceeded, calculate how many lines fit under threshold
+            if max_bytes and current_bytes > max_bytes:
+                cumulative_bytes = 0
+                bytes_keep_count = 0
+                # Count from newest (end) backward
+                for i in range(len(lines) - 1, -1, -1):
+                    line_bytes = len(lines[i])
+                    if cumulative_bytes + line_bytes <= max_bytes:
+                        cumulative_bytes += line_bytes
+                        bytes_keep_count += 1
+                    else:
+                        break
+                # Use the more conservative count
+                keep_count = min(keep_count, bytes_keep_count)
+
+            # Guard: ensure we keep at least 1 line, archive the rest
+            if keep_count <= 0:
+                keep_count = 1
+
+            # Split lines
+            archive_lines = lines[:-keep_count] if keep_count < len(lines) else []
+            remaining_lines = lines[-keep_count:] if keep_count > 0 else []
+
+            if not archive_lines:
+                # Nothing to archive
+                return 0
+
             try:
-                # Read all bytes while locked; `consumed` is the exact on-disk
-                # extent this rotation is responsible for.
-                data = f.read()
-                consumed = len(data)
-                lines = data.splitlines(keepends=True)
+                archive_path.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                print(f"ERROR: Failed to create archive directory {archive_path}: {e}",
+                      file=sys.stderr)
+                return 1
 
-                if not lines:
-                    return 0
+            try:
+                create_archive(archive_path, logfile.stem, archive_lines)
+            except IOError as e:
+                print(f"ERROR: {e}", file=sys.stderr)
+                return 1
 
-                # Determine split point based on which threshold was exceeded
-                current_lines = len(lines)
-                current_bytes = consumed
+            # MITIGATION for external O_APPEND writers:
+            # Writing the archive takes time, and non-locking writers (>> and
+            # tee -a in the shell daemons) can append during it. Anything past
+            # `consumed` is such an append and must survive the swap.
+            #
+            # 1. Byte offsets, not line counts. Diffing line counts loses data
+            #    whenever the last consumed line has no trailing newline: the
+            #    append concatenates onto it, the line count does not grow by
+            #    the number of appended lines, and the surplus is destroyed.
+            #    Reading the delta at a byte offset is exact in every case.
+            #
+            # 2. The check sits immediately before the swap. The observation is
+            #    repeated until the size stops moving, so appends arriving
+            #    mid-preservation are also caught.
+            for _ in range(PRESERVE_ATTEMPTS):
+                grown = os.fstat(f.fileno()).st_size
+                if grown <= consumed:
+                    break
+                f.seek(consumed)
+                external = f.read(grown - consumed)
+                if not external:
+                    break
+                remaining_lines.extend(external.splitlines(keepends=True))
+                consumed = grown
 
-                keep_count = current_lines // 2  # Default: keep ~half
+            kept = b"".join(remaining_lines)
 
-                # If max_lines exceeded, keep lines just under threshold
-                if max_lines and current_lines > max_lines:
-                    keep_count = min(keep_count, max_lines)
-
-                # If max_bytes exceeded, calculate how many lines fit under threshold
-                if max_bytes and current_bytes > max_bytes:
-                    cumulative_bytes = 0
-                    bytes_keep_count = 0
-                    # Count from newest (end) backward
-                    for i in range(len(lines) - 1, -1, -1):
-                        line_bytes = len(lines[i])
-                        if cumulative_bytes + line_bytes <= max_bytes:
-                            cumulative_bytes += line_bytes
-                            bytes_keep_count += 1
-                        else:
-                            break
-                    # Use the more conservative count
-                    keep_count = min(keep_count, bytes_keep_count)
-
-                # Guard: ensure we keep at least 1 line, archive the rest
-                if keep_count <= 0:
-                    # If calculated keep_count is 0 or negative, keep at least 1 line
-                    keep_count = 1
-
-                # Split lines
-                archive_lines = lines[:-keep_count] if keep_count < len(lines) else []
-                remaining_lines = lines[-keep_count:] if keep_count > 0 else []
-
-                if not archive_lines:
-                    # Nothing to archive
-                    return 0
-
-                # Generate archive filename with UTC timestamp
-                utc_now = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-                archive_filename = f"{logfile.stem}.{utc_now}.log"
-                archive_file = archive_path / archive_filename
-
-                # Write archive file
-                try:
-                    write_lines(str(archive_file), archive_lines)
-                except IOError as e:
-                    print(f"ERROR: {e}", file=sys.stderr)
-                    return 1
-
-                # MITIGATION for external O_APPEND writers:
-                # Writing the archive takes time, and non-locking writers (>> and
-                # tee -a in the shell daemons) can append during it. Anything past
-                # `consumed` is such an append and must survive the truncate.
-                #
-                # Two properties matter here, and the previous line-counting
-                # implementation had neither:
-                #
-                # 1. Byte offsets, not line counts. Diffing line counts loses data
-                #    whenever the last consumed line has no trailing newline: the
-                #    append concatenates onto it, the line count does not grow by
-                #    the number of appended lines, and the surplus is destroyed.
-                #    Reading the delta at a byte offset is exact in every case.
-                #
-                # 2. The check must sit immediately before the truncate. The old
-                #    code re-read the whole file to count lines and only then
-                #    truncated, so an append landing after that scan was lost --
-                #    a window as wide as a full file read. Here the only work
-                #    between the last size observation and the truncate is a
-                #    single seek, and the observation is repeated until the size
-                #    stops moving, so appends arriving mid-preservation are also
-                #    caught.
-                for _ in range(PRESERVE_ATTEMPTS):
-                    grown = os.fstat(f.fileno()).st_size
-                    if grown <= consumed:
-                        break
-                    f.seek(consumed)
-                    external = f.read(grown - consumed)
-                    if not external:
-                        break
-                    remaining_lines.extend(external.splitlines(keepends=True))
-                    consumed = grown
-
-                # Atomically truncate and write remaining lines back to original
-                # while still holding the lock
-                f.seek(0)
-                f.truncate()
-                f.write(b"".join(remaining_lines))
-
-            finally:
-                # Rewind before unlocking: msvcrt.locking() unlocks the byte range
-                # at the *current* position, so releasing from the write position
-                # would target a region we never locked.
-                try:
-                    f.seek(0)
-                except (OSError, ValueError):
-                    pass
-                # Release lock after all writes complete
-                release_lock(f.fileno())
+        # The live log is closed here. Windows refuses to replace a file that has
+        # an open handle; the sidecar lock still serialises rotators across the swap.
+        try:
+            replace_file_atomically(logfile, kept)
+        except OSError as e:
+            print(f"ERROR: Failed to replace {logfile} with rotated content: {e}",
+                  file=sys.stderr)
+            return 1
 
     except IOError as e:
         print(f"ERROR: {e}", file=sys.stderr)

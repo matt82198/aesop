@@ -4,7 +4,20 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
+
+# Fixed UTC instant used to force two rotations into the same archive second.
+FROZEN_NOW = datetime(2026, 10, 15, 12, 0, 0, tzinfo=timezone.utc)
+
+
+class _FrozenDatetime(datetime):
+    """datetime whose now() always returns FROZEN_NOW (same-second rotations)."""
+
+    @classmethod
+    def now(cls, tz=None):
+        return FROZEN_NOW if tz is None else FROZEN_NOW.astimezone(tz)
 
 
 class TestRotateLogs(unittest.TestCase):
@@ -529,6 +542,146 @@ class TestRotateLogs(unittest.TestCase):
         finally:
             # Restore original
             rotate_logs.write_lines = original_write_lines
+
+    # ------------------------------------------------------------------
+    # Archive-name collisions, decide-under-lock, and atomic replacement.
+    # ------------------------------------------------------------------
+
+    def _load_rotate_logs(self):
+        sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
+        import rotate_logs
+        return rotate_logs
+
+    def _write_numbered(self, logfile, start, end):
+        with open(logfile, 'w', encoding='utf-8') as f:
+            for i in range(start, end):
+                f.write(f"line {i}\n")
+
+    def _archive_lines(self, archive_dir):
+        """All archived lines across every archive file (order-insensitive)."""
+        archived = []
+        for name in os.listdir(archive_dir):
+            with open(os.path.join(archive_dir, name), 'r', encoding='utf-8') as f:
+                archived.extend(ln.rstrip("\n") for ln in f)
+        return archived
+
+    def _live_lines(self, logfile):
+        with open(logfile, 'r', encoding='utf-8') as f:
+            return [ln.rstrip("\n") for ln in f]
+
+    def test_same_second_rotations_never_overwrite_archive(self):
+        """Two rotations inside one UTC second must both keep their lines.
+
+        Archive names have one-second resolution. The second rotation used to
+        open the same archive path with 'wb' and destroy the first archive.
+        """
+        logfile = os.path.join(self.temp_dir, "test.log")
+        archive_dir = os.path.join(self.temp_dir, "archive")
+        rotate_logs = self._load_rotate_logs()
+        self._write_numbered(logfile, 1, 251)
+
+        with mock.patch.object(rotate_logs, "datetime", _FrozenDatetime):
+            rc1 = rotate_logs.rotate_log(logfile, 200, 20480, archive_dir, False)
+            self._append_external(logfile, 251, 376)
+            rc2 = rotate_logs.rotate_log(logfile, 200, 20480, archive_dir, False)
+
+        self.assertEqual((rc1, rc2), (0, 0))
+        self.assertEqual(len(os.listdir(archive_dir)), 2,
+                         "second rotation must create its own archive")
+        archived = self._archive_lines(archive_dir)
+        live = self._live_lines(logfile)
+        expected = [f"line {i}" for i in range(1, 376)]
+        self.assertEqual(
+            sorted(archived + live), sorted(expected),
+            f"same-second rotation lost lines: {len(archived)} archived + "
+            f"{len(live)} live, expected 375 each exactly once"
+        )
+
+    def test_existing_archive_name_is_never_overwritten(self):
+        """A pre-existing archive at the chosen name is left byte-identical."""
+        logfile = os.path.join(self.temp_dir, "test.log")
+        archive_dir = os.path.join(self.temp_dir, "archive")
+        os.makedirs(archive_dir)
+        old_archive = os.path.join(archive_dir, "test.20261015120000.log")
+        with open(old_archive, 'w', encoding='utf-8') as f:
+            f.write("OLD ARCHIVE\n")
+        rotate_logs = self._load_rotate_logs()
+        self._write_numbered(logfile, 1, 251)
+
+        with mock.patch.object(rotate_logs, "datetime", _FrozenDatetime):
+            rc = rotate_logs.rotate_log(logfile, 200, 20480, archive_dir, False)
+
+        self.assertEqual(rc, 0)
+        with open(old_archive, 'r', encoding='utf-8') as f:
+            self.assertEqual(f.read(), "OLD ARCHIVE\n")
+        self.assertEqual(len(os.listdir(archive_dir)), 2)
+
+    def test_decision_is_rechecked_under_lock(self):
+        """A file another rotator already shrank must not be rotated again.
+
+        The threshold check used to run before the lock, so a stale 'over
+        threshold' reading rotated a file that was already under the limit.
+        """
+        logfile = os.path.join(self.temp_dir, "test.log")
+        archive_dir = os.path.join(self.temp_dir, "archive")
+        self._write_numbered(logfile, 1, 251)
+        rotate_logs = self._load_rotate_logs()
+        real_acquire = rotate_logs.acquire_lock
+
+        def other_rotator_shrinks_then_lock(fd):
+            # Simulate a concurrent rotator finishing between our pre-check
+            # and our acquisition of the lock.
+            self._write_numbered(logfile, 1, 11)
+            real_acquire(fd)
+
+        with mock.patch.object(rotate_logs, "acquire_lock", other_rotator_shrinks_then_lock):
+            rc = rotate_logs.rotate_log(logfile, 200, 20480, archive_dir, False)
+
+        self.assertEqual(rc, 0)
+        self.assertFalse(os.path.exists(archive_dir),
+                         "file under threshold under the lock must not be archived")
+        self.assertEqual(self._live_lines(logfile),
+                         [f"line {i}" for i in range(1, 11)])
+
+    def test_failed_replace_leaves_original_intact(self):
+        """If the kept half cannot be swapped in, the original file is untouched."""
+        logfile = os.path.join(self.temp_dir, "test.log")
+        archive_dir = os.path.join(self.temp_dir, "archive")
+        self._write_numbered(logfile, 1, 251)
+        with open(logfile, 'rb') as f:
+            original = f.read()
+        rotate_logs = self._load_rotate_logs()
+
+        with mock.patch.object(os, "replace", side_effect=OSError("simulated replace failure")):
+            rc = rotate_logs.rotate_log(logfile, 200, 20480, archive_dir, False)
+
+        self.assertEqual(rc, 1, "a failed swap must be reported, not swallowed")
+        with open(logfile, 'rb') as f:
+            self.assertEqual(f.read(), original, "original log changed on failed swap")
+        leftovers = [n for n in os.listdir(self.temp_dir) if n.endswith(".rotate.tmp")]
+        self.assertEqual(leftovers, [], "temp file left behind after failed swap")
+
+    def test_kill_during_swap_leaves_original_intact(self):
+        """A kill (modelled as KeyboardInterrupt) at the swap keeps the original.
+
+        The old code truncated the live file and then wrote the kept half, so a
+        kill between the two destroyed the kept half with no copy anywhere.
+        """
+        logfile = os.path.join(self.temp_dir, "test.log")
+        archive_dir = os.path.join(self.temp_dir, "archive")
+        self._write_numbered(logfile, 1, 251)
+        with open(logfile, 'rb') as f:
+            original = f.read()
+        rotate_logs = self._load_rotate_logs()
+
+        with mock.patch.object(os, "replace", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                rotate_logs.rotate_log(logfile, 200, 20480, archive_dir, False)
+
+        with open(logfile, 'rb') as f:
+            self.assertEqual(f.read(), original, "kill during swap lost the kept half")
+        leftovers = [n for n in os.listdir(self.temp_dir) if n.endswith(".rotate.tmp")]
+        self.assertEqual(leftovers, [], "temp file left behind after kill")
 
 
 if __name__ == "__main__":
