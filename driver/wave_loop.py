@@ -57,6 +57,7 @@ import os
 import posixpath
 import re
 import shlex
+import subprocess
 import sys
 import threading
 import time
@@ -71,8 +72,8 @@ DRIVER_DIR = REPO / "driver"
 if str(DRIVER_DIR) not in sys.path:
     sys.path.insert(0, str(DRIVER_DIR))
 
-from agent_driver import AgentDriver
-from proc_util import run_shell_bounded
+from agent_driver import AgentDriver, CommandResult
+from proc_util import kill_process_tree, run_shell_bounded
 from wave_bridge import build_manifest_item, dispatch_item
 from verification_policy import verification_policy
 
@@ -498,6 +499,79 @@ def _cap_test_output(stdout: str, stderr: str, max_chars: int = 4000) -> str:
     return combined[-max_chars:]
 
 
+_OWNS_FILE_FORBIDDEN_CHARS = frozenset("\"'&|;<>^%!`$")
+
+
+def _validate_owns_file_entry(entry: Any) -> str:
+    """Validate one ownsFiles entry as a plain relative path (fail-closed).
+
+    ownsFiles values are data. Anything shell-significant (quotes, & | ; < > ^ %
+    ! ` $) or any control character (including newline and NUL) is rejected,
+    as is an absolute path. Backslash separators are allowed.
+
+    Args:
+        entry: the ownsFiles value to check
+
+    Returns:
+        str: the entry, unchanged, when it is valid
+
+    Raises:
+        ValueError: if the entry is not a plain relative path
+    """
+    if not isinstance(entry, str) or not entry.strip():
+        raise ValueError(f"ownsFiles entry must be a non-empty string, got {entry!r}")
+    for ch in entry:
+        if ord(ch) < 32 or ord(ch) == 127:
+            raise ValueError(f"ownsFiles entry contains a control character (code {ord(ch)}): {entry!r}")
+        if ch in _OWNS_FILE_FORBIDDEN_CHARS:
+            raise ValueError(f"ownsFiles entry contains forbidden character {ch!r}: {entry!r}")
+    if Path(entry).is_absolute() or entry.startswith(("/", "\\")):
+        raise ValueError(f"ownsFiles entry must be a relative path, got absolute: {entry!r}")
+    return entry
+
+
+def _run_argv_bounded(argv: List[str], cwd: str, timeout_s: float) -> CommandResult:
+    """Run argv directly (shell=False), hard-bounded by timeout_s.
+
+    Mirrors proc_util.run_shell_bounded (own process group/session, whole-tree
+    kill on timeout) but takes an argument list, so no shell parses the args.
+
+    Returns:
+        CommandResult: exit 124 on timeout, 127 on spawn failure
+    """
+    popen_kwargs: Dict[str, Any] = {}
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
+
+    try:
+        proc = subprocess.Popen(
+            argv,
+            cwd=cwd,
+            shell=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            **popen_kwargs,
+        )
+    except OSError as exc:
+        return CommandResult(exit_code=127, stdout="", stderr=str(exc))
+
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        kill_process_tree(proc)
+        try:
+            proc.communicate(timeout=5)
+        except (subprocess.TimeoutExpired, ValueError, OSError):
+            pass
+        return CommandResult(exit_code=124, stdout="", stderr="command timed out")
+    return CommandResult(exit_code=proc.returncode, stdout=stdout or "", stderr=stderr or "")
+
+
 def _get_owned_files_diff(workdir: str, owned_files: List[str], max_chars: int = 8000) -> str:
     """Get git diff of owned files, capped to a reasonable size.
 
@@ -515,16 +589,16 @@ def _get_owned_files_diff(workdir: str, owned_files: List[str], max_chars: int =
     if not owned_files:
         return ""
 
-    try:
-        # Build git diff command
-        diff_cmd = "git diff --"
-        for f in owned_files:
-            diff_cmd += f" {_quote_arg(f)}"
+    # Validate every entry BEFORE any process is spawned. ValueError is raised
+    # outside the fail-closed handler below so a malformed entry is a loud
+    # error, never a silently empty diff.
+    for f in owned_files:
+        _validate_owns_file_entry(f)
 
-        # Run git diff in the workdir
-        # Bounded via proc_util: subprocess.run(shell=True, timeout=) is not a
-        # wall-clock bound on Windows (see driver/proc_util.py).
-        result = run_shell_bounded(diff_cmd, cwd=workdir, timeout_s=10)
+    try:
+        # argv list, no shell: ownsFiles entries are never parsed by cmd.exe/sh.
+        argv = ["git", "diff", "--"] + [str(f) for f in owned_files]
+        result = _run_argv_bounded(argv, cwd=workdir, timeout_s=10)
 
         if result.exit_code != 0:
             # No diff or git error (not a repo, files not tracked, etc.)
@@ -1503,6 +1577,17 @@ def _preflight_check_ownership(items: List[Dict[str, Any]], result: Dict[str, An
         slug = item.get("slug", "unknown")
         owned_files = item.get("ownsFiles", [])
         repo = item.get("repo", ".")  # Default to cwd if no repo specified
+
+        # Fail closed on malformed ownsFiles before any git/shell use downstream.
+        for f in owned_files:
+            try:
+                _validate_owns_file_entry(f)
+            except ValueError as e:
+                result["aborted"] = True
+                result["abort_reason"] = "invalid_owns_file"
+                result["item_slug"] = slug
+                result["error"] = str(e)
+                return True
 
         repo_normalized = str(Path(repo).resolve()).lower()
 
