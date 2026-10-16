@@ -5,48 +5,82 @@ Wave Gantt timeline data — per-agent phase spans from ledger/journal + transcr
 Reads agent dispatch data (via wave_dispatch.py) and enriches with timing info
 from the ledger to create Gantt-style bars (agent rows, phase spans as bars).
 
+Timestamp contract: every emitted timestamp is RFC 3339 in the single `...Z` form
+(UTC, seconds precision, matching wave_dispatch). A duration is only reported when
+both its real start and end are known; otherwise it is None (unknown). Idle age
+(last_activity_age_sec) is never substituted for a duration.
+
 Returns timeline data for visualization in the Activity view.
 """
-from datetime import datetime, timezone
-from typing import Dict, List
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Optional
 
 import wave_dispatch
 
 
-def _parse_agent_phases_from_transcript(agent_id: str) -> List[Dict]:
-    """Extract phase timing info from agent transcript (if available).
+def _now_rfc3339() -> str:
+    """Current UTC time as RFC 3339 'Z' (seconds precision)."""
+    return _to_rfc3339(datetime.now(timezone.utc))
 
-    Looks for transcript_mtime events in state_store that track phase changes.
-    Falls back to dispatch inference if not available.
 
-    Returns:
-        list: [{"phase": "dispatch", "start": iso_timestamp, "end": iso_timestamp, ...}, ...]
-    """
+def _to_rfc3339(dt: datetime) -> str:
+    """Format an aware datetime as RFC 3339 'Z' (seconds precision, UTC)."""
+    return dt.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _parse_ts(value) -> Optional[datetime]:
+    """Parse an RFC 3339 timestamp to an aware UTC datetime, or None if unparseable."""
+    if not isinstance(value, str) or not value:
+        return None
+    text = value[:-1] + "+00:00" if value.endswith(("Z", "z")) else value
     try:
-        # For now, use dispatch data as single span
-        # Future: parse state_store for detailed phase tracking
-        dispatch_data = wave_dispatch.get_wave_dispatch()
-        if not dispatch_data or not dispatch_data.get("available"):
-            return []
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc)
 
-        # Find this agent in dispatch data
-        for agent in dispatch_data.get("agents", []):
-            if agent.get("id") == agent_id:
-                # Create a single span from start to now
-                now = datetime.now(timezone.utc).isoformat() + "Z"
-                return [
-                    {
-                        "phase": agent.get("phase", "unknown"),
-                        "start": agent.get("started_at") or now,
-                        "end": agent.get("last_activity") or now,
-                        "duration_sec": agent.get("last_activity_age_sec", 0),
-                        "token_estimate": agent.get("token_estimate", 0),
-                    }
-                ]
-        return []
-    except Exception as e:
-        print(f"[wave_gantt] Error parsing phases: {e}")
-        return []
+
+def _agent_phase(agent: Dict, snapshot_at: Optional[datetime]) -> Dict:
+    """Build the single phase span for one agent from its dispatch row.
+
+    start: the real started_at, or None when the dispatch row does not carry one.
+    end: the real last_activity, or the snapshot time minus the measured idle age.
+    duration_sec: end - start when both are known and non-negative, else None.
+    """
+    start = _parse_ts(agent.get("started_at"))
+    end = _parse_ts(agent.get("last_activity"))
+    if end is None and snapshot_at is not None:
+        age = agent.get("last_activity_age_sec")
+        if isinstance(age, int) and not isinstance(age, bool) and age >= 0:
+            end = snapshot_at - timedelta(seconds=age)
+
+    duration = None
+    if start is not None and end is not None:
+        span = int((end - start).total_seconds())
+        if span >= 0:
+            duration = span
+
+    return {
+        "phase": agent.get("phase", "unknown"),
+        "start": _to_rfc3339(start) if start is not None else None,
+        "end": _to_rfc3339(end) if end is not None else None,
+        "duration_sec": duration,
+        "token_estimate": agent.get("token_estimate", 0),
+    }
+
+
+def _total_duration(phases: List[Dict]) -> Optional[int]:
+    """Span from the earliest phase start to the latest phase end, or None if unknown."""
+    if not phases:
+        return None
+    starts = [_parse_ts(p.get("start")) for p in phases]
+    ends = [_parse_ts(p.get("end")) for p in phases]
+    if any(s is None for s in starts) or any(e is None for e in ends):
+        return None
+    span = int((max(ends) - min(starts)).total_seconds())
+    return span if span >= 0 else None
 
 
 def get_wave_gantt() -> Dict:
@@ -62,11 +96,10 @@ def get_wave_gantt() -> Dict:
                 {
                     "id": "agent-123",
                     "phases": [
-                        {"phase": "dispatch", "start": iso, "end": iso, "duration_sec": 10},
-                        {"phase": "thinking", "start": iso, "end": iso, "duration_sec": 25},
-                        ...
+                        {"phase": "thinking", "start": iso|None, "end": iso|None,
+                         "duration_sec": int|None, "token_estimate": int},
                     ],
-                    "total_duration_sec": 120,
+                    "total_duration_sec": int|None,   # None = unknown
                     "status": "running|done|error"
                 },
                 ...
@@ -81,42 +114,19 @@ def get_wave_gantt() -> Dict:
                 "available": False,
                 "agents": [],
                 "error": "No active workflow",
-                "at": datetime.now(timezone.utc).isoformat() + "Z"
+                "at": _now_rfc3339(),
             }
+
+        snapshot_at = _parse_ts(dispatch_data.get("at")) or datetime.now(timezone.utc)
 
         agents = []
         for agent in dispatch_data.get("agents", []):
-            agent_id = agent.get("id", "unknown")
-            phases = _parse_agent_phases_from_transcript(agent_id)
-
-            # Calculate total duration
-            total_sec = 0
-            if phases:
-                # Use the span from earliest start to latest end
-                starts = [p.get("start") for p in phases if p.get("start")]
-                ends = [p.get("end") for p in phases if p.get("end")]
-                if starts and ends:
-                    try:
-                        earliest = min(datetime.fromisoformat(s.replace("Z", "+00:00")) for s in starts)
-                        latest = max(datetime.fromisoformat(e.replace("Z", "+00:00")) for e in ends)
-                        total_sec = int((latest - earliest).total_seconds())
-                    except (ValueError, TypeError):
-                        total_sec = sum(p.get("duration_sec", 0) for p in phases)
-            else:
-                # Fallback: use last_activity_age_sec
-                total_sec = agent.get("last_activity_age_sec", 0)
-
+            phase = _agent_phase(agent, snapshot_at)
+            phases = [phase]
             agents.append({
-                "id": agent_id,
-                "phases": phases or [
-                    {
-                        "phase": agent.get("phase", "unknown"),
-                        "start": agent.get("started_at") or datetime.now(timezone.utc).isoformat() + "Z",
-                        "end": agent.get("last_activity") or datetime.now(timezone.utc).isoformat() + "Z",
-                        "duration_sec": agent.get("last_activity_age_sec", 0),
-                    }
-                ],
-                "total_duration_sec": total_sec,
+                "id": agent.get("id", "unknown"),
+                "phases": phases,
+                "total_duration_sec": _total_duration(phases),
                 "status": _infer_status(agent.get("phase", "unknown"), agent.get("warnings", [])),
             })
 
@@ -124,7 +134,7 @@ def get_wave_gantt() -> Dict:
             "available": True,
             "wave_phase": dispatch_data.get("wave_phase", "unknown"),
             "agents": agents,
-            "at": dispatch_data.get("at", datetime.now(timezone.utc).isoformat() + "Z"),
+            "at": _to_rfc3339(snapshot_at) if dispatch_data.get("at") else _now_rfc3339(),
         }
     except Exception as e:
         print(f"[wave_gantt] Uncaught error: {e}")
@@ -134,7 +144,7 @@ def get_wave_gantt() -> Dict:
             "available": False,
             "agents": [],
             "error": str(e),
-            "at": datetime.now(timezone.utc).isoformat() + "Z"
+            "at": _now_rfc3339(),
         }
 
 
