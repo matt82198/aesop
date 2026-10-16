@@ -1645,18 +1645,21 @@ if (!isRuntimeCommand) {
       // Generate CLAUDE.md from template
       const templatePath = path.join(finalTargetDir, 'CLAUDE-TEMPLATE.md');
       const claudeMdPath = path.join(finalTargetDir, 'CLAUDE.md');
+      // Non-destructive: an existing CLAUDE.md / aesop.config.json is kept unless --force.
+      // Every skipped file is printed so a re-run never silently rewrites user edits.
       if (fs.existsSync(templatePath)) {
-        const templateContent = fs.readFileSync(templatePath, 'utf8');
-        const claudeContent = substituteTemplate(templateContent, finalProjectName, finalDomainsStr, finalReposStr);
-        fs.writeFileSync(claudeMdPath, claudeContent);
-        console.log('✓ Generated CLAUDE.md (from template with substitutions)');
+        if (fs.existsSync(claudeMdPath) && !forceFlag) {
+          console.log('- Kept existing CLAUDE.md (use --force to overwrite)');
+        } else {
+          const templateContent = fs.readFileSync(templatePath, 'utf8');
+          const claudeContent = substituteTemplate(templateContent, finalProjectName, finalDomainsStr, finalReposStr);
+          fs.writeFileSync(claudeMdPath, claudeContent);
+          console.log('✓ Generated CLAUDE.md (from template with substitutions)');
+        }
       }
 
-      // Check if aesop.config.json already exists (for wizard mode)
-      if (fs.existsSync(configPath) && wizardMode && isInteractive()) {
-        // This should not happen in wizard mode since we're creating a new targetDir
-        // But if it does, warn and skip
-        console.warn(`⚠ Warning: aesop.config.json already exists at ${configPath}`);
+      if (fs.existsSync(configPath) && !forceFlag) {
+        console.log('- Kept existing aesop.config.json (use --force to overwrite)');
       } else {
         // Generate aesop.config.json with the determined port
         const config = generateConfigJson(finalTargetDir, templateRoot, finalProjectName, finalReposStr, finalRepoUrlsStr, dashboardPort);
