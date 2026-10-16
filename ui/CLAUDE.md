@@ -92,7 +92,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
   - FailureDrilldown: drawer showing CI job list + ~100-line log excerpts on expand; fetches `/api/wave/failure?pr=N`.
   - ToolingPanel: compact card grid showing repo tooling health (TODO count, coverage, dead code, import cycles, encoding issues); fetches `/api/tooling/summary`; green/yellow/red severity coding; refresh button; responsive grid.
 - **lib/api.ts**: Typed fetch helpers + CSRF header injection + `/api/session` fallback for dev server.
-- **lib/useSSE.ts**: EventSource hook with reconnect logic, per-section state, connection status.
+- **lib/useSSE.ts**: EventSource hook with reconnect logic, per-section state, connection status. Cleanup clears the EventSource ref so a same-instance re-run (StrictMode double effect) opens a fresh source; covered by `lib/useSSE.test.tsx`.
 - **lib/types.ts**: TypeScript types for all API payloads (backend contract).
 - **lib/sanitizeUrl.ts**: XSS-safe URL parsing (inerts PR links on bad schemes).
 - **vite.config.ts**: Vite config with API proxy to :8770.
