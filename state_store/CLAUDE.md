@@ -114,6 +114,9 @@ Run from repo root. `npm run test:py` runs ALL Python suites (includes state_sto
 ## Task-event stream (2026-10-15)
 `tools/ingest_task_events.py` tails the brain's `~/.claude/state/task-events.jsonl` (written by the brain hook; this code only consumes it) into stream `task`, event type `task_event`, in the tracker DB (`resolve_db_path(state, "tracker")`). Idempotent via cursor `state/task_events.cursor.json` plus sha256 `event_id` dedupe; fail-closed (exit 3) on malformed or truncated input; `kind: "internal"` tags harness suggestion echoes (empty `agent_type` AND user-voice or slash-command summary). The store `ts` is the ingest time; the source time is `payload.ts`.
 
+## Tracker adopt mode (2026-10-16) — disk-only items into the log
+`WriteAPI.tracker_adopt_disk_items(actor, reason, ids=None, dry_run=False)` is the only sanctioned path for items present in tracker.json but absent from the event log (the set the OCC guard refuses on). Each adopted item gets an `item_created` carrying its full disk record plus `adopted_from_disk`, `adopt_reason`, `adopt_actor`, `adopt_ts` (those four fields are therefore present on the rendered item); a non-open status also gets an `item_updated` transition. Refused unless: non-empty `reason` (non-dry-run), every id disk-only, and the set covers ALL disk-only items (a partial adopt would make the render drop the rest). The fold is verified against the disk records before any append and again before the render. CLI: `tools/tracker_guard.py --adopt-disk-items --reason TEXT [--ids a,b] [--dry-run]`. Tests: `tests/test_tracker_adopt.py`.
+
 ## Next (cutover, follow-up — NOT this increment)
 **Phase 1 (middle)**: Tracker dual-read (StateAPI for CRUD, export job keeps `tracker.json` rendered).
 **Phase 2 (cutover complete)**: Flip all readers to API; remove git fallback.
