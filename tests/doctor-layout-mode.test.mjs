@@ -16,7 +16,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gitCmd } from './helpers/git-helpers.mjs';
 
-const DOCTOR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'tools', 'doctor.js');
+const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const DOCTOR = path.join(REPO_ROOT, 'tools', 'doctor.js');
+const CLI = path.join(REPO_ROOT, 'bin', 'cli.js');
 
 // Push-gate artifacts the doctor requires (tools/doctor.js PUSH_GATE_ARTIFACTS).
 const PUSH_GATE_FILES = [
@@ -179,4 +181,19 @@ test('default run does not read the home skills directory; --global does', () =>
   const globalFull = runDoctorJson(root, fullHome, ['--global']);
   assert.equal(rowFor(globalFull.report, 'Skills files').passed, true, '--global must PASS with both skills installed');
   assert.equal(globalFull.res.status, expectedExit(globalFull.report), '--global exit must follow the port row');
+});
+
+test('the CLI accepts `doctor --global` (no "unknown option", exit != 2)', () => {
+  const root = makeRepo({ config: { description: 'init', repos: [], layout: 'init' } });
+  const home = makeTempDir('aesop-doctor-home-');
+  const env = { ...process.env, HOME: home, USERPROFILE: home };
+  const res = spawnSync(process.execPath, [CLI, 'doctor', '--global'], {
+    cwd: root,
+    encoding: 'utf8',
+    env,
+    timeout: 60000,
+    killSignal: 'SIGKILL'
+  });
+  assert.ok(!res.stderr.includes('unknown option'), `doctor --global must be a documented flag. stderr: ${res.stderr}`);
+  assert.notEqual(res.status, 2, `doctor --global must not exit 2 (usage error). stderr: ${res.stderr}`);
 });

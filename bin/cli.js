@@ -128,7 +128,7 @@ const DOCUMENTED_FLAGS = new Set([
   '--force', '--yes', '--no-skills', '--install-deps', '--no-git',
   '--name', '--domains', '--repos', '--repo-urls',
   '--ci-mode', '--self-hosted-labels', '--json', '--demo',
-  '--repo', '--labels', '--instances', '--install-root', '--dry-run', '--set-fork-policy'
+  '--repo', '--labels', '--instances', '--install-root', '--dry-run', '--set-fork-policy', '--global'
 ]);
 
 // Top-level gate: --version/-v and unknown-flag rejection. Runs before any filesystem work.
