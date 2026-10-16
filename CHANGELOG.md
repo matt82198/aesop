@@ -27,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added the refuted ledger: `docs/refuted.jsonl` (committed record of measured-and-killed ideas, gate-bounced claims and REFUTED lanes), `tools/refuted_ledger.py` (validate, add, stats, redact; fail-closed) and `docs/REFUTED.md`.
 - Fix (CLI): the final summary's `cp ... ~/.claude/CLAUDE.md` instructions now back up the existing global file first; the scaffold never performed that copy, but the printed text would have overwritten it silently (#1086).
 - Fix (CLI): `--repos` entries must be existing directories; a missing path, file, or URL now exits 2 before anything is written, instead of recording a nonexistent repo (#1086).
+- Fix (receipt emitter): both fail-closed fallbacks in the scoped shard selection (underivable shard map, unowned `tools/` change) now run the injected `registry` instead of `DEFAULT_MATRIX`, so a caller with a different registry no longer gets "unknown matrix part(s)"; production is unchanged because the injected registry equals `DEFAULT_REGISTRY`.
 
 ## [0.10.0] - 2026-10-15
 

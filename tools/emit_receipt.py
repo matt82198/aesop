@@ -612,12 +612,12 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
                 shard_map = _build_shard_map(sorted(_PY_SHARDS), timing=_load_ci_timing(repo), repo=repo)
                 if shard_map is None:
                     # Underivable mapping: fall back to full matrix
-                    names = list(DEFAULT_MATRIX)
+                    names = list(registry)
                 else:
                     owning_shards = None if changed_files is None else _find_owning_shards(changed_files, shard_map)
                     if owning_shards is None:
                         # Underivable: fall back to full
-                        names = list(DEFAULT_MATRIX)
+                        names = list(registry)
                     else:
                         # Build scoped matrix
                         names, scoped_skips = _build_parts_and_skipped_for_profile(
