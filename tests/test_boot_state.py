@@ -322,6 +322,46 @@ class BootStateTests(unittest.TestCase):
         self.assertEqual(r.stdout, "")
         self.assertFalse(missing.exists())
 
+    def test_failed_ingest_inside_heartbeat_window_is_not_fresh(self):
+        # A clean run writes the heartbeat. A later run that fails on a held malformed last
+        # line leaves that heartbeat inside the 15 min window, so status() alone says fresh.
+        # The INGEST line must still say STALE and carry the failed outcome.
+        self._seed_goal()
+        self._write_jsonl([self._rec("a1", "good event")])
+        ok = self._brief()
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertIn("INGEST: fresh", ok.stdout)
+        self._write_jsonl([self._rec("a1", "good event"), "{not json"])
+        r = self._brief()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ingest_line = [ln for ln in r.stdout.splitlines() if ln.startswith("INGEST:")]
+        self.assertEqual(len(ingest_line), 1, r.stdout)
+        self.assertNotIn("fresh", ingest_line[0])
+        self.assertIn("STALE", ingest_line[0])
+        self.assertIn("ingest run: failed exit 3", ingest_line[0])
+
+    def test_timed_out_ingest_inside_heartbeat_window_is_not_fresh(self):
+        from tools import boot_state as bs
+        self._write_jsonl([self._rec("a1", "clean")])
+        self.assertEqual(bs.run_ingest(self.state_dir, self.jsonl), "ok")  # writes the heartbeat
+        line = bs._ingest_line(self.state_dir, self.jsonl, "timed out after 5s")
+        self.assertNotIn("fresh", line)
+        self.assertIn("STALE", line)
+        self.assertIn("ingest run: timed out after 5s", line)
+
+    def test_oversized_goal_keeps_every_section_and_marks_truncation(self):
+        # A 15 KB goal must not hard-cut the brief: GOAL is bounded, every other section renders.
+        self._seed_goal("BIGGOAL " + "word " * 3000)
+        self._seed_tasks(2)
+        r = self._brief()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertLessEqual(len(r.stdout.encode("utf-8")), 12000)
+        for header in ("## STATE.md (ACTIVE block)", "## BUILDLOG.md", "## EVENT STORE", "## GIT"):
+            self.assertIn(header, r.stdout)
+        self.assertIn("active line alpha", r.stdout)
+        self.assertRegex(r.stdout, r"\[GOAL truncated \d+ bytes\]")
+        self.assertLess(r.stdout.index("[GOAL truncated"), r.stdout.index("## STATE.md"))
+
     def _brief_at(self, state_dir):
         env = dict(os.environ)
         env["AESOP_TASK_EVENTS_JSONL"] = str(self.jsonl)

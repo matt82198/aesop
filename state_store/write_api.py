@@ -447,6 +447,214 @@ class WriteAPI:
 
         return updated_items[item_id]
 
+    ADOPT_PROVENANCE_FIELDS = frozenset(
+        {"adopted_from_disk", "adopt_reason", "adopt_actor", "adopt_ts"}
+    )
+
+    def tracker_adopt_disk_items(
+        self,
+        actor: str,
+        reason: str | None,
+        ids: list | None = None,
+        dry_run: bool = False,
+    ) -> dict:
+        """Explicitly adopt disk-only tracker items into the event log.
+
+        A disk-only item is one present in tracker.json but absent from the event
+        log (the same set the OCC guard in _render_tracker_atomic refuses on). Each
+        is adopted by appending an item_created event carrying its full disk record
+        plus provenance (adopted_from_disk, adopt_reason, adopt_actor, adopt_ts); a
+        non-open disk status is also recorded as an item_updated transition.
+
+        Fail-closed throughout:
+          - a non-empty adoption requires a non-empty ``reason`` (dry runs do not);
+          - ``ids`` must all be disk-only, and must cover every disk-only item
+            (a partial adoption would make the render silently drop the rest);
+          - the folded projection is verified against the disk records BEFORE any
+            event is appended, and again after appending but BEFORE the render, so a
+            mismatch leaves tracker.json untouched.
+
+        Args:
+            actor: who performs the adoption (recorded as adopt_actor)
+            reason: explicit human reason, required for a non-empty adoption
+            ids: optional explicit list of ids to adopt (default: all disk-only)
+            dry_run: plan and verify only; append nothing and write nothing
+
+        Returns:
+            dict with ok, dry_run, adopted_ids, pre/post counts (disk_items,
+            logged_items) and the plan entries.
+
+        Raises:
+            ValueError: any refusal (missing reason, non-disk-only id, partial
+                        adoption, unreadable tracker.json, verification mismatch)
+            WriteConflict: the final render was refused by the OCC guard
+        """
+        from state_store.projections import project_tracker, project_tracker_with_snapshot
+
+        if not isinstance(actor, str) or not actor.strip():
+            raise ValueError("adopt requires a non-empty actor")
+
+        disk_items = self._disk_items_for_adopt()
+        disk_by_id = {item["id"]: item for item in disk_items}
+
+        start_disk_hash = None
+        if self.tracker_file.exists():
+            start_disk_hash = self._compute_content_hash(
+                json.loads(self.tracker_file.read_text(encoding="utf-8"))
+            )
+
+        store = self._make_store()
+        events = store.read("tracker")
+        logged_ids = {
+            item.get("id")
+            for item in project_tracker_with_snapshot(store, "tracker", events).get("items", [])
+        }
+        disk_only = [item["id"] for item in disk_items if item["id"] not in logged_ids]
+        disk_only_set = set(disk_only)
+
+        if ids is None:
+            selected = list(disk_only)
+        else:
+            selected = []
+            for raw in ids:
+                if not isinstance(raw, str) or not raw.strip():
+                    raise ValueError(f"adopt ids must be non-empty strings, got {raw!r}")
+                if raw not in selected:
+                    selected.append(raw)
+            not_disk_only = [i for i in selected if i not in disk_only_set]
+            if not_disk_only:
+                raise ValueError(
+                    f"refusing adopt: ids not disk-only (absent from tracker.json or already "
+                    f"in the event log): {not_disk_only}"
+                )
+
+        selected_set = set(selected)
+        remaining = [i for i in disk_only if i not in selected_set]
+        if remaining:
+            raise ValueError(
+                f"refusing partial adopt: disk-only items {remaining} would stay unadopted "
+                f"and the render would drop them; include them in ids or omit ids"
+            )
+
+        pre_counts = {"disk_items": len(disk_items), "logged_items": len(logged_ids)}
+        result = {
+            "ok": True,
+            "dry_run": bool(dry_run),
+            "adopted_ids": list(selected),
+            "pre": pre_counts,
+            "post": dict(pre_counts),
+            "plan": [
+                {"id": i, "status": disk_by_id[i].get("status"), "title": disk_by_id[i].get("title")}
+                for i in selected
+            ],
+        }
+        if dry_run or not selected:
+            return result
+
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("adopt requires an explicit non-empty reason string")
+
+        for item_id in selected:
+            clash = self.ADOPT_PROVENANCE_FIELDS & set(disk_by_id[item_id])
+            if clash:
+                raise ValueError(
+                    f"refusing adopt of {item_id}: disk record already carries provenance "
+                    f"fields {sorted(clash)}"
+                )
+
+        adopt_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        provenance = {
+            "adopted_from_disk": True,
+            "adopt_reason": reason,
+            "adopt_actor": actor,
+            "adopt_ts": adopt_ts,
+        }
+        new_events = []
+        for item_id in selected:
+            disk = disk_by_id[item_id]
+            created = dict(disk)
+            created.update(provenance)
+            new_events.append(("item_created", created))
+            if "status" in disk and disk["status"] != "open":
+                transition = {"id": item_id, "status": disk["status"]}
+                if "completed_at" in disk:
+                    transition["completed_at"] = disk["completed_at"]
+                new_events.append(("item_updated", transition))
+
+        # Verify the fold BEFORE appending anything (full replay of the candidate log).
+        candidate = list(events) + [{"type": t, "payload": p} for t, p in new_events]
+        self._verify_adopted_projection(project_tracker(candidate), selected, disk_by_id)
+
+        for event_type, payload in new_events:
+            try:
+                store.append("tracker", event_type, payload, actor)
+            except Exception as e:
+                raise ValueError(f"Failed to append adopt event {event_type}: {e}") from e
+
+        # Verify the exact projection the render will use, before the render.
+        post_projection = project_tracker_with_snapshot(store, "tracker", store.read("tracker"))
+        self._verify_adopted_projection(post_projection, selected, disk_by_id)
+
+        self._render_tracker_atomic(store, start_disk_hash=start_disk_hash)
+
+        # Re-read the file that was actually written and verify it too.
+        rendered_items = self._disk_items_for_adopt()
+        self._verify_adopted_projection({"items": rendered_items}, selected, disk_by_id)
+        result["post"] = {
+            "disk_items": len(rendered_items),
+            "logged_items": len(post_projection.get("items", [])),
+        }
+        result["adopt_ts"] = adopt_ts
+        return result
+
+    def _disk_items_for_adopt(self) -> list:
+        """Read tracker.json items for adopt; fail-closed on unreadable or malformed input."""
+        if not self.tracker_file.exists():
+            return []
+        try:
+            data = json.loads(self.tracker_file.read_text(encoding="utf-8"))
+        except Exception as e:
+            raise ValueError(f"tracker.json is unreadable; refusing adopt: {e}") from e
+        items = data.get("items") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            raise ValueError("tracker.json has unexpected shape; refusing adopt")
+        seen = set()
+        for item in items:
+            item_id = item.get("id") if isinstance(item, dict) else None
+            if not isinstance(item_id, str) or not item_id:
+                raise ValueError(
+                    f"tracker.json item without a string id; refusing adopt: {str(item)[:200]}"
+                )
+            if item_id in seen:
+                raise ValueError(f"tracker.json holds duplicate id {item_id!r}; refusing adopt")
+            seen.add(item_id)
+        return items
+
+    def _verify_adopted_projection(self, projection: dict, selected: list, disk_by_id: dict) -> None:
+        """Assert each adopted item folds to its disk record, plus only provenance fields."""
+        by_id = {item.get("id"): item for item in projection.get("items", [])}
+        problems = []
+        for item_id in selected:
+            rendered = by_id.get(item_id)
+            disk = disk_by_id[item_id]
+            if rendered is None:
+                problems.append(f"{item_id}: missing from projection")
+                continue
+            for key, value in disk.items():
+                if key not in rendered:
+                    problems.append(f"{item_id}: field {key!r} missing")
+                elif rendered[key] != value:
+                    problems.append(
+                        f"{item_id}: field {key!r} is {rendered[key]!r}, disk has {value!r}"
+                    )
+            extra = set(rendered) - set(disk)
+            if extra != self.ADOPT_PROVENANCE_FIELDS:
+                problems.append(f"{item_id}: unexpected extra fields {sorted(extra)}")
+        if problems:
+            raise ValueError(
+                "adopt verification failed; tracker.json left untouched: " + "; ".join(problems[:20])
+            )
+
     def rebuild_projection(self) -> None:
         """Rebuild tracker.json from the event store.
 
@@ -1087,7 +1295,9 @@ class WriteAPI:
                         expected_hash=start_disk_hash,
                         actual_hash=disk_hash,
                         reason=f"Unexplained disk state: items {unexplained_items} "
-                               f"on disk but not in event store (divergent state or external write)",
+                               f"on disk but not in event store (divergent state or external write). "
+                               f"Remedy (pointer, not a bypass): python tools/tracker_guard.py "
+                               f"--adopt-disk-items --dry-run",
                     )
 
                 # Check 2: If disk differs from both start and projection, it's a concurrent modification
