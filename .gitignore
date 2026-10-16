@@ -19,6 +19,8 @@ ledger/
 *-BACKUP.log
 *.jsonl
 bench/results/frontier_slice_results.json
+# Refuted ledger: committed record of measured-and-closed ideas (docs/REFUTED.md)
+!docs/refuted.jsonl
 
 # Exceptions: committed benchmark ground truth and sampled task sets
 !bench/tasks_sampled_judgment.jsonl
