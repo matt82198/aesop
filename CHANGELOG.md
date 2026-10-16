@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Receipt honesty: a scoped push that selects zero python shards now posts check-run conclusion `neutral` instead of `success`; red stays `failure` and the verifier is unchanged (#1085).
 - Fix: `baseline_liveness_check.py` no longer probes writer/seed tables. A `tools/*.py` file that only quotes a baseline filename is a consumer only if it also declares `--baseline`; otherwise it is skipped with one INFO line instead of failing closed as a "consumer error".
 - Fix: the no-timeout receipt branch of the pre-push hook now propagates the child's real exit code (red receipt matrix blocks the push on hosts without timeout/gtimeout) (#1091).
 - `tools/ingest_task_events.py` appends one `agent_done` (or `agent_stalled` on an error stop_reason) event per lane task_event to stream `agent_lifecycle`, deduped on the task event_id (#1083).
