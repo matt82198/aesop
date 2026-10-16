@@ -27,6 +27,7 @@ import time
 from pathlib import Path
 
 _TOOLS_DIR = Path(__file__).resolve().parent
+_REPO_ROOT = _TOOLS_DIR.parent
 sys.path.insert(0, str(_TOOLS_DIR))
 
 import receipt_common as rc  # noqa: E402  (sys.path adjusted above)
@@ -55,10 +56,12 @@ def _py(*rest):
 
 
 DEFAULT_REGISTRY = {
-    "py-shard-0": _py("tools/ci_shard_runner.py", "0", "4"),
-    "py-shard-1": _py("tools/ci_shard_runner.py", "1", "4"),
-    "py-shard-2": _py("tools/ci_shard_runner.py", "2", "4"),
-    "py-shard-3": _py("tools/ci_shard_runner.py", "3", "4"),
+    # Same argv as ci.yml (`--timing-file`): the runner's bucket assignment is then the one
+    # _build_shard_map derives. The path is relative to the part's cwd (the throwaway worktree).
+    "py-shard-0": _py("tools/ci_shard_runner.py", "0", "4", "--timing-file", ".github/shard-timing.json"),
+    "py-shard-1": _py("tools/ci_shard_runner.py", "1", "4", "--timing-file", ".github/shard-timing.json"),
+    "py-shard-2": _py("tools/ci_shard_runner.py", "2", "4", "--timing-file", ".github/shard-timing.json"),
+    "py-shard-3": _py("tools/ci_shard_runner.py", "3", "4", "--timing-file", ".github/shard-timing.json"),
     "secret-scan": _py("tools/secret_scan.py", "."),
     "claudemd-sync-gate": _py("tools/claudemd_sync_gate.py", "--check"),
     "gen-tool-index": _py("tools/gen_tool_index.py", "--check"),
@@ -87,9 +90,11 @@ def _resolve_profile(environ):
 
 
 def _get_test_files(repo):
-    """Get list of test files from git ls-files. Returns None if cannot determine."""
+    """Get list of test files from git ls-files. Returns None if cannot determine.
+    The `:(top)` magic anchors the pathspec at the worktree root, so a cwd inside a subdirectory
+    still sees every tracked test file (plain `tests/...` is cwd-relative in git)."""
     try:
-        output = _git(repo, "ls-files", "tests/test_*.py")
+        output = _git(repo, "ls-files", ":(top)tests/test_*.py")
         if not output:
             return []
         return sorted([Path(line).stem for line in output.split("\n") if line])
@@ -97,15 +102,16 @@ def _get_test_files(repo):
         return None
 
 
-def _build_shard_map(shard_names, test_files=None, timing=None):
+def _build_shard_map(shard_names, test_files=None, timing=None, repo=None):
     """Build a map of test file stems to owning shard names. Returns None if unable.
 
     Uses the SAME assignment as ci_shard_runner.py: greedy timing-aware bin-packing when a
     non-empty timing map is given (CI passes .github/shard-timing.json), otherwise round-robin.
     `test_files` / `timing` are injectable for tests; the caller passes the CI timing map so
-    the emitter cannot drift from the runner's assignment."""
+    the emitter cannot drift from the runner's assignment. Discovery is anchored at `repo`
+    (default: this checkout's root), never at the process cwd."""
     if test_files is None:
-        test_files = _get_test_files(Path("."))
+        test_files = _get_test_files(_REPO_ROOT if repo is None else repo)
     if test_files is None:
         return None
 
@@ -130,7 +136,9 @@ def _load_ci_timing(repo):
 
 
 def _find_owning_shards(changed_files, shard_map):
-    """Map changed files to owning shards. Returns set of shard names or empty set if none."""
+    """Map changed files to owning shards. Returns a set of shard names, or None (underivable:
+    the caller runs the FULL set) when the shard map is missing or a tools/ change has no owner.
+    A tools/ change that no shard owns (e.g. tools/receipt_common.py) must never narrow to zero."""
     if shard_map is None:
         return None  # Underivable
 
@@ -142,6 +150,9 @@ def _find_owning_shards(changed_files, shard_map):
             stem = path.stem
             if stem in shard_map:
                 owning.add(shard_map[stem])
+                continue
+        if path.parts[:1] == ("tools",):
+            return None  # fail closed: unowned tools/ change selects the full set
     return owning
 
 
@@ -563,6 +574,8 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
     args = build_parser().parse_args(argv)
     repo = Path(args.repo).resolve()
     try:
+        # Anchor at the worktree root: a run from a subdirectory must select the same scope.
+        repo = Path(_git(repo, "rev-parse", "--show-toplevel"))
         scheme = choose_scheme(args.scheme, environ)
         # Use explicit --key arg, or resolve from env var / default path
         key_path = args.key or rc.resolve_receipt_key_path(environ=environ)
@@ -576,6 +589,7 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
         profile = _resolve_profile(environ)
         registry = DEFAULT_REGISTRY if registry is None else registry
 
+        scope_skips = []  # shard parts left out by the scoped profile, recorded in the receipt
         if args.matrix:
             # Explicit --matrix overrides profile scoping
             names = [n.strip() for n in args.matrix.split(",") if n.strip()]
@@ -595,7 +609,7 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
                           % " ".join(str(exc).split()))
 
                 # Build shard map and find owning shards
-                shard_map = _build_shard_map(sorted(_PY_SHARDS), timing=_load_ci_timing(repo))
+                shard_map = _build_shard_map(sorted(_PY_SHARDS), timing=_load_ci_timing(repo), repo=repo)
                 if shard_map is None:
                     # Underivable mapping: fall back to full matrix
                     names = list(DEFAULT_MATRIX)
@@ -606,13 +620,15 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
                         names = list(DEFAULT_MATRIX)
                     else:
                         # Build scoped matrix
-                        names, skipped_infos = _build_parts_and_skipped_for_profile(
+                        names, scoped_skips = _build_parts_and_skipped_for_profile(
                             profile, changed_files, owning_shards, registry
                         )
+                        scope_skips = [s for s in scoped_skips if s["name"] in _PY_SHARDS]
             else:  # full
                 names = list(DEFAULT_MATRIX)
 
         parts, skipped = run_matrix(repo, names, registry=registry, jobs=args.jobs)
+        skipped = skipped + scope_skips
         receipt = build_receipt(repo, parts, skipped, slug=args.slug, main_ref=args.main_ref, profile=profile)
         if args.pushed_red and conclusion_for(parts) == "failure":
             # Stamped BEFORE signing: the override is part of the signed record, not a label beside it.
