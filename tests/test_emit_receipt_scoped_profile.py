@@ -288,8 +288,9 @@ class TestZeroShardConclusionIsNotSuccess(unittest.TestCase):
                        check=True, capture_output=True, encoding="utf-8", errors="replace")
 
     def _repo(self, tmp):
-        # origin/main holds tools/emit_receipt.py; the feature branch changes it. No test file
-        # is touched, so the scoped profile maps the change to no shard.
+        # origin/main holds tools/emit_receipt.py; the feature branch changes a docs file (#1122 fails a
+        # tools/ change with no owning shard closed to the full set, so a docs-only push is the zero-shard case).
+        # No test file is touched, so the scoped profile maps the change to no shard.
         repo = Path(tmp) / "repo"
         (repo / "tools").mkdir(parents=True)
         self._git(repo, "init", "-q", "-b", "main")
@@ -298,8 +299,9 @@ class TestZeroShardConclusionIsNotSuccess(unittest.TestCase):
         self._git(repo, "commit", "-q", "-m", "base")
         self._git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
         self._git(repo, "checkout", "-q", "-b", "feat")
-        (repo / "tools" / "emit_receipt.py").write_text("X = 2\n", encoding="utf-8")
-        self._git(repo, "add", "tools/emit_receipt.py")
+        (repo / "docs").mkdir()
+        (repo / "docs" / "receipt-note.md").write_text("note\n", encoding="utf-8")
+        self._git(repo, "add", "docs/receipt-note.md")
         self._git(repo, "commit", "-q", "-m", "feat")
         return repo
 
