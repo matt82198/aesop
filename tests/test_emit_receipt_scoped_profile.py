@@ -7,6 +7,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 # Add tools/ to path for imports
 _TOOLS_DIR = Path(__file__).resolve().parent.parent / "tools"
@@ -259,6 +260,57 @@ class TestShardMapMatchesCIRunner(unittest.TestCase):
         shard_map = emit_receipt._build_shard_map(self.SHARDS, test_files=self.TEST_FILES, timing=timing)
         owning = emit_receipt._find_owning_shards(["tests/test_e.py"], shard_map)
         self.assertEqual(owning, {self.SHARDS[ci_shard]})
+
+
+class _MatrixCaptured(Exception):
+    """Raised by the fake run_matrix to stop main() right after the matrix is chosen."""
+
+
+class TestScopedFallbackUsesInjectedRegistry(unittest.TestCase):
+    """Both fail-closed fallbacks in main()'s shard selection must run the parts of the
+    registry actually injected into main(), never DEFAULT_MATRIX."""
+
+    REGISTRY = {
+        "custom-shard-a": emit_receipt.PartSpec(["true"]),
+        "custom-gate": emit_receipt.PartSpec(["true"]),
+    }
+    REPO = Path(__file__).resolve().parent.parent
+
+    def _matrix_for(self, git_diff_output, shard_map):
+        captured = {}
+        real_git = emit_receipt._git
+
+        def fake_git(repo, *args):
+            if args[:1] == ("merge-base",):
+                return "0" * 40
+            if args[:2] == ("diff", "--name-only"):
+                return git_diff_output
+            return real_git(repo, *args)
+
+        def fake_run_matrix(repo, names, registry=None, jobs=1, wsl_status_fn=None):
+            captured["names"] = list(names)
+            raise _MatrixCaptured()
+
+        with mock.patch.object(emit_receipt, "_git", fake_git), \
+                mock.patch.object(emit_receipt, "_build_shard_map", return_value=shard_map), \
+                mock.patch.object(emit_receipt, "run_matrix", fake_run_matrix):
+            with self.assertRaises(_MatrixCaptured):
+                emit_receipt.main(
+                    ["--repo", str(self.REPO), "--scheme", "hmac-sha256"],
+                    registry=self.REGISTRY,
+                    environ={emit_receipt.rc.HMAC_ENV: "test-secret"},
+                )
+        return captured["names"]
+
+    def test_unowned_tools_change_fallback_uses_injected_registry(self):
+        """A tools/ change no shard owns makes _find_owning_shards return None (fallback at the owning-shards check)."""
+        names = self._matrix_for("tools/receipt_common.py\n", {"test_foo": "py-shard-0"})
+        self.assertEqual(sorted(names), sorted(self.REGISTRY))
+
+    def test_underivable_shard_map_fallback_uses_injected_registry(self):
+        """An underivable shard map (_build_shard_map returns None) takes the first fallback."""
+        names = self._matrix_for("tests/test_foo.py\n", None)
+        self.assertEqual(sorted(names), sorted(self.REGISTRY))
 
 
 class TestShardSetSingleDeclaration(unittest.TestCase):

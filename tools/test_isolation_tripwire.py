@@ -2,7 +2,7 @@
 """
 Test-isolation tripwire: fails closed if the REAL developer profile changes
 while a test suite runs.
-INDEX: Test-isolation tripwire (incident 2026-10-05: installSkills() in bin/cli.js overwrote real ~/.claude/skills during a Node test run); snapshots sha256 of ~/.claude/{skills,settings.json,memory,hooks} + `git config --global -l` before/after wrapping a command, FAILS CLOSED naming every changed path when the profile exists, degrades loudly-but-green ("no profile present, tripwire inert") when ~/.claude is absent (CI); CLI: `[--root DIR] -- <command...>`; exit = max(wrapped command's exit code, tripwire finding); stdlib-only. Extended 2026-10-06 (shell-test-isolation incident) to also snapshot fleet-state heartbeat/state files, and Windows Aesop* scheduled-task DEFINITIONS. Daemon-written files use VALIDITY checks (heartbeat epoch bounds, log growth, JSON parse+shape) instead of hash comparisons since daemons legitimately update them during test runs. Fixed 2026-10-06 (flaky-tripwire incident): the scheduled-task check was fingerprinting `schtasks /query /fo CSV`'s Status column, which the live AesopWatchdogDaemon/AesopRefinementMonitor flip between Running/Ready every few minutes with no test touching tasks, alternating OK/FAIL with no real change -- now lists Aesop* task names via CSV (AESOP_TRIPWIRE_SCHTASKS_CMD override), then hashes each task's DEFINITION ONLY via `schtasks /query /tn <name> /xml` (AESOP_TRIPWIRE_SCHTASKS_XML_CMD override, `{name}` placeholder) -- the exported Task Scheduler XML schema never contains LastRunTime/NextRunTime/Last Result/State, only Triggers/Actions/Principals/Settings, so run-state churn can no longer flip this check.
+INDEX: Test-isolation tripwire (incident 2026-10-05: installSkills() in bin/cli.js overwrote real ~/.claude/skills during a Node test run); snapshots sha256 of ~/.claude/{skills,settings.json,memory,hooks} + `git config --global -l` before/after wrapping a command, FAILS CLOSED naming every changed path when the profile exists, degrades loudly-but-green ("no profile present, tripwire inert") when ~/.claude is absent (CI); CLI: `[--root DIR] -- <command...>`; exit = wrapped command's exit code if non-zero else the tripwire's (a signal-killed child maps to 128+N, so SIGKILL exits 137, never 0); stdlib-only. Extended 2026-10-06 (shell-test-isolation incident) to also snapshot fleet-state heartbeat/state files, and Windows Aesop* scheduled-task DEFINITIONS. Daemon-written files use VALIDITY checks (heartbeat epoch bounds, log growth, JSON parse+shape) instead of hash comparisons since daemons legitimately update them during test runs. Fixed 2026-10-06 (flaky-tripwire incident): the scheduled-task check was fingerprinting `schtasks /query /fo CSV`'s Status column, which the live AesopWatchdogDaemon/AesopRefinementMonitor flip between Running/Ready every few minutes with no test touching tasks, alternating OK/FAIL with no real change -- now lists Aesop* task names via CSV (AESOP_TRIPWIRE_SCHTASKS_CMD override), then hashes each task's DEFINITION ONLY via `schtasks /query /tn <name> /xml` (AESOP_TRIPWIRE_SCHTASKS_XML_CMD override, `{name}` placeholder) -- the exported Task Scheduler XML schema never contains LastRunTime/NextRunTime/Last Result/State, only Triggers/Actions/Principals/Settings, so run-state churn can no longer flip this check.
 
 Why this exists: tests/CLAUDE.md and LANE-CONTRACT.md have said "tests must not
 pollute cwd or global state" as prose for a long time. Prose is not a gate. On
@@ -841,6 +841,24 @@ def diff_snapshots(before: dict, after: dict, attributor=None, ledger=None):
     return changes
 
 
+def _exit_code(returncode):
+    """Shell-style exit code. A child killed by signal N reports returncode -N on POSIX;
+    the shell convention is 128+N (SIGKILL -> 137). Never a negative or a silent 0."""
+    if returncode is None:
+        return 1
+    if returncode < 0:
+        return 128 - returncode
+    return returncode
+
+
+def _combine_exit(command_rc, tripwire_rc):
+    """Non-zero if EITHER side is non-zero. The wrapped command's own non-zero code is
+    preserved; otherwise the tripwire's. Never max(): max(-9, 0) == 0 hid a SIGKILL."""
+    if command_rc != 0:
+        return command_rc
+    return tripwire_rc
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
     parser = argparse.ArgumentParser(
@@ -894,7 +912,7 @@ def main(argv=None):
             resolved_command[0] = which_path
 
     proc = subprocess.run(resolved_command, cwd=str(Path.cwd()))
-    cmd_exit = proc.returncode if proc.returncode is not None else 1
+    cmd_exit = _exit_code(proc.returncode)
 
     after = take_snapshot(root)
     ledger = []
@@ -929,7 +947,7 @@ def main(argv=None):
         if before["profile_present"]:
             print("[test_isolation_tripwire] OK: real profile unchanged", file=sys.stderr)
 
-    return max(cmd_exit, tripwire_exit)
+    return _combine_exit(cmd_exit, tripwire_exit)
 
 
 if __name__ == "__main__":
