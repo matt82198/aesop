@@ -24,6 +24,17 @@ const cases = [
   [DENY, 'Bash', 'cat /home/dev/.claude/projects/-home-dev-myproject/3348b35a.jsonl', null, 'POSIX home: cat a transcript'], // e.g.
   [DENY, 'Read', '', ['/home/dev/.claude/projects/-home-dev-myproject/3348b35a.jsonl'], 'POSIX home: Read tool on a transcript'], // e.g.
 
+  // ---- must DENY: bypass forms that previously slipped past (no literal `.claude/projects`) ----
+  [DENY, 'Bash', 'cd ~/.claude && cat projects/x/abc.jsonl', null, 'bypass: cd ~/.claude then relative projects/ .jsonl'],
+  [DENY, 'Bash', 'cat ~/.claude/p*/x/abc.jsonl', null, 'bypass: glob in place of the projects segment'],
+  [DENY, 'Bash', 'cat "$HOME"/.claude/p*/x/abc.jsonl', null, 'bypass: $HOME-prefixed glob'],
+  [DENY, 'Bash', 'cat $USERPROFILE/.claude/projects/x/abc.jsonl', null, 'bypass: $USERPROFILE-prefixed transcript path'],
+  [DENY, 'Bash', 'cd C:/Users/dev/.claude && grep -l foo projects/*/*.jsonl', null, 'bypass: cd .claude then relative projects glob'],
+  [DENY, 'Bash', 'cd projects/x && cat abc.jsonl', null, 'bypass: cd into a projects segment then .jsonl'],
+  [DENY, 'Read', '', ['projects/x/abc.jsonl'], 'bypass: Read of relative projects/ .jsonl'],
+  [DENY, 'Read', '', ['projects\\x\\abc.JSONL'], 'bypass: Read of relative Windows-style projects path, uppercase ext'],
+  [DENY, 'Grep', '', ['projects', '*.jsonl'], 'bypass: Grep relative projects dir with *.jsonl glob'],
+
   // ---- must ALLOW: the control files that ARE the record ----
   [ALLOW, 'Read', '', ['C:/Users/dev/conductor/STATE.md'], 'STATE.md'], // e.g.
   [ALLOW, 'Read', '', ['C:/Users/dev/conductor/BUILDLOG.md'], 'BUILDLOG.md'], // e.g.
@@ -34,6 +45,12 @@ const cases = [
   [ALLOW, 'Bash', 'python tools/some_gate.py --check', null, 'the toolkit'],
   [ALLOW, 'Bash', 'cat /app/data/pages/x/facts.json', null, 'a real artifact'],
   [ALLOW, 'Bash', 'grep -n "def team_label" engine/standings.py', null, 'source grep'],
+  [ALLOW, 'Bash', 'cat README.md', null, 'plain README read'],
+  [ALLOW, 'Read', '', ['tests/fixture.json'], 'non-transcript json fixture'],
+  [ALLOW, 'Bash', 'cd ~/.claude && cat settings.json', null, '.claude read with no jsonl target'],
+  [ALLOW, 'Read', '', ['projects/x/memory/MEMORY.md'], 'relative memory subtree is not a transcript'],
+  [ALLOW, 'Bash', 'cat data/events.jsonl', null, 'a jsonl outside any .claude or projects tree'],
+  [ALLOW, 'Read', '', ['data/events.jsonl'], 'Read of a jsonl outside any projects tree'],
 ];
 
 let pass = 0, fail = 0;
