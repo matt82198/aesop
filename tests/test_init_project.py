@@ -1,6 +1,7 @@
 """Tests for tools/init_project.py -- project initialization scaffolder."""
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -10,6 +11,24 @@ from pathlib import Path
 
 # Ensure tools/ is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'tools'))
+
+
+def _hook_shell():
+    """Return the POSIX shell git itself uses to run hooks.
+
+    On Windows a bare ``bash`` can resolve to the WSL launcher in System32, which
+    refuses to run without an installed distribution. Git for Windows ships its own
+    bash.exe under <git root>/bin; use that so the hook runs the way git runs it.
+    """
+    if os.name != "nt":
+        return "bash"
+    git = shutil.which("git")
+    if git:
+        for ancestor in Path(git).resolve().parents:
+            candidate = ancestor / "bin" / "bash.exe"
+            if candidate.is_file():
+                return str(candidate)
+    raise RuntimeError("Git for Windows bash.exe not found next to git; cannot run the pre-push hook")
 
 from init_project import (
     PRE_PUSH_HOOK,
@@ -488,7 +507,7 @@ class TestPrePushHookScansPushedRange(unittest.TestCase):
         """Run the installed hook with LF-only stdin (as git sends it); return (rc, output)."""
         hook = Path(td, ".git", "hooks", "pre-push").as_posix()
         result = subprocess.run(
-            ["bash", hook, "origin", "https://example.invalid/range-scan.git"],
+            [_hook_shell(), hook, "origin", "https://example.invalid/range-scan.git"],
             input=stdin_text.encode("utf-8"), cwd=td, capture_output=True, timeout=120,
         )
         return result.returncode, (result.stdout + result.stderr).decode("utf-8", errors="replace")
