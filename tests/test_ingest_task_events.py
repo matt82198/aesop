@@ -17,18 +17,19 @@ if str(REPO_ROOT) not in sys.path:
 
 from state_store.api import StateAPI  # noqa: E402
 from state_store.paths import resolve_db_path  # noqa: E402
+from state_store.projections import project_agent_lifecycle  # noqa: E402
 from tools import ingest_task_events as ite  # noqa: E402
 
 SCRIPT = str(REPO_ROOT / "tools" / "ingest_task_events.py")
 
 
-def _rec(agent_id, agent_type="", summary="working", ts="2026-10-15T01:00:00.000Z", sess="s1"):
+def _rec(agent_id, agent_type="", summary="working", ts="2026-10-15T01:00:00.000Z", sess="s1", stop_reason=None):
     return json.dumps({
         "ts": ts,
         "session_id": sess,
         "agent_id": agent_id,
         "agent_type": agent_type,
-        "stop_reason": None,
+        "stop_reason": stop_reason,
         "summary": summary,
         "context_used_pct": 10,
     })
@@ -309,6 +310,60 @@ class TaskEventIngestTests(unittest.TestCase):
         result = self._ingest()
         self.assertEqual(result["ingested"], 0)
         self.assertEqual(len(self._task_events()), 1)
+
+    # --- agent lifecycle stream (agent_lifecycle) -----------------------------
+    def _lifecycle_events(self):
+        api = StateAPI(resolve_db_path(self.state, "tracker"))
+        try:
+            return api.get("agent_lifecycle")
+        finally:
+            api.close()
+
+    def _lifecycle_agents(self):
+        return {a["id"]: a for a in project_agent_lifecycle(self._lifecycle_events())["agents"]}
+
+    def test_lane_stop_projects_agent_done(self):
+        self._write([_rec("lane1", "general-purpose", "lane work", ts="2026-10-15T01:00:00.000Z")])
+        self._ingest()
+        agents = self._lifecycle_agents()
+        self.assertEqual(set(agents), {"lane1"})
+        self.assertEqual(agents["lane1"]["state"], "done")
+        self.assertEqual(agents["lane1"]["transitions"], [{"state": "done", "at": "2026-10-15T01:00:00.000Z"}])
+        self.assertEqual(len(self._lifecycle_events()), 1)
+
+    def test_second_ingest_adds_zero_lifecycle_rows(self):
+        self._write([_rec("lane1", "general-purpose")])
+        self._ingest()
+        self.cursor.unlink()  # lost cursor forces a full re-scan through the dedupe
+        result = self._ingest()
+        self.assertEqual(result["ingested"], 0)
+        self.assertEqual(len(self._lifecycle_events()), 1)
+        self.assertEqual(self._lifecycle_agents()["lane1"]["state"], "done")
+
+    def test_error_stop_reason_projects_agent_stalled(self):
+        self._write([_rec("lane2", "general-purpose", stop_reason="error")])
+        self._ingest()
+        self.assertEqual(self._lifecycle_agents()["lane2"]["state"], "stalled")
+
+    def test_internal_records_emit_no_lifecycle_rows(self):
+        self._write([_rec("helper", "", "/mcp")])
+        self._ingest()
+        self.assertEqual(self._lifecycle_events(), [])
+
+    def test_lifecycle_row_emitted_when_task_row_already_present(self):
+        # Crash between the task append and the lifecycle append leaves a task row
+        # with no lifecycle row. A re-run must emit the lifecycle row exactly once.
+        line = _rec("lane3", "general-purpose")
+        self._write([line])
+        api = StateAPI(resolve_db_path(self.state, "tracker"))
+        try:
+            api.append("task", "task_event", dict(json.loads(line), event_id=ite._event_id(line.encode(), 0), kind="agent"), "task_ingest")
+        finally:
+            api.close()
+        self._ingest()
+        self._ingest()
+        self.assertEqual(len(self._lifecycle_events()), 1)
+        self.assertEqual(self._lifecycle_agents()["lane3"]["state"], "done")
 
     # --- CLI exit codes -------------------------------------------------------
     def _cli(self, *extra):

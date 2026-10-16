@@ -21,6 +21,23 @@ ensure_log_dir() {
   mkdir -p "$(dirname "$SELFHEAL_LOG")" 2>/dev/null || true
 }
 
+# Same lock contract as run-watchdog.sh acquire_lock (tracker f18337dc30c3): pid written
+# first, timestamp second, refreshed each cycle. A live recorded pid is never reclaimed;
+# a dead one is reclaimed by an atomic mv-aside, so only one reclaimer wins.
+write_lock_owner() {
+  local lock_dir="$1"
+  echo $$ > "$lock_dir/pid" 2>/dev/null || return 1
+  date +%s > "$lock_dir/timestamp" 2>/dev/null || return 1
+  return 0
+}
+
+refresh_lock() {
+  local lock_dir="$1"
+  if [ -f "$lock_dir/pid" ] && [ "$(cat "$lock_dir/pid" 2>/dev/null)" = "$$" ]; then
+    date +%s > "$lock_dir/timestamp" 2>/dev/null || true
+  fi
+}
+
 acquire_lock() {
   local lock_dir="$1"
   local stale_threshold="$2"
@@ -28,63 +45,90 @@ acquire_lock() {
   mkdir -p "$(dirname "$lock_dir")" 2>/dev/null || true
 
   if mkdir "$lock_dir" 2>/dev/null; then
-    if ! date +%s > "$lock_dir/timestamp" 2>/dev/null || ! echo $$ > "$lock_dir/pid" 2>/dev/null; then
+    if ! write_lock_owner "$lock_dir"; then
       rm -rf "$lock_dir" 2>/dev/null || true
       return 1
     fi
     return 0
   fi
 
-  if [ -d "$lock_dir" ]; then
-    local lock_pid=""
-    if [ -f "$lock_dir/pid" ]; then
-      lock_pid=$(cat "$lock_dir/pid" 2>/dev/null)
-    fi
+  [ -d "$lock_dir" ] || return 1
 
-    if [ -f "$lock_dir/timestamp" ] && [ -f "$lock_dir/pid" ] && [ -n "$lock_pid" ]; then
-      local lock_ts=$(cat "$lock_dir/timestamp" 2>/dev/null)
-      local lock_mtime=${lock_ts:-0}
-      local now=$(date +%s)
-      local lock_age=$((now - lock_mtime))
-
-      if [ "$lock_age" -gt "$stale_threshold" ]; then
-        rm -rf "$lock_dir" 2>/dev/null || true
-        if mkdir "$lock_dir" 2>/dev/null; then
-          date +%s > "$lock_dir/timestamp" 2>/dev/null || true
-          echo $$ > "$lock_dir/pid" 2>/dev/null || true
-          return 2
-        fi
-      fi
-    else
-      local should_reclaim=0
-      if [ -f "$lock_dir/pid" ] && [ -n "$lock_pid" ]; then
-        if ! kill -0 "$lock_pid" 2>/dev/null; then
-          should_reclaim=1
-        fi
-      fi
-
-      if [ $should_reclaim -eq 0 ] && [ -f "$lock_dir/timestamp" ]; then
-        local lock_ts=$(cat "$lock_dir/timestamp" 2>/dev/null)
-        local lock_mtime=${lock_ts:-0}
-        local now=$(date +%s)
-        local lock_age=$((now - lock_mtime))
-
-        if [ "$lock_age" -gt "$stale_threshold" ]; then
-          should_reclaim=1
-        fi
-      fi
-
-      if [ $should_reclaim -eq 1 ]; then
-        rm -rf "$lock_dir" 2>/dev/null || true
-        if mkdir "$lock_dir" 2>/dev/null; then
-          date +%s > "$lock_dir/timestamp" 2>/dev/null || true
-          echo $$ > "$lock_dir/pid" 2>/dev/null || true
-          return 2
-        fi
-      fi
+  local lock_pid="" lock_ts="" expect_pid="" reclaim=0 ts_corrupt=0
+  if [ -f "$lock_dir/pid" ]; then
+    lock_pid=$(cat "$lock_dir/pid" 2>/dev/null)
+  fi
+  if [ -f "$lock_dir/timestamp" ]; then
+    lock_ts=$(cat "$lock_dir/timestamp" 2>/dev/null)
+    if ! [[ "$lock_ts" =~ ^[0-9]+$ ]]; then
+      ts_corrupt=1
     fi
   fi
 
+  if [[ "$lock_pid" =~ ^[0-9]+$ ]]; then
+    if kill -0 "$lock_pid" 2>/dev/null; then
+      return 1
+    fi
+    reclaim=1
+    expect_pid="$lock_pid"
+  else
+    expect_pid=""
+    if [ ! -f "$lock_dir/timestamp" ]; then
+      if [ -n "$(find "$lock_dir" -maxdepth 0 -mmin +$((stale_threshold / 60)) 2>/dev/null)" ]; then
+        reclaim=1
+      fi
+    elif [ "$ts_corrupt" -eq 1 ] || [ $(( $(date +%s) - lock_ts )) -gt "$stale_threshold" ]; then
+      reclaim=1
+    fi
+  fi
+
+  if [ "$reclaim" -ne 1 ]; then
+    return 1
+  fi
+  if reclaim_lock "$lock_dir" "$expect_pid"; then
+    return 2
+  fi
+  return 1
+}
+
+reclaim_lock() {
+  local lock_dir="$1"
+  local expect_pid="$2"
+  local aside="$lock_dir.reclaim.$$"
+
+  rm -rf "$aside" 2>/dev/null || true
+  mv "$lock_dir" "$aside" 2>/dev/null || return 1
+  local moved_pid=""
+  if [ -f "$aside/pid" ]; then
+    moved_pid=$(cat "$aside/pid" 2>/dev/null)
+  fi
+  if [ "$moved_pid" != "$expect_pid" ]; then
+    [ -e "$lock_dir" ] || mv "$aside" "$lock_dir" 2>/dev/null || true
+    return 1
+  fi
+  rm -rf "$aside" 2>/dev/null || true
+  if mkdir "$lock_dir" 2>/dev/null; then
+    write_lock_owner "$lock_dir"
+    return 0
+  fi
+  return 1
+}
+
+# HALT sentinel check (tracker f18337dc30c3): selfheal must not respawn a daemon the
+# operator halted. Existence is enough (no interpreter needed). Checks the box-wide
+# $CONDUCTOR_ROOT sentinel, the per-checkout state sentinel and AESOP_STATE_ROOT's.
+# Prints the sentinel path and returns 0 when one exists.
+halt_sentinel_present() {
+  local candidate
+  for candidate in \
+    "${AESOP_STATE_ROOT:+$AESOP_STATE_ROOT/.HALT}" \
+    "$AESOP_ROOT/state/.HALT" \
+    "${CONDUCTOR_ROOT:+$CONDUCTOR_ROOT/state/.HALT}"; do
+    if [ -n "$candidate" ] && [ -e "$candidate" ]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
   return 1
 }
 
@@ -132,6 +176,13 @@ restart_watchdog() {
   fi
 
   if is_heartbeat_stale "$WATCHDOG_HB" "$WATCHDOG_STALE_THRESHOLD"; then
+    # A halted daemon writes no heartbeat, so it always looks stale. Respawning it every
+    # 60s while HALT is set only leaks processes; the operator's kill switch wins.
+    local halt_path
+    if halt_path=$(halt_sentinel_present); then
+      log_heal "SKIP: HALT sentinel present ($halt_path); not spawning watchdog"
+      return 1
+    fi
     if [ -z "${AESOP_SELFHEAL_SKIP_RESTART:-}" ]; then
       log_heal "ACTION: run-watchdog heartbeat stale, restarting..."
       if command -v bash >/dev/null 2>&1; then
@@ -214,6 +265,7 @@ main() {
   fi
 
   while true; do
+    refresh_lock "$SELFHEAL_LOCK_DIR"
     cycle_once
     sleep 60
   done
