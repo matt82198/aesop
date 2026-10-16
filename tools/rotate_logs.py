@@ -19,9 +19,7 @@ Exit codes:
 """
 import argparse
 import os
-import shutil
 import sys
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -127,9 +125,6 @@ PRESERVE_ATTEMPTS = 5
 # take ".<n>" suffixes; this bounds how many are tried before giving up.
 MAX_ARCHIVE_COLLISIONS = 1000
 
-# Suffix of the temp file that replaces the live log. It is removed on failure.
-TEMP_SUFFIX = ".rotate.tmp"
-
 
 def exceeds_thresholds(line_count, byte_count, max_lines, max_bytes):
     """True when either configured threshold is exceeded."""
@@ -149,41 +144,50 @@ def needs_rotation(filepath, max_lines, max_bytes):
 def lock_path_for(logfile):
     """Sidecar lock file for a log.
 
-    The lock lives beside the log rather than on it, because the log itself is
-    replaced by rename while the lock is held. A lock on a replaced inode would
-    not serialise anything. The sidecar is never removed; it is empty.
+    The lock lives beside the log rather than on it, so it is independent of the
+    log's own handles: writers hold the log open, and a lock taken on the log
+    would be shared with them. The sidecar is never removed; it is empty.
     """
     return logfile.with_name(logfile.name + ".rotate.lock")
 
 
-def replace_file_atomically(target, data):
-    """Make ``target`` hold exactly ``data``, or leave it untouched.
+def write_in_place(handle, data):
+    """Overwrite the open log with ``data`` and cut off whatever followed it.
 
-    The bytes go to a temp file in the same directory, are fsynced, and are then
-    swapped in with os.replace, so readers see either the old file or the new one,
-    never a truncated mix. Any failure, including a kill modelled as a
-    BaseException, removes the temp file and propagates; the target is unchanged.
+    ``handle`` is a read-write handle that is NOT in append mode, so the write
+    lands at offset 0, where the kept half belongs; ``truncate`` then drops the
+    old tail. An external O_APPEND writer that appends after the truncate lands
+    at the new end, which is where it belongs.
+
+    The log is rewritten in place, never renamed: its inode, and therefore every
+    writer's open handle, survives the rotation. (An earlier revision swapped in a
+    temp file with os.replace. That left a writer holding a long-lived ``>>``
+    handle appending to the unlinked inode, and on Windows os.replace fails closed
+    with rc=1 while another process holds the live log open without
+    FILE_SHARE_DELETE, so rotation was refused whenever a daemon was writing.)
     """
-    target = Path(target)
-    fd, tmp_name = tempfile.mkstemp(dir=str(target.parent),
-                                    prefix="." + target.name + ".",
-                                    suffix=TEMP_SUFFIX)
+    handle.seek(0)
+    handle.write(data)
+    handle.truncate(len(data))
+    handle.flush()
+    os.fsync(handle.fileno())
+
+
+def _restore(handle, original):
+    """Put ``original`` back over a partly rewritten log. True when it succeeded."""
     try:
-        with os.fdopen(fd, 'wb') as tmp:
-            tmp.write(data)
-            tmp.flush()
-            os.fsync(tmp.fileno())
-        try:
-            shutil.copymode(str(target), tmp_name)
-        except OSError:
-            pass  # Keeping the mode is best effort; the content is what matters.
-        os.replace(tmp_name, str(target))
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
-        raise
+        write_in_place(handle, original)
+        return True
+    except OSError:
+        return False
+
+
+def _discard_archive(archive_file):
+    """Remove an archive this rotation created, once its lines are back in the log."""
+    try:
+        os.unlink(str(archive_file))
+    except OSError:
+        pass
 
 
 def create_archive(archive_path, stem, archive_lines):
@@ -205,7 +209,7 @@ def create_archive(archive_path, stem, archive_lines):
 
 
 def rotate_log(logfile, max_lines, max_bytes, archive_dir, check_only=False):
-    """Rotate log file by archiving oldest lines atomically.
+    """Rotate log file by archiving oldest lines (copy-truncate).
 
     Uses exclusive file locking (on a sidecar lock file) to serialize rotations
     against other lock-takers. The lock is ADVISORY: external writers (e.g. shell
@@ -215,25 +219,41 @@ def rotate_log(logfile, max_lines, max_bytes, archive_dir, check_only=False):
     lock. An unlocked threshold check runs first only as a cheap early exit; a
     reading taken before the lock can be stale, so it never decides on its own.
 
+    Sequence, under the lock:
+    1. Read the whole log in binary; decide from those bytes.
+    2. Create the archive exclusively ('xb') from the lines cut off. An existing
+       file is never overwritten; a collision takes the next ``.<n>`` name.
+       If this fails, the live log has not been touched.
+    3. Fold in bytes appended past the read extent (detected by size, read back at
+       the exact byte offset, repeated up to PRESERVE_ATTEMPTS times).
+    4. Rewrite the kept half into the live log in place at offset 0 and truncate
+       the tail (write_in_place). The file is not renamed, so writers holding it
+       open keep appending to the same file.
+
     To prevent data loss from non-locking O_APPEND writers:
     - Bytes appended past the extent this rotation consumed are detected by
       comparing the live file size against that extent, read back at the exact
-      byte offset, and folded into the retained content before the swap.
+      byte offset, and folded into the retained content before the rewrite.
     - The size check is repeated (bounded by PRESERVE_ATTEMPTS) until the file
       stops growing.
 
-    The kept half is written to a temp file in the same directory and swapped in
-    with os.replace, so a crash at any point leaves either the original log or
-    the complete rotated log. Archives are created exclusively and never
-    overwritten.
+    Intact on failure: if the in-place rewrite raises (OSError, or a BaseException
+    such as KeyboardInterrupt), the bytes observed under the lock (the original
+    plus any appends seen) are written back and the archive this rotation created
+    is removed, so the log and archive set are as they were before the call. If
+    the write-back itself fails, the archive is kept, because it then holds the
+    only copy of the cut-off lines, and the failure is reported on stderr.
 
-    NOTE: This narrows but cannot close the race: an append landing between the
-    final size observation and the swap is still lost, because no portable
-    primitive makes "check size, then replace" atomic against a writer that
-    declines to take the lock. Writers that hold the log open across rotations
-    (e.g. a daemon's long-lived >> fd) keep appending to the replaced inode after
-    a swap; they must reopen the log. For complete safety, all writers must
-    cooperate on locking.
+    NOTE: This narrows but cannot close the race. An append that lands between the
+    final size observation and the truncate is still lost: no portable primitive
+    makes "check size, then truncate" atomic against a writer that declines to
+    take the lock. Writers holding the log open in append mode are safe across a
+    rotation (same inode), but their bytes are only preserved if they land before
+    the final size check; for complete safety, all writers must cooperate on
+    locking.
+
+    Windows: the in-place rewrite never renames the live log, so a writer that has
+    it open does not block rotation (Python opens it with read/write sharing).
 
     Args:
         logfile: Path to log file to rotate.
@@ -284,7 +304,9 @@ def _rotate_locked(logfile, max_lines, max_bytes, archive_dir):
     # mode's newline translation would desynchronise character counts from
     # on-disk byte offsets (CRLF on Windows) and silently rewrite line endings.
     try:
-        with open(str(logfile), 'rb') as f:
+        # 'r+b' so the same handle reads the extent and later rewrites the kept
+        # half in place. It is not append mode: writes must land at offset 0.
+        with open(str(logfile), 'r+b') as f:
             # `consumed` is the exact on-disk extent this rotation is responsible for.
             data = f.read()
             consumed = len(data)
@@ -338,8 +360,9 @@ def _rotate_locked(logfile, max_lines, max_bytes, archive_dir):
                       file=sys.stderr)
                 return 1
 
+            # Archive first. If this fails the live log has not been touched.
             try:
-                create_archive(archive_path, logfile.stem, archive_lines)
+                archive_file = create_archive(archive_path, logfile.stem, archive_lines)
             except IOError as e:
                 print(f"ERROR: {e}", file=sys.stderr)
                 return 1
@@ -347,7 +370,7 @@ def _rotate_locked(logfile, max_lines, max_bytes, archive_dir):
             # MITIGATION for external O_APPEND writers:
             # Writing the archive takes time, and non-locking writers (>> and
             # tee -a in the shell daemons) can append during it. Anything past
-            # `consumed` is such an append and must survive the swap.
+            # `consumed` is such an append and must survive the rewrite.
             #
             # 1. Byte offsets, not line counts. Diffing line counts loses data
             #    whenever the last consumed line has no trailing newline: the
@@ -355,9 +378,14 @@ def _rotate_locked(logfile, max_lines, max_bytes, archive_dir):
             #    the number of appended lines, and the surplus is destroyed.
             #    Reading the delta at a byte offset is exact in every case.
             #
-            # 2. The check sits immediately before the swap. The observation is
+            # 2. The check sits immediately before the rewrite. The observation is
             #    repeated until the size stops moving, so appends arriving
             #    mid-preservation are also caught.
+            #
+            # `observed` is every byte this rotation has seen in the live log: the
+            # bytes read under the lock plus any appends folded in. It is what a
+            # rollback writes back.
+            observed = bytearray(data)
             for _ in range(PRESERVE_ATTEMPTS):
                 grown = os.fstat(f.fileno()).st_size
                 if grown <= consumed:
@@ -366,22 +394,29 @@ def _rotate_locked(logfile, max_lines, max_bytes, archive_dir):
                 external = f.read(grown - consumed)
                 if not external:
                     break
+                observed.extend(external)
                 remaining_lines.extend(external.splitlines(keepends=True))
                 consumed = grown
 
             kept = b"".join(remaining_lines)
 
-        # The live log is closed here. Windows refuses to replace a file that has
-        # an open handle; the sidecar lock still serialises rotators across the swap.
-        try:
-            replace_file_atomically(logfile, kept)
-        except OSError as e:
-            print(f"ERROR: Failed to replace {logfile} with rotated content: {e}",
-                  file=sys.stderr)
-            return 1
+            # The swap: the kept half is written over the live log in place. A
+            # kill or I/O error part-way leaves a partly rewritten file, so on any
+            # exception (BaseException included) the observed bytes are written
+            # back before the error propagates.
+            try:
+                write_in_place(f, kept)
+            except BaseException:
+                if _restore(f, bytes(observed)):
+                    _discard_archive(archive_file)
+                else:
+                    print(f"ERROR: could not restore {logfile} after a failed rewrite; "
+                          f"the cut-off lines are kept in {archive_file}",
+                          file=sys.stderr)
+                raise
 
-    except IOError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
+    except OSError as e:
+        print(f"ERROR: Failed to rewrite {logfile} in place: {e}", file=sys.stderr)
         return 1
 
     return 0

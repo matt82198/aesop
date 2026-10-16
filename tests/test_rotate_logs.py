@@ -643,8 +643,28 @@ class TestRotateLogs(unittest.TestCase):
         self.assertEqual(self._live_lines(logfile),
                          [f"line {i}" for i in range(1, 11)])
 
-    def test_failed_replace_leaves_original_intact(self):
-        """If the kept half cannot be swapped in, the original file is untouched."""
+    def _interrupt_first_rewrite(self, rotate_logs, exc):
+        """Patch write_in_place so its first call writes half the kept bytes then raises.
+
+        Later calls (the rollback) delegate to the real function, so the restore
+        path is exercised for real rather than mocked away.
+        """
+        real_write = rotate_logs.write_in_place
+        calls = []
+
+        def partial_then_raise(handle, data):
+            calls.append(len(data))
+            if len(calls) == 1:
+                handle.seek(0)
+                handle.write(data[: len(data) // 2])
+                handle.flush()
+                raise exc
+            return real_write(handle, data)
+
+        return mock.patch.object(rotate_logs, "write_in_place", partial_then_raise)
+
+    def test_failed_rewrite_leaves_original_intact(self):
+        """A failed in-place rewrite is rolled back: original bytes, no archive left."""
         logfile = os.path.join(self.temp_dir, "test.log")
         archive_dir = os.path.join(self.temp_dir, "archive")
         self._write_numbered(logfile, 1, 251)
@@ -652,20 +672,22 @@ class TestRotateLogs(unittest.TestCase):
             original = f.read()
         rotate_logs = self._load_rotate_logs()
 
-        with mock.patch.object(os, "replace", side_effect=OSError("simulated replace failure")):
+        with self._interrupt_first_rewrite(rotate_logs, OSError("simulated write failure")):
             rc = rotate_logs.rotate_log(logfile, 200, 20480, archive_dir, False)
 
-        self.assertEqual(rc, 1, "a failed swap must be reported, not swallowed")
+        self.assertEqual(rc, 1, "a failed rewrite must be reported, not swallowed")
         with open(logfile, 'rb') as f:
-            self.assertEqual(f.read(), original, "original log changed on failed swap")
-        leftovers = [n for n in os.listdir(self.temp_dir) if n.endswith(".rotate.tmp")]
-        self.assertEqual(leftovers, [], "temp file left behind after failed swap")
+            self.assertEqual(f.read(), original,
+                             "partly rewritten log was not restored after failed rewrite")
+        self.assertEqual(os.listdir(archive_dir), [],
+                         "archive from a rolled-back rotation must be removed")
 
     def test_kill_during_swap_leaves_original_intact(self):
-        """A kill (modelled as KeyboardInterrupt) at the swap keeps the original.
+        """A kill (modelled as KeyboardInterrupt) mid-rewrite keeps the original.
 
-        The old code truncated the live file and then wrote the kept half, so a
-        kill between the two destroyed the kept half with no copy anywhere.
+        The rewrite is in place, so a kill after part of the kept half is written
+        would leave a torn file. The BaseException path writes the observed bytes
+        back and removes the archive before the interrupt propagates.
         """
         logfile = os.path.join(self.temp_dir, "test.log")
         archive_dir = os.path.join(self.temp_dir, "archive")
@@ -674,14 +696,38 @@ class TestRotateLogs(unittest.TestCase):
             original = f.read()
         rotate_logs = self._load_rotate_logs()
 
-        with mock.patch.object(os, "replace", side_effect=KeyboardInterrupt):
+        with self._interrupt_first_rewrite(rotate_logs, KeyboardInterrupt()):
             with self.assertRaises(KeyboardInterrupt):
                 rotate_logs.rotate_log(logfile, 200, 20480, archive_dir, False)
 
         with open(logfile, 'rb') as f:
-            self.assertEqual(f.read(), original, "kill during swap lost the kept half")
-        leftovers = [n for n in os.listdir(self.temp_dir) if n.endswith(".rotate.tmp")]
-        self.assertEqual(leftovers, [], "temp file left behind after kill")
+            self.assertEqual(f.read(), original, "kill during rewrite tore the live log")
+        self.assertEqual(os.listdir(archive_dir), [],
+                         "archive from an interrupted rotation must be removed")
+
+    def test_long_lived_append_handle_survives_rotation(self):
+        """A writer holding a '>>' handle across a rotation keeps writing to the log.
+
+        Rotation rewrites the live file in place (same inode), so the handle opened
+        before the rotation still points at the log afterwards. A rename-based swap
+        would send these writes to the unlinked file and lose them.
+        """
+        logfile = os.path.join(self.temp_dir, "test.log")
+        archive_dir = os.path.join(self.temp_dir, "archive")
+        self._write_numbered(logfile, 1, 251)
+        rotate_logs = self._load_rotate_logs()
+
+        writer = open(logfile, 'a', encoding='utf-8')
+        try:
+            rc = rotate_logs.rotate_log(logfile, 200, 20480, archive_dir, False)
+            writer.write("line after rotation\n")
+            writer.flush()
+        finally:
+            writer.close()
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(self._live_lines(logfile)[-1], "line after rotation",
+                         "write through a handle held across rotation did not reach the log")
 
 
 if __name__ == "__main__":
