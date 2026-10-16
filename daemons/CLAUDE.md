@@ -21,7 +21,7 @@
 
 - `$CONDUCTOR_ROOT/state/.watchdog-heartbeat`: Unix epoch seconds; updated by backup-fleet.sh at the end of every completed cycle (exit 0 or exit 3); used by selfheal.sh to detect staleness (>600s). selfheal.sh resolves the same path with the same CONDUCTOR_ROOT rule as backup-fleet.sh and SKIPs the watchdog check when it cannot be resolved. Path is shared across all monitoring infrastructure (GUI, idle_tick, monitor) regardless of AESOP_ROOT worktree location.
 - `$CONDUCTOR_ROOT/state/.watchdog-blocked`: Present only after a completed cycle with >=1 BLOCKED repo; one blocked repo name per line. Written with the heartbeat on exit 3, removed by a clean cycle. Lets consumers distinguish healthy from healthy-with-blocked.
-- `$AESOP_ROOT/state/.watchdog-lock/`: Atomic lockfile dir (mkdir-based, POSIX atomic). Contains `timestamp` (epoch) and `pid` files; stale if >300s old or process dead (atomic reclaim logic in acquire_lock()).
+- `$AESOP_ROOT/state/.watchdog-lock/`: Atomic lockfile dir (mkdir-based, POSIX atomic). Contains `pid` (written first) and `timestamp` (epoch, refreshed every loop iteration by the holder). Reclaimed ONLY when the pid is dead (kill -0 fails), or when there is no pid and the timestamp is >300s old; a live holder is never reclaimed. Reclaim is an atomic `mv` aside, so only one reclaimer wins (f18337dc30c3).
 - `$AESOP_ROOT/state/.selfheal-lock/`: Atomic lockfile dir for selfheal.sh (same pattern as watchdog); prevents concurrent healing attempts.
 - `$AESOP_ROOT/state/.watchdog-repos.json`: Per-cycle snapshot [{repo, state: CLEAN|PUSHED|SNAPSHOTTED|BLOCKED, age}] with JSON-escaped repo names (backslash/quote/newline/control chars).
 - `$AESOP_ROOT/state/FLEET-BACKUP.log`: Append-only; cycle start/end, repo statuses, secret-scan blocks, monitor staleness signals.
@@ -37,7 +37,7 @@
 
 ## Environment variables
 
-- `AESOP_ROOT` (default: `.`): Project root; prepends to all state/ and tools/ paths.
+- `AESOP_ROOT` (no default for backup-fleet.sh: unset refuses to run): Project root; prepends to all state/ and tools/ paths. backup-fleet.sh never falls back to `.`. The run-watchdog.sh entry point exports it, deriving it from its own script location when unset, never from the current directory.
 - `CONDUCTOR_ROOT` (default: sibling of AESOP_ROOT): Conductor3 root; if unset or missing, monitor-related operations skip gracefully (portability).
 - `AESOP_WATCHDOG_CYCLE_CMD`: Override backup-fleet.sh invocation (test override); if set, runs as `bash -c "$AESOP_WATCHDOG_CYCLE_CMD"`.
 - `AESOP_SELFHEAL_SKIP_RESTART`: If set, selfheal.sh detects stale heartbeats and logs dry-run actions instead of actually restarting daemons (test-only flag).
@@ -46,7 +46,7 @@
 
 ## Invariants & Style
 
-1. **Single-instance guard**: run-watchdog.sh and selfheal.sh each use atomic mkdir ($LOCK_DIR) to prevent concurrent daemons (both daemon and --once modes). Stale-lock recovery at 300s threshold; crashed holder won't wedge forever.
+1. **Single-instance guard**: run-watchdog.sh and selfheal.sh each use atomic mkdir ($LOCK_DIR) to prevent concurrent daemons (both daemon and --once modes). Stale-lock recovery is pid-based (dead holder = reclaimable); a live holder is never reclaimed. selfheal.sh does not respawn run-watchdog.sh while a HALT sentinel exists.
 2. **CRLF-safe, no line continuations**: Use POSIX-safe heredocs (no backslash wrapping); scripts must work on Windows/CRLF systems.
 3. **Append-only logs**: FLEET-BACKUP.log, SELFHEAL.log only grow; rotate via tools/rotate_logs.py if >20KB.
 4. **Secret-scan gate**: `scan_tracked_files()` and `scan_unpushed_commits()` call tools/secret_scan.py; non-0 exit blocks push, marks repo BLOCKED.

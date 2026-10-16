@@ -11,8 +11,33 @@
 # and skips all work — no backup, no push, no scan — until cleared via `python tools/halt.py --clear`.
 # Fails closed: if the halt status cannot be determined, the cycle is skipped too.
 
-# Atomic lock acquire: mkdir is atomic (POSIX guarantees)
-# Returns 0 if lock acquired, 1 if held by another process, 2 if stale lock reclaimed
+# Lock dir layout (f18337dc30c3): $lock_dir/pid is the holder's pid, written FIRST;
+# $lock_dir/timestamp is written second and refreshed by the holder every cycle
+# (refresh_lock). A live writer therefore always has a live pid on disk.
+write_lock_owner() {
+  local lock_dir="$1"
+  echo $$ > "$lock_dir/pid" 2>/dev/null || return 1
+  date +%s > "$lock_dir/timestamp" 2>/dev/null || return 1
+  return 0
+}
+
+# Holder heartbeat: called once per daemon loop iteration (including halted ones) so a
+# live daemon's lock never looks abandoned. Only the owning pid may refresh it.
+refresh_lock() {
+  local lock_dir="$1"
+  if [ -f "$lock_dir/pid" ] && [ "$(cat "$lock_dir/pid" 2>/dev/null)" = "$$" ]; then
+    date +%s > "$lock_dir/timestamp" 2>/dev/null || true
+  fi
+}
+
+# Atomic lock acquire. Returns 0 acquired, 1 held (live holder, or too fresh to judge),
+# 2 stale lock reclaimed. Reclaim rules:
+#   - recorded pid ALIVE (kill -0)                       -> held, never reclaimed, however old
+#   - recorded pid DEAD                                  -> reclaimed, however fresh
+#   - no pid, no timestamp file                          -> held (writer mid-acquire), unless the
+#                                                           dir itself is older than stale_threshold
+#   - no pid, timestamp empty or non-numeric             -> reclaimed (corrupt)
+#   - no pid, timestamp older than stale_threshold       -> reclaimed
 acquire_lock() {
   local lock_dir="$1"
   local stale_threshold="$2"
@@ -22,83 +47,84 @@ acquire_lock() {
 
   # Try to create lock directory atomically (this is atomic on all POSIX systems)
   if mkdir "$lock_dir" 2>/dev/null; then
-    # We created it; write timestamp and PID
-    date +%s > "$lock_dir/timestamp" 2>/dev/null
-    echo $$ > "$lock_dir/pid" 2>/dev/null
+    write_lock_owner "$lock_dir"
     return 0
   fi
 
-  # Lock directory already exists; check if it's stale
-  # AUDIT FIX 2: Verify both timestamp AND pid files exist before the stale comparison
-  if [ -d "$lock_dir" ]; then
-    # Try to read pid file to check if process is still running
-    local lock_pid=""
-    if [ -f "$lock_dir/pid" ]; then
-      lock_pid=$(cat "$lock_dir/pid" 2>/dev/null)
-    fi
+  [ -d "$lock_dir" ] || return 1
 
-    # Check if both required files exist
-    if [ -f "$lock_dir/timestamp" ] && [ -f "$lock_dir/pid" ] && [ -n "$lock_pid" ]; then
-      # Both files present and pid is readable - use timestamp for stale check
-      local lock_ts=$(cat "$lock_dir/timestamp" 2>/dev/null)
-      local lock_mtime=${lock_ts:-0}
-      if [ -z "$lock_ts" ]; then
-        echo "empty/corrupt lock timestamp — treating lock as stale" >&2
-      fi
-      local now=$(date +%s)
-      local lock_age=$((now - lock_mtime))
-
-      if [ "$lock_age" -gt "$stale_threshold" ]; then
-        # Lock is stale; try to reclaim it
-        rm -rf "$lock_dir" 2>/dev/null || true
-        if mkdir "$lock_dir" 2>/dev/null; then
-          date +%s > "$lock_dir/timestamp" 2>/dev/null
-          echo $$ > "$lock_dir/pid" 2>/dev/null
-          echo "watchdog lock was stale (${lock_age}s) — reclaimed." >&2
-          return 2
-        fi
-      fi
-    else
-      # AUDIT FIX 2: Timestamp or pid file missing, or pid is empty - lock is incomplete
-      # Reclaim only if we can verify it's abandoned: dead pid OR stale timestamp
-      local should_reclaim=0
-
-      # Case 1: pid file exists and is readable - check if process is running
-      if [ -f "$lock_dir/pid" ] && [ -n "$lock_pid" ]; then
-        if ! kill -0 "$lock_pid" 2>/dev/null; then
-          should_reclaim=1
-        fi
-      fi
-
-      # Case 2: no pid file, but timestamp exists and is old (definitely abandoned)
-      if [ $should_reclaim -eq 0 ] && [ -f "$lock_dir/timestamp" ]; then
-        local lock_ts=$(cat "$lock_dir/timestamp" 2>/dev/null)
-        local lock_mtime=${lock_ts:-0}
-        if [ -z "$lock_ts" ]; then
-          echo "empty/corrupt lock timestamp — treating lock as stale" >&2
-        fi
-        local now=$(date +%s)
-        local lock_age=$((now - lock_mtime))
-        if [ "$lock_age" -gt "$stale_threshold" ]; then
-          should_reclaim=1
-        fi
-      fi
-
-      if [ $should_reclaim -eq 1 ]; then
-        # Lock is abandoned - reclaim it
-        rm -rf "$lock_dir" 2>/dev/null || true
-        if mkdir "$lock_dir" 2>/dev/null; then
-          date +%s > "$lock_dir/timestamp" 2>/dev/null
-          echo $$ > "$lock_dir/pid" 2>/dev/null
-          echo "watchdog lock was stale (incomplete) — reclaimed." >&2
-          return 2
-        fi
-      fi
-      # If lock is incomplete but fresh, hold it (process might be in progress)
+  local lock_pid="" lock_ts="" expect_pid="" reason="" reclaim=0 ts_corrupt=0
+  if [ -f "$lock_dir/pid" ]; then
+    lock_pid=$(cat "$lock_dir/pid" 2>/dev/null)
+  fi
+  if [ -f "$lock_dir/timestamp" ]; then
+    lock_ts=$(cat "$lock_dir/timestamp" 2>/dev/null)
+    if ! [[ "$lock_ts" =~ ^[0-9]+$ ]]; then
+      ts_corrupt=1
     fi
   fi
 
-  # Lock is held by another process
+  if [[ "$lock_pid" =~ ^[0-9]+$ ]]; then
+    if kill -0 "$lock_pid" 2>/dev/null; then
+      # Live holder: never reclaim, regardless of timestamp age.
+      return 1
+    fi
+    reclaim=1
+    expect_pid="$lock_pid"
+    reason="holder pid $lock_pid is dead"
+  else
+    expect_pid=""
+    if [ ! -f "$lock_dir/timestamp" ]; then
+      # No pid and no timestamp: a writer may be mid-acquire. Judge only by dir age.
+      if [ -n "$(find "$lock_dir" -maxdepth 0 -mmin +$((stale_threshold / 60)) 2>/dev/null)" ]; then
+        reclaim=1
+        reason="incomplete lock older than ${stale_threshold}s"
+      fi
+    elif [ "$ts_corrupt" -eq 1 ]; then
+      reclaim=1
+      reason="corrupt timestamp, no pid"
+    elif [ $(( $(date +%s) - lock_ts )) -gt "$stale_threshold" ]; then
+      reclaim=1
+      reason="no pid, timestamp $(( $(date +%s) - lock_ts ))s old"
+    fi
+  fi
+
+  if [ "$reclaim" -ne 1 ]; then
+    return 1
+  fi
+  if [ "$ts_corrupt" -eq 1 ]; then
+    echo "empty/corrupt lock timestamp — treating lock as stale" >&2
+  fi
+  if reclaim_lock "$lock_dir" "$expect_pid"; then
+    echo "watchdog lock was stale ($reason) — reclaimed." >&2
+    return 2
+  fi
+  return 1
+}
+
+# Atomic reclaim: rename the stale dir aside with mv. Only one rename of a given dir can
+# succeed, so only one reclaimer proceeds. The moved dir's pid is re-checked against the
+# pid we judged stale; if a fresh holder slipped in, its lock is put back untouched.
+reclaim_lock() {
+  local lock_dir="$1"
+  local expect_pid="$2"
+  local aside="$lock_dir.reclaim.$$"
+
+  rm -rf "$aside" 2>/dev/null || true
+  mv "$lock_dir" "$aside" 2>/dev/null || return 1
+  local moved_pid=""
+  if [ -f "$aside/pid" ]; then
+    moved_pid=$(cat "$aside/pid" 2>/dev/null)
+  fi
+  if [ "$moved_pid" != "$expect_pid" ]; then
+    [ -e "$lock_dir" ] || mv "$aside" "$lock_dir" 2>/dev/null || true
+    return 1
+  fi
+  rm -rf "$aside" 2>/dev/null || true
+  if mkdir "$lock_dir" 2>/dev/null; then
+    write_lock_owner "$lock_dir"
+    return 0
+  fi
   return 1
 }
 
@@ -383,6 +409,9 @@ main() {
   n=0
   while true; do
     n=$((n+1))
+    # Refresh the lock every iteration, halted ones included, so a live daemon never
+    # looks abandoned to a second instance or to selfheal.
+    refresh_lock "$LOCK_DIR"
     if check_halt "$AESOP_ROOT/state/FLEET-BACKUP.log"; then
       sleep 150
       continue
@@ -423,6 +452,10 @@ main() {
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   AESOP_ROOT="${AESOP_ROOT:-$(dirname "$SCRIPT_DIR")}"
+  # Exported (tracker 00fa6e4cb68b): backup-fleet.sh runs as a child and refuses to run
+  # without AESOP_ROOT, so the scheduled task's cwd and environment cannot decide
+  # which tree's secret scanner gates the push.
+  export AESOP_ROOT
   MODE="${1:-daemon}"
   LOCK_DIR="$AESOP_ROOT/state/.watchdog-lock"
   LOCK_STALE_THRESHOLD=300

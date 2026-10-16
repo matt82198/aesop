@@ -241,5 +241,85 @@ class TestJsonOutput(_ConflictMarkerFixture):
         self.assertEqual(payload["findings"][0]["file"], "docs/CONFLICTED.md")
 
 
+def _load_check_module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("conflict_marker_check", CHECK_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestUnreadableTrackedFileFailsClosed(_ConflictMarkerFixture):
+    """An unreadable tracked file (AV lock, permission denied) is an error,
+    never a silent skip -- in full-tree and --files modes alike."""
+
+    def _run_inprocess(self, unreadable_rel, *argv):
+        """Run main() in-process with open() failing for one path. Returns
+        (rc, stdout, stderr)."""
+        import builtins
+        import contextlib
+        import io
+        from unittest import mock
+
+        module = _load_check_module()
+        real_open = builtins.open
+        locked = unreadable_rel.replace("\\", "/")
+
+        def fake_open(file, *args, **kwargs):
+            if str(file).replace("\\", "/").endswith(locked):
+                raise PermissionError(13, "Permission denied", str(file))
+            return real_open(file, *args, **kwargs)
+
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(builtins, "open", fake_open), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = module.main(["--root", str(self.repo_root)] + list(argv))
+        return rc, out.getvalue(), err.getvalue()
+
+    def test_full_tree_unreadable_file_with_markers_fails_closed(self):
+        """Red-first: a locked file that holds markers must NOT be skipped
+        into exit 0. Expect exit 2 with the path named."""
+        self._write("docs/LOCKED.md", "<<<<<<< HEAD\nours\n=======\n>>>>>>> x\n")
+        self._write("docs/CLEAN.md", "clean body\n")
+        self._commit_all()
+
+        rc, out, err = self._run_inprocess("docs/LOCKED.md", "--check")
+        self.assertEqual(rc, 2, err)
+        self.assertIn("LOCKED.md", err)
+        self.assertNotIn("OK: no conflict markers", out)
+
+    def test_full_tree_unreadable_clean_file_fails_closed(self):
+        """Red-first: an unreadable file is unverifiable even when its
+        content is unknown -- still exit 2, never a clean pass."""
+        self._write("docs/LOCKED.md", "clean body\n")
+        self._write("docs/CLEAN.md", "clean body\n")
+        self._commit_all()
+
+        rc, out, err = self._run_inprocess("docs/LOCKED.md", "--check")
+        self.assertEqual(rc, 2, err)
+        self.assertIn("LOCKED.md", err)
+
+    def test_files_mode_unreadable_file_fails_closed(self):
+        """Consistency guard: --files already fails closed; both modes must
+        agree (exit 2, path named)."""
+        self._write("docs/LOCKED.md", "clean body\n")
+        self._commit_all()
+
+        rc, out, err = self._run_inprocess("docs/LOCKED.md", "--files", "docs/LOCKED.md")
+        self.assertEqual(rc, 2, err)
+        self.assertIn("LOCKED.md", err)
+
+    def test_readable_files_still_scanned_when_other_path_locked(self):
+        """Guard: an unreadable path that is NOT tracked must not stop the
+        scan of readable files -- a real marker is still reported (exit 1)."""
+        self._write("docs/CONFLICTED.md", "<<<<<<< HEAD\nours\n=======\n>>>>>>> x\n")
+        self._write("docs/CLEAN.md", "clean body\n")
+        self._commit_all()
+
+        rc, out, err = self._run_inprocess("docs/NOT_TRACKED.md", "--check")
+        self.assertEqual(rc, 1, err)
+        self.assertIn("CONFLICTED.md", err)
+
+
 if __name__ == "__main__":
     unittest.main()
