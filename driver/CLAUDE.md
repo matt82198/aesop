@@ -146,4 +146,6 @@ Thread-safety: no locks in wave_scheduler, preserved as-is. Exception envelope c
 
 **Pyflakes cleanup (2026-10-06, Guardrail G15)**: removed unused `agent_driver.ROLE_SETUP`/`ROLE_VERIFY`/`ROLE_WORKER` imports from `openai_compatible_driver.py` and a dead `high_signal_lines` list comprehension from `context_pack.py`'s B3 truncation path (never referenced after computation); zero behavior change, see `tools/pyflakes_gate.py`.
 
+**Owned-files diff has no shell (2026-10-16, bb56e30584d0)**: `wave_loop._get_owned_files_diff` runs `git diff` as an argv list with `shell=False` through a bounded Popen helper, and ownsFiles entries are validated first (quotes, `& | ; < > ^ % ! ` $`, control characters, NUL, and absolute paths raise `ValueError`). Preflight rejects a malformed entry with `abort_reason=invalid_owns_file` before any dispatch. The cost-ceiling gate test (1fc39dd04325) stubs `wave_loop.cost_ceiling` and asserts the gate consults `check()` and dispatches 0 lanes. Tests: `tests/test_wave_loop_cli.py` (13 tests).
+
 **Metrics**: `run_wave_scheduler` CC 82 → 15 (grade F → C). Total extracted functions: 10. Max extracted CC: 17 (still grade C). Test pass rate: 35/35 (100%). <!-- metrics-verified: python -m radon cc driver/wave_scheduler.py -s -->
