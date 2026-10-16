@@ -23,9 +23,11 @@ Exit: 0=success, 1=error or scaffold refused, 2=usage error
 """
 import argparse
 import json
+import os
 import stat
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 TOOLS_DIR = Path(__file__).resolve().parent
@@ -174,6 +176,71 @@ DEFAULT_CONFIG = {
         "secret_scan_gates_push": True
     }
 }
+
+# Push-gate artifacts the pre-push hook and `aesop doctor` require. Same generators and
+# arguments as bin/cli.js (PUSH_GATE_ARTIFACTS) and tools/doctor.js; run here from the
+# aesop tools dir with cwd set to the target repo, because init does not copy tools/.
+PUSH_GATE_GENERATORS = [
+    ("tools/INDEX.md", "gen_tool_index.py", ["--regenerate"]),
+    (".pyflakes-baseline.json", "pyflakes_gate.py",
+     ["--root", ".", "--baseline", ".pyflakes-baseline.json", "--update-baseline"]),
+    (".subprocess-guard-baseline.json", "subprocess_guard.py",
+     ["--baseline", ".subprocess-guard-baseline.json", "--update-baseline"]),
+    (".portability-baseline.json", "portability_check.py",
+     ["--root", ".", "--baseline", ".portability-baseline.json", "--update-baseline"]),
+    (".stateapi-baseline.json", "stateapi_lint.py",
+     ["--root", ".", "--baseline", ".stateapi-baseline.json", "--update-baseline"]),
+]
+
+
+def _run_push_gate_generator(target, script, args):
+    """Run one generator with cwd=target. Returns None on success, else an error string."""
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(TOOLS_DIR / script), *args],
+            cwd=str(target), capture_output=True, encoding="utf-8", errors="replace",
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return str(exc)
+    if proc.returncode != 0:
+        return (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()
+    return None
+
+
+def generate_push_gate_artifacts(target, force=False):
+    """Generate the push-gate artifacts in target; return (created, skipped) file lists.
+
+    An existing artifact is kept unless force is set (same rule as write_file). Failures never
+    abort the scaffold: each prints a warning naming the file and its regenerate command, and
+    the pre-push hook and `aesop doctor` fail closed until the file exists.
+    AESOP_SKIP_PUSH_GATE_ARTIFACTS=1 skips generation (matches bin/cli.js).
+    """
+    target = Path(target)
+    if os.environ.get("AESOP_SKIP_PUSH_GATE_ARTIFACTS") == "1":
+        return [], []
+    skipped = [rel for rel, _, _ in PUSH_GATE_GENERATORS if (target / rel).exists() and not force]
+    todo = [g for g in PUSH_GATE_GENERATORS if g[0] not in skipped]
+    if not todo:
+        return [], skipped
+    if not (target / ".git").exists():
+        print("WARN: no git repository: push-gate artifacts were not generated "
+              "(the pre-push hook will block until they are).", file=sys.stderr)
+        return [], skipped
+    with ThreadPoolExecutor(max_workers=len(todo)) as pool:
+        futures = [(rel, script, args, pool.submit(_run_push_gate_generator, target, script, args))
+                   for rel, script, args in todo]
+        results = [(rel, script, args, fut.result()) for rel, script, args, fut in futures]
+    created = []
+    for rel, script, args, err in results:
+        if err is None and (target / rel).is_file():
+            created.append(rel)
+        else:
+            cmd = " ".join(["python", f"tools/{script}", *args])
+            print(f"WARN: could not generate {rel}: {err or 'file missing'}\n"
+                  f"  regenerate with: cd {target} && {cmd}", file=sys.stderr)
+    return created, skipped
+
 
 PRE_PUSH_HOOK = """\
 #!/usr/bin/env bash
@@ -642,6 +709,11 @@ def init_project(target_dir, project_name=None, force=False, ci_mode="hosted",
     hook_ok, hook_status = install_pre_push_hook(str(target), force=force)
     if hook_ok:
         files_created.append(".git/hooks/pre-push")
+
+    # 8. Push-gate artifacts doctor and the pre-push hook require (needs the git repo)
+    gate_created, gate_skipped = generate_push_gate_artifacts(target, force=force)
+    files_created.extend(gate_created)
+    files_skipped.extend(gate_skipped)
 
     return {
         "project_name": project_name,
