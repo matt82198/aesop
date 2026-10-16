@@ -97,10 +97,10 @@ jobs:
       # Customize this step for your specific orchestration needs:
       #
       # Examples:
-      #   - npx aesop@latest doctor
-      #   - npx aesop@latest wave preflight
-      #   - npx aesop@latest status --json
-      #   - npx aesop@latest reproduce
+      #   - npx @matt82198/aesop doctor
+      #   - npx @matt82198/aesop wave preflight
+      #   - npx @matt82198/aesop status --json
+      #   - npx @matt82198/aesop reproduce
       #
       # NOTE: All invoked commands must exist in bin/cli.js (verified in test suite)
       - name: Orchestration
@@ -111,7 +111,7 @@ jobs:
           echo "Running aesop: $OPERATION"
 
           # Invoke aesop (install latest from npm, run the command)
-          npx aesop@latest $OPERATION || EXIT_CODE=$?
+          npx @matt82198/aesop $OPERATION || EXIT_CODE=$?
           exit ${EXIT_CODE:-0}
         env:
           # Pass cost ceiling and concurrency to orchestration tools
