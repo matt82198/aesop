@@ -5,7 +5,10 @@ set -uo pipefail
 # Improvements: dot-directory discovery, path dedup, tracked-files-only secret scanning.
 # P2 FIX: JSON escaping for repo names and NUL-delimited internal protocol.
 
-AESOP_ROOT="${AESOP_ROOT:-.}"
+# No default (tracker 00fa6e4cb68b): with AESOP_ROOT unset this used to fall back to '.',
+# so the secret scanner was looked up relative to whatever cwd the caller had. main()
+# refuses to run instead. run-watchdog.sh exports AESOP_ROOT before calling this script.
+AESOP_ROOT="${AESOP_ROOT:-}"
 
 # Heartbeat-pollution guard (incident 2026-10-06/07): CONDUCTOR_ROOT used to
 # default unconditionally to "$(dirname "$AESOP_ROOT")/conductor3". Every
@@ -100,21 +103,44 @@ is_touched() {
   )
 }
 
+# Fail-closed scanner resolution (tracker 00fa6e4cb68b). Prints the interpreter that runs
+# tools/secret_scan.py. If the scanner file or every interpreter is missing, the reason
+# is logged to FLEET-BACKUP.log and the function returns 1, so the caller refuses the
+# push (repo -> BLOCKED). It used to return 0 here: an unscanned push.
+resolve_scanner() {
+  local label="$1"
+  if [ ! -f "$AESOP_ROOT/tools/secret_scan.py" ]; then
+    echo "[$(ts)] SECRET-SCAN $label: scanner missing ($AESOP_ROOT/tools/secret_scan.py); push refused (fail-closed)" >> "$LOG"
+    return 1
+  fi
+  local py=""
+  if command -v python3 >/dev/null 2>&1; then py=python3
+  elif command -v python >/dev/null 2>&1; then py=python; fi
+  if [ -z "$py" ]; then
+    echo "[$(ts)] SECRET-SCAN $label: no python interpreter; push refused (fail-closed)" >> "$LOG"
+    return 1
+  fi
+  printf '%s' "$py"
+}
+
+# NUL-delimited with core.quotepath off (tracker 00fa6e4cb68b): without -z git C-quotes
+# non-ASCII names ("caf\303\251-keys.env"), the -f test then fails and the file is never
+# scanned. NUL output is read with read -d '' in the callers.
 get_tracked_modifications() {
   local repo="$1"
   (
     cd "$repo" || return 1
-    git diff --name-only HEAD 2>/dev/null
-    git ls-files -m 2>/dev/null
-  ) | sort -u
+    git -c core.quotepath=off diff -z --name-only HEAD 2>/dev/null
+    git -c core.quotepath=off ls-files -z -m 2>/dev/null
+  ) | sort -zu
 }
 
 get_untracked_files() {
   local repo="$1"
   (
     cd "$repo" || return 1
-    git ls-files --others --exclude-standard 2>/dev/null
-  ) | sort -u
+    git -c core.quotepath=off ls-files -z --others --exclude-standard 2>/dev/null
+  ) | sort -zu
 }
 
 scan_unpushed_commits() {
@@ -167,89 +193,55 @@ scan_unpushed_commits() {
   # of the actual blob(s) the backup push carries. --range is also robust to
   # deleted files (git diff --diff-filter=d inside secret_scan.py already
   # excludes them from the file list it scans).
-  if [ -f "$AESOP_ROOT/tools/secret_scan.py" ]; then
-    local py=""
-    if command -v python3 >/dev/null 2>&1; then py=python3
-    elif command -v python >/dev/null 2>&1; then py=python; fi
-    if [ -n "$py" ]; then
-      # Scanner output goes to a file (process_repo's stdout is the NUL protocol);
-      # its HIGH/FOUND/FATAL lines are appended to FLEET-BACKUP.log so the BLOCKED
-      # repo is named with file:line + rule. secret_scan.py masks matched values.
-      local scan_out scan_rc
-      scan_out=$(mktemp) || { echo "[$(ts)] SECRET-SCAN $(basename "$repo"): cannot capture scanner output (fail-closed)" >> "$LOG"; return 1; }
-      "$py" "$AESOP_ROOT/tools/secret_scan.py" --range "$range_expr" --repo "$repo" > "$scan_out" 2>&1
-      scan_rc=$?
-      grep -E '^(HIGH |FOUND: |FATAL)' "$scan_out" 2>/dev/null | while IFS= read -r line; do
-        echo "[$(ts)] SECRET-SCAN $(basename "$repo"): $line" >> "$LOG"
-      done
-      rm -f "$scan_out"
-      return $scan_rc
-    fi
-  fi
-
-  return 0
+  # Scanner output goes to a file (process_repo's stdout is the NUL protocol);
+  # its HIGH/FOUND/FATAL lines are appended to FLEET-BACKUP.log so the BLOCKED
+  # repo is named with file:line + rule. secret_scan.py masks matched values.
+  # A missing scanner or interpreter returns 1 (refused), never 0 (tracker 00fa6e4cb68b).
+  local py scan_out scan_rc
+  py=$(resolve_scanner "$(basename "$repo")") || return 1
+  scan_out=$(mktemp) || { echo "[$(ts)] SECRET-SCAN $(basename "$repo"): cannot capture scanner output (fail-closed)" >> "$LOG"; return 1; }
+  "$py" "$AESOP_ROOT/tools/secret_scan.py" --range "$range_expr" --repo "$repo" > "$scan_out" 2>&1
+  scan_rc=$?
+  grep -E '^(HIGH |FOUND: |FATAL)' "$scan_out" 2>/dev/null | while IFS= read -r line; do
+    echo "[$(ts)] SECRET-SCAN $(basename "$repo"): $line" >> "$LOG"
+  done
+  rm -f "$scan_out"
+  return $scan_rc
 }
 
 scan_tracked_files() {
   local repo="$1"
-  local tracked_files
-  local untracked_files
   local -a file_paths=()
-  local repo_win
+  local repo_win file
 
   # Portable path derivation (not Git-Bash pwd -W only)
   repo_win=$(cd "$repo" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null || echo "$repo")
 
-  tracked_files=$(get_tracked_modifications "$repo")
-  untracked_files=$(get_untracked_files "$repo")
-
-  # Collect tracked modifications
-  if [ -n "$tracked_files" ]; then
-    while IFS= read -r file; do
-      if [ -n "$file" ] && [ -f "$repo/$file" ]; then
-        file_paths+=("$repo_win/$file")
-      fi
-    done <<EOF
-$tracked_files
-EOF
-  fi
-
-  # Collect untracked files (ITEM 1 fix)
-  if [ -n "$untracked_files" ]; then
-    while IFS= read -r file; do
-      if [ -n "$file" ] && [ -f "$repo/$file" ]; then
-        file_paths+=("$repo_win/$file")
-      fi
-    done <<EOF
-$untracked_files
-EOF
-  fi
+  # Tracked modifications, then untracked files (ITEM 1 fix). NUL-delimited so no
+  # name is C-quoted or split (tracker 00fa6e4cb68b: a non-ASCII name was dropped here).
+  while IFS= read -r -d '' file; do
+    if [ -n "$file" ] && [ -f "$repo/$file" ]; then
+      file_paths+=("$repo_win/$file")
+    fi
+  done < <(get_tracked_modifications "$repo"; get_untracked_files "$repo")
 
   if [ ${#file_paths[@]} -eq 0 ]; then
     return 0
   fi
 
-  if [ -f "$AESOP_ROOT/tools/secret_scan.py" ]; then
-    # ITEM 2 fix: use "${file_paths[@]}" to properly quote array elements
-    # Defect (a) fix: use python3||python probe instead of bare python (portable to python3-only systems)
-    local py=""
-    if command -v python3 >/dev/null 2>&1; then py=python3
-    elif command -v python >/dev/null 2>&1; then py=python; fi
-    if [ -n "$py" ]; then
-      # Same capture as scan_unpushed_commits: HIGH/FOUND/FATAL lines -> FLEET-BACKUP.log.
-      local scan_out scan_rc
-      scan_out=$(mktemp) || { echo "[$(ts)] SECRET-SCAN $(basename "$repo"): cannot capture scanner output (fail-closed)" >> "$LOG"; return 1; }
-      "$py" "$AESOP_ROOT/tools/secret_scan.py" "${file_paths[@]}" > "$scan_out" 2>&1
-      scan_rc=$?
-      grep -E '^(HIGH |FOUND: |FATAL)' "$scan_out" 2>/dev/null | while IFS= read -r line; do
-        echo "[$(ts)] SECRET-SCAN $(basename "$repo"): $line" >> "$LOG"
-      done
-      rm -f "$scan_out"
-      return $scan_rc
-    fi
-  fi
-
-  return 0
+  # ITEM 2 fix: use "${file_paths[@]}" to properly quote array elements.
+  # Fail closed: no scanner or no interpreter means refused, not passed (00fa6e4cb68b).
+  local py scan_out scan_rc
+  py=$(resolve_scanner "$(basename "$repo")") || return 1
+  # Same capture as scan_unpushed_commits: HIGH/FOUND/FATAL lines -> FLEET-BACKUP.log.
+  scan_out=$(mktemp) || { echo "[$(ts)] SECRET-SCAN $(basename "$repo"): cannot capture scanner output (fail-closed)" >> "$LOG"; return 1; }
+  "$py" "$AESOP_ROOT/tools/secret_scan.py" "${file_paths[@]}" > "$scan_out" 2>&1
+  scan_rc=$?
+  grep -E '^(HIGH |FOUND: |FATAL)' "$scan_out" 2>/dev/null | while IFS= read -r line; do
+    echo "[$(ts)] SECRET-SCAN $(basename "$repo"): $line" >> "$LOG"
+  done
+  rm -f "$scan_out"
+  return $scan_rc
 }
 
 get_default_branch() {
@@ -337,6 +329,12 @@ process_repo() {
 }
 
 main() {
+  # Fail closed (tracker 00fa6e4cb68b): no AESOP_ROOT means no secret scanner can be
+  # located and no state log can be written. Refuse, with no heartbeat, before any work.
+  if [ -z "$AESOP_ROOT" ]; then
+    echo "backup-fleet: AESOP_ROOT is not set; refusing to run (fail-closed: the secret scanner cannot be located)" >&2
+    exit 1
+  fi
   log "=== cycle start ==="
   temp_json=$(mktemp) || {
     # Hard failure: the cycle cannot stage its status file. Exit 1 WITHOUT a
