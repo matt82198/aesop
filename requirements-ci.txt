@@ -1,0 +1,9 @@
+# Single source of the CI Python test dependencies. Every workflow pip step runs
+# `pip install -r requirements-ci.txt`; tools/ci_workflow_lint.py fails any inline
+# re-listing of these packages. Versions are exactly what ci.yml installed before
+# consolidation (only cryptography is pinned there).
+pyyaml
+pytest
+pytest-timeout
+pyflakes
+cryptography==50.0.2
