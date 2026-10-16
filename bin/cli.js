@@ -128,7 +128,7 @@ const DOCUMENTED_FLAGS = new Set([
   '--force', '--yes', '--no-skills', '--install-deps', '--no-git',
   '--name', '--domains', '--repos', '--repo-urls',
   '--ci-mode', '--self-hosted-labels', '--json', '--demo',
-  '--repo', '--labels', '--instances', '--install-root', '--dry-run', '--set-fork-policy'
+  '--repo', '--labels', '--instances', '--install-root', '--dry-run', '--set-fork-policy', '--global'
 ]);
 
 // Top-level gate: --version/-v and unknown-flag rejection. Runs before any filesystem work.
@@ -659,6 +659,18 @@ const domainsStr = getFlag('--domains');
 const reposStr = getFlag('--repos');
 const repoUrlsStr = getFlag('--repo-urls');
 
+// Fail closed before any filesystem work: every --repos entry must name an existing directory.
+if (reposStr !== null) {
+  const invalidRepos = findInvalidRepoPaths(reposStr);
+  if (invalidRepos.length > 0) {
+    console.error('Error: every --repos entry must be an existing directory (URLs belong in --repo-urls):');
+    for (const bad of invalidRepos) {
+      console.error(`  - ${bad}`);
+    }
+    process.exit(2);
+  }
+}
+
 // Validate target directory doesn't exist or is empty (except for .git and aesop files)
 if (fs.existsSync(targetDir)) {
   const contents = fs.readdirSync(targetDir);
@@ -906,6 +918,26 @@ function generateDomainText(domainsStr) {
     .join('\n');
 }
 
+/**
+ * Return the --repos entries that do not name an existing directory.
+ * Missing paths, files, and URLs all count as invalid; URLs are not accepted here.
+ * @param {string} reposStr comma-separated repo paths as given on the command line
+ * @returns {string[]} the invalid entries, in the order given (empty when all are valid)
+ */
+function findInvalidRepoPaths(reposStr) {
+  return reposStr
+    .split(',')
+    .map(r => r.trim())
+    .filter(r => r)
+    .filter(r => {
+      try {
+        return !fs.statSync(path.resolve(r)).isDirectory();
+      } catch (e) {
+        return true;
+      }
+    });
+}
+
 function generateRepoText(reposStr) {
   if (!reposStr) {
     return '- **[Your repos here]** — [Customize per team]';
@@ -1037,6 +1069,8 @@ async function printNextStepsAndWatchdog(rl, targetDir, configPath, port) {
   console.log('     python3 ui/serve.py  (or python as fallback)\n');
   console.log('📖 Optional: Set up your brain (Claude Code orchestration memory):\n');
   console.log('  mkdir -p ~/.claude/memory');
+  console.log('  # if ~/.claude/CLAUDE.md already exists, back it up or merge it first:');
+  console.log('  cp ~/.claude/CLAUDE.md ~/.claude/CLAUDE.md.bak  (skip if there is no existing file)');
   console.log(`  cp ${resolvedTargetDir}/CLAUDE.md ~/.claude/CLAUDE.md  (review and customize)`);
   console.log(`  cp ${resolvedTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)\n`);
 
@@ -1687,6 +1721,8 @@ if (!isRuntimeCommand) {
       console.log('');
       console.log('📖 Optional: Set up your brain (Claude Code orchestration memory):\n');
       console.log('  mkdir -p ~/.claude/memory');
+      console.log('  # if ~/.claude/CLAUDE.md already exists, back it up or merge it first:');
+      console.log('  cp ~/.claude/CLAUDE.md ~/.claude/CLAUDE.md.bak  (skip if there is no existing file)');
       console.log(`  cp ${resolvedFinalTargetDir}/CLAUDE.md ~/.claude/CLAUDE.md  (review and customize)`);
       console.log(`  cp ${resolvedFinalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
       process.exit(0);
@@ -1716,6 +1752,8 @@ if (!isRuntimeCommand) {
       console.log('');
       console.log('📖 Optional: Set up your brain (Claude Code orchestration memory):\n');
       console.log('  mkdir -p ~/.claude/memory');
+      console.log('  # if ~/.claude/CLAUDE.md already exists, back it up or merge it first:');
+      console.log('  cp ~/.claude/CLAUDE.md ~/.claude/CLAUDE.md.bak  (skip if there is no existing file)');
       console.log(`  cp ${resolvedFinalTargetDir}/CLAUDE.md ~/.claude/CLAUDE.md  (review and customize)`);
       console.log(`  cp ${resolvedFinalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
     } else {
@@ -1746,6 +1784,8 @@ if (!isRuntimeCommand) {
       console.log('');
       console.log('📖 Optional: Set up your brain (Claude Code orchestration memory):\n');
       console.log('  mkdir -p ~/.claude/memory');
+      console.log('  # if ~/.claude/CLAUDE.md already exists, back it up or merge it first:');
+      console.log('  cp ~/.claude/CLAUDE.md ~/.claude/CLAUDE.md.bak  (skip if there is no existing file)');
       console.log(`  cp ${resolvedFinalTargetDir}/CLAUDE-TEMPLATE.md ~/.claude/CLAUDE.md  (then edit domains/team info)`);
       console.log(`  cp ${resolvedFinalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
     }

@@ -348,13 +348,13 @@ class TestCiMergeWait(unittest.TestCase):
         self.assertIn("[OK]", result.stdout)
 
     def test_positional_pr_number_still_works(self):
-        """Test that positional PR number interface remains unchanged."""
-        # The tool should accept positional PR number (will fail on gh not found, but not on parsing)
-        result = self._run_tool_subprocess("999")
-        # Will fail because gh is not mocked and PR doesn't exist, but the arg should parse
-        self.assertNotEqual(result.returncode, 0)
-        # Should not complain about missing --pr flag
-        self.assertNotIn("required", result.stderr.lower())
+        """Test that positional PR number parses and drives the gh status fetch (fake gh, no real PR)."""
+        fake = _FakeGh(["ok"])
+        code, out = _run_tool_in_process(["999"], fake)
+        self.assertEqual(code, 0, out)
+        self.assertIn("Checking PR #999 status", out)
+        self.assertEqual(fake.merge_calls, 1, out)
+        self.assertNotIn("required", out.lower())
 
     def test_dry_run_with_positional_pr(self):
         """Test --dry-run works with positional PR number."""
@@ -1072,6 +1072,119 @@ class TestCiMergeWait(unittest.TestCase):
         # We verify the docstring/implementation will be updated to reflect this.
         self.assertIn("match-head-commit", module.merge_pr.__doc__.lower() or "",
                      "F5 FIX: merge_pr docstring should mention --match-head-commit")
+
+
+class _FakeGh:
+    """Scripted stand-in for subprocess_common.gh. No network, no real PR.
+
+    merge_outcomes: one entry per `gh pr merge` call, consumed in order:
+      ok             -> state becomes MERGED, rc 0
+      timeout_landed -> state becomes MERGED server-side, then TimeoutExpired raised client-side
+      timeout_open   -> TimeoutExpired raised, state stays OPEN
+      fail_landed    -> state becomes MERGED, rc 1 (merge reported failure after landing)
+      fail_open      -> rc 1, state stays OPEN
+    An exhausted script behaves as fail_open and is still counted as an attempt.
+    """
+
+    def __init__(self, merge_outcomes, state_read_fails=False):
+        self.state = "OPEN"
+        self.outcomes = list(merge_outcomes)
+        self.state_read_fails = state_read_fails
+        self.merge_calls = 0
+        self.state_reads = 0
+
+    def __call__(self, args, check=False, timeout=None):
+        args = list(args)
+        if args and args[0] == "gh":
+            args = args[1:]
+        if args[:2] == ["pr", "view"]:
+            if args[args.index("--json") + 1] == "state":
+                self.state_reads += 1
+                if self.state_read_fails:
+                    return subprocess.CompletedProcess(args, 1, "", "HTTP 502")
+                return subprocess.CompletedProcess(args, 0, json.dumps({"state": self.state}), "")
+            rollup = {
+                "mergeable": "MERGEABLE",
+                "headRefOid": "deadbeef",
+                "statusCheckRollup": [
+                    {"name": "unit-tests", "status": "COMPLETED", "conclusion": "SUCCESS"},
+                ],
+            }
+            return subprocess.CompletedProcess(args, 0, json.dumps(rollup), "")
+        if args[:2] == ["pr", "merge"]:
+            self.merge_calls += 1
+            outcome = self.outcomes.pop(0) if self.outcomes else "fail_open"
+            if outcome in ("ok", "timeout_landed", "fail_landed"):
+                self.state = "MERGED"
+            if outcome.startswith("timeout"):
+                raise subprocess.TimeoutExpired(args, timeout or 30)
+            return subprocess.CompletedProcess(args, 0 if outcome == "ok" else 1, "", "merge failed")
+        raise AssertionError(f"unexpected gh call: {args}")
+
+
+TOOL_PATH = Path(__file__).parent.parent / "tools" / "ci_merge_wait.py"
+
+
+def _run_tool_in_process(argv, fake):
+    """Run ci_merge_wait.main() in-process with gh replaced by `fake`. Returns (exit_code, stdout)."""
+    import contextlib
+    import importlib.util
+    import io
+    spec = importlib.util.spec_from_file_location("ci_merge_wait_inproc", TOOL_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    out = io.StringIO()
+    with patch.object(sys, "argv", ["ci_merge_wait.py"] + argv), patch.object(module, "gh", fake), \
+            patch("time.sleep"), contextlib.redirect_stdout(out):
+        try:
+            module.main()
+            code = 0
+        except SystemExit as exc:
+            code = exc.code
+    return code, out.getvalue()
+
+
+class TestMergeLandedDespiteTimeout(unittest.TestCase):
+    """ci_merge_wait must treat a merge that landed despite a timeout/failure as success."""
+
+    def _run_main(self, fake):
+        return _run_tool_in_process(["123", "--timeout", "600", "--poll", "1"], fake)
+
+    def test_timeout_after_server_side_merge_exits_zero_with_one_attempt(self):
+        fake = _FakeGh(["timeout_landed"])
+        code, out = self._run_main(fake)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(fake.merge_calls, 1, out)
+        self.assertEqual(fake.state_reads, 1, out)
+        self.assertIn("MERGED: PR #123", out)
+
+    def test_failure_after_server_side_merge_exits_zero_with_one_attempt(self):
+        fake = _FakeGh(["fail_landed"])
+        code, out = self._run_main(fake)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(fake.merge_calls, 1, out)
+        self.assertIn("MERGED: PR #123", out)
+
+    def test_timeout_with_pr_still_open_retries_merge(self):
+        # Guard: a timeout that did NOT land must still retry, and the retry can succeed.
+        fake = _FakeGh(["timeout_open", "ok"])
+        code, out = self._run_main(fake)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(fake.merge_calls, 2, out)
+
+    def test_failure_with_pr_still_open_does_not_retry(self):
+        # Guard: a non-timeout merge failure on an OPEN PR keeps the existing exit 1, no retry.
+        fake = _FakeGh(["fail_open"])
+        code, out = self._run_main(fake)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(fake.merge_calls, 1, out)
+
+    def test_timeout_with_unreadable_state_fails_closed_without_retry(self):
+        # Cannot confirm the merge outcome, so do not blindly re-merge.
+        fake = _FakeGh(["timeout_open", "ok"], state_read_fails=True)
+        code, out = self._run_main(fake)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(fake.merge_calls, 1, out)
 
 
 if __name__ == "__main__":

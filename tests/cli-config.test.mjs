@@ -60,6 +60,15 @@ function cleanupTestDir(dir) {
   }
 }
 
+/** Create real repo directories under dir; return their absolute paths. --repos now requires existing dirs. */
+function makeRepoDirs(dir, names) {
+  return names.map((name) => {
+    const p = path.join(dir, name);
+    fs.mkdirSync(p, { recursive: true });
+    return p;
+  });
+}
+
 
 test('aesop.config.example.json has _fleet_root_note key explaining security boundary', () => {
   const exampleConfig = JSON.parse(fs.readFileSync(EXAMPLE_CONFIG, 'utf8'));
@@ -131,7 +140,7 @@ test('scaffold with --repos generates placeholder URLs but adds _repos_note when
 
     const res = runCli(targetDir, [
       '--name', 'my-service',
-      '--repos', '/path/to/api,/path/to/worker'
+      '--repos', makeRepoDirs(tempDir, ['api', 'worker']).join(',')
     ]);
     assert.equal(res.status, 0, `Scaffold should succeed. stderr: ${res.stderr}`);
 
@@ -178,7 +187,7 @@ test('scaffold with --repo-urls uses provided URLs in generated config', () => {
 
     const res = runCli(targetDir, [
       '--name', 'my-service',
-      '--repos', '/path/to/api,/path/to/worker',
+      '--repos', makeRepoDirs(tempDir, ['api', 'worker']).join(','),
       '--repo-urls', 'https://github.com/myorg/api.git,https://github.com/myorg/worker.git'
     ]);
     assert.equal(res.status, 0, `Scaffold with --repo-urls should succeed. stderr: ${res.stderr}`);
@@ -216,7 +225,7 @@ test('scaffold respects --repo-urls count matches --repos count', () => {
     // 3 repos but only 2 URLs - should still work but fill remaining with placeholders
     const res = runCli(targetDir, [
       '--name', 'my-service',
-      '--repos', '/path/to/api,/path/to/worker,/path/to/scheduler',
+      '--repos', makeRepoDirs(tempDir, ['api', 'worker', 'scheduler']).join(','),
       '--repo-urls', 'https://github.com/myorg/api.git,https://github.com/myorg/worker.git'
     ]);
 
@@ -247,7 +256,7 @@ test('scaffold with --domains and --repo-urls works together', () => {
     const res = runCli(targetDir, [
       '--name', 'production-api',
       '--domains', 'api,worker,monitoring',
-      '--repos', '/home/user/api,/home/user/worker',
+      '--repos', makeRepoDirs(tempDir, ['api', 'worker']).join(','),
       '--repo-urls', 'git@github.com:company/api.git,git@github.com:company/worker.git'
     ]);
     assert.equal(res.status, 0, `Full scaffold should succeed. stderr: ${res.stderr}`);
@@ -298,5 +307,120 @@ test('scaffold initializes both fleet_root and fallback config path with homedir
     );
   } finally {
     cleanupTestDir(tempDir);
+  }
+});
+
+test('scaffold rejects a nonexistent --repos path: exit 2, names the path, writes no config', () => {
+  const tempDir = createTestDir();
+  const targetDir = path.join(tempDir, 'fleet-config-missing-repo');
+
+  try {
+    const res = runCli(targetDir, ['--name', 'my-service', '--repos', '/path/to/repo']);
+    assert.equal(res.status, 2, `Nonexistent --repos path must exit 2. stdout: ${res.stdout}\nstderr: ${res.stderr}`);
+    assert.ok(res.stderr.includes('/path/to/repo'), `stderr should name the bad path. stderr: ${res.stderr}`);
+    assert.equal(fs.existsSync(path.join(targetDir, 'aesop.config.json')), false, 'no aesop.config.json may be written');
+  } finally {
+    cleanupTestDir(tempDir);
+  }
+});
+
+test('scaffold rejects a --repos entry that is a file, not a directory', () => {
+  const tempDir = createTestDir();
+  const targetDir = path.join(tempDir, 'fleet-config-file-repo');
+
+  try {
+    const filePath = path.join(tempDir, 'not-a-repo.txt');
+    fs.writeFileSync(filePath, 'not a directory');
+    const res = runCli(targetDir, ['--name', 'my-service', '--repos', filePath]);
+    assert.equal(res.status, 2, `File given as --repos must exit 2. stdout: ${res.stdout}\nstderr: ${res.stderr}`);
+    assert.ok(res.stderr.includes(filePath), `stderr should name the bad entry. stderr: ${res.stderr}`);
+    assert.equal(fs.existsSync(path.join(targetDir, 'aesop.config.json')), false, 'no aesop.config.json may be written');
+  } finally {
+    cleanupTestDir(tempDir);
+  }
+});
+
+test('scaffold reports only the missing --repos entries and rejects the whole run', () => {
+  const tempDir = createTestDir();
+  const targetDir = path.join(tempDir, 'fleet-config-partial-repos');
+
+  try {
+    const [good] = makeRepoDirs(tempDir, ['api']);
+    const missing = path.join(tempDir, 'ghost-repo');
+    const res = runCli(targetDir, ['--name', 'my-service', '--repos', `${good},${missing}`]);
+    assert.equal(res.status, 2, `Any missing entry must exit 2. stdout: ${res.stdout}\nstderr: ${res.stderr}`);
+    assert.ok(res.stderr.includes(missing), `stderr should name the missing entry. stderr: ${res.stderr}`);
+    assert.equal(res.stderr.includes(good), false, `existing entry must not be reported as missing. stderr: ${res.stderr}`);
+    assert.equal(fs.existsSync(path.join(targetDir, 'aesop.config.json')), false, 'no aesop.config.json may be written');
+  } finally {
+    cleanupTestDir(tempDir);
+  }
+});
+
+test('scaffold does not accept a URL in --repos (URLs belong in --repo-urls)', () => {
+  const tempDir = createTestDir();
+  const targetDir = path.join(tempDir, 'fleet-config-url-repo');
+
+  try {
+    const res = runCli(targetDir, ['--name', 'my-service', '--repos', 'https://github.com/myorg/api.git']);
+    assert.equal(res.status, 2, `URL given as --repos must exit 2. stdout: ${res.stdout}\nstderr: ${res.stderr}`);
+    assert.equal(fs.existsSync(path.join(targetDir, 'aesop.config.json')), false, 'no aesop.config.json may be written');
+  } finally {
+    cleanupTestDir(tempDir);
+  }
+});
+
+test('final summary never prints a bare overwrite of ~/.claude/CLAUDE.md (back up or merge first)', () => {
+  const tempDir = createTestDir();
+  const targetDir = path.join(tempDir, 'fleet-config-brain-summary');
+
+  try {
+    fs.mkdirSync(targetDir, { recursive: true });
+    gitCmd(targetDir, ['init']);
+    gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+    gitCmd(targetDir, ['config', 'user.name', 'Test User']);
+
+    const res = runCli(targetDir, ['--name', 'brain-summary']);
+    assert.equal(res.status, 0, `Scaffold should succeed. stderr: ${res.stderr}`);
+
+    // The overwrite form is "cp <src> ~/.claude/CLAUDE.md  (review ...)" with the global file as destination.
+    const lines = res.stdout.split(/\r?\n/);
+    const overwriteIdx = lines
+      .map((l, i) => (/^\s*cp \S+ ~\/\.claude\/CLAUDE\.md\s+\(/.test(l) ? i : -1))
+      .filter((i) => i >= 0);
+    assert.ok(overwriteIdx.length > 0, `summary should still print the brain copy instruction. stdout: ${res.stdout}`);
+    for (const i of overwriteIdx) {
+      const prev = i > 0 ? lines[i - 1] : '';
+      assert.match(prev, /back ?up|merge|CLAUDE\.md\.bak/i, `line before overwrite must back up or merge: "${lines[i]}"`);
+    }
+  } finally {
+    cleanupTestDir(tempDir);
+  }
+});
+
+test('scaffold never writes to an existing ~/.claude/CLAUDE.md in the home directory', () => {
+  const tempDir = createTestDir();
+  const home = createTestDir();
+  const targetDir = path.join(tempDir, 'fleet-config-home-guard');
+  const globalClaude = path.join(home, '.claude', 'CLAUDE.md');
+  const sentinel = '# adopter global instructions (must survive scaffold)\n';
+
+  try {
+    fs.mkdirSync(path.dirname(globalClaude), { recursive: true });
+    fs.writeFileSync(globalClaude, sentinel);
+    const env = { ...process.env, HOME: home, USERPROFILE: home };
+    delete env.AESOP_SKILLS_HOME;
+    const res = spawnSync(process.execPath, [CLI, targetDir, '--name', 'home-guard', '--no-skills'], {
+      encoding: 'utf8',
+      cwd: tempDir,
+      env,
+      timeout: 30000,
+      killSignal: 'SIGKILL'
+    });
+    assert.equal(res.status, 0, `Scaffold should succeed. stderr: ${res.stderr}`);
+    assert.equal(fs.readFileSync(globalClaude, 'utf8'), sentinel, 'existing global CLAUDE.md must be byte-identical');
+  } finally {
+    cleanupTestDir(tempDir);
+    cleanupTestDir(home);
   }
 });

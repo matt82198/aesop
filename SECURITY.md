@@ -15,12 +15,12 @@ You can also email a detailed report to matt82198@gmail.com if you prefer.
 
 ## Supported versions
 
-Only the latest **0.3.x** release receives security updates.
+Only the latest **0.10.x** release receives security updates.
 
 | Version | Status                 | Support ends |
 |---------|------------------------|--------------|
-| 0.3.x   | Actively supported     | TBD          |
-| < 0.3   | Not supported          | —            |
+| 0.10.x  | Actively supported     | TBD          |
+| < 0.10  | Not supported          | —            |
 
 ## Policy
 
