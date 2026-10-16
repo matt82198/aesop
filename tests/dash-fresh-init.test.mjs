@@ -39,8 +39,22 @@ function killTree(child) {
     // Kill only the process tree this test spawned (pid from our own child).
     spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true });
   } else {
+    // The child is spawned detached (its own process group), so SIGKILL to the group
+    // reaches the dashboard server that `aesop dash` forks. Killing only the direct
+    // child left that server alive and writing into the repo while the finally-block
+    // rmSync ran (CI ENOTEMPTY: rmdir /tmp/shard-2/aesop-dash-fresh-*).
+    try { process.kill(-child.pid, 'SIGKILL'); } catch { /* group already gone */ }
     try { child.kill('SIGKILL'); } catch { /* already gone */ }
   }
+}
+
+// Resolves once the direct child has exited, or after a bounded wait.
+function waitForExit(child, ms) {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    child.once('exit', () => { clearTimeout(timer); resolve(); });
+  });
 }
 
 async function waitForHttp(port, timeoutMs, stillAlive) {
@@ -71,6 +85,8 @@ test('aesop dash launches the dashboard from a freshly init-ed repo', async () =
     env: { ...process.env, PORT: String(port) },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
+    // Own process group on POSIX so killTree can reach the forked dashboard server.
+    detached: process.platform !== 'win32',
   });
   let stderr = '';
   let exitCode = null;
@@ -88,6 +104,7 @@ test('aesop dash launches the dashboard from a freshly init-ed repo', async () =
     assert.notEqual(status, null, `dashboard never answered on port ${port}. stderr: ${stderr.trim()}`);
   } finally {
     killTree(child);
+    await waitForExit(child, 5000);
     fs.rmSync(repo, { recursive: true, force: true });
   }
 });
