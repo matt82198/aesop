@@ -1,5 +1,5 @@
 // Behaviour tests for tests/helpers/timed-spawn.mjs (timedSpawnSync).
-// Run: node --test tests/helpers/timed-spawn.test.mjs
+// Run: node --test tests/timed-spawn-helper.test.mjs
 //
 // Each case drives a real child process and captures what the helper writes to
 // process.stderr. No mocks of child_process: the timeout and exit-status paths
@@ -7,7 +7,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { timedSpawnSync } from './timed-spawn.mjs';
+import { timedSpawnSync } from './helpers/timed-spawn.mjs';
 
 /**
  * Run fn while capturing every process.stderr.write call. Restores the original
