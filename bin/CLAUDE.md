@@ -11,7 +11,7 @@
 ## Invocation modes
 
 **Scaffolder** (creates new fleet):
-- Top-level gate (runs before any filesystem work, skipped for `aesop <namespace> ...` passthrough): `--version`/`-v` print the package.json version and exit 0; any `-` argument not in `DOCUMENTED_FLAGS` prints `unknown option: <arg>` plus help to stderr and exits 2. Tests: `tests/cli-version-unknown-flags.test.mjs`.
+- Top-level gate (runs before any filesystem work, skipped for `aesop <namespace> ...` passthrough): `--version`/`-v` print the package.json version and exit 0; any `-` argument not in `DOCUMENTED_FLAGS` prints `unknown option: <arg>` plus help to stderr and exits 2; `--global` is a documented flag (`doctor --global` runs the `~/.claude/skills` check). Tests: `tests/cli-version-unknown-flags.test.mjs`, `tests/doctor-layout-mode.test.mjs`.
 - `npx @matt82198/aesop` → scaffolds to `./aesop-fleet` (default)
 - `npx @matt82198/aesop my-fleet` → scaffolds to `./my-fleet`
 - `npx @matt82198/aesop my-fleet --force` → re-scaffold and replace `.git/hooks/pre-push`
