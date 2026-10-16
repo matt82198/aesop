@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Receipt honesty: a scoped push that selects zero python shards now posts check-run conclusion `neutral` instead of `success`; red stays `failure` and the verifier is unchanged (#1085).
+- CI: the CI Python test dependencies are single-sourced in a root `requirements-ci.txt` (versions unchanged from ci.yml; cryptography stays pinned to 50.0.2). Every workflow pip step runs `pip install -r requirements-ci.txt`, and `tools/ci_workflow_lint.py` fails any step that re-lists those packages inline, so the shard job can no longer drift from ci.yml.
+
 - Doctor layout detection: an init'd repo (no scaffold directories) reports the five-directory check as n/a instead of failing, and the `~/.claude/skills` check runs only with `--global` (#1092).
 - Added `tools/lane_ab_report.py` (stdlib; reports the lane-contract A/B experiment from `lane-ab.jsonl` and the hook-denial ledger: per-arm dispatches, forced count, denials per dispatch, arm B page-fault relaunches, rules_by_fault_count; exits 2 on unreadable input) and `LANE-CONTRACT-MIN.md` (walls-only arm B brief).
 - CI hardening: every GitHub Actions `uses:` pinned to a full commit SHA with a version comment; top-level `permissions: contents: read` in every workflow, with write grants moved to the jobs that need them; npm pinned to 12.2.0 in publish.yml (the version the last green publish used).
@@ -21,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added supply-chain hygiene: `requirements.lock.txt` (hash-locked runtime deps from `requirements.txt` via `pip-compile --generate-hashes`, verified with `--require-hashes`), `.github/workflows/scorecard.yml` (OpenSSF Scorecard) and `.github/workflows/codeql.yml` (CodeQL for javascript-typescript and python), all actions SHA-pinned.
 - Fixed MCP server metadata drift: `mcp/package.json` author now matches the root package (Matt Culliton), and the `mcp/server.mjs` initialize response advertises protocolVersion `2025-11-25` (was `2024-11-05`); guarded by `tests/mcp-metadata.test.mjs`.
 - Docs: corrected dependency and Python-floor claims to match the repo (no runtime npm dependencies; CI floor Python 3.11; PyYAML/cryptography/playwright/opentelemetry/anthropic/pyflakes listed in new `pyproject.toml`) and added a prompt-injection threat model to `docs/ARCHITECTURE.md`.
+- Added the refuted ledger: `docs/refuted.jsonl` (committed record of measured-and-killed ideas, gate-bounced claims and REFUTED lanes), `tools/refuted_ledger.py` (validate, add, stats, redact; fail-closed) and `docs/REFUTED.md`.
 - Fix (CLI): the final summary's `cp ... ~/.claude/CLAUDE.md` instructions now back up the existing global file first; the scaffold never performed that copy, but the printed text would have overwritten it silently (#1086).
 - Fix (CLI): `--repos` entries must be existing directories; a missing path, file, or URL now exits 2 before anything is written, instead of recording a nonexistent repo (#1086).
 
