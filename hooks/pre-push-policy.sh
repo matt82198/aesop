@@ -1852,6 +1852,11 @@ check_generated_regen() {
     fi
     return 1
   fi
+  # Pass: echo the gate's note lines (e.g. D46 "inherited unchanged from base") so the
+  # pass is visible in the push log, not silently swallowed.
+  if [ -n "$gate_output" ]; then
+    printf '%s\n' "$gate_output"
+  fi
   return 0
 }
 
