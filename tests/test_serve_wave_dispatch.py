@@ -109,48 +109,68 @@ class WaveDispatchFixtureCase(unittest.TestCase):
         aesop_subagents = self.transcripts_root / "aesop" / "subagents"
         aesop_subagents.mkdir(parents=True, exist_ok=True)
 
-        # Agent 1: active, tool-use phase
+        # Agent 1: active, tool-use phase (newest turn is an assistant tool_use block)
         agent1_path = aesop_subagents / "agent-fleet-fix-0.jsonl"
         agent1_content = self._make_agent_jsonl(
-            "User dispatch",
-            "Assistant thinking",
-            "[tool_use: write]",
-            "Tool result",
+            self._user_prompt("User dispatch"),
+            self._assistant_text("Assistant thinking", stop_reason="end_turn"),
+            self._assistant_tool_use("write"),
         )
         agent1_path.write_text(agent1_content, encoding='utf-8')
 
-        # Agent 2: stalled, many entries
+        # Agent 2: stalled, many entries (newest turn is a finished assistant reply)
         agent2_path = aesop_subagents / "agent-fleet-fix-1.jsonl"
         agent2_content = self._make_agent_jsonl(
-            "User dispatch",
-            "Assistant thinking",
-            "Assistant completion",
-            "Tool result",
-            "Another completion",
+            self._user_prompt("User dispatch"),
+            self._assistant_text("Assistant thinking", stop_reason=None),
+            self._assistant_text("Assistant completion", stop_reason="end_turn"),
+            self._user_tool_result("Tool result"),
+            self._assistant_text("Another completion", stop_reason="end_turn"),
         )
         agent2_path.write_text(agent2_content, encoding='utf-8')
         # Make it older (stalled)
         old_time = time.time() - 500  # 500 seconds old
         os.utime(agent2_path, (old_time, old_time))
 
-        # Agent 3: new, thinking phase
+        # Agent 3: new, thinking phase (assistant turn still streaming, no stop_reason yet)
         agent3_path = aesop_subagents / "agent-fleet-review-0.jsonl"
         agent3_content = self._make_agent_jsonl(
-            "User dispatch",
-            "Assistant thinking",
+            self._user_prompt("User dispatch"),
+            self._assistant_text("Assistant thinking", stop_reason=None),
         )
         agent3_path.write_text(agent3_content, encoding='utf-8')
 
-    def _make_agent_jsonl(self, *lines):
-        """Create minimal NDJSON transcript content."""
-        entries = []
-        for i, line in enumerate(lines):
-            entry = {
-                "type": "assistant" if "Assistant" in line else ("tool_result" if "Tool result" in line else "user"),
-                "text": line,
-            }
-            entries.append(json.dumps(entry))
-        return "\n".join(entries) + "\n"
+    @staticmethod
+    def _user_prompt(text):
+        """A plain user prompt record (message.content is a string)."""
+        return {"type": "user", "message": {"role": "user", "content": text}}
+
+    @staticmethod
+    def _user_tool_result(text):
+        """A user record carrying a structured tool_result content block."""
+        block = {"type": "tool_result", "tool_use_id": "toolu_1", "content": text}
+        return {"type": "user", "message": {"role": "user", "content": [block]}}
+
+    @staticmethod
+    def _assistant_text(text, stop_reason):
+        """An assistant record with a text block and the given stop_reason."""
+        message = {
+            "role": "assistant",
+            "content": [{"type": "text", "text": text}],
+            "stop_reason": stop_reason,
+        }
+        return {"type": "assistant", "message": message}
+
+    @staticmethod
+    def _assistant_tool_use(tool_name):
+        """An assistant turn whose content holds a tool_use block (stop_reason tool_use)."""
+        block = {"type": "tool_use", "id": "toolu_1", "name": tool_name, "input": {}}
+        message = {"role": "assistant", "content": [block], "stop_reason": "tool_use"}
+        return {"type": "assistant", "message": message}
+
+    def _make_agent_jsonl(self, *records):
+        """Create NDJSON transcript content from structured record dicts."""
+        return "\n".join(json.dumps(record) for record in records) + "\n"
 
     def tearDown(self):
         try:
