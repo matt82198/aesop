@@ -146,160 +146,105 @@ echo "PASS: acquire_lock reported reclaiming the stale lock"
 rm -f "$OUT1" "$OUT2"
 
 echo ""
-echo "=== Test 3: Lock ownership (original holder can't delete reclaimed lock) ==="
-# Clean state
+echo "=== Test 3: Lock reclaim contract (dead holder reclaimed, live holder never) ==="
+# Contract (f18337dc30c3): a lock is reclaimed ONLY when its recorded holder pid is
+# dead. A live holder is never reclaimed, however old its timestamp is.
+# Superseded assertion (do not restore): this test used to age the lock of a LIVE
+# holder and expect a second daemon to reclaim it. That encoded the defect the fix
+# removes (a live daemon's lock being stolen), so the test was rewritten.
 rm -rf "${TEST_STATE_DIR}"
 mkdir -p "${TEST_STATE_DIR}"
 echo "0" > "${CYCLE_COUNTER}"
 
-# Create a mock cycle that sleeps to simulate slow work
-SLOW_MOCK="${TMP_DIR}/slow-mock.sh"
-cat > "${SLOW_MOCK}" << 'EOFSLOW'
-#!/bin/bash
-COUNTER_FILE="$1"
-SLEEP_TIME="${2:-2}"
-if [ -z "$COUNTER_FILE" ]; then
-  echo "Usage: slow-mock.sh <counter-file> [sleep-time]" >&2
-  exit 1
-fi
-COUNT=$(cat "$COUNTER_FILE" 2>/dev/null || echo 0)
-echo $((COUNT + 1)) > "$COUNTER_FILE"
-echo "[slow-mock] Counter incremented to $((COUNT + 1)), sleeping ${SLEEP_TIME}s"
-sleep "$SLEEP_TIME"
-EOFSLOW
-chmod +x "${SLOW_MOCK}"
-
 LOCK_PATH="${TEST_STATE_DIR}/.watchdog-lock"
 
-# Process A: acquires the (real) lock and holds it for A_SLEEP seconds — the
-# "original holder" whose lock will be forcibly aged into staleness while A
-# is still mid-cycle, unaware it has been reclaimed out from under it.
-A_SLEEP=2
-OUT_A=$(mktemp)
-(
-  AESOP_ROOT="${AESOP_ROOT}" \
-    AESOP_WATCHDOG_CYCLE_CMD="${SLOW_MOCK} ${CYCLE_COUNTER} ${A_SLEEP}" \
-    bash "${REPO_ROOT}/daemons/run-watchdog.sh" --once > "$OUT_A" 2>&1
-) &
-PID_A=$!
-
-# Wait for A to acquire the lock (poll instead of a fixed sleep — robust
-# under process-start jitter, e.g. on Git-Bash/Windows).
-ACQUIRE_WAIT=0
-while [ ! -f "$LOCK_PATH/timestamp" ] && [ "$ACQUIRE_WAIT" -lt 50 ]; do
-  sleep 0.1
-  ACQUIRE_WAIT=$((ACQUIRE_WAIT + 1))
-done
-if [ ! -f "$LOCK_PATH/timestamp" ]; then
-  echo "FAIL: Process A never acquired the lock at $LOCK_PATH"
+echo "--- Test 3a: holder pid DEAD + stale timestamp -> second daemon reclaims ---"
+# A reaped child's pid is dead by construction (same technique as Test 6).
+( exit 0 ) &
+DEAD_PID=$!
+wait "$DEAD_PID" 2>/dev/null
+if kill -0 "$DEAD_PID" 2>/dev/null; then
+  echo "FAIL: fixture pid ${DEAD_PID} still alive after reap"
   exit 1
 fi
-
-# A writes its OWN real pid here (unlike Test 2's manually-planted "9999"
-# sentinel) — capture it so the reclaim-detection poll below can watch for
-# the pid actually changing away from A, rather than an irrelevant sentinel.
-ORIGINAL_PID=$(cat "$LOCK_PATH/pid" 2>/dev/null || echo "")
-if [ -z "$ORIGINAL_PID" ]; then
-  echo "FAIL: Process A's lock has no pid file at $LOCK_PATH/pid"
-  exit 1
-fi
-
-# Age A's lock past the staleness threshold. This is the ACTUAL lock path the
-# script under test reads (AESOP_ROOT is the same throwaway fixture root used
-# by both A and B), so this genuinely triggers acquire_lock's reclaim branch —
-# unlike the old decoy path, which aged a directory nobody read.
+mkdir -p "$LOCK_PATH"
+echo "$DEAD_PID" > "$LOCK_PATH/pid"
 echo $(($(date +%s) - 350)) > "$LOCK_PATH/timestamp"
 
-# Process B: reclaims the now-stale lock and holds it for B_SLEEP seconds —
-# long enough that B is STILL holding the lock when A finishes its own
-# (now-orphaned) cycle and calls release_lock. This is exactly the race the
-# ownership check (PR #23 release_lock fix) exists to guard: A must NOT be
-# able to delete a lock it no longer owns.
-B_SLEEP=3
-OUT_B=$(mktemp)
+OUT_3A=$(mktemp)
+set +e
 AESOP_ROOT="${AESOP_ROOT}" \
-  AESOP_WATCHDOG_CYCLE_CMD="${SLOW_MOCK} ${CYCLE_COUNTER} ${B_SLEEP}" \
-  bash "${REPO_ROOT}/daemons/run-watchdog.sh" --once > "$OUT_B" 2>&1 &
-PID_B=$!
+  AESOP_WATCHDOG_CYCLE_CMD="${MOCK_CYCLE} ${CYCLE_COUNTER}" \
+  bash "${REPO_ROOT}/daemons/run-watchdog.sh" --once > "$OUT_3A" 2>&1
+EXIT_3A=$?
+set -e
 
-# Wait for B to reclaim. Poll for BOTH the pid file flipping away from A's
-# ORIGINAL_PID AND the "reclaimed" message landing in OUT_B — checking only
-# the pid file races the stderr write (mkdir/pid/timestamp land on disk a
-# hair before the echo flushes), which is enough jitter on Git-Bash/Windows
-# to false-fail this assertion.
-RECLAIM_WAIT=0
-RECLAIMER_PID=""
-RECLAIM_SEEN=0
-while [ "$RECLAIM_WAIT" -lt 100 ]; do
-  if [ -z "$RECLAIMER_PID" ] && [ -f "$LOCK_PATH/pid" ]; then
-    CANDIDATE=$(cat "$LOCK_PATH/pid" 2>/dev/null || echo "")
-    if [ -n "$CANDIDATE" ] && [ "$CANDIDATE" != "$ORIGINAL_PID" ]; then
-      RECLAIMER_PID="$CANDIDATE"
-    fi
-  fi
-  if grep -q "reclaimed" "$OUT_B" 2>/dev/null; then
-    RECLAIM_SEEN=1
-  fi
-  if [ -n "$RECLAIMER_PID" ] && [ "$RECLAIM_SEEN" -eq 1 ]; then
-    break
-  fi
-  sleep 0.1
-  RECLAIM_WAIT=$((RECLAIM_WAIT + 1))
-done
-
-if [ "$RECLAIM_SEEN" -ne 1 ]; then
-  echo "FAIL: Process B did not report reclaiming the stale lock (no 'reclaimed' in output)"
-  cat "$OUT_B"
-  exit 1
-fi
-echo "PASS: Process B reported reclaiming the stale lock"
-
-if [ -z "$RECLAIMER_PID" ]; then
-  echo "FAIL: Could not read reclaimer's pid from $LOCK_PATH/pid"
-  exit 1
-fi
-
-# Wait for A to finish its (orphaned) cycle and attempt release_lock. B is
-# still sleeping (B_SLEEP > A_SLEEP), so this is the exact moment the
-# ownership check is exercised: A's release_lock must be a no-op here.
-wait $PID_A
-EXIT_A=$?
-
-if [ ! -d "$LOCK_PATH" ]; then
-  echo "FAIL: Lock directory was removed by A — ownership check did NOT hold (release_lock deleted a lock it doesn't own)"
-  exit 1
-fi
-
-CURRENT_PID=$(cat "$LOCK_PATH/pid" 2>/dev/null || echo "")
-if [ "$CURRENT_PID" != "$RECLAIMER_PID" ]; then
-  echo "FAIL: Lock pid changed after A's release attempt (expected reclaimer's pid $RECLAIMER_PID, got '$CURRENT_PID')"
-  exit 1
-fi
-echo "PASS: Process A's release_lock did not touch B's live (reclaimed) lock — ownership check held"
-
-# Now wait for B to finish its own cycle and release its own lock.
-wait $PID_B
-EXIT_B=$?
-
-echo ""
-echo "Process A (original holder) exit code: $EXIT_A"
-echo "Process B (reclaimer) exit code: $EXIT_B"
-
-if [ -d "$LOCK_PATH" ]; then
-  echo "FAIL: Lock directory still exists after B's own release_lock — B failed to clean up its own lock"
-  exit 1
-fi
-echo "PASS: Lock directory was cleaned up by its rightful owner (B)"
-
+echo "Output (dead holder, exit ${EXIT_3A}):"
+cat "$OUT_3A"
 CYCLE_RUN_COUNT=$(cat "${CYCLE_COUNTER}")
-if [ "$CYCLE_RUN_COUNT" != "2" ]; then
-  echo "FAIL: Expected both cycles to run (A and B each once), but count=$CYCLE_RUN_COUNT"
+if [ "$CYCLE_RUN_COUNT" != "1" ]; then
+  echo "FAIL: Expected dead-holder lock to be reclaimed and cycle to run, but count=$CYCLE_RUN_COUNT"
   exit 1
 fi
-echo "PASS: Both cycles ran (A and B each ran once)"
+if ! grep -q "reclaimed" "$OUT_3A"; then
+  echo "FAIL: Expected a 'reclaimed' message for a dead holder"
+  exit 1
+fi
+if [ -d "$LOCK_PATH" ]; then
+  echo "FAIL: Lock directory still exists after the reclaiming daemon's own release"
+  exit 1
+fi
+echo "PASS: Dead-holder lock was reclaimed, cycle ran, and the reclaimer released it"
 
-rm -f "$OUT_A" "$OUT_B" "$SLOW_MOCK"
-echo "PASS: Lock ownership enforced"
+echo "--- Test 3b: holder pid LIVE + stale timestamp -> second daemon does NOT reclaim ---"
+echo "0" > "${CYCLE_COUNTER}"
+# A real process this test starts and kills itself. Its pid stays live for the run.
+sleep 60 &
+LIVE_PID=$!
+if ! kill -0 "$LIVE_PID" 2>/dev/null; then
+  echo "FAIL: fixture sleep process ${LIVE_PID} did not start"
+  exit 1
+fi
+rm -rf "$LOCK_PATH"
+mkdir -p "$LOCK_PATH"
+echo "$LIVE_PID" > "$LOCK_PATH/pid"
+echo $(($(date +%s) - 350)) > "$LOCK_PATH/timestamp"
+
+OUT_3B=$(mktemp)
+set +e
+AESOP_ROOT="${AESOP_ROOT}" \
+  AESOP_WATCHDOG_CYCLE_CMD="${MOCK_CYCLE} ${CYCLE_COUNTER}" \
+  bash "${REPO_ROOT}/daemons/run-watchdog.sh" --once > "$OUT_3B" 2>&1
+EXIT_3B=$?
+set -e
+LIVE_PID_AFTER=$(cat "$LOCK_PATH/pid" 2>/dev/null || echo "")
+kill "$LIVE_PID" 2>/dev/null || true
+wait "$LIVE_PID" 2>/dev/null || true
+
+echo "Output (live holder, exit ${EXIT_3B}):"
+cat "$OUT_3B"
+CYCLE_RUN_COUNT=$(cat "${CYCLE_COUNTER}")
+if grep -q "reclaimed" "$OUT_3B"; then
+  echo "FAIL: A LIVE holder's lock was reclaimed (f18337dc30c3 regression)"
+  exit 1
+fi
+if [ "$CYCLE_RUN_COUNT" != "0" ]; then
+  echo "FAIL: Second daemon ran a cycle while a live holder held the lock, count=$CYCLE_RUN_COUNT"
+  exit 1
+fi
+if ! grep -q "already running" "$OUT_3B"; then
+  echo "FAIL: Second daemon did not report the lock as held by a live holder"
+  exit 1
+fi
+if [ "$LIVE_PID_AFTER" != "$LIVE_PID" ]; then
+  echo "FAIL: Live holder's lock pid was changed by the second daemon (got '$LIVE_PID_AFTER')"
+  exit 1
+fi
+echo "PASS: Live holder's lock was not reclaimed; second daemon exited as held"
+
+rm -rf "$LOCK_PATH"
+rm -f "$OUT_3A" "$OUT_3B"
+echo "PASS: Lock reclaim contract enforced (dead holder reclaimed, live holder never)"
 
 echo ""
 echo "=== Test 4: CYCLE_CMD with spaces in AESOP_ROOT ==="
