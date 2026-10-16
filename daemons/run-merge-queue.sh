@@ -19,8 +19,10 @@
 # does no work at all until the sentinel is cleared. Detection delegates to
 # `python tools/halt.py --status` as the single source of truth, respecting
 # all resolution precedence (AESOP_STATE_ROOT env > aesop.config.json state_root
-# > default). Bash never re-derives the sentinel path, eliminating drift from
-# configuration overrides.
+# > default). The box-wide sentinel is checked first by existence, with the same
+# default as halt.py's setter (CONDUCTOR_ROOT, else $USERPROFILE|$HOME/conductor3),
+# so an unset CONDUCTOR_ROOT never disables it. This script never exports
+# AESOP_STATE_ROOT, because an exported value counts as an explicit isolated override.
 #
 # Exit codes: 0 = pass completed / halted / lock contention, 1 = an action in
 # the pass failed, 2 = precondition failure (see tools/merge_queue.py).
@@ -57,9 +59,19 @@ log_line() {
 check_halt() {
   local log_file="$1"
   local halt_py="${2:-${HALT_PY_PATH}}"
+  # Box-wide root mirrors halt.py resolve_conductor_root(): CONDUCTOR_ROOT env, else
+  # the home fleet root (USERPROFILE, then HOME; the same default the setter uses).
+  # An unset CONDUCTOR_ROOT must never disable this check.
+  local box_root="${CONDUCTOR_ROOT:-}"
+  if [ -z "$box_root" ]; then
+    local box_home="${USERPROFILE:-${HOME:-}}"
+    if [ -n "$box_home" ]; then
+      box_root="$box_home/conductor3"
+    fi
+  fi
   local box_sentinel=""
-  if [ -n "${CONDUCTOR_ROOT:-}" ]; then
-    box_sentinel="$CONDUCTOR_ROOT/state/.HALT"
+  if [ -n "$box_root" ]; then
+    box_sentinel="$box_root/state/.HALT"
   fi
 
   # Trigger 1 (box-wide, operator kill switch): file existence only, needs no interpreter.
@@ -163,9 +175,12 @@ main() {
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   AESOP_ROOT="${AESOP_ROOT:-$(dirname "$SCRIPT_DIR")}"
+  # AESOP_STATE_ROOT is deliberately NOT exported: an exported value is read by
+  # halt.py as an explicit isolated override, which suppresses the box-wide HALT.
+  # The default is only a shell variable (used for the log path and mkdir); a
+  # caller that sets AESOP_STATE_ROOT in its environment keeps the isolation.
   AESOP_STATE_ROOT="${AESOP_STATE_ROOT:-$AESOP_ROOT/state}"
   AESOP_QUEUE_ROOT="${AESOP_QUEUE_ROOT:-$AESOP_ROOT}"
-  export AESOP_STATE_ROOT
   export AESOP_QUEUE_ROOT
   # Resolve halt.py from the repo (daemons/ is in same AESOP_ROOT as tools/)
   HALT_PY_PATH="$(dirname "$SCRIPT_DIR")/tools/halt.py"
