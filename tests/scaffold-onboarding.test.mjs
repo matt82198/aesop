@@ -32,12 +32,16 @@ const MEMORY_TEMPLATE = path.join(
   '..', 'docs', 'MEMORY-TEMPLATE.md'
 );
 
-function runCli(targetDir, args = []) {
+function runCli(targetDir, args = [], { git = false } = {}) {
   const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
   // --no-skills: this file doesn't test skill installation; without it every
   // scaffold call would write into the real ~/.claude/skills/ (isolation contract
   // documented in cli-skills-install.test.mjs) and contend with it on CI Windows.
-  const res = spawnSync(process.execPath, [CLI, targetDir, ...args, '--no-skills'], {
+  // --no-git: the git init/add -A/commit over the ~600 template files is the slow step
+  // (about 3s locally, and the step that hit the 30s spawnSync cap on CI). Only the full
+  // headless test asserts the pre-push hook install, so it opts back in with { git: true }.
+  const gitArgs = git ? [] : ['--no-git'];
+  const res = spawnSync(process.execPath, [CLI, targetDir, ...args, ...gitArgs, '--no-skills'], {
     encoding: 'utf8',
     cwd: path.dirname(targetDir),
     timeout,
@@ -49,7 +53,7 @@ function runCli(targetDir, args = []) {
 function runCliInDir(cwd, args = []) {
   // Invoke CLI without a positional targetDir; uses default
   const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
-  const res = spawnSync(process.execPath, [CLI, ...args, '--no-skills'], {
+  const res = spawnSync(process.execPath, [CLI, ...args, '--no-git', '--no-skills'], {
     encoding: 'utf8',
     cwd: cwd,
     timeout,
@@ -226,12 +230,12 @@ test('full headless scaffold is complete and valid', () => {
   gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
   gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
-  // Headless scaffold with all flags
+  // Headless scaffold with all flags (git on: this test asserts the pre-push hook install)
   const res = runCli(targetDir, [
     '--name', 'production-api',
     '--domains', 'api,worker,security,monitoring',
     '--repos', repoDirsArg(tempDir, ['my-api', 'my-worker'])
-  ]);
+  ], { git: true });
   assert.equal(res.status, 0, `Full scaffold should succeed. stderr: ${res.stderr}`);
 
   // Verify all required files exist

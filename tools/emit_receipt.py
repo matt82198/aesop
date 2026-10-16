@@ -455,8 +455,18 @@ def build_receipt(repo, parts, skipped, slug=None, main_ref="origin/main", profi
     }
 
 
-def conclusion_for(parts):
-    return "success" if parts and all(p.get("exit_code") == 0 for p in parts) else "failure"
+def _shards_ran(parts):
+    """True when at least one python shard part was selected and run for this receipt."""
+    return any(p.get("name") in _PY_SHARDS for p in parts)
+
+
+def conclusion_for(parts, shards_ran=True):
+    """Check-run conclusion. "failure" when any part is red or there are no parts; "neutral" when
+    every part passed but NO python shard ran (a scoped push that owns no test shard has not
+    exercised the changed code, so it must not read as a pass); "success" otherwise."""
+    if not parts or any(p.get("exit_code") != 0 for p in parts):
+        return "failure"
+    return "success" if shards_ran else "neutral"
 
 
 def exit_code_for(parts, args):
@@ -496,12 +506,14 @@ def post_receipt(envelope, slug, gh_runner, spool_dir=None):
     receipt = envelope["receipt"]
     text = wrap_receipt_text(envelope)
     parts = receipt["parts"]
+    # Derived from the receipt itself, so a spooled receipt flushed later (receipt_flush) gets the same verdict.
+    conclusion = conclusion_for(parts, shards_ran=_shards_ran(parts))
     summary = "%d part(s) ran, %d skipped; conclusion=%s; scheme=%s" % (
-        len(parts), len(receipt.get("skipped", [])), conclusion_for(parts), envelope["sig"]["scheme"])
+        len(parts), len(receipt.get("skipped", [])), conclusion, envelope["sig"]["scheme"])
     payload = {
         "name": rc.CHECK_NAME, "head_sha": receipt["head_sha"], "status": "completed",
-        "conclusion": conclusion_for(parts),
-        "output": {"title": "local receipt (" + conclusion_for(parts) + ")", "summary": summary, "text": text},
+        "conclusion": conclusion,
+        "output": {"title": "local receipt (" + conclusion + ")", "summary": summary, "text": text},
     }
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as fh:
         json.dump(payload, fh)
@@ -612,12 +624,12 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
                 shard_map = _build_shard_map(sorted(_PY_SHARDS), timing=_load_ci_timing(repo), repo=repo)
                 if shard_map is None:
                     # Underivable mapping: fall back to full matrix
-                    names = list(DEFAULT_MATRIX)
+                    names = list(registry)
                 else:
                     owning_shards = None if changed_files is None else _find_owning_shards(changed_files, shard_map)
                     if owning_shards is None:
                         # Underivable: fall back to full
-                        names = list(DEFAULT_MATRIX)
+                        names = list(registry)
                     else:
                         # Build scoped matrix
                         names, scoped_skips = _build_parts_and_skipped_for_profile(
@@ -646,7 +658,8 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
             print("skip %-28s %s" % (s["name"], s["reason"]))
         if receipt["env"]["scrubbed"]:
             print("scrub env for parts: %s" % ", ".join(receipt["env"]["scrubbed"]))
-        print("conclusion=%s head=%s tree=%s scheme=%s" % (conclusion_for(parts), receipt["head_sha"][:12],
+        print("conclusion=%s head=%s tree=%s scheme=%s" % (conclusion_for(parts, shards_ran=_shards_ran(parts)),
+                                                           receipt["head_sha"][:12],
                                                            receipt["tree_hash"][:12], scheme))
         if args.dry_run:
             print(json.dumps(envelope, sort_keys=True, indent=1))

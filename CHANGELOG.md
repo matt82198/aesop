@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Added `tools/pr_trigger_check.py`, a read-only single-shot detector that reports open PRs whose current head sha has no `pull_request` workflow run (exit 1 if any open non-draft PR lacks one, 2 on gh error); detects only, never remediates (#1088).
+- Receipt honesty: a scoped push that selects zero python shards now posts check-run conclusion `neutral` instead of `success`; red stays `failure` and the verifier is unchanged (#1085).
+- Fix: `baseline_liveness_check.py` no longer probes writer/seed tables. A `tools/*.py` file that only quotes a baseline filename is a consumer only if it also declares `--baseline`; otherwise it is skipped with one INFO line instead of failing closed as a "consumer error".
 - Fix: the no-timeout receipt branch of the pre-push hook now propagates the child's real exit code (red receipt matrix blocks the push on hosts without timeout/gtimeout) (#1091).
 - `tools/ingest_task_events.py` appends one `agent_done` (or `agent_stalled` on an error stop_reason) event per lane task_event to stream `agent_lifecycle`, deduped on the task event_id (#1083).
 - CI: the CI Python test dependencies are single-sourced in a root `requirements-ci.txt` (versions unchanged from ci.yml; cryptography stays pinned to 50.0.2). Every workflow pip step runs `pip install -r requirements-ci.txt`, and `tools/ci_workflow_lint.py` fails any step that re-lists those packages inline, so the shard job can no longer drift from ci.yml.
@@ -29,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added the refuted ledger: `docs/refuted.jsonl` (committed record of measured-and-killed ideas, gate-bounced claims and REFUTED lanes), `tools/refuted_ledger.py` (validate, add, stats, redact; fail-closed) and `docs/REFUTED.md`.
 - Fix (CLI): the final summary's `cp ... ~/.claude/CLAUDE.md` instructions now back up the existing global file first; the scaffold never performed that copy, but the printed text would have overwritten it silently (#1086).
 - Fix (CLI): `--repos` entries must be existing directories; a missing path, file, or URL now exits 2 before anything is written, instead of recording a nonexistent repo (#1086).
+- Fix (receipt emitter): both fail-closed fallbacks in the scoped shard selection (underivable shard map, unowned `tools/` change) now run the injected `registry` instead of `DEFAULT_MATRIX`, so a caller with a different registry no longer gets "unknown matrix part(s)"; production is unchanged because the injected registry equals `DEFAULT_REGISTRY`.
 
 ## [0.10.0] - 2026-10-15
 
