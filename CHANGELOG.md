@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Fix: the no-timeout receipt branch of the pre-push hook now propagates the child's real exit code (red receipt matrix blocks the push on hosts without timeout/gtimeout) (#1091).
+- `tools/ingest_task_events.py` appends one `agent_done` (or `agent_stalled` on an error stop_reason) event per lane task_event to stream `agent_lifecycle`, deduped on the task event_id (#1083).
 - CI: the CI Python test dependencies are single-sourced in a root `requirements-ci.txt` (versions unchanged from ci.yml; cryptography stays pinned to 50.0.2). Every workflow pip step runs `pip install -r requirements-ci.txt`, and `tools/ci_workflow_lint.py` fails any step that re-lists those packages inline, so the shard job can no longer drift from ci.yml.
 
 - Doctor layout detection: an init'd repo (no scaffold directories) reports the five-directory check as n/a instead of failing, and the `~/.claude/skills` check runs only with `--global` (#1092).
@@ -23,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added supply-chain hygiene: `requirements.lock.txt` (hash-locked runtime deps from `requirements.txt` via `pip-compile --generate-hashes`, verified with `--require-hashes`), `.github/workflows/scorecard.yml` (OpenSSF Scorecard) and `.github/workflows/codeql.yml` (CodeQL for javascript-typescript and python), all actions SHA-pinned.
 - Fixed MCP server metadata drift: `mcp/package.json` author now matches the root package (Matt Culliton), and the `mcp/server.mjs` initialize response advertises protocolVersion `2025-11-25` (was `2024-11-05`); guarded by `tests/mcp-metadata.test.mjs`.
 - Docs: corrected dependency and Python-floor claims to match the repo (no runtime npm dependencies; CI floor Python 3.11; PyYAML/cryptography/playwright/opentelemetry/anthropic/pyflakes listed in new `pyproject.toml`) and added a prompt-injection threat model to `docs/ARCHITECTURE.md`.
+- CI: `.github/shard-timing.json` populated with per-file test counts (a proxy, not measured runtime) so the timing-balanced shard path engages; balanced 4-shard split measured 1674/1673/1673/1673 (was 1607/1583/1520/1983 round-robin) (#1089).
 - Added the refuted ledger: `docs/refuted.jsonl` (committed record of measured-and-killed ideas, gate-bounced claims and REFUTED lanes), `tools/refuted_ledger.py` (validate, add, stats, redact; fail-closed) and `docs/REFUTED.md`.
 - Fix (CLI): the final summary's `cp ... ~/.claude/CLAUDE.md` instructions now back up the existing global file first; the scaffold never performed that copy, but the printed text would have overwritten it silently (#1086).
 - Fix (CLI): `--repos` entries must be existing directories; a missing path, file, or URL now exits 2 before anything is written, instead of recording a nonexistent repo (#1086).
