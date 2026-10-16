@@ -1258,8 +1258,8 @@ check_pyflakes_ratchet() {
   gate_dir=$(gate_base_dir) || { gate_base_block "check_pyflakes_ratchet"; return 1; }
   # Pyflakes ratchet gate (guardrail G15, tools/pyflakes_gate.py).
   # Wraps `python -m pyflakes` to enforce a baseline: never let unused-import /
-  # unused-variable debt grow. A new finding blocks the push; a stale entry
-  # (burned down) also blocks until the baseline is regenerated. Scans tools/,
+  # unused-variable debt grow. A new finding blocks the push. A branch that burns
+  # the trunk baseline down passes with a note (D40); any addition blocks. Scans tools/,
   # bin/, ui/, state_store/, driver/, monitor/, daemons/, tests/, bench/.
   #
   # Pyflakes is a dev-only lint dependency (not installed by default;
@@ -1300,10 +1300,17 @@ check_pyflakes_ratchet() {
   fi
 
   local pyflakes_output
-  pyflakes_output=$("$py_bin" "$pyflakes_script" --root "$aesop_root" --baseline "$gate_dir/.pyflakes-baseline.json" 2>&1)
+  # D40: the trunk baseline ($gate_dir) is the authority for additions; the branch
+  # baseline ($aesop_root, the pushed tree's copy) may burn the trunk down. The gate
+  # fails closed on a missing/malformed branch baseline, an addition, or a new finding.
+  pyflakes_output=$("$py_bin" "$pyflakes_script" --root "$aesop_root" --baseline "$aesop_root/.pyflakes-baseline.json" --trunk-baseline "$gate_dir/.pyflakes-baseline.json" 2>&1)
   local pyflakes_exit_code=$?
 
   if [ $pyflakes_exit_code -eq 0 ]; then
+    # Burn-down note (one line) is surfaced in the push log; a clean PASS stays silent.
+    case "$pyflakes_output" in
+      *"pyflakes baseline burned down:"*) printf '%s\n' "$pyflakes_output" | grep -F 'pyflakes baseline burned down:' >&2 ;;
+    esac
     return 0
   fi
 
