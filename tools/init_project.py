@@ -201,6 +201,11 @@ fi
 scan_script="$repo_root/tools/secret_scan.py"
 if [ -f "$scan_script" ]; then
   while read -r local_ref local_sha remote_ref remote_sha; do
+    # Fail closed on a malformed line (fewer than four fields): never fall back to a whole-tree scan
+    if [ -z "$local_ref" ] || [ -z "$local_sha" ] || [ -z "$remote_ref" ] || [ -z "$remote_sha" ]; then
+      echo "ERROR: Malformed pre-push stdin line (expected: <local_ref> <local_sha> <remote_ref> <remote_sha>). Push blocked."
+      exit 1
+    fi
     # Protected remote refs are blocked whatever branch is checked out
     case "$remote_ref" in
       refs/heads/main|refs/heads/master)
