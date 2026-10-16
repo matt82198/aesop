@@ -314,5 +314,89 @@ class TestF01UnquotedDottedValues(unittest.TestCase):
         self.assertNotIn("generic_credential_assignment", _all_rules(findings))
 
 
+AWS_KEY = _j("AKIA", "ABCDEFGHIJKLMNOP")
+
+
+class TestItem1CommittedBlobsNotSkippedByPath(unittest.TestCase):
+    """Tracker 1af7eda7fa11 (P1): scan_blob() returned [] for committed blobs whose
+    path has node_modules/__pycache__ or ends .pyc/.pyo. A staged or ranged blob is
+    the object being pushed and must be scanned whatever its path class."""
+
+    def test_staged_env_under_node_modules_is_fatal(self):
+        findings = scan_blob("vendor/node_modules/app/.env", _j("AWS_ACCESS_KEY_ID=", AWS_KEY).encode())
+        self.assertIn("aws_access_key", _fatal_rules(findings))
+
+    def test_staged_pycache_blob_is_fatal(self):
+        findings = scan_blob("app/__pycache__/cfg.cpython-312.pyc", b"\x00\x03\x00\x00" + AWS_KEY.encode() + b"\x00\x01")
+        self.assertIn("aws_access_key", _fatal_rules(findings))
+
+    def test_staged_pyo_suffix_blob_is_fatal(self):
+        findings = scan_blob("build/lib/creds.pyo", AWS_KEY.encode())
+        self.assertIn("aws_access_key", _fatal_rules(findings))
+
+    def test_working_tree_walk_still_skips_node_modules(self):
+        """Control: the disk walk (scan_file) keeps skipping vendored dirs."""
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "node_modules" / "app" / ".env"
+            p.parent.mkdir(parents=True)
+            p.write_text("AWS_ACCESS_KEY_ID=" + AWS_KEY + "\n", encoding="utf-8")
+            self.assertEqual(scan_file(p), [])
+
+
+class TestItem2ControlBytesDoNotDropGenericRules(unittest.TestCase):
+    """Tracker e346b3e442e8 (P1): >=5% control bytes classed the blob binary and ran
+    only FATAL_RULES, so generic credential rules were dropped. ANSI escapes must not
+    count as binary content, and a binary blob must still get generic rules over its
+    printable runs."""
+
+    def test_ansi_escapes_do_not_hide_generic_credential(self):
+        findings = scan_blob("cfg.txt", b"password=Xq7mPz9vLr2wK\n" + b"\x1b[0m" * 6)
+        self.assertTrue(any(r.startswith("generic_") for r in _fatal_rules(findings)), findings)
+
+    def test_binary_blob_printable_run_still_gets_generic_rules(self):
+        raw = b"\x01\x02\x03\x04\x05\x06\x07\x08" * 8 + b"password=Xq7mPz9vLr2wK" + b"\x01\x02\x03\x04\x05\x06\x07\x08" * 8
+        findings = scan_blob("blob.bin", raw)
+        self.assertTrue(any(r.startswith("generic_") for r in _fatal_rules(findings)), findings)
+
+
+class TestItem3ConnectionStringPlaceholderOnPassword(unittest.TestCase):
+    """Tracker b0937071216e (P1): the placeholder check ran on the whole URL, so a
+    real password on a DB named /test was dropped. It must check the password only."""
+
+    def test_real_password_with_test_db_name_is_fatal(self):
+        line = _j("DATABASE_URL = postgresql://app:", "Pr0dS3cr3tPw", "@db.prod-acme.io:5432/test")
+        findings = scan_blob("deploy.py", line.encode())
+        self.assertIn("connection_string", _fatal_rules(findings))
+
+    def test_placeholder_password_is_still_dropped(self):
+        """Control: a placeholder PASSWORD still passes."""
+        line = _j("postgresql://app:", "changeme", "@db.prod-acme.io:5432/app")
+        findings = scan_blob("deploy.py", line.encode())
+        self.assertNotIn("connection_string", _all_rules(findings))
+
+
+class TestItem4GenericHeuristics(unittest.TestCase):
+    """Tracker a108e72018bf (P2): placeholder words matched as substrings, and a
+    trailing comment made a real value look like a code reference."""
+
+    def test_placeholder_word_substring_does_not_hide_real_value(self):
+        findings = scan_blob("app/settings.env.py", _j("DB_PASSWORD=Hunter2xxx", "RealPw").encode())
+        self.assertIn("generic_credential_assignment", _fatal_rules(findings))
+
+    def test_trailing_comment_is_not_a_code_reference(self):
+        findings = scan_blob("conf.yml", _j("password: correct", "horsebattery  # prod key\n").encode())
+        self.assertIn("generic_credential_assignment", _fatal_rules(findings))
+
+    def test_whole_token_placeholder_still_dropped(self):
+        """Control: a placeholder as its own token still passes."""
+        findings = scan_blob("app/settings.env.py", _j("DB_PASSWORD=changeme", "-prod-1234").encode())
+        self.assertNotIn("generic_credential_assignment", _all_rules(findings))
+
+    def test_code_reference_with_trailing_comment_stays_clean(self):
+        """Control: a snake_case identifier with a comment is still code, not a literal."""
+        findings = scan_blob("app.py", _j("token = resolved", "_key  # from env\n").encode())
+        self.assertNotIn("generic_credential_assignment", _all_rules(findings))
+
+
 if __name__ == "__main__":
     unittest.main()
