@@ -87,6 +87,22 @@ def get_pr_status(pr_number):
     return data
 
 
+def read_pr_state(pr_number):
+    """
+    Read the PR state once (OPEN / MERGED / CLOSED), upper-cased.
+    Returns None if the state cannot be read (caller fails closed).
+    A merge call that times out or reports failure may still have landed server-side,
+    so this is consulted before any retry decision.
+    """
+    try:
+        data = run_gh_command(["gh", "pr", "view", str(pr_number), "--json", "state"])
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("state"), str):
+        return None
+    return data["state"].upper()
+
+
 def check_ci_status(status_rollup, allow_no_checks=False, expected_checks=None):
     """
     Analyze status check rollup from gh pr view --json statusCheckRollup.
@@ -738,14 +754,16 @@ def main():
             else:
                 print(f"CI CONFIRMED GREEN. Merging PR #{args.pr_number}...")
 
-            # N9 FIX: Catch TimeoutExpired from merge subprocess and treat as transient error
+            # A timeout or failure from `gh pr merge` does NOT prove the merge did not land:
+            # the server may have merged before the client gave up. Read the PR state once
+            # before deciding anything, so a landed merge is never re-attempted or reported as failed.
+            merge_timed_out = False
             try:
                 merge_result = merge_pr(args.pr_number, args.merge_method, dry_run=args.dry_run, head_ref_oid=head_ref_oid)
             except subprocess.TimeoutExpired:
-                print(f"TRANSIENT ERROR: merge command timed out, retrying...")
-                print(f"CI PENDING ({elapsed:.0f}s elapsed)... waiting {args.poll}s")
-                time.sleep(args.poll)
-                continue
+                print(f"TRANSIENT ERROR: merge command timed out, reading PR state before any retry...")
+                merge_result = False
+                merge_timed_out = True
 
             if merge_result:
                 if args.dry_run:
@@ -753,9 +771,23 @@ def main():
                 else:
                     print(f"MERGED: PR #{args.pr_number} merged successfully")
                 sys.exit(0)
-            else:
-                print("ERROR: merge failed (PR state changed? or missing SHA pin?)")
-                sys.exit(1)
+
+            if not args.dry_run:
+                pr_state = read_pr_state(args.pr_number)
+                if pr_state == "MERGED":
+                    print(f"MERGED: PR #{args.pr_number} state is MERGED; the merge landed despite the merge command timing out or failing")
+                    sys.exit(0)
+                if merge_timed_out:
+                    if pr_state == "OPEN":
+                        print(f"PR #{args.pr_number} is still OPEN after the timeout; retrying merge...")
+                        print(f"CI PENDING ({elapsed:.0f}s elapsed)... waiting {args.poll}s")
+                        time.sleep(args.poll)
+                        continue
+                    print(f"ERROR: merge timed out and PR state is {pr_state or 'unreadable'}; not retrying (fail closed)")
+                    sys.exit(1)
+
+            print("ERROR: merge failed (PR state changed? or missing SHA pin?)")
+            sys.exit(1)
 
         # Still pending: wait and retry
         print(f"CI PENDING ({elapsed:.0f}s elapsed)... waiting {args.poll}s")

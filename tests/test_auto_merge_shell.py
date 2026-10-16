@@ -1,9 +1,14 @@
 """Verify auto_merge.run() uses list-form subprocess (no shell=True)."""
 import ast
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools'))
+import auto_merge  # noqa: E402
 
 
 class TestAutoMergeNoShell(unittest.TestCase):
@@ -159,6 +164,109 @@ class TestAutoMergeHelpEncoding(unittest.TestCase):
             f'--help crashed under cp1252 (stderr): {result.stderr}'
         )
         self.assertIn('usage', result.stdout)
+
+
+def _git(cwd, *args):
+    """Run git in a scratch repo and return stripped stdout; raise on non-zero exit."""
+    r = subprocess.run(['git', *args], cwd=cwd, capture_output=True, text=True,
+                       encoding='utf-8', errors='replace', check=False)
+    if r.returncode != 0:
+        raise AssertionError(f'git {args} failed in {cwd}: {r.stderr}')
+    return r.stdout.strip()
+
+
+def _write(repo, rel, text):
+    path = os.path.join(repo, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w', encoding='utf-8', newline='\n') as f:
+        f.write(text)
+
+
+def _commit(repo, msg):
+    _git(repo, 'add', '-A')
+    _git(repo, 'commit', '-q', '-m', msg)
+
+
+class _ScratchRepoCase(unittest.TestCase):
+    """Bare origin + primary clone on an unrelated branch with untracked WIP. Scratch only."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='automerge-test-')
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.origin = os.path.join(self.tmp, 'origin.git')
+        self.primary = os.path.join(self.tmp, 'primary')
+        _git(self.tmp, 'init', '-q', '--bare', '-b', 'main', self.origin)
+        _git(self.tmp, 'init', '-q', '-b', 'main', self.primary)
+        _git(self.primary, 'config', 'user.name', 'Test')
+        _git(self.primary, 'config', 'user.email', 'test@example.invalid')
+        _git(self.primary, 'remote', 'add', 'origin', self.origin)
+        _write(self.primary, 'README.md', 'base\n')
+        # Seed the real secret gate (a copy, read-only use) so the gate runs in scratch.
+        os.makedirs(os.path.join(self.primary, 'tools'), exist_ok=True)
+        shutil.copyfile(os.path.join(os.path.dirname(os.path.abspath(auto_merge.__file__)), 'secret_scan.py'),
+                        os.path.join(self.primary, 'tools', 'secret_scan.py'))
+        _commit(self.primary, 'base')
+        _git(self.primary, 'push', '-q', 'origin', 'main')
+        _git(self.primary, 'checkout', '-q', '-b', 'pr')
+        _write(self.primary, 'feature.txt', 'feature\n')
+        _commit(self.primary, 'pr work')
+        _git(self.primary, 'push', '-q', 'origin', 'pr')
+        _git(self.primary, 'checkout', '-q', 'main')
+        _write(self.primary, 'main-change.txt', 'main\n')
+        _commit(self.primary, 'main moves ahead')
+        _git(self.primary, 'push', '-q', 'origin', 'main')
+        _git(self.primary, 'checkout', '-q', '-b', 'wip-local')
+        _write(self.primary, 'wip.txt', 'untracked WIP\n')
+        prev = os.getcwd()
+        os.chdir(self.primary)
+        self.addCleanup(os.chdir, prev)
+
+    def origin_sha(self, branch):
+        return _git(self.origin, 'rev-parse', f'refs/heads/{branch}')
+
+
+class TestFixBranchLeavesCallerCheckoutAlone(_ScratchRepoCase):
+    def test_wip_stays_untracked_and_head_unchanged(self):
+        before_head = _git(self.primary, 'rev-parse', 'HEAD')
+        before_branch = _git(self.primary, 'branch', '--show-current')
+        old_pr = self.origin_sha('pr')
+        ok, msg = auto_merge.fix_branch('pr')
+        self.assertTrue(ok, msg)
+        self.assertEqual(_git(self.primary, 'rev-parse', 'HEAD'), before_head)
+        self.assertEqual(_git(self.primary, 'branch', '--show-current'), before_branch)
+        self.assertIn('?? wip.txt', _git(self.primary, 'status', '--porcelain').splitlines())
+        self.assertNotEqual(self.origin_sha('pr'), old_pr)
+        self.assertEqual(_git(self.origin, 'show', 'refs/heads/pr:main-change.txt'), 'main')
+        self.assertNotIn('wip.txt', _git(self.origin, 'ls-tree', '-r', '--name-only', 'refs/heads/pr').split())
+
+
+class TestFixBranchSecretGate(_ScratchRepoCase):
+    def test_secret_in_fix_diff_blocks_push(self):
+        # Runtime-assembled dummy key: never a literal credential in this file.
+        dummy = 'sk-' + 'Qw8Zr4Vt1Bn6Lk3Pm9Hs2Yc5Gd7Ja'
+        _git(self.primary, 'checkout', '-q', 'main')
+        _write(self.primary, 'notes/config.txt', f'token = {dummy}\n')
+        _commit(self.primary, 'add config with token')
+        _git(self.primary, 'push', '-q', 'origin', 'main')
+        _git(self.primary, 'checkout', '-q', 'wip-local')
+        old_pr = self.origin_sha('pr')
+        ok, msg = auto_merge.fix_branch('pr')
+        self.assertFalse(ok, msg)
+        self.assertIn('secret', msg)
+        self.assertEqual(self.origin_sha('pr'), old_pr)
+
+    def test_zero_inspected_files_is_not_a_pass(self):
+        fake = os.path.join(self.tmp, 'fake_scan.py')
+        with open(fake, 'w', encoding='utf-8') as f:
+            f.write("print('CLEAN: 0 files scanned')\n")
+        orig = auto_merge.SECRET_SCAN
+        auto_merge.SECRET_SCAN = fake
+        self.addCleanup(setattr, auto_merge, 'SECRET_SCAN', orig)
+        old_pr = self.origin_sha('pr')
+        ok, msg = auto_merge.fix_branch('pr')
+        self.assertFalse(ok, msg)
+        self.assertIn('inspected 0 files', msg)
+        self.assertEqual(self.origin_sha('pr'), old_pr)
 
 
 if __name__ == '__main__':

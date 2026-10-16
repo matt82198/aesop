@@ -17,7 +17,7 @@
     "orchestration",
     "aesop"
   ],
-  "author": "Anthropic",
+  "author": "Matt Culliton",
   "license": "PolyForm-Noncommercial-1.0.0",
   "dependencies": {},
   "engines": {
