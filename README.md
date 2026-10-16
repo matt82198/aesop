@@ -83,7 +83,7 @@ npx @matt82198/aesop my-fleet --name "api" --repos "/path/to/repo" --install-dep
 cd my-fleet
 
 # Restart Claude Code — skills are enumerated at startup.
-npx . doctor                  # Confirms skills, hooks, config, and interpreters
+npx @matt82198/aesop doctor   # Confirms skills, hooks, config, and interpreters
 ```
 
 Existing skills of yours are never clobbered: an installed skill that differs
