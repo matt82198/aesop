@@ -11,12 +11,13 @@ Rows marked (inferred) were classified from the commit subject because the commi
 - **doc-invented** (2, 2 inferred): Documentation made unverifiable claims, hallucinated counts or proofs
 - **fake-green** (1, 1 inferred): Tests reported green but never ran or skipped real validation
 - **flake** (4, 4 inferred): Test timing/race condition, deflake required, logical time or retry
-- **gate-activation** (3, 3 inferred): Pre-push secret/verification gate caught an escape or bypass
+- **gate-activation** (4, 4 inferred): Pre-push secret/verification gate caught an escape or bypass
 - **stall** (4, 4 inferred): Agent/process hung or deadlocked, watchdog detected, restart required
 - **test-pollution** (5, 5 inferred): Test config leaked between shards, state not isolated, mock pollution
 
 | Class | What Happened | Resolution | Source |
 | --- | --- | --- | --- |
+| gate-activation (inferred) | record auto_merge caller-safe fix path and delta secret gate | record auto_merge caller-safe fix path and delta secret gate | commit a969fc4c |
 | flake (inferred) | deflake windows-shard concurrency tests (proven under stress) | * fix(tests): deflake windows-shard concurrency tests (stress-proven) | PR #714 |
 | flake (inferred) | fix: deflake test_compact_preserves_ttl_for_expiry on slow CI runners | The "held right now" assertion re-read the wall clock AFTER appendi... | commit 3d47aa99 |
 | test-pollution (inferred) | fix: make CLAUDE.md linter scan tracked files, and stop test scaffo... | The runner failure was pollution, not a real violation. CI reported: | commit 33fb4a11 |
@@ -59,4 +60,4 @@ Rows marked (inferred) were classified from the commit subject because the commi
 | test-pollution (inferred) | isolate tracker writes to tempdir; guard verify_dash against pollut... | - tools/verify_dash.py now explicitly sets AESOP_STATE_ROOT to temp... | commit 29356d85 |
 | stall (inferred) | stall_check.py — silent-hang detection for the agent watchdog (wave... | Adds automated detection of stalled agents by scanning transcript m... | commit 17010688 |
 
-<!-- Latest incident: 2026-09-02T13:07:31-05:00 -->
+<!-- Latest incident: 2026-10-15T19:51:08-05:00 -->
