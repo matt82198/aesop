@@ -165,6 +165,8 @@ DEFAULT_CONFIG = {
         "name": None,
         "email": None
     },
+    # tools/doctor.js checkConfig requires the repos key (an array) to be present.
+    "repos": [],
     "cardinal_rules": {
         "subagent_model": "haiku",
         "tdd_first": True,
@@ -177,8 +179,9 @@ PRE_PUSH_HOOK = """\
 #!/usr/bin/env bash
 set -uo pipefail
 
-# Aesop pre-push hook: secret scan gate
+# Aesop pre-push hook: branch protection + secret scan gate
 # Installed by tools/init_project.py
+# git feeds one stdin line per pushed ref: <local_ref> <local_sha> <remote_ref> <remote_sha>
 
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
 if [ -z "$repo_root" ]; then
@@ -197,12 +200,30 @@ fi
 # Secret scan gate (fail-closed: exit 1 if script is missing)
 scan_script="$repo_root/tools/secret_scan.py"
 if [ -f "$scan_script" ]; then
-  python3 "$scan_script" --staged --repo "$repo_root"
-  scan_exit=$?
-  if [ $scan_exit -ne 0 ]; then
-    echo "ERROR: Secret scan found issues. Push blocked."
-    exit 1
-  fi
+  while read -r local_ref local_sha remote_ref remote_sha; do
+    # Protected remote refs are blocked whatever branch is checked out
+    case "$remote_ref" in
+      refs/heads/main|refs/heads/master)
+        echo "ERROR: Push to $remote_ref is blocked by policy (protected remote ref)."
+        echo "Use a feature branch and open a pull request."
+        exit 1
+        ;;
+    esac
+    # Deleting a ref pushes no content
+    case "$local_sha" in *[!0]*) ;; *) continue ;; esac
+    # Scan the commits being pushed: remote tip..local tip, or the whole tree for a new ref
+    base=""
+    case "$remote_sha" in *[!0]*) base="$remote_sha" ;; esac
+    if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+      base=$(git hash-object -t tree /dev/null)
+    fi
+    python3 "$scan_script" --range "$base..$local_sha" --repo "$repo_root" < /dev/null
+    scan_exit=$?
+    if [ $scan_exit -ne 0 ]; then
+      echo "ERROR: Secret scan found issues in $local_ref. Push blocked."
+      exit 1
+    fi
+  done
 else
   echo "ERROR: Secret scan script not found at $scan_script"
   echo "The pre-push hook cannot run. Push blocked."
@@ -393,10 +414,10 @@ def resolve_real_git_dir(target_dir):
         return None
 
 
-def copy_secret_scan_script(target_dir):
+def copy_secret_scan_script(target_dir, force=False):
     """
     Copy tools/secret_scan.py from the aesop repo into the target repo's tools/ dir.
-    Skips if already present.
+    Skips if already present unless force=True (init --force refreshes a stale copy).
 
     Returns: (success: bool, message: str)
     """
@@ -412,8 +433,8 @@ def copy_secret_scan_script(target_dir):
         if not source_scan_path.is_file():
             return False, f"source secret_scan.py not found at {source_scan_path}"
 
-        # Skip if already exists
-        if target_scan_path.exists():
+        # Skip if already exists (unless force)
+        if target_scan_path.exists() and not force:
             return False, "already exists"
 
         # Create target tools directory
@@ -606,7 +627,7 @@ def init_project(target_dir, project_name=None, force=False, ci_mode="hosted",
             files_skipped.append(rel)
 
     # 6. Copy secret_scan.py to tools/
-    scan_ok, scan_status = copy_secret_scan_script(str(target))
+    scan_ok, scan_status = copy_secret_scan_script(str(target), force=force)
     if scan_ok:
         files_created.append("tools/secret_scan.py")
     else:

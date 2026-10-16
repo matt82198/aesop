@@ -171,8 +171,13 @@ class BaselineLivenessCheckTest(unittest.TestCase):
     # ---- consumer discovery via hardcoded usage ----------------------
 
     def test_hardcoded_usage_line_is_a_real_consumer(self):
+        # A real consumer declares the --baseline option (see WriterTableSkipTest).
         (self.repo_root / "tools" / "reader.py").write_text(
+            '# usage: reader.py --baseline FILE --json\n'
+            'import argparse\n'
             'from pathlib import Path\n'
+            'parser = argparse.ArgumentParser()\n'
+            'parser.add_argument("--baseline", default=None)\n'
             'def f(repo_root):\n'
             '    baseline_file = Path(repo_root) / ".widget-baseline.json"\n'
             '    return baseline_file\n',
@@ -331,6 +336,137 @@ class BaselineLivenessCheckTest(unittest.TestCase):
         self.assertEqual(stale, [])
         self.assertIsNotNone(error)
         self.assertIn("missing", error)
+
+
+class WriterTableSkipTest(unittest.TestCase):
+    """A file that only QUOTES a baseline filename (a writer/seed table) is not a
+    consumer: it does not accept --baseline, so probing it fails closed. Only a file
+    that both references the filename and declares a --baseline option is probed."""
+
+    _WRITER_SRC = (
+        "# Writer/seed table: quotes the baseline name, never reads it back.\n"
+        "def write_json(name, payload):\n"
+        "    return name, payload\n"
+        "SEEDS = [\n"
+        '    ("widget", write_json(".widget-baseline.json", {"violations": []})),\n'
+        "]\n"
+    )
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.repo_root = Path(self.tmp)
+        (self.repo_root / "tools").mkdir(parents=True, exist_ok=True)
+        # Real consumer: references the baseline by name AND declares --baseline.
+        consumer_src = _FIXTURE_CONSUMER.replace(
+            'MARKER = "FINDME"',
+            'MARKER = "FINDME"\nDEFAULT_BASELINE = Path(__file__).parent / ".widget-baseline.json"',
+        )
+        (self.repo_root / "tools" / "widget_consumer.py").write_text(consumer_src, encoding="utf-8")
+        # Writer-only file: sorts BEFORE the consumer, so the old discovery returned it.
+        (self.repo_root / "tools" / "init_seed.py").write_text(self._WRITER_SRC, encoding="utf-8")
+        (self.repo_root / "widget.py").write_text("clean\n", encoding="utf-8")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write_baseline(self, violations):
+        path = self.repo_root / ".widget-baseline.json"
+        path.write_text(json.dumps({"violations": violations}, indent=2) + "\n", encoding="utf-8")
+        return path
+
+    def test_writer_only_file_is_not_the_consumer(self):
+        self._write_baseline([])
+        consumer = find_consumer(".widget-baseline.json", self.repo_root)
+        self.assertEqual(consumer, "tools/widget_consumer.py")
+
+    def test_writer_only_file_is_never_probed_and_run_passes(self):
+        self._write_baseline([])
+        result = check_repo(self.repo_root)
+        # Probing the writer would produce a consumer error (it prints no JSON).
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(result["stale"], [])
+        self.assertEqual(result["dead"], [])
+        rc = _quiet_main(["--root", str(self.repo_root)])
+        self.assertEqual(rc, 0)
+
+    def test_writer_skip_emits_one_info_line_naming_it(self):
+        self._write_baseline([])
+        result = check_repo(self.repo_root)
+        self.assertEqual(
+            result["writer_skips"],
+            [{"baseline": ".widget-baseline.json", "file": "tools/init_seed.py"}],
+        )
+        sink = io.StringIO()
+        with contextlib.redirect_stdout(sink):
+            main(["--root", str(self.repo_root)])
+        info_lines = [ln for ln in sink.getvalue().splitlines() if ln.startswith("INFO:")]
+        self.assertEqual(len(info_lines), 1)
+        self.assertIn("tools/init_seed.py", info_lines[0])
+
+    def test_real_consumer_is_still_probed(self):
+        # Baseline entry with no matching finding -> the probed consumer reports it stale.
+        self._write_baseline(["widget.py:99"])
+        result = check_repo(self.repo_root)
+        self.assertEqual(len(result["stale"]), 1)
+        self.assertEqual(result["stale"][0]["consumer"], "tools/widget_consumer.py")
+        self.assertEqual(result["stale"][0]["entries"], ["widget.py:99"])
+        self.assertEqual(result["errors"], [])
+
+
+class DeclarationRequiredTest(unittest.TestCase):
+    """A consumer must DECLARE the --baseline flag, not merely mention it.
+
+    A writer table (PUSH_GATE_GENERATORS-style) can quote the baseline filename as
+    code and carry the literal `--baseline` inside an argv string list without
+    accepting that flag. Such a file sorts ahead of real consumers and must never
+    be probed or chosen as the consumer; it is recorded in writer_skips instead.
+    """
+
+    _WRITER_SRC = (
+        "# Writer table: quotes the baseline name and argv strings, never parses them.\n"
+        "from pathlib import Path\n"
+        'OUT = Path(".widget-baseline.json")\n'
+        "PUSH_GATE_GENERATORS = [\n"
+        '    ("widget", ["python", "tools/zz_consumer.py", "--baseline", ".widget-baseline.json"]),\n'
+        "]\n"
+    )
+
+    _CONSUMER_SRC = (
+        "import argparse\n"
+        "from pathlib import Path\n"
+        'DEFAULT = Path(".widget-baseline.json")\n'
+        "parser = argparse.ArgumentParser()\n"
+        'parser.add_argument("--baseline", default=None)\n'
+    )
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.repo_root = Path(self.tmp)
+        (self.repo_root / "tools").mkdir(parents=True, exist_ok=True)
+        # Sorts FIRST ("a_writer.py" < "zz_consumer.py") so the old discovery picked it.
+        (self.repo_root / "tools" / "a_writer.py").write_text(self._WRITER_SRC, encoding="utf-8")
+        (self.repo_root / "tools" / "zz_consumer.py").write_text(self._CONSUMER_SRC, encoding="utf-8")
+        (self.repo_root / ".widget-baseline.json").write_text(
+            json.dumps({"violations": []}) + "\n", encoding="utf-8"
+        )
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_writer_string_list_is_skipped_and_declared_consumer_is_chosen(self):
+        skips = []
+        consumer = find_consumer(".widget-baseline.json", self.repo_root, writer_skips=skips)
+        self.assertEqual(consumer, "tools/zz_consumer.py")
+        self.assertEqual(skips, ["tools/a_writer.py"])
+
+    def test_writer_only_repo_stays_fail_closed(self):
+        (self.repo_root / "tools" / "zz_consumer.py").unlink()
+        skips = []
+        consumer = find_consumer(".widget-baseline.json", self.repo_root, writer_skips=skips)
+        self.assertIsNone(consumer)
+        self.assertEqual(skips, ["tools/a_writer.py"])
+        result = check_repo(self.repo_root)
+        self.assertIn(".widget-baseline.json", result["dead"])
 
 
 if __name__ == "__main__":

@@ -155,10 +155,11 @@ def snapshot_remote_branches(repo_root):
 
 
 def snapshot_open_prs(repo_root):
-    """`gh pr list --state open --json number` -> (sorted [numbers], None) or (None, reason)."""
+    """`gh pr list --state open --json number,headRefName` -> ({number: headRefName}, None)
+    or (None, reason)."""
     try:
         result = subprocess.run(
-            ["gh", "pr", "list", "--state", "open", "--json", "number",
+            ["gh", "pr", "list", "--state", "open", "--json", "number,headRefName",
              "--limit", str(PR_LIST_LIMIT)],
             cwd=str(repo_root), capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=PROBE_TIMEOUT,
@@ -172,9 +173,9 @@ def snapshot_open_prs(repo_root):
     except json.JSONDecodeError as e:
         return None, f"gh pr list produced unparsable JSON: {e}"
     try:
-        return sorted(item["number"] for item in data), None
+        return {item["number"]: item["headRefName"] for item in data}, None
     except (KeyError, TypeError) as e:
-        return None, f"gh pr list JSON missing 'number': {e}"
+        return None, f"gh pr list JSON missing 'number'/'headRefName': {e}"
 
 
 def _branch_name(ref):
@@ -307,10 +308,55 @@ def diff_branches_observed(before, after, mode="strict", session_id=None):
     return observed
 
 
-def diff_prs(before, after):
+def _new_pr_is_observed_only(number, heads, mode, session_id):
+    """Attributed mode only: a new PR whose head branch the tripwire cannot attribute to
+    the run is logged, not failed. A PR with no known head fails closed."""
+    head = heads.get(number)
+    return mode == "attributed" and bool(head) and not _is_attributable_new_branch(head, session_id)
+
+
+def diff_prs(before, after, mode="strict", session_id=None):
+    """PRs that appeared mid-run. Strict mode fails on any new open PR; attributed mode
+    fails only on one whose head branch is plausibly test-created (same rule as
+    diff_branches). `after` may be {number: headRefName} or a bare list of numbers."""
     if before is None or after is None:
         return []
-    return [f"NEW open PR appeared: #{n}" for n in sorted(set(after) - set(before))]
+    heads = after if isinstance(after, dict) else {}
+    return [
+        f"NEW open PR appeared: #{n}"
+        for n in sorted(set(after) - set(before))
+        if not _new_pr_is_observed_only(n, heads, mode, session_id)
+    ]
+
+
+def diff_prs_observed(before, after, mode="strict", session_id=None):
+    """Attributed mode only: unrelated new PRs, logged for visibility, never a failure."""
+    if mode != "attributed" or before is None or after is None:
+        return []
+    heads = after if isinstance(after, dict) else {}
+    return [
+        f"observed, not attributed: NEW open PR #{n} (head {heads[n]})"
+        for n in sorted(set(after) - set(before))
+        if _new_pr_is_observed_only(n, heads, mode, session_id)
+    ]
+
+
+def _exit_code(returncode):
+    """Shell-style exit code. A child killed by signal N reports returncode -N on POSIX;
+    the shell convention is 128+N (SIGKILL -> 137). Never a negative or a silent 0."""
+    if returncode is None:
+        return 1
+    if returncode < 0:
+        return 128 - returncode
+    return returncode
+
+
+def _combine_exit(command_rc, tripwire_rc):
+    """Non-zero if EITHER side is non-zero. The wrapped command's own non-zero code is
+    preserved; otherwise the tripwire's. Never max(): max(-9, 0) == 0 hid a SIGKILL."""
+    if command_rc != 0:
+        return command_rc
+    return tripwire_rc
 
 
 def _fmt_count(value):
@@ -373,7 +419,7 @@ def main(argv):
 
     t0 = time.monotonic()
     proc = subprocess.run(command, cwd=str(repo_root))
-    command_rc = proc.returncode
+    command_rc = _exit_code(proc.returncode)
     elapsed = time.monotonic() - t0
 
     branches_after, _ = snapshot_remote_branches(repo_root)
@@ -386,18 +432,19 @@ def main(argv):
     )
 
     observed = diff_branches_observed(branches_before, branches_after, mode=mode, session_id=session_id)
+    observed += diff_prs_observed(prs_before, prs_after, mode=mode, session_id=session_id)
     for o in observed:
         print(o, file=sys.stderr)
 
     findings = (
         diff_branches(branches_before, branches_after, mode=mode, session_id=session_id)
-        + diff_prs(prs_before, prs_after)
+        + diff_prs(prs_before, prs_after, mode=mode, session_id=session_id)
     )
     for f in findings:
         print(f"FAIL (remote-refs tripwire): {f}", file=sys.stderr)
 
     tripwire_rc = 1 if findings else 0
-    return max(command_rc, tripwire_rc)
+    return _combine_exit(command_rc, tripwire_rc)
 
 
 if __name__ == "__main__":
