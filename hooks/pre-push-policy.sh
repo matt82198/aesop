@@ -1859,6 +1859,11 @@ check_generated_regen() {
     fi
     return 1
   fi
+  # Pass: echo the gate's note lines (e.g. D46 "inherited unchanged from base") so the
+  # pass is visible in the push log, not silently swallowed.
+  if [ -n "$gate_output" ]; then
+    printf '%s\n' "$gate_output"
+  fi
   return 0
 }
 
@@ -2018,8 +2023,10 @@ check_emit_receipt() {
 
     # Wait for the process to clean up, with a small timeout to avoid hanging
     ( sleep 2; kill -KILL "$receipt_pid" 2>/dev/null || true ) &
-    wait "$receipt_pid" 2>/dev/null || true
-    receipt_exit_code=$?
+    # Capture the child's real exit code: `wait ... || true; $?` always reads 0 (fail-open).
+    local wait_rc=0
+    wait "$receipt_pid" 2>/dev/null || wait_rc=$?
+    receipt_exit_code=$wait_rc
 
     # If we timed out, report exit code 124 (same as timeout command)
     if [ $timed_out -eq 1 ]; then

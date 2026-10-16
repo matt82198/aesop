@@ -206,9 +206,13 @@ export function useSSE() {
     return () => {
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
       }
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
+        // Clear the ref too: connect() treats a set ref as "already connected",
+        // so a StrictMode re-mount would otherwise skip opening a fresh source.
+        eventSourceRef.current = null;
       }
     };
   }, [connect]);

@@ -170,10 +170,11 @@ def check_tree(repo_root, allowlist):
         try:
             with open(abspath, "rb") as fh:
                 raw = fh.read()
-        except OSError:
-            # Deleted/renamed between ls-files and read (race) or a symlink
-            # to nowhere -- not a finding, nothing to scan.
-            continue
+        except OSError as e:
+            # A tracked file we cannot read (AV lock, permission denied,
+            # dangling symlink) is UNVERIFIED, never clean: fail closed the
+            # same way check_files does, naming the path.
+            raise GitError("could not read %s: %s" % (rel, e))
         if looks_binary(raw):
             continue
         text = raw.decode("utf-8", errors="replace")
