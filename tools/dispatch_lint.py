@@ -140,6 +140,9 @@ FORBIDDEN_PATTERNS = {
 # File patterns to scan (glob patterns, not regex)
 SCANNABLE_GLOB_PATTERNS = ["*.py", "*.js", "*.mjs", "*.md", "*.sh"]
 
+# Directory names (exact path components, relative to the scan root) never scanned.
+SKIP_DIR_NAMES = {".git", "node_modules", ".pytest_cache", "state", "tests"}
+
 # Categorical documentation exemptions. These are never dispatch templates --
 # they are generated or hand-written PROSE that *describes* forbidden patterns
 # (so a tool's job of preventing --admin/--auto/merge_train.py/etc necessarily
@@ -192,16 +195,33 @@ def is_index_summary_line(line: str) -> bool:
     return line.strip().startswith("INDEX:")
 
 
+def _hash_comment_start(line: str) -> int:
+    """Index of a '#' that starts a comment, or -1.
+
+    A '#' starts a comment only when it is the first non-whitespace character
+    of the line, or when it is preceded by whitespace AND followed by whitespace
+    or end-of-line (`cmd  # note`). `PR #845` and `#845` are issue references,
+    not comments, so the prose after them is still scanned (tracker 75cd331b1686).
+    """
+    first_code = len(line) - len(line.lstrip())
+    for i, ch in enumerate(line):
+        if ch != '#':
+            continue
+        if i == first_code:
+            return i
+        if i > 0 and line[i - 1].isspace() and (i + 1 == len(line) or line[i + 1].isspace()):
+            return i
+    return -1
+
+
 def is_comment_only(line: str, pattern: str) -> bool:
     """Check if a pattern appears only in a comment, not in code.
 
     Returns True if the pattern is only found after # or // comment markers,
     indicating it's a comment-only reference that shouldn't trigger a violation.
     """
-    line.strip()
-
     # Find comment markers
-    hash_pos = line.find('#')
+    hash_pos = _hash_comment_start(line)
     slash_pos = line.find('//')
 
     # Determine the actual comment start position
@@ -227,27 +247,98 @@ def is_comment_only(line: str, pattern: str) -> bool:
     return True
 
 
-def is_in_string_literal(lines: List[str], line_num: int, col_start: int, col_end: int) -> bool:
-    """Check if a position range is inside a backtick string (JS template).
+# Prohibition markers. A forbidden flag or command that comes AFTER one of these
+# in the same clause (same line, or earlier in its list item, with no ';' or '.'
+# between marker and flag) is a MENTION (a rule about the command), not an
+# instruction to run it. Case-insensitive, whole words/phrases.
+PROHIBITION_MARKER_RE = re.compile(
+    r"\b(?:never|forbidden|do\s+not|don['" + chr(0x2019) + r"]t|banned|prohibited|must\s+not|"
+    r"disallowed|not\s+to|avoid|without)\b",
+    re.IGNORECASE,
+)
+# A bare `no` or `not` immediately before a backticked flag: "no `--no-verify`".
+BACKTICK_NEGATION_RE = re.compile(r"\b(?:no|not)\s+`\s*$", re.IGNORECASE)
+# Clause boundaries: a marker only covers a flag that follows it in the same clause.
+CLAUSE_BOUNDARY_RE = re.compile(r"[;.]")
+# Prose describing a threat or a bypass (not an instruction). A line containing one
+# of these words is a mention of the forbidden token it carries.
+THREAT_CONTEXT_RE = re.compile(
+    r"\b(?:threats?|bypass\w*|attacks?|adversar\w*|escap\w*|incidents?|would|could)\b",
+    re.IGNORECASE,
+)
+# An angle-bracket placeholder argument (`auto_merge.py <n>`) is a documentation
+# example, not an invocation. Only the sanctioned merge-automation commands use it.
+PLACEHOLDER_ARG_RE = re.compile(r"\s+<[A-Za-z][\w .|-]*>")
+PLACEHOLDER_EXEMPT_PATTERNS = {"auto_merge_bare_invocation", "gh_pr_merge_auto_bare"}
+# A Markdown bullet or numbered item start. Indented lines after it belong to it.
+LIST_ITEM_START_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+# Leading decoration stripped before deciding whether a line is a command line.
+LEADING_DECORATION_RE = re.compile(r"^\s*(?:(?:[-*+]|\d+[.)])\s+)?[`$>\s]*")
+# A line whose first token is a shell command is an instruction, whatever it says.
+COMMAND_LINE_RE = re.compile(r"(?:git|gh|python3?|cd|npm|node|bash|sh|pip|make)\b", re.IGNORECASE)
+# Quoted spans on a line. A match inside one is code only when the quote is a
+# string passed to an exec/spawn-style call, or assigned to a variable.
+QUOTED_LITERAL_RE = re.compile(r"\"[^\"\n]*\"|'[^'\n]*'|`[^`\n]*`")
+CODE_CALL_BEFORE_QUOTE_RE = re.compile(
+    r"(?:\bexec\w*|\bspawn\w*|\bPopen|\bsystem|\bcheck_output|\bcheck_call|\bsubprocess\.\w+)"
+    r"\s*\((?:[^()]*,)?\s*\[?\s*$",
+    re.IGNORECASE,
+)
+CODE_ASSIGN_BEFORE_QUOTE_RE = re.compile(r"\b[A-Za-z_$][\w$]*\s*=\s*\[?\s*$")
 
-    Returns True only if the pattern is inside a backtick-delimited string (typically
-    documentation in JS files). Does NOT filter triple-quoted Python strings, as those
-    are often actual dispatch prompts being tested.
+
+def list_item_owners(lines: List[str]) -> List[object]:
+    """For each line, the index of the list item (bullet line) it belongs to, or None.
+
+    A bullet starts an item; following lines indented under it are its
+    continuation; a blank line or an unindented non-bullet line ends the item.
     """
-    # Only filter backtick strings (JavaScript template literals used for documentation)
-    # Don't filter triple-quoted strings as they're often actual dispatch code being tested
-    marker = '`'
-    # Count occurrences before this line
-    lines_before = '\n'.join(lines[:line_num-1])
-    count_before = lines_before.count(marker)
-    # Count occurrences up to col_start on current line
-    current_line = lines[line_num - 1]
-    count_current = current_line[:col_start].count(marker)
-    # If odd total, we're inside a backtick string
-    if (count_before + count_current) % 2 == 1:
-        return True
+    owners: List[object] = []
+    owner = None
+    for idx, raw in enumerate(lines):
+        if LIST_ITEM_START_RE.match(raw):
+            owner = idx
+        elif not raw.strip():
+            owner = None
+        elif not (raw[:1] in (" ", "\t") and owner is not None):
+            owner = None
+        owners.append(owner)
+    return owners
 
+
+def _is_command_line(line: str) -> bool:
+    """True when the line's first token is a shell command (an instruction)."""
+    return bool(COMMAND_LINE_RE.match(LEADING_DECORATION_RE.sub("", line, count=1)))
+
+
+def _in_code_literal(line: str, pos: int) -> bool:
+    """True when position `pos` sits inside a quoted string that is code."""
+    for quoted in QUOTED_LITERAL_RE.finditer(line):
+        if quoted.start() < pos < quoted.end():
+            before = line[:quoted.start()]
+            return bool(CODE_CALL_BEFORE_QUOTE_RE.search(before)
+                        or CODE_ASSIGN_BEFORE_QUOTE_RE.search(before))
     return False
+
+
+def is_prohibition_mention(line: str, match_start: int, item_lines_before: List[str]) -> bool:
+    """True when a forbidden match is a mention of a rule, not an instruction.
+
+    Passes when a prohibition marker (or a bare `no`/`not` before a backtick) sits
+    in the same clause as the match, on the same line or earlier in its list item,
+    with no ';' or '.' between them. It also passes for a line that describes a
+    threat or bypass. The match is never a mention when it is imperative: on a
+    command line, or inside a code string passed to exec/spawn or assigned in code.
+    """
+    if _is_command_line(line) or _in_code_literal(line, match_start):
+        return False
+    # Threat/bypass prose is judged over the whole sentence-bearing item, so a
+    # threat word on the item's first line covers a flag on its continuation line.
+    if THREAT_CONTEXT_RE.search("\n".join(item_lines_before + [line])):
+        return True
+    preceding = "\n".join(item_lines_before + [line[:match_start]])
+    clause = CLAUSE_BOUNDARY_RE.split(preceding)[-1]
+    return bool(PROHIBITION_MARKER_RE.search(clause) or BACKTICK_NEGATION_RE.search(clause))
 
 
 def find_violations(
@@ -261,6 +352,7 @@ def find_violations(
         return violations
 
     lines = content.split("\n")
+    owners = list_item_owners(lines)
 
     for line_num, line in enumerate(lines, 1):
         # Skip suppressed lines
@@ -272,14 +364,25 @@ def find_violations(
         if is_index_summary_line(line):
             continue
 
+        owner = owners[line_num - 1]
+        item_lines_before = lines[owner:line_num - 1] if owner is not None else []
+
         for pattern_key, pattern_info in FORBIDDEN_PATTERNS.items():
             for match in re.finditer(pattern_info["pattern"], line, re.IGNORECASE):
-                # Skip if pattern only appears in comments
+                # Skip if pattern only appears in comments. Inline backtick
+                # spans and markdown fences are NOT exemptions: a command in
+                # a dispatch prompt is an instruction wherever it is quoted.
                 if is_comment_only(line, pattern_info["pattern"]):
                     continue
 
-                # Skip if pattern is inside a string literal
-                if is_in_string_literal(lines, line_num, match.start(), match.end()):
+                # A documentation example with a placeholder argument (`<n>`) is not
+                # an invocation of the command it names.
+                if (pattern_key in PLACEHOLDER_EXEMPT_PATTERNS
+                        and PLACEHOLDER_ARG_RE.match(line, match.end())):
+                    continue
+
+                # Skip a mention of the rule (prohibition marker before it).
+                if is_prohibition_mention(line, match.start(), item_lines_before):
                     continue
 
                 violations.append({
@@ -319,9 +422,14 @@ def scan_directory(
             else:
                 paths_to_scan.extend(start_path.glob(pattern))
 
+    scan_root = start_path if start_path.is_dir() else start_path.parent
     for file_path in sorted(set(paths_to_scan)):
-        # Skip certain directories and test files
-        if any(skip in str(file_path) for skip in [".git", "node_modules", ".pytest_cache", "state", "/tests/", "\\tests\\"]):
+        # Skip directories whose path component is exactly a skip name, relative
+        # to the scan root. Substring matching on the absolute path wrongly
+        # skipped state_store/ and every file under a checkout such as
+        # C:/statewide/aesop (tracker 6a2736a273b8).
+        rel_dirs = file_path.relative_to(scan_root).parts[:-1]
+        if any(part in SKIP_DIR_NAMES for part in rel_dirs):
             continue
         # Skip test files specifically (test_*.py, etc.)
         if file_path.name.startswith("test_"):
@@ -331,10 +439,13 @@ def scan_directory(
         if file_path.name in DOC_EXEMPT_FILENAMES:
             continue
 
+        # Fail closed on read errors (reported as errors -> exit 2), but decode
+        # with errors='replace' so a stray non-UTF-8 byte cannot hide the
+        # forbidden command on the same file (tracker 4b3485fefc1e).
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                 content = f.read()
-        except (UnicodeDecodeError, PermissionError) as e:
+        except OSError as e:
             errors.append(f"Error reading {file_path}: {e}")
             continue
 
@@ -402,15 +513,19 @@ def main():
     start_path = Path(args.path).resolve()
     violations_by_file, errors = scan_directory(start_path)
 
-    # Print errors
-    if errors:
-        for error in errors:
-            print(f"Warning: {error}", file=sys.stderr)
-
     # Print violations
     if violations_by_file:
         output = format_violations(violations_by_file, as_json=args.json)
         print(output)
+
+    # Any path or file that could not be scanned is an error: fail closed (exit 2)
+    # rather than reporting clean over files that were never read.
+    if errors:
+        for error in errors:
+            print(f"Error: {error}", file=sys.stderr)
+        return 2
+
+    if violations_by_file:
         return 1
 
     # Clean

@@ -215,6 +215,46 @@ class BootStateTests(unittest.TestCase):
         self.assertEqual(r.stdout, "")
         self.assertFalse(missing.exists(), "a read must not create the state dir")
 
+    # --- state root resolution: AESOP_STATE_ROOT beats <repo>/state -----------
+    def _seed_goal_at(self, state_dir, goal):
+        state_dir.mkdir(parents=True, exist_ok=True)
+        with StateAPI(resolve_db_path(state_dir, "tracker")) as api:
+            goal_state.record_goal(api, goal, phase="build", next_action="read the right store", refs=[])
+
+    def test_env_state_root_is_read_not_stale_repo_state(self):
+        # Live store lives at AESOP_STATE_ROOT; a stale <repo>/state store also exists.
+        # With no --state-dir, the brief must read the env-configured store only.
+        fixture = Path(self._tmp.name) / "fixture-store"
+        self._seed_goal_at(fixture, "Fixture goal from env root")
+        self._seed_goal_at(self.repo / "state", "STALE goal in repo state")
+        env = dict(os.environ)
+        env["AESOP_STATE_ROOT"] = str(fixture)
+        env["AESOP_TASK_EVENTS_JSONL"] = str(self.jsonl)
+        r = subprocess.run(
+            [sys.executable, str(TOOL), "--repo", str(self.repo), "--jsonl", str(self.jsonl)],
+            capture_output=True, encoding="utf-8", errors="replace", env=env, timeout=60,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("GOAL: Fixture goal from env root", r.stdout)
+        self.assertNotIn("STALE goal in repo state", r.stdout)
+
+    def test_state_dir_flag_beats_env_state_root(self):
+        flag_store = Path(self._tmp.name) / "flag-store"
+        env_store = Path(self._tmp.name) / "env-store"
+        self._seed_goal_at(flag_store, "Goal from the flag store")
+        self._seed_goal_at(env_store, "Goal from the env store")
+        env = dict(os.environ)
+        env["AESOP_STATE_ROOT"] = str(env_store)
+        env["AESOP_TASK_EVENTS_JSONL"] = str(self.jsonl)
+        r = subprocess.run(
+            [sys.executable, str(TOOL), "--repo", str(self.repo), "--state-dir", str(flag_store),
+             "--jsonl", str(self.jsonl)],
+            capture_output=True, encoding="utf-8", errors="replace", env=env, timeout=60,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("GOAL: Goal from the flag store", r.stdout)
+        self.assertNotIn("env store", r.stdout)
+
     # --- INGEST line: the brief ingests first and reports freshness ----------
     def _write_jsonl(self, lines, trailing_newline=True):
         body = "\n".join(lines) + ("\n" if trailing_newline else "")
@@ -281,6 +321,46 @@ class BootStateTests(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertEqual(r.stdout, "")
         self.assertFalse(missing.exists())
+
+    def test_failed_ingest_inside_heartbeat_window_is_not_fresh(self):
+        # A clean run writes the heartbeat. A later run that fails on a held malformed last
+        # line leaves that heartbeat inside the 15 min window, so status() alone says fresh.
+        # The INGEST line must still say STALE and carry the failed outcome.
+        self._seed_goal()
+        self._write_jsonl([self._rec("a1", "good event")])
+        ok = self._brief()
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertIn("INGEST: fresh", ok.stdout)
+        self._write_jsonl([self._rec("a1", "good event"), "{not json"])
+        r = self._brief()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        ingest_line = [ln for ln in r.stdout.splitlines() if ln.startswith("INGEST:")]
+        self.assertEqual(len(ingest_line), 1, r.stdout)
+        self.assertNotIn("fresh", ingest_line[0])
+        self.assertIn("STALE", ingest_line[0])
+        self.assertIn("ingest run: failed exit 3", ingest_line[0])
+
+    def test_timed_out_ingest_inside_heartbeat_window_is_not_fresh(self):
+        from tools import boot_state as bs
+        self._write_jsonl([self._rec("a1", "clean")])
+        self.assertEqual(bs.run_ingest(self.state_dir, self.jsonl), "ok")  # writes the heartbeat
+        line = bs._ingest_line(self.state_dir, self.jsonl, "timed out after 5s")
+        self.assertNotIn("fresh", line)
+        self.assertIn("STALE", line)
+        self.assertIn("ingest run: timed out after 5s", line)
+
+    def test_oversized_goal_keeps_every_section_and_marks_truncation(self):
+        # A 15 KB goal must not hard-cut the brief: GOAL is bounded, every other section renders.
+        self._seed_goal("BIGGOAL " + "word " * 3000)
+        self._seed_tasks(2)
+        r = self._brief()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertLessEqual(len(r.stdout.encode("utf-8")), 12000)
+        for header in ("## STATE.md (ACTIVE block)", "## BUILDLOG.md", "## EVENT STORE", "## GIT"):
+            self.assertIn(header, r.stdout)
+        self.assertIn("active line alpha", r.stdout)
+        self.assertRegex(r.stdout, r"\[GOAL truncated \d+ bytes\]")
+        self.assertLess(r.stdout.index("[GOAL truncated"), r.stdout.index("## STATE.md"))
 
     def _brief_at(self, state_dir):
         env = dict(os.environ)

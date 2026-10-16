@@ -568,5 +568,308 @@ def bad_merge():
             "Test files should not trigger dispatch_lint violations")
 
 
+class TestTightenedDispatchLint(unittest.TestCase):
+    """Behavioural regressions for the three verified dispatch_lint gaps
+    (tracker 75cd331b1686, 4b3485fefc1e, 6a2736a273b8)."""
+
+    @staticmethod
+    def _patterns(content, name="lane.md"):
+        return {v["pattern"] for v in find_violations(Path(name), content)}
+
+    # --- item 1: '#' is only a comment at line start or as a spaced trailing
+    # comment; backtick spans and markdown fences are never exemptions.
+
+    def test_pr_hash_prose_line_is_scanned(self):
+        """`PR #845` is an issue reference, not a comment: the command after it
+        must still be flagged."""
+        content = "Agent()\nLane for PR #845: run gh pr merge 845 --admin now\n"
+        self.assertIn("admin_flag", self._patterns(content))
+
+    def test_inline_backtick_command_in_prose_is_scanned(self):
+        """An inline code span in a dispatch prompt is still an instruction."""
+        content = "Agent()\nLane for PR #845: run `gh pr merge 845 --admin` now\n"
+        self.assertIn("admin_flag", self._patterns(content))
+
+    def test_fenced_block_command_is_scanned(self):
+        """A ```bash fence contains code, not an inline string: its command is
+        scanned (odd backtick parity must not hide it)."""
+        content = "Agent()\n```bash\ngh pr merge 12 --admin\n```\n"
+        self.assertIn("admin_flag", self._patterns(content))
+
+    def test_fence_markers_do_not_hide_later_violations(self):
+        """Fence markers must not flip scanning state for the rest of the file."""
+        content = (
+            "Agent()\n```\nsafe\n```\n\n```\nsafe\n```\n"
+            "gh pr merge 5 --admin\n"
+        )
+        v = find_violations(Path("lane.md"), content)
+        self.assertTrue(any(x["line"] == 9 and x["pattern"] == "admin_flag"
+                            for x in v), v)
+
+    def test_spaced_trailing_comment_still_ignored(self):
+        """A real trailing comment (whitespace, '#', space) is still a comment."""
+        content = "Agent()\ndo_thing()  # gh pr merge 5 --admin\n"
+        self.assertEqual(find_violations(Path("x.py"), content), [])
+
+    # --- item 2: fail closed on missing paths and unreadable files.
+
+    def _run_cli(self, *args):
+        tool = Path(__file__).resolve().parent.parent / "tools" / "dispatch_lint.py"
+        return subprocess.run(
+            [sys.executable, "-I", str(tool), *args],
+            capture_output=True, encoding="utf-8", errors="replace", timeout=120,
+        )
+
+    def test_missing_scan_path_exits_2(self):
+        """The docstring promises exit 2 on error; a missing path is an error."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing = Path(tmpdir) / "no_such_path"
+            result = self._run_cli(str(missing), "--check")
+            self.assertEqual(result.returncode, 2, result.stderr)
+
+    def test_undecodable_file_is_still_scanned_and_fails(self):
+        """A cp1252 byte must not hide the forbidden command on the same file."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bad = Path(tmpdir) / "dispatch.md"
+            bad.write_bytes(b"Agent()\ngh pr merge 12\n# caf\xe9\n")
+            result = self._run_cli(tmpdir, "--check")
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("gh_pr_merge", result.stdout)
+
+    def test_unreadable_file_fails_closed(self):
+        """A file that cannot be read at all makes main() return 2, not 0."""
+        import builtins
+        import unittest.mock as mock
+        import dispatch_lint
+        with tempfile.TemporaryDirectory() as tmpdir:
+            locked = Path(tmpdir) / "locked.py"
+            locked.write_text("Agent()\n", encoding="utf-8")
+            real_open = builtins.open
+
+            def guarded_open(file, *args, **kwargs):
+                if Path(str(file)).name == "locked.py":
+                    raise PermissionError(13, "denied", str(file))
+                return real_open(file, *args, **kwargs)
+
+            with mock.patch.object(builtins, "open", guarded_open), \
+                    mock.patch.object(sys, "argv", ["dispatch_lint.py", tmpdir, "--check"]):
+                self.assertEqual(dispatch_lint.main(), 2)
+
+    # --- item 3: only a path component named exactly `state` (relative to the
+    # scan root) is skipped; substring matches on ancestors or siblings are not.
+
+    def test_state_store_package_is_scanned(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            pkg = Path(tmpdir) / "state_store"
+            pkg.mkdir()
+            (pkg / "bad.py").write_text("Agent()\ngh pr merge 1\n", encoding="utf-8")
+            violations_by_file, errors = scan_directory(Path(tmpdir))
+            self.assertEqual(errors, [])
+            self.assertTrue(any(f.endswith("bad.py") for f in violations_by_file),
+                            violations_by_file)
+
+    def test_state_directory_is_still_skipped(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            d = Path(tmpdir) / "state"
+            d.mkdir()
+            (d / "bad.py").write_text("Agent()\ngh pr merge 1\n", encoding="utf-8")
+            violations_by_file, _ = scan_directory(Path(tmpdir))
+            self.assertEqual(violations_by_file, {})
+
+    def test_ancestor_containing_state_substring_is_scanned(self):
+        """A checkout under e.g. C:/statewide/aesop must not make every file skip."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / "statewide"
+            root.mkdir()
+            (root / "bad.py").write_text("Agent()\ngh pr merge 1\n", encoding="utf-8")
+            violations_by_file, _ = scan_directory(root)
+            self.assertTrue(any(f.endswith("bad.py") for f in violations_by_file),
+                            violations_by_file)
+
+
+class TestMentionVersusInstruction(unittest.TestCase):
+    """A forbidden flag or command is a MENTION (passes) when the same line, or
+    the list item it belongs to, carries a prohibition marker BEFORE it. Imperative
+    use still fails: a command line, a code string passed to exec/spawn or
+    assigned in code, and any line with no marker before the match."""
+
+    @staticmethod
+    def _patterns(body):
+        content = "Agent()\n" + body
+        return {v["pattern"] for v in find_violations(Path("lane.md"), content)}
+
+    def test_marker_before_flag_on_same_line_is_mention(self):
+        self.assertNotIn("no_verify_flag", self._patterns("never use --no-verify\n"))
+
+    def test_every_prohibition_marker_is_recognised(self):
+        markers = ["never", "FORBIDDEN:", "do not use", "don't use",
+                   "don" + chr(0x2019) + "t use", "banned:", "prohibited:", "must not use",
+                   "disallowed:"]
+        for marker in markers:
+            with self.subTest(marker=marker):
+                self.assertNotIn("no_verify_flag",
+                                 self._patterns(marker + " --no-verify\n"))
+
+    def test_marker_after_flag_does_not_make_mention(self):
+        self.assertIn("no_verify_flag",
+                      self._patterns("--no-verify is forbidden\n"))
+
+    def test_bare_command_without_marker_still_fails(self):
+        self.assertIn("no_verify_flag", self._patterns("git push --no-verify\n"))
+
+    def test_code_string_fails_even_with_comment_marker_above(self):
+        body = '// never do this\nconst cmd = "gh pr merge --admin"\n'
+        self.assertIn("admin_flag", self._patterns(body))
+
+    def test_marker_on_same_line_does_not_exempt_exec_string(self):
+        body = 'never run: exec("gh pr merge --admin")\n'
+        self.assertIn("admin_flag", self._patterns(body))
+
+    def test_list_item_marker_covers_its_continuation_lines(self):
+        body = ("- FORBIDDEN: git stash (shared across worktrees),\n"
+                "  --no-verify, --admin, --auto, force-push,\n"
+                "  manual 'gh pr merge', credential hunting.\n")
+        self.assertEqual(set(), self._patterns(body))
+
+    def test_new_list_item_does_not_inherit_marker(self):
+        body = "- FORBIDDEN: git stash\n- run --no-verify on push\n"
+        self.assertIn("no_verify_flag", self._patterns(body))
+
+    def test_blank_line_ends_list_item(self):
+        body = "- FORBIDDEN: git stash\n\n  --no-verify\n"
+        self.assertIn("no_verify_flag", self._patterns(body))
+
+    def test_marker_in_plain_line_does_not_cover_next_line(self):
+        body = "never do this\nsee --no-verify\n"
+        self.assertIn("no_verify_flag", self._patterns(body))
+
+    def test_ci_to_green_prohibition_list_passes(self):
+        body = ("HARD RULES\n"
+                "- FORBIDDEN: git stash (the stash stack is shared across worktrees),\n"
+                "  --no-verify, --admin, --auto, force-push, 'git commit --amend' on an\n"
+                "  already-pushed commit, manual 'gh pr merge', credential hunting.\n"
+                "- NEVER weaken a gate.\n")
+        self.assertEqual(set(), self._patterns(body))
+
+    def test_ci_to_green_merge_train_instruction_still_fails(self):
+        body = ("USE THE REPO'S DETERMINISTIC SCRIPT, never 'gh pr merge' by hand:\n"
+                "    cd ${REPO} && python tools/merge_train.py -u ${readyToMerge.join(' ')}"
+                " [[ALLOW-MERGE-TRAIN]]\n")
+        patterns = self._patterns(body)
+        self.assertIn("lane_ci_polling_merge_train", patterns)
+        self.assertNotIn("gh_pr_merge", patterns)
+
+    def test_ci_to_green_auto_merge_lane_step_passes(self):
+        body = ("Merge these green, mergeable PRs in ${REPO}: ${readyToMerge.join(', ')}\n"
+                "\n"
+                "USE THE REPO'S DETERMINISTIC SCRIPT, never 'gh pr merge' by hand:\n"
+                "    cd ${REPO} && python tools/auto_merge.py <n>\n"
+                "(<n> = each PR number above, one at a time, in order: run the script once per PR and nothing else)\n"
+                "\n"
+                "You are the merge lane for these PRs. No escape token applies: the script runs under its normal gates,\n"
+                "and the orchestrator never runs a merge train.\n")
+        self.assertEqual(set(), self._patterns(body))
+
+
+class TestDispatchLintRulings(unittest.TestCase):
+    """Precision rulings: 'not to', 'avoid', 'without', bare no/not before a
+    backticked flag, clause scope, threat/bypass prose, and angle-bracket
+    placeholders. Each ruling has a mention case (passes) and an imperative
+    case (still fails)."""
+
+    @staticmethod
+    def _patterns(body):
+        content = "Agent()\n" + body
+        return {v["pattern"] for v in find_violations(Path("doc.md"), content)}
+
+    def test_not_to_marker_covers_flags_in_its_clause(self):
+        body = ("`LANE-CONTRACT.md` tells agents not to merge, not to use `--admin`, `--no-verify`"
+                " or `--force`, not to self-grant `--@gate-allow`.\n")
+        self.assertEqual(set(), self._patterns(body))
+
+    def test_not_to_marker_after_flag_still_fails(self):
+        self.assertIn("admin_flag", self._patterns("--admin is not to be used by agents\n"))
+
+    def test_avoid_marker_is_a_mention(self):
+        self.assertNotIn("admin_flag", self._patterns("avoid --admin on every merge\n"))
+
+    def test_avoid_marker_after_flag_still_fails(self):
+        self.assertIn("admin_flag", self._patterns("--admin to avoid waiting\n"))
+
+    def test_without_marker_is_a_mention(self):
+        self.assertNotIn("no_verify_flag", self._patterns("push without --no-verify ever\n"))
+
+    def test_without_marker_after_flag_still_fails(self):
+        self.assertIn("no_verify_flag", self._patterns("--no-verify without asking anyone\n"))
+
+    def test_bare_no_before_backtick_flag_is_a_mention(self):
+        # GOVERNANCE.md:133 shape.
+        self.assertNotIn("no_verify_flag",
+                         self._patterns("3. Re-push (no `--no-verify` or workarounds)\n"))
+
+    def test_bare_not_before_backtick_flag_is_a_mention(self):
+        self.assertNotIn("no_verify_flag", self._patterns("not `--no-verify` on push\n"))
+
+    def test_bare_no_before_backtick_in_imperative_still_fails(self):
+        self.assertIn("no_verify_flag", self._patterns("run `--no-verify` now\n"))
+
+    def test_bare_no_as_word_elsewhere_still_fails(self):
+        self.assertIn("no_verify_flag", self._patterns("no fixes here, run --no-verify\n"))
+
+    def test_marker_does_not_cross_semicolon(self):
+        self.assertIn("no_verify_flag", self._patterns("never skip tests; run --no-verify\n"))
+
+    def test_marker_does_not_cross_period(self):
+        self.assertIn("no_verify_flag", self._patterns("- FORBIDDEN: git stash. Then --no-verify\n"))
+
+    def test_placeholder_auto_merge_is_documentation(self):
+        # GOVERNANCE.md:101 shape.
+        body = ("- Orchestrator delegates the merge to a dispatched agent (`python tools/auto_merge.py <n>`)"
+                " and verifies `state == MERGED`\n")
+        self.assertNotIn("auto_merge_bare_invocation", self._patterns(body))
+
+    def test_placeholder_gh_pr_merge_auto_is_documentation(self):
+        self.assertNotIn("gh_pr_merge_auto_bare", self._patterns("gh pr merge --auto <n>\n"))
+
+    def test_auto_merge_without_placeholder_or_number_still_fails(self):
+        self.assertIn("auto_merge_bare_invocation",
+                      self._patterns("run python tools/auto_merge.py --json\n"))
+
+    def test_placeholder_does_not_exempt_manual_merge(self):
+        self.assertIn("gh_pr_merge", self._patterns("gh pr merge <n>\n"))
+
+    def test_threat_prose_line_is_a_mention(self):
+        # ARCHITECTURE.md:301 shape.
+        body = ("- **Local hook bypass.** The pre-push hook runs on the developer's machine and "
+                "`git push --no-verify` skips it.\n")
+        self.assertNotIn("no_verify_flag", self._patterns(body))
+
+    def test_adversary_prose_line_is_a_mention(self):
+        # AUDIT-BACKLOG.md:242 shape.
+        body = "  adversary with `--no-verify` / `state/` write already owns it\n"
+        self.assertNotIn("no_verify_flag", self._patterns(body))
+
+    def test_threat_word_on_item_first_line_covers_continuation(self):
+        body = "- adversary model: tamper detection only\n  with `--no-verify` already owned\n"
+        self.assertNotIn("no_verify_flag", self._patterns(body))
+
+    def test_threat_word_does_not_leak_into_next_item(self):
+        body = "- adversary model: tamper detection only\n- run `--no-verify` on push\n"
+        self.assertIn("no_verify_flag", self._patterns(body))
+
+    def test_non_threat_imperative_line_still_fails(self):
+        self.assertIn("no_verify_flag", self._patterns("Run `git push --no-verify` to skip the hook.\n"))
+
+    def test_threat_word_on_command_line_still_fails(self):
+        self.assertIn("no_verify_flag", self._patterns("git push --no-verify  # bypass the hook\n"))
+
+    def test_architecture_lane_rules_sentence_passes(self):
+        # ARCHITECTURE.md:279 shape: 'not to' sits in the same clause as each flag.
+        body = ("1. **Lane rules (text, not enforcement).** `LANE-CONTRACT.md` tells dispatched agents "
+                "not to merge, not to use `--admin`, `--no-verify` or `--force`, not to self-grant "
+                "`--@gate-allow`, and not to hand-edit generated files (sections 3, 4 and 6).\n")
+        self.assertEqual(set(), self._patterns(body))
+
+
 if __name__ == "__main__":
     unittest.main()

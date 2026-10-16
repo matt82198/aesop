@@ -120,6 +120,40 @@ def changed_paths(root: Path, base: str, tip: str) -> Optional[List[str]]:
     return [generated_paths.normalize(l) for l in out.splitlines() if l.strip()]
 
 
+def _blob(root: Path, rev: str, path: str) -> Optional[str]:
+    """Blob id of ``path`` at ``rev``, or None when absent or unresolvable."""
+    rc, out, _ = _git(root, "rev-parse", "--verify", "--quiet", "%s:%s" % (rev, path))
+    if rc != 0 or not out.strip():
+        return None
+    return out.strip()
+
+
+def inherited_unchanged(root: Path, tip: str, path: str) -> bool:
+    """True when the push carries ``path`` exactly as trunk's merge-base has it (D46).
+
+    Judged over merge-base(origin/main, tip)..tip: the push must touch neither the
+    registered artifact nor its registered generator, the generator must exist at
+    the tip, and the artifact blob at the tip must equal the merge-base blob. Such a
+    path is stale only because trunk is, and regeneration belongs to main (the
+    regen-on-main workflow heals it). Every failure returns False, so the path is
+    verified instead (fail closed).
+    """
+    argv = generated_paths.regenerator_for(path)
+    if not argv:
+        return False
+    rc, out, _ = _git(root, "merge-base", TRUNK_REF, tip)
+    if rc != 0 or not out.strip():
+        return False
+    base = out.strip()
+    touched = changed_paths(root, base, tip)
+    if touched is None or path in touched or argv[0] in touched:
+        return False
+    if _blob(root, tip, argv[0]) is None:
+        return False
+    head_blob = _blob(root, tip, path)
+    return head_blob is not None and head_blob == _blob(root, base, path)
+
+
 def instruction_for(path: str) -> str:
     argv = generated_paths.regenerator_for(path) or []
     return "run: python %s && git add %s" % (" ".join(argv), path)
@@ -181,8 +215,11 @@ def verify_tip(root: Path, tip: str, paths: List[str],
             else:
                 script = wt / argv[0]
                 if not script.exists():
-                    sys.stdout.write("generated_push_gate: %s has no %s at %s; nothing to verify\n"
-                                     % (path, argv[0], tip[:7]))
+                    # Fail closed: a registered artifact whose generator is absent at
+                    # the tip cannot be verified, so it must never pass silently.
+                    stale.append({"path": path, "tip": tip, "repair": False,
+                                  "reason": "generator %s is absent at the tip; cannot verify"
+                                  % argv[0]})
                     continue
             # Capture the state of the file at tip (committed state).
             # We do NOT use raw bytes; instead we'll use git diff which applies
@@ -272,6 +309,7 @@ def main(argv: List[str]) -> int:
 
     stamped = [p for p in read_stamp(root) if generated_paths.regenerator_for(p)]
     per_tip: Dict[str, List[str]] = {}
+    inherited_all: List[str] = []  # D46 notes: paths carried unchanged from trunk
     edited_by_tip: Dict[str, Set[str]] = {}
     for text in ranges:
         parsed = parse_range(text)
@@ -315,6 +353,13 @@ def main(argv: List[str]) -> int:
                     # Check if this path exists at the tip
                     rc, _, _ = _git(root, "rev-parse", "--verify", "--quiet", tip + ":" + p)
                     if rc == 0:
+                        # D46: a path the push neither touches (nor its generator) and that
+                        # still equals the merge-base copy is stale only because trunk is.
+                        # Regeneration belongs to main; the sweep must not refuse it here.
+                        if inherited_unchanged(root, tip, p):
+                            if p not in inherited_all:
+                                inherited_all.append(p)
+                            continue
                         # Path exists at tip; add it to targets for verification
                         targets.append(p)
         if targets:
@@ -333,7 +378,12 @@ def main(argv: List[str]) -> int:
 
     if as_json:
         sys.stdout.write(json.dumps({"stale": stale_all, "verified": verified_all,
+                                     "inherited": inherited_all,
                                      "checked_tips": sorted(per_tip)}, indent=2) + "\n")
+    elif not stale_all:
+        for path in inherited_all:
+            sys.stdout.write("generated path %s inherited unchanged from base; "
+                             "regeneration belongs to main\n" % path)
     if stale_all:
         for rec in stale_all:
             sys.stderr.write("ERROR: %s committed at %s is stale (%s)\n"

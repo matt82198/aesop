@@ -140,6 +140,8 @@ Expected output:
 
 If you see errors, check the logs in `state/FLEET-BACKUP.log`.
 
+The default doctor run checks only the repo it runs in, so its verdict does not depend on the home directory; `aesop doctor --global` also checks the `~/.claude/skills` install (`power` and `buildsystem`).
+
 The doctor's final section, **CI capability**, is report-only: it tells you which CI mode this machine can run (hosted, self-hosted runner, local receipt gate) and why. See [CI-MODES.md](CI-MODES.md) for choosing a mode with `aesop init --ci-mode` and registering runners with `aesop runner install`.
 
 ---
