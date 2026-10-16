@@ -74,8 +74,12 @@ jobs:
         if: steps.guard.outputs.skip == 'false'
         run: |
           set -eu
+          # pipefail: the pipe must carry regen_all's exit code, not tee's (a failed regen
+          # used to report green while drift stayed on main with no alarm).
+          set -o pipefail
           python tools/regen_all.py --fix --json | tee "$RUNNER_TEMP/regen-result.json"
-          FIXED=$(python -c "import json,sys; print(json.load(open(sys.argv[1])).get('fixed', []))" "$RUNNER_TEMP/regen-result.json")
+          # Fail closed: a result without a 'fixed' key is a failed regen, never "nothing to fix".
+          FIXED=$(python -c "import json,sys; d=json.load(open(sys.argv[1])); sys.exit(1) if 'fixed' not in d else print(d['fixed'])" "$RUNNER_TEMP/regen-result.json") || { echo "regen result has no 'fixed' key or regen failed"; exit 1; }
           echo "fixed paths: $FIXED"
           if [ "$FIXED" = "[]" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
