@@ -1234,6 +1234,107 @@ test('stall check signal: BRIEF.md includes agent stalls section', async (t) => 
   }
 });
 
+// === Watchdog heartbeat path: monitor must read what backup-fleet.sh writes ===
+// backup-fleet.sh writes $CONDUCTOR_ROOT/state/.watchdog-heartbeat. CONDUCTOR_ROOT is
+// explicit, or the sibling conductor3 only when AESOP_ROOT's basename is "aesop";
+// otherwise the daemon writes nothing. The monitor must resolve the same path and
+// report a missing, unreadable, or unresolvable heartbeat as a gap, never as fresh.
+
+function writeWatchdogBeat(stateDir, content) {
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.writeFileSync(path.join(stateDir, '.watchdog-heartbeat'), content, 'utf8');
+}
+
+function readFixtureBrief(fixture) {
+  return fs.readFileSync(path.join(fixture.monitorDir, 'BRIEF.md'), 'utf8');
+}
+
+test('watchdog heartbeat: stale beat at CONDUCTOR_ROOT/state is reported stale, not fresh', async (t) => {
+  const fixture = createFixture();
+  try {
+    const conductorRoot = path.join(fixture.root, 'conductor3');
+    const staleEpoch = Math.floor(Date.now() / 1000) - 3600;
+    writeWatchdogBeat(path.join(conductorRoot, 'state'), String(staleEpoch));
+
+    runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1', CONDUCTOR_ROOT: conductorRoot });
+
+    const brief = readFixtureBrief(fixture);
+    assert.ok(!brief.includes('All heartbeats fresh'), 'a 1h-old watchdog beat must not be reported fresh');
+    const signals = JSON.parse(fs.readFileSync(path.join(fixture.monitorDir, 'SIGNALS.json'), 'utf8'));
+    assert.ok(
+      signals.heartbeats.details.some(d => d.name === '.watchdog-heartbeat'),
+      'SIGNALS.json heartbeats.details should name the watchdog beat as stale'
+    );
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('watchdog heartbeat: fresh beat at CONDUCTOR_ROOT/state is reported fresh', async (t) => {
+  const fixture = createFixture();
+  try {
+    const conductorRoot = path.join(fixture.root, 'conductor3');
+    writeWatchdogBeat(path.join(conductorRoot, 'state'), String(Math.floor(Date.now() / 1000)));
+
+    runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1', CONDUCTOR_ROOT: conductorRoot });
+
+    assert.ok(readFixtureBrief(fixture).includes('All heartbeats fresh'), 'a current watchdog beat should be fresh');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('watchdog heartbeat: missing beat at CONDUCTOR_ROOT is a MISSING gap; a fresh beat at the old AESOP_STATE path is ignored', async (t) => {
+  const fixture = createFixture();
+  try {
+    const conductorRoot = path.join(fixture.root, 'conductor3');
+    fs.mkdirSync(path.join(conductorRoot, 'state'), { recursive: true });
+    // The wrong location the collector used to read: a fresh beat here must NOT count.
+    writeWatchdogBeat(fixture.stateDir, String(Math.floor(Date.now() / 1000)));
+
+    runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1', CONDUCTOR_ROOT: conductorRoot });
+
+    const brief = readFixtureBrief(fixture);
+    assert.ok(!brief.includes('All heartbeats fresh'), 'a missing watchdog beat must not be reported fresh');
+    assert.match(brief, /watchdog heartbeat.*MISSING/i, 'BRIEF should name the missing watchdog heartbeat as a gap');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('watchdog heartbeat: unresolvable CONDUCTOR_ROOT (non-canonical AESOP_ROOT) is an UNRESOLVED gap', async (t) => {
+  const fixture = createFixture();
+  try {
+    // Fixture root basename is not "aesop", so backup-fleet.sh never writes a beat.
+    // A beat sitting under AESOP_ROOT/state must not stand in for it.
+    writeWatchdogBeat(fixture.stateDir, String(Math.floor(Date.now() / 1000)));
+
+    runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1', CONDUCTOR_ROOT: '' });
+
+    const brief = readFixtureBrief(fixture);
+    assert.ok(!brief.includes('All heartbeats fresh'), 'an unresolved watchdog heartbeat must not be reported fresh');
+    assert.match(brief, /watchdog heartbeat.*UNRESOLVED/i, 'BRIEF should name the unresolved watchdog heartbeat as a gap');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+test('watchdog heartbeat: unparseable beat content is a gap, not fresh', async (t) => {
+  const fixture = createFixture();
+  try {
+    const conductorRoot = path.join(fixture.root, 'conductor3');
+    writeWatchdogBeat(path.join(conductorRoot, 'state'), 'not-an-epoch');
+
+    runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1', CONDUCTOR_ROOT: conductorRoot });
+
+    const brief = readFixtureBrief(fixture);
+    assert.ok(!brief.includes('All heartbeats fresh'), 'an unparseable watchdog beat must not be reported fresh');
+    assert.match(brief, /watchdog heartbeat.*UNREADABLE/i, 'BRIEF should name the unreadable watchdog heartbeat as a gap');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 // === main_ci signal tests ===
 test('main_ci signal: present in SIGNALS.json', async (t) => {
   const fixture = createFixture();
