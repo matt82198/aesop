@@ -172,6 +172,43 @@ const EXFILTRATION_ALLOWLIST = [
   'resolve_alerts',
 ];
 
+// Transmission indicators: a message carrying any of these is never a benign
+// defensive reference, even when an allowlisted word is also present.
+const EXFIL_TRANSMISSION_INDICATORS = /\bPOST\b|https?:\/\/|\b[Uu]pload(s|ed|ing)?\b|\b(curl|wget)\b/;
+
+// Whole-token containment: `ref` must not be glued to a word character, hyphen,
+// or dotted suffix (so "triage" does not match "re-triage", "triaged" or "triage.txt").
+function containsWholeToken(text, ref) {
+  const escaped = ref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![\\w.-])${escaped}(?![\\w-]|\\.\\w)`).test(text);
+}
+
+// The clause holding index `idx`: text bounded by newline, ; ! ? or a comma/period
+// followed by whitespace or end of text.
+function clauseAround(text, idx) {
+  const boundary = /[\n;!?]|[.,](?=\s|$)/g;
+  let start = 0;
+  let end = text.length;
+  let m;
+  while ((m = boundary.exec(text)) !== null) {
+    if (m.index < idx) start = m.index + 1;
+    else {
+      end = m.index;
+      break;
+    }
+  }
+  return text.slice(start, end);
+}
+
+// Suppress an exfiltration match only when BOTH hold: (1) an allowlisted reference
+// appears as a whole token in the same clause as the match, and (2) the message
+// carries no transmission indicator anywhere. Substring hits elsewhere never suppress.
+function isDefensiveExfilReference(text, match) {
+  const clause = clauseAround(text, match.index);
+  if (!EXFILTRATION_ALLOWLIST.some((ref) => containsWholeToken(clause, ref))) return false;
+  return !EXFIL_TRANSMISSION_INDICATORS.test(text);
+}
+
 const PROMPT_IOC = [
   ['HIGH', 'prompt-injection', /ignore\s+(all\s+)?(previous|prior|the\s+above)\s+instructions|disregard\s+(the|your)\s+(rules|instructions)|you\s+are\s+now\s+|new\s+system\s+prompt/i],
   ['HIGH', 'exfiltration', /exfiltrat|send\s+(it|them|the\s+\w+)\s+to\s+https?:|upload\s+to\s+|POST\s+.*to\s+http|leak\s+(the\s+)?(secret|cred|token|key)/i],
@@ -257,8 +294,7 @@ for (const fp of tFiles) {
               }
             }
             if (kind === 'exfiltration') {
-              const isDefensiveReviewRef = EXFILTRATION_ALLOWLIST.some((ref) => text.includes(ref));
-              if (isDefensiveReviewRef) {
+              if (isDefensiveExfilReference(text, re.exec(text))) {
                 const detail = text.replace(/\s+/g, ' ').slice(0, 180);
                 add('SUPPRESSED-FP', 'exfiltration (defensive-review reference)', base, detail);
                 flagged = true;
