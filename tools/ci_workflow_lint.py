@@ -24,6 +24,9 @@ Checks:
      $ACTIONLINT_BIN or PATH; set CI_WORKFLOW_LINT_REQUIRE_ACTIONLINT=1 to FAIL
      when it is missing (CI does). Check 5 runs regardless, so the gate never
      depends on actionlint being installed.
+  7. Single-sourced CI Python deps: a pip install step may not list a package from
+     requirements-ci.txt inline; it must use `pip install -r requirements-ci.txt`
+     (fails closed when that file is missing). Drift class: main-full.yml red x7.
 
 Exit: 0 if all checks pass, 1 if any findings. Support --json for structured output.
 
@@ -348,6 +351,118 @@ def check_file_references(workflow_data, root):
     return findings
 
 
+# --- Single-sourced CI Python dependencies -------------------------------------
+# requirements-ci.txt at the repo root is the ONE list of CI Python test packages.
+# Workflows install it with `pip install -r requirements-ci.txt`. A pip step that
+# re-lists any package from that file inline is the drift class that turned
+# main-full.yml red seven times (a lagging copy of ci.yml's list). Packages outside
+# the file (e.g. playwright) may stay inline.
+
+REQUIREMENTS_CI = "requirements-ci.txt"
+_PIP_SEGMENT_SPLIT_RE = re.compile(r"&&|\|\||;|\|")
+# pip options that consume the following token as their value.
+_PIP_OPTIONS_WITH_VALUE = frozenset({
+    "-r", "--requirement", "-c", "--constraint", "-i", "--index-url",
+    "--extra-index-url", "-t", "--target", "--prefix", "--root",
+})
+
+
+def _normalize_requirement_name(token):
+    """Reduce a requirement token (`cryptography==50.0.2`, `Pytest_Timeout[x]`) to a PEP 503 name."""
+    name = re.split(r"[<>=!~;\[@\s]", token.strip().strip("'\""), maxsplit=1)[0]
+    return name.lower().replace("_", "-").replace(".", "-")
+
+
+def load_requirements_ci_names(root):
+    """Return the package names listed in requirements-ci.txt, or None when the file is absent."""
+    path = Path(root) / REQUIREMENTS_CI
+    if not path.is_file():
+        return None
+    names = set()
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line or line.startswith("-"):
+            continue
+        names.add(_normalize_requirement_name(line))
+    return names
+
+
+def _pip_install_args(segment):
+    """Return the argument tokens after `pip install` in one shell segment, or None."""
+    tokens = segment.split()
+    for i in range(1, len(tokens)):
+        if tokens[i] == "install" and tokens[i - 1] in ("pip", "pip3"):
+            return tokens[i + 1:]
+    return None
+
+
+def _pip_args_inline_packages(args):
+    """Return (inline_package_names, references_requirements_ci) for pip install arguments."""
+    inline = []
+    references = False
+    skip_value = False
+    for tok in args:
+        if skip_value:
+            skip_value = False
+            if tok.strip("'\"") == REQUIREMENTS_CI:
+                references = True
+            continue
+        if tok in _PIP_OPTIONS_WITH_VALUE:
+            skip_value = True
+            continue
+        if tok.startswith("-"):
+            continue
+        name = _normalize_requirement_name(tok)
+        if name and not name.startswith(("$", ".", "/")):
+            inline.append(name)
+    return inline, references
+
+
+def check_pip_install_single_source(workflow_path, workflow_data, root):
+    """Fail any workflow pip step that lists a requirements-ci.txt package inline.
+
+    Fails closed: when requirements-ci.txt is absent, every inline package is flagged
+    and any reference to the missing file is flagged.
+
+    Returns:
+        List[str]: List of findings
+    """
+    findings = []
+    if not workflow_data or not isinstance(workflow_data, dict):
+        return findings
+
+    required = load_requirements_ci_names(root)
+    jobs = workflow_data.get("jobs") or {}
+    for job_name, job_data in jobs.items():
+        if not isinstance(job_data, dict):
+            continue
+        for step in job_data.get("steps") or []:
+            if not isinstance(step, dict) or not isinstance(step.get("run"), str):
+                continue
+            step_name = step.get("name", "unnamed")
+            for line in step["run"].splitlines():
+                for segment in _PIP_SEGMENT_SPLIT_RE.split(line):
+                    args = _pip_install_args(segment)
+                    if args is None:
+                        continue
+                    inline, references = _pip_args_inline_packages(args)
+                    if required is None:
+                        if references:
+                            findings.append(
+                                f"{workflow_path.name}: job '{job_name}' step '{step_name}' "
+                                f"references {REQUIREMENTS_CI}, which is missing at the repo root")
+                        flagged = inline
+                    else:
+                        flagged = [name for name in inline if name in required]
+                    if flagged:
+                        findings.append(
+                            f"{workflow_path.name}: job '{job_name}' step '{step_name}' installs "
+                            f"{', '.join(sorted(set(flagged)))} inline; use "
+                            f"`pip install -r {REQUIREMENTS_CI}` (single source of CI Python "
+                            f"dependencies, tools/ci_workflow_lint.py)")
+    return findings
+
+
 # --- GitHub Actions schema semantics ------------------------------------------
 # Valid YAML is not a valid workflow. GitHub validates the document against its
 # own schema when the run is created; a schema error yields a run with NO jobs,
@@ -655,6 +770,11 @@ def lint_workflows(root, json_output=False, use_actionlint=False):
     for workflow_path, workflow_data in zip(workflow_files, workflow_data_list):
         if workflow_data:
             findings.extend(check_github_semantics(workflow_path, workflow_data))
+
+    # Single-sourced CI Python deps: no inline re-listing of requirements-ci.txt packages
+    for workflow_path, workflow_data in zip(workflow_files, workflow_data_list):
+        if workflow_data:
+            findings.extend(check_pip_install_single_source(workflow_path, workflow_data, root))
 
     # actionlint (independent second opinion; opt-in so fixture-based tests stay hermetic)
     if use_actionlint:
