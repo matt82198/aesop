@@ -3,7 +3,7 @@ Every gate, daemon, store, lane contract, monitor and UI surface in this reposit
 
 **Basis.** origin/main at `cb972c56`. Each row was checked against that tree: the file exists (`ls`), and each named function or flag appears in that file (`grep`). Line numbers are for that commit and drift on edit. Rows the tree did not confirm are not here (section 8.3).
 
-**Scope limits.** Brain-side hooks (`~/.claude/hooks`), the agent catalog, and the fleet scripts in `~/scripts` and `~/conductor3` live outside this repo. They appear only as names (section 6). Runtime state (live tasks, heartbeat ages, queue contents) is not described.
+**Scope limits.** Brain-side hooks (`~/.claude/hooks`), the agent catalog, and the fleet scripts in `~/scripts` and the external conductor checkout live outside this repo. They appear only as names (section 6). Runtime state (live tasks, heartbeat ages, queue contents) is not described.
 
 **Columns.** "Path" is repo-relative, with `file:line` where a function is named. "Enforced-by" names the gate or code that makes a property hold. "Consumed-by" names the reader.
 
@@ -377,5 +377,5 @@ Status: **enforced** means a code path in the tree enforces the principle. **par
 | lane 4 K2: gate tamper regex misses gen_* | Refuted: the regex in `check_gate_tamper` (hooks/pre-push-policy.sh:258-279) matches `tools/gen_*` and `tools/generated_*`. |
 | lane 4 K3: AESOP_CI_SHARD_TRIPWIRE_ARMED not scrubbed | Refuted: tools/emit_receipt.py:225 lists it in `SCRUBBED_ENV_VARS`. |
 | lane 1 D1: LANE-CONTRACT "injected" by a hook | Phrase absent from root CLAUDE.md; the injector is outside the repo. |
-| lane 4 K4, K6, K7, K9, K10; `~/conductor3` watchdog and monitor copies | Refer to files outside the repo; not checkable here. |
+| lane 4 K4, K6, K7, K9, K10; the external conductor checkout watchdog and monitor copies | Refer to files outside the repo; not checkable here. |
 | Runtime measurements (event-store lag, usage-watchdog staleness, live task states, stray directory) | Runtime state, not in the tree; dropped. |
