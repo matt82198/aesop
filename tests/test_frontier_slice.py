@@ -500,12 +500,12 @@ class TestBenchHardeningFixes(unittest.TestCase):
         self.assertIn("FALLBACK", result.stdout + result.stderr,
                       "Unknown model pricing should be labeled FALLBACK")
 
-    def test_missing_anthropic_api_key_skips_cleanly(self):
-        """frontier_slice with missing ANTHROPIC_API_KEY should skip, not crash."""
+    def test_missing_anthropic_api_key_refuses_run_and_writes_nothing(self):
+        """Live run with no ANTHROPIC_API_KEY is an error exit, never a 0% result file."""
         import tempfile
         import os
-        output_path = Path(tempfile.NamedTemporaryFile(delete=False, suffix=".json").name)
-        try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "out.json"
             # Remove ANTHROPIC_API_KEY from environment for this test
             env = os.environ.copy()
             env.pop("ANTHROPIC_API_KEY", None)
@@ -522,11 +522,9 @@ class TestBenchHardeningFixes(unittest.TestCase):
                 timeout=10,
                 env=env,
             )
-            # Should skip cleanly (exit 0) with SKIP message
-            self.assertIn("SKIP", result.stderr)
-        finally:
-            if output_path.exists():
-                output_path.unlink()
+            self.assertNotEqual(result.returncode, 0, result.stderr)
+            self.assertIn("ANTHROPIC_API_KEY", result.stderr)
+            self.assertFalse(output_path.exists(), "refused live run must not write results")
 
     def test_api_error_tasks_excluded_from_accuracy(self):
         """Tasks with API errors should be excluded from accuracy, recorded separately."""

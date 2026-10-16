@@ -70,7 +70,8 @@ Output:
 
 ## Implementation Notes
 
-- **Sandboxed Execution**: Each solution runs in an isolated subprocess with a 5-second timeout
+- **Execution isolation (what it does)**: Each candidate runs in its own subprocess with a 5-second timeout (the whole process group is killed on expiry). The child's environment is an allowlist (`PATH`, `PATHEXT`, `SYSTEMROOT`, `SYSTEMDRIVE`, `WINDIR`, `TEMP`, `TMP`, `TMPDIR`, plus `PYTHONIOENCODING`/`PYTHONDONTWRITEBYTECODE`), so `*_API_KEY`, `*_TOKEN`, `*_SECRET` and every other grader variable are NOT inherited. The candidate file is written to a fresh scratch directory that is also the child's working directory, and that directory is deleted afterwards.
+- **Execution isolation (what it does NOT do)**: This is NOT a security sandbox. A candidate still runs as your user account and can read any file that account can read (including key or credential files on disk), open network connections, write anywhere it has permission, spawn processes, and consume unbounded memory or CPU within the timeout. Do not run untrusted candidates through this grader on a machine holding secrets you are not willing to expose to model-generated code. Environment scrubbing removes credentials from the environment only; it does not remove them from the filesystem.
 - **Stdlib Only**: No external dependencies; uses only Python standard library
 - **Windows-Safe**: Works on Windows, macOS, and Linux
 - **JSON Protocol**: Test results and outputs are JSON for easy parsing

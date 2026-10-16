@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Module-level error tracking for API runs
 _error_tasks = []  # Populated by run_live_frontier_benchmark on API errors
+_live_skipped = False  # Set when a live run was refused/skipped; main() must not write results
 
 
 # ============================================================================
@@ -275,10 +276,15 @@ def run_live_frontier_benchmark(
             print("Note: FALLBACK pricing rates were used in the estimate above.")
         sys.exit(2)
 
-    # Check API key up front (fail-closed) before creating client
+    global _live_skipped
+    _live_skipped = False
+
+    # Check API key up front (fail-closed) before creating client. A refused
+    # run is NOT a 0% measurement: main() must not write results for it.
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        print("SKIP: ANTHROPIC_API_KEY not set — skipping live run", file=sys.stderr)
+        print("ERROR: ANTHROPIC_API_KEY not set - live run refused, no results written", file=sys.stderr)
+        _live_skipped = True
         return ([], 0.0)
 
     # Check HALT sentinel before starting API calls
@@ -295,6 +301,7 @@ def run_live_frontier_benchmark(
             halt_info = halt.get_halt_info()
             reason = halt_info.get("reason") if halt_info else "(no reason recorded)"
             print(f"SKIP: HALT sentinel detected — {reason}", file=sys.stderr)
+            _live_skipped = True
             return ([], 0.0)
 
     # Offline seam: AESOP_BENCH_OFFLINE=1 returns BEFORE any API client is
@@ -302,6 +309,7 @@ def run_live_frontier_benchmark(
     # never reach the network. Placed after the HALT check so HALT still wins.
     if os.environ.get("AESOP_BENCH_OFFLINE") == "1":
         print("SKIP: AESOP_BENCH_OFFLINE=1 - live run disabled, no client constructed", file=sys.stderr)
+        _live_skipped = True
         return ([], 0.0)
 
     # Import Claude client
@@ -431,17 +439,46 @@ def main():
     parser.add_argument(
         "--output",
         default=None,
-        help="Output JSON file (env: FRONTIER_SLICE_OUTPUT; default: state/bench/frontier_slice_results.json)",
+        help=(
+            "Output JSON file (env: FRONTIER_SLICE_OUTPUT; default per mode: "
+            "state/bench/frontier_slice_results.json for live, "
+            "state/bench/frontier_slice_offline_results.json for offline)"
+        ),
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Allow an offline run to replace an existing live-mode results file",
     )
 
     args = parser.parse_args()
 
-    # Resolve output path: env var > CLI arg > default (gitignored state dir)
+    # Resolve output path: env var > CLI arg > mode-distinct default (gitignored
+    # state dir). Offline and live never share a default file, so an offline
+    # run cannot silently replace a paid live measurement.
     if args.output is None:
-        args.output = os.environ.get(
-            "FRONTIER_SLICE_OUTPUT",
+        default_path = (
             "state/bench/frontier_slice_results.json"
+            if args.mode == "live"
+            else "state/bench/frontier_slice_offline_results.json"
         )
+        args.output = os.environ.get("FRONTIER_SLICE_OUTPUT", default_path)
+
+    # Fail closed: an offline run never replaces a live-mode results file
+    # (or a file it cannot read) unless --overwrite is passed explicitly.
+    if args.mode == "offline" and not args.overwrite and Path(args.output).exists():
+        try:
+            with open(args.output, encoding="utf-8") as f:
+                existing_mode = json.load(f).get("mode")
+        except (OSError, ValueError, AttributeError):
+            existing_mode = "unreadable"
+        if existing_mode != "offline":
+            print(
+                f"ERROR: {args.output} holds a '{existing_mode}' result; refusing to overwrite "
+                "from an offline run without --overwrite",
+                file=sys.stderr,
+            )
+            return 1
 
     # Load tasks and ground truth
     tasks = load_frontier_tasks(args.tasks)
@@ -454,6 +491,9 @@ def main():
     else:
         print(f"Running LIVE frontier benchmark against {args.model}...\n")
         scores, accuracy = run_live_frontier_benchmark(tasks, model=args.model, confirm_spend=args.confirm_spend)
+        if _live_skipped:
+            print("ERROR: live run did not execute; nothing was written", file=sys.stderr)
+            return 1
 
     # Print results
     print_results_table(scores, accuracy, args.mode, args.model)
