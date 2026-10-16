@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Added the `state_root` config key as the single live event-store root (`tools/state_root.py`: `--state-dir` > `AESOP_STATE_ROOT` > `aesop.config.json` `state_root` > fail closed); `tools/boot_state.py` and the watchdog ingest now read the same store instead of a silent `<repo>/state` default. (#1090)
+- Fix: `baseline_liveness_check.py` no longer probes writer/seed tables. A `tools/*.py` file that only quotes a baseline filename is a consumer only if it also declares `--baseline`; otherwise it is skipped with one INFO line instead of failing closed as a "consumer error".
 - Fix: the no-timeout receipt branch of the pre-push hook now propagates the child's real exit code (red receipt matrix blocks the push on hosts without timeout/gtimeout) (#1091).
 - `tools/ingest_task_events.py` appends one `agent_done` (or `agent_stalled` on an error stop_reason) event per lane task_event to stream `agent_lifecycle`, deduped on the task event_id (#1083).
 - CI: the CI Python test dependencies are single-sourced in a root `requirements-ci.txt` (versions unchanged from ci.yml; cryptography stays pinned to 50.0.2). Every workflow pip step runs `pip install -r requirements-ci.txt`, and `tools/ci_workflow_lint.py` fails any step that re-lists those packages inline, so the shard job can no longer drift from ci.yml.
