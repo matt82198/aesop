@@ -23,9 +23,11 @@ Exit: 0=success, 1=error or scaffold refused, 2=usage error
 """
 import argparse
 import json
+import os
 import stat
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 TOOLS_DIR = Path(__file__).resolve().parent
@@ -175,6 +177,71 @@ DEFAULT_CONFIG = {
     }
 }
 
+# Push-gate artifacts the pre-push hook and `aesop doctor` require. Same generators and
+# arguments as bin/cli.js (PUSH_GATE_ARTIFACTS) and tools/doctor.js; run here from the
+# aesop tools dir with cwd set to the target repo, because init does not copy tools/.
+PUSH_GATE_GENERATORS = [
+    ("tools/INDEX.md", "gen_tool_index.py", ["--regenerate"]),
+    (".pyflakes-baseline.json", "pyflakes_gate.py",
+     ["--root", ".", "--baseline", ".pyflakes-baseline.json", "--update-baseline"]),
+    (".subprocess-guard-baseline.json", "subprocess_guard.py",
+     ["--baseline", ".subprocess-guard-baseline.json", "--update-baseline"]),
+    (".portability-baseline.json", "portability_check.py",
+     ["--root", ".", "--baseline", ".portability-baseline.json", "--update-baseline"]),
+    (".stateapi-baseline.json", "stateapi_lint.py",
+     ["--root", ".", "--baseline", ".stateapi-baseline.json", "--update-baseline"]),
+]
+
+
+def _run_push_gate_generator(target, script, args):
+    """Run one generator with cwd=target. Returns None on success, else an error string."""
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(TOOLS_DIR / script), *args],
+            cwd=str(target), capture_output=True, encoding="utf-8", errors="replace",
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return str(exc)
+    if proc.returncode != 0:
+        return (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()
+    return None
+
+
+def generate_push_gate_artifacts(target, force=False):
+    """Generate the push-gate artifacts in target; return (created, skipped) file lists.
+
+    An existing artifact is kept unless force is set (same rule as write_file). Failures never
+    abort the scaffold: each prints a warning naming the file and its regenerate command, and
+    the pre-push hook and `aesop doctor` fail closed until the file exists.
+    AESOP_SKIP_PUSH_GATE_ARTIFACTS=1 skips generation (matches bin/cli.js).
+    """
+    target = Path(target)
+    if os.environ.get("AESOP_SKIP_PUSH_GATE_ARTIFACTS") == "1":
+        return [], []
+    skipped = [rel for rel, _, _ in PUSH_GATE_GENERATORS if (target / rel).exists() and not force]
+    todo = [g for g in PUSH_GATE_GENERATORS if g[0] not in skipped]
+    if not todo:
+        return [], skipped
+    if not (target / ".git").exists():
+        print("WARN: no git repository: push-gate artifacts were not generated "
+              "(the pre-push hook will block until they are).", file=sys.stderr)
+        return [], skipped
+    with ThreadPoolExecutor(max_workers=len(todo)) as pool:
+        futures = [(rel, script, args, pool.submit(_run_push_gate_generator, target, script, args))
+                   for rel, script, args in todo]
+        results = [(rel, script, args, fut.result()) for rel, script, args, fut in futures]
+    created = []
+    for rel, script, args, err in results:
+        if err is None and (target / rel).is_file():
+            created.append(rel)
+        else:
+            cmd = " ".join(["python", f"tools/{script}", *args])
+            print(f"WARN: could not generate {rel}: {err or 'file missing'}\n"
+                  f"  regenerate with: cd {target} && {cmd}", file=sys.stderr)
+    return created, skipped
+
+
 PRE_PUSH_HOOK = """\
 #!/usr/bin/env bash
 set -uo pipefail
@@ -201,6 +268,11 @@ fi
 scan_script="$repo_root/tools/secret_scan.py"
 if [ -f "$scan_script" ]; then
   while read -r local_ref local_sha remote_ref remote_sha; do
+    # Fail closed on a malformed line (fewer than four fields): never fall back to a whole-tree scan
+    if [ -z "$local_ref" ] || [ -z "$local_sha" ] || [ -z "$remote_ref" ] || [ -z "$remote_sha" ]; then
+      echo "ERROR: Malformed pre-push stdin line (expected: <local_ref> <local_sha> <remote_ref> <remote_sha>). Push blocked."
+      exit 1
+    fi
     # Protected remote refs are blocked whatever branch is checked out
     case "$remote_ref" in
       refs/heads/main|refs/heads/master)
@@ -230,6 +302,42 @@ else
   echo "This is likely a setup error: tools/secret_scan.py must be present in the repo."
   exit 1
 fi
+
+# Pushed-range secret scan: --staged only sees the index, so committed secrets
+# would pass. git feeds one line per ref on stdin:
+#   <local_ref> <local_sha> <remote_ref> <remote_sha>
+# Every non-deletion line scans the pushed commits with --range (fail closed).
+zero_sha=0000000000000000000000000000000000000000
+empty_tree_sha=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -z "${local_ref:-}" ] && continue
+  if [ -z "${remote_sha:-}" ] || [ -z "${local_sha:-}" ]; then
+    echo "ERROR: Malformed pre-push input line for $local_ref. Push blocked."
+    exit 1
+  fi
+  # Branch deletion pushes no commits.
+  [ "$local_sha" = "$zero_sha" ] && continue
+  if [ "$remote_sha" = "$zero_sha" ]; then
+    # New branch: scan from the merge-base with the default branch, else the whole history.
+    base_sha=""
+    for default_ref in origin/HEAD origin/main origin/master main master; do
+      if git rev-parse --verify -q "$default_ref^{commit}" >/dev/null 2>&1; then
+        base_sha=$(git merge-base "$local_sha" "$default_ref" 2>/dev/null || echo "")
+        break
+      fi
+    done
+    [ -z "$base_sha" ] && base_sha="$empty_tree_sha"
+    pushed_range="$base_sha..$local_sha"
+  else
+    pushed_range="$remote_sha..$local_sha"
+  fi
+  python3 "$scan_script" --range "$pushed_range" --repo "$repo_root" </dev/null
+  range_exit=$?
+  if [ $range_exit -ne 0 ]; then
+    echo "ERROR: Secret scan found issues in pushed commits ($pushed_range). Push blocked."
+    exit 1
+  fi
+done
 
 exit 0
 """
@@ -450,7 +558,8 @@ def install_pre_push_hook(target_dir, force=False):
             return False, "existing pre-push is a symlink (security risk)"
         return False, "pre-push hook already exists (use --force to replace)"
 
-    hook_path.write_text(PRE_PUSH_HOOK, encoding="utf-8")
+    # Write bytes so the POSIX hook keeps LF endings on Windows (write_text would emit CRLF).
+    hook_path.write_bytes(PRE_PUSH_HOOK.encode("utf-8"))
 
     # Make executable (no-op on Windows, matters on POSIX)
     try:
@@ -600,6 +709,11 @@ def init_project(target_dir, project_name=None, force=False, ci_mode="hosted",
     hook_ok, hook_status = install_pre_push_hook(str(target), force=force)
     if hook_ok:
         files_created.append(".git/hooks/pre-push")
+
+    # 8. Push-gate artifacts doctor and the pre-push hook require (needs the git repo)
+    gate_created, gate_skipped = generate_push_gate_artifacts(target, force=force)
+    files_created.extend(gate_created)
+    files_skipped.extend(gate_skipped)
 
     return {
         "project_name": project_name,

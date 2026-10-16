@@ -12,6 +12,24 @@ from pathlib import Path
 # Ensure tools/ is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'tools'))
 
+
+def _hook_shell():
+    """Return the POSIX shell git itself uses to run hooks.
+
+    On Windows a bare ``bash`` can resolve to the WSL launcher in System32, which
+    refuses to run without an installed distribution. Git for Windows ships its own
+    bash.exe under <git root>/bin; use that so the hook runs the way git runs it.
+    """
+    if os.name != "nt":
+        return "bash"
+    git = shutil.which("git")
+    if git:
+        for ancestor in Path(git).resolve().parents:
+            candidate = ancestor / "bin" / "bash.exe"
+            if candidate.is_file():
+                return str(candidate)
+    raise RuntimeError("Git for Windows bash.exe not found next to git; cannot run the pre-push hook")
+
 from init_project import (
     PRE_PUSH_HOOK,
     build_domain_map,
@@ -456,6 +474,138 @@ class TestCLI(unittest.TestCase):
             self.assertIn("cli-test", result.stdout)
             self.assertTrue((Path(td) / "CLAUDE.md").exists())
 
+
+PUSH_GATE_ARTIFACT_FILES = [
+    "tools/INDEX.md",
+    ".pyflakes-baseline.json",
+    ".subprocess-guard-baseline.json",
+    ".portability-baseline.json",
+    ".stateapi-baseline.json",
+]
+
+
+class TestInitWritesPushGateArtifacts(unittest.TestCase):
+    """`aesop init` must leave the push-gate artifacts doctor requires and a `repos` key."""
+
+    def _git_repo(self, td):
+        subprocess.run(["git", "init", "-q"], cwd=td, capture_output=True, timeout=30, check=True)
+
+    def test_init_generates_push_gate_artifacts(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as td:
+            self._git_repo(td)
+            env = {k: v for k, v in os.environ.items() if k != "AESOP_SKIP_PUSH_GATE_ARTIFACTS"}
+            with mock.patch.dict(os.environ, env, clear=True):
+                init_project(td, project_name="gate-test")
+            for rel in PUSH_GATE_ARTIFACT_FILES:
+                self.assertTrue((Path(td) / rel).is_file(), f"missing push-gate artifact: {rel}")
+
+    def test_init_skip_env_suppresses_generation(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as td:
+            self._git_repo(td)
+            with mock.patch.dict(os.environ, {"AESOP_SKIP_PUSH_GATE_ARTIFACTS": "1"}):
+                init_project(td, project_name="skip-test")
+            for rel in PUSH_GATE_ARTIFACT_FILES:
+                self.assertFalse((Path(td) / rel).exists(), f"unexpected artifact: {rel}")
+
+    def test_init_config_has_repos_key(self):
+        with tempfile.TemporaryDirectory() as td:
+            init_project(td, project_name="repos-test")
+            config = json.loads((Path(td) / "aesop.config.json").read_text(encoding="utf-8"))
+            self.assertIn("repos", config)
+            self.assertIsInstance(config["repos"], list)
+
+def _git_text(cwd, *args):
+    """Run a git command in cwd and return its stripped stdout."""
+    result = subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=60, check=True,
+    )
+    return result.stdout.strip()
+
+
+class TestPrePushHookScansPushedRange(unittest.TestCase):
+    """The installed pre-push hook must scan the pushed commit range, not only the index."""
+
+    BRANCH = "refs/heads/feature/range-scan"
+    ZERO_SHA = "0" * 40
+
+    def _make_repo(self, td):
+        _git_text(td, "init", "-q")
+        _git_text(td, "symbolic-ref", "HEAD", self.BRANCH)
+        _git_text(td, "config", "user.email", "hook-test@example.invalid")
+        _git_text(td, "config", "user.name", "Hook Test")
+        init_project(td, project_name="range-scan")
+
+    def _commit(self, td, name, content, message):
+        Path(td, name).write_text(content, encoding="utf-8")
+        _git_text(td, "add", name)
+        _git_text(td, "commit", "-q", "-m", message)
+        return _git_text(td, "rev-parse", "HEAD")
+
+    def _run_hook(self, td, stdin_text):
+        """Run the installed hook with LF-only stdin (as git sends it); return (rc, output)."""
+        hook = Path(td, ".git", "hooks", "pre-push").as_posix()
+        result = subprocess.run(
+            [_hook_shell(), hook, "origin", "https://example.invalid/range-scan.git"],
+            input=stdin_text.encode("utf-8"), cwd=td, capture_output=True, timeout=120,
+        )
+        return result.returncode, (result.stdout + result.stderr).decode("utf-8", errors="replace")
+
+    def _push_line(self, local_sha, remote_sha):
+        return f"{self.BRANCH} {local_sha} {self.BRANCH} {remote_sha}\n"
+
+    def test_committed_secret_blocked_with_nothing_staged(self):
+        # Dummy key assembled at runtime; never a literal key in source.
+        dummy_key = "AKIA" + "3V7QK2ZT9WRX4LMD"
+        with tempfile.TemporaryDirectory() as td:
+            self._make_repo(td)
+            base = self._commit(td, "README.md", "clean base\n", "base")
+            leak = self._commit(td, "config.txt", f"aws_key = {dummy_key}\n", "leak")
+            self.assertEqual(_git_text(td, "diff", "--cached", "--name-only"), "")
+            rc, out = self._run_hook(td, self._push_line(leak, base))
+            self.assertNotEqual(rc, 0, out)
+
+    def test_clean_pushed_commit_exits_zero(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._make_repo(td)
+            base = self._commit(td, "README.md", "clean base\n", "base")
+            clean = self._commit(td, "notes.txt", "nothing sensitive here\n", "clean")
+            rc, out = self._run_hook(td, self._push_line(clean, base))
+            self.assertEqual(rc, 0, out)
+
+    def test_committed_secret_blocked_on_new_branch(self):
+        dummy_key = "AKIA" + "3V7QK2ZT9WRX4LMD"
+        with tempfile.TemporaryDirectory() as td:
+            self._make_repo(td)
+            self._commit(td, "README.md", "clean base\n", "base")
+            leak = self._commit(td, "config.txt", f"aws_key = {dummy_key}\n", "leak")
+            rc, out = self._run_hook(td, self._push_line(leak, self.ZERO_SHA))
+            self.assertNotEqual(rc, 0, out)
+
+    def test_branch_deletion_exits_zero(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._make_repo(td)
+            base = self._commit(td, "README.md", "clean base\n", "base")
+            rc, out = self._run_hook(td, self._push_line(self.ZERO_SHA, base))
+            self.assertEqual(rc, 0, out)
+
+    def test_malformed_stdin_line_fails_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._make_repo(td)
+            base = self._commit(td, "README.md", "clean base\n", "base")
+            rc, out = self._run_hook(td, f"{self.BRANCH} {base}\n")
+            self.assertNotEqual(rc, 0, out)
+
+    def test_missing_scanner_fails_closed(self):
+        with tempfile.TemporaryDirectory() as td:
+            self._make_repo(td)
+            base = self._commit(td, "README.md", "clean base\n", "base")
+            clean = self._commit(td, "notes.txt", "nothing sensitive here\n", "clean")
+            Path(td, "tools", "secret_scan.py").unlink()
+            rc, out = self._run_hook(td, self._push_line(clean, base))
+            self.assertNotEqual(rc, 0, out)
 
 ZERO_SHA = "0" * 40
 
