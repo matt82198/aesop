@@ -31,6 +31,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - **Fallback git dir resolution**: Manual parsing of `.git` file's `gitdir:` pointer if git command fails. Every branch returns `Path(...).resolve()` (8.3 TEMP alias `RUNNER~1` / subst drives differ from raw paths).
 - **Hook installation**: `install_pre_push_hook()` uses resolved git dir to place hooks in the common directory (not worktree), preventing ENOTDIR errors in worktree scenarios. Hooks dir is resolved by `common.resolve_hooks_dir` (git `--git-path hooks`, honours worktrees + core.hooksPath); health_score FAILs on git error (tests: `tests/test_health_score.py::TestHealthScoreHooksDirResolution`).
 - **Security**: symlink checks preserved throughout resolution.
+- **Pre-push hook scans pushed refs**: the hook `init_project.py` installs reads git's per-ref stdin, blocks pushes to `refs/heads/main|master`, and runs `secret_scan.py --range <remote-tip>..<local-tip>` per ref (whole tree for a new ref); `copy_secret_scan_script(force=)` refreshes a stale scan script only under `--force`. Tests: `tests/test_init_project.py`.
 - **state/ git-ignore (F-10, 2026-10-14)**: `ensure_state_gitignore()` appends a marker-delimited block (`state/*` + `!state/.gitkeep`) to the scaffolded `.gitignore`, idempotent on re-init. Without it `git add -A` staged the SQLite event store and tracker json. Tests: `tests/test_init_gitignore.py`.
 
 ## dash.js — fresh-init resolution (F-09, 2026-10-14)
