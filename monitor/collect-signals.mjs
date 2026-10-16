@@ -213,7 +213,7 @@ function checkHeartbeats() {
 }
 
 // Watchdog heartbeat location. This MUST mirror daemons/backup-fleet.sh, the only writer:
-// CONDUCTOR_ROOT env wins; otherwise the sibling conductor3 is used only when AESOP_ROOT's
+// CONDUCTOR_ROOT env wins; otherwise the sibling brain checkout is used only when AESOP_ROOT's
 // basename is exactly "aesop". Anything else resolves to null: the daemon writes no beat.
 function resolveWatchdogHeartbeat() {
   let conductorRoot = null;
