@@ -18,6 +18,7 @@ Deterministic on Linux, macOS, and Windows:
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -202,13 +203,48 @@ def _resolve_entrypoint(task_id: str) -> Optional[str]:
     return entrypoint
 
 
-def _run_candidate(cmd, timeout: int) -> Tuple[Optional[int], str, str, bool]:
+# Environment variables a candidate may inherit. Everything else is dropped,
+# so API keys, tokens and secrets in the grader's environment never reach
+# model-generated code. This is an ALLOWLIST: new secret-bearing variables are
+# excluded by default without needing a denylist update.
+_CANDIDATE_ENV_ALLOWLIST = (
+    "PATH",
+    "PATHEXT",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+)
+
+
+def _candidate_env(cwd: str) -> Dict[str, str]:
+    """Return the minimal environment a candidate process runs with.
+
+    Only ``_CANDIDATE_ENV_ALLOWLIST`` entries are copied from the grader's
+    environment. ``cwd`` is the per-candidate scratch directory, exported as
+    PWD so tools that read it see the sandbox rather than the repo.
+    """
+    env = {
+        name: os.environ[name]
+        for name in _CANDIDATE_ENV_ALLOWLIST
+        if name in os.environ
+    }
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["PWD"] = cwd
+    return env
+
+
+def _run_candidate(cmd, timeout: int, cwd: str) -> Tuple[Optional[int], str, str, bool]:
     """Run ``cmd`` with a hard timeout, killing the whole process group on expiry.
 
-    Returns ``(returncode, stdout, stderr, timed_out)``. ``returncode`` is None
-    when the candidate timed out. stdin is closed so a candidate cannot block
-    on input, and output is decoded as UTF-8 (bad bytes replaced) so a
-    non-ASCII candidate never crashes the grader on a cp1252 console.
+    The child gets a scrubbed environment (``_candidate_env``) and ``cwd`` as its
+    working directory. Returns ``(returncode, stdout, stderr, timed_out)``.
+    ``returncode`` is None when the candidate timed out. stdin is closed so a
+    candidate cannot block on input, and output is decoded as UTF-8 (bad bytes
+    replaced) so a non-ASCII candidate never crashes the grader on a cp1252 console.
     """
     popen_kwargs = dict(
         stdin=subprocess.DEVNULL,
@@ -217,6 +253,8 @@ def _run_candidate(cmd, timeout: int) -> Tuple[Optional[int], str, str, bool]:
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=_candidate_env(cwd),
+        cwd=cwd,
     )
     # Put the child in its own process group so we can kill descendants too.
     if os.name == "posix":
@@ -320,11 +358,11 @@ def grade_solution(task_id: str, solution_file: str) -> Dict:
             "error": f"Invalid entrypoint name: {entrypoint}. Must be a valid Python identifier (^[a-zA-Z_][a-zA-Z0-9_]*$)",
         }
 
-    # Create a temporary file to execute
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".py", delete=False, encoding="utf-8"
-    ) as f:
-        temp_file = f.name
+    # Stage the candidate in a fresh scratch directory that is also the child's
+    # cwd, so relative paths and module imports resolve inside the sandbox.
+    sandbox_dir = tempfile.mkdtemp(prefix="bench-candidate-")
+    temp_file = os.path.join(sandbox_dir, "candidate_solution.py")
+    with open(temp_file, "w", encoding="utf-8") as f:
         f.write(solution_code)
 
     try:
@@ -365,6 +403,7 @@ def grade_solution(task_id: str, solution_file: str) -> Dict:
                 returncode, stdout, stderr, timed_out = _run_candidate(
                     [sys.executable, "-c", "import json\n" + exec_code],
                     timeout=TIMEOUT_SECONDS,
+                    cwd=sandbox_dir,
                 )
 
                 if timed_out:
@@ -423,11 +462,8 @@ def grade_solution(task_id: str, solution_file: str) -> Dict:
         }
 
     finally:
-        # Clean up temp file
-        try:
-            os.unlink(temp_file)
-        except OSError:
-            pass
+        # Remove the whole scratch directory (candidate file and anything it wrote)
+        shutil.rmtree(sandbox_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
