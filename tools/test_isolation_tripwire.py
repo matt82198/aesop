@@ -123,6 +123,15 @@ LIVE_WRITER_ALLOWLIST = {
     },
 }
 
+# COMPACT-ON-STOP JOB FILES (2026-10-17 incident: a pre-push receipt run of ~5 min
+# collided with the live orchestrator session, whose Stop hook rewrites
+# state/compact-on-stop-job-<console pid>.json every time it stops a turn, and the
+# push was blocked by a file the suite never touched). The file name is the whole
+# contract: a fullmatch on a fleet-state-relative path naming one numeric session
+# pid. No evidence file is required, and no other fleet-state path can match, so an
+# arbitrary new file under the root still fails.
+COMPACT_ON_STOP_JOB_RE = re.compile(r"state/compact-on-stop-job-[0-9]+\.json")
+
 _REFLOG_TS_RE = re.compile(r"HEAD@\{(\d+)\}")
 
 
@@ -473,7 +482,8 @@ def build_attributor(before: dict, after: dict):
                     run (reflog entry inside the window) and which is now a clean
                     tracked file: another lane's `git pull`/checkout, not a test.
       "live-writer" fleet file registered in LIVE_WRITER_ALLOWLIST with a
-                    pidfile/heartbeat mtime inside the window.
+                    pidfile/heartbeat mtime inside the window, or a
+                    compact-on-stop job file (COMPACT_ON_STOP_JOB_RE).
       "unrelated"   everything else; it FAILS the run.
     """
     start = int(before.get("snapshot_time", 0))
@@ -508,6 +518,10 @@ def build_attributor(before: dict, after: dict):
         return "git-deploy", f"changed by git ({old}..{new}, reflog {reflog[-1]})"
 
     def attribute_fleet(rel: str):
+        if COMPACT_ON_STOP_JOB_RE.fullmatch(rel):
+            return "live-writer", (
+                "written by live writer compact-on-stop Stop hook "
+                f"(fleet-state/{rel}, rewritten each time its session stops a turn)")
         spec = LIVE_WRITER_ALLOWLIST.get(rel)
         if spec is None:
             return "unrelated", "not a registered live-writer file"

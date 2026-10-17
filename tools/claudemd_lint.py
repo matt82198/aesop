@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """CLAUDE.md linter — dogfoods the scope-min invariant.
-INDEX: Lint the domain CLAUDE.md layer: doc-pointers resolve, cited npm scripts exist, runtime/state artifacts not flagged, domain cross-refs prohibited; 4 checks: DOC-POINTER, TEST-CMD, DOMAIN-CROSS-REF (domain CLAUDE.md must not reference other domain CLAUDE.md with directives; parent-child refs allowed), line-count; --json; root CLAUDE.md exempt from cross-ref check. `--headroom [--base-ref origin/main] [--head-ref HEAD]` is a separate mode linting the MERGE UNION instead of the working tree: it previews the merge (`git merge-tree --write-tree`, falling back to a per-file three-way `git merge-file` on pre-2.38 git) and applies the same cap + per-file oversize allowance to the union's line count, so a branch sitting just under the cap while the base independently grew fails BEFORE the merge busts the cap on main; exit 0=clean / 1=a union busts its cap / 2=union unreadable (not a git repo, unresolvable ref, undecodable blob); wired into hooks/pre-push-policy.sh as `check_claudemd_headroom` (exit 2 fails open, exit 1 blocks the push). Also enforces the GENERATED-FILE contract landed with the tools/INDEX.md extraction: an authored CLAUDE.md carrying a `<!-- GENERATED-BY: <generator> -->` sentinel is a `sentinel-on-authored` finding, a sentinel-bearing file is exempt from the line-count cap, and every generated file must stay byte-identical to its generator's output (`generated-drift`, so a hand-edited tools/INDEX.md is rejected).
+INDEX: Lint the domain CLAUDE.md layer: doc-pointers resolve, cited npm scripts exist, runtime/state artifacts not flagged, domain cross-refs prohibited; 4 checks: DOC-POINTER, TEST-CMD, DOMAIN-CROSS-REF (domain CLAUDE.md must not reference other domain CLAUDE.md with directives; parent-child refs allowed), line-count; --json; root CLAUDE.md exempt from cross-ref check. `--headroom [--base-ref <trunk>] [--head-ref HEAD]` is a separate mode linting the MERGE UNION instead of the working tree (base defaults to the repo's trunk, resolved like the pre-push hook; no resolvable trunk exits 2): it previews the merge (`git merge-tree --write-tree`, falling back to a per-file three-way `git merge-file` on pre-2.38 git) and applies the same cap + per-file oversize allowance to the union's line count, so a branch sitting just under the cap while the base independently grew fails BEFORE the merge busts the cap on main; exit 0=clean / 1=a union busts its cap / 2=union unreadable (not a git repo, unresolvable ref, undecodable blob); wired into hooks/pre-push-policy.sh as `check_claudemd_headroom` (exit 2 fails open, exit 1 blocks the push). Also enforces the GENERATED-FILE contract landed with the tools/INDEX.md extraction: an authored CLAUDE.md carrying a `<!-- GENERATED-BY: <generator> -->` sentinel is a `sentinel-on-authored` finding, a sentinel-bearing file is exempt from the line-count cap, and every generated file must stay byte-identical to its generator's output (`generated-drift`, so a hand-edited tools/INDEX.md is rejected).
 
 For each */CLAUDE.md in a repo:
 1. DOC-POINTER check — every referenced path ending .md/.py/.sh/.mjs that looks like a
@@ -15,7 +15,8 @@ For each */CLAUDE.md in a repo:
 4. Optional — flags files over --max-lines (default 150).
 
 `--headroom` is a separate mode: instead of linting the working tree, it lints the
-MERGE UNION of each tracked CLAUDE.md against a base ref (default origin/main). A
+MERGE UNION of each tracked CLAUDE.md against a base ref (default: the repo's trunk,
+resolved origin/HEAD then origin/main, origin/master, main, master; --base-ref overrides). A
 branch can sit at 149/150 on its own and still bust the cap once merged, because the
 base moved too; three such cascades landed in one day. The union preview is the only
 thing that predicts the post-merge file, so the cap is checked there.
@@ -320,7 +321,7 @@ class HeadroomError(Exception):
 
 def _git(repo_root: Path, args: List[str], binary: bool = False):
     """Run a git plumbing command in repo_root. Returns CompletedProcess."""
-    kwargs = {"cwd": str(repo_root), "capture_output": True}
+    kwargs = {"cwd": str(repo_root), "capture_output": True, "timeout": 30}
     if not binary:
         kwargs["encoding"] = "utf-8"
         kwargs["errors"] = "replace"
@@ -328,6 +329,46 @@ def _git(repo_root: Path, args: List[str], binary: bool = False):
         return subprocess.run(["git"] + args, **kwargs)  # noqa: S603
     except (OSError, subprocess.SubprocessError) as exc:
         raise HeadroomError(f"git {' '.join(args)} failed to launch: {exc}") from exc
+
+
+def _ref_resolves(repo_root: Path, ref: str) -> bool:
+    """True when ref names a commit in repo_root."""
+    probe = _git(repo_root, ["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"])
+    return probe.returncode == 0 and bool(probe.stdout.strip())
+
+
+def resolve_trunk_ref(repo_root: Path) -> Optional[str]:
+    """Return the repo's trunk ref, or None when no candidate resolves.
+
+    Order matches gate_trunk_ref in hooks/pre-push-policy.sh: origin/HEAD's target,
+    then origin/main, then origin/master. Repos with no origin fall through to the
+    local default branch: main, then master. An unreadable repo resolves to None.
+    """
+    try:
+        sym = _git(repo_root, ["symbolic-ref", "-q", "refs/remotes/origin/HEAD"])
+        if sym.returncode == 0:
+            target = sym.stdout.strip()
+            if target.startswith("refs/remotes/"):
+                name = target[len("refs/remotes/"):]
+                if _ref_resolves(repo_root, name):
+                    return name
+        for name in ("origin/main", "origin/master", "main", "master"):
+            if _ref_resolves(repo_root, name):
+                return name
+    except HeadroomError:
+        return None
+    return None
+
+
+def _require_trunk(repo_root: Path) -> str:
+    """Resolved trunk ref; raises HeadroomError (exit 2) when none resolves."""
+    trunk = resolve_trunk_ref(repo_root)
+    if trunk is None:
+        raise HeadroomError(
+            f"no trunk ref resolves in {repo_root} (tried origin/HEAD, origin/main, "
+            "origin/master, main, master); pass --base-ref <ref> explicitly"
+        )
+    return trunk
 
 
 def _count_lines(blob: bytes, where: str) -> int:
@@ -435,13 +476,16 @@ def _union_via_three_way(repo_root: Path, base_ref: str, head_ref: str) -> Dict[
 
 def compute_union_line_counts(
     repo_root: Path,
-    base_ref: str = "origin/main",
+    base_ref: Optional[str] = None,
     head_ref: str = "HEAD",
 ) -> Dict[str, int]:
     """Line count of every tracked CLAUDE.md as it will look AFTER merging into base_ref.
 
-    Raises HeadroomError (caller maps to exit 2) when the preview is unreadable.
+    base_ref None resolves to the repo's trunk. Raises HeadroomError (caller maps to
+    exit 2) when the trunk or the preview is unreadable.
     """
+    if base_ref is None:
+        base_ref = _require_trunk(repo_root)
     top = _git(repo_root, ["rev-parse", "--show-toplevel"])
     if top.returncode != 0:
         raise HeadroomError(f"{repo_root} is not a git repository")
@@ -458,15 +502,18 @@ def compute_union_line_counts(
 
 def check_headroom(
     repo_root: Path,
-    base_ref: str = "origin/main",
+    base_ref: Optional[str] = None,
     head_ref: str = "HEAD",
     max_lines: int = DEFAULT_MAX_LINES,
 ) -> List[Dict[str, str]]:
     """Lint the merge union's line count for every tracked CLAUDE.md.
 
+    base_ref None resolves to the repo's trunk (fail closed when none resolves).
     Fails a file whose UNION busts its cap even when the branch alone is under it --
     the cascade class this gate exists for. Raises HeadroomError on unreadable input.
     """
+    if base_ref is None:
+        base_ref = _require_trunk(repo_root)
     union_counts = compute_union_line_counts(repo_root, base_ref, head_ref)
     branch_counts: Dict[str, int] = {}
     for path in _tracked_claudemd_paths(repo_root, head_ref):
@@ -729,8 +776,10 @@ def main():
     )
     parser.add_argument(
         "--base-ref",
-        default="origin/main",
-        help="Base ref for --headroom merge preview (default: origin/main)",
+        default=None,
+        help="Base ref for --headroom merge preview (default: the repo's trunk: "
+             "origin/HEAD target, then origin/main, origin/master, main, master; "
+             "exit 2 if none resolves)",
     )
     parser.add_argument(
         "--head-ref",
@@ -747,8 +796,9 @@ def main():
 
     if args.headroom:
         try:
+            base_ref = args.base_ref or _require_trunk(repo_root)
             all_findings = check_headroom(
-                repo_root, args.base_ref, args.head_ref, args.max_lines
+                repo_root, base_ref, args.head_ref, args.max_lines
             )
         except HeadroomError as exc:
             if args.json:
@@ -759,14 +809,14 @@ def main():
         if args.json:
             print(json.dumps(
                 {"findings": all_findings, "count": len(all_findings),
-                 "repo_root": str(repo_root), "base_ref": args.base_ref},
+                 "repo_root": str(repo_root), "base_ref": base_ref},
                 indent=2,
             ))
         elif all_findings:
             for i, finding in enumerate(all_findings, 1):
                 print(f"{i}. [{finding['type']}] {finding['message']}")
         else:
-            print(f"[OK] No CLAUDE.md busts its cap in the merge union with {args.base_ref}")
+            print(f"[OK] No CLAUDE.md busts its cap in the merge union with {base_ref}")
         sys.exit(1 if all_findings else 0)
 
     # Find all CLAUDE.md files (recursive, with exclusions for common junk dirs)
