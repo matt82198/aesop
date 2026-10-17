@@ -85,15 +85,16 @@ class MetricsGate:
                 errors="replace",
                 check=False,
             )
-            if result.returncode == 0:
-                # Success, continue to parse
-                pass
-            elif result.returncode == 128:
-                # Invalid range (ref doesn't exist) - no diff available
-                return []
-            else:
-                # Other git error - fail closed (cannot verify => deny)
-                print(f"ERROR: git diff failed with exit code {result.returncode}", file=sys.stderr)
+            if result.returncode != 0:
+                # Any git failure means the gate cannot look at the range. Git exits
+                # 128 for an unresolvable ref (e.g. a 0000000 base with no origin/main),
+                # and treating that as "no diff" passed the push unscanned. Fail
+                # closed for every non-zero exit: a gate that cannot look must not pass.
+                print(
+                    f"METRICS-GATE: BLOCK unresolvable range {self.diff_range} "
+                    f"(git exit {result.returncode})",
+                    file=sys.stderr,
+                )
                 sys.exit(1)
 
             diff_output = result.stdout
@@ -114,8 +115,12 @@ class MetricsGate:
 
             return added_lines
         except Exception as e:
-            # Unexpected error (file I/O, parsing) - fail closed (cannot verify => deny)
-            print(f"ERROR: git diff operation failed: {e}", file=sys.stderr)
+            # Unexpected error (git not runnable, decode, parse) - fail closed
+            print(
+                f"METRICS-GATE: BLOCK unresolvable range {self.diff_range} "
+                f"(git error: {e})",
+                file=sys.stderr,
+            )
             sys.exit(1)
 
     def is_version_number(self, text: str) -> bool:

@@ -59,16 +59,22 @@ class TestMetricsGate(unittest.TestCase):
         subprocess.run(["git", "commit", "-m", message], cwd=str(repo), capture_output=True)
 
     def test_no_metrics_pass(self):
-        """Test: a diff with no numeric claims passes."""
+        """Test: a resolvable range with no .md changes (empty md diff) passes.
+
+        This is the legitimate empty-diff case. The range resolves, git exits 0,
+        and only a non-markdown file changed, so there is nothing to scan.
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             self._init_repo(repo)
             self._commit(repo, "# Test\nNo numbers here.\n", "initial")
+            repo.joinpath("notes.txt").write_text("plain text only\n")
+            subprocess.run(["git", "add", "notes.txt"], cwd=str(repo), capture_output=True)
+            subprocess.run(["git", "commit", "-m", "add-txt"], cwd=str(repo), capture_output=True)
 
-            # Fresh repo with a single commit: HEAD~1 does not resolve, so the
-            # gate falls back cleanly (git exit 128) — verify it doesn't crash.
             exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~1...HEAD")
-            self.assertIn(exit_code, (0, 128))  # 0 = pass, 128 = not enough commits
+            self.assertEqual(exit_code, 0)
+            self.assertIn("NO-UNVERIFIED-METRICS: OK", stdout)
 
     def test_percentage_without_verification_fails(self):
         """Test: percentage claims without verification marker fail."""
@@ -158,26 +164,46 @@ class TestMetricsGate(unittest.TestCase):
             self.assertEqual(exit_code, 0)
 
     def test_git_diff_error_fails_closed(self):
-        """Test: git-diff error (bad ref) should fail-closed (exit 1)."""
+        """Test: an unresolvable range BLOCKs (exit 1) and names the range.
+
+        Regression for the fail-open defect: git exits 128 on an unknown ref, and
+        the gate used to treat that as "no diff" and PASS. A gate that cannot look
+        must not pass.
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             repo = Path(tmpdir)
             self._init_repo(repo)
             self._commit(repo, "# Test\n", "initial")
 
-            # Use a bad ref that doesn't exist; git-diff will fail with non-zero exit
-            # (not 0 and not 128 for invalid range)
             exit_code, stdout, stderr = self.run_metrics_gate(repo, "nonexistent-ref...HEAD")
+            combined = stdout + stderr
+            self.assertEqual(exit_code, 1)
+            self.assertIn(
+                "METRICS-GATE: BLOCK unresolvable range nonexistent-ref...HEAD (git exit 128)",
+                combined,
+            )
 
-            # Should exit with 1 (fail-closed: cannot verify => deny)
-            # Note: git-diff may return 128 for invalid ref, which the gate treats as
-            # "no diff"; but other errors should fail-closed
-            # We accept exit code 0 if it's the 128 case, or 1 if it's another error
-            # For this test we just verify the gate doesn't silently pass (exit 0)
-            # when there's a real error condition.
-            # Actually, "nonexistent-ref" should trigger 128 (invalid range), so
-            # the gate will return empty diff and exit 0. Let's use a different approach.
-            # We'll test by mocking the subprocess to raise an exception.
-            pass  # Skip this test as it requires subprocess mocking
+    def test_zero_sha_range_fails_closed(self):
+        """Test: a pre-push style all-zero base sha that git cannot resolve BLOCKs.
+
+        The pre-push hook hands the gate ``<zero-sha>...<sha>`` for a branch whose
+        base does not exist on the remote. An unresolvable base must block.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._init_repo(repo)
+            self._commit(repo, "# Test\n", "initial")
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(repo), capture_output=True, text=True, encoding="utf-8",
+            ).stdout.strip()
+            zero_range = "0" * 40 + "..." + head
+
+            exit_code, stdout, stderr = self.run_metrics_gate(repo, zero_range)
+            combined = stdout + stderr
+            self.assertEqual(exit_code, 1)
+            self.assertIn("unresolvable", combined)
+            self.assertIn("BLOCK unresolvable range " + zero_range, combined)
 
     def test_normal_diff_with_no_claims_passes(self):
         """Test: regression - normal diff with no unverified claims still passes (exit 0)."""
