@@ -1368,7 +1368,9 @@ check_inprocess_http_timeout() {
   # Scans the pushed tests/ for a constant client timeout under 30 s in any module that starts
   # an in-process server. Fail-CLOSED on any hit, an unparseable test module, or an escape total
   # or per-file hit count above the TRUNK baseline ($gate_dir, the authority, like D40).
-  # Fail-open only when the trunk does not yet carry the tool (dev-only bootstrap, WARN).
+  # Fail-CLOSED when the trunk copy of the tool is missing from a repo that has tools/
+  # (the tool is on trunk once guard/inprocess-http-timeout-lint-v2 merges); skip only
+  # when there is no aesop tools/ directory at all (gate_tool_status = skip).
   local aesop_root
   aesop_root=$(resolve_aesop_root)
   local lint_script="$gate_dir/tools/inprocess_http_timeout_lint.py"
@@ -1380,9 +1382,9 @@ check_inprocess_http_timeout() {
     return 0
   fi
   if [ "$tool_status" = "missing" ]; then
-    printf 'Warning: inprocess_http_timeout_lint.py not found; timeout lint skipped (fail-open until trunk carries it)\n' >&2
+    gate_tool_missing_block "inprocess_http_timeout_lint.py" "$lint_script"
     log_event "inprocess_timeout_tool_missing"
-    return 0
+    return 1
   fi
 
   local py_bin=""

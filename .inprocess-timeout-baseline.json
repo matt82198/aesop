@@ -1,4 +1,5 @@
 {
+  "_generated": "2026-10-17",
   "escapes": 0,
   "tests/test_agent_inspector.py": 1,
   "tests/test_api_state.py": 2,
@@ -11,6 +12,6 @@
   "tests/test_sse_disconnect.py": 1,
   "tests/test_symlink_guard.py": 1,
   "tests/test_tracker_csrf.py": 2,
-  "tests/test_ui_demo_mode.py": 1,
+  "tests/test_ui_demo_mode.py": 2,
   "tests/test_ui_handler.py": 1
 }

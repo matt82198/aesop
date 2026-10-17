@@ -319,6 +319,10 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/pyflakes_gate.py --root . --baseline .pyflakes-baseline.json
 
+      - name: In-process HTTP timeout lint (main-full-windows-shard2-ui-acceptance-timeout)
+        if: matrix.python-shard == 0
+        run: python tools/inprocess_http_timeout_lint.py --root . --baseline .inprocess-timeout-baseline.json
+
       - name: Dead-baseline liveness gate (GUARDRAIL #3)
         if: matrix.python-shard == 0
         run: python tools/baseline_liveness_check.py --root .
