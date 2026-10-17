@@ -1361,6 +1361,55 @@ check_pyflakes_ratchet() {
 }
 
 
+check_inprocess_http_timeout() {
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_inprocess_http_timeout"; return 1; }
+  # Escape main-full-windows-shard2-ui-acceptance-timeout (tools/inprocess_http_timeout_lint.py).
+  # Scans the pushed tests/ for a constant client timeout under 30 s in any module that starts
+  # an in-process server. Fail-CLOSED on any hit, an unparseable test module, or an escape total
+  # or per-file hit count above the TRUNK baseline ($gate_dir, the authority, like D40).
+  # Fail-open only when the trunk does not yet carry the tool (dev-only bootstrap, WARN).
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local lint_script="$gate_dir/tools/inprocess_http_timeout_lint.py"
+
+  local tool_status
+  tool_status=$(gate_tool_status "$aesop_root" "$lint_script")
+  if [ "$tool_status" = "skip" ]; then
+    log_event "inprocess_timeout_skipped_no_aesop_tools"
+    return 0
+  fi
+  if [ "$tool_status" = "missing" ]; then
+    printf 'Warning: inprocess_http_timeout_lint.py not found; timeout lint skipped (fail-open until trunk carries it)\n' >&2
+    log_event "inprocess_timeout_tool_missing"
+    return 0
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    gate_no_python_block "inprocess timeout lint"
+    log_event "inprocess_timeout_no_python"
+    return 1
+  fi
+
+  local lint_output
+  lint_output=$("$py_bin" "$lint_script" --root "$aesop_root" --baseline "$gate_dir/.inprocess-timeout-baseline.json" 2>&1)
+  local lint_exit_code=$?
+
+  if [ $lint_exit_code -eq 0 ]; then
+    case "$lint_output" in
+      *"burned down:"*) printf '%s\n' "$lint_output" | grep -F 'burned down:' >&2 ;;
+    esac
+    return 0
+  fi
+
+  if [ -n "$lint_output" ]; then
+    printf '%s\n' "$lint_output" >&2
+  fi
+  # Exit 1 (hit or ratchet above trunk baseline) and exit 2 (unreadable input) both block.
+  return 1
+}
+
 check_subprocess_guard_ratchet() {
   # Subprocess anti-pattern ratchet (guardrail G6, tools/subprocess_guard.py).
   # Runs the EXACT invocation ci.yml runs, from the repo root, against the pushed
@@ -3472,6 +3521,13 @@ main() {
   if ! check_pyflakes_ratchet; then
     printf 'Error: Pyflakes ratchet check failed (new or stale findings). Push blocked.\n' >&2
     log_block "pyflakes_ratchet_failure"
+    exit 1
+  fi
+
+  # Escape main-full-windows-shard2-ui-acceptance-timeout: in-process HTTP test timeout lint.
+  if ! check_inprocess_http_timeout; then
+    printf 'Error: In-process HTTP timeout lint failed (short client timeout on an in-process server). Push blocked.\n' >&2
+    log_block "inprocess_http_timeout_failure"
     exit 1
   fi
 

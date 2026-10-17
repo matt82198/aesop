@@ -1,0 +1,16 @@
+{
+  "escapes": 0,
+  "tests/test_agent_inspector.py": 1,
+  "tests/test_api_state.py": 2,
+  "tests/test_serve_agent_security.py": 1,
+  "tests/test_serve_sse.py": 5,
+  "tests/test_serve_wave8_fixes.py": 1,
+  "tests/test_serve_wave_dispatch.py": 1,
+  "tests/test_serve_wave_failure.py": 1,
+  "tests/test_serve_wave_telemetry.py": 1,
+  "tests/test_sse_disconnect.py": 1,
+  "tests/test_symlink_guard.py": 1,
+  "tests/test_tracker_csrf.py": 2,
+  "tests/test_ui_demo_mode.py": 1,
+  "tests/test_ui_handler.py": 1
+}
