@@ -3,10 +3,10 @@ name: CI
 # NOTE: `ci` runs on EVERY PR, including docs-only. We deliberately do NOT skip it on docs-only
 # changes: a skipped matrix job reports its `ci (N)` checks as *skipped*, and under strict branch
 # protection a skipped required check is NOT satisfied, so pure-docs PRs deadlock forever (observed
-# 2026-07-17 on PR #170 — even `--admin` fails with "N of N required status checks are expected").
+# 2026-07-17 on PR #170 -- even `--admin` fails with "N of N required status checks are expected").
 # Running the full suite on a docs-only change is cheap enough and always passes (code is unchanged),
 # so correctness beats the few saved minutes. Do NOT re-add a job-level `if:` skip on `ci` or a
-# trigger-level `paths-ignore:` — either one reintroduces the deadlock.
+# trigger-level `paths-ignore:` -- either one reintroduces the deadlock.
 # Scoping must remain STEP-LEVEL: individual gates can be conditional (e.g., shard 0 only) without
 # causing matrix jobs to report skipped. This approach preserves deadlock safety while allowing
 # incremental gate optimization (browser-proofs and windows-shard skip safely as non-required).
@@ -16,18 +16,18 @@ name: CI
 # no job-level `if:` skip and no `paths-ignore:` in sight. GitHub Actions implicitly prepends
 # `success() &&` to any job's scheduling decision when it has a `needs:` entry, UNLESS that job's
 # own `if:` explicitly calls always()/cancelled()/failure(). So whenever docs-only-gate itself does
-# not conclude "success" — a genuine script bug, OR (as observed) the job sitting queued and then
-# getting cancelled by runner/concurrency starvation, with zero steps ever executing — `ci` reports
+# not conclude "success" -- a genuine script bug, OR (as observed) the job sitting queued and then
+# getting cancelled by runner/concurrency starvation, with zero steps ever executing -- `ci` reports
 # `skipped` on all 4 shards and `windows-shard` also skips (which the `windows` aggregator then
 # treats as an acceptable "correctly skipped for docs-only," turning a Windows run that never
 # happened into a false green). Required contexts "ci (0..3)"/"windows" must always conclude
-# success or failure, never skipped, REGARDLESS of why docs-only-gate failed to resolve — hence
+# success or failure, never skipped, REGARDLESS of why docs-only-gate failed to resolve -- hence
 # `if: always() && (needs.docs-only-gate.result != 'success' || ...)` on all three downstream jobs.
 # Do not remove always() from any of them; without it the implicit success()-gate comes back.
 #
 # PR-only by design. `push: branches: [main]` was removed: main is protected by PR
 # checks, so the merge commit's `ci` run already passed on the PR, and .github/workflows/
-# main-full.yml is the post-merge verification (that is why it exists — see its header).
+# main-full.yml is the post-merge verification (that is why it exists -- see its header).
 # Keeping both meant every merge paid the full ~30 job-minutes twice. Do NOT re-add a
 # push trigger here; post-merge coverage belongs to main-full.
 on:
@@ -206,7 +206,7 @@ jobs:
       - name: Node syntax check
         run: |
           # *.template.mjs are Claude Code WORKFLOW scripts (top-level return is valid
-          # in the harness runtime, illegal to plain node) — structurally tested in
+          # in the harness runtime, illegal to plain node) -- structurally tested in
           # tests/buildsystem-template.test.mjs instead.
           git ls-files '*.mjs' | grep -v '\.template\.mjs$' | while read file; do
             node --check "$file" || exit 1
@@ -344,7 +344,7 @@ jobs:
 
       # The ui/web chain below is shard-INVARIANT: all four ubuntu shards ran the same
       # npm ci + build + tsc + dist-drift + vitest, so 3 of every 4 runs were pure waste.
-      # Gate is STEP-level on purpose — a job-level `if:` makes `ci (N)` report skipped,
+      # Gate is STEP-level on purpose -- a job-level `if:` makes `ci (N)` report skipped,
       # and a skipped required check never satisfies branch protection (PR #170 deadlock).
       - name: Build React dashboard (ui/web/)
         if: matrix.python-shard == 0
@@ -437,7 +437,7 @@ jobs:
     strategy:
       fail-fast: false
       max-parallel: 4
-      # Full parallelism with per-test timeout guards (PYTEST_TIMEOUT) — contention-prone tests
+      # Full parallelism with per-test timeout guards (PYTEST_TIMEOUT) -- contention-prone tests
       # fail individually via pytest-timeout instead of hanging the whole shard.
       matrix:
         python-shard: [0, 1, 2, 3]
@@ -662,7 +662,7 @@ jobs:
           python tools/state_rebuild.py --all --state-root "$STATE_ROOT"
           python tools/state_rebuild.py --check --state-root "$STATE_ROOT"
 
-  # Guardrail G2.7 (tools/CLAUDE.md): PR footprint gate — detects oversized PRs (>100 files
+  # Guardrail G2.7 (tools/CLAUDE.md): PR footprint gate -- detects oversized PRs (>100 files
   # or >5000 deletions) or fixture-polluted branches (test fixtures committed into lanes).
   # REQUIRED: blocks auto-merge of oversized/polluted PRs unless labeled 'big-change' or
   # chore(stats)-only. Standalone job, no docs-only-gate dependency: read-only, fast, and

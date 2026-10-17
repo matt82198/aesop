@@ -62,7 +62,7 @@ jobs:
           echo "If the next step fails with '404 Not Found', the package owner must:"
           echo "  1. Log into https://www.npmjs.com/ with the package owner account"
           echo "  2. Navigate to the package settings page"
-          echo "  3. Go to Publishing access → Trusted Publishers"
+          echo "  3. Go to Publishing access -> Trusted Publishers"
           echo "  4. Add: GitHub Actions org=matt82198 repo=aesop workflow=publish.yml"
           echo "  5. Save (takes ~30s to propagate)"
           echo "See full docs: https://docs.npmjs.com/trusted-publishers"
@@ -78,11 +78,11 @@ jobs:
 
       - name: Diagnose publish failure
         # continue-on-error keeps job-level failure() false, so gate on the
-        # step outcome alone — failure() here would make this step dead code.
+        # step outcome alone -- failure() here would make this step dead code.
         if: steps.publish-attempt.outcome == 'failure'
         run: |
           echo "=========================================="
-          echo "PUBLISH FAILED — LIKELY CAUSE:"
+          echo "PUBLISH FAILED -- LIKELY CAUSE:"
           echo "=========================================="
           echo ""
           echo "The npm registry returned a 404 error, which typically means the"
@@ -92,7 +92,7 @@ jobs:
           echo "HUMAN ACTION REQUIRED (npmjs.com only, ~2 minutes):"
           echo "  1. Go to: https://www.npmjs.com/settings/matt82198/packages"
           echo "  2. Click the @matt82198/aesop package"
-          echo "  3. Go to 'Publishing access' → 'Trusted Publishers'"
+          echo "  3. Go to 'Publishing access' -> 'Trusted Publishers'"
           echo "  4. Click 'Add a new publisher'"
           echo "  5. Select: GitHub Actions"
           echo "       Organization: matt82198"
