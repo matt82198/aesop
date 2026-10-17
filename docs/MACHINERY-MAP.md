@@ -379,3 +379,153 @@ Status: **enforced** means a code path in the tree enforces the principle. **par
 | lane 1 D1: LANE-CONTRACT "injected" by a hook | Phrase absent from root CLAUDE.md; the injector is outside the repo. |
 | lane 4 K4, K6, K7, K9, K10; the external conductor checkout watchdog and monitor copies | Refer to files outside the repo; not checkable here. |
 | Runtime measurements (event-store lag, usage-watchdog staleness, live task states, stray directory) | Runtime state, not in the tree; dropped. |
+
+## 9. Service interactions (how the machinery connects at runtime)
+**Basis.** origin/main at `ab27a6cc`, read on that tree for this section. Sections 1-8 cite `cb972c56` and their line numbers have moved (for example `run-watchdog.sh` `main` is now :332, not :306). Re-derive a cited line before relying on it.
+
+**Scope.** Every edge in 9.2 names the file:line that makes it happen. Items that live outside this repo (the scheduled-task XML on the live box, `~/.claude` hooks, the machinery repo checkout, the contents of the `~/aesop-daemon-runtime` checkout) are marked **UNVERIFIED** in 9.5 and are not asserted as fact.
+
+### 9.1 Runtime topology
+```
+[A] Orchestrator = interactive Claude Code session (outside repo; no daemon)
+ |  brain hooks ~/.claude/hooks/*.mjs            (names only, section 6)
+ |  repo hook .claude/settings.json PreToolUse Agent|Task
+ |     -> hooks/claude/force-model-policy.mjs
+ |  dispatch = harness agent-call or Task. ClaudeCodeDriver.dispatch_worker is a
+ |     seam that raises outside the harness; it is not a subprocess.
+ v
+[B] Lanes = stateless agents, each in a sibling worktree <repo>-wt-<name>
+ |  branch per lane, pushed in the foreground, never --no-verify
+ v
+[C] Pre-push gates: hooks/pre-push-policy.sh (check calls 3333-3470)
+ |  secret scan, encoding, symbol survival, generated artifacts, ...
+ |  check_emit_receipt (:1900) -> tools/emit_receipt.py run_matrix
+ |     signs with ~/.aesop/receipt_key.pem; no key = WARN, push continues
+ |     posts check-run / commit-comment on head sha; 422 -> spool
+ |  spawns receipt_autoflush.py poller, detached (:2118-2122)
+ v
+[D] GitHub
+ |  ci.yml: ci(0..3) shards, windows, pr-footprint-gate, pr-symbol-survival
+ |          (required set: tools/required-checks.json)
+ |  main-full.yml: push to main + nightly cron 03:30 UTC
+ |  verify-receipt.yml: pull_request, recomputes tree hash, NOT required
+ |  native auto-merge: armed by the lane, re-armed by pr_sweep (E12, E13)
+ ^
+ |  gh CLI (read and arm)
+[E] Watchdog = Windows scheduled task AesopWatchdogDaemon, every 5 min
+ |  action: daemons/bin/run-hidden.exe (built by install-tasks.ps1)
+ |     -> bash -lc "{ bash <root>/daemons/run-watchdog.sh --once; } >> state/cron-watchdog.log 2>&1"
+ |  run-watchdog.sh --once:
+ |     check_halt (tools/halt.py --status, fail closed)
+ |     backup-fleet.sh cycle: push unpushed commits, secret scan,
+ |        heartbeat -> $CONDUCTOR_ROOT/state/.watchdog-heartbeat
+ |     receipt flush | PR sweep (15 min stamp) | task-event ingest | alert bridge
+ v
+[F] Refinement monitor = monitor/collect-signals.mjs (MON = $AESOP_ROOT/monitor)
+ |  reads watchdog heartbeat (300 s), monitor heartbeat (3600 s), alerts, git
+ |  writes monitor/BRIEF.md, SIGNALS.json, ACTIONS.log, .monitor-heartbeat,
+ |     PROPOSALS.md (append under lock). Launched by /power (brain side).
+ v
+[G] Read surfaces (read-only toward state)
+ |  ui/serve.py          -> 127.0.0.1:$PORT (default 8770), HTTP + SSE
+ |  mcp/server.mjs       -> stdio JSON-RPC, server name aesop-fleet
+ |  dash/watchdog-gui.sh -> terminal view of the watchdog heartbeat
+ v
+[H] State stores
+    state_root (aesop.config.json key, gitignored; else $AESOP_ROOT/state):
+       tracker_events.db, state.db, tracker.json, orchestrator-status.json,
+       SECURITY-ALERTS.log, FLEET-BACKUP.log, MERGE-QUEUE.log, .HALT
+    CONDUCTOR_ROOT/state: .watchdog-heartbeat, .watchdog-blocked, .HALT (box-wide)
+    ~/.aesop: receipt_key.pem, receipt-spool/   (outside repo)
+    ~/.claude/state/task-events.jsonl           (brain hook writes, ingest reads)
+```
+
+### 9.2 Interaction edges
+Each row is one edge. "Detection" is what shows the edge has failed. Line numbers are from `ab27a6cc`.
+
+| # | Producer -> consumer | Channel | Path or port | Cadence | Failure mode | Detection |
+|---|---|---|---|---|---|---|
+| E01 | Orchestrator -> lane | Harness agent-call or Task dispatch | driver/claude_code_driver.py:113-123 (seam) | per dispatch | lane stalls or fails; contract says kill and re-dispatch a fresh lane (LANE-CONTRACT s0) | per-agent heartbeat (writer UNVERIFIED, 9.5); monitor reads `.heartbeats` (monitor/collect-signals.mjs:176) |
+| E02 | Orchestrator session -> repo hook | Claude Code PreToolUse hook | .claude/settings.json (matcher Agent or Task) -> hooks/claude/force-model-policy.mjs | every Agent or Task call | denial blocks the call; contract says stop and report | hook denial text in the session |
+| E03 | Lane -> origin | git push (foreground) | remote `origin` | per push | push refused by a gate | non-zero push exit |
+| E04 | git pre-push -> gate checks | git hook, bash | hooks/pre-push-policy.sh:3333-3470 | per push | any red gate blocks; base-pinned tools come from an origin/main copy (gate_base_dir :187) | exit code; log_event lines |
+| E05 | pre-push -> receipt matrix | subprocess | hooks/pre-push-policy.sh:1900 -> tools/emit_receipt.py `run_matrix` :343 | per push when gh is present | red matrix blocks (exit 3); no key material = WARN and push continues (hooks/pre-push-policy.sh:1978-1982) | `receipt_emit_skipped_no_key_material` event; receipt on head sha |
+| E06 | emit_receipt -> GitHub | gh API: check-run or commit comment; spool on 422 | tools/emit_receipt.py `post_receipt` :498; spool `resolve_spool_dir` tools/receipt_common.py:188 | per push | 422 (commit not found) spools the receipt | receipt on sha (check-run); spool directory contents |
+| E07 | pre-push -> autoflush poller | detached spawn | hooks/pre-push-policy.sh:2118-2122 -> tools/receipt_autoflush.py `poll_and_flush` :67, `spawn_detached` :107 | per push with a spooled receipt | poller exits; E08 is the backstop | spool still non-empty |
+| E08 | watchdog -> receipt flush | subprocess | daemons/run-watchdog.sh:176 -> tools/receipt_flush.py | every watchdog cycle | fail-open (receipt only) | spool contents; flush log |
+| E09 | push or PR -> GitHub CI | GitHub Actions | .github/workflows/ci.yml (matrix :160-161; jobs :144-759); nightly schedule ci.yml:38 | per push or PR, nightly | red required check blocks merge | `gh pr view --json statusCheckRollup` |
+| E10 | push to main -> main-full | GitHub Actions | .github/workflows/main-full.yml:6-13 | per main push, nightly 03:30 UTC | red run does not block a merge (not in required set) | Actions run status |
+| E11 | PR -> verify-receipt | GitHub Actions; fetches the receipt for the head sha | .github/workflows/verify-receipt.yml:38, job :51; tools/verify_receipt.py `fetch_receipt_for_head` :245 | per PR update | NOT a required check (tools/required-checks.json lacks it) | check status on PR |
+| E12 | lane -> GitHub native auto-merge | gh CLI | `gh pr merge <N> --auto --squash` (LANE-CONTRACT s6) | once at PR open | GitHub merges when required checks are green | `gh pr view <N> --json autoMergeRequest` |
+| E13 | watchdog -> PR sweep (re-arm) | subprocess, 15-min stamp | daemons/run-watchdog.sh:198 -> tools/pr_sweep.py `arm_auto_merge` :203 (args :204) | every 15 min (state/.pr-sweep-last) | exit 2 when gh auth is missing; stuck-red and DIRTY PRs raised as signals | `pr.red` / `pr.dirty` events to the machinery repo queue (path UNVERIFIED) |
+| E14 | Windows Task Scheduler -> watchdog | scheduled task action | daemons/install-tasks.ps1:6 (5 min), :59-61 (launcher path), :406 (derived command); exe built :64-87 from daemons/run-hidden.cs | every 5 min | launcher exe missing = task fails closed; install stops before tasks change if csc.exe is missing | task last-run result; tools/task_cadence_check.py |
+| E15 | run-watchdog -> backup-fleet cycle | subprocess (bash) | daemons/run-watchdog.sh:416 and :445 (loop); daemons/backup-fleet.sh `main` :331 | every cycle; 150 s in daemon mode | exit 1 = no heartbeat; exit 3 = BLOCKED marker | heartbeat age; `state/.watchdog-blocked` |
+| E16 | backup-fleet -> GitHub | git fetch and push; `secret_scan.py --range` | daemons/backup-fleet.sh:146 `scan_unpushed_commits`, :259 `git fetch -q origin` | each cycle | secret hit blocks that repo (exit 3) | FLEET-BACKUP.log |
+| E17 | backup-fleet -> watchdog heartbeat | file write | daemons/backup-fleet.sh:24-31 (rule), :56 `write_heartbeat` -> $CONDUCTOR_ROOT/state/.watchdog-heartbeat | end of each completed cycle (exit 0 or 3) | no write when CONDUCTOR_ROOT is empty (non-canonical AESOP_ROOT) | heartbeat age (E23) |
+| E18 | run-watchdog -> halt check | subprocess | daemons/run-watchdog.sh:262 `check_halt` -> tools/halt.py --status | each cycle | unknown result = HALT-CHECK-FAILED, cycle skipped | FLEET-BACKUP.log |
+| E19 | operator -> all loops (halt) | file sentinel | tools/halt.py `_write_sentinel` :132 -> state/.HALT (box-wide: $CONDUCTOR_ROOT/state/.HALT) | when halted | loops that read the sentinel stop | readers listed in map 2.3 |
+| E20 | brain hook -> task ingest -> state store | file, then subprocess | ~/.claude/state/task-events.jsonl (tools/ingest_task_events.py:95) -> run-watchdog.sh:241 -> store under ${AESOP_STATE_ROOT:-$AESOP_ROOT/state} | each cycle | non-zero exit logged ERROR; `--once` exits 1 | state/.task-ingest-heartbeat (ingest :93, :426) |
+| E21 | watchdog -> alert bridge | subprocess (errors ignored) | daemons/CLAUDE.md invariant 7 -> tools/alert_bridge.py --scan; reads SECURITY-ALERTS.log, cursor .alert-bridge-cursor | each cycle; opt-in webhook | no-op when webhook_url is unset | cursor file; delivery target UNVERIFIED |
+| E22 | watchdog -> git integrity | subprocess | daemons/CLAUDE.md (run-watchdog description) -> tools/git_integrity_check.py --repos-json .watchdog-repos.json | each cycle | DAMAGED repo writes SECURITY-ALERTS.log | SECURITY-ALERTS.log |
+| E23 | watchdog heartbeat -> readers | file read | monitor/collect-signals.mjs:218-226; ui/collectors.py:145; mcp/server.mjs:101; dash/watchdog-gui.sh:27; daemons/selfheal.sh:228 cycle_once (unscheduled, E33) | monitor per cycle; UI per collector tick | stale over 300 s = staleLoops signal (collect-signals.mjs:180); missing or unparseable = GAP, never fresh | the SIGNALS.json entry; mcp fleet_status |
+| E24 | monitor -> monitor heartbeat | file write | monitor/collect-signals.mjs:1359 -> $AESOP_ROOT/monitor/.monitor-heartbeat | per monitor cycle (scheduler UNVERIFIED) | watchdog reads $CONDUCTOR_ROOT/monitor/.monitor-heartbeat (run-watchdog.sh:489): path mismatch unless the roots coincide | staleness over 3600 s (collect-signals.mjs:181) |
+| E25 | monitor -> proposals | file append under lock | monitor/collect-signals.mjs:944 `emitProposal`, :945 PROPOSALS.md | per cycle, PROPOSE tier only | lock contention (`safeAcquireLock` :930) | operator reads PROPOSALS.md |
+| E26 | browser -> dashboard | HTTP GET and POST (CSRF-checked), SSE | ui/serve.py:86 (print); ui/handler.py:1415-1416 bind 127.0.0.1; `/events` ui/handler.py:1215; origin and Host checks :116-190; port ui/config.py:68 (env PORT, default 8770) | on demand; SSE push | non-loopback Host or Origin rejected | browser error; process not listening |
+| E27 | UI collector thread -> state | in-process thread | ui/sse.py:420 `start_collector_thread`; ui/config.py:104-115 (state dir: AESOP_STATE_ROOT > config state_root > AESOP_ROOT/state) | COLLECTOR_INTERVAL | stale view | `/api/state` contents |
+| E28 | MCP client -> mcp/server.mjs | stdio JSON-RPC (readline on stdin and stdout) | mcp/server.mjs:115 | per tool call | read-only; missing file returns a tool error | tool result text |
+| E29 | mcp -> helpers | child_process spawn | mcp/server.mjs:290 (dash-extra.mjs), :760 (gh), :912 `spawnFleetHelper` (mcp/instances-claims.py) | per tool call | spawn error returned to client (:837) | tool result text |
+| E30 | config -> every reader | file read at process start | aesop.config.json key `state_root` (gitignored, .gitignore:13) via tools/state_root.py; readers mcp/server.mjs:80-86, ui/config.py:104-115, daemons/run-watchdog.sh:473-483 (exports AESOP_STATE_ROOT) | per process start | unset: tools/boot_state.py fails closed (exit 2); watchdog falls back to $AESOP_ROOT/state | state_root error text |
+| E31 | writers -> event store | Python API | state_store/store.py `EventStore.append` :204 -> tracker_events.db (state_store/paths.py:37) and state.db (paths.py:38) | per write | version check inside BEGIN IMMEDIATE | `read` / `read_since` :280, :284 |
+| E32 | scheduler -> merge queue (opt-in) | scheduled task AesopMergeQueue -> daemons/run-merge-queue.sh `main` :128 -> tools/merge_queue.py --advance | install-tasks.ps1 -EnableMergeQueue (opt-in); daemons/CLAUDE.md run-merge-queue entry | 5 min when enabled | halt check fails closed (:59); exceptions.jsonl | state/MERGE-QUEUE.log; .merge-queue-heartbeat |
+| E33 | selfheal -> watchdog and monitor (restart) | none in repo | daemons/selfheal.sh `main` :251, `restart_watchdog` :167, `restart_monitor` :203 | would be 60 s; NOT SCHEDULED | no restart of a dead watchdog or monitor | none in repo (see T8) |
+
+Edge count: 33 (E01-E33). E33 is listed to show a missing edge; it is not active.
+
+### 9.3 Where things actually run
+| Process | Launched by | Checkout or cwd it runs from | Env it needs (names only) | Evidence |
+|---|---|---|---|---|
+| Orchestrator Claude Code session | the user, interactively | the user's session cwd | CLAUDE_PROJECT_DIR (used by the repo hook entry) | repo .claude/settings.json (PreToolUse, matcher Agent or Task) |
+| Lane (agent) | orchestrator dispatch through the harness | sibling worktree `<repo>-wt-<name>` | AESOP_STATE_ROOT (export explicitly, per LANE-CONTRACT s4); optional AESOP_RECEIPT_KEY | LANE-CONTRACT s4 |
+| pre-push gates and emit_receipt | git, on every push | the pushing worktree; base tools from an origin/main copy | AESOP_RECEIPT_KEY, AESOP_RECEIPT_HMAC_SECRET, AESOP_HOME, AESOP_RECEIPT_SPOOL | hooks/pre-push-policy.sh:1978; tools/receipt_common.py:186-200, :269-270 |
+| Watchdog (scheduled) | Task Scheduler task AesopWatchdogDaemon, through daemons/bin/run-hidden.exe and bash | the runtime checkout (`~/aesop-daemon-runtime`, a detached git worktree at ab27a6cc per `git worktree list`) | CONDUCTOR_ROOT (must be set explicitly for a non-"aesop" checkout, see T4); AESOP_ROOT derived from the script location; AESOP_STATE_ROOT optional | daemons/CLAUDE.md; backup-fleet.sh:24-31; run-watchdog.sh:473-483 |
+| backup-fleet.sh cycle | run-watchdog.sh, once per cycle | same checkout as the watchdog | CONDUCTOR_ROOT; AESOP_WATCHDOG_CYCLE_CMD (test override only) | daemons/CLAUDE.md |
+| Task installer | the operator, run from the runtime checkout | PowerShell 5.1 in the runtime checkout | AESOP_INSTALL_TASKS_DRY_RUN (refuses real registration) | install-tasks.ps1 header; daemons/CLAUDE.md |
+| Merge queue (opt-in) | AesopMergeQueue task -> run-merge-queue.sh | cd to $AESOP_ROOT | AESOP_QUEUE_ROOT, CONDUCTOR_ROOT | daemons/run-merge-queue.sh; daemons/CLAUDE.md |
+| Refinement monitor | /power (brain side), self-paced | $AESOP_ROOT (default `.`, see T14) | AESOP_ROOT, CONDUCTOR_ROOT, AESOP_MONITOR_FORCE | monitor/collect-signals.mjs:43, :107-116 |
+| UI dashboard | `python ui/serve.py`, or `bin/cli.js dash` (spawns python3 ui/serve.py) | the repo checkout | PORT (default 8770), AESOP_ROOT, AESOP_STATE_ROOT | ui/serve.py:86; ui/config.py:68, :104-115; bin/CLAUDE.md:33 |
+| MCP server | the MCP client, over stdio (client config UNVERIFIED) | the repo checkout | AESOP_ROOT, AESOP_STATE_ROOT | mcp/server.mjs:80-86 |
+| Dash TUI | the operator | the repo checkout | AESOP_ROOT | dash/watchdog-gui.sh:27, :33 |
+| Autoflush poller | spawned detached by pre-push | the pushing worktree | AESOP_RECEIPT_SPOOL | hooks/pre-push-policy.sh:2118-2122 |
+
+### 9.4 Known traps
+- **T1. Scheduled-task changes go through install-tasks.ps1 only.** Any difference in action, arguments, logon type, or interval re-registers the task (install-tasks.ps1 header, "Divergence (D45)" in daemons/CLAUDE.md). Hand edits to the task are overwritten. A task still pointing at `run-hidden.vbs` is retired and converges on the next install. Run the installer from the runtime checkout after any launcher change (daemons/CLAUDE.md).
+- **T2. The launcher is built, not committed.** `daemons/bin/run-hidden.exe` is gitignored and compiled by `install-tasks.ps1` (:64-87) with the .NET Framework `csc.exe`. A missing `csc.exe` stops the install before any task is touched. A missing exe makes the task fail closed.
+- **T3. The `&&` redirect gap is FIXED.** The derived watchdog command brace-groups the run so the redirect to `state/cron-watchdog.log` covers the whole run (install-tasks.ps1:403-406). A hand-supplied `-WatchdogCommand` chain must group itself, because the installer does not wrap it (daemons/CLAUDE.md, run-hidden paragraph).
+- **T4. A heartbeat needs CONDUCTOR_ROOT on the runtime checkout.** backup-fleet.sh writes a heartbeat only when CONDUCTOR_ROOT is set, or when the basename of AESOP_ROOT is exactly `aesop` (:24-31). `~/aesop-daemon-runtime` is not `aesop`. Without an explicit CONDUCTOR_ROOT the watchdog runs, writes no heartbeat, and the monitor reports the heartbeat UNRESOLVED or MISSING (collect-signals.mjs:218-226, :1097-1099).
+- **T5. The runtime's fetch and reset are not in the repo.** The derived command (install-tasks.ps1:406) runs only `run-watchdog.sh --once`. STATE.md:117 records a fetch and `reset --hard origin/main` each tick, which must come from a caller-supplied `-WatchdogCommand`. A bare re-run of the installer re-registers with the derived command, which has no reset, so the reset must be passed again. This is inferred from the code and was not run (see U1).
+- **T6. There is no CONDUCTOR_HOME in this repo.** The collector reads CONDUCTOR_ROOT (collect-signals.mjs:220). Without it, it uses the sibling machinery repo only when AESOP_ROOT's basename is `aesop` (:222-223). The value must be the machinery repo directory itself, because the path appended is `state/.watchdog-heartbeat` (:225). Setting it to the parent of the machinery repo points the collector at the wrong place.
+- **T7. The monitor and the watchdog disagree on the monitor heartbeat path.** The monitor writes `$AESOP_ROOT/monitor/.monitor-heartbeat` (collect-signals.mjs:1359). The watchdog reads `$CONDUCTOR_ROOT/monitor/.monitor-heartbeat` (run-watchdog.sh:489). They match only when the two roots coincide (also map 8.2).
+- **T8. selfheal.sh is not scheduled.** install-tasks.ps1 registers three tasks and none runs selfheal.sh (also map 8.2). Nothing in the repo restarts a dead watchdog or monitor. daemons/CLAUDE.md describes selfheal as active.
+- **T9. daemons/CLAUDE.md is stale on CONDUCTOR_ROOT.** Its Environment variables section says the default is "sibling of AESOP_ROOT". The same file's heartbeat paragraph and backup-fleet.sh:24-31 say the sibling is derived only for the canonical `aesop` basename. Trust the code.
+- **T10. The UI is loopback only.** The bind is hard-coded to 127.0.0.1 (ui/handler.py:1415-1416), and Host and Origin are checked against loopback names (:116-190). The port comes from the generic env name `PORT` (ui/config.py:68), so setting `PORT` for any other process changes the dashboard port. There is no `/health` route in ui/handler.py, although docs/ADOPTION-CHECKLIST.md:267-268 describes one.
+- **T11. state/ and aesop.config.json are gitignored.** `.gitignore:2` ignores `state/` and `.gitignore:13` ignores `aesop.config.json`. The live store, tracker, receipts and the `state_root` value are never in git, and a fresh clone has no live state. The example's `state_root` (aesop.config.example.json) is only an example.
+- **T12. A missing receipt key does not block a push.** hooks/pre-push-policy.sh:1978-1982 warns and continues. The gates still run, but a push can land with no receipt. verify-receipt is not in tools/required-checks.json, so a missing receipt is not a merge gate.
+- **T13. A recorded emergency override exists.** `AESOP_PUSH_RED=1` lets a red emit_receipt run push, and the receipt is stamped `pushed_red` (hooks/pre-push-policy.sh:1915 comment). It is an escape token. LANE-CONTRACT forbids lanes from bypassing gates.
+- **T14. An unset AESOP_ROOT makes the monitor read `./monitor`.** collect-signals.mjs:43 defaults AESOP_ROOT to `.`, so its files land relative to the current directory.
+- **T15. Native auto-merge is the merge actor.** The AesopMergeQueue task is opt-in and must stay disabled while native auto-merge runs (LANE-CONTRACT s6; daemons/CLAUDE.md invariant 12). No loop may merge with the admin bypass.
+- **T16. The orchestrator's dispatch is not a subprocess.** `ClaudeCodeDriver.dispatch_worker` raises `NotImplementedError` outside the harness (driver/claude_code_driver.py:113-123, marker text :64-68). The only subprocess path is `run_command`, for tests and out-of-harness use (:141-150).
+- **T17. Line numbers in map sections 1-8 are from cb972c56.** They have drifted. Example: run-watchdog.sh `main` was :306 and is now :332.
+
+### 9.5 UNVERIFIED (not checkable from the repo, or not checked)
+- **U1.** The live scheduled-task XML for AesopWatchdogDaemon: its action arguments, whether CONDUCTOR_ROOT is exported, the git fetch and reset chain, and the Hidden, IgnoreNew and 1 h settings. daemons/CLAUDE.md states the settings, but install-tasks.ps1 has no literal for them (grep for ExecutionTimeLimit and IgnoreNew returned nothing).
+- **U2.** The contents and HEAD of `~/aesop-daemon-runtime`. `git worktree list` shows it as a detached worktree at ab27a6cc. It was not checked for local changes or for whether origin/main has moved.
+- **U3.** `~/.claude/.heartbeats`, named in the task brief. No file in the repo references it. The repo reads `$AESOP_ROOT/monitor/.heartbeats` (collect-signals.mjs:176) and `state/.heartbeats` (dash/watchdog-gui.sh:33). Whether `~/.claude/.heartbeats` exists was not checked.
+- **U4.** The per-agent heartbeat writer (brain side).
+- **U5.** The refinement monitor's scheduling (`/power` plus self-pacing). Only the agent definition text was read.
+- **U6.** The machinery repo checkout and its signal-hub queue, the destination of pr_sweep signals (E13).
+- **U7.** The live `state_root` value in aesop.config.json (gitignored).
+- **U8.** Which MCP client registers mcp/server.mjs. No `.mcp.json` exists at the repo root.
+- **U9.** The live copies of brain hooks named in map 6.2, including the task-event projector that writes `~/.claude/state/task-events.jsonl`.
+- **U10.** The writer of `tracker.json`. tools/stateapi_lint.py:89-92 forbids raw writes outside the facade, but the writer was not traced.
+- **U11.** Whether the watchdog, monitor and merge-queue tasks are registered on the live box right now. tools/task_cadence_check.py reads this and was not run.
+- **U12.** Whether the halt sentinel is honored per checkout as daemons/CLAUDE.md states. The code path in tools/halt.py was not traced.
