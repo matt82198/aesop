@@ -1386,6 +1386,18 @@ check_inprocess_http_timeout() {
     log_event "inprocess_timeout_tool_missing"
     return 1
   fi
+  # No tests/ in the pushed tree: nothing to scan, UNLESS the trunk still has tests/ (a
+  # branch that deletes tests/ must not skip the lint). Bootstrap (no trunk) skips.
+  if [ ! -d "$aesop_root/tests" ]; then
+    local trunk_ref=""
+    if trunk_ref=$(gate_trunk_ref) && git -C "$aesop_root" cat-file -e "$trunk_ref:tests" 2>/dev/null; then
+      printf 'FATAL: tests/ is missing from the pushed tree but %s still has it. Push blocked.\n' "$trunk_ref" >&2
+      log_event "inprocess_timeout_tests_dir_removed"
+      return 1
+    fi
+    log_event "inprocess_timeout_no_tests_dir"
+    return 0
+  fi
 
   local py_bin=""
   if ! py_bin=$(resolve_py_bin); then
