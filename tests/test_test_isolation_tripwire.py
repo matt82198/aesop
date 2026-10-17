@@ -952,6 +952,63 @@ class TestGitDeployAndLiveWriterAttribution(unittest.TestCase):
             self.assertNotIn("changed by git", proc.stderr)
 
 
+class TestCompactOnStopJobIsLiveWriter(unittest.TestCase):
+    """The compact-on-stop Stop hook writes state/compact-on-stop-job-<pid>.json
+    for the live orchestrator session every time that session stops a turn. A
+    pre-push suite (~5 min) almost always overlaps a live session, so that file
+    must classify as a live-writer event (INFO), not pollution. Every other
+    fleet-state change keeps failing; the control test pins that."""
+
+    JOB = "state/compact-on-stop-job-22084.json"
+
+    def test_job_file_change_during_run_is_info_not_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home"
+            make_fake_conductor(root)
+            job = root / "conductor3" / self.JOB
+            job.write_text('{"state": "queued"}', encoding="utf-8")
+            proc = run_tripwire(root, [sys.executable, "-c",
+                                       f"open(r'{job}', 'w').write('{{\"state\": \"done\"}}')"])
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("INFO", proc.stderr)
+            self.assertIn("compact-on-stop-job-22084.json", proc.stderr)
+            self.assertIn("not a test", proc.stderr)
+            self.assertNotIn("FAIL", proc.stderr)
+            self.assertIn("fleet-state/state/compact-on-stop-job-22084.json=live-writer",
+                          proc.stderr)
+
+    def test_job_file_created_during_run_is_info_not_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home"
+            make_fake_conductor(root)
+            job = root / "conductor3" / self.JOB
+            proc = run_tripwire(root, [sys.executable, "-c",
+                                       f"open(r'{job}', 'w').write('{{\"state\": \"queued\"}}')"])
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("compact-on-stop-job-22084.json=live-writer", proc.stderr)
+            self.assertNotIn("FAIL", proc.stderr)
+
+    def test_control_near_miss_and_arbitrary_fleet_files_still_fail(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home"
+            make_fake_conductor(root)
+            state = root / "conductor3" / "state"
+            near_miss = state / "compact-on-stop-job-notapid.json"
+            arbitrary = state / "orchestrator-status.json"
+            script = (
+                f"open(r'{near_miss}', 'w').write('{{}}'); "
+                f"open(r'{arbitrary}', 'w').write('{{}}')"
+            )
+            proc = run_tripwire(root, [sys.executable, "-c", script])
+            self.assertEqual(proc.returncode, 1, proc.stderr)
+            self.assertIn("FAIL", proc.stderr)
+            bullets = _fail_bullets(proc.stderr)
+            self.assertEqual(len(bullets), 2, proc.stderr)
+            self.assertIn("compact-on-stop-job-notapid.json", proc.stderr)
+            self.assertIn("orchestrator-status.json", proc.stderr)
+            self.assertNotIn("live-writer", proc.stderr)
+
+
 KILL_MARK = "AESOP_TEST_SIGKILL_MARK"
 
 

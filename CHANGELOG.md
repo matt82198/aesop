@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The test-isolation tripwire classifies `state/compact-on-stop-job-<pid>.json` (the live Stop-hook job file, rewritten every time a live session stops a turn) as a live-writer event reported as INFO, instead of failing a pre-push run with `(fleet-state root) changed`; every other fleet-state change still fails.
 - `aesop doctor` port check now probes the dashboard port the project configures (`PORT` env, then `aesop.config.json` `dashboard.port`, then 8770, the same resolution `aesop dash` uses) and labels the row with that port, instead of always probing a hardcoded 8770.
 
 ## [0.10.1] - 2026-10-17
