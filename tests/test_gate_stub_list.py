@@ -50,6 +50,7 @@ KNOWN_FAIL_CLOSED_GATES = sorted([
     "linux_shape_check",
     "generated_push_gate",
     "pr_symbol_survival_check",
+    "inprocess_http_timeout_lint",
 ])
 
 DUMMY_FAIL_CLOSED_GATE = """
