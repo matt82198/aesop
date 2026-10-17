@@ -18,6 +18,14 @@ CLI:
   python tools/state_root.py --config-only [--config-dir DIR]
       print the configured state_root (or nothing when unset), exit 0;
       exit 2 only when aesop.config.json exists but is unreadable
+
+Migration (2026-10-17, decision b): this module is the STRICT resolver. common.get_state_dir()
+is LEGACY and keeps its cwd fallback, unchanged. Callers migrate one at a time, only after the
+primary aesop.config.json state_root is absolute and fleet processes export AESOP_STATE_ROOT.
+Migration surface (all still on get_state_dir): tools/heartbeat.py, tools/tracker_guard.py,
+tools/halt.py, tools/merge_queue.py, orchestrator_status, healthcheck, toolchain_health,
+otel_sink, buildlog, eod_sweep, fleet_ledger, wave_scorecard, merge_telemetry,
+tracker_autoclose, driver/wave_scheduler.py.
 """
 
 import argparse
