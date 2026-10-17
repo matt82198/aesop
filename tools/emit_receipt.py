@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Run the local verification matrix and publish a signed receipt bound to HEAD.
-INDEX: Receipt-gate increment 1 -- runs the configured local matrix (default: the 4 python shards via `ci_shard_runner.py n 4` plus the pre-push gate set; `--matrix a,b,c` to subset; parts that cannot run on this box, e.g. `browser-proofs`, are recorded as skipped with a reason, never silently dropped), collects `{schema:1, schema_version:1, repo, head_sha, base_sha (merge-base with origin/main), tree_hash (= git rev-parse HEAD^{tree}), parts:[{name, exit_code, test_count, duration_s}], skipped, host:{os, python, hostname_hash}, timestamp}`, canonicalizes (sorted keys, no whitespace) and signs it (`--scheme auto|ed25519|hmac-sha256`; Ed25519 via `cryptography` when importable with the private key at `$AESOP_RECEIPT_KEY`, else HMAC-SHA256 keyed by `$AESOP_RECEIPT_HMAC_SECRET`; the key NEVER lives in the repo), then `--post` publishes it on the head sha as a GitHub check-run named `verify-receipt-local` (conclusion from the parts, receipt JSON in output.text) and, when the token cannot create check-runs (HTTP 403: only GitHub Apps may), falls back to a commit comment carrying the same JSON under a marker; `--dry-run` prints/writes the envelope and performs NO network call. The receipt is NOT a committed file (self-reference + merge conflicts). Exit 0 = receipt produced (parts may still be red: that is what the verifier judges), 2 = could not produce/publish (no key material, unknown part, both publish channels failed). stdlib-only; `cryptography` optional.
+INDEX: Receipt-gate increment 1 -- runs the configured local matrix (default: the 4 python shards via `ci_shard_runner.py n 4` plus the pre-push gate set; `--matrix a,b,c` to subset; parts that cannot run on this box, e.g. `browser-proofs`, are recorded as skipped with a reason, never silently dropped), collects `{schema:1, schema_version:1, repo, head_sha, base_sha (merge-base with trunk_ref, the trunk resolved like the pre-push hook: origin/HEAD, origin/main, origin/master, else HEAD on a fresh remote), tree_hash (= git rev-parse HEAD^{tree}), parts:[{name, exit_code, test_count, duration_s}], skipped, host:{os, python, hostname_hash}, timestamp}`, canonicalizes (sorted keys, no whitespace) and signs it (`--scheme auto|ed25519|hmac-sha256`; Ed25519 via `cryptography` when importable with the private key at `$AESOP_RECEIPT_KEY`, else HMAC-SHA256 keyed by `$AESOP_RECEIPT_HMAC_SECRET`; the key NEVER lives in the repo), then `--post` publishes it on the head sha as a GitHub check-run named `verify-receipt-local` (conclusion from the parts, receipt JSON in output.text) and, when the token cannot create check-runs (HTTP 403: only GitHub Apps may), falls back to a commit comment carrying the same JSON under a marker; `--dry-run` prints/writes the envelope and performs NO network call. The receipt is NOT a committed file (self-reference + merge conflicts). Exit 0 = receipt produced (parts may still be red: that is what the verifier judges), 2 = could not produce/publish (no key material, unknown part, both publish channels failed). stdlib-only; `cryptography` optional.
 
 Trust boundary (see docs/RECEIPT-GATE.md): a signed receipt proves only that the key
 holder ran these parts on a tree with this hash and got these exit codes. The hosted
@@ -25,6 +25,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 _TOOLS_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _TOOLS_DIR.parent
@@ -432,16 +433,87 @@ def repo_slug(repo):
     return m.group(1) if m else None
 
 
-def build_receipt(repo, parts, skipped, slug=None, main_ref="origin/main", profile="scoped"):
+TRUNK_FALLBACKS = ("origin/main", "origin/master")
+BOOTSTRAP_TRUNK = "HEAD"
+
+
+def _ref_resolves(repo, ref):
+    try:
+        _git(repo, "rev-parse", "--verify", "-q", ref + "^{commit}")
+        return True
+    except ReceiptError:
+        return False
+
+
+def resolve_trunk(repo, requested=None):
+    """Name of the ref a receipt's base_sha is measured against.
+
+    Mirrors hooks/pre-push-policy.sh gate_trunk_ref: an explicit ref that resolves wins;
+    otherwise origin/HEAD's symbolic target, then origin/main, then origin/master. When
+    origin has no trunk yet (a fresh remote: BOOTSTRAP) the base is HEAD, so base_sha == head_sha.
+    """
+    if requested and _ref_resolves(repo, requested):
+        return requested
+    try:
+        head_ref = _git(repo, "symbolic-ref", "-q", "refs/remotes/origin/HEAD")
+    except ReceiptError:
+        head_ref = ""
+    prefix = "refs/remotes/origin/"
+    if head_ref.startswith(prefix):
+        name = "origin/" + head_ref[len(prefix):]
+        if _ref_resolves(repo, name):
+            return name
+    for name in TRUNK_FALLBACKS:
+        if _ref_resolves(repo, name):
+            return name
+    return BOOTSTRAP_TRUNK
+
+
+def non_github_remote(repo):
+    """Why the check-run POST cannot happen, or None when it should be attempted.
+
+    A check-run only exists on github.com. Only an origin that is configured AND not a
+    github.com remote is skipped (local path, file:// or another host). No origin at all
+    returns None, so the POST is attempted and fails closed as before. A GitHub remote
+    always returns None: a GitHub error on it still blocks.
+    """
+    try:
+        # The raw configured URL: `remote get-url` applies insteadOf rewrites, which the test
+        # harness uses to point github.com at a local sink and would hide the real host.
+        url = _git(repo, "config", "--get", "remote.origin.url")
+    except ReceiptError:
+        return None
+    if "://" in url:
+        parsed = urlparse(url)
+        if parsed.scheme == "file" or not parsed.hostname:
+            remote = "local-path"
+        elif parsed.hostname.lower() == "github.com":
+            return None
+        else:
+            remote = "other-host"
+    else:
+        scp = re.match(r"^[^@/\\]+@([^:/\\]+):", url)
+        if scp is None:
+            remote = "local-path"  # a bare path such as C:/... or /srv/remote.git
+        elif scp.group(1).lower() == "github.com":
+            return None
+        else:
+            remote = "other-host"
+    return {"skipped": "non-github-remote", "remote": remote}
+
+
+def build_receipt(repo, parts, skipped, slug=None, main_ref=None, profile="scoped"):
     repo = Path(repo)
     head = _git(repo, "rev-parse", "HEAD")
+    trunk = resolve_trunk(repo, main_ref)
     return {
         "schema": 1,
         "schema_version": 1,
         "profile": profile,
         "repo": slug or repo_slug(repo) or "unknown",
         "head_sha": head,
-        "base_sha": _git(repo, "merge-base", head, main_ref),
+        "base_sha": _git(repo, "merge-base", head, trunk),
+        "trunk_ref": trunk,
         "tree_hash": _git(repo, "rev-parse", head + "^{tree}"),
         "parts": parts,
         "skipped": skipped,
@@ -569,7 +641,9 @@ def build_parser():
     p.add_argument("--scheme", default="auto", choices=("auto",) + rc.SCHEMES)
     p.add_argument("--key", default=None, help="Ed25519 private key PEM (default: $%s)" % rc.KEY_ENV)
     p.add_argument("--slug", default=None, help="owner/repo (default: parsed from origin)")
-    p.add_argument("--main-ref", default="origin/main")
+    p.add_argument("--main-ref", default=None,
+                   help="trunk ref for base_sha (default: resolved like the pre-push hook: origin/HEAD, "
+                        "origin/main, origin/master, else HEAD on a fresh remote; an unresolvable value falls back)")
     p.add_argument("--out", default=None, help="also write the signed envelope JSON here")
     p.add_argument("--post", action="store_true", help="publish as check-run on the head sha (commit comment on 403)")
     p.add_argument("--dry-run", action="store_true", help="print the envelope; perform NO network call even with --post")
@@ -602,6 +676,7 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
         registry = DEFAULT_REGISTRY if registry is None else registry
 
         scope_skips = []  # shard parts left out by the scoped profile, recorded in the receipt
+        trunk = resolve_trunk(repo, args.main_ref)
         if args.matrix:
             # Explicit --matrix overrides profile scoping
             names = [n.strip() for n in args.matrix.split(",") if n.strip()]
@@ -610,7 +685,7 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
             if profile == "scoped":
                 # Get changed files from git diff
                 try:
-                    base_sha = _git(repo, "merge-base", "HEAD", args.main_ref)
+                    base_sha = _git(repo, "merge-base", "HEAD", trunk)
                     changed_output = _git(repo, "diff", "--name-only", base_sha + "..HEAD")
                     changed_files = [f.strip() for f in changed_output.split("\n") if f.strip()]
                 except ReceiptError as exc:
@@ -641,7 +716,12 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
 
         parts, skipped = run_matrix(repo, names, registry=registry, jobs=args.jobs)
         skipped = skipped + scope_skips
-        receipt = build_receipt(repo, parts, skipped, slug=args.slug, main_ref=args.main_ref, profile=profile)
+        receipt = build_receipt(repo, parts, skipped, slug=args.slug, main_ref=trunk, profile=profile)
+        if args.post:
+            # Recorded before signing: "not posted, and why" is part of the signed record.
+            not_posted = non_github_remote(repo)
+            if not_posted is not None:
+                receipt["posted"] = not_posted
         if args.pushed_red and conclusion_for(parts) == "failure":
             # Stamped BEFORE signing: the override is part of the signed record, not a label beside it.
             receipt["pushed_red"] = True
@@ -665,7 +745,10 @@ def main(argv=None, registry=None, gh_runner=None, environ=None):
             print(json.dumps(envelope, sort_keys=True, indent=1))
             print("dry-run: nothing posted")
             return exit_code_for(parts, args)
-        if args.post:
+        if args.post and "posted" in receipt:
+            print("WARN: origin is not a github.com remote (%s); check-run not posted, "
+                  "receipt records posted.skipped" % receipt["posted"]["remote"])
+        elif args.post:
             # Spool directory survives worktree removal via env override or git-common-dir
             spool_dir = rc.resolve_spool_dir(repo=str(repo), environ=environ)
             channel = post_receipt(envelope, receipt["repo"], gh_runner, spool_dir=spool_dir)
