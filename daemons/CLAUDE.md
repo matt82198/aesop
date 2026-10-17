@@ -43,7 +43,7 @@
 - `CONDUCTOR_ROOT` (default: sibling of AESOP_ROOT): Conductor3 root; if unset or missing, monitor-related operations skip gracefully (portability).
 - `AESOP_WATCHDOG_CYCLE_CMD`: Override backup-fleet.sh invocation (test override); if set, runs as `bash -c "$AESOP_WATCHDOG_CYCLE_CMD"`.
 - `AESOP_SELFHEAL_SKIP_RESTART`: If set, selfheal.sh detects stale heartbeats and logs dry-run actions instead of actually restarting daemons (test-only flag).
-- `AESOP_STATE_ROOT` (default: `$AESOP_ROOT/state`): State directory; exported by run-merge-queue.sh so the advancer's lock/heartbeat/ledger land with the rest of state.
+- `AESOP_STATE_ROOT` (default: `$AESOP_ROOT/state`): State directory; exported by run-merge-queue.sh so the advancer's lock/heartbeat/ledger land with the rest of state. **Single live store (D25)**: `aesop.config.json` key `state_root` (absolute, `~` allowed) is the one documented config key for the live event store. run-watchdog.sh exports `AESOP_STATE_ROOT` from it when the env var is unset (via `python tools/state_root.py --config-only`; an unreadable config is logged as ERROR), and its task-event ingest writes to `${AESOP_STATE_ROOT:-$AESOP_ROOT/state}`. `tools/boot_state.py` resolves through the same `tools/state_root.py` with precedence `--state-dir` > `AESOP_STATE_ROOT` > config key, and FAILS CLOSED (exit 2, one stderr line naming `state_root`) when none is set, so the brief can no longer read a silent stale `<repo>/state`. Tests: `tests/test_state_root.py`, `tests/test_boot_state.py`.
 - `AESOP_MERGE_QUEUE_CMD`: Override the `tools/merge_queue.py --advance` invocation (test override); if set, runs as `bash -c "$AESOP_MERGE_QUEUE_CMD"`.
 
 ## Invariants & Style

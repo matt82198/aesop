@@ -34,7 +34,9 @@ Determinism: the same store, STATE.md, BUILDLOG.md and git state give byte-ident
 with one documented exception. The INGEST line's heartbeat_age_s and its fresh/STALE word are
 functions of the clock. Every other line is a function of the disk state alone.
 
-Store: --state-dir, else $AESOP_STATE_ROOT, else <repo>/state (the tracker DB). A missing,
+Store: --state-dir, else $AESOP_STATE_ROOT, else aesop.config.json state_root (see
+tools/state_root.py). With none of these set it exits 2 naming the key; it never falls back to
+<repo>/state. A missing,
 empty or unreadable store exits 2 with one stderr line and prints NOTHING on stdout (fail
 closed: no partial brief that looks complete). The ingest runs only against a store that
 already exists, so a brief never creates one.
@@ -46,7 +48,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -59,6 +60,7 @@ from state_store.paths import resolve_db_path  # noqa: E402
 from state_store.read_api import read_text_file  # noqa: E402
 from tools import goal_state  # noqa: E402
 from tools import ingest_task_events as ite  # noqa: E402
+from tools.state_root import StateRootError, resolve_state_root  # noqa: E402
 
 DEFAULT_MAX_BYTES = 12000
 DEFAULT_BUILDLOG_LINES = 25
@@ -373,7 +375,7 @@ def _positive(value: str) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Print the canonical orchestrator boot brief.")
     parser.add_argument("--repo", default=str(REPO_ROOT), help="git repo holding STATE.md and BUILDLOG.md (default: this checkout)")
-    parser.add_argument("--state-dir", default=None, help="state directory (default: AESOP_STATE_ROOT or <repo>/state)")
+    parser.add_argument("--state-dir", default=None, help="state directory (default: AESOP_STATE_ROOT, then aesop.config.json state_root; fails closed if neither is set)")
     parser.add_argument("--jsonl", default=None, help="task-events JSONL to ingest (default: the ingest tool's default)")
     parser.add_argument("--max-bytes", type=_positive, default=DEFAULT_MAX_BYTES, help="byte cap (default 12000)")
     parser.add_argument("--buildlog-lines", type=int, default=DEFAULT_BUILDLOG_LINES, help="BUILDLOG tail lines (default 25)")
@@ -386,9 +388,11 @@ def main(argv=None) -> int:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     args = build_parser().parse_args(argv)
     repo = Path(args.repo)
-    state_dir = Path(args.state_dir) if args.state_dir else (
-        Path(os.environ["AESOP_STATE_ROOT"]) if os.environ.get("AESOP_STATE_ROOT") else repo / "state"
-    )
+    try:
+        state_dir = resolve_state_root(args.state_dir)
+    except StateRootError as exc:
+        print(f"boot_state: {exc}", file=sys.stderr)
+        return 2
     jsonl = Path(args.jsonl) if args.jsonl else None
     # Ingest only into a store that already exists: a brief must never create one.
     outcome = None

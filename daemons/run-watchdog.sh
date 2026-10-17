@@ -238,7 +238,7 @@ run_task_ingest() {
     return 0
   fi
   local ingest_out ingest_rc
-  ingest_out=$("$python_exe" "$aesop_root/tools/ingest_task_events.py" --state-dir "$aesop_root/state" 2>&1)
+  ingest_out=$("$python_exe" "$aesop_root/tools/ingest_task_events.py" --state-dir "${AESOP_STATE_ROOT:-$aesop_root/state}" 2>&1)
   ingest_rc=$?
   echo "$ingest_out" >> "$log_file"
   if [ $ingest_rc -ne 0 ]; then
@@ -468,6 +468,20 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     PYTHON_EXE="python3"
   elif command -v python >/dev/null 2>&1; then
     PYTHON_EXE="python"
+  fi
+
+  # Live store root: AESOP_STATE_ROOT env wins; otherwise export the aesop.config.json
+  # state_root key (tools/state_root.py --config-only) so the watchdog ingests into the
+  # same store the boot brief reads. Key unset = no export (legacy $AESOP_ROOT/state).
+  # An unreadable config is logged as ERROR, never silently ignored.
+  if [ -z "${AESOP_STATE_ROOT:-}" ] && [ -n "$PYTHON_EXE" ] && [ -f "$AESOP_ROOT/tools/state_root.py" ]; then
+    cfg_state_root=$(AESOP_ROOT="$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/tools/state_root.py" --config-only 2>&1)
+    cfg_state_rc=$?
+    if [ $cfg_state_rc -ne 0 ]; then
+      echo "[$(date '+%F %T')] ERROR: state_root config unreadable (exit $cfg_state_rc): $cfg_state_root" >> "$AESOP_ROOT/state/FLEET-BACKUP.log"
+    elif [ -n "$cfg_state_root" ]; then
+      export AESOP_STATE_ROOT="$cfg_state_root"
+    fi
   fi
 
   # Resolve conductor3 directory (sibling of AESOP_ROOT); env var override for portability
