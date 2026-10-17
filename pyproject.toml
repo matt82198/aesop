@@ -12,7 +12,7 @@
 
 [project]
 name = "aesop-kernel"
-version = "0.10.0"
+version = "0.10.1"
 description = "Orchestration kernel for autonomous software development: multi-agent coordination on git and plain text, with fail-closed verification gates."
 readme = "README.md"
 # Lowest Python any workflow in .github/workflows/ runs (3.11; see crossos-drift.yml and stats-refresh.yml).
