@@ -1103,5 +1103,131 @@ class TestGeneratedSentinel(unittest.TestCase):
             self.assertEqual(len(drift), 1, "hand-edited generated file must drift")
 
 
+class TestTrunkResolution(unittest.TestCase):
+    """--base-ref defaults to the repo's trunk, resolved the way the pre-push hook does.
+
+    Gap this closes: the default was hardcoded to origin/main, so a master-trunk repo
+    (claude-config, claude-scripts, conductor3) either errored or compared against
+    nothing. Every fixture repo here is built in a temp dir with local config only.
+    """
+
+    BASE_BODY = 100
+    BRANCH_PREPEND = 48  # branch alone = 149 counted lines (passes 150)
+    MAIN_APPEND = 2      # merge union = 151 counted lines (busts 150)
+
+    def _git(self, repo, *args):
+        res = subprocess.run(
+            ["git", *args], cwd=str(repo), capture_output=True,
+            encoding="utf-8", errors="replace", timeout=30,
+        )
+        if res.returncode != 0:
+            self.fail(f"git {' '.join(args)} failed: {res.stderr or res.stdout}")
+        return res
+
+    def _init(self, repo, trunk):
+        self._git(repo, "init", "-q", "-b", trunk)
+        self._git(repo, "config", "user.email", "fixture@example.invalid")
+        self._git(repo, "config", "user.name", "Fixture User")
+
+    def _build_cascade(self, repo, trunk):
+        """Trunk and feature each grow tools/CLAUDE.md since the merge base (cascade)."""
+        self._init(repo, trunk)
+        rel = "tools/CLAUDE.md"
+        (repo / "tools").mkdir(parents=True, exist_ok=True)
+        base = "".join(f"body line {i}\n" for i in range(self.BASE_BODY))
+        (repo / rel).write_text(base, encoding="utf-8")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-q", "-m", "base")
+        self._git(repo, "checkout", "-q", "-b", "feature/trunk")
+        top = "".join(f"branch line {i}\n" for i in range(self.BRANCH_PREPEND))
+        (repo / rel).write_text(top + base, encoding="utf-8")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-q", "-m", "branch grows")
+        self._git(repo, "checkout", "-q", trunk)
+        bottom = "".join(f"trunk line {i}\n" for i in range(self.MAIN_APPEND))
+        (repo / rel).write_text(base + bottom, encoding="utf-8")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-q", "-m", "trunk grows")
+        self._git(repo, "checkout", "-q", "feature/trunk")
+
+    def _run_cli(self, repo, *extra):
+        return subprocess.run(
+            [sys.executable, str(LINT_SCRIPT), "--root", str(repo), "--headroom", *extra],
+            cwd=str(repo), capture_output=True, encoding="utf-8", errors="replace",
+            timeout=60,
+        )
+
+    def test_master_trunk_repo_resolves(self):
+        """A master-trunk repo with no origin resolves to master and compares against it."""
+        from claudemd_lint import resolve_trunk_ref
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._build_cascade(repo, "master")
+            self.assertEqual(resolve_trunk_ref(repo), "master")
+            res = self._run_cli(repo)
+            self.assertEqual(res.returncode, 1, f"stdout={res.stdout} stderr={res.stderr}")
+            self.assertIn("with master", res.stdout)
+
+    def test_main_trunk_repo_resolves(self):
+        """A main-trunk repo with no origin resolves to main and compares against it."""
+        from claudemd_lint import resolve_trunk_ref
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._build_cascade(repo, "main")
+            self.assertEqual(resolve_trunk_ref(repo), "main")
+            res = self._run_cli(repo)
+            self.assertEqual(res.returncode, 1, f"stdout={res.stdout} stderr={res.stderr}")
+            self.assertIn("with main", res.stdout)
+
+    def test_origin_head_target_is_preferred(self):
+        """A clone whose origin/HEAD points at master resolves to origin/master."""
+        from claudemd_lint import resolve_trunk_ref
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = Path(tmpdir) / "src"
+            src.mkdir()
+            self._build_cascade(src, "master")
+            self._git(src, "checkout", "-q", "master")  # clone inherits src's HEAD
+            clone = Path(tmpdir) / "clone"
+            res = subprocess.run(
+                ["git", "clone", "-q", str(src), str(clone)],
+                capture_output=True, encoding="utf-8", errors="replace", timeout=60,
+            )
+            self.assertEqual(res.returncode, 0, f"clone failed: {res.stderr}")
+            self.assertEqual(resolve_trunk_ref(clone), "origin/master")
+
+    def test_no_trunk_ref_fails_closed(self):
+        """No origin/HEAD, origin/main, origin/master, main or master -> None, exit 2."""
+        from claudemd_lint import HeadroomError, check_headroom, resolve_trunk_ref
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._init(repo, "scratch")
+            self._git(repo, "commit", "-q", "--allow-empty", "-m", "base")
+            self._git(repo, "checkout", "-q", "-b", "feature/x")
+            self.assertIsNone(resolve_trunk_ref(repo))
+            with self.assertRaises(HeadroomError) as ctx:
+                check_headroom(repo, head_ref="HEAD")
+            self.assertIn("trunk", str(ctx.exception))
+            res = self._run_cli(repo)
+            self.assertEqual(res.returncode, 2, f"stdout={res.stdout} stderr={res.stderr}")
+            self.assertIn("trunk", res.stderr.lower())
+
+    def test_explicit_base_ref_wins_over_resolution(self):
+        """--base-ref overrides the resolved trunk (master would bust; feature/trunk is clean)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._build_cascade(repo, "master")
+            default = self._run_cli(repo)
+            self.assertEqual(default.returncode, 1, f"stdout={default.stdout}")
+            explicit = self._run_cli(repo, "--base-ref", "feature/trunk")
+            self.assertEqual(explicit.returncode, 0, f"stdout={explicit.stdout} stderr={explicit.stderr}")
+            missing = self._run_cli(repo, "--base-ref", "origin/does-not-exist")
+            self.assertEqual(missing.returncode, 2, f"stdout={missing.stdout}")
+            self.assertIn("unreadable", missing.stderr.lower())
+
+
 if __name__ == "__main__":
     unittest.main()
