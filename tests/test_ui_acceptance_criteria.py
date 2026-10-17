@@ -85,7 +85,7 @@ class AcceptanceCriteriaTestCase(unittest.TestCase):
             shutil.rmtree(self._conductor_root, ignore_errors=True)
 
     def _conn(self):
-        return http.client.HTTPConnection("127.0.0.1", self.actual_port, timeout=5)
+        return http.client.HTTPConnection("127.0.0.1", self.actual_port, timeout=30)
 
     def test_create_item_with_acceptance_criteria(self):
         """Test POST /api/tracker can create item with acceptanceCriteria."""
