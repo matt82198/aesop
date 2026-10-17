@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-10-17
+
 ### Changed
 
 - CI hardening: every GitHub Actions `uses:` pinned to a full commit SHA with a version comment; top-level `permissions: contents: read` in every workflow, with write grants moved to the jobs that need them; npm pinned to 12.2.0 in publish.yml (the version the last green publish used).
@@ -19,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tools/ingest_task_events.py` appends one `agent_done` (or `agent_stalled` on an error stop_reason) event per lane task_event to stream `agent_lifecycle`, deduped on the task event_id (#1083).
 - CI: the CI Python test dependencies are single-sourced in a root `requirements-ci.txt` (versions unchanged from ci.yml; cryptography stays pinned to 50.0.2). Every workflow pip step runs `pip install -r requirements-ci.txt`, and `tools/ci_workflow_lint.py` fails any step that re-lists those packages inline, so the shard job can no longer drift from ci.yml.
 - Doctor layout detection: an init'd repo (no scaffold directories) reports the five-directory check as n/a instead of failing, and the `~/.claude/skills` check runs only with `--global` (#1092).
+- Dependencies: Dependabot bumps merged to main for `playwright`, `@playwright/test`, `@testing-library/user-event`, the minor-and-patch dev group, and the Python `anthropic` client (0.120.0 to 1.13.0, a major-version bump; review the SDK migration notes if you pin it) (#1134, #1135, #1137, #1138, #1148, #1149, #1150).
+- Docs: `docs/MACHINERY-MAP.md` is an evidence-bound map of every gate, daemon, store, lane contract and monitor (#1132).
+- Docs: `docs/INCIDENTS.md` regenerated at main head after a squash dropped a branch-baked row (#1115).
+- Tests: the scaffold test suites stop hitting the CI spawn caps (#1139); the boot-state tests lock the state-dir resolution order `--state-dir`, `AESOP_STATE_ROOT`, repo `state/` (#1084).
+- CI: checks trigger on bot-opened stats-refresh PRs (fd7d0822).
 
 ### Added
 
@@ -29,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `tools/lane_ab_report.py` (stdlib; reports the lane-contract A/B experiment from `lane-ab.jsonl` and the hook-denial ledger: per-arm dispatches, forced count, denials per dispatch, arm B page-fault relaunches, rules_by_fault_count; exits 2 on unreadable input) and `LANE-CONTRACT-MIN.md` (walls-only arm B brief).
 - Added supply-chain hygiene: `requirements.lock.txt` (hash-locked runtime deps from `requirements.txt` via `pip-compile --generate-hashes`, verified with `--require-hashes`), `.github/workflows/scorecard.yml` (OpenSSF Scorecard) and `.github/workflows/codeql.yml` (CodeQL for javascript-typescript and python), all actions SHA-pinned.
 - Added the refuted ledger: `docs/refuted.jsonl` (committed record of measured-and-killed ideas, gate-bounced claims and REFUTED lanes), `tools/refuted_ledger.py` (validate, add, stats, redact; fail-closed) and `docs/REFUTED.md`.
+- Added the `state_store` adopt mode: an explicit, provenance-stamped adopt for disk-only tracker items (#1098).
 
 ### Fixed
 
@@ -48,10 +56,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix (CLI): `--repos` entries must be existing directories; a missing path, file, or URL now exits 2 before anything is written, instead of recording a nonexistent repo (#1086).
 - Fix (receipt emitter): both fail-closed fallbacks in the scoped shard selection (underivable shard map, unowned `tools/` change) now run the injected `registry` instead of `DEFAULT_MATRIX`, so a caller with a different registry no longer gets "unknown matrix part(s)"; production is unchanged because the injected registry equals `DEFAULT_REGISTRY`.
 - Fix (init pre-push hook): a malformed stdin line (fewer than four fields, or an empty ref or sha) now prints a one-line diagnostic and exits 1 instead of falling back to a whole-tree scan and passing; the zero-sha new-branch and deleted-ref paths are unchanged.
+- Fix (daemons): the watchdog task command is grouped so its log covers the whole run (#1151); the watchdog lock is pid-aware and atomic, its backup scan fails closed, and selfheal honours HALT (#1100).
+- Fix (daemons): the installer plan mode never touches the scheduler in tests, and daemon tasks run with no visible window (#1133); tasks re-register when only the trigger interval differs (#1108).
+- Fix (dash/monitor): the watchdog heartbeat path and home resolution are correct (#1099); the monitor reads the heartbeat path the watchdog writes (#1116).
+- Fix (halt): the merge queue honours the box-wide HALT without `CONDUCTOR_ROOT` (#1095).
+- Fix (hooks): the scrollback guard closes transcript-read bypasses (#1103); the pre-push `resolve_py_bin` probe is bounded (#1143); the dispatch-lint gate fails closed on unreadable paths and catches PR-number prose and fenced blocks (#1096); the generated-artifact gate passes files inherited unchanged from base (D46) (#1128); the pyflakes ratchet passes a baseline burn-down and blocks additions (D40) (#1127).
+- Fix (liveness/gates): `baseline_liveness_check.py` requires a declared `--baseline` option for consumer discovery (#1144); the encoding-lint scan fails when empty or mis-rooted instead of reporting OK (#1112); the conflict-marker check fails closed on an unreadable tracked file in full-tree mode (#1109); the tripwires exit non-zero for signal-killed test runs (#1101).
+- Fix (receipts): scoped shard selection fails closed to the full set with root-anchored discovery (#1122).
+- Fix (onboarding): the init hook scans pushed refs; the scaffold keeps user files; `--force` refreshes the scan script (#1124).
+- Fix (ci): `regen_all` always emits fixed output and regen-on-main no longer fails on no-drift (#1121); the regen-on-main job fails on regen errors and the pr-footprint gate tool is base-pinned (#1093); the template dispatch workflow runs `@matt82198/aesop`, not the unscoped `aesop` package (#1094).
+- Fix (ui): the agent phase comes from structured transcript fields, not substrings (#1126); the gantt emits valid RFC 3339 timestamps and real durations (#1129); the tracker delete strips the query before reading `item_id` (#1125); `useSSE` reconnects after the StrictMode double effect (#1120).
+- Fix (state): `boot_state` INGEST never reads fresh after a failed run and bounds GOAL to a quarter of the cap (#1106); `state_store` `compact_claims` keeps the live holder, not the first claim (#1097); `auto_merge` fix path works in a temp worktree and scans the real fix delta (#1107); `ci_merge_wait` reads PR state after a merge timeout or failure before retrying (#1104).
+- Fix (logs): `rotate-logs` uses collision-safe archives, takes the lock before deciding, and rotates intact-on-failure (#1123); the transcript-replay `-o` never deletes an unmarked non-empty directory (#1130).
+- Fix (mcp): the fleet helper resolves its python interpreter (#1102).
+- Fix (bench): frontier runs no longer clobber results, and the candidate environment is scrubbed (#1110).
+- Fix (wave): the wave loop shell injection is closed and the gate test is repaired (#1136); the wave-presets dashboard pipeline fails closed and the library module name is hyphen-safe (#1111).
+- Fix (packaging): the npm package ships `mcp/instances-claims.py` (#1117).
+- Fix (receipts tests): the receipt-flush placeholder tests carry real assertions (#1119).
 
 ### Security
 
 - Security: the pre-push hook installed by `aesop init` now scans the pushed commit range (`secret_scan.py --range` over the pre-push stdin refs), not only the index, so committed secrets are blocked; fails closed on findings, scanner error, or missing scanner (#1087).
+- Security: `secret_scan` scans vendored blobs, control-byte text, URL credentials and placeholder tokens (#1105).
+- Security: the scan allowlist no longer suppresses exfiltration alerts by substring match (#1118).
 
 ## [0.10.0] - 2026-10-15
 
