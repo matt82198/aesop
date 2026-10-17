@@ -656,8 +656,22 @@ get_commit_range() {
     fi
 
     # Found a valid ref tuple; build its range
+    # New TAG (refs/tags/*, remote sha all zeros): scan the TAGGED COMMIT ALONE,
+    # <commit>^..<commit> (the empty tree for a root commit). A tag names a commit that
+    # is already in history, so the merge-base branch below collapsed it to an empty
+    # X..X range and the tag push scanned zero files (v0.10.1 incident). The tag object
+    # is peeled to its commit with ^{commit}; a tag that does not peel is fail-closed.
+    if [ "$remote_sha" = "0000000000000000000000000000000000000000" ] && [ "${remote_ref#refs/tags/}" != "$remote_ref" ]; then
+      local tag_commit tag_base
+      tag_commit=$(git rev-parse --verify -q "${local_sha}^{commit}" 2>/dev/null) || tag_commit=""
+      if [ -z "$tag_commit" ]; then
+        printf 'Error: tag %s does not peel to a commit; cannot derive its scan range (fail-closed)\n' "$remote_ref" >&2
+        return 1
+      fi
+      tag_base=$(git rev-parse --verify -q "${tag_commit}^" 2>/dev/null) || tag_base="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+      printf '%s..%s\n' "$tag_base" "$tag_commit"
     # If remote_sha is all zeros (new branch), use merge-base with remote default branch
-    if [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
+    elif [ "$remote_sha" = "0000000000000000000000000000000000000000" ]; then
       # New branch: find merge-base with remote main/master, NOT local
       # (local main may be stale; remote is the authoritative ref)
       local base_sha=""
@@ -1213,6 +1227,30 @@ check_metrics() {
     gate_no_python_block "metrics gate"
     log_event "metrics_gate_no_python"
     return 1
+  fi
+
+  # Scan the PUSHED ranges read from stdin, derived by get_commit_range exactly as
+  # check_secret_scan derives them: one metrics_gate.py run per range, any failing
+  # range blocks. Before this, the gate always ran with its default range
+  # origin/main...HEAD, so a tag-only push was judged by the current branch's
+  # unpushed commits (v0.10.1 incident). Empty, delete-only and unparseable stdin
+  # fall through to the default range below (today's behaviour, fail-closed).
+  local push_ranges push_range push_rc range_output range_exit overall_rc=0
+  push_ranges=$(get_commit_range)
+  push_rc=$?
+  if [ $push_rc -eq 0 ] && [ -n "$push_ranges" ]; then
+    while IFS= read -r push_range || [ -n "$push_range" ]; do
+      [ -z "$push_range" ] && continue
+      range_output=$("$py_bin" "$metrics_script" "$push_range" 2>&1)
+      range_exit=$?
+      if [ $range_exit -ne 0 ]; then
+        if [ -n "$range_output" ]; then
+          printf '%s\n' "$range_output" >&2
+        fi
+        overall_rc=1
+      fi
+    done <<< "$push_ranges"
+    return $overall_rc
   fi
 
   local metrics_output
@@ -2712,7 +2750,7 @@ refs/heads/feature/test $local_sha refs/heads/main 00000000000000000000000000000
     export AESOP_ROOT="$tmpdir/aesop_no_metrics"
     mkdir -p "$AESOP_ROOT"
 
-    if check_metrics >/dev/null 2>&1; then
+    if check_metrics </dev/null >/dev/null 2>&1; then
       printf 'PASS: check_metrics returns 0 (fail-open) when tool missing\n'
     else
       printf 'FAIL: check_metrics should fail-open when tool missing\n'
@@ -2756,7 +2794,7 @@ refs/heads/feature/test $local_sha refs/heads/main 00000000000000000000000000000
     test_clone_base "$tmpdir/tn20_clone" "$AESOP_ROOT/tools"
     cd "$tmpdir/tn20_clone" || exit 1
 
-    if check_metrics >/dev/null 2>&1; then
+    if check_metrics </dev/null >/dev/null 2>&1; then
       printf 'FAIL: check_metrics fail-opened despite tools/ being present\n'
       exit 1
     else
@@ -2803,7 +2841,7 @@ refs/heads/feature/test $local_sha refs/heads/main 00000000000000000000000000000
     test_clone_base "$tmpdir/tn22_clone" "$AESOP_ROOT/tools"
     cd "$tmpdir/tn22_clone" || exit 1
 
-    if check_metrics >/dev/null 2>&1; then
+    if check_metrics </dev/null >/dev/null 2>&1; then
       printf 'FAIL: non-executable gate script was skipped instead of run\n'
       exit 1
     else
@@ -3451,7 +3489,9 @@ main() {
     exit 1
   fi
 
-  if ! check_metrics; then
+  # Same captured stdin as the other range gates: check_metrics scans the pushed refs,
+  # not the current branch (v0.10.1 incident).
+  if ! check_metrics <<< "$prepush_stdin"; then
     printf 'Error: Metrics verification gate failed. Push blocked.\n' >&2
     log_block "metrics_gate_failure"
     exit 1
