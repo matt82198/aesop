@@ -247,7 +247,7 @@ gate_base_dir() {
   fi
   [ -n "$base_sha" ] || return 1
   tmp_root="${TMPDIR:-/tmp}"
-  dir="$tmp_root/aesop-gate-base-v3-$base_sha"
+  dir="$tmp_root/aesop-gate-base-v4-$base_sha"
   if [ ! -f "$dir/.complete" ]; then
     for root in tools state_store; do
       if git cat-file -e "$base_sha:$root" 2>/dev/null; then
@@ -266,6 +266,13 @@ gate_base_dir() {
     find "$staging/tools" -maxdepth 1 -name '*.py' -exec chmod +x {} + 2>/dev/null
     if git cat-file -e "$base_sha:.pyflakes-baseline.json" 2>/dev/null; then
       if ! git show "$base_sha:.pyflakes-baseline.json" > "$staging/.pyflakes-baseline.json" 2>/dev/null; then
+        rm -rf "$staging"
+        return 1
+      fi
+    fi
+    # The inprocess-timeout trunk baseline (check_inprocess_http_timeout judges against it).
+    if git cat-file -e "$base_sha:.inprocess-timeout-baseline.json" 2>/dev/null; then
+      if ! git show "$base_sha:.inprocess-timeout-baseline.json" > "$staging/.inprocess-timeout-baseline.json" 2>/dev/null; then
         rm -rf "$staging"
         return 1
       fi
