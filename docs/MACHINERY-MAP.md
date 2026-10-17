@@ -391,7 +391,7 @@ Status: **enforced** means a code path in the tree enforces the principle. **par
  |  brain hooks ~/.claude/hooks/*.mjs            (names only, section 6)
  |  repo hook .claude/settings.json PreToolUse Agent|Task
  |     -> hooks/claude/force-model-policy.mjs
- |  dispatch = harness agent()/Task. ClaudeCodeDriver.dispatch_worker is a
+ |  dispatch = harness agent-call or Task. ClaudeCodeDriver.dispatch_worker is a
  |     seam that raises outside the harness; it is not a subprocess.
  v
 [B] Lanes = stateless agents, each in a sibling worktree <repo>-wt-<name>
@@ -445,7 +445,7 @@ Each row is one edge. "Detection" is what shows the edge has failed. Line number
 
 | # | Producer -> consumer | Channel | Path or port | Cadence | Failure mode | Detection |
 |---|---|---|---|---|---|---|
-| E01 | Orchestrator -> lane | Harness agent()/Task dispatch | driver/claude_code_driver.py:113-123 (seam) | per dispatch | lane stalls or fails; contract says kill and re-dispatch a fresh lane (LANE-CONTRACT s0) | per-agent heartbeat (writer UNVERIFIED, 9.5); monitor reads `.heartbeats` (monitor/collect-signals.mjs:176) |
+| E01 | Orchestrator -> lane | Harness agent-call or Task dispatch | driver/claude_code_driver.py:113-123 (seam) | per dispatch | lane stalls or fails; contract says kill and re-dispatch a fresh lane (LANE-CONTRACT s0) | per-agent heartbeat (writer UNVERIFIED, 9.5); monitor reads `.heartbeats` (monitor/collect-signals.mjs:176) |
 | E02 | Orchestrator session -> repo hook | Claude Code PreToolUse hook | .claude/settings.json (matcher Agent or Task) -> hooks/claude/force-model-policy.mjs | every Agent or Task call | denial blocks the call; contract says stop and report | hook denial text in the session |
 | E03 | Lane -> origin | git push (foreground) | remote `origin` | per push | push refused by a gate | non-zero push exit |
 | E04 | git pre-push -> gate checks | git hook, bash | hooks/pre-push-policy.sh:3333-3470 | per push | any red gate blocks; base-pinned tools come from an origin/main copy (gate_base_dir :187) | exit code; log_event lines |
@@ -512,7 +512,7 @@ Edge count: 33 (E01-E33). E33 is listed to show a missing edge; it is not active
 - **T12. A missing receipt key does not block a push.** hooks/pre-push-policy.sh:1978-1982 warns and continues. The gates still run, but a push can land with no receipt. verify-receipt is not in tools/required-checks.json, so a missing receipt is not a merge gate.
 - **T13. A recorded emergency override exists.** `AESOP_PUSH_RED=1` lets a red emit_receipt run push, and the receipt is stamped `pushed_red` (hooks/pre-push-policy.sh:1915 comment). It is an escape token. LANE-CONTRACT forbids lanes from bypassing gates.
 - **T14. An unset AESOP_ROOT makes the monitor read `./monitor`.** collect-signals.mjs:43 defaults AESOP_ROOT to `.`, so its files land relative to the current directory.
-- **T15. Native auto-merge is the merge actor.** The AesopMergeQueue task is opt-in and must stay disabled while native auto-merge runs (LANE-CONTRACT s6; daemons/CLAUDE.md invariant 12). No loop may merge with `--admin`.
+- **T15. Native auto-merge is the merge actor.** The AesopMergeQueue task is opt-in and must stay disabled while native auto-merge runs (LANE-CONTRACT s6; daemons/CLAUDE.md invariant 12). No loop may merge with the admin bypass.
 - **T16. The orchestrator's dispatch is not a subprocess.** `ClaudeCodeDriver.dispatch_worker` raises `NotImplementedError` outside the harness (driver/claude_code_driver.py:113-123, marker text :64-68). The only subprocess path is `run_command`, for tests and out-of-harness use (:141-150).
 - **T17. Line numbers in map sections 1-8 are from cb972c56.** They have drifted. Example: run-watchdog.sh `main` was :306 and is now :332.
 
