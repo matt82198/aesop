@@ -74,8 +74,27 @@ jobs:
         if: steps.guard.outputs.skip == 'false'
         run: |
           set -eu
+          # pipefail: the pipe must carry regen_all's exit code, not tee's (a failed regen
+          # used to report green while drift stayed on main with no alarm).
+          set -o pipefail
           python tools/regen_all.py --fix --json | tee "$RUNNER_TEMP/regen-result.json"
-          FIXED=$(python -c "import json,sys; print(json.load(open(sys.argv[1])).get('fixed', []))" "$RUNNER_TEMP/regen-result.json")
+          # Fail closed on anything but a well-formed result: exit_code must be integer 0 and
+          # 'fixed' must be a list. exit_code 0 with fixed == [] is success-nothing-to-do.
+          # A missing exit_code, a non-zero exit_code, malformed JSON, or a missing 'fixed'
+          # key is a failed regen.
+          python - "$RUNNER_TEMP/regen-result.json" > "$RUNNER_TEMP/regen-fixed.json" <<'PY' || { echo "regen result is malformed, or exit_code is missing or non-zero, or 'fixed' is missing"; exit 1; }
+          import json, sys
+          with open(sys.argv[1], encoding='utf-8') as fh:
+              d = json.load(fh)
+          code = d.get('exit_code')
+          if not isinstance(code, int) or isinstance(code, bool) or code != 0:
+              sys.exit(1)
+          fixed = d.get('fixed')
+          if not isinstance(fixed, list):
+              sys.exit(1)
+          print(json.dumps(fixed))
+          PY
+          FIXED=$(cat "$RUNNER_TEMP/regen-fixed.json")
           echo "fixed paths: $FIXED"
           if [ "$FIXED" = "[]" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -122,7 +141,8 @@ jobs:
           Triggering sha on main: ${{ github.sha }}
           Run: $RUN_URL
 
-          🐢 Generated with Aesop
+          Merge note: this PR needs checks from a non-bot token to merge (a GITHUB_TOKEN push triggers no ci.yml run); that is the owner's decision.
+          :turtle: Generated with Aesop
           EOF
           PR_URL=$(gh pr create --title "chore(regen): heal generated artifacts" --body-file "$BODY_FILE" --head "${{ steps.branch.outputs.branch }}" --base main)
           echo "opened: $PR_URL"

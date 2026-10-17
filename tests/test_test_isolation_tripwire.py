@@ -952,5 +952,58 @@ class TestGitDeployAndLiveWriterAttribution(unittest.TestCase):
             self.assertNotIn("changed by git", proc.stderr)
 
 
+KILL_MARK = "AESOP_TEST_SIGKILL_MARK"
+
+
+class TestSignalKilledWrappedCommand(unittest.TestCase):
+    """A wrapped command killed by a signal reports a NEGATIVE returncode. It must
+    never exit 0: returncode -9 with a clean profile used to give max(-9, 0) == 0,
+    so a SIGKILLed (OOM) test shard reported green with its tests unrun."""
+
+    def setUp(self):
+        sys.path.insert(0, str(REPO_ROOT))
+        from tools import test_isolation_tripwire as tit
+        self.tit = tit
+
+    def test_sigkill_returncode_yields_137_in_process(self):
+        from unittest import mock
+        real_run = subprocess.run
+
+        def fake_run(cmd, *args, **kwargs):
+            if isinstance(cmd, list) and KILL_MARK in cmd:
+                return subprocess.CompletedProcess(cmd, -9)
+            return real_run(cmd, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            root = tmp / "fake-home-real"
+            root.mkdir()
+            stub_env = {
+                "CONDUCTOR_ROOT": str(tmp / "conductor3"),
+                "AESOP_TRIPWIRE_SCHTASKS_CMD": "aesop-tripwire-schtasks-stub-unavailable",
+            }
+            with mock.patch.dict(os.environ, stub_env), \
+                    mock.patch.object(subprocess, "run", side_effect=fake_run):
+                rc = self.tit.main(["--root", str(root), "--",
+                                    sys.executable, "-c", KILL_MARK])
+        self.assertEqual(rc, 137)
+
+    @unittest.skipUnless(os.name == "posix", "a real SIGKILL needs POSIX")
+    def test_real_sigkill_child_yields_137_via_cli(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "fake-home-real"
+            make_fake_profile(root)
+            proc = run_tripwire(root, [sys.executable, "-c",
+                                       "import os, signal; os.kill(os.getpid(), signal.SIGKILL)"])
+        self.assertEqual(proc.returncode, 137, proc.stderr)
+
+    def test_combine_rule_is_nonzero_if_either_side_is_nonzero(self):
+        self.assertEqual(self.tit._combine_exit(0, 0), 0)
+        self.assertEqual(self.tit._combine_exit(0, 1), 1)
+        self.assertEqual(self.tit._combine_exit(7, 0), 7)
+        self.assertEqual(self.tit._exit_code(-9), 137)
+        self.assertEqual(self.tit._exit_code(None), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

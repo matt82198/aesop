@@ -139,7 +139,7 @@ Five CI failures this week came from checks lanes could run locally. This ordere
 5. **Tool index** — If tools/ changed, `python tools/gen_tool_index.py --regenerate` and commit the update.
 6. **Push cwd** — Always push from the worktree; never `git -C <primary> push`.
 7. **PR head** — `gh pr create --base main --head <branch>` explicitly, then verify `gh pr view N --json headRefName,headRefOid`.
-8. **Receipt interim** — Until PR #924, push with `AESOP_RECEIPT_EMIT=0` and state it in the PR body.
+8. **Receipt emission** — Every push emits a signed receipt automatically (`hooks/pre-push-policy.sh` `check_emit_receipt`). Never set `AESOP_RECEIPT_EMIT`. A lane that needs a faster push uses nothing; it waits for the hook. A push without a receipt means the gates did not run: fix it, don't bypass it.
 
 ## 4b. AESOP NATIVE FIRST — STANDING USER RULE (aesop core)
 

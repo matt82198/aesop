@@ -19,8 +19,9 @@ Flags:
 
 Allows: binary mode (`'rb'`, `'wb'`) -- no encoding needed.
 Suppression: `# encoding-ok` inline comment.
-ASCII rule: tools/*.py must be ASCII-only (LANE-CONTRACT section 6). Ratcheted by
-tools/encoding-ascii-baseline.json, which may only shrink (see ascii_findings).
+ASCII rule: tools/*.py must be ASCII-only (LANE-CONTRACT section 6). Ratcheted per
+file by non-ASCII character count in tools/encoding-ascii-baseline.json: a count may
+stay or fall, never rise (see ascii_findings).
 
 This guardrail prevents cp1252/locale-encoding surprises on Windows
 (e.g., tracker.json UnicodeDecodeError, subprocess text=True failure) AND the
@@ -284,8 +285,9 @@ def scan_ascii(filepath: Path) -> List[Dict]:
             if ord(ch) > 127:
                 findings.append(_finding(
                     filepath, lineno, col,
-                    f"non-ASCII character U+{ord(ch):04X} in tools/*.py; "
-                    f"Python in tools/ must be ASCII (use -- and ->, or \\uXXXX escapes)",
+                    f"non-ASCII character U+{ord(ch):04X} in ASCII-scoped file "
+                    f"(tools/*.py or .github/workflows/*.yml); keep it ASCII "
+                    f"(use -- and ->, or \\uXXXX escapes; GitHub :turtle: for emoji)",
                     line,
                 ))
                 break
@@ -341,10 +343,15 @@ def load_ascii_baseline(path: Path) -> Dict[str, Optional[int]]:
 
 
 def _ascii_scope(root: Path) -> Dict[str, Path]:
-    """Repo-relative POSIX path -> Path for every tools/*.py (non-recursive)."""
+    """Repo-relative POSIX path -> Path for every ASCII-scoped file (non-recursive).
+
+    Scope is tools/*.py plus .github/workflows/*.yml. A non-ASCII byte in a workflow
+    breaks cp1252 yaml loads (regen-on-main.yml, 2026-10-15), so workflows ratchet too.
+    """
+    paths = list((root / 'tools').glob('*.py')) + list((root / '.github' / 'workflows').glob('*.yml'))
     return {
         p.relative_to(root).as_posix(): p
-        for p in sorted((root / 'tools').glob('*.py'))
+        for p in sorted(paths)
     }
 
 
@@ -353,13 +360,30 @@ def ascii_stale_entries(root: Path, baseline_path: Path) -> List[str]:
     scope = _ascii_scope(root)
     stale = []
     for rel in sorted(load_ascii_baseline(baseline_path)):
-        if rel not in scope or not scan_ascii(scope[rel]):
+        if rel not in scope or _count_non_ascii(scope[rel]) == 0:
             stale.append(rel)
     return stale
 
 
+def ascii_lowered_entries(root: Path, baseline_path: Path) -> Dict[str, int]:
+    """Baselined files whose count fell below their baseline: rel -> current count.
+
+    A fall passes the lint. The baseline should then be lowered by hand to match,
+    otherwise the file could re-rise to the old count and still pass unnoticed.
+    List-shape entries (value None) carry no count and are never reported here.
+    """
+    scope = _ascii_scope(root)
+    lowered: Dict[str, int] = {}
+    for rel, allowed in sorted(load_ascii_baseline(baseline_path).items()):
+        if rel in scope and allowed is not None:
+            actual = _count_non_ascii(scope[rel])
+            if 0 < actual < allowed:
+                lowered[rel] = actual
+    return lowered
+
+
 def ascii_findings(root: Path, baseline_path: Optional[Path] = None) -> List[Dict]:
-    """ASCII-only rule for tools/*.py (non-recursive), with a shrink-only ratchet.
+    """ASCII-only rule for tools/*.py (non-recursive), ratcheted per file by count.
 
     A non-ASCII file not in the baseline is a finding (a file absent from a
     count-shape baseline allows zero non-ASCII characters). A list-shape entry is
@@ -444,6 +468,44 @@ def scan_file(filepath: Path) -> List[Dict]:
     return findings
 
 
+JUNK_DIR_NAMES = frozenset({'__pycache__', '.git', 'node_modules', 'dist', '.pytest_cache'})
+
+
+def _is_under(path: Path, root: Path) -> bool:
+    """True when path is root or lies beneath it (both already resolved)."""
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _in_junk_dir(pyfile: Path, base: Path) -> bool:
+    """True when a junk directory name appears BETWEEN base and pyfile.
+
+    `base` must contain pyfile. Ancestors of base never count: a checkout at
+    C:/work/dist/aesop must not have every file skipped as `dist`.
+    """
+    return any(p in JUNK_DIR_NAMES for p in pyfile.relative_to(base).parts)
+
+
+def iter_python_files(dirpath: Path, repo_root: Optional[Path] = None) -> List[Path]:
+    """Sorted .py files under dirpath, skipping junk dirs below the repo root.
+
+    Junk matching is relative to repo_root when dirpath sits under it, else
+    relative to dirpath itself.
+    """
+    files = []
+    for pyfile in sorted(dirpath.rglob('*.py')):
+        if repo_root is not None and _is_under(pyfile, repo_root):
+            base = repo_root
+        else:
+            base = dirpath
+        if not _in_junk_dir(pyfile, base):
+            files.append(pyfile)
+    return files
+
+
 def scan_directory(dirpath: Path, repo_root: Optional[Path] = None) -> List[Dict]:
     """Recursively scan a directory for Python files.
 
@@ -454,17 +516,8 @@ def scan_directory(dirpath: Path, repo_root: Optional[Path] = None) -> List[Dict
     Returns: List of all findings
     """
     all_findings = []
-
-    # Find all .py files
-    for pyfile in sorted(dirpath.rglob('*.py')):
-        # Skip common junk directories
-        parts = pyfile.parts
-        if any(p in {'__pycache__', '.git', 'node_modules', 'dist', '.pytest_cache'} for p in parts):
-            continue
-
-        findings = scan_file(pyfile)
-        all_findings.extend(findings)
-
+    for pyfile in iter_python_files(dirpath, repo_root):
+        all_findings.extend(scan_file(pyfile))
     return all_findings
 
 
@@ -489,6 +542,10 @@ def run(
         root = Path.cwd()
     else:
         root = Path(root).resolve()
+
+    if not root.is_dir():
+        print(f"Error: root {root} does not exist (or is not a directory)", file=sys.stderr)
+        return 2
 
     if baseline is not None:
         stale = ascii_stale_entries(root, Path(baseline).resolve())
@@ -522,19 +579,31 @@ def run(
             continue
         scan_dirs.append(ppath)
 
-    # Scan all directories
-    all_findings = []
+    # Collect every file first: an empty scan set must fail, never report [OK].
+    files_to_scan: List[Path] = []
     for scan_dir in scan_dirs:
         if scan_dir.is_file():
-            findings = scan_file(scan_dir)
-            all_findings.extend(findings)
+            files_to_scan.append(scan_dir)
         else:
-            findings = scan_directory(scan_dir, root)
-            all_findings.extend(findings)
+            files_to_scan.extend(iter_python_files(scan_dir, root))
+
+    if not files_to_scan:
+        print(
+            f"Error: no Python files scanned under {root} (paths: {', '.join(paths)}); "
+            f"an empty scan set blesses nothing. Check --root and --paths.",
+            file=sys.stderr,
+        )
+        return 2
+
+    all_findings = []
+    for pyfile in files_to_scan:
+        all_findings.extend(scan_file(pyfile))
 
     # tools/*.py is held to the ASCII-only rule whenever tools/ is scanned.
+    lowered: Dict[str, int] = {}
     if (root / 'tools').resolve() in scan_dirs:
         all_findings.extend(ascii_findings(root))
+        lowered = ascii_lowered_entries(root, root / ASCII_BASELINE_RELPATH)
 
     # Output results
     if json_output:
@@ -542,6 +611,7 @@ def run(
             'findings': all_findings,
             'count': len(all_findings),
             'root': str(root),
+            'lowered': lowered,
         }
         print(json.dumps(output, indent=2))
     else:
@@ -560,6 +630,11 @@ def run(
                     print(f"   {finding['code']}")
         else:
             print("[OK] No encoding issues found")
+        for rel, actual in lowered.items():
+            print(
+                f"note: {rel} now has {actual} non-ASCII characters, below its "
+                f"baseline; lower it in {ASCII_BASELINE_RELPATH} to keep the ratchet tight"
+            )
 
     return 1 if all_findings else 0
 

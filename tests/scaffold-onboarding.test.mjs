@@ -10,12 +10,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gitCmd, assertConfigNotPoisoned } from './helpers/git-helpers.mjs';
+import { timedSpawnSync } from './helpers/timed-spawn.mjs';
 
 const CLI = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -32,34 +32,47 @@ const MEMORY_TEMPLATE = path.join(
   '..', 'docs', 'MEMORY-TEMPLATE.md'
 );
 
-function runCli(targetDir, args = []) {
+function runCli(targetDir, args = [], { git = false } = {}) {
   const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
   // --no-skills: this file doesn't test skill installation; without it every
   // scaffold call would write into the real ~/.claude/skills/ (isolation contract
   // documented in cli-skills-install.test.mjs) and contend with it on CI Windows.
-  const res = spawnSync(process.execPath, [CLI, targetDir, ...args, '--no-skills'], {
+  // --no-git: the git init/add -A/commit over the ~600 template files is the slow step
+  // (about 3s locally, and the step that hit the 30s spawnSync cap on CI). Only the full
+  // headless test asserts the pre-push hook install, so it opts back in with { git: true }.
+  const gitArgs = git ? [] : ['--no-git'];
+  const res = timedSpawnSync(process.execPath, [CLI, targetDir, ...args, ...gitArgs, '--no-skills'], {
     encoding: 'utf8',
     cwd: path.dirname(targetDir),
     timeout,
     killSignal: 'SIGKILL'
-  });
+  }, 'scaffold');
   return res;
 }
 
 function runCliInDir(cwd, args = []) {
   // Invoke CLI without a positional targetDir; uses default
   const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
-  const res = spawnSync(process.execPath, [CLI, ...args, '--no-skills'], {
+  const res = timedSpawnSync(process.execPath, [CLI, ...args, '--no-git', '--no-skills'], {
     encoding: 'utf8',
     cwd: cwd,
     timeout,
     killSignal: 'SIGKILL'
-  });
+  }, 'scaffold-in-dir');
   return res;
 }
 
 function createTestDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-onboard-test-'));
+}
+
+/** Create real repo directories under dir and return them comma-joined for --repos (must exist). */
+function repoDirsArg(dir, names) {
+  return names.map((name) => {
+    const p = path.join(dir, name);
+    fs.mkdirSync(p, { recursive: true });
+    return p;
+  }).join(',');
 }
 
 
@@ -84,16 +97,27 @@ test('CLAUDE-TEMPLATE.md is a filled worked example, not bare template', () => {
   assert.ok(template.length > 500, 'Template should be a substantial worked example');
 });
 
+// One `--name test-service` scaffold, shared by the four read-only checks that use it
+// (--name flag, state/ dir, CLAUDE.md tokens, memory seed). Every scaffold is a real CLI
+// spawn; re-spawning the identical command per test pushed this file past the 60s
+// per-file cap on CI (ubuntu, ci (3): "test timed out after 60000ms", duration 60009ms).
+// The checks only read the output, so sharing one spawn changes no assertion.
+let sharedTestService = null;
+function sharedTestServiceScaffold() {
+  if (!sharedTestService) {
+    const tempDir = createTestDir();
+    const targetDir = path.join(tempDir, 'fleet-onboard-shared');
+    fs.mkdirSync(targetDir, { recursive: true });
+    gitCmd(targetDir, ['init']);
+    gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+    gitCmd(targetDir, ['config', 'user.name', 'Test User']);
+    sharedTestService = { targetDir, res: runCli(targetDir, ['--name', 'test-service']) };
+  }
+  return sharedTestService;
+}
+
 test('--name flag scaffolds without errors', () => {
-  const tempDir = createTestDir();
-  const targetDir = path.join(tempDir, 'fleet-onboard-1');
-
-  fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, ['init']);
-  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
-  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
-
-  const res = runCli(targetDir, ['--name', 'test-service']);
+  const { res } = sharedTestServiceScaffold();
   assert.equal(res.status, 0, `Scaffold with --name should succeed. stderr: ${res.stderr}`);
 });
 
@@ -109,21 +133,13 @@ test('--name --domains --repos scaffolds without errors', () => {
   const res = runCli(targetDir, [
     '--name', 'my-service',
     '--domains', 'api,worker,monitoring',
-    '--repos', '/path/to/repo1,/path/to/repo2'
+    '--repos', repoDirsArg(tempDir, ['repo1', 'repo2'])
   ]);
   assert.equal(res.status, 0, `Scaffold with full flags should succeed. stderr: ${res.stderr}`);
 });
 
 test('scaffold creates state/ directory', () => {
-  const tempDir = createTestDir();
-  const targetDir = path.join(tempDir, 'fleet-onboard-3');
-
-  fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, ['init']);
-  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
-  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
-
-  const res = runCli(targetDir, ['--name', 'test-service']);
+  const { targetDir, res } = sharedTestServiceScaffold();
   assert.equal(res.status, 0);
 
   const stateDir = path.join(targetDir, 'state');
@@ -132,15 +148,7 @@ test('scaffold creates state/ directory', () => {
 });
 
 test('scaffold generates CLAUDE.md with no {{UNSUBSTITUTED}} placeholders', () => {
-  const tempDir = createTestDir();
-  const targetDir = path.join(tempDir, 'fleet-onboard-4');
-
-  fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, ['init']);
-  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
-  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
-
-  const res = runCli(targetDir, ['--name', 'test-service']);
+  const { targetDir, res } = sharedTestServiceScaffold();
   assert.equal(res.status, 0);
 
   const claudeMdPath = path.join(targetDir, 'CLAUDE.md');
@@ -165,7 +173,7 @@ test('scaffold generates valid aesop.config.json', () => {
 
   const res = runCli(targetDir, [
     '--name', 'my-api',
-    '--repos', '/path/to/api,/path/to/worker'
+    '--repos', repoDirsArg(tempDir, ['api', 'worker'])
   ]);
   assert.equal(res.status, 0);
 
@@ -188,15 +196,7 @@ test('scaffold generates valid aesop.config.json', () => {
 });
 
 test('scaffold copies MEMORY-TEMPLATE.md as memory seed', () => {
-  const tempDir = createTestDir();
-  const targetDir = path.join(tempDir, 'fleet-onboard-6');
-
-  fs.mkdirSync(targetDir, { recursive: true });
-  gitCmd(targetDir, ['init']);
-  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
-  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
-
-  const res = runCli(targetDir, ['--name', 'test-service']);
+  const { targetDir, res } = sharedTestServiceScaffold();
   assert.equal(res.status, 0);
 
   const memorySeedPath = path.join(targetDir, 'MEMORY-SEED.md');
@@ -217,12 +217,12 @@ test('full headless scaffold is complete and valid', () => {
   gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
   gitCmd(targetDir, ['config', 'user.name', 'Test User']);
 
-  // Headless scaffold with all flags
+  // Headless scaffold with all flags (git on: this test asserts the pre-push hook install)
   const res = runCli(targetDir, [
     '--name', 'production-api',
     '--domains', 'api,worker,security,monitoring',
-    '--repos', '/home/user/my-api,/home/user/my-worker'
-  ]);
+    '--repos', repoDirsArg(tempDir, ['my-api', 'my-worker'])
+  ], { git: true });
   assert.equal(res.status, 0, `Full scaffold should succeed. stderr: ${res.stderr}`);
 
   // Verify all required files exist
@@ -275,11 +275,11 @@ test('targetDir defaults to aesop-fleet when --repos provided without positional
 
   // NO explicit target dir, only --repos flag
   // Should NOT scaffold into /tmp/x; should create ./aesop-fleet (default)
-  const res = runCliInDir(tempDir, ['--repos', '/tmp/test-repos']);
+  const res = runCliInDir(tempDir, ['--repos', repoDirsArg(tempDir, ['test-repos'])]);
   assert.equal(res.status, 0, `Scaffold with --repos only should succeed. stderr: ${res.stderr}`);
 
-  // Verify created at default location, NOT at /tmp/test-repos
-  assert.ok(fs.existsSync(targetDir), `Default target dir "aesop-fleet" should be created, not /tmp/test-repos`);
+  // Verify created at default location, NOT at the --repos directory
+  assert.ok(fs.existsSync(targetDir), `Default target dir "aesop-fleet" should be created, not the --repos directory`);
   assert.ok(fs.existsSync(path.join(targetDir, 'daemons')), 'daemons/ should exist in default location');
 });
 
@@ -324,4 +324,44 @@ test('positional targetDir works AFTER flags', () => {
 
   assert.ok(fs.existsSync(customDir), `Custom target dir should be created (positional after flags)`);
   assert.ok(fs.existsSync(path.join(customDir, 'CLAUDE.md')), 'CLAUDE.md should exist');
+});
+
+// Re-running a headless named scaffold must not clobber user edits to CLAUDE.md or
+// aesop.config.json (the contract in bin/CLAUDE.md "Non-destructive"); --force overrides it.
+function scaffoldRerunFixture(label) {
+  const tempDir = createTestDir();
+  const targetDir = path.join(tempDir, `fleet-rerun-${label}`);
+  fs.mkdirSync(targetDir, { recursive: true });
+  const args = ['--name', 'rerun-svc', '--repos', repoDirsArg(tempDir, ['repo1'])];
+  const first = runCli(targetDir, args);
+  assert.equal(first.status, 0, `first scaffold should succeed. stderr: ${first.stderr}`);
+
+  const configPath = path.join(targetDir, 'aesop.config.json');
+  const claudePath = path.join(targetDir, 'CLAUDE.md');
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  config.description = 'USER-EDIT-CONFIG';
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  fs.appendFileSync(claudePath, '\nUSER-EDIT-CLAUDE\n');
+  return { targetDir, args, configPath, claudePath };
+}
+
+// One fixture serves both the keep and the --force rerun. Every scaffold is a real CLI
+// spawn (~1.5s locally); two separate tests (4 spawns) pushed this file over the 60s
+// shard cap on the Windows CI runner ("test timed out after 60000ms", ci (3)).
+test('re-running a headless named scaffold keeps user files, and --force overwrites them', () => {
+  const { targetDir, args, configPath, claudePath } = scaffoldRerunFixture('keep-force');
+
+  const keep = runCli(targetDir, args);
+  assert.equal(keep.status, 0, `rerun should succeed. stderr: ${keep.stderr}`);
+  const kept = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  assert.equal(kept.description, 'USER-EDIT-CONFIG', 'aesop.config.json must not be rewritten without --force');
+  assert.ok(fs.readFileSync(claudePath, 'utf8').includes('USER-EDIT-CLAUDE'), 'CLAUDE.md must not be rewritten without --force');
+  assert.match(keep.stdout, /Kept existing CLAUDE\.md/, 'skipped CLAUDE.md must be reported');
+  assert.match(keep.stdout, /Kept existing aesop\.config\.json/, 'skipped aesop.config.json must be reported');
+
+  const forced = runCli(targetDir, [...args, '--force']);
+  assert.equal(forced.status, 0, `forced rerun should succeed. stderr: ${forced.stderr}`);
+  const overwritten = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  assert.notEqual(overwritten.description, 'USER-EDIT-CONFIG', '--force must regenerate aesop.config.json');
+  assert.ok(!fs.readFileSync(claudePath, 'utf8').includes('USER-EDIT-CLAUDE'), '--force must regenerate CLAUDE.md');
 });

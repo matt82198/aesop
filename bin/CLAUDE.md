@@ -11,11 +11,11 @@
 ## Invocation modes
 
 **Scaffolder** (creates new fleet):
-- Top-level gate (runs before any filesystem work, skipped for `aesop <namespace> ...` passthrough): `--version`/`-v` print the package.json version and exit 0; any `-` argument not in `DOCUMENTED_FLAGS` prints `unknown option: <arg>` plus help to stderr and exits 2. Tests: `tests/cli-version-unknown-flags.test.mjs`.
+- Top-level gate (runs before any filesystem work, skipped for `aesop <namespace> ...` passthrough): `--version`/`-v` print the package.json version and exit 0; any `-` argument not in `DOCUMENTED_FLAGS` prints `unknown option: <arg>` plus help to stderr and exits 2; `--global` is a documented flag (`doctor --global` runs the `~/.claude/skills` check). Tests: `tests/cli-version-unknown-flags.test.mjs`, `tests/doctor-layout-mode.test.mjs`.
 - `npx @matt82198/aesop` → scaffolds to `./aesop-fleet` (default)
 - `npx @matt82198/aesop my-fleet` → scaffolds to `./my-fleet`
 - `npx @matt82198/aesop my-fleet --force` → re-scaffold and replace `.git/hooks/pre-push`
-- `npx @matt82198/aesop --name "api" --domains "server,worker" --repos "/path/repo"` → headless scaffold (no interactive prompts)
+- `npx @matt82198/aesop --name "api" --domains "server,worker" --repos "/path/repo"` → headless scaffold (no interactive prompts); `--repos` entries must each be existing directories (missing/file/URL → bad entries printed, exit 2, before any filesystem work; URLs belong in `--repo-urls`); summary `cp ~/.claude/CLAUDE.md` lines are printed text only, each after a backup step. Tests: `tests/cli-config.test.mjs`.
 
 **Wizard** (guided setup, ~60 sec):
 - `npx @matt82198/aesop wizard` → prompts: project name (default: "my-fleet"), repos (auto-discover from `~`), port (default: 8770, validates 1–65535), brain root (default: `~/.claude`)
@@ -43,6 +43,7 @@ require(commandMap[args[0]]); // Load + run; returns immediately after
 - Creates: CLAUDE.md, domain CLAUDE.md for first code dir, aesop.config.json, state/.gitkeep, .github/workflows/ci.yml, pre-push hook
 - Flags: `--name <name>` (project name, auto-detected from git remote), `--force` (overwrite existing files), `--ci-mode hosted|self-hosted-runner|local-receipt-gate` + `--self-hosted-labels L1,L2` (CI workflow template from templates/ci/ and the `ci` block of aesop.config.json; see docs/CI-MODES.md)
 - Delegates to `tools/init_project.py` via spawnSync (python3 with python fallback)
+- Non-destructive by default: an existing `CLAUDE.md` or `aesop.config.json` is kept and a `- Kept existing ...` line is printed; `--force` overwrites them. Tests: `tests/test_init_project.py`.
 
 **CI-modes surface** (docs/CI-MODES.md): `doctor [--json]` appends a REPORT-ONLY "CI capability" table (mode -> runnable here, from `tools/ci_capability.py`; never fails the doctor) and validates the config `ci` block via `tools/ci_config.js` (Node mirror of `tools/common.py validate_ci_config`); `runner install|remove [...]` dispatches to `tools/runner_install.py` through the fail-closed propagator (preflight refuses on Smart App Control / UMCI boxes and on public repos without all_external_contributors fork approval; `--dry-run` plans only). Tests: `tests/ci-modes.test.mjs`.
 
@@ -144,6 +145,5 @@ undiscoverable and the orchestrator cannot be invoked.
 - Post-scaffold user guidance steps (belongs in README/CLAUDE-TEMPLATE.md output, not scaffolder contract)
 - Repo discovery implementation details (discoverRepos function is simple, documented inline in code)
 - Port validation logic (validatePort function documented inline; accepts 1–65535)
-- Flag parsing implementation (getFlag function is simple; documented inline)
 
 Map of all domains: /CLAUDE.md

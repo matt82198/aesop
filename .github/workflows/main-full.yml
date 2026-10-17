@@ -1,6 +1,6 @@
 name: main-full
 
-# Purpose: Post-merge full sequential CI run — drift guard vs shard de-collection / flaky luck-passes
+# Purpose: Post-merge full sequential CI run -- drift guard vs shard de-collection / flaky luck-passes
 # / skip-path classes. NOT a merge gate (main is already protected by PR checks).
 
 on:
@@ -17,10 +17,10 @@ concurrency:
   # this is the post-merge drift net, not a merge gate, so a newer run supersedes
   # nothing.
   #
-  # Do NOT group on `github.ref` — for a push to main it is always `refs/heads/main`,
+  # Do NOT group on `github.ref` -- for a push to main it is always `refs/heads/main`,
   # so every merge landed in one group and (with cancel-in-progress: true) killed the
   # PREVIOUS merge's verification. Measured 2026-08-02: 8 of the last 12 main-full runs
-  # CANCELLED, i.e. the net was off 67% of the time, worst during merge bursts — exactly
+  # CANCELLED, i.e. the net was off 67% of the time, worst during merge bursts -- exactly
   # when drift is most likely.
   group: main-full-${{ github.sha }}
   cancel-in-progress: false
@@ -70,7 +70,7 @@ jobs:
         # guard tests/test_verify_receipt_base_trust.py on every shard. Under CI
         # (CI/GITHUB_ACTIONS set) that guard FAILS when cryptography is absent, so
         # omitting it here turned shard 3 red on run 38818655874 (4 failures).
-        run: pip install pyyaml pytest pytest-timeout pyflakes cryptography==50.0.2
+        run: pip install -r requirements-ci.txt
 
       - name: Set shard-specific temporary directory (Windows)
         if: runner.os == 'Windows'

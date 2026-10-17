@@ -1,11 +1,11 @@
 name: Weekly Cross-OS Drift Snapshot
 
 # PUBLISH DESIGN (self-landing rolling PR): main is protected (PRs + required checks), so
-# this workflow must NOT `git push` to main — that fails with GH006, which is exactly the
+# this workflow must NOT `git push` to main -- that fails with GH006, which is exactly the
 # red this design replaces. Instead it force-pushes a single snapshot commit (rebased on
 # the current main) to the fixed branch `ci/crossos-drift`, opens or reuses a PR, and arms
 # GitHub's native auto-merge on it. The branch is force-pushed each week, so an unmerged PR
-# simply rolls forward to the newest snapshot — never a conflict, never more than one PR.
+# simply rolls forward to the newest snapshot -- never a conflict, never more than one PR.
 #
 # SELF-LANDING, proven by stats-refresh.yml (PR #801, 2026-10-05): the long-standing
 # assumption here was that a plain `github.token` push can't trigger the `pull_request`
@@ -13,7 +13,7 @@ name: Weekly Cross-OS Drift Snapshot
 # "expected" (PR #795 sat unmerged 41 days and was closed stale). Measured against this repo
 # that assumption is wrong: ten consecutive scheduled stats-refresh runs each force-pushed
 # with the plain default token and each one's `pull_request` `ci` checks ran and posted
-# green with no PAT and no human nudge — the push-to-an-open-PR-branch itself fires
+# green with no PAT and no human nudge -- the push-to-an-open-PR-branch itself fires
 # `pull_request: synchronize`. `gh workflow run` is a red herring either way: it opens a
 # SEPARATE `workflow_dispatch` check suite that branch protection never looks at, so it
 # cannot be what satisfies a required context. So: no DRIFT_PR_TOKEN secret is needed: the

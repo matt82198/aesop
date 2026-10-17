@@ -140,6 +140,8 @@ Expected output:
 
 If you see errors, check the logs in `state/FLEET-BACKUP.log`.
 
+The default doctor run checks only the repo it runs in, so its verdict does not depend on the home directory; `aesop doctor --global` also checks the `~/.claude/skills` install (`power` and `buildsystem`).
+
 The doctor's final section, **CI capability**, is report-only: it tells you which CI mode this machine can run (hosted, self-hosted runner, local receipt gate) and why. See [CI-MODES.md](CI-MODES.md) for choosing a mode with `aesop init --ci-mode` and registering runners with `aesop runner install`.
 
 ---
@@ -580,7 +582,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 -U
 powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 -DryRun
 ```
 
-**How it works**: The installer creates Scheduled Tasks that launch `wscript.exe` with a hidden VBScript launcher (`daemons/run-hidden.vbs`). This avoids the console window that appears when bash.exe is run directly as a Scheduled Task action.
+**How it works**: The installer compiles a small C# launcher (`daemons/bin/run-hidden.exe`, from `daemons/run-hidden.cs`, needs the .NET Framework `csc.exe` that ships with Windows) and creates Scheduled Tasks that run it. The launcher starts bash.exe with no console window. Existing tasks whose action or interval differs from this spec are re-registered.
+
+**Preview without touching Task Scheduler**: `-Plan -ExistingTasksJson <file>` prints the planned actions and decisions as JSON from a JSON array of existing task records, and calls no scheduler cmdlet.
 
 **Parameters**:
 - `-TaskPrefix AesopMyFleet` — Task names: `AesopMyFleetWatchdogDaemon`, `AesopMyFleetRefinementMonitor` (default: `Aesop`)
@@ -592,9 +596,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File daemons/install-tasks.ps1 -D
 - `-DryRun` — Preview task configuration without registering
 
 **Constraints**:
-- Commands (`-WatchdogCommand`, `-MonitorCommand`) must NOT contain double quotes (vbs launcher contract)
+- Commands (`-WatchdogCommand`, `-MonitorCommand`) must NOT contain double quotes (launcher argument contract)
 - UNC paths (e.g., `\\server\share`) are not supported; use local Windows or POSIX paths only
-- `-DryRun` mode works even if `bash.exe` or run-hidden.vbs is missing (validation downgraded to warnings for preview)
+- `-DryRun` mode works even if `bash.exe` is missing (validation downgraded to warnings for preview)
+- `AESOP_INSTALL_TASKS_DRY_RUN=1` makes the installer refuse registration and `-Uninstall`; `-Plan` and `-DryRun` still run
 
 ---
 

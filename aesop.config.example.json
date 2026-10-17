@@ -5,7 +5,7 @@
     "brain_root": "Override via BRAIN_ROOT env var or config; default: {aesop_root}/../.claude",
     "scripts_root": "Override via SCRIPTS_ROOT env var or config; default: {aesop_root}/../scripts",
     "temp_root": "Override via TEMP_ROOT env var or config; default: system temp + /claude",
-    "state_root": "Override via AESOP_STATE_ROOT env var or config; default: {aesop_root}/state",
+    "state_root": "The live event-store root, read by tools/state_root.py (boot brief, ingest) and daemons/run-watchdog.sh. Precedence: --state-dir flag > AESOP_STATE_ROOT env var > this key. Must be an absolute path (~ allowed). Unset everywhere: tools/boot_state.py FAILS CLOSED (exit 2, names this key); the watchdog falls back to {aesop_root}/state for its ingest only.",
     "fleet_root": "Override via AESOP_FLEET_ROOT env var or config; default: $HOME. SECURITY: all repository clone targets must remain under fleet_root to prevent credential harvesting across account boundaries. The monitor validates clone targets on each cycle and surfaces violations as HIGH alerts.",
     "transcripts_root": "Override via AESOP_TRANSCRIPTS_ROOT env var or config; default: ~/.claude/projects"
   },
@@ -13,7 +13,8 @@
   "scripts_root": "~/scripts",
   "temp_root": "~/.aesop-temp",
   "_temp_root_notes": "Portable path for temporary aesop files. ~ expands to home directory on both Windows and POSIX. Alternatively, on Windows set to %TEMP%/aesop, on POSIX set to /tmp/aesop. Config loaders expand ~ at runtime.",
-  "state_root": "./state",
+  "state_root": "~/.aesop-state",
+  "_state_root_note": "Live event-store root shared by the watchdog ingest and tools/boot_state.py. Must be an absolute path after ~ expansion; a relative value such as ./state is rejected (exit 2). Set AESOP_STATE_ROOT in the environment to override for one process.",
   "_fleet_root_note": "SECURITY BOUNDARY: all repository clone targets must remain under fleet_root to prevent credential harvesting across account boundaries. The monitor validates clone targets on each cycle. Defaults to home directory if not specified.",
   "fleet_root": "/path/to/fleet",
   "transcripts_root": "~/.claude/projects",
