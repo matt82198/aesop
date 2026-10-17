@@ -10,12 +10,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gitCmd, assertConfigNotPoisoned } from './helpers/git-helpers.mjs';
+import { timedSpawnSync } from './helpers/timed-spawn.mjs';
 
 const CLI = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -41,24 +41,24 @@ function runCli(targetDir, args = [], { git = false } = {}) {
   // (about 3s locally, and the step that hit the 30s spawnSync cap on CI). Only the full
   // headless test asserts the pre-push hook install, so it opts back in with { git: true }.
   const gitArgs = git ? [] : ['--no-git'];
-  const res = spawnSync(process.execPath, [CLI, targetDir, ...args, ...gitArgs, '--no-skills'], {
+  const res = timedSpawnSync(process.execPath, [CLI, targetDir, ...args, ...gitArgs, '--no-skills'], {
     encoding: 'utf8',
     cwd: path.dirname(targetDir),
     timeout,
     killSignal: 'SIGKILL'
-  });
+  }, 'scaffold');
   return res;
 }
 
 function runCliInDir(cwd, args = []) {
   // Invoke CLI without a positional targetDir; uses default
   const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
-  const res = spawnSync(process.execPath, [CLI, ...args, '--no-git', '--no-skills'], {
+  const res = timedSpawnSync(process.execPath, [CLI, ...args, '--no-git', '--no-skills'], {
     encoding: 'utf8',
     cwd: cwd,
     timeout,
     killSignal: 'SIGKILL'
-  });
+  }, 'scaffold-in-dir');
   return res;
 }
 

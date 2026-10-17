@@ -64,3 +64,4 @@ monitor/.ledger-cursor.json
 # Static dashboard build output (GitHub Pages)
 _site/
 .aesop-worktree-owner
+daemons/bin/
