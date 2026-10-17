@@ -318,11 +318,29 @@ function checkPrePushHook() {
   return { passed, hint };
 }
 
-// Check if port 8770 is free (using socket connection test)
-function checkPort8770() {
+// Dashboard port, resolved exactly as `aesop dash` does (tools/dash.js): a valid PORT env wins
+// (an invalid PORT falls back to 8770), else aesop.config.json dashboard.port, else 8770.
+const DEFAULT_DASHBOARD_PORT = 8770;
+function parsePortNumber(value) {
+  const n = parseInt(value, 10);
+  return !isNaN(n) && n > 0 && n < 65536 ? n : null;
+}
+function resolveDashboardPort() {
+  if (process.env.PORT) {
+    return parsePortNumber(process.env.PORT) || DEFAULT_DASHBOARD_PORT;
+  }
+  const { config } = ciConfig.loadAesopConfig(CURRENT_DIR);
+  const configured = config && config.dashboard && config.dashboard.port
+    ? parsePortNumber(config.dashboard.port)
+    : null;
+  return configured || DEFAULT_DASHBOARD_PORT;
+}
+
+// Check if the dashboard port is free (using socket connection test)
+function checkDashboardPort(port) {
   return new Promise((resolve) => {
     let resolved = false;
-    const sock = net.createConnection({ port: 8770, host: '127.0.0.1', timeout: 500 });
+    const sock = net.createConnection({ port, host: '127.0.0.1', timeout: 500 });
 
     const cleanup = () => {
       try {
@@ -336,7 +354,7 @@ function checkPort8770() {
       if (!resolved) {
         resolved = true;
         cleanup();
-        resolve({ passed: false, hint: 'Port 8770 in use — is another fleet running? Update dashboard.port in aesop.config.json' });
+        resolve({ passed: false, hint: `Port ${port} in use — is another fleet running? Update dashboard.port in aesop.config.json` });
       }
     });
 
@@ -466,11 +484,12 @@ function formatRow(label, status, hint, na = false) {
       results.push({ label: check.label, passed: result.passed, hint: result.hint || '', na: result.na === true });
     }
 
+    const dashboardPort = resolveDashboardPort();
     try {
-      const portResult = await checkPort8770();
-      results.push({ label: 'Port 8770 available', passed: portResult.passed, hint: portResult.hint || '', na: false });
+      const portResult = await checkDashboardPort(dashboardPort);
+      results.push({ label: `Port ${dashboardPort} available`, passed: portResult.passed, hint: portResult.hint || '', na: false });
     } catch (e) {
-      results.push({ label: 'Port 8770 available', passed: false, hint: 'Port check failed', na: false });
+      results.push({ label: `Port ${dashboardPort} available`, passed: false, hint: 'Port check failed', na: false });
     }
 
     // Report-only section: probed after the checks, counted in none of them.
