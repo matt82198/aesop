@@ -182,7 +182,7 @@ test('trunk master on origin: base resolution uses it and bootstrap does not app
   assert.ok(!output(res).includes(BOOTSTRAP_BANNER), `bootstrap must not apply once a trunk exists.\n${output(res)}`);
   // The base gate copies were extracted from the trunk commit, not from HEAD.
   assert.ok(
-    fs.existsSync(path.join(tmpRoot, `aesop-gate-base-v3-${trunkSha}`, '.complete')),
+    fs.existsSync(path.join(tmpRoot, `aesop-gate-base-v4-${trunkSha}`, '.complete')),
     'base gate copy must be extracted from origin/master (the trunk), not HEAD'
   );
 });
