@@ -195,6 +195,27 @@ class InstallTasksPlanTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn("AESOP_INSTALL_TASKS_DRY_RUN=1", result.stdout + result.stderr)
 
+    def test_derived_watchdog_command_covers_whole_chain(self):
+        # The generated watchdog command must send everything it runs to the cron log, not just
+        # its last && segment: a failure ahead of the watchdog must still be logged. Drives the
+        # real derivation (no -WatchdogCommand) and reads the action the plan would register.
+        fixture = self._write_fixture([])
+        result = _run_installer(
+            [
+                "-Plan",
+                "-ExistingTasksJson", str(fixture),
+                "-TaskPrefix", TASK_PREFIX,
+            ]
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        plan = json.loads(result.stdout)
+        args = self._watchdog_item(plan)["arguments"]
+        payload = args.split(' -lc "', 1)[1]
+        self.assertTrue(payload.startswith("{ bash "), payload)
+        group_end = payload.index("; } >> ")
+        self.assertLess(payload.index("run-watchdog.sh"), group_end, payload)
+        self.assertTrue(payload.endswith("cron-watchdog.log' 2>&1\""), payload)
+
     def test_test_file_names_no_scheduler_cmdlet(self):
         # Source guard: this file must not name a Task Scheduler cmdlet, so no test path can
         # reach one. The pattern is spelled out in pieces so this check does not match itself.

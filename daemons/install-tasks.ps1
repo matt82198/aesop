@@ -401,7 +401,9 @@ function Resolve-DaemonCommands {
             exit 1
         }
 
-        $script:WatchdogCommand = "bash '$posixRoot/daemons/run-watchdog.sh' --once >> '$posixRoot/state/cron-watchdog.log' 2>&1"
+        # Braces group the run so the redirect covers everything it runs, not just the last
+        # && segment of a chain: a failure ahead of the watchdog is still logged.
+        $script:WatchdogCommand = "{ bash '$posixRoot/daemons/run-watchdog.sh' --once; } >> '$posixRoot/state/cron-watchdog.log' 2>&1"
     }
 
     # OPT-IN merge queue: this task merges to main with no interactive session, so it is
