@@ -142,8 +142,7 @@ jobs:
           Run: $RUN_URL
 
           Merge note: this PR needs checks from a non-bot token to merge (a GITHUB_TOKEN push triggers no ci.yml run); that is the owner's decision.
-
-          🐢 Generated with Aesop
+          :turtle: Generated with Aesop
           EOF
           PR_URL=$(gh pr create --title "chore(regen): heal generated artifacts" --body-file "$BODY_FILE" --head "${{ steps.branch.outputs.branch }}" --base main)
           echo "opened: $PR_URL"

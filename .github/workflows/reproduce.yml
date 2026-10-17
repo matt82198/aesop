@@ -45,7 +45,7 @@ jobs:
       - name: Node syntax check
         run: |
           # *.template.mjs are Claude Code WORKFLOW scripts (top-level return is valid
-          # in the harness runtime, illegal to plain node) — structurally tested in
+          # in the harness runtime, illegal to plain node) -- structurally tested in
           # tests/buildsystem-template.test.mjs instead.
           git ls-files '*.mjs' | grep -v '\.template\.mjs$' | while read file; do
             node --check "$file" || exit 1
@@ -151,7 +151,7 @@ jobs:
       - name: Verify offline benchmark reproduction
         run: |
           python tools/bench_runner.py --runner mock
-          echo "✓ Benchmark reproduction successful"
+          echo "OK Benchmark reproduction successful"
 
       - name: Cache Playwright browsers
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
