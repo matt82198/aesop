@@ -22,6 +22,7 @@ _TOOLS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_TOOLS_DIR))
 
 import receipt_common as rc  # noqa: E402  (sys.path adjusted above)
+import emit_receipt as emit  # noqa: E402  (shared trunk resolver: the same default the emitter uses)
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _FENCE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
@@ -304,7 +305,10 @@ def build_parser():
     p.add_argument("--receipt", default=None, help="envelope JSON file, or - for stdin")
     p.add_argument("--repo", default=".", help="checkout to verify against (default: cwd)")
     p.add_argument("--head", default="HEAD")
-    p.add_argument("--main-ref", default="origin/main")
+    p.add_argument("--main-ref", default=None,
+                   help="trunk ref for the freshness check (default: resolved by emit_receipt.resolve_trunk, "
+                        "the same resolver the emitter uses: origin/HEAD, origin/main, origin/master, else HEAD; "
+                        "an explicit value that does not resolve is refused, never substituted)")
     p.add_argument("--max-behind", type=int, default=50)
     p.add_argument("--required", default=",".join(rc.DEFAULT_REQUIRED_PARTS), help="comma-separated part names")
     p.add_argument("--pubkey", default=None, help="Ed25519 public key (default: <repo>/%s)" % rc.DEFAULT_PUBKEY_REL)
@@ -390,7 +394,9 @@ def main(argv=None, environ=None):
         return 2
     required = [n.strip() for n in args.required.split(",") if n.strip()]
     keyring = Path(args.keyring) if args.keyring else None
-    code, reasons = verify(envelope, repo=repo, head=args.head, main_ref=args.main_ref, max_behind=args.max_behind,
+    # An explicit --main-ref is used verbatim (unresolvable -> exit 2); only the default is resolved.
+    main_ref = args.main_ref if args.main_ref is not None else emit.resolve_trunk(repo)
+    code, reasons = verify(envelope, repo=repo, head=args.head, main_ref=main_ref, max_behind=args.max_behind,
                            required=required, pubkey_path=pubkey, hmac_secret=environ.get(rc.HMAC_ENV),
                            keyring=keyring, allow_no_required=args.allow_no_required_parts)
     label = {0: "VALID", 1: "INVALID", 2: "CANNOT EVALUATE"}[code]

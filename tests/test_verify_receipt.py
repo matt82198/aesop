@@ -541,5 +541,42 @@ class TestBoundedPollWindow(VerifyBase):
         self.assertEqual(json.loads(out_env.read_text(encoding="utf-8")), {"marker": "late"})
 
 
+class TestDefaultMainRefResolvesLikeEmitter(unittest.TestCase):
+    """verify_receipt's default --main-ref comes from the trunk resolver emit_receipt uses
+    (emit_receipt.resolve_trunk), not a hardcoded origin/main. This repo has NO origin/main,
+    only origin/master, so a hardcoded default cannot verify the receipt."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name) / "repo"
+        self.repo.mkdir()
+        _git(self.repo, "init", "-q", "-b", "feat")
+        _commit(self.repo, "base")
+        _git(self.repo, "update-ref", "refs/remotes/origin/master", "HEAD")
+        self.head = _commit(self.repo, "feat1")
+        self.receipt_path = Path(self.tmp.name) / "receipt.json"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write_receipt(self, main_ref):
+        receipt = emit.build_receipt(self.repo, _good_parts(), skipped=[], slug="o/r", main_ref=main_ref)
+        sig = rc.sign(rc.canonical_json(receipt), scheme="hmac-sha256", hmac_secret=_secret())
+        self.receipt_path.write_text(json.dumps({"receipt": receipt, "sig": sig}), encoding="utf-8")
+
+    def _verify(self, *extra):
+        args = ["--receipt", str(self.receipt_path), "--repo", str(self.repo), "--head", self.head,
+                "--required", ",".join(REQUIRED)] + list(extra)
+        return vr.main(args, environ={"AESOP_RECEIPT_HMAC_SECRET": _secret()})
+
+    def test_default_main_ref_resolves_to_origin_master_when_origin_main_absent(self):
+        self._write_receipt("origin/master")
+        self.assertEqual(self._verify(), 0)
+
+    def test_explicit_unresolvable_main_ref_stays_fail_closed(self):
+        self._write_receipt("origin/master")
+        self.assertEqual(self._verify("--main-ref", "origin/nope"), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
