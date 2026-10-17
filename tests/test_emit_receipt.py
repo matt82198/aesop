@@ -430,5 +430,143 @@ class TestShardEnvScrubsTripwireArmed(unittest.TestCase):
         self.assertIn(self.VAR, removed)
 
 
+def _mk_trunk_repo(tmp, remote_refs):
+    """A repo whose origin/* refs are exactly remote_refs (names, all at the base commit).
+
+    An empty remote_refs list is a fresh remote with no trunk yet (BOOTSTRAP). The feature
+    commit is HEAD, one commit past the base.
+    """
+    repo = Path(tmp) / "trunk-repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "feat")
+    (repo / "a.txt").write_text("a\n", encoding="utf-8")
+    _git(repo, "add", "a.txt")
+    _git(repo, "commit", "-q", "-m", "base")
+    for name in remote_refs:
+        _git(repo, "update-ref", "refs/remotes/origin/" + name, "HEAD")
+    (repo / "b.txt").write_text("b\n", encoding="utf-8")
+    _git(repo, "add", "b.txt")
+    _git(repo, "commit", "-q", "-m", "feat")
+    return repo
+
+
+class TestTrunkResolution(unittest.TestCase):
+    """The emitter resolves the trunk the way hooks/pre-push-policy.sh gate_trunk_ref does."""
+
+    def _emit(self, repo, tmp, *extra):
+        out = Path(tmp) / "r.json"
+        env = {"AESOP_RECEIPT_HMAC_SECRET": _hmac_secret()}
+        registry = {"py-shard-0": emit.PartSpec(lambda r: [sys.executable, "-c", "print('Ran 1 tests in 0.00s')"])}
+        code = emit.main(["--repo", str(repo), "--matrix", "py-shard-0", "--scheme", "hmac-sha256",
+                          "--dry-run", "--out", str(out)] + list(extra),
+                         registry=registry, gh_runner=lambda args: None, environ=env)
+        receipt = json.loads(out.read_text(encoding="utf-8"))["receipt"] if out.exists() else None
+        return code, receipt
+
+    def test_trunk_master_on_origin_base_is_merge_base_with_master(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_trunk_repo(tmp, ["master"])
+            code, r = self._emit(repo, tmp)
+            self.assertEqual(code, 0)
+            self.assertEqual(r["base_sha"], _git(repo, "merge-base", "HEAD", "origin/master"))
+            self.assertNotEqual(r["base_sha"], r["head_sha"])
+            self.assertEqual(r["trunk_ref"], "origin/master")
+
+    def test_empty_remote_is_bootstrap_base_is_head(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_trunk_repo(tmp, [])
+            code, r = self._emit(repo, tmp)
+            self.assertEqual(code, 0)
+            self.assertEqual(r["base_sha"], _git(repo, "rev-parse", "HEAD"))
+            self.assertEqual(r["trunk_ref"], "HEAD")
+
+    def test_origin_head_symbolic_target_wins_over_main(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_trunk_repo(tmp, ["main", "master"])
+            _git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
+            code, r = self._emit(repo, tmp)
+            self.assertEqual(code, 0)
+            self.assertEqual(r["trunk_ref"], "origin/master")
+            self.assertEqual(r["base_sha"], _git(repo, "merge-base", "HEAD", "origin/master"))
+
+    def test_unresolvable_explicit_main_ref_falls_back_to_trunk(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_trunk_repo(tmp, ["master"])
+            code, r = self._emit(repo, tmp, "--main-ref", "origin/nope")
+            self.assertEqual(code, 0)
+            self.assertEqual(r["trunk_ref"], "origin/master")
+            self.assertEqual(r["base_sha"], _git(repo, "merge-base", "HEAD", "origin/master"))
+
+
+class TestNonGithubRemotePost(unittest.TestCase):
+    """A check-run only exists on github.com. Non-GitHub origins skip the POST; GitHub errors still block."""
+
+    def _registry(self):
+        ok = [sys.executable, "-c", "print('Ran 1 tests in 0.00s')"]
+        return {"py-shard-0": emit.PartSpec(lambda repo: ok)}
+
+    def _bare_origin(self, tmp):
+        bare = Path(tmp) / "remote.git"
+        _git(Path(tmp), "init", "-q", "--bare", str(bare))
+        return bare
+
+    def test_non_github_origin_skips_post_and_records_field(self):
+        calls = []
+
+        def tripwire(args):
+            calls.append(args)
+            return (1, "", "HTTP 404: Not Found")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            _git(repo, "remote", "add", "origin", str(self._bare_origin(tmp)))
+            out = Path(tmp) / "r.json"
+            env = {"AESOP_RECEIPT_HMAC_SECRET": _hmac_secret()}
+            code = emit.main(["--repo", str(repo), "--matrix", "py-shard-0", "--scheme", "hmac-sha256",
+                              "--post", "--out", str(out)],
+                             registry=self._registry(), gh_runner=tripwire, environ=env)
+            self.assertEqual(code, 0)
+            self.assertEqual(calls, [], "no GitHub API call for a non-GitHub origin")
+            env_json = json.loads(out.read_text(encoding="utf-8"))
+            self.assertEqual(env_json["receipt"]["posted"], {"skipped": "non-github-remote", "remote": "local-path"})
+            self.assertTrue(rc.verify_signature(rc.canonical_json(env_json["receipt"]), env_json["sig"],
+                                                hmac_secret=_hmac_secret()))
+
+    def test_github_origin_404_still_blocks_with_exit_2(self):
+        calls = []
+
+        def gh_404(args):
+            calls.append(args)
+            return (1, "", "HTTP 404: Not Found")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            _git(repo, "remote", "add", "origin", "https://github.com/o/r.git")
+            env = {"AESOP_RECEIPT_HMAC_SECRET": _hmac_secret()}
+            code = emit.main(["--repo", str(repo), "--matrix", "py-shard-0", "--scheme", "hmac-sha256",
+                              "--post"], registry=self._registry(), gh_runner=gh_404, environ=env)
+            self.assertEqual(code, 2)
+            self.assertEqual(len(calls), 1)
+            self.assertIn("repos/o/r/check-runs", calls[0][1])
+
+    def test_remote_classification(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            self.assertIsNone(emit.non_github_remote(repo), "no origin keeps today's behaviour")
+            local = {"skipped": "non-github-remote", "remote": "local-path"}
+            cases = [
+                ("https://github.com/o/r.git", None),
+                ("git@github.com:o/r.git", None),
+                ("ssh://git@github.com/o/r", None),
+                ("C:/Users/x/remote.git", local),
+                ("file:///tmp/remote.git", local),
+                ("git@gitlab.example.com:o/r.git", {"skipped": "non-github-remote", "remote": "other-host"}),
+            ]
+            _git(repo, "remote", "add", "origin", cases[0][0])
+            for url, expected in cases:
+                _git(repo, "remote", "set-url", "origin", url)
+                self.assertEqual(emit.non_github_remote(repo), expected, url)
+
+
 if __name__ == "__main__":
     unittest.main()
