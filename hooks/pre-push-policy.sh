@@ -97,14 +97,44 @@ resolve_py_bin() {
   # defeat the audit hash-chain's monotonic-seq tamper detection. Prints
   # nothing and returns 1 if neither resolves; callers must not mask that
   # into a silent default (Finding: get_next_seq's old `|| echo 0` did).
-  if command -v python3 >/dev/null 2>&1; then
-    printf 'python3'
+  #
+  # Each candidate is PROBED with a bounded `timeout 5` run, not just looked
+  # up on PATH: a python3 that is present but blocks (a stub that sleeps, a
+  # wedged shim) would otherwise hang every gate and turn a push into a
+  # multi-minute hang. A candidate that fails or times out is skipped with a
+  # WARN line; candidate order is unchanged. If no `timeout` binary exists the
+  # probe runs unbounded and one WARN says so.
+  #
+  # main() resolves ONCE and stores the result in _AESOP_PY_BIN; subshells
+  # inherit it, so the probe cost is paid once per push, not once per gate.
+  if [ -n "${_AESOP_PY_BIN:-}" ]; then
+    printf '%s' "$_AESOP_PY_BIN"
     return 0
   fi
-  if command -v python >/dev/null 2>&1; then
-    printf 'python'
-    return 0
+  local have_timeout=""
+  if command -v timeout >/dev/null 2>&1 && timeout --version >/dev/null 2>&1; then
+    have_timeout="1"
+  else
+    printf 'WARN: timeout binary not found; python interpreter probe is unbounded\n' >&2
   fi
+  local c rc
+  for c in python3 python; do
+    if ! command -v "$c" >/dev/null 2>&1; then
+      continue
+    fi
+    if [ -n "$have_timeout" ]; then
+      timeout 5 "$c" -c "import sys" </dev/null >/dev/null 2>&1
+    else
+      "$c" -c "import sys" </dev/null >/dev/null 2>&1
+    fi
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+      printf '%s' "$c"
+      return 0
+    fi
+    printf "WARN: python candidate '%s' unusable (rc=%s); trying next\n" "$c" "$rc" >&2
+  done
+  printf 'Error: no usable python interpreter; push blocked.\n' >&2
   return 1
 }
 
@@ -1258,8 +1288,8 @@ check_pyflakes_ratchet() {
   gate_dir=$(gate_base_dir) || { gate_base_block "check_pyflakes_ratchet"; return 1; }
   # Pyflakes ratchet gate (guardrail G15, tools/pyflakes_gate.py).
   # Wraps `python -m pyflakes` to enforce a baseline: never let unused-import /
-  # unused-variable debt grow. A new finding blocks the push; a stale entry
-  # (burned down) also blocks until the baseline is regenerated. Scans tools/,
+  # unused-variable debt grow. A new finding blocks the push. A branch that burns
+  # the trunk baseline down passes with a note (D40); any addition blocks. Scans tools/,
   # bin/, ui/, state_store/, driver/, monitor/, daemons/, tests/, bench/.
   #
   # Pyflakes is a dev-only lint dependency (not installed by default;
@@ -1300,10 +1330,17 @@ check_pyflakes_ratchet() {
   fi
 
   local pyflakes_output
-  pyflakes_output=$("$py_bin" "$pyflakes_script" --root "$aesop_root" --baseline "$gate_dir/.pyflakes-baseline.json" 2>&1)
+  # D40: the trunk baseline ($gate_dir) is the authority for additions; the branch
+  # baseline ($aesop_root, the pushed tree's copy) may burn the trunk down. The gate
+  # fails closed on a missing/malformed branch baseline, an addition, or a new finding.
+  pyflakes_output=$("$py_bin" "$pyflakes_script" --root "$aesop_root" --baseline "$aesop_root/.pyflakes-baseline.json" --trunk-baseline "$gate_dir/.pyflakes-baseline.json" 2>&1)
   local pyflakes_exit_code=$?
 
   if [ $pyflakes_exit_code -eq 0 ]; then
+    # Burn-down note (one line) is surfaced in the push log; a clean PASS stays silent.
+    case "$pyflakes_output" in
+      *"pyflakes baseline burned down:"*) printf '%s\n' "$pyflakes_output" | grep -F 'pyflakes baseline burned down:' >&2 ;;
+    esac
     return 0
   fi
 
@@ -1852,6 +1889,11 @@ check_generated_regen() {
     fi
     return 1
   fi
+  # Pass: echo the gate's note lines (e.g. D46 "inherited unchanged from base") so the
+  # pass is visible in the push log, not silently swallowed.
+  if [ -n "$gate_output" ]; then
+    printf '%s\n' "$gate_output"
+  fi
   return 0
 }
 
@@ -2011,8 +2053,10 @@ check_emit_receipt() {
 
     # Wait for the process to clean up, with a small timeout to avoid hanging
     ( sleep 2; kill -KILL "$receipt_pid" 2>/dev/null || true ) &
-    wait "$receipt_pid" 2>/dev/null || true
-    receipt_exit_code=$?
+    # Capture the child's real exit code: `wait ... || true; $?` always reads 0 (fail-open).
+    local wait_rc=0
+    wait "$receipt_pid" 2>/dev/null || wait_rc=$?
+    receipt_exit_code=$wait_rc
 
     # If we timed out, report exit code 124 (same as timeout command)
     if [ $timed_out -eq 1 ]; then
@@ -3315,6 +3359,14 @@ main() {
   if [ -t 0 ]; then
     printf 'Error: interactive invocation: this hook runs under git push; refusing to skip security checks (fail-closed)\n' >&2
     log_block "interactive_invocation_blocked"
+    exit 1
+  fi
+
+  # Resolve the python interpreter ONCE for this push (bounded probe, see
+  # resolve_py_bin). Every gate calls resolve_py_bin inside a $(...) subshell,
+  # which inherits this variable, so a hung python3 costs one bounded probe.
+  # No usable interpreter -> fail closed here; the hook body never runs without one.
+  if ! _AESOP_PY_BIN=$(resolve_py_bin); then
     exit 1
   fi
 

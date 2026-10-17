@@ -70,7 +70,7 @@ jobs:
         # guard tests/test_verify_receipt_base_trust.py on every shard. Under CI
         # (CI/GITHUB_ACTIONS set) that guard FAILS when cryptography is absent, so
         # omitting it here turned shard 3 red on run 38818655874 (4 failures).
-        run: pip install pyyaml pytest pytest-timeout pyflakes cryptography==50.0.2
+        run: pip install -r requirements-ci.txt
 
       - name: Set shard-specific temporary directory (Windows)
         if: runner.os == 'Windows'

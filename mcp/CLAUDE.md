@@ -9,6 +9,8 @@
 
 **File**: `mcp/server.mjs` — Stdio-transport JSON-RPC 2.0 server, Node.js (no npm dependencies, stdlib only).
 
+**Protocol version**: `initialize` advertises `protocolVersion` `2025-11-25` (the `LATEST_PROTOCOL_VERSION` of `@modelcontextprotocol/sdk` 1.32.1). Metadata author in `mcp/package.json` matches the root package. Guarded by `tests/mcp-metadata.test.mjs`.
+
 **Launch**:
 ```bash
 node mcp/server.mjs [--root /path/to/aesop]
@@ -98,7 +100,7 @@ Query GitHub Actions run history for a CI job: status, conclusion, duration, fla
 
 ## Multibox Coordination Helper
 
-**File**: `mcp/instances-claims.py` (`--db <db> [--root <aesop_root>] [--config <path>]`) — spawned by the three `fleet_instances`/`fleet_claims`/`fleet_multibox_summary` tools above; resolves coordination backend config via the same precedence as `tools/multibox_config` (env → aesop.config.json → default) and reports mode (`advisory`|`local-lease`|`fs-claim-log`), transport, shared dir, TTL; read-only, structured `absent`/`reason` on error.
+**File**: `mcp/instances-claims.py` (`--db <db> [--root <aesop_root>] [--config <path>]`) — spawned by the three `fleet_instances`/`fleet_claims`/`fleet_multibox_summary` tools above; resolves coordination backend config via the same precedence as `tools/multibox_config` (env → aesop.config.json → default) and reports mode (`advisory`|`local-lease`|`fs-claim-log`), transport, shared dir, TTL; read-only, structured `absent`/`reason` on error. The interpreter is resolved once per process (`resolvePython`: `AESOP_PYTHON`, then `python3`, `python`, `py -3`, probed with `--version`); when none runs the three tools return `error` (with `absent: false`, empty arrays), never a silent empty fleet. Tests: `tests/mcp-python-resolver.test.mjs`.
 
 **DB resolution (F-06, 2026-10-14)**: the instances/claims tools open `state.db` via `INSTANCES_DB_FILENAME` (`mcp/server.mjs`, mirrors `state_store/paths.py`), the file `tools/instance_manager.py` writes. `aesop.db` had no writer and always reported `absent`. Tracker DB paths resolve through `state_store/paths.py::resolve_db_path`.
 
@@ -137,6 +139,7 @@ Server registers these tools for `tools/list` and `tools/call`:
 **Test files**:
 - `tests/mcp-fleet.test.mjs` — Spawns server over stdio, drives JSON-RPC initialize + tools/list/call round-trips, validates read-only behavior (11 test cases).
 - `tests/mcp-ci-status.test.mjs` — Tests ci_job_status tool with mocked gh subprocess: normal history, empty history (never_executed), gh failure → structured error (4 test cases).
+- `tests/mcp-metadata.test.mjs` — Asserts `mcp/package.json` author equals root package author and that the live server's initialize `protocolVersion` is `2025-11-25`.
 
 Run: `npm run test:node` or `node --test tests/mcp*.test.mjs`.
 

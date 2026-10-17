@@ -803,5 +803,74 @@ class AsciiScopeTest(unittest.TestCase):
         self.assertEqual(el.ascii_findings(ROOT), [])
 
 
+class ScanRootHardeningTest(unittest.TestCase):
+    """A scan must never bless an empty or mis-rooted tree.
+
+    Bug bcddd626dc26: junk-dir skipping matched ABSOLUTE path parts, so any
+    checkout under a `dist` ancestor skipped every file and reported [OK];
+    a nonexistent --root also printed warnings and exited 0.
+    """
+
+    OFFENDER = 'with open("f.txt") as f: pass\n'
+    CLEAN = 'with open("f.txt", encoding="utf-8") as f: pass\n'
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write(self, rel, text):
+        path = self.base / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def _cli(self, *args):
+        return subprocess.run(
+            [sys.executable, "-I", str(ROOT / "tools" / "encoding_lint.py"), *args],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=120,
+        )
+
+    def test_offender_under_dist_ancestor_still_fails(self):
+        checkout = self.base / "dist" / "aesop"
+        self._write("dist/aesop/tools/bad.py", self.OFFENDER)
+        result = self._cli("--root", str(checkout))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("bad.py", result.stdout)
+
+    def test_nonexistent_root_is_an_error(self):
+        result = self._cli("--root", str(self.base / "nope"))
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("does not exist", result.stderr)
+
+    def test_empty_scan_set_is_an_error_not_ok(self):
+        (self.base / "tools").mkdir()
+        result = self._cli("--root", str(self.base))
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertNotIn("[OK]", result.stdout)
+        self.assertIn("no Python files", result.stderr)
+
+    def test_wrong_root_with_no_scan_dirs_is_an_error(self):
+        self._write("elsewhere/only.py", self.CLEAN)
+        result = self._cli("--root", str(self.base))
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertNotIn("[OK]", result.stdout)
+
+    def test_normal_scratch_tree_stays_ok(self):
+        self._write("tools/good.py", self.CLEAN)
+        result = self._cli("--root", str(self.base))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("[OK] No encoding issues found", result.stdout)
+
+    def test_junk_dir_inside_root_is_still_skipped(self):
+        self._write("tools/good.py", self.CLEAN)
+        self._write("tools/dist/bad.py", self.OFFENDER)
+        result = self._cli("--root", str(self.base))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
 if __name__ == '__main__':
     unittest.main()

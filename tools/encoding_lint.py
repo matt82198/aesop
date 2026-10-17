@@ -468,6 +468,44 @@ def scan_file(filepath: Path) -> List[Dict]:
     return findings
 
 
+JUNK_DIR_NAMES = frozenset({'__pycache__', '.git', 'node_modules', 'dist', '.pytest_cache'})
+
+
+def _is_under(path: Path, root: Path) -> bool:
+    """True when path is root or lies beneath it (both already resolved)."""
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _in_junk_dir(pyfile: Path, base: Path) -> bool:
+    """True when a junk directory name appears BETWEEN base and pyfile.
+
+    `base` must contain pyfile. Ancestors of base never count: a checkout at
+    C:/work/dist/aesop must not have every file skipped as `dist`.
+    """
+    return any(p in JUNK_DIR_NAMES for p in pyfile.relative_to(base).parts)
+
+
+def iter_python_files(dirpath: Path, repo_root: Optional[Path] = None) -> List[Path]:
+    """Sorted .py files under dirpath, skipping junk dirs below the repo root.
+
+    Junk matching is relative to repo_root when dirpath sits under it, else
+    relative to dirpath itself.
+    """
+    files = []
+    for pyfile in sorted(dirpath.rglob('*.py')):
+        if repo_root is not None and _is_under(pyfile, repo_root):
+            base = repo_root
+        else:
+            base = dirpath
+        if not _in_junk_dir(pyfile, base):
+            files.append(pyfile)
+    return files
+
+
 def scan_directory(dirpath: Path, repo_root: Optional[Path] = None) -> List[Dict]:
     """Recursively scan a directory for Python files.
 
@@ -478,17 +516,8 @@ def scan_directory(dirpath: Path, repo_root: Optional[Path] = None) -> List[Dict
     Returns: List of all findings
     """
     all_findings = []
-
-    # Find all .py files
-    for pyfile in sorted(dirpath.rglob('*.py')):
-        # Skip common junk directories
-        parts = pyfile.parts
-        if any(p in {'__pycache__', '.git', 'node_modules', 'dist', '.pytest_cache'} for p in parts):
-            continue
-
-        findings = scan_file(pyfile)
-        all_findings.extend(findings)
-
+    for pyfile in iter_python_files(dirpath, repo_root):
+        all_findings.extend(scan_file(pyfile))
     return all_findings
 
 
@@ -513,6 +542,10 @@ def run(
         root = Path.cwd()
     else:
         root = Path(root).resolve()
+
+    if not root.is_dir():
+        print(f"Error: root {root} does not exist (or is not a directory)", file=sys.stderr)
+        return 2
 
     if baseline is not None:
         stale = ascii_stale_entries(root, Path(baseline).resolve())
@@ -546,15 +579,25 @@ def run(
             continue
         scan_dirs.append(ppath)
 
-    # Scan all directories
-    all_findings = []
+    # Collect every file first: an empty scan set must fail, never report [OK].
+    files_to_scan: List[Path] = []
     for scan_dir in scan_dirs:
         if scan_dir.is_file():
-            findings = scan_file(scan_dir)
-            all_findings.extend(findings)
+            files_to_scan.append(scan_dir)
         else:
-            findings = scan_directory(scan_dir, root)
-            all_findings.extend(findings)
+            files_to_scan.extend(iter_python_files(scan_dir, root))
+
+    if not files_to_scan:
+        print(
+            f"Error: no Python files scanned under {root} (paths: {', '.join(paths)}); "
+            f"an empty scan set blesses nothing. Check --root and --paths.",
+            file=sys.stderr,
+        )
+        return 2
+
+    all_findings = []
+    for pyfile in files_to_scan:
+        all_findings.extend(scan_file(pyfile))
 
     # tools/*.py is held to the ASCII-only rule whenever tools/ is scanned.
     lowered: Dict[str, int] = {}

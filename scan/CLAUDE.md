@@ -39,6 +39,7 @@
 **PROMPT_IOC** (fleet transcripts, recent only, ~5 patterns):
 - HIGH: prompt-injection (ignore prior instructions), exfiltration (send to URL), cred-harvest (read secrets), evade-security (disable antivirus), cred-harvest/exfiltration have allowlists to suppress false-positives on defensive tool references
 - MED: danger-shell (curl|bash, base64 -d, rm -rf)
+- Exfiltration allowlist: an exfiltration match is suppressed only when an allowlisted term appears as a whole token in the same clause as the match AND the message has no transmission indicator (POST, http(s)://, upload, curl/wget). Substring hits never suppress (tests/scan-fleet-exfil-allowlist.test.mjs).
 
 Add domain-specific checks by editing the REPOS/PROJECT_ROOTS arrays and IOC pattern lists.
 

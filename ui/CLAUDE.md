@@ -34,7 +34,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **csrf.py**: Session-token generation (atomic O_EXCL 0600 mode) + `validate_csrf_request()` (Origin/Referer check + X-Aesop-Token header). `init()` sets `SESSION_TOKEN` (43-char URL-safe base64). Token persisted to `state/.ui-session-token` (readable only by owner).
 
-**collectors.py**: Read-only data collectors (heartbeats, repos, events, alerts, messages, backlog parse), tracker CRUD via WriteAPI, queue status (exceptions.jsonl + heartbeat age), and SSE section snapshots. Functions: `_snapshot_data`, `_snapshot_tracker`, `_snapshot_orchestrator_status`, `drain_tracker_inbox`, `get_alerts`, `get_heartbeat_status(clock=)` (injectable epoch clock for the 3s age buckets), `get_queue_status` (Q5 merge-queue operator panel), `get_agent_lifecycle_events` (wave-29), etc. **Inc 1 (2026-07-30):** Tracker CRUD routes through `state_store.write_api.WriteAPI` (atomic append + render). `load_tracker()` reads `tracker.json` cache.
+**collectors.py**: Read-only data collectors (heartbeats, repos, events, alerts, messages, backlog parse), tracker CRUD via WriteAPI, queue status (exceptions.jsonl + heartbeat age), and SSE section snapshots. Functions: `_snapshot_data`, `_snapshot_tracker`, `_snapshot_orchestrator_status`, `drain_tracker_inbox`, `get_alerts`, `get_heartbeat_status(clock=)` (injectable epoch clock for the 3s age buckets), `get_queue_status` (Q5 merge-queue operator panel), `get_agent_lifecycle_events` (wave-29), etc. **Inc 1 (2026-07-30):** Tracker CRUD routes through `state_store.write_api.WriteAPI` (atomic append + render). `load_tracker()` reads `tracker.json` cache. **Slow-create diagnostics:** `create_tracker_item` times its migrate, append and render stages and writes one stderr line `tracker-create slow: total= migrate= append= render= state_dir=` only when the create exceeds `AESOP_TRACKER_SLOW_SECONDS` (default 1.0).
 
 **agents.py**: Agent transcript reading (`get_fleet_agents`, `extract_agent_dispatch_prompt`, `get_agent_detail`), path-traversal-safe agent-id handling via `_AGENT_ID_FORBIDDEN`.
 
@@ -45,7 +45,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 **handler.py** (HTTP routing + GET/POST endpoints):
 - `DashboardHandler` class (extends `http.server.BaseHTTPRequestHandler`).
 - `run_server(host, port, app_handler_fn)` â€” ThreadingHTTPServer required (SSE holds one connection per client).
-- Reads `config.X` / `csrf.SESSION_TOKEN` at call time.
+- Reads `config.X` / `csrf.SESSION_TOKEN` at call time. Tracker delete splits the path from the query before `item_id` (else archive 404s).
 - `serve_api_state` (`GET /api/state`): a cached section that is **empty** counts as not-yet-snapshotted and is recomputed inline. The "data" source seeds `{}` and is mtime-gated, so a quiet collector leaves that default cached; testing only for `None` let `{}` through and produced an empty first paint.
 
 **cost.py**: Parser for `state/ledger/OUTCOMES-LEDGER.md` (markdown table); returns per-model + per-day aggregates, verdict scorecards, optional dollar estimates (if `aesop.config.json` supplies `pricing` map).
@@ -56,7 +56,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **wave_telemetry.py** â€” Wave telemetry: `get_wave_telemetry()` extracts current phase (from `orchestrator-status` when fresh, `STATE.md` `## Phase:` fallback), top blocker (from `AUDIT-BACKLOG.md`), cost metrics (from ledger). Reads state at call time (no cache); degrades gracefully on missing files. `get_wave_telemetry(now=)` and `_read_orchestrator_status(now=)` take an injectable freshness clock (tests pin it; default is the wall clock).
 
-**wave_dispatch.py** â€” Wave dispatch (per-agent visibility): reads agent transcripts, infers phase (dispatch/thinking/tool-use/stall/done) from tail, estimates tokens from file size, computes activity age from mtime. Returns per-agent rows with phase badge, age, warnings (inactive >5min, stalled >10min). Degrades `{available:false}`. Polled 2-3s.
+**wave_dispatch.py** â€” Wave dispatch (per-agent visibility): reads agent transcripts, infers phase (dispatch/thinking/tool-use/stall/done, else unknown) from structured tail fields only (record type, message.stop_reason, content block types, API-error marker; free text never inspected), estimates tokens from file size, computes activity age from mtime. Returns per-agent rows with phase badge, age, warnings (inactive >5min, stalled >10min). Degrades `{available:false}`. Polled 2-3s.
 
 **wave_failure.py** â€” Wave PR failure drill-down: `get_wave_failure(pr_number)` shells `gh run view --json jobs` for jobs on PR branch, then `gh api .../jobs/{id}/logs` for failing jobs; extracts ~100-line log tails. Caches ~5s per PR; degrades to `{available:false, error}` when gh missing/un-authed. Override gh binary: `AESOP_GH_BIN` env var.
 
@@ -70,7 +70,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 **wave_audit_tail.py** â€” Wave audit tail: streams recent audit findings for live dashboard display.
 
-**wave_gantt.py** â€” Wave Gantt chart data: per-agent timeline for wave execution visualization.
+**wave_gantt.py** â€” Wave Gantt chart data: per-agent timeline for wave execution visualization. Timestamps are RFC 3339 `Z` only; duration is end minus start, or `null` (unknown) when start is missing, never idle age.
 
 **wave_reasoning_tail.py** â€” Wave reasoning tail: streams orchestrator reasoning for live display.
 
@@ -92,7 +92,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
   - FailureDrilldown: drawer showing CI job list + ~100-line log excerpts on expand; fetches `/api/wave/failure?pr=N`.
   - ToolingPanel: compact card grid showing repo tooling health (TODO count, coverage, dead code, import cycles, encoding issues); fetches `/api/tooling/summary`; green/yellow/red severity coding; refresh button; responsive grid.
 - **lib/api.ts**: Typed fetch helpers + CSRF header injection + `/api/session` fallback for dev server.
-- **lib/useSSE.ts**: EventSource hook with reconnect logic, per-section state, connection status.
+- **lib/useSSE.ts**: EventSource hook with reconnect logic, per-section state, connection status. Cleanup clears the EventSource ref so a same-instance re-run (StrictMode double effect) opens a fresh source; covered by `lib/useSSE.test.tsx`.
 - **lib/types.ts**: TypeScript types for all API payloads (backend contract).
 - **lib/sanitizeUrl.ts**: XSS-safe URL parsing (inerts PR links on bad schemes).
 - **vite.config.ts**: Vite config with API proxy to :8770.

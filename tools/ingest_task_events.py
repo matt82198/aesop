@@ -18,6 +18,11 @@ Behavior:
   - kind = "internal" for harness-internal stops (see INTERNAL_SUMMARY_PATTERNS
     below: records with empty agent_type whose summary is user-voice or a
     slash-command echo); kind = "agent" otherwise.
+  - Each agent-kind record also appends one lifecycle event to stream
+    "agent_lifecycle" (payload agent_id, timestamp = record ts): agent_done, or
+    agent_stalled when stop_reason contains "error" or is max_tokens/refusal.
+    Deduped on a key derived from the task event_id, so a re-run (even with a
+    lost cursor) adds no lifecycle row twice. Internal records get none.
   - Idempotent: a cursor file (byte offset) skips lines already consumed, and
     event_id dedupe against the stream prevents duplicates even if the cursor
     write was lost after the appends.
@@ -78,6 +83,12 @@ from state_store.paths import resolve_db_path  # noqa: E402
 STREAM = "task"
 EVENT_TYPE = "task_event"
 ACTOR = "task_ingest"
+# Each lane task_event also appends one lifecycle event to LIFECYCLE_STREAM, folded
+# by state_store.projections.project_agent_lifecycle (agent_done / agent_stalled).
+LIFECYCLE_STREAM = "agent_lifecycle"
+LIFECYCLE_ACTOR = "task_ingest"
+# Non-"error" stop reasons that still mean the lane ended abnormally.
+ABNORMAL_STOP_REASONS = frozenset({"max_tokens", "refusal"})
 CURSOR_FILENAME = "task_events.cursor.json"
 HEARTBEAT_FILENAME = ".task-ingest-heartbeat"
 DEFAULT_JSONL = os.environ.get("AESOP_TASK_EVENTS_JSONL") or os.path.join(
@@ -121,6 +132,16 @@ def classify_kind(record: dict) -> str:
     return "agent"
 
 
+def lifecycle_event_type(record: dict) -> str:
+    """Return "agent_stalled" when the stop_reason signals an error, else "agent_done"."""
+    stop_reason = record.get("stop_reason")
+    if isinstance(stop_reason, str):
+        lowered = stop_reason.strip().lower()
+        if "error" in lowered or lowered in ABNORMAL_STOP_REASONS:
+            return "agent_stalled"
+    return "agent_done"
+
+
 QUARANTINE_SUFFIX = ".quarantine.jsonl"
 
 
@@ -130,6 +151,28 @@ def _event_id(raw_line: bytes, offset: int) -> str:
 
 def _legacy_event_id(raw_line: bytes) -> str:
     return hashlib.sha256(raw_line).hexdigest()
+
+
+def _lifecycle_event_id(task_event_id: str) -> str:
+    """Dedupe key for the lifecycle row of one task event (derived, so replay-safe)."""
+    return hashlib.sha256(f"{LIFECYCLE_STREAM}:{task_event_id}".encode("ascii")).hexdigest()
+
+
+def _append_lifecycle(api, record: dict, task_event_id: str, seen_lifecycle: set, result: dict) -> None:
+    """Append the agent lifecycle row for one agent-kind task event, at most once."""
+    event_id = _lifecycle_event_id(task_event_id)
+    if event_id in seen_lifecycle:
+        return
+    payload = {
+        "agent_id": record["agent_id"],
+        "timestamp": record["ts"],
+        "stop_reason": record.get("stop_reason"),
+        "task_event_id": task_event_id,
+        "event_id": event_id,
+    }
+    api.append(LIFECYCLE_STREAM, lifecycle_event_type(record), payload, LIFECYCLE_ACTOR)
+    seen_lifecycle.add(event_id)
+    result["lifecycle"] += 1
 
 
 def _quarantine_path(jsonl_path: Path) -> Path:
@@ -296,7 +339,7 @@ def ingest(jsonl_path, state_dir, max_bytes: int = 0) -> dict:
     state_dir = Path(state_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
     cursor_path = state_dir / CURSOR_FILENAME
-    result = {"ingested": 0, "duplicates": 0, "malformed": 0, "quarantined": 0, "cursor": 0, "exit_code": EXIT_OK}
+    result = {"ingested": 0, "duplicates": 0, "malformed": 0, "quarantined": 0, "lifecycle": 0, "cursor": 0, "exit_code": EXIT_OK}
 
     if not jsonl_path.exists():
         # No brain hook on this box (or a CI runner): nothing to ingest is a clean
@@ -320,6 +363,7 @@ def ingest(jsonl_path, state_dir, max_bytes: int = 0) -> dict:
     api = StateAPI(resolve_db_path(state_dir, "tracker"))
     try:
         seen = {e["payload"].get("event_id") for e in api.get(STREAM)}
+        seen_lifecycle = {e["payload"].get("event_id") for e in api.get(LIFECYCLE_STREAM)}
         cursor = offset
         contiguous = True
         for start, end, raw, error, record in complete:
@@ -355,6 +399,10 @@ def ingest(jsonl_path, state_dir, max_bytes: int = 0) -> dict:
                     api.append(STREAM, EVENT_TYPE, payload, ACTOR)
                     seen.add(event_id)
                     result["ingested"] += 1
+                if classify_kind(record) == "agent":
+                    # Checked on duplicates too: a crash between the task append and
+                    # the lifecycle append must not leave the lane without its row.
+                    _append_lifecycle(api, record, event_id, seen_lifecycle, result)
             if contiguous:
                 cursor = end
         if new_quarantine_rows:
