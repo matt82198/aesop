@@ -2500,6 +2500,117 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+# ===== Metrics + range gates scan the PUSHED refs read from stdin (tag-only push defect) =====
+# Defect: check_metrics() ignored stdin and ran metrics_gate.py with its default range
+# origin/main...HEAD, so a tag-only push was judged by the current branch's unpushed commits.
+ZERO40="0000000000000000000000000000000000000000"
+
+# setup_metrics_repo <dir>: origin/main carries tools/metrics_gate.py plus two commits
+# (base, release). The local branch feature/test adds STATE.md with an unverified 80%.
+# Sets MG_BASE_SHA, MG_RELEASE_SHA, MG_FEATURE_SHA. Working tree ends on feature/test.
+setup_metrics_repo() {
+  local mg="$1"
+  rm -rf "$mg" "$mg.origin"
+  mkdir -p "$mg/tools"
+  cp "$REPO_ROOT/tools/metrics_gate.py" "$mg/tools/metrics_gate.py"
+  git -C "$mg" init -q -b main
+  git -C "$mg" config user.email t@example.com
+  git -C "$mg" config user.name t
+  git -C "$mg" config core.autocrlf false
+  printf 'base\n' > "$mg/README.md"
+  git -C "$mg" add -A
+  git -C "$mg" commit -q -m base
+  MG_BASE_SHA=$(git -C "$mg" rev-parse HEAD)
+  printf 'release notes\n' > "$mg/RELEASE.md"
+  git -C "$mg" add -A
+  git -C "$mg" commit -q -m release
+  MG_RELEASE_SHA=$(git -C "$mg" rev-parse HEAD)
+  git init -q --bare "$mg.origin"
+  git -C "$mg" remote add origin "$mg.origin"
+  git -C "$mg" push -q origin main
+  git -C "$mg" checkout -q -b feature/test
+  printf '# State\n\nCost fell 80%% this wave.\n' > "$mg/STATE.md"
+  git -C "$mg" add -A
+  git -C "$mg" commit -q -m unverified-metric
+  MG_FEATURE_SHA=$(git -C "$mg" rev-parse HEAD)
+}
+
+printf '\n=== Metrics gate: tag-only push of an already-pushed commit passes (pushed refs, not HEAD) ===\n'
+(
+  mg="$TEST_ROOT/mg_tag_only"
+  setup_metrics_repo "$mg"
+  export AESOP_ROOT="$mg"
+  cd "$mg" || exit 1
+  if check_metrics <<< "refs/tags/v9.9.9 $MG_RELEASE_SHA refs/tags/v9.9.9 $ZERO40" >/dev/null 2>&1; then
+    printf 'PASS: tag-only push passes; the unverified metric lives only in the unpushed local branch\n'
+  else
+    printf 'FAIL: tag-only push was blocked by a metric that is not in the pushed range\n'
+    exit 1
+  fi
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Metrics gate: branch push that adds an unverified metric still FAILS ===\n'
+(
+  mg="$TEST_ROOT/mg_branch"
+  setup_metrics_repo "$mg"
+  export AESOP_ROOT="$mg"
+  cd "$mg" || exit 1
+  if check_metrics <<< "refs/heads/feature/test $MG_FEATURE_SHA refs/heads/feature/test $MG_RELEASE_SHA" >/dev/null 2>&1; then
+    printf 'FAIL: branch push adding an unverified metric passed the gate\n'
+    exit 1
+  fi
+  printf 'PASS: branch push adding an unverified metric is still blocked\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Metrics gate: empty stdin keeps today behaviour (fail-closed on the HEAD range) ===\n'
+(
+  mg="$TEST_ROOT/mg_empty"
+  setup_metrics_repo "$mg"
+  export AESOP_ROOT="$mg"
+  cd "$mg" || exit 1
+  if check_metrics </dev/null >/dev/null 2>&1; then
+    printf 'FAIL: empty stdin fell open instead of scanning the current range\n'
+    exit 1
+  fi
+  printf 'PASS: empty stdin still runs the default range and blocks the unverified metric\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== get_commit_range: tag push with zero remote sha scans the tagged commit alone ===\n'
+(
+  mg="$TEST_ROOT/mg_range_tag"
+  setup_metrics_repo "$mg"
+  export AESOP_ROOT="$mg"
+  cd "$mg" || exit 1
+  got=$(printf 'refs/tags/v9.9.9 %s refs/tags/v9.9.9 %s\n' "$MG_RELEASE_SHA" "$ZERO40" | get_commit_range 2>/dev/null)
+  want="$MG_BASE_SHA..$MG_RELEASE_SHA"
+  if [ "$got" = "$want" ]; then
+    printf 'PASS: tag range is %s (the tagged commit alone)\n' "$got"
+  else
+    printf 'FAIL: tag range was %s, expected %s\n' "$got" "$want"
+    exit 1
+  fi
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Test Summary ===\n'
 printf 'Tests PASSED: %d\n' "$test_passed"
 printf 'Tests FAILED: %d\n' "$test_failed"
