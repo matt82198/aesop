@@ -288,6 +288,32 @@ Lead the report with the ACCEPTANCE observable (section 8a), before the check li
 4. A lane that cannot produce the observable reports BLOCKED-ACCEPTANCE with what it could prove, never "done".
 5. The orchestrator records the acceptance observable in STATE.md next to the PR number before calling the item complete.
 
+## 8b. Landing (done means pushed and PR open, verified)
+1. A lane that changed any file has exactly two terminal states:
+   - **LANDED**: branch pushed, PR open. The report carries the PR url and the full head sha, and the
+     head sha is confirmed by pasting the literal output of `git ls-remote origin <branch>`.
+   - **BLOCKED-LANDING: <reason>**: the branch is still pushed if it can be, and the exact denial text
+     from the failed push or gh call is pasted.
+2. "Code written, not committed", "ready to commit" and "tests green locally" are not terminal states.
+   A hand-back in any of those states is a contract violation.
+3. A hand-back that lists a changed file must carry a PR url, or BLOCKED-LANDING with the blocker. The
+   orchestrator treats any other hand-back as unlanded and re-dispatches the SAME lane by SendMessage,
+   not a new finisher lane.
+4. The lane runs its push in its own foreground Bash call (timeout 600000), never in the background. A
+   background push strands the lane (memory: background-push-strands-lanes).
+5. When the merge step is in scope, LANDED extends to MERGED only with the `pr_merged_check` line pasted
+   verbatim.
+
+## 9a. Index-first reading (knowledge tree)
+1. Before any grep/rg/find over a brain repo (`~/.claude`, `~/scripts`, `~/conductor3`) or any repo with a
+   generated KNOWLEDGE.md, read KNOWLEDGE.md at the root, then the one domain INDEX*.md the task names.
+2. Grep is a last resort for a symbol the index does not list. The report says which index was read first.
+3. Counting things an index already counts (tests per file, entries per domain) is read from the index,
+   never re-grepped. (Matt 2026-10-18: "see how python-pro is grepping for test counts lol, that emphasizes
+   the issue".)
+4. A lane that finds the index wrong fixes the source header (one derived line) and re-runs
+   `python ~/scripts/knowledge_tree.py --write` for that root. It never hand-edits INDEX*.md.
+
 ## 9. Linux shape — cross-platform test gate
 - **Shell, workflow, and Node-test changes are proven on the Linux shape before push.**
   `tools/linux_shape_check.py` triggers on commits touching `*.sh`, `hooks/*`,
