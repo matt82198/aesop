@@ -144,9 +144,10 @@ def scoped_required_shards(repo, receipt):
     """The python shards a SCOPED receipt must carry, recomputed from its own changed files with
     the emitter's shard assignment (emit_receipt._find_owning_shards over the checkout's shard map).
 
-    Fail closed to EVERY shard when the answer is unknown or empty: an underivable shard map, an
-    underivable change set, an unowned tools/ change (_find_owning_shards -> None), or an empty
-    owning set (docs-only: an empty scope would pass with zero Python tests run)."""
+    Fail closed to EVERY shard when the answer is unknown: an underivable shard map, an
+    underivable change set, or an unowned tools/ change (_find_owning_shards -> None). An EMPTY
+    owning set is a real answer (docs-only diff, no Python code changed) and requires no py shards,
+    matching what the emitter records for a scoped receipt."""
     try:
         shard_map = emit._build_shard_map(sorted(emit._PY_SHARDS), timing=emit._load_ci_timing(repo), repo=repo)
     except Exception:  # noqa: BLE001 -- an underivable map is fail-closed, never a crash
@@ -155,7 +156,7 @@ def scoped_required_shards(repo, receipt):
     owning = None
     if changed is not None and shard_map is not None:
         owning = emit._find_owning_shards(changed, shard_map)
-    if not owning:
+    if owning is None:
         return sorted(rc.DEFAULT_REQUIRED_PARTS)
     return sorted(owning)
 
