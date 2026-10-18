@@ -315,6 +315,12 @@ Lead the report with the ACCEPTANCE observable (section 8a), before the check li
 4. A lane that finds the index wrong fixes the source header (one derived line) and re-runs
    `python ~/scripts/knowledge_tree.py --write` for that root. It never hand-edits INDEX*.md.
 
+## 9b. Purpose pin (intent decay)
+1. Every dispatch brief for a lane that creates or changes product code carries one line `PURPOSE: this artifact exists to <why, from the project's plan doc>; status: real|throwaway|oracle`.
+2. The lane copies that line verbatim into its PR body and into any new file header or STATE entry it writes.
+3. A lane whose brief has no PURPOSE line asks for it in its first message and does not start code.
+4. A lane that discovers its work builds on a `throwaway` artifact as if it were `real` stops and reports (intent decay), it does not continue.
+
 ## 9. Linux shape — cross-platform test gate
 - **Shell, workflow, and Node-test changes are proven on the Linux shape before push.**
   `tools/linux_shape_check.py` triggers on commits touching `*.sh`, `hooks/*`,
@@ -328,3 +334,9 @@ Lead the report with the ACCEPTANCE observable (section 8a), before the check li
 - Windows, `WSL_ERROR` (the probe itself failed): exit 1, fail closed, with or without the require flag.
 - Node tests run with `USERPROFILE` unset (native and WSL) to catch environment variable assumptions
   (e.g., isolated-home tripwire test failures on Windows-only CI shard #864).
+
+## 10. Plan-vs-output check (intent decay)
+1. At every project checkpoint (and before any release) the orchestrator dispatches a read-only Haiku lane that reads the project's plan/design doc goals (e.g. keyrun design/BIBLE.md, aesop docs/ROADMAP or the STATE.md intent section), the current STATE.md and the shipped artifact, and answers only: does what was built match what this was for? It does not assess whether it works.
+2. The verdict is one BUILDLOG line `[intent-check] <project> MATCH|DRIFT: <one sentence>`.
+3. DRIFT blocks new feature lanes in that project until the orchestrator records the correction (re-plan or re-scope) in STATE.md.
+4. The check names the artifact's status (real/throwaway/oracle) from the PURPOSE pins it finds, and flags any throwaway that has accumulated more than one feature lane.

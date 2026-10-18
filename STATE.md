@@ -186,6 +186,7 @@ Matt 16:30Z: "go from state on the release" + "and fix the clear issue". Verify 
 13. Matt decisions: F-03 required code-owner review needs a second reviewer account (CODEOWNERS landed in #969); WSL install blocked by firmware virtualization (BIOS change and reboot, Matt action); Chrome native-host bridge needs Matt to relaunch Chrome (agents never restart the browser); merchant feed hosting for tannery-merchant-feed.tsv (claude-scripts #31) is BLOCKED on Matt.
 14. Backlog from the 2026-10-07 queue: extend hooks/no-polling.mjs to deny backgrounded whole-filesystem searches in lanes; tests/test_test_hygiene.py lookback is hardcoded 19 lines while the doc says 20; pyflakes G15 ratchet has about 50 remaining findings; confirm AesopMergeQueue Scheduled Task retirement (Disabled since 2026-09-11, per #871) with a cleanup PR.
 15. Worktree sweep and scripts checkout: aesop-wt-credname (17 local-only commits, keep); aesop-wt-sysmodules (clean at 7ee4aa7c, remove); aesop-wt-1011 and aesop-wt-escape-993 (empty dirs, rmdir when free); ~/scripts live checkout is on feat/shorts-prep-montage (claude-scripts #14 OPEN for Matt's review, 37 commits; merged scripts run from scripts-wt-master, detached origin/master). Remove only clean and merged; no deletes otherwise.
+16. 2026-10-18T02:10Z [intent-decay rule] Before the next keyrun checkpoint, run the section 10 plan-vs-output check (LANE-CONTRACT.md section 10); a DRIFT verdict blocks new keyrun feature lanes until STATE.md records the re-plan or re-scope.
 
 ## STANDING RULES LEARNED
 
