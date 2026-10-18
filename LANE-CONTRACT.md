@@ -223,6 +223,7 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   code changes, re-push the branch (a plain push, or a local merge of the default branch per section 3 when the PR is BEHIND). Never ask
   GitHub to update a PR branch server-side: that creates a merge head no box ran the gates on, so no receipt can exist for it.
   A `gh workflow run` dispatch creates a separate check suite that branch protection ignores.
+  A Mode 1 PR that goes DIRTY because a sibling landed first is repaired by the merge in section 8c, never by the orchestrator editing the branch.
 - **Fully machine-generated paths (`tools/INDEX.md`, `state/ledger/*.jsonl`, etc. — `tools/generated_paths.py::REGISTRY`)
   are push-blocked by `hooks/pre-push-policy.sh check_generated_paths()`.** The only override is
   `AESOP_ALLOW_GENERATED=1` — the DESIGNED writer path for a generator/regeneration push (a seated session re-running
@@ -320,6 +321,22 @@ Lead the report with the ACCEPTANCE observable (section 8a), before the check li
    background push strands the lane (memory: background-push-strands-lanes).
 5. When the merge step is in scope, LANDED extends to MERGED only with the `pr_merged_check` line pasted
    verbatim.
+
+## 8c. Shared append files
+1. **Evidence.** Between 2026-10-18 14:00Z and 16:20Z, five keyrun PRs (#120, #121, #122, #124, #128) each
+   needed a lane-run `git merge origin/main` solely because every lane appends one line to BUILDLOG.md and one
+   row to the end of game/CLAUDE.md. A sibling that merged first made each PR DIRTY, and GitHub runs no checks
+   on a DIRTY PR.
+2. **Rule.** A file that every lane in a repo appends to (BUILDLOG.md, a domain CLAUDE.md row table, an index)
+   is a SHARED APPEND FILE. A lane touching one must, immediately before its push, run `git fetch origin <default>`
+   and `git merge origin/<default>` inside its worktree (`<default>` resolved per section 4). On a conflict in a
+   shared append file, keep BOTH sides: main's lines first, the lane's line last. Then re-run
+   `python ~/scripts/secret_scan.py --range origin/<default>..HEAD` and push. Appends go at the END of the file,
+   never inserted mid-file.
+3. **DIRTY after a sibling lands.** If `gh pr view` shows mergeStateStatus DIRTY after a sibling lands, the lane
+   (or a resume of it) repeats the merge in item 2. The orchestrator never edits the branch.
+4. **Not in force (PLAN item).** The durable fix is for the lane to put its BUILDLOG line and CLAUDE.md row in the
+   PR body, and for the orchestrator to append them on land. Until that is built, item 2 is the rule.
 
 ## 9a. Index-first reading (knowledge tree)
 1. Before any grep/rg/find over a brain repo (`~/.claude`, `~/scripts`, `~/conductor3`) or any repo with a
