@@ -200,18 +200,24 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   soften it into "mostly done".
 
 ## 6. Boundaries
-- **Merge authority: lanes never merge by hand, never with `--admin`, and never by hand-resolving branch protection.**
-  Exactly two merge modes are sanctioned. The repo selects the mode; the lane does not choose.
-  - **Mode 1 — repos WITH CI and branch protection (aesop, keyrun).** The lane pushes, opens the PR, and ARMS native
-    auto-merge pinned to the tested head: `gh pr merge <N> --auto --squash --match-head-commit <full head sha>`.
-    GitHub performs the merge once the required checks pass. The lane's job ends when auto-merge is armed. The
-    orchestrator verifies `state == MERGED` afterward; it does not poll or babysit the merge.
-  - **Mode 2 — brain repos WITHOUT CI (claude-config, claude-scripts, conductor3).** There is no required check to wait
-    on, so the lane performs the merge itself after its worktree test run: `gh pr merge <N> --repo <o/r> --squash --match-head-commit <full head sha>`.
-    The pin guarantees the merged commit is the one that was tested. The orchestrator re-verifies with
-    `python ~/scripts/pr_merged_check.py --repo <o/r> --pr <N>`.
-  - In both modes `--admin` is forbidden, `--auto` is used only in a Mode 1 repo, and no branch or worktree is deleted
-    until `pr_merged_check.py` reports MERGED.
+- **Merge authority: a lane never runs a merge that completes immediately.** No bare `gh pr merge`, never `--admin`,
+  and never hand-resolving branch protection. The repo selects the landing mode; the lane does not choose it.
+  - **Mode 1 - repos WITH required CI checks (aesop, keyrun).** The lane pushes, opens the PR, and ARMS native
+    auto-merge once at PR open, pinned to the tested head:
+    `gh pr merge <N> --repo <o/r> --squash --auto --match-head-commit <full head sha>`. The lane takes one
+    foreground `gh pr checks <N>` snapshot (exit 8 = pending) and stops. The merge actor is GitHub: it merges once
+    the required checks pass. The orchestrator verifies `state == MERGED` with
+    `gh pr view <N> --json state,mergeCommit`; it does not poll or babysit the merge.
+  - **Mode 2 - repos WITHOUT CI (claude-config, claude-scripts, conductor3, psinasty).** There is no required check
+    to arm against, so the lane stops at PR open. It runs its gates in its worktree, pastes the literal output, and
+    reports the PR number and the full head sha. The orchestrator lands it with one pinned
+    `gh pr merge <N> --repo <o/r> --squash --match-head-commit <sha>` after reading the pasted gate output (tests,
+    secret scan), then re-verifies with `python ~/scripts/pr_merged_check.py --repo <o/r> --pr <N>`.
+  - **The aesop merge tool.** `tools/auto_merge.py <n>` remains the aesop merge tool when the orchestrator drives a
+    merge itself. A lane never runs it.
+  - A non-null `autoMergeRequest` on a PR proves nothing about its state. Bind `state` and trust only `MERGED`.
+    In both modes `--admin` is forbidden, `--auto` is used only in a Mode 1 repo, and no branch or worktree is
+    deleted until MERGED is confirmed.
 - **Mode 1 arming, in detail.** A PR must never wait for a session daemon or manual merge to complete. Native
   auto-merge is the merge actor in Mode 1; AesopMergeQueue is disabled. To re-run required checks on an armed PR without
   code changes, re-push the branch (a plain push, or a local merge of the default branch per section 3 when the PR is BEHIND). Never ask
