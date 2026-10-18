@@ -641,14 +641,18 @@ class TestScopedRequiredShards(unittest.TestCase):
         self._head_with({"tests/test_c.py": "c2\n"})
         self.assertEqual(self._verify(self._passing("py-shard-2")), (0, []))
 
-    def test_docs_only_scoped_receipt_requires_all_four_shards(self):
+    def test_docs_only_scoped_receipt_with_zero_py_parts_is_valid(self):
+        # Deliberate rule change (PR fix/verify-receipt-docs-only-required): a docs-only diff has an
+        # EMPTY owning set, which requires no py shards. The emitter's scoped receipt carries zero
+        # py-shard parts there, so it must verify VALID. Only owning-is-None (unowned tools/) fails closed.
         self._head_with({"docs/guide.md": "guide\n"})
-        code, reasons = self._verify(self._passing("py-shard-0", "py-shard-1"))
-        self.assertEqual(code, 1, reasons)
-        for name in ("py-shard-2", "py-shard-3"):
-            self.assertIn("required part missing: " + name, reasons)
+        non_py = [{"name": n, "exit_code": 0, "test_count": 0, "duration_s": 0.1}
+                  for n in ("lint", "docs-gate")]
+        self.assertEqual(self._verify(non_py), (0, []))
 
     def test_docs_only_scoped_receipt_with_all_four_passing_is_valid(self):
+        # Rule changed deliberately (PR fix/verify-receipt-docs-only-required): an empty owning set
+        # requires no py shards; four passing shards are still harmless extras, so this stays valid.
         self._head_with({"docs/guide.md": "guide\n"})
         self.assertEqual(self._verify(self._passing("py-shard-0", "py-shard-1", "py-shard-2", "py-shard-3")),
                          (0, []))
