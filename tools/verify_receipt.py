@@ -132,6 +132,46 @@ def _signature_ok(canonical, sig, pubkey_path, hmac_secret, keyring=None):
     return rc.verify_signature(canonical, sig, pubkey_path=pubkey_path, hmac_secret=hmac_secret)
 
 
+def _receipt_changed_files(repo, receipt):
+    """Files changed from the receipt's base to its head, or None when git cannot say."""
+    code, out, _err = _git(repo, "diff", "--name-only", receipt["base_sha"] + ".." + receipt["head_sha"])
+    if code != 0:
+        return None
+    return [f.strip() for f in out.splitlines() if f.strip()]
+
+
+def scoped_required_shards(repo, receipt):
+    """The python shards a SCOPED receipt must carry, recomputed from its own changed files with
+    the emitter's shard assignment (emit_receipt._find_owning_shards over the checkout's shard map).
+
+    Fail closed to EVERY shard when the answer is unknown or empty: an underivable shard map, an
+    underivable change set, an unowned tools/ change (_find_owning_shards -> None), or an empty
+    owning set (docs-only: an empty scope would pass with zero Python tests run)."""
+    try:
+        shard_map = emit._build_shard_map(sorted(emit._PY_SHARDS), timing=emit._load_ci_timing(repo), repo=repo)
+    except Exception:  # noqa: BLE001 -- an underivable map is fail-closed, never a crash
+        shard_map = None
+    changed = _receipt_changed_files(repo, receipt)
+    owning = None
+    if changed is not None and shard_map is not None:
+        owning = emit._find_owning_shards(changed, shard_map)
+    if not owning:
+        return sorted(rc.DEFAULT_REQUIRED_PARTS)
+    return sorted(owning)
+
+
+def effective_required(repo, receipt, required):
+    """Required part names for this receipt. A full-profile receipt keeps the caller's list. A scoped
+    receipt (profile "scoped", or absent for legacy receipts, or any unknown value) has its shard
+    requirement RECOMPUTED from its changed files: the recomputed shards replace the caller's shard
+    names, and any non-shard names the caller asked for are kept."""
+    if receipt.get("profile") == "full":
+        return list(required)
+    shards = scoped_required_shards(repo, receipt)
+    extra = [n for n in required if n not in emit._PY_SHARDS and n not in shards]
+    return shards + extra
+
+
 def verify(envelope, repo, head, main_ref, max_behind, required, pubkey_path, hmac_secret,
            keyring=None, allow_no_required=False):
     """Return (exit_code, reasons). 0 valid / 1 invalid / 2 cannot evaluate.
@@ -176,6 +216,7 @@ def verify(envelope, repo, head, main_ref, max_behind, required, pubkey_path, hm
             if behind > max_behind:
                 reasons.append("base_sha: %d commits behind %s (max %d) -- stale receipt" % (behind, main_ref, max_behind))
 
+        required = effective_required(repo, receipt, required)
         by_name = {}
         for p in receipt["parts"]:
             if isinstance(p, dict) and isinstance(p.get("name"), str):

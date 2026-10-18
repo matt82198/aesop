@@ -80,7 +80,10 @@ class VerifyBase(unittest.TestCase):
         self.tmp.cleanup()
 
     def envelope(self, parts=None, **overrides):
-        receipt = emit.build_receipt(self.repo, parts if parts is not None else _good_parts(), skipped=[], slug="o/r")
+        # profile="full": these fixtures test signature/tree/freshness/parts, not shard scoping
+        # (the scoped recomputation has its own class, TestScopedRequiredShards).
+        receipt = emit.build_receipt(self.repo, parts if parts is not None else _good_parts(), skipped=[],
+                                     slug="o/r", profile="full")
         receipt.update(overrides)
         sig = rc.sign(rc.canonical_json(receipt), scheme="hmac-sha256", hmac_secret=_secret())
         return {"receipt": receipt, "sig": sig}
@@ -560,7 +563,8 @@ class TestDefaultMainRefResolvesLikeEmitter(unittest.TestCase):
         self.tmp.cleanup()
 
     def _write_receipt(self, main_ref):
-        receipt = emit.build_receipt(self.repo, _good_parts(), skipped=[], slug="o/r", main_ref=main_ref)
+        receipt = emit.build_receipt(self.repo, _good_parts(), skipped=[], slug="o/r", main_ref=main_ref,
+                                     profile="full")
         sig = rc.sign(rc.canonical_json(receipt), scheme="hmac-sha256", hmac_secret=_secret())
         self.receipt_path.write_text(json.dumps({"receipt": receipt, "sig": sig}), encoding="utf-8")
 
@@ -576,6 +580,93 @@ class TestDefaultMainRefResolvesLikeEmitter(unittest.TestCase):
     def test_explicit_unresolvable_main_ref_stays_fail_closed(self):
         self._write_receipt("origin/master")
         self.assertEqual(self._verify("--main-ref", "origin/nope"), 2)
+
+
+def _commit_files(repo, files, message):
+    """Commit each `name -> text` (nested paths allowed) and return the new HEAD sha."""
+    for name, text in files.items():
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        _git(repo, "add", name)
+    _git(repo, "commit", "-q", "-m", message)
+    return _git(repo, "rev-parse", "HEAD")
+
+
+class TestScopedRequiredShards(unittest.TestCase):
+    """The scoped profile recomputes its required shards from the receipt's own changed files
+    (emit_receipt._find_owning_shards over base_sha..head_sha) and fails closed: an owning set
+    that is None (unowned tools/ change) or empty (docs-only) requires all four shards.
+    The tests are on real repos: the shard map is derived by the verifier from the checkout's
+    tracked tests/test_*.py, which round-robins sorted stems test_a..test_d onto py-shard-0..3.
+    The caller's --required list (py-shard-0,py-shard-1 here) must no longer decide scope."""
+
+    CALLER_REQUIRED = ["py-shard-0", "py-shard-1"]
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name) / "repo"
+        self.repo.mkdir()
+        _git(self.repo, "init", "-q", "-b", "main")
+        _commit_files(self.repo, {"tests/test_a.py": "a\n", "tests/test_b.py": "b\n",
+                                  "tests/test_c.py": "c\n", "tests/test_d.py": "d\n"}, "m1")
+        _commit_files(self.repo, {"m2.txt": "m2\n"}, "m2")
+        _git(self.repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+        _git(self.repo, "checkout", "-q", "-b", "feat")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _head_with(self, files):
+        return _commit_files(self.repo, files, "feat change")
+
+    @staticmethod
+    def _passing(*names):
+        return [{"name": n, "exit_code": 0, "test_count": 3, "duration_s": 1.0} for n in names]
+
+    def _verify(self, parts, profile="scoped"):
+        receipt = emit.build_receipt(self.repo, parts, skipped=[], slug="o/r", profile=profile)
+        sig = rc.sign(rc.canonical_json(receipt), scheme="hmac-sha256", hmac_secret=_secret())
+        return vr.verify({"receipt": receipt, "sig": sig}, repo=self.repo, head=receipt["head_sha"],
+                         main_ref="origin/main", max_behind=50, required=self.CALLER_REQUIRED,
+                         pubkey_path=None, hmac_secret=_secret())
+
+    def test_scoped_receipt_omitting_owning_shard_is_invalid(self):
+        self._head_with({"tests/test_c.py": "c2\n"})  # owned by py-shard-2
+        code, reasons = self._verify(self._passing("py-shard-0", "py-shard-1"))
+        self.assertEqual(code, 1, reasons)
+        self.assertIn("required part missing: py-shard-2", reasons)
+
+    def test_scoped_receipt_with_owning_shard_passing_is_valid(self):
+        self._head_with({"tests/test_c.py": "c2\n"})
+        self.assertEqual(self._verify(self._passing("py-shard-2")), (0, []))
+
+    def test_docs_only_scoped_receipt_requires_all_four_shards(self):
+        self._head_with({"docs/guide.md": "guide\n"})
+        code, reasons = self._verify(self._passing("py-shard-0", "py-shard-1"))
+        self.assertEqual(code, 1, reasons)
+        for name in ("py-shard-2", "py-shard-3"):
+            self.assertIn("required part missing: " + name, reasons)
+
+    def test_docs_only_scoped_receipt_with_all_four_passing_is_valid(self):
+        self._head_with({"docs/guide.md": "guide\n"})
+        self.assertEqual(self._verify(self._passing("py-shard-0", "py-shard-1", "py-shard-2", "py-shard-3")),
+                         (0, []))
+
+    def test_unowned_tools_change_fails_closed_to_all_four(self):
+        self._head_with({"tools/brand_new.py": "x = 1\n"})  # _find_owning_shards -> None
+        code, reasons = self._verify(self._passing("py-shard-0", "py-shard-1"))
+        self.assertEqual(code, 1, reasons)
+        self.assertIn("required part missing: py-shard-3", reasons)
+
+    def test_unowned_tools_change_with_all_four_passing_is_valid(self):
+        self._head_with({"tools/brand_new.py": "x = 1\n"})
+        self.assertEqual(self._verify(self._passing("py-shard-0", "py-shard-1", "py-shard-2", "py-shard-3")),
+                         (0, []))
+
+    def test_full_profile_keeps_the_caller_required_list(self):
+        self._head_with({"docs/guide.md": "guide\n"})
+        self.assertEqual(self._verify(self._passing("py-shard-0", "py-shard-1"), profile="full"), (0, []))
 
 
 if __name__ == "__main__":
