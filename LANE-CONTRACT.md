@@ -297,8 +297,9 @@ Lead the report with the ACCEPTANCE observable (section 8a), before the check li
 2. "Code written, not committed", "ready to commit" and "tests green locally" are not terminal states.
    A hand-back in any of those states is a contract violation.
 3. A hand-back that lists a changed file must carry a PR url, or BLOCKED-LANDING with the blocker. The
-   orchestrator treats any other hand-back as unlanded and re-dispatches the SAME lane by SendMessage,
-   not a new finisher lane.
+   orchestrator treats any other hand-back as unlanded: the lane is killed per the header rule and a
+   fresh lane is dispatched with the SAME brief plus the unlanded branch name, never a "finisher" lane
+   with a different scope.
 4. The lane runs its push in its own foreground Bash call (timeout 600000), never in the background. A
    background push strands the lane (memory: background-push-strands-lanes).
 5. When the merge step is in scope, LANDED extends to MERGED only with the `pr_merged_check` line pasted
