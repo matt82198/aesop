@@ -5,6 +5,14 @@
 **Current Version:** v0.9.2 released 2026-10-15 (tag a29208b5, publish run 38679550874, GitHub release 2026-10-15T04:04:32Z, npm @matt82198/aesop 0.9.2 visible 04:09:43Z). Previous: v0.9.1 (tag 5026195d, cut 2026-10-09; GitHub release 2026-10-10; npm @matt82198/aesop 0.9.1). v0.9.0 (2026-10-07).
 
 ## ACTIVE: RELEASE 0.10.0 + SELF-CLEAR (rotated 2026-10-15 16:50Z; read THIS block first; full historical ledger in BUILDLOG.md)
+- 2026-10-18 00:17Z BOUND #1162 MERGED cd4511db, #1163 MERGED d5a0f874; receipt-scoped lane + checkpoint lane dispatched; #14 merge lane resumed with written gate confirmation.
+- 2026-10-18 00:16Z #14 trimmed head f56379d -> merge lane live; then ~/scripts -> master. Backlog: claude-scripts master 4F/5E pre-existing tests.
+- 2026-10-18 00:12Z BOUND claude-config #62 MERGED 7d03edd; ~/.claude ff 7d03edd 0 0, suite 319/319; verify dispatch-ledger.jsonl written after next dispatch; #64 close decision -> Matt.
+- 2026-10-18 00:11Z #62 proof head d20b906 319/319 -> merge lane live; #14 trim lane live; #1163 verify-receipt FAIL (non-required, docs-only).
+- 2026-10-18 00:09Z BOUND claude-scripts #10 MERGED ab06a19; ~/scripts primary on feat/shorts-prep-montage 10/41 (deploy-by-merge pattern, stale since #71) -> land #14 then move to master.
+- 2026-10-18 00:07Z BOUND portfolio #112 MERGED adee81b, live site shows /in/matthew-culliton (deploy 39081389661 success); #1162 OPEN 2b88baa7 armed; #1163 OPEN 4a074e46 pending.
+- 2026-10-18 00:20Z BOUND aesop #1163 checkpoint OPEN 4a074e46 auto-merge armed; lanes live: keyrun telegraph labels (Opus), claude-config #62 proof, claude-scripts #10 merge, portfolio LinkedIn fix, aesop verify-receipt push+PR.
+- 2026-10-18 00:12Z BOUND keyrun #104 MERGED b54eb40 (play checkout b54eb40); claude-config #89 MERGED b50d070 (brain at b50d070, 308 tests); aesop #1161 MERGED 4654ef9; verify-receipt push+PR lane live; checkpoint-0010 re-land lane live.
 - 2026-10-18 00:05Z BOUND claude-config #89 claim-binding PR-scope fix OPEN fb38d3af, merge lane live; aesop verify-receipt branch on origin 8c7691b6, PR lane resumed; keyrun #104 9d25c35 checks pending.
 - 2026-10-17 23:58Z BOUND keyrun #103 MERGED 99f39a2, play checkout at 99f39a2; #104 checkpoint OPEN da61277c (sync+merge lane live); brain: claim-binding PR-scope fix lane live; #62 fix + #10 rebase lanes NEXT; #64 CLOSE candidate; #14 trim; aesop verify-receipt lane paused mid-run (relaunch split); #1161 OPEN.
 - 2026-10-17 23:53Z BOUND keyrun #102 MERGED 2c8f8ea (tank pull-1 survival); #103 status-net OPEN head 0503fb7b, sync+merge lane live; aesop verify-receipt-main-ref follow-up lane live (tools/CLAUDE.md in scope); #1161 OPEN auto-merge armed.
