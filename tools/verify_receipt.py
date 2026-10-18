@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Offline verifier for a signed local receipt (the hosted side of the receipt gate).
-INDEX: Receipt-gate increment 2 -- offline verifier used by `.github/workflows/verify-receipt.yml`: input is a receipt envelope (`--receipt FILE|-`, as posted by `emit_receipt.py`) plus the head sha of ITS OWN checkout (`--head`, default HEAD); it RECOMPUTES `git rev-parse <head>^{tree}` and compares to the receipt's tree_hash (never trusts the lane's number), verifies the signature (Ed25519 against the committed `tools/receipt_pubkey.pub`, or HMAC-SHA256 against `$AESOP_RECEIPT_HMAC_SECRET`), validates `schema_version` (reject if >1; legacy receipts without it still verify for backward compatibility), checks freshness (receipt.base_sha must be an ancestor of `--main-ref` (origin/main) and at most `--max-behind` (50) commits behind its tip), and requires every REQUIRED part (`--required a,b` ; default py-shard-0..3) present with exit_code 0. Exit 0 = valid, 1 = INVALID (any check failed), 2 = cannot evaluate (unreadable/malformed envelope, no key material for the scheme, git failure) -- fail-closed, never exit 0 on doubt. Also exposes `extract_receipt_from_check_runs()` / `extract_receipt_from_comments()`, and a `--fetch-for-head SHA --repo-slug OWNER/REPO` CLI mode (`fetch_receipt_for_head()`) that the Action's fetch step uses to look up a receipt via `gh api`: FAIL-CLOSED on a missing receipt: no receipt found (or a lookup problem: gh api error, malformed payload) prints `MISSING receipt: ...` and exits 1; a missing `--receipt` file or a payload with no receipt exits 1 the same way. Exit 2 stays for present-but-unevaluable. Lookup never raises. stdlib-only; `cryptography` optional (needed for ed25519 receipts).
+INDEX: Receipt-gate increment 2 -- offline verifier used by `.github/workflows/verify-receipt.yml`: input is a receipt envelope (`--receipt FILE|-`, as posted by `emit_receipt.py`) plus the head sha of ITS OWN checkout (`--head`, default HEAD); it RECOMPUTES `git rev-parse <head>^{tree}` and compares to the receipt's tree_hash (never trusts the lane's number), verifies the signature (Ed25519 against the committed `tools/receipt_pubkey.pub`, or HMAC-SHA256 against `$AESOP_RECEIPT_HMAC_SECRET`), validates `schema_version` (reject if >1; legacy receipts without it still verify for backward compatibility), checks freshness (receipt.base_sha must be an ancestor of `--main-ref` (default: resolved trunk via emit_receipt.resolve_trunk) and at most `--max-behind` (50) commits behind its tip), and requires every REQUIRED part (`--required a,b` ; default py-shard-0..3) present with exit_code 0. Exit 0 = valid, 1 = INVALID (any check failed), 2 = cannot evaluate (unreadable/malformed envelope, no key material for the scheme, git failure) -- fail-closed, never exit 0 on doubt. Also exposes `extract_receipt_from_check_runs()` / `extract_receipt_from_comments()`, and a `--fetch-for-head SHA --repo-slug OWNER/REPO` CLI mode (`fetch_receipt_for_head()`) that the Action's fetch step uses to look up a receipt via `gh api`: FAIL-CLOSED on a missing receipt: no receipt found (or a lookup problem: gh api error, malformed payload) prints `MISSING receipt: ...` and exits 1; a missing `--receipt` file or a payload with no receipt exits 1 the same way. Exit 2 stays for present-but-unevaluable. Lookup never raises. stdlib-only; `cryptography` optional (needed for ed25519 receipts).
 
 What a PASS proves: the holder of the signing key ran the named parts on a tree whose
 hash equals the one in this checkout, those parts exited 0, and the run was against a
@@ -22,6 +22,7 @@ _TOOLS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_TOOLS_DIR))
 
 import receipt_common as rc  # noqa: E402  (sys.path adjusted above)
+import emit_receipt as emit  # noqa: E402  (shared trunk resolver: the same default the emitter uses)
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _FENCE_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.DOTALL)
@@ -304,7 +305,10 @@ def build_parser():
     p.add_argument("--receipt", default=None, help="envelope JSON file, or - for stdin")
     p.add_argument("--repo", default=".", help="checkout to verify against (default: cwd)")
     p.add_argument("--head", default="HEAD")
-    p.add_argument("--main-ref", default="origin/main")
+    p.add_argument("--main-ref", default=None,
+                   help="trunk ref for the freshness check (default: resolved by emit_receipt.resolve_trunk, "
+                        "the same resolver the emitter uses: origin/HEAD, origin/main, origin/master, else HEAD; "
+                        "an explicit value that does not resolve is refused, never substituted)")
     p.add_argument("--max-behind", type=int, default=50)
     p.add_argument("--required", default=",".join(rc.DEFAULT_REQUIRED_PARTS), help="comma-separated part names")
     p.add_argument("--pubkey", default=None, help="Ed25519 public key (default: <repo>/%s)" % rc.DEFAULT_PUBKEY_REL)
@@ -390,7 +394,9 @@ def main(argv=None, environ=None):
         return 2
     required = [n.strip() for n in args.required.split(",") if n.strip()]
     keyring = Path(args.keyring) if args.keyring else None
-    code, reasons = verify(envelope, repo=repo, head=args.head, main_ref=args.main_ref, max_behind=args.max_behind,
+    # An explicit --main-ref is used verbatim (unresolvable -> exit 2); only the default is resolved.
+    main_ref = args.main_ref if args.main_ref is not None else emit.resolve_trunk(repo)
+    code, reasons = verify(envelope, repo=repo, head=args.head, main_ref=main_ref, max_behind=args.max_behind,
                            required=required, pubkey_path=pubkey, hmac_secret=environ.get(rc.HMAC_ENV),
                            keyring=keyring, allow_no_required=args.allow_no_required_parts)
     label = {0: "VALID", 1: "INVALID", 2: "CANNOT EVALUATE"}[code]
