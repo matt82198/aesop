@@ -75,15 +75,15 @@ expensive way during aesop development. Each line exists because a lane failed w
   carry the same stale number with nothing for git to conflict on, and it stays silently wrong.
 - **Resolving a merge conflict means keeping BOTH intents, never taking one side's whole file.**
   Taking "theirs" (or "ours") wholesale on a conflicted file silently deletes the other side's
-  additions with nothing for git to flag (PR #745: a conflict resolution took origin/main's whole
+  additions with nothing for git to flag (PR #745: a conflict resolution took the default branch's whole
   `tools/merge_queue.py`, dropping the PR's own `build_bisect_batches`/`parse_bisect_lineage`/
   `bisect_is_exhausted`, and CI stayed green because only the PR's own tests exercised them). After
   resolving any merge conflict, run `python tools/pr_symbol_survival_check.py --base <base> --head
   <head>` (Guardrail G13) before pushing.
-- **Lanes cannot force-push (hook-blocked).** Recover a dirty PR with `git merge origin/main` into
+- **Lanes cannot force-push (hook-blocked).** Recover a dirty PR with `git merge origin/HEAD` (the default branch, see section 4) into
   your branch, keeping BOTH intents (never `checkout --ours/--theirs` on code or docs), regenerate
   registered generated artifacts (`python tools/gen_tool_index.py --regenerate`), run `python
-  tools/pr_symbol_survival_check.py --base origin/main --head HEAD` (0 MISSING), then a plain push.
+  tools/pr_symbol_survival_check.py --base origin/HEAD --head HEAD` (0 MISSING), then a plain push.
 
 - **A scalar's COUNTING RULE is part of the scalar.** Re-measuring is not enough if you assume what
   is being counted. A gate counting "Python test files executed" has a rule; a leg adding a `.mjs`
@@ -104,7 +104,8 @@ expensive way during aesop development. Each line exists because a lane failed w
 
 ## 4. This repo's environment (do not re-derive, do not conclude "missing")
 - **Worktrees: sibling only, never the primary tree.** Always create a worktree before writing code:
-  `git -C $AESOP_ROOT fetch -q origin && git -C $AESOP_ROOT worktree add $AESOP_ROOT-wt-<name> -b <branch> origin/main`.
+  `git -C $AESOP_ROOT fetch -q origin && git -C $AESOP_ROOT worktree add $AESOP_ROOT-wt-<name> -b <branch> origin/HEAD`.
+  "origin/HEAD" here means the repo's default branch (origin/HEAD; main for aesop/keyrun/psinasty, master for the brain repos). Resolve it with `git symbolic-ref refs/remotes/origin/HEAD`; never hard-code the branch name.
   Exit the primary tree unchanged. Check `git branch --show-current` immediately after creating the
   worktree; if empty (detached HEAD), create a branch first.
 - **Never git stash.** The stash is shared across worktrees; concurrent agents cross-contaminate WIP.
@@ -132,7 +133,7 @@ expensive way during aesop development. Each line exists because a lane failed w
 
 Five CI failures this week came from checks lanes could run locally. This ordered checklist prevents them:
 
-1. **Footprint** — `git diff --shortstat origin/main...HEAD` and `git log --oneline origin/main..HEAD`. STOP if diff is unexpectedly large or any commit subject reads like a test fixture ("Initial", "fixture", "base", "seed", "baseline").
+1. **Footprint** — `git diff --shortstat origin/HEAD...HEAD` and `git log --oneline origin/HEAD..HEAD` (origin/HEAD = the repo's default branch). STOP if diff is unexpectedly large or any commit subject reads like a test fixture ("Initial", "fixture", "base", "seed", "baseline").
 2. **Pyflakes** — `python tools/pyflakes_gate.py` (paste literal output).
 3. **Test hygiene** — `python -m unittest tests.test_no_bare_test_functions tests.test_test_hygiene` (paste output).
 4. **Metadata** — `python tools/claudemd_lint.py --root .` and `python tools/claudemd_sync_gate.py --check` (paste output).
@@ -199,12 +200,21 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   soften it into "mostly done".
 
 ## 6. Boundaries
-- **Lanes open/update PRs and push branches. They NEVER merge.** Only the orchestrator (via `tools/auto_merge.py`)
-  merges. A lane's job ends when the branch is pushed and a PR is open.
-- **Merge automation: arm native auto-merge at PR open time.** After `gh pr create`, immediately run `gh pr merge <N> --auto --squash`
-  to arm GitHub's native auto-merge. Never use `--admin`. A PR must never wait for a session daemon or manual merge to complete.
-  Native auto-merge is the merge actor; AesopMergeQueue is disabled. To re-run required checks on an armed PR without code
-  changes, re-push the branch (a plain push, or a local merge of origin/main per section 3 when the PR is BEHIND). Never ask
+- **Merge authority: lanes never merge by hand, never with `--admin`, and never by hand-resolving branch protection.**
+  Exactly two merge modes are sanctioned. The repo selects the mode; the lane does not choose.
+  - **Mode 1 — repos WITH CI and branch protection (aesop, keyrun).** The lane pushes, opens the PR, and ARMS native
+    auto-merge pinned to the tested head: `gh pr merge <N> --auto --squash --match-head-commit <full head sha>`.
+    GitHub performs the merge once the required checks pass. The lane's job ends when auto-merge is armed. The
+    orchestrator verifies `state == MERGED` afterward; it does not poll or babysit the merge.
+  - **Mode 2 — brain repos WITHOUT CI (claude-config, claude-scripts, conductor3).** There is no required check to wait
+    on, so the lane performs the merge itself after its worktree test run: `gh pr merge <N> --repo <o/r> --squash --match-head-commit <full head sha>`.
+    The pin guarantees the merged commit is the one that was tested. The orchestrator re-verifies with
+    `python ~/scripts/pr_merged_check.py --repo <o/r> --pr <N>`.
+  - In both modes `--admin` is forbidden, `--auto` is used only in a Mode 1 repo, and no branch or worktree is deleted
+    until `pr_merged_check.py` reports MERGED.
+- **Mode 1 arming, in detail.** A PR must never wait for a session daemon or manual merge to complete. Native
+  auto-merge is the merge actor in Mode 1; AesopMergeQueue is disabled. To re-run required checks on an armed PR without
+  code changes, re-push the branch (a plain push, or a local merge of the default branch per section 3 when the PR is BEHIND). Never ask
   GitHub to update a PR branch server-side: that creates a merge head no box ran the gates on, so no receipt can exist for it.
   A `gh workflow run` dispatch creates a separate check suite that branch protection ignores.
 - **Fully machine-generated paths (`tools/INDEX.md`, `state/ledger/*.jsonl`, etc. — `tools/generated_paths.py::REGISTRY`)
@@ -225,10 +235,10 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
 - **Before pushing, run the shard for your test file.** Run `python tools/ci_shard_runner.py <n> 4` for the shard that owns your
   test file (see tests/CLAUDE.md for shard assignment). CI is confirmation of local verification, not discovery of breakage. Paste
   the shard output to your report: it proves your changes work before they hit main.
-- **Merge = `python tools/auto_merge.py <n>` with the PR number. Never bare.** The primary tree is the merge tool's working tree.
+- **Merge paths.** A lane merges only through the Mode 1 or Mode 2 commands above. `python tools/auto_merge.py <n>` (never bare) is not a lane merge path; the primary tree is that tool's working tree and a lane never runs it.
 - Generated whole-tree artifacts (`tools/generated_paths.py::GENERATED_PATHS`) self-heal post-merge via `.github/workflows/regen-on-main.yml` + `tools/regen_all.py`; do not hand-edit them.
 - **Domain docs are ALWAYS in scope.** The one-line entry in the changed domain's CLAUDE.md (and `tools/INDEX.md` regenerated when a `tools/` script is added) is ALWAYS in scope for any lane that changes code in that domain. It is required by the pre-push `claudemd_sync_gate`, it is written in the same PR, it is not an out-of-scope edit, and it is never a reason to hand back BLOCKED.
-- **Repo gates a lane must satisfy on push** (run each, paste output; fix, never bypass): `claudemd_sync_gate.py --check` (edit the domain CLAUDE.md); `encoding_lint.py --check` (ASCII ratchet `encoding-ascii-baseline.json`, shrink-only); `gen_tool_index.py --regenerate && git add tools/INDEX.md`; `import_resolution_check.py --staged`; `secret_scan.py --staged`; `sibling_import_check.py --check` (guard the import); `verify_test_suite_count.py --check`; `pyflakes_gate.py --check` (burn-down only: `--update-baseline --baseline .pyflakes-baseline.json`); `subprocess_guard.py --check` (burn-down only: `--update-baseline --baseline .subprocess-guard-baseline.json`); G13 `pr_symbol_survival_check.py --base origin/main --head HEAD` (0 MISSING). A ratchet is never raised with `--update-baseline`.
+- **Repo gates a lane must satisfy on push** (run each, paste output; fix, never bypass): `claudemd_sync_gate.py --check` (edit the domain CLAUDE.md); `encoding_lint.py --check` (ASCII ratchet `encoding-ascii-baseline.json`, shrink-only); `gen_tool_index.py --regenerate && git add tools/INDEX.md`; `import_resolution_check.py --staged`; `secret_scan.py --staged`; `sibling_import_check.py --check` (guard the import); `verify_test_suite_count.py --check`; `pyflakes_gate.py --check` (burn-down only: `--update-baseline --baseline .pyflakes-baseline.json`); `subprocess_guard.py --check` (burn-down only: `--update-baseline --baseline .subprocess-guard-baseline.json`); G13 `pr_symbol_survival_check.py --base origin/HEAD --head HEAD` (0 MISSING; origin/HEAD = the repo's default branch, see section 4). A ratchet is never raised with `--update-baseline`.
 - Stay inside your declared files. If the chain leaves them, **STOP and hand off** — a clean hand-off
   beats a collision and is a complete result, not a failure.
 - **REARCH sections 69+ are orchestrator-reserved.** Claim an unreserved number AT WRITE TIME and
