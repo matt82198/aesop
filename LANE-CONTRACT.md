@@ -279,6 +279,14 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
 ## 8. Report format
 Causal chain with `file:line` | gate output (literal) | the anti-vacuity run as literal output
 | gate counts | PR number | MERGED-state proof | worktree removed | **anything you refused to decide silently**.
+Lead the report with the ACCEPTANCE observable (section 8a), before the check list.
+
+## 8a. Acceptance (done-per-user, not done-per-CI)
+1. Every lane brief carries an ACCEPTANCE line: the user's verbatim ask plus the single observable the user will check (a rendered page, a screenshot, a run's output, a command's exit).
+2. The closing report leads with that observable shown (artifact path, URL + status, or pasted output), not with the check list.
+3. CI green, merged state and pr_merged_check are preconditions and are reported after the observable.
+4. A lane that cannot produce the observable reports BLOCKED-ACCEPTANCE with what it could prove, never "done".
+5. The orchestrator records the acceptance observable in STATE.md next to the PR number before calling the item complete.
 
 ## 9. Linux shape — cross-platform test gate
 - **Shell, workflow, and Node-test changes are proven on the Linux shape before push.**
