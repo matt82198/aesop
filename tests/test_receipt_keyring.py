@@ -150,7 +150,8 @@ class TestVerifyWithKeyring(unittest.TestCase):
 
     def _envelope(self, key_path):
         parts = [{"name": n, "exit_code": 0, "test_count": 5, "duration_s": 1.0} for n in REQUIRED]
-        receipt = emit.build_receipt(self.repo, parts, skipped=[], slug="o/r")
+        # profile="full": these fixtures test key trust, not shard scoping
+        receipt = emit.build_receipt(self.repo, parts, skipped=[], slug="o/r", profile="full")
         sig = rc.sign(rc.canonical_json(receipt), scheme="ed25519", private_key_path=key_path)
         return {"receipt": receipt, "sig": sig}
 

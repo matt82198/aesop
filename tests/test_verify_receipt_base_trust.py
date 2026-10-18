@@ -140,7 +140,8 @@ class TestBaseKeyringRejectsHeadOnlyKey(unittest.TestCase):
         self.head = _commit(self.repo, "f1")
         self.env_file = root / "receipt.json"
         parts = _good_parts()
-        receipt = emit.build_receipt(self.repo, parts, skipped=[], slug="o/r")
+        # profile="full": these fixtures test key trust and the empty-required refusal, not shard scoping
+        receipt = emit.build_receipt(self.repo, parts, skipped=[], slug="o/r", profile="full")
         sig = rc.sign(rc.canonical_json(receipt), scheme="ed25519", private_key_path=self.key_b)
         self.env_file.write_text(json.dumps({"receipt": receipt, "sig": sig}), encoding="utf-8")
 
@@ -195,7 +196,8 @@ class TestEmptyRequiredRefused(unittest.TestCase):
         self.head = _commit(self.repo, "f1")
         self.secret = _secret()
         self.env_file = Path(self.tmp.name) / "receipt.json"
-        receipt = emit.build_receipt(self.repo, _good_parts(), skipped=[], slug="o/r")
+        # profile="full": these fixtures test key trust and the empty-required refusal, not shard scoping
+        receipt = emit.build_receipt(self.repo, _good_parts(), skipped=[], slug="o/r", profile="full")
         sig = rc.sign(rc.canonical_json(receipt), scheme="hmac-sha256", hmac_secret=self.secret)
         self.env_file.write_text(json.dumps({"receipt": receipt, "sig": sig}), encoding="utf-8")
 
