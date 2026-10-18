@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-10-18
+
+
+
 ### Fixed
 
 - The local receipt emitter resolves the trunk the way the pre-push hook does (origin/HEAD, origin/main, origin/master, else HEAD on a fresh remote), so a bootstrap or master-trunk push no longer fails with "merge-base origin/main failed". Receipts record the ref used as `trunk_ref`, and a non-GitHub origin (local path or other host) skips the check-run POST with a WARN and records `posted.skipped`; a GitHub-side error still blocks.
@@ -17,6 +21,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 >- `aesop doctor` port check now probes the dashboard port the project configures (`PORT` env, then `aesop.config.json` `dashboard.port`, then 8770, the same resolution `aesop dash` uses) and labels the row with that port, instead of always probing a hardcoded 8770.
 - `verify_receipt` scoped profile recomputes its required shards from the receipt's changed files via `emit_receipt._find_owning_shards` and fails closed to all four shards when the owning set is unknown (None) or empty (docs-only), so a scoped receipt that omits an owning shard, or a docs-only scoped receipt, no longer verifies VALID; a full-profile receipt keeps the caller's `--required` list.
 - `verify_receipt` resolves its default `--main-ref` with the same trunk resolver the emitter uses (`emit_receipt.resolve_trunk`: origin/HEAD, origin/main, origin/master, else HEAD), instead of a hardcoded `origin/main`; an explicit `--main-ref` that does not resolve is still refused (exit 2).
+
+### Merged pull requests (since v0.10.1)
+
+- #1152 docs: service interaction map (how the aesop machinery actually connects)
+- #1153 guard: in-process HTTP timeout lint (resolver escape) + shard-2 flake fix
+- #1154 fix(doctor): port check honours the configured dashboard port
+- #1155 fix(pre-push): metrics gate and tag ranges scan the pushed refs, not HEAD
+- #1156 fix(tripwire): compact-on-stop job file is live-writer INFO, not pollution
+- #1157 fix(claudemd-lint): resolve --base-ref to the repo trunk, fail closed
+- #1158 fix(receipt): emit_receipt resolves the trunk like the pre-push hook; skip check-run on non-GitHub origin
+- #1159 fix(metrics-gate): fail closed on an unresolvable range
+- #1160 docs: checkpoint STATE.md + BUILDLOG.md 2026-10-17T23:2xZ
+- #1161 docs: checkpoint STATE.md + BUILDLOG.md 2026-10-17T23:46Z
+- #1162 fix(receipt): verify_receipt default --main-ref resolves trunk like emit_receipt
+- #1163 docs: checkpoint 2026-10-18 00:10Z (STATE + BUILDLOG delta since #1161)
+- #1164 docs: checkpoint 2026-10-18 00:20Z STATE/BUILDLOG
+- #1165 fix(receipt): scoped profile recomputes required shards from owning shards
+- #1166 docs: checkpoint 2026-10-18 00:47Z (STATE/BUILDLOG)
+- #1167 docs: add acceptance section (done-per-user, not done-per-CI) to LANE-CONTRACT
+- #1168 docs: checkpoint-0048 (STATE/BUILDLOG union)
+- #1169 docs: add 8b landing and 9a index-first reading to LANE-CONTRACT
+- #1170 fix(verify-receipt): docs-only scoped receipts require no py shards
+- #1171 docs: checkpoint 0049 (STATE/BUILDLOG union through 2026-10-18T01:36Z)
 
 ## [0.10.1] - 2026-10-17
 
