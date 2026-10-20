@@ -20,8 +20,9 @@
 # `python tools/halt.py --status` as the single source of truth, respecting
 # all resolution precedence (AESOP_STATE_ROOT env > aesop.config.json state_root
 # > default). The box-wide sentinel is checked first by existence, with the same
-# default as halt.py's setter (CONDUCTOR_ROOT, else $USERPROFILE|$HOME/conductor3),
-# so an unset CONDUCTOR_ROOT never disables it. This script never exports
+# root rule as halt.py (explicit CONDUCTOR_ROOT, else the canonical-aesop sibling). An
+# UNRESOLVED root never falls back to a home fleet root: halt.py --status then exits 3 and
+# the pass is skipped (fail closed). This script never exports
 # AESOP_STATE_ROOT, because an exported value counts as an explicit isolated override.
 #
 # Exit codes: 0 = pass completed / halted / lock contention, 1 = an action in
@@ -59,15 +60,13 @@ log_line() {
 check_halt() {
   local log_file="$1"
   local halt_py="${2:-${HALT_PY_PATH}}"
-  # Box-wide root mirrors halt.py resolve_conductor_root(): CONDUCTOR_ROOT env, else
-  # the home fleet root (USERPROFILE, then HOME; the same default the setter uses).
-  # An unset CONDUCTOR_ROOT must never disable this check.
+  # Box-wide root by the conductor-root rule (same as halt.py resolve_conductor_root()):
+  # explicit CONDUCTOR_ROOT, else the sibling for the canonical "aesop" tree, else empty.
+  # Empty never falls back to a home fleet root: the existence check is skipped and
+  # halt.py --status below reports UNKNOWN (exit 3), which fails closed.
   local box_root="${CONDUCTOR_ROOT:-}"
-  if [ -z "$box_root" ]; then
-    local box_home="${USERPROFILE:-${HOME:-}}"
-    if [ -n "$box_home" ]; then
-      box_root="$box_home/conductor3"
-    fi
+  if [ -z "$box_root" ] && declare -F resolve_conductor_root >/dev/null; then
+    box_root="$(resolve_conductor_root "${AESOP_ROOT:-}")"
   fi
   local box_sentinel=""
   if [ -n "$box_root" ]; then
@@ -175,6 +174,10 @@ main() {
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   AESOP_ROOT="${AESOP_ROOT:-$(dirname "$SCRIPT_DIR")}"
+  # Box-wide root by the daemons/conductor-root.sh rule (explicit CONDUCTOR_ROOT, else the
+  # sibling for the canonical "aesop" tree, else empty). Empty fails closed in check_halt.
+  # shellcheck source=conductor-root.sh
+  . "$SCRIPT_DIR/conductor-root.sh"
   # AESOP_STATE_ROOT is deliberately NOT exported: an exported value is read by
   # halt.py as an explicit isolated override, which suppresses the box-wide HALT.
   # The default is only a shell variable (used for the log path and mkdir); a

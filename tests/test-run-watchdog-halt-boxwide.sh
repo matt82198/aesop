@@ -36,7 +36,7 @@ OUT="$TMP_DIR/out.txt"
 FAILS=0
 
 mkdir -p "$HOME_FIX" "$CR/state" "$PRIMARY/state" "$RUNTIME/daemons" "$RUNTIME/tools" "$RUNTIME/state" "$STUB_DIR"
-cp "$REPO_ROOT/daemons/run-watchdog.sh" "$RUNTIME/daemons/run-watchdog.sh"
+cp "$REPO_ROOT/daemons/run-watchdog.sh" "$REPO_ROOT/daemons/conductor-root.sh" "$RUNTIME/daemons/"
 cp "$REPO_ROOT/tools/halt.py" "$REPO_ROOT/tools/common.py" "$RUNTIME/tools/"
 
 # A python3 that behaves like the Windows Store stub: prints a message, exits 49.

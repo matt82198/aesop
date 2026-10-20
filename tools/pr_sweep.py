@@ -77,7 +77,7 @@ _TOOLS_DIR = Path(__file__).resolve().parent
 # only this form, not a conditional "if ... not in sys.path" variant.
 sys.path.insert(0, str(_TOOLS_DIR))
 
-from common import get_conductor_root  # noqa: E402
+from common import ConductorRootUnresolved, get_conductor_root  # noqa: E402
 
 DEFAULT_BEHIND_CAP = 2
 
@@ -641,7 +641,14 @@ def main(argv=None):
         _flush_receipts_if_possible()
 
     repo = resolve_repo(args.repo)
-    queue_path = Path(args.queue_path) if args.queue_path else default_queue_path()
+    # Fail closed before any write: a default queue/log path needs the conductor root,
+    # and an unresolved root must never be guessed (exit 2, nothing acted on).
+    try:
+        queue_path = Path(args.queue_path) if args.queue_path else default_queue_path()
+        default_log = None if args.log_path else default_sweep_log_path()
+    except ConductorRootUnresolved as exc:
+        print("ERROR: %s" % exc, file=sys.stderr)
+        return 2
 
     try:
         prs = list_open_prs(repo)
@@ -653,7 +660,7 @@ def main(argv=None):
     draft_count = sum(1 for p in prs if p.get("isDraft"))
     open_prs = [p for p in prs if not p.get("isDraft")]
 
-    log_path = Path(args.log_path) if args.log_path else default_sweep_log_path()
+    log_path = Path(args.log_path) if args.log_path else default_log
 
     # All gh reads happen inside build_plan; a failed read stops here, before
     # any write (fail closed: exit 3, nothing acted on).

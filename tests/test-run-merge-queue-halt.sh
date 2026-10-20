@@ -165,9 +165,11 @@ else
 fi
 
 echo ""
-echo "=== Test 6: scheduled shape (no CONDUCTOR_ROOT, no AESOP_STATE_ROOT in env) honors the box-wide HALT under HOME ==="
-# Mirrors the AesopMergeQueue scheduled task: the operator ran `halt.py set`, which
-# wrote <HOME>/conductor3/state/.HALT. The queue must refuse to merge.
+echo "=== Test 6: CONDUCTOR_ROOT unset on a non-canonical checkout fails closed (no HOME fallback) ==="
+# The box-wide root is resolved ONLY by the conductor-root rule: explicit CONDUCTOR_ROOT, or
+# the sibling for the canonical "aesop" basename. Here the checkout is aesop-wt-*, so the root
+# is unresolved. A HALT that sits under HOME must NOT be read by path, and the pass must not
+# run: the check fails closed (HALT-CHECK-FAILED), it does not guess a home fleet root.
 SCHED_HOME="${TMP_DIR}/sched-home"
 SCHED_ROOT="${TMP_DIR}/sched-project"
 mkdir -p "${SCHED_HOME}/conductor3/state" "${SCHED_ROOT}/state"
@@ -185,39 +187,41 @@ if [ "$(cycle_count)" != "0" ]; then
   echo "FAIL: merge-queue pass ran while the box-wide HALT under HOME existed (CONDUCTOR_ROOT unset) -- fail-open"
   exit 1
 fi
-if ! grep -q "^HALTED: box-wide operator stop \[box-wide " "$OUT6"; then
-  echo "FAIL: expected 'HALTED: box-wide operator stop [box-wide <path>]' for the HOME-resolved sentinel"
+if ! grep -rqs "HALT-CHECK-FAILED" "$OUT6" "${SCHED_ROOT}/state"; then
+  echo "FAIL: expected HALT-CHECK-FAILED (fail closed) for an unresolved CONDUCTOR_ROOT"
   exit 1
 fi
-if [ "$EXIT6" != "0" ]; then
-  echo "FAIL: halted pass should exit 0, got $EXIT6"
+if grep -q "box-wide operator stop" "$OUT6"; then
+  echo "FAIL: HOME sentinel was honored by path (home fleet-root fallback is forbidden)"
   exit 1
 fi
-echo "PASS: HOME-resolved box-wide HALT stops the queue with CONDUCTOR_ROOT unset"
+echo "PASS: unresolved CONDUCTOR_ROOT fails closed; no home fleet-root fallback (exit $EXIT6)"
 
 echo ""
-echo "=== Test 7: halt.py --status reports halted for the same setup (CONDUCTOR_ROOT unset, HOME holds sentinel) ==="
+echo "=== Test 7: halt.py --status fails closed for the same setup (CONDUCTOR_ROOT unset, HOME holds sentinel) ==="
 if ! command -v python3 >/dev/null 2>&1; then
   echo "SKIP: no python3 on PATH for halt.py --status check"
 else
   PY_OUT7="${TMP_DIR}/py-out7"
   (
     cd "${SCHED_ROOT}" && \
-    env -u CONDUCTOR_ROOT -u AESOP_STATE_ROOT -u AESOP_ROOT \
-      HOME="${SCHED_HOME}" USERPROFILE="${SCHED_HOME}" \
+    env -u CONDUCTOR_ROOT -u AESOP_STATE_ROOT \
+      HOME="${SCHED_HOME}" USERPROFILE="${SCHED_HOME}" AESOP_ROOT="${SCHED_ROOT}" \
       python3 "${REPO_ROOT}/tools/halt.py" --status
   ) > "$PY_OUT7" 2>&1
   PY_EXIT7=$?
   cat "$PY_OUT7"
-  if [ "$PY_EXIT7" != "1" ]; then
-    echo "FAIL: halt.py --status should exit 1 (halted), got $PY_EXIT7"
+  # Exit 1 would mean the HOME sentinel was honored (forbidden fallback). 0 would mean the
+  # box-wide HALT was silently missed (fail open). Unresolved must be a distinct failure.
+  if [ "$PY_EXIT7" = "0" ] || [ "$PY_EXIT7" = "1" ]; then
+    echo "FAIL: halt.py --status must fail closed with an unresolved CONDUCTOR_ROOT, got $PY_EXIT7"
     exit 1
   fi
-  if ! grep -q "^HALTED: box-wide operator stop (since .*) \[box-wide " "$PY_OUT7"; then
-    echo "FAIL: halt.py --status did not report the HOME-resolved box-wide HALT"
+  if ! grep -q "CONDUCTOR_ROOT" "$PY_OUT7"; then
+    echo "FAIL: halt.py --status failure must name CONDUCTOR_ROOT so the operator can fix it"
     exit 1
   fi
-  echo "PASS: halt.py --status reports halted with CONDUCTOR_ROOT unset"
+  echo "PASS: halt.py --status fails closed with CONDUCTOR_ROOT unset (exit $PY_EXIT7)"
 fi
 
 echo ""
