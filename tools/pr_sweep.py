@@ -59,8 +59,9 @@ Usage:
                               [--queue-path FILE] [--behind-cap N] [--log-path FILE]
 
 Exit codes: 0 = swept (incl. no-op), 1 = one or more PR actions failed (all PRs
-still attempted; failures listed on stderr), 2 = gh auth missing or PR listing failed, 3 = a zero-check read
-failed (nothing was acted on).
+still attempted; failures listed on stderr), 2 = gh auth missing, PR listing failed,
+or the listing hit the PR_LIST_LIMIT cap (partial sweep refused), 3 = a read that
+decides an action failed (required-checks or zero-check state; nothing was acted on).
 """
 import argparse
 import json
@@ -172,23 +173,39 @@ PR_LIST_FIELDS = (
 )
 
 
+# `gh pr list` returns at most --limit rows with no pagination, so the cap is
+# set well above any real open-PR count. A listing that reaches the cap is
+# refused (exit 2) rather than swept partially: the oldest PRs past the cap
+# would otherwise be silently never armed or nudged.
+PR_LIST_LIMIT = 1000
+# gh's answer when a branch has no required checks configured. It is an
+# empty set, not a read failure.
+NO_REQUIRED_CHECKS_MARK = "no required checks"
+
+
 def list_open_prs(repo=None):
-    args = ["pr", "list", "--state", "open", "--limit", "100", "--json", PR_LIST_FIELDS]
+    args = ["pr", "list", "--state", "open", "--limit", str(PR_LIST_LIMIT),
+            "--json", PR_LIST_FIELDS]
     if repo:
         args += ["--repo", repo]
     result = gh(*args)
     if isinstance(result, dict) and "error" in result:
         raise GhError(result["error"])
     if isinstance(result, list):
+        if len(result) >= PR_LIST_LIMIT:
+            raise GhError("PR listing reached the %d-row cap; refusing a partial sweep"
+                          % PR_LIST_LIMIT)
         return result
     return []
 
 
 def get_required_checks(pr_number, repo=None):
-    """Return the REQUIRED checks for pr_number, or [] if gh can't answer
-    (no branch protection, transient error, etc.) -- treated as "no evidence
-    of a stuck red", which is the fail-safe-against-false-alarms direction
-    for a tool that only ever appends advisory signal rows.
+    """Return the REQUIRED checks for pr_number. A branch with no required
+    checks configured yields []. Any other gh error (timeout, auth, 5xx,
+    unparseable output) raises GhError: an unreadable check state must never
+    be read as "no failing check", because the caller would then skip the
+    stuck-red signal on a guess. The caller turns GhError into exit 3 with
+    nothing acted on.
     """
     args = ["pr", "checks", str(pr_number), "--required", "--json",
             "name,bucket,completedAt,startedAt"]
@@ -197,7 +214,15 @@ def get_required_checks(pr_number, repo=None):
     result = gh(*args)
     if isinstance(result, list):
         return result
-    return []
+    if isinstance(result, dict) and "error" in result:
+        if NO_REQUIRED_CHECKS_MARK in str(result["error"]).lower():
+            return []
+        raise GhError("pr checks #%s failed: %s" % (pr_number, result["error"]))
+    if result == "":
+        return []
+    if isinstance(result, str) and NO_REQUIRED_CHECKS_MARK in result.lower():
+        return []
+    raise GhError("pr checks #%s returned unexpected output: %r" % (pr_number, result))
 
 
 def arm_auto_merge(pr_number, repo=None):

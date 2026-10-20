@@ -501,5 +501,53 @@ class TestPerPrIsolation(PrSweepTestCase):
         self.assertIn("dispatched", by_pr[802]["outcome"])
 
 
+class LimitHonouringFakeGh(FakeGh):
+    """Models real `gh pr list --limit N`: returns at most N PRs, so a
+    listing that ignores the cap is visible to the test."""
+
+    def __call__(self, *args):
+        if args[:2] == ("pr", "list"):
+            self.calls.append(args)
+            limit = int(args[args.index("--limit") + 1])
+            return self.prs[:limit]
+        return super().__call__(*args)
+
+
+class TestPrListPagination(PrSweepTestCase):
+    def test_arms_pr_beyond_the_first_100_open_prs(self):
+        prs = [make_pr(n, auto_merge=False, now=self.now) for n in range(1, 151)]
+        fake = LimitHonouringFakeGh(prs)
+        rc = self.run_sweep(fake)
+        armed = {int(c[2]) for c in fake.calls_matching("pr", "merge")}
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(armed), 150, "PRs past the 100 cap were never swept")
+        self.assertIn(150, armed)
+
+    def test_refuses_a_listing_that_hits_the_limit_and_acts_on_nothing(self):
+        limit = self.module.PR_LIST_LIMIT
+        prs = [make_pr(n, auto_merge=False, now=self.now) for n in range(1, limit + 2)]
+        fake = LimitHonouringFakeGh(prs)
+        rc = self.run_sweep(fake)
+        self.assertEqual(rc, 2, "a truncated PR listing must fail closed, not sweep a partial set")
+        self.assertEqual(fake.calls_matching("pr", "merge"), [])
+
+
+class TestRequiredChecksReadFailsClosed(PrSweepTestCase):
+    def test_required_checks_read_error_stops_before_any_write(self):
+        pr = make_pr(301, auto_merge=False, now=self.now)
+        fake = FakeGh([pr], fail_on={("pr", "checks"): "HTTP 502: bad gateway"})
+        rc = self.run_sweep(fake)
+        self.assertEqual(rc, 3, "an unreadable required-check state must not be read as 'no checks'")
+        self.assertEqual(fake.calls_matching("pr", "merge"), [])
+        self.assertEqual(fake.calls_matching("pr", "comment"), [])
+
+    def test_repo_with_no_required_checks_is_not_an_error(self):
+        pr = make_pr(302, auto_merge=True, now=self.now)
+        fake = FakeGh([pr], fail_on={
+            ("pr", "checks"): "no required checks reported on the 'feature-302' branch"})
+        rc = self.run_sweep(fake)
+        self.assertEqual(rc, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
