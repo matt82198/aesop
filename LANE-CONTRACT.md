@@ -212,6 +212,11 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
     `baseRefName` is the repo default branch, arm as above. A stacked PR (base is another PR's branch) is NOT armed:
     GitHub would merge it into that unprotected parent with no CI run. The lane reports
     `stacked on #N; retarget to main after #N merges` and stops.
+  - **Draft-then-arm order (supersedes "at PR open" for draft PRs), in this order:**
+    1. Open the PR as a draft at the first commit; this draft is the receipt.
+    2. Run `gh pr ready <N>` only when the lane's own checks are green locally.
+    3. Arm auto-merge immediately after marking ready: `gh pr merge <N> --repo <o/r> --squash --auto --match-head-commit <full head sha>`.
+    Draft state is never an excuse to skip arming once the PR is ready.
   - **Mode 2 - repos WITHOUT CI (claude-config, claude-scripts, conductor3, psinasty).** There is no required check
     to arm against, so the lane stops at PR open. It runs its gates in its worktree, pastes the literal output, and
     reports the PR number and the full head sha. The orchestrator lands it with one pinned
