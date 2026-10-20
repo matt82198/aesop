@@ -205,8 +205,8 @@ else
   PY_OUT7="${TMP_DIR}/py-out7"
   (
     cd "${SCHED_ROOT}" && \
-    env -u CONDUCTOR_ROOT -u AESOP_STATE_ROOT -u AESOP_ROOT \
-      HOME="${SCHED_HOME}" USERPROFILE="${SCHED_HOME}" \
+    env -u CONDUCTOR_ROOT -u AESOP_STATE_ROOT \
+      HOME="${SCHED_HOME}" USERPROFILE="${SCHED_HOME}" AESOP_ROOT="${SCHED_ROOT}" \
       python3 "${REPO_ROOT}/tools/halt.py" --status
   ) > "$PY_OUT7" 2>&1
   PY_EXIT7=$?
