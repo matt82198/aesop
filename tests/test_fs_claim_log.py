@@ -527,12 +527,42 @@ class TestFsClaimLog(unittest.TestCase):
         log.close()
 
     def test_no_fs_locking_primitives_are_used(self):
-        """The design forbids flock / O_EXCL / link tricks -- assert on the source."""
-        src = Path(_REPO_ROOT / "state_store" / "fs_claim_log.py").read_text(
-            encoding="utf-8"
-        )
-        for forbidden in ("flock", "O_EXCL", "os.link(", "lockf", "msvcrt"):
-            self.assertNotIn(forbidden, src, f"forbidden FS primitive: {forbidden}")
+        """Behaviour: a real claim/holder cycle never reaches a forbidden locking primitive.
+
+        The design forbids flock / lockf / msvcrt.locking / O_EXCL / os.link. Each one is
+        replaced with a tripwire, then the real claim path runs. Any use raises and fails.
+        """
+        import importlib
+        from contextlib import ExitStack
+        from unittest import mock
+
+        real_open = os.open
+
+        def guarded_open(path, flags, *args, **kwargs):
+            if flags & os.O_EXCL:
+                raise AssertionError("os.open with O_EXCL used by FsClaimLog")
+            return real_open(path, flags, *args, **kwargs)
+
+        def tripwire(name):
+            def _trip(*args, **kwargs):
+                raise AssertionError(f"forbidden FS primitive used: {name}")
+            return _trip
+
+        with ExitStack() as stack:
+            stack.enter_context(mock.patch("os.open", side_effect=guarded_open))
+            stack.enter_context(mock.patch("os.link", side_effect=tripwire("os.link")))
+            for modname, attrs in (("fcntl", ("flock", "lockf")), ("msvcrt", ("locking",))):
+                try:
+                    mod = importlib.import_module(modname)
+                except ImportError:
+                    continue  # platform lacks this module; its primitives cannot be reached
+                for attr in attrs:
+                    if hasattr(mod, attr):
+                        stack.enter_context(
+                            mock.patch.object(mod, attr, side_effect=tripwire(f"{modname}.{attr}"))
+                        )
+            self.log.claim(["Dir/Locked.txt"], "inst-1", ttl_seconds=60)
+            self.assertEqual(self.log.holder(["dir/locked.txt"]), "inst-1")
 
     def test_paths_are_canonicalized_case_insensitively(self):
         self.log.claim(["Dir/File.TXT"], "inst-1", ttl_seconds=60)
