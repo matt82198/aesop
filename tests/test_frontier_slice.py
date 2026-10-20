@@ -27,6 +27,10 @@ sys.path.insert(0, str(bench_dir))
 _SEAM_ENV = "AESOP_BENCH_OFFLINE"
 _saved_seam = None
 
+# Test-only model ID paired with a TEST FIXTURE price injected via mock.patch.dict.
+# It is not a real model and its rates are not billing data.
+FIXTURE_MODEL = "test-fixture-model"
+
 
 def setUpModule():
     global _saved_seam
@@ -349,38 +353,106 @@ class TestLiveModeGating(unittest.TestCase):
     """Test that --mode live requires --confirm-spend."""
 
     def test_live_mode_without_confirm_spend_exits_2(self):
-        """Running --mode live without --confirm-spend should exit with code 2."""
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(bench_dir / "frontier_slice.py"),
-                "--mode", "live",
-                "--model", "claude-3-5-opus-20241022",
-                # Deliberately NOT providing --confirm-spend
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
+        """Running --mode live without --confirm-spend should exit with code 2.
+
+        Uses a TEST FIXTURE price (not a real model price) so the gate is reached.
+        """
+        import io
+        from contextlib import redirect_stdout
+        from frontier_slice import (
+            MODEL_PRICING_USD_PER_MTOK, load_frontier_tasks,
+            run_live_frontier_benchmark,
         )
-        self.assertEqual(result.returncode, 2, f"Expected exit 2, got {result.returncode}")
-        self.assertIn("confirm-spend", result.stdout, "Should mention --confirm-spend in output")
+
+        tasks = load_frontier_tasks(str(bench_dir / "tasks_frontier.jsonl"))
+        buf = io.StringIO()
+        with mock.patch.dict(MODEL_PRICING_USD_PER_MTOK, {FIXTURE_MODEL: (1.0, 1.0)}, clear=True), \
+                redirect_stdout(buf):
+            with self.assertRaises(SystemExit) as cm:
+                run_live_frontier_benchmark(tasks, model=FIXTURE_MODEL, confirm_spend=False)
+        self.assertEqual(cm.exception.code, 2, f"Expected exit 2, got {cm.exception.code}")
+        self.assertIn("confirm-spend", buf.getvalue(), "Should mention --confirm-spend in output")
 
     def test_live_mode_prints_cost_estimate(self):
-        """Running --mode live should print cost estimate."""
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(bench_dir / "frontier_slice.py"),
-                "--mode", "live",
-                "--model", "claude-3-5-opus-20241022",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
+        """Running --mode live should print cost estimate (fixture price)."""
+        import io
+        from contextlib import redirect_stdout
+        from frontier_slice import (
+            MODEL_PRICING_USD_PER_MTOK, load_frontier_tasks,
+            run_live_frontier_benchmark,
         )
-        self.assertIn("COST ESTIMATE", result.stdout, "Should show cost estimate")
-        self.assertIn("USD", result.stdout, "Should mention USD pricing")
-        self.assertIn("tokens", result.stdout, "Should mention tokens")
+
+        tasks = load_frontier_tasks(str(bench_dir / "tasks_frontier.jsonl"))
+        buf = io.StringIO()
+        with mock.patch.dict(MODEL_PRICING_USD_PER_MTOK, {FIXTURE_MODEL: (1.0, 1.0)}, clear=True), \
+                redirect_stdout(buf):
+            with self.assertRaises(SystemExit):
+                run_live_frontier_benchmark(tasks, model=FIXTURE_MODEL, confirm_spend=False)
+        out = buf.getvalue()
+        self.assertIn("COST ESTIMATE", out, "Should show cost estimate")
+        self.assertIn("USD", out, "Should mention USD pricing")
+        self.assertIn("tokens", out, "Should mention tokens")
+
+
+class TestCurrentModelDefaults(unittest.TestCase):
+    """The default model is a current 5.5 ID; a model with no verified price fails closed."""
+
+    CURRENT_IDS = {"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"}
+
+    def test_default_model_is_current_id(self):
+        """Default --model must be a current 5.5 ID, not a retired claude-3-5 ID."""
+        import frontier_slice
+        self.assertIn(frontier_slice.DEFAULT_MODEL, self.CURRENT_IDS)
+
+    def test_default_model_is_in_pricing_table(self):
+        """The default model must have a verified price, or a live run cannot estimate."""
+        import frontier_slice
+        self.assertIn(frontier_slice.DEFAULT_MODEL, frontier_slice.MODEL_PRICING_USD_PER_MTOK)
+
+    def test_unpriced_model_raises_explicit_error(self):
+        """A model with no verified price raises, never falls back to a guessed rate."""
+        import frontier_slice
+        with mock.patch.dict(frontier_slice.MODEL_PRICING_USD_PER_MTOK, {}, clear=True):
+            with self.assertRaises(frontier_slice.UnknownModelPricingError) as cm:
+                frontier_slice._price_for(frontier_slice.DEFAULT_MODEL)
+        self.assertIn(frontier_slice.DEFAULT_MODEL, str(cm.exception))
+
+    def test_priced_model_returns_its_rates(self):
+        """A priced model returns its (input, output) USD-per-MTok pair."""
+        import frontier_slice
+        with mock.patch.dict(frontier_slice.MODEL_PRICING_USD_PER_MTOK,
+                             {FIXTURE_MODEL: (1.0, 2.0)}, clear=True):
+            self.assertEqual(frontier_slice._price_for(FIXTURE_MODEL), (1.0, 2.0))
+
+    def test_live_cli_refuses_unpriced_default_model_before_any_run(self):
+        """`--mode live --confirm-spend` on the default model exits 2 before any client or run.
+
+        A dummy key and an empty state root make the key and HALT refusals pass, so the
+        price gate is the check that refuses. AESOP_BENCH_OFFLINE=1 (set by setUpModule)
+        is also inherited, so no client could be built even if the gate were bypassed.
+        """
+        import tempfile
+        state_dir = tempfile.mkdtemp()
+        try:
+            env = os.environ.copy()
+            for key in ("BENCH_API_KEY", "OPENAI_API_KEY"):
+                env.pop(key, None)
+            env["ANTHROPIC_API_KEY"] = "dummy-key-for-test"
+            env["AESOP_STATE_ROOT"] = state_dir
+            result = subprocess.run(
+                [sys.executable, str(bench_dir / "frontier_slice.py"),
+                 "--mode", "live", "--confirm-spend",
+                 "--model", "unpriced-test-model",
+                 "--output", str(Path(state_dir) / "out.json")],
+                capture_output=True, text=True, timeout=30, env=env,
+            )
+            self.assertEqual(result.returncode, 2, f"Expected exit 2, got {result.returncode}")
+            self.assertIn("no verified price", result.stderr)
+            self.assertFalse((Path(state_dir) / "out.json").exists(), "refused run must not write results")
+            self.assertNotIn("FALLBACK", result.stdout + result.stderr)
+        finally:
+            import shutil
+            shutil.rmtree(state_dir, ignore_errors=True)
 
 
 # ============================================================================
@@ -473,13 +545,11 @@ class TestBenchHardeningFixes(unittest.TestCase):
         # Verified in the code: when cost is None, result gets cost_usd=None and cost_note set
         pass  # Covered by integration test below
 
-    def test_frontier_fallback_pricing_labeled_in_output(self):
-        """Cost estimate should label fallback pricing clearly.
+    def test_unpriced_model_is_explicit_error_not_fallback(self):
+        """An unpriced model must fail closed with an explicit error, never a guessed rate.
 
-        Intent: the FALLBACK label is printed by the COST ESTIMATE, which runs
-        before any spend. Without --confirm-spend the bench prints the estimate
-        and exits 2 before any API client exists. --confirm-spend is deliberately
-        NOT passed: passing it would send the run into the paid live path.
+        No verified 5.5 price exists in the repo, so no FALLBACK estimate is produced.
+        --confirm-spend is deliberately NOT passed: even the cost gate must refuse first.
         """
         env = os.environ.copy()
         for key in ("ANTHROPIC_API_KEY", "BENCH_API_KEY", "OPENAI_API_KEY"):
@@ -496,9 +566,9 @@ class TestBenchHardeningFixes(unittest.TestCase):
             timeout=10,
             env=env,
         )
-        self.assertEqual(result.returncode, 2, "Cost gate must exit 2 without --confirm-spend")
-        self.assertIn("FALLBACK", result.stdout + result.stderr,
-                      "Unknown model pricing should be labeled FALLBACK")
+        self.assertEqual(result.returncode, 2, "Unpriced model must exit 2")
+        self.assertIn("no verified price", result.stderr)
+        self.assertNotIn("FALLBACK", result.stdout + result.stderr)
 
     def test_missing_anthropic_api_key_refuses_run_and_writes_nothing(self):
         """Live run with no ANTHROPIC_API_KEY is an error exit, never a 0% result file."""
@@ -596,7 +666,10 @@ class TestLiveNetworkGuard(unittest.TestCase):
 
     def _run_live(self, seam_value):
         import tempfile
-        from frontier_slice import load_frontier_tasks, run_live_frontier_benchmark
+        from frontier_slice import (
+            MODEL_PRICING_USD_PER_MTOK, load_frontier_tasks,
+            run_live_frontier_benchmark,
+        )
 
         tasks = load_frontier_tasks(str(bench_dir / "tasks_frontier.jsonl"))
         state_dir = tempfile.mkdtemp()
@@ -605,11 +678,13 @@ class TestLiveNetworkGuard(unittest.TestCase):
             env.pop(_SEAM_ENV, None)
         else:
             env[_SEAM_ENV] = seam_value
+        # TEST FIXTURE price so the live path is reached; not a real model rate.
         with mock.patch.dict(os.environ, env, clear=False), \
+                mock.patch.dict(MODEL_PRICING_USD_PER_MTOK, {FIXTURE_MODEL: (1.0, 1.0)}, clear=True), \
                 mock.patch.dict(sys.modules, {"anthropic": self._stub_anthropic()}):
             if seam_value is None:
                 os.environ.pop(_SEAM_ENV, None)
-            return run_live_frontier_benchmark(tasks, confirm_spend=True)
+            return run_live_frontier_benchmark(tasks, model=FIXTURE_MODEL, confirm_spend=True)
 
     def test_seam_blocks_client_construction_even_with_confirm_spend(self):
         """Seam set + --confirm-spend: returns empty, never builds a client."""
