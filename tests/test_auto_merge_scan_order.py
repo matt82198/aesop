@@ -17,6 +17,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TOOLS_DIR = os.path.join(REPO_ROOT, 'tools')
@@ -56,6 +57,12 @@ class ScanBeforeCommitTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix='scan-order-'))
         self.addCleanup(shutil.rmtree, str(self.tmp), True)
+        # auto_merge's own `git commit` runs without _git's env, so it needs the identity in
+        # the process environment. Without this the test depends on a host global identity:
+        # present on the dev box, absent on the Windows CI shard ("commit failed").
+        identity = mock.patch.dict(os.environ, _IDENTITY_ENV)
+        identity.start()
+        self.addCleanup(identity.stop)
         self.bare = self.tmp / 'origin.git'
         seed = self.tmp / 'seed'
         self.wt = self.tmp / 'wt'
