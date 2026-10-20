@@ -919,11 +919,16 @@ class TestIntegrationMode(unittest.TestCase):
                 "",
                 "MERGED",
             ]
-            ok = self.module.merge_integration_pr(99)
+            ok = self.module.merge_integration_pr(99, head_oid="abc123")
             self.assertTrue(ok)
             merge_calls = [c for c in mock_gh.call_args_list
                            if "pr" in c[0] and "merge" in c[0]]
             self.assertTrue(len(merge_calls) > 0)
+            self.assertIn("--match-head-commit", merge_calls[0][0],
+                          "integration merge must be pinned to the CI-tested sha")
+            self.assertEqual(
+                merge_calls[0][0][merge_calls[0][0].index("--match-head-commit") + 1],
+                "abc123")
 
     def test_merge_integration_pr_verify_state(self):
         with patch.object(self.module, 'gh') as mock_gh:
@@ -1270,6 +1275,83 @@ class TestIntegrationOriginGuard(unittest.TestCase):
         rc, _ = self._git(self.queue, "rev-parse", "--verify", "--quiet",
                           "refs/heads/integrate/wtcheck")
         self.assertNotEqual(rc, 0)
+
+
+class TestMergePinsSnapshotHead(unittest.TestCase):
+    """merge_train must merge only the head commit it snapshotted (tracker 31c0ddd1e22b).
+
+    A fake GitHub answers `gh pr view` and `gh pr merge`. It honours
+    --match-head-commit the way GitHub does: a pinned merge whose sha is no
+    longer the PR head is refused, and nothing lands.
+    """
+
+    def setUp(self):
+        import importlib.util
+        tool = Path(__file__).parent.parent / "tools" / "merge_train.py"
+        spec = importlib.util.spec_from_file_location("merge_train_31c0", tool)
+        self.m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.m)
+        self.head = "sha1"
+        self.move_after_snapshot = False
+        self.state = "OPEN"
+        self.merge_calls = []
+
+    def _fake_gh(self, *args):
+        if args[:2] == ("pr", "view"):
+            if "--jq" in args:
+                return self.state
+            snapshot = {"state": self.state, "mergeStateStatus": "CLEAN",
+                        "statusCheckRollup": [{"__typename": "CheckRun",
+                                               "status": "COMPLETED",
+                                               "conclusion": "SUCCESS"}],
+                        "title": "t", "headRefName": "feat",
+                        "headRefOid": self.head}
+            if self.move_after_snapshot:
+                # A new commit is pushed after the green snapshot was taken.
+                self.head = "sha2"
+                self.move_after_snapshot = False
+            return snapshot
+        if args[:2] == ("pr", "merge"):
+            self.merge_calls.append(list(args))
+            if "--match-head-commit" in args:
+                pinned = args[args.index("--match-head-commit") + 1]
+                if pinned != self.head:
+                    return {"error": "head commit does not match", "rc": 1}
+            self.state = "MERGED"
+            return ""
+        raise AssertionError(f"unexpected gh call: {args}")
+
+    def _run(self):
+        with patch.object(self.m, "gh", side_effect=self._fake_gh), \
+             patch.object(self.m, "_check_halt"), \
+             contextlib.redirect_stdout(io.StringIO()):
+            return self.m.run_train([7], max_rounds=1, poll_interval=0)
+
+    def test_merge_is_pinned_to_the_snapshotted_head(self):
+        """The merge call must carry --match-head-commit with the sha that was green."""
+        self._run()
+        self.assertEqual(len(self.merge_calls), 1)
+        merge = self.merge_calls[0]
+        self.assertIn("--match-head-commit", merge,
+                      "merge must be pinned to the snapshotted head (TOCTOU)")
+        self.assertEqual(merge[merge.index("--match-head-commit") + 1], "sha1")
+
+    def test_head_moved_after_snapshot_does_not_land(self):
+        """A commit pushed between the green snapshot and the merge must not be merged."""
+        self.move_after_snapshot = True
+        result = self._run()
+        self.assertFalse(result, "the train must not report success")
+        self.assertNotEqual(self.state, "MERGED",
+                            "the untested head sha2 must not land")
+
+    def test_merge_without_a_pin_refuses_and_makes_no_gh_call(self):
+        """No snapshotted head sha means no merge at all (fail closed)."""
+        with patch.object(self.m, "gh", side_effect=self._fake_gh) as mock_gh, \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertFalse(self.m.merge_pr(7, ""))
+            self.assertFalse(self.m.merge_integration_pr(7, head_oid=""))
+        mock_gh.assert_not_called()
+        self.assertEqual(self.merge_calls, [])
 
 
 if __name__ == "__main__":
