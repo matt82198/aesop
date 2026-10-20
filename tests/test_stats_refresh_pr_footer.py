@@ -7,6 +7,7 @@ Nothing is matched against source text.
 """
 
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -20,6 +21,37 @@ STEP_NAME = "Create or update pull request"
 FOOTER = "\U0001f422 Generated with Aesop"
 RUN_URL = "https://github.com/example/aesop/actions/runs/424242"
 STATS_BRANCH = "chore/stats-refresh"
+# Windows system launchers that shadow Git Bash on PATH; never run the script
+# through these (the WSL launcher exits 1 when no distro is installed).
+_REJECTED_BASH_DIRS = ("windowsapps", "system32")
+
+
+def _resolve_bash() -> str:
+    """Return a bash that runs scripts non-interactively with stdout captured.
+
+    On POSIX this is plain "bash". On Windows it is Git Bash's own
+    ``<git root>/bin/bash.exe``, derived from ``shutil.which("git")``. The
+    WindowsApps and System32 launchers are never accepted. ``git-bash.exe``
+    is deliberately not used: it is the mintty GUI launcher and does not
+    write script output to stdout.
+    """
+    if os.name != "nt":
+        return "bash"
+    git = shutil.which("git")
+    if git:
+        # git.exe is at <root>\\cmd\\git.exe or <root>\\mingw64\\bin\\git.exe,
+        # so <root>\\bin\\bash.exe is one of the first three ancestors.
+        for ancestor in Path(git).parents[:3]:
+            candidate = ancestor / "bin" / "bash.exe"
+            if not candidate.is_file():
+                continue
+            if any(part.lower() in _REJECTED_BASH_DIRS for part in candidate.parts):
+                continue
+            return str(candidate)
+    raise RuntimeError(
+        "Git Bash not found: expected <git root>\\bin\\bash.exe derived from "
+        f"shutil.which('git')={git!r}. Install Git for Windows or put it on PATH."
+    )
 
 
 def _body_writer_script() -> str:
@@ -62,7 +94,7 @@ class StatsRefreshPrFooterTest(unittest.TestCase):
                 }
             )
             result = subprocess.run(
-                ["bash", script_path.as_posix()],
+                [_resolve_bash(), script_path.as_posix()],
                 cwd=tmp,
                 env=env,
                 capture_output=True,
