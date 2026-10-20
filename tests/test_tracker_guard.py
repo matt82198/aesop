@@ -602,5 +602,41 @@ class TestTrackerGuardCLI(TrackerGuardTestBase):
         self.assertTrue(journal_file.exists(), "journal should be created in AESOP_STATE_ROOT")
 
 
+class TestEnforceFailsClosedOnRevertError(TrackerGuardTestBase):
+    """--enforce must not report success when a zombie revert write fails."""
+
+    def test_enforce_exits_nonzero_when_revert_write_fails(self):
+        """A WriteAPI failure on a zombie revert is printed, so --enforce must exit 1."""
+        from unittest import mock
+
+        items = [{"id": "zombie-write-fail", "lane": "ranked", "title": "Write Fails"}]
+        self.create_tracker(items)
+        self.create_journal([
+            {"ts": datetime.utcnow().isoformat(), "id": "zombie-write-fail", "from": None, "to": "done"},
+        ])
+        # Resurrect the item into an active lane so it is a zombie.
+        self.create_tracker(items)
+
+        class _FailingWriteAPI:
+            """Stand-in writer whose every tracker_update_item call fails."""
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def tracker_update_item(self, *args, **kwargs):
+                raise RuntimeError("simulated WriteConflict")
+
+            def close(self):
+                pass
+
+        with mock.patch.object(tracker_guard, "WriteAPI", _FailingWriteAPI):
+            exit_code = tracker_guard.main(["--enforce"])
+
+        self.assertNotEqual(
+            exit_code, 0,
+            "--enforce must not exit 0 when a zombie revert failed (the caller would believe it healed)",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
