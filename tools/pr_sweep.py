@@ -172,7 +172,7 @@ def default_queue_path():
 
 PR_LIST_FIELDS = (
     "number,title,isDraft,autoMergeRequest,mergeStateStatus,updatedAt,"
-    "createdAt,headRefOid,headRefName,url,mergeable"
+    "createdAt,headRefOid,headRefName,baseRefName,url,mergeable"
 )
 
 
@@ -200,6 +200,23 @@ def list_open_prs(repo=None):
                           % PR_LIST_LIMIT)
         return result
     return []
+
+
+def default_branch(repo=None):
+    """The repo's default branch name, the only base a lane PR may be armed
+    against. Any read failure raises GhError: an unknown default must never
+    let a stacked PR through, so the caller stops before any write."""
+    args = ["repo", "view", "--json", "defaultBranchRef"]
+    if repo:
+        args.insert(2, repo)
+    result = gh(*args)
+    if isinstance(result, dict) and "error" in result:
+        raise GhError("repo view failed: %s" % result["error"])
+    ref = result.get("defaultBranchRef") if isinstance(result, dict) else None
+    name = ref.get("name") if isinstance(ref, dict) else None
+    if not name:
+        raise GhError("repo view returned no defaultBranchRef.name: %r" % (result,))
+    return name
 
 
 def get_required_checks(pr_number, repo=None):
@@ -402,10 +419,30 @@ def build_plan(open_prs, repo, now, queue_path, behind_cap=DEFAULT_BEHIND_CAP):
     """
     actions = []
 
-    # (a) arm missing auto-merge
+    # (a) arm missing auto-merge -- ONLY for PRs based on the repo default
+    # branch. A stacked PR (base = another PR's branch) is left unarmed: GitHub
+    # would merge it into that parent, which has no protection and no CI, and
+    # `gh pr view` would then report MERGED for content that never reached the
+    # trunk. Reported as a "stacked" action, never armed.
+    trunk = default_branch(repo)
+    open_by_head = {p.get("headRefName"): p["number"] for p in open_prs
+                    if p.get("headRefName")}
     for p in open_prs:
-        if not p.get("autoMergeRequest"):
+        if p.get("autoMergeRequest"):
+            continue
+        base = p.get("baseRefName")
+        if base == trunk:
             actions.append({"kind": "arm", "pr": p["number"], "url": p.get("url", "")})
+            continue
+        parent = open_by_head.get(base)
+        if parent is not None:
+            reason = ("stacked on #%d; retarget to %s after #%d merges"
+                      % (parent, trunk, parent))
+        else:
+            reason = ("base %r is not the default branch %r; retarget to %s before arming"
+                      % (base, trunk, trunk))
+        actions.append({"kind": "stacked", "pr": p["number"], "url": p.get("url", ""),
+                        "parent": parent, "reason": reason})
 
     # (b) BEHIND, cap behind_cap, oldest (by createdAt) first, 20-min throttle
     behind_eligible = []
@@ -473,8 +510,8 @@ def record_pr_failure(results, lines, log_path, pr_number, kind, reason, err):
 
 def execute_plan(actions, repo, dry_run, queue_path, log_path=None):
     lines = []
-    results = {"armed": 0, "behind_refused": 0, "signaled": 0, "retriggered": 0,
-               "disarmed": 0, "errors": []}
+    results = {"armed": 0, "stacked_refused": 0, "behind_refused": 0, "signaled": 0,
+               "retriggered": 0, "disarmed": 0, "errors": []}
     for a in actions:
         if a["kind"] == "arm":
             lines.append("ARM #%s (auto-merge missing) %s" % (a["pr"], a.get("url", "")))
@@ -485,6 +522,11 @@ def execute_plan(actions, repo, dry_run, queue_path, log_path=None):
                 else:
                     record_pr_failure(results, lines, log_path, a["pr"], "arm",
                                       "auto-merge missing", err)
+        elif a["kind"] == "stacked":
+            lines.append("STACKED #%s (not armed: %s) %s" % (a["pr"], a["reason"], a.get("url", "")))
+            if not dry_run:
+                results["stacked_refused"] += 1
+                append_sweep_log(log_path, a["pr"], "stacked", a["reason"], "refused: not armed")
         elif a["kind"] == "behind":
             lines.append("BEHIND #%s (refused: lane merges main locally) %s" % (a["pr"], a.get("url", "")))
             if not dry_run:
