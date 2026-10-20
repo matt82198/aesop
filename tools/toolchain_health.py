@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Toolchain health check — verifies interpreter and binary availability.
-INDEX: Binary/heartbeat availability verifier. CLI: `[--check] [--json] [--max-age S]`; stdlib only. Heartbeat freshness goes through the `state_store.read_api.ReadAPI` facade constructed with `get_state_dir()` -- the class is `ReadAPI`, NOT `StateReadAPI`, a symbol that never existed: importing that name made the ImportError fallback fire on every single run, so both heartbeat checks reported "unavailable" and never actually ran (a check that was silently dead from the day it was written). `tests/test_toolchain_health.py` now asserts every symbol imported from `state_store.read_api` really exists in that module AND that `run_checks` passes a non-None `state_api` into `check_heartbeat`, so a rename can never silently re-disable the check.
+INDEX: Binary/heartbeat availability verifier. CLI: `[--check] [--json] [--max-age S]`; stdlib only. Monitor heartbeat freshness goes through the `state_store.read_api.ReadAPI` facade constructed with `get_state_dir()`; the watchdog beat is read at its CONDUCTOR_ROOT location (`resolve_watchdog_heartbeat_path`, same rule as monitor/collect-signals.mjs), because the facade answers only for the directory it was built with and the watchdog never writes under AESOP_STATE_ROOT. The class is `ReadAPI`, NOT `StateReadAPI`, a symbol that never existed: importing that name made the ImportError fallback fire on every single run, so both heartbeat checks reported "unavailable" and never actually ran (a check that was silently dead from the day it was written). `tests/test_toolchain_health.py` now asserts every symbol imported from `state_store.read_api` really exists in that module AND that `run_checks` passes a non-None `state_api` into `check_heartbeat`, so a rename can never silently re-disable the check.
 
 Detects:
   - Binaries that exist but cannot execute (e.g., Git for Windows bash.exe
@@ -29,6 +29,7 @@ Output:
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -42,9 +43,9 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 try:
-    from common import get_state_dir
+    from common import check_heartbeat_staleness, get_state_dir
 except ImportError:
-    from tools.common import get_state_dir
+    from tools.common import check_heartbeat_staleness, get_state_dir
 
 # The facade class is named ReadAPI (state_store/read_api.py). It was previously
 # imported here as `StateReadAPI`, a symbol that has never existed, so the
@@ -75,6 +76,48 @@ HEARTBEAT_FILENAMES = {
     "watchdog": ".watchdog-heartbeat",
     "monitor": ".monitor-heartbeat",
 }
+
+
+WATCHDOG_HEARTBEAT_FILENAME = ".watchdog-heartbeat"
+
+
+def resolve_watchdog_heartbeat_path() -> Optional[Path]:
+    """Return the watchdog beat path, or None when it cannot be resolved.
+
+    Mirrors monitor/collect-signals.mjs resolveWatchdogHeartbeat and the only
+    writer, daemons/backup-fleet.sh: CONDUCTOR_ROOT env wins; otherwise the sibling
+    conductor3 is used only when AESOP_ROOT's basename is exactly "aesop".
+    Anything else is unresolved, and the daemon writes no beat there.
+    """
+    conductor_root = os.environ.get("CONDUCTOR_ROOT")
+    if not conductor_root:
+        aesop_root = Path(os.environ.get("AESOP_ROOT", "."))
+        if aesop_root.name != "aesop":
+            return None
+        conductor_root = str(aesop_root.parent / "conductor3")
+    return Path(conductor_root) / "state" / WATCHDOG_HEARTBEAT_FILENAME
+
+
+def check_watchdog_heartbeat(max_age_seconds: int) -> Tuple[bool, Optional[str]]:
+    """Check the watchdog beat at its CONDUCTOR_ROOT location, fail-closed.
+
+    Unresolved, missing, unreadable, or stale all return (False, message). The
+    StateAPI facade is not used here: it answers only for the state directory it
+    was built with, which is AESOP_STATE_ROOT and not where the watchdog writes.
+
+    Returns:
+        (is_ok, message) where is_ok=True means the beat is fresh
+    """
+    hb_path = resolve_watchdog_heartbeat_path()
+    if hb_path is None:
+        return False, (
+            "Heartbeat watchdog UNRESOLVED: CONDUCTOR_ROOT is unset and AESOP_ROOT is not "
+            "the canonical aesop tree, so the daemon's beat cannot be located"
+        )
+    is_stale, _, info = check_heartbeat_staleness(hb_path, max_age_seconds)
+    if is_stale:
+        return False, f"Heartbeat watchdog stale or missing at {hb_path}: {info}"
+    return True, None
 
 
 def find_binary(name: str, candidates: List[str]) -> Optional[Path]:
@@ -204,7 +247,11 @@ def run_checks(json_mode: bool = False, max_age_seconds: int = 300) -> int:
     # Phase 2: Check heartbeat files (via StateAPI facade)
     for hb_name, hb_filename in HEARTBEAT_FILENAMES.items():
         check_count += 1
-        is_ok, message = check_heartbeat(hb_name, hb_filename, max_age_seconds, state_api)
+        if hb_filename == WATCHDOG_HEARTBEAT_FILENAME:
+            # The watchdog beat lives under CONDUCTOR_ROOT, not the state dir.
+            is_ok, message = check_watchdog_heartbeat(max_age_seconds)
+        else:
+            is_ok, message = check_heartbeat(hb_name, hb_filename, max_age_seconds, state_api)
         if not is_ok:
             findings.append(
                 {
