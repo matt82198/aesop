@@ -72,7 +72,7 @@ class ScanBeforeCommitTest(unittest.TestCase):
 
     def test_secret_in_fix_is_blocked_before_commit_is_created(self):
         (self.wt / 'config.txt').write_text(
-            'token=' + _fixture_secret() + '\n', encoding='utf-8')
+            'line ' + _fixture_secret() + '\n', encoding='utf-8')
         head_before = _git(self.wt, 'rev-parse', 'HEAD')
         remote_before = self._remote_sha()
 
