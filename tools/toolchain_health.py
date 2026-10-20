@@ -86,7 +86,7 @@ def resolve_watchdog_heartbeat_path() -> Optional[Path]:
 
     Mirrors monitor/collect-signals.mjs resolveWatchdogHeartbeat and the only
     writer, daemons/backup-fleet.sh: CONDUCTOR_ROOT env wins; otherwise the sibling
-    conductor3 is used only when AESOP_ROOT's basename is exactly "aesop".
+    default sibling conductor state is used only when AESOP_ROOT's basename is exactly "aesop".
     Anything else is unresolved, and the daemon writes no beat there.
     """
     conductor_root = os.environ.get("CONDUCTOR_ROOT")
@@ -94,7 +94,7 @@ def resolve_watchdog_heartbeat_path() -> Optional[Path]:
         aesop_root = Path(os.environ.get("AESOP_ROOT", "."))
         if aesop_root.name != "aesop":
             return None
-        conductor_root = str(aesop_root.parent / "conductor3")
+        conductor_root = str(aesop_root.parent / "conductor3")  # default sibling convention
     return Path(conductor_root) / "state" / WATCHDOG_HEARTBEAT_FILENAME
 
 
