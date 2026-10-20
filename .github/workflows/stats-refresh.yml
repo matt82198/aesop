@@ -104,6 +104,8 @@ jobs:
         run: |
           set -eu
           BODY_FILE=$RUNNER_TEMP/stats-pr-body.md
+          # U+1F422 turtle as UTF-8 octal bytes: this workflow file is ASCII-only (encoding_lint).
+          FOOTER=$(printf '\360\237\220\242 Generated with Aesop')
           cat > $BODY_FILE <<EOF
           Automated stats refresh from the scheduled stats-refresh workflow.
 
@@ -114,6 +116,8 @@ jobs:
           ${STATS_BRANCH}, so there is exactly one open stats PR at a time.
 
           Run: ${RUN_URL}
+
+          ${FOOTER}
           EOF
 
           PR_URL=$(gh pr list --state open --head "${STATS_BRANCH}" --json url -q '.[0].url' || true)

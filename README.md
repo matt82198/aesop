@@ -23,6 +23,111 @@
 
 ## What It Is
 
+Aesop is a kernel. It is not a finished autonomous developer, and it does not know your repositories, rules, or accounts. It ships the parts that run the loop: dispatch, gates, receipts, merge, watchdog, durable state, and a dashboard. You fill in the rest.
+
+An iteration counts only when it leaves receipts that a gate can check. A lane that reports success without a receipt a gate can verify has not passed. The receipt gate is still in measurement mode, so the hosted receipt check is not required yet ([docs/RECEIPT-GATE.md](./docs/RECEIPT-GATE.md)).
+
+### System diagram
+
+Blue boxes ship in the npm package. Yellow boxes are yours to provide. Grey dashed boxes are examples that show one way to structure the system.
+
+```mermaid
+flowchart LR
+  subgraph YOU["You provide (not in the package)"]
+    R["Your repos<br/>(repos in aesop.config.json)"]
+    B["Your brain<br/>(~/.claude: CLAUDE.md, MEMORY.md)"]
+    M["Machinery repo (optional)<br/>(CONDUCTOR_ROOT)"]
+    K["Keys and accounts<br/>(Claude Code login, gh auth)"]
+  end
+  subgraph KERNEL["Kernel (ships in @matt82198/aesop)"]
+    D["Dispatch<br/>driver/wave_loop.py"]
+    W["Workers in worktrees<br/>driver/claude_code_driver.py"]
+    G["Gates<br/>hooks/pre-push-policy.sh<br/>tools/secret_scan.py"]
+    RC["Receipts<br/>tools/emit_receipt.py"]
+    MQ["Merge<br/>tools/auto_merge.py"]
+    WD["Watchdog<br/>daemons/run-watchdog.sh"]
+    S["Durable state<br/>state_store/store.py"]
+    V["Dashboard and monitor<br/>ui/serve.py<br/>monitor/collect-signals.mjs"]
+  end
+  subgraph EX["Examples (show structure only)"]
+    X["docs/MACHINERY-MAP.md<br/>examples/first-wave-baseline/<br/>scan/fleet-scan.example.mjs"]
+  end
+  R --> D
+  B --> D
+  K --> W
+  D --> W
+  W --> G
+  G --> RC
+  RC --> MQ
+  WD --> W
+  D --> S
+  S --> V
+  M -.-> V
+
+  classDef kernel fill:#dbeafe,stroke:#1e40af,color:#111
+  classDef yours fill:#fef9c3,stroke:#854d0e,color:#111
+  classDef example fill:#f3f4f6,stroke:#6b7280,stroke-dasharray:4 3,color:#374151
+  class D,W,G,RC,MQ,WD,S,V kernel
+  class R,B,M,K yours
+  class X example
+```
+
+### The kernel and what you fill in
+
+The blue boxes are the kernel. They are fixed machinery that ships in the package and is the same for every repo: **Dispatch**, **Workers in worktrees**, **Gates**, **Receipts**, **Merge**, **Watchdog**, **Durable state**, and **Dashboard and monitor**. The gates are in `hooks/pre-push-policy.sh` and `tools/secret_scan.py`, and receipts are written by `tools/emit_receipt.py`.
+
+The yellow boxes are yours, and you fill them in for your own repo:
+
+- **Your repos** is the list of repos the fleet works on. Set it under `repos` in `aesop.config.json`, copied from `aesop.config.example.json`.
+- **Your brain** is your rules, memory and brain-side hooks in `~/.claude`. Start from `CLAUDE-TEMPLATE.md` and `docs/MEMORY-TEMPLATE.md`. Your CLAUDE.md domain map, which names each domain and its rules, goes here too. The kernel does not ship one.
+- **Machinery repo (optional)** is a directory of fleet state you own. Set it with `CONDUCTOR_ROOT` (see `daemons/conductor-root.sh`).
+- **Keys and accounts** are your Claude Code login and `gh` auth. API keys are needed only for an API backend (`aesop.config.example.json` `seats`, `driver/anthropic_transport.py`).
+
+The diagram does not draw a box for lane briefs, tests or STATE.md, but the same split applies. Lane briefs and your tests and gate configuration live in your repo. STATE.md is your intent and phase record, and the kernel reads it in `driver/orchestrator_driver.py`. `LANE-CONTRACT.md` in this repo is one project's dispatch contract, an example rather than a template to copy as-is.
+
+### What ships, what you define, what is an example
+
+| Class | Piece | Where (path) | What it does for you |
+|---|---|---|---|
+| Ships | Dispatch loop | `driver/wave_loop.py` | Runs one wave through the AgentDriver backends: preflight, build, verify, repair rounds. |
+| Ships | Worker driver | `driver/claude_code_driver.py` | Runs a coding agent in a worktree. Other backends sit beside it in `driver/`. |
+| Ships | Gates and pre-push policy | `hooks/pre-push-policy.sh` | Runs the push-time checks. The CLI copies it into `.git/hooks`. |
+| Ships | Secret scan | `tools/secret_scan.py` | Blocks a push when staged files contain secrets. |
+| Ships | Receipts | `tools/emit_receipt.py` | Signs a record of which local checks ran, for a gate to read. |
+| Ships | Merge | `tools/auto_merge.py` | Merges green PRs in batches and fixes conflicts by default. Uses `gh`. |
+| Ships | Watchdog and self-heal | `daemons/run-watchdog.sh`, `daemons/selfheal.sh` | Backs up and scans fleet work on a timer, honors the halt switch, and restarts stale daemons. |
+| Ships | Durable state | `state_store/store.py` | Event-sourced SQLite (WAL) store. |
+| Ships | Dashboard | `ui/serve.py`, `ui/web/dist/index.html` | Live fleet view. `npx @matt82198/aesop dash --demo` runs with no keys. |
+| Ships | Monitor and MCP server | `monitor/collect-signals.mjs`, `mcp/server.mjs` | Collects health signals. The MCP server is read-only. |
+| Ships | Skills | `skills/power/SKILL.md`, `skills/buildsystem/SKILL.md` | The CLI installs them into `~/.claude/skills/` unless you pass `--no-skills`. |
+| Ships | Brain templates | `CLAUDE-TEMPLATE.md`, `docs/MEMORY-TEMPLATE.md` | Starting shape for your own CLAUDE.md and memory index. |
+| Ships | CI templates | `templates/ci/ci-hosted.yml` | Starting workflows. Pick a mode with `npx @matt82198/aesop init --ci-mode`. |
+| Ships | Claude Code hooks | `hooks/claude/force-model-policy.mjs` (plus two more) | Ship as files. Wiring them into your Claude Code settings is yours. |
+| Ships | Config example | `aesop.config.example.json` | Example `aesop.config.json` to copy and edit. |
+| You define | Repositories | `aesop.config.example.json` (`repos`) | The repos the fleet works on. The example uses placeholders. |
+| You define | Brain | `~/.claude` (`brain_root`, see `docs/CONFIGURE.md`) | Your rules, memory, and brain-side hooks. Not in the package. |
+| You define | Machinery repo (optional) | `daemons/conductor-root.sh` (`CONDUCTOR_ROOT`) | A directory of fleet state that you own. Set it explicitly. |
+| You define | Keys and accounts | `aesop.config.example.json` (`seats`), `driver/anthropic_transport.py` | Claude Code login, `gh` auth, and API keys only if you use an API backend. |
+| You define | Domain map | `CLAUDE-TEMPLATE.md` | Your project map and per-domain rules. |
+| You define | Brain-side hooks | `~/.claude/hooks/` (not in this repo) | Hooks for your own environment. The kernel does not ship them. |
+| Example | Aesop's own root CLAUDE.md | `CLAUDE.md` | One layout for a domain map. Not in the package. |
+| Example | Machinery map | `docs/MACHINERY-MAP.md` | Maps this repo's gates and daemons. It does not describe your setup. |
+| Example | First-wave replay | `examples/first-wave-baseline/` | A recorded wave to study. Not in the package. |
+| Example | Scanner template | `scan/fleet-scan.example.mjs` | An IOC scanner to copy and configure. |
+| Example | Lane contract | `LANE-CONTRACT.md` | One project's dispatch contract. Not in the package. |
+| Example | This repo's metrics and tests | `stats.json`, `tests/` | Counts and suites for Aesop itself. Not in the package. |
+
+### Fill in the gaps
+
+1. **Install the kernel.** `npx @matt82198/aesop my-fleet --name "api" --repos "/path/to/repo"`, then `npx @matt82198/aesop doctor` to see what is still missing.
+2. **Point it at your repos.** Copy `aesop.config.example.json` to `aesop.config.json` and set `repos`. Field reference: [docs/CONFIGURE.md](./docs/CONFIGURE.md).
+3. **Write your brain.** Copy `CLAUDE-TEMPLATE.md` to `~/.claude/CLAUDE.md` and edit it. Add a `MEMORY.md` built from `docs/MEMORY-TEMPLATE.md`. `/power` reads both.
+4. **Name a machinery repo (optional).** Set `CONDUCTOR_ROOT` to a directory you own. Do not rely on the default. Some daemons derive a sibling `conductor3` directory when it is unset (`daemons/run-watchdog.sh`, line 496).
+5. **Provide keys and accounts.** Run `gh auth login` for merges and sign in to Claude Code for workers. Add API keys only if you use an API backend.
+6. **Run one wave.** `npx @matt82198/aesop watch`, then `/power`, then `/buildsystem`. [docs/FIRST-WAVE.md](./docs/FIRST-WAVE.md) walks through it.
+
+## Background
+
 **Aesop Kernel is a multi-agent orchestration kernel for autonomous software development.** A kernel, not a harness: it owns the boundary between the model and your codebase, enforces one invariant (fail-closed verification), and refuses what it cannot verify rather than steering the model. It runs fleets of LLM coding agents across ranked backlog items, verifies their output locally, and ships merge-ready code to CI. Crash-only by design: workers are stateless, state lives in git + SQLite + durable files, and restart is the only recovery path.
 
 The design lineage spans 50 years: Unix kernel/user-space boundaries and fail-closed composable tools (1975), through crash-only software (Candea & Fox, 2003), to the agentic loop — the Ralph technique of running a coding agent in a tight reconciliation loop (2025). Aesop Kernel implements this: the wave cycle is a reconciliation controller; STATE.md + BUILDLOG.md are the durable event log; workers are supervised processes; crashes trigger re-reads from disk.

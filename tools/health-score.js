@@ -28,7 +28,23 @@ if (args[0] === 'health-score') {
   args = args.slice(1);
 }
 
-const result = spawnSync('python3', [pythonScript, ...args], {
+// Resolve Python interpreter portably (prefer python3, fallback to python) — same order as health.js/dash.js
+function resolvePython() {
+  for (const candidate of ['python3', 'python']) {
+    if (spawnSync(candidate, ['--version'], { stdio: 'ignore' }).error === undefined) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+const pythonBin = resolvePython();
+if (pythonBin === null) {
+  console.error('Error running health-score: python3 or python not found on PATH');
+  process.exit(1);
+}
+
+const result = spawnSync(pythonBin, [pythonScript, ...args], {
   stdio: 'inherit',
   timeout: 30000
 });

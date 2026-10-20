@@ -30,7 +30,7 @@ Heartbeat thresholds loaded from `aesop.config.json` (if present + jq available;
 - Home is `os.homedir()` (USERPROFILE on Windows, HOME on POSIX), never `process.env.HOME` alone: HOME is unset on native Windows PowerShell and scheduled-task launches.
 - `AESOP_TRANSCRIPTS_ROOT` (env) or config `.transcripts_root` or `<home>/.claude/projects` → scans `agent-*.jsonl` files (mtime <12min, top 8 recent)
 - `AESOP_STATE_ROOT` (env) or config `.state_root` or `{AESOP_ROOT}/state` → reads `SECURITY-ALERTS.log` for severity (HIGH/MED/DRIFT)
-- Local cache: `{STATE_ROOT}/.dash-extra-cache.json` (persisted metadata; optimization only, safe to drop)
+- Local cache: `{STATE_ROOT}/.dash-extra-cache.json` (persisted metadata; optimization only, safe to drop). Pruned on each `--json` save to transcripts seen in that run; never stores `promptFull` (re-derived from the transcript head on a cache hit) (tracker 44ce0f022454)
 
 ## Invariants & gotchas
 

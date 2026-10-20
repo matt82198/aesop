@@ -122,7 +122,7 @@ cat > "${CONFIG_FILE}" << EOFCONFIG
 {"state_root": "${WIN_STATE_2}"}
 EOFCONFIG
 
-python3 "${REPO_ROOT}/tools/halt.py" set "halt via config" > /dev/null 2>&1
+CONDUCTOR_ROOT="${CONDUCTOR_ROOT_FIXTURE}" python3 "${REPO_ROOT}/tools/halt.py" set "halt via config" > /dev/null 2>&1
 
 if [ ! -f "${TEST_STATE_2}/.HALT" ]; then
   echo "FAIL: .HALT not created in config state_root"
@@ -152,7 +152,7 @@ echo "PASS: Daemon skips cycle when halted (config)"
 rm -f "$OUT"
 
 # Clear and resume
-python3 "${REPO_ROOT}/tools/halt.py" --clear > /dev/null 2>&1
+CONDUCTOR_ROOT="${CONDUCTOR_ROOT_FIXTURE}" python3 "${REPO_ROOT}/tools/halt.py" --clear > /dev/null 2>&1
 echo "0" > "${CYCLE_COUNTER}"
 
 OUT=$(mktemp)

@@ -1335,6 +1335,31 @@ test('watchdog heartbeat: unparseable beat content is a gap, not fresh', async (
   }
 });
 
+test('watchdog heartbeat: stale beat under AESOP_STATE_ROOT is never reported as All heartbeats fresh', async (t) => {
+  const fixture = createFixture();
+  try {
+    const staleEpoch = Math.floor(Date.now() / 1000) - 3600;
+    // Case A: the stale beat sits in AESOP_STATE_ROOT and no CONDUCTOR_ROOT can be resolved.
+    writeWatchdogBeat(fixture.stateDir, String(staleEpoch));
+    runCollector(fixture.root, { AESOP_MONITOR_FORCE: '1', AESOP_STATE_ROOT: fixture.stateDir, CONDUCTOR_ROOT: '' });
+    const briefA = readFixtureBrief(fixture);
+    assert.ok(!briefA.includes('All heartbeats fresh'), 'case A: a stale beat under AESOP_STATE_ROOT must not print All heartbeats fresh');
+
+    // Case B: AESOP_STATE_ROOT points at the conductor state dir that holds the stale beat.
+    const conductorRoot = path.join(fixture.root, 'conductor3');
+    writeWatchdogBeat(path.join(conductorRoot, 'state'), String(staleEpoch));
+    runCollector(fixture.root, {
+      AESOP_MONITOR_FORCE: '1',
+      AESOP_STATE_ROOT: path.join(conductorRoot, 'state'),
+      CONDUCTOR_ROOT: conductorRoot,
+    });
+    const briefB = readFixtureBrief(fixture);
+    assert.ok(!briefB.includes('All heartbeats fresh'), 'case B: a stale conductor beat reached via AESOP_STATE_ROOT must not print All heartbeats fresh');
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 // === main_ci signal tests ===
 test('main_ci signal: present in SIGNALS.json', async (t) => {
   const fixture = createFixture();

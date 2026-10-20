@@ -83,7 +83,7 @@ aesop transcript timeline|replay|digest
 `aesop.config.example.json`, `README.md`, `LICENSE`, `CHANGELOG.md`, `CLAUDE-TEMPLATE.md`, `requirements.txt`, `requirements-dev.txt`
 
 **NOT copied**:
-`aesop.config.json` (user must `cp aesop.config.example.json` and edit), `state/` (runtime durable state, git-ignored), `.git/`, `node_modules/`, build artifacts
+`aesop.config.json` (user must `cp aesop.config.example.json` and edit), `state/` (runtime durable state, git-ignored), `.git/`, `node_modules/`, build artifacts, Python bytecode (`__pycache__/` dirs and `*.pyc` files). `copyRecursive` filters these by name before `statSync`, so a .pyc written or deleted by a concurrent process mid-copy cannot raise ENOENT. Test: `tests/cli-doctor-defects.test.mjs` "DEFECT 6b".
 
 **npm package.json `files` array** (lines 9–36): If adding new dirs/files to `filesToCopy`, add to `files` array so npm publish includes them.
 

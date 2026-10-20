@@ -756,13 +756,20 @@ const filesToCopy = [
 
 let copiedCount = 0;
 
+// Python bytecode is never shipped. Skipping by name BEFORE stat matters: a
+// concurrent test or interpreter may create or delete .pyc files under ui/
+// while the copy walks it, and statting a vanished entry throws ENOENT.
+function isBytecodeEntry(name) {
+  return name === '__pycache__' || name.endsWith('.pyc');
+}
+
 function copyRecursive(src, dest) {
   const stat = fs.statSync(src);
   if (stat.isDirectory()) {
     if (!fs.existsSync(dest)) {
       fs.mkdirSync(dest, { recursive: true });
     }
-    const entries = fs.readdirSync(src);
+    const entries = fs.readdirSync(src).filter(entry => !isBytecodeEntry(entry));
     entries.forEach(entry => {
       const srcFile = path.join(src, entry);
       const destFile = path.join(dest, entry);

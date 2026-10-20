@@ -475,7 +475,7 @@ When a model tier is not found in the pricing table, runners (`run_seam_u.py`, `
 - Add `cost_note: "unknown-model-pricing:<tier>"` to results
 - **Never silently report $0.00 cost** (which could hide billing surprises) <!-- metrics-verified: design_policy -->
 
-Fallback pricing estimates (when model not in table) are clearly labeled as `[FALLBACK - model not in pricing table]` in cost estimate output.
+There is no fallback rate. Both runners price from the single table `MODEL_PRICING_USD_PER_MTOK` in `bench/frontier_slice.py`; a model absent from it fails closed (`frontier_slice.py` refuses to estimate or run with `UnknownModelPricingError`, and `run_seam_u.py` records its cost as UNKNOWN).
 
 ### API Errors & Incomplete Runs
 

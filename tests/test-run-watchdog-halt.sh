@@ -11,6 +11,10 @@ set -e
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR=$(mktemp -d)
 AESOP_ROOT="${TMP_DIR}"
+# Fail-closed root rule: a non-canonical fixture AESOP_ROOT has no derivable conductor root,
+# so every daemon invocation below pins its OWN fixture conductor root (never the live fleet).
+CONDUCTOR_ROOT="${TMP_DIR}/conductor3"
+export CONDUCTOR_ROOT
 TEST_STATE_DIR="${TMP_DIR}/state"
 CYCLE_COUNTER="${TMP_DIR}/cycle-counter"
 

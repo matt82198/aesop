@@ -77,36 +77,70 @@ def get_journal_path():
     return common.get_state_dir() / "tracker-journal.jsonl"
 
 
-def read_tracker():
-    """Read tracker.json via the state_store facade. Returns None if missing/empty.
+class GuardDataError(Exception):
+    """tracker.json or the journal is present but unreadable/malformed.
 
-    Uses state_store.read_api.ReadAPI for all tracker reads.
+    Fail closed: a corrupt input must never be treated as "nothing to check"
+    (which would let zombie items pass the gate). main() maps this to exit 1.
+    """
+
+
+def read_tracker():
+    """Read tracker.json via the state_store facade. Returns None if the file is absent.
+
+    Uses state_store.read_api.ReadAPI for the tracker data.
     Respects AESOP_STATE_ROOT env var.
+
+    Raises GuardDataError when tracker.json exists but is not a JSON object
+    with a list-valued "items" (if present). ReadAPI swallows parse errors and
+    returns {}, so validity is probed here, before trusting its result.
     """
     state_dir = common.get_state_dir()
+    tracker_file = state_dir / "tracker.json"
+    if not tracker_file.exists():
+        return None
+
+    try:
+        raw = json.loads(tracker_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise GuardDataError(f"tracker.json is malformed or unreadable ({tracker_file}): {e}")
+    if not isinstance(raw, dict):
+        raise GuardDataError(f"tracker.json top level is not a JSON object ({tracker_file})")
+    if "items" in raw and not isinstance(raw["items"], list):
+        raise GuardDataError(f"tracker.json 'items' is not a list ({tracker_file})")
+
     api = ReadAPI(state_dir)
     tracker_data = api.read_tracker_snapshot()
 
-    # Return None if tracker is empty dict (no tracker.json exists)
-    # Return tracker data if it has items or other content
+    # A valid but empty object ({}) carries no items: treat as no tracker data.
     if not tracker_data:
         return None
     return tracker_data
 
 
 def read_journal():
-    """Read all journal entries. Returns list of dicts."""
+    """Read all journal entries. Returns list of dicts.
+
+    Raises GuardDataError on any unreadable or corrupt line. A partial line
+    must not be silently dropped: that would hide lane history and let zombies pass.
+    """
     journal_path = get_journal_path()
     if not journal_path.exists():
         return []
     entries = []
     try:
-        for line in journal_path.read_text(encoding="utf-8").strip().split("\n"):
-            if line:
-                entries.append(json.loads(line))
-    except (json.JSONDecodeError, IOError) as e:
-        print(f"ERROR: Could not read journal: {e}", file=sys.stderr)
-        return []
+        for line_no, line in enumerate(journal_path.read_text(encoding="utf-8").strip().split("\n"), 1):
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError as e:
+                raise GuardDataError(f"journal line {line_no} is corrupt ({journal_path}): {e}")
+            if not isinstance(entry, dict):
+                raise GuardDataError(f"journal line {line_no} is not a JSON object ({journal_path})")
+            entries.append(entry)
+    except OSError as e:
+        raise GuardDataError(f"journal is unreadable ({journal_path}): {e}")
     return entries
 
 
@@ -345,6 +379,7 @@ def cmd_enforce(args):
                 to_revert.append((item_id, current_lane, terminal_lane))
 
     reverted = []
+    failed = []
     if to_revert:
         write_api = WriteAPI(common.get_state_dir())
         try:
@@ -361,6 +396,7 @@ def cmd_enforce(args):
                     )
                 except Exception as e:
                     print(f"ERROR: failed to revert {item_id} via WriteAPI: {e}", file=sys.stderr)
+                    failed.append(item_id)
                     continue
 
                 reverted.append({
@@ -386,6 +422,12 @@ def cmd_enforce(args):
         for r in reverted:
             print(f"  {r['id']}: {r['from']} -> {r['to']}")
         rotate_journal_if_needed()
+
+    if failed:
+        # A zombie we could not revert is still a live violation: never report healed.
+        print(f"ERROR: {len(failed)} zombie item(s) could not be reverted: {', '.join(failed)}",
+              file=sys.stderr)
+        return 1
 
     return 0
 
@@ -544,17 +586,21 @@ def main(argv=None):
             print(f"ERROR: unknown flag: {arg}", file=sys.stderr)
             return 1
 
-    # Run the appropriate command
-    if mode == "seed":
-        return cmd_seed(argv)
-    elif mode == "check":
-        return cmd_check(argv)
-    elif mode == "enforce":
-        return cmd_enforce(argv)
-    elif mode == "reconcile-journal":
-        return cmd_reconcile_journal(argv)
-    else:
+    # Run the appropriate command. Malformed tracker/journal data fails closed.
+    commands = {
+        "seed": cmd_seed,
+        "check": cmd_check,
+        "enforce": cmd_enforce,
+        "reconcile-journal": cmd_reconcile_journal,
+    }
+    if mode not in commands:
         print(f"ERROR: unknown mode: {mode}", file=sys.stderr)
+        return 1
+    try:
+        return commands[mode](argv)
+    except GuardDataError as e:
+        print(f"ERROR: {e}. Refusing to pass (fail-closed); repair or restore the file.",
+              file=sys.stderr)
         return 1
 
 
