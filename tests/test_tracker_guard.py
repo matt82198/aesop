@@ -466,6 +466,70 @@ class TestTrackerGuardEdgeCases(TrackerGuardTestBase):
         self.assertEqual(exit_code, 0, "second seed should not crash")
 
 
+class TestTrackerGuardFailClosed(TrackerGuardTestBase):
+    """Malformed tracker.json or journal data must fail closed (exit 1), never pass."""
+
+    def write_malformed_tracker(self):
+        """Write a truncated tracker.json into the isolated temp state dir."""
+        tracker_file = self.state_dir / "tracker.json"
+        tracker_file.write_text('{"version": 1, "items": [{"id": "item1", "lane": "do', encoding="utf-8")
+        return tracker_file
+
+    def test_check_malformed_tracker_exits_1(self):
+        """--check on a malformed tracker.json exits 1 (not 0 'nothing to check')."""
+        self.write_malformed_tracker()
+
+        exit_code = tracker_guard.main(["--check"])
+
+        self.assertEqual(exit_code, 1, "malformed tracker.json must fail closed")
+
+    def test_default_check_malformed_tracker_exits_1(self):
+        """The default mode (no flag) also exits 1 on a malformed tracker.json."""
+        self.write_malformed_tracker()
+
+        exit_code = tracker_guard.main([])
+
+        self.assertEqual(exit_code, 1, "default check must fail closed on malformed tracker")
+
+    def test_enforce_malformed_tracker_exits_1(self):
+        """--enforce on a malformed tracker.json exits 1 instead of silently passing."""
+        self.write_malformed_tracker()
+
+        exit_code = tracker_guard.main(["--enforce"])
+
+        self.assertEqual(exit_code, 1, "enforce must fail closed on malformed tracker")
+
+    def test_empty_tracker_file_exits_1(self):
+        """A zero-byte tracker.json is unreadable data, not a missing tracker: exit 1."""
+        (self.state_dir / "tracker.json").write_text("", encoding="utf-8")
+
+        exit_code = tracker_guard.main(["--check"])
+
+        self.assertEqual(exit_code, 1, "empty tracker.json must fail closed")
+
+    def test_check_corrupt_journal_line_exits_1(self):
+        """One partial/corrupt journal line makes --check exit 1, not treat history as empty."""
+        self.create_tracker([{"id": "item1", "lane": "ranked"}])
+        journal_file = self.state_dir / "tracker-journal.jsonl"
+        journal_file.write_text(
+            json.dumps({"ts": "t", "id": "item1", "from": None, "to": "done"}) + "\n"
+            + '{"ts": "t", "id": "item1", "to": "rank',
+            encoding="utf-8",
+        )
+
+        exit_code = tracker_guard.main(["--check"])
+
+        self.assertEqual(exit_code, 1, "corrupt journal line must fail closed")
+
+    def test_missing_tracker_still_exits_0(self):
+        """A genuinely absent tracker.json remains a clean no-op (exit 0)."""
+        self.assertFalse((self.state_dir / "tracker.json").exists())
+
+        exit_code = tracker_guard.main(["--check"])
+
+        self.assertEqual(exit_code, 0, "absent tracker is not malformed")
+
+
 class TestTrackerGuardIntegration(TrackerGuardTestBase):
     """Integration tests mimicking real workflow."""
 
