@@ -195,6 +195,85 @@ class TestTrackerReconcile(unittest.TestCase):
             rc = tracker_reconcile.main(["--help"])
         self.assertEqual(rc, 0)
 
+    # --- --fix close failure must never print FIXED (P0 wrong data) ---
+
+    def _fix_with_failing_close(self, argv):
+        """Run main(argv) with one zombie whose StateAPI append raises."""
+        import io
+
+        class _BrokenAPI:
+            def __init__(self, db_path):
+                pass
+
+            def append(self, *args, **kwargs):
+                raise RuntimeError("simulated append failure")
+
+            def close(self):
+                pass
+
+        self._write_tracker([
+            {"id": "cf1", "title": "Close fails", "status": "in_progress",
+             "notes": "PR #600", "pr_link": None},
+        ])
+        out, err = io.StringIO(), io.StringIO()
+        with patch.dict(os.environ, {"AESOP_STATE_ROOT": str(self.state_dir)}):
+            with patch("tools.tracker_reconcile._check_pr_merged", return_value=True):
+                with patch("tools.tracker_reconcile._check_git_evidence", return_value=None):
+                    with patch("state_store.api.StateAPI", _BrokenAPI):
+                        with patch("sys.stdout", out), patch("sys.stderr", err):
+                            rc = tracker_reconcile.main(argv)
+        return rc, out.getvalue()
+
+    def test_fix_close_failure_exits_nonzero(self):
+        """--fix exits nonzero when the close write raises."""
+        rc, _ = self._fix_with_failing_close(["--fix"])
+        self.assertNotEqual(rc, 0)
+
+    def test_fix_close_failure_prints_no_fixed_line(self):
+        """--fix never prints a FIXED line for an item whose close failed."""
+        _, stdout = self._fix_with_failing_close(["--fix"])
+        fixed_lines = [ln for ln in stdout.splitlines() if ln.startswith("FIXED")]
+        self.assertEqual(fixed_lines, [])
+
+    def test_fix_close_failure_json_not_fixed(self):
+        """--fix --json reports fixed=false when the close write raises."""
+        _, stdout = self._fix_with_failing_close(["--fix", "--json"])
+        data = json.loads(stdout)
+        self.assertFalse(data["fixed"])
+        self.assertEqual(len(data["zombies"]), 1)
+        self.assertFalse(data["zombies"][0]["closed"])
+
+    def test_fix_close_success_prints_fixed_line(self):
+        """Control: a successful close still prints FIXED and exits 0."""
+        import io
+
+        class _RecordingAPI:
+            calls = []
+
+            def __init__(self, db_path):
+                pass
+
+            def append(self, *args, **kwargs):
+                _RecordingAPI.calls.append(args)
+
+            def close(self):
+                pass
+
+        self._write_tracker([
+            {"id": "ok1", "title": "Close ok", "status": "in_progress",
+             "notes": "PR #601", "pr_link": None},
+        ])
+        out = io.StringIO()
+        with patch.dict(os.environ, {"AESOP_STATE_ROOT": str(self.state_dir)}):
+            with patch("tools.tracker_reconcile._check_pr_merged", return_value=True):
+                with patch("tools.tracker_reconcile._check_git_evidence", return_value=None):
+                    with patch("state_store.api.StateAPI", _RecordingAPI):
+                        with patch("sys.stdout", out):
+                            rc = tracker_reconcile.main(["--fix"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(_RecordingAPI.calls), 1)
+        self.assertTrue(any(ln.startswith("FIXED ok1") for ln in out.getvalue().splitlines()))
+
     # --- pr_link field ---
 
     def test_pr_link_field_used(self):
