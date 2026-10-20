@@ -1205,6 +1205,44 @@ check_gen_tool_index() {
   return 0
 }
 
+# Crash-recovery backup refs: refs/heads/backup/crash-YYYY-MM-DD/<name> (strict, nothing else).
+# A backup ref is never a merge target, so the metrics and python-test-coverage gates add no
+# protection there and only block data preservation. Secret scan and every other gate still run.
+BACKUP_REF_RE='^refs/heads/backup/crash-[0-9]{4}-[0-9]{2}-[0-9]{2}/[A-Za-z0-9][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*$'
+BACKUP_PUSH=0
+BACKUP_REFS=""
+
+backup_only_push() {
+  # Reads pre-push stdin. Returns 0 (and sets BACKUP_REFS) only when there is at least one
+  # tuple, EVERY tuple is well-formed (4 fields) and EVERY remote ref matches BACKUP_REF_RE.
+  # Anything else (empty, malformed, mixed, tty) returns 1 => caller runs all gates (fail closed).
+  local local_ref local_sha remote_ref remote_sha extra n=0 refs=""
+  [ -t 0 ] && return 1
+  while IFS=' ' read -r local_ref local_sha remote_ref remote_sha extra || [ -n "$local_ref" ]; do
+    remote_ref="${remote_ref%$'\r'}"; remote_sha="${remote_sha%$'\r'}"; extra="${extra%$'\r'}"
+    if [ -z "$local_ref$local_sha$remote_ref$remote_sha" ]; then
+      continue
+    fi
+    [ -n "$extra" ] && return 1
+    [ -n "$remote_ref" ] && [ -n "$remote_sha" ] || return 1
+    [[ "$remote_ref" =~ $BACKUP_REF_RE ]] || return 1
+    n=$((n + 1))
+    refs="${refs:+$refs,}$remote_ref"
+  done
+  [ "$n" -gt 0 ] || return 1
+  BACKUP_REFS="$refs"
+  return 0
+}
+
+backup_ref_skip() {
+  # Returns 0 (gate skipped, loudly) when this push is backup-refs-only, else 1 (run the gate).
+  local gate="$1"
+  [ "$BACKUP_PUSH" = "1" ] || return 1
+  printf 'NOTE: skipping %s gate for crash-backup ref(s): %s\n' "$gate" "$BACKUP_REFS" >&2
+  log_event "gate_skipped_backup_ref:${gate}:${BACKUP_REFS}"
+  return 0
+}
+
 check_metrics() {
   local gate_dir
   gate_dir=$(gate_base_dir) || { gate_base_block "check_metrics"; return 1; }
@@ -3490,6 +3528,11 @@ main() {
     prepush_stdin=$(cat)
   fi
 
+  # Backup-refs-only push? (strict match; any parse doubt => all gates run)
+  if backup_only_push <<< "$prepush_stdin"; then
+    BACKUP_PUSH=1
+  fi
+
   if ! check_branch_policy <<< "$prepush_stdin"; then
     printf 'Error: Push to main/master is blocked by policy\n' >&2
     log_block "push_to_protected_branch"
@@ -3561,7 +3604,7 @@ main() {
 
   # Same captured stdin as the other range gates: check_metrics scans the pushed refs,
   # not the current branch (v0.10.1 incident).
-  if ! check_metrics <<< "$prepush_stdin"; then
+  if ! backup_ref_skip metrics && ! check_metrics <<< "$prepush_stdin"; then
     printf 'Error: Metrics verification gate failed. Push blocked.\n' >&2
     log_block "metrics_gate_failure"
     exit 1
@@ -3605,7 +3648,7 @@ main() {
     exit 1
   fi
 
-  if ! check_test_coverage; then
+  if ! backup_ref_skip test_coverage && ! check_test_coverage; then
     printf 'Error: Test coverage check failed. Push blocked.\n' >&2
     log_block "test_coverage_failure"
     exit 1
