@@ -237,12 +237,14 @@ class TestHealthyStateAndZeroChecks(unittest.TestCase):
         """Test that a healthy state (all checks pass) exits with 0."""
         with mock.patch("toolchain_health.check_binary") as mock_binary:
             with mock.patch("toolchain_health.check_heartbeat") as mock_hb:
-                # All checks pass
-                mock_binary.return_value = (True, None)
-                mock_hb.return_value = (True, None)
+                with mock.patch("toolchain_health.check_watchdog_heartbeat") as mock_wd:
+                    # All checks pass (the watchdog beat has its own CONDUCTOR_ROOT check)
+                    mock_binary.return_value = (True, None)
+                    mock_hb.return_value = (True, None)
+                    mock_wd.return_value = (True, None)
 
-                exit_code = toolchain_health.run_checks(json_mode=False, max_age_seconds=300)
-                assert exit_code == 0
+                    exit_code = toolchain_health.run_checks(json_mode=False, max_age_seconds=300)
+                    assert exit_code == 0
 
     def test_found_issues_exits_one(self):
         """Test that found issues cause exit code 1."""
