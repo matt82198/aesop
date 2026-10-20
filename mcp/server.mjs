@@ -98,7 +98,19 @@ const TRANSCRIPTS_ROOT = path.resolve(
 );
 
 // File paths
-const WATCHDOG_HEARTBEAT = path.join(STATE_ROOT, '.watchdog-heartbeat');
+// Watchdog heartbeat location. MUST mirror monitor/collect-signals.mjs resolveWatchdogHeartbeat
+// and daemons/backup-fleet.sh (the only writer): CONDUCTOR_ROOT env wins; otherwise the sibling
+// conductor3 checkout is used only when AESOP_ROOT's basename is exactly "aesop". Else null.
+// It is NOT under STATE_ROOT: the daemon never writes there.
+function resolveWatchdogHeartbeat() {
+  let conductorRoot = null;
+  if (process.env.CONDUCTOR_ROOT) {
+    conductorRoot = process.env.CONDUCTOR_ROOT;
+  } else if (path.basename(AESOP_ROOT) === 'aesop') {
+    conductorRoot = path.join(path.dirname(AESOP_ROOT), 'conductor3');
+  }
+  return conductorRoot ? path.join(conductorRoot, 'state', '.watchdog-heartbeat') : null;
+}
 const MONITOR_HEARTBEAT = path.join(STATE_ROOT, '.monitor-heartbeat');
 const ALERTS_LOG = path.join(STATE_ROOT, 'SECURITY-ALERTS.log');
 const TRACKER_FILE = path.join(STATE_ROOT, 'tracker.json');
@@ -189,27 +201,33 @@ function getFleetStatus() {
     alerts: null
   };
 
-  // Read watchdog heartbeat
-  try {
-    if (fs.existsSync(WATCHDOG_HEARTBEAT)) {
-      const content = fs.readFileSync(WATCHDOG_HEARTBEAT, 'utf8').trim();
-      if (content) {
-        const timestamp = parseInt(content, 10);
-        if (!isNaN(timestamp)) {
-          const now = Math.floor(Date.now() / 1000);
-          const ageSec = now - timestamp;
-          const ageBucketed = Math.floor(ageSec / 3) * 3;
-          const alive = ageSec < 300 ? 'ALIVE' : 'STALE';
-          result.watchdog = {
-            alive,
-            age_seconds: ageBucketed,
-            threshold_seconds: 300
-          };
-        }
+  // Read watchdog heartbeat from the writer's root (CONDUCTOR_ROOT/state).
+  // A missing, unresolved, or unparseable beat is an explicit gap (UNKNOWN/MISSING), never ALIVE.
+  const wdPath = resolveWatchdogHeartbeat();
+  if (!wdPath) {
+    result.watchdog = { alive: 'UNKNOWN', reason: 'watchdog root unresolved (set CONDUCTOR_ROOT)', path: null };
+  } else if (!fs.existsSync(wdPath)) {
+    result.watchdog = { alive: 'MISSING', path: wdPath };
+  } else {
+    try {
+      const content = fs.readFileSync(wdPath, 'utf8').trim();
+      const timestamp = parseInt(content, 10);
+      if (!content || isNaN(timestamp)) {
+        result.watchdog = { alive: 'UNKNOWN', path: wdPath, reason: 'unparseable heartbeat' };
+      } else {
+        const now = Math.floor(Date.now() / 1000);
+        const ageSec = now - timestamp;
+        const ageBucketed = Math.floor(ageSec / 3) * 3;
+        const alive = ageSec < 300 ? 'ALIVE' : 'STALE';
+        result.watchdog = {
+          alive,
+          age_seconds: ageBucketed,
+          threshold_seconds: 300
+        };
       }
+    } catch (e) {
+      result.watchdog = { alive: 'UNKNOWN', path: wdPath, reason: 'unreadable heartbeat' };
     }
-  } catch (e) {
-    // Silently ignore errors
   }
 
   // Read monitor heartbeat
