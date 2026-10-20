@@ -37,7 +37,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Set, Tuple
 
-from frontier_slice import MODEL_PRICING_USD_PER_MTOK
+try:
+    # Imported as bench.run_seam_u (tests, repo-root imports): resolve through the package.
+    from bench.frontier_slice import MODEL_PRICING_USD_PER_MTOK
+except ImportError:
+    # Run as a script from bench/ (sys.path[0] is bench/): the bare module name resolves.
+    from frontier_slice import MODEL_PRICING_USD_PER_MTOK
 
 
 # ============================================================================
