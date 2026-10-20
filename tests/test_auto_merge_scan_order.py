@@ -28,11 +28,22 @@ import auto_merge  # noqa: E402
 BRANCH = 'fix/scan-order-fixture'
 
 
+_IDENTITY_ENV = {
+    'GIT_AUTHOR_NAME': 'Fixture', 'GIT_AUTHOR_EMAIL': 'fixture@example.invalid',
+    'GIT_COMMITTER_NAME': 'Fixture', 'GIT_COMMITTER_EMAIL': 'fixture@example.invalid',
+}
+
+
 def _git(cwd, *args):
-    """Run git in cwd with utf-8 capture; return stripped stdout. Raises on failure."""
+    """Run git in cwd with utf-8 capture; return stripped stdout. Raises on failure.
+
+    The commit identity comes from environment variables, never `git config user.*`,
+    so the temp repos never mutate git configuration.
+    """
     return subprocess.run(
         ['git', *args], cwd=str(cwd), capture_output=True, text=True,
         encoding='utf-8', errors='replace', timeout=60, check=True,
+        env={**os.environ, **_IDENTITY_ENV},
     ).stdout.strip()
 
 
@@ -51,8 +62,6 @@ class ScanBeforeCommitTest(unittest.TestCase):
 
         _git(self.tmp, 'init', '-q', '--bare', str(self.bare))
         _git(self.tmp, 'init', '-q', '-b', 'main', str(seed))
-        _git(seed, 'config', 'user.name', 'Fixture')
-        _git(seed, 'config', 'user.email', 'fixture@example.invalid')
         (seed / 'config.txt').write_text('value=1\n', encoding='utf-8')
         _git(seed, 'add', 'config.txt')
         _git(seed, 'commit', '-q', '-m', 'seed')
@@ -63,8 +72,6 @@ class ScanBeforeCommitTest(unittest.TestCase):
         _git(self.bare, 'symbolic-ref', 'HEAD', 'refs/heads/main')
 
         _git(self.tmp, 'clone', '-q', str(self.bare), str(self.wt))
-        _git(self.wt, 'config', 'user.name', 'Fixture')
-        _git(self.wt, 'config', 'user.email', 'fixture@example.invalid')
 
     def _remote_sha(self):
         """The SHA origin's fix branch points at (the branch exists from setup)."""
