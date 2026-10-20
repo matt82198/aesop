@@ -264,6 +264,7 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   watcher, or standing loop of its own.
 - **BACKGROUND RUNS are denied by hook.** A lane runs to completion in the foreground — no
   `run_in_background`, no detached/nohup process; backgrounding is not a lane capability.
+- **Hook probes never write the real resistance ledger.** Any manual run of a brain hook outside its test file sets `RESISTANCE_LEDGER=<temp file under the lane's worktree parent>` first (the override the hooks read, e.g. `main-context-ceiling.mjs`), so no row reaches `~/.claude/state/resistance-ledger.jsonl`. A probe that wrote the real ledger is reported in the hand-back.
 
 ## 7. Definition of DONE — work that is not pushed does not exist
 - **A lane is not finished when the code is written and the bar is green. It is finished when the
