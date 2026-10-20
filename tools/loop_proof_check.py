@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Loop-Proof gate: a change to a listed loop file needs a red-then-green trailer.
+INDEX: Refuses a git range that changes a LOOP-MANIFEST.json loop file without a Loop-Proof trailer naming a declared test (fail-closed, PR-only CI).
 
 LOOP-MANIFEST.json (repo root) lists the loop-machinery files (daemons and the scripts they run),
 each with the test files that prove it. For the range base..head:
