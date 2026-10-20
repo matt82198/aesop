@@ -208,6 +208,10 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
     foreground `gh pr checks <N>` snapshot (exit 8 = pending) and stops. The merge actor is GitHub: it merges once
     the required checks pass. The orchestrator verifies `state == MERGED` with
     `gh pr view <N> --json state,mergeCommit`; it does not poll or babysit the merge.
+    **Arm only when the base is the default branch.** Before arming, run `gh pr view <N> --json baseRefName`. If
+    `baseRefName` is the repo default branch, arm as above. A stacked PR (base is another PR's branch) is NOT armed:
+    GitHub would merge it into that unprotected parent with no CI run. The lane reports
+    `stacked on #N; retarget to main after #N merges` and stops.
   - **Mode 2 - repos WITHOUT CI (claude-config, claude-scripts, conductor3, psinasty).** There is no required check
     to arm against, so the lane stops at PR open. It runs its gates in its worktree, pastes the literal output, and
     reports the PR number and the full head sha. The orchestrator lands it with one pinned
