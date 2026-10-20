@@ -46,6 +46,24 @@ function checkNodeVersion() {
 }
 
 // Check Python available and version >= 3.10
+// Box fence (tools/box_fence.py): a checkout that carries BOX_PROTOCOL must not be behind the
+// shared repo's. Fails closed on FAIL (stale box); WARN (offline) passes with a hint; a
+// checkout without BOX_PROTOCOL is n/a (feature not adopted).
+function checkBoxFence() {
+  if (!fs.existsSync(path.join(CURRENT_DIR, 'BOX_PROTOCOL'))) {
+    return { passed: true, na: true, hint: 'n/a (no BOX_PROTOCOL in this checkout)' };
+  }
+  const script = path.join(__dirname, 'box_fence.py');
+  for (const bin of ['python3', 'python']) {
+    const r = spawnSync(bin, [script, '--repo', CURRENT_DIR], { encoding: 'utf8', timeout: 60000, stdio: ['ignore', 'pipe', 'pipe'] });
+    if (r.error && r.error.code === 'ENOENT') continue;
+    const out = ((r.stdout || '') + (r.stderr || '')).trim();
+    if (r.status === 0) return { passed: true, hint: out.split('\n')[0] };
+    return { passed: false, hint: out.split('\n').slice(0, 2).join(' ') || 'box fence failed' };
+  }
+  return { passed: false, hint: 'python3 or python not found; cannot run the box fence' };
+}
+
 function checkPython() {
   // Try python3 first
   let pythonBin = null;
@@ -467,6 +485,7 @@ function formatRow(label, status, hint, na = false) {
       { label: 'Node.js version >=18', fn: checkNodeVersion },
       { label: 'Python version >=3.10', fn: checkPython },
       { label: 'Git repository', fn: checkGitRepo },
+      { label: 'Box fence (BOX_PROTOCOL up to date)', fn: checkBoxFence },
       { label: 'aesop.config.json (structure & required fields)', fn: checkConfig },
       { label: 'Repository URLs (no placeholders)', fn: checkRepoURLs },
       { label: 'Skills files (power & buildsystem)', fn: checkSkillsFiles },

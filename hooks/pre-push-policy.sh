@@ -3516,6 +3516,20 @@ main() {
     exit 1
   fi
 
+  # Box fence push-time re-check (tools/box_fence.py): when an earlier fence run could not reach
+  # origin it left a marker in the git dir. Before any push, re-verify BOX_PROTOCOL; still offline
+  # or behind means the push is blocked (an offline box could not collide until now).
+  local fence_root fence_gitdir
+  fence_root=$(resolve_aesop_root)
+  fence_gitdir=$(git rev-parse --absolute-git-dir 2>/dev/null || true)
+  if [ -n "$fence_gitdir" ] && [ -f "$fence_gitdir/aesop-box-fence-offline" ] && [ -f "$fence_root/tools/box_fence.py" ]; then
+    if ! "$_AESOP_PY_BIN" "$fence_root/tools/box_fence.py" --repo "$fence_root" --push-check < /dev/null >&2; then
+      printf 'Error: box fence: this box could not prove it is current; push blocked (fail-closed)\n' >&2
+      log_block "box_fence_push_check_failed"
+      exit 1
+    fi
+  fi
+
   # git pre-push provides ref info on stdin, and BOTH check_branch_policy and
   # check_secret_scan (via get_commit_range) need to read every ref tuple.
   # Capture the real pipe ONCE here and hand each consumer its own here-string

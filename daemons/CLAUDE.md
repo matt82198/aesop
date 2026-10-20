@@ -120,3 +120,5 @@ Tests never touch real AESOP_ROOT/state; all invocations point at throwaway mkte
 - Per-function implementation details (inlined only contracts/interfaces above)
 
 Map of all domains: /CLAUDE.md
+
+- **Box fence in run-watchdog.sh**: `run_box_fence` runs tools/box_fence.py before the lock and any cycle; a FAIL logs an ERROR line to FLEET-BACKUP.log and exits 1 (daemon and --once); WARN (offline) logs and continues.

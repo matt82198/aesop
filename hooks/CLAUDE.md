@@ -145,3 +145,5 @@ Early guard in pre-push-policy.sh blocks push if Python missing (required for se
 ## Dropped (reason)
 - `docs/HOOK-INSTALL.md` comprehensive guide inlined above (GitHub config, troubleshooting, customization, rotation); refer to that file if org needs full runbook for distribution teams.
 - Map of all domains: /CLAUDE.md
+
+- **Box fence push re-check** (`pre-push-policy.sh` main): when the git dir holds the `aesop-box-fence-offline` marker, runs `tools/box_fence.py --push-check`; failure blocks the push (fail-closed).

@@ -326,6 +326,28 @@ check_halt() {
   return 0
 }
 
+# Box fence gate: see tools/box_fence.py. Returns 1 (and logs ERROR) only when the fence FAILs.
+run_box_fence() {
+  local aesop_root="$1" python_exe="$2" log_file="$3" fence_out fence_rc
+  if [ ! -f "$aesop_root/tools/box_fence.py" ]; then
+    return 0
+  fi
+  mkdir -p "$(dirname "$log_file")" 2>/dev/null || true
+  if [ -z "$python_exe" ]; then
+    echo "[$(date '+%F %T')] WARN: box fence not run: no python interpreter" >> "$log_file"
+    return 0
+  fi
+  fence_out=$("$python_exe" "$aesop_root/tools/box_fence.py" --repo "$aesop_root" < /dev/null 2>&1)
+  fence_rc=$?
+  if [ $fence_rc -ne 0 ]; then
+    echo "[$(date '+%F %T')] ERROR: box fence FAILED, watchdog not started (exit $fence_rc): $fence_out" >> "$log_file"
+    printf 'WATCHDOG: NOT STARTED (box fence)\n%s\n' "$fence_out" >&2
+    return 1
+  fi
+  case "$fence_out" in *"FENCE WARN"*) echo "[$(date '+%F %T')] WARN: $fence_out" >> "$log_file" ;; esac
+  return 0
+}
+
 # Main execution — guarded below so sourcing this file (e.g. from tests, to
 # reuse acquire_lock/release_lock/check_halt) never runs a cycle as a
 # side effect of the source itself.
@@ -507,6 +529,11 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   fi
   MONITOR_HB_FILE="$CONDUCTOR_ROOT/monitor/.monitor-heartbeat"
   MONITOR_HB_STALE_THRESHOLD=600
+
+  # Box fence (tools/box_fence.py): a box behind the shared BOX_PROTOCOL must not run. FAIL logs an
+  # ERROR line (the monitor surfaces it) and exits 1 before any lock, backup or push. WARN (offline)
+  # and PASS continue; a checkout without the tool is a skip.
+  run_box_fence "$AESOP_ROOT" "$PYTHON_EXE" "$AESOP_ROOT/state/FLEET-BACKUP.log" || exit 1
 
   main "$@"
 fi
