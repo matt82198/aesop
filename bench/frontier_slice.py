@@ -217,9 +217,15 @@ class FakeTransport:
 DEFAULT_MODEL = "claude-opus-5-5"
 
 # Billed (input, output) USD per million tokens, keyed by model ID.
-# Intentionally EMPTY: no verified 5.5-generation prices exist in the repo, and
-# guessed prices are not allowed. Add a row only from a verified billing source.
-MODEL_PRICING_USD_PER_MTOK: Dict[str, Tuple[float, float]] = {}
+# Source: https://platform.claude.com/docs/en/about-claude/models/overview.md
+# (verified 2026-10-13). Haiku 5.5 input is TIERED: $0.10/MTok applies to requests
+# up to 100K tokens; the rate above that tier is not modelled here, so estimates
+# for larger requests understate cost. Any model not listed fails closed.
+MODEL_PRICING_USD_PER_MTOK: Dict[str, Tuple[float, float]] = {
+    "claude-opus-5-5": (4.0, 20.0),
+    "claude-sonnet-5-5": (2.0, 10.0),
+    "claude-haiku-5-5": (0.10, 0.50),
+}
 
 
 class UnknownModelPricingError(ValueError):

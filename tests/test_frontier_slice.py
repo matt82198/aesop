@@ -404,6 +404,11 @@ class TestCurrentModelDefaults(unittest.TestCase):
         import frontier_slice
         self.assertIn(frontier_slice.DEFAULT_MODEL, self.CURRENT_IDS)
 
+    def test_default_model_is_in_pricing_table(self):
+        """The default model must have a verified price, or a live run cannot estimate."""
+        import frontier_slice
+        self.assertIn(frontier_slice.DEFAULT_MODEL, frontier_slice.MODEL_PRICING_USD_PER_MTOK)
+
     def test_unpriced_model_raises_explicit_error(self):
         """A model with no verified price raises, never falls back to a guessed rate."""
         import frontier_slice
@@ -437,6 +442,7 @@ class TestCurrentModelDefaults(unittest.TestCase):
             result = subprocess.run(
                 [sys.executable, str(bench_dir / "frontier_slice.py"),
                  "--mode", "live", "--confirm-spend",
+                 "--model", "unpriced-test-model",
                  "--output", str(Path(state_dir) / "out.json")],
                 capture_output=True, text=True, timeout=30, env=env,
             )
