@@ -91,7 +91,10 @@ PATTERNS = {
         r"(?:[_\-]?KEY)?(?![A-Za-z0-9_\-])"
         r"\s*[:=]\s*"
         r"(?:(?P<q>[\"'])(?P<v>[^\"'\n]{8,})(?P=q)"
-        r"|(?P<u>[^\s'\"`$<{}()\[\],;:]{8,})(?=\s|$|[;,]))",
+        # The unquoted value may not be a slash-delimited regex literal (`/body/` or
+        # `/body/gi`): a scanner's own rule-table entry such as
+        # `SUPPRESSED_CRED = /tokenvalue123456/` is code, not a credential (f-332fcec2).
+        r"|(?!/[^\s/]+/)(?P<u>[^\s'\"`$<{}()\[\],;:]{8,})(?=\s|$|[;,]))",
         re.IGNORECASE,
     ),
     "connection_string": (
