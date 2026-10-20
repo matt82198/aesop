@@ -22,6 +22,23 @@ const LOCK_BASE_DELAY_MS = parseInt(process.env.AESOP_LOCK_BASE_DELAY_MS || '10'
 const LOCK_TIMEOUT_MS = parseInt(process.env.AESOP_LOCK_TIMEOUT_MS || '30000', 10); // 30s default
 const STALE_LOCK_THRESHOLD = 10 * 60 * 1000; // 10 minutes
 
+// Shared cell used only as a futex target for Atomics.wait. Nothing ever
+// notifies it, so each wait runs to its timeout while the thread sleeps.
+const SLEEP_CELL = new Int32Array(new SharedArrayBuffer(4));
+
+/**
+ * Block the current thread for ms milliseconds without spinning the CPU.
+ * acquireLock is synchronous (callers depend on it returning the lock dir),
+ * so an async sleep is not an option; Atomics.wait yields the core instead.
+ *
+ * @param {number} ms - Milliseconds to sleep (0 returns immediately)
+ */
+function sleepSync(ms) {
+  if (ms > 0) {
+    Atomics.wait(SLEEP_CELL, 0, 0, ms);
+  }
+}
+
 /**
  * Check whether a pid is a live process, cross-platform (Windows + POSIX).
  *
@@ -164,10 +181,8 @@ export function acquireLock(filePath, opts = {}) {
         // Lock is held; wait and retry with exponential backoff
         attempt++;
         const delayMs = LOCK_BASE_DELAY_MS * Math.pow(2, Math.min(attempt - 1, 5)); // Cap exponential growth at 2^5 = 32x
-        const start = Date.now();
-        while (Date.now() - start < delayMs && Date.now() - startTime < timeoutMs) {
-          // Busy-wait for calculated backoff delay
-        }
+        const remainingMs = timeoutMs - (Date.now() - startTime);
+        sleepSync(Math.max(0, Math.min(delayMs, remainingMs)));
       } else {
         throw e;
       }
