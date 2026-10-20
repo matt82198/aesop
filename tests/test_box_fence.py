@@ -24,7 +24,7 @@ ENV = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COM
 
 
 def git(cwd, *args):
-    r = subprocess.run(["git", *args], cwd=str(cwd), env=ENV, capture_output=True, text=True,
+    r = subprocess.run(["git", *args], cwd=str(cwd), env=ENV, capture_output=True, text=True, encoding="utf-8", errors="replace",
                        stdin=subprocess.DEVNULL)
     assert r.returncode == 0, f"git {args} failed: {r.stderr}"
     return r.stdout
@@ -32,7 +32,7 @@ def git(cwd, *args):
 
 def fence(repo, *extra):
     r = subprocess.run([sys.executable, str(TOOL), "--repo", str(repo), "--json", *extra],
-                       capture_output=True, text=True, stdin=subprocess.DEVNULL, env=ENV, timeout=60)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL, env=ENV, timeout=60)
     try:
         data = json.loads(r.stdout)
     except ValueError:

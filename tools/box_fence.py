@@ -40,7 +40,7 @@ DEFAULT_TIMEOUT_S = 30
 def _git(repo, args, timeout):
     """Run git; return (rc, stdout, stderr). A timeout or missing git returns rc 124/127."""
     try:
-        r = subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True,
+        r = subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True, encoding="utf-8", errors="replace",
                            stdin=subprocess.DEVNULL, timeout=timeout,
                            env=_env())
         return r.returncode, r.stdout, r.stderr
