@@ -163,6 +163,33 @@ def _run_in(cwd, cmd, timeout=30):
                           encoding='utf-8', errors='replace', timeout=timeout, check=False)
 
 
+def _inspected_ok(scan_stdout, changed_count):
+    """True when a CLEAN scanner report actually inspected files for a non-empty delta."""
+    if not changed_count:
+        return True
+    m = _CLEAN_COUNT_RE.search(scan_stdout)
+    return (m is not None and int(m.group(1)) >= 1) or 'CLEAN: scanned (' in scan_stdout
+
+
+def _secret_gate_staged(wt):
+    """Scan the STAGED index before `git commit` creates the fix commit. Fails closed.
+
+    Runs before the commit object exists, so a secret in the fix is blocked while it is still
+    only staged; a blocked scan leaves HEAD and origin untouched. A non-empty staged set that
+    the scanner reports as 0 files inspected is NOT a pass.
+    """
+    r = git(['diff', '--cached', '--name-only', '--diff-filter=d'], cwd=wt, check=False)
+    if r.returncode != 0:
+        return False, 'secret scan: cannot list staged fix'
+    staged = [ln for ln in r.stdout.splitlines() if ln.strip()]
+    r = _run_in(wt, [sys.executable, SECRET_SCAN, '--staged', '--repo', wt], timeout=60)
+    if r.returncode != 0:
+        return False, 'secret scan failed before commit (staged)'
+    if not _inspected_ok(r.stdout, len(staged)):
+        return False, f'secret scan inspected 0 files for {len(staged)} staged'
+    return True, 'staged secret scan clean'
+
+
 def _secret_gate(wt, branch):
     """Scan the fix's committed delta over origin/<branch> before push. Fails closed.
 
@@ -177,11 +204,8 @@ def _secret_gate(wt, branch):
     r = _run_in(wt, [sys.executable, SECRET_SCAN, '--range', base, '--repo', wt], timeout=60)
     if r.returncode != 0:
         return False, 'secret scan failed'
-    if changed:
-        m = _CLEAN_COUNT_RE.search(r.stdout)
-        inspected = (m is not None and int(m.group(1)) >= 1) or 'CLEAN: scanned (' in r.stdout
-        if not inspected:
-            return False, f'secret scan inspected 0 files for {len(changed)} changed'
+    if not _inspected_ok(r.stdout, len(changed)):
+        return False, f'secret scan inspected 0 files for {len(changed)} changed'
     return True, 'secret scan clean'
 
 
@@ -214,10 +238,15 @@ def _fix_in_worktree(branch, wt):
         git(['add', '--'] + touched, cwd=wt, check=False)
     r = git(['diff', '--cached', '--quiet'], cwd=wt, check=False)
     if r.returncode != 0:
+        # Scan the index BEFORE the commit object exists: a secret must never become a commit.
+        ok, detail = _secret_gate_staged(wt)
+        if not ok:
+            return False, detail
         r = git(['commit', '-m', 'fix: merge main + resolve conflicts'], cwd=wt, check=False)
         if r.returncode != 0:
             return False, 'commit failed'
 
+    # Committed-range scan before push: covers the merge commit and anything already committed.
     ok, detail = _secret_gate(wt, branch)
     if not ok:
         return False, detail
