@@ -39,7 +39,7 @@
 
 ## Environment variables
 
-- `AESOP_ROOT` (no default for backup-fleet.sh: unset refuses to run): Project root; prepends to all state/ and tools/ paths. backup-fleet.sh never falls back to `.`. The run-watchdog.sh entry point exports it, deriving it from its own script location when unset, never from the current directory.
+- `AESOP_ROOT` (no default for backup-fleet.sh: unset refuses to run): Project root; prepends to all state/ and tools/ paths. backup-fleet.sh never falls back to `.`. The run-watchdog.sh entry point exports it, deriving it from its own script location when unset, never from the current directory. That derivation is announced on stderr (`NOTICE: AESOP_ROOT unset; derived checkout root ...`), so it is never silent; the scheduled task relies on it (install-tasks.ps1 sets no AESOP_ROOT). Test: `tests/test-run-watchdog-root.sh` (tracker cebab35aabeb).
 - `CONDUCTOR_ROOT` (default: sibling of AESOP_ROOT): Conductor3 root; if unset or missing, monitor-related operations skip gracefully (portability).
 - `AESOP_WATCHDOG_CYCLE_CMD`: Override backup-fleet.sh invocation (test override); if set, runs as `bash -c "$AESOP_WATCHDOG_CYCLE_CMD"`.
 - `AESOP_SELFHEAL_SKIP_RESTART`: If set, selfheal.sh detects stale heartbeats and logs dry-run actions instead of actually restarting daemons (test-only flag).
