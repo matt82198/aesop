@@ -788,7 +788,15 @@ def scan_content(content, scan_path=None):
             matches = re.finditer(pattern, line, flags)
             for match in matches:
                 match_str = match.group(0)
-                if is_placeholder(match_str):
+                if rule_name == "connection_string":
+                    # Tracker scan-content-dsn (refutes b0937071216e's history path):
+                    # route through the same password-only check as _scan_views, so a
+                    # real DSN whose DB name is `/test` is not excused as a placeholder.
+                    if _connection_password_is_placeholder(match_str):
+                        continue
+                    if _connection_password_is_regex_shape(match_str):
+                        continue
+                elif is_placeholder(match_str):
                     continue
                 is_fatal = _classify_finding(rule_name, False, scan_path)
                 findings.append((line_num, rule_name, match_str, is_fatal))
