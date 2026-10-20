@@ -197,6 +197,67 @@ class TestGitIntegrityCheck(unittest.TestCase):
         # Just verify it works without Windows-specific paths
         self.assertIn(status, ["OK", "DAMAGED"])
 
+    def test_malformed_repos_json_fails_closed_without_reading_stdin(self):
+        """A malformed --repos-json must exit 2 with an error, never block on stdin.
+
+        stdin is an open pipe that is never closed by the test, so a tool that
+        falls through to reading stdin hangs and hits the wait timeout.
+        """
+        bad_json = os.path.join(self.temp_dir, "watchdog-repos.json")
+        with open(bad_json, "w", encoding="utf-8") as f:
+            f.write("{not valid json")
+        script = str(Path(__file__).parent.parent / "tools" / "git_integrity_check.py")
+        err_path = os.path.join(self.temp_dir, "stderr.txt")
+
+        with open(err_path, "w", encoding="utf-8") as errf:
+            proc = subprocess.Popen(
+                [sys.executable, script, "--repos-json", bad_json],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=errf,
+            )
+            try:
+                returncode = proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                proc.stdin.close()
+                self.fail("git_integrity_check blocked reading stdin after a malformed --repos-json")
+            proc.stdin.close()
+
+        with open(err_path, "r", encoding="utf-8") as f:
+            stderr_text = f.read()
+
+        self.assertEqual(returncode, 2)
+        # Specific message, not the generic "No repositories specified" line.
+        self.assertIn("cannot read --repos-json", stderr_text)
+
+    def test_empty_repos_json_does_not_read_stdin(self):
+        """A valid but empty --repos-json list must not fall through to stdin."""
+        empty_json = os.path.join(self.temp_dir, "empty-repos.json")
+        with open(empty_json, "w", encoding="utf-8") as f:
+            f.write("[]")
+        script = str(Path(__file__).parent.parent / "tools" / "git_integrity_check.py")
+        err_path = os.path.join(self.temp_dir, "stderr-empty.txt")
+
+        with open(err_path, "w", encoding="utf-8") as errf:
+            proc = subprocess.Popen(
+                [sys.executable, script, "--repos-json", empty_json],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=errf,
+            )
+            try:
+                returncode = proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                proc.stdin.close()
+                self.fail("git_integrity_check blocked reading stdin after an empty --repos-json")
+            proc.stdin.close()
+
+        self.assertEqual(returncode, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
