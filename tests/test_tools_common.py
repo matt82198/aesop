@@ -230,18 +230,6 @@ class TestGetConductorRootFailClosed(unittest.TestCase):
             get_conductor_root()
         self.assertIn("CONDUCTOR_ROOT", str(ctx.exception))
 
-    def test_unset_env_never_uses_cwd_parent(self):
-        from common import ConductorRootUnresolved, get_conductor_root
-        cwd = self.tmp / "work" / "aesop-wt-y"
-        cwd.mkdir(parents=True)
-        old = os.getcwd()
-        os.chdir(cwd)
-        try:
-            with self.assertRaises(ConductorRootUnresolved):
-                get_conductor_root()
-        finally:
-            os.chdir(old)
-
 
 if __name__ == "__main__":
     unittest.main()

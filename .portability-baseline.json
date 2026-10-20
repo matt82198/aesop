@@ -1,8 +1,6 @@
 {
   "_comment": "Portability-gate ratchet baseline (see tools/portability_check.py --help). Regenerate ONLY via --update-baseline after reviewing the diff; CI must never pass --update-baseline.",
   "violations": {
-    "daemons/run-merge-queue.sh@private_token": 1,
-    "daemons/run-watchdog.sh@private_token": 2,
     "daemons/selfheal.sh@private_token": 1,
     "docs/CONFIGURE.md@posix_home_path": 15,
     "docs/INSTALL.md@posix_home_path": 9,
@@ -15,7 +13,6 @@
     "scan/fleet-scan.example.mjs@private_token": 1,
     "state_store/__init__.py@private_token": 1,
     "tools/claudemd_drift.py@private_token": 1,
-    "tools/halt.py@private_token": 2,
     "tools/launch_tui.py@posix_home_path": 2,
     "tools/launch_tui.py@windows_user_path": 2,
     "tools/portability_check.py@private_token": 4,
