@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "description": "Loop machinery of this repo: the long-running daemons and the per-cycle worker they run. An added or modified listed file needs a commit trailer 'Loop-Proof: <declared test> red=a/b green=c/c' (red before the change, fully green after) naming one of that file's declared tests. A listed file with no declared test cannot change. Deleting a listed file or removing a manifest entry or declared test is refused. Checked by tools/loop_proof_check.py in CI on every PR. Paths are relative to this repo root, POSIX-style.",
+  "files": [
+    {
+      "path": "daemons/run-watchdog.sh",
+      "reason": "watchdog daemon: long-running backup, PR-sweep and task-ingest cycle loop",
+      "tests": [
+        "tests/test-run-watchdog.sh",
+        "tests/test-run-watchdog-ingest.sh"
+      ]
+    },
+    {
+      "path": "daemons/selfheal.sh",
+      "reason": "self-healing supervisor loop: detects stale heartbeats and restarts dead daemons",
+      "tests": [
+        "tests/test-selfheal.sh"
+      ]
+    },
+    {
+      "path": "daemons/backup-fleet.sh",
+      "reason": "per-cycle backup worker run by the watchdog loop; writes the heartbeat on a completed cycle",
+      "tests": [
+        "tests/test-backup-fleet-heartbeat-guard.sh"
+      ]
+    },
+    {
+      "path": "tools/loop_proof_check.py",
+      "reason": "the Loop-Proof gate itself; changes to it must prove themselves",
+      "tests": [
+        "tests/test_loop_proof.py",
+        "tests/test_loop_manifest_integrity.py"
+      ]
+    }
+  ]
+}

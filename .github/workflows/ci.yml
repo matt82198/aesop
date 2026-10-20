@@ -253,6 +253,15 @@ jobs:
         # for literal conflict markers. This sweeps every tracked text file.
         run: python tools/conflict_marker_check.py --check
 
+      - name: Loop-Proof gate (loop-machinery changes need red-then-green proof)
+        # Fail closed: exit 1 = listed loop file changed without a valid Loop-Proof
+        # trailer; exit 2 = manifest unreadable. Runs on PRs only (base..head range).
+        if: matrix.python-shard == 0 && github.event_name == 'pull_request'
+        env:
+          LOOP_BASE: ${{ github.event.pull_request.base.sha }}
+          LOOP_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python tools/loop_proof_check.py --base "$LOOP_BASE" --head "$LOOP_HEAD"
+
       - name: Install actionlint (GitHub-semantics workflow validator)
         if: matrix.python-shard == 0
         # Pinned release tarball, sha256-verified before extraction (no remote script
