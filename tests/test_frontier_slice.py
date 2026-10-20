@@ -523,8 +523,8 @@ class TestBenchHardeningFixes(unittest.TestCase):
         sys.path.insert(0, str(bench_dir.parent))
         from run_seam_u import calculate_cost
 
-        # Known model
-        cost = calculate_cost("claude-haiku-4-5-20251001", {
+        # Known model (priced in the shared MODEL_PRICING_USD_PER_MTOK table)
+        cost = calculate_cost("claude-haiku-5-5", {
             "input_tokens": 1000,
             "output_tokens": 500,
         })
@@ -537,6 +537,35 @@ class TestBenchHardeningFixes(unittest.TestCase):
             "output_tokens": 500,
         })
         self.assertIsNone(cost)
+
+    def test_calculate_cost_prices_opus_5_5_from_frontier_table(self):
+        """f-e1824938: calculate_cost reads the shared MODEL_PRICING_USD_PER_MTOK
+        table (frontier_slice), so claude-opus-5-5 is billed at 4.0 in / 20.0 out."""
+        sys.path.insert(0, str(bench_dir.parent))
+        from run_seam_u import calculate_cost
+
+        self.assertEqual(calculate_cost("claude-opus-5-5", {"input_tokens": 1_000_000, "output_tokens": 0}), 4.0)
+        self.assertEqual(calculate_cost("claude-opus-5-5", {"input_tokens": 0, "output_tokens": 1_000_000}), 20.0)
+
+    def test_stale_claude_opus_5_price_is_not_used(self):
+        """f-e1824938: the stale second-table entry ('claude-opus-5': 15.0/75.0) is gone.
+        A model absent from the shared table reports UNKNOWN (None), never a stale rate."""
+        sys.path.insert(0, str(bench_dir.parent))
+        from run_seam_u import calculate_cost
+
+        self.assertIsNone(calculate_cost("claude-opus-5", {"input_tokens": 1_000_000, "output_tokens": 0}))
+
+    def test_calculate_cost_matches_shared_table_for_every_priced_model(self):
+        """f-e1824938: every model in the shared pricing table is costed from that table
+        and nothing else."""
+        sys.path.insert(0, str(bench_dir.parent))
+        from run_seam_u import calculate_cost
+        from frontier_slice import MODEL_PRICING_USD_PER_MTOK
+
+        self.assertTrue(MODEL_PRICING_USD_PER_MTOK)
+        for model, (in_price, out_price) in MODEL_PRICING_USD_PER_MTOK.items():
+            expected = round((1000 * in_price + 500 * out_price) / 1_000_000, 6)
+            self.assertEqual(calculate_cost(model, {"input_tokens": 1000, "output_tokens": 500}), expected, model)
 
     def test_run_seam_result_includes_cost_note_on_unknown_model(self):
         """run_single_task should include cost_note for unknown models."""
