@@ -72,6 +72,19 @@ flowchart LR
   class X example
 ```
 
+### The kernel and what you fill in
+
+The blue boxes are the kernel. They are fixed machinery that ships in the package and is the same for every repo: **Dispatch**, **Workers in worktrees**, **Gates**, **Receipts**, **Merge**, **Watchdog**, **Durable state**, and **Dashboard and monitor**. The gates are in `hooks/pre-push-policy.sh` and `tools/secret_scan.py`, and receipts are written by `tools/emit_receipt.py`.
+
+The yellow boxes are yours, and you fill them in for your own repo:
+
+- **Your repos** is the list of repos the fleet works on. Set it under `repos` in `aesop.config.json`, copied from `aesop.config.example.json`.
+- **Your brain** is your rules, memory and brain-side hooks in `~/.claude`. Start from `CLAUDE-TEMPLATE.md` and `docs/MEMORY-TEMPLATE.md`. Your CLAUDE.md domain map, which names each domain and its rules, goes here too. The kernel does not ship one.
+- **Machinery repo (optional)** is a directory of fleet state you own. Set it with `CONDUCTOR_ROOT` (see `daemons/conductor-root.sh`).
+- **Keys and accounts** are your Claude Code login and `gh` auth. API keys are needed only for an API backend (`aesop.config.example.json` `seats`, `driver/anthropic_transport.py`).
+
+The diagram does not draw a box for lane briefs, tests or STATE.md, but the same split applies. Lane briefs and your tests and gate configuration live in your repo. STATE.md is your intent and phase record, and the kernel reads it in `driver/orchestrator_driver.py`. `LANE-CONTRACT.md` in this repo is one project's dispatch contract, an example rather than a template to copy as-is.
+
 ### What ships, what you define, what is an example
 
 | Class | Piece | Where (path) | What it does for you |
