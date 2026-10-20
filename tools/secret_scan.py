@@ -774,6 +774,11 @@ def scan_paths(paths):
             if committable is not None:
                 candidates = [p for p in candidates if p.resolve() in committable]
             files_to_scan.extend(candidates)
+        else:
+            # Tracker 17aa5e02e34d: a path that is neither a file nor a directory
+            # (a typo, a stale --from-stdin entry, a broken symlink) must fail
+            # closed, never be silently dropped into a CLEAN 0-files result.
+            raise ScanError(f"path does not exist or is not a file or directory: {path_str}")
     return [p for p in files_to_scan if p.is_file()]
 
 
@@ -940,7 +945,12 @@ def main():
             if line:
                 paths_from_stdin.append(line)
 
-        files = scan_paths(paths_from_stdin)
+        try:
+            files = scan_paths(paths_from_stdin)
+        except ScanError as e:
+            print(f"FATAL: {e}", file=sys.stderr)
+            print("Failing CLOSED: refusing to report CLEAN when a listed path cannot be scanned.", file=sys.stderr)
+            sys.exit(2)
         file_count = len(files)
         for filepath in files:
             try:
@@ -960,7 +970,12 @@ def main():
                         allowed_doc_count += 1
 
     else:
-        files = scan_paths(args.paths)
+        try:
+            files = scan_paths(args.paths)
+        except ScanError as e:
+            print(f"FATAL: {e}", file=sys.stderr)
+            print("Failing CLOSED: refusing to report CLEAN when a path argument cannot be scanned.", file=sys.stderr)
+            sys.exit(2)
         file_count = len(files)
         for filepath in files:
             try:
