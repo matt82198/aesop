@@ -451,7 +451,15 @@ main() {
 # reuse acquire_lock/release_lock/check_halt without triggering a cycle).
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  AESOP_ROOT="${AESOP_ROOT:-$(dirname "$SCRIPT_DIR")}"
+  # Tracker cebab35aabeb: when unset, the root is derived from this script's own checkout
+  # (the scheduled task runs it with no AESOP_ROOT, see daemons/install-tasks.ps1), and the
+  # derivation is announced on stderr instead of happening silently. The export below
+  # hands the same root to backup-fleet.sh, so the two cannot disagree.
+  if [ -z "${AESOP_ROOT:-}" ]; then
+    AESOP_ROOT="$(dirname "$SCRIPT_DIR")"
+    printf '[%s] NOTICE: AESOP_ROOT unset; derived checkout root %s from script location\n' \
+      "$(date '+%F %T')" "$AESOP_ROOT" >&2
+  fi
   # Exported (tracker 00fa6e4cb68b): backup-fleet.sh runs as a child and refuses to run
   # without AESOP_ROOT, so the scheduled task's cwd and environment cannot decide
   # which tree's secret scanner gates the push.
