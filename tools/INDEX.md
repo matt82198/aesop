@@ -16,6 +16,7 @@ listed by adding an `INDEX: <one-liner>` line to its module docstring/header.
 - `bench_results_cache.py` -- Append-only benchmark results journal (state/bench-runs.jsonl); idempotent dedup by model+timestamp; stdlib-only
 - `bench_runner.py` -- Held-out benchmark runner + scorer (Haiku/Sonnet/Opus pluggable)
 - `boot_state.py` -- Canonical deterministic boot brief (GOAL from the event store, STATE.md ACTIVE block, BUILDLOG tail, event-store projections, git) with a byte cap; exit 2 when the store is unreadable.
+- `box_fence.py` -- Compares the checkout's BOX_PROTOCOL integer with origin's; fast-forwards a clean strictly-behind tree, FAILs (never resets) otherwise, WARNs offline with a push-time re-check marker.
 - `build_static_dash.py` -- Build a static, self-contained snapshot of the dashboard with demo data for GitHub Pages; starts demo server, captures API state, produces _site/ with fetch/EventSource shim; CLI: `--output DIR`
 - `buildlog.py` -- Uniform BUILDLOG.md appender (writes via state_store WriteAPI: entry also lands as buildlog_entry event)
 - `chaos_harness.py` -- Chaos-wave resilience harness: offline deterministic fault injection (worker kill, checkpoint corruption, planted secret, heartbeat stall, forced red test) with detection/recovery measurement; CLI: `--offline [--state-root DIR] [--output REPORT.md] [--json REPORT.json]`
