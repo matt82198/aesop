@@ -127,9 +127,12 @@ def gh(*args):
     """
     cmd = ["gh"] + list(args)
     try:
+        # stdin=DEVNULL: the watchdog runs this hidden (CREATE_NO_WINDOW), where
+        # the inherited STD_INPUT_HANDLE is invalid and subprocess.run() raises
+        # OSError [WinError 6] before gh starts. gh never reads stdin here.
         result = subprocess.run(
-            cmd, capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=GH_TIMEOUT,
+            cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=GH_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
         return {"error": "gh call timed out: %s" % " ".join(args), "rc": -1}
