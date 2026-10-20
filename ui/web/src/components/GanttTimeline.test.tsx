@@ -138,4 +138,27 @@ describe('GanttTimeline', () => {
       expect(screen.getByText('50s')).toBeInTheDocument(); // fleet-fix-0: 50 seconds
     }, { timeout: 10000 });
   });
+
+  it('never renders the literal "nulls" when a duration is unknown (null)', async () => {
+    // Server contract (ui/wave_gantt.py): total_duration_sec and phase duration_sec are
+    // int|None, None = unknown. formatDuration(null) used to render "nulls".
+    const base = fixtureWaveGantt.agents[0];
+    const unknownAgent = {
+      ...base,
+      total_duration_sec: null,
+      phases: base.phases.map((p) => ({ ...p, duration_sec: null })),
+    };
+    const data = { ...fixtureWaveGantt, agents: [unknownAgent] } as unknown as WaveGanttData;
+    const mockFetcher = vi.fn().mockResolvedValue(data);
+    const { container } = render(<GanttTimeline fetcher={mockFetcher} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId(TESTIDS.ganttRow).length).toBe(1);
+    });
+
+    // Covers text nodes AND attributes (title, aria-label) of every rendered element.
+    expect(container.innerHTML).not.toMatch(/nulls/);
+    // Unknown durations must be shown explicitly as unknown, not as a reassuring number.
+    expect(screen.getByText('unknown')).toBeInTheDocument();
+  });
 });
