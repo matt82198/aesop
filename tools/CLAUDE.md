@@ -69,6 +69,7 @@ The dry-range row (2026-10-06 follow-up): a branch that merged `origin/main` leg
 
 ## Recent additions (2026-10)
 
+- **health-score.js python resolver (397553876e57)**: `tools/health-score.js` resolves the interpreter `python3` then `python` (same order as `health.js`/`dash.js`) and exits 1 with an explicit error if neither exists. Test: `tests/health-score-python-fallback.test.mjs`.
 - **state_root migration (2026-10-17, PR #1090, decision b)**: `tools/state_root.py` is the STRICT resolver (fail closed). `common.get_state_dir()` is LEGACY with a cwd fallback and is unchanged. Callers migrate one at a time, only after the primary `aesop.config.json` `state_root` is absolute and fleet processes export `AESOP_STATE_ROOT`. Migration surface: the caller set listed in `tools/state_root.py`'s docstring.
 
 - **tracker_reconcile.py --fix (70334b87760f, P0 wrong data)**: `FIXED` prints and exit 0 only when the StateAPI close write succeeded. A failed write prints `CLOSE-FAILED <id>` (still open), `--json` reports `fixed=false` with `closed=false` on the entry, exit 2. Tests: `tests/test_tracker_reconcile.py` (`test_fix_close_failure_*`).
