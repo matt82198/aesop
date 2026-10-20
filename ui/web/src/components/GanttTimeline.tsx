@@ -16,10 +16,10 @@ export interface GanttAgent {
     phase: string;
     start: string;
     end: string;
-    duration_sec: number;
+    duration_sec: number | null;
     token_estimate?: number;
   }>;
-  total_duration_sec: number;
+  total_duration_sec: number | null;
   status: 'running' | 'done' | 'stalled' | 'inactive';
 }
 
@@ -53,7 +53,9 @@ function getPhaseColor(phase: string): string {
   return PHASE_COLORS[phase.toLowerCase()] || '#9ca3af'; // default gray
 }
 
-function formatDuration(seconds: number): string {
+function formatDuration(seconds: number | null | undefined): string {
+  // null/undefined = duration unknown (server emits None). Never coerce it to a number.
+  if (seconds == null || Number.isNaN(seconds)) return 'unknown';
   if (seconds < 60) return `${seconds}s`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
   return `${Math.floor(seconds / 3600)}h`;
