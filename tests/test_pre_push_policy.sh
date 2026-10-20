@@ -2669,6 +2669,41 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+# ===== A losing push must never delete the cache slot it does not own (item c730e29d46ea race) =====
+# Race: a push that finds the cache slot occupied by a directory without .complete used to rm -rf
+# it, which can delete a copy another hook is reading. Such a push must leave the slot untouched
+# and extract privately. The sentinel file stands in for that reader.
+printf '\n=== Test: a losing push never rm -rf the cache slot it does not own ===\n'
+(
+  export TMPDIR="$TEST_ROOT/race_tmp"
+  mkdir -p "$TMPDIR"
+  clone="$TEST_ROOT/race_clone"
+  make_clone_with_base "$clone" "$REPO_ROOT/tools"
+  base_sha=$(git -C "$clone" rev-parse --verify -q "origin/main^{commit}") || exit 1
+  slot="$TMPDIR/aesop-gate-base-v5-$(id -u)-$base_sha"
+  mkdir -p "$slot/tools"
+  printf 'reader in use\n' > "$slot/in-use.marker"
+  got=$(cd "$clone" && gate_base_dir 2>/dev/null) || { printf 'FAIL: gate_base_dir failed\n'; exit 1; }
+  if [ ! -f "$slot/in-use.marker" ]; then
+    printf 'FAIL: the cache slot was deleted by a push that does not own it: %s\n' "$slot"
+    exit 1
+  fi
+  if [ "$got" = "$slot" ]; then
+    printf 'FAIL: returned the slot that was not complete and not ours: %s\n' "$got"
+    exit 1
+  fi
+  if ! git -C "$clone" show "origin/main:tools/secret_scan.py" | cmp -s - "$got/tools/secret_scan.py"; then
+    printf 'FAIL: private base copy %s is not the trunk tools/secret_scan.py\n' "$got"
+    exit 1
+  fi
+  printf 'PASS: occupied slot left intact; private trunk extraction used (%s)\n' "$got"
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Test Summary ===\n'
 printf 'Tests PASSED: %d\n' "$test_passed"
 printf 'Tests FAILED: %d\n' "$test_failed"

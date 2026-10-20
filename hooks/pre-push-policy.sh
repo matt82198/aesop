@@ -262,16 +262,15 @@ gate_base_dir() {
     printf '%s\n' "$dir"
     return 0
   fi
-  # Our own stale or half-written extraction is debris: clear it so the slot can be refilled.
-  if gate_owned_dir "$dir"; then
-    rm -rf -- "$dir"
-  fi
+  # The slot is never deleted here: a directory at it is not known to be unused (another hook may
+  # be reading it), so a push that does not find a complete, owned copy extracts privately.
   for root in tools state_store; do
     if git cat-file -e "$base_sha:$root" 2>/dev/null; then
       roots="$roots $root"
     fi
   done
-  staging=$(mktemp -d "$tmp_root/aesop-gate-stage.XXXXXX" 2>/dev/null) || return 1
+  # Staged per PID: concurrent pushes never share an extraction directory.
+  staging=$(mktemp -d "$tmp_root/aesop-gate-stage-$$.XXXXXX" 2>/dev/null) || return 1
   if ! git archive "$base_sha" -- $roots 2>/dev/null | tar -x -C "$staging" 2>/dev/null \
      || [ ! -d "$staging/tools" ]; then
     rm -rf "$staging"
