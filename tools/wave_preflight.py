@@ -707,6 +707,13 @@ def main(argv=None):
         elif arg == "--from-stdin":
             from_stdin = True
             i += 1
+        elif arg == "--text":
+            # Text is the default output mode; accepted so the documented flag works.
+            output_format = "text"
+            i += 1
+        elif arg in ("-h", "--help"):
+            print(__doc__)
+            return 0
         else:
             print(f"Unknown argument: {arg}", file=sys.stderr)
             return 2
