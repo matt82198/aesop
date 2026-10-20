@@ -371,7 +371,7 @@ def _item_fingerprint(item: Dict[str, Any]) -> str:
     ).hexdigest()
 
 
-def _write_journal_entry(state_dir: str, slug: str, phase: str, data: Dict[str, Any], repo: str = None) -> None:
+def _write_journal_entry(state_dir: str, slug: str, phase: str, data: Dict[str, Any], repo: str = None) -> bool:
     """Write a journal entry for an item's progress.
 
     Args:
@@ -380,6 +380,12 @@ def _write_journal_entry(state_dir: str, slug: str, phase: str, data: Dict[str, 
         phase: phase name (e.g., "verified", "failed", "dispatched")
         data: dict with outcome data (verified, testExit, repairs, etc.)
         repo: optional repo path for repo-aware journal keying
+
+    Returns:
+        True when the entry was written. False when it was NOT written; the
+        reason is always printed to stderr as an explicit
+        "journal write failed" line naming the item and phase, so a lost
+        recovery entry is never silent.
 
     Journal is stored as: state_dir/journal/<journal-key>.json with timestamp.
     Journal key includes repo context if provided, to prevent collisions.
@@ -394,9 +400,14 @@ def _write_journal_entry(state_dir: str, slug: str, phase: str, data: Dict[str, 
         if repo:
             item_stub["repo"] = repo
         journal_key = _journal_key_for_item(item_stub)
-    except ValueError:
-        # Fail-closed: if key generation fails, skip journaling.
-        return
+    except ValueError as exc:
+        # Fail-closed: if key generation fails, skip journaling, but say so.
+        print(
+            f"journal write failed: slug={slug} phase={phase} "
+            f"could not derive journal key ({exc}); entry NOT recorded",
+            file=sys.stderr,
+        )
+        return False
 
     journal_file = journal_dir / f"{journal_key}.json"
     entry = {
@@ -416,13 +427,22 @@ def _write_journal_entry(state_dir: str, slug: str, phase: str, data: Dict[str, 
         payload = json.dumps(entry, default=str) + "\n"
         tmp_file.write_text(payload)
         os.replace(str(tmp_file), str(journal_file))
-    except Exception:
-        # Fail-closed: if journal write fails, continue without journaling.
+    except Exception as exc:
+        # Fail-closed: if journal write fails, continue without journaling,
+        # but report it. A silent drop means resume re-dispatches the item.
+        print(
+            f"journal write failed: slug={slug} phase={phase} "
+            f"path={journal_file} error={exc!r}; entry NOT recorded, "
+            f"resume will re-dispatch this item",
+            file=sys.stderr,
+        )
         try:
             if tmp_file.exists():
                 tmp_file.unlink()
         except Exception:
             pass
+        return False
+    return True
 
 
 def _load_journal_state(state_dir: str) -> Dict[str, Dict[str, Any]]:
