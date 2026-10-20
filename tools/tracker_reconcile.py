@@ -38,7 +38,7 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-ACTIVE_STATUSES = {"ranked", "open", "in_progress", "proposed", "accepted"}
+ACTIVE_STATUSES = {"ranked", "open", "todo", "in_progress", "in-progress", "proposed", "accepted"}
 
 
 def _load_tracker(state_dir):
