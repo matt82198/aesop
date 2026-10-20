@@ -476,8 +476,8 @@ def _scan_views(label, views, env_file, has_file_pragma, scan_path):
                                 continue
                         if _credential_value_is_placeholder(value):
                             continue
-                        # A regex literal assigned to a credential-named variable
-                        # (`TOKEN_KEY = "(?i)token\s*[:=]\s*\S{8,}"`) is a pattern, not a secret.
+                        # A regex literal assigned to a credential-named variable is a
+                        # pattern from a scanner's own rule table, not a secret.
                         if _credential_value_is_regex_shape(value):
                             continue
                     elif rule_name == "connection_string":
