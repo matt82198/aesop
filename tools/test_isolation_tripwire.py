@@ -576,7 +576,11 @@ def take_snapshot(root: Path) -> dict:
         # relative to the test fixture, not the real repo.
         if old_aesop_root is None and "CONDUCTOR_ROOT" not in os.environ:
             os.environ["AESOP_ROOT"] = str(root)
-        conductor_root = common.get_conductor_root()
+        # Fail closed: an unresolvable conductor root is "not watched", never a guessed path.
+        try:
+            conductor_root = common.get_conductor_root()
+        except common.ConductorRootUnresolved:
+            conductor_root = None
     finally:
         # Restore the original AESOP_ROOT
         if old_aesop_root is None:
@@ -584,7 +588,7 @@ def take_snapshot(root: Path) -> dict:
         else:
             os.environ["AESOP_ROOT"] = old_aesop_root
 
-    conductor_present = conductor_root.exists()
+    conductor_present = conductor_root is not None and conductor_root.exists()
     now = int(time.time())
     snap = {
         "profile_present": profile_present,

@@ -191,5 +191,57 @@ class TestCheckHeartbeatStaleness(unittest.TestCase):
             self.assertEqual(age_s, age_expected)
 
 
+class TestGetConductorRootFailClosed(unittest.TestCase):
+    """get_conductor_root() follows daemons/conductor-root.sh: explicit wins,
+    sibling only for the canonical "aesop" basename, otherwise fail closed."""
+
+    KEYS = ("CONDUCTOR_ROOT", "AESOP_ROOT")
+
+    def setUp(self):
+        self._saved = {k: os.environ.get(k) for k in self.KEYS}
+        for k in self.KEYS:
+            os.environ.pop(k, None)
+        self.tmp = Path(tempfile.mkdtemp(prefix="aesop-common-root-"))
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_explicit_conductor_root_wins(self):
+        from common import get_conductor_root
+        os.environ["CONDUCTOR_ROOT"] = str(self.tmp / "explicit")
+        os.environ["AESOP_ROOT"] = str(self.tmp / "aesop")
+        self.assertEqual(get_conductor_root(), (self.tmp / "explicit").resolve())
+
+    def test_canonical_aesop_root_derives_sibling(self):
+        from common import get_conductor_root
+        os.environ["AESOP_ROOT"] = str(self.tmp / "aesop")
+        self.assertEqual(get_conductor_root(), (self.tmp / "conductor3").resolve())
+
+    def test_non_canonical_aesop_root_fails_closed(self):
+        from common import ConductorRootUnresolved, get_conductor_root
+        os.environ["AESOP_ROOT"] = str(self.tmp / "aesop-wt-x")
+        with self.assertRaises(ConductorRootUnresolved) as ctx:
+            get_conductor_root()
+        self.assertIn("CONDUCTOR_ROOT", str(ctx.exception))
+
+    def test_unset_env_never_uses_cwd_parent(self):
+        from common import ConductorRootUnresolved, get_conductor_root
+        cwd = self.tmp / "work" / "aesop-wt-y"
+        cwd.mkdir(parents=True)
+        old = os.getcwd()
+        os.chdir(cwd)
+        try:
+            with self.assertRaises(ConductorRootUnresolved):
+                get_conductor_root()
+        finally:
+            os.chdir(old)
+
+
 if __name__ == "__main__":
     unittest.main()

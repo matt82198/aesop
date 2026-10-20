@@ -24,7 +24,7 @@ fail() { echo "FAIL: $*"; FAILED=$((FAILED + 1)); }
 
 FIXTURE_ROOT="$TMP_DIR/aesop"
 mkdir -p "$FIXTURE_ROOT/daemons" "$FIXTURE_ROOT/tools" "$TMP_DIR/home"
-cp "$REPO_ROOT/daemons/run-watchdog.sh" "$FIXTURE_ROOT/daemons/"
+cp "$REPO_ROOT/daemons/run-watchdog.sh" "$REPO_ROOT/daemons/conductor-root.sh" "$FIXTURE_ROOT/daemons/"
 cp "$REPO_ROOT/tools/halt.py" "$REPO_ROOT/tools/common.py" "$FIXTURE_ROOT/tools/"
 # Canonical spelling of the fixture root, as the script's own pwd will print it.
 EXPECTED_ROOT="$(cd "$FIXTURE_ROOT" && pwd)"
@@ -81,6 +81,29 @@ if ! grep -qF "AESOP_ROOT unset" "$ERR_SET"; then
   pass "explicit AESOP_ROOT is silent about derivation"
 else
   fail "explicit AESOP_ROOT still printed the derivation notice"
+fi
+
+echo "=== Test 5: CONDUCTOR_ROOT unset + non-canonical AESOP_ROOT fails closed before any cycle ==="
+# Same rule as daemons/conductor-root.sh: the sibling conductor3 is derived only for the
+# canonical "aesop" basename. This checkout is named aesop-wt-x, so the root is unresolved
+# and the watchdog must refuse to start (no cycle, no guessed sibling, no home fallback).
+WT_ROOT="$TMP_DIR/wt/aesop-wt-x"
+mkdir -p "$WT_ROOT/daemons" "$WT_ROOT/tools" "$TMP_DIR/wt/conductor3/state"
+cp "$REPO_ROOT/daemons/run-watchdog.sh" "$REPO_ROOT/daemons/conductor-root.sh" "$WT_ROOT/daemons/"
+cp "$REPO_ROOT/tools/halt.py" "$REPO_ROOT/tools/common.py" "$WT_ROOT/tools/"
+MARK5="$TMP_DIR/child-saw-root-5"
+rm -f "$MARK5"
+ERR_5="$TMP_DIR/stderr-5.txt"
+env -u AESOP_ROOT -u CONDUCTOR_ROOT -u AESOP_STATE_ROOT \
+  HOME="$TMP_DIR/home" USERPROFILE="$TMP_DIR/home" TMPDIR="$TMP_DIR" \
+  AESOP_ROOT="$WT_ROOT" AESOP_WATCHDOG_CYCLE_CMD='printf x > '"'$MARK5'" \
+  bash "$WT_ROOT/daemons/run-watchdog.sh" --once >/dev/null 2>"$ERR_5"
+RC5=$?
+if [ "$RC5" -ne 0 ] && [ ! -e "$MARK5" ] && grep -qF "CONDUCTOR_ROOT" "$ERR_5"; then
+  pass "unresolved CONDUCTOR_ROOT: watchdog exits $RC5 with a CONDUCTOR_ROOT message, no cycle ran"
+else
+  fail "unresolved CONDUCTOR_ROOT did not fail closed (rc=$RC5, cycle ran=$([ -e "$MARK5" ] && echo yes || echo no)). stderr was:"
+  cat "$ERR_5"
 fi
 
 echo ""

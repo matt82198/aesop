@@ -15,6 +15,10 @@ set -e
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR=$(mktemp -d)
 AESOP_ROOT="${TMP_DIR}"
+# Fail-closed root rule: a non-canonical fixture AESOP_ROOT has no derivable conductor root,
+# so every daemon invocation pins its OWN fixture conductor root (never the live fleet).
+CONDUCTOR_ROOT="${TMP_DIR}/conductor3"
+export CONDUCTOR_ROOT
 TEST_STATE_DIR="${TMP_DIR}/state"
 CYCLE_COUNTER="${TMP_DIR}/cycle-counter"
 
@@ -260,7 +264,7 @@ AESOP_ROOT_WITH_SPACES="${TMP_DIR}/aesop with spaces"
 # Real install layout: the daemon halt-checks via tools/halt.py (fail-closed when
 # the tool is missing), so the fixture must ship daemons/ and tools/ together.
 mkdir -p "$AESOP_ROOT_WITH_SPACES/daemons" "$AESOP_ROOT_WITH_SPACES/tools"
-cp "${REPO_ROOT}/daemons/run-watchdog.sh" "$AESOP_ROOT_WITH_SPACES/daemons/"
+cp "${REPO_ROOT}/daemons/run-watchdog.sh" "${REPO_ROOT}/daemons/conductor-root.sh" "$AESOP_ROOT_WITH_SPACES/daemons/"
 cp "${REPO_ROOT}/tools/halt.py" "${REPO_ROOT}/tools/common.py" "$AESOP_ROOT_WITH_SPACES/tools/"
 
 OUT_SPACES=$(mktemp)

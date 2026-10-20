@@ -18,6 +18,7 @@ Coverage mirrors the tool's contract (see tools/pr_sweep.py docstring):
 """
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -25,6 +26,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 TOOL_PATH = Path(__file__).resolve().parents[1] / "tools" / "pr_sweep.py"
+
+# pr_sweep fails closed when CONDUCTOR_ROOT is unresolved (this test tree is not the canonical
+# "aesop" checkout). Every test run pins its OWN mktemp conductor root, never the live fleet.
+_TEST_CONDUCTOR_ROOT = tempfile.mkdtemp(prefix="aesop-prsweep-conductor-")
+os.environ["CONDUCTOR_ROOT"] = _TEST_CONDUCTOR_ROOT
 
 
 def load_module():

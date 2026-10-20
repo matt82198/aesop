@@ -492,8 +492,19 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     fi
   fi
 
-  # Resolve conductor3 directory (sibling of AESOP_ROOT); env var override for portability
-  CONDUCTOR_ROOT="${CONDUCTOR_ROOT:-$(dirname "$AESOP_ROOT")/conductor3}"
+  # Resolve the conductor root by the daemons/conductor-root.sh rule: explicit CONDUCTOR_ROOT
+  # wins; the sibling fleet root is derived ONLY for the canonical "aesop" AESOP_ROOT. Any other
+  # shape is unresolved and the watchdog refuses to start (fail closed), never a guessed root.
+  # shellcheck source=conductor-root.sh
+  if ! . "$SCRIPT_DIR/conductor-root.sh" 2>/dev/null; then
+    printf 'ERROR: daemons/conductor-root.sh is missing or unreadable beside run-watchdog.sh; refusing to start (fail closed).\n' >&2
+    exit 2
+  fi
+  CONDUCTOR_ROOT="$(resolve_conductor_root "$AESOP_ROOT")"
+  if [ -z "$CONDUCTOR_ROOT" ]; then
+    printf 'ERROR: CONDUCTOR_ROOT is unset and AESOP_ROOT (%s) is not the canonical aesop tree; set CONDUCTOR_ROOT to the fleet-state root. Refusing to start (fail closed).\n' "$AESOP_ROOT" >&2
+    exit 2
+  fi
   MONITOR_HB_FILE="$CONDUCTOR_ROOT/monitor/.monitor-heartbeat"
   MONITOR_HB_STALE_THRESHOLD=600
 
