@@ -343,6 +343,14 @@ Lead the report with the ACCEPTANCE observable (section 8a), before the check li
 4. **Not in force (PLAN item).** The durable fix is for the lane to put its BUILDLOG line and CLAUDE.md row in the
    PR body, and for the orchestrator to append them on land. Until that is built, item 2 is the rule.
 
+## 8d. Receipt first (push early, draft PR early)
+1. A build lane pushes its branch and opens a draft PR within 20 minutes of its first commit, before any long test run. The draft PR is the receipt; its body says what is folded in and what is still red.
+2. Every later push happens at least every 45 minutes while the lane is working, or at every green step, whichever is first.
+3. A lane that folds other branches and reverts one of its own merges says so in the PR body at the time of the revert, with the reason, and pushes.
+4. A branch with no origin ref 30 minutes after its first commit is a contract breach the monitor flags as [CHURN-NO-SHIP]; the orchestrator stops and relaunches that lane.
+
+Why: 2026-10-20 integrate/playable-dungeon reached 154 commits over 15 hours with no push and three self-reverts before anyone noticed.
+
 ## 9a. Index-first reading (knowledge tree)
 1. Before any grep/rg/find over a brain repo (`~/.claude`, `~/scripts`, `~/conductor3`) or any repo with a
    generated KNOWLEDGE.md, read KNOWLEDGE.md at the root, then the one domain INDEX*.md the task names.
