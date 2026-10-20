@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 # Ensure tools/ is importable
@@ -193,6 +194,56 @@ class TestInstallPrePushHook(unittest.TestCase):
             self.assertTrue(ok)
             content = hook.read_text(encoding="utf-8")
             self.assertIn("secret_scan", content)
+
+    def test_force_never_writes_through_symlinked_hook(self):
+        """--force must not follow .git/hooks/pre-push when it is a symlink.
+
+        The outside file is the symlink target; it must stay byte-identical.
+        """
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as outside:
+            subprocess.run(
+                ["git", "init", "-q"], cwd=td,
+                capture_output=True, timeout=10,
+            )
+            outside_file = Path(outside) / "victim.txt"
+            original = b"do not overwrite\n"
+            outside_file.write_bytes(original)
+            hook = Path(td) / ".git" / "hooks" / "pre-push"
+            hook.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.symlink(outside_file, hook)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"OS refuses to create symlinks here: {exc}")
+            ok, status = install_pre_push_hook(td, force=True)
+            self.assertFalse(ok, status)
+            self.assertEqual(outside_file.read_bytes(), original)
+            self.assertTrue(hook.is_symlink(), "symlink should be left in place, not replaced")
+
+    def test_force_refuses_hook_reported_as_symlink_without_writing(self):
+        """Symlink-independent variant: the OS may refuse symlink creation (Windows
+        without SeCreateSymbolicLinkPrivilege), so report the pre-push hook path as a
+        symlink via a patched Path.is_symlink and assert --force never overwrites it."""
+        original_is_symlink = Path.is_symlink
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run(
+                ["git", "init", "-q"], cwd=td,
+                capture_output=True, timeout=10,
+            )
+            hook = Path(td) / ".git" / "hooks" / "pre-push"
+            hook.parent.mkdir(parents=True, exist_ok=True)
+            original = b"#!/bin/sh\necho keep me\n"
+            hook.write_bytes(original)
+            hook_resolved = hook.resolve()
+
+            def fake_is_symlink(self):
+                if self.resolve() == hook_resolved:
+                    return True
+                return original_is_symlink(self)
+
+            with unittest.mock.patch.object(Path, "is_symlink", fake_is_symlink):
+                ok, status = install_pre_push_hook(td, force=True)
+            self.assertFalse(ok, status)
+            self.assertEqual(hook.read_bytes(), original)
 
 
 class TestInitProject(unittest.TestCase):
