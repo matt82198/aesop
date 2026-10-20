@@ -116,6 +116,23 @@ class TestTrackerReconcile(unittest.TestCase):
         self.assertEqual(len(zombies), 1)
         self.assertIn("commit found", zombies[0]["evidence"])
 
+    def test_zombie_detected_for_todo_and_in_progress_statuses(self):
+        """Items with status 'todo' or 'in-progress' and a merged PR are zombies."""
+        for status in ("todo", "in-progress"):
+            with self.subTest(status=status):
+                self._write_tracker([
+                    {"id": "s1", "title": "Status item", "status": status,
+                     "notes": "PR #300", "pr_link": None},
+                ])
+                with patch.dict(os.environ, {"AESOP_STATE_ROOT": str(self.state_dir)}):
+                    with patch("tools.tracker_reconcile._check_pr_merged", return_value=True):
+                        with patch("tools.tracker_reconcile._check_git_evidence", return_value=None):
+                            zombies, genuinely = tracker_reconcile.reconcile(
+                                str(self.state_dir), str(Path(__file__).parent.parent)
+                            )
+                self.assertEqual([z["id"] for z in zombies], ["s1"])
+                self.assertEqual(genuinely, [])
+
     # --- Skip done items ---
 
     def test_done_items_skipped(self):
