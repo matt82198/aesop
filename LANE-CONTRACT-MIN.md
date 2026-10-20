@@ -11,7 +11,7 @@ Lever in the brain; ledger state/lane-ab.jsonl. A fault (hook denial or failed r
 - Never start background runs (`run_in_background`, nohup, detached processes).
 - Never kill a process you did not start by PID from your own CommandLine.
 - Secret scan before every push: `python tools/secret_scan.py --staged` must exit 0.
-- Commit messages: write the message with the Write tool, then `git commit -F <file>`. End it with `Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>`.
+- Commit messages: write the message with the Write tool, then `git commit -F <file>`. End it with `Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>`. This applies to commits you write; merge commits GitHub creates through update-branch carry no trailer and are not a violation.
 
 ## Report
 - Paste literal command output for every command you cite, including `rc=` lines. Do not describe what a command would do.
