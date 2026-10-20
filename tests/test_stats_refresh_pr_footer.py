@@ -39,9 +39,10 @@ def _resolve_bash() -> str:
         return "bash"
     git = shutil.which("git")
     if git:
-        # git.exe is at <root>\\cmd\\git.exe or <root>\\mingw64\\bin\\git.exe,
-        # so <root>\\bin\\bash.exe is one of the first three ancestors.
-        for ancestor in Path(git).parents[:3]:
+        # git.exe lives at varying depths: <root>\cmd\git.exe,
+        # <root>\mingw64\bin\git.exe, <root>\mingw64\libexec\git-core\git.EXE.
+        # Walk every ancestor and take the first <ancestor>\bin\bash.exe.
+        for ancestor in Path(git).parents:
             candidate = ancestor / "bin" / "bash.exe"
             if not candidate.is_file():
                 continue
