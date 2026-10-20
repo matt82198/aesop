@@ -19,7 +19,7 @@
 
 **Wizard** (guided setup, ~60 sec):
 - `npx @matt82198/aesop wizard` → prompts: project name (default: "my-fleet"), repos (auto-discover from `~`), port (default: 8770, validates 1–65535), brain root (default: `~/.claude`)
-- `npx @matt82198/aesop wizard --yes` → uses all defaults, no prompts (CI-safe)
+- `npx @matt82198/aesop wizard --yes` → uses defaults, no prompts (CI-safe); an explicit `--name` and `--repos` on the command line override the `my-fleet` / no-repos defaults
 - Non-TTY input auto-skips prompts
 
 **Runtime commands** (after scaffolding; dispatch pattern in cli.js):

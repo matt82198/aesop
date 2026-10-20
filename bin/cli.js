@@ -640,7 +640,7 @@ if (wizardModeRequested && wizardArgIndex >= 0) {
 // Extract targetDir (first non-flag argument, excluding flag values)
 // Build set of indices consumed as flag values (tokens after --name/--domains/--repos/--repo-urls)
 const consumedIndices = new Set();
-const flagsWithValues = ['--name', '--domains', '--repos', '--repo-urls'];
+const flagsWithValues = ['--name', '--domains', '--repos', '--repo-urls', '--ci-mode', '--self-hosted-labels'];
 for (let i = 0; i < args.length; i++) {
   if (flagsWithValues.includes(args[i]) && i + 1 < args.length) {
     consumedIndices.add(i + 1);
@@ -1072,6 +1072,7 @@ async function printNextStepsAndWatchdog(rl, targetDir, configPath, port) {
   console.log('  # if ~/.claude/CLAUDE.md already exists, back it up or merge it first:');
   console.log('  cp ~/.claude/CLAUDE.md ~/.claude/CLAUDE.md.bak  (skip if there is no existing file)');
   console.log(`  cp ${resolvedTargetDir}/CLAUDE.md ~/.claude/CLAUDE.md  (review and customize)`);
+  console.log('  cp ~/.claude/MEMORY.md ~/.claude/MEMORY.md.bak  (skip if there is no existing file)');
   console.log(`  cp ${resolvedTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)\n`);
 
   return new Promise((resolve) => {
@@ -1610,8 +1611,9 @@ if (!isRuntimeCommand) {
       configPath = path.join(finalTargetDir, 'aesop.config.json');
     } else if (yesFlag && wizardMode) {
       // Non-interactive defaults for wizard mode with --yes
-      finalProjectName = 'my-fleet';
-      finalReposStr = '';
+      // --name and --repos given on the command line win over the defaults.
+      finalProjectName = projectName || 'my-fleet';
+      finalReposStr = reposStr || '';
       // Find available port
       dashboardPort = await findAvailablePort(8770);
       console.log('🪄 Running onboarding wizard with defaults (--yes)');
@@ -1727,6 +1729,7 @@ if (!isRuntimeCommand) {
       console.log('  # if ~/.claude/CLAUDE.md already exists, back it up or merge it first:');
       console.log('  cp ~/.claude/CLAUDE.md ~/.claude/CLAUDE.md.bak  (skip if there is no existing file)');
       console.log(`  cp ${resolvedFinalTargetDir}/CLAUDE.md ~/.claude/CLAUDE.md  (review and customize)`);
+      console.log('  cp ~/.claude/MEMORY.md ~/.claude/MEMORY.md.bak  (skip if there is no existing file)');
       console.log(`  cp ${resolvedFinalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
       process.exit(0);
     } else if (finalProjectName) {
@@ -1758,6 +1761,7 @@ if (!isRuntimeCommand) {
       console.log('  # if ~/.claude/CLAUDE.md already exists, back it up or merge it first:');
       console.log('  cp ~/.claude/CLAUDE.md ~/.claude/CLAUDE.md.bak  (skip if there is no existing file)');
       console.log(`  cp ${resolvedFinalTargetDir}/CLAUDE.md ~/.claude/CLAUDE.md  (review and customize)`);
+      console.log('  cp ~/.claude/MEMORY.md ~/.claude/MEMORY.md.bak  (skip if there is no existing file)');
       console.log(`  cp ${resolvedFinalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
     } else {
       const resolvedFinalTargetDir = path.resolve(finalTargetDir);
@@ -1789,7 +1793,10 @@ if (!isRuntimeCommand) {
       console.log('  mkdir -p ~/.claude/memory');
       console.log('  # if ~/.claude/CLAUDE.md already exists, back it up or merge it first:');
       console.log('  cp ~/.claude/CLAUDE.md ~/.claude/CLAUDE.md.bak  (skip if there is no existing file)');
-      console.log(`  cp ${resolvedFinalTargetDir}/CLAUDE-TEMPLATE.md ~/.claude/CLAUDE.md  (then edit domains/team info)`);
+      // No --name here, so no CLAUDE.md was generated: the template still holds its
+      // {{PROJECT_NAME}} tokens and the step must say so.
+      console.log(`  cp ${resolvedFinalTargetDir}/CLAUDE-TEMPLATE.md ~/.claude/CLAUDE.md  (then replace the {{PROJECT_NAME}} tokens and edit domains/team info)`);
+      console.log('  cp ~/.claude/MEMORY.md ~/.claude/MEMORY.md.bak  (skip if there is no existing file)');
       console.log(`  cp ${resolvedFinalTargetDir}/MEMORY-SEED.md ~/.claude/MEMORY.md  (then add your facts)`);
     }
     console.log('\nFor full documentation, see the README.md in the scaffolded directory.');

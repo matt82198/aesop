@@ -373,9 +373,18 @@ describe('CLI Python dispatch table', () => {
 
   describe('no breaking changes', () => {
     it('wizard mode still works', async () => {
-      const result = await runCli(['wizard', '--yes']);
-      // wizard creates files; we don't verify success but that it runs without dispatch error
-      assert(result.exitCode === 0 || result.exitCode === 1, 'wizard should run (not dispatch error)');
+      // Run in a fresh temp cwd: the wizard scaffolds into its cwd by default, and a
+      // repo-root run leaves a partial aesop-fleet/ behind when the 10s spawn timeout
+      // kills it mid-write (after this suite's after() hook has already cleaned up).
+      const wizardCwd = join(tmpdir(), `aesop-dispatch-wizard-${randomBytes(4).toString('hex')}`);
+      mkdirSync(wizardCwd, { recursive: true });
+      try {
+        const result = await runCli(['wizard', '--yes'], wizardCwd);
+        // wizard creates files; we don't verify success but that it runs without dispatch error
+        assert(result.exitCode === 0 || result.exitCode === 1, 'wizard should run (not dispatch error)');
+      } finally {
+        rmSync(wizardCwd, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      }
     });
   });
 });
