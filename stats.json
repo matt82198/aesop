@@ -1,15 +1,15 @@
 {
   "git": {
-    "merged_prs": 907,
+    "merged_prs": 1006,
     "merged_prs_source": "git-log",
-    "total_commits": 2533,
-    "project_age_days": 97,
+    "total_commits": 2633,
+    "project_age_days": 101,
     "wave_count": 31,
-    "insertions_deletions": 497207,
-    "files_tracked": 1329,
-    "distinct_coauthors": 20,
+    "insertions_deletions": 508640,
+    "files_tracked": 1366,
+    "distinct_coauthors": 21,
     "authors_human": 0,
-    "model_tiers": 8,
+    "model_tiers": 9,
     "model_tier_names": [
       "Fable 5",
       "Fable 5.1",
@@ -18,7 +18,8 @@
       "Opus 4.6",
       "Opus 4.8",
       "Opus 5",
-      "Sonnet 5"
+      "Sonnet 5",
+      "Sonnet 5.5"
     ]
   },
   "telemetry": {
@@ -30,14 +31,14 @@
     "cumulative_tokens": null,
     "total_coding_hours": null
   },
-  "generated_at": "2026-10-17T06:47:41.086799+00:00",
-  "loc": 421094,
-  "head_sha": "7dc7df1a25f827398fa03d34dccbaa3e7c04bbb2",
+  "generated_at": "2026-10-21T07:22:48.232008+00:00",
+  "loc": 430467,
+  "head_sha": "5e8a9c3ef78d47caab353f5b449b55b11aebcf41",
   "economics": {
     "token_ledger_available": false,
-    "merged_prs": 907,
+    "merged_prs": 1006,
     "merged_prs_source": "git-log",
-    "lines_of_code": 421094,
+    "lines_of_code": 430467,
     "wave_count": 31
   },
   "economics_caveats": {
