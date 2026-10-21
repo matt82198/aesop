@@ -28,8 +28,8 @@ Also reads `$AESOP_ROOT/aesop.config.json` for optional `state_root`, `transcrip
 ### fleet_status
 Get daemon/monitor heartbeats, orchestrator status, alert count.
 **Input**: `{}` (no args).
-**Output**: `{ watchdog: { alive: "ALIVE"|"STALE", age_seconds, threshold_seconds }, monitor: { ... }, orchestrator: {...}|null, alerts: { count, sample_lines } }`.
-**Design**: Missing files → `null`; never crashes. Heartbeat age computed from file mtime bucketed into brackets.
+**Output**: `{ watchdog: { alive: "ALIVE"|"STALE", age_seconds, threshold_seconds } | { alive: "MISSING", path } | { alive: "UNKNOWN", reason, path? }, monitor: { ... }, orchestrator: {...}|null, alerts: { count, sample_lines } }`.
+**Design**: Watchdog beat is read from `CONDUCTOR_ROOT/state/.watchdog-heartbeat` (mirrors `monitor/collect-signals.mjs` `resolveWatchdogHeartbeat`; `CONDUCTOR_ROOT` env wins, else sibling `conductor3` only when `AESOP_ROOT` basename is `aesop`). Never `STATE_ROOT`: the daemon writes nowhere else. Unresolved root → `UNKNOWN`; no file → `MISSING`; unparseable → `UNKNOWN`. A missing beat is never reported ALIVE. Other missing files → `null`; never crashes. Monitor heartbeat age computed from file mtime bucketed into brackets.
 
 ### fleet_agents
 List active Claude agents from `AESOP_TRANSCRIPTS_ROOT`. Invokes `dash-extra.mjs --json` passthrough with 5s timeout.

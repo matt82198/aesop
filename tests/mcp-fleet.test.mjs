@@ -111,9 +111,11 @@ async function runTests() {
   fs.mkdirSync(stateRoot, { recursive: true });
   fs.mkdirSync(ledgerDir, { recursive: true });
 
-  // Create heartbeat file (current epoch)
+  // Create heartbeat file (current epoch) where the watchdog daemon writes it: CONDUCTOR_ROOT/state
+  const conductorRoot = join(fixtureRoot, 'conductor3');
+  fs.mkdirSync(join(conductorRoot, 'state'), { recursive: true });
   const now = Math.floor(Date.now() / 1000);
-  fs.writeFileSync(join(stateRoot, '.watchdog-heartbeat'), `${now}`);
+  fs.writeFileSync(join(conductorRoot, 'state', '.watchdog-heartbeat'), `${now}`);
 
   // Create tracker.json
   const tracker = {
@@ -182,7 +184,8 @@ async function runTests() {
     env: {
       ...process.env,
       AESOP_ROOT: fixtureRoot,
-      AESOP_STATE_ROOT: stateRoot
+      AESOP_STATE_ROOT: stateRoot,
+      CONDUCTOR_ROOT: conductorRoot
     }
   });
 
