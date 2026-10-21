@@ -1,6 +1,6 @@
 import { describe, it, before, after } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
@@ -34,25 +34,44 @@ function assertRouted(result, msg) {
 /**
  * Run `node bin/cli.js` with given args and capture exit code + output
  */
+/**
+ * Kill a child AND its descendants. On Windows, `proc.kill()` (and spawn's `timeout`
+ * option) only terminates the direct node.exe: a wizard that is mid-scaffold keeps its
+ * git/python grandchildren alive, and those hold their cwd inside the temp dir, so the
+ * caller's rmSync fails with EBUSY/EPERM. `taskkill /T` takes the whole tree down.
+ */
+function killProcessTree(pid) {
+  if (process.platform === 'win32') {
+    try {
+      execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      return;
+    } catch { /* process already gone: fall through to the direct kill */ }
+  }
+  try { process.kill(pid, 'SIGKILL'); } catch { /* already exited */ }
+}
+
 function runCli(args, cwdOverride) {
   return new Promise((resolve) => {
     const proc = spawn('node', [cliPath, ...args], {
       cwd: cwdOverride || repoRoot,
       stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 10000
+      windowsHide: true
     });
 
     let stdout = '';
     let stderr = '';
+    const timer = setTimeout(() => killProcessTree(proc.pid), 10000);
 
     proc.stdout.on('data', (data) => { stdout += data.toString(); });
     proc.stderr.on('data', (data) => { stderr += data.toString(); });
 
     proc.on('error', (err) => {
+      clearTimeout(timer);
       resolve({ exitCode: 2, stdout, stderr, error: err.message });
     });
 
     proc.on('close', (code) => {
+      clearTimeout(timer);
       resolve({ exitCode: code ?? 0, stdout, stderr });
     });
   });
