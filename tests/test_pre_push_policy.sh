@@ -2704,6 +2704,107 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+printf '\n=== Backup-ref scope: crash-backup refs skip metrics + test-coverage gates ONLY ===\n'
+(
+  # End-to-end through main(): metrics_gate.py and verify_test_coverage.py are
+  # stubbed to FAIL; secret_scan.py is stubbed per-case. Everything else passes.
+  export AESOP_ROOT="$TEST_ROOT/aesop_backup_ref"
+  export AESOP_RECEIPT_EMIT=0  # receipt gate is out of scope here (documented opt-out)
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+  printf '{"violations": {}}\n' > "$AESOP_ROOT/.subprocess-guard-baseline.json"
+  py_bin="python3"
+  command -v python3 >/dev/null 2>&1 || py_bin="python"
+  for gate_stub in $("$py_bin" "$(dirname "$HOOK_SCRIPT")/../tools/gate_stub_list.py" "$HOOK_SCRIPT" | tr -d '\r'); do
+    printf 'import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/$gate_stub.py"
+  done
+  printf '#!/usr/bin/env python3
+import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/secret_scan.py"
+  chmod +x "$AESOP_ROOT/tools/secret_scan.py"
+  printf 'import sys\nprint("unverified metric")\nsys.exit(1)\n' > "$AESOP_ROOT/tools/metrics_gate.py"
+  printf 'import sys\nprint("orphaned test")\nsys.exit(1)\n' > "$AESOP_ROOT/tools/verify_test_coverage.py"
+
+  BREPO="$TEST_ROOT/aesop_backup_ref_repo"
+  # Gate scripts are extracted from origin/main and check_secret_scan needs the
+  # tracked exec bit (mode 755), which a plain `git add` loses on this box.
+  bpublish() {
+    publish_base_tools "$BREPO" "$AESOP_ROOT/tools"
+    git -C "$BREPO.base" update-index --chmod=+x tools/secret_scan.py
+    git -C "$BREPO.base" -c user.email=t@example.com -c user.name=t commit -q --amend --no-edit
+    git -C "$BREPO" fetch -q origin main
+  }
+  mkdir -p "$BREPO"
+  (
+    cd "$BREPO" || exit 1
+    git init -q
+    git config user.email t@example.com
+    git config user.name t
+    echo x > f.txt
+    git add f.txt
+    git commit -q -m init
+    git checkout -q -b feature/x
+  )
+  bpublish
+  BSHA=$(git -C "$BREPO" rev-parse HEAD)
+  BZERO=0000000000000000000000000000000000000000
+
+  run_push() { # <remote-ref>... -> sets PUSH_RC / PUSH_ERR
+    local tuples="" r
+    for r in "$@"; do tuples+="refs/heads/feature/x $BSHA $r $BZERO"$'\n'; done
+    PUSH_ERR=$( { printf '%s' "$tuples" | ( cd "$BREPO" && bash "$HOOK_SCRIPT" ); } 2>&1 1>/dev/null )
+    PUSH_RC=$?
+  }
+  fail() { printf 'FAIL: %s\n(rc=%s) stderr: %s\n' "$1" "${PUSH_RC:-}" "${PUSH_ERR:-}"; exit 1; }
+
+  # Control: a normal feature-branch push IS blocked by the failing gates.
+  run_push refs/heads/feature/y
+  [ "$PUSH_RC" -ne 0 ] || fail "control: feature push should be blocked by the failing metrics gate"
+
+  run_push refs/heads/backup/crash-2026-10-20/common-state-root
+  [ "$PUSH_RC" -eq 0 ] || fail "backup ref push should skip metrics+coverage gates and pass"
+  printf '%s' "$PUSH_ERR" | grep -q 'metrics' || fail "no stderr skip line naming the metrics gate"
+  printf '%s' "$PUSH_ERR" | grep -q 'test_coverage' || fail "no stderr skip line naming the coverage gate"
+  printf '%s' "$PUSH_ERR" | grep -q 'refs/heads/backup/crash-2026-10-20/common-state-root' || fail "skip line must name the ref"
+  grep -q 'gate_skipped_backup_ref' "$AESOP_ROOT/state/SECURITY-AUDIT.log" || fail "skip not appended to audit log"
+
+  # Non-matching refs still run (and are blocked by) the gates.
+  for r in refs/heads/main refs/heads/backup-x/crash-2026-10-20/a refs/heads/backupcrash-2026-10-20/a \
+           refs/heads/backup/crash-2026-10-20 refs/heads/backup/crash-2026-10-20/ \
+           refs/heads/backup/crash-2026-1-20/a refs/heads/backup/crash-2026-10-20/a/b \
+           refs/heads/backup/crash-2026-10-20/a:b refs/tags/backup/crash-2026-10-20/a \
+           refs/heads/xbackup/crash-2026-10-20/a refs/heads/backup/crash-2026-10-20/a..b ; do
+    run_push "$r"
+    [ "$PUSH_RC" -ne 0 ] || fail "non-backup ref $r must still run the gates"
+  done
+
+  # Mixed push (backup + non-backup) runs all gates.
+  run_push refs/heads/backup/crash-2026-10-20/a refs/heads/feature/y
+  [ "$PUSH_RC" -ne 0 ] || fail "mixed push must run all gates"
+
+  # Secret scan STILL runs on backup refs.
+  printf '#!/usr/bin/env python3
+import sys\nprint("SECRET")\nsys.exit(1)\n' > "$AESOP_ROOT/tools/secret_scan.py"
+  chmod +x "$AESOP_ROOT/tools/secret_scan.py"
+  bpublish
+  run_push refs/heads/backup/crash-2026-10-20/a
+  [ "$PUSH_RC" -ne 0 ] || fail "secret scan must still block backup refs"
+
+  # Malformed tuple (3 fields) on a backup-looking ref fails closed (no skip).
+  printf '#!/usr/bin/env python3
+import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/secret_scan.py"
+  chmod +x "$AESOP_ROOT/tools/secret_scan.py"
+  bpublish
+  PUSH_ERR=$( { printf 'refs/heads/feature/x %s refs/heads/backup/crash-2026-10-20/a\n' "$BSHA" | ( cd "$BREPO" && bash "$HOOK_SCRIPT" ); } 2>&1 1>/dev/null )
+  PUSH_RC=$?
+  [ "$PUSH_RC" -ne 0 ] || fail "malformed tuple must fail closed"
+
+  printf 'PASS: backup-ref scope skips only metrics+coverage; other/mixed/secret/malformed stay gated\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Test Summary ===\n'
 printf 'Tests PASSED: %d\n' "$test_passed"
 printf 'Tests FAILED: %d\n' "$test_failed"

@@ -21,6 +21,10 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR=$(mktemp -d)
 FAKE_ROOT="${TMP_DIR}/project"
 ALT_STATE="${TMP_DIR}/elsewhere-state"
+# Fail-closed root rule: the fixture AESOP_ROOT is not the canonical "aesop" tree, so every
+# daemon and halt.py invocation below pins its OWN fixture conductor root.
+CONDUCTOR_ROOT="${TMP_DIR}/conductor3"
+export CONDUCTOR_ROOT
 COUNTER="${TMP_DIR}/cycle-counter"
 
 trap "rm -rf ${TMP_DIR}" EXIT

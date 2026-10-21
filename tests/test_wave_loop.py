@@ -1560,6 +1560,39 @@ class ResumingDriver(AgentDriver):
         return self.dispatch_count * 100
 
 
+class TestJournalWriteFailureSurfaced(unittest.TestCase):
+    """A journal write that fails must not vanish silently (tracker e107455fa22b)."""
+
+    def test_write_failure_logs_error_and_returns_false(self):
+        """Failing atomic replace: explicit stderr line naming the item and cause, False returned."""
+        import contextlib
+        import io
+        from wave_loop import _write_journal_entry
+
+        with tempfile.TemporaryDirectory() as state_dir:
+            err = io.StringIO()
+            with mock.patch("wave_loop.os.replace", side_effect=OSError("disk full")), \
+                    contextlib.redirect_stderr(err):
+                ok = _write_journal_entry(state_dir, "item-1", "verified", {"verified": True}, repo=None)
+            self.assertIs(ok, False)
+            self.assertIn("item-1", err.getvalue())
+            self.assertIn("disk full", err.getvalue())
+            self.assertIn("journal", err.getvalue().lower())
+
+    def test_successful_write_returns_true_and_is_silent(self):
+        """Happy path: returns True, writes nothing to stderr."""
+        import contextlib
+        import io
+        from wave_loop import _write_journal_entry
+
+        with tempfile.TemporaryDirectory() as state_dir:
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                ok = _write_journal_entry(state_dir, "item-2", "verified", {"verified": True}, repo=None)
+            self.assertIs(ok, True)
+            self.assertEqual(err.getvalue(), "")
+
+
 class TestWaveRecoveryJournal(unittest.TestCase):
     """Test journal creation and reading for wave recovery."""
 

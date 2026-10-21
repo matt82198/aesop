@@ -189,6 +189,13 @@ def _quarantined_offsets(path: Path) -> set:
     return offsets
 
 
+def _quarantine_count(path: Path) -> int:
+    """Total quarantined records on disk (read-only; 0 when no quarantine file)."""
+    if not path.exists():
+        return 0
+    return sum(1 for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+
+
 def _append_quarantine(path: Path, rows: list) -> None:
     with open(path, "a", encoding="utf-8", newline="\n") as fh:
         for row in rows:
@@ -315,16 +322,20 @@ def status(jsonl_path, state_dir, now=None, stale_after_s=STALE_HEARTBEAT_SECOND
         reasons.append(f"heartbeat {heartbeat_age}s old exceeds {stale_after_s}s")
     stale = bool(reasons)
     age_text = "none" if heartbeat_age is None else str(heartbeat_age)
+    # Quarantined records are dropped from the task stream, so the count is
+    # surfaced here: a schema change must not read as silently clean.
+    quarantined = _quarantine_count(_quarantine_path(jsonl_path))
     line = (
         f"INGEST: {'STALE' if stale else 'fresh'} cursor={cursor} source_bytes={size} "
-        f"lag_bytes={lag} heartbeat_age_s={age_text}"
+        f"lag_bytes={lag} heartbeat_age_s={age_text} quarantined={quarantined}"
     )
     if stale:
         line += " reasons=[" + "; ".join(reasons) + "]"
     return {
         "state": "STALE" if stale else "fresh", "stale": stale, "source": str(jsonl_path),
         "source_bytes": size, "cursor": cursor, "lag_bytes": lag,
-        "heartbeat_age_s": heartbeat_age, "reasons": reasons, "line": line,
+        "heartbeat_age_s": heartbeat_age, "quarantined": quarantined,
+        "reasons": reasons, "line": line,
     }
 
 

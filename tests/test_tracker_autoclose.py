@@ -122,6 +122,31 @@ class TestTrackerAutoclose(unittest.TestCase):
             self.assertEqual(journal[0]["id"], "358af636cdf0")
             self.assertIn("merged", journal[0]["evidence"])
 
+    def test_todo_and_in_progress_merged_pr_is_shipped(self):
+        """Items with status 'todo' or 'in-progress' and a merged PR are classified SHIPPED."""
+        for status in ("todo", "in-progress"):
+            with self.subTest(status=status):
+                self._write_tracker([
+                    {
+                        "id": "ac-status-1",
+                        "title": "Status escape",
+                        "status": status,
+                        "lane": "proposed",
+                        "priority": "P1",
+                        "notes": "Fix: PR #123",
+                        "pr_link": None,
+                        "created_at": "2026-07-29T00:00:00Z",
+                        "completed_at": None,
+                    }
+                ])
+                with patch("tools.tracker_autoclose.subprocess.run") as mock_run:
+                    mock_proc = Mock()
+                    mock_proc.returncode = 0
+                    mock_proc.stdout = json.dumps({"state": "MERGED", "mergedAt": "2026-07-30T10:00:00Z"})
+                    mock_run.return_value = mock_proc
+                    rc = tracker_autoclose.main(["--check"], state_root=str(self.state_dir))
+                self.assertEqual(rc, 1, f"status {status!r} with merged PR must be closable")
+
     # ========== Genuinely open item (no evidence) ==========
 
     def test_open_item_no_evidence(self):
