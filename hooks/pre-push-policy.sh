@@ -1664,7 +1664,13 @@ check_claudemd_headroom() {
     return 0
   fi
 
-  local base_ref="${AESOP_HEADROOM_BASE_REF:-origin/main}"
+  # Base ref: the override, else the repo's trunk resolved exactly as the gate base is
+  # (origin/HEAD, origin/main, origin/master). origin/main is only the diagnostic name
+  # when no trunk exists, which is the empty-remote case handled below.
+  local base_ref="${AESOP_HEADROOM_BASE_REF:-}"
+  if [ -z "$base_ref" ]; then
+    base_ref=$(gate_trunk_ref 2>/dev/null) || base_ref="origin/main"
+  fi
   # An override that names the branch itself previews a merge with nothing: refuse it.
   if [ -n "${AESOP_HEADROOM_BASE_REF:-}" ] && headroom_base_is_branch_head "$aesop_root" "$base_ref"; then
     printf 'BLOCKED: AESOP_HEADROOM_BASE_REF=%s resolves to the branch head; the headroom preview would merge the branch with itself. Push blocked (fail closed).\n' "$base_ref" >&2
@@ -1684,7 +1690,14 @@ check_claudemd_headroom() {
   fi
 
   if [ $headroom_exit_code -eq 2 ]; then
-    printf 'BLOCKED: CLAUDE.md headroom union unreadable against %s (exit 2) after one fetch attempt; push blocked (fail closed). Tail of tool output:\n' "$base_ref" >&2
+    # Case 1, empty remote (no branches at all): there is nothing to merge against, and
+    # the union is the pushed tree itself. Passes, and says so in the audit log.
+    if headroom_remote_empty "$aesop_root"; then
+      log_event "claudemd_headroom_empty_remote_pass"
+      return 0
+    fi
+    # Case 2, remote has refs but no readable trunk (missing or corrupt main/master): deny.
+    printf 'BLOCKED: CLAUDE.md headroom base %s does not resolve (case: remote-has-refs; origin has branches but no readable trunk, so the union cannot be previewed). Push blocked (fail closed). Tail of tool output:\n' "$base_ref" >&2
     printf '%s\n' "$headroom_output" | tail -n 20 >&2
     log_block "claudemd_headroom_unreadable_blocked"
     return 1
@@ -1722,6 +1735,15 @@ headroom_refresh_base() {
     fetch_args=(fetch --quiet --no-tags --unshallow origin "$remote_branch")
   fi
   git -C "$root" "${fetch_args[@]}" </dev/null >/dev/null 2>&1
+}
+
+# headroom_remote_empty <aesop_root>
+# Returns 0 only when origin is readable AND lists no branches at all. An unreadable
+# origin returns 1 (treated as "has refs": deny), never as empty.
+headroom_remote_empty() {
+  local listing
+  listing=$(git -C "$1" ls-remote --heads origin </dev/null 2>/dev/null) || return 1
+  [ -z "$listing" ]
 }
 
 # ----- Audit writes (never drop a record) -----

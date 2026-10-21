@@ -3182,6 +3182,48 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+printf '\n=== Headroom remote cases: an EMPTY remote passes (nothing to merge against); a remote with refs but no trunk DENIES ===\n'
+(
+  hr_root="$TEST_ROOT/hr_remote_cases"
+  rm -rf "$hr_root"
+  mkdir -p "$hr_root/clone/tools" "$hr_root/clone/state"
+  hr_clone="$hr_root/clone"
+  git init -q -b feature/test "$hr_clone"
+  git -C "$hr_clone" config user.email t@example.com
+  git -C "$hr_clone" config user.name t
+  printf 'import sys\nsys.exit(2)\n' > "$hr_clone/tools/claudemd_lint.py"
+  : > "$hr_clone/tools/INDEX.md"
+  printf '{}\n' > "$hr_clone/.pyflakes-baseline.json"
+  printf '{"violations": {}}\n' > "$hr_clone/.subprocess-guard-baseline.json"
+  git -C "$hr_clone" add -A
+  git -C "$hr_clone" commit -q -m seed
+  git init -q --bare "$hr_root/remote.git"
+  git -C "$hr_clone" remote add origin "$hr_root/remote.git"
+  export AESOP_ROOT="$hr_clone"
+  cd "$hr_clone" || exit 1
+
+  # Case A: the remote has NO branches. The union is the pushed tree: pass.
+  if ! check_claudemd_headroom >/dev/null 2>&1; then
+    printf 'FAIL: an empty remote (no branches) must pass the headroom gate\n'
+    exit 1
+  fi
+  grep -q 'claudemd_headroom_empty_remote_pass' "$hr_clone/state/SECURITY-AUDIT.log" || { printf 'FAIL: empty-remote pass not audited\n'; exit 1; }
+
+  # Case B: the remote has refs (a branch) but no readable trunk. Deny, naming the case.
+  git -C "$hr_clone" push -q origin HEAD:refs/heads/feature/other >/dev/null 2>&1
+  case_err=$( { check_claudemd_headroom; } 2>&1 >/dev/null ) && {
+    printf 'FAIL: a remote with refs but no trunk must DENY the headroom gate\n'
+    exit 1
+  }
+  printf '%s' "$case_err" | grep -q 'case: remote-has-refs' || { printf 'FAIL: deny text must name case remote-has-refs; got: %s\n' "$case_err"; exit 1; }
+  printf 'PASS: empty remote passes (audited); remote with refs but no trunk denies (case named)\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Test Summary ===\n'
 printf 'Tests PASSED: %d\n' "$test_passed"
 printf 'Tests FAILED: %d\n' "$test_failed"
