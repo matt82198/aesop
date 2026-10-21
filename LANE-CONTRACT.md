@@ -52,6 +52,10 @@ Four rules:
 - **Anti-vacuity is mandatory and is proven by REMOVING the fix and RUNNING the suite** — paste the
   failure, restore, paste the pass. Not by reasoning. If removing the fix does NOT redden it, the
   test is vacuous: say so and rewrite it.
+- **The red for a new pure symbol is taken on a stub.** When the red test references a symbol that does not exist
+  on main, the test cannot compile on main. The lane declares the symbol on its branch as a stub whose body returns the
+  wrong answer, records the red output with the assertion failing, then implements. A compile error is not a red test.
+  *Why: a compile error shows the symbol is missing, not that the assertion checks behaviour, so the receipt must show the assertion failing.*
 - Verify the suite is COUNTED: executed == declared, 0 dormant, total up by the number you added.
 - **A test must EXERCISE BEHAVIOUR, never grep source text.** Asserting that a file *contains*
   `foo:Bar()` — or does not contain `foo.Bar()` — is not a test: it passes on a match inside a
@@ -131,6 +135,10 @@ Four rules:
   "origin/HEAD" here means the repo's default branch (origin/HEAD; main for aesop/keyrun/psinasty, master for the brain repos). Resolve it with `git symbolic-ref refs/remotes/origin/HEAD`; never hard-code the branch name.
   Exit the primary tree unchanged. Check `git branch --show-current` immediately after creating the
   worktree; if empty (detached HEAD), create a branch first.
+- **Worktree path collision: stop and hand off.** If the worktree path already exists, or the branch is already checked
+  out in another worktree, the lane stops and hands off naming the occupant (its `git worktree list` line). It never
+  removes, reuses or re-targets the occupant and never picks a different path on its own; the orchestrator names a path
+  that `git worktree list` shows free. *Why: 2026-10-21 18:16Z keyrun-wt/pair-marks was occupied by an older branch, and the stop was correct.*
 - **Never git stash.** The stash is shared across worktrees; concurrent agents cross-contaminate WIP.
   Use `git diff > patch.diff && git checkout . && git apply patch.diff` instead.
 - **AESOP_STATE_ROOT**: all state files (heartbeat, logs, audit trail) use `$AESOP_STATE_ROOT` env var
@@ -329,6 +337,7 @@ Hooks enforce these. Each line is the allowed shape, then the denied one.
 5. Push: the secret scan runs `--staged` before the commit and must print CLEAN with a count above zero; the push is its own command, never chained with `;` or `&&` after a scan or a test.
 6. Branch base: cut from origin/main unless the brief names another base; a branch cut from an open PR's head makes a stacked PR, which is not armed.
 7. Scratch: every gate's output, commit message, PR body and probe script goes to a file under the session scratchpad folder named in the brief, and is read back with the Read tool; the hand-back names each file by its complete absolute path.
+8. Worktree npm and npx: `cd` does not persist across tool calls, so run vitest and npx as one command, `cd <wt> && npx vitest run ...`, and in a fresh worktree run `cd <wt> && npm ci --no-audit --no-fund` first. The scene-test exception in the CI contract (item 2, no `cd &&` prefix) still applies to scene runs. *Why: 2026-10-21 two false vitest failures came from running in the wrong cwd.*
 
 ## The brief
 A dispatch brief carries exactly these, and nothing else (everything else is this contract and is not repeated):
@@ -446,6 +455,8 @@ frames, launches, timeout) changed, as old -> new; (c) the PR head sha (`gh pr v
 
 **8. Enemy content tree.** Enemy telegraphs, abilities and layout live in the repo-root content tree, `content/data/enemies/*.json`, embedded by `Keyrun.Content.csproj`. `game/content/data` is a different tree. Briefs and lanes name the repo-root path.
 
+**9. Capture log writer.** Only `Driver.HostLine` reaches `demo.log`; `GD.Print` and Console output never do. Any log receipt a capture must show is emitted through `Driver.HostLine`. *Why: #488 found a `GD.Print` receipt would never appear in the capture log.*
+
 ## 7. Definition of DONE — work that is not pushed does not exist
 - **A lane is not finished when the code is written and the bar is green. It is finished when the
   branch is PUSHED and a PR is OPEN, and the report names the PR number.** Work sitting in a local
@@ -534,7 +545,7 @@ across lanes mean a contract section is written before the next dispatch in that
    (or a resume of it) repeats the merge in item 2. The orchestrator never edits the branch.
 4. **Not in force (PLAN item).** The durable fix is for the lane to put its BUILDLOG line and CLAUDE.md row in the
    PR body, and for the orchestrator to append them on land. Until that is built, item 2 is the rule.
-5. **Fold anchor and fold verification.** A checkpoint block folds into STATE.md directly above the FIRST line that begins `## NEXT STEPS` (keyrun STATE.md has two such headings; the first is the anchor), with no blank separator line. The fold verifier takes the STATE-only diff, `git -C <wt> diff -- STATE.md`, never a whole-tree diff: git lists BUILDLOG.md before STATE.md, so a flat added-line list fails on a multi-file diff. BUILDLOG.md is appended only through `printf '\n' >> <wt>/BUILDLOG.md` then `cat <block> >> <wt>/BUILDLOG.md`, and its numstat must be block lines + 1 added, 0 deleted (verified separately from the STATE diff).
+5. **Fold anchor and fold verification.** A checkpoint block folds into STATE.md directly above the FIRST line that begins `## NEXT STEPS` (keyrun STATE.md has two such headings; the first is the anchor), with no blank separator line. The fold verifier takes the STATE-only diff, `git -C <wt> diff -- STATE.md`, never a whole-tree diff: git lists BUILDLOG.md before STATE.md, so a flat added-line list fails on a multi-file diff. BUILDLOG.md is appended only through `printf '\n' >> <wt>/BUILDLOG.md` then `cat <block> >> <wt>/BUILDLOG.md`, and its numstat must be block lines + 1 added, 0 deleted (verified separately from the STATE diff). When a STATE.md has more than one `## NEXT STEPS` heading, the fold block goes directly above the FIRST one with no blank separator, and the lane's hand-back states the anchor line number it folded above. *Why: `verify_1220b.py` does not check which heading was used, so the rule has to be written and the hand-back has to show it (keyrun STATE.md has two headings, at lines 726 and 1569 at 0e560876).*
 
 ## 8d. Receipt first (push early, draft PR early)
 1. A build lane pushes its branch and opens a draft PR within 20 minutes of its first commit, before any long test run. The draft PR is the receipt; its body says what is folded in and what is still red.
