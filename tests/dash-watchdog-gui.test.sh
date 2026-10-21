@@ -172,6 +172,46 @@ test_heartbeat_path_matches_daemon_derivation() {
   fi
 }
 
+# Incident (P0 wrong data): with CONDUCTOR_ROOT unset and AESOP_ROOT ending in "aesop", the
+# derived sibling conductor3 can be a stray dir holding only state/pr-sweep.log (no heartbeat).
+# The GUI must not stop at that stray dir; it must fall through to the canonical $HOME/conductor3.
+test_stray_sibling_falls_through_to_home() {
+  local scratch line
+  scratch="$(mktemp -d)"
+  mkdir -p "$scratch/home/conductor3/state" "$scratch/aesop" "$scratch/conductor3/state"
+  date +%s > "$scratch/home/conductor3/state/.watchdog-heartbeat"
+  : > "$scratch/conductor3/state/pr-sweep.log"
+
+  line="$(render_daemon_line "$scratch" -u CONDUCTOR_ROOT HOME="$scratch/home" AESOP_ROOT="$scratch/aesop")"
+  rm -rf "$scratch"
+
+  if printf '%s' "$line" | grep -q 'ALIVE'; then
+    echo "PASS: stray sibling conductor3 (no heartbeat) falls through to HOME/conductor3 and reads ALIVE"
+    return 0
+  else
+    echo "FAIL: stray sibling shadowed the live heartbeat; Daemon line was: $line"
+    return 1
+  fi
+}
+
+# With no heartbeat resolvable anywhere, the GUI must say UNRESOLVED, never STALE or ALIVE.
+test_unresolvable_root_reports_unresolved_not_stale() {
+  local scratch line
+  scratch="$(mktemp -d)"
+  mkdir -p "$scratch/home" "$scratch/aesop"
+
+  line="$(render_daemon_line "$scratch" -u CONDUCTOR_ROOT HOME="$scratch/home" AESOP_ROOT="$scratch/aesop")"
+  rm -rf "$scratch"
+
+  if printf '%s' "$line" | grep -q 'UNRESOLVED' && ! printf '%s' "$line" | grep -q 'STALE'; then
+    echo "PASS: unresolvable conductor root reports UNRESOLVED (not STALE)"
+    return 0
+  else
+    echo "FAIL: unresolvable conductor root did not report UNRESOLVED; Daemon line was: $line"
+    return 1
+  fi
+}
+
 main() {
   local pass=0
   local fail=0
@@ -215,9 +255,17 @@ main() {
   if test_heartbeat_path_matches_daemon_derivation; then ((pass++)); else ((fail++)); fi
   echo
 
+  echo "Running: test_stray_sibling_falls_through_to_home"
+  if test_stray_sibling_falls_through_to_home; then ((pass++)); else ((fail++)); fi
+  echo
+
+  echo "Running: test_unresolvable_root_reports_unresolved_not_stale"
+  if test_unresolvable_root_reports_unresolved_not_stale; then ((pass++)); else ((fail++)); fi
+  echo
+
   echo "${C}=== Test Summary ===${X}"
-  echo "Passed: $pass / 9"
-  echo "Failed: $fail / 9"
+  echo "Passed: $pass / 11"
+  echo "Failed: $fail / 11"
   echo
 
   if [ "$fail" -eq 0 ]; then
