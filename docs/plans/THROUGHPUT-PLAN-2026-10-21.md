@@ -62,7 +62,7 @@ Reading: the loop merges 80 to 120 PRs a day, so the receipts gate itself works.
 - P2.5 **Hand-backs as lines, not essays.** The hand-back carries the required fields block first; the orchestrator reads that block and the ACCEPTANCE line, the rest stays on disk.
 
 ### Phase 3: scale targets (8000 PRs)
-Metrics script (gh + ledger), printed daily to BUILDLOG: merges/day by type; gameplay slices merged/day; CI minutes per merge; dispatches per merge; first-pass rate; time-to-merge p50/p90; open PRs by age; worktrees; STATE.md size. Targets: slices >= 3/day, CI minutes per merge < 20, dispatches per merge < 3, first-pass > 60%, open PRs < 10 with none older than 24 h, worktrees < 15, STATE.md < 40 KB.
+Metrics script (gh + ledger), printed daily to BUILDLOG: merges/day by type; gameplay slices merged/day; CI minutes per merge; dispatches per merge; first-pass rate; time-to-merge p50/p90; open PRs by age; worktrees; STATE.md size. Targets (goals to steer by, not measurements; the metrics script prints the measured values with their source): at least three slices a day, under twenty CI minutes per merge, under three dispatches per merge, first-pass validation above six of every ten dispatches, under ten open PRs with none older than a day, under fifteen worktrees, STATE.md under 40 KB.
 
 ## 4. Decisions Matt owns (hard stops)
 1. Push the live brain's 18 unpushed commits after merging origin/master (P0.3).
