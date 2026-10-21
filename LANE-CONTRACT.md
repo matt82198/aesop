@@ -319,6 +319,15 @@ Hooks enforce these. Each line is the allowed shape, then the denied one.
 - **Never:** `git stash`; history rewrites (`--amend` on a pushed commit, `rebase`, `reset --hard`, force-push); the primary checkout as a working tree (only `fetch origin` and `worktree add <literal path>` run there); touching an auto-merge arm Matt enabled (`gh pr merge --disable-auto` on an armed PR); deleting a branch or a worktree. Push shape: `git -C <literal wt> push origin HEAD:<branch>`, in its own foreground call.
 - **Knowledge-tree hook fix shape** (a brain repo's knowledge-tree gate reds on a stale index): `python ~/scripts/knowledge_tree.py --write --root <wt>`, then stage `INDEX*.md` and `KNOWLEDGE.md`; never hand-edit them (section 9a).
 
+### Hook-safe shapes (read before the first shell command)
+1. Clock: `python C:/Users/Mattt/scripts-wt/utc-now/utc_now.py` from Bash at the lane's start and end (its `--local` flag prints Chicago time). Never a PowerShell expression, never `~` inside a python path argument. A denied clock read is recorded as "not captured" and never stops the lane.
+2. Code reads: the Glob tool to locate files, the Read tool to read them, the Edit or Write tool to change them. In shell: never `sed`, `awk` or `grep` on a game path; never `$(...)` command substitution; `sed`/`awk` programs, where a gate needs them, are one single-quoted token on a literal path. PowerShell only for a named gate script.
+3. Git paths: literal absolute paths with forward slashes in every git argument, worktree-add targets included; never a shell variable, never `$HOME`, never `~`.
+4. Denials: a denial whose text names an allowed shape gets exactly one retry in that shape; any other denial means stop, record the text verbatim, hand back.
+5. Push: the secret scan runs `--staged` before the commit and must print CLEAN with a count above zero; the push is its own command, never chained with `;` or `&&` after a scan or a test.
+6. Branch base: cut from origin/main unless the brief names another base; a branch cut from an open PR's head makes a stacked PR, which is not armed.
+7. Scratch: every gate's output goes to a file under the session scratchpad folder named in the brief and is read back with the Read tool.
+
 ## The brief
 A dispatch brief carries exactly these, and nothing else (everything else is this contract and is not repeated):
 1. The PURPOSE line: `PURPOSE: this artifact exists to <one line>; status: real|throwaway|oracle` (section 9b).
