@@ -17,18 +17,52 @@ resolve_aesop_root() {
   # code that was not being pushed.
   #
   # A pre-push hook runs with cwd inside the pushing worktree, so the git
-  # toplevel is the correct root. Explicit AESOP_ROOT still wins; the old
-  # hardcoded path remains only as a last-resort fallback.
+  # toplevel is the correct root. A toplevel that is an aesop checkout (has
+  # tools/, or is the aesop package by name) WINS over AESOP_ROOT: an env var
+  # must never redirect the gates away from the repo being pushed. When the
+  # env var disagrees with such a toplevel, check_aesop_root_pin blocks the
+  # push before any gate runs. Outside an aesop checkout AESOP_ROOT is used as
+  # before; the old hardcoded path remains only as a last-resort fallback.
+  local top=""
+  if top=$(git rev-parse --show-toplevel 2>/dev/null) && [ -n "$top" ] && _is_aesop_checkout "$top"; then
+    printf '%s\n' "$top"
+    return 0
+  fi
   if [ -n "${AESOP_ROOT:-}" ]; then
     printf '%s\n' "$AESOP_ROOT"
     return 0
   fi
-  local top=""
-  if top=$(git rev-parse --show-toplevel 2>/dev/null) && [ -n "$top" ]; then
+  if [ -n "$top" ]; then
     printf '%s\n' "$top"
     return 0
   fi
   printf '%s\n' "$HOME/aesop"
+}
+
+_is_aesop_checkout() {
+  # True when the directory $1 is an aesop checkout: it has tools/, or its
+  # package.json names the aesop package. Fail-closed downstream: a checkout
+  # matched by name alone with no tools/ makes every gate report "missing".
+  local dir="$1"
+  [ -d "$dir/tools" ] && return 0
+  [ -f "$dir/package.json" ] && grep -q '"name": *"@matt82198/aesop"' "$dir/package.json" 2>/dev/null
+}
+
+check_aesop_root_pin() {
+  # Block (return 1) when AESOP_ROOT is set and names a different directory
+  # than the git toplevel that is an aesop checkout. Returns 0 otherwise.
+  # Prints one message naming both paths; the message carries no bypass hint.
+  local top="" top_canon="" pinned_canon=""
+  [ -n "${AESOP_ROOT:-}" ] || return 0
+  top=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
+  [ -n "$top" ] || return 0
+  _is_aesop_checkout "$top" || return 0
+  top_canon=$(cd -- "$top" 2>/dev/null && pwd -P) || top_canon="$top"
+  pinned_canon=$(cd -- "$AESOP_ROOT" 2>/dev/null && pwd -P) || pinned_canon="$AESOP_ROOT"
+  [ "$top_canon" = "$pinned_canon" ] && return 0
+  printf 'BLOCKED: the environment-pinned root (%s) disagrees with the aesop checkout being pushed (%s). Push blocked (fail-closed). Ask the orchestrator.\n' \
+    "$pinned_canon" "$top_canon" >&2
+  return 1
 }
 
 json_escape() {
@@ -1829,6 +1863,79 @@ log_block() {
   audit_write_locked "$state_dir" "$fragment" "$state_dir/.audit-log-lock"
 }
 
+# ---------------------------------------------------------------------------
+# Escape-rate counter (observability only: it never blocks a push).
+# Every skip, opt-out and fail-open branch already logs an audit event via
+# log_event. After a push, check_escape_rate counts those events in the last
+# hour and writes ONE ALERT line (audit log + stderr) per hour window when the
+# count exceeds the threshold. Whether the counter should ever block is a later
+# decision, made from the evidence this alert produces.
+# ---------------------------------------------------------------------------
+readonly ESCAPE_ALERT_DEFAULT_THRESHOLD=3
+readonly ESCAPE_ALERT_WINDOW_SECS=3600
+# Audit event names that record a skip, opt-out or fail-open branch.
+readonly ESCAPE_EVENT_RE='(skipped|opted_out|tool_missing|no_python|red_override)'
+
+escape_alert_threshold() {
+  # AESOP_ESCAPE_ALERT_THRESHOLD may only raise the alarm sooner: values above
+  # the default are clamped down to it, and anything unparseable (empty,
+  # negative, non-numeric, absurdly long) falls back to the default.
+  local raw="${AESOP_ESCAPE_ALERT_THRESHOLD:-}"
+  if ! [[ "$raw" =~ ^[0-9]{1,2}$ ]]; then
+    printf '%s' "$ESCAPE_ALERT_DEFAULT_THRESHOLD"
+    return 0
+  fi
+  local value=$((10#$raw))
+  if [ "$value" -gt "$ESCAPE_ALERT_DEFAULT_THRESHOLD" ]; then
+    value=$ESCAPE_ALERT_DEFAULT_THRESHOLD
+  fi
+  printf '%s' "$value"
+}
+
+escape_window_cutoff() {
+  # ISO-8601 UTC timestamp one window ago. GNU date first, BSD date second.
+  local start
+  start=$(( $(date +%s) - ESCAPE_ALERT_WINDOW_SECS ))
+  date -u -d "@$start" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -r "$start" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null
+}
+
+check_escape_rate() {
+  # Count escape events in the audit log within the window. Emits one ALERT when
+  # the count exceeds the threshold and no ALERT was written in the window yet.
+  # Always returns 0: this counter never changes the push outcome.
+  local aesop_root audit_log threshold cutoff counts count alerted
+  aesop_root=$(resolve_aesop_root)
+  audit_log="$aesop_root/state/SECURITY-AUDIT.log"
+  [ -s "$audit_log" ] || return 0
+  threshold=$(escape_alert_threshold)
+  cutoff=$(escape_window_cutoff) || return 0
+  [ -n "$cutoff" ] || return 0
+  counts=$(awk -v cutoff="$cutoff" -v re="$ESCAPE_EVENT_RE" '
+    match($0, /"ts":"[^"]*"/) { ts = substr($0, RSTART + 6, RLENGTH - 7) }
+    match($0, /"event":"[^"]*"/) { ev = substr($0, RSTART + 9, RLENGTH - 10) }
+    ts >= cutoff && ev ~ /escape_rate_ALERT/ { alerted++ }
+    ts >= cutoff && ev ~ re { escapes++ }
+    END { printf "%d %d\n", escapes + 0, alerted + 0 }
+  ' "$audit_log" 2>/dev/null) || return 0
+  read -r count alerted <<< "$counts"
+  [[ "$count" =~ ^[0-9]+$ && "$alerted" =~ ^[0-9]+$ ]] || return 0
+  if [ "$count" -le "$threshold" ] || [ "$alerted" -gt 0 ]; then
+    return 0
+  fi
+  printf 'ALERT: %s gate skip / opt-out / fail-open events in the last hour (threshold %s). Ask the orchestrator to review the audit log.\n' \
+    "$count" "$threshold" >&2
+  log_event "escape_rate_ALERT:count=${count}:threshold=${threshold}"
+  return 0
+}
+
+_escape_rate_on_exit() {
+  # EXIT trap: runs once per push after every gate has logged its events. Preserves
+  # the push's exit status; a counter failure is swallowed (observability only).
+  local rc=$?
+  check_escape_rate || true
+  exit "$rc"
+}
+
 check_encoding_lint() {
   local gate_dir
   gate_dir=$(gate_base_dir) || { gate_base_block "check_encoding_lint"; return 1; }
@@ -2385,7 +2492,7 @@ check_emit_receipt() {
 
   # Timeout: the matrix never reported a conclusion, so there is nothing to allow on.
   if [ $receipt_exit_code -eq 124 ]; then
-    printf 'BLOCKED: receipt matrix timed out after %ss; conclusion unreadable, push blocked (fail closed). Raise AESOP_RECEIPT_TIMEOUT to allow a longer run.\n' "$timeout_secs" >&2
+    printf 'BLOCKED: receipt matrix timed out after %ss; conclusion unreadable, push blocked (fail closed). Ask the orchestrator.\n' "$timeout_secs" >&2
     log_block "receipt_emit_timed_out"
     return 1
   fi
@@ -2406,7 +2513,7 @@ check_emit_receipt() {
     if [ -n "$receipt_output" ]; then
       printf '%s\n' "$receipt_output" >&2
     fi
-    printf 'BLOCKED: a required receipt part is RED; push blocked. Fix the failing part (the failure receipt is recorded on the head sha). Emergency only: AESOP_PUSH_RED=1 git push.\n' >&2
+    printf 'BLOCKED: a required receipt part is RED; push blocked. Fix the failing part (the failure receipt is recorded on the head sha). Ask the orchestrator.\n' >&2
     log_block "receipt_red_blocked"
     return 1
   fi
@@ -2474,6 +2581,13 @@ run_test_mode() {
   local tmpdir
   tmpdir=$(mktemp -d)
   trap "rm -rf '$tmpdir'" EXIT
+  # Resolve the repo root while the cwd is still the caller's: BASH_SOURCE can be relative.
+  local test_hook_root
+  test_hook_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+  # Run the fixtures from a directory that is NOT an aesop checkout. resolve_aesop_root lets an
+  # aesop git toplevel (tools/) win over AESOP_ROOT, so a cwd inside the real checkout would send
+  # the audit-log fixtures (Tests 3, 8-11) into that checkout's state/ instead of $tmpdir.
+  cd "$tmpdir" || exit 1
 
   printf '\n=== Test 1: Branch policy check ===\n'
   (
@@ -3147,7 +3261,7 @@ refs/heads/feature/test $local_sha refs/heads/main 00000000000000000000000000000
       exit 1
     fi
 
-    # 23b: tool reports exit 2 (merge union UNREADABLE) -> fail-open, not a policy block
+    # 23b: tool reports exit 2 (merge union UNREADABLE) -> one fetch attempt, then BLOCK (fail-closed)
     cat > "$AESOP_ROOT/tools/claudemd_lint.py" <<'HEADROOM_UNREADABLE'
 #!/usr/bin/env python3
 import sys
@@ -3156,8 +3270,8 @@ sys.exit(2)
 HEADROOM_UNREADABLE
     test_clone_base "$tmpdir/hr_clone_b" "$AESOP_ROOT/tools"
     cd "$tmpdir/hr_clone_b" || exit 1
-    if ! check_claudemd_headroom >/dev/null 2>&1; then
-      printf 'FAIL: exit 2 (unreadable) must fail-open, not block the push\n'
+    if check_claudemd_headroom >/dev/null 2>&1; then
+      printf 'FAIL: exit 2 (unreadable) must BLOCK after one fetch attempt, not fail open\n'
       exit 1
     fi
 
@@ -3423,7 +3537,7 @@ GENPATHS
 
   printf '\n=== Test 29: check_symbol_survival BLOCKS a merge that drops a branch symbol (main as first parent), passes a clean push ===\n'
   (
-    sym_real_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+    sym_real_root="$test_hook_root"
     sym_aesop_root="$tmpdir/symbol_survival_aesop"
     rm -rf "$sym_aesop_root"
     mkdir -p "$sym_aesop_root/tools"
@@ -3679,6 +3793,17 @@ main() {
     log_block "interactive_invocation_blocked"
     exit 1
   fi
+
+  # The environment must not point the gates at a different tree than the one being
+  # pushed (see resolve_aesop_root). Checked before any gate can run.
+  if ! check_aesop_root_pin; then
+    log_block "aesop_root_pin_mismatch"
+    exit 1
+  fi
+
+  # Escape-rate counter runs once on every exit path of a push, after all gates
+  # have logged their events (observability only; see check_escape_rate).
+  trap '_escape_rate_on_exit' EXIT
 
   # Resolve the python interpreter ONCE for this push (bounded probe, see
   # resolve_py_bin). Every gate calls resolve_py_bin inside a $(...) subshell,

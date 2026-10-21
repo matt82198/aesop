@@ -9,6 +9,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+(None yet.)
+
+## [0.10.3] - 2026-10-21
+
+This release covers 80 PRs since v0.10.2 (2026-10-18), #1174 through #1256, merged after the v0.10.2 release commit.
+
+### Added
+
+- #1191 feat(tools): lossless union reconcile for diverged append-only logs
+- #1222 feat(multibox): box fence - BOX_PROTOCOL gate stops a stale box from running
+- #1232 feat(gates): LOOP-MANIFEST.json and Loop-Proof gate for aesop loop machinery
+
+### Fixed
+
+- #1181 fix(stats): end stats-refresh PR body with Aesop footer
+- #1183 fix(mcp): fleet_status reads watchdog heartbeat from CONDUCTOR_ROOT, not STATE_ROOT
+- #1184 fix(dash): conductor root by live heartbeat; UNRESOLVED never STALE
+- #1185 fix(secret-scan): fail closed on nonexistent path arguments (17aa5e02e34d)
+- #1186 fix(tracker_guard): fail closed on malformed tracker.json or corrupt journal (df1f7058c269)
+- #1187 fix(watchdog): announce AESOP_ROOT derivation instead of silent default (cebab35aabeb)
+- #1188 fix(dash): bound dash-extra transcript cache and stop persisting prompts (44ce0f022454)
+- #1190 fix(scan): cred-harvest suppression uses whole-token clause rule (tracker 94a2cc553503)
+- #1194 fix(tracker_reconcile): never print FIXED or exit 0 when the close write fails (70334b87760f)
+- #1195 fix(bench): replace retired claude-3-5 default; verified 5.5 prices; fail closed (2d645641c020)
+- #1196 fix(git-integrity): malformed --repos-json fails closed instead of blocking on stdin (5999373469c2)
+- #1197 fix(wave-loop): surface journal write failures (e107455fa22b)
+- #1198 fix(init): --force never writes through a symlinked pre-push hook (7db5af78a8a5)
+- #1200 fix(state_store): tracker_append_item retry after WriteConflict no longer duplicates the item (11bececf532c)
+- #1203 fix(health-score): resolve python3 then python like sibling tools (397553876e57)
+- #1204 fix(secret_scan): scan_content judges DSNs by password, not DB path (scan-content-dsn)
+- #1206 fix(mcp): read-only instances helper never creates or writes state.db (t-e9a72d)
+- #1207 fix(pre-push): gate-base cache is uid-scoped and never deleted (c730e29d46ea)
+- #1208 fix(toolchain): read watchdog heartbeat from CONDUCTOR_ROOT, fail closed
+- #1209 fix(dispatch_lint): a URL '//' no longer masks a command (1f024dc61697)
+- #1210 fix(tracker_guard): --enforce exits 1 when a zombie revert fails (84e4a43f4140)
+- #1211 fix(pr_sweep): no 100-row PR cap; fail closed on required-check reads (5f0c5b842f2b)
+- #1213 fix(receipt): bound each receipt-matrix part with a per-part timeout
+- #1214 fix(ingest): surface quarantined schema-invalid task events in status (7ddff224ea4c)
+- #1215 fix(tools): make wave_history/wave_preflight CLI docs match the parser (6e189130e166)
+- #1216 fix(ui/gantt): render unknown durations as 'unknown', never 'nulls' (40bfc022e59e)
+- #1217 fix(merge_train): pin every merge to the snapshotted head (tracker 31c0ddd1e22b)
+- #1218 fix(tracker): treat 'todo' and 'in-progress' as active statuses (a879cf665047)
+- #1219 fix(metrics-gate): BUILDLOG.md retraction marker for historical unverified metrics
+- #1220 fix(pr_sweep): pass stdin=DEVNULL to gh so the hidden watchdog stops raising WinError 6
+- #1223 fix(pre-push): scope metrics/test-coverage gates away from crash-backup refs
+- #1224 fix(secret_scan): exclude regex-literal values from generic_credential_assignment
+- #1225 fix(bench): price run_seam_u calculate_cost from the shared pricing table
+- #1226 fix(pr-sweep): never arm auto-merge on a stacked PR
+- #1227 fix(secret_scan): stop generic_credential_assignment firing on slash-delimited regex literals (f-332fcec2)
+- #1229 fix(conductor-root): fail closed when CONDUCTOR_ROOT is unresolved
+- #1231 fix(scaffold): skip __pycache__ and *.pyc in template copy
+- #1239 fix(stateapi-lint): buildlog-md-write fires only for modules that write
+- #1244 fix(state_store): bound write lock wait and serialize in-process writers
+
+### Changed
+
+- #1174 LANE-CONTRACT: sanction two merge modes; default branch not hard-coded
+- #1175 docs(readme): add contact policy notice
+- #1176 docs(checkpoint): union origin/main and primary checkpoint delta (0258)
+- #1177 chore(stats): scheduled refresh
+- #1178 docs(contract): one merge-mode rule for lanes (LANE-CONTRACT s6)
+- #1179 docs(contract): add 8c shared append files, DIRTY repair rule
+- #1180 docs(contract): exempt update-branch merge commits from trailer rule
+- #1182 docs(contract): hook probes must not write the real resistance ledger
+- #1189 docs: fix broken WHY-CRASH-ONLY links and stale DEMO.md scaffold step
+- #1192 test: regression guards for stale watchdog heartbeat and regen fail-closed
+- #1199 test: make hygiene-gap tests execute and test behaviour (3f49833d771e, 74a4ab3a1078)
+- #1202 ci: pin actionlint to sha256-verified release tarball (tracker 768c26047468)
+- #1205 docs: fix remaining broken doc links from tracker 89ddff415b30
+- #1221 chore(incident): 2026-10-20 host crash and recovery (aesop demo)
+- #1228 docs(readme): explain the kernel boundary
+- #1230 docs(readme): add kernel and what you fill in section
+- #1233 docs(state): correct Current Version to v0.10.2
+- #1234 docs(lane-contract): add 8d Receipt first (push early, draft PR early)
+- #1235 docs(lane-contract): s6 draft-then-arm order for Mode 1
+- #1236 docs: evening checkpoint 2026-10-20 (NEXT STEPS + BUILDLOG)
+- #1237 docs: checkpoint 2026-10-21 00:35Z (keyrun lane honesty while playable PR lands)
+- #1238 docs(lane-contract): s6 arming merges at once when no checks are required
+- #1240 docs: checkpoint 2026-10-21 00:50Z (pre-compact fleet state)
+- #1241 docs(checkpoint): 2026-10-21 01:40Z gh-bound merges and open items
+- #1242 docs(checkpoint): 2026-10-21 01:50Z hook-hardening stranded PRs, checkpoint merged
+- #1243 perf(pyflakes): scan only changed files in the ratchet gate
+- #1245 docs: checkpoint 2026-10-21 02:10Z (keyrun lanes on #370/#366, #396 D54/D55 in flight)
+- #1246 perf(secret_scan): clean-verdict cache for path-mode scans
+- #1247 docs(lane-contract): CI contract for keyrun lanes
+- #1248 docs(plans): throughput regression and scale plan 2026-10-21
+- #1249 docs(lane-contract): standing shell and hook shapes, scene tests run by lanes, the brief shape
+- #1250 docs(lane-contract): ordering rules and required discovery-cost fields
+- #1251 docs(lane-contract): hook-safe shapes (clock, code reads, git paths, push, branch base)
+- #1252 LANE-CONTRACT: rules lanes missed this span
+- #1253 LANE-CONTRACT: seven lane rules from 2026-10-21 hand-backs
+- #1254 contract: five lane rules from 2026-10-21 (worktree collision, stub red, HostLine, cd && npx, fold anchor)
+- #1255 contract: trailer for every lane, row file always, ANIM channel, cd && scope, capture mkdir
+- #1256 docs(contract): Discovery answer is consequence-free (sensor, not gate)
+
 ## [0.10.2] - 2026-10-18
 
 

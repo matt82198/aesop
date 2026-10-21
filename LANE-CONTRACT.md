@@ -85,6 +85,7 @@ Four rules:
   pins `HOME`/`TMPDIR` before any test runs; `tools/test_isolation_tripwire.py` also guards conductor3
   heartbeats, state JSON, and scheduled-task registrations) -- never pin `AESOP_ROOT`/`CONDUCTOR_ROOT` to
   `REPO_ROOT` or leave them unset on a daemon invocation; always point them at your own mktemp fixture.
+- When a brief's behaviour already exists on main, pin it with a test and prove non-vacuity by a production mutant instead of a red-first (discovery 2026-10-21).
 
 ## 3. Never fit green
 - **Never relax an assertion, lower a floor/ratchet, delete a suite, add a skip, or retune a constant
@@ -160,6 +161,11 @@ Four rules:
 - **Resolve env vars and paths at dispatch time, never hardcode.** Use `$AESOP_ROOT`, `$HOME`, and
   `sys.executable`; never `/c/Users/matt8` or `python3` or machine-specific paths.
 - **Dispatch-ledger retro.** The dispatch-ledger retro lives at `C:/Users/Mattt/scripts-wt/ledger-retro/dispatch_ledger.py` (claude-scripts #137).
+- `git -C` takes a literal path, never a shell variable, and commit and push are always separate commands (discovery 2026-10-21).
+- A commit in claude-scripts needs `python ~/scripts/knowledge_tree.py --write --root <wt>` first, and a `tools/*.js` or `tools/*.py` change in aesop needs a tools/CLAUDE.md entry plus `python tools/gen_tool_index.py --regenerate`, pushed with the documented generated-artifact shape (discovery 2026-10-21).
+- pwsh is not on the Bash PATH on this box, so run fastcheck as `cd <wt> && powershell -NoProfile -ExecutionPolicy Bypass -File tools/fastcheck.ps1 -All`, and fastcheck skips tools/Keyrun.Playtest.Tests, so run that project directly when touching it (discovery 2026-10-21).
+- Keyrun content lives in two trees, game/content/data (layout, forces, enemies/*.json) and repo-root content/data/dungeons, the sim is under game/sim/Keyrun.Sim, and a Godot-bound file (`using Godot;`) is never compiled by a test project, so a view-model seam goes in a Godot-free file linked into Keyrun.Sim.Tests.csproj (discovery 2026-10-21).
+- A hook change in claude-config needs an evidence commit with a Hook-Proof trailer `red=<failed>/<total> green=<total>/<total>` (format in scripts/hook_removal_check.py), and the base branch there is master (discovery 2026-10-21).
 
 ## 4a. Before you push — ordered self-checks
 
@@ -310,7 +316,11 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   watcher, or standing loop of its own.
 - **BACKGROUND RUNS are denied by hook.** A lane runs to completion in the foreground — no
   `run_in_background`, no detached/nohup process; backgrounding is not a lane capability.
+- Pushes run as their own Bash command with a 600000 ms timeout and are never backgrounded (discovery 2026-10-21).
+- The ONE sanctioned wait for a lane is `gh pr checks <N> --repo <owner/repo> --watch` or `gh run watch <id>` as a single foreground command with a 600000 ms timeout, and Monitor and sleep loops stay denied to lanes (discovery 2026-10-21).
 - **Hook probes never write the real resistance ledger.** Any manual run of a brain hook outside its test file sets `RESISTANCE_LEDGER=<temp file under the lane's worktree parent>` first (the override the hooks read, e.g. `main-context-ceiling.mjs`), so no row reaches `~/.claude/state/resistance-ledger.jsonl`. A probe that wrote the real ledger is reported in the hand-back.
+- Pushing to a PR with auto-merge armed means pushing first and then re-arming with `gh pr merge <N> --repo <o/r> --squash --auto --match-head-commit <full head sha>` (discovery 2026-10-21).
+- A stacked PR (base not the default branch) is never armed, because the orchestrator retargets it after the parent merges (discovery 2026-10-21).
 
 ## Shell and hook shapes (every lane, every repo)
 Hooks enforce these. Each line is the allowed shape, then the denied one.
@@ -499,7 +509,7 @@ Every hand-back carries all of these fields, in this order:
 - **Wall time:** start and end clock reads, UTC (from `python C:/Users/Mattt/scripts-wt/utc-now/utc_now.py`).
 - **Validation attempts:** count of local gate runs before the final one.
 - **First run passed:** yes or no.
-- **Discovery:** "What did you have to figure out that the contract didn't tell you?" One line per item, or `nothing`.
+- **Discovery:** "What did you have to figure out that the contract didn't tell you?" One line per item, or `nothing`. This answer is consequence-free: it never triggers a retro, never counts toward any threshold or ledger score, and never blocks or passes the hand-back or the PR. It is read only later, across many hand-backs, to find contract sentences that are missing. `nothing` is a fine answer.
 - **Failures:** one line per validation failure, tagged `{code, environment-or-CI, flaky, contract-ambiguous}`, with the failing line.
 - **Hook denials:** each hook denial verbatim, or `none`.
 - **Unpushed:** `Unpushed: none`, or one `Unpushed: <branch> <sha>` line per unpushed branch (Ordering rule 4).

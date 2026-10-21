@@ -229,6 +229,10 @@ _WRITE_MODE_CHARS = frozenset("wax+")
 # it in a constant) is not a writer; a module that names it AND writes is still flagged.
 WRITE_OPERATION_GATED_IDS = frozenset({"buildlog-md-write"})
 
+# STATE.md write rules fire only when a write-shaped call's own arguments name the file
+# (state_md_written_in_call), so a set/list literal or comparison naming STATE.md is not a write.
+STATE_MD_WRITE_IDS = frozenset({"state-md-write", "state-state-md-write"})
+
 
 def _mode_is_write(mode_node):
     """A literal open() mode with w/a/x/+ writes; a non-literal mode fails closed."""
@@ -297,6 +301,26 @@ def module_has_write_operation(source):
     except (SyntaxError, ValueError):
         return True
     return any(isinstance(node, ast.Call) and _call_is_write(node) for node in ast.walk(tree))
+
+
+def state_md_written_in_call(source):
+    """Return True when a write-capable call's own arguments name STATE.md.
+
+    Per-statement, not per-module: a STATE.md literal in a set, list or comparison,
+    or passed to a read-only call, is not a write, even in a module that writes some
+    other file elsewhere. Only a write-shaped Call whose subtree contains the literal
+    counts. An unparseable module returns True (fail closed, the regex still applies).
+    """
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return True
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and _call_is_write(node):
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Constant) and isinstance(sub.value, str) and "STATE.md" in sub.value:
+                    return True
+    return False
 
 
 def find_direct_opens(repo_root):
@@ -378,6 +402,7 @@ def find_direct_opens(repo_root):
             # Scan for violations over the code view: docstrings and comments are blanked
             # (AST/tokenize-aware), so only code and non-docstring string literals match.
             can_write = module_has_write_operation(content)
+            state_md_written = state_md_written_in_call(content)
 
             for line_num, line in enumerate(python_code_view(content).split("\n"), 1):
                 # Check read violations
@@ -393,6 +418,8 @@ def find_direct_opens(repo_root):
                 # Check write violations
                 for pattern, pattern_id in write_patterns:
                     if pattern_id in WRITE_OPERATION_GATED_IDS and not can_write:
+                        continue
+                    if pattern_id in STATE_MD_WRITE_IDS and not state_md_written:
                         continue
                     if re.search(pattern, line):
                         violation_key = f"{relative_path.as_posix()}@{pattern_id}"

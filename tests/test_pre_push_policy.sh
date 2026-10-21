@@ -13,6 +13,12 @@ TEST_ROOT="$TMPDIR/pre_push_test_$$"
 trap "rm -rf '$TEST_ROOT'" EXIT
 mkdir -p "$TEST_ROOT"
 
+# Run the harness from a directory that is NOT an aesop checkout. resolve_aesop_root
+# lets an aesop git toplevel (tools/) win over AESOP_ROOT, so a cwd inside this
+# worktree would send fixture audit logs into the real checkout's state/. Fixtures
+# that need a repo create their own (see the per-test cd / make_*_clone helpers).
+cd "$TEST_ROOT" || exit 1
+
 # Import hook functions by sourcing the hook script directly.
 # The hook guards its own "main "$@"" call with a BASH_SOURCE check so
 # sourcing it here only defines functions and never executes main()
@@ -1451,6 +1457,7 @@ printf '\n=== Test: AESOP_RECEIPT_EMIT=0 is INERT (no orchestrator-only mechanis
   export AESOP_RECEIPT_KEY="$AESOP_ROOT/dummy_key.pem"
   touch "$AESOP_ROOT/dummy_key.pem"
   export AESOP_RECEIPT_EMIT=0
+  # check_emit_receipt reads its base gate copy from the cwd repo: make the fixture its own repo.
   emit_fixture_base "$AESOP_ROOT"
   cd "$AESOP_ROOT" || exit 1
 
@@ -1589,6 +1596,8 @@ printf '\n=== Test: check_emit_receipt WARNs and fails open when no signing key 
   unset AESOP_RECEIPT_EMIT
   unset AESOP_RECEIPT_KEY
   unset AESOP_RECEIPT_HMAC_SECRET
+  emit_fixture_base "$AESOP_ROOT"
+  cd "$AESOP_ROOT" || exit 1
 
   stderr_output=$( { check_emit_receipt; } 2>&1 1>/dev/null )
   exit_code=$?
@@ -1658,6 +1667,8 @@ printf '\n=== Test: check_emit_receipt BLOCKS (fail closed) when gh is unavailab
   export AESOP_RECEIPT_KEY="$AESOP_ROOT/dummy_key.pem"
   touch "$AESOP_ROOT/dummy_key.pem"
   unset AESOP_RECEIPT_EMIT
+  emit_fixture_base "$AESOP_ROOT"
+  cd "$AESOP_ROOT" || exit 1
 
   # Create a stub gh that exits 127 (command not found). Prepend it to PATH
   # so it shadows any real gh. Don't copy binaries (they break on CI due to RPATH deps).
@@ -2100,6 +2111,9 @@ printf '\n=== Test 32: check_pyflakes_ratchet honors AESOP_PYFLAKES_SKIP=1 ===\n
 
   # Stub pyflakes_gate.py that would return 1 (blocked), but should be skipped
   printf 'import sys\nsys.exit(1)\n' > "$AESOP_ROOT/tools/pyflakes_gate.py"
+  # check_pyflakes_ratchet reads its base gate copy from the cwd repo: make the fixture its own repo.
+  emit_fixture_base "$AESOP_ROOT"
+  cd "$AESOP_ROOT" || exit 1
 
   if ! check_pyflakes_ratchet >/dev/null 2>&1; then
     printf 'FAIL: check_pyflakes_ratchet should be skipped when AESOP_PYFLAKES_SKIP=1\n'
@@ -2874,6 +2888,117 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+# ---------------------------------------------------------------------------
+# Escape hardening: AESOP_ROOT pin, escape-free block messages, escape-rate alert.
+# Table-driven. Each row names a fixture and the outcome it must produce.
+# ---------------------------------------------------------------------------
+escape_fail() { printf 'FAIL: %s\n' "$*"; exit 1; }
+
+# pin_fixture <label> <kind>: fresh git repo on feature/test under $TEST_ROOT/pin_<label>/.
+# kind=aesop adds tools/ (an aesop toplevel); kind=plain adds nothing. Prints the repo path.
+pin_fixture() {
+  local label="$1" kind="$2" root="$TEST_ROOT/pin_$1"
+  rm -rf "$root"
+  mkdir -p "$root/repo" "$root/empty"
+  git -C "$root/repo" init -q -b feature/test
+  if [ "$kind" = aesop ]; then
+    mkdir -p "$root/repo/tools"
+    : > "$root/repo/tools/.keep"
+  fi
+  printf '%s\n' "$root/repo"
+}
+
+printf '\n=== Test: AESOP_ROOT pin table: a pinned root that disagrees with an aesop toplevel blocks ===\n'
+# label|toplevel kind|pinned root (empty = a different empty dir, same = the repo, unset)|expected check rc
+pin_rows='mismatch_empty_dir|aesop|empty|1
+same_as_toplevel|aesop|same|0
+unset_root|aesop|unset|0
+plain_repo_other_root|plain|empty|0'
+(
+  while IFS='|' read -r label kind pin want; do
+    repo=$(pin_fixture "$label" "$kind")
+    case "$pin" in
+      empty) pinned="$TEST_ROOT/pin_$label/empty" ;;
+      same) pinned="$repo" ;;
+      unset) pinned="" ;;
+    esac
+    (
+      cd "$repo" || exit 1
+      if [ -n "$pinned" ]; then export AESOP_ROOT="$pinned"; else unset AESOP_ROOT; fi
+      check_aesop_root_pin 2> "$TEST_ROOT/pin_$label/err.txt"
+    )
+    rc=$?
+    [ "$rc" -eq "$want" ] || escape_fail "pin row $label: check_aesop_root_pin rc=$rc, want $want"
+    if [ "$want" -eq 1 ]; then
+      grep -q -- "$repo" "$TEST_ROOT/pin_$label/err.txt" || escape_fail "pin row $label: block message does not name the toplevel path"
+      grep -q -- "$pinned" "$TEST_ROOT/pin_$label/err.txt" || escape_fail "pin row $label: block message does not name the pinned path"
+    fi
+    printf 'PASS [pin %s]: check_aesop_root_pin rc=%s\n' "$label" "$rc"
+  done <<< "$pin_rows"
+
+  # Resolution: an aesop toplevel wins over a pinned root; the hook blocks end to end.
+  e2e_repo=$(pin_fixture e2e aesop)
+  zero_sha=0000000000000000000000000000000000000000
+  e2e_out=$( cd "$e2e_repo" && printf 'refs/heads/feature/test %s refs/heads/feature/test %s\n' "$zero_sha" "$zero_sha" | AESOP_ROOT="$TEST_ROOT/pin_e2e/empty" bash "$HOOK_SCRIPT" 2>&1 )
+  e2e_rc=$?
+  [ "$e2e_rc" -ne 0 ] || escape_fail "end-to-end: pinned root that disagrees with the aesop toplevel must block the push (rc=0)"
+  printf '%s' "$e2e_out" | grep -q "environment-pinned root" || escape_fail "end-to-end: block message missing (got: $e2e_out)"
+  resolved=$( cd "$e2e_repo" && AESOP_ROOT="$TEST_ROOT/pin_e2e/empty" resolve_aesop_root )
+  [ "$resolved" = "$(git -C "$e2e_repo" rev-parse --show-toplevel)" ] || escape_fail "resolve_aesop_root must return the aesop toplevel, got: $resolved"
+  printf 'PASS [pin e2e]: mismatched AESOP_ROOT blocks the push (rc=%s); resolve returns the toplevel\n' "$e2e_rc"
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test: no block message carries an AESOP_* assignment or --no-verify ===\n'
+(
+  msgs_repo=$(pin_fixture msgs aesop)
+  # Each msg_* drives one block path and leaves its stderr for inspection.
+  msg_pin() {
+    ( cd "$msgs_repo" && AESOP_ROOT="$TEST_ROOT/pin_msgs/empty" check_aesop_root_pin ) 2>&1 >/dev/null
+  }
+  msg_tool_missing() {
+    ( cd "$msgs_repo" && AESOP_ROOT="$msgs_repo" gate_tool_missing_block "x.py" "$TEST_ROOT/pin_msgs/none/x.py" ) 2>&1 >/dev/null
+  }
+  msg_no_python() {
+    ( cd "$msgs_repo" && AESOP_ROOT="$msgs_repo" gate_no_python_block "x" ) 2>&1 >/dev/null
+  }
+  msg_gate_base() {
+    ( cd "$msgs_repo" && AESOP_ROOT="$msgs_repo" gate_base_block "x" ) 2>&1 >/dev/null
+  }
+  # Receipt red block: a stub emitter that exits 3 (a required part is red) must block
+  # with a message that names no escape variable and ends by asking the orchestrator.
+  msg_receipt_red() {
+    local rr="$TEST_ROOT/msg_receipt_red"
+    rm -rf "$rr"
+    mkdir -p "$rr/tools" "$rr/state"
+    printf 'import sys\nsys.exit(3)\n' > "$rr/tools/emit_receipt.py"
+    touch "$rr/dummy_key.pem"
+    emit_fixture_base "$rr"
+    ( cd "$rr" && AESOP_ROOT="$rr" AESOP_RECEIPT_KEY="$rr/dummy_key.pem" check_emit_receipt ) 2>&1 >/dev/null
+  }
+  for fn in msg_pin msg_tool_missing msg_no_python msg_gate_base msg_receipt_red; do
+    text=$("$fn")
+    [ -n "$text" ] || escape_fail "$fn produced no block message; cannot prove it is clean"
+    printf '%s\n' "$text" | grep -E -q 'BLOCKED|FATAL|Error|blocked' || escape_fail "$fn did not emit a block message (got: $text)"
+    if printf '%s\n' "$text" | grep -E -q 'AESOP_[A-Z_]+=|--no-verify|AESOP_PUSH_RED|AESOP_RECEIPT_TIMEOUT|AESOP_RECEIPT_EMIT'; then
+      escape_fail "$fn block message carries a bypass hint: $text"
+    fi
+    if [ "$fn" = msg_receipt_red ]; then
+      printf '%s\n' "$text" | grep -q 'Ask the orchestrator\.$' || escape_fail "$fn must end by asking the orchestrator (got: $text)"
+    fi
+    printf 'PASS [message %s]: no AESOP_* assignment or --no-verify\n' "$fn"
+  done
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Headroom: exit 2 gets one fetch and a re-run, then BLOCKS (never fail-open) ===\n'
 (
   export AESOP_ROOT="$TEST_ROOT/aesop_headroom_unread"
@@ -3012,6 +3137,44 @@ printf '\n=== Linux shape (no WSL): a coverage probe that cannot answer BLOCKS (
   fi
   printf '%s' "$stderr_output" | grep -q 'could not decide' || { printf 'FAIL: missing probe-error block line: %s\n' "$stderr_output"; exit 1; }
   printf 'PASS: coverage probe error blocks the push (fail closed)\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test: escape-rate counter: >3 skip events in an hour raise ONE ALERT, never block ===\n'
+# label|skip events now|AESOP_ESCAPE_ALERT_THRESHOLD (empty = unset)|old events (2020)|expected ALERT lines
+esc_rows='four_events_one_alert|4||0|1
+three_events_no_alert|3||0|0
+threshold_lowered_to_1|2|1|0|1
+threshold_above_3_clamped|4|99|0|1
+threshold_clamped_three_no_alert|3|99|0|0
+old_events_outside_window|0||4|0'
+(
+  while IFS='|' read -r label now thr old want; do
+    dir="$TEST_ROOT/esc_$label"
+    rm -rf "$dir"
+    mkdir -p "$dir/state"
+    for ((i = 1; i <= old; i++)); do
+      printf '{"seq":%d,"prev_hash":"x","ts":"2020-01-01T00:00:00Z","repo":"r","event":"test_skipped_old_%d","user":"u"}\n' "$i" "$i" >> "$dir/state/SECURITY-AUDIT.log"
+    done
+    (
+      export AESOP_ROOT="$dir"
+      if [ -n "$thr" ]; then export AESOP_ESCAPE_ALERT_THRESHOLD="$thr"; else unset AESOP_ESCAPE_ALERT_THRESHOLD; fi
+      for ((i = 1; i <= now; i++)); do
+        log_event "test_skipped_now_$i"
+      done
+      check_escape_rate 2> "$dir/err.txt"
+      check_escape_rate 2>> "$dir/err.txt"
+    ) > /dev/null
+    alerts=$(grep -c '"event":"escape_rate_ALERT' "$dir/state/SECURITY-AUDIT.log" || true)
+    stderr_alerts=$(grep -c '^ALERT:' "$dir/err.txt" || true)
+    [ "$alerts" -eq "$want" ] || escape_fail "escape row $label: $alerts ALERT audit lines, want $want"
+    [ "$stderr_alerts" -eq "$want" ] || escape_fail "escape row $label: $stderr_alerts ALERT stderr lines, want $want"
+    printf 'PASS [escape %s]: %s ALERT line(s)\n' "$label" "$alerts"
+  done <<< "$esc_rows"
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))

@@ -26,10 +26,12 @@ PRs and ZERO receipts — lanes were never told to run the emitter and nothing r
 them, so the honesty signal had no data. The hook is a CONCLUSION GATE: a red required
 part (emitter exit 3 under `--fail-on-red`) or an unreadable conclusion (timeout, any other
 emitter exit) blocks the push, and the failure receipt is still posted as the trace; a
-missing tool/python/`gh`/signing-key (matrix never ran) still WARNs and proceeds, and a
-skipped-with-reason part never blocks. `AESOP_PUSH_RED=1` is the one recorded emergency
-override (emitter exit 4; the receipt is stamped `pushed_red: true`). `AESOP_RECEIPT_EMIT=0` opts out entirely. Manual invocation still works
-the same way, e.g. for a `--dry-run` preview or a narrower `--matrix`:
+missing python, `gh`, signing key, or base emitter BLOCKS too (fail closed: no conclusion can
+be produced or signed), and a skipped-with-reason part never blocks. `AESOP_PUSH_RED=1` is the
+one recorded emergency override (emitter exit 4; the receipt is stamped `pushed_red: true`).
+`AESOP_RECEIPT_EMIT=0` is INERT: it is logged as `receipt_emit_optout_ignored` and emission
+still runs, because no orchestrator-only mechanism exists to honor it. Manual invocation still
+works the same way, e.g. for a `--dry-run` preview or a narrower `--matrix`:
 
 ```
 python tools/emit_receipt.py --post            # default matrix, Ed25519 if $AESOP_RECEIPT_KEY is set
@@ -250,3 +252,11 @@ lookup exception-safe and guarding the module's own absence at the shell level.)
 # Test 4 after unset hooks path
 
 2026-10-14: verified on the Mattt box - pre-push hook resynced from hooks/pre-push-policy.sh and a signed receipt emitted on push.
+
+## Fail-closed contract (2026-10-21)
+
+- Receipt emission failure blocks: missing python, `gh`, signing key material, base emitter, or a timeout blocks the push with a `BLOCKED:` line and a `push_blocked` audit event.
+- `AESOP_RECEIPT_EMIT=0` is inert (logged as `receipt_emit_optout_ignored`); emission still runs.
+- Exit 2 from the pyflakes ratchet or the CLAUDE.md headroom gate blocks, printing the tool output tail. Headroom gets one base-ref fetch or unshallow and one re-run first.
+- Lock contention never drops a record: a busy audit lock spills to `state/audit-spill-<pid>-<ts>.jsonl`, merged by the next lock holder.
+- Windows without WSL: a push touching Linux-shape covered paths blocks; uncovered pushes keep the NOTICE.
