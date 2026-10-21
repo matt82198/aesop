@@ -320,5 +320,61 @@ class BuildlogWriteRuleTest(unittest.TestCase):
                 )
 
 
+class StateMdWriteRuleTest(unittest.TestCase):
+    """state-md-write fires only when a write-shaped call's own arguments name STATE.md."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.repo_root = Path(self.tmp)
+        (self.repo_root / "tools").mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _flagged(self, name, content):
+        (self.repo_root / "tools" / name).write_text(content, encoding="utf-8")
+        from tools.stateapi_lint import find_direct_opens
+
+        keys = find_direct_opens(str(self.repo_root))
+        return any(k == f"tools/{name}@state-md-write" for k in keys)
+
+    def test_set_literal_naming_state_md_is_not_flagged(self):
+        """A set literal naming STATE.md is data, not a write, even beside an unrelated writer."""
+        content = (
+            "EXEMPT = {\"BUILDLOG.md\", \"STATE.md\"}\n"
+            "def save(path, text):\n"
+            "    path.write_text(text)\n"
+        )
+        self.assertFalse(self._flagged("exempt_set_writer.py", content))
+
+    def test_list_literal_naming_state_md_is_not_flagged(self):
+        content = "NAMES = [\"STATE.md\", \"OTHER.md\"]\n"
+        self.assertFalse(self._flagged("names_list.py", content))
+
+    def test_comparison_naming_state_md_is_not_flagged(self):
+        content = (
+            "def is_state(name):\n"
+            "    return name == \"STATE.md\"\n"
+        )
+        self.assertFalse(self._flagged("compare_name.py", content))
+
+    def test_read_call_naming_state_md_is_not_flagged(self):
+        content = (
+            "def head():\n"
+            "    with open(\"STATE.md\", encoding=\"utf-8\") as f:\n"
+            "        return f.read(10)\n"
+        )
+        self.assertFalse(self._flagged("reads_state.py", content))
+
+    def test_write_call_naming_state_md_is_flagged(self):
+        content = (
+            "from pathlib import Path\n"
+            "def clobber(root):\n"
+            "    Path(root, \"STATE.md\").write_text(\"x\")\n"
+        )
+        self.assertTrue(self._flagged("writes_state.py", content))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -890,5 +890,71 @@ class TestUrlDoubleSlashMasking(unittest.TestCase):
         self.assertIn("gh_pr_merge", self._patterns(body))
 
 
+class TestAesopEscapeVariables(unittest.TestCase):
+    """Setting an AESOP_* gate escape variable in a dispatch is forbidden (same severity as --no-verify)."""
+
+    # Literal list, written out here rather than imported, so this table is an independent oracle.
+    ESCAPE_VARIABLES = (
+        "AESOP_ALLOW_GENERATED",
+        "AESOP_HEADROOM_BASE_REF",
+        "AESOP_PUSH_RED",
+        "AESOP_PYFLAKES_SKIP",
+        "AESOP_RECEIPT_EMIT",
+        "AESOP_RECEIPT_TIMEOUT",
+        "AESOP_REQUIRE_LINUX_SHAPE",
+        "AESOP_ROOT",
+    )
+
+    # Configuration variables: not escapes, so assigning them stays allowed.
+    CONFIG_VARIABLES = (
+        "AESOP_ESCAPE_ALERT_THRESHOLD",
+        "AESOP_HOME",
+        "AESOP_PY_BIN",
+        "AESOP_RECEIPT_AUTOFLUSH",
+        "AESOP_RECEIPT_HMAC_SECRET",
+        "AESOP_RECEIPT_KEY",
+        "AESOP_STATE_ROOT",
+    )
+
+    def test_config_variable_assignment_is_not_flagged(self):
+        for var in self.CONFIG_VARIABLES:
+            with self.subTest(variable=var):
+                self.assertNotIn("aesop_escape_variable", self._patterns(f"{var}=1 git push origin HEAD\n"))
+
+    def test_escape_rule_skips_append_only_history_files(self):
+        body = "AESOP_PUSH_RED=1 git push origin HEAD\n"
+        for name in ("BUILDLOG.md", "STATE.md"):
+            with self.subTest(file=name):
+                content = "Agent()\n" + body
+                violations = find_violations(Path(name), content)
+                self.assertNotIn("aesop_escape_variable", {v["pattern"] for v in violations})
+
+    @staticmethod
+    def _patterns(body):
+        content = "Agent()\n" + body
+        return {v["pattern"] for v in find_violations(Path("lane.md"), content)}
+
+    def test_each_escape_variable_assignment_is_flagged(self):
+        for var in self.ESCAPE_VARIABLES:
+            with self.subTest(variable=var):
+                self.assertIn("aesop_escape_variable", self._patterns(f"{var}=1 git push origin HEAD\n"))
+
+    def test_env_prefix_assignment_is_flagged(self):
+        body = "env AESOP_RECEIPT_EMIT=0 git push origin HEAD\n"
+        self.assertIn("aesop_escape_variable", self._patterns(body))
+
+    def test_export_assignment_is_flagged(self):
+        body = "export AESOP_PUSH_RED=1\n"
+        self.assertIn("aesop_escape_variable", self._patterns(body))
+
+    def test_read_of_aesop_root_is_not_flagged(self):
+        body = 'git -C "$AESOP_ROOT" worktree list\n'
+        self.assertNotIn("aesop_escape_variable", self._patterns(body))
+
+    def test_js_local_declaration_is_not_flagged(self):
+        body = "const AESOP_ROOT = process.env.AESOP_ROOT || '.';\n"
+        self.assertNotIn("aesop_escape_variable", self._patterns(body))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,12 +1,10 @@
 {
   "violations": [
-    "driver/context_pack.py@state-md-write",
     "driver/context_pack.py@tracker-json",
     "tools/alert_bridge.py@watchdog-hb",
     "tools/claudemd_lint.py@buildlog-md-write",
     "tools/claudemd_lint.py@ledger-md",
     "tools/claudemd_lint.py@monitor-hb",
-    "tools/claudemd_lint.py@state-md-write",
     "tools/claudemd_lint.py@tracker-json",
     "tools/cost_econ.py@ledger-md",
     "tools/cost_forecast.py@ledger-md",
@@ -15,7 +13,6 @@
     "tools/health_checks.py@watchdog-hb",
     "tools/health_score.py@monitor-hb",
     "tools/health_score.py@watchdog-hb",
-    "tools/reconcile.py@state-md-write",
     "tools/status_publish.py@buildlog-md-write",
     "tools/verify_cost_forecast.py@ledger-md",
     "tools/verify_cost_panel.py@ledger-md",

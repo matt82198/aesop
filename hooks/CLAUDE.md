@@ -43,7 +43,7 @@ Runs on `git push` via `.git/hooks/pre-push` (symlink on Unix/macOS/Git Bash; co
 19a. **Crash-backup refs:** a push whose EVERY remote ref matches `^refs/heads/backup/crash-YYYY-MM-DD/<name>$` (`backup_only_push`) skips ONLY the metrics and test_coverage gates (stderr NOTE + audit event `gate_skipped_backup_ref`); secret scan and all other gates still run; mixed, malformed or empty stdin runs everything. Tests: tests/test_pre_push_policy.sh.
 19. Policy violations trigger `log_block()` to append audit record (JSON-lines) before exit
 
-**Audit Ledger**: Append-only path: `${AESOP_ROOT:-$HOME/aesop}/state/SECURITY-AUDIT.log` (git-ignored). 
+**Audit Ledger**: Append-only path: `<root>/state/SECURITY-AUDIT.log` (git-ignored). Escape-rate counter (EXIT trap, never blocks): counts `skipped|opted_out|tool_missing|no_python|red_override` events in the last hour; above `AESOP_ESCAPE_ALERT_THRESHOLD` (default 3, clamped to 3) writes one `escape_rate_ALERT` line and one `ALERT:` stderr line per hour. Tests: "escape-rate counter" in `tests/test_pre_push_policy.sh`. 
 Schema: `{"seq":N,"prev_hash":"SHA256_OF_PREV_LINE","ts":"2025-07-12T14:32:01Z","repo":"aesop","event":"push_blocked","reason":"secret_scan_failure"|"push_to_protected_branch","user":"alice"}`
 - `seq`: Monotonically increasing (starts 1); detects truncation.
 - `prev_hash`: SHA-256 of prior line (no newline); first entry = `"GENESIS"`. Detects tampering.
@@ -131,7 +131,7 @@ Pre-commit hook running `tools/dispatch_lint.py` on staged files. Blocks commits
 - Bash required (explicit shebang), CRLF-safe
 - Tolerate git pre-push stdin (ref list: `<local-ref> <local-oid> <remote-ref> <remote-oid>` per line) + optional args without crashing
 - Fail-closed for policy checks (branch, marker, model) AND for any gate whose script is missing from an existing `tools/`; skip only when there is no aesop checkout at all (see § Gate tool resolution). `secret_scan.py` absent is already fail-closed (FATAL, push denied)
-- `AESOP_ROOT` env var or `$HOME/aesop` fallback; no hardcoded machine paths/usernames
+- Root: an aesop checkout's git toplevel (has `tools/`, or package name `@matt82198/aesop`) wins; `AESOP_ROOT` is a fallback outside a checkout and a mismatch blocks (`check_aesop_root_pin`, logs `aesop_root_pin_mismatch`); no hardcoded machine paths/usernames
 - Local convenience defense only; real enforcement requires server-side branch protection (GitHub) and centralized audit logs
 
 ## hook_preflight.py — Interpreter health check
