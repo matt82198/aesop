@@ -17,6 +17,10 @@ Exclusions (don't require verification):
 
 A claim passes verification if:
   - The same line or an adjacent line has: <!-- metrics-verified: <source> -->
+  - BUILDLOG.md only: a LATER added line has
+    <!-- metrics-retracted: <entry timestamp> '<metric>' reason: <text> -->
+    whose timestamp equals the claim's entry head ("- <timestamp> ...") and whose
+    metric equals the claim (whitespace ignored); other files get no retraction
   - OR the claim itself looks like a version (e.g., "v1.2.3")
   - OR the claim is a year/date (2000-2999)
   - OR the claim is a line reference (line X, :X, @X patterns)
@@ -38,6 +42,11 @@ from pathlib import Path
 from typing import List, Tuple
 
 
+def _squash(text: str) -> str:
+    """Drop all whitespace so '83 %' and '83%' compare equal."""
+    return re.sub(r"\s+", "", text)
+
+
 class MetricsGate:
     """Scan git diffs for unverified hard numeric claims."""
 
@@ -56,6 +65,20 @@ class MetricsGate:
     # containing a hyphen or dash ("wave-1", "PR-123", "2026-07-31"), which is most
     # real citations, so valid markers silently failed to register.
     VERIFICATION_PATTERN = re.compile(r'<!--\s*metrics-verified:\s*.+?-->', re.DOTALL)
+
+    # Append-only logs cannot take a same-line marker for a historical line (the
+    # append-only hook forbids rewriting it), so a LATER appended line may retract
+    # an unverified metric instead. Retraction is honoured ONLY in LOG_FILES.
+    LOG_FILES = frozenset({"BUILDLOG.md"})
+    RETRACTION_PATTERN = re.compile(
+        r"<!--\s*metrics-retracted:\s*"
+        r"(?P<ts>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?Z)\s+"
+        r"'(?P<metric>[^']+)'\s+reason:\s*(?P<reason>\S.*?)\s*-->"
+    )
+    # Entry head of a log line: "- 2026-10-20 12:47Z ..." -> that entry's timestamp.
+    ENTRY_TS_PATTERN = re.compile(
+        r"^\s*-\s+(?P<ts>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?Z)(?=\s|$)"
+    )
 
     def __init__(self, diff_range: str = "origin/main...HEAD"):
         """Initialize with a git diff range.
@@ -158,6 +181,28 @@ class MetricsGate:
         claims.extend(self.DOLLAR_PATTERN.findall(text))
         return claims
 
+    def is_retracted(
+        self, line: str, index: int, claim: str,
+        retractions: List[Tuple[int, str, str]],
+    ) -> bool:
+        """True if a retraction on a LATER line names this entry's timestamp and metric.
+
+        line: the claim's own line; index: its position in the file's added lines;
+        retractions: (line index, entry timestamp, metric) for every marker in the file.
+        The entry timestamp must be the line's leading entry head, and both timestamp
+        and metric must match exactly, so a retraction of a different entry or metric
+        clears nothing.
+        """
+        head = self.ENTRY_TS_PATTERN.match(line)
+        if head is None:
+            return False
+        ts = head.group("ts")
+        metric = _squash(claim)
+        return any(
+            j > index and rts == ts and rmetric == metric
+            for j, rts, rmetric in retractions
+        )
+
     def is_verified(self, lines: List[Tuple[str, int, str]]) -> bool:
         """Check if a claim line has verification marker nearby.
 
@@ -182,11 +227,25 @@ class MetricsGate:
 
         # Check each added line
         for file, contents in lines_by_file.items():
+            originals = contents
+            retractions = []
+            if file in self.LOG_FILES:
+                # Retraction markers are evidence, not claims: strip them before the
+                # scan (their quoted metric and reason would otherwise re-flag), and
+                # index them so a later line can retract an earlier entry's metric.
+                for j, original in enumerate(originals):
+                    for m in self.RETRACTION_PATTERN.finditer(original):
+                        retractions.append((j, m.group("ts"), _squash(m.group("metric"))))
+                contents = [self.RETRACTION_PATTERN.sub("", c) for c in originals]
             for i, content in enumerate(contents):
                 claims = self.find_hard_claims(content)
                 for claim in claims:
                     # Skip if it's excluded (version, date, line ref)
                     if self.is_excluded(claim):
+                        continue
+
+                    # Skip if a LATER appended line in this log retracts it
+                    if retractions and self.is_retracted(originals[i], i, claim, retractions):
                         continue
 
                     # Check if verified (current line or adjacent)
