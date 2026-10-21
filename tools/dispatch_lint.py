@@ -8,6 +8,8 @@ Scans Python/JS/MD files for agent dispatch patterns and flags FORBIDDEN pattern
     matches the live no-orchestrator-merge-train PreToolUse hook's own denial semantics)
   - `--admin` flag (merge automation bypass; forbidden even alongside a legitimately-armed --auto)
   - `--no-verify` flag (pre-commit hook bypass)
+  - `AESOP_*` gate escape variables assigned in a dispatch (AESOP_ESCAPE_VARIABLES;
+    orchestrator-only, same severity as --no-verify)
   - `--force` in git context (dangerous history rewrite)
   - `git stash` (shared across worktrees, cross-contamination risk)
   - Credential/key hunting patterns (find.*key, grep.*token, env.*KEY)  # hygiene-ok
@@ -53,6 +55,27 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 
+# AESOP_* gate escape variables read by hooks/pre-push-policy.sh: each one skips a
+# gate, opts out of the receipt, pins the root, or relaxes a ratchet. Setting one in a
+# dispatch prompt is forbidden. Configuration variables (AESOP_HOME, AESOP_STATE_ROOT,
+# AESOP_PY_BIN, AESOP_RECEIPT_KEY, AESOP_RECEIPT_HMAC_SECRET, AESOP_RECEIPT_AUTOFLUSH,
+# AESOP_ESCAPE_ALERT_THRESHOLD) are not escapes and are not listed. Reads such as
+# "$AESOP_ROOT" are never matched.
+AESOP_ESCAPE_VARIABLES = (
+    "AESOP_ALLOW_GENERATED",
+    "AESOP_HEADROOM_BASE_REF",
+    "AESOP_PUSH_RED",
+    "AESOP_PYFLAKES_SKIP",
+    "AESOP_RECEIPT_EMIT",
+    "AESOP_RECEIPT_TIMEOUT",
+    "AESOP_REQUIRE_LINUX_SHAPE",
+    "AESOP_ROOT",
+)
+
+# Files whose history is append-only or orchestrator-owned: the escape rule does not
+# scan them (their quoted past commands are records, not dispatch instructions).
+ESCAPE_RULE_EXEMPT_FILENAMES = {"BUILDLOG.md", "STATE.md"}
+
 # Forbidden patterns and their suggested fixes
 FORBIDDEN_PATTERNS = {
     "gh_pr_merge": {
@@ -81,6 +104,19 @@ FORBIDDEN_PATTERNS = {
         "pattern": r"--no-verify\b",
         "description": "Pre-commit hook bypass forbidden (security gate)",
         "fix": "Remove --no-verify flag; commit must pass security scanning",
+    },
+    "aesop_escape_variable": {
+        # Assignment or env-prefix of an AESOP_* variable from AESOP_ESCAPE_VARIABLES.
+        # Same severity as --no-verify. Reads such as "$AESOP_ROOT" are not matched,
+        # nor are JS/TS local declarations (`const AESOP_ROOT = process.env...`),
+        # which bind a local name and set nothing in the environment.
+        "pattern": (
+            r"(?<![\w$])(?<!const )(?<!let )(?<!var )(?:"
+            + "|".join(AESOP_ESCAPE_VARIABLES)
+            + r")\s*=(?!=)"
+        ),
+        "description": "AESOP_* gate escape variable set in a dispatch prompt is orchestrator-only",
+        "fix": "Remove the AESOP_* assignment; lanes never set gate escape variables. Ask the orchestrator.",
     },
     "force_flag": {
         "pattern": r"\bgit\s+.*\s+--force\b|\bgit\s+.*\s+-f\b",
@@ -371,6 +407,8 @@ def find_violations(
         item_lines_before = lines[owner:line_num - 1] if owner is not None else []
 
         for pattern_key, pattern_info in FORBIDDEN_PATTERNS.items():
+            if pattern_key == "aesop_escape_variable" and file_path.name in ESCAPE_RULE_EXEMPT_FILENAMES:
+                continue
             for match in re.finditer(pattern_info["pattern"], line, re.IGNORECASE):
                 # Skip if pattern only appears in comments. Inline backtick
                 # spans and markdown fences are NOT exemptions: a command in

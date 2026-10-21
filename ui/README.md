@@ -5,8 +5,8 @@ A lightweight, self-contained web dashboard for real-time fleet monitoring. Repl
 ## Launch
 
 ```bash
-export AESOP_ROOT=$HOME/aesop
-python $AESOP_ROOT/ui/serve.py
+cd "$HOME/aesop"    # with no AESOP_ROOT set, the dashboard uses the checkout that ui/config.py lives in
+python ui/serve.py
 ```
 
 Prints `Dashboard: http://localhost:8770` and serves until Ctrl-C.
@@ -15,17 +15,17 @@ Prints `Dashboard: http://localhost:8770` and serves until Ctrl-C.
 
 The dashboard reads configuration from `aesop.config.json` if present. Key paths:
 
-- **`AESOP_ROOT`** (env var): Path to aesop installation (default: `$HOME/aesop`)
+- **`AESOP_ROOT`** (env var, optional): Path to the aesop installation. When unset, the dashboard uses the checkout that contains `ui/config.py`. (The pre-push hook's own root rule is different: an aesop checkout's git toplevel always wins there.)
 - **`PORT`** (env var): Dashboard port (default: `8770`)
 - **`AESOP_TRANSCRIPTS_ROOT`** (env var): Path to Claude session transcripts (default: `~/.claude/projects`)
 
 Example with custom paths:
 
 ```bash
-export AESOP_ROOT=/opt/aesop
+cd /opt/aesop    # no AESOP_ROOT set: the checkout containing ui/config.py is used
 export AESOP_TRANSCRIPTS_ROOT=/home/user/.claude/projects
 export PORT=9000
-python $AESOP_ROOT/ui/serve.py
+python ui/serve.py
 ```
 
 ## Features
