@@ -203,7 +203,7 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
 - **Merge authority: a lane never runs a merge that completes immediately.** No bare `gh pr merge`, never `--admin`,
   and never hand-resolving branch protection. The repo selects the landing mode; the lane does not choose it.
   - **Mode 1 - repos WITH required CI checks (aesop, keyrun).** The lane pushes, opens the PR, and ARMS native
-    auto-merge once at PR open, pinned to the tested head:
+    auto-merge once the PR is ready (never a draft) and its head sha is the final diff, pinned to the tested head:
     `gh pr merge <N> --repo <o/r> --squash --auto --match-head-commit <full head sha>`. The lane takes one
     foreground `gh pr checks <N>` snapshot (exit 8 = pending) and stops. The merge actor is GitHub: it merges once
     the required checks pass. The orchestrator verifies `state == MERGED` with
@@ -217,6 +217,9 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
     2. Run `gh pr ready <N>` only when the lane's own checks are green locally.
     3. Arm auto-merge immediately after marking ready: `gh pr merge <N> --repo <o/r> --squash --auto --match-head-commit <full head sha>`.
     Draft state is never an excuse to skip arming once the PR is ready.
+  - **`--auto` means "merge when requirements are met".** With no required checks pending it merges immediately at arm
+    time. So arm only after `gh pr ready` and the head sha is the final diff; `--match-head-commit <full head sha>` is
+    mandatory; never arm a draft. If a repo has no required checks, arming equals merging, and the lane states that in its report.
   - **Mode 2 - repos WITHOUT CI (claude-config, claude-scripts, conductor3, psinasty).** There is no required check
     to arm against, so the lane stops at PR open. It runs its gates in its worktree, pastes the literal output, and
     reports the PR number and the full head sha. The orchestrator lands it with one pinned
