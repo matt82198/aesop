@@ -8,6 +8,10 @@ fail to specify?"** Amend this file, then dispatch a FRESH lane. Corrections sen
 die with it and teach nothing; a contract amendment compounds forever. Failures are cheap when
 lanes are Haiku and stateless — so fail fast, fix the contract, re-run.
 
+**Read first:** this contract supersedes any session LANE-RULES file (for example a scratchpad `LANE-RULES-<time>.md`);
+where they differ, this file wins. The shell and hook shapes are in "Shell and hook shapes (every lane, every repo)"
+and the brief shape is in "The brief", both below.
+
 Every dispatch brief should POINT here rather than restate it. Below is what was learned the
 expensive way during aesop development. Each line exists because a lane failed without it.
 
@@ -278,6 +282,36 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   `run_in_background`, no detached/nohup process; backgrounding is not a lane capability.
 - **Hook probes never write the real resistance ledger.** Any manual run of a brain hook outside its test file sets `RESISTANCE_LEDGER=<temp file under the lane's worktree parent>` first (the override the hooks read, e.g. `main-context-ceiling.mjs`), so no row reaches `~/.claude/state/resistance-ledger.jsonl`. A probe that wrote the real ledger is reported in the hand-back.
 
+## Shell and hook shapes (every lane, every repo)
+Hooks enforce these. Each line is the allowed shape, then the denied one.
+- **Git paths are literal:** `git -C C:/Users/Mattt/Desktop/<repo>-wt/<lane> ...`; never a shell variable (`$X`, `${X}`) inside any git path, worktree-add targets included.
+- **File content is written with the Write tool** (edits with the Edit tool or a Python script file); never a heredoc (`python - <<EOF`, `cat <<EOF`), a here-string (`<<<`) or process substitution (`<( )`). No `sed` with `$` or a variable.
+- **Commit messages:** write the message with the Write tool, then `git commit -F <file>`; never `-m` with multi-line text. PR text: `gh pr edit --body-file <file>`, `gh pr comment --body-file <file>`.
+- **The append-only log (`BUILDLOG.md`)**: its name appears only in git commands and the two append shapes `printf '\n' >> <wt>/BUILDLOG.md` and `cat <tmp> >> <wt>/BUILDLOG.md`; any other shell command naming it is denied.
+- **STATE.md** is edited only above the first `## NEXT STEPS`, with the Edit tool; never below it, never by shell.
+- **Secret scan BEFORE committing:** `python ~/scripts/secret_scan.py --staged --repo <wt>`; require CLEAN with files scanned > 0 (if 0, run `--range origin/<base>..HEAD --repo <wt>` after the commit and before the push). Never commit first and scan after.
+- **Commit trailer, last line exactly:** `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` (Matt's rule; it overrides any harness attribution reminder). **PR footer, last line exactly once:** `🐢 Generated with Aesop`, never the Claude Code line.
+- **dotnet** is `C:/Users/Mattt/.dotnet/dotnet.exe`; never bare `dotnet` from PATH.
+- **fastcheck** is one plain invocation: `cd <wt> && powershell -NoProfile -ExecutionPolicy Bypass -File tools/fastcheck.ps1 -All > <scratch>/fastcheck.txt 2>&1`, then read the file. Scene tests are NOT this shape: see the CI contract item 2 (no `cd &&` prefix there).
+- **Scratch:** gate output is redirected to a file in the lane's scratch directory and read with the Read tool or tail; never read a transcript or session file.
+- **One compliant retry.** When a hook denial names an allowed shape, retry ONCE in exactly that shape. If it is denied again, or names no shape, STOP and report the denial text verbatim. Never try a third variant, never ask the orchestrator to run the denied command for you.
+- **Escape tokens are never used:** any `[[ALLOW-...]]` token, `AESOP_ALLOW_GENERATED=1` outside section 6's stated purpose, `--no-verify`, `core.hooksPath`, `--admin`, and any env var that turns a hook off.
+- **Never:** `git stash`; history rewrites (`--amend` on a pushed commit, `rebase`, `reset --hard`, force-push); the primary checkout as a working tree (only `fetch origin` and `worktree add <literal path>` run there); touching an auto-merge arm Matt enabled (`gh pr merge --disable-auto` on an armed PR); deleting a branch or a worktree. Push shape: `git -C <literal wt> push origin HEAD:<branch>`, in its own foreground call.
+- **Knowledge-tree hook fix shape** (a brain repo's knowledge-tree gate reds on a stale index): `python ~/scripts/knowledge_tree.py --write --root <wt>`, then stage `INDEX*.md` and `KNOWLEDGE.md`; never hand-edit them (section 9a).
+
+## The brief
+A dispatch brief carries exactly these, and nothing else (everything else is this contract and is not repeated):
+1. The PURPOSE line: `PURPOSE: this artifact exists to <one line>; status: real|throwaway|oracle` (section 9b).
+2. The model, and why.
+3. The acceptance line: one sentence verifiable in one run or one test (section 8a).
+4. The worktree path and branch name.
+5. The files or domain-map rows the lane owns.
+6. The ruling ids it serves.
+7. The CI jobs it can affect (CI contract item 1).
+8. The hand-back block (section 8): the fields the orchestrator wants back.
+A brief that restates shell, hook, push, merge or scan rules is carrying contract text: delete it and point here. A lane
+that finds a rule missing from the contract reports "what did the contract not tell you" in its hand-back; the contract is amended, not the brief.
+
 ## CI contract (keyrun)
 Applies to every lane that pushes to `matt82198/keyrun`. Sources: `game.yml@main` and `tests.yml@main` read
 via `gh api repos/matt82198/keyrun/contents/.github/workflows/<f>?ref=main`; `tools/fastcheck.ps1`; keyrun
@@ -319,10 +353,20 @@ that adds ticks, frames or launches to a scene test raises its row; state it (it
   (:119); `game/src/Hud/ScreenSceneTest.ps1` (:129), `ProgressionSaveSceneTest.ps1` (:139),
   `RunEndBonusSceneTest.ps1` (:149), `NameplateDeclutterTest.ps1` (:159), `HelpHintSceneTest.ps1` (:169),
   `CombatTextOverlapTest.ps1` (:179); then boot smoke (:189), export (:218) and `game/src/Host/E2eAssert.ps1` (:264).
-  A lane runs one of these ONLY when the `no-lane-game-launch` hook allows `pwsh -File <X>SceneTest.ps1`
-  through the launch lock. If the hook denies it, do NOT retry a variant: the hand-back lists which scene steps
-  the change can affect and why (which file under `game/src/**`, `game/scenes/**`, `game/content/**` or the sim
-  feeds which test), and the orchestrator runs them. Never name a scene script in a shell command the hook denies.
+  A lane runs the scene tests its change can affect (which file under `game/src/**`, `game/scenes/**`,
+  `game/content/**` or the sim feeds which test), one at a time, in the shape claude-config #233 allows (reason
+  `scene-test-run`, serialised by the launch lock): ONE `pwsh -File` (or `powershell -File`) of a
+  `game/src/**/*SceneTest.ps1` or `*Test.ps1` with plain literal args and an optional redirect into the temp dir, e.g.
+  `pwsh -File game/src/Host/HudSceneTest.ps1 > C:/Users/Mattt/AppData/Local/Temp/<lane>-Hud.txt 2>&1` (the script path is
+  RELATIVE to the worktree root; an absolute script path or a `*>` redirect is denied by #233's parser, which accepts only
+  `>`, `>>`, `1>`, `2>`, `2>&1` into an absolute path under the OS temp dir). Get the worktree root as the shell's working
+  directory with a lone `cd C:/Users/Mattt/Desktop/keyrun-wt/<lane>` in its own earlier call (the directory persists
+  between calls), never as a `cd &&` prefix; no quotes, no `&`, no `$`, no pipe or chain. The lane reads
+  the output file and pastes the `<X>SceneTest: PASS` lines in the hand-back. A fresh worktree needs
+  `tools/godot/setup-worktree.ps1` (build plus one-time import) first once keyrun #472 lands; until then the build
+  and import commands keyrun `game/CLAUDE.md` names. Captures (`screens.ps1`), raw Godot launches and `--autorun`
+  outside a scene script stay the orchestrator's. If the hook still denies a scene run, follow "one compliant retry"
+  in "Shell and hook shapes"; the hand-back then lists the scene steps not run and why.
 
 **3. One push per green local state.** A push restarts the whole run from blank (new head sha, both workflows,
 the older run cancelled, game.yml:18-20); every job above re-queues and the ~15 min starts over. A fold, a
