@@ -233,6 +233,7 @@
   "tests/test_state_query_api.py": 12,
   "tests/test_state_rebuild_roundtrip.py": 3,
   "tests/test_state_store.py": 15,
+  "tests/test_state_store_busy.py": 2,
   "tests/test_state_store_concurrency.py": 12,
   "tests/test_state_store_hardening.py": 7,
   "tests/test_state_store_identity.py": 20,
