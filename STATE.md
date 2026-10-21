@@ -169,6 +169,19 @@ Matt 16:30Z: "go from state on the release" + "and fix the clear issue". Verify 
 **QUEUED AFTER RELEASE:** G11 wiring lane (see NEXT STEPS 12); relaunch refinement-monitor (single cycle; cannot self-pace); worktree sweep (classify; remove only clean and merged).
 
 0d. 2026-10-18 00:47Z tick (13th compaction done). LIVE lanes: knowledge_tree.py generator (claude-scripts feat/knowledge-tree), knowledge-tree gates (claude-config feat/knowledge-tree-gates), transcript_audit noise fix (claude-scripts fix/transcript-audit-noise), deny.mjs dedupe + grants 1b (claude-config fix/deny-line-dedupe-grants-1b), keyrun #106 merge lane, psinasty fix/unplayed-week-preview. OPEN: aesop #1165 head 9d776d1 auto-merge armed. NEXT after the tree lands: per-repo --write lanes (claude-config, claude-scripts, conductor3) commit the generated INDEX.md/KNOWLEDGE.md; deploy gates; decide agents _CATALOG.txt -> generated agents/INDEX.md groups; ~/scripts branch move to master (Matt). QUEUED (Matt 00:53Z): tests indexed with static counts+subject in knowledge_tree.py (send on generator hand-back); discovery_grep detector in transcript_audit; LANE-CONTRACT index-first rule.
+## CHECKPOINT 2026-10-21 00:35Z (orchestrator, after compaction)
+WHY: aesop's job this span is keeping the keyrun lane honest (receipts on disk, gh-bound state) while the playable PR lands. Every PR state below was read from gh on 2026-10-21, not from lane narration.
+- Current Version line already reads v0.10.2 (released 2026-10-18); not changed here (another PR owns the version line).
+- MERGED: aesop #1236 257e0534, #1221 7711334a, #1234 96db4aff, #1235 e95b0cab, #1184 28aca2f4 (dash conductor root), #1183 c9e4a03b (fleet_status watchdog heartbeat). claude-config #200 3f1a7d64, #201 70fa8d19 (KEYRUN FIRST denial, <=5 lines), #202 e6f4fdd7 (no-lane-game-launch path-as-data). conductor3 #191 f6bc5807, #192 a642bf3f (churnNoShip signal, keyrun in repo list).
+- OPEN: #1193 d7a36df9, #1207 1a0e2559, #1204 603d6f5a (rebase lane in flight), #1201 621fbc37, #1219 413bbdf2 (red on stateapi_lint buildlog-md-write false positive; fix lane on branch fix/stateapi-buildlog-write-readonly), #1212 99b9a02e (CodeQL alert #50 needs Matt), #1177 abbfa50f (bot-token PR, needs Matt).
+- Monitor cycle 672 findings:
+  - conductor3 checkout sits on chore/monitor-state-cycle-538 (178 ahead / 142 behind origin/master), so the collector runs stale code.
+  - ~/.claude master is 16 ahead / 16 behind origin/master, so the hook-removal check holds every memory auto-commit (16 held since 23:53Z). The gate is correct; a reconcile lane is dispatched.
+  - aesop branch backup/main-pre-rebase-20261017 is 220 commits ahead with no origin ref (keep/push/drop is Matt's call).
+  - proposal P-CHECKOUT-20261021 staged in conductor3/monitor/PROPOSALS.md.
+- Nine merged worktrees removed (allowed scratch cleanup); no branches deleted.
+- NEEDS MATT: ~/.claude plans/ checkout; BRAIN_READ_TOKEN; #1177 bot-token PR; CodeQL #50; Haiku-vs-Fable Co-Authored-By attribution; remote branch chore/incident-crash-2026-10-20 delete; backup branch decision; SAC f-37ad66b3; `! flyctl auth login`.
+
 ## NEXT STEPS (open items distilled from the ledger, ranked; bind each to its PR or path before acting)
 
 00a. 2026-10-20 evening. Keyrun #396 "integrate: playable dungeon (one PR)" is the deliverable: draft opened 2026-10-20T23:44Z at d9cb7c2b; folds #308 #388 #333 #369 #335 #244, reverts #325 #326 #344 (oracle/parity red when folded), still to fold feat/no-push-rule 7334a6c8 and the #326 path-pack scripts. WHY: one PR Matt can play (keyrun D10/D15). After MERGED (gh, never narration): ff primary keyrun tree, screens.ps1 capture, orchestrator views frames, close superseded #308 #375 #333 #369 #335 #344 #325 #326 #244, revisit #370 (deferred: TS/C# sim divergence on Cadence HoT vs HEAL-NEVER-HOSTILE).
