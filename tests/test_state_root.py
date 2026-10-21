@@ -178,7 +178,8 @@ class StateRootCliTests(unittest.TestCase):
         _write_config(self.config_dir, '{"state_root": %s}' % _json_str(str(store)))
         r = self._run(BOOT_TOOL, "--repo", str(self.repo))
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("## STATE.md", r.stdout)
+        self.assertTrue(r.stdout.startswith("STATE.md "), r.stdout[:200])
+        self.assertIn("## NEXT STEPS", r.stdout)
 
 
 def _json_str(value: str) -> str:

@@ -1,11 +1,15 @@
 """Tests for tools/boot_state.py -- the ONE canonical boot brief.
 
 Contract under test:
-  - Sections in fixed order: GOAL, STATE.md ACTIVE block, BUILDLOG.md tail,
-    EVENT STORE, GIT.
+  - First line states STATE.md size in bytes and the ACTIVE heading's rotation stamp.
+  - Sections in fixed order: GOAL (intent), STATE.md "## CHECKPOINT" (latest block),
+    "## NEXT STEPS", "## STANDING RULES LEARNED", "## ACTIVE" (newest bullets first),
+    BUILDLOG.md tail, EVENT STORE, GIT.
+  - Each STATE.md section has a per-section byte budget; a cut section keeps its heading
+    and says "(truncated to N KB of M KB)".
   - GOAL comes only from the event store projection; no goal event means the literal
     line `GOAL: none recorded` and nothing else for that section.
-  - The brief is byte-capped (--max-bytes, default 12000) and the cap always holds.
+  - The brief is byte-capped (--max-bytes, default 14336 = 14 KB) and the cap always holds.
   - Deterministic: same inputs give byte-identical stdout and --json output.
   - Unreadable (or missing) store: exit 2, one stderr line, empty stdout. Never a
     partial brief that looks complete.
@@ -35,14 +39,30 @@ TOOL = REPO_ROOT / "tools" / "boot_state.py"
 
 STATE_MD = """# STATE
 
-## ACTIVE: RELEASE TEST
+## ACTIVE: RELEASE TEST (rotated 2026-10-15 16:50Z; read THIS block first)
 
 - active line alpha
 - active line beta
 
-## NEXT STEPS
+## CHECKPOINT 2026-10-20 09:00Z (older checkpoint)
 
-- next step that must NOT appear in the brief
+- superseded checkpoint line that must NOT appear
+
+## CHECKPOINT 2026-10-21 00:35Z (orchestrator, after compaction)
+
+- checkpoint line newest
+
+## NEXT STEPS (ranked)
+
+- next step alpha ranked one
+
+## STANDING RULES LEARNED
+
+- standing rule alpha
+
+## RECONCILE 2026-10-18 (outside every brief section)
+
+- reconcile line that must NOT appear
 """
 
 
@@ -103,16 +123,78 @@ class BootStateTests(unittest.TestCase):
         r = self._brief()
         self.assertEqual(r.returncode, 0, r.stderr)
         out = r.stdout
-        markers = ["GOAL:", "## STATE.md", "## BUILDLOG.md", "## EVENT STORE", "## GIT"]
+        markers = ["GOAL:", "## CHECKPOINT 2026-10-21", "## NEXT STEPS", "## STANDING RULES LEARNED",
+                   "## ACTIVE: RELEASE TEST", "## BUILDLOG.md", "## EVENT STORE", "## GIT"]
+        for m in markers:
+            self.assertEqual(out.count(m), 1, f"{m!r} must appear exactly once:\n{out}")
         positions = [out.index(m) for m in markers]
         self.assertEqual(positions, sorted(positions), out)
 
-    def test_state_section_is_active_block_only(self):
+    def test_next_steps_section_is_in_brief(self):
+        self._seed_goal()
+        out = self._brief().stdout
+        self.assertIn("next step alpha ranked one", out)
+
+    def test_standing_rules_section_is_in_brief(self):
+        self._seed_goal()
+        out = self._brief().stdout
+        self.assertIn("standing rule alpha", out)
+
+    def test_checkpoint_is_latest_block_only(self):
+        self._seed_goal()
+        out = self._brief().stdout
+        self.assertIn("checkpoint line newest", out)
+        self.assertNotIn("superseded checkpoint line", out)
+
+    def test_active_section_is_active_block_only(self):
         self._seed_goal()
         out = self._brief().stdout
         self.assertIn("active line alpha", out)
-        self.assertNotIn("NEXT STEPS", out)
+        self.assertNotIn("RECONCILE", out)
         self.assertNotIn("must NOT appear", out)
+
+    def test_first_line_states_state_md_size_and_active_rotation(self):
+        self._seed_goal()
+        r = self._brief()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        size = (self.repo / "STATE.md").stat().st_size
+        self.assertEqual(r.stdout.splitlines()[0],
+                         f"STATE.md {size} bytes | ACTIVE rotated 2026-10-15 16:50Z")
+
+    def test_cut_section_keeps_heading_and_says_truncated(self):
+        self._seed_goal()
+        big = "".join(f"- next filler {i} " + "y" * 90 + "\n" for i in range(120))
+        state = STATE_MD.replace("- next step alpha ranked one", big.rstrip("\n"))
+        (self.repo / "STATE.md").write_text(state, encoding="utf-8")
+        r = self._brief("--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        nxt = json.loads(r.stdout)["sections"]["next_steps"]
+        self.assertTrue(nxt.startswith("## NEXT STEPS (ranked) (truncated to 3.0 KB of "), nxt[:200])
+        self.assertRegex(nxt, r"## NEXT STEPS \(ranked\) \(truncated to 3\.0 KB of \d+\.\d KB\)")
+
+    def test_per_section_budgets_hold_and_total_is_14_kb(self):
+        self._seed_goal()
+        filler = lambda tag: "".join(f"- {tag} filler {i} " + "z" * 90 + "\n" for i in range(150))  # ~15 KB
+        state = (
+            "# STATE\n\n## ACTIVE: BUDGET (rotated 2026-10-15 16:50Z)\n\n" + filler("active")
+            + "\n## CHECKPOINT 2026-10-21 00:35Z (budget)\n\n" + filler("checkpoint")
+            + "\n## NEXT STEPS (budget)\n\n" + filler("next")
+            + "\n## STANDING RULES LEARNED\n\n" + filler("rule")
+        )
+        (self.repo / "STATE.md").write_text(state, encoding="utf-8")
+        r = self._brief("--json")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        obj = json.loads(r.stdout)
+        budgets = {"checkpoint": 2 * 1024, "next_steps": 3 * 1024,
+                   "standing_rules": 3 * 1024, "state_active": 4 * 1024}
+        for key, budget in budgets.items():
+            size = len(obj["sections"][key].encode("utf-8"))
+            self.assertLessEqual(size, budget, f"{key} is {size} bytes, budget {budget}")
+            self.assertIn("(truncated to", obj["sections"][key].splitlines()[0], key)
+        self.assertEqual(obj["max_bytes"], 14336)
+        self.assertLessEqual(obj["bytes"], 14336)
+        default = self._brief()
+        self.assertLessEqual(len(default.stdout.encode("utf-8")), 14336)
 
     def test_buildlog_section_is_last_n_lines(self):
         self._seed_goal()
@@ -145,13 +227,13 @@ class BootStateTests(unittest.TestCase):
             self.assertLessEqual(len(r.stdout.encode("utf-8")), cap, f"cap {cap} exceeded")
             self.assertIn("GOAL: Keep the goal", r.stdout)
 
-    def test_default_cap_is_12000_bytes(self):
+    def test_default_cap_is_14_kb(self):
         self._seed_goal()
         big = "".join(f"- active filler line {i} " + "x" * 80 + "\n" for i in range(400))
         (self.repo / "STATE.md").write_text("## ACTIVE: BIG\n" + big + "## NEXT STEPS\n", encoding="utf-8")
         r = self._brief()
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertLessEqual(len(r.stdout.encode("utf-8")), 12000)
+        self.assertLessEqual(len(r.stdout.encode("utf-8")), 14336)
 
     def test_deterministic_two_runs_byte_identical(self):
         self._seed_goal()
@@ -170,7 +252,8 @@ class BootStateTests(unittest.TestCase):
         obj = json.loads(r.stdout)
         self.assertEqual(
             list(obj["sections"].keys()),
-            ["goal", "state_active", "buildlog_tail", "event_store", "git"],
+            ["goal", "checkpoint", "next_steps", "standing_rules", "state_active",
+             "buildlog_tail", "event_store", "git"],
         )
         self.assertIn("Finish boot brief", obj["sections"]["goal"])
 
@@ -355,12 +438,13 @@ class BootStateTests(unittest.TestCase):
         self._seed_tasks(2)
         r = self._brief()
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertLessEqual(len(r.stdout.encode("utf-8")), 12000)
-        for header in ("## STATE.md (ACTIVE block)", "## BUILDLOG.md", "## EVENT STORE", "## GIT"):
+        self.assertLessEqual(len(r.stdout.encode("utf-8")), 14336)
+        for header in ("## CHECKPOINT 2026-10-21", "## NEXT STEPS", "## STANDING RULES LEARNED",
+                       "## ACTIVE: RELEASE TEST", "## BUILDLOG.md", "## EVENT STORE", "## GIT"):
             self.assertIn(header, r.stdout)
         self.assertIn("active line alpha", r.stdout)
         self.assertRegex(r.stdout, r"\[GOAL truncated \d+ bytes\]")
-        self.assertLess(r.stdout.index("[GOAL truncated"), r.stdout.index("## STATE.md"))
+        self.assertLess(r.stdout.index("[GOAL truncated"), r.stdout.index("## CHECKPOINT"))
 
     def _brief_at(self, state_dir):
         env = dict(os.environ)

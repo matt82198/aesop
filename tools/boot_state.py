@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
 """Print the ONE canonical boot brief for the orchestrator.
 
-INDEX: Canonical deterministic boot brief (GOAL from the event store, STATE.md ACTIVE block, BUILDLOG tail, event-store projections, git) with a byte cap; exit 2 when the store is unreadable.
+INDEX: Canonical deterministic boot brief (GOAL from the event store, STATE.md CHECKPOINT, NEXT STEPS, STANDING RULES LEARNED and ACTIVE sections with per-section budgets, BUILDLOG tail, event-store projections, git) with a 14 KB total cap; exit 2 when the store is unreadable.
 
 Usage:
     python tools/boot_state.py [--repo DIR] [--state-dir DIR] [--jsonl PATH] [--max-bytes N]
                                [--buildlog-lines N] [--json]
 
-Sections, in this order:
-    GOAL         the latest goal_set projection (tools/goal_state.py). With no goal event:
-                 the single line "GOAL: none recorded" and nothing else for that section.
-    STATE.md     the "## ACTIVE" block of <repo>/STATE.md only.
+First line: "STATE.md <size> bytes | ACTIVE rotated <stamp>" (size of <repo>/STATE.md on disk and
+the rotation stamp in the "## ACTIVE" heading), so a stale ACTIVE title is visible at a glance.
+
+Sections, in this order (the section heading is printed as it stands in STATE.md):
+    GOAL         the latest goal_set projection (tools/goal_state.py), the orchestrator intent.
+                 Verbatim and unbudgeted; only an emergency bound at half the cap applies. With no
+                 goal event: the single line "GOAL: none recorded" and nothing else for that section.
+    CHECKPOINT   the LATEST "## CHECKPOINT" block of <repo>/STATE.md. Budget 2 KB.
+    NEXT STEPS   the "## NEXT STEPS" block. Budget 3 KB.
+    STANDING RULES LEARNED  the "## STANDING RULES LEARNED" block. Budget 3 KB.
+    ACTIVE       the "## ACTIVE" block. Budget 4 KB. The top (newest) bullets survive the cut.
     BUILDLOG.md  the last N lines (default 25) of <repo>/BUILDLOG.md.
     EVENT STORE  first line is the INGEST line; then open tracker lanes via
                  StateAPI.project("tracker") (project_tracker) and the last task_event rows of
@@ -23,12 +30,16 @@ Sections, in this order:
                  source is NO-SOURCE. A STALE projection is printed as STALE, never silently.
     GIT          `git log --oneline -5` and the first 20 lines of `git status --short`.
 
-Cap: the markdown brief is at most --max-bytes (default 12000) UTF-8 bytes and always holds.
-The GOAL section is first bounded to a quarter of the cap; a longer goal is cut at the start
-with a "[GOAL truncated N bytes]" marker. When over the cap, the ACTIVE block is trimmed to
-half the cap, then the oldest BUILDLOG lines, then ACTIVE, event-store and git lines (tail
-first). Every section keeps its heading. --json carries the same section texts as one
-object; the cap applies to the markdown.
+Cap: the markdown brief (first line and fence line included) is at most --max-bytes (default
+14336 = 14 KB) UTF-8 bytes and always holds. Each STATE.md section has its own budget (CHECKPOINT
+2 KB, NEXT STEPS 3 KB, STANDING RULES LEARNED 3 KB, ACTIVE 4 KB). A section over its budget keeps
+its heading (relabelled "(truncated to N KB of M KB)", N = its budget, M = its full size) and its
+top lines. A goal longer than half the cap is cut at the start with a "[GOAL truncated N bytes]"
+marker. When the total is still over the cap, the oldest BUILDLOG lines go first, then the
+event-store and git lines, then ACTIVE, STANDING RULES, NEXT STEPS and CHECKPOINT lines (tail
+first). Every section keeps its heading. --json carries the same section texts as one object
+(keys goal, checkpoint, next_steps, standing_rules, state_active, buildlog_tail, event_store,
+git) plus state_header; the cap applies to the markdown.
 
 Determinism: the same store, STATE.md, BUILDLOG.md and git state give byte-identical output,
 with one documented exception. The INGEST line's heartbeat_age_s and its fresh/STALE word are
@@ -52,6 +63,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -67,7 +79,7 @@ from tools import goal_state  # noqa: E402
 from tools import ingest_task_events as ite  # noqa: E402
 from tools.state_root import StateRootError, resolve_state_root  # noqa: E402
 
-DEFAULT_MAX_BYTES = 12000
+DEFAULT_MAX_BYTES = 14 * 1024  # 14336
 DEFAULT_BUILDLOG_LINES = 25
 FENCE_TIMEOUT_S = 15
 INGEST_TIMEOUT_S = 5
@@ -84,11 +96,23 @@ CLOSED_STATUSES = frozenset({
     "done", "closed", "closed-foreign", "resolved", "archived", "merged", "cancelled", "wontfix",
 })
 
-SECTION_KEYS = ("goal", "state_active", "buildlog_tail", "event_store", "git")
-GOAL, STATE, BUILD, EVENT, GIT = range(5)
+SECTION_KEYS = ("goal", "checkpoint", "next_steps", "standing_rules", "state_active",
+                "buildlog_tail", "event_store", "git")
+GOAL, CHECKPOINT, NEXT, STANDING, STATE, BUILD, EVENT, GIT = range(8)
 
-GOAL_SHARE_DIVISOR = 4  # GOAL is bounded to max_bytes // 4 bytes, marked "[GOAL truncated N bytes]"
-MARK_STATE = "... (ACTIVE block trimmed to --max-bytes)"
+# Per-section byte budgets for the STATE.md sections. GOAL (INTENT) is unbudgeted: verbatim.
+SECTION_BUDGETS = {
+    CHECKPOINT: 2 * 1024,
+    NEXT: 3 * 1024,
+    STANDING: 3 * 1024,
+    STATE: 4 * 1024,
+}
+GOAL_EMERGENCY_DIVISOR = 2  # GOAL is bounded to max_bytes // 2 only when it alone would overflow
+ROTATION_RE = re.compile(r"rotated (\d{4}-\d{2}-\d{2} \d{2}:\d{2}Z)")
+MARK_CHECKPOINT = "... (CHECKPOINT lines trimmed to --max-bytes)"
+MARK_NEXT = "... (NEXT STEPS lines trimmed to --max-bytes)"
+MARK_STANDING = "... (STANDING RULES lines trimmed to --max-bytes)"
+MARK_STATE = "... (ACTIVE lines trimmed to --max-bytes)"
 MARK_BUILD = "... (older BUILDLOG lines trimmed to --max-bytes)"
 MARK_EVENT = "... (event-store lines trimmed to --max-bytes)"
 MARK_GIT = "... (git lines trimmed to --max-bytes)"
@@ -111,17 +135,57 @@ def _read_text(path: Path) -> str | None:
     return read_text_file(path)
 
 
-def state_active_block(text: str) -> list[str] | None:
-    """Return the ``## ACTIVE`` block (heading included) or None if absent."""
-    lines = text.splitlines()
-    start = next((i for i, ln in enumerate(lines) if ln.startswith("## ACTIVE")), None)
-    if start is None:
+def _heading_block(lines: list[str], prefix: str, last: bool = False) -> list[str] | None:
+    """Return the block (heading included) whose heading starts with ``prefix``, or None.
+
+    ``last`` picks the final match instead of the first (the CHECKPOINT section is appended
+    over time, so its latest block is the last one in the file).
+    """
+    starts = [i for i, ln in enumerate(lines) if ln.startswith(prefix)]
+    if not starts:
         return None
+    start = starts[-1] if last else starts[0]
     end = next((j for j in range(start + 1, len(lines)) if lines[j].startswith("## ")), len(lines))
     block = lines[start:end]
     while block and not block[-1].strip():
         block.pop()
     return block
+
+
+def state_active_block(text: str) -> list[str] | None:
+    """Return the ``## ACTIVE`` block (heading included) or None if absent."""
+    return _heading_block(text.splitlines(), "## ACTIVE")
+
+
+def state_sections(text: str | None) -> list[list[str]]:
+    """The four STATE.md sections in brief order: CHECKPOINT (latest), NEXT STEPS, STANDING RULES
+    LEARNED, ACTIVE. A missing section is one labelled line, never silently absent."""
+    specs = (("## CHECKPOINT", True), ("## NEXT STEPS", False),
+             ("## STANDING RULES LEARNED", False), ("## ACTIVE", False))
+    if text is None:
+        return [[prefix, "(STATE.md missing)"] for prefix, _ in specs]
+    lines = text.splitlines()
+    out = []
+    for prefix, last in specs:
+        block = _heading_block(lines, prefix, last)
+        out.append(block if block is not None else [prefix, f"(no {prefix} section in STATE.md)"])
+    return out
+
+
+def state_header_line(repo: Path) -> str:
+    """The brief's first line: STATE.md size on disk and the ACTIVE heading's rotation stamp."""
+    path = repo / "STATE.md"
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return "STATE.md missing | ACTIVE rotation unknown"
+    block = state_active_block(_read_text(path) or "")
+    if block is None:
+        stamp = "ACTIVE heading missing"
+    else:
+        found = ROTATION_RE.search(block[0])
+        stamp = f"ACTIVE rotated {found.group(1)}" if found else "ACTIVE heading has no rotation stamp"
+    return f"STATE.md {size} bytes | {stamp}"
 
 
 def read_store(state_dir: Path) -> dict:
@@ -238,15 +302,7 @@ def gather(repo: Path, state_dir: Path, buildlog_lines: int, ingest_line: str) -
     store = read_store(state_dir)
     goal_block = goal_state.render_goal_block(store["goal"]).rstrip("\n").splitlines()
 
-    state_text = _read_text(repo / "STATE.md")
-    if state_text is None:
-        state_lines = ["## STATE.md (ACTIVE block)", "(STATE.md missing)"]
-    else:
-        block = state_active_block(state_text)
-        if block is None:
-            state_lines = ["## STATE.md (ACTIVE block)", "(no ## ACTIVE block in STATE.md)"]
-        else:
-            state_lines = ["## STATE.md (ACTIVE block)"] + block
+    checkpoint, next_steps, standing, active = state_sections(_read_text(repo / "STATE.md"))
 
     build_text = _read_text(repo / "BUILDLOG.md")
     heading = f"## BUILDLOG.md (last {buildlog_lines} lines)"
@@ -256,8 +312,8 @@ def gather(repo: Path, state_dir: Path, buildlog_lines: int, ingest_line: str) -
         entries = build_text.splitlines()[-buildlog_lines:] if buildlog_lines > 0 else []
         build_lines = [heading] + entries
 
-    return [goal_block, state_lines, build_lines, _event_store_lines(store, ingest_line),
-            ["## GIT"] + _git_lines(repo)]
+    return [goal_block, checkpoint, next_steps, standing, active, build_lines,
+            _event_store_lines(store, ingest_line), ["## GIT"] + _git_lines(repo)]
 
 
 # ---------------------------------------------------------------------------
@@ -325,22 +381,46 @@ def _bound_goal(block: list[str], allow: int) -> list[str]:
     return [kept, marker] if kept else [marker]
 
 
+def _budget_section(block: list[str], budget: int) -> list[str]:
+    """Cut one STATE.md section to ``budget`` bytes, keeping its top (newest) lines.
+
+    The heading is kept and relabelled "(truncated to N KB of M KB)": N is the budget, M the
+    section's full size, both in KB to one decimal. A section within budget is returned as is.
+    """
+    full = _nbytes(block)
+    if full <= budget:
+        return block
+    label = f"{block[0]} (truncated to {budget / 1024:.1f} KB of {full / 1024:.1f} KB)"
+    room = budget - len(label.encode("utf-8")) - 1  # the newline after the label
+    keep: list[str] = []
+    used = 0
+    for ln in block[1:]:
+        cost = len(ln.encode("utf-8")) + 1
+        if used + cost > room:
+            break
+        keep.append(ln)
+        used += cost
+    return [label] + keep
+
+
 def fit_to_cap(sections: list[list[str]], max_bytes: int) -> list[list[str]]:
-    """Deterministically shrink ``sections`` so the assembled brief is <= ``max_bytes``."""
+    """Deterministically shrink ``sections`` so the assembled brief is <= ``max_bytes``.
+
+    Per-section budgets (SECTION_BUDGETS) always apply. The total is then enforced by trimming
+    in order: BUILDLOG (oldest first), GIT, event store, ACTIVE, CHECKPOINT, NEXT STEPS and
+    STANDING RULES (tail first). GOAL is never line-trimmed.
+    """
     out = [list(s) for s in sections]
-    # 0. GOAL gets at most a quarter of the cap, so an oversized goal never crowds out the rest.
-    out[GOAL] = _bound_goal(out[GOAL], max_bytes // GOAL_SHARE_DIVISOR)
+    for idx, budget in SECTION_BUDGETS.items():
+        out[idx] = _budget_section(out[idx], budget)
+    # GOAL is verbatim; only an emergency bound stops one goal from consuming the whole brief.
+    out[GOAL] = _bound_goal(out[GOAL], max_bytes // GOAL_EMERGENCY_DIVISOR)
     if _size(out) <= max_bytes:
         return out
-    # 1. ACTIVE gets its share (half the cap), never more than what is left.
-    allow = min(max_bytes // 2, max_bytes - _size_with(out, STATE, []))
-    out[STATE] = _fit_drop_tail(out[STATE], allow, MARK_STATE)
-    # 2. BUILDLOG: keep the newest lines.
-    if _size(out) > max_bytes:
-        allow = max_bytes - _size_with(out, BUILD, [])
-        out[BUILD] = _fit_drop_head(out[BUILD], allow, MARK_BUILD)
-    # 3. Remaining sections, tail first. GOAL is never line-trimmed.
-    for idx, marker in ((STATE, MARK_STATE), (EVENT, MARK_EVENT), (GIT, MARK_GIT)):
+    allow = max_bytes - _size_with(out, BUILD, [])
+    out[BUILD] = _fit_drop_head(out[BUILD], allow, MARK_BUILD)
+    for idx, marker in ((GIT, MARK_GIT), (EVENT, MARK_EVENT), (STATE, MARK_STATE),
+                        (CHECKPOINT, MARK_CHECKPOINT), (NEXT, MARK_NEXT), (STANDING, MARK_STANDING)):
         if _size(out) <= max_bytes:
             break
         allow = max_bytes - _size_with(out, idx, [])
@@ -357,9 +437,10 @@ def render_brief(sections: list[list[str]], max_bytes: int) -> str:
     return data[:max_bytes].decode("utf-8", errors="ignore")
 
 
-def build_json(sections: list[list[str]], max_bytes: int) -> dict:
-    fitted = fit_to_cap(sections, max_bytes)
-    text = _assemble(fitted)
+def build_json(sections: list[list[str]], max_bytes: int, prefix: str = "") -> dict:
+    """The sections as one object. ``prefix`` (first line, fence) counts toward ``max_bytes``."""
+    fitted = fit_to_cap(sections, max_bytes - len(prefix.encode("utf-8")))
+    text = prefix + _assemble(fitted)
     return {
         "max_bytes": max_bytes,
         "bytes": len(text.encode("utf-8")),
@@ -383,7 +464,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repo", default=str(REPO_ROOT), help="git repo holding STATE.md and BUILDLOG.md (default: this checkout)")
     parser.add_argument("--state-dir", default=None, help="state directory (default: AESOP_STATE_ROOT, then aesop.config.json state_root; fails closed if neither is set)")
     parser.add_argument("--jsonl", default=None, help="task-events JSONL to ingest (default: the ingest tool's default)")
-    parser.add_argument("--max-bytes", type=_positive, default=DEFAULT_MAX_BYTES, help="byte cap (default 12000)")
+    parser.add_argument("--max-bytes", type=_positive, default=DEFAULT_MAX_BYTES, help="byte cap (default 14336 = 14 KB)")
     parser.add_argument("--buildlog-lines", type=int, default=DEFAULT_BUILDLOG_LINES, help="BUILDLOG tail lines (default 25)")
     parser.add_argument("--json", action="store_true", help="print one JSON object with the same sections")
     return parser
@@ -422,14 +503,17 @@ def main(argv=None) -> int:
     except Exception as exc:  # fail closed: never print a partial brief
         print(f"boot_state: brief unavailable: {exc}", file=sys.stderr)
         return 2
-    fence_bytes = len(fence_line.encode("utf-8"))
+    # First line: STATE.md size and the ACTIVE rotation stamp, then the fence line (if any).
+    prefix = state_header_line(repo) + "\n\n" + fence_line
     if args.json:
-        out = build_json(sections, args.max_bytes - fence_bytes)
+        out = build_json(sections, args.max_bytes, prefix)
         if fence_line:
             out = {"fence": fence_line.strip(), **out}
+        out = {"state_header": prefix.splitlines()[0], **out}
         sys.stdout.write(json.dumps(out, indent=2) + "\n")
     else:
-        sys.stdout.write(fence_line + render_brief(sections, args.max_bytes - fence_bytes))
+        prefix_bytes = len(prefix.encode("utf-8"))
+        sys.stdout.write(prefix + render_brief(sections, args.max_bytes - prefix_bytes))
     return 0
 
 

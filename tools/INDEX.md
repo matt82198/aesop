@@ -15,7 +15,7 @@ listed by adding an `INDEX: <one-liner>` line to its module docstring/header.
 - `bench_api_runner.py` -- Bench v2+v3 via Anthropic API (BENCH_API_KEY, API-only per bench-no-cli-fallback rule); reuses bench_runner machinery; CLI: `bench_api_runner.py <v2|v3|all> <model...>`
 - `bench_results_cache.py` -- Append-only benchmark results journal (state/bench-runs.jsonl); idempotent dedup by model+timestamp; stdlib-only
 - `bench_runner.py` -- Held-out benchmark runner + scorer (Haiku/Sonnet/Opus pluggable)
-- `boot_state.py` -- Canonical deterministic boot brief (GOAL from the event store, STATE.md ACTIVE block, BUILDLOG tail, event-store projections, git) with a byte cap; exit 2 when the store is unreadable.
+- `boot_state.py` -- Canonical deterministic boot brief (GOAL from the event store, STATE.md CHECKPOINT, NEXT STEPS, STANDING RULES LEARNED and ACTIVE sections with per-section budgets, BUILDLOG tail, event-store projections, git) with a 14 KB total cap; exit 2 when the store is unreadable.
 - `box_fence.py` -- Compares the checkout's BOX_PROTOCOL integer with origin's; fast-forwards a clean strictly-behind tree, FAILs (never resets) otherwise, WARNs offline with a push-time re-check marker.
 - `build_static_dash.py` -- Build a static, self-contained snapshot of the dashboard with demo data for GitHub Pages; starts demo server, captures API state, produces _site/ with fetch/EventSource shim; CLI: `--output DIR`
 - `buildlog.py` -- Uniform BUILDLOG.md appender (writes via state_store WriteAPI: entry also lands as buildlog_entry event)
