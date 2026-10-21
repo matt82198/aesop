@@ -499,7 +499,7 @@ Every hand-back carries all of these fields, in this order:
 - **Wall time:** start and end clock reads, UTC (from `python C:/Users/Mattt/scripts-wt/utc-now/utc_now.py`).
 - **Validation attempts:** count of local gate runs before the final one.
 - **First run passed:** yes or no.
-- **Discovery:** "What did you have to figure out that the contract didn't tell you?" One line per item, or `nothing`.
+- **Discovery:** "What did you have to figure out that the contract didn't tell you?" One line per item, or `nothing`. This answer is consequence-free: it never triggers a retro, never counts toward any threshold or ledger score, and never blocks or passes the hand-back or the PR. It is read only later, across many hand-backs, to find contract sentences that are missing. `nothing` is a fine answer.
 - **Failures:** one line per validation failure, tagged `{code, environment-or-CI, flaky, contract-ambiguous}`, with the failing line.
 - **Hook denials:** each hook denial verbatim, or `none`.
 - **Unpushed:** `Unpushed: none`, or one `Unpushed: <branch> <sha>` line per unpushed branch (Ordering rule 4).
