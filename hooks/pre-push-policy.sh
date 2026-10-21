@@ -2433,6 +2433,13 @@ run_test_mode() {
   local tmpdir
   tmpdir=$(mktemp -d)
   trap "rm -rf '$tmpdir'" EXIT
+  # Resolve the repo root while the cwd is still the caller's: BASH_SOURCE can be relative.
+  local test_hook_root
+  test_hook_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+  # Run the fixtures from a directory that is NOT an aesop checkout. resolve_aesop_root lets an
+  # aesop git toplevel (tools/) win over AESOP_ROOT, so a cwd inside the real checkout would send
+  # the audit-log fixtures (Tests 3, 8-11) into that checkout's state/ instead of $tmpdir.
+  cd "$tmpdir" || exit 1
 
   printf '\n=== Test 1: Branch policy check ===\n'
   (
@@ -3382,7 +3389,7 @@ GENPATHS
 
   printf '\n=== Test 29: check_symbol_survival BLOCKS a merge that drops a branch symbol (main as first parent), passes a clean push ===\n'
   (
-    sym_real_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+    sym_real_root="$test_hook_root"
     sym_aesop_root="$tmpdir/symbol_survival_aesop"
     rm -rf "$sym_aesop_root"
     mkdir -p "$sym_aesop_root/tools"
