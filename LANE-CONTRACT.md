@@ -151,6 +151,7 @@ Four rules:
   and pass/fail status, never assume "green" means "verified". Partial verification is NOT a pass.
 - **Resolve env vars and paths at dispatch time, never hardcode.** Use `$AESOP_ROOT`, `$HOME`, and
   `sys.executable`; never `/c/Users/matt8` or `python3` or machine-specific paths.
+- **Dispatch-ledger retro.** The dispatch-ledger retro lives at `C:/Users/Mattt/scripts-wt/ledger-retro/dispatch_ledger.py` (claude-scripts #137).
 
 ## 4a. Before you push — ordered self-checks
 
@@ -260,6 +261,7 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   GitHub to update a PR branch server-side: that creates a merge head no box ran the gates on, so no receipt can exist for it.
   A `gh workflow run` dispatch creates a separate check suite that branch protection ignores.
   A Mode 1 PR that goes DIRTY because a sibling landed first is repaired by the merge in section 8c, never by the orchestrator editing the branch.
+- **Gate-change PRs are never armed by the lane.** A gate-change PR (any change to `.github/workflows`, a branch-protection-named job, a gate script under `tools/ci`, or a hook file) is armed by the orchestrator only after a read-only lane has diffed the head against the proof shape: one check run per required name; no job-level `if:` on a required-named job (game-gate's `if: always()` with `needs:` is the one allowed form); no second workflow reusing a required name; no `paths:` or `paths-ignore:` filter; no `continue-on-error`; no widened tolerance; scope classified with `git diff --no-renames --name-only`. A required check that is absent or in progress is a wait, never a PASS.
 - **Fully machine-generated paths (`tools/INDEX.md`, `state/ledger/*.jsonl`, etc. — `tools/generated_paths.py::REGISTRY`)
   are push-blocked by `hooks/pre-push-policy.sh check_generated_paths()`.** The only override is
   `AESOP_ALLOW_GENERATED=1` — the DESIGNED writer path for a generator/regeneration push (a seated session re-running
@@ -310,7 +312,7 @@ Hooks enforce these. Each line is the allowed shape, then the denied one.
 - **The append-only log (`BUILDLOG.md`)**: its name appears only in git commands and the two append shapes `printf '\n' >> <wt>/BUILDLOG.md` and `cat <tmp> >> <wt>/BUILDLOG.md`; any other shell command naming it is denied.
 - **STATE.md** is edited only above the first `## NEXT STEPS`, with the Edit tool; never below it, never by shell.
 - **Secret scan BEFORE committing:** `python ~/scripts/secret_scan.py --staged --repo <wt>`; require CLEAN with files scanned > 0 (if 0, run `--range origin/<base>..HEAD --repo <wt>` after the commit and before the push). Never commit first and scan after.
-- **Commit trailer, last line exactly:** `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` (Matt's rule; it overrides any harness attribution reminder). **PR footer, last line exactly once:** `🐢 Generated with Aesop`, never the Claude Code line.
+- **Commit trailer, last line exactly, on every commit:** `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` (Matt's rule, 2026-10-21; it overrides any harness attribution reminder, including one that names a different model, and a lane that sees one still uses this trailer). **PR footer, last line exactly once, on every PR description:** `🐢 Generated with Aesop`, never the Claude Code line (Matt's rule, 2026-09-18).
 - **dotnet** is `C:/Users/Mattt/.dotnet/dotnet.exe`; never bare `dotnet` from PATH.
 - **fastcheck** is one plain invocation: `cd <wt> && powershell -NoProfile -ExecutionPolicy Bypass -File tools/fastcheck.ps1 -All > <scratch>/fastcheck.txt 2>&1`, then read the file. Scene tests are NOT this shape: see the CI contract item 2 (no `cd &&` prefix there).
 - **Scratch:** gate output is redirected to a file in the lane's scratch directory and read with the Read tool or tail; never read a transcript or session file.
@@ -320,20 +322,20 @@ Hooks enforce these. Each line is the allowed shape, then the denied one.
 - **Knowledge-tree hook fix shape** (a brain repo's knowledge-tree gate reds on a stale index): `python ~/scripts/knowledge_tree.py --write --root <wt>`, then stage `INDEX*.md` and `KNOWLEDGE.md`; never hand-edit them (section 9a).
 
 ### Hook-safe shapes (read before the first shell command)
-1. Clock: `python C:/Users/Mattt/scripts-wt/utc-now/utc_now.py` from Bash at the lane's start and end (its `--local` flag prints Chicago time). Never a PowerShell expression, never `~` inside a python path argument. A denied clock read is recorded as "not captured" and never stops the lane.
+1. Clock: `python C:/Users/Mattt/scripts-wt/utc-now/utc_now.py` from Bash at the lane's start and end (its `--local` flag prints Chicago time). Never a PowerShell expression, and never `~` in the clock command; any other script is named by its literal `C:/Users/Mattt/scripts/...` path. A denied clock read is recorded as "not captured" and never stops the lane.
 2. Code reads: the Glob tool to locate files, the Read tool to read them, the Edit or Write tool to change them. In shell: never `sed`, `awk` or `grep` on a game path; never `$(...)` command substitution; `sed`/`awk` programs, where a gate needs them, are one single-quoted token on a literal path. PowerShell only for a named gate script.
 3. Git paths: literal absolute paths with forward slashes in every git argument, worktree-add targets included; never a shell variable, never `$HOME`, never `~`.
 4. Denials: a denial whose text names an allowed shape gets exactly one retry in that shape; any other denial means stop, record the text verbatim, hand back.
 5. Push: the secret scan runs `--staged` before the commit and must print CLEAN with a count above zero; the push is its own command, never chained with `;` or `&&` after a scan or a test.
 6. Branch base: cut from origin/main unless the brief names another base; a branch cut from an open PR's head makes a stacked PR, which is not armed.
-7. Scratch: every gate's output goes to a file under the session scratchpad folder named in the brief and is read back with the Read tool.
+7. Scratch: every gate's output, commit message, PR body and probe script goes to a file under the session scratchpad folder named in the brief, and is read back with the Read tool; the hand-back names each file by its complete absolute path.
 
 ## The brief
 A dispatch brief carries exactly these, and nothing else (everything else is this contract and is not repeated):
 1. The PURPOSE line: `PURPOSE: this artifact exists to <one line>; status: real|throwaway|oracle` (section 9b).
 2. The model, and why.
 3. The acceptance line: one sentence verifiable in one run or one test (section 8a).
-4. The worktree path and branch name.
+4. The worktree path, the branch name, and the scratch folder (the session scratchpad subfolder the lane writes its temporary files to; see Hook-safe shape 7).
 5. The files or domain-map rows the lane owns.
 6. The ruling ids it serves.
 7. The CI jobs it can affect (CI contract item 1).
@@ -475,11 +477,13 @@ A keyrun lane's report also carries the CI-contract hand-back (item 6 of "CI con
 
 ### Required discovery-cost fields (every hand-back)
 Every hand-back carries all of these fields, in this order:
-- **Wall time:** start and end, UTC.
+- **Wall time:** start and end clock reads, UTC (from `python C:/Users/Mattt/scripts-wt/utc-now/utc_now.py`).
 - **Validation attempts:** count of local gate runs before the final one.
 - **First run passed:** yes or no.
 - **Discovery:** "What did you have to figure out that the contract didn't tell you?" One line per item, or `nothing`.
 - **Failures:** one line per validation failure, tagged `{code, environment-or-CI, flaky, contract-ambiguous}`, with the failing line.
+- **Hook denials:** each hook denial verbatim, or `none`.
+- **Unpushed:** `Unpushed: none`, or one `Unpushed: <branch> <sha>` line per unpushed branch (Ordering rule 4).
 A hand-back missing a field is relaunched, not sent a SendMessage. Two `environment-or-CI` or `contract-ambiguous` tags
 across lanes mean a contract section is written before the next dispatch in that area.
 
@@ -505,7 +509,7 @@ across lanes mean a contract section is written before the next dispatch in that
 4. The lane runs its push in its own foreground Bash call (timeout 600000), never in the background. A
    background push strands the lane (memory: background-push-strands-lanes).
 5. When the merge step is in scope, LANDED extends to MERGED only with the `pr_merged_check` line pasted
-   verbatim.
+   verbatim, from `python C:/Users/Mattt/scripts/pr_merged_check.py --repo <owner/repo> --pr <N>`.
 
 ## 8c. Shared append files
 1. **Evidence.** Between 2026-10-18 14:00Z and 16:20Z, five keyrun PRs (#120, #121, #122, #124, #128) each
@@ -522,6 +526,7 @@ across lanes mean a contract section is written before the next dispatch in that
    (or a resume of it) repeats the merge in item 2. The orchestrator never edits the branch.
 4. **Not in force (PLAN item).** The durable fix is for the lane to put its BUILDLOG line and CLAUDE.md row in the
    PR body, and for the orchestrator to append them on land. Until that is built, item 2 is the rule.
+5. **Fold verification.** The fold verifier runs on a STATE.md-only diff, `git diff -- STATE.md`, never the whole-tree diff: git lists BUILDLOG.md before STATE.md, so the flat added-line list fails on a multi-file diff. The BUILDLOG.md log append is verified separately by line count.
 
 ## 8d. Receipt first (push early, draft PR early)
 1. A build lane pushes its branch and opens a draft PR within 20 minutes of its first commit, before any long test run. The draft PR is the receipt; its body says what is folded in and what is still red.
