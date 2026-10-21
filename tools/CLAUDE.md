@@ -6,6 +6,8 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 - In worktrees use ABSOLUTE paths under the worktree for every write; redaction and path-handling code must genericize over Windows profile names (use `[A-Za-z0-9_]+` regex, not hardcoded) so checkout works across shared boxes.
 - Domain docs stay minimal-but-complete; update this file in the same PR as code it describes.
 
+- **map_lookup.js** (`aesop map <term...>`, Node stdlib): searches only INDEX.md and CLAUDE.md entry lines under the repo root (plus `--root DIR`); prints `path: one-liner` rows, max 30; a miss exits 0 with the Discovery fallback message. Tests: `tests/map-lookup.test.mjs`.
+
 ## Core invariants
 - **Never print secrets**: mask as pattern name + masked value only; NEVER output raw credentials/tokens.
 - **AESOP_STATE_ROOT**: all heartbeat/ledger/logs use `AESOP_STATE_ROOT` env var (default `./state`) or CLI args; no hardcoded personal paths.
