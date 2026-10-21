@@ -31,6 +31,10 @@ An iteration counts only when it leaves receipts that a gate can check. A lane t
 
 Blue boxes ship in the npm package. Yellow boxes are yours to provide. Grey dashed boxes are examples that show one way to structure the system.
 
+![Kernel boundary](https://raw.githubusercontent.com/matt82198/aesop/main/docs/img/kernel-boundary.svg)
+
+<details><summary>Mermaid source</summary>
+
 ```mermaid
 flowchart LR
   subgraph YOU["You provide (not in the package)"]
@@ -71,6 +75,8 @@ flowchart LR
   class R,B,M,K yours
   class X example
 ```
+
+</details>
 
 ### The kernel and what you fill in
 

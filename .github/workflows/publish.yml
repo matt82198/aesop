@@ -67,6 +67,10 @@ jobs:
           echo "  5. Save (takes ~30s to propagate)"
           echo "See full docs: https://docs.npmjs.com/trusted-publishers"
 
+      - name: README mermaid gate (no bare fence ships to npm)
+        run: |
+          python3 tools/readme_lint.py
+
       - name: Publish to npm with OIDC
         # No NODE_AUTH_TOKEN: trusted publishing authenticates via the OIDC
         # id-token (permissions.id-token: write above). Setting an empty token
