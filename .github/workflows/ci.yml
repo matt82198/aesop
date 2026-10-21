@@ -302,6 +302,10 @@ jobs:
         run: python tools/workflow_model_linter.py
 
 
+      - name: README mermaid gate (npm-safe diagram)
+        if: matrix.python-shard == 0
+        run: python tools/readme_lint.py
+
       - name: Documented gates wiring check (Guardrail G2.6)
         if: matrix.python-shard == 0
         run: python tools/verify_gates_wired.py
