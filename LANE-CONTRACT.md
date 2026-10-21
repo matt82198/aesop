@@ -15,6 +15,25 @@ and the brief shape is in "The brief", both below.
 Every dispatch brief should POINT here rather than restate it. Below is what was learned the
 expensive way during aesop development. Each line exists because a lane failed without it.
 
+## Ordering: write before act, one source per fact
+Matt 2026-10-21, verbatim: "write before act, one source per fact." The failures are missing linearization, not bad
+actors: each component acts on its own snapshot of the truth, and a task that crosses several snapshots fails.
+Four rules:
+
+1. **Intent becomes a write first.** When intent changes, it lands in this file (or the repo CLAUDE.md row) before any
+   dispatch acts on it. No dispatch runs against a rule this file does not state yet. Shape: a ruling is an Edit to this
+   file in a worktree PR; until that PR is on origin/main, the brief quotes the exact text and says it is pending.
+2. **One source per fact.** A PR head comes from `git ls-remote origin refs/heads/<branch>`, not from gh; gh is used for
+   check state on that sha and for MERGED. A live hook comes from the ~/.claude checkout
+   (`git -C C:/Users/Mattt/.claude rev-parse HEAD`), not from a merged PR.
+3. **Arm last.** Auto-merge goes on only after the final push to a branch. Nothing pushes to an armed branch. Shape: the
+   arm is the last command of a lane (section 6). A lane that must push after arming runs
+   `gh pr merge <N> --repo <o/r> --disable-auto` on its own arm, pushes, then re-arms with
+   `gh pr merge <N> --repo <o/r> --squash --auto --match-head-commit <new sha>`; or it uses a new branch.
+   An arm Matt enabled is never disarmed.
+4. **No hidden local state at a compaction boundary.** Either everything is pushed, or the checkpoint and the compaction
+   summary name the unpushed shas by branch. Shape: `Unpushed: <branch> <sha>` lines, or the single line `Unpushed: none`.
+
 ## 1. Evidence, not narration
 - **Run every command you report. Never describe what a command "would" do.** "Would fail",
   "proven by the assertion path", "test logic shows failure" are all REJECTED. Paste literal output.
@@ -206,8 +225,9 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
 ## 6. Boundaries
 - **Merge authority: a lane never runs a merge that completes immediately.** No bare `gh pr merge`, never `--admin`,
   and never hand-resolving branch protection. The repo selects the landing mode; the lane does not choose it.
-  - **Mode 1 - repos WITH required CI checks (aesop, keyrun).** The lane pushes, opens the PR, and ARMS native
-    auto-merge once the PR is ready (never a draft) and its head sha is the final diff, pinned to the tested head:
+  - **Mode 1 - repos WITH required CI checks (aesop, keyrun).** The lane makes its final push, opens or readies the PR,
+    and ARMS native auto-merge only AFTER that final push (Ordering rule 3), never before it and never on a draft,
+    pinned to the tested head:
     `gh pr merge <N> --repo <o/r> --squash --auto --match-head-commit <full head sha>`. The lane takes one
     foreground `gh pr checks <N>` snapshot (exit 8 = pending) and stops. The merge actor is GitHub: it merges once
     the required checks pass. The orchestrator verifies `state == MERGED` with
@@ -219,7 +239,7 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   - **Draft-then-arm order (supersedes "at PR open" for draft PRs), in this order:**
     1. Open the PR as a draft at the first commit; this draft is the receipt.
     2. Run `gh pr ready <N>` only when the lane's own checks are green locally.
-    3. Arm auto-merge immediately after marking ready: `gh pr merge <N> --repo <o/r> --squash --auto --match-head-commit <full head sha>`.
+    3. Arm auto-merge after the final push, as the last command: `gh pr merge <N> --repo <o/r> --squash --auto --match-head-commit <full head sha>`.
     Draft state is never an excuse to skip arming once the PR is ready.
   - **`--auto` means "merge when requirements are met".** With no required checks pending it merges immediately at arm
     time. So arm only after `gh pr ready` and the head sha is the final diff; `--match-head-commit <full head sha>` is
@@ -435,12 +455,24 @@ frames, launches, timeout) changed, as old -> new; (c) the PR head sha (`gh pr v
   shown as literal output); the PR number and MERGED state are confirmed via `gh pr view --json state`.
   **"Remaining work: ..." in a final report means the lane FAILED** — say so plainly and stop, do not
   soften it into "mostly done".
+- **A hand-back without the required discovery-cost fields (section 8) is not DONE.** The lane is relaunched with the
+  same brief.
 
 ## 8. Report format
 Causal chain with `file:line` | gate output (literal) | the anti-vacuity run as literal output
 | gate counts | PR number | MERGED-state proof | worktree removed | **anything you refused to decide silently**.
 Lead the report with the ACCEPTANCE observable (section 8a), before the check list.
 A keyrun lane's report also carries the CI-contract hand-back (item 6 of "CI contract (keyrun)"): local gate lines verbatim, expected `game-e2e` wall time if a scene budget changed, and the PR head sha the arm matches.
+
+### Required discovery-cost fields (every hand-back)
+Every hand-back carries all of these fields, in this order:
+- **Wall time:** start and end, UTC.
+- **Validation attempts:** count of local gate runs before the final one.
+- **First run passed:** yes or no.
+- **Discovery:** "What did you have to figure out that the contract didn't tell you?" One line per item, or `nothing`.
+- **Failures:** one line per validation failure, tagged `{code, environment-or-CI, flaky, contract-ambiguous}`, with the failing line.
+A hand-back missing a field is relaunched, not sent a SendMessage. Two `environment-or-CI` or `contract-ambiguous` tags
+across lanes mean a contract section is written before the next dispatch in that area.
 
 ## 8a. Acceptance (done-per-user, not done-per-CI)
 1. Every lane brief carries an ACCEPTANCE line: the user's verbatim ask plus the single observable the user will check (a rendered page, a screenshot, a run's output, a command's exit).
