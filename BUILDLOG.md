@@ -796,3 +796,10 @@ The 0.7.1 release added a second corollary: a gate that exists is not a gate tha
 - BRANCH PROTECTION on master of claude-config, claude-scripts and conductor3: force-push and deletion disabled, applied by Matt. Receipt: gh api repos/matt82198/<repo>/branches/master/protection reports allow_force_pushes false and allow_deletions false on all three.
 - STILL OPEN, stated plainly: node-storm root cause is UNCONFIRMED. Aesop worktree backups are in progress. Box version fence is in progress.
 - WHY this is a demo: nothing was trusted from narration. Every recovered item is a ref, sha or merged PR that a gate can check: git ls-remote for refs, gh pr view for PR state, merge shas for merges, and the Incident-Class / Incident-Category trailers on the commit that records this incident.
+
+## 2026-10-20 ~00:00Z (21 Oct) Evening checkpoint: receipt landed, brain sync blocked
+- Keyrun #396 'integrate: playable dungeon (one PR)' is the deliverable: draft opened 2026-10-20T23:44Z at d9cb7c2b; folds #308 #388 #333 #369 #335 #244, reverts #325 #326 #344. WHY: one PR Matt can play (keyrun D10/D15).
+- Receipt-first contract: #1234 (section 8d) and #1235 (section 6 draft-then-arm) armed; MERGED state to be verified with gh, not assumed here. WHY: 2026-10-20 the integration lane ran 15h/154 commits unpushed before anyone noticed.
+- Brain sync BLOCKED on Matt: ~/.claude master 16 ahead 13 behind origin; 11 plans/*.md deleted in the working tree; keeper memory commits cannot push and hook PRs #196-#199 are not live until synced.
+- Needs Matt: BRAIN_READ_TOKEN secret, make trailer-gate required (claude-config), flyctl login, aesop #1177 bot PR, 116 aesop worktrees, keyrun idle branches, Smart App Control f-37ad66b3.
+- Open aesop PRs 2026-10-20: #1207 #1204 #1184 #1183 #1193 #1221 #1219 #1212 #1201; #1222 MERGED 00b9384; #1233 MERGED 80968248.
