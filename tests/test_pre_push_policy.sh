@@ -2611,6 +2611,200 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+# ===== Gate-base cache must never trust a pre-planted directory (item c730e29d46ea) =====
+# Threat: the base gate copy was cached at the predictable path $TMPDIR/aesop-gate-base-v4-<sha>
+# and reused whenever a .complete marker existed. Another local user on a shared host can
+# plant that directory with a poisoned tools/; every gate would then run their code.
+printf '\n=== Test: a pre-planted gate-base cache dir (predictable name + .complete) is never used ===\n'
+(
+  export TMPDIR="$TEST_ROOT/planted_tmp"
+  mkdir -p "$TMPDIR"
+  clone="$TEST_ROOT/planted_clone"
+  make_clone_with_base "$clone" "$REPO_ROOT/tools"
+  base_sha=$(git -C "$clone" rev-parse --verify -q "origin/main^{commit}") || exit 1
+  planted="$TMPDIR/aesop-gate-base-v4-$base_sha"
+  mkdir -p "$planted/tools"
+  : > "$planted/.complete"
+  printf 'print("CLEAN: poisoned gate")\n' > "$planted/tools/secret_scan.py"
+  pristine="$TEST_ROOT/planted_pristine_scan.py"
+  git -C "$clone" show "$base_sha:tools/secret_scan.py" > "$pristine" || exit 1
+  got=$(cd "$clone" && gate_base_dir 2>/dev/null) || { printf 'FAIL: gate_base_dir failed\n'; exit 1; }
+  if [ "$got" = "$planted" ]; then
+    printf 'FAIL: gate_base_dir returned the pre-planted directory: %s\n' "$got"
+    exit 1
+  fi
+  if ! cmp -s "$got/tools/secret_scan.py" "$pristine"; then
+    printf 'FAIL: base gate copy %s is not the trunk tools/secret_scan.py\n' "$got"
+    exit 1
+  fi
+  printf 'PASS: pre-planted cache ignored; base gate copy is the trunk content (%s)\n' "$got"
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test: the base gate copy is still cached (second call reuses the same verified dir) ===\n'
+(
+  export TMPDIR="$TEST_ROOT/cache_reuse_tmp"
+  mkdir -p "$TMPDIR"
+  clone="$TEST_ROOT/cache_reuse_clone"
+  make_clone_with_base "$clone" "$REPO_ROOT/tools"
+  first=$(cd "$clone" && gate_base_dir 2>/dev/null) || { printf 'FAIL: first gate_base_dir failed\n'; exit 1; }
+  second=$(cd "$clone" && gate_base_dir 2>/dev/null) || { printf 'FAIL: second gate_base_dir failed\n'; exit 1; }
+  if [ -z "$first" ] || [ "$first" != "$second" ]; then
+    printf 'FAIL: cache not reused: first=%s second=%s\n' "$first" "$second"
+    exit 1
+  fi
+  if [ ! -f "$second/tools/secret_scan.py" ]; then
+    printf 'FAIL: reused base copy lacks tools/secret_scan.py: %s\n' "$second"
+    exit 1
+  fi
+  printf 'PASS: base gate copy reused across calls (%s)\n' "$second"
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+# ===== A losing push must never delete the cache slot it does not own (item c730e29d46ea race) =====
+# Race: a push that finds the cache slot occupied by a directory without .complete used to rm -rf
+# it, which can delete a copy another hook is reading. Such a push must leave the slot untouched
+# and extract privately. The sentinel file stands in for that reader.
+printf '\n=== Test: a losing push never rm -rf the cache slot it does not own ===\n'
+(
+  export TMPDIR="$TEST_ROOT/race_tmp"
+  mkdir -p "$TMPDIR"
+  clone="$TEST_ROOT/race_clone"
+  make_clone_with_base "$clone" "$REPO_ROOT/tools"
+  base_sha=$(git -C "$clone" rev-parse --verify -q "origin/main^{commit}") || exit 1
+  slot="$TMPDIR/aesop-gate-base-v5-$(id -u)-$base_sha"
+  mkdir -p "$slot/tools"
+  printf 'reader in use\n' > "$slot/in-use.marker"
+  got=$(cd "$clone" && gate_base_dir 2>/dev/null) || { printf 'FAIL: gate_base_dir failed\n'; exit 1; }
+  if [ ! -f "$slot/in-use.marker" ]; then
+    printf 'FAIL: the cache slot was deleted by a push that does not own it: %s\n' "$slot"
+    exit 1
+  fi
+  if [ "$got" = "$slot" ]; then
+    printf 'FAIL: returned the slot that was not complete and not ours: %s\n' "$got"
+    exit 1
+  fi
+  if ! git -C "$clone" show "origin/main:tools/secret_scan.py" | cmp -s - "$got/tools/secret_scan.py"; then
+    printf 'FAIL: private base copy %s is not the trunk tools/secret_scan.py\n' "$got"
+    exit 1
+  fi
+  printf 'PASS: occupied slot left intact; private trunk extraction used (%s)\n' "$got"
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Backup-ref scope: crash-backup refs skip metrics + test-coverage gates ONLY ===\n'
+(
+  # End-to-end through main(): metrics_gate.py and verify_test_coverage.py are
+  # stubbed to FAIL; secret_scan.py is stubbed per-case. Everything else passes.
+  export AESOP_ROOT="$TEST_ROOT/aesop_backup_ref"
+  export AESOP_RECEIPT_EMIT=0  # receipt gate is out of scope here (documented opt-out)
+  mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+  printf '{"violations": {}}\n' > "$AESOP_ROOT/.subprocess-guard-baseline.json"
+  py_bin="python3"
+  command -v python3 >/dev/null 2>&1 || py_bin="python"
+  for gate_stub in $("$py_bin" "$(dirname "$HOOK_SCRIPT")/../tools/gate_stub_list.py" "$HOOK_SCRIPT" | tr -d '\r'); do
+    printf 'import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/$gate_stub.py"
+  done
+  printf '#!/usr/bin/env python3
+import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/secret_scan.py"
+  chmod +x "$AESOP_ROOT/tools/secret_scan.py"
+  printf 'import sys\nprint("unverified metric")\nsys.exit(1)\n' > "$AESOP_ROOT/tools/metrics_gate.py"
+  printf 'import sys\nprint("orphaned test")\nsys.exit(1)\n' > "$AESOP_ROOT/tools/verify_test_coverage.py"
+
+  BREPO="$TEST_ROOT/aesop_backup_ref_repo"
+  # Gate scripts are extracted from origin/main and check_secret_scan needs the
+  # tracked exec bit (mode 755), which a plain `git add` loses on this box.
+  bpublish() {
+    publish_base_tools "$BREPO" "$AESOP_ROOT/tools"
+    git -C "$BREPO.base" update-index --chmod=+x tools/secret_scan.py
+    git -C "$BREPO.base" -c user.email=t@example.com -c user.name=t commit -q --amend --no-edit
+    git -C "$BREPO" fetch -q origin main
+  }
+  mkdir -p "$BREPO"
+  (
+    cd "$BREPO" || exit 1
+    git init -q
+    git config user.email t@example.com
+    git config user.name t
+    echo x > f.txt
+    git add f.txt
+    git commit -q -m init
+    git checkout -q -b feature/x
+  )
+  bpublish
+  BSHA=$(git -C "$BREPO" rev-parse HEAD)
+  BZERO=0000000000000000000000000000000000000000
+
+  run_push() { # <remote-ref>... -> sets PUSH_RC / PUSH_ERR
+    local tuples="" r
+    for r in "$@"; do tuples+="refs/heads/feature/x $BSHA $r $BZERO"$'\n'; done
+    PUSH_ERR=$( { printf '%s' "$tuples" | ( cd "$BREPO" && bash "$HOOK_SCRIPT" ); } 2>&1 1>/dev/null )
+    PUSH_RC=$?
+  }
+  fail() { printf 'FAIL: %s\n(rc=%s) stderr: %s\n' "$1" "${PUSH_RC:-}" "${PUSH_ERR:-}"; exit 1; }
+
+  # Control: a normal feature-branch push IS blocked by the failing gates.
+  run_push refs/heads/feature/y
+  [ "$PUSH_RC" -ne 0 ] || fail "control: feature push should be blocked by the failing metrics gate"
+
+  run_push refs/heads/backup/crash-2026-10-20/common-state-root
+  [ "$PUSH_RC" -eq 0 ] || fail "backup ref push should skip metrics+coverage gates and pass"
+  printf '%s' "$PUSH_ERR" | grep -q 'metrics' || fail "no stderr skip line naming the metrics gate"
+  printf '%s' "$PUSH_ERR" | grep -q 'test_coverage' || fail "no stderr skip line naming the coverage gate"
+  printf '%s' "$PUSH_ERR" | grep -q 'refs/heads/backup/crash-2026-10-20/common-state-root' || fail "skip line must name the ref"
+  grep -q 'gate_skipped_backup_ref' "$AESOP_ROOT/state/SECURITY-AUDIT.log" || fail "skip not appended to audit log"
+
+  # Non-matching refs still run (and are blocked by) the gates.
+  for r in refs/heads/main refs/heads/backup-x/crash-2026-10-20/a refs/heads/backupcrash-2026-10-20/a \
+           refs/heads/backup/crash-2026-10-20 refs/heads/backup/crash-2026-10-20/ \
+           refs/heads/backup/crash-2026-1-20/a refs/heads/backup/crash-2026-10-20/a/b \
+           refs/heads/backup/crash-2026-10-20/a:b refs/tags/backup/crash-2026-10-20/a \
+           refs/heads/xbackup/crash-2026-10-20/a refs/heads/backup/crash-2026-10-20/a..b ; do
+    run_push "$r"
+    [ "$PUSH_RC" -ne 0 ] || fail "non-backup ref $r must still run the gates"
+  done
+
+  # Mixed push (backup + non-backup) runs all gates.
+  run_push refs/heads/backup/crash-2026-10-20/a refs/heads/feature/y
+  [ "$PUSH_RC" -ne 0 ] || fail "mixed push must run all gates"
+
+  # Secret scan STILL runs on backup refs.
+  printf '#!/usr/bin/env python3
+import sys\nprint("SECRET")\nsys.exit(1)\n' > "$AESOP_ROOT/tools/secret_scan.py"
+  chmod +x "$AESOP_ROOT/tools/secret_scan.py"
+  bpublish
+  run_push refs/heads/backup/crash-2026-10-20/a
+  [ "$PUSH_RC" -ne 0 ] || fail "secret scan must still block backup refs"
+
+  # Malformed tuple (3 fields) on a backup-looking ref fails closed (no skip).
+  printf '#!/usr/bin/env python3
+import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/secret_scan.py"
+  chmod +x "$AESOP_ROOT/tools/secret_scan.py"
+  bpublish
+  PUSH_ERR=$( { printf 'refs/heads/feature/x %s refs/heads/backup/crash-2026-10-20/a\n' "$BSHA" | ( cd "$BREPO" && bash "$HOOK_SCRIPT" ); } 2>&1 1>/dev/null )
+  PUSH_RC=$?
+  [ "$PUSH_RC" -ne 0 ] || fail "malformed tuple must fail closed"
+
+  printf 'PASS: backup-ref scope skips only metrics+coverage; other/mixed/secret/malformed stay gated\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Test Summary ===\n'
 printf 'Tests PASSED: %d\n' "$test_passed"
 printf 'Tests FAILED: %d\n' "$test_failed"

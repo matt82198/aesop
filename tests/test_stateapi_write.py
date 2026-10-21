@@ -719,5 +719,45 @@ class WriteAPIProjectionRecoveryTest(unittest.TestCase):
         self.assertIn(item1["id"], recovered_ids)
 
 
+class WriteAPIRetryAfterConflictTest(unittest.TestCase):
+    """Retrying tracker_append_item after WriteConflict must not duplicate the item (11bececf532c)."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.state_dir = Path(self.temp_dir.name)
+        self.api = WriteAPI(self.state_dir)
+
+    def tearDown(self):
+        self.api.close()
+        self.temp_dir.cleanup()
+
+    def test_retry_after_writeconflict_does_not_duplicate_item(self):
+        """The item event is durable before the render raises WriteConflict; the
+        caller retries exactly as the docstring instructs (same dict, no id). The
+        projection must contain the item exactly once."""
+        real_render = self.api._render_tracker_atomic
+        calls = {"n": 0}
+
+        def conflict_once(store, start_disk_hash=None, force=False):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise WriteConflict(expected_hash=None, actual_hash=None,
+                                    reason="simulated concurrent write")
+            return real_render(store, start_disk_hash=start_disk_hash, force=force)
+
+        item_dict = {"title": "Retry me", "priority": "P2", "lane": "proposed"}
+        self.api._render_tracker_atomic = conflict_once
+        try:
+            with self.assertRaises(WriteConflict):
+                self.api.tracker_append_item(dict(item_dict), actor="test-actor")
+            self.api.tracker_append_item(dict(item_dict), actor="test-actor")
+        finally:
+            self.api._render_tracker_atomic = real_render
+
+        tracker = json.loads((self.state_dir / "tracker.json").read_text(encoding="utf-8"))
+        matches = [i for i in tracker["items"] if i["title"] == "Retry me"]
+        self.assertEqual(len(matches), 1, f"expected one 'Retry me' item, found {len(matches)}")
+
+
 if __name__ == "__main__":
     unittest.main()

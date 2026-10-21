@@ -423,5 +423,25 @@ class TestItem4GenericHeuristics(unittest.TestCase):
         self.assertNotIn("generic_credential_assignment", _all_rules(findings))
 
 
+class TestCredentialValueRegexShape(unittest.TestCase):
+    """A generic_credential_assignment whose value is a regex literal (a regex class
+    escape or group opener plus a quantifier, as in a scanner's own pattern table) is
+    not a credential. A real-looking value with no regex syntax is still fatal."""
+
+    def test_regex_literal_assignment_is_clean(self):
+        line = _j("TOKEN_KEY = \"(?i)token", r"\s*[:=]\s*\S{8,}" + "\"\n")
+        findings = scan_blob("tools/pattern_table.py", line.encode())
+        self.assertNotIn("generic_credential_assignment", _all_rules(findings))
+
+    def test_real_looking_quoted_credential_is_still_fatal(self):
+        findings = scan_blob("app.py", _j("DB_PASSWORD = \"Zq8v", "Hunter", "2prod\"\n").encode())
+        self.assertIn("generic_credential_assignment", _fatal_rules(findings))
+
+    def test_real_looking_credential_with_backslash_is_still_fatal(self):
+        """Control: a backslash that is not a regex class escape does not excuse a value."""
+        findings = scan_blob("app.py", _j("API_KEY=ab3", "\\", "qZ9xk3Wp7Lm\n").encode())
+        self.assertIn("generic_credential_assignment", _fatal_rules(findings))
+
+
 if __name__ == "__main__":
     unittest.main()

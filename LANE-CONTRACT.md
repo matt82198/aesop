@@ -8,8 +8,31 @@ fail to specify?"** Amend this file, then dispatch a FRESH lane. Corrections sen
 die with it and teach nothing; a contract amendment compounds forever. Failures are cheap when
 lanes are Haiku and stateless — so fail fast, fix the contract, re-run.
 
+**Read first:** this contract supersedes any session LANE-RULES file (for example a scratchpad `LANE-RULES-<time>.md`);
+where they differ, this file wins. The shell and hook shapes are in "Shell and hook shapes (every lane, every repo)"
+and the brief shape is in "The brief", both below.
+
 Every dispatch brief should POINT here rather than restate it. Below is what was learned the
 expensive way during aesop development. Each line exists because a lane failed without it.
+
+## Ordering: write before act, one source per fact
+Matt 2026-10-21, verbatim: "write before act, one source per fact." The failures are missing linearization, not bad
+actors: each component acts on its own snapshot of the truth, and a task that crosses several snapshots fails.
+Four rules:
+
+1. **Intent becomes a write first.** When intent changes, it lands in this file (or the repo CLAUDE.md row) before any
+   dispatch acts on it. No dispatch runs against a rule this file does not state yet. Shape: a ruling is an Edit to this
+   file in a worktree PR; until that PR is on origin/main, the brief quotes the exact text and says it is pending.
+2. **One source per fact.** A PR head comes from `git ls-remote origin refs/heads/<branch>`, not from gh; gh is used for
+   check state on that sha and for MERGED. A live hook comes from the ~/.claude checkout
+   (`git -C C:/Users/Mattt/.claude rev-parse HEAD`), not from a merged PR.
+3. **Arm last.** Auto-merge goes on only after the final push to a branch. Nothing pushes to an armed branch. Shape: the
+   arm is the last command of a lane (section 6). A lane that must push after arming runs
+   `gh pr merge <N> --repo <o/r> --disable-auto` on its own arm, pushes, then re-arms with
+   `gh pr merge <N> --repo <o/r> --squash --auto --match-head-commit <new sha>`; or it uses a new branch.
+   An arm Matt enabled is never disarmed.
+4. **No hidden local state at a compaction boundary.** Either everything is pushed, or the checkpoint and the compaction
+   summary name the unpushed shas by branch. Shape: `Unpushed: <branch> <sha>` lines, or the single line `Unpushed: none`.
 
 ## 1. Evidence, not narration
 - **Run every command you report. Never describe what a command "would" do.** "Would fail",
@@ -29,6 +52,10 @@ expensive way during aesop development. Each line exists because a lane failed w
 - **Anti-vacuity is mandatory and is proven by REMOVING the fix and RUNNING the suite** — paste the
   failure, restore, paste the pass. Not by reasoning. If removing the fix does NOT redden it, the
   test is vacuous: say so and rewrite it.
+- **The red for a new pure symbol is taken on a stub.** When the red test references a symbol that does not exist
+  on main, the test cannot compile on main. The lane declares the symbol on its branch as a stub whose body returns the
+  wrong answer, records the red output with the assertion failing, then implements. A compile error is not a red test.
+  *Why: a compile error shows the symbol is missing, not that the assertion checks behaviour, so the receipt must show the assertion failing.*
 - Verify the suite is COUNTED: executed == declared, 0 dormant, total up by the number you added.
 - **A test must EXERCISE BEHAVIOUR, never grep source text.** Asserting that a file *contains*
   `foo:Bar()` — or does not contain `foo.Bar()` — is not a test: it passes on a match inside a
@@ -108,6 +135,10 @@ expensive way during aesop development. Each line exists because a lane failed w
   "origin/HEAD" here means the repo's default branch (origin/HEAD; main for aesop/keyrun/psinasty, master for the brain repos). Resolve it with `git symbolic-ref refs/remotes/origin/HEAD`; never hard-code the branch name.
   Exit the primary tree unchanged. Check `git branch --show-current` immediately after creating the
   worktree; if empty (detached HEAD), create a branch first.
+- **Worktree path collision: stop and hand off.** If the worktree path already exists, or the branch is already checked
+  out in another worktree, the lane stops and hands off naming the occupant (its `git worktree list` line). It never
+  removes, reuses or re-targets the occupant and never picks a different path on its own; the orchestrator names a path
+  that `git worktree list` shows free. *Why: 2026-10-21 18:16Z keyrun-wt/pair-marks was occupied by an older branch, and the stop was correct.*
 - **Never git stash.** The stash is shared across worktrees; concurrent agents cross-contaminate WIP.
   Use `git diff > patch.diff && git checkout . && git apply patch.diff` instead.
 - **AESOP_STATE_ROOT**: all state files (heartbeat, logs, audit trail) use `$AESOP_STATE_ROOT` env var
@@ -128,6 +159,7 @@ expensive way during aesop development. Each line exists because a lane failed w
   and pass/fail status, never assume "green" means "verified". Partial verification is NOT a pass.
 - **Resolve env vars and paths at dispatch time, never hardcode.** Use `$AESOP_ROOT`, `$HOME`, and
   `sys.executable`; never `/c/Users/matt8` or `python3` or machine-specific paths.
+- **Dispatch-ledger retro.** The dispatch-ledger retro lives at `C:/Users/Mattt/scripts-wt/ledger-retro/dispatch_ledger.py` (claude-scripts #137).
 
 ## 4a. Before you push — ordered self-checks
 
@@ -202,12 +234,25 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
 ## 6. Boundaries
 - **Merge authority: a lane never runs a merge that completes immediately.** No bare `gh pr merge`, never `--admin`,
   and never hand-resolving branch protection. The repo selects the landing mode; the lane does not choose it.
-  - **Mode 1 - repos WITH required CI checks (aesop, keyrun).** The lane pushes, opens the PR, and ARMS native
-    auto-merge once at PR open, pinned to the tested head:
+  - **Mode 1 - repos WITH required CI checks (aesop, keyrun).** The lane makes its final push, opens or readies the PR,
+    and ARMS native auto-merge only AFTER that final push (Ordering rule 3), never before it and never on a draft,
+    pinned to the tested head:
     `gh pr merge <N> --repo <o/r> --squash --auto --match-head-commit <full head sha>`. The lane takes one
     foreground `gh pr checks <N>` snapshot (exit 8 = pending) and stops. The merge actor is GitHub: it merges once
     the required checks pass. The orchestrator verifies `state == MERGED` with
     `gh pr view <N> --json state,mergeCommit`; it does not poll or babysit the merge.
+    **Arm only when the base is the default branch.** Before arming, run `gh pr view <N> --json baseRefName`. If
+    `baseRefName` is the repo default branch, arm as above. A stacked PR (base is another PR's branch) is NOT armed:
+    GitHub would merge it into that unprotected parent with no CI run. The lane reports
+    `stacked on #N; retarget to main after #N merges` and stops.
+  - **Draft-then-arm order (supersedes "at PR open" for draft PRs), in this order:**
+    1. Open the PR as a draft at the first commit; this draft is the receipt.
+    2. Run `gh pr ready <N>` only when the lane's own checks are green locally.
+    3. Arm auto-merge after the final push, as the last command: `gh pr merge <N> --repo <o/r> --squash --auto --match-head-commit <full head sha>`.
+    Draft state is never an excuse to skip arming once the PR is ready.
+  - **`--auto` means "merge when requirements are met".** With no required checks pending it merges immediately at arm
+    time. So arm only after `gh pr ready` and the head sha is the final diff; `--match-head-commit <full head sha>` is
+    mandatory; never arm a draft. If a repo has no required checks, arming equals merging, and the lane states that in its report.
   - **Mode 2 - repos WITHOUT CI (claude-config, claude-scripts, conductor3, psinasty).** There is no required check
     to arm against, so the lane stops at PR open. It runs its gates in its worktree, pastes the literal output, and
     reports the PR number and the full head sha. The orchestrator lands it with one pinned
@@ -224,6 +269,7 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   GitHub to update a PR branch server-side: that creates a merge head no box ran the gates on, so no receipt can exist for it.
   A `gh workflow run` dispatch creates a separate check suite that branch protection ignores.
   A Mode 1 PR that goes DIRTY because a sibling landed first is repaired by the merge in section 8c, never by the orchestrator editing the branch.
+- **Gate-change PRs are never armed by the lane.** A gate-change PR (anything under `.github/workflows`, a tool that CI runs, a branch-protection-named job, or a hook file) is armed by the orchestrator only after a read-only lane has diffed the head against the proof shape: each required name posts exactly one check run that actually runs the step; docs-only pass-through proven by a check-run listing; no job-level `if:` on a required-named job (game-gate's `if: always()` with `needs:` is the one allowed form); no second workflow reusing a required name; no `paths:` or `paths-ignore:` filter; no `continue-on-error`; no widened tolerance; scope classified with `git diff --no-renames --name-only`. The orchestrator reads that verdict before arming. A required check that is absent or in progress is a wait, never a PASS.
 - **Fully machine-generated paths (`tools/INDEX.md`, `state/ledger/*.jsonl`, etc. — `tools/generated_paths.py::REGISTRY`)
   are push-blocked by `hooks/pre-push-policy.sh check_generated_paths()`.** The only override is
   `AESOP_ALLOW_GENERATED=1` — the DESIGNED writer path for a generator/regeneration push (a seated session re-running
@@ -266,6 +312,151 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   `run_in_background`, no detached/nohup process; backgrounding is not a lane capability.
 - **Hook probes never write the real resistance ledger.** Any manual run of a brain hook outside its test file sets `RESISTANCE_LEDGER=<temp file under the lane's worktree parent>` first (the override the hooks read, e.g. `main-context-ceiling.mjs`), so no row reaches `~/.claude/state/resistance-ledger.jsonl`. A probe that wrote the real ledger is reported in the hand-back.
 
+## Shell and hook shapes (every lane, every repo)
+Hooks enforce these. Each line is the allowed shape, then the denied one.
+- **Git paths are literal:** `git -C C:/Users/Mattt/Desktop/<repo>-wt/<lane> ...`; never a shell variable (`$X`, `${X}`) inside any git path, worktree-add targets included.
+- **File content is written with the Write tool** (edits with the Edit tool or a Python script file); never a heredoc (`python - <<EOF`, `cat <<EOF`), a here-string (`<<<`) or process substitution (`<( )`). No `sed` with `$` or a variable.
+- **Commit messages:** write the message with the Write tool, then `git commit -F <file>`; never `-m` with multi-line text. PR text: `gh pr edit --body-file <file>`, `gh pr comment --body-file <file>`.
+- **The append-only log (`BUILDLOG.md`)**: its name appears only in git commands and the two append shapes `printf '\n' >> <wt>/BUILDLOG.md` and `cat <tmp> >> <wt>/BUILDLOG.md`; any other shell command naming it is denied.
+- **STATE.md** is edited only above the first `## NEXT STEPS`, with the Edit tool; never below it, never by shell. The fold anchor and the STATE-only fold diff are in section 8c item 5.
+- **Secret scan BEFORE committing:** `python ~/scripts/secret_scan.py --staged --repo <wt>`; require CLEAN with files scanned > 0 (if 0, run `--range origin/<base>..HEAD --repo <wt>` after the commit and before the push). Never commit first and scan after.
+- **Commit trailer, last line exactly, on every commit:** `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` (Matt's rule, 2026-10-21; it overrides any harness attribution reminder, including one that names a different model, and a lane that sees one still uses this trailer). This applies to every lane regardless of the model it runs on; a harness reminder naming a different model does not change the trailer. *Why: 2026-10-21 a haiku lane wrote "Claude Haiku 5.5" because it read the bullet as ambiguous for non-Fable lanes.* **PR footer, last line exactly once, on every PR description:** `🐢 Generated with Aesop`, never the Claude Code line (Matt's rule, 2026-09-18).
+- **dotnet** is `C:/Users/Mattt/.dotnet/dotnet.exe`; never bare `dotnet` from PATH.
+- **fastcheck** is one plain invocation: `cd <wt> && powershell -NoProfile -ExecutionPolicy Bypass -File tools/fastcheck.ps1 -All > <scratch>/fastcheck.txt 2>&1`, then read the file. Scene tests are NOT this shape: see the CI contract item 2 (no `cd &&` prefix there).
+- **Scratch:** gate output is redirected to a file in the lane's scratch directory and read with the Read tool or tail; never read a transcript or session file.
+- **One compliant retry.** When a hook denial names an allowed shape, retry ONCE in exactly that shape. If it is denied again, or names no shape, STOP and report the denial text verbatim. Never try a third variant, never ask the orchestrator to run the denied command for you.
+- **Escape tokens are never used:** any `[[ALLOW-...]]` token, `AESOP_ALLOW_GENERATED=1` outside section 6's stated purpose, `--no-verify`, `core.hooksPath`, `--admin`, and any env var that turns a hook off.
+- **Never:** `git stash`; history rewrites (`--amend` on a pushed commit, `rebase`, `reset --hard`, force-push); the primary checkout as a working tree (only `fetch origin` and `worktree add <literal path>` run there); touching an auto-merge arm Matt enabled (`gh pr merge --disable-auto` on an armed PR); deleting a branch or a worktree. Push shape: `git -C <literal wt> push origin HEAD:<branch>`, in its own foreground call.
+- **Knowledge-tree hook fix shape** (a brain repo's knowledge-tree gate reds on a stale index): `python ~/scripts/knowledge_tree.py --write --root <wt>`, then stage `INDEX*.md` and `KNOWLEDGE.md`; never hand-edit them (section 9a).
+
+### Hook-safe shapes (read before the first shell command)
+1. Clock: `python C:/Users/Mattt/scripts-wt/utc-now/utc_now.py` from Bash at the lane's start and end (its `--local` flag prints Chicago time). Never a PowerShell expression, and never `~` in the clock command; any other script is named by its literal `C:/Users/Mattt/scripts/...` path. A denied clock read is recorded as "not captured" and never stops the lane.
+2. Code reads: the Glob tool to locate files, the Read tool to read them, the Edit or Write tool to change them. In shell: never `sed`, `awk` or `grep` on a game path; never `$(...)` command substitution; `sed`/`awk` programs, where a gate needs them, are one single-quoted token on a literal path. PowerShell only for a named gate script.
+3. Git paths: literal absolute paths with forward slashes in every git argument, worktree-add targets included; never a shell variable, never `$HOME`, never `~`.
+4. Denials: a denial whose text names an allowed shape gets exactly one retry in that shape; any other denial means stop, record the text verbatim, hand back.
+5. Push: the secret scan runs `--staged` before the commit and must print CLEAN with a count above zero; the push is its own command, never chained with `;` or `&&` after a scan or a test.
+6. Branch base: cut from origin/main unless the brief names another base; a branch cut from an open PR's head makes a stacked PR, which is not armed.
+7. Scratch: every gate's output, commit message, PR body and probe script goes to a file under the session scratchpad folder named in the brief, and is read back with the Read tool; the hand-back names each file by its complete absolute path.
+8. Worktree npm and npx: `cd` does not persist across tool calls, so run vitest and npx as one command, `cd <wt> && npx vitest run ...`, and in a fresh worktree run `cd <wt> && npm ci --no-audit --no-fund` first. The scene-test exception in the CI contract (item 2, no `cd &&` prefix) still applies to scene runs. This shape is for npm, npx and vitest only; scene tests keep their no-`cd &&` shape, and the two rules do not conflict. *Why: 2026-10-21 two false vitest failures came from running in the wrong cwd.*
+
+## The brief
+A dispatch brief carries exactly these, and nothing else (everything else is this contract and is not repeated):
+1. The PURPOSE line: `PURPOSE: this artifact exists to <one line>; status: real|throwaway|oracle` (section 9b).
+2. The model, and why.
+3. The acceptance line: one sentence verifiable in one run or one test (section 8a).
+4. The worktree path, the branch name, and the scratch folder (the session scratchpad subfolder the lane writes its temporary files to; see Hook-safe shape 7).
+5. The files or domain-map rows the lane owns.
+6. The ruling ids it serves.
+7. The CI jobs it can affect (CI contract item 1).
+8. The hand-back block (section 8): the fields the orchestrator wants back.
+A brief that restates shell, hook, push, merge or scan rules is carrying contract text: delete it and point here. A lane
+that finds a rule missing from the contract reports "what did the contract not tell you" in its hand-back; the contract is amended, not the brief.
+
+## CI contract (keyrun)
+Applies to every lane that pushes to `matt82198/keyrun`. Sources: `game.yml@main` and `tests.yml@main` read
+via `gh api repos/matt82198/keyrun/contents/.github/workflows/<f>?ref=main`; `tools/fastcheck.ps1`; keyrun
+`CLAUDE.md`, `game/CLAUDE.md`. Line numbers are `game.yml@main` unless stated. Measured 2026-10-21.
+
+**1. Jobs.** Required on main (`gh api repos/matt82198/keyrun/branches/main/protection --jq
+'.required_status_checks.contexts'` -> `["test","e2e","game-test","game-gate","game-e2e"]`). Every push to a PR
+head re-runs both workflows (`on: pull_request`, tests.yml:3-5, game.yml:5-8); `cancel-in-progress` cancels the
+older run (game.yml:18-20). Wall times from `gh api repos/matt82198/keyrun/actions/runs/<id>/jobs --jq '.jobs[]
+| "\(.name) \(.started_at) \(.completed_at)"'`, last two green main runs (Game 39605588895 @0f6a8989, Game
+39602147154 @6ce74317; Tests 39605588877, 39602147012):
+
+| Job | Runner / timeout | Runs | Wall (run 1, run 2) |
+|---|---|---|---|
+| `test` (Tests) | ubuntu-latest, no timeout set | Node 24: `npm ci`, `npm run typecheck`, `npm test`, `npm run build` (tests.yml:10-20) | 35s, 43s |
+| `e2e` (Tests) | ubuntu-latest, no timeout set | `npm ci`, playwright chromium, `python tools/ci/e2e_wait_ratchet.py`, `npm run test:e2e` (tests.yml:21-31) | 68s, 79s |
+| `game-test` | windows-latest, 20 min (:24-25) | `dotnet test game/Keyrun.sln` on 8.0.x (:31-33), then `launch-lock-test.ps1` stub (:35-44, must print `launch-lock-test: PASS`) | 3m38s, 4m16s |
+| `game-e2e` | windows-latest, 30 min (:47), per-launch cap `KEYRUN_GODOT_TIMEOUT_SEC=660` (:51), `GODOT_VERSION` 4.7.2 (:14) | Godot download (SHA512-checked, cached) -> `--build-solutions` (:92-97, step timeout 12) -> 9 scene tests -> boot smoke -> export (:218-223, step timeout 12) -> exported-exe smoke -> `E2eAssert.ps1` (:264-266, step timeout 5) | 12m32s, 12m42s |
+| `game-gate` | ubuntu-latest, 5 min | `tools/ci/game_gate.py`: a PR touching `game/**` or `tools/godot/**` needs `game-e2e` success; needs both game jobs, `if: always()` | 8s, 5s |
+| `balance` (non-required) | not measured here; see keyrun `game.yml` | Fork parity: `Bots.Tests` Category=Balance. Reported, never gates a merge (paragraph below). | not measured |
+
+**balance is reported, not gated.** The `balance` job is not a required check: a red balance never blocks a merge and is never disarmed over. The standing finding (chanter.cadence groupSong dominated by swift; warden.bulwark fortress dominated by mobile) is carried in the checkpoint, not fixed by a lane without a ruling. `dotnet test game/Keyrun.sln` exits 1 while balance is red, so a lane runs the test projects individually (Content, Sim, Bots, Playtest) or reports that sln exit as the balance red.
+
+Whole Game workflow wall: 12m57s and 14m18s (run `createdAt`->`updatedAt`, `gh run list --repo matt82198/keyrun
+--branch main --limit 8 --json databaseId,name,conclusion,createdAt,updatedAt,headSha`). Budget a push at about
+15 minutes of CI. game.yml lines 3-4 call game-test/game-e2e non-required; the protection query above is the
+truth: they ARE required. `gh api repos/matt82198/keyrun/actions/jobs/119240827516 --jq '.steps[]...'` (game-e2e of
+run 1) shows where the time goes: HUD scene test 5m32s, Run-end bonus 1m11s, Nameplate declutter 1m08s, Combat
+text overlap 55s, `E2eAssert` 52s, `--build-solutions` 50s, export 37s, the other scene tests 3-17s each. A change
+that adds ticks, frames or launches to a scene test raises its row; state it (item 6).
+
+**2. Local reproduction before a push** (cd to your worktree; redirect output to scratch, read the summary line):
+- tests.yml `test`: in a fresh worktree (no node_modules is carried) run `npm ci --no-audit --no-fund` first, before any vitest run; then `npm run typecheck && npm test && npm run build` (`npx vitest run` = `npm test`).
+  `e2e`: `npm run test:e2e` after `npx playwright install chromium` plus `python tools/ci/e2e_wait_ratchet.py`.
+- game-test: `powershell -NoProfile -ExecutionPolicy Bypass -File tools/fastcheck.ps1 -All` (builds the sln with
+  warnings as errors and the Keyrun.Sim banned-API analyzer, then the three xUnit projects; prints
+  `fastcheck: PASS in <n>s`; without `-All` it maps the diff to projects and an unmapped path selects all,
+  fastcheck.ps1:33-53,98-116), then the CI command itself: `C:/Users/Mattt/.dotnet/dotnet.exe test game/Keyrun.sln --nologo`.
+  fastcheck is the per-step loop and replaces neither `dotnet test game/Keyrun.sln` nor CI (fastcheck.ps1:15-16). While `balance` is red, `dotnet test game/Keyrun.sln` exits 1 (item 1): a lane runs the test projects individually (Content, Sim, Bots, Playtest) or reports that sln exit as the balance red, never as its own failure.
+- game-e2e scene tests (each needs Godot, runs through the launch lock, prints `<Name>: PASS`; script order is
+  the CI order): `game/src/Host/SimDriverSceneTest.ps1` (:99), `HudSceneTest.ps1` (:109), `CombatViewSceneTest.ps1`
+  (:119); `game/src/Hud/ScreenSceneTest.ps1` (:129), `ProgressionSaveSceneTest.ps1` (:139),
+  `RunEndBonusSceneTest.ps1` (:149), `NameplateDeclutterTest.ps1` (:159), `HelpHintSceneTest.ps1` (:169),
+  `CombatTextOverlapTest.ps1` (:179); then boot smoke (:189), export (:218) and `game/src/Host/E2eAssert.ps1` (:264).
+  A lane runs the scene tests its change can affect (which file under `game/src/**`, `game/scenes/**`,
+  `game/content/**` or the sim feeds which test), one at a time, in the shape claude-config #233 allows (reason
+  `scene-test-run`, serialised by the launch lock): ONE `pwsh -File` (or `powershell -File`) of a
+  `game/src/**/*SceneTest.ps1` or `*Test.ps1` with plain literal args and an optional redirect into the temp dir, e.g.
+  `pwsh -File game/src/Host/HudSceneTest.ps1 > C:/Users/Mattt/AppData/Local/Temp/<lane>-Hud.txt 2>&1` (the script path is
+  RELATIVE to the worktree root; an absolute script path or a `*>` redirect is denied by #233's parser, which accepts only
+  `>`, `>>`, `1>`, `2>`, `2>&1` into an absolute path under the OS temp dir). Get the worktree root as the shell's working
+  directory with a lone `cd C:/Users/Mattt/Desktop/keyrun-wt/<lane>` in its own earlier call (the directory persists
+  between calls), never as a `cd &&` prefix; no quotes, no `&`, no `$`, no pipe or chain. The lane reads
+  the output file and pastes the `<X>SceneTest: PASS` lines in the hand-back. A fresh worktree needs
+  `tools/godot/setup-worktree.ps1` (build plus one-time import) first once keyrun #472 lands; until then the build
+  and import commands keyrun `game/CLAUDE.md` names. Captures (`screens.ps1`), raw Godot launches and `--autorun`
+  outside a scene script stay the orchestrator's. Capture shape: the `screens.ps1` run is one unchained PowerShell command; its OutDir folder is created in a separate Bash `mkdir -p` call first, never chained with `;`. *Why: 2026-10-21 afternoon the no-scrollback hook refused a chained New-Item + screens.ps1 line.* If the hook still denies a scene run, follow "one compliant retry"
+  in "Shell and hook shapes"; the hand-back then lists the scene steps not run and why.
+
+**3. One push per green local state.** A push restarts the whole run from blank (new head sha, both workflows,
+the older run cancelled, game.yml:18-20); every job above re-queues and the ~15 min starts over. A fold, a
+"fix up" or an unrelated commit pushed to an open PR costs a full cycle and invalidates any
+`--match-head-commit` arm. So: finish the change, run every item-2 command that applies, paste the summary lines,
+push once. Never push to "see what CI says"; CI is confirmation, not discovery. If the gates cannot all run
+locally, the push is still one push and the hand-back names which job was not reproduced and why.
+
+**4. Goldens and pinned fixtures (never loosened, never hand-edited).** These compare against committed
+recordings or pinned counts, so a sim, content or host change can redden them with no code error:
+- `game/fixtures/input/example-enter-ping.input-log.json` (HUD scene test step K1: the recorded input must equal
+  the committed file byte for byte; HudSceneTest.ps1:171-181) and `example-yaw-walk.input-log.json` (same,
+  :189-194; the one `startHeading` header line is ignored in the K1 comparison, :217).
+- `$ReplayTickDigest = 'b950474eff2d9967'` (E2eAssert.ps1:63, checked :270) and the `game/sim/Keyrun.Sim.Tests/Fixtures/oracle/` traces + manifest
+  hash: recordings of the C# sim (game/CLAUDE.md:41-50). Re-record only with
+  `ORACLE_WRITE=1 npx vitest run tests/oracle` (ORACLE.md:14) and a stated reason next to the new value.
+- `game/sim/Keyrun.Sim.Tests/Encounter/EncounterTraceTests.cs` pins record counts (`Assert.Equal(600, t.Records)`
+  :239, `400` :249); `game/bots/Keyrun.Bots.Tests/ForkParityTests.cs` pins fork parity margins (read the file
+  for the constants before touching bots, sim rules or talent variants).
+Rule: a changed golden is RE-DERIVED by a real run of the producer, and the hand-back states `old -> new` and why
+the rule change makes it so. Editing a number, margin, tick or seed until the test passes is a fitted green
+(section 3) and the lane FAILED. A failing golden you did not intend to move is a finding: stop and report.
+
+**5. Reading a failure** (foreground, one call each, output to a file):
+- `gh pr checks <N> --repo matt82198/keyrun --json name,bucket,link` -> which job, then the job id from the link.
+- `gh run view --repo matt82198/keyrun --job <id> --log-failed > <scratch>/fail.txt`, then read the tail.
+- per-step timing: `gh api repos/matt82198/keyrun/actions/jobs/<id> --jq '.steps[] | "\(.name) \(.conclusion)
+  \(.started_at) \(.completed_at)"'`. A step far over the table in item 1 (or a step that hit its 12/5 min
+  timeout) is a hang or a budget breach, not a flake; a 660s launch cap kill reads the same.
+- Scene-test output shape: asserted lines first, then one terminal line `<Name>SceneTest: PASS` or
+  `<Name>SceneTest: FAIL (n)` (n = failed assertions). The workflow throws if the exit code is nonzero or the
+  line `(?m)^<Name>: PASS` is missing (e.g. game.yml:99-107), so read the `FAIL` lines directly above the
+  terminal line, not the PowerShell stack. `SMOKE ok` and `E2eAssert: PASS` follow the same rule.
+- "Pre-existing flake" is a claim (section 1): attach a rerun and the main run id that shows the same step green.
+
+**6. Hand-back must state about CI:** (a) the local gate lines verbatim (`fastcheck: PASS in <n>s`, dotnet
+`Passed!`/`Failed!` totals per project, vitest `Test Files`/`Tests` lines, each scene test's PASS line if run, or
+the not-run list with reasons from item 2); (b) the expected `game-e2e` wall time if a scene budget (ticks,
+frames, launches, timeout) changed, as old -> new; (c) the PR head sha (`gh pr view <N> --repo matt82198/keyrun
+--json headRefOid`) that the `--match-head-commit` arm uses; any push after that sha restarts item 1.
+
+**7. Lane row files (`game/lanes/`).** Every keyrun lane writes its game/lanes row file (`game/lanes/README.md`): exactly two non-empty lines, a lane bullet then a BUILDLOG line, never a PURPOSE line. A PURPOSE line belongs in the brief and the PR body. `tests/lanes/row-files.test.ts` enforces it in the required `test` job. *Why: the hedge made one lane ask.*
+
+**8. Enemy content tree.** Enemy telegraphs, abilities and layout live in the repo-root content tree, `content/data/enemies/*.json`, embedded by `Keyrun.Content.csproj`. `game/content/data` is a different tree. Briefs and lanes name the repo-root path.
+
+**9. Capture log writer.** Only `Driver.HostLine` reaches `demo.log`; `GD.Print` and Console output never do. Any log receipt a capture must show is emitted through `Driver.HostLine`. The view's ANIM/VIEW channel (`GD.Print` in `game/src/View`, e.g. ActorView's flash print) never reaches `demo.log` either; any receipt a capture must show is emitted through `Driver.HostLine` or the sim EVENT list (Run.cs emit list -> SimDriver -> RunLog). *Why: #488 found a `GD.Print` receipt would never appear in the capture log, and a recon could not see the hit flash in the log because it was a `GD.Print`.*
+
 ## 7. Definition of DONE — work that is not pushed does not exist
 - **A lane is not finished when the code is written and the bar is green. It is finished when the
   branch is PUSHED and a PR is OPEN, and the report names the PR number.** Work sitting in a local
@@ -293,11 +484,27 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   shown as literal output); the PR number and MERGED state are confirmed via `gh pr view --json state`.
   **"Remaining work: ..." in a final report means the lane FAILED** — say so plainly and stop, do not
   soften it into "mostly done".
+- **A hand-back without the required discovery-cost fields (section 8) is not DONE.** The lane is relaunched with the
+  same brief.
 
 ## 8. Report format
 Causal chain with `file:line` | gate output (literal) | the anti-vacuity run as literal output
 | gate counts | PR number | MERGED-state proof | worktree removed | **anything you refused to decide silently**.
 Lead the report with the ACCEPTANCE observable (section 8a), before the check list.
+Recon lanes return their findings in the hand-back message, never as RECON.md or any other report file in the repo (an operator rule denies such writes).
+A keyrun lane's report also carries the CI-contract hand-back (item 6 of "CI contract (keyrun)"): local gate lines verbatim, expected `game-e2e` wall time if a scene budget changed, and the PR head sha the arm matches.
+
+### Required discovery-cost fields (every hand-back)
+Every hand-back carries all of these fields, in this order:
+- **Wall time:** start and end clock reads, UTC (from `python C:/Users/Mattt/scripts-wt/utc-now/utc_now.py`).
+- **Validation attempts:** count of local gate runs before the final one.
+- **First run passed:** yes or no.
+- **Discovery:** "What did you have to figure out that the contract didn't tell you?" One line per item, or `nothing`. This answer is consequence-free: it never triggers a retro, never counts toward any threshold or ledger score, and never blocks or passes the hand-back or the PR. It is read only later, across many hand-backs, to find contract sentences that are missing. `nothing` is a fine answer.
+- **Failures:** one line per validation failure, tagged `{code, environment-or-CI, flaky, contract-ambiguous}`, with the failing line.
+- **Hook denials:** each hook denial verbatim, or `none`.
+- **Unpushed:** `Unpushed: none`, or one `Unpushed: <branch> <sha>` line per unpushed branch (Ordering rule 4).
+A hand-back missing a field is relaunched, not sent a SendMessage. Two `environment-or-CI` or `contract-ambiguous` tags
+across lanes mean a contract section is written before the next dispatch in that area.
 
 ## 8a. Acceptance (done-per-user, not done-per-CI)
 1. Every lane brief carries an ACCEPTANCE line: the user's verbatim ask plus the single observable the user will check (a rendered page, a screenshot, a run's output, a command's exit).
@@ -321,7 +528,7 @@ Lead the report with the ACCEPTANCE observable (section 8a), before the check li
 4. The lane runs its push in its own foreground Bash call (timeout 600000), never in the background. A
    background push strands the lane (memory: background-push-strands-lanes).
 5. When the merge step is in scope, LANDED extends to MERGED only with the `pr_merged_check` line pasted
-   verbatim.
+   verbatim, from `python C:/Users/Mattt/scripts/pr_merged_check.py --repo <owner/repo> --pr <N>`.
 
 ## 8c. Shared append files
 1. **Evidence.** Between 2026-10-18 14:00Z and 16:20Z, five keyrun PRs (#120, #121, #122, #124, #128) each
@@ -338,6 +545,15 @@ Lead the report with the ACCEPTANCE observable (section 8a), before the check li
    (or a resume of it) repeats the merge in item 2. The orchestrator never edits the branch.
 4. **Not in force (PLAN item).** The durable fix is for the lane to put its BUILDLOG line and CLAUDE.md row in the
    PR body, and for the orchestrator to append them on land. Until that is built, item 2 is the rule.
+5. **Fold anchor and fold verification.** A checkpoint block folds into STATE.md directly above the FIRST line that begins `## NEXT STEPS` (keyrun STATE.md has two such headings; the first is the anchor), with no blank separator line. The fold verifier takes the STATE-only diff, `git -C <wt> diff -- STATE.md`, never a whole-tree diff: git lists BUILDLOG.md before STATE.md, so a flat added-line list fails on a multi-file diff. BUILDLOG.md is appended only through `printf '\n' >> <wt>/BUILDLOG.md` then `cat <block> >> <wt>/BUILDLOG.md`, and its numstat must be block lines + 1 added, 0 deleted (verified separately from the STATE diff). When a STATE.md has more than one `## NEXT STEPS` heading, the fold block goes directly above the FIRST one with no blank separator, and the lane's hand-back states the anchor line number it folded above. *Why: `verify_1220b.py` does not check which heading was used, so the rule has to be written and the hand-back has to show it (keyrun STATE.md has two headings, at lines 726 and 1569 at 0e560876).*
+
+## 8d. Receipt first (push early, draft PR early)
+1. A build lane pushes its branch and opens a draft PR within 20 minutes of its first commit, before any long test run. The draft PR is the receipt; its body says what is folded in and what is still red.
+2. Every later push happens at least every 45 minutes while the lane is working, or at every green step, whichever is first.
+3. A lane that folds other branches and reverts one of its own merges says so in the PR body at the time of the revert, with the reason, and pushes.
+4. A branch with no origin ref 30 minutes after its first commit is a contract breach the monitor flags as [CHURN-NO-SHIP]; the orchestrator stops and relaunches that lane.
+
+Why: 2026-10-20 integrate/playable-dungeon reached 154 commits over 15 hours with no push and three self-reverts before anyone noticed.
 
 ## 9a. Index-first reading (knowledge tree)
 1. Before any grep/rg/find over a brain repo (`~/.claude`, `~/scripts`, `~/conductor3`) or any repo with a

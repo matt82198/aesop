@@ -28,8 +28,8 @@ Also reads `$AESOP_ROOT/aesop.config.json` for optional `state_root`, `transcrip
 ### fleet_status
 Get daemon/monitor heartbeats, orchestrator status, alert count.
 **Input**: `{}` (no args).
-**Output**: `{ watchdog: { alive: "ALIVE"|"STALE", age_seconds, threshold_seconds }, monitor: { ... }, orchestrator: {...}|null, alerts: { count, sample_lines } }`.
-**Design**: Missing files → `null`; never crashes. Heartbeat age computed from file mtime bucketed into brackets.
+**Output**: `{ watchdog: { alive: "ALIVE"|"STALE", age_seconds, threshold_seconds } | { alive: "MISSING", path } | { alive: "UNKNOWN", reason, path? }, monitor: { ... }, orchestrator: {...}|null, alerts: { count, sample_lines } }`.
+**Design**: Watchdog beat is read from `CONDUCTOR_ROOT/state/.watchdog-heartbeat` (mirrors `monitor/collect-signals.mjs` `resolveWatchdogHeartbeat`; `CONDUCTOR_ROOT` env wins, else sibling `conductor3` only when `AESOP_ROOT` basename is `aesop`). Never `STATE_ROOT`: the daemon writes nowhere else. Unresolved root → `UNKNOWN`; no file → `MISSING`; unparseable → `UNKNOWN`. A missing beat is never reported ALIVE. Other missing files → `null`; never crashes. Monitor heartbeat age computed from file mtime bucketed into brackets.
 
 ### fleet_agents
 List active Claude agents from `AESOP_TRANSCRIPTS_ROOT`. Invokes `dash-extra.mjs --json` passthrough with 5s timeout.
@@ -100,7 +100,7 @@ Query GitHub Actions run history for a CI job: status, conclusion, duration, fla
 
 ## Multibox Coordination Helper
 
-**File**: `mcp/instances-claims.py` (`--db <db> [--root <aesop_root>] [--config <path>]`) — spawned by the three `fleet_instances`/`fleet_claims`/`fleet_multibox_summary` tools above; resolves coordination backend config via the same precedence as `tools/multibox_config` (env → aesop.config.json → default) and reports mode (`advisory`|`local-lease`|`fs-claim-log`), transport, shared dir, TTL; read-only, structured `absent`/`reason` on error. The interpreter is resolved once per process (`resolvePython`: `AESOP_PYTHON`, then `python3`, `python`, `py -3`, probed with `--version`); when none runs the three tools return `error` (with `absent: false`, empty arrays), never a silent empty fleet. Tests: `tests/mcp-python-resolver.test.mjs`.
+**File**: `mcp/instances-claims.py` (`--db <db> [--root <aesop_root>] [--config <path>]`) — spawned by the three `fleet_instances`/`fleet_claims`/`fleet_multibox_summary` tools above; resolves coordination backend config via the same precedence as `tools/multibox_config` (env → aesop.config.json → default) and reports mode (`advisory`|`local-lease`|`fs-claim-log`), transport, shared dir, TTL; read-only (opens the DB `mode=ro` via `ReadOnlyEventSource`, never runs DDL/PRAGMA, never creates a missing state.db; tracker e9a72d86760f), structured `absent`/`reason` on error. The interpreter is resolved once per process (`resolvePython`: `AESOP_PYTHON`, then `python3`, `python`, `py -3`, probed with `--version`); when none runs the three tools return `error` (with `absent: false`, empty arrays), never a silent empty fleet. Tests: `tests/mcp-python-resolver.test.mjs`.
 
 **DB resolution (F-06, 2026-10-14)**: the instances/claims tools open `state.db` via `INSTANCES_DB_FILENAME` (`mcp/server.mjs`, mirrors `state_store/paths.py`), the file `tools/instance_manager.py` writes. `aesop.db` had no writer and always reported `absent`. Tracker DB paths resolve through `state_store/paths.py::resolve_db_path`.
 

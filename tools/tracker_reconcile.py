@@ -18,7 +18,8 @@ Flags:
 Exit codes:
   0: Clean (no zombies) or zombies fixed (--fix)
   1: Zombies found (without --fix)
-  2: Error (missing deps, unknown flags)
+  2: Error (missing deps, unknown flags, or a --fix close write failed;
+     a failed close is printed as CLOSE-FAILED, never FIXED)
 """
 
 import json
@@ -37,7 +38,7 @@ repo_root = Path(__file__).parent.parent
 if str(repo_root) not in sys.path:
     sys.path.insert(0, str(repo_root))
 
-ACTIVE_STATUSES = {"ranked", "open", "in_progress", "proposed", "accepted"}
+ACTIVE_STATUSES = {"ranked", "open", "todo", "in_progress", "in-progress", "proposed", "accepted"}
 
 
 def _load_tracker(state_dir):
@@ -101,7 +102,11 @@ def _check_git_evidence(item_id, title, repo_dir):
 
 
 def _close_zombie(item, state_dir, evidence):
-    """Close a zombie by appending an item_updated event via StateAPI."""
+    """Close a zombie by appending an item_updated event via StateAPI.
+
+    Returns True only when the close write succeeded. A failed write returns
+    False so the caller never reports the item as FIXED.
+    """
     from state_store.api import StateAPI
     db_path = str(Path(state_dir) / common.STATE_DB_FILENAME)
     now = datetime.now(timezone.utc).isoformat()
@@ -115,8 +120,10 @@ def _close_zombie(item, state_dir, evidence):
         api = StateAPI(db_path)
         api.append("tracker", "item_updated", payload, actor="tracker_reconcile")
         api.close()
+        return True
     except Exception as exc:
         print(f"WARN: event append failed for {item['id']}: {exc}", file=sys.stderr)
+        return False
 
 
 def reconcile(state_dir, repo_dir, fix=False):
@@ -158,9 +165,9 @@ def reconcile(state_dir, repo_dir, fix=False):
 
         if evidence:
             entry = {"id": item_id, "title": title, "status": status, "evidence": evidence}
-            zombies.append(entry)
             if fix:
-                _close_zombie(item, state_dir, evidence)
+                entry["closed"] = _close_zombie(item, state_dir, evidence)
+            zombies.append(entry)
         else:
             genuinely_open.append({"id": item_id, "title": title, "status": status})
 
@@ -204,11 +211,15 @@ def main(argv=None):
 
     zombies, genuinely_open = reconcile(state_dir, repo_dir, fix=fix)
 
+    # With --fix, an item counts as fixed only if its close write succeeded.
+    failed_closes = [z for z in zombies if fix and not z.get("closed")]
+    all_fixed = fix and bool(zombies) and not failed_closes
+
     if json_out:
         result = {
             "zombies": zombies,
             "genuinely_open": genuinely_open,
-            "fixed": fix and len(zombies) > 0,
+            "fixed": all_fixed,
         }
         print(json.dumps(result, indent=2))
     else:
@@ -216,15 +227,21 @@ def main(argv=None):
             print("No tracker data or no active items.")
             return 0
         if zombies:
-            verb = "FIXED" if fix else "ZOMBIE"
             for z in zombies:
-                print(f"{verb} {z['id']}: {z['evidence']} (was {z['status']})")
+                if not fix:
+                    print(f"ZOMBIE {z['id']}: {z['evidence']} (was {z['status']})")
+                elif z.get("closed"):
+                    print(f"FIXED {z['id']}: {z['evidence']} (was {z['status']})")
+                else:
+                    print(f"CLOSE-FAILED {z['id']}: {z['evidence']} (was {z['status']}) - still open")
         if genuinely_open:
             print(f"\nGenuinely open: {len(genuinely_open)}")
             for o in genuinely_open:
                 print(f"  OPEN {o['id']}: {o['title']} ({o['status']})")
         print(f"\nSummary: {len(zombies)} zombie(s), {len(genuinely_open)} open")
 
+    if failed_closes:
+        return 2
     if zombies and not fix:
         return 1
     return 0

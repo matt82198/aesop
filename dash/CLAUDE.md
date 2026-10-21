@@ -14,7 +14,7 @@
 ## State contracts
 
 **watchdog-gui.sh reads** (configured via `AESOP_ROOT`, default: `.`; all paths relative to it):
-- `$CONDUCTOR_ROOT/state/.watchdog-heartbeat` — watchdog heartbeat (epoch seconds), the path backup-fleet.sh writes; resolved by `resolve_conductor_root` in `daemons/conductor-root.sh` (the daemons' rule: `CONDUCTOR_ROOT` env wins, else sibling of the canonical `aesop` tree, else no path → STALE, fail closed). watchdog-gui.sh sources that helper and never re-derives the path itself (keeps the portability ratchet clean). Never `AESOP_ROOT/state`.
+- `$CONDUCTOR_ROOT/state/.watchdog-heartbeat` — watchdog heartbeat (epoch seconds), the path backup-fleet.sh writes; resolved by `resolve_conductor_root` in `daemons/conductor-root.sh` (`CONDUCTOR_ROOT` env wins; else the sibling of the canonical `aesop` tree if it holds `state/.watchdog-heartbeat`; else `$HOME/conductor3` under the same heartbeat test; else no path → the GUI prints `UNRESOLVED`, never STALE or ALIVE). A bare `state/` dir is not a marker: a stray sibling can hold only `state/pr-sweep.log`. watchdog-gui.sh sources that helper and never re-derives the path itself (keeps the portability ratchet clean). Never `AESOP_ROOT/state`.
 - `state/FLEET-BACKUP.log` — append-only recent events (tail -3 displayed)
 - `state/SECURITY-ALERTS.log` — all lines; counts HIGH/MED (filters RESOLVED-FP); displayed as badge
 - `state/.watchdog-repos.json` — JSON array of repo status (jq-parsed)
@@ -30,7 +30,7 @@ Heartbeat thresholds loaded from `aesop.config.json` (if present + jq available;
 - Home is `os.homedir()` (USERPROFILE on Windows, HOME on POSIX), never `process.env.HOME` alone: HOME is unset on native Windows PowerShell and scheduled-task launches.
 - `AESOP_TRANSCRIPTS_ROOT` (env) or config `.transcripts_root` or `<home>/.claude/projects` → scans `agent-*.jsonl` files (mtime <12min, top 8 recent)
 - `AESOP_STATE_ROOT` (env) or config `.state_root` or `{AESOP_ROOT}/state` → reads `SECURITY-ALERTS.log` for severity (HIGH/MED/DRIFT)
-- Local cache: `{STATE_ROOT}/.dash-extra-cache.json` (persisted metadata; optimization only, safe to drop)
+- Local cache: `{STATE_ROOT}/.dash-extra-cache.json` (persisted metadata; optimization only, safe to drop). Pruned on each `--json` save to transcripts seen in that run; never stores `promptFull` (re-derived from the transcript head on a cache hit) (tracker 44ce0f022454)
 
 ## Invariants & gotchas
 

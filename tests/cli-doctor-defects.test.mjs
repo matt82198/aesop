@@ -293,6 +293,69 @@ test('DEFECT 6: scaffold NEXT STEPS should guide customization (domains, URLs, s
     `Output should guide on CLAUDE.md/domains. stdout: ${res.stdout}`);
 });
 
+// DEFECT 6b: the scaffold copy must never ship Python bytecode, and must not
+// race concurrent writers of ui/__pycache__. The CLI copies its own package
+// root (templateRoot = bin/..), so the source tree is a temp package holding
+// bin/cli.js plus a ui/ that contains __pycache__. A dangling symlink named
+// *.pyc stands in for a .pyc that vanishes between readdir and stat: the old
+// copy statted every listed entry and died with ENOENT on it.
+test('DEFECT 6b: scaffold copy skips __pycache__ and *.pyc (no ENOENT race)', () => {
+  const tempDir = createTestDir();
+  const pkgDir = path.join(tempDir, 'pkg');
+  const targetDir = path.join(tempDir, 'fleet-6b-pyc');
+  const uiDir = path.join(pkgDir, 'ui');
+  const pycDir = path.join(uiDir, '__pycache__');
+
+  fs.mkdirSync(path.join(pkgDir, 'bin'), { recursive: true });
+  fs.copyFileSync(CLI, path.join(pkgDir, 'bin', 'cli.js'));
+  fs.writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify({ name: 'aesop-fixture', version: '0.0.0-test' }));
+  fs.mkdirSync(pycDir, { recursive: true });
+  fs.writeFileSync(path.join(uiDir, 'app.py'), 'print("ui")\n');
+  fs.writeFileSync(path.join(pycDir, 'app.cpython-312.pyc'), Buffer.from([0, 1, 2, 3]));
+  fs.mkdirSync(targetDir, { recursive: true });
+  gitCmd(targetDir, ['init']);
+  gitCmd(targetDir, ['config', 'user.email', 'test@example.com']);
+  gitCmd(targetDir, ['config', 'user.name', 'Test User']);
+
+  // Deterministic race: a preload shim makes statSync of any *.pyc throw ENOENT,
+  // exactly what a file deleted between readdir and stat produces. Dangling
+  // symlinks are not usable here (EPERM on Windows without developer mode).
+  const shimPath = path.join(tempDir, 'vanish-shim.cjs');
+  fs.writeFileSync(shimPath, [
+    "const fs = require('fs');",
+    'const realStat = fs.statSync;',
+    'fs.statSync = function (p, ...rest) {',
+    "  if (String(p).endsWith('.pyc')) { const e = new Error('ENOENT: vanished, ' + p); e.code = 'ENOENT'; throw e; }",
+    '  return realStat.call(this, p, ...rest);',
+    '};',
+    ''
+  ].join('\n'));
+
+  const timeout = Number(process.env.AESOP_TEST_CHILD_TIMEOUT_MS) || 30000;
+  const res = spawnSync(process.execPath, [path.join(pkgDir, 'bin', 'cli.js'), targetDir, '--name', 'test-fleet', '--yes', '--no-skills'], {
+    encoding: 'utf8',
+    cwd: tempDir,
+    timeout,
+    killSignal: 'SIGKILL',
+    env: { ...process.env, NODE_OPTIONS: `--require "${shimPath.split(path.sep).join("/")}"` }
+  });
+  assert.equal(res.status, 0, `Scaffold must succeed while ui/__pycache__ holds a vanishing pyc. stderr: ${res.stderr}`);
+  assert.ok(fs.existsSync(path.join(targetDir, 'ui', 'app.py')), 'ui/app.py must be copied');
+
+  const shipped = [];
+  const walk = dir => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(p);
+      else if (entry.name.endsWith('.pyc')) shipped.push(p);
+    }
+  };
+  walk(path.join(targetDir, 'ui'));
+  assert.deepEqual(shipped, [], 'scaffold must not ship .pyc bytecode');
+  assert.equal(fs.existsSync(path.join(targetDir, 'ui', '__pycache__')), false,
+    'scaffold must not create ui/__pycache__ in the target');
+});
+
 // DEFECT 7: the pre-push hook check must resolve the hooks directory through git.
 // In a linked worktree .git is a FILE ("gitdir: <primary>/.git/worktrees/<name>") and
 // hooks live in the common dir; core.hooksPath moves them elsewhere entirely.

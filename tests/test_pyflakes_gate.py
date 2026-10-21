@@ -362,6 +362,145 @@ class TestPyflakesGateAgainstRealBaseline(unittest.TestCase):
         )
 
 
+class TestPyflakesIncrementalParity(unittest.TestCase):
+    """The per-file incremental scan must give the same verdict as a full scan.
+
+    A file's pyflakes result is reused only when its path and content hash match
+    a cached entry. A full scan (--no-cache) recomputes every file. Both paths must
+    agree on findings, new/stale keys and exit code, and every fallback to a full
+    scan must say so in the JSON "scan" block.
+    """
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+        self.root = os.path.join(self.test_dir, 'repo')
+        self.cache_dir = os.path.join(self.test_dir, 'cache')
+        os.makedirs(os.path.join(self.root, 'pkg'))
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def _write(self, relative_path, content, root=None):
+        full_path = os.path.join(root or self.root, relative_path)
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        with open(full_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+    def _baseline(self, violations, root=None):
+        path = os.path.join(root or self.root, '.pyflakes-baseline.json')
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump({'violations': violations}, f)
+        return path
+
+    def _run(self, *extra, root=None, baseline=None):
+        root = root or self.root
+        baseline = baseline or os.path.join(root, '.pyflakes-baseline.json')
+        cmd = [sys.executable, GATE_SCRIPT, '--root', root, '--paths', 'pkg',
+               '--baseline', baseline, '--json', '--cache-dir', self.cache_dir, *extra]
+        result = subprocess.run(cmd, capture_output=True, encoding='utf-8', errors='replace')
+        data = json.loads(result.stdout) if result.returncode in (0, 1) else None
+        return result.returncode, data, result.stderr
+
+    @REQUIRES_PYFLAKES
+    def test_incremental_verdict_matches_full_scan_after_one_file_changes(self):
+        """RED: one changed file with one new finding; incremental == full scan."""
+        self._write('pkg/a.py', 'def a():\n    return 1\n')
+        self._write('pkg/b.py', 'def b():\n    return 2\n')
+        self._baseline({})
+        seed_code, _, seed_err = self._run()
+        self.assertEqual(seed_code, 0, seed_err)
+
+        self._write('pkg/b.py', 'import os\n\n\ndef b():\n    return 2\n')
+        inc_code, inc, inc_err = self._run()
+        full_code, full, full_err = self._run('--no-cache')
+        self.assertEqual(full_code, 1, full_err)
+        self.assertEqual(inc_code, full_code, inc_err)
+        self.assertEqual(inc['ok'], full['ok'])
+        self.assertEqual(inc['new'], full['new'])
+        self.assertEqual(inc['stale'], full['stale'])
+        self.assertEqual(inc['findings'], full['findings'])
+        self.assertEqual(inc['by_category'], full['by_category'])
+        self.assertEqual(inc['scan']['mode'], 'incremental')
+        self.assertEqual(inc['scan']['scanned'], 1, 'only the changed file may be re-scanned')
+        self.assertEqual(inc['scan']['reused'], 1)
+        self.assertTrue(any('pkg/b.py@UnusedImport' in item for item in inc['new']))
+
+    @REQUIRES_PYFLAKES
+    def test_unchanged_tree_reuses_every_cached_file(self):
+        """RED: a second run over an unchanged tree re-scans nothing."""
+        self._write('pkg/a.py', 'def a():\n    return 1\n')
+        self._write('pkg/b.py', 'def b():\n    return 2\n')
+        self._baseline({})
+        self._run()
+        code, out, err = self._run()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out['scan']['mode'], 'incremental')
+        self.assertEqual(out['scan']['scanned'], 0)
+        self.assertEqual(out['scan']['reused'], 2)
+
+    @REQUIRES_PYFLAKES
+    def test_cold_cache_falls_back_to_full_scan_and_says_so(self):
+        """RED: no cache on disk -> full scan, reason printed in the JSON output."""
+        self._write('pkg/a.py', 'def a():\n    return 1\n')
+        self._baseline({})
+        code, out, err = self._run()
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out['scan']['mode'], 'full')
+        self.assertIn('cold cache', out['scan']['reason'])
+
+    @REQUIRES_PYFLAKES
+    def test_missing_baseline_forces_full_scan(self):
+        """RED: a missing baseline file forces a full scan (reason says baseline missing)."""
+        self._write('pkg/a.py', 'def a():\n    return 1\n')
+        self._baseline({})
+        self._run()
+        missing = os.path.join(self.root, 'does-not-exist.json')
+        code, out, err = self._run(baseline=missing)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out['scan']['mode'], 'full')
+        self.assertIn('baseline missing', out['scan']['reason'])
+
+    @REQUIRES_PYFLAKES
+    def test_corrupt_cache_falls_back_to_full_scan_and_still_verdicts_correctly(self):
+        """RED: an unreadable cache never changes the verdict; it forces a full scan."""
+        self._write('pkg/a.py', 'import os\n\n\ndef a():\n    return 1\n')
+        self._baseline({})
+        self._run()
+        for name in os.listdir(self.cache_dir):
+            with open(os.path.join(self.cache_dir, name), 'w', encoding='utf-8') as f:
+                f.write('{not json')
+        code, out, err = self._run()
+        self.assertEqual(code, 1, err)
+        self.assertEqual(out['scan']['mode'], 'full')
+        self.assertIn('cache unreadable', out['scan']['reason'])
+        self.assertTrue(any('pkg/a.py@UnusedImport' in item for item in out['new']))
+
+    @REQUIRES_PYFLAKES
+    def test_check_mode_is_read_only_and_writes_no_cache(self):
+        """RED: --check is the read-only verification mode; it must not create the cache."""
+        self._write('pkg/a.py', 'def a():\n    return 1\n')
+        self._baseline({})
+        code, out, err = self._run('--check')
+        self.assertEqual(code, 0, err)
+        self.assertFalse(os.path.isdir(self.cache_dir) and os.listdir(self.cache_dir),
+                         'check mode must not write the per-file cache')
+
+    @REQUIRES_PYFLAKES
+    def test_root_change_does_not_reuse_other_roots_cache(self):
+        """RED: the same tree under a different --root starts cold (no cross-root reuse)."""
+        self._write('pkg/a.py', 'def a():\n    return 1\n')
+        self._baseline({})
+        self._run()
+        other = os.path.join(self.test_dir, 'other-repo')
+        self._write('pkg/a.py', 'def a():\n    return 1\n', root=other)
+        self._baseline({}, root=other)
+        code, out, err = self._run(root=other)
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out['scan']['mode'], 'full')
+        self.assertIn('cold cache', out['scan']['reason'])
+
+
 class TestPyflakesGateImport(unittest.TestCase):
     """Test that pyflakes_gate.py has no syntax errors and --help works."""
 

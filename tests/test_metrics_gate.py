@@ -231,5 +231,104 @@ class TestMetricsGate(unittest.TestCase):
             self.assertTrue("5x" in stdout or "5x" in stderr or "faster" in stdout or "faster" in stderr)
 
 
+CLAIM_ENTRY = "- 2026-10-20 12:47Z CI-QUEUE: 292 runs, 83% on superseded heads.\n"
+RETRACTION = (
+    "<!-- metrics-retracted: 2026-10-20 12:47Z '83%' "
+    "reason: figure inconsistent with 1718/1884 = 91% -->\n"
+)
+
+
+class TestMetricsGateRetraction(unittest.TestCase):
+    """Append-only log retraction: a LATER appended line may retract a historical
+    unverified metric in BUILDLOG.md. Every other file stays under the strict gate."""
+
+    def run_metrics_gate(self, repo, *args):
+        result = subprocess.run(
+            [sys.executable, str(METRICS_GATE)] + list(args),
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            cwd=str(repo),
+        )
+        return result.returncode, result.stdout, result.stderr
+
+    @staticmethod
+    def _init_repo(repo):
+        subprocess.run(["git", "init"], cwd=str(repo), capture_output=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo), capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=str(repo), capture_output=True)
+
+    @staticmethod
+    def _append_commit(repo, name, text, message):
+        path = repo.joinpath(name)
+        path.write_text(path.read_text() + text if path.exists() else text)
+        subprocess.run(["git", "add", name], cwd=str(repo), capture_output=True)
+        subprocess.run(["git", "commit", "-m", message], cwd=str(repo), capture_output=True)
+
+    def _log_repo(self, repo, name, claim_text, later_text):
+        """Base commit, then the claim commit, then the (optional) later commit."""
+        self._init_repo(repo)
+        self._append_commit(repo, name, "# Log\n", "initial")
+        self._append_commit(repo, name, claim_text, "claim")
+        if later_text is not None:
+            self._append_commit(repo, name, later_text, "later")
+
+    def test_retracted_historical_metric_in_buildlog_passes(self):
+        """Test: a later appended retraction naming the same entry timestamp and metric clears it."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._log_repo(repo, "BUILDLOG.md", CLAIM_ENTRY, RETRACTION)
+            exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~2...HEAD")
+            self.assertEqual(exit_code, 0, stdout + stderr)
+            self.assertIn("NO-UNVERIFIED-METRICS: OK", stdout)
+
+    def test_unretracted_buildlog_metric_still_fails(self):
+        """Test (a): an unverified BUILDLOG metric with no retraction marker still fails."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._log_repo(repo, "BUILDLOG.md", CLAIM_ENTRY, None)
+            exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~1...HEAD")
+            self.assertEqual(exit_code, 1)
+            self.assertIn("unverified metric '83%'", stdout + stderr)
+
+    def test_retraction_with_different_timestamp_does_not_clear(self):
+        """Test (b): a retraction naming another entry's timestamp does not clear the claim."""
+        wrong_ts = RETRACTION.replace("12:47Z", "12:48Z")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._log_repo(repo, "BUILDLOG.md", CLAIM_ENTRY, wrong_ts)
+            exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~2...HEAD")
+            self.assertEqual(exit_code, 1)
+            self.assertIn("unverified metric '83%'", stdout + stderr)
+
+    def test_retraction_with_different_metric_does_not_clear(self):
+        """Test (b): a retraction naming a different metric does not clear the claim."""
+        wrong_metric = RETRACTION.replace("'83%'", "'84%'")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._log_repo(repo, "BUILDLOG.md", CLAIM_ENTRY, wrong_metric)
+            exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~2...HEAD")
+            self.assertEqual(exit_code, 1)
+            self.assertIn("unverified metric '83%'", stdout + stderr)
+
+    def test_retraction_before_claim_does_not_clear(self):
+        """Test (b): only a LATER appended line retracts; an earlier marker does not."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._init_repo(repo)
+            self._append_commit(repo, "BUILDLOG.md", "# Log\n", "initial")
+            self._append_commit(repo, "BUILDLOG.md", RETRACTION + CLAIM_ENTRY, "retraction-first")
+            exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~1...HEAD")
+            self.assertEqual(exit_code, 1)
+            self.assertIn("unverified metric '83%'", stdout + stderr)
+
+    def test_retraction_does_not_apply_outside_log_files(self):
+        """Test (c): the same claim plus retraction in a non-log .md file still fails."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._log_repo(repo, "notes.md", CLAIM_ENTRY, RETRACTION)
+            exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~2...HEAD")
+            self.assertEqual(exit_code, 1)
+            self.assertIn("unverified metric '83%'", stdout + stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

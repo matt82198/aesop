@@ -42,10 +42,13 @@ NOTE: Public repo version has NO vault allowlist.
 """
 
 import argparse
+import hashlib
+import json
 import os
 import re
 import sys
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -91,7 +94,10 @@ PATTERNS = {
         r"(?:[_\-]?KEY)?(?![A-Za-z0-9_\-])"
         r"\s*[:=]\s*"
         r"(?:(?P<q>[\"'])(?P<v>[^\"'\n]{8,})(?P=q)"
-        r"|(?P<u>[^\s'\"`$<{}()\[\],;:]{8,})(?=\s|$|[;,]))",
+        # The unquoted value may not be a slash-delimited regex literal (`/body/` or
+        # `/body/gi`): a scanner's own rule-table entry such as
+        # `SUPPRESSED_CRED = /tokenvalue123456/` is code, not a credential (f-332fcec2).
+        r"|(?!/[^\s/]+/)(?P<u>[^\s'\"`$<{}()\[\],;:]{8,})(?=\s|$|[;,]))",
         re.IGNORECASE,
     ),
     "connection_string": (
@@ -318,6 +324,19 @@ def _credential_value_is_placeholder(value):
     return is_placeholder(value)
 
 
+_CREDENTIAL_REGEX_CLASS = re.compile(r"\\[sSdDwW]|\(\?|\[\^")
+_CREDENTIAL_REGEX_QUANTIFIER = re.compile(r"\{[0-9]*,[0-9]*\}|\{[0-9]+\}|[*+]")
+
+
+def _credential_value_is_regex_shape(value):
+    """True when a generic_credential_assignment value is a regex literal: a regex
+    class escape (backslash-s, backslash-d), a group opener (`(?i)`) or a negated
+    class (`[^`), together with a quantifier (`{8,}`, `+`, `*`). That is the shape of
+    a scanner's own pattern-table literal, not a credential. A real-looking value
+    carries no regex class escape or group syntax, so it is never excused here."""
+    return bool(_CREDENTIAL_REGEX_CLASS.search(value) and _CREDENTIAL_REGEX_QUANTIFIER.search(value))
+
+
 def _is_code_identifier(value, rest_of_line):
     """True for a bare identifier or dotted attribute chain (every segment letters/
     underscore only, no digits) that reads as a code or prose reference rather than a
@@ -439,6 +458,106 @@ def _connection_password_is_regex_shape(url):
     return _LITERAL_ALNUM.search(_REGEX_CONSTRUCT.sub("", password)) is None
 
 
+# Compiled once at import. re.finditer(p, s, f) is re.compile(p, f).finditer(s), so the
+# matches are identical; only the per-line cache lookup and recompilation are avoided.
+_COMPILED_PATTERNS = {name: re.compile(pattern, flags) for name, (pattern, flags) in PATTERNS.items()}
+
+# ---------------------------------------------------------------------------
+# Clean-verdict cache (path mode only, see scan_file / main).
+#
+# A file is cached ONLY when its full scan produced no findings at all. The entry
+# holds the path, the sha256 of its bytes, and the one SKIPPED-BINARY notice to replay.
+# No matched text is ever written. A file with any finding is always re-scanned and
+# reported. The whole cache is keyed by a tag over this scanner's source, so any change
+# to the rules invalidates every entry. A missing, corrupt or mismatched cache means a
+# full scan. A failed cache write only costs speed.
+# ---------------------------------------------------------------------------
+CLEAN_CACHE_SCHEMA = 1
+_CLEAN_CACHE_NAME = "clean.json"
+_clean_cache_state = {"enabled": False, "entries": {}, "new": {}, "file": None, "tag": None}
+
+
+def _clean_cache_path():
+    """AESOP_STATE_ROOT/cache/secret_scan/clean.json, else the temp dir (same rule as pyflakes_gate)."""
+    root = os.environ.get("AESOP_STATE_ROOT", "").strip()
+    base = Path(root) if root else Path(tempfile.gettempdir())
+    return base / "cache" / "secret_scan" / _CLEAN_CACHE_NAME
+
+
+def _clean_cache_tag(scanner_bytes):
+    """Key for the whole cache: schema plus the exact scanner source bytes."""
+    digest = hashlib.sha256()
+    digest.update(("schema=%d\n" % CLEAN_CACHE_SCHEMA).encode("ascii"))
+    digest.update(scanner_bytes)
+    return digest.hexdigest()
+
+
+def _clean_cache_lookup(entries, path_key, sha):
+    """Return the cached notice list when path_key is a clean entry for exactly this content hash, else None."""
+    entry = entries.get(path_key) if isinstance(entries, dict) else None
+    if not isinstance(entry, dict) or entry.get("sha") != sha:
+        return None
+    notices = entry.get("notices")
+    if not isinstance(notices, list) or not all(isinstance(line, str) for line in notices):
+        return None
+    return notices
+
+
+def _load_clean_cache(cache_file, tag):
+    """Entries for this exact tag, or {} when the cache is absent, unreadable or from another scanner."""
+    try:
+        data = json.loads(cache_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict) or data.get("tag") != tag or not isinstance(data.get("entries"), dict):
+        return {}
+    return data["entries"]
+
+
+def _save_clean_cache(cache_file, tag, entries):
+    """Atomically replace the cache with this run's clean verdicts. Failure only costs speed."""
+    tmp_name = None
+    try:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(dir=str(cache_file.parent), suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump({"schema": CLEAN_CACHE_SCHEMA, "tag": tag, "entries": entries}, handle, sort_keys=True)
+        os.replace(tmp_name, cache_file)
+        tmp_name = None
+    except OSError:
+        pass
+    finally:
+        if tmp_name is not None:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+
+
+def _clean_cache_begin(enabled):
+    """Arm the cache for one path-mode run. Any failure to key it leaves it off (full scan)."""
+    state = _clean_cache_state
+    state.update(enabled=False, entries={}, new={}, file=None, tag=None)
+    if not enabled:
+        return
+    try:
+        scanner_bytes = Path(__file__).read_bytes()
+    except OSError:
+        return
+    state["file"] = _clean_cache_path()
+    state["tag"] = _clean_cache_tag(scanner_bytes)
+    state["entries"] = _load_clean_cache(state["file"], state["tag"])
+    state["enabled"] = True
+
+
+def _clean_cache_commit():
+    """Persist this run's clean verdicts (files not clean this run are dropped from the cache)."""
+    state = _clean_cache_state
+    if state["enabled"] and state["file"] is not None:
+        _save_clean_cache(state["file"], state["tag"], state["new"])
+    state["enabled"] = False
+
+
 def _scan_views(label, views, env_file, has_file_pragma, scan_path):
     """Run PATTERNS over every view. Returns list of (line_num, rule, match_str, is_fatal).
     Duplicate (line, rule, match) hits across views are reported once."""
@@ -447,12 +566,12 @@ def _scan_views(label, views, env_file, has_file_pragma, scan_path):
     for text, full_rules in views:
         lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
         for line_num, line in enumerate(lines, start=1):
-            for rule_name, (pattern, flags) in PATTERNS.items():
+            for rule_name, compiled in _COMPILED_PATTERNS.items():
                 if not full_rules and rule_name not in FATAL_RULES:
                     continue
                 if rule_name == "env_assignment" and not env_file:
                     continue
-                for match in re.finditer(pattern, line, flags):
+                for match in compiled.finditer(line):
                     match_str = match.group(0)
                     if rule_name == "generic_credential_assignment":
                         if match.group("v") is not None:
@@ -462,6 +581,10 @@ def _scan_views(label, views, env_file, has_file_pragma, scan_path):
                             if _is_code_identifier(value, line[match.end():]):
                                 continue
                         if _credential_value_is_placeholder(value):
+                            continue
+                        # A regex literal assigned to a credential-named variable is a
+                        # pattern from a scanner's own rule table, not a secret.
+                        if _credential_value_is_regex_shape(value):
                             continue
                     elif rule_name == "connection_string":
                         # Tracker b0937071216e: the placeholder check applies to the
@@ -532,10 +655,27 @@ def scan_file(filepath):
     except (OSError, PermissionError, FileNotFoundError, IOError) as e:
         raise ScanError(f"Cannot scan file {filepath}: {e}")
 
+    state = _clean_cache_state
+    cache_key = str(filepath)
+    content_sha = hashlib.sha256(raw).hexdigest() if state["enabled"] else None
+    if state["enabled"] and not findings:
+        cached_notices = _clean_cache_lookup(state["entries"], cache_key, content_sha)
+        if cached_notices is not None:
+            # Same bytes, same scanner, clean last time: replay the notice and skip the regex pass.
+            for notice in cached_notices:
+                print(notice, file=sys.stderr)
+            state["new"][cache_key] = {"sha": content_sha, "notices": list(cached_notices)}
+            return findings
+
     views, nul_tagged = _content_views(raw)
+    binary_notice = None
     if nul_tagged:
-        print(f"SKIPPED-BINARY {filepath} (NUL bytes present; scanned as text, latin-1 and UTF-16 views)", file=sys.stderr)
-    return findings + _scan_views(filepath, views, is_env_file(filepath), _pragma_in_bytes(raw), filepath)
+        binary_notice = f"SKIPPED-BINARY {filepath} (NUL bytes present; scanned as text, latin-1 and UTF-16 views)"
+        print(binary_notice, file=sys.stderr)
+    scanned = findings + _scan_views(filepath, views, is_env_file(filepath), _pragma_in_bytes(raw), filepath)
+    if state["enabled"] and not scanned:
+        state["new"][cache_key] = {"sha": content_sha, "notices": [binary_notice] if binary_notice else []}
+    return scanned
 
 
 def scan_blob(label, content_bytes):
@@ -774,6 +914,11 @@ def scan_paths(paths):
             if committable is not None:
                 candidates = [p for p in candidates if p.resolve() in committable]
             files_to_scan.extend(candidates)
+        else:
+            # Tracker 17aa5e02e34d: a path that is neither a file nor a directory
+            # (a typo, a stale --from-stdin entry, a broken symlink) must fail
+            # closed, never be silently dropped into a CLEAN 0-files result.
+            raise ScanError(f"path does not exist or is not a file or directory: {path_str}")
     return [p for p in files_to_scan if p.is_file()]
 
 
@@ -784,11 +929,19 @@ def scan_content(content, scan_path=None):
     --history / prepublish scan permanently red."""
     findings = []
     for line_num, line in enumerate(content.split("\n"), start=1):
-        for rule_name, (pattern, flags) in PATTERNS.items():
-            matches = re.finditer(pattern, line, flags)
+        for rule_name, compiled in _COMPILED_PATTERNS.items():
+            matches = compiled.finditer(line)
             for match in matches:
                 match_str = match.group(0)
-                if is_placeholder(match_str):
+                if rule_name == "connection_string":
+                    # Tracker scan-content-dsn (refutes b0937071216e's history path):
+                    # route through the same password-only check as _scan_views, so a
+                    # real DSN whose DB name is `/test` is not excused as a placeholder.
+                    if _connection_password_is_placeholder(match_str):
+                        continue
+                    if _connection_password_is_regex_shape(match_str):
+                        continue
+                elif is_placeholder(match_str):
                     continue
                 is_fatal = _classify_finding(rule_name, False, scan_path)
                 findings.append((line_num, rule_name, match_str, is_fatal))
@@ -823,6 +976,11 @@ def main():
         "--repo",
         default=os.getcwd(),
         help="Git repo path (default: current directory)",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Full scan: read and write no clean-verdict cache (path mode)",
     )
     parser.add_argument(
         "paths", nargs="*", help="Paths to scan directly (files or directories)"
@@ -940,7 +1098,12 @@ def main():
             if line:
                 paths_from_stdin.append(line)
 
-        files = scan_paths(paths_from_stdin)
+        try:
+            files = scan_paths(paths_from_stdin)
+        except ScanError as e:
+            print(f"FATAL: {e}", file=sys.stderr)
+            print("Failing CLOSED: refusing to report CLEAN when a listed path cannot be scanned.", file=sys.stderr)
+            sys.exit(2)
         file_count = len(files)
         for filepath in files:
             try:
@@ -960,8 +1123,14 @@ def main():
                         allowed_doc_count += 1
 
     else:
-        files = scan_paths(args.paths)
+        try:
+            files = scan_paths(args.paths)
+        except ScanError as e:
+            print(f"FATAL: {e}", file=sys.stderr)
+            print("Failing CLOSED: refusing to report CLEAN when a path argument cannot be scanned.", file=sys.stderr)
+            sys.exit(2)
         file_count = len(files)
+        _clean_cache_begin(enabled=not args.no_cache)
         for filepath in files:
             try:
                 findings = scan_file(filepath)
@@ -978,6 +1147,7 @@ def main():
                         allowed_redaction_count += 1
                     else:
                         allowed_doc_count += 1
+        _clean_cache_commit()
 
     # Output findings
     for filepath, line_num, rule, match_str, is_fatal in all_findings:

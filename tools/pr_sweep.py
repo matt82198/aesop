@@ -59,8 +59,9 @@ Usage:
                               [--queue-path FILE] [--behind-cap N] [--log-path FILE]
 
 Exit codes: 0 = swept (incl. no-op), 1 = one or more PR actions failed (all PRs
-still attempted; failures listed on stderr), 2 = gh auth missing or PR listing failed, 3 = a zero-check read
-failed (nothing was acted on).
+still attempted; failures listed on stderr), 2 = gh auth missing, PR listing failed,
+or the listing hit the PR_LIST_LIMIT cap (partial sweep refused), 3 = a read that
+decides an action failed (required-checks or zero-check state; nothing was acted on).
 """
 import argparse
 import json
@@ -76,7 +77,7 @@ _TOOLS_DIR = Path(__file__).resolve().parent
 # only this form, not a conditional "if ... not in sys.path" variant.
 sys.path.insert(0, str(_TOOLS_DIR))
 
-from common import get_conductor_root  # noqa: E402
+from common import ConductorRootUnresolved, get_conductor_root  # noqa: E402
 
 DEFAULT_BEHIND_CAP = 2
 
@@ -126,9 +127,12 @@ def gh(*args):
     """
     cmd = ["gh"] + list(args)
     try:
+        # stdin=DEVNULL: the watchdog runs this hidden (CREATE_NO_WINDOW), where
+        # the inherited STD_INPUT_HANDLE is invalid and subprocess.run() raises
+        # OSError [WinError 6] before gh starts. gh never reads stdin here.
         result = subprocess.run(
-            cmd, capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=GH_TIMEOUT,
+            cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=GH_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
         return {"error": "gh call timed out: %s" % " ".join(args), "rc": -1}
@@ -168,27 +172,60 @@ def default_queue_path():
 
 PR_LIST_FIELDS = (
     "number,title,isDraft,autoMergeRequest,mergeStateStatus,updatedAt,"
-    "createdAt,headRefOid,headRefName,url,mergeable"
+    "createdAt,headRefOid,headRefName,baseRefName,url,mergeable"
 )
 
 
+# `gh pr list` returns at most --limit rows with no pagination, so the cap is
+# set well above any real open-PR count. A listing that reaches the cap is
+# refused (exit 2) rather than swept partially: the oldest PRs past the cap
+# would otherwise be silently never armed or nudged.
+PR_LIST_LIMIT = 1000
+# gh's answer when a branch has no required checks configured. It is an
+# empty set, not a read failure.
+NO_REQUIRED_CHECKS_MARK = "no required checks"
+
+
 def list_open_prs(repo=None):
-    args = ["pr", "list", "--state", "open", "--limit", "100", "--json", PR_LIST_FIELDS]
+    args = ["pr", "list", "--state", "open", "--limit", str(PR_LIST_LIMIT),
+            "--json", PR_LIST_FIELDS]
     if repo:
         args += ["--repo", repo]
     result = gh(*args)
     if isinstance(result, dict) and "error" in result:
         raise GhError(result["error"])
     if isinstance(result, list):
+        if len(result) >= PR_LIST_LIMIT:
+            raise GhError("PR listing reached the %d-row cap; refusing a partial sweep"
+                          % PR_LIST_LIMIT)
         return result
     return []
 
 
+def default_branch(repo=None):
+    """The repo's default branch name, the only base a lane PR may be armed
+    against. Any read failure raises GhError: an unknown default must never
+    let a stacked PR through, so the caller stops before any write."""
+    args = ["repo", "view", "--json", "defaultBranchRef"]
+    if repo:
+        args.insert(2, repo)
+    result = gh(*args)
+    if isinstance(result, dict) and "error" in result:
+        raise GhError("repo view failed: %s" % result["error"])
+    ref = result.get("defaultBranchRef") if isinstance(result, dict) else None
+    name = ref.get("name") if isinstance(ref, dict) else None
+    if not name:
+        raise GhError("repo view returned no defaultBranchRef.name: %r" % (result,))
+    return name
+
+
 def get_required_checks(pr_number, repo=None):
-    """Return the REQUIRED checks for pr_number, or [] if gh can't answer
-    (no branch protection, transient error, etc.) -- treated as "no evidence
-    of a stuck red", which is the fail-safe-against-false-alarms direction
-    for a tool that only ever appends advisory signal rows.
+    """Return the REQUIRED checks for pr_number. A branch with no required
+    checks configured yields []. Any other gh error (timeout, auth, 5xx,
+    unparseable output) raises GhError: an unreadable check state must never
+    be read as "no failing check", because the caller would then skip the
+    stuck-red signal on a guess. The caller turns GhError into exit 3 with
+    nothing acted on.
     """
     args = ["pr", "checks", str(pr_number), "--required", "--json",
             "name,bucket,completedAt,startedAt"]
@@ -197,7 +234,15 @@ def get_required_checks(pr_number, repo=None):
     result = gh(*args)
     if isinstance(result, list):
         return result
-    return []
+    if isinstance(result, dict) and "error" in result:
+        if NO_REQUIRED_CHECKS_MARK in str(result["error"]).lower():
+            return []
+        raise GhError("pr checks #%s failed: %s" % (pr_number, result["error"]))
+    if result == "":
+        return []
+    if isinstance(result, str) and NO_REQUIRED_CHECKS_MARK in result.lower():
+        return []
+    raise GhError("pr checks #%s returned unexpected output: %r" % (pr_number, result))
 
 
 def arm_auto_merge(pr_number, repo=None):
@@ -374,10 +419,30 @@ def build_plan(open_prs, repo, now, queue_path, behind_cap=DEFAULT_BEHIND_CAP):
     """
     actions = []
 
-    # (a) arm missing auto-merge
+    # (a) arm missing auto-merge -- ONLY for PRs based on the repo default
+    # branch. A stacked PR (base = another PR's branch) is left unarmed: GitHub
+    # would merge it into that parent, which has no protection and no CI, and
+    # `gh pr view` would then report MERGED for content that never reached the
+    # trunk. Reported as a "stacked" action, never armed.
+    trunk = default_branch(repo)
+    open_by_head = {p.get("headRefName"): p["number"] for p in open_prs
+                    if p.get("headRefName")}
     for p in open_prs:
-        if not p.get("autoMergeRequest"):
+        if p.get("autoMergeRequest"):
+            continue
+        base = p.get("baseRefName")
+        if base == trunk:
             actions.append({"kind": "arm", "pr": p["number"], "url": p.get("url", "")})
+            continue
+        parent = open_by_head.get(base)
+        if parent is not None:
+            reason = ("stacked on #%d; retarget to %s after #%d merges"
+                      % (parent, trunk, parent))
+        else:
+            reason = ("base %r is not the default branch %r; retarget to %s before arming"
+                      % (base, trunk, trunk))
+        actions.append({"kind": "stacked", "pr": p["number"], "url": p.get("url", ""),
+                        "parent": parent, "reason": reason})
 
     # (b) BEHIND, cap behind_cap, oldest (by createdAt) first, 20-min throttle
     behind_eligible = []
@@ -445,8 +510,8 @@ def record_pr_failure(results, lines, log_path, pr_number, kind, reason, err):
 
 def execute_plan(actions, repo, dry_run, queue_path, log_path=None):
     lines = []
-    results = {"armed": 0, "behind_refused": 0, "signaled": 0, "retriggered": 0,
-               "disarmed": 0, "errors": []}
+    results = {"armed": 0, "stacked_refused": 0, "behind_refused": 0, "signaled": 0,
+               "retriggered": 0, "disarmed": 0, "errors": []}
     for a in actions:
         if a["kind"] == "arm":
             lines.append("ARM #%s (auto-merge missing) %s" % (a["pr"], a.get("url", "")))
@@ -457,6 +522,11 @@ def execute_plan(actions, repo, dry_run, queue_path, log_path=None):
                 else:
                     record_pr_failure(results, lines, log_path, a["pr"], "arm",
                                       "auto-merge missing", err)
+        elif a["kind"] == "stacked":
+            lines.append("STACKED #%s (not armed: %s) %s" % (a["pr"], a["reason"], a.get("url", "")))
+            if not dry_run:
+                results["stacked_refused"] += 1
+                append_sweep_log(log_path, a["pr"], "stacked", a["reason"], "refused: not armed")
         elif a["kind"] == "behind":
             lines.append("BEHIND #%s (refused: lane merges main locally) %s" % (a["pr"], a.get("url", "")))
             if not dry_run:
@@ -571,7 +641,14 @@ def main(argv=None):
         _flush_receipts_if_possible()
 
     repo = resolve_repo(args.repo)
-    queue_path = Path(args.queue_path) if args.queue_path else default_queue_path()
+    # Fail closed before any write: a default queue/log path needs the conductor root,
+    # and an unresolved root must never be guessed (exit 2, nothing acted on).
+    try:
+        queue_path = Path(args.queue_path) if args.queue_path else default_queue_path()
+        default_log = None if args.log_path else default_sweep_log_path()
+    except ConductorRootUnresolved as exc:
+        print("ERROR: %s" % exc, file=sys.stderr)
+        return 2
 
     try:
         prs = list_open_prs(repo)
@@ -583,7 +660,7 @@ def main(argv=None):
     draft_count = sum(1 for p in prs if p.get("isDraft"))
     open_prs = [p for p in prs if not p.get("isDraft")]
 
-    log_path = Path(args.log_path) if args.log_path else default_sweep_log_path()
+    log_path = Path(args.log_path) if args.log_path else default_log
 
     # All gh reads happen inside build_plan; a failed read stops here, before
     # any write (fail closed: exit 3, nothing acted on).

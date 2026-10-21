@@ -214,6 +214,11 @@ gate_regen_command() {
   esac
 }
 
+# gate_owned_dir <path>: true only for a real (non-symlink) directory owned by the current user.
+gate_owned_dir() {
+  [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ]
+}
+
 gate_base_dir() {
   # Prints a directory holding the trunk's tools/ and .pyflakes-baseline.json:
   # the BASE gate copies. Every gate script this hook runs comes from here, never
@@ -221,8 +226,9 @@ gate_base_dir() {
   # push (F-04 / adv-enforcement F-03). Gate DATA roots (--root) still point at
   # the pushed tree; only gate code and gate baselines are pinned to base.
   # Content-addressed by the base commit, so one base is extracted once.
-  # The directory name carries a cache-format version (v2): v1 extractions held
-  # only tools/ and are never reused, because the base gates import state_store/
+  # The directory name carries the uid and a cache-format version (v5; the owner check is
+  # in the trust rule below). Older-version extractions are never reused. Earlier format v1 held
+  # only tools/ and is never reused, because the base gates import state_store/
   # too (tools/tracker_guard.py -> state_store.read_api) and a v1 copy fails
   # with ModuleNotFoundError on every push.
   # Every root package the base gates import is extracted: tools/ always, and
@@ -247,42 +253,60 @@ gate_base_dir() {
   fi
   [ -n "$base_sha" ] || return 1
   tmp_root="${TMPDIR:-/tmp}"
-  dir="$tmp_root/aesop-gate-base-v4-$base_sha"
-  if [ ! -f "$dir/.complete" ]; then
-    for root in tools state_store; do
-      if git cat-file -e "$base_sha:$root" 2>/dev/null; then
-        roots="$roots $root"
-      fi
-    done
-    staging=$(mktemp -d "$tmp_root/aesop-gate-stage.XXXXXX" 2>/dev/null) || return 1
-    if ! git archive "$base_sha" -- $roots 2>/dev/null | tar -x -C "$staging" 2>/dev/null \
-       || [ ! -d "$staging/tools" ]; then
+  # Trust rule (item c730e29d46ea): a cached base copy is reused only when THIS user owns it
+  # (gate_owned_dir) and it carries .complete. The name carries the uid, so a same-named
+  # directory planted by another local user is not ours: it is never reused, deleted or
+  # overwritten, and this push extracts privately instead.
+  dir="$tmp_root/aesop-gate-base-v5-$(id -u)-$base_sha"
+  if gate_owned_dir "$dir" && [ -f "$dir/.complete" ]; then
+    printf '%s\n' "$dir"
+    return 0
+  fi
+  # The slot is never deleted here: a directory at it is not known to be unused (another hook may
+  # be reading it), so a push that does not find a complete, owned copy extracts privately.
+  for root in tools state_store; do
+    if git cat-file -e "$base_sha:$root" 2>/dev/null; then
+      roots="$roots $root"
+    fi
+  done
+  # Staged per PID: concurrent pushes never share an extraction directory.
+  staging=$(mktemp -d "$tmp_root/aesop-gate-stage-$$.XXXXXX" 2>/dev/null) || return 1
+  if ! git archive "$base_sha" -- $roots 2>/dev/null | tar -x -C "$staging" 2>/dev/null \
+     || [ ! -d "$staging/tools" ]; then
+    rm -rf "$staging"
+    return 1
+  fi
+  # git records tools/*.py as 100644, and POSIX `[ -x ]` (check_secret_scan) then rejects the
+  # scanner on Linux. The base copy is private to this hook and content-addressed, so its
+  # gate scripts are made executable here; the -x check itself is unchanged.
+  find "$staging/tools" -maxdepth 1 -name '*.py' -exec chmod +x {} + 2>/dev/null
+  if git cat-file -e "$base_sha:.pyflakes-baseline.json" 2>/dev/null; then
+    if ! git show "$base_sha:.pyflakes-baseline.json" > "$staging/.pyflakes-baseline.json" 2>/dev/null; then
       rm -rf "$staging"
       return 1
     fi
-    # git records tools/*.py as 100644, and POSIX `[ -x ]` (check_secret_scan) then rejects the
-    # scanner on Linux. The base copy is private to this hook and content-addressed, so its
-    # gate scripts are made executable here; the -x check itself is unchanged.
-    find "$staging/tools" -maxdepth 1 -name '*.py' -exec chmod +x {} + 2>/dev/null
-    if git cat-file -e "$base_sha:.pyflakes-baseline.json" 2>/dev/null; then
-      if ! git show "$base_sha:.pyflakes-baseline.json" > "$staging/.pyflakes-baseline.json" 2>/dev/null; then
-        rm -rf "$staging"
-        return 1
-      fi
-    fi
-    # The inprocess-timeout trunk baseline (check_inprocess_http_timeout judges against it).
-    if git cat-file -e "$base_sha:.inprocess-timeout-baseline.json" 2>/dev/null; then
-      if ! git show "$base_sha:.inprocess-timeout-baseline.json" > "$staging/.inprocess-timeout-baseline.json" 2>/dev/null; then
-        rm -rf "$staging"
-        return 1
-      fi
-    fi
-    touch "$staging/.complete"
-    rm -rf "$dir"
-    mv "$staging" "$dir" 2>/dev/null || rm -rf "$staging"
-    [ -f "$dir/.complete" ] || return 1
   fi
-  printf '%s\n' "$dir"
+  # The inprocess-timeout trunk baseline (check_inprocess_http_timeout judges against it).
+  if git cat-file -e "$base_sha:.inprocess-timeout-baseline.json" 2>/dev/null; then
+    if ! git show "$base_sha:.inprocess-timeout-baseline.json" > "$staging/.inprocess-timeout-baseline.json" 2>/dev/null; then
+      rm -rf "$staging"
+      return 1
+    fi
+  fi
+  touch "$staging/.complete"
+  # Publish by rename into the free cache slot. A slot that is taken (a foreign directory, or a
+  # race) is never touched: the rename is skipped or fails, and this push uses its own private
+  # extraction. If a rename raced into a foreign directory, $staging no longer exists: fail closed.
+  if [ ! -e "$dir" ] && [ ! -L "$dir" ] && mv "$staging" "$dir" 2>/dev/null \
+     && gate_owned_dir "$dir" && [ -f "$dir/.complete" ]; then
+    printf '%s\n' "$dir"
+    return 0
+  fi
+  if [ -d "$staging" ] && [ -f "$staging/.complete" ]; then
+    printf '%s\n' "$staging"
+    return 0
+  fi
+  return 1
 }
 
 gate_base_block() {
@@ -1202,6 +1226,44 @@ check_gen_tool_index() {
     return 1
   fi
 
+  return 0
+}
+
+# Crash-recovery backup refs: refs/heads/backup/crash-YYYY-MM-DD/<name> (strict, nothing else).
+# A backup ref is never a merge target, so the metrics and python-test-coverage gates add no
+# protection there and only block data preservation. Secret scan and every other gate still run.
+BACKUP_REF_RE='^refs/heads/backup/crash-[0-9]{4}-[0-9]{2}-[0-9]{2}/[A-Za-z0-9][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)*$'
+BACKUP_PUSH=0
+BACKUP_REFS=""
+
+backup_only_push() {
+  # Reads pre-push stdin. Returns 0 (and sets BACKUP_REFS) only when there is at least one
+  # tuple, EVERY tuple is well-formed (4 fields) and EVERY remote ref matches BACKUP_REF_RE.
+  # Anything else (empty, malformed, mixed, tty) returns 1 => caller runs all gates (fail closed).
+  local local_ref local_sha remote_ref remote_sha extra n=0 refs=""
+  [ -t 0 ] && return 1
+  while IFS=' ' read -r local_ref local_sha remote_ref remote_sha extra || [ -n "$local_ref" ]; do
+    remote_ref="${remote_ref%$'\r'}"; remote_sha="${remote_sha%$'\r'}"; extra="${extra%$'\r'}"
+    if [ -z "$local_ref$local_sha$remote_ref$remote_sha" ]; then
+      continue
+    fi
+    [ -n "$extra" ] && return 1
+    [ -n "$remote_ref" ] && [ -n "$remote_sha" ] || return 1
+    [[ "$remote_ref" =~ $BACKUP_REF_RE ]] || return 1
+    n=$((n + 1))
+    refs="${refs:+$refs,}$remote_ref"
+  done
+  [ "$n" -gt 0 ] || return 1
+  BACKUP_REFS="$refs"
+  return 0
+}
+
+backup_ref_skip() {
+  # Returns 0 (gate skipped, loudly) when this push is backup-refs-only, else 1 (run the gate).
+  local gate="$1"
+  [ "$BACKUP_PUSH" = "1" ] || return 1
+  printf 'NOTE: skipping %s gate for crash-backup ref(s): %s\n' "$gate" "$BACKUP_REFS" >&2
+  log_event "gate_skipped_backup_ref:${gate}:${BACKUP_REFS}"
   return 0
 }
 
@@ -3478,6 +3540,20 @@ main() {
     exit 1
   fi
 
+  # Box fence push-time re-check (tools/box_fence.py): when an earlier fence run could not reach
+  # origin it left a marker in the git dir. Before any push, re-verify BOX_PROTOCOL; still offline
+  # or behind means the push is blocked (an offline box could not collide until now).
+  local fence_root fence_gitdir
+  fence_root=$(resolve_aesop_root)
+  fence_gitdir=$(git rev-parse --absolute-git-dir 2>/dev/null || true)
+  if [ -n "$fence_gitdir" ] && [ -f "$fence_gitdir/aesop-box-fence-offline" ] && [ -f "$fence_root/tools/box_fence.py" ]; then
+    if ! "$_AESOP_PY_BIN" "$fence_root/tools/box_fence.py" --repo "$fence_root" --push-check < /dev/null >&2; then
+      printf 'Error: box fence: this box could not prove it is current; push blocked (fail-closed)\n' >&2
+      log_block "box_fence_push_check_failed"
+      exit 1
+    fi
+  fi
+
   # git pre-push provides ref info on stdin, and BOTH check_branch_policy and
   # check_secret_scan (via get_commit_range) need to read every ref tuple.
   # Capture the real pipe ONCE here and hand each consumer its own here-string
@@ -3488,6 +3564,11 @@ main() {
   local prepush_stdin=""
   if [ ! -t 0 ]; then
     prepush_stdin=$(cat)
+  fi
+
+  # Backup-refs-only push? (strict match; any parse doubt => all gates run)
+  if backup_only_push <<< "$prepush_stdin"; then
+    BACKUP_PUSH=1
   fi
 
   if ! check_branch_policy <<< "$prepush_stdin"; then
@@ -3561,7 +3642,7 @@ main() {
 
   # Same captured stdin as the other range gates: check_metrics scans the pushed refs,
   # not the current branch (v0.10.1 incident).
-  if ! check_metrics <<< "$prepush_stdin"; then
+  if ! backup_ref_skip metrics && ! check_metrics <<< "$prepush_stdin"; then
     printf 'Error: Metrics verification gate failed. Push blocked.\n' >&2
     log_block "metrics_gate_failure"
     exit 1
@@ -3605,7 +3686,7 @@ main() {
     exit 1
   fi
 
-  if ! check_test_coverage; then
+  if ! backup_ref_skip test_coverage && ! check_test_coverage; then
     printf 'Error: Test coverage check failed. Push blocked.\n' >&2
     log_block "test_coverage_failure"
     exit 1
