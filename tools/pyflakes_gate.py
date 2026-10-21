@@ -45,6 +45,15 @@ CLI:
   --baseline FILE: baseline file (default: .pyflakes-baseline.json)
   --update-baseline: regenerate --baseline from the current scan
                       (review-only; CI must never pass this)
+  --no-cache: full scan (no per-file result cache read or write)
+  --cache-dir DIR: per-file result cache directory (default
+                   $AESOP_STATE_ROOT/cache/pyflakes, else the temp dir)
+
+Speed: pyflakes analyses one file at a time, so unchanged files reuse their
+recorded messages from the cache (keyed by path + sha256 of bytes). The
+verdict is identical to a full scan; the JSON "scan" block and the
+"pyflakes_gate: scan ..." line say whether a full-scan fallback happened and
+why (cold cache, unreadable/mismatched cache, missing baseline, --no-cache).
 
 Exit codes: 0 clean/baselined, 1 new-or-stale findings (ratchet mismatch)
 or bare findings (non-ratchet mode), 2 error (pyflakes not installed,
@@ -52,11 +61,13 @@ unreadable paths, malformed baseline/usage error).
 """
 
 import argparse
+import hashlib
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 DEFAULT_PATHS = [
     "tools",
@@ -94,40 +105,177 @@ class _Collector:
         self.flakes.append(message)
 
 
-def run_pyflakes(root: Path, paths: List[str]) -> Tuple[List[dict], List[str], bool]:
-    """Run pyflakes over the given repo-relative paths.
+CACHE_SCHEMA = 1
+_CACHE_MESSAGE_KEYS = ("line", "col", "category", "text")
 
-    Returns (findings, errors, pyflakes_available). Each finding is a dict with
-    file (repo-relative, forward slashes), line, col, category (message class
-    name), message (str(warning)).
+
+def default_cache_dir() -> Path:
+    """Per-machine cache directory, outside the repo (state root, else the temp dir)."""
+    state_root = os.environ.get("AESOP_STATE_ROOT")
+    base = Path(state_root) if state_root else Path(tempfile.gettempdir()) / "aesop"
+    return base / "cache" / "pyflakes"
+
+
+def _cache_file(cache_dir: Path, root: Path) -> Path:
+    """One cache file per repo root, so a different --root never reuses another root's results."""
+    digest = hashlib.sha256(str(root).encode("utf-8", "replace")).hexdigest()[:24]
+    return Path(cache_dir) / f"{digest}.json"
+
+
+def _cache_tag(pyflakes_module) -> str:
+    """Anything that can change a per-file pyflakes result invalidates the whole cache."""
+    return "schema=%d;pyflakes=%s;python=%s" % (
+        CACHE_SCHEMA,
+        getattr(pyflakes_module, "__version__", "?"),
+        ".".join(str(part) for part in sys.version_info[:3]),
+    )
+
+
+def _entry_key(rel_path: str, data: bytes) -> str:
+    """Content key: the path as pyflakes sees it (basename matters) plus the file bytes."""
+    digest = hashlib.sha256()
+    digest.update(rel_path.encode("utf-8", "replace"))
+    digest.update(b"\0")
+    digest.update(data)
+    return digest.hexdigest()
+
+
+def _valid_entry(entry) -> bool:
+    if not isinstance(entry, list):
+        return False
+    for msg in entry:
+        if not isinstance(msg, dict) or any(k not in msg for k in _CACHE_MESSAGE_KEYS):
+            return False
+        if not isinstance(msg["line"], int) or not isinstance(msg["col"], int):
+            return False
+    return True
+
+
+def _load_cache(cache_file: Path, tag: str) -> Tuple[Optional[dict], str]:
+    """Return (entries, reason). entries is None when the cache cannot be used (full scan)."""
+    if not cache_file.exists():
+        return None, "cold cache"
+    try:
+        data = json.loads(cache_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, "cache unreadable"
+    if not isinstance(data, dict) or not isinstance(data.get("entries"), dict):
+        return None, "cache unreadable"
+    if data.get("tag") != tag:
+        return None, "cache version mismatch"
+    return data["entries"], ""
+
+
+def _save_cache(cache_file: Path, tag: str, entries: Dict[str, list]) -> None:
+    """Atomically replace the cache with the entries seen this run. Failure only costs speed."""
+    tmp_name = None
+    try:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(dir=str(cache_file.parent), suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"tag": tag, "entries": entries}, sort_keys=True))
+        os.replace(tmp_name, cache_file)
+    except OSError:
+        if tmp_name and os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+
+
+def run_pyflakes(root: Path, paths: List[str], cache_file: Optional[Path] = None,
+                 forced_reason: str = "") -> Tuple[List[dict], List[str], bool, dict]:
+    """Run pyflakes over the given repo-relative paths, reusing cached per-file results.
+
+    pyflakes analyses one file at a time, so a file's messages depend only on its
+    path and bytes. Each file is keyed by (path, sha256 of bytes); a hit reuses the
+    recorded messages, a miss runs pyflakes on that file alone. Every file in the
+    scan set is still enumerated and read, so the finding set is the same as a full
+    scan. cache_file=None (or a non-empty forced_reason) makes it a full scan.
+
+    Returns (findings, errors, pyflakes_available, scan). Each finding is a dict with
+    file (repo-relative, forward slashes), line, category (message class name),
+    message (str(warning)). scan reports mode (full|incremental), reason, scanned,
+    reused.
     """
     try:
+        import pyflakes
         import pyflakes.api as api
     except ImportError:
-        return [], [], False
+        return [], [], False, {}
 
     existing = [p for p in paths if (root / p).exists()]
     if not existing:
-        return [], [f"no scannable paths found under {root} (looked for {paths})"], True
+        return [], [f"no scannable paths found under {root} (looked for {paths})"], True, {}
 
-    collector = _Collector()
+    tag = _cache_tag(pyflakes)
+    old_entries: dict = {}
+    reason = forced_reason
+    if cache_file is None:
+        reason = forced_reason or "cache disabled (--no-cache)"
+    elif not forced_reason:
+        loaded, load_reason = _load_cache(cache_file, tag)
+        if loaded is None:
+            reason = load_reason
+        else:
+            old_entries = loaded
+
+    findings: List[dict] = []
+    errors: List[str] = []
+    live: Dict[str, list] = {}
+    scanned = reused = 0
     cwd = os.getcwd()
     try:
         os.chdir(root)
-        api.checkRecursive(existing, collector)
+        for filename in api.iterSourceCode(existing):
+            try:
+                with open(filename, "rb") as fh:
+                    data = fh.read()
+            except OSError as exc:
+                errors.append(f"{filename}: {exc.args[1] if len(exc.args) > 1 else exc}")
+                continue
+            key = _entry_key(filename, data)
+            cached = old_entries.get(key)
+            if _valid_entry(cached):
+                messages = cached
+                reused += 1
+            else:
+                collector = _Collector()
+                api.check(data, filename, collector)
+                errors.extend(collector.errors)
+                if collector.errors:
+                    continue
+                messages = [
+                    {
+                        "line": getattr(w, "lineno", 0),
+                        "col": getattr(w, "col", 0),
+                        "category": type(w).__name__,
+                        "text": w.message % w.message_args,
+                    }
+                    for w in collector.flakes
+                ]
+                scanned += 1
+            live[key] = messages
+            rel = _normalize(os.path.relpath(filename, ".") if os.path.isabs(filename) else filename)
+            for msg in messages:
+                findings.append({
+                    "file": rel,
+                    "line": msg["line"],
+                    "category": msg["category"],
+                    "message": "%s:%s:%s: %s" % (filename, msg["line"], msg["col"] + 1, msg["text"]),
+                })
     finally:
         os.chdir(cwd)
 
-    findings = []
-    for w in collector.flakes:
-        findings.append({
-            "file": _normalize(os.path.relpath(w.filename, ".") if os.path.isabs(w.filename) else w.filename),
-            "line": getattr(w, "lineno", 0),
-            "category": type(w).__name__,
-            "message": str(w),
-        })
+    if cache_file is not None and not errors:
+        _save_cache(cache_file, tag, live)
+    if not reason and reused == 0:
+        reason = "no cached entries matched"
+    scan = {
+        "mode": "incremental" if reused else "full",
+        "reason": reason,
+        "scanned": scanned,
+        "reused": reused,
+    }
     findings.sort(key=lambda f: (f["file"], f["line"], f["category"]))
-    return findings, collector.errors, True
+    return findings, errors, True, scan
 
 
 def findings_to_baseline_keys(findings: List[dict]) -> Dict[str, int]:
@@ -239,6 +387,18 @@ def category_counts(findings: List[dict]) -> Dict[str, int]:
     return counts
 
 
+def format_scan_line(scan: dict) -> str:
+    """One line saying whether the scan was incremental or a full fallback, and why."""
+    if not scan:
+        return "pyflakes_gate: scan: none"
+    line = "pyflakes_gate: scan %s (scanned %d, reused %d)" % (
+        scan["mode"], scan["scanned"], scan["reused"],
+    )
+    if scan["mode"] == "full" and scan["reason"]:
+        line += " -- full scan fallback: %s" % scan["reason"]
+    return line
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--root", default=".", help="Repository root (default: current directory)")
@@ -248,6 +408,8 @@ def main(argv=None) -> int:
     parser.add_argument("--trunk-baseline", default=None, help="Pre-push trunk mode: the trunk's baseline. --baseline (the branch copy) must be a burn-down of it (strict subset, scan within it) or the gate fails; additions and missing/malformed baselines fail")
     parser.add_argument("--update-baseline", action="store_true", help="Regenerate --baseline from the current scan (review-only; CI must never pass this)")
     parser.add_argument("--check", action="store_true", help="(default behavior) run the gate check")
+    parser.add_argument("--no-cache", action="store_true", help="Full scan: neither read nor write the per-file result cache")
+    parser.add_argument("--cache-dir", default=None, help="Per-file result cache directory (default: $AESOP_STATE_ROOT/cache/pyflakes, else the temp dir)")
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
@@ -257,7 +419,20 @@ def main(argv=None) -> int:
         print("pyflakes_gate: --update-baseline requires --baseline FILE", file=sys.stderr)
         return 2
 
-    findings, errors, available = run_pyflakes(root, paths)
+    # The cache only skips re-analysis of unchanged files; it never changes the verdict.
+    # --update-baseline and --no-cache always do a full scan; a missing baseline does too.
+    cache_file = None
+    forced_reason = ""
+    if args.update_baseline:
+        forced_reason = "full scan requested (--update-baseline)"
+    elif args.no_cache:
+        cache_file = None
+    else:
+        cache_file = _cache_file(Path(args.cache_dir) if args.cache_dir else default_cache_dir(), root)
+    if args.baseline and not args.update_baseline and not (root / args.baseline).is_file():
+        forced_reason = "baseline missing"
+
+    findings, errors, available, scan = run_pyflakes(root, paths, cache_file, forced_reason)
 
     if not available:
         print(
@@ -321,9 +496,11 @@ def main(argv=None) -> int:
                 "new": new,
                 "burned_down": burned,
                 "by_category": category_counts(findings),
+                "scan": scan,
                 "findings": findings,
             }, indent=2))
         else:
+            print(format_scan_line(scan))
             if is_ok:
                 print(
                     f"pyflakes_gate: PASS (ratchet: {len(findings)} baselined "
@@ -357,8 +534,10 @@ def main(argv=None) -> int:
         print(json.dumps({
             "findings": findings,
             "by_category": category_counts(findings),
+            "scan": scan,
         }, indent=2))
     else:
+        print(format_scan_line(scan))
         if findings:
             print(f"Found {len(findings)} pyflakes finding(s):", file=sys.stderr)
             for i, f in enumerate(findings, 1):
