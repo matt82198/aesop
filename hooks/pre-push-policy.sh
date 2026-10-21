@@ -214,6 +214,11 @@ gate_regen_command() {
   esac
 }
 
+# gate_owned_dir <path>: true only for a real (non-symlink) directory owned by the current user.
+gate_owned_dir() {
+  [ -d "$1" ] && [ ! -L "$1" ] && [ -O "$1" ]
+}
+
 gate_base_dir() {
   # Prints a directory holding the trunk's tools/ and .pyflakes-baseline.json:
   # the BASE gate copies. Every gate script this hook runs comes from here, never
@@ -221,8 +226,9 @@ gate_base_dir() {
   # push (F-04 / adv-enforcement F-03). Gate DATA roots (--root) still point at
   # the pushed tree; only gate code and gate baselines are pinned to base.
   # Content-addressed by the base commit, so one base is extracted once.
-  # The directory name carries a cache-format version (v2): v1 extractions held
-  # only tools/ and are never reused, because the base gates import state_store/
+  # The directory name carries the uid and a cache-format version (v5; the owner check is
+  # in the trust rule below). Older-version extractions are never reused. Earlier format v1 held
+  # only tools/ and is never reused, because the base gates import state_store/
   # too (tools/tracker_guard.py -> state_store.read_api) and a v1 copy fails
   # with ModuleNotFoundError on every push.
   # Every root package the base gates import is extracted: tools/ always, and
@@ -247,42 +253,60 @@ gate_base_dir() {
   fi
   [ -n "$base_sha" ] || return 1
   tmp_root="${TMPDIR:-/tmp}"
-  dir="$tmp_root/aesop-gate-base-v4-$base_sha"
-  if [ ! -f "$dir/.complete" ]; then
-    for root in tools state_store; do
-      if git cat-file -e "$base_sha:$root" 2>/dev/null; then
-        roots="$roots $root"
-      fi
-    done
-    staging=$(mktemp -d "$tmp_root/aesop-gate-stage.XXXXXX" 2>/dev/null) || return 1
-    if ! git archive "$base_sha" -- $roots 2>/dev/null | tar -x -C "$staging" 2>/dev/null \
-       || [ ! -d "$staging/tools" ]; then
+  # Trust rule (item c730e29d46ea): a cached base copy is reused only when THIS user owns it
+  # (gate_owned_dir) and it carries .complete. The name carries the uid, so a same-named
+  # directory planted by another local user is not ours: it is never reused, deleted or
+  # overwritten, and this push extracts privately instead.
+  dir="$tmp_root/aesop-gate-base-v5-$(id -u)-$base_sha"
+  if gate_owned_dir "$dir" && [ -f "$dir/.complete" ]; then
+    printf '%s\n' "$dir"
+    return 0
+  fi
+  # The slot is never deleted here: a directory at it is not known to be unused (another hook may
+  # be reading it), so a push that does not find a complete, owned copy extracts privately.
+  for root in tools state_store; do
+    if git cat-file -e "$base_sha:$root" 2>/dev/null; then
+      roots="$roots $root"
+    fi
+  done
+  # Staged per PID: concurrent pushes never share an extraction directory.
+  staging=$(mktemp -d "$tmp_root/aesop-gate-stage-$$.XXXXXX" 2>/dev/null) || return 1
+  if ! git archive "$base_sha" -- $roots 2>/dev/null | tar -x -C "$staging" 2>/dev/null \
+     || [ ! -d "$staging/tools" ]; then
+    rm -rf "$staging"
+    return 1
+  fi
+  # git records tools/*.py as 100644, and POSIX `[ -x ]` (check_secret_scan) then rejects the
+  # scanner on Linux. The base copy is private to this hook and content-addressed, so its
+  # gate scripts are made executable here; the -x check itself is unchanged.
+  find "$staging/tools" -maxdepth 1 -name '*.py' -exec chmod +x {} + 2>/dev/null
+  if git cat-file -e "$base_sha:.pyflakes-baseline.json" 2>/dev/null; then
+    if ! git show "$base_sha:.pyflakes-baseline.json" > "$staging/.pyflakes-baseline.json" 2>/dev/null; then
       rm -rf "$staging"
       return 1
     fi
-    # git records tools/*.py as 100644, and POSIX `[ -x ]` (check_secret_scan) then rejects the
-    # scanner on Linux. The base copy is private to this hook and content-addressed, so its
-    # gate scripts are made executable here; the -x check itself is unchanged.
-    find "$staging/tools" -maxdepth 1 -name '*.py' -exec chmod +x {} + 2>/dev/null
-    if git cat-file -e "$base_sha:.pyflakes-baseline.json" 2>/dev/null; then
-      if ! git show "$base_sha:.pyflakes-baseline.json" > "$staging/.pyflakes-baseline.json" 2>/dev/null; then
-        rm -rf "$staging"
-        return 1
-      fi
-    fi
-    # The inprocess-timeout trunk baseline (check_inprocess_http_timeout judges against it).
-    if git cat-file -e "$base_sha:.inprocess-timeout-baseline.json" 2>/dev/null; then
-      if ! git show "$base_sha:.inprocess-timeout-baseline.json" > "$staging/.inprocess-timeout-baseline.json" 2>/dev/null; then
-        rm -rf "$staging"
-        return 1
-      fi
-    fi
-    touch "$staging/.complete"
-    rm -rf "$dir"
-    mv "$staging" "$dir" 2>/dev/null || rm -rf "$staging"
-    [ -f "$dir/.complete" ] || return 1
   fi
-  printf '%s\n' "$dir"
+  # The inprocess-timeout trunk baseline (check_inprocess_http_timeout judges against it).
+  if git cat-file -e "$base_sha:.inprocess-timeout-baseline.json" 2>/dev/null; then
+    if ! git show "$base_sha:.inprocess-timeout-baseline.json" > "$staging/.inprocess-timeout-baseline.json" 2>/dev/null; then
+      rm -rf "$staging"
+      return 1
+    fi
+  fi
+  touch "$staging/.complete"
+  # Publish by rename into the free cache slot. A slot that is taken (a foreign directory, or a
+  # race) is never touched: the rename is skipped or fails, and this push uses its own private
+  # extraction. If a rename raced into a foreign directory, $staging no longer exists: fail closed.
+  if [ ! -e "$dir" ] && [ ! -L "$dir" ] && mv "$staging" "$dir" 2>/dev/null \
+     && gate_owned_dir "$dir" && [ -f "$dir/.complete" ]; then
+    printf '%s\n' "$dir"
+    return 0
+  fi
+  if [ -d "$staging" ] && [ -f "$staging/.complete" ]; then
+    printf '%s\n' "$staging"
+    return 0
+  fi
+  return 1
 }
 
 gate_base_block() {

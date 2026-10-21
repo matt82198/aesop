@@ -2611,6 +2611,99 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+# ===== Gate-base cache must never trust a pre-planted directory (item c730e29d46ea) =====
+# Threat: the base gate copy was cached at the predictable path $TMPDIR/aesop-gate-base-v4-<sha>
+# and reused whenever a .complete marker existed. Another local user on a shared host can
+# plant that directory with a poisoned tools/; every gate would then run their code.
+printf '\n=== Test: a pre-planted gate-base cache dir (predictable name + .complete) is never used ===\n'
+(
+  export TMPDIR="$TEST_ROOT/planted_tmp"
+  mkdir -p "$TMPDIR"
+  clone="$TEST_ROOT/planted_clone"
+  make_clone_with_base "$clone" "$REPO_ROOT/tools"
+  base_sha=$(git -C "$clone" rev-parse --verify -q "origin/main^{commit}") || exit 1
+  planted="$TMPDIR/aesop-gate-base-v4-$base_sha"
+  mkdir -p "$planted/tools"
+  : > "$planted/.complete"
+  printf 'print("CLEAN: poisoned gate")\n' > "$planted/tools/secret_scan.py"
+  pristine="$TEST_ROOT/planted_pristine_scan.py"
+  git -C "$clone" show "$base_sha:tools/secret_scan.py" > "$pristine" || exit 1
+  got=$(cd "$clone" && gate_base_dir 2>/dev/null) || { printf 'FAIL: gate_base_dir failed\n'; exit 1; }
+  if [ "$got" = "$planted" ]; then
+    printf 'FAIL: gate_base_dir returned the pre-planted directory: %s\n' "$got"
+    exit 1
+  fi
+  if ! cmp -s "$got/tools/secret_scan.py" "$pristine"; then
+    printf 'FAIL: base gate copy %s is not the trunk tools/secret_scan.py\n' "$got"
+    exit 1
+  fi
+  printf 'PASS: pre-planted cache ignored; base gate copy is the trunk content (%s)\n' "$got"
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Test: the base gate copy is still cached (second call reuses the same verified dir) ===\n'
+(
+  export TMPDIR="$TEST_ROOT/cache_reuse_tmp"
+  mkdir -p "$TMPDIR"
+  clone="$TEST_ROOT/cache_reuse_clone"
+  make_clone_with_base "$clone" "$REPO_ROOT/tools"
+  first=$(cd "$clone" && gate_base_dir 2>/dev/null) || { printf 'FAIL: first gate_base_dir failed\n'; exit 1; }
+  second=$(cd "$clone" && gate_base_dir 2>/dev/null) || { printf 'FAIL: second gate_base_dir failed\n'; exit 1; }
+  if [ -z "$first" ] || [ "$first" != "$second" ]; then
+    printf 'FAIL: cache not reused: first=%s second=%s\n' "$first" "$second"
+    exit 1
+  fi
+  if [ ! -f "$second/tools/secret_scan.py" ]; then
+    printf 'FAIL: reused base copy lacks tools/secret_scan.py: %s\n' "$second"
+    exit 1
+  fi
+  printf 'PASS: base gate copy reused across calls (%s)\n' "$second"
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+# ===== A losing push must never delete the cache slot it does not own (item c730e29d46ea race) =====
+# Race: a push that finds the cache slot occupied by a directory without .complete used to rm -rf
+# it, which can delete a copy another hook is reading. Such a push must leave the slot untouched
+# and extract privately. The sentinel file stands in for that reader.
+printf '\n=== Test: a losing push never rm -rf the cache slot it does not own ===\n'
+(
+  export TMPDIR="$TEST_ROOT/race_tmp"
+  mkdir -p "$TMPDIR"
+  clone="$TEST_ROOT/race_clone"
+  make_clone_with_base "$clone" "$REPO_ROOT/tools"
+  base_sha=$(git -C "$clone" rev-parse --verify -q "origin/main^{commit}") || exit 1
+  slot="$TMPDIR/aesop-gate-base-v5-$(id -u)-$base_sha"
+  mkdir -p "$slot/tools"
+  printf 'reader in use\n' > "$slot/in-use.marker"
+  got=$(cd "$clone" && gate_base_dir 2>/dev/null) || { printf 'FAIL: gate_base_dir failed\n'; exit 1; }
+  if [ ! -f "$slot/in-use.marker" ]; then
+    printf 'FAIL: the cache slot was deleted by a push that does not own it: %s\n' "$slot"
+    exit 1
+  fi
+  if [ "$got" = "$slot" ]; then
+    printf 'FAIL: returned the slot that was not complete and not ours: %s\n' "$got"
+    exit 1
+  fi
+  if ! git -C "$clone" show "origin/main:tools/secret_scan.py" | cmp -s - "$got/tools/secret_scan.py"; then
+    printf 'FAIL: private base copy %s is not the trunk tools/secret_scan.py\n' "$got"
+    exit 1
+  fi
+  printf 'PASS: occupied slot left intact; private trunk extraction used (%s)\n' "$got"
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Backup-ref scope: crash-backup refs skip metrics + test-coverage gates ONLY ===\n'
 (
   # End-to-end through main(): metrics_gate.py and verify_test_coverage.py are
