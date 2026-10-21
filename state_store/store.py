@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import sys
 import threading
@@ -27,6 +28,36 @@ import time
 # Retry configuration for database lock contention (especially under parallel CI shards)
 _MAX_DB_LOCK_RETRIES = 3
 _DB_LOCK_RETRY_BASE_DELAY = 0.05  # 50ms base, exponential backoff
+_DEFAULT_BUSY_TIMEOUT_MS = 5000
+
+# One write lock per database file, shared by every EventStore in this process.
+# Threads in one process serialize their BEGIN IMMEDIATE transactions here instead
+# of racing for the SQLite write lock, so SQLite's busy handler (which polls with
+# coarse backoff and can starve a writer past the busy window) only ever sees
+# contention from other processes. Keyed by absolute path; entries are never
+# evicted (one small lock per distinct database path used in the process).
+_WRITE_LOCKS: dict[str, threading.Lock] = {}
+_WRITE_LOCKS_GUARD = threading.Lock()
+
+
+def _write_lock_for(db_path: str) -> threading.Lock:
+    """Return the process-wide write lock for ``db_path``, creating it on first use."""
+    key = os.path.abspath(db_path)
+    with _WRITE_LOCKS_GUARD:
+        lock = _WRITE_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _WRITE_LOCKS[key] = lock
+        return lock
+
+
+class StoreBusyError(sqlite3.OperationalError):
+    """Raised when a write cannot take the SQLite write lock inside the busy window.
+
+    Subclasses ``sqlite3.OperationalError`` so existing callers that catch the
+    sqlite3 base class keep working; the message keeps the ``database is locked``
+    text. No event is written when this exception is raised.
+    """
 
 
 class ConcurrencyConflict(Exception):
@@ -66,7 +97,8 @@ def _retry_on_db_lock(func, max_retries=_MAX_DB_LOCK_RETRIES, base_delay=_DB_LOC
         The return value of func().
 
     Raises:
-        sqlite3.OperationalError: If all retries are exhausted or non-lock error occurs.
+        StoreBusyError: If all retries are exhausted on a lock error.
+        sqlite3.OperationalError: For any non-lock error (re-raised unchanged).
     """
     for attempt in range(max_retries):
         try:
@@ -75,7 +107,7 @@ def _retry_on_db_lock(func, max_retries=_MAX_DB_LOCK_RETRIES, base_delay=_DB_LOC
             if "database is locked" not in str(e):
                 raise
             if attempt == max_retries - 1:
-                raise
+                raise StoreBusyError(str(e)) from e
             time.sleep(base_delay * (2 ** attempt))  # exponential: 0.05s, 0.1s, 0.2s
 
 
@@ -98,8 +130,20 @@ class EventStore:
     SQLite connections hold file locks that prevent temp-dir cleanup.
     """
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, busy_timeout_ms: int = _DEFAULT_BUSY_TIMEOUT_MS):
+        """Open (or create) the event log at ``db_path``.
+
+        Args:
+            db_path: SQLite file path.
+            busy_timeout_ms: How long one SQLite write waits for the database
+                write lock held by another process before that attempt fails.
+                A write makes up to ``_MAX_DB_LOCK_RETRIES`` attempts, so the
+                worst-case cross-process wait is about that many windows plus
+                backoff. Exhaustion raises ``StoreBusyError``.
+        """
         self.db_path = db_path
+        self.busy_timeout_ms = busy_timeout_ms
+        self._write_lock = _write_lock_for(db_path)
         self._local = threading.local()
         self._all_conns: list[sqlite3.Connection] = []
         self._all_conns_lock = threading.Lock()
@@ -155,9 +199,13 @@ class EventStore:
         """
         conn = getattr(self._local, "conn", None)
         if conn is None:
-            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            conn = sqlite3.connect(
+                self.db_path,
+                check_same_thread=False,
+                timeout=self.busy_timeout_ms / 1000,
+            )
+            conn.execute(f"PRAGMA busy_timeout={int(self.busy_timeout_ms)}")
             conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA busy_timeout=5000")
             self._local.conn = conn
             with self._all_conns_lock:
                 self._all_conns.append(conn)
@@ -275,7 +323,17 @@ class EventStore:
                     pass
                 raise
 
-        return _retry_on_db_lock(_do_append)
+        return self._locked_write(_do_append)
+
+    def _locked_write(self, fn):
+        """Run one write transaction under the in-process write lock, with lock retry.
+
+        The in-process lock is taken blocking: it is only ever held by a write
+        transaction in this process, and that transaction is itself bounded by
+        the SQLite busy window, so the wait cannot hang.
+        """
+        with self._write_lock:
+            return _retry_on_db_lock(fn)
 
     def read(self, stream: str) -> list:
         """Return all events for ``stream`` ascending by version (empty if none)."""
@@ -357,7 +415,7 @@ class EventStore:
                     pass
                 raise
 
-        _retry_on_db_lock(_do_save_snapshot)
+        self._locked_write(_do_save_snapshot)
 
     def read_snapshot(self, stream: str) -> tuple | None:
         """Read the most recent snapshot for a stream.
