@@ -16,12 +16,12 @@ Offline (no API key, no network, canned mock responses):
   python bench/frontier_slice.py --mode offline
 
 Live (ANTHROPIC_API_KEY, real models, cost-gated):
-  python bench/frontier_slice.py --mode live --model claude-3-5-haiku-20241022 --confirm-spend
-  python bench/frontier_slice.py --mode live --model claude-3-5-opus-20241022 --confirm-spend
+  python bench/frontier_slice.py --mode live --model claude-opus-5-5 --confirm-spend
 
 Cost estimate (before running live):
-  python bench/frontier_slice.py --mode live --model claude-3-5-opus-20241022
-  (prints estimate and exits 2 without --confirm-spend)
+  python bench/frontier_slice.py --mode live --model claude-opus-5-5
+  (prints estimate and exits 2 without --confirm-spend; exits 2 with an
+  explicit error if the model has no verified price in MODEL_PRICING_USD_PER_MTOK)
 """
 
 import argparse
@@ -214,66 +214,73 @@ class FakeTransport:
 # ============================================================================
 
 
+DEFAULT_MODEL = "claude-opus-5-5"
+
+# Billed (input, output) USD per million tokens, keyed by model ID.
+# Source: https://platform.claude.com/docs/en/about-claude/models/overview.md
+# (verified 2026-10-13). Haiku 5.5 input is TIERED: $0.10/MTok applies to requests
+# up to 100K tokens; the rate above that tier is not modelled here, so estimates
+# for larger requests understate cost. Any model not listed fails closed.
+MODEL_PRICING_USD_PER_MTOK: Dict[str, Tuple[float, float]] = {
+    "claude-opus-5-5": (4.0, 20.0),
+    "claude-sonnet-5-5": (2.0, 10.0),
+    "claude-haiku-5-5": (0.10, 0.50),
+}
+
+
+class UnknownModelPricingError(ValueError):
+    """Raised when a model has no verified price; the live run and estimate refuse."""
+
+
+def _price_for(model: str) -> Tuple[float, float]:
+    """Return (input, output) USD per MTok for model, or raise UnknownModelPricingError."""
+    rates = MODEL_PRICING_USD_PER_MTOK.get(model)
+    if rates is None:
+        raise UnknownModelPricingError(
+            f"no verified price for model '{model}' in MODEL_PRICING_USD_PER_MTOK; "
+            "refusing to estimate or run (no fallback rate is used)"
+        )
+    return rates
+
+
+def _print_cost_estimate(tasks: List[FrontierTask], rates: Tuple[float, float]) -> None:
+    """Print the pre-spend cost estimate (input ~1000 tokens per task, output ~300)."""
+    input_rate, output_rate = rates
+    input_tokens_estimate = len(tasks) * 1000
+    output_tokens_estimate = len(tasks) * 300
+    estimated_cost_usd = (
+        (input_tokens_estimate / 1_000_000) * input_rate +
+        (output_tokens_estimate / 1_000_000) * output_rate
+    )
+    print(f"\n{'='*70}")
+    print(f"COST ESTIMATE: {len(tasks)} frontier tasks")
+    print(f"  Input:  ~{input_tokens_estimate:,} tokens @ ${input_rate:.2f}/MTok")
+    print(f"  Output: ~{output_tokens_estimate:,} tokens @ ${output_rate:.2f}/MTok")
+    print(f"  Total:  ~${estimated_cost_usd:.2f} USD")
+    print(f"{'='*70}\n")
+
+
 def run_live_frontier_benchmark(
     tasks: List[FrontierTask],
-    model: str = "claude-3-5-opus-20241022",
+    model: str = DEFAULT_MODEL,
     confirm_spend: bool = False,
 ) -> Tuple[List[FrontierScore], float]:
     """Run frontier tasks against Claude API.
 
     Args:
         tasks: List of frontier tasks
-        model: Claude model ID
+        model: Claude model ID; must have a verified price
         confirm_spend: If False, print cost estimate and exit(2) without running
 
     Returns:
         Tuple of (scores, accuracy_percent)
+
+    Raises:
+        UnknownModelPricingError: model has no verified price (checked before any output or spend)
     """
-    # Estimate cost (input ~1000 tokens per task, output ~300)
-    input_tokens_estimate = len(tasks) * 1000
-    output_tokens_estimate = len(tasks) * 300
-
-    # Anthropic Claude pricing (as of 2024)
-    input_cost_per_mtok = {
-        "claude-3-5-haiku-20241022": 0.80,
-        "claude-3-5-sonnet-20241022": 3.00,
-        "claude-3-5-opus-20241022": 15.00,
-    }
-    output_cost_per_mtok = {
-        "claude-3-5-haiku-20241022": 4.00,
-        "claude-3-5-sonnet-20241022": 15.00,
-        "claude-3-5-opus-20241022": 75.00,
-    }
-
-    input_rate = input_cost_per_mtok.get(model)
-    output_rate = output_cost_per_mtok.get(model)
-
-    # Label fallback rates clearly when model not in pricing table
-    input_rate_label = ""
-    output_rate_label = ""
-    if input_rate is None:
-        input_rate = 10.0
-        input_rate_label = " [FALLBACK - model not in pricing table]"
-    if output_rate is None:
-        output_rate = 30.0
-        output_rate_label = " [FALLBACK - model not in pricing table]"
-
-    estimated_cost_usd = (
-        (input_tokens_estimate / 1_000_000) * input_rate +
-        (output_tokens_estimate / 1_000_000) * output_rate
-    )
-
-    print(f"\n{'='*70}")
-    print(f"COST ESTIMATE: {len(tasks)} frontier tasks")
-    print(f"  Input:  ~{input_tokens_estimate:,} tokens @ ${input_rate:.2f}/MTok{input_rate_label}")
-    print(f"  Output: ~{output_tokens_estimate:,} tokens @ ${output_rate:.2f}/MTok{output_rate_label}")
-    print(f"  Total:  ~${estimated_cost_usd:.2f} USD")
-    print(f"{'='*70}\n")
-
     if not confirm_spend:
+        _print_cost_estimate(tasks, _price_for(model))
         print("Use --confirm-spend to actually run (without it, exits 2).")
-        if input_rate_label or output_rate_label:
-            print("Note: FALLBACK pricing rates were used in the estimate above.")
         sys.exit(2)
 
     global _live_skipped
@@ -303,6 +310,11 @@ def run_live_frontier_benchmark(
             print(f"SKIP: HALT sentinel detected — {reason}", file=sys.stderr)
             _live_skipped = True
             return ([], 0.0)
+
+    # Price gate for the confirmed run: an unpriced model raises before any client
+    # or spend. Checked after the key/HALT refusals so those keep their own messages.
+    rates = _price_for(model)
+    _print_cost_estimate(tasks, rates)
 
     # Offline seam: AESOP_BENCH_OFFLINE=1 returns BEFORE any API client is
     # constructed, even with --confirm-spend. Unit tests set it so they can
@@ -418,8 +430,8 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="claude-3-5-opus-20241022",
-        help="Claude model ID for live mode",
+        default=DEFAULT_MODEL,
+        help="Claude model ID for live mode (must have a verified price in MODEL_PRICING_USD_PER_MTOK)",
     )
     parser.add_argument(
         "--confirm-spend",
@@ -490,7 +502,11 @@ def main():
         scores, accuracy = run_offline_frontier_benchmark(tasks)
     else:
         print(f"Running LIVE frontier benchmark against {args.model}...\n")
-        scores, accuracy = run_live_frontier_benchmark(tasks, model=args.model, confirm_spend=args.confirm_spend)
+        try:
+            scores, accuracy = run_live_frontier_benchmark(tasks, model=args.model, confirm_spend=args.confirm_spend)
+        except UnknownModelPricingError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
         if _live_skipped:
             print("ERROR: live run did not execute; nothing was written", file=sys.stderr)
             return 1

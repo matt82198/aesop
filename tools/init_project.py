@@ -552,10 +552,12 @@ def install_pre_push_hook(target_dir, force=False):
 
     hook_path = hooks_dir / "pre-push"
 
+    # Security: reject a symlinked hook file even under force. write_bytes follows the
+    # link, so --force would overwrite the link's target outside .git/hooks.
+    if hook_path.is_symlink():
+        return False, "existing pre-push is a symlink (security risk)"
+
     if hook_path.exists() and not force:
-        # Security: reject symlinked hook file
-        if hook_path.is_symlink():
-            return False, "existing pre-push is a symlink (security risk)"
         return False, "pre-push hook already exists (use --force to replace)"
 
     # Write bytes so the POSIX hook keeps LF endings on Windows (write_text would emit CRLF).

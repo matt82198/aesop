@@ -29,7 +29,7 @@ The rest of this page is the full end-to-end walkthrough.
 
 Covered in this demo:
 1. Create a toy project (just a git repo)
-2. Scaffold Aesop into a fleet harness
+2. Scaffold Aesop into the toy project
 3. Run `/power` to prime the orchestrator
 4. Understand what happens next
 
@@ -80,34 +80,25 @@ Your toy project is now ready. It's a clean git repo with one commit.
 
 ## Step 2: Scaffold Aesop (2 min)
 
-Create a fleet harness in a separate directory. The harness orchestrates your project(s).
+Scaffold the aesop orchestration layer into the toy project. `init` runs in the current repo, so stay inside `~/my-demo-project`.
 
 ```bash
-# Go to a working directory (e.g., your home or ~/projects)
-cd ~
+cd ~/my-demo-project
 
-# Scaffold Aesop (creates ~/demo-fleet/)
-npx @matt82198/aesop demo-fleet \
-  --name "demo-fleet" \
-  --repos "~/my-demo-project" \
-  --yes
-
-# Move into the harness
-cd ~/demo-fleet
+# Scaffold Aesop into this repo (cwd = the target; no flags needed)
+npx @matt82198/aesop init
 ```
 
-What this does:
-- Creates `daemons/`, `skills/`, `monitor/`, `tools/`, `ui/`, `docs/` subdirectories
-- Generates `aesop.config.json` with your project path
-- Creates `CLAUDE.md` (orchestrator brain template)
-- Installs a git pre-push hook for secret scanning
-- Initializes a git repo in the harness
+What this does (per the scaffolder's own list in `tools/init_project.py` lines 4-16):
+- Creates root `CLAUDE.md` (project purpose placeholder and domain map), plus a starter domain `CLAUDE.md` if a code directory is discovered
+- Writes `aesop.config.json` with defaults, and creates `state/` with a `.gitkeep`
+- Renders `.github/workflows/ci.yml` for the default `--ci-mode hosted`
+- Copies `tools/secret_scan.py` and installs a git pre-push hook for secret scanning
 
-The scaffold will report success and print next steps. Your output will vary depending on your environment, but will confirm:
-- Fleet directory created
-- Configuration files generated
-- Git initialized
-- Pre-push hook installed
+The scaffold prints a summary and next steps. Your output will vary depending on your environment, but will confirm:
+- Root `CLAUDE.md` and `aesop.config.json` written
+- `state/` created
+- Pre-push hook installed (or reported as already present, if one existed)
 
 ---
 
@@ -283,7 +274,7 @@ See [CONFIGURE.md](CONFIGURE.md) and [INSTALL.md](INSTALL.md) for full details.
 **Q: Watchdog fails with "not inside a git repository"**
 - A: Make sure you've run the scaffold from a location with git installed and initialized. Re-run scaffold:
   ```bash
-  npx @matt82198/aesop demo-fleet --yes
+  cd ~/my-demo-project && npx @matt82198/aesop init --force
   ```
 
 **Q: Dashboard won't open (port 8770 in use)**

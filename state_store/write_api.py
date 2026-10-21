@@ -302,11 +302,19 @@ class WriteAPI:
 
         store = self._make_store()
 
-        # Append the event (fail-closed: if this fails, no projection write)
-        try:
-            store.append("tracker", "item_created", created_item, actor)
-        except Exception as e:
-            raise ValueError(f"Failed to append create event: {e}") from e
+        # Retry safety (11bececf532c): if an earlier call appended this create but its
+        # projection render raised WriteConflict, the event is durable and the item is
+        # missing from tracker.json. A caller retrying the identical create must reuse
+        # that durable item, not append a second copy under a fresh id.
+        pending = self._find_pending_create(store, created_item)
+        if pending is not None:
+            item_id = pending["id"]
+        else:
+            # Append the event (fail-closed: if this fails, no projection write)
+            try:
+                store.append("tracker", "item_created", created_item, actor)
+            except Exception as e:
+                raise ValueError(f"Failed to append create event: {e}") from e
 
         # Now re-render the projection atomically
         self._render_tracker_atomic(store, start_disk_hash=start_disk_hash)
@@ -320,6 +328,37 @@ class WriteAPI:
             raise ValueError(f"Item disappeared after create: {item_id}")
 
         return created_items[item_id]
+
+    _CREATE_CONTENT_FIELDS = (
+        "title", "priority", "status", "lane", "source", "tags",
+        "notes", "pr_link", "acceptanceCriteria",
+    )
+
+    def _find_pending_create(self, store: EventStore, created_item: dict) -> dict | None:
+        """Return the payload of a durable item_created event that is not yet on disk.
+
+        Matches on content fields only (id and created_at are fresh per call). An
+        event whose item id is already in tracker.json was projected by an earlier
+        successful write, so it is not pending and never matches.
+
+        Args:
+            store: EventStore to scan for the tracker stream
+            created_item: The canonical item the caller is about to create
+
+        Returns:
+            dict | None: The durable item payload to reuse, or None
+        """
+        disk_ids = {item.get("id") for item in self._load_tracker_safe().get("items", [])}
+        for event in store.read("tracker"):
+            if event.get("type") != "item_created":
+                continue
+            payload = event.get("payload") or {}
+            pending_id = payload.get("id")
+            if pending_id is None or pending_id in disk_ids:
+                continue
+            if all(payload.get(f) == created_item.get(f) for f in self._CREATE_CONTENT_FIELDS):
+                return payload
+        return None
 
     def tracker_update_item(
         self,

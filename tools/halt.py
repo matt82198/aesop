@@ -50,11 +50,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 try:
-    from common import get_state_dir
+    from common import ConductorRootUnresolved, get_state_dir, try_resolve_conductor_root
 except ImportError:
-    from tools.common import get_state_dir
+    from tools.common import ConductorRootUnresolved, get_state_dir, try_resolve_conductor_root
 
 SENTINEL_NAME = ".HALT"
+# Exit status when the box-wide root cannot be resolved (CONDUCTOR_ROOT unset and AESOP_ROOT
+# not the canonical "aesop" tree). Distinct from 0 (not halted) and 1 (halted), so every
+# caller treats it as UNKNOWN and fails closed.
+EXIT_UNRESOLVED = 3
 
 
 def load_config():
@@ -103,23 +107,27 @@ def resolve_state_dir(config=None):
 
 
 def resolve_conductor_root():
-    """Box-wide fleet state root: CONDUCTOR_ROOT env > sibling of AESOP_ROOT > home fleet root.
+    """Box-wide fleet state root by the daemons/conductor-root.sh rule, or None.
 
-    Mirrors daemons/run-watchdog.sh's CONDUCTOR_ROOT default, so the operator's halt
-    and a scheduled watchdog running from another checkout agree on one sentinel at
-    <conductor_root>/state/.HALT.
+    CONDUCTOR_ROOT wins; the sibling fleet root is derived only for the canonical
+    "aesop" AESOP_ROOT; anything else is None (fail closed, no home fleet-root fallback).
+    AESOP_ROOT defaults to this checkout's root, the same default the daemons use.
     """
-    if os.environ.get("CONDUCTOR_ROOT"):
-        return Path(os.environ["CONDUCTOR_ROOT"])
-    if os.environ.get("AESOP_ROOT"):
-        return Path(os.environ["AESOP_ROOT"]).parent / "conductor3"
-    home = os.environ.get("USERPROFILE") or str(Path.home())
-    return Path(home) / "conductor3"
+    aesop_root = os.environ.get("AESOP_ROOT") or str(Path(__file__).resolve().parent.parent)
+    return try_resolve_conductor_root(aesop_root)
 
 
 def box_wide_sentinel_path(conductor_root=None):
-    """Path of the box-wide kill switch, honored by every checkout's watchdog."""
+    """Path of the box-wide kill switch, honored by every checkout's watchdog.
+
+    Raises ConductorRootUnresolved when no root can be resolved (fail closed).
+    """
     root = Path(conductor_root) if conductor_root is not None else resolve_conductor_root()
+    if root is None:
+        raise ConductorRootUnresolved(
+            "CONDUCTOR_ROOT is unset and AESOP_ROOT is not the canonical 'aesop' tree; "
+            "set CONDUCTOR_ROOT to the fleet-state root (box-wide halt cannot be located)"
+        )
     return root / "state" / SENTINEL_NAME
 
 
@@ -237,11 +245,20 @@ def main(argv=None):
         if _box_wide_applies():
             # Operator kill switch: the box-wide sentinel is what every checkout's
             # watchdog honors, including a runtime worktree running from elsewhere.
-            print(f"sentinel: {halt_box_wide(reason)} (box-wide)")
+            try:
+                print(f"sentinel: {halt_box_wide(reason)} (box-wide)")
+            except ConductorRootUnresolved as exc:
+                # The local halt is already in effect; the box-wide one could not be placed.
+                print(f"ERROR: box-wide sentinel NOT written: {exc}", file=sys.stderr)
+                return EXIT_UNRESOLVED
         return 0
 
     if argv[0] == "--status":
-        active = active_halt()
+        try:
+            active = active_halt()
+        except ConductorRootUnresolved as exc:
+            print(f"HALT-STATUS-UNKNOWN: {exc}", file=sys.stderr)
+            return EXIT_UNRESOLVED
         if active is not None:
             label, info = active
             print(f"HALTED: {info.get('reason')} (since {info.get('timestamp')}) [{label}]")
@@ -250,7 +267,11 @@ def main(argv=None):
         return 0
 
     if argv[0] == "--clear":
-        cleared = clear_all_halts()
+        try:
+            cleared = clear_all_halts()
+        except ConductorRootUnresolved as exc:
+            print(f"ERROR: box-wide sentinel cannot be cleared: {exc}", file=sys.stderr)
+            return EXIT_UNRESOLVED
         print("cleared" if cleared else "not halted (nothing to clear)")
         return 0
 

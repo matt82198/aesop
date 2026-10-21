@@ -107,7 +107,7 @@ The handoff certificate demonstrates that the wave engine (the real orchestrator
 
 No external coordinator needed. No "detect that Operator A died and revoke its lease." Just read the journal and continue.
 
-*(Source: [`docs/HANDOFF-CERTIFICATE.md`](../HANDOFF-CERTIFICATE.md))*
+*(Source: [`docs/HANDOFF-CERTIFICATE.md`](HANDOFF-CERTIFICATE.md))*
 
 ### 4. Failure Is Observable
 
@@ -123,7 +123,7 @@ The reliability report (chaos-wave fault injection) tested five failure modes:
 
 **All five passed.** MTTR ranges from 0.0s (immediate local detection) to 0.5s (watchdog timeout). No infinite loops, no silent failures, no "wedged state" that requires manual intervention.
 
-*(Source: [`docs/RELIABILITY-REPORT.md`](../RELIABILITY-REPORT.md))*
+*(Source: [`docs/RELIABILITY-REPORT.md`](RELIABILITY-REPORT.md))*
 
 ---
 
@@ -180,7 +180,7 @@ Aesop's incident log tracks operational failures by class:
 
 The **16 stall incidents** are directly resolved by crash-only recovery: watchdog detects (deterministic age check), kills the worker, orchestrator re-reads from disk and respawns. None required consensus voting or lease revocation.
 
-*(Source: [`docs/INCIDENTS.md`](../INCIDENTS.md))*
+*(Source: [`docs/INCIDENTS.md`](INCIDENTS.md))*
 
 ---
 
@@ -192,7 +192,7 @@ Crash-only design assumes one orchestrator instance at a time. If the orchestrat
 
 **Solution**: Use file-system-level atomicity (rename instead of write), or sequence multiple instances via polling the heartbeat file. Multi-instance coordination is on the roadmap but unscheduled for v0.4.0.
 
-*(See [`docs/TEAM-STATE.md`](../TEAM-STATE.md) for the multi-instance design.)*
+*(See [`docs/TEAM-STATE.md`](TEAM-STATE.md) for the multi-instance design.)*
 
 ### Journal Contention
 
@@ -261,7 +261,7 @@ Start with crash-only on a single box. Add multi-instance via event sourcing whe
 - **Armstrong, J. et al. (1996).** Concurrent Programming in Erlang. Prentice Hall.
 - **Burns, K. et al. (2015).** Kubernetes Design Patterns. In *EuroSys*.
 - **Aesop Bench Results** [`bench/results/seam-loop-study-2026-07-28.md`](../bench/results/seam-loop-study-2026-07-28.md)
-- **Aesop Handoff Certificate** [`docs/HANDOFF-CERTIFICATE.md`](../HANDOFF-CERTIFICATE.md)
-- **Aesop Reliability Report** [`docs/RELIABILITY-REPORT.md`](../RELIABILITY-REPORT.md)
-- **Aesop Incidents** [`docs/INCIDENTS.md`](../INCIDENTS.md)
-- **Aesop Architecture** [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md)
+- **Aesop Handoff Certificate** [`docs/HANDOFF-CERTIFICATE.md`](HANDOFF-CERTIFICATE.md)
+- **Aesop Reliability Report** [`docs/RELIABILITY-REPORT.md`](RELIABILITY-REPORT.md)
+- **Aesop Incidents** [`docs/INCIDENTS.md`](INCIDENTS.md)
+- **Aesop Architecture** [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)

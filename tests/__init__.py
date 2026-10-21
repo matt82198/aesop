@@ -22,7 +22,9 @@ incapable of reaching the real origin or GitHub API, regardless of what any
 individual test does or forgets. See tools/test_network_isolation.py for the
 mechanism and tests/test_test_network_isolation.py for the behavioral proof.
 """
+import os
 import sys
+import tempfile
 from pathlib import Path
 
 _TOOLS_DIR = str(Path(__file__).resolve().parent.parent / "tools")
@@ -32,3 +34,12 @@ if _TOOLS_DIR not in sys.path:
 from test_network_isolation import apply_test_isolation_env  # noqa: E402
 
 apply_test_isolation_env()
+
+# Conductor root isolation (fail-closed rule): a test checkout is not the canonical "aesop"
+# tree, so CONDUCTOR_ROOT is otherwise UNRESOLVED and every halt reader fails closed. Pin an
+# empty fixture root for the whole test process so no test reads or writes the live fleet
+# root, and so halt readers see "not halted" unless a test halts its own fixture. Tests that
+# need a specific root set it themselves. The flag keeps subprocess re-imports from re-pinning.
+if not os.environ.get("AESOP_TEST_CONDUCTOR_ROOT_PINNED"):
+    os.environ["CONDUCTOR_ROOT"] = tempfile.mkdtemp(prefix="aesop-test-conductor-")
+    os.environ["AESOP_TEST_CONDUCTOR_ROOT_PINNED"] = "1"

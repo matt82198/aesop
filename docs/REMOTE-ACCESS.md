@@ -248,5 +248,5 @@ python ~/scripts/inbox_drain.py pending
 
 - **Main orchestrator documentation**: `docs/INSTALL.md`, `docs/ARCHITECTURE.md`
 - **Inbox format & drain script**: `~/scripts/inbox_drain.py`
-- **UI Inbox web submission**: `ui/web/components/SubmitForm.tsx`
+- **UI Inbox web submission**: `ui/web/src/components/InboxForm.tsx`
 - **Orchestrator integration**: `driver/wave_loop.py` (reads inbox on `/power`)

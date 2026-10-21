@@ -274,5 +274,73 @@ class TestSecretScanGitFailures(unittest.TestCase):
         self.assertIn("FATAL", stderr, "Should print FATAL message")
 
 
+class TestNonexistentPathFailsClosed(unittest.TestCase):
+    """Tracker 17aa5e02e34d: a path argument that does not exist must not be
+    silently dropped, or the run prints CLEAN 0 files with exit 0. A typo or a
+    stale --from-stdin list would otherwise pass the scan without scanning anything."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.scanner_path = Path(__file__).parent.parent / "tools" / "secret_scan.py"
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_nonexistent_failclosed_")
+        self.tmpdir_path = Path(self.tmpdir)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def run_scanner(self, *args, stdin_text=None):
+        """Run the scanner with given arguments; return (exit_code, stdout, stderr)."""
+        cmd = [sys.executable, str(self.scanner_path)] + list(args)
+        result = subprocess.run(
+            cmd,
+            input=stdin_text,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+        )
+        return result.returncode, result.stdout, result.stderr
+
+    def test_nonexistent_path_argument_exits_nonzero(self):
+        """A missing path argument is an input error: exit non-zero, never CLEAN."""
+        missing = self.tmpdir_path / "does-not-exist" / "prod.env"
+        exit_code, stdout, stderr = self.run_scanner(str(missing))
+        self.assertNotEqual(exit_code, 0, f"missing path exited 0; stdout={stdout!r}")
+        self.assertNotIn("CLEAN", stdout, "a missing path must not print CLEAN")
+
+    def test_nonexistent_path_is_reported_on_stderr(self):
+        """The missing path is named on stderr so the operator can see what was dropped."""
+        missing = self.tmpdir_path / "typo-dir" / "prod.env"
+        exit_code, stdout, stderr = self.run_scanner(str(missing))
+        self.assertIn("prod.env", stderr, f"missing path not reported; stderr={stderr!r}")
+
+    def test_one_missing_path_among_real_files_fails_closed(self):
+        """A real clean file plus a typo path still fails: the typo is not skipped."""
+        clean = self.tmpdir_path / "ok.txt"
+        clean.write_text("hello world\n", encoding="utf-8")
+        missing = self.tmpdir_path / "tpyo.env"
+        exit_code, stdout, stderr = self.run_scanner(str(clean), str(missing))
+        self.assertNotEqual(exit_code, 0, f"typo path among real files exited 0; stdout={stdout!r}")
+
+    def test_missing_path_from_stdin_fails_closed(self):
+        """--from-stdin with a stale path in the list fails closed too."""
+        missing = self.tmpdir_path / "stale-list-entry.env"
+        exit_code, stdout, stderr = self.run_scanner(
+            "--from-stdin", stdin_text=f"{missing}\n"
+        )
+        self.assertNotEqual(exit_code, 0, f"stale stdin path exited 0; stdout={stdout!r}")
+
+    def test_existing_clean_path_still_exits_zero(self):
+        """Control: an existing clean file still passes with exit 0."""
+        clean = self.tmpdir_path / "ok.txt"
+        clean.write_text("hello world\n", encoding="utf-8")
+        exit_code, stdout, stderr = self.run_scanner(str(clean))
+        self.assertEqual(exit_code, 0, f"stdout={stdout!r} stderr={stderr!r}")
+        self.assertIn("CLEAN", stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

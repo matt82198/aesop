@@ -207,10 +207,11 @@ def check_outcome(c: dict) -> str:
 
 def pr_state(n: int) -> dict:
     raw = gh("pr", "view", str(n), "--json",
-             "state,mergeStateStatus,statusCheckRollup,title,headRefName")
+             "state,mergeStateStatus,statusCheckRollup,title,headRefName,headRefOid")
     if isinstance(raw, dict) and "error" in raw:
         return {"state": "ERROR", "merge": "UNKNOWN", "checks": "unknown",
-                "title": f"(error: {raw['error'][:80]})", "headRefName": ""}
+                "title": f"(error: {raw['error'][:80]})", "headRefName": "",
+                "head_oid": ""}
     checks_list = raw.get("statusCheckRollup") or []
     outcomes = [check_outcome(c) for c in checks_list]
     if not checks_list:
@@ -228,6 +229,8 @@ def pr_state(n: int) -> dict:
         "checks": ci,
         "title": raw.get("title", ""),
         "headRefName": raw.get("headRefName", ""),
+        # The sha whose checks were just read green; the merge is pinned to it.
+        "head_oid": raw.get("headRefOid", ""),
     }
 
 
@@ -243,8 +246,16 @@ def update_branch(n: int) -> bool:
     return False
 
 
-def merge_pr(n: int) -> bool:
-    result = gh("pr", "merge", str(n), "--squash")
+def merge_pr(n: int, head_oid: str = "") -> bool:
+    """Squash-merge PR n, pinned to head_oid (tracker 31c0ddd1e22b).
+
+    --match-head-commit makes GitHub refuse the merge if the PR head moved after
+    the green snapshot, so an untested commit cannot land. No pin means no merge.
+    """
+    if not head_oid:
+        print(f"  [FAIL] merge #{n} refused: no head sha pin (headRefOid missing)")
+        return False
+    result = gh("pr", "merge", str(n), "--squash", "--match-head-commit", head_oid)
     if isinstance(result, dict) and "error" in result:
         err = result["error"][:120]
         if "already merged" not in err.lower():
@@ -562,8 +573,12 @@ def wait_for_integration_ci(pr_number: int, poll_interval: int = 45,
     return False
 
 
-def merge_integration_pr(pr_number: int) -> bool:
-    gh("pr", "merge", str(pr_number), "--squash")
+def merge_integration_pr(pr_number: int, head_oid: str = "") -> bool:
+    """Squash-merge the integration PR pinned to head_oid, the sha CI was waited on."""
+    if not head_oid:
+        print(f"  [FAIL] integration PR #{pr_number} refused: no head sha pin")
+        return False
+    gh("pr", "merge", str(pr_number), "--squash", "--match-head-commit", head_oid)
     verify = gh("pr", "view", str(pr_number), "--json", "state", "--jq", ".state")
     if verify == "MERGED":
         print(f"  [ok] integration PR #{pr_number} MERGED (verified)")
@@ -759,7 +774,7 @@ def run_integration_train(prs: list[int], batch_name: str = "",
 
         # Re-check halt before merging integration PR (kill-switch enforcement)
         _check_halt(" [before integration merge]")
-        if not merge_integration_pr(pr_number):
+        if not merge_integration_pr(pr_number, head_oid=pushed_sha):
             outcome = f"integration PR #{pr_number} not MERGED"
             return False
 
@@ -870,7 +885,7 @@ def run_train(prs: list[int], max_rounds: int = 50, poll_interval: int = 45,
             if info["merge"] == "CLEAN" and info["checks"] == "green":
                 # Re-check halt before merging (kill-switch enforcement)
                 _check_halt(" [before merge]")
-                if merge_pr(n):
+                if merge_pr(n, info["head_oid"]):
                     merged.append(n)
                     progress_this_round = True
                     # After a merge, all others go BEHIND -- restart the loop

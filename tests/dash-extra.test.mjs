@@ -311,3 +311,63 @@ test('P2: config.state_root is honored when AESOP_STATE_ROOT env var not set', (
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
 });
+
+// Cache contract (tracker 44ce0f022454): the persisted transcript cache must stay
+// bounded (entries only for transcripts seen in the current run) and must not
+// persist full dispatch prompts, while the emitted promptFull stays populated.
+function cacheFilePath(fixture) {
+  return path.join(fixture.aesopRoot, 'state', '.dash-extra-cache.json');
+}
+
+function transcriptLine(prompt) {
+  return JSON.stringify({
+    type: 'user',
+    message: { content: prompt },
+    timestamp: new Date().toISOString()
+  }) + '\n';
+}
+
+test('dash-extra cache is pruned to transcripts seen in the current run (bounded growth)', () => {
+  const fixture = makeFixture();
+  try {
+    const transcript = path.join(fixture.transcriptsRoot, AGENT_BASENAME);
+    runScript(fixture);
+    // Change the file so its (path|size|mtime) cache key changes.
+    fs.appendFileSync(transcript, transcriptLine('second revision of the fixture'));
+    runScript(fixture);
+
+    const cache = JSON.parse(fs.readFileSync(cacheFilePath(fixture), 'utf8'));
+    const keys = Object.keys(cache);
+    assert.equal(
+      keys.length,
+      1,
+      `cache must hold only the current transcript state, got ${keys.length} entries: ${keys.join(' , ')}`
+    );
+    assert.ok(keys[0].startsWith(transcript + '|'), 'the surviving key must be the live transcript');
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test('dash-extra cache does not persist full dispatch prompts, yet output keeps promptFull', () => {
+  const fixture = makeFixture();
+  try {
+    const transcript = path.join(fixture.transcriptsRoot, AGENT_BASENAME);
+    // Multi-line prompt: the first line becomes taskLabel (an 80-char label), while
+    // the marker sits past it, so it only appears if promptFull is persisted.
+    const marker = 'PROMPT-MARKER-44ce0f022454 full dispatch text';
+    const prompt = `Dispatch header line\n${marker}\n` + 'body '.repeat(40);
+    fs.writeFileSync(transcript, transcriptLine(prompt));
+
+    const first = runScript(fixture);
+    const cacheText = fs.readFileSync(cacheFilePath(fixture), 'utf8');
+    assert.ok(!cacheText.includes(marker), 'cache file must not contain the full prompt text');
+
+    // Second run takes the cache-hit path; the full prompt must still be emitted.
+    const second = runScript(fixture);
+    assert.equal(first[0].promptFull, prompt, 'first run emits full promptFull');
+    assert.equal(second[0].promptFull, prompt, 'cache-hit run must still emit full promptFull');
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+});

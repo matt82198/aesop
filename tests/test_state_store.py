@@ -270,21 +270,47 @@ class ApiAndExportTest(unittest.TestCase):
         reloaded = json.loads(Path(out).read_text(encoding="utf-8"))
         self.assertEqual(reloaded, proj)
 
-    def test_ingest_project_export_round_trips_real_tracker(self):
-        tracker_path = ROOT / "state" / "tracker.json"
-        if not tracker_path.exists():
-            self.skipTest("no state/tracker.json checked out")
-        original = json.loads(tracker_path.read_text(encoding="utf-8"))
-        api = StateAPI(self.db)
+    def _round_trip(self, tracker_path, label):
+        """ingest -> project -> export of one tracker.json; the item list must survive intact."""
+        original = json.loads(Path(tracker_path).read_text(encoding="utf-8"))
+        original_items = original["items"] if isinstance(original, dict) else original
+        api = StateAPI(os.path.join(self.tmp, f"{label}.db"))
         n = ingest_tracker_json(api, str(tracker_path))
-        self.assertEqual(n, len(original["items"]))
-        projected = api.project("tracker")
+        self.assertEqual(n, len(original_items))
         # Round-trip must reproduce the exact item list (semantic equality).
-        self.assertEqual(projected["items"], original["items"])
-        out = os.path.join(self.tmp, "roundtrip.json")
+        self.assertEqual(api.project("tracker")["items"], original_items)
+        out = os.path.join(self.tmp, f"{label}-roundtrip.json")
         export_tracker(api, out)
         reloaded = json.loads(Path(out).read_text(encoding="utf-8"))
-        self.assertEqual(reloaded["items"], original["items"])
+        self.assertEqual(reloaded["items"], original_items)
+
+    def test_ingest_project_export_round_trips_tracker_fixture(self):
+        """Always runs (no skip). state/ is gitignored, so the real tracker is absent in CI;
+        the fixture mirrors its item schema in both on-disk shapes ingest accepts."""
+        fixture_items = [
+            {"id": "aaa111", "title": "Plain item", "priority": "P2", "status": "todo",
+             "lane": "proposed", "tags": ["x"], "notes": "{\"k\": 1}", "pr_link": None,
+             "created_at": "2026-10-16T00:00:00Z", "completed_at": None},
+            {"id": "bbb222", "title": "Unicode — dash", "priority": "P3", "status": "done",
+             "lane": "done", "tags": [], "notes": "", "pr_link": "https://example.invalid/pull/1",
+             "created_at": "2026-10-16T00:00:01Z", "completed_at": "2026-10-16T01:00:00Z"},
+        ]
+        canonical = Path(self.tmp) / "tracker-canonical.json"
+        canonical.write_text(json.dumps({"items": fixture_items}), encoding="utf-8")
+        with self.subTest(shape="canonical-dict"):
+            self._round_trip(canonical, "canonical")
+        legacy = Path(self.tmp) / "tracker-legacy.json"
+        legacy.write_text(json.dumps(fixture_items), encoding="utf-8")
+        with self.subTest(shape="legacy-bare-list"):
+            self._round_trip(legacy, "legacy")
+
+    def test_ingest_project_export_round_trips_real_tracker_when_present(self):
+        """Local-only extra leg: when a real state/tracker.json exists it is round-tripped too.
+        Absent in CI (gitignored), so it adds no subTest there; it never skips."""
+        real = ROOT / "state" / "tracker.json"
+        if real.exists():
+            with self.subTest(shape="real-checkout"):
+                self._round_trip(real, "real")
 
 
 if __name__ == "__main__":

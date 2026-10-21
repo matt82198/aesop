@@ -18,6 +18,7 @@ Coverage mirrors the tool's contract (see tools/pr_sweep.py docstring):
 """
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -25,6 +26,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 TOOL_PATH = Path(__file__).resolve().parents[1] / "tools" / "pr_sweep.py"
+
+# pr_sweep fails closed when CONDUCTOR_ROOT is unresolved (this test tree is not the canonical
+# "aesop" checkout). Every test run pins its OWN mktemp conductor root, never the live fleet.
+_TEST_CONDUCTOR_ROOT = tempfile.mkdtemp(prefix="aesop-prsweep-conductor-")
+os.environ["CONDUCTOR_ROOT"] = _TEST_CONDUCTOR_ROOT
 
 
 def load_module():
@@ -40,7 +46,8 @@ def iso(minutes_ago, now=None):
 
 
 def make_pr(number, *, draft=False, auto_merge=True, merge_state="CLEAN",
-            updated_min_ago=60, created_min_ago=120, head="a" * 40, now=None):
+            updated_min_ago=60, created_min_ago=120, head="a" * 40, now=None,
+            base="main", head_ref=None):
     return {
         "number": number,
         "title": "pr #%d" % number,
@@ -50,7 +57,8 @@ def make_pr(number, *, draft=False, auto_merge=True, merge_state="CLEAN",
         "updatedAt": iso(updated_min_ago, now),
         "createdAt": iso(created_min_ago, now),
         "headRefOid": head,
-        "headRefName": "feature-%d" % number,
+        "headRefName": head_ref or "feature-%d" % number,
+        "baseRefName": base,
         "url": "https://github.com/acme/repo/pull/%d" % number,
     }
 
@@ -60,8 +68,10 @@ class FakeGh:
     subcommand shape, recording every call for assertions."""
 
     def __init__(self, prs, checks_by_pr=None, repo="acme/repo", auth_ok=True,
-                 view_by_pr=None, fail_on=None):
+                 view_by_pr=None, fail_on=None, default_branch="main"):
         self.prs = prs
+        # Repo default branch answered by `gh repo view`; None = unreadable.
+        self.default_branch = default_branch
         self.checks_by_pr = checks_by_pr or {}
         self.repo = repo
         self.auth_ok = auth_ok
@@ -82,7 +92,10 @@ class FakeGh:
                 return ""
             return {"error": "not logged in", "rc": 1}
         if args[:2] == ("repo", "view"):
-            return {"nameWithOwner": self.repo}
+            if self.default_branch is None:
+                return {"nameWithOwner": self.repo}
+            return {"nameWithOwner": self.repo,
+                    "defaultBranchRef": {"name": self.default_branch}}
         if args[:2] == ("pr", "list"):
             return self.prs
         if args[:2] == ("pr", "view"):
@@ -267,6 +280,61 @@ class TestDirtySignal(PrSweepTestCase):
         self.run_sweep(FakeGh([pr]))
         lines = self.queue_path.read_text(encoding="utf-8").strip().splitlines()
         self.assertEqual(len(lines), 1)
+
+
+class TestStackedPrNotArmed(PrSweepTestCase):
+    """A stacked PR (base is another PR's branch, not the repo default) must
+    never be armed: GitHub would merge it into the parent branch, which has
+    no protection and runs no CI, and report MERGED for content that never
+    reached the trunk."""
+
+    def stacked_pair(self):
+        parent = make_pr(233, auto_merge=True, now=self.now,
+                         head_ref="feat/rewards-content-facets")
+        child = make_pr(332, auto_merge=False, base="feat/rewards-content-facets",
+                        now=self.now)
+        return parent, child
+
+    def test_stacked_pr_is_not_armed(self):
+        parent, child = self.stacked_pair()
+        fake = FakeGh([parent, child])
+        rc = self.run_sweep(fake)
+        self.assertEqual(rc, 0)
+        self.assertEqual(fake.calls_matching("pr", "merge"), [])
+
+    def test_stacked_pr_report_names_parent_and_retarget_step(self):
+        parent, child = self.stacked_pair()
+        fake = FakeGh([parent, child])
+        with patch.object(self.module, "gh", fake):
+            actions = self.module.build_plan([parent, child], "acme/repo",
+                                             self.now, self.queue_path)
+        stacked = [a for a in actions if a["kind"] == "stacked"]
+        self.assertEqual(len(stacked), 1)
+        self.assertEqual(stacked[0]["pr"], 332)
+        self.assertIn("stacked on #233; retarget to main after #233 merges",
+                      stacked[0]["reason"])
+        self.assertEqual([a for a in actions if a["kind"] == "arm"], [])
+
+    def test_stacked_pr_on_unknown_parent_is_still_refused(self):
+        child = make_pr(340, auto_merge=False, base="feat/gone", now=self.now)
+        fake = FakeGh([child])
+        rc = self.run_sweep(fake)
+        self.assertEqual(rc, 0)
+        self.assertEqual(fake.calls_matching("pr", "merge"), [])
+
+    def test_default_branch_pr_still_armed(self):
+        pr = make_pr(341, auto_merge=False, base="main", now=self.now)
+        fake = FakeGh([pr])
+        rc = self.run_sweep(fake)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(fake.calls_matching("pr", "merge")), 1)
+
+    def test_unreadable_default_branch_fails_closed_before_any_write(self):
+        pr = make_pr(342, auto_merge=False, base="main", now=self.now)
+        fake = FakeGh([pr], default_branch=None)
+        rc = self.run_sweep(fake)
+        self.assertEqual(rc, 3)
+        self.assertEqual(fake.calls_matching("pr", "merge"), [])
 
 
 class TestDraftSkipped(PrSweepTestCase):
@@ -499,6 +567,54 @@ class TestPerPrIsolation(PrSweepTestCase):
         self.assertIn("failed", by_pr[801]["outcome"])
         self.assertIn("refused", by_pr[801]["outcome"])
         self.assertIn("dispatched", by_pr[802]["outcome"])
+
+
+class LimitHonouringFakeGh(FakeGh):
+    """Models real `gh pr list --limit N`: returns at most N PRs, so a
+    listing that ignores the cap is visible to the test."""
+
+    def __call__(self, *args):
+        if args[:2] == ("pr", "list"):
+            self.calls.append(args)
+            limit = int(args[args.index("--limit") + 1])
+            return self.prs[:limit]
+        return super().__call__(*args)
+
+
+class TestPrListPagination(PrSweepTestCase):
+    def test_arms_pr_beyond_the_first_100_open_prs(self):
+        prs = [make_pr(n, auto_merge=False, now=self.now) for n in range(1, 151)]
+        fake = LimitHonouringFakeGh(prs)
+        rc = self.run_sweep(fake)
+        armed = {int(c[2]) for c in fake.calls_matching("pr", "merge")}
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(armed), 150, "PRs past the 100 cap were never swept")
+        self.assertIn(150, armed)
+
+    def test_refuses_a_listing_that_hits_the_limit_and_acts_on_nothing(self):
+        limit = self.module.PR_LIST_LIMIT
+        prs = [make_pr(n, auto_merge=False, now=self.now) for n in range(1, limit + 2)]
+        fake = LimitHonouringFakeGh(prs)
+        rc = self.run_sweep(fake)
+        self.assertEqual(rc, 2, "a truncated PR listing must fail closed, not sweep a partial set")
+        self.assertEqual(fake.calls_matching("pr", "merge"), [])
+
+
+class TestRequiredChecksReadFailsClosed(PrSweepTestCase):
+    def test_required_checks_read_error_stops_before_any_write(self):
+        pr = make_pr(301, auto_merge=False, now=self.now)
+        fake = FakeGh([pr], fail_on={("pr", "checks"): "HTTP 502: bad gateway"})
+        rc = self.run_sweep(fake)
+        self.assertEqual(rc, 3, "an unreadable required-check state must not be read as 'no checks'")
+        self.assertEqual(fake.calls_matching("pr", "merge"), [])
+        self.assertEqual(fake.calls_matching("pr", "comment"), [])
+
+    def test_repo_with_no_required_checks_is_not_an_error(self):
+        pr = make_pr(302, auto_merge=True, now=self.now)
+        fake = FakeGh([pr], fail_on={
+            ("pr", "checks"): "no required checks reported on the 'feature-302' branch"})
+        rc = self.run_sweep(fake)
+        self.assertEqual(rc, 0)
 
 
 if __name__ == "__main__":

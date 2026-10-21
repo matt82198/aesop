@@ -41,8 +41,12 @@ empty or unreadable store exits 2 with one stderr line and prints NOTHING on std
 closed: no partial brief that looks complete). The ingest runs only against a store that
 already exists, so a brief never creates one.
 
+FENCE: when <repo>/BOX_PROTOCOL exists, tools/box_fence.py runs first and its one-line result
+("FENCE PASS|WARN: ...") is printed before every section. A FAIL prints the fix steps on stderr
+and exits 3 with no brief (a stale box must not boot).
+
 Exit codes: 0 ok (a STALE INGEST line is still exit 0: it is printed, not hidden); 2 store
-unreadable or brief unavailable.
+unreadable or brief unavailable; 3 box fence FAIL.
 """
 from __future__ import annotations
 
@@ -58,12 +62,14 @@ if str(REPO_ROOT) not in sys.path:
 
 from state_store.paths import resolve_db_path  # noqa: E402
 from state_store.read_api import read_text_file  # noqa: E402
+from tools import box_fence  # noqa: E402
 from tools import goal_state  # noqa: E402
 from tools import ingest_task_events as ite  # noqa: E402
 from tools.state_root import StateRootError, resolve_state_root  # noqa: E402
 
 DEFAULT_MAX_BYTES = 12000
 DEFAULT_BUILDLOG_LINES = 25
+FENCE_TIMEOUT_S = 15
 INGEST_TIMEOUT_S = 5
 INGEST_MAX_BYTES = 4 * 1024 * 1024
 INGEST_SCRIPT = str(REPO_ROOT / "tools" / "ingest_task_events.py")
@@ -388,6 +394,15 @@ def main(argv=None) -> int:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     args = build_parser().parse_args(argv)
     repo = Path(args.repo)
+    # FENCE first: a box behind BOX_PROTOCOL must not boot. Only checkouts that carry
+    # BOX_PROTOCOL run it (an unadopted checkout has nothing to enforce).
+    fence_line = ""
+    if (repo / box_fence.PROTOCOL_FILE).is_file():
+        fence = box_fence.check(repo, timeout=FENCE_TIMEOUT_S)
+        if fence["status"] == "FAIL":
+            print("FENCE FAIL: " + fence["message"], file=sys.stderr)
+            return 3
+        fence_line = "FENCE %s: %s\n\n" % (fence["status"], fence["message"].splitlines()[0])
     try:
         state_dir = resolve_state_root(args.state_dir)
     except StateRootError as exc:
@@ -407,10 +422,14 @@ def main(argv=None) -> int:
     except Exception as exc:  # fail closed: never print a partial brief
         print(f"boot_state: brief unavailable: {exc}", file=sys.stderr)
         return 2
+    fence_bytes = len(fence_line.encode("utf-8"))
     if args.json:
-        sys.stdout.write(json.dumps(build_json(sections, args.max_bytes), indent=2) + "\n")
+        out = build_json(sections, args.max_bytes - fence_bytes)
+        if fence_line:
+            out = {"fence": fence_line.strip(), **out}
+        sys.stdout.write(json.dumps(out, indent=2) + "\n")
     else:
-        sys.stdout.write(render_brief(sections, args.max_bytes))
+        sys.stdout.write(fence_line + render_brief(sections, args.max_bytes - fence_bytes))
     return 0
 
 
