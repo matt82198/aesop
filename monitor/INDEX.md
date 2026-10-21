@@ -2,4 +2,4 @@
 # monitor index (3 entries)
 - [CHARTER.md](CHARTER.md) - Orchestration Refinement Monitor - Charter
 - [CLAUDE.md](CLAUDE.md) - monitor/ - Orchestration monitor
-- [collect-signals.mjs](collect-signals.mjs) - Orchestration Refinement Monitor - deterministic signal collector (no LLM).
+- [collect-signals.mjs](collect-signals.mjs) - Orchestration Refinement Monitor - determinist... (see monitor/CLAUDE.md)

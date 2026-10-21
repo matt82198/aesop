@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Blocks commits in the primary tree while a wave is in flight (state/.wave-in-flight marker); worktree commits pass.
 set -uo pipefail
 
 main() {

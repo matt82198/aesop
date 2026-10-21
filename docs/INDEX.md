@@ -17,7 +17,7 @@
 - [CONFIGURE.md](CONFIGURE.md) - Configuration
 - [CONTRIBUTING.md](CONTRIBUTING.md) - Contributing to Aesop
 - [convergence-log-wave1.md](convergence-log-wave1.md) - Wave-1 Convergence Log - 2026-07-22 (5-pass hardening loop)
-- [crash-only-whitepaper.md](crash-only-whitepaper.md) - Crash-Only Orchestration for Agent Fleets: Design, Evidence, and Trade-offs
+- [crash-only-whitepaper.md](crash-only-whitepaper.md) - Crash-Only Orchestration... (see docs/crash-only-whitepaper.md)
 - [CROSSOS-DRIFT.md](CROSSOS-DRIFT.md) - Cross-OS CI Drift Report
 - [DECISIONS.md](DECISIONS.md) - Architecture Decision Records
 - [DEMO.md](DEMO.md) - Init-Prime-Demo: Your First Complete Aesop Flow
@@ -55,5 +55,5 @@
 - [SCRIPTS-POLICY.md](SCRIPTS-POLICY.md) - Scripts Policy: Local-only, shared library
 - [TEAM-STATE.md](TEAM-STATE.md) - Team-Shared State: Current & Future Architecture
 - [TESTING.md](TESTING.md) - Test Strategy
-- [THE-AESOP-HYPOTHESIS.md](THE-AESOP-HYPOTHESIS.md) - The Aesop Hypothesis: Why Crash-Recoverable Systems Outrun Distributed Ones
+- [THE-AESOP-HYPOTHESIS.md](THE-AESOP-HYPOTHESIS.md) - The Aesop Hypothesis: Why C... (see docs/THE-AESOP-HYPOTHESIS.md)
 - [WHY-CRASH-ONLY.md](WHY-CRASH-ONLY.md) - Why Crash-Only Beats Distributed Consensus for Agent Fleets

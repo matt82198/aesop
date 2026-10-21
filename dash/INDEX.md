@@ -2,4 +2,4 @@
 # dash index (3 entries)
 - [CLAUDE.md](CLAUDE.md) - dash/ - Real-time TUI fleet monitoring (watchdog + agent activity)
 - [dash-extra.mjs](dash-extra.mjs) - Detect and render running Claude agents from transcripts.
-- [watchdog-gui.sh](watchdog-gui.sh) - Fleet watchdog TUI dashboard. Double-buffered no-flicker render. 4s refresh. CRLF-safe (no line continuations).
+- [watchdog-gui.sh](watchdog-gui.sh) - Fleet watchdog TUI dashboard. Double-buffered no-flicker... (see dash/CLAUDE.md)

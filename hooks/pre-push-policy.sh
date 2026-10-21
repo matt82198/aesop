@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Pre-push policy gate: runs every push-time gate (secret scan, tool index, knowledge tree, metrics) before a push leaves.
 set -uo pipefail
 
 if ! command -v python3 >/dev/null 2>&1 && ! command -v python >/dev/null 2>&1; then
@@ -1222,6 +1223,44 @@ check_gen_tool_index() {
   if [ $index_exit_code -ne 0 ]; then
     if [ -n "$index_output" ]; then
       printf '%s\n' "$index_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
+check_knowledge_tree() {
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_knowledge_tree"; return 1; }
+  # Knowledge tree coverage and budget gate (knowledge_tree.py --check --tree).
+  # Every directory with a CLAUDE.md or INDEX.md must be listed in the root INDEX.md; every
+  # generated index stays within its byte cap and every entry within its char cap. Any violation
+  # prints one reason per line and fails the push (exit 4 from the generator).
+  #
+  # The generator lives in the operator's claude-scripts checkout, not in this repo. Resolve it from
+  # AESOP_KNOWLEDGE_TREE, else $HOME/scripts/knowledge_tree.py. A missing generator fails closed.
+  local kt_script="${AESOP_KNOWLEDGE_TREE:-$HOME/scripts/knowledge_tree.py}"
+  if [ ! -f "$kt_script" ]; then
+    gate_tool_missing_block "knowledge_tree.py" "$kt_script"
+    log_event "knowledge_tree_tool_missing"
+    return 1
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    gate_no_python_block "knowledge tree gate"
+    log_event "knowledge_tree_no_python"
+    return 1
+  fi
+
+  local kt_output
+  kt_output=$("$py_bin" "$kt_script" --check --tree --root "$gate_dir" 2>&1)
+  local kt_exit_code=$?
+
+  if [ $kt_exit_code -ne 0 ]; then
+    if [ -n "$kt_output" ]; then
+      printf '%s\n' "$kt_output" >&2
     fi
     return 1
   fi
@@ -3637,6 +3676,12 @@ main() {
   if ! check_gen_tool_index; then
     printf 'Error: Tool index synchronization gate failed. Push blocked.\n' >&2
     log_block "gen_tool_index_failure"
+    exit 1
+  fi
+
+  if ! check_knowledge_tree; then
+    printf 'Error: Knowledge tree gate failed. Push blocked.\n' >&2
+    log_block "knowledge_tree_failure"
     exit 1
   fi
 

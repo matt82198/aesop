@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Installs the waveguard pre-commit hook into this repo's .git/hooks, backing up any existing pre-commit.
 set -uo pipefail
 
 main() {
