@@ -1402,11 +1402,11 @@ check_pyflakes_ratchet() {
   # Pyflakes is a dev-only lint dependency (not installed by default;
   # CI installs it in the "Install Python test dependencies" step).
   # Exit codes: 0 = clean/baselined, 1 = new-or-stale findings (fail-CLOSED),
-  # 2 = error (pyflakes not installed, baseline unreadable, etc; fail-OPEN with WARN).
+  # 2 = error (pyflakes not installed, baseline unreadable, etc): fail-CLOSED, blocks
+  # with the tool's output tail (a crashing gate must never read as a pass).
   #
   # Opt-out: AESOP_PYFLAKES_SKIP=1 (exact match "1", not just truthy).
-  # Fail-open when the pyflakes package is not installed or the gate tool is
-  # absent; actual baseline mismatches stay fail-closed.
+  # Fail-open only when the gate tool file is absent (dev-only, see below).
   if [ "${AESOP_PYFLAKES_SKIP:-}" = "1" ]; then
     log_event "pyflakes_ratchet_skipped_env_opt_out"
     return 0
@@ -1455,12 +1455,12 @@ check_pyflakes_ratchet() {
     printf '%s\n' "$pyflakes_output" >&2
   fi
 
-  # Exit code 2 is an environment condition (pyflakes not installed, etc.):
-  # fail-open with a warning audit event, not a push-block
+  # Exit code 2 is an ERROR, not a pass: a gate that crashes must not read as
+  # clean. Block with the tool's stderr tail so the cause is named.
   if [ $pyflakes_exit_code -eq 2 ]; then
-    printf 'Warning: pyflakes ratchet check unavailable (pyflakes not installed or other error); skipping (fail-open)\n' >&2
-    log_event "pyflakes_ratchet_skipped_tool_error"
-    return 0
+    printf 'BLOCKED: pyflakes ratchet errored (exit 2); the gate could not evaluate. Tail of tool output:\n' >&2
+    printf '%s\n' "$pyflakes_output" | tail -n 20 >&2
+    return 1
   fi
 
   # Exit code 1: new-or-stale findings => fail-CLOSED, block the push
@@ -1611,10 +1611,9 @@ check_claudemd_headroom() {
   # the UNION's line count, catching the cascade before the push.
   #
   # Tool exit contract: 0=clean, 1=a union busts its cap (fail-CLOSED, push
-  # blocked), 2=merge union UNREADABLE. Exit 2 is an environment condition (no
-  # origin/main fetched yet, shallow clone, un-previewable merge), not a policy
-  # violation, so it fails OPEN with an audit event -- the same philosophy as the
-  # missing-tool fail-open below.
+  # blocked), 2=merge union UNREADABLE (no origin/main fetched, shallow clone,
+  # un-previewable merge). Exit 2 gets one fetch/unshallow of the base ref and one
+  # re-run; still 2 -> BLOCKED with the tool's output tail (fail-CLOSED).
   local aesop_root
   aesop_root=$(resolve_aesop_root)
   local lint_script="$gate_dir/tools/claudemd_lint.py"
@@ -1632,16 +1631,29 @@ check_claudemd_headroom() {
   fi
 
   local base_ref="${AESOP_HEADROOM_BASE_REF:-origin/main}"
+  # An override that names the branch itself previews a merge with nothing: refuse it.
+  if [ -n "${AESOP_HEADROOM_BASE_REF:-}" ] && headroom_base_is_branch_head "$aesop_root" "$base_ref"; then
+    printf 'BLOCKED: AESOP_HEADROOM_BASE_REF=%s resolves to the branch head; the headroom preview would merge the branch with itself. Push blocked (fail closed).\n' "$base_ref" >&2
+    log_block "claudemd_headroom_base_is_branch_head"
+    return 1
+  fi
+
   local headroom_output
   headroom_output=$("$py_bin" "$lint_script" --root "$aesop_root" --headroom --base-ref "$base_ref" 2>&1)
   local headroom_exit_code=$?
 
+  # Exit 2 (base ref unfetched, shallow clone, un-previewable merge): one fetch or
+  # unshallow of the base ref, then one re-run. Still unreadable -> block.
+  if [ $headroom_exit_code -eq 2 ] && headroom_refresh_base "$aesop_root" "$base_ref"; then
+    headroom_output=$("$py_bin" "$lint_script" --root "$aesop_root" --headroom --base-ref "$base_ref" 2>&1)
+    headroom_exit_code=$?
+  fi
+
   if [ $headroom_exit_code -eq 2 ]; then
-    if [ -n "$headroom_output" ]; then
-      printf '%s\n' "$headroom_output" >&2
-    fi
-    log_event "claudemd_headroom_skipped_unreadable"
-    return 0
+    printf 'BLOCKED: CLAUDE.md headroom union unreadable against %s (exit 2) after one fetch attempt; push blocked (fail closed). Tail of tool output:\n' "$base_ref" >&2
+    printf '%s\n' "$headroom_output" | tail -n 20 >&2
+    log_block "claudemd_headroom_unreadable_blocked"
+    return 1
   fi
 
   if [ $headroom_exit_code -ne 0 ]; then
@@ -1654,14 +1666,138 @@ check_claudemd_headroom() {
   return 0
 }
 
+# headroom_base_is_branch_head <aesop_root> <base_ref>
+# Returns 0 when <base_ref> resolves to the same commit as HEAD (the branch head).
+# An unresolvable ref returns 1 and is left to the lint tool's exit-2 path.
+headroom_base_is_branch_head() {
+  local root="$1" base_ref="$2" base_sha head_sha
+  base_sha=$(git -C "$root" rev-parse --verify --quiet "$base_ref^{commit}" 2>/dev/null) || return 1
+  head_sha=$(git -C "$root" rev-parse --verify --quiet "HEAD^{commit}" 2>/dev/null) || return 1
+  [ -n "$base_sha" ] && [ "$base_sha" = "$head_sha" ]
+}
+
+# headroom_refresh_base <aesop_root> <base_ref>
+# One attempt to make an origin/* base ref readable: fetch it, unshallowing the
+# clone first when it is shallow. Returns 0 only when the fetch succeeded.
+headroom_refresh_base() {
+  local root="$1" base_ref="$2" remote_branch
+  remote_branch="${base_ref#origin/}"
+  [ "$remote_branch" != "$base_ref" ] || return 1
+  local fetch_args=(fetch --quiet --no-tags origin "$remote_branch")
+  if [ "$(git -C "$root" rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+    fetch_args=(fetch --quiet --no-tags --unshallow origin "$remote_branch")
+  fi
+  git -C "$root" "${fetch_args[@]}" </dev/null >/dev/null 2>&1
+}
+
+# ----- Audit writes (never drop a record) -----
+# A record is either appended under the audit lock, or, when the lock is busy,
+# spilled to this process's own file audit-spill-<pid>-<ts>.jsonl next to the log.
+# The next successful lock holder folds every spill file into the chain (name
+# order: ts, then pid; file order within a process) before appending its own
+# record, and the sidecar is then verified against the merged log.
+
+# audit_append_fragment <audit_log> <state_dir> <fragment>
+# Appends one chained record. <fragment> is the JSON members after prev_hash
+# (no braces). The caller MUST hold the audit lock.
+audit_append_fragment() {
+  local audit_log="$1" state_dir="$2" fragment="$3"
+  local prev_hash seq
+  prev_hash=$(get_previous_hash "$audit_log")
+  seq=$(get_next_seq "$audit_log")
+  printf '{"seq":%d,"prev_hash":"%s",%s}\n' "$seq" "$prev_hash" "$fragment" >> "$audit_log" 2>/dev/null || return 1
+  if [ -s "$audit_log" ]; then
+    tail -n 1 "$audit_log" | tr -d '\n' | compute_sha256 > "$state_dir/.audit-tail-hash" 2>/dev/null
+  fi
+  return 0
+}
+
+# audit_spill_record <state_dir> <fragment>
+# Lock-busy path: append the record to this process's spill file. Returns 1 (and
+# says so loudly) when the record cannot be persisted at all.
+audit_spill_record() {
+  local state_dir="$1" fragment="$2"
+  if [ -z "${AUDIT_SPILL_FILE:-}" ]; then
+    AUDIT_SPILL_FILE="$state_dir/audit-spill-$$-$(date -u '+%Y%m%dT%H%M%SZ').jsonl"
+  fi
+  if ! printf '{%s}\n' "$fragment" >> "$AUDIT_SPILL_FILE" 2>/dev/null; then
+    printf 'ERROR: audit lock busy and spill write failed (%s); record NOT persisted\n' "$AUDIT_SPILL_FILE" >&2
+    return 1
+  fi
+  printf 'Warning: audit lock busy; record spilled to %s (merged by the next lock holder)\n' "$AUDIT_SPILL_FILE" >&2
+  return 0
+}
+
+# merge_audit_spills <state_dir>
+# Caller MUST hold the audit lock. Each spill file is claimed by rename (so a
+# spiller that appends later recreates a fresh file, never a half-read one),
+# appended record by record in order, then removed. A claim left by a crashed
+# merger is re-merged on the next run. Prints the number of records merged.
+merge_audit_spills() {
+  local state_dir="$1" audit_log="$1/SECURITY-AUDIT.log"
+  local name f line fragment merged=0
+  local listing
+  # Basenames only, sorted by the ts field (4th '-' field), then pid (3rd).
+  listing=$(cd "$state_dir" 2>/dev/null && shopt -s nullglob && printf '%s\n' audit-spill-* | sort -t- -k4,4 -k3,3n) || listing=""
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    f="$state_dir/$name"
+    [ -f "$f" ] || continue
+    case "$f" in
+      *.jsonl)
+        if ! mv -- "$f" "$f.claim.$$" 2>/dev/null; then
+          printf 'ERROR: could not claim audit spill %s; it stays for the next merge\n' "$f" >&2
+          return 1
+        fi
+        f="$f.claim.$$"
+        ;;
+    esac
+    while IFS= read -r line || [ -n "$line" ]; do
+      [ -n "$line" ] || continue
+      fragment="${line#\{}"
+      fragment="${fragment%\}}"
+      if ! audit_append_fragment "$audit_log" "$state_dir" "$fragment"; then
+        printf 'ERROR: audit merge failed; %s kept for the next merge\n' "$f" >&2
+        return 1
+      fi
+      merged=$((merged + 1))
+    done < "$f"
+    rm -f -- "$f"
+  done <<< "$listing"
+  return 0
+}
+
+# audit_write_locked <state_dir> <fragment> <lock_dir>
+# Shared write path for log_event and log_block: spill when the lock is busy,
+# otherwise merge pending spills, append, release, then verify the merged log.
+audit_write_locked() {
+  local state_dir="$1" fragment="$2" lock_dir="$3"
+  local audit_log="$state_dir/SECURITY-AUDIT.log"
+  local had_spills=0
+  if ! acquire_audit_lock "$lock_dir"; then
+    audit_spill_record "$state_dir" "$fragment"
+    return $?
+  fi
+  if compgen -G "$state_dir/audit-spill-*" >/dev/null; then
+    had_spills=1
+    merge_audit_spills "$state_dir" || printf 'ERROR: audit spill merge incomplete; pending spills kept\n' >&2
+  fi
+  local rc=0
+  audit_append_fragment "$audit_log" "$state_dir" "$fragment" || rc=1
+  release_audit_lock "$lock_dir"
+  # Verification is never skipped: after merging spills, the sidecar must still
+  # anchor the merged log. Runs after release because verify_audit_log takes the lock.
+  if [ "$had_spills" -eq 1 ] && ! verify_audit_log "$audit_log" >/dev/null 2>&1; then
+    printf 'ERROR: audit log failed sidecar verification after merging spills (%s)\n' "$audit_log" >&2
+  fi
+  return $rc
+}
+
 log_event() {
-  # Finding 1 & 2: Acquire lock before read-modify-append, add seq field, update sidecar
   local event_type="$1"
   local aesop_root
   aesop_root=$(resolve_aesop_root)
   local state_dir="$aesop_root/state"
-  local audit_log="$state_dir/SECURITY-AUDIT.log"
-  local lock_dir="$state_dir/.audit-log-lock"
   local ts
   ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
   local repo_name
@@ -1670,37 +1806,16 @@ log_event() {
   user=$(git config user.name 2>/dev/null || echo "unknown")
 
   mkdir -p "$state_dir" 2>/dev/null
-
-  # Acquire write lock
-  if ! acquire_audit_lock "$lock_dir"; then
-    # Log write blocked by lock; fail-open (don't block push)
-    printf 'Warning: audit log write skipped, lock contention\n' >&2
-    return 0
-  fi
-
-  local prev_hash
-  prev_hash=$(get_previous_hash "$audit_log")
-  local seq
-  seq=$(get_next_seq "$audit_log")
-
-  printf '{"seq":%d,"prev_hash":"%s","ts":"%s","repo":"%s","event":"%s","user":"%s"}\n' "$seq" "$prev_hash" "$ts" "$(json_escape "$repo_name")" "$(json_escape "$event_type")" "$(json_escape "$user")" >> "$audit_log" 2>/dev/null
-
-  # Update tail hash sidecar
-  if [ -s "$audit_log" ]; then
-    tail -n 1 "$audit_log" | tr -d '\n' | compute_sha256 > "$state_dir/.audit-tail-hash" 2>/dev/null
-  fi
-
-  release_audit_lock "$lock_dir"
+  local fragment
+  fragment=$(printf '"ts":"%s","repo":"%s","event":"%s","user":"%s"' "$ts" "$(json_escape "$repo_name")" "$(json_escape "$event_type")" "$(json_escape "$user")")
+  audit_write_locked "$state_dir" "$fragment" "$state_dir/.audit-log-lock"
 }
 
 log_block() {
-  # Finding 1 & 2: Acquire lock before read-modify-append, add seq field, update sidecar
   local reason="$1"
   local aesop_root
   aesop_root=$(resolve_aesop_root)
   local state_dir="$aesop_root/state"
-  local audit_log="$state_dir/SECURITY-AUDIT.log"
-  local lock_dir="$state_dir/.audit-log-lock"
   local ts
   ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
   local repo_name
@@ -1709,27 +1824,9 @@ log_block() {
   user=$(git config user.name 2>/dev/null || echo "unknown")
 
   mkdir -p "$state_dir" 2>/dev/null
-
-  # Acquire write lock
-  if ! acquire_audit_lock "$lock_dir"; then
-    # Log write blocked by lock; fail-open (don't block push)
-    printf 'Warning: audit log write skipped, lock contention\n' >&2
-    return 0
-  fi
-
-  local prev_hash
-  prev_hash=$(get_previous_hash "$audit_log")
-  local seq
-  seq=$(get_next_seq "$audit_log")
-
-  printf '{"seq":%d,"prev_hash":"%s","ts":"%s","repo":"%s","event":"push_blocked","reason":"%s","user":"%s"}\n' "$seq" "$prev_hash" "$ts" "$(json_escape "$repo_name")" "$(json_escape "$reason")" "$(json_escape "$user")" >> "$audit_log" 2>/dev/null
-
-  # Update tail hash sidecar
-  if [ -s "$audit_log" ]; then
-    tail -n 1 "$audit_log" | tr -d '\n' | compute_sha256 > "$state_dir/.audit-tail-hash" 2>/dev/null
-  fi
-
-  release_audit_lock "$lock_dir"
+  local fragment
+  fragment=$(printf '"ts":"%s","repo":"%s","event":"push_blocked","reason":"%s","user":"%s"' "$ts" "$(json_escape "$repo_name")" "$(json_escape "$reason")" "$(json_escape "$user")")
+  audit_write_locked "$state_dir" "$fragment" "$state_dir/.audit-log-lock"
 }
 
 check_encoding_lint() {
@@ -1890,7 +1987,57 @@ check_linux_shape() {
     return 1
   fi
 
+  # Exit 0 with the WSL NOTICE means the tool could not run the Linux shape on this
+  # Windows host. Covered paths BLOCK; any other push keeps the NOTICE and proceeds.
+  if printf '%s' "$shape_output" | grep -q 'NOTICE: WSL unavailable'; then
+    local covered_rc=0
+    linux_shape_range_covered "$py_bin" "$gate_dir" "$aesop_root" "$commit_ranges" || covered_rc=$?
+    case "$covered_rc" in
+      0)
+        printf '%s\n' "$shape_output" >&2
+        printf 'BLOCKED: this push touches Linux-shape paths (shell, hooks, workflows, Node tests) and WSL is unavailable, so they cannot be proven on Linux. Install WSL (wsl --install -d Ubuntu) or push from a Linux host. Push blocked (fail closed).\n' >&2
+        log_block "linux_shape_wsl_absent_covered_blocked"
+        return 1
+        ;;
+      1)
+        printf '%s\n' "$shape_output" >&2
+        log_event "linux_shape_wsl_absent_notice"
+        ;;
+      *)
+        printf 'BLOCKED: could not decide whether this push touches Linux-shape paths (coverage probe exit %s); push blocked (fail closed).\n' "$covered_rc" >&2
+        log_block "linux_shape_coverage_probe_failed"
+        return 1
+        ;;
+    esac
+  fi
+
   return 0
+}
+
+# linux_shape_range_covered <py_bin> <gate_dir> <aesop_root> <commit_range>
+# Asks the gate's own coverage rule (tools/linux_shape_check.py should_check_linux_shape,
+# read from the BASE copy in <gate_dir>) whether the range's changed files are covered.
+# Exit 0 = covered, 1 = not covered, 3 = probe error (callers block on anything else).
+linux_shape_range_covered() {
+  "$1" -c 'import subprocess, sys
+try:
+    sys.path.insert(0, sys.argv[1])
+    import linux_shape_check as gate
+    # Own git call (not get_changed_files, which swallows git errors as "no files"):
+    # an unreadable range must be a probe error, never a silent "not covered".
+    listing = subprocess.run(["git", "diff", "--name-only", sys.argv[2]], cwd=sys.argv[3],
+                             capture_output=True, timeout=30, stdin=subprocess.DEVNULL)
+    if listing.returncode != 0:
+        sys.exit(3)
+    changed = [f.strip() for f in listing.stdout.decode("utf-8", errors="replace").splitlines() if f.strip()]
+    covered = bool(gate.should_check_linux_shape(changed))
+except SystemExit:
+    raise
+except BaseException:
+    # Any error (import, git, rule) is exit 3: the caller blocks. An uncaught
+    # traceback would exit 1 and read as "not covered" -- a fail-open.
+    sys.exit(3)
+sys.exit(0 if covered else 1)' "$2/tools" "$4" "$3" </dev/null
 }
 
 check_generated_paths() {
@@ -2098,12 +2245,11 @@ check_emit_receipt() {
   # other branch here -- it is not a verification failure, just a slow run
   # that ran out of patience.
   #
-  # Opt-out: AESOP_RECEIPT_EMIT=0 skips emission entirely (e.g. a lane that
-  # intentionally wants no receipt, or a CI checkout that should not try to
-  # sign anything).
+  # AESOP_RECEIPT_EMIT=0 is INERT. No orchestrator-only mechanism for it exists
+  # (none in hooks/CLAUDE.md or STATE.md), so a lane cannot skip emission by
+  # setting it. The attempt is logged and emission proceeds.
   if [ "${AESOP_RECEIPT_EMIT:-1}" = "0" ]; then
-    log_event "receipt_emit_skipped_opted_out"
-    return 0
+    log_event "receipt_emit_optout_ignored"
   fi
 
   local aesop_root
@@ -2132,24 +2278,26 @@ check_emit_receipt() {
     return 1
   fi
 
+  # Python, gh and signing key are preconditions of the matrix itself: without
+  # them no conclusion can be produced or signed, so each one BLOCKS (fail closed).
   local py_bin=""
   if ! py_bin=$(resolve_py_bin); then
-    printf 'WARN: no python interpreter found; receipt not emitted (push continues).\n' >&2
-    log_event "receipt_emit_skipped_no_python"
-    return 0
+    printf 'BLOCKED: no usable python interpreter; receipt cannot be emitted; push blocked (fail closed).\n' >&2
+    log_block "receipt_emit_no_python"
+    return 1
   fi
 
   if ! command -v gh >/dev/null 2>&1 || ! gh --version >/dev/null 2>&1; then
-    printf 'WARN: gh CLI not found or not working; receipt not emitted (push continues).\n' >&2
-    log_event "receipt_emit_skipped_no_gh"
-    return 0
+    printf 'BLOCKED: gh CLI not found or not working; receipt cannot be posted; push blocked (fail closed).\n' >&2
+    log_block "receipt_emit_no_gh"
+    return 1
   fi
 
   if [ -z "${AESOP_RECEIPT_KEY:-}" ] && [ -z "${AESOP_RECEIPT_HMAC_SECRET:-}" ] && [ ! -f "${AESOP_HOME:-$HOME}/.aesop/receipt_key.pem" ]; then
-    printf 'WARN: no receipt signing key material (%s or %s unset, and default path not found); receipt not emitted (push continues).\n' \
+    printf 'BLOCKED: no receipt signing key material (%s or %s unset, and default path not found); receipt cannot be signed; push blocked (fail closed).\n' \
       "AESOP_RECEIPT_KEY" "AESOP_RECEIPT_HMAC_SECRET" >&2
-    log_event "receipt_emit_skipped_no_key_material"
-    return 0
+    log_block "receipt_emit_no_key_material"
+    return 1
   fi
 
   local timeout_bin=""
@@ -2237,7 +2385,7 @@ check_emit_receipt() {
 
   # Timeout: the matrix never reported a conclusion, so there is nothing to allow on.
   if [ $receipt_exit_code -eq 124 ]; then
-    printf 'BLOCKED: receipt matrix timed out after %ss; conclusion unreadable, push blocked (fail closed). Raise AESOP_RECEIPT_TIMEOUT, or AESOP_RECEIPT_EMIT=0 to opt out.\n' "$timeout_secs" >&2
+    printf 'BLOCKED: receipt matrix timed out after %ss; conclusion unreadable, push blocked (fail closed). Raise AESOP_RECEIPT_TIMEOUT to allow a longer run.\n' "$timeout_secs" >&2
     log_block "receipt_emit_timed_out"
     return 1
   fi
