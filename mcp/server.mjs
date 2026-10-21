@@ -100,14 +100,14 @@ const TRANSCRIPTS_ROOT = path.resolve(
 // File paths
 // Watchdog heartbeat location. MUST mirror monitor/collect-signals.mjs resolveWatchdogHeartbeat
 // and daemons/backup-fleet.sh (the only writer): CONDUCTOR_ROOT env wins; otherwise the sibling
-// conductor3 checkout is used only when AESOP_ROOT's basename is exactly "aesop". Else null.
+// default conductor3 checkout is used only when AESOP_ROOT's basename is exactly "aesop". Else null.
 // It is NOT under STATE_ROOT: the daemon never writes there.
 function resolveWatchdogHeartbeat() {
   let conductorRoot = null;
   if (process.env.CONDUCTOR_ROOT) {
     conductorRoot = process.env.CONDUCTOR_ROOT;
   } else if (path.basename(AESOP_ROOT) === 'aesop') {
-    conductorRoot = path.join(path.dirname(AESOP_ROOT), 'conductor3');
+    conductorRoot = path.join(path.dirname(AESOP_ROOT), 'conductor3');  // default sibling
   }
   return conductorRoot ? path.join(conductorRoot, 'state', '.watchdog-heartbeat') : null;
 }
