@@ -179,5 +179,93 @@ class TestHaltCLI(HaltTestCase):
         self.assertNotEqual(result.returncode, 0)
 
 
+class TestConductorRootFailClosed(unittest.TestCase):
+    """CONDUCTOR_ROOT resolution follows daemons/conductor-root.sh exactly.
+
+    Explicit CONDUCTOR_ROOT wins. The sibling conductor3 is derived ONLY when the
+    AESOP_ROOT basename is the canonical "aesop". Anything else is unresolved and
+    must fail closed: no home-directory fallback, no guessed sibling.
+    """
+
+    KEYS = ("CONDUCTOR_ROOT", "AESOP_ROOT", "AESOP_STATE_ROOT", "HOME", "USERPROFILE")
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="aesop-root-fc-"))
+        self._saved = {k: os.environ.get(k) for k in self.KEYS}
+        for k in self.KEYS:
+            os.environ.pop(k, None)
+        sys.modules.pop("halt", None)
+        sys.modules.pop("common", None)
+        import halt
+        self.halt = halt
+
+    def tearDown(self):
+        for k, v in self._saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        sys.modules.pop("halt", None)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_explicit_conductor_root_wins(self):
+        explicit = self.tmp / "explicit-fleet"
+        os.environ["CONDUCTOR_ROOT"] = str(explicit)
+        os.environ["AESOP_ROOT"] = str(self.tmp / "aesop-wt-x")
+        self.assertEqual(self.halt.resolve_conductor_root(), explicit)
+
+    def test_unset_non_canonical_aesop_root_is_unresolved(self):
+        os.environ["AESOP_ROOT"] = str(self.tmp / "aesop-wt-x")
+        self.assertIsNone(self.halt.resolve_conductor_root())
+
+    def test_unset_canonical_aesop_root_derives_sibling(self):
+        os.environ["AESOP_ROOT"] = str(self.tmp / "aesop")
+        self.assertEqual(self.halt.resolve_conductor_root(), self.tmp / "conductor3")
+
+    def test_no_home_fallback_when_unresolved(self):
+        home = self.tmp / "home"
+        (home / "conductor3" / "state").mkdir(parents=True)
+        (home / "conductor3" / "state" / ".HALT").write_text('{"reason": "x"}', encoding="utf-8")
+        os.environ["HOME"] = str(home)
+        os.environ["USERPROFILE"] = str(home)
+        os.environ["AESOP_ROOT"] = str(self.tmp / "aesop-wt-x")
+        self.assertIsNone(self.halt.resolve_conductor_root())
+        with self.assertRaises(RuntimeError):
+            self.halt.box_wide_sentinel_path()
+
+    def test_cli_status_fails_closed_when_unresolved(self):
+        home = self.tmp / "home"
+        (home / "conductor3" / "state").mkdir(parents=True)
+        (home / "conductor3" / "state" / ".HALT").write_text('{"reason": "x"}', encoding="utf-8")
+        env = {k: v for k, v in os.environ.items() if k not in self.KEYS}
+        env["HOME"] = str(home)
+        env["USERPROFILE"] = str(home)
+        env["AESOP_ROOT"] = str(self.tmp / "aesop-wt-x")
+        result = subprocess.run(
+            [sys.executable, str(HALT_PY), "--status"],
+            env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            cwd=str(self.tmp), timeout=60,
+        )
+        # Exit 1 would mean "halted" via the home sentinel (the old fallback). Unresolved
+        # must be a distinct non-0/non-1 failure so every caller treats it as UNKNOWN.
+        self.assertNotIn(result.returncode, (0, 1), result.stdout + result.stderr)
+        self.assertIn("CONDUCTOR_ROOT", result.stderr)
+
+    def test_cli_status_uses_explicit_conductor_root(self):
+        fleet = self.tmp / "fleet"
+        (fleet / "state").mkdir(parents=True)
+        (fleet / "state" / ".HALT").write_text('{"reason": "box stop"}', encoding="utf-8")
+        env = {k: v for k, v in os.environ.items() if k not in self.KEYS}
+        env["CONDUCTOR_ROOT"] = str(fleet)
+        env["AESOP_ROOT"] = str(self.tmp / "aesop-wt-x")
+        result = subprocess.run(
+            [sys.executable, str(HALT_PY), "--status"],
+            env=env, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            cwd=str(self.tmp), timeout=60,
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("box stop", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

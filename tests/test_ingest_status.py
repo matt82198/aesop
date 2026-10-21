@@ -162,6 +162,26 @@ class IngestStatusTests(unittest.TestCase):
         for token in ("cursor=0", f"source_bytes={self._source_bytes()}", f"lag_bytes={self._source_bytes()}", "heartbeat_age_s=0"):
             self.assertIn(token, line)
 
+    def test_status_surfaces_quarantined_schema_invalid_records(self):
+        # A hook schema change drops agent_id: the record is quarantined on
+        # ingest, but status() and its line must not stay silent about it.
+        schema_invalid = json.dumps({"ts": "2026-10-15T01:00:00.000Z", "session_id": "s1", "summary": "no agent"})
+        with open(self.jsonl, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(_rec("a0") + "\n")
+            fh.write(schema_invalid + "\n")
+            fh.write(_rec("a1") + "\n")
+        ite.ingest(self.jsonl, self.state)
+        st = ite.status(self.jsonl, self.state, now=self._heartbeat_epoch() + 1)
+        self.assertEqual(st.get("quarantined"), 1, st)
+        self.assertIn("quarantined=1", st["line"])
+
+    def test_status_reports_zero_quarantined_when_clean(self):
+        self._write_lines(2)
+        ite.ingest(self.jsonl, self.state)
+        st = ite.status(self.jsonl, self.state, now=self._heartbeat_epoch() + 1)
+        self.assertEqual(st.get("quarantined"), 0, st)
+        self.assertIn("quarantined=0", st["line"])
+
     def test_status_is_read_only(self):
         self._write_lines(2)
         self._set_cursor(0)

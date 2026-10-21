@@ -17,6 +17,7 @@ Exit codes:
 import sys
 import subprocess
 import re
+import unittest
 from pathlib import Path
 
 try:
@@ -378,6 +379,40 @@ def check_no_fabricated_output(template_path):
     except Exception as e:
         print(f"[ERROR]: {e}")
         return False
+
+
+class ActionsTemplateTests(unittest.TestCase):
+    """Runs each template check as a unittest case so discovery executes them.
+
+    The check_* functions above print their own PASS/FAIL line and return a bool;
+    each test asserts that bool. Paths come from this file's location, not the cwd.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.repo_root = Path(__file__).resolve().parents[1]
+        cls.template_path = cls.repo_root / 'templates' / 'aesop-dispatch-template.yml'
+
+    def test_template_file_exists(self):
+        self.assertTrue(self.template_path.is_file(), f"template missing: {self.template_path}")
+
+    def test_yaml_is_valid(self):
+        self.assertTrue(check_yaml_validity(self.template_path), "YAML validity check failed")
+
+    def test_workflow_structure_is_valid(self):
+        self.assertTrue(check_workflow_structure(self.template_path), "workflow structure check failed")
+
+    def test_referenced_cli_commands_exist(self):
+        self.assertTrue(
+            check_cli_command_existence(self.template_path, self.repo_root),
+            "a command referenced by the template is not in `node bin/cli.js --help`",
+        )
+
+    def test_no_invented_flags(self):
+        self.assertTrue(check_no_invented_flags(self.template_path), "invented flag check failed")
+
+    def test_no_fabricated_output(self):
+        self.assertTrue(check_no_fabricated_output(self.template_path), "fabricated output check failed")
 
 
 def main():

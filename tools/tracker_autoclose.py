@@ -235,7 +235,7 @@ def check_files_on_main(owns_files, skip_git=False):
 
 def is_active_status(status):
     """Check if item is in an active status (not yet complete)."""
-    return status in ("ranked", "open", "in_progress", "proposed", "accepted")
+    return status in ("ranked", "open", "todo", "in_progress", "in-progress", "proposed", "accepted")
 
 
 def classify_item(item, skip_gh=False, skip_git=False):

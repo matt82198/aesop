@@ -213,7 +213,7 @@ class TestMergeTrainHaltEnforcement(unittest.TestCase):
         lines = content.split('\n')
         merge_pr_line = None
         for i, line in enumerate(lines):
-            if 'if merge_pr(n):' in line or 'merge_pr(n)' in line:
+            if 'if merge_pr(n' in line or 'merge_pr(n,' in line or 'merge_pr(n)' in line:
                 # Check that _check_halt appears in previous lines
                 context = '\n'.join(lines[max(0, i-5):i+1])
                 if '_check_halt' in context:
@@ -235,7 +235,7 @@ class TestMergeTrainHaltEnforcement(unittest.TestCase):
         lines = content.split('\n')
         merge_integration_line = None
         for i, line in enumerate(lines):
-            if 'merge_integration_pr(pr_number)' in line:
+            if 'merge_integration_pr(pr_number' in line:
                 context = '\n'.join(lines[max(0, i-5):i+1])
                 if '_check_halt' in context:
                     merge_integration_line = i

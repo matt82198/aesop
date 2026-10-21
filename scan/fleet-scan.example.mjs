@@ -200,12 +200,13 @@ function clauseAround(text, idx) {
   return text.slice(start, end);
 }
 
-// Suppress an exfiltration match only when BOTH hold: (1) an allowlisted reference
-// appears as a whole token in the same clause as the match, and (2) the message
-// carries no transmission indicator anywhere. Substring hits elsewhere never suppress.
-function isDefensiveExfilReference(text, match) {
+// Suppress a prompt-IOC match (exfiltration or cred-harvest) only when BOTH hold:
+// (1) an allowlisted reference from `allowlist` appears as a whole token in the same
+// clause as the match, and (2) the message carries no transmission indicator anywhere.
+// Substring hits elsewhere in the message never suppress.
+function isDefensiveReference(text, match, allowlist) {
   const clause = clauseAround(text, match.index);
-  if (!EXFILTRATION_ALLOWLIST.some((ref) => containsWholeToken(clause, ref))) return false;
+  if (!allowlist.some((ref) => containsWholeToken(clause, ref))) return false;
   return !EXFIL_TRANSMISSION_INDICATORS.test(text);
 }
 
@@ -285,7 +286,7 @@ for (const fp of tFiles) {
         for (const [sev, kind, re] of PROMPT_IOC) {
           if (re.test(text)) {
             if (kind === 'cred-harvest') {
-              const isDefensiveToolRef = CRED_HARVEST_ALLOWLIST.some((ref) => text.includes(ref));
+              const isDefensiveToolRef = isDefensiveReference(text, re.exec(text), CRED_HARVEST_ALLOWLIST);
               if (isDefensiveToolRef) {
                 const detail = text.replace(/\s+/g, ' ').slice(0, 180);
                 add('SUPPRESSED-FP', 'cred-harvest (defensive-tool reference)', base, detail);
@@ -294,7 +295,7 @@ for (const fp of tFiles) {
               }
             }
             if (kind === 'exfiltration') {
-              if (isDefensiveExfilReference(text, re.exec(text))) {
+              if (isDefensiveReference(text, re.exec(text), EXFILTRATION_ALLOWLIST)) {
                 const detail = text.replace(/\s+/g, ' ').slice(0, 180);
                 add('SUPPRESSED-FP', 'exfiltration (defensive-review reference)', base, detail);
                 flagged = true;

@@ -133,19 +133,25 @@ def main():
             repo_paths.append(arg)
         i += 1
 
-    # If --repos-json provided, read repos from JSON file
-    if repos_json_file and os.path.isfile(repos_json_file):
+    # An explicit --repos-json is authoritative: if it cannot be read or parsed,
+    # fail closed with exit 2. Never fall through to stdin, which can block forever
+    # when the caller (e.g. the watchdog) leaves stdin open.
+    if repos_json_file is not None:
         try:
             with open(repos_json_file, "r", encoding="utf-8") as f:
                 repos_data = json.load(f)
-                for repo_obj in repos_data:
-                    if isinstance(repo_obj, dict) and "repo" in repo_obj:
-                        repo_paths.append(repo_obj["repo"])
-        except (json.JSONDecodeError, IOError):
-            pass  # Fall through to stdin/args
+        except (OSError, ValueError) as e:
+            print(f"ERROR: cannot read --repos-json {repos_json_file}: {e}", file=sys.stderr)
+            sys.exit(2)
+        if not isinstance(repos_data, list):
+            print(f"ERROR: --repos-json {repos_json_file} must contain a JSON list", file=sys.stderr)
+            sys.exit(2)
+        for repo_obj in repos_data:
+            if isinstance(repo_obj, dict) and "repo" in repo_obj:
+                repo_paths.append(repo_obj["repo"])
 
-    # If no paths provided as args or json, read from stdin (one per line)
-    if not repo_paths:
+    # Only without --repos-json and without positional args, read from stdin (one per line)
+    if repos_json_file is None and not repo_paths:
         try:
             for line in sys.stdin:
                 line = line.strip()

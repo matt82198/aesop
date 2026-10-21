@@ -16,7 +16,7 @@
 
 import { strict as assert } from 'assert';
 import { spawn } from 'child_process';
-import { existsSync, mkdtempSync, writeFileSync, rmSync, cpSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync, cpSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
@@ -625,6 +625,50 @@ export default async function test() {
       console.log('✓ Helper reports the active backend from config\n');
     } catch (err) {
       console.error('✗ Test 10 failed:', err.message, '\n');
+      throw err;
+    }
+  })();
+
+  // Test 11: the helper is READ-ONLY (mcp/CLAUDE.md invariant; tracker
+  // e9a72d86760f). Inspecting a state DB must never create a missing file and
+  // must never write schema or PRAGMA into an existing one.
+  await (async () => {
+    console.log('Test 11: Helper never creates or writes the state DB');
+
+    try {
+      const helper = join(AESOP_ROOT, 'mcp', 'instances-claims.py');
+      const tmpDir = mkdtempSync(join(tmpdir(), 'mcp-readonly-'));
+      const missingDb = join(tmpDir, 'missing.db');
+      const emptyDb = join(tmpDir, 'empty.db');
+      writeFileSync(emptyDb, '', 'utf8');
+
+      const runHelper = (dbPath) => new Promise((resolve) => {
+        const child = spawn('python3', [helper, '--db', dbPath, '--root', AESOP_ROOT], {
+          cwd: AESOP_ROOT,
+          timeout: 20000
+        });
+        let out = '';
+        child.stdout.on('data', (d) => { out += d.toString(); });
+        child.on('close', () => resolve(out));
+        child.on('error', () => resolve(''));
+      });
+
+      const missingOut = await runHelper(missingDb);
+      const emptyOut = await runHelper(emptyDb);
+
+      // The helper must actually have run, or the file checks below are vacuous.
+      assert(missingOut.trim(), 'helper produced output for a missing DB (python3 must run)');
+      assert(emptyOut.trim(), 'helper produced output for an empty DB (python3 must run)');
+      assert(JSON.parse(missingOut).summary.backend, 'missing-DB output still reports backend');
+      assert(JSON.parse(emptyOut).summary.backend, 'empty-DB output still reports backend');
+
+      assert.strictEqual(existsSync(missingDb), false, 'helper must not create a missing DB file');
+      assert.strictEqual(readFileSync(emptyDb).length, 0, 'helper must not write schema into an existing DB');
+
+      await cleanupTempDir(tmpDir);
+      console.log('✓ Helper leaves the state DB untouched\n');
+    } catch (err) {
+      console.error('✗ Test 11 failed:', err.message, '\n');
       throw err;
     }
   })();

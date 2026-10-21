@@ -40,7 +40,8 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from state_store import StateAPI
+import sqlite3
+
 from state_store.instance_projection import (
     list_active_instances,
     get_all_claimed_files,
@@ -56,6 +57,60 @@ ADVISORY_KIND = "advisory"
 #: mode, "unknown" is an admission that we did not observe one.
 UNKNOWN_KIND = "unknown"
 _TRANSPORT_KINDS = {"local": "local-lease", "shared-fs": "fs-claim-log"}
+
+
+class ReadOnlyEventSource:
+    """Read-only view of the ``events`` table for the projection helpers.
+
+    Opens the DB with ``mode=ro`` and issues only SELECTs. Unlike
+    ``state_store.StateAPI`` (EventStore), it never runs CREATE TABLE/INDEX or
+    ``PRAGMA journal_mode=WAL``, and it never creates a missing file: a missing
+    DB raises at open time, which main() reports as an error. A DB with no
+    ``events`` table reads as an empty stream, the same answer a fresh
+    EventStore would give. Honours the mcp/CLAUDE.md read-only invariant
+    (tracker e9a72d86760f).
+    """
+
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        uri = Path(db_path).resolve().as_uri() + "?mode=ro"
+        self._conn = sqlite3.connect(uri, uri=True)
+
+    def get(self, stream: str) -> list:
+        """Projection-helper alias for read()."""
+        return self.read(stream)
+
+    def read(self, stream: str) -> list:
+        """Return events for ``stream`` ascending by version (empty if none)."""
+        try:
+            cur = self._conn.execute(
+                "SELECT id, ts, actor, stream, type, payload, version FROM events "
+                "WHERE stream = ? ORDER BY version ASC",
+                (stream,),
+            )
+        except sqlite3.OperationalError as exc:
+            if "no such table" in str(exc):
+                return []
+            raise
+        rows = []
+        for r in cur.fetchall():
+            try:
+                payload = json.loads(r[5])
+            except json.JSONDecodeError as e:
+                print(
+                    f"WARNING: corrupt JSON payload in stream={r[3]} id={r[0]}: {e}",
+                    file=sys.stderr,
+                )
+                continue
+            rows.append({
+                "id": r[0], "ts": r[1], "actor": r[2], "stream": r[3],
+                "type": r[4], "payload": payload, "version": r[6],
+            })
+        return rows
+
+    def close(self) -> None:
+        """Release the read-only connection."""
+        self._conn.close()
 
 
 def describe_backend(config_path):
@@ -132,7 +187,7 @@ def main():
     backend = describe_backend(config_path)
 
     try:
-        store = StateAPI(args.db)
+        store = ReadOnlyEventSource(args.db)
     except Exception as e:
         print(
             json.dumps(

@@ -253,14 +253,29 @@ jobs:
         # for literal conflict markers. This sweeps every tracked text file.
         run: python tools/conflict_marker_check.py --check
 
+      - name: Loop-Proof gate (loop-machinery changes need red-then-green proof)
+        # Fail closed: exit 1 = listed loop file changed without a valid Loop-Proof
+        # trailer; exit 2 = manifest unreadable. Runs on PRs only (base..head range).
+        if: matrix.python-shard == 0 && github.event_name == 'pull_request'
+        env:
+          LOOP_BASE: ${{ github.event.pull_request.base.sha }}
+          LOOP_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python tools/loop_proof_check.py --base "$LOOP_BASE" --head "$LOOP_HEAD"
+
       - name: Install actionlint (GitHub-semantics workflow validator)
         if: matrix.python-shard == 0
-        # Pinned release via the official downloader. GAP 2026-10-06: PyYAML-valid
-        # main-full.yml was rejected by GitHub ("Unexpected value 'exclude'") and
-        # ran ZERO jobs for ~10 merges; actionlint flags that class at PR time.
+        # Pinned release tarball, sha256-verified before extraction (no remote script
+        # is piped into a shell). Digest = GitHub's published sha256 for the v1.7.12
+        # linux_amd64 release asset. GAP 2026-10-06: PyYAML-valid main-full.yml was
+        # rejected by GitHub ("Unexpected value 'exclude'") and ran ZERO jobs for ~10
+        # merges; actionlint flags that class at PR time.
         run: |
           mkdir -p "$HOME/.local/bin"
-          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12 "$HOME/.local/bin"
+          tmp_dir="$(mktemp -d)"
+          curl -fsSL -o "$tmp_dir/actionlint.tar.gz" https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $tmp_dir/actionlint.tar.gz" | sha256sum -c -
+          tar -xzf "$tmp_dir/actionlint.tar.gz" -C "$tmp_dir" actionlint
+          install -m 0755 "$tmp_dir/actionlint" "$HOME/.local/bin/actionlint"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/actionlint" -version
 

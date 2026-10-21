@@ -86,6 +86,24 @@ const MAX_DEPTH = 6;
 // Cache file for transcript metadata (path, size, mtime -> token counts, etc.)
 const CACHE_FILE = path.join(STATE_ROOT, '.dash-extra-cache.json');
 
+// Cache keys (path|size|mtime) actually touched by this run. The persisted cache
+// is pruned to this set on save, so it stays bounded by the live transcript
+// window instead of accumulating one entry per append forever (tracker 44ce0f022454).
+const liveCacheKeys = new Set();
+
+// Drop entries for transcripts this run did not see, and strip any legacy
+// promptFull so full dispatch prompts are never persisted to disk.
+function pruneCache(cache, keep) {
+  for (const key of Object.keys(cache)) {
+    if (!keep.has(key)) {
+      delete cache[key];
+    } else {
+      delete cache[key].promptFull;
+    }
+  }
+  return cache;
+}
+
 // Load persistent cache from disk (keyed by "path|size|mtime")
 function loadCache() {
   try {
@@ -110,6 +128,31 @@ function saveCache(cache) {
   } catch {
     // Ignore write errors; cache loss is non-fatal
   }
+}
+
+// Re-derive the dispatch prompt for a cache hit (promptFull is not persisted).
+// Same head/tail line selection as parseAgentJsonl, so the result matches a miss.
+function readFirstPrompt(filePath) {
+  try {
+    const lines = fs.readFileSync(filePath, 'utf8').split('\n');
+    const candidates = lines.length <= 100
+      ? lines
+      : [...lines.slice(0, 50), ...lines.slice(-50)];
+    for (const line of candidates) {
+      if (!line.trim()) continue;
+      try {
+        const obj = JSON.parse(line);
+        if (obj.type === 'user' && obj.message && typeof obj.message.content === 'string') {
+          return obj.message.content;
+        }
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    // Unreadable transcript: no prompt
+  }
+  return '';
 }
 
 // Parse JSONL agent transcript and extract rich metadata.
@@ -144,13 +187,20 @@ function parseAgentJsonl(filePath, cache) {
     // Cache key combines path, size, and mtime for exact identity
     const cacheKey = `${filePath}|${stat.size}|${stat.mtimeMs}`;
 
+    liveCacheKeys.add(cacheKey);
+
     // Check if we have cached metadata for this exact file state
     if (cache[cacheKey]) {
       const cached = cache[cacheKey];
-      return {
+      const hit = {
         ...metadata,
         ...cached
       };
+      // promptFull is never persisted; re-derive it from the transcript head.
+      if (!cached.promptFull) {
+        hit.promptFull = readFirstPrompt(filePath);
+      }
+      return hit;
     }
 
     // File is new or changed; parse it
@@ -230,7 +280,6 @@ function parseAgentJsonl(filePath, cache) {
     cache[cacheKey] = {
       tokensUsed: metadata.tokensUsed,
       taskLabel: metadata.taskLabel,
-      promptFull: metadata.promptFull,
       startedAt: metadata.startedAt,
       lastActivity: metadata.lastActivity,
       runtimeSeconds: metadata.runtimeSeconds,
@@ -419,8 +468,8 @@ if (process.argv.includes('--json')) {
       promptFull: metadata.promptFull
     });
   }
-  // Persist cache for next invocation
-  saveCache(cache);
+  // Persist cache for next invocation, bounded to transcripts seen in this run
+  saveCache(pruneCache(cache, liveCacheKeys));
   process.stdout.write(JSON.stringify(agents) + '\n');
 } else {
   // TUI mode: emit colored text

@@ -324,13 +324,20 @@ class TestSharedParser(CostCeilingTestCase):
         self.assertEqual(result["spent"], 500)
 
     def test_shared_parser_no_reimplementation(self):
-        """Verify cost_ceiling doesn't reimplement the ledger parsing logic."""
-        # Read cost_ceiling.py source to ensure it uses fleet_ledger
-        import inspect
-        source = inspect.getsource(self.cost_ceiling)
-        # Should NOT contain duplicate parsing logic (read_ledger_total_tokens should be gone or minimal)
-        # Should import or call fleet_ledger's parser
-        self.assertIn("fleet_ledger", source.lower(), "cost_ceiling.py should import/use fleet_ledger")
+        """Behaviour: check() reads the ledger through fleet_ledger.parse_ledger_rows.
+
+        A spy wraps the real parser. If cost_ceiling re-implemented the parse locally,
+        the spy would never be called, so this fails on a local re-implementation.
+        """
+        from unittest import mock
+        self._write_ledger([(100, 200), (50, 150)])
+        real_parse = self.cost_ceiling.fleet_ledger.parse_ledger_rows
+        with mock.patch.object(
+            self.cost_ceiling.fleet_ledger, "parse_ledger_rows", wraps=real_parse
+        ) as spy:
+            result = self.cost_ceiling.check(period="wave", config={"limits": {"max_wave_tokens": 1000}})
+        self.assertGreaterEqual(spy.call_count, 1, "check() never called fleet_ledger.parse_ledger_rows")
+        self.assertEqual(result["spent"], 500)
 
 
 if __name__ == "__main__":

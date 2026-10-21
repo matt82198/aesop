@@ -222,7 +222,10 @@ def is_comment_only(line: str, pattern: str) -> bool:
     """
     # Find comment markers
     hash_pos = _hash_comment_start(line)
-    slash_pos = line.find('//')
+    # A '//' that is part of a URL scheme ('https://', 'file:///') is not a comment
+    # marker (tracker 1f024dc61697): treating it as one hid commands after the URL.
+    slash_match = re.search(r"(?<![:/])//", line)
+    slash_pos = slash_match.start() if slash_match else -1
 
     # Determine the actual comment start position
     comment_start = None
