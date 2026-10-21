@@ -5,7 +5,7 @@
 #   2. otherwise the sibling conductor root is derived ONLY when the basename of the
 #      given AESOP_ROOT is exactly "aesop" (the canonical tree), and only when that
 #      candidate holds a live heartbeat (state/.watchdog-heartbeat);
-#   3. otherwise the canonical $HOME/conductor3 is used, under the same heartbeat test;
+#   3. otherwise the default canonical $HOME/conductor3 is used, under the same heartbeat test;
 #   4. if nothing resolves, the result is the empty string (fail closed: no heartbeat
 #      path, and the GUI reports UNRESOLVED rather than STALE).
 # The heartbeat file, not a bare state/ directory, is the marker: a stray sibling dir
@@ -33,7 +33,7 @@ resolve_conductor_root() {
       return 0
     fi
   fi
-  candidate="${HOME:-}/conductor3"  # canonical conductor3 on this box
+  candidate="${HOME:-}/conductor3"  # default canonical conductor3 on this box
   if _conductor_root_is_live "$candidate"; then
     printf '%s' "$candidate"
   fi
