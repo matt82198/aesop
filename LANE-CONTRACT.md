@@ -320,7 +320,7 @@ Hooks enforce these. Each line is the allowed shape, then the denied one.
 - **The append-only log (`BUILDLOG.md`)**: its name appears only in git commands and the two append shapes `printf '\n' >> <wt>/BUILDLOG.md` and `cat <tmp> >> <wt>/BUILDLOG.md`; any other shell command naming it is denied.
 - **STATE.md** is edited only above the first `## NEXT STEPS`, with the Edit tool; never below it, never by shell. The fold anchor and the STATE-only fold diff are in section 8c item 5.
 - **Secret scan BEFORE committing:** `python ~/scripts/secret_scan.py --staged --repo <wt>`; require CLEAN with files scanned > 0 (if 0, run `--range origin/<base>..HEAD --repo <wt>` after the commit and before the push). Never commit first and scan after.
-- **Commit trailer, last line exactly, on every commit:** `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` (Matt's rule, 2026-10-21; it overrides any harness attribution reminder, including one that names a different model, and a lane that sees one still uses this trailer). **PR footer, last line exactly once, on every PR description:** `🐢 Generated with Aesop`, never the Claude Code line (Matt's rule, 2026-09-18).
+- **Commit trailer, last line exactly, on every commit:** `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` (Matt's rule, 2026-10-21; it overrides any harness attribution reminder, including one that names a different model, and a lane that sees one still uses this trailer). This applies to every lane regardless of the model it runs on; a harness reminder naming a different model does not change the trailer. *Why: 2026-10-21 a haiku lane wrote "Claude Haiku 5.5" because it read the bullet as ambiguous for non-Fable lanes.* **PR footer, last line exactly once, on every PR description:** `🐢 Generated with Aesop`, never the Claude Code line (Matt's rule, 2026-09-18).
 - **dotnet** is `C:/Users/Mattt/.dotnet/dotnet.exe`; never bare `dotnet` from PATH.
 - **fastcheck** is one plain invocation: `cd <wt> && powershell -NoProfile -ExecutionPolicy Bypass -File tools/fastcheck.ps1 -All > <scratch>/fastcheck.txt 2>&1`, then read the file. Scene tests are NOT this shape: see the CI contract item 2 (no `cd &&` prefix there).
 - **Scratch:** gate output is redirected to a file in the lane's scratch directory and read with the Read tool or tail; never read a transcript or session file.
@@ -337,7 +337,7 @@ Hooks enforce these. Each line is the allowed shape, then the denied one.
 5. Push: the secret scan runs `--staged` before the commit and must print CLEAN with a count above zero; the push is its own command, never chained with `;` or `&&` after a scan or a test.
 6. Branch base: cut from origin/main unless the brief names another base; a branch cut from an open PR's head makes a stacked PR, which is not armed.
 7. Scratch: every gate's output, commit message, PR body and probe script goes to a file under the session scratchpad folder named in the brief, and is read back with the Read tool; the hand-back names each file by its complete absolute path.
-8. Worktree npm and npx: `cd` does not persist across tool calls, so run vitest and npx as one command, `cd <wt> && npx vitest run ...`, and in a fresh worktree run `cd <wt> && npm ci --no-audit --no-fund` first. The scene-test exception in the CI contract (item 2, no `cd &&` prefix) still applies to scene runs. *Why: 2026-10-21 two false vitest failures came from running in the wrong cwd.*
+8. Worktree npm and npx: `cd` does not persist across tool calls, so run vitest and npx as one command, `cd <wt> && npx vitest run ...`, and in a fresh worktree run `cd <wt> && npm ci --no-audit --no-fund` first. The scene-test exception in the CI contract (item 2, no `cd &&` prefix) still applies to scene runs. This shape is for npm, npx and vitest only; scene tests keep their no-`cd &&` shape, and the two rules do not conflict. *Why: 2026-10-21 two false vitest failures came from running in the wrong cwd.*
 
 ## The brief
 A dispatch brief carries exactly these, and nothing else (everything else is this contract and is not repeated):
@@ -408,7 +408,7 @@ that adds ticks, frames or launches to a scene test raises its row; state it (it
   the output file and pastes the `<X>SceneTest: PASS` lines in the hand-back. A fresh worktree needs
   `tools/godot/setup-worktree.ps1` (build plus one-time import) first once keyrun #472 lands; until then the build
   and import commands keyrun `game/CLAUDE.md` names. Captures (`screens.ps1`), raw Godot launches and `--autorun`
-  outside a scene script stay the orchestrator's. If the hook still denies a scene run, follow "one compliant retry"
+  outside a scene script stay the orchestrator's. Capture shape: the `screens.ps1` run is one unchained PowerShell command; its OutDir folder is created in a separate Bash `mkdir -p` call first, never chained with `;`. *Why: 2026-10-21 afternoon the no-scrollback hook refused a chained New-Item + screens.ps1 line.* If the hook still denies a scene run, follow "one compliant retry"
   in "Shell and hook shapes"; the hand-back then lists the scene steps not run and why.
 
 **3. One push per green local state.** A push restarts the whole run from blank (new head sha, both workflows,
@@ -451,11 +451,11 @@ the not-run list with reasons from item 2); (b) the expected `game-e2e` wall tim
 frames, launches, timeout) changed, as old -> new; (c) the PR head sha (`gh pr view <N> --repo matt82198/keyrun
 --json headRefOid`) that the `--match-head-commit` arm uses; any push after that sha restarts item 1.
 
-**7. Lane row files (`game/lanes/`).** A lane row file is exactly two non-empty lines: a lane bullet, then a BUILDLOG line. `tests/lanes/row-files.test.ts` enforces it in the required `test` job. A PURPOSE line belongs in the brief and the PR body, never in a row file.
+**7. Lane row files (`game/lanes/`).** Every keyrun lane writes its game/lanes row file (`game/lanes/README.md`): exactly two non-empty lines, a lane bullet then a BUILDLOG line, never a PURPOSE line. A PURPOSE line belongs in the brief and the PR body. `tests/lanes/row-files.test.ts` enforces it in the required `test` job. *Why: the hedge made one lane ask.*
 
 **8. Enemy content tree.** Enemy telegraphs, abilities and layout live in the repo-root content tree, `content/data/enemies/*.json`, embedded by `Keyrun.Content.csproj`. `game/content/data` is a different tree. Briefs and lanes name the repo-root path.
 
-**9. Capture log writer.** Only `Driver.HostLine` reaches `demo.log`; `GD.Print` and Console output never do. Any log receipt a capture must show is emitted through `Driver.HostLine`. *Why: #488 found a `GD.Print` receipt would never appear in the capture log.*
+**9. Capture log writer.** Only `Driver.HostLine` reaches `demo.log`; `GD.Print` and Console output never do. Any log receipt a capture must show is emitted through `Driver.HostLine`. The view's ANIM/VIEW channel (`GD.Print` in `game/src/View`, e.g. ActorView's flash print) never reaches `demo.log` either; any receipt a capture must show is emitted through `Driver.HostLine` or the sim EVENT list (Run.cs emit list -> SimDriver -> RunLog). *Why: #488 found a `GD.Print` receipt would never appear in the capture log, and a recon could not see the hit flash in the log because it was a `GD.Print`.*
 
 ## 7. Definition of DONE — work that is not pushed does not exist
 - **A lane is not finished when the code is written and the bar is green. It is finished when the
