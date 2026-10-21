@@ -180,9 +180,13 @@ test('trunk master on origin: base resolution uses it and bootstrap does not app
   const res = push(target, { ...env, TMPDIR: tmpRoot }, 'feature/smoke', 'trunk-push');
   assert.equal(res.status, 0, `push must succeed with master as trunk.\n${output(res)}`);
   assert.ok(!output(res).includes(BOOTSTRAP_BANNER), `bootstrap must not apply once a trunk exists.\n${output(res)}`);
-  // The base gate copies were extracted from the trunk commit, not from HEAD.
+  // The base gate copies were extracted from the trunk commit, not from HEAD. The cache
+  // slot is aesop-gate-base-v5-<uid>-<sha> (hooks/pre-push-policy.sh, gate_base_dir): the uid
+  // is machine-specific, so match it by pattern and key the assertion on the trunk sha.
+  const trunkSlot = new RegExp(`^aesop-gate-base-v5-\\d+-${trunkSha}$`);
+  const entries = fs.readdirSync(tmpRoot);
   assert.ok(
-    fs.existsSync(path.join(tmpRoot, `aesop-gate-base-v4-${trunkSha}`, '.complete')),
-    'base gate copy must be extracted from origin/master (the trunk), not HEAD'
+    entries.some((name) => trunkSlot.test(name) && fs.existsSync(path.join(tmpRoot, name, '.complete'))),
+    `base gate copy must be extracted from origin/master (the trunk), not HEAD. tmp entries: ${entries.join(', ')}`
   );
 });
