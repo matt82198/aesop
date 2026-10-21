@@ -243,5 +243,82 @@ class StateLintDocstringAwareTest(unittest.TestCase):
         )
 
 
+class BuildlogWriteRuleTest(unittest.TestCase):
+    """buildlog-md-write fires only for a tool that can WRITE BUILDLOG.md, not for a read-only literal."""
+
+    BUILDLOG_KEY = "@buildlog-md-write"
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.repo_root = Path(self.tmp)
+        (self.repo_root / "tools").mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _scan(self, name, content):
+        (self.repo_root / "tools" / name).write_text(content, encoding="utf-8")
+        from tools.stateapi_lint import find_direct_opens
+
+        return find_direct_opens(str(self.repo_root))
+
+    def test_read_only_buildlog_literal_is_not_flagged(self):
+        """A module that names BUILDLOG.md and only reads it (no write operation) passes."""
+        content = (
+            "from pathlib import Path\n"
+            'LOG_FILES = frozenset({"BUILDLOG.md"})\n'
+            "\n"
+            "def tail(repo_root, n):\n"
+            '    text = (Path(repo_root) / "BUILDLOG.md").read_text(encoding="utf-8")\n'
+            "    return text.splitlines()[-n:]\n"
+        )
+        violations = self._scan("metrics_like_reader.py", content)
+        found = [v for v in violations if "metrics_like_reader.py" in v]
+        self.assertEqual(found, [], f"Read-only BUILDLOG.md literal must not be flagged: {violations}")
+
+    def test_buildlog_literal_with_write_operation_is_flagged(self):
+        """A module that names BUILDLOG.md AND appends to it is still flagged (true positive kept)."""
+        content = (
+            "from pathlib import Path\n"
+            "\n"
+            "def append_entry(repo_root, line):\n"
+            '    with open(Path(repo_root) / "BUILDLOG.md", "a", encoding="utf-8") as f:\n'
+            "        f.write(line)\n"
+        )
+        violations = self._scan("real_buildlog_writer.py", content)
+        self.assertIn(
+            "tools/real_buildlog_writer.py@buildlog-md-write",
+            violations,
+            f"A writer of BUILDLOG.md must still be flagged: {violations}",
+        )
+
+    def test_each_write_operation_form_still_flags_buildlog_literal(self):
+        """Every write form the rule recognises, paired with the literal, is flagged."""
+        write_forms = {
+            "open_w_mode": 'open("BUILDLOG.md", "w").close()',
+            "open_plus_mode_kw": 'open("BUILDLOG.md", mode="r+").close()',
+            "path_open_append": 'Path("BUILDLOG.md").open("a").close()',
+            "write_text": 'Path("BUILDLOG.md").write_text("x")',
+            "write_bytes": 'Path("BUILDLOG.md").write_bytes(b"x")',
+            "shutil_copy": 'shutil.copy("src.md", "BUILDLOG.md")',
+            "os_replace": 'os.replace("tmp.md", "BUILDLOG.md")',
+            "os_open_append_flag": 'os.open("BUILDLOG.md", os.O_WRONLY | os.O_APPEND)',
+            "subprocess_tee_append": 'subprocess.run(["tee", "-a", "BUILDLOG.md"], input=b"x")',
+        }
+        for form, call in write_forms.items():
+            with self.subTest(form=form):
+                content = (
+                    "import os\nimport shutil\nimport subprocess\nfrom pathlib import Path\n"
+                    f"def go():\n    {call}\n"
+                )
+                violations = self._scan(f"writer_{form}.py", content)
+                self.assertIn(
+                    f"tools/writer_{form}.py@buildlog-md-write",
+                    violations,
+                    f"write form {form} with the literal must be flagged: {violations}",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
