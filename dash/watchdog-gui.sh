@@ -19,7 +19,7 @@ X=$'\e[0m'
 # (never under AESOP_ROOT). The resolution rule is shared with the daemons through
 # daemons/conductor-root.sh (resolve_conductor_root), so the GUI and the daemon cannot
 # disagree. The resolved AESOP_ROOT is canonicalised first, as before. An unresolvable
-# root yields no heartbeat path, so the watchdog reads STALE (fail closed).
+# root yields no heartbeat path, so the watchdog reads UNRESOLVED (never STALE or ALIVE).
 DASH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=../daemons/conductor-root.sh
 . "$DASH_DIR/../daemons/conductor-root.sh"
@@ -144,7 +144,11 @@ main() {
     fi
 
     WD_THRESH=$(get_hb_threshold "watchdog")
-    if [ "$AGE" -lt "$WD_THRESH" ]; then
+    # No resolved conductor root means there is no heartbeat path to judge: say so
+    # explicitly instead of inferring STALE from a file that was never looked up.
+    if [ -z "$HB" ]; then
+      WD="${Y}UNRESOLVED${X}"
+    elif [ "$AGE" -lt "$WD_THRESH" ]; then
       WD="${G}ALIVE${X} ${D}(${AGE}s)${X}"
     else
       WD="${R}STALE${X}"
