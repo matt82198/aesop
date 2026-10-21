@@ -1229,6 +1229,56 @@ check_gen_tool_index() {
   return 0
 }
 
+check_machinery_map_symbols() {
+  local gate_dir
+  gate_dir=$(gate_base_dir) || { gate_base_block "check_machinery_map_symbols"; return 1; }
+  # Machinery-map symbol gate (tools/check_machinery_map_symbols.py --check). Mirror of
+  # check_gen_tool_index: docs/MACHINERY-MAP.md must cite symbols, never line numbers, and every
+  # cited symbol must still exist in its file. A bare :<digits> citation or a missing symbol fails closed.
+  #
+  # Bootstrap: a gate introduced by the push being checked is absent from the base copy until it
+  # merges. Only in that case the pushed copy runs (logged as an event); once merged, the base copy pins it.
+  local aesop_root
+  aesop_root=$(resolve_aesop_root)
+  local map_script="$gate_dir/tools/check_machinery_map_symbols.py"
+  if [ ! -f "$map_script" ] && [ -f "$aesop_root/tools/check_machinery_map_symbols.py" ]; then
+    map_script="$aesop_root/tools/check_machinery_map_symbols.py"
+    log_event "machinery_map_symbols_bootstrap_working_tree"
+  fi
+
+  local tool_status
+  tool_status=$(gate_tool_status "$aesop_root" "$map_script")
+  if [ "$tool_status" = "skip" ]; then
+    log_event "machinery_map_symbols_skipped_no_aesop_tools"
+    return 0
+  fi
+  if [ "$tool_status" = "missing" ]; then
+    gate_tool_missing_block "check_machinery_map_symbols.py" "$map_script"
+    log_event "machinery_map_symbols_tool_missing"
+    return 1
+  fi
+
+  local py_bin=""
+  if ! py_bin=$(resolve_py_bin); then
+    gate_no_python_block "machinery map symbol gate"
+    log_event "machinery_map_symbols_no_python"
+    return 1
+  fi
+
+  local map_output
+  map_output=$("$py_bin" "$map_script" --check --root "$aesop_root" 2>&1)
+  local map_exit_code=$?
+
+  if [ $map_exit_code -ne 0 ]; then
+    if [ -n "$map_output" ]; then
+      printf '%s\n' "$map_output" >&2
+    fi
+    return 1
+  fi
+
+  return 0
+}
+
 # Crash-recovery backup refs: refs/heads/backup/crash-YYYY-MM-DD/<name> (strict, nothing else).
 # A backup ref is never a merge target, so the metrics and python-test-coverage gates add no
 # protection there and only block data preservation. Secret scan and every other gate still run.
@@ -3637,6 +3687,12 @@ main() {
   if ! check_gen_tool_index; then
     printf 'Error: Tool index synchronization gate failed. Push blocked.\n' >&2
     log_block "gen_tool_index_failure"
+    exit 1
+  fi
+
+  if ! check_machinery_map_symbols; then
+    printf 'Error: Machinery map symbol gate failed. Push blocked.\n' >&2
+    log_block "machinery_map_symbols_failure"
     exit 1
   fi
 
