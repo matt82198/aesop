@@ -334,6 +334,10 @@ jobs:
         if: matrix.python-shard == 0
         run: python tools/pyflakes_gate.py --root . --baseline .pyflakes-baseline.json
 
+      - name: Pyflakes ratchet gate tests (Guardrail G15, changed-files cache behaviour)
+        if: matrix.python-shard == 0
+        run: python tests/test_pyflakes_gate.py
+
       - name: In-process HTTP timeout lint (main-full-windows-shard2-ui-acceptance-timeout)
         if: matrix.python-shard == 0
         run: python tools/inprocess_http_timeout_lint.py --root . --baseline .inprocess-timeout-baseline.json
