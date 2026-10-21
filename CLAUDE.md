@@ -34,6 +34,24 @@ No RED run is missed; deduplication prevents redundant queue entries (keys on ru
 - **examples/** — Reference implementations and adopter walkthrough kits — read examples/first-wave-baseline/README.md
 - **scripts/** — Repo maintenance wrappers (stats verification) — see § scripts/ below
 
+## If you need X, read Y
+
+Search by question, not by directory. For a term not in this table run `aesop map <term...>` (searches INDEX.md and CLAUDE.md entry lines only). Grep only after a miss, and record that miss as a Discovery line: every repeated discovery becomes a new row here.
+
+| If you need | Read |
+|---|---|
+| how CI runs game-e2e (keyrun) | LANE-CONTRACT.md § CI contract (keyrun) |
+| a fresh keyrun worktree has no Godot import cache | LANE-CONTRACT.md § CI contract (keyrun) (setup-worktree.ps1 note) |
+| a lane's row file format (keyrun game/lanes) | LANE-CONTRACT.md § CI contract (keyrun) item 7 (canonical format: keyrun's lanes README) |
+| git -C with a $VAR path, or pushing from the wrong cwd | LANE-CONTRACT.md § 4a item 6 (push from the worktree, literal paths, separate commit and push commands) |
+| the checks to run before push, in order | LANE-CONTRACT.md § 4a Before you push |
+| what a finished lane must prove (LANDED / BLOCKED-LANDING) | LANE-CONTRACT.md § 8b Landing |
+| the hand-back required fields and the consequence-free discovery line | LANE-CONTRACT.md § 8 Report format, "Required discovery-cost fields" |
+| where hand-backs land | C:/Users/Mattt/.claude/state/handbacks/<session>/ |
+| the test isolation rules (HOME, AESOP_STATE_ROOT) | LANE-CONTRACT.md § 2 Tests; tests/CLAUDE.md |
+| which gates CI runs and how to run them | LANE-CONTRACT.md § 5 Verification |
+| how to find a term in the index files | `aesop map <term...>` (bin/cli.js `map`, tools/map_lookup.js) |
+
 ## examples/
 
 Adopter reference implementations and verified baseline walkthroughs. Artifacts here demonstrate the aesop product end-to-end: canonical wave cycles, manifest schema compliance, and realistic onboarding flows. **Invariants:** (1) All manifests validate against `tools/wave_templates.py` schema; (2) No personal paths, secrets, or invented CLI flags; (3) All claimed commands must be verifiable from `bin/cli.js --help` or repo tools; (4) README files include honest timing, cost, and prerequisites.

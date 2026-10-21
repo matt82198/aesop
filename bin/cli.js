@@ -128,7 +128,8 @@ const DOCUMENTED_FLAGS = new Set([
   '--force', '--yes', '--no-skills', '--install-deps', '--no-git',
   '--name', '--domains', '--repos', '--repo-urls',
   '--ci-mode', '--self-hosted-labels', '--json', '--demo',
-  '--repo', '--labels', '--instances', '--install-root', '--dry-run', '--set-fork-policy', '--global'
+  '--repo', '--labels', '--instances', '--install-root', '--dry-run', '--set-fork-policy', '--global',
+  '--root'
 ]);
 
 // Top-level gate: --version/-v and unknown-flag rejection. Runs before any filesystem work.
@@ -243,10 +244,19 @@ if (isPythonDispatch && args.length >= 1) {
 }
 
 // Check for runtime subcommands (doctor, watch, dash, status, fleet, health, health-score, reproduce, init, runner)
-const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health', 'health-score', 'reproduce', 'init', 'runner'];
+const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health', 'health-score', 'reproduce', 'init', 'runner', 'map'];
 const isRuntimeCommand = runtimeCommands.includes(args[0]);
 
 if (isRuntimeCommand) {
+  // 'map <term...>' is handled by tools/map_lookup.js: deterministic lookup over INDEX.md and
+  // CLAUDE.md entry lines only (never the source tree). Exit 0 on hit or miss; 2 on usage error.
+  if (args[0] === 'map') {
+    const { main: mapMain } = require('../tools/map_lookup.js');
+    // exitCode, not process.exit: stdout may be an async pipe on Windows and must flush first.
+    process.exitCode = mapMain(args.slice(1), process.cwd());
+    return;
+  }
+
   // 'runner install|remove' is handled by tools/runner_install.py (preflight via the doctor's
   // capability probe; refuses on Smart App Control / UMCI boxes and on public repos without
   // all_external_contributors fork approval). All flags pass through untouched.
@@ -518,6 +528,7 @@ Usage:
   npx @matt82198/aesop dash
   npx @matt82198/aesop status
   npx @matt82198/aesop fleet
+  npx @matt82198/aesop map <term...> [--root DIR]... [--json]
   npx @matt82198/aesop reproduce
   npx @matt82198/aesop init [--name NAME] [--force] [--ci-mode hosted|self-hosted-runner|local-receipt-gate] [--self-hosted-labels L1,L2]
   npx @matt82198/aesop runner install [--repo OWNER/NAME] [--instances N] [--labels L1,L2] [--install-root DIR] [--dry-run] [--set-fork-policy] [--json]
@@ -540,6 +551,8 @@ Commands (Node.js):
   dash                    Launch the web dashboard (spawns python3 ui/serve.py or python fallback; add --demo for a seeded zero-key snapshot)
   status                  One-shot fleet status snapshot (heartbeats, dashboard port, git branch)
   fleet                   One-shot fleet snapshot (agents, heartbeats, tracker lanes, orchestrator status)
+  map                     Look up a term in INDEX.md / CLAUDE.md entry lines only (paths + one-liners, max 30 rows;
+                          --root DIR adds a project root; --json for machines; a miss exits 0 with a Discovery hint)
   reproduce               Offline verification suite (repo: full test suite; installed: self-checks)
   wizard                  Interactive onboarding (prompts for project name, repos, port)
 

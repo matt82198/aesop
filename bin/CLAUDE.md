@@ -126,7 +126,7 @@ undiscoverable and the orchestrator cannot be invoked.
 ## Test commands
 
 **Node.js tests** (npm run test:node):
-- `npm run test:node` → `node --test --test-timeout=60000 tests/*.test.mjs`
+- `npm run test:node` → `node --test --test-timeout=60000 tests/*.test.mjs` (incl. `tests/map-lookup.test.mjs`: `aesop map` INDEX/CLAUDE-only search, ranking, 30-row cap, `--json`, `--root`, miss exits 0)
 - Fleet CLI tests: `tests/fleet-cli.test.mjs` — spawns CLI in temp fixture, verifies JSON shape (heartbeats, agents, tracker, orchestrator), graceful degrade, exit 0, no cwd pollution
 - CLI config tests: `tests/cli-config.test.mjs` — scaffold flags (--name, --domains, --repos, --repo-urls), fleet_root auto-set to os.homedir(), config validation, repo URL generation
 - CLI dispatch tests: `tests/cli-dispatch.test.mjs` — Python namespace dispatch routing, verb help, exit code fidelity (0/1/2), fail-closed propagator (signal-kill / null status / spawn error → 2, cross-checked against a real self-SIGTERM child on POSIX), interpreter resolution, unknown namespace/verb errors, arg passthrough
