@@ -215,6 +215,90 @@ def python_code_view(source):
     return "\n".join("".join(row) for row in grid)
 
 
+# Write-capable call shapes. A module is a "writer" only when it contains one of these
+# (AST-detected on real code, so a docstring or comment naming a write does not count).
+_WRITE_METHODS = frozenset({"write_text", "write_bytes"})
+_SHUTIL_WRITERS = frozenset({"copy", "copy2", "copyfile", "copytree", "move"})
+_OS_WRITERS = frozenset({"replace", "rename"})
+_OS_WRITE_FLAGS = frozenset({"O_WRONLY", "O_RDWR", "O_APPEND", "O_CREAT", "O_TRUNC"})
+_SUBPROCESS_CALLS = frozenset({"run", "Popen", "call", "check_call", "check_output"})
+_WRITE_MODE_CHARS = frozenset("wax+")
+
+# Patterns whose firing additionally requires a write operation in the same module.
+# buildlog-md-write: a tool that only READS BUILDLOG.md (e.g. a diff/metrics gate naming
+# it in a constant) is not a writer; a module that names it AND writes is still flagged.
+WRITE_OPERATION_GATED_IDS = frozenset({"buildlog-md-write"})
+
+
+def _mode_is_write(mode_node):
+    """A literal open() mode with w/a/x/+ writes; a non-literal mode fails closed."""
+    if mode_node is None:
+        return False
+    if isinstance(mode_node, ast.Constant) and isinstance(mode_node.value, str):
+        return any(ch in _WRITE_MODE_CHARS for ch in mode_node.value)
+    return True
+
+
+def _walk_constants(node):
+    """Yield every string constant under the call's arguments."""
+    for part in [*node.args, *(k.value for k in node.keywords)]:
+        for sub in ast.walk(part):
+            if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                yield sub.value
+
+
+def _call_is_write(node):
+    """True when this ast.Call can write a file."""
+    func = node.func
+    if isinstance(func, ast.Name):
+        if func.id != "open":
+            return False
+        mode = next((k.value for k in node.keywords if k.arg == "mode"), None)
+        if mode is None and len(node.args) >= 2:
+            mode = node.args[1]
+        return _mode_is_write(mode)
+    if not isinstance(func, ast.Attribute):
+        return False
+    attr = func.attr
+    owner = func.value.id if isinstance(func.value, ast.Name) else None
+    if attr in _WRITE_METHODS:
+        return True
+    if attr == "open":
+        if owner == "os":
+            return any(
+                isinstance(sub, ast.Attribute) and sub.attr in _OS_WRITE_FLAGS
+                for part in node.args
+                for sub in ast.walk(part)
+            )
+        # Path(...).open(mode): the mode is the first positional argument.
+        mode = next((k.value for k in node.keywords if k.arg == "mode"), None)
+        if mode is None and node.args:
+            mode = node.args[0]
+        return _mode_is_write(mode)
+    if owner == "shutil" and attr in _SHUTIL_WRITERS:
+        return True
+    if owner == "os" and attr in _OS_WRITERS:
+        return True
+    if owner == "subprocess" and attr in _SUBPROCESS_CALLS:
+        return any(
+            ">>" in text or text in ("-a", "--append") for text in _walk_constants(node)
+        )
+    return False
+
+
+def module_has_write_operation(source):
+    """Return True when `source` contains a write-capable call.
+
+    Docstrings and comments are ignored (only real Call nodes count). A module that
+    cannot be parsed returns True, failing closed so the gated rules keep their reach.
+    """
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return True
+    return any(isinstance(node, ast.Call) and _call_is_write(node) for node in ast.walk(tree))
+
+
 def find_direct_opens(repo_root):
     """Scan repo for direct opens/writes of protected state files outside the API.
 
@@ -293,6 +377,8 @@ def find_direct_opens(repo_root):
 
             # Scan for violations over the code view: docstrings and comments are blanked
             # (AST/tokenize-aware), so only code and non-docstring string literals match.
+            can_write = module_has_write_operation(content)
+
             for line_num, line in enumerate(python_code_view(content).split("\n"), 1):
                 # Check read violations
                 for pattern, pattern_id in read_patterns:
@@ -306,6 +392,8 @@ def find_direct_opens(repo_root):
 
                 # Check write violations
                 for pattern, pattern_id in write_patterns:
+                    if pattern_id in WRITE_OPERATION_GATED_IDS and not can_write:
+                        continue
                     if re.search(pattern, line):
                         violation_key = f"{relative_path.as_posix()}@{pattern_id}"
                         if violation_key not in violations:

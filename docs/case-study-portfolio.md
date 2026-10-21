@@ -49,7 +49,7 @@ Playwright screenshot automation caught this in production-like conditions (rend
 ## How to Reproduce
 
 1. Fork this repo or set up Aesop in your environment.
-2. Run the [buildsystem skill](/skills/CLAUDE.md) for a portfolio project.
+2. Run the [buildsystem skill](../skills/CLAUDE.md) for a portfolio project.
 3. Provide 4–6 source URLs or inspiration topics; Aesop will dispatch 6 discovery scouts.
 4. Approve the ranked backlog (user decision round).
 5. Aesop dispatches the 10-agent build workflow in parallel on Astro or your framework.

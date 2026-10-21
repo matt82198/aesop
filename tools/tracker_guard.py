@@ -379,6 +379,7 @@ def cmd_enforce(args):
                 to_revert.append((item_id, current_lane, terminal_lane))
 
     reverted = []
+    failed = []
     if to_revert:
         write_api = WriteAPI(common.get_state_dir())
         try:
@@ -395,6 +396,7 @@ def cmd_enforce(args):
                     )
                 except Exception as e:
                     print(f"ERROR: failed to revert {item_id} via WriteAPI: {e}", file=sys.stderr)
+                    failed.append(item_id)
                     continue
 
                 reverted.append({
@@ -420,6 +422,12 @@ def cmd_enforce(args):
         for r in reverted:
             print(f"  {r['id']}: {r['from']} -> {r['to']}")
         rotate_journal_if_needed()
+
+    if failed:
+        # A zombie we could not revert is still a live violation: never report healed.
+        print(f"ERROR: {len(failed)} zombie item(s) could not be reverted: {', '.join(failed)}",
+              file=sys.stderr)
+        return 1
 
     return 0
 

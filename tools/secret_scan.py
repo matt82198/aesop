@@ -91,7 +91,10 @@ PATTERNS = {
         r"(?:[_\-]?KEY)?(?![A-Za-z0-9_\-])"
         r"\s*[:=]\s*"
         r"(?:(?P<q>[\"'])(?P<v>[^\"'\n]{8,})(?P=q)"
-        r"|(?P<u>[^\s'\"`$<{}()\[\],;:]{8,})(?=\s|$|[;,]))",
+        # The unquoted value may not be a slash-delimited regex literal (`/body/` or
+        # `/body/gi`): a scanner's own rule-table entry such as
+        # `SUPPRESSED_CRED = /tokenvalue123456/` is code, not a credential (f-332fcec2).
+        r"|(?!/[^\s/]+/)(?P<u>[^\s'\"`$<{}()\[\],;:]{8,})(?=\s|$|[;,]))",
         re.IGNORECASE,
     ),
     "connection_string": (
@@ -318,6 +321,19 @@ def _credential_value_is_placeholder(value):
     return is_placeholder(value)
 
 
+_CREDENTIAL_REGEX_CLASS = re.compile(r"\\[sSdDwW]|\(\?|\[\^")
+_CREDENTIAL_REGEX_QUANTIFIER = re.compile(r"\{[0-9]*,[0-9]*\}|\{[0-9]+\}|[*+]")
+
+
+def _credential_value_is_regex_shape(value):
+    """True when a generic_credential_assignment value is a regex literal: a regex
+    class escape (backslash-s, backslash-d), a group opener (`(?i)`) or a negated
+    class (`[^`), together with a quantifier (`{8,}`, `+`, `*`). That is the shape of
+    a scanner's own pattern-table literal, not a credential. A real-looking value
+    carries no regex class escape or group syntax, so it is never excused here."""
+    return bool(_CREDENTIAL_REGEX_CLASS.search(value) and _CREDENTIAL_REGEX_QUANTIFIER.search(value))
+
+
 def _is_code_identifier(value, rest_of_line):
     """True for a bare identifier or dotted attribute chain (every segment letters/
     underscore only, no digits) that reads as a code or prose reference rather than a
@@ -462,6 +478,10 @@ def _scan_views(label, views, env_file, has_file_pragma, scan_path):
                             if _is_code_identifier(value, line[match.end():]):
                                 continue
                         if _credential_value_is_placeholder(value):
+                            continue
+                        # A regex literal assigned to a credential-named variable is a
+                        # pattern from a scanner's own rule table, not a secret.
+                        if _credential_value_is_regex_shape(value):
                             continue
                     elif rule_name == "connection_string":
                         # Tracker b0937071216e: the placeholder check applies to the

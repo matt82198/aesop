@@ -871,5 +871,24 @@ class TestDispatchLintRulings(unittest.TestCase):
         self.assertEqual(set(), self._patterns(body))
 
 
+class TestUrlDoubleSlashMasking(unittest.TestCase):
+    """tracker 1f024dc61697: is_comment_only treated the '//' of a URL as a comment
+    start, so a forbidden command AFTER a URL on the same line was skipped as
+    comment-only. A URL is not a comment; the command must still be flagged."""
+
+    @staticmethod
+    def _patterns(body):
+        content = "Agent()\n" + body
+        return {v["pattern"] for v in find_violations(Path("doc.md"), content)}
+
+    def test_manual_merge_after_url_on_command_line_is_flagged(self):
+        body = "git fetch https://github.com/matt82198/aesop && gh pr merge 42\n"
+        self.assertIn("gh_pr_merge", self._patterns(body))
+
+    def test_manual_merge_after_url_in_prose_is_flagged(self):
+        body = "Fetch https://github.com/matt82198/aesop then gh pr merge 42\n"
+        self.assertIn("gh_pr_merge", self._patterns(body))
+
+
 if __name__ == "__main__":
     unittest.main()

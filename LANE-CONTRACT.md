@@ -203,11 +203,23 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
 - **Merge authority: a lane never runs a merge that completes immediately.** No bare `gh pr merge`, never `--admin`,
   and never hand-resolving branch protection. The repo selects the landing mode; the lane does not choose it.
   - **Mode 1 - repos WITH required CI checks (aesop, keyrun).** The lane pushes, opens the PR, and ARMS native
-    auto-merge once at PR open, pinned to the tested head:
+    auto-merge once the PR is ready (never a draft) and its head sha is the final diff, pinned to the tested head:
     `gh pr merge <N> --repo <o/r> --squash --auto --match-head-commit <full head sha>`. The lane takes one
     foreground `gh pr checks <N>` snapshot (exit 8 = pending) and stops. The merge actor is GitHub: it merges once
     the required checks pass. The orchestrator verifies `state == MERGED` with
     `gh pr view <N> --json state,mergeCommit`; it does not poll or babysit the merge.
+    **Arm only when the base is the default branch.** Before arming, run `gh pr view <N> --json baseRefName`. If
+    `baseRefName` is the repo default branch, arm as above. A stacked PR (base is another PR's branch) is NOT armed:
+    GitHub would merge it into that unprotected parent with no CI run. The lane reports
+    `stacked on #N; retarget to main after #N merges` and stops.
+  - **Draft-then-arm order (supersedes "at PR open" for draft PRs), in this order:**
+    1. Open the PR as a draft at the first commit; this draft is the receipt.
+    2. Run `gh pr ready <N>` only when the lane's own checks are green locally.
+    3. Arm auto-merge immediately after marking ready: `gh pr merge <N> --repo <o/r> --squash --auto --match-head-commit <full head sha>`.
+    Draft state is never an excuse to skip arming once the PR is ready.
+  - **`--auto` means "merge when requirements are met".** With no required checks pending it merges immediately at arm
+    time. So arm only after `gh pr ready` and the head sha is the final diff; `--match-head-commit <full head sha>` is
+    mandatory; never arm a draft. If a repo has no required checks, arming equals merging, and the lane states that in its report.
   - **Mode 2 - repos WITHOUT CI (claude-config, claude-scripts, conductor3, psinasty).** There is no required check
     to arm against, so the lane stops at PR open. It runs its gates in its worktree, pastes the literal output, and
     reports the PR number and the full head sha. The orchestrator lands it with one pinned
@@ -338,6 +350,14 @@ Lead the report with the ACCEPTANCE observable (section 8a), before the check li
    (or a resume of it) repeats the merge in item 2. The orchestrator never edits the branch.
 4. **Not in force (PLAN item).** The durable fix is for the lane to put its BUILDLOG line and CLAUDE.md row in the
    PR body, and for the orchestrator to append them on land. Until that is built, item 2 is the rule.
+
+## 8d. Receipt first (push early, draft PR early)
+1. A build lane pushes its branch and opens a draft PR within 20 minutes of its first commit, before any long test run. The draft PR is the receipt; its body says what is folded in and what is still red.
+2. Every later push happens at least every 45 minutes while the lane is working, or at every green step, whichever is first.
+3. A lane that folds other branches and reverts one of its own merges says so in the PR body at the time of the revert, with the reason, and pushes.
+4. A branch with no origin ref 30 minutes after its first commit is a contract breach the monitor flags as [CHURN-NO-SHIP]; the orchestrator stops and relaunches that lane.
+
+Why: 2026-10-20 integrate/playable-dungeon reached 154 commits over 15 hours with no push and three self-reverts before anyone noticed.
 
 ## 9a. Index-first reading (knowledge tree)
 1. Before any grep/rg/find over a brain repo (`~/.claude`, `~/scripts`, `~/conductor3`) or any repo with a

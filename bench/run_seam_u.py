@@ -37,6 +37,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Set, Tuple
 
+try:
+    # Imported as bench.run_seam_u (tests, repo-root imports): resolve through the package.
+    from bench.frontier_slice import MODEL_PRICING_USD_PER_MTOK
+except ImportError:
+    # Run as a script from bench/ (sys.path[0] is bench/): the bare module name resolves.
+    from frontier_slice import MODEL_PRICING_USD_PER_MTOK
+
 
 # ============================================================================
 # CONSTANTS
@@ -1322,29 +1329,18 @@ def calculate_cost(tier: str, usage: Dict[str, Any]) -> Optional[float]:
     """
     Calculate cost in USD for a single call.
 
-    Pricing (approximate, as of 2025):
-    - Claude Haiku: $0.80/$4 per 1M in/out tokens
-    - Claude Sonnet: $3/$15 per 1M in/out tokens
-    - Claude Opus: $15/$75 per 1M in/out tokens
-    - Claude Fable: $0.30/$1.20 per 1M in/out tokens
-    - GPT-4o Mini: $0.15/$0.60 per 1M in/out tokens
+    Prices come from the single shared table frontier_slice.MODEL_PRICING_USD_PER_MTOK
+    (USD per million tokens, (input, output)). There is no second table here: a model
+    absent from that table is UNKNOWN (None), never a stale or guessed rate.
 
     Args:
-        tier: Model tier
+        tier: Model tier (a model ID from MODEL_PRICING_USD_PER_MTOK)
         usage: Usage dict with input_tokens, output_tokens
 
     Returns:
         Cost in USD, or None if model tier not found in pricing table
     """
-    pricing = {
-        "claude-fable-5": (0.30, 1.20),
-        "claude-haiku-4-5-20251001": (0.80, 4.0),
-        "claude-sonnet-5": (3.0, 15.0),
-        "claude-opus-5": (15.0, 75.0),
-        "gpt-4o-mini": (0.15, 0.60),
-    }
-
-    price_pair = pricing.get(tier)
+    price_pair = MODEL_PRICING_USD_PER_MTOK.get(tier)
     if price_pair is None:
         # Unknown model — mark as such rather than silently returning 0.0
         print(f"WARNING: unknown model pricing for tier '{tier}' — cost marked as UNKNOWN", file=sys.stderr)

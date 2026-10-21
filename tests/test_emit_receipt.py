@@ -568,5 +568,111 @@ class TestNonGithubRemotePost(unittest.TestCase):
                 self.assertEqual(emit.non_github_remote(repo), expected, url)
 
 
+_HANG_SRC = """import sys, time
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    fh.write(str(__import__("os").getpid()))
+time.sleep(600)
+"""
+
+_HANG_WITH_GRANDCHILD_SRC = """import subprocess, sys, time
+child = subprocess.Popen([sys.executable, sys.argv[2]])
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    fh.write(str(__import__("os").getpid()) + " " + str(child.pid))
+time.sleep(600)
+"""
+
+_OK_SRC = "import sys\nsys.exit(0)\n"
+
+
+def _alive(pid):
+    """True when `pid` is still running. Windows uses tasklist (os.kill(pid, 0) is CTRL_C there)."""
+    if os.name == "nt":
+        out = subprocess.run(["tasklist", "/FI", "PID eq %d" % pid, "/NH"], capture_output=True,
+                             encoding="utf-8", errors="replace", timeout=30).stdout
+        return str(pid) in out.split()
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _bounded(fn, budget_s):
+    """Run fn() in a daemon thread; fail the test (not the runner) if it has not returned in budget_s."""
+    import threading
+    box = {}
+
+    def target():
+        box["value"] = fn()
+
+    worker = threading.Thread(target=target, daemon=True)
+    worker.start()
+    worker.join(budget_s)
+    if worker.is_alive():
+        raise AssertionError("run_part still blocked after %ss: a hung part is not bounded" % budget_s)
+    return box["value"]
+
+
+class TestPartTimeout(unittest.TestCase):
+    """A hung receipt-matrix part must fail RED within its bound and take its whole tree with it.
+    Driven through run_part() (the real Popen path); no timed-out part may ever be reported green."""
+
+    def _helper(self, tmp, name, src):
+        path = Path(tmp) / name
+        path.write_text(src, encoding="utf-8")
+        return path
+
+    def test_hung_part_fails_red_within_bound_and_leaves_no_child(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            helper = self._helper(tmp, "hang.py", _HANG_SRC)
+            pidfile = Path(tmp) / "pid.txt"
+            spec = emit.PartSpec(lambda repo: [sys.executable, str(helper), str(pidfile)])
+            logfile = Path(tmp) / "part.log"
+            env = dict(os.environ, AESOP_RECEIPT_PART_TIMEOUT="5")
+            res = _bounded(lambda: emit.run_part(Path(tmp), "hung", spec, log_path=logfile, environ=env), 30)
+            self.assertNotEqual(res["exit_code"], 0, "a timed-out part must be RED")
+            self.assertLess(res["duration_s"], 30)
+            self.assertIn("timed out after 5s", logfile.read_text(encoding="utf-8"))
+            self.assertFalse(_alive(int(pidfile.read_text(encoding="utf-8"))), "hung part survived the kill")
+
+    def test_sleeping_grandchild_is_killed_with_its_parent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            grandchild = self._helper(tmp, "grandchild.py", _HANG_SRC)
+            parent = self._helper(tmp, "parent.py", _HANG_WITH_GRANDCHILD_SRC)
+            pidfile = Path(tmp) / "pids.txt"
+            spec = emit.PartSpec(lambda repo: [sys.executable, str(parent), str(pidfile), str(grandchild)])
+            env = dict(os.environ, AESOP_RECEIPT_PART_TIMEOUT="5")
+            # The grandchild shares the pipe, so a tree kill is the only thing that lets run_part return.
+            res = _bounded(lambda: emit.run_part(Path(tmp), "tree", spec, environ=env), 30)
+            self.assertNotEqual(res["exit_code"], 0)
+            parent_pid, child_pid = (int(x) for x in pidfile.read_text(encoding="utf-8").split())
+            self.assertFalse(_alive(parent_pid), "parent survived the kill")
+            self.assertFalse(_alive(child_pid), "grandchild survived the kill")
+
+    def test_fast_part_is_unaffected_by_the_bound(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ok = self._helper(tmp, "ok.py", _OK_SRC)
+            spec = emit.PartSpec(lambda repo: [sys.executable, str(ok)])
+            env = dict(os.environ, AESOP_RECEIPT_PART_TIMEOUT="5")
+            res = _bounded(lambda: emit.run_part(Path(tmp), "fast", spec, environ=env), 30)
+            self.assertEqual(res["exit_code"], 0)
+
+    def test_invalid_timeout_uses_default_and_says_so(self):
+        import io
+        for raw in ("abc", "0", "-5", "nan", "inf"):
+            err = io.StringIO()
+            real_stderr, sys.stderr = sys.stderr, err
+            try:
+                value = emit.part_timeout_seconds({"AESOP_RECEIPT_PART_TIMEOUT": raw})
+            finally:
+                sys.stderr = real_stderr
+            self.assertEqual(value, emit.PART_TIMEOUT_DEFAULT_S, raw)
+            self.assertIn("AESOP_RECEIPT_PART_TIMEOUT", err.getvalue(), raw)
+        self.assertEqual(emit.part_timeout_seconds({"AESOP_RECEIPT_PART_TIMEOUT": "7"}), 7.0)
+        self.assertEqual(emit.part_timeout_seconds({}), emit.PART_TIMEOUT_DEFAULT_S)
+
+
 if __name__ == "__main__":
     unittest.main()

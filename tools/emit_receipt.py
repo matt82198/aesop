@@ -15,10 +15,12 @@ import concurrent.futures
 import datetime
 import hashlib
 import json
+import math
 import os
 import platform
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -262,15 +264,73 @@ def scrubbed_part_env(environ):
     return scrub_child_env(environ)[0]
 
 
+PART_TIMEOUT_ENV = "AESOP_RECEIPT_PART_TIMEOUT"
+# Below the pre-push hook's outer AESOP_RECEIPT_TIMEOUT (900s): a hung part goes RED on its own,
+# instead of the outer ceiling killing the hook and stranding the push with children orphaned.
+PART_TIMEOUT_DEFAULT_S = 600.0
+PART_TIMEOUT_EXIT = 124  # the coreutils `timeout` convention; any non-zero exit is red
+
+
+def part_timeout_seconds(environ=None):
+    """Per-part wall-clock bound in seconds. Invalid, zero, negative or non-finite values fall back
+    to the default and say so on stderr: a bad value never disables the bound."""
+    environ = os.environ if environ is None else environ
+    raw = environ.get(PART_TIMEOUT_ENV)
+    if raw is None or not raw.strip():
+        return PART_TIMEOUT_DEFAULT_S
+    try:
+        value = float(raw)
+    except ValueError:
+        value = float("nan")
+    if not math.isfinite(value) or value <= 0:
+        print("emit_receipt: invalid %s=%r; using the default %ds (the bound is never disabled)"
+              % (PART_TIMEOUT_ENV, raw, int(PART_TIMEOUT_DEFAULT_S)), file=sys.stderr)
+        return PART_TIMEOUT_DEFAULT_S
+    return value
+
+
+def _kill_process_tree(proc):
+    """Kill proc and every descendant. Windows: taskkill /T; POSIX: the whole session group."""
+    if os.name == "nt":
+        try:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True,
+                           encoding="utf-8", errors="replace", timeout=30)
+        except subprocess.TimeoutExpired:
+            pass  # fall through to the direct kill below
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)  # start_new_session=True made proc the group leader
+        except ProcessLookupError:
+            pass
+    if proc.poll() is None:
+        proc.kill()
+
+
 def run_part(repo, name, spec, throwaway_wt=None, log_path=None, environ=None):
     argv = spec.cmd(Path(throwaway_wt or repo))
     t0 = time.monotonic()
-    env, _removed = scrub_child_env(os.environ if environ is None else environ)
+    source = os.environ if environ is None else environ
+    env, _removed = scrub_child_env(source)
+    budget = part_timeout_seconds(source)
 
     with tempfile.TemporaryDirectory(prefix="receipt-%s-" % name) as tmp:
         env["TMPDIR"] = tmp  # per-part temp dir, mirrors ci.yml's shard-specific TMPDIR
-        res = subprocess.run(argv, cwd=str(throwaway_wt or repo), env=env, capture_output=True,
-                             encoding="utf-8", errors="replace")
+        proc = subprocess.Popen(argv, cwd=str(throwaway_wt or repo), env=env, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, encoding="utf-8", errors="replace",
+                                start_new_session=(os.name != "nt"))
+        try:
+            out_text, err_text = proc.communicate(timeout=budget)
+            returncode = proc.returncode
+        except subprocess.TimeoutExpired:
+            _kill_process_tree(proc)
+            try:
+                out_text, err_text = proc.communicate(timeout=30)  # drain; pipes close once the tree is gone
+            except subprocess.TimeoutExpired:
+                out_text, err_text = "", ""
+            returncode = PART_TIMEOUT_EXIT
+            err_text = (err_text or "") + ("\nemit_receipt: part %s timed out after %ss; killed its process tree (FAILED)\n"
+                                           % (name, "%g" % budget))
+    res = subprocess.CompletedProcess(argv, returncode, out_text, err_text)
     out = (res.stdout or "") + "\n" + (res.stderr or "")
     if res.returncode != 0 and log_path is not None:
         # A failing part must be explainable: keep its output tail on disk (never in the envelope).

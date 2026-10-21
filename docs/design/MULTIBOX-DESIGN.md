@@ -507,4 +507,22 @@ Clock skew beyond `max_skew` is folded INTO lease deadline (skew only lengthens)
 
 ---
 
+## Box fence: a box that is behind does not run
+
+If two machines share the same GitHub repos, a machine that has not pulled keeps running old code, and old code can overwrite the other machine's work. Aesop stops that.
+
+The repo root holds a file called `BOX_PROTOCOL`, one whole number. It goes up only when a change would make old copies unsafe to run (for example, a change to how or where boxes push). Ordinary commits never change it, so your box does not need the latest commit, only a compatible one.
+
+Every time the watchdog starts, `aesop doctor` runs, or the boot brief is printed, `tools/box_fence.py` compares your number with the one on GitHub:
+
+- Same or newer: you run as normal.
+- Behind, and you have no unsaved changes: it updates your checkout for you (a fast-forward only) and says so.
+- Behind, and you have unsaved work or local commits: it refuses to run and prints the exact commands to save your work and update. It never resets, stashes or deletes anything itself.
+- Cannot reach GitHub (offline): it warns and lets you run, because an offline box cannot collide with anyone until it pushes. It leaves a marker, and the pre-push hook re-checks before any push; a box that still cannot prove it is current cannot push.
+- GitHub has no `BOX_PROTOCOL` yet: nothing to enforce.
+
+You can run it by hand: `python tools/box_fence.py` (add `--json` for machine output).
+
+---
+
 **Generated with Claude Code** — Aesop Docs Lane 2026-08-02
