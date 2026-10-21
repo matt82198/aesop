@@ -477,6 +477,16 @@ class TestPyflakesIncrementalParity(unittest.TestCase):
         self.assertTrue(any('pkg/a.py@UnusedImport' in item for item in out['new']))
 
     @REQUIRES_PYFLAKES
+    def test_check_mode_is_read_only_and_writes_no_cache(self):
+        """RED: --check is the read-only verification mode; it must not create the cache."""
+        self._write('pkg/a.py', 'def a():\n    return 1\n')
+        self._baseline({})
+        code, out, err = self._run('--check')
+        self.assertEqual(code, 0, err)
+        self.assertFalse(os.path.isdir(self.cache_dir) and os.listdir(self.cache_dir),
+                         'check mode must not write the per-file cache')
+
+    @REQUIRES_PYFLAKES
     def test_root_change_does_not_reuse_other_roots_cache(self):
         """RED: the same tree under a different --root starts cold (no cross-root reuse)."""
         self._write('pkg/a.py', 'def a():\n    return 1\n')

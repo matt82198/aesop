@@ -181,7 +181,7 @@ def _save_cache(cache_file: Path, tag: str, entries: Dict[str, list]) -> None:
 
 
 def run_pyflakes(root: Path, paths: List[str], cache_file: Optional[Path] = None,
-                 forced_reason: str = "") -> Tuple[List[dict], List[str], bool, dict]:
+                 forced_reason: str = "", write_cache: bool = True) -> Tuple[List[dict], List[str], bool, dict]:
     """Run pyflakes over the given repo-relative paths, reusing cached per-file results.
 
     pyflakes analyses one file at a time, so a file's messages depend only on its
@@ -264,7 +264,7 @@ def run_pyflakes(root: Path, paths: List[str], cache_file: Optional[Path] = None
     finally:
         os.chdir(cwd)
 
-    if cache_file is not None and not errors:
+    if cache_file is not None and write_cache and not errors:
         _save_cache(cache_file, tag, live)
     if not reason and reused == 0:
         reason = "no cached entries matched"
@@ -407,7 +407,7 @@ def main(argv=None) -> int:
     parser.add_argument("--baseline", default=DEFAULT_BASELINE, help=f"Ratchet baseline file (default: {DEFAULT_BASELINE}; pass empty string to disable ratchet mode)")
     parser.add_argument("--trunk-baseline", default=None, help="Pre-push trunk mode: the trunk's baseline. --baseline (the branch copy) must be a burn-down of it (strict subset, scan within it) or the gate fails; additions and missing/malformed baselines fail")
     parser.add_argument("--update-baseline", action="store_true", help="Regenerate --baseline from the current scan (review-only; CI must never pass this)")
-    parser.add_argument("--check", action="store_true", help="(default behavior) run the gate check")
+    parser.add_argument("--check", action="store_true", help="(default behavior) run the gate check; read-only, so it reads the per-file cache but never writes it")
     parser.add_argument("--no-cache", action="store_true", help="Full scan: neither read nor write the per-file result cache")
     parser.add_argument("--cache-dir", default=None, help="Per-file result cache directory (default: $AESOP_STATE_ROOT/cache/pyflakes, else the temp dir)")
     args = parser.parse_args(argv)
@@ -432,7 +432,10 @@ def main(argv=None) -> int:
     if args.baseline and not args.update_baseline and not (root / args.baseline).is_file():
         forced_reason = "baseline missing"
 
-    findings, errors, available, scan = run_pyflakes(root, paths, cache_file, forced_reason)
+    # --check is the read-only verification mode: it may read the cache, never write it.
+    findings, errors, available, scan = run_pyflakes(
+        root, paths, cache_file, forced_reason, write_cache=not args.check,
+    )
 
     if not available:
         print(
