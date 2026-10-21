@@ -32,6 +32,8 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 
 - **transcript_replay.py -o safety (04e84b1d0cf8, 2026-10-16)**: `-o <dir>` clears an existing directory only when it is empty or carries the `.transcript-replay-output` marker this tool writes into every output dir; any other non-empty directory exits 2 naming the path and marker, with nothing deleted. Tests: `tests/test_transcript_replay.py`.
 
+- **Worktree GC report and cap (2026-10-21, Matt: "nothing cleans up worktrees")**: `worktree_gc.py` inventories the non-primary worktrees of the registered `PRIMARIES` (lane_liveness discovery reused; `KEEP_PATHS` runtime trees are always LIVE) and classifies each SAFE (clean, ancestor of origin default or MERGED PR) / DIRTY (file list) / UNPUSHED / LIVE (open PR or touched inside `--live-minutes`, default 120) / UNKNOWN (fail closed). Report mode is read-only and needs gh; `--check` is a counts-only cap check (cap 15, about 1s, exit 1 OVER / 2 unreadable primary), wired in `hooks/pre-push-policy.sh` as `check_worktree_cap`, WARNING only, never blocks. `--apply --confirm-token T` removes SAFE worktrees only (no --force, then prune) and only when T equals `AESOP_WORKTREE_GC_TOKEN`, a value Matt sets; the orchestrator never passes it. Tests: `tests/test_worktree_gc.py`.
+
 ## init_project.py — Worktree support
 - **Worktree .git handling**: `resolve_real_git_dir()` detects when `.git` is a FILE (worktree case) and uses `git rev-parse --git-common-dir` to locate the actual git directory.
 - **Fallback git dir resolution**: Manual parsing of `.git` file's `gitdir:` pointer if git command fails. Every branch returns `Path(...).resolve()` (8.3 TEMP alias `RUNNER~1` / subst drives differ from raw paths).

@@ -1184,6 +1184,33 @@ check_claudemd_sync() {
   return 0
 }
 
+check_worktree_cap() {
+  # Worktree cap WARNING (tools/worktree_gc.py --check). WARNING ONLY: this function
+  # always returns 0, so it never blocks a push. Removal of worktrees is Matt's hard stop;
+  # this only makes the count visible. --check is a cheap git worktree list (about 1s).
+  local gate_dir gc_script py_bin cap_out cap_rc
+  gate_dir=$(gate_base_dir) || { printf 'WARNING: worktree cap not checked (gate base dir unresolved)\n' >&2; return 0; }
+  gc_script="$gate_dir/tools/worktree_gc.py"
+  if [ ! -f "$gc_script" ]; then
+    printf 'WARNING: worktree cap not checked (tools/worktree_gc.py missing at %s)\n' "$gc_script" >&2
+    log_event "worktree_cap_tool_missing"
+    return 0
+  fi
+  if ! py_bin=$(resolve_py_bin); then
+    printf 'WARNING: worktree cap not checked (no python on PATH)\n' >&2
+    log_event "worktree_cap_no_python"
+    return 0
+  fi
+  cap_out=$("$py_bin" "$gc_script" --check 2>&1)
+  cap_rc=$?
+  if [ $cap_rc -ne 0 ]; then
+    printf 'WARNING: worktree cap check exit %s (1 = over cap, 2 = a primary unreadable): %s\n' "$cap_rc" "$cap_out" >&2
+    printf 'WARNING: run python tools/worktree_gc.py for the classified report. Push NOT blocked.\n' >&2
+    log_event "worktree_cap_warning"
+  fi
+  return 0
+}
+
 check_gen_tool_index() {
   local gate_dir
   gate_dir=$(gate_base_dir) || { gate_base_block "check_gen_tool_index"; return 1; }
@@ -3639,6 +3666,9 @@ main() {
     log_block "gen_tool_index_failure"
     exit 1
   fi
+
+  # Worktree cap: WARNING only (never blocks). See check_worktree_cap.
+  check_worktree_cap
 
   # Same captured stdin as the other range gates: check_metrics scans the pushed refs,
   # not the current branch (v0.10.1 incident).

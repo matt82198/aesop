@@ -208,6 +208,7 @@ listed by adding an `INDEX: <one-liner>` line to its module docstring/header.
 - `wave_scorecard.py` -- Wave quality scorecard generator (deterministic metrics from on-disk telemetry); computes items dispatched/succeeded, repair rounds, first-try-green rate, tokens + cost by phase/model, agent success by type, retry frequency; CLI: `[--json|--md] [--waves N] [--state-root PATH]` (default ASCII); emits n/a for missing sources; hermetic, stdlib-only
 - `wave_templates.py` -- Wave-manifest preset generator: instantiate/validate templates/wave-presets/*.json into ready manifests; CLI: `validate [--template saas|data|library|all]` (exits 0=clean / 1=defects per item), `instantiate <preset> --project-name --base-dir [--output FILE]`
 - `workflow_model_linter.py` -- Guardrail G7: workflow model pin linter; AST-scans .js/.mjs files for agent() calls missing explicit model:'haiku' parameter (bypasses PreToolUse hook); suppress via `// model-ok`; CLI: `--check` (default) | `--json` | `--help`; exit 0=clean/1=violations/2=error; stdlib-only
+- `worktree_gc.py` -- Worktree garbage-collection report and cap check; classifies every non-primary worktree of the registered primaries as SAFE, DIRTY, UNPUSHED, LIVE or UNKNOWN, WARNs over the cap (default 15), and removes SAFE worktrees only under --apply with --confirm-token equal to AESOP_WORKTREE_GC_TOKEN (an operator-held value)
 - `worktree_marker.py` -- Worktree ownership marker (.aesop-worktree-owner) read/write with fail-closed parsing, consumed by merge_train and primary-branch-guard
 
 <!-- END-GENERATED -->
