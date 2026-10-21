@@ -261,7 +261,7 @@ looks like. Matching the gate's contract is also what makes reproduction and rev
   GitHub to update a PR branch server-side: that creates a merge head no box ran the gates on, so no receipt can exist for it.
   A `gh workflow run` dispatch creates a separate check suite that branch protection ignores.
   A Mode 1 PR that goes DIRTY because a sibling landed first is repaired by the merge in section 8c, never by the orchestrator editing the branch.
-- **Gate-change PRs are never armed by the lane.** A gate-change PR (any change to `.github/workflows`, a branch-protection-named job, a gate script under `tools/ci`, or a hook file) is armed by the orchestrator only after a read-only lane has diffed the head against the proof shape: one check run per required name; no job-level `if:` on a required-named job (game-gate's `if: always()` with `needs:` is the one allowed form); no second workflow reusing a required name; no `paths:` or `paths-ignore:` filter; no `continue-on-error`; no widened tolerance; scope classified with `git diff --no-renames --name-only`. A required check that is absent or in progress is a wait, never a PASS.
+- **Gate-change PRs are never armed by the lane.** A gate-change PR (anything under `.github/workflows`, a tool that CI runs, a branch-protection-named job, or a hook file) is armed by the orchestrator only after a read-only lane has diffed the head against the proof shape: each required name posts exactly one check run that actually runs the step; docs-only pass-through proven by a check-run listing; no job-level `if:` on a required-named job (game-gate's `if: always()` with `needs:` is the one allowed form); no second workflow reusing a required name; no `paths:` or `paths-ignore:` filter; no `continue-on-error`; no widened tolerance; scope classified with `git diff --no-renames --name-only`. The orchestrator reads that verdict before arming. A required check that is absent or in progress is a wait, never a PASS.
 - **Fully machine-generated paths (`tools/INDEX.md`, `state/ledger/*.jsonl`, etc. — `tools/generated_paths.py::REGISTRY`)
   are push-blocked by `hooks/pre-push-policy.sh check_generated_paths()`.** The only override is
   `AESOP_ALLOW_GENERATED=1` — the DESIGNED writer path for a generator/regeneration push (a seated session re-running
@@ -310,7 +310,7 @@ Hooks enforce these. Each line is the allowed shape, then the denied one.
 - **File content is written with the Write tool** (edits with the Edit tool or a Python script file); never a heredoc (`python - <<EOF`, `cat <<EOF`), a here-string (`<<<`) or process substitution (`<( )`). No `sed` with `$` or a variable.
 - **Commit messages:** write the message with the Write tool, then `git commit -F <file>`; never `-m` with multi-line text. PR text: `gh pr edit --body-file <file>`, `gh pr comment --body-file <file>`.
 - **The append-only log (`BUILDLOG.md`)**: its name appears only in git commands and the two append shapes `printf '\n' >> <wt>/BUILDLOG.md` and `cat <tmp> >> <wt>/BUILDLOG.md`; any other shell command naming it is denied.
-- **STATE.md** is edited only above the first `## NEXT STEPS`, with the Edit tool; never below it, never by shell.
+- **STATE.md** is edited only above the first `## NEXT STEPS`, with the Edit tool; never below it, never by shell. The fold anchor and the STATE-only fold diff are in section 8c item 5.
 - **Secret scan BEFORE committing:** `python ~/scripts/secret_scan.py --staged --repo <wt>`; require CLEAN with files scanned > 0 (if 0, run `--range origin/<base>..HEAD --repo <wt>` after the commit and before the push). Never commit first and scan after.
 - **Commit trailer, last line exactly, on every commit:** `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` (Matt's rule, 2026-10-21; it overrides any harness attribution reminder, including one that names a different model, and a lane that sees one still uses this trailer). **PR footer, last line exactly once, on every PR description:** `🐢 Generated with Aesop`, never the Claude Code line (Matt's rule, 2026-09-18).
 - **dotnet** is `C:/Users/Mattt/.dotnet/dotnet.exe`; never bare `dotnet` from PATH.
@@ -362,6 +362,9 @@ older run (game.yml:18-20). Wall times from `gh api repos/matt82198/keyrun/actio
 | `game-test` | windows-latest, 20 min (:24-25) | `dotnet test game/Keyrun.sln` on 8.0.x (:31-33), then `launch-lock-test.ps1` stub (:35-44, must print `launch-lock-test: PASS`) | 3m38s, 4m16s |
 | `game-e2e` | windows-latest, 30 min (:47), per-launch cap `KEYRUN_GODOT_TIMEOUT_SEC=660` (:51), `GODOT_VERSION` 4.7.2 (:14) | Godot download (SHA512-checked, cached) -> `--build-solutions` (:92-97, step timeout 12) -> 9 scene tests -> boot smoke -> export (:218-223, step timeout 12) -> exported-exe smoke -> `E2eAssert.ps1` (:264-266, step timeout 5) | 12m32s, 12m42s |
 | `game-gate` | ubuntu-latest, 5 min | `tools/ci/game_gate.py`: a PR touching `game/**` or `tools/godot/**` needs `game-e2e` success; needs both game jobs, `if: always()` | 8s, 5s |
+| `balance` (non-required) | not measured here; see keyrun `game.yml` | Fork parity: `Bots.Tests` Category=Balance. Reported, never gates a merge (paragraph below). | not measured |
+
+**balance is reported, not gated.** The `balance` job is not a required check: a red balance never blocks a merge and is never disarmed over. The standing finding (chanter.cadence groupSong dominated by swift; warden.bulwark fortress dominated by mobile) is carried in the checkpoint, not fixed by a lane without a ruling. `dotnet test game/Keyrun.sln` exits 1 while balance is red, so a lane runs the test projects individually (Content, Sim, Bots, Playtest) or reports that sln exit as the balance red.
 
 Whole Game workflow wall: 12m57s and 14m18s (run `createdAt`->`updatedAt`, `gh run list --repo matt82198/keyrun
 --branch main --limit 8 --json databaseId,name,conclusion,createdAt,updatedAt,headSha`). Budget a push at about
@@ -372,13 +375,13 @@ text overlap 55s, `E2eAssert` 52s, `--build-solutions` 50s, export 37s, the othe
 that adds ticks, frames or launches to a scene test raises its row; state it (item 6).
 
 **2. Local reproduction before a push** (cd to your worktree; redirect output to scratch, read the summary line):
-- tests.yml `test`: `npm ci && npm run typecheck && npm test && npm run build` (`npx vitest run` = `npm test`).
+- tests.yml `test`: in a fresh worktree (no node_modules is carried) run `npm ci --no-audit --no-fund` first, before any vitest run; then `npm run typecheck && npm test && npm run build` (`npx vitest run` = `npm test`).
   `e2e`: `npm run test:e2e` after `npx playwright install chromium` plus `python tools/ci/e2e_wait_ratchet.py`.
 - game-test: `powershell -NoProfile -ExecutionPolicy Bypass -File tools/fastcheck.ps1 -All` (builds the sln with
   warnings as errors and the Keyrun.Sim banned-API analyzer, then the three xUnit projects; prints
   `fastcheck: PASS in <n>s`; without `-All` it maps the diff to projects and an unmapped path selects all,
   fastcheck.ps1:33-53,98-116), then the CI command itself: `C:/Users/Mattt/.dotnet/dotnet.exe test game/Keyrun.sln --nologo`.
-  fastcheck is the per-step loop and replaces neither `dotnet test game/Keyrun.sln` nor CI (fastcheck.ps1:15-16).
+  fastcheck is the per-step loop and replaces neither `dotnet test game/Keyrun.sln` nor CI (fastcheck.ps1:15-16). While `balance` is red, `dotnet test game/Keyrun.sln` exits 1 (item 1): a lane runs the test projects individually (Content, Sim, Bots, Playtest) or reports that sln exit as the balance red, never as its own failure.
 - game-e2e scene tests (each needs Godot, runs through the launch lock, prints `<Name>: PASS`; script order is
   the CI order): `game/src/Host/SimDriverSceneTest.ps1` (:99), `HudSceneTest.ps1` (:109), `CombatViewSceneTest.ps1`
   (:119); `game/src/Hud/ScreenSceneTest.ps1` (:129), `ProgressionSaveSceneTest.ps1` (:139),
@@ -439,6 +442,10 @@ the not-run list with reasons from item 2); (b) the expected `game-e2e` wall tim
 frames, launches, timeout) changed, as old -> new; (c) the PR head sha (`gh pr view <N> --repo matt82198/keyrun
 --json headRefOid`) that the `--match-head-commit` arm uses; any push after that sha restarts item 1.
 
+**7. Lane row files (`game/lanes/`).** A lane row file is exactly two non-empty lines: a lane bullet, then a BUILDLOG line. `tests/lanes/row-files.test.ts` enforces it in the required `test` job. A PURPOSE line belongs in the brief and the PR body, never in a row file.
+
+**8. Enemy content tree.** Enemy telegraphs, abilities and layout live in the repo-root content tree, `content/data/enemies/*.json`, embedded by `Keyrun.Content.csproj`. `game/content/data` is a different tree. Briefs and lanes name the repo-root path.
+
 ## 7. Definition of DONE — work that is not pushed does not exist
 - **A lane is not finished when the code is written and the bar is green. It is finished when the
   branch is PUSHED and a PR is OPEN, and the report names the PR number.** Work sitting in a local
@@ -473,6 +480,7 @@ frames, launches, timeout) changed, as old -> new; (c) the PR head sha (`gh pr v
 Causal chain with `file:line` | gate output (literal) | the anti-vacuity run as literal output
 | gate counts | PR number | MERGED-state proof | worktree removed | **anything you refused to decide silently**.
 Lead the report with the ACCEPTANCE observable (section 8a), before the check list.
+Recon lanes return their findings in the hand-back message, never as RECON.md or any other report file in the repo (an operator rule denies such writes).
 A keyrun lane's report also carries the CI-contract hand-back (item 6 of "CI contract (keyrun)"): local gate lines verbatim, expected `game-e2e` wall time if a scene budget changed, and the PR head sha the arm matches.
 
 ### Required discovery-cost fields (every hand-back)
@@ -526,7 +534,7 @@ across lanes mean a contract section is written before the next dispatch in that
    (or a resume of it) repeats the merge in item 2. The orchestrator never edits the branch.
 4. **Not in force (PLAN item).** The durable fix is for the lane to put its BUILDLOG line and CLAUDE.md row in the
    PR body, and for the orchestrator to append them on land. Until that is built, item 2 is the rule.
-5. **Fold verification.** The fold verifier runs on a STATE.md-only diff, `git diff -- STATE.md`, never the whole-tree diff: git lists BUILDLOG.md before STATE.md, so the flat added-line list fails on a multi-file diff. The BUILDLOG.md log append is verified separately by line count.
+5. **Fold anchor and fold verification.** A checkpoint block folds into STATE.md directly above the FIRST line that begins `## NEXT STEPS` (keyrun STATE.md has two such headings; the first is the anchor), with no blank separator line. The fold verifier takes the STATE-only diff, `git -C <wt> diff -- STATE.md`, never a whole-tree diff: git lists BUILDLOG.md before STATE.md, so a flat added-line list fails on a multi-file diff. BUILDLOG.md is appended only through `printf '\n' >> <wt>/BUILDLOG.md` then `cat <block> >> <wt>/BUILDLOG.md`, and its numstat must be block lines + 1 added, 0 deleted (verified separately from the STATE diff).
 
 ## 8d. Receipt first (push early, draft PR early)
 1. A build lane pushes its branch and opens a draft PR within 20 minutes of its first commit, before any long test run. The draft PR is the receipt; its body says what is folded in and what is still red.
