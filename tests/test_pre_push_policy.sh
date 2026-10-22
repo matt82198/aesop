@@ -3224,6 +3224,51 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+printf '\n=== Receipt remote cases: an EMPTY origin is bootstrap (passes, audited); origin with refs and no readable conclusion DENIES ===\n'
+(
+  rr_root="$TEST_ROOT/receipt_remote_cases"
+  rm -rf "$rr_root"
+  mkdir -p "$rr_root/clone/tools" "$rr_root/clone/state"
+  rr_clone="$rr_root/clone"
+  git init -q -b feature/test "$rr_clone"
+  git -C "$rr_clone" config user.email t@example.com
+  git -C "$rr_clone" config user.name t
+  # The emitter exits 2 (no readable conclusion). Case A must never reach it.
+  printf 'import sys\nsys.exit(2)\n' > "$rr_clone/tools/emit_receipt.py"
+  : > "$rr_clone/tools/INDEX.md"
+  printf '{}\n' > "$rr_clone/.pyflakes-baseline.json"
+  printf '{"violations": {}}\n' > "$rr_clone/.subprocess-guard-baseline.json"
+  touch "$rr_clone/dummy_key.pem"
+  git -C "$rr_clone" add -A
+  git -C "$rr_clone" commit -q -m seed
+  git init -q --bare "$rr_root/remote.git"
+  git -C "$rr_clone" remote add origin "$rr_root/remote.git"
+  export AESOP_ROOT="$rr_clone"
+  export AESOP_RECEIPT_KEY="$rr_clone/dummy_key.pem"
+  cd "$rr_clone" || exit 1
+
+  # Case A: origin has NO branches. Bootstrap: passes, and the audit row names it.
+  if ! check_emit_receipt >/dev/null 2>&1; then
+    printf 'FAIL: an empty origin must pass the receipt gate (bootstrap)\n'
+    exit 1
+  fi
+  grep -q 'receipt_emit_empty_remote_bootstrap' "$rr_clone/state/SECURITY-AUDIT.log" || { printf 'FAIL: empty-origin bootstrap not audited\n'; exit 1; }
+
+  # Case B: origin has a branch but the emitter gives no readable conclusion. Deny, naming the case.
+  git -C "$rr_clone" push -q origin HEAD:refs/heads/feature/other >/dev/null 2>&1
+  rr_err=$( { check_emit_receipt; } 2>&1 >/dev/null ) && {
+    printf 'FAIL: origin with refs and no readable conclusion must DENY the receipt gate\n'
+    exit 1
+  }
+  printf '%s' "$rr_err" | grep -q 'case: remote-has-refs' || { printf 'FAIL: deny text must name case remote-has-refs; got: %s\n' "$rr_err"; exit 1; }
+  printf 'PASS: empty origin passes the receipt gate (audited); origin with refs and no conclusion denies (case named)\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 printf '\n=== Test Summary ===\n'
 printf 'Tests PASSED: %d\n' "$test_passed"
 printf 'Tests FAILED: %d\n' "$test_failed"

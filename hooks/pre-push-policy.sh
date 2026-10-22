@@ -2429,6 +2429,15 @@ check_emit_receipt() {
     return 1
   fi
 
+  # Case 1, empty origin (no branches at all): bootstrap. No remote conclusion exists to bind
+  # the receipt to, so emission is not attempted; the audit row names the case. Runs only after
+  # the python, gh, and key preconditions above, so nothing else loosens.
+  if headroom_remote_empty "$aesop_root"; then
+    printf 'NOTE: origin has no branches (bootstrap case: remote-empty); receipt not emitted, no remote conclusion to bind.\n' >&2
+    log_event "receipt_emit_empty_remote_bootstrap"
+    return 0
+  fi
+
   local timeout_bin=""
   if command -v timeout >/dev/null 2>&1 && timeout --version >/dev/null 2>&1; then
     timeout_bin="timeout"
@@ -2542,7 +2551,7 @@ check_emit_receipt() {
 
   # Any other exit (2 = could not sign/publish, 1 = crash, ...): no readable conclusion.
   if [ $receipt_exit_code -ne 0 ]; then
-    printf 'BLOCKED: receipt emission failed (exit %d); conclusion unreadable, push blocked (fail closed).\n' "$receipt_exit_code" >&2
+    printf 'BLOCKED: receipt emission failed (exit %d); conclusion unreadable (case: remote-has-refs; origin has branches, so a conclusion is required), push blocked (fail closed).\n' "$receipt_exit_code" >&2
     if [ -n "$receipt_output" ]; then
       printf '%s\n' "$receipt_output" >&2
     fi
