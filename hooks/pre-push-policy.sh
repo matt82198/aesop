@@ -4040,6 +4040,14 @@ main() {
     exit 1
   fi
 
+  # Empty ref list on stdin (up-to-date push: nothing to push) is not a push. No ref
+  # reaches origin, so there is no pushed head to receipt; exit 0 before any receipt
+  # lookup. Every gate above has already run on the same captured stdin (#289 path).
+  if [ -z "$(printf '%s' "$prepush_stdin" | tr -d '[:space:]')" ]; then
+    log_event "receipt_gate_nothing_to_push"
+    exit 0
+  fi
+
   # Receipt conclusion gate: runs last, after every gate has passed. A red
   # required part or an unreadable conclusion blocks (see check_emit_receipt);
   # check_emit_receipt has already logged the block reason to the audit log.
