@@ -1681,7 +1681,10 @@ printf '\n=== Test: check_emit_receipt BLOCKS (fail closed) when gh is unavailab
   mkdir -p "$stub_gh_dir"
   printf '#!/bin/sh\nexit 127\n' > "$stub_gh_dir/gh"
   chmod +x "$stub_gh_dir/gh"
-  test_path="$stub_gh_dir:$PATH"
+  # PATH is colon-separated, so a C:/ TMPDIR path would be split at its drive colon and
+  # the stub would never be found (the real gh would run). Prepend the POSIX form.
+  stub_gh_dir_posix=$(cd -- "$stub_gh_dir" && pwd -P)
+  test_path="$stub_gh_dir_posix:$PATH"
 
   # Use 60s timeout guard (with real timeout from outer PATH) to catch hangs and print trace
   trace_file="$AESOP_ROOT/test-trace.log"
@@ -2468,7 +2471,9 @@ printf '\n=== Test: a HUNG python3 on PATH: resolve_py_bin probe is bounded, ski
   # top of this file) directly. Clear the per-push memo so the probe really runs,
   # and put the hung stub first on PATH so it is the first candidate probed.
   unset _AESOP_PY_BIN
-  PATH="$pp_stub_bin:$PATH"
+  # Prepend the POSIX form: a C:/ path in PATH is split at its drive colon.
+  pp_stub_bin_posix=$(cd -- "$pp_stub_bin" && pwd -P)
+  PATH="$pp_stub_bin_posix:$PATH"
   export PATH
   pp_start=$(date +%s)
   pp_py=$(resolve_py_bin 2>"$pp_root/probe.err")
@@ -2915,10 +2920,12 @@ plain_repo_other_root|plain|empty|0'
     rc=$?
     [ "$rc" -eq "$want" ] || escape_fail "pin row $label: check_aesop_root_pin rc=$rc, want $want"
     if [ "$want" -eq 1 ]; then
-      # The policy prints each path canonicalised with `cd -- DIR && pwd -P` (see
-      # check_aesop_root_pin). On Git Bash a C:/ TMPDIR canonicalises to /tmp/...,
-      # so expect the same canonical form the script prints, not the raw fixture string.
-      repo_canon=$(cd -- "$repo" && pwd -P)
+      # The policy prints the toplevel from `git rev-parse --show-toplevel`, canonicalised
+      # with `cd -- DIR && pwd -P` (see check_aesop_root_pin). Derive the expectation the
+      # same way: the toplevel string git reports, then pwd -P. The raw fixture spelling
+      # can canonicalise differently on Git Bash, so it is not used.
+      repo_top=$(git -C "$repo" rev-parse --show-toplevel)
+      repo_canon=$(cd -- "$repo_top" && pwd -P)
       pinned_canon=$(cd -- "$pinned" && pwd -P)
       grep -qF -- "$repo_canon" "$TEST_ROOT/pin_$label/err.txt" || escape_fail "pin row $label: block message does not name the toplevel path (want $repo_canon)"
       grep -qF -- "$pinned_canon" "$TEST_ROOT/pin_$label/err.txt" || escape_fail "pin row $label: block message does not name the pinned path (want $pinned_canon)"

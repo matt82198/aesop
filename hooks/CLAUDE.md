@@ -131,7 +131,7 @@ Pre-commit hook running `tools/dispatch_lint.py` on staged files. Blocks commits
 - Bash required (explicit shebang), CRLF-safe
 - Tolerate git pre-push stdin (ref list: `<local-ref> <local-oid> <remote-ref> <remote-oid>` per line) + optional args without crashing
 - Fail-closed for policy checks (branch, marker, model) AND for any gate whose script is missing from an existing `tools/`; skip only when there is no aesop checkout at all (see § Gate tool resolution). `secret_scan.py` absent is already fail-closed (FATAL, push denied)
-- Root: an aesop checkout's git toplevel (has `tools/`, or package name `@matt82198/aesop`) wins; `AESOP_ROOT` is a fallback outside a checkout and a mismatch blocks (`check_aesop_root_pin`, logs `aesop_root_pin_mismatch`); no hardcoded machine paths/usernames
+- Root: an aesop checkout's git toplevel (has `tools/`, or package name `@matt82198/aesop`) wins; `AESOP_ROOT` is a fallback outside a checkout and a mismatch blocks (`check_aesop_root_pin`, logs `aesop_root_pin_mismatch`); no hardcoded machine paths/usernames. The pin check compares directory identity with `[ AESOP_ROOT -ef toplevel ]`, not `pwd -P` strings: on Git Bash `pwd -P` maps one directory to different strings by spelling (`C:/...` -> `/tmp/...`, `/c/...` -> `/c/...`), which blocked a checkout that is the pinned root. `-ef` fails closed when the pinned path does not exist.
 - Local convenience defense only; real enforcement requires server-side branch protection (GitHub) and centralized audit logs
 
 ## hook_preflight.py — Interpreter health check
