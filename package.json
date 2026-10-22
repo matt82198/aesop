@@ -22,6 +22,7 @@
     "tools/*.sh",
     "tools/*.mjs",
     "tools/*.js",
+    "tools/receipt_pubkeys/*.pub",
     "ui/*.py",
     "ui/api/*.py",
     "ui/README.md",
