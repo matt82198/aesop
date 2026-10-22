@@ -584,6 +584,12 @@ Why: 2026-10-20 integrate/playable-dungeon reached 154 commits over 15 hours wit
 3. A lane whose brief has no PURPOSE line asks for it in its first message and does not start code.
 4. A lane that discovers its work builds on a `throwaway` artifact as if it were `real` stops and reports (intent decay), it does not continue.
 
+## 8e. CI and gate failures: the catalog is the lookup
+- The error line from a red CI log is a lookup key in `docs/CI-CATALOG.md`. Find the matching row and apply its recipe ONCE.
+- A second identical failure is a hand-back, not a retry. Report the row id and the run id.
+- Commands in a recipe use literal absolute paths; shell variables in paths are denied by the worktree gate.
+- A signature with no catalog row is a new category: read the first `not ok` or `FAILED` line in the full job log, and report it. Do not retry it.
+
 ## 9. Linux shape — cross-platform test gate
 - **Shell, workflow, and Node-test changes are proven on the Linux shape before push.**
   `tools/linux_shape_check.py` triggers on commits touching `*.sh`, `hooks/*`,
