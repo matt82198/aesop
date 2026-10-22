@@ -33,6 +33,21 @@ It does not open the source. The rows name paths and commits; they do not reprod
 
 Row 4 and row 5 share one commit. The author of that commit is recorded as it appears in git.
 
+## Evolution of the paradigm, from these repos' own history
+
+Each stage below is a commit I made in one of two repos, claude-config (private) or aesop (public). Dates are UTC author dates read from the commit objects.
+
+- 2026-07-11T18:09:44Z, claude-config, a2718c5a6f323ef8183d61590b5d9e4faf84da35: I added hooks/force-haiku-subagents.mjs, which denies a subagent dispatch rather than rewriting it.
+- 2026-10-05T17:53:39Z, claude-config, 01f99a71c3f8dfdb885655256755f6d1b05b206e: I added a PreCompact checkpoint hook (hooks/checkpoint-before-compact.mjs), so state is written to disk before context is compacted.
+- 2026-10-06T17:37:48Z, aesop, ec8993947c1d7dbe28968741018a940403a9b5b7: I added Ed25519 receipt emit and offline verify (tools/emit_receipt.py, tools/verify_receipt.py) as receipt gate increments 1 to 3.
+- 2026-10-07T16:24:08Z, claude-config, b687a45e69d91fdde1dc7501e81444dfba08288a: I added hooks/main-context-ceiling.mjs, a hook on main-thread context size.
+- 2026-10-15T04:45:59Z, claude-config, 3bfd5fd6e1148c076f6fd8242830a86a8abfa67b: I added a fail-closed guard against in-place edits to live gate code. The memory note memory/aesop/all-hooks-fail-closed.md is a memory file, not code; it was committed in 0c62c92c393f2348d1d8e6faaddc7711875148f6 at 2026-10-15T00:47:04Z, and it records the rule that hooks fail closed.
+- 2026-10-15T00:55:32Z, claude-config, 3f022f3cc7258b7d6fab17c8a83dc0300ecffef1: I added hooks/claim-binding.mjs, so a claim that something merged or is green needs a same-turn evidence read.
+- 2026-10-20T05:03:44Z, claude-config, c2e92848ae92fb75a40cf93f037289704b12574a: I added hooks/lane-ledger.mjs, so every lane action leaves a row.
+- 2026-10-20T23:47:46Z, claude-config, 24ade3b113deb591add61c574815c810edb17724: I added hooks/handback-ledger.mjs, which writes lane reports to disk so compaction cannot lose them.
+- 2026-10-22T18:20:04Z, aesop, 0dac3347e15c693f7358b52b99b288b9da075e15: I added the v2 hash-chained event store core (sha256 prev field, tools/event_store/store.py).
+- 2026-10-22T17:49:27Z, aesop, 703cfee4dc8b77b81a2f1dd0fc36ca0ad40a36b7: I wrote the per-project event stores plan (docs/plans/PER-PROJECT-EVENT-STORES.md).
+
 ## Verification recipe
 
 The signed record is `docs/PROVENANCE.receipt.json`. It signs the sha256 of `docs/PROVENANCE.md`, the path of that file, and the version 0.11.0, using the Ed25519 key whose public half is committed under `tools/receipt_pubkeys/`. To check it offline:

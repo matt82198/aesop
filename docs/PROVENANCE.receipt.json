@@ -5,13 +5,13 @@
   "schema": 1,
   "subject": {
    "path": "docs/PROVENANCE.md",
-   "sha256": "860bdc90c31cc9e6110a890475747b6ac37e21f44d9d923b8843599234dc5985"
+   "sha256": "17c781ec125384dd337faf1884cb8a377294d24dc9be6c121da5011ab64f421b"
   },
   "version": "0.11.0"
  },
  "sig": {
   "key_id": "00946e62ea15ecd4",
   "scheme": "ed25519",
-  "value": "O9sI/RddGC2f+mDQC8IsyQjyv8VFGiRQ53/RAtAQKSCcPwo3Do8b3y3CzP78EyTxCKPaJLskzj251EViPG7lCw=="
+  "value": "mZuN15o0Y6RAZrh9P4/zteKnrZAvwS1I43KDayQ3ZdhHEorXxMWx0/NF07OBNXziE6PgJDxRIPN0y4yV54oZAw=="
  }
 }
