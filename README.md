@@ -1,7 +1,7 @@
 > **Contact policy.** I am not accepting acquisition offers, recruiter inquiries, or cold calls. Inquiries regarding licensing or commercial usage must go to matt82198@gmail.com. All other outreach will be ignored.
 
 ﻿<p align="center">
-  <img src="https://raw.githubusercontent.com/matt82198/aesop/main/assets/logo.png" alt="Aesop" width="420">
+  <img src="https://cdn.jsdelivr.net/npm/@matt82198/aesop@0.10.4/assets/logo.png" alt="Aesop" width="420">
 </p>
 
 <p align="center">
@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <video width="400" controls><source src="https://raw.githubusercontent.com/matt82198/aesop/main/assets/clips/lens-fanout-haiku-pin.mp4" type="video/mp4"><img src="https://raw.githubusercontent.com/matt82198/aesop/main/assets/clips/lens-fanout-haiku-pin.gif" alt="Aesop wave opening and audit fleet fanout" width="400"></video>
+  <a href="https://cdn.jsdelivr.net/npm/@matt82198/aesop@0.10.4/assets/clips/lens-fanout-haiku-pin.mp4">Watch the wave opening and audit fleet fanout (MP4, 0.5 MB)</a>
 </p>
 
 <p align="center">
@@ -31,46 +31,9 @@ An iteration counts only when it leaves receipts that a gate can check. A lane t
 
 Blue boxes ship in the npm package. Yellow boxes are yours to provide. Grey dashed boxes are examples that show one way to structure the system.
 
-```mermaid
-flowchart LR
-  subgraph YOU["You provide (not in the package)"]
-    R["Your repos<br/>(repos in aesop.config.json)"]
-    B["Your brain<br/>(~/.claude: CLAUDE.md, MEMORY.md)"]
-    M["Machinery repo (optional)<br/>(CONDUCTOR_ROOT)"]
-    K["Keys and accounts<br/>(Claude Code login, gh auth)"]
-  end
-  subgraph KERNEL["Kernel (ships in @matt82198/aesop)"]
-    D["Dispatch<br/>driver/wave_loop.py"]
-    W["Workers in worktrees<br/>driver/claude_code_driver.py"]
-    G["Gates<br/>hooks/pre-push-policy.sh<br/>tools/secret_scan.py"]
-    RC["Receipts<br/>tools/emit_receipt.py"]
-    MQ["Merge<br/>tools/auto_merge.py"]
-    WD["Watchdog<br/>daemons/run-watchdog.sh"]
-    S["Durable state<br/>state_store/store.py"]
-    V["Dashboard and monitor<br/>ui/serve.py<br/>monitor/collect-signals.mjs"]
-  end
-  subgraph EX["Examples (show structure only)"]
-    X["docs/MACHINERY-MAP.md<br/>examples/first-wave-baseline/<br/>scan/fleet-scan.example.mjs"]
-  end
-  R --> D
-  B --> D
-  K --> W
-  D --> W
-  W --> G
-  G --> RC
-  RC --> MQ
-  WD --> W
-  D --> S
-  S --> V
-  M -.-> V
+![Kernel boundary](https://cdn.jsdelivr.net/npm/@matt82198/aesop@0.10.4/docs/img/kernel-boundary.svg)
 
-  classDef kernel fill:#dbeafe,stroke:#1e40af,color:#111
-  classDef yours fill:#fef9c3,stroke:#854d0e,color:#111
-  classDef example fill:#f3f4f6,stroke:#6b7280,stroke-dasharray:4 3,color:#374151
-  class D,W,G,RC,MQ,WD,S,V kernel
-  class R,B,M,K yours
-  class X example
-```
+Mermaid source (Mermaid text, not rendered on npm): [docs/img/kernel-boundary.mmd](https://cdn.jsdelivr.net/npm/@matt82198/aesop@0.10.4/docs/img/kernel-boundary.mmd)
 
 ### The kernel and what you fill in
 
