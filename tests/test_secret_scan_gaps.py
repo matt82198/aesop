@@ -89,8 +89,9 @@ class TestSecretScanGaps(unittest.TestCase):
                 self.assertEqual(len(connection_findings), 0,
                                f"Should NOT flag .local/.localdomain host: {conn_str}")
 
-    def test_allowlisted_example_domain_not_flagged(self):
-        """Test that example.* (all subdomains) is allowlisted"""
+    def test_example_domain_real_password_is_flagged(self):
+        """example.* hosts no longer excuse the password (contract: host exclusion removed
+        for example/test; a non-placeholder password such as `pass` is a credential)."""
         test_cases = [
             _j("postgre", "sql://user:", "pass@example.com/db"),
             _j("postgre", "sql://user:", "pass@example.org/db"),
@@ -106,28 +107,32 @@ class TestSecretScanGaps(unittest.TestCase):
                 findings = scan_file(test_file)
                 connection_findings = [f for f in findings if f[1] == "connection_string"]
 
-                self.assertEqual(len(connection_findings), 0,
-                               f"Should NOT flag example.* host: {conn_str}")
+                self.assertEqual(len(connection_findings), 1,
+                               f"Should flag example.* host with real password: {conn_str}")
 
-    def test_allowlisted_test_domain_not_flagged(self):
-        """Test that test.* (all subdomains) is allowlisted"""
-        test_cases = [
+    def test_test_domain_real_password_is_flagged_local_still_excused(self):
+        """test.* hosts no longer excuse the password; .local remains a local host and is
+        still excused by the host rule."""
+        flagged_cases = [
             _j("postgre", "sql://user:", "pass@test.com/db"),
             _j("postgre", "sql://user:", "pass@test.example.com/db"),
-            _j("postgre", "sql://user:", "pass@staging.test.local/db"),
             _j("postgre", "sql://user:", "pass@dev.test.io/db"),
+        ]
+        clean_cases = [
+            _j("postgre", "sql://user:", "pass@staging.test.local/db"),
         ]
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            for i, conn_str in enumerate(test_cases):
+            for i, conn_str in enumerate(flagged_cases + clean_cases):
                 test_file = Path(tmpdir) / f"config_{i}.txt"
                 test_file.write_text(conn_str)
 
                 findings = scan_file(test_file)
                 connection_findings = [f for f in findings if f[1] == "connection_string"]
+                expected = 1 if conn_str in flagged_cases else 0
 
-                self.assertEqual(len(connection_findings), 0,
-                               f"Should NOT flag test.* host: {conn_str}")
+                self.assertEqual(len(connection_findings), expected,
+                               f"Unexpected connection_string result for: {conn_str}")
 
     def test_non_allowlisted_hosts_flagged(self):
         """Test that non-allowlisted hosts ARE flagged in connection strings"""
