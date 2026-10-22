@@ -225,11 +225,15 @@ def push_repo(repo_path):
 
 
 def run_secret_scan(repo_path):
-    """Run secret_scan.py on staged files (return True if no secrets found)."""
+    """Scan the commits --fix-push is about to push (return True if no secrets found).
+
+    Scans <upstream>..HEAD (every blob those commits introduce). It used to run --staged,
+    which inspects only the index: empty after a commit, so it never looked at the pushed
+    content (and an empty index is now EMPTY-INDEX, exit 1). No upstream fails closed."""
     try:
         script_path = Path(__file__).parent / 'secret_scan.py'
         result = subprocess.run(
-            [sys.executable, str(script_path), '--staged'],
+            [sys.executable, str(script_path), '--range', '@{upstream}..HEAD', '--repo', str(repo_path)],
             cwd=str(repo_path),
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30
         )

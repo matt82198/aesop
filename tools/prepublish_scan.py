@@ -28,6 +28,10 @@ def run_secret_scan(mode, repo_path):
 
     try:
         cmd = [sys.executable, str(secret_scan_path), mode, "--repo", repo_path]
+        if mode == "--staged":
+            # Not a push gate: the history scan above covers committed content, and a
+            # publish run on a clean tree legitimately has nothing staged (EMPTY-INDEX otherwise).
+            cmd.append("--allow-empty")
         result = subprocess.run(
             cmd,
             capture_output=True,
