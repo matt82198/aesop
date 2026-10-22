@@ -169,7 +169,12 @@ class TestSpawnDetached(unittest.TestCase):
     """Real detached child: spawn returns at once; the child logs its outcome to <sha>.flush.log."""
 
     def test_spawn_returns_fast_and_child_logs_outcome(self):
-        with tempfile.TemporaryDirectory() as tmp:
+        # ignore_cleanup_errors: the detached flusher can still hold <sha>.flush.log
+        # open for a moment after it logs "gave up" (CI: WinError 32 on Windows,
+        # runs 39821111420 and 39433621472). The assertions below read that log before
+        # the context exits, so the outcome is still verified; only the post-test
+        # removal of the temp dir tolerates a file the child has not yet released.
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             root = Path(tmp)
             spool = root / "spool"
             spool.mkdir()
