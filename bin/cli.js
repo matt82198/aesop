@@ -1233,14 +1233,27 @@ function pushGateRegenCommand(artifact) {
 // The generators are independent (each reads the tree and writes its own file), so they run
 // concurrently; wall time is the slowest one, not the sum. AESOP_SKIP_PUSH_GATE_ARTIFACTS=1
 // skips generation for callers that never push (the hook-install contract tests set it).
+// Each generator prints one `[push-gate] <script> ok|FAILED in <ms> ms` line when it finishes,
+// so a CI deadline red carries the per-generator durations (CI-A1 / G1.3).
 function runPushGateGenerator(py, artifact, targetDir) {
+  const name = path.basename(artifact.script);
+  const t0 = Date.now();
   return new Promise((resolve) => {
     execFile(py, [artifact.script, ...artifact.args], {
       cwd: targetDir,
       encoding: 'utf8',
       timeout: 120000,
       windowsHide: true
-    }, (err) => resolve(err || null));
+    }, (err, _stdout, stderr) => {
+      const ms = Date.now() - t0;
+      if (err) {
+        const detail = String(stderr || err.message || '').split('\n').find(l => l.trim()) || 'unknown error';
+        console.log(`[push-gate] ${name} FAILED in ${ms} ms: ${detail.trim()}`);
+      } else {
+        console.log(`[push-gate] ${name} ok in ${ms} ms`);
+      }
+      resolve(err || null);
+    });
   });
 }
 
@@ -1263,9 +1276,12 @@ async function generatePushGateArtifacts(targetDir) {
     });
     return;
   }
+  console.log(`[push-gate] starting ${PUSH_GATE_ARTIFACTS.length} generators`);
+  const allStart = Date.now();
   const results = await Promise.all(
     PUSH_GATE_ARTIFACTS.map(a => runPushGateGenerator(py, a, targetDir).then(err => ({ a, err })))
   );
+  console.log(`[push-gate] all ${PUSH_GATE_ARTIFACTS.length} generators done in ${Date.now() - allStart} ms`);
   for (const { a, err } of results) {
     if (err) {
       console.warn(`⚠ Could not generate ${a.file}; the pre-push hook will block until it exists.`);
