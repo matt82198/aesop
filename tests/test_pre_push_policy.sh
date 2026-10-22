@@ -42,8 +42,13 @@ publish_base_tools() {
   git -C "$base" init -q -b main
   git -C "$base" add -A
   git -C "$base" -c user.email=t@example.com -c user.name=t -c core.autocrlf=false commit -q -m base
+  # The fixture models a github.com origin: the CONFIGURED url names github.com, and
+  # insteadOf maps it onto the local base repo, so no test reaches the network. The
+  # receipt gate treats a non-github origin as having no conclusion channel.
+  local gh_url="https://github.com/example/aesop-fixture.git"
   git -C "$clone" remote remove origin >/dev/null 2>&1 || true
-  git -C "$clone" remote add origin "$base"
+  git -C "$clone" config "url.$base.insteadOf" "$gh_url"
+  git -C "$clone" remote add origin "$gh_url"
   git -C "$clone" fetch -q origin main
 }
 
@@ -3247,21 +3252,35 @@ printf '\n=== Receipt remote cases: an EMPTY origin is bootstrap (passes, audite
   export AESOP_RECEIPT_KEY="$rr_clone/dummy_key.pem"
   cd "$rr_clone" || exit 1
 
-  # Case A: origin has NO branches. Bootstrap: passes, and the audit row names it.
+  # The github.com origin is a URL that insteadOf maps to the local bare remote (no network).
+  rr_gh_url="https://github.com/example/fixture.git"
+  git -C "$rr_clone" config "url.$rr_root/remote.git.insteadOf" "$rr_gh_url"
+  git -C "$rr_clone" remote set-url origin "$rr_gh_url"
+
+  # Case A: github origin with NO branches. Bootstrap: passes, and the audit row names it.
   if ! check_emit_receipt >/dev/null 2>&1; then
-    printf 'FAIL: an empty origin must pass the receipt gate (bootstrap)\n'
+    printf 'FAIL: an empty github origin must pass the receipt gate (bootstrap)\n'
     exit 1
   fi
   grep -q 'receipt_emit_empty_remote_bootstrap' "$rr_clone/state/SECURITY-AUDIT.log" || { printf 'FAIL: empty-origin bootstrap not audited\n'; exit 1; }
 
-  # Case B: origin has a branch but the emitter gives no readable conclusion. Deny, naming the case.
-  git -C "$rr_clone" push -q origin HEAD:refs/heads/feature/other >/dev/null 2>&1
+  # Case B: github origin with a branch and no readable conclusion. Deny, naming the case.
+  git -C "$rr_clone" push -q "$rr_root/remote.git" HEAD:refs/heads/feature/other >/dev/null 2>&1
   rr_err=$( { check_emit_receipt; } 2>&1 >/dev/null ) && {
-    printf 'FAIL: origin with refs and no readable conclusion must DENY the receipt gate\n'
+    printf 'FAIL: github origin with refs and no readable conclusion must DENY the receipt gate\n'
     exit 1
   }
   printf '%s' "$rr_err" | grep -q 'case: remote-has-refs' || { printf 'FAIL: deny text must name case remote-has-refs; got: %s\n' "$rr_err"; exit 1; }
-  printf 'PASS: empty origin passes the receipt gate (audited); origin with refs and no conclusion denies (case named)\n'
+
+  # Case C: a fixture remote (local path, NOT github.com) with refs, with NO signing key and
+  # HOME empty, as on CI. No conclusion channel exists: passes, audited as non-github.
+  git -C "$rr_clone" remote set-url origin "$rr_root/remote.git"
+  if ! ( unset AESOP_RECEIPT_KEY; export HOME="$rr_root/nohome"; mkdir -p "$HOME"; check_emit_receipt >/dev/null 2>&1 ); then
+    printf 'FAIL: a non-github fixture remote must pass the receipt gate with no key material\n'
+    exit 1
+  fi
+  grep -q 'receipt_emit_non_github_origin' "$rr_clone/state/SECURITY-AUDIT.log" || { printf 'FAIL: non-github pass not audited\n'; exit 1; }
+  printf 'PASS: github empty origin passes (audited); github origin with refs and no conclusion denies (case named); non-github fixture remote passes without key (audited)\n'
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))

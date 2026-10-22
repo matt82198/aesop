@@ -1746,6 +1746,19 @@ headroom_remote_empty() {
   [ -z "$listing" ]
 }
 
+# receipt_origin_is_github <aesop_root>
+# Returns 0 when origin's CONFIGURED url names github.com, and also when origin has no
+# url at all (fail closed). Returns 1 only for a readable non-github url. The raw config
+# value is read, not the insteadOf-expanded one, so the configured host is what decides.
+receipt_origin_is_github() {
+  local url
+  url=$(git -C "$1" config --get remote.origin.url 2>/dev/null) || return 0
+  case "$url" in
+    *github.com[:/]*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # ----- Audit writes (never drop a record) -----
 # A record is either appended under the audit lock, or, when the lock is busy,
 # spilled to this process's own file audit-spill-<pid>-<ts>.jsonl next to the log.
@@ -2405,6 +2418,15 @@ check_emit_receipt() {
     printf 'FATAL: emit_receipt.py not found in the base gate copy (%s). Push blocked (fail-closed).\n' "$receipt_script" >&2
     log_block "receipt_emit_base_tool_missing"
     return 1
+  fi
+
+  # Case 0, origin is not github.com: no CI check-run or commit comment can exist on
+  # such a remote, so there is no channel to publish a conclusion to, and emission is not
+  # attempted (the audit row says so). A github.com origin never takes this branch.
+  if ! receipt_origin_is_github "$aesop_root"; then
+    printf 'NOTE: origin is not github.com (case: non-github-origin); no conclusion channel, receipt not emitted.\n' >&2
+    log_event "receipt_emit_non_github_origin"
+    return 0
   fi
 
   # Python, gh and signing key are preconditions of the matrix itself: without
