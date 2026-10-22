@@ -1,6 +1,7 @@
-"""event_store CLI. Run as: python -I tools/event_store/cli.py append|verify ...
+"""event_store CLI. Run as: python -I tools/event_store/cli.py append|verify|project ...
 
-Exit codes: 0 ok, 1 failure (verify problems, git commit failure), 2 refused/usage.
+Exit codes: 0 ok, 1 failure (verify problems, git commit failure, unreadable or broken
+store in a projection), 2 refused/usage.
 """
 import argparse
 import os
@@ -12,6 +13,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from event_store import project as proj_mod  # noqa: E402
 from event_store import registry as reg_mod  # noqa: E402
 from event_store.store import Store, StoreError  # noqa: E402
 
@@ -117,6 +119,33 @@ def cmd_verify(args):
     return 1 if bad else 0
 
 
+def cmd_project(args):
+    """Read-only projections: pending | rulings | checkpoints over one or all stores."""
+    if bool(args.project) == bool(args.all_stores):
+        return refuse("project needs exactly one of --project or --all-stores")
+    if args.by_goal and args.view != "rulings":
+        return refuse("--by-goal applies to rulings only")
+    if args.view == "checkpoints":
+        if not args.per_goal and args.last <= 0:
+            return refuse("checkpoints needs --last N (N > 0) or --per-goal")
+        if args.per_store and args.per_goal:
+            return refuse("--per-store and --per-goal are exclusive")
+    elif args.per_store or args.per_goal or args.last:
+        return refuse("--last, --per-store and --per-goal apply to checkpoints only")
+    try:
+        reg = reg_mod.load_registry()
+    except reg_mod.RegistryError as exc:
+        return refuse(str(exc))
+    projects = [args.project] if args.project else sorted(reg["stores"])
+    code, lines = proj_mod.render(args.view, reg, projects, last=args.last,
+                                  per_store=args.per_store, per_goal=args.per_goal,
+                                  by_goal=args.by_goal)
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    for line in lines:
+        sys.stdout.write(line + "\n")
+    return code
+
+
 def build_parser():
     ap = argparse.ArgumentParser(prog="event_store")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -132,6 +161,15 @@ def build_parser():
     v.add_argument("--project")
     v.add_argument("--path")
     v.set_defaults(fn=cmd_verify)
+    p = sub.add_parser("project")
+    p.add_argument("view", choices=("pending", "rulings", "checkpoints"))
+    p.add_argument("--project")
+    p.add_argument("--all-stores", action="store_true")
+    p.add_argument("--by-goal", action="store_true")
+    p.add_argument("--last", type=int, default=0)
+    p.add_argument("--per-store", action="store_true")
+    p.add_argument("--per-goal", action="store_true")
+    p.set_defaults(fn=cmd_project)
     return ap
 
 
