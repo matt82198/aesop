@@ -10,6 +10,7 @@ Each test drives the real verifier over a real temp git repo (or a fake gh api p
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import subprocess
 import sys
@@ -165,6 +166,62 @@ class TestServerMergeCauseFetchCli(unittest.TestCase):
         self.assertEqual(code, 1, text)
         self.assertIn("MISSING receipt", text)
         self.assertNotIn("server-authored", text)
+
+
+class TestMissingLineNamesShaAndAuthor(unittest.TestCase):
+    """Every MISSING line names the head sha, its commit author and the receipt hint.
+    The hint must never leak onto an INVALID verdict (a receipt that was found and failed)."""
+
+    HINT = "no receipt for this sha; if the author is GitHub (server-side branch update), push from a receipted worktree"
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self._tmp.name) / "repo"
+        self.repo.mkdir()
+        _git(self.repo, "init", "-q", "-b", "main")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _run(self, argv, environ=None):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = vr.main(argv, environ=environ if environ is not None else {})
+        return code, out.getvalue()
+
+    def test_missing_line_names_head_sha_author_and_hint_for_a_lane_author(self):
+        head = _build_two_parent_commit(self.repo, "Matt Culliton", "matt82198@gmail.com")
+        code, text = self._run(["--receipt", str(Path(self._tmp.name) / "absent.json"),
+                                "--repo", str(self.repo), "--head", head])
+        self.assertEqual(code, 1, text)
+        self.assertIn("MISSING receipt", text)
+        self.assertIn("head " + head, text)
+        self.assertIn("author lane", text)
+        self.assertIn(self.HINT, text)
+
+    def test_author_is_read_from_the_commit_not_the_committer(self):
+        head = _build_two_parent_commit(self.repo, "GitHub", "noreply@github.com")
+        code, text = self._run(["--receipt", str(Path(self._tmp.name) / "absent.json"),
+                                "--repo", str(self.repo), "--head", head])
+        self.assertEqual(code, 1, text)
+        self.assertIn("author lane", text)
+        self.assertIn(CAUSE, text)
+
+    def test_hint_is_absent_from_an_invalid_verdict(self):
+        head = _build_two_parent_commit(self.repo, "Matt Culliton", "matt82198@gmail.com")
+        tree = _git(self.repo, "rev-parse", head + "^{tree}")
+        envelope = {
+            "receipt": {"schema": 1, "head_sha": head, "base_sha": head, "tree_hash": tree, "parts": []},
+            "sig": {"scheme": "hmac-sha256", "value": "00" * 32},
+        }
+        path = Path(self._tmp.name) / "forged.json"
+        path.write_text(json.dumps(envelope), encoding="utf-8")
+        code, text = self._run(["--receipt", str(path), "--repo", str(self.repo), "--head", head],
+                               environ={"AESOP_RECEIPT_HMAC_SECRET": "unit-test-secret"})
+        self.assertEqual(code, 1, text)
+        self.assertIn("receipt INVALID", text)
+        self.assertNotIn(self.HINT, text)
+        self.assertNotIn("MISSING", text)
 
 
 if __name__ == "__main__":
