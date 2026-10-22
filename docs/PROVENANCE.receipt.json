@@ -1,0 +1,17 @@
+{
+ "receipt": {
+  "kind": "provenance",
+  "repo": "matt82198/aesop",
+  "schema": 1,
+  "subject": {
+   "path": "docs/PROVENANCE.md",
+   "sha256": "17c781ec125384dd337faf1884cb8a377294d24dc9be6c121da5011ab64f421b"
+  },
+  "version": "0.11.0"
+ },
+ "sig": {
+  "key_id": "00946e62ea15ecd4",
+  "scheme": "ed25519",
+  "value": "mZuN15o0Y6RAZrh9P4/zteKnrZAvwS1I43KDayQ3ZdhHEorXxMWx0/NF07OBNXziE6PgJDxRIPN0y4yV54oZAw=="
+ }
+}

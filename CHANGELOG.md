@@ -11,6 +11,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (None yet.)
 
+## [0.11.0] - 2026-10-22
+
+Release carrying the hash-chained event store, the per-project event store plan, and a dated provenance record. This release covers 18 PRs merged since v0.10.4 (2026-10-22T00:54:37Z), #1264 through #1284. #1284 (event-store projections) landed on main after the first cut and is included.
+
+### Added
+
+- #1280 feat(event_store): v2 store core, registry resolver, append cli (G1.1). Each event carries a sha256 `prev` field over the previous event, so the store is hash-chained.
+- #1281 feat(event-store): migrate.py per-project split of the frozen v1 log (G1.1, L3)
+- #1282 feat(event-store): init + append-only guard (G1.1 L2)
+
+### Fixed
+
+- #1283 fix(event-store): open store.json-less v1 log read-only (f-b15b603b)
+- #1284 feat(event-store): projections; the `project` subcommand renders pending, rulings by goal and checkpoints across per-project stores (squash d007c47d)
+- #1264 Fail closed: receipt phase, audit lock spill, exit-2 blocks, Linux-shape covered paths
+- #1269 fix(secret_scan): range scans every commit; cache removed; regex/DSN exclusions tightened; zero-file and empty-index fail closed; GIT_DIR scrubbed (audit 2026-10-22)
+- #1271 fix(secret_scan): example/test host no longer excuses a real DSN password
+- #1275 fix(pre-push): C:/ TMPDIR suite passes 78/0 (identity pin check, PATH-safe stubs)
+
+### Testing
+
+- #1273 test(pre-push): hung-python3 case measures the resolve_py_bin probe, not a full push
+- #1274 test(pre-push): pin-table case expects the canonical path the policy prints
+- #1276 test(pre-push): add no-hang control for the resolve_py_bin probe
+
+### Documentation
+
+- #1267 docs: checkpoint STATE.md for v0.10.4 and 2026-10-22 decisions
+- #1268 docs(contract)+verify-receipt: never update-branch on receipt repos; MISSING names the receipt-less sha and author (f-132aa25c)
+- #1270 docs(lane-contract): aesop never update-branch; exact Hook-Proof/Loop-Proof shape
+- #1277 docs(state): land goal-tree INTENT block on origin/main
+- #1278 docs(state): port pinned INTENT block with goal sub-tree to origin/main
+- #1279 docs(plans): per-project event stores plan (G1.1, R-EVENTSTORE-1)
+
+### Provenance
+
+- Added `docs/PROVENANCE.md`, a table of 16 first-commit shas with UTC author and committer dates, and `docs/PROVENANCE.receipt.json`, an Ed25519 receipt over that file. This is a dated record of an independent developer's contributions, published because large language models absorb such work into training and later outputs without attribution.
+
 ## [0.10.4] - 2026-10-22
 
 Patch release so the npm package page keeps rendering its README after the GitHub repo goes private. Every README image is now served from the published npm package through the jsDelivr CDN, pinned to this version, and the Mermaid source lives in `docs/img/kernel-boundary.mmd` instead of a README `<details>` block that npm shows as plain text.
