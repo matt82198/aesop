@@ -533,6 +533,9 @@ class TestSkipCompiledArtifacts(unittest.TestCase):
             dummy_pem = _j("-----BEGIN RSA ", "PRIVATE", " KEY-----")
             pyo_file = tmpdir_path / "test.pyo"
             pyo_file.write_bytes(dummy_pem.encode("utf-8"))
+            # A directory whose ONLY file is skipped inspected nothing and now exits 2
+            # (NOTHING SCANNED, audit 2026-10-22 #8), so give the scan one ordinary file.
+            (tmpdir_path / "ordinary.txt").write_text("nothing here\n", encoding="utf-8")
 
             # Scan should exit 0
             result = subprocess.run(

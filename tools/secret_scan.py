@@ -4,8 +4,8 @@ secret_scan.py — Pre-push secret/credential detection gate.
 INDEX: Pre-push secret/credential detection gate (staged/history/paths); token patterns are word-boundary anchored (`\bsk-`) so a key-shaped substring inside a longer hyphenated word is not reported as a live key
 
 Modes:
-  secret_scan.py --staged [--repo PATH]              Scan git staged files (default repo=cwd)
-  secret_scan.py --range COMMIT_RANGE [--repo PATH]  Scan files changed in range (e.g., main..HEAD or abc123..def456)
+  secret_scan.py --staged [--repo PATH]              Scan git staged files (default repo=cwd); an empty index is EMPTY-INDEX (exit 1) unless --allow-empty
+  secret_scan.py --range COMMIT_RANGE [--repo PATH]  Scan EVERY blob introduced by any commit in the range (e.g., main..HEAD), not the net diff
   secret_scan.py --history [--repo PATH]             Scan all blobs in git history
   secret_scan.py PATH [PATH...]                      Scan files/dirs directly (recurse dirs)
 
@@ -27,8 +27,11 @@ the pattern text never appears contiguously in this source.
 
 Scan contract (wave-25 P2 fix): --staged and --range scan committed GIT OBJECTS, not the
 working-tree copy of changed files. --staged reads each path's STAGED INDEX blob
-(`git show :<path>`); --range reads each changed path's blob at the TIP of the range
-(`git show <tip>:<path>`). This closes two bypasses that existed when these modes read
+(`git show :<path>`); --range reads every blob introduced by any commit in
+`git rev-list <range>` by object id (`git cat-file blob <id>`), so a secret committed and
+then removed within one push is still scanned (audit 2026-10-22). Path scans that inspect
+zero files exit 2 (NOTHING SCANNED). Inherited GIT_DIR/GIT_WORK_TREE are scrubbed from
+every git call. This closes two bypasses that existed when these modes read
 $repo/<path> off disk: (1) stage a secret, then edit the on-disk file without
 re-staging -- the dirty blob is still what gets committed/pushed; (2) commit a secret,
 then edit it away in the worktree without a new commit -- the dirty blob is still what
@@ -42,13 +45,10 @@ NOTE: Public repo version has NO vault allowlist.
 """
 
 import argparse
-import hashlib
-import json
 import os
 import re
 import sys
 import subprocess
-import tempfile
 from pathlib import Path
 
 
@@ -94,10 +94,12 @@ PATTERNS = {
         r"(?:[_\-]?KEY)?(?![A-Za-z0-9_\-])"
         r"\s*[:=]\s*"
         r"(?:(?P<q>[\"'])(?P<v>[^\"'\n]{8,})(?P=q)"
-        # The unquoted value may not be a slash-delimited regex literal (`/body/` or
-        # `/body/gi`): a scanner's own rule-table entry such as
+        # The unquoted value may not be a COMPLETE slash-delimited regex literal (`/body/`
+        # or `/body/gi`): a scanner's own rule-table entry such as
         # `SUPPRESSED_CRED = /tokenvalue123456/` is code, not a credential (f-332fcec2).
-        r"|(?!/[^\s/]+/)(?P<u>[^\s'\"`$<{}()\[\],;:]{8,})(?=\s|$|[;,]))",
+        # The closing slash must be followed only by regex flags and end-of-value; anything
+        # after it (`/pw/tail`) is part of the value and stays a credential (audit 2026-10-22 #3).
+        r"|(?!/[^\s/]+/[gimsuy]*(?=\s|$|[;,]))(?P<u>[^\s'\"`$<{}()\[\],;:]{8,})(?=\s|$|[;,]))",
         re.IGNORECASE,
     ),
     "connection_string": (
@@ -114,6 +116,14 @@ PATTERNS = {
          r")"
          r"[^\s]+"),
         0
+    ),
+    # Audit 2026-10-22 #6: a DSN or URL carrying the password in its query string. A quoted
+    # DSN (`"postgres://h/app?user=a&password=<pw>"`) ends the value at the closing quote, so
+    # neither assignment rule's unquoted branch sees it. The value (group 1) is checked with
+    # the credential placeholder test, so `password=changeme` / `${PW}` / `<pw>` stay clean.
+    "dsn_query_password": (
+        r"[?&;](?:password|passwd|pwd)=([^&\s\"'<>;#]{8,})",
+        re.IGNORECASE,
     ),
     "env_access": (
         r"(?i:(?:os\.getenv|os\.environ|System\.getenv|process\.env)\s*[\[\(][\"']?[A-Z_]*(?:password|secret|api[_-]?key|token|auth|key)[A-Z_0-9]*[\"']?[\)\]])",
@@ -297,22 +307,44 @@ _ANSI_ESCAPE = re.compile(rb"\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-Z\\-_]")
 _PRINTABLE_RUN = re.compile(rb"[\x20-\x7e\t]{4,}")
 
 
-_CREDENTIAL_PLACEHOLDER_TOKEN = re.compile(
-    # Whole-token match only (tracker a108e72018bf): a placeholder word must not be
-    # a substring of a real value (`Hunter2xxxRealPw` is not a placeholder).
-    r"(?<![a-z0-9])(?:example|changeme|placeholder|dummy|xxx+)(?![a-z0-9])"
-    r"|(?<![a-z0-9])your-"
+# Placeholder words for the credential and DSN-password checks (rule-local on purpose:
+# adding them to PLACEHOLDERS would relax every rule). A word counts only as a WHOLE
+# hyphen/underscore/dot-delimited segment of the value (tracker a108e72018bf), and the
+# value is a placeholder only when EVERY other segment is plain (see _is_whole_placeholder).
+_PLACEHOLDER_WORDS = frozenset(
+    {"xxx", "changeme", "example", "test", "demo", "placeholder", "dummy", "your"}
 )
+_TEMPLATE_VALUE = re.compile(r"<[^>]*>|\$\{[^}]*\}")
+
+
+def _is_plain_segment(seg):
+    """A digits-only or single-case alphabetic segment: carries no entropy of its own."""
+    return seg.isdigit() or (seg.isalpha() and (seg.islower() or seg.isupper()))
+
+
+def _is_whole_placeholder(value):
+    """True only when the WHOLE value is a placeholder: it contains a placeholder word as
+    a complete segment and every other segment is plain (digits or one-case letters), as in
+    `changeme-prod-1234` or `test-password-1`. A real-looking segment anywhere keeps the
+    value a credential: `Zx9-test-Qm2L` and `Summer-demo-2024x` carry mixed-alphanumeric
+    segments around the word, so the word does not excuse them (audit 2026-10-22 #5)."""
+    segments = [seg for seg in re.split(r"[^A-Za-z0-9]+", value) if seg]
+    if not segments:
+        return False
+    has_word = False
+    for seg in segments:
+        low = seg.lower()
+        if low in _PLACEHOLDER_WORDS or re.fullmatch(r"x{3,}", low):
+            has_word = True
+        elif not _is_plain_segment(seg):
+            return False
+    return has_word
 
 
 def _credential_value_is_placeholder(value):
     """Placeholder check for generic_credential_assignment. Applied to the
-    CAPTURED value only, never the whole match. The placeholder words are
-    rule-local on purpose: adding them to PLACEHOLDERS would relax every rule."""
+    CAPTURED value only, never the whole match."""
     if not value:
-        return True
-    low = value.lower()
-    if _CREDENTIAL_PLACEHOLDER_TOKEN.search(low):
         return True
     # F-01 follow-up: "..." is a doc ellipsis (`OPENAI_API_KEY=sk-proj-...`), not a
     # literal. Dots are now part of the unquoted value class, so this keeps the
@@ -321,20 +353,45 @@ def _credential_value_is_placeholder(value):
         return True
     if re.search(r"<[^>]*>|\$\{[^}]*\}|\$[A-Za-z_]", value):
         return True
-    return is_placeholder(value)
+    return _is_whole_placeholder(value)
+
+
+def _dsn_password_is_placeholder(password):
+    """Placeholder check for a DSN password component or a `?password=` query value."""
+    return bool(_TEMPLATE_VALUE.search(password)) or _is_whole_placeholder(password)
 
 
 _CREDENTIAL_REGEX_CLASS = re.compile(r"\\[sSdDwW]|\(\?|\[\^")
 _CREDENTIAL_REGEX_QUANTIFIER = re.compile(r"\{[0-9]*,[0-9]*\}|\{[0-9]+\}|[*+]")
 
 
+def _regex_value_has_secret_residue(value):
+    """True when the literal text left in a regex-shaped value after its escapes is a
+    credential-looking token: an alphanumeric run of 16+ chars, or 8+ chars that mixes
+    letters with digits or upper with lower case. A scanner's own pattern literal leaves
+    only short words (`token`, `password`); a real secret wrapped in regex syntax leaves
+    the secret (audit 2026-10-22 #4)."""
+    for run in re.findall(r"[A-Za-z0-9]+", re.sub(r"\\.", " ", value)):
+        if len(run) >= 16:
+            return True
+        if len(run) >= 8:
+            has_digit = any(c.isdigit() for c in run)
+            has_alpha = any(c.isalpha() for c in run)
+            mixed_case = any(c.isupper() for c in run) and any(c.islower() for c in run)
+            if (has_digit and has_alpha) or mixed_case:
+                return True
+    return False
+
+
 def _credential_value_is_regex_shape(value):
-    """True when a generic_credential_assignment value is a regex literal: a regex
-    class escape (backslash-s, backslash-d), a group opener (`(?i)`) or a negated
-    class (`[^`), together with a quantifier (`{8,}`, `+`, `*`). That is the shape of
-    a scanner's own pattern-table literal, not a credential. A real-looking value
-    carries no regex class escape or group syntax, so it is never excused here."""
-    return bool(_CREDENTIAL_REGEX_CLASS.search(value) and _CREDENTIAL_REGEX_QUANTIFIER.search(value))
+    """True when a generic_credential_assignment value is a regex pattern-table literal:
+    a regex class escape (backslash-s, backslash-d), a group opener (`(?i)`) or a negated
+    class (`[^`), together with a quantifier (`{8,}`, `+`, `*`), AND no credential-looking
+    token left in its literal text. A secret with regex syntax bolted on is still a
+    secret, so a value with residue is never excused here."""
+    if not (_CREDENTIAL_REGEX_CLASS.search(value) and _CREDENTIAL_REGEX_QUANTIFIER.search(value)):
+        return False
+    return not _regex_value_has_secret_residue(value)
 
 
 def _is_code_identifier(value, rest_of_line):
@@ -434,7 +491,7 @@ def _connection_password_is_placeholder(url):
     match = _CONNECTION_PASSWORD.search(url)
     if not match:
         return is_placeholder(url)
-    return is_placeholder(match.group(1))
+    return _dsn_password_is_placeholder(match.group(1))
 
 
 # A regex construct inside a password component: an escape (`\s`), a bracket class
@@ -461,102 +518,6 @@ def _connection_password_is_regex_shape(url):
 # Compiled once at import. re.finditer(p, s, f) is re.compile(p, f).finditer(s), so the
 # matches are identical; only the per-line cache lookup and recompilation are avoided.
 _COMPILED_PATTERNS = {name: re.compile(pattern, flags) for name, (pattern, flags) in PATTERNS.items()}
-
-# ---------------------------------------------------------------------------
-# Clean-verdict cache (path mode only, see scan_file / main).
-#
-# A file is cached ONLY when its full scan produced no findings at all. The entry
-# holds the path, the sha256 of its bytes, and the one SKIPPED-BINARY notice to replay.
-# No matched text is ever written. A file with any finding is always re-scanned and
-# reported. The whole cache is keyed by a tag over this scanner's source, so any change
-# to the rules invalidates every entry. A missing, corrupt or mismatched cache means a
-# full scan. A failed cache write only costs speed.
-# ---------------------------------------------------------------------------
-CLEAN_CACHE_SCHEMA = 1
-_CLEAN_CACHE_NAME = "clean.json"
-_clean_cache_state = {"enabled": False, "entries": {}, "new": {}, "file": None, "tag": None}
-
-
-def _clean_cache_path():
-    """AESOP_STATE_ROOT/cache/secret_scan/clean.json, else the temp dir (same rule as pyflakes_gate)."""
-    root = os.environ.get("AESOP_STATE_ROOT", "").strip()
-    base = Path(root) if root else Path(tempfile.gettempdir())
-    return base / "cache" / "secret_scan" / _CLEAN_CACHE_NAME
-
-
-def _clean_cache_tag(scanner_bytes):
-    """Key for the whole cache: schema plus the exact scanner source bytes."""
-    digest = hashlib.sha256()
-    digest.update(("schema=%d\n" % CLEAN_CACHE_SCHEMA).encode("ascii"))
-    digest.update(scanner_bytes)
-    return digest.hexdigest()
-
-
-def _clean_cache_lookup(entries, path_key, sha):
-    """Return the cached notice list when path_key is a clean entry for exactly this content hash, else None."""
-    entry = entries.get(path_key) if isinstance(entries, dict) else None
-    if not isinstance(entry, dict) or entry.get("sha") != sha:
-        return None
-    notices = entry.get("notices")
-    if not isinstance(notices, list) or not all(isinstance(line, str) for line in notices):
-        return None
-    return notices
-
-
-def _load_clean_cache(cache_file, tag):
-    """Entries for this exact tag, or {} when the cache is absent, unreadable or from another scanner."""
-    try:
-        data = json.loads(cache_file.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(data, dict) or data.get("tag") != tag or not isinstance(data.get("entries"), dict):
-        return {}
-    return data["entries"]
-
-
-def _save_clean_cache(cache_file, tag, entries):
-    """Atomically replace the cache with this run's clean verdicts. Failure only costs speed."""
-    tmp_name = None
-    try:
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(dir=str(cache_file.parent), suffix=".tmp")
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump({"schema": CLEAN_CACHE_SCHEMA, "tag": tag, "entries": entries}, handle, sort_keys=True)
-        os.replace(tmp_name, cache_file)
-        tmp_name = None
-    except OSError:
-        pass
-    finally:
-        if tmp_name is not None:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
-
-
-def _clean_cache_begin(enabled):
-    """Arm the cache for one path-mode run. Any failure to key it leaves it off (full scan)."""
-    state = _clean_cache_state
-    state.update(enabled=False, entries={}, new={}, file=None, tag=None)
-    if not enabled:
-        return
-    try:
-        scanner_bytes = Path(__file__).read_bytes()
-    except OSError:
-        return
-    state["file"] = _clean_cache_path()
-    state["tag"] = _clean_cache_tag(scanner_bytes)
-    state["entries"] = _load_clean_cache(state["file"], state["tag"])
-    state["enabled"] = True
-
-
-def _clean_cache_commit():
-    """Persist this run's clean verdicts (files not clean this run are dropped from the cache)."""
-    state = _clean_cache_state
-    if state["enabled"] and state["file"] is not None:
-        _save_clean_cache(state["file"], state["tag"], state["new"])
-    state["enabled"] = False
-
 
 def _scan_views(label, views, env_file, has_file_pragma, scan_path):
     """Run PATTERNS over every view. Returns list of (line_num, rule, match_str, is_fatal).
@@ -585,6 +546,9 @@ def _scan_views(label, views, env_file, has_file_pragma, scan_path):
                         # A regex literal assigned to a credential-named variable is a
                         # pattern from a scanner's own rule table, not a secret.
                         if _credential_value_is_regex_shape(value):
+                            continue
+                    elif rule_name == "dsn_query_password":
+                        if _dsn_password_is_placeholder(match.group(1)):
                             continue
                     elif rule_name == "connection_string":
                         # Tracker b0937071216e: the placeholder check applies to the
@@ -655,27 +619,10 @@ def scan_file(filepath):
     except (OSError, PermissionError, FileNotFoundError, IOError) as e:
         raise ScanError(f"Cannot scan file {filepath}: {e}")
 
-    state = _clean_cache_state
-    cache_key = str(filepath)
-    content_sha = hashlib.sha256(raw).hexdigest() if state["enabled"] else None
-    if state["enabled"] and not findings:
-        cached_notices = _clean_cache_lookup(state["entries"], cache_key, content_sha)
-        if cached_notices is not None:
-            # Same bytes, same scanner, clean last time: replay the notice and skip the regex pass.
-            for notice in cached_notices:
-                print(notice, file=sys.stderr)
-            state["new"][cache_key] = {"sha": content_sha, "notices": list(cached_notices)}
-            return findings
-
     views, nul_tagged = _content_views(raw)
-    binary_notice = None
     if nul_tagged:
-        binary_notice = f"SKIPPED-BINARY {filepath} (NUL bytes present; scanned as text, latin-1 and UTF-16 views)"
-        print(binary_notice, file=sys.stderr)
-    scanned = findings + _scan_views(filepath, views, is_env_file(filepath), _pragma_in_bytes(raw), filepath)
-    if state["enabled"] and not scanned:
-        state["new"][cache_key] = {"sha": content_sha, "notices": [binary_notice] if binary_notice else []}
-    return scanned
+        print(f"SKIPPED-BINARY {filepath} (NUL bytes present; scanned as text, latin-1 and UTF-16 views)", file=sys.stderr)
+    return findings + _scan_views(filepath, views, is_env_file(filepath), _pragma_in_bytes(raw), filepath)
 
 
 def scan_blob(label, content_bytes):
@@ -720,6 +667,24 @@ def _range_tip_ref(commit_range):
     return tip or "HEAD"
 
 
+# Repo-location variables a git hook exports into its environment. An inherited value
+# names some OTHER repository (or none), so `git` run with cwd=<repo> would resolve the
+# wrong repo and scan the wrong index/objects (audit 2026-10-22 #10; claude-scripts #134).
+# GIT_INDEX_FILE is deliberately NOT scrubbed: it names the index a commit made from a
+# hook would be built from, and is left to git to honour.
+_INHERITED_REPO_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_PREFIX")
+
+
+def _git_repo_env():
+    """Environment for every git call: repo discovery comes from cwd / --repo only.
+    A cwd that is not a repository still fails closed (git exits non-zero and every
+    caller turns that into a GitScanError)."""
+    env = dict(os.environ)
+    for name in _INHERITED_REPO_VARS:
+        env.pop(name, None)
+    return env
+
+
 def get_git_blob(repo_path, ref_path):
     """Fetch raw blob bytes via `git show <ref_path>` -- e.g. ref_path=':foo.py'
     reads foo.py from the STAGED INDEX, 'abc123:foo.py' reads foo.py as it
@@ -736,6 +701,7 @@ def get_git_blob(repo_path, ref_path):
         result = subprocess.run(
             ["git", "show", ref_path],
             cwd=repo_path,
+            env=_git_repo_env(),
             capture_output=True,
             timeout=15,
         )
@@ -751,6 +717,28 @@ def get_git_blob(repo_path, ref_path):
     return result.stdout
 
 
+def get_blob_by_id(repo_path, blob_id):
+    """Fetch raw blob bytes by OBJECT ID (`git cat-file blob <id>`), so the bytes are
+    exactly the committed content regardless of path, attributes, textconv or filters.
+    Raises GitScanError on any failure (fail closed)."""
+    try:
+        result = subprocess.run(
+            ["git", "cat-file", "blob", blob_id],
+            cwd=repo_path,
+            env=_git_repo_env(),
+            capture_output=True,
+            timeout=30,
+        )
+    except Exception as e:
+        raise GitScanError(f"git cat-file blob {blob_id!r} raised {e!r}")
+    if result.returncode != 0:
+        raise GitScanError(
+            f"git cat-file blob {blob_id!r} failed (rc={result.returncode}): "
+            f"{result.stderr.decode('utf-8', errors='ignore').strip()}"
+        )
+    return result.stdout
+
+
 def get_staged_files(repo_path):
     """Get list of staged file paths (relative to repo root) from git repo.
 
@@ -761,6 +749,7 @@ def get_staged_files(repo_path):
         result = subprocess.run(
             ["git", "diff", "--cached", "--name-only", "--diff-filter=d"],
             cwd=repo_path,
+            env=_git_repo_env(),
             capture_output=True,
             text=True,
             encoding='utf-8', errors='replace',
@@ -777,6 +766,93 @@ def get_staged_files(repo_path):
     return [f for f in result.stdout.strip().split("\n") if f.strip()]
 
 
+def _run_git_text(repo_path, args, timeout, stdin_text=None):
+    """Run git (scrubbed env) and return stdout text; GitScanError on any failure."""
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=repo_path,
+            env=_git_repo_env(),
+            capture_output=True,
+            text=True,
+            encoding='utf-8', errors='replace',
+            input=stdin_text,
+            timeout=timeout,
+        )
+    except Exception as e:
+        raise GitScanError(f"git {' '.join(args)} raised {e!r}")
+    if result.returncode != 0:
+        raise GitScanError(
+            f"git {' '.join(args)} failed (rc={result.returncode}): {result.stderr.strip()}"
+        )
+    return result.stdout
+
+
+def get_range_blobs(repo_path, commit_range):
+    """Every blob INTRODUCED by any commit in `git rev-list <commit_range>`, as a list of
+    (blob_id, repo-relative path), first occurrence order, deduplicated.
+
+    This is the pushed content. The old net `git diff <range>` showed only the final tree
+    delta, so a secret committed and then removed inside one push shipped in a commit object
+    yet produced "0 files scanned" (audit 2026-10-22 #1). Each commit is diffed against its
+    parent(s) (root commits against the empty tree) and every added or modified blob is
+    returned by object id, so the scanned bytes are the committed ones.
+
+    A base that is a TREE (the empty-tree sentinel the hooks use for a root commit or a
+    new ref with no merge-base) means "no exclusion": every commit reachable from the tip.
+    An unresolvable ref, a failing git call or an unparseable listing raises GitScanError
+    (fail closed); a range with no commits is a genuine empty result."""
+    if "..." in commit_range:
+        left, right = commit_range.split("...", 1)
+        base = _run_git_text(repo_path, ["merge-base", left or "HEAD", right or "HEAD"], 30).strip()
+        rev_args = [right or "HEAD", "--not", base]
+    elif ".." in commit_range:
+        left, right = commit_range.split("..", 1)
+        rev_args = [commit_range]
+        if left:
+            left_type = _run_git_text(repo_path, ["cat-file", "-t", left], 30).strip()
+            if left_type == "tree":
+                rev_args = [right or "HEAD"]
+    else:
+        rev_args = [commit_range]
+
+    commits = _run_git_text(repo_path, ["rev-list", *rev_args], 120).split()
+    if not commits:
+        return []
+
+    raw = _run_git_text(
+        repo_path,
+        ["diff-tree", "--stdin", "-r", "-m", "--root", "--no-commit-id", "--no-renames",
+         "--diff-filter=d", "--raw", "-z", "--no-abbrev"],
+        300,
+        stdin_text="\n".join(commits) + "\n",
+    )
+    blobs = []
+    seen = set()
+    tokens = raw.split("\0")
+    idx = 0
+    while idx < len(tokens):
+        meta = tokens[idx]
+        idx += 1
+        if not meta:
+            continue
+        if not meta.startswith(":"):
+            raise GitScanError(f"unparseable diff-tree record {meta!r}")
+        fields = meta[1:].split()
+        if len(fields) < 5 or idx >= len(tokens):
+            raise GitScanError(f"unparseable diff-tree record {meta!r}")
+        path = tokens[idx]
+        idx += 1
+        new_mode, new_id = fields[1], fields[3]
+        if new_mode == "160000" or not new_id.strip("0"):
+            continue  # submodule gitlink or deletion: no blob content
+        key = (new_id, path)
+        if key not in seen:
+            seen.add(key)
+            blobs.append(key)
+    return blobs
+
+
 def get_range_files(repo_path, commit_range):
     """Get list of file paths (relative to repo root) changed in commit range
     (e.g. 'main..HEAD' or 'abc123..def456').
@@ -789,6 +865,7 @@ def get_range_files(repo_path, commit_range):
         result = subprocess.run(
             ["git", "diff", "--name-only", "--diff-filter=d", commit_range],
             cwd=repo_path,
+            env=_git_repo_env(),
             capture_output=True,
             text=True,
             encoding='utf-8', errors='replace',
@@ -818,6 +895,7 @@ def get_history_files(repo_path):
         result = subprocess.run(
             ["git", "log", "--all", "-p", "--reverse"],
             cwd=repo_path,
+            env=_git_repo_env(),
             capture_output=True,
             text=True,
             encoding='utf-8',
@@ -869,14 +947,14 @@ def _git_committable_set(dir_path):
     try:
         top = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            cwd=str(dir_path), capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10,
+            cwd=str(dir_path), env=_git_repo_env(), capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=10,
         )
         if top.returncode != 0:
             return None
         toplevel = Path(top.stdout.strip())
         listing = subprocess.run(
             ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-            cwd=str(toplevel), capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=60,
+            cwd=str(toplevel), env=_git_repo_env(), capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=60,
         )
         if listing.returncode != 0:
             return None
@@ -941,11 +1019,30 @@ def scan_content(content, scan_path=None):
                         continue
                     if _connection_password_is_regex_shape(match_str):
                         continue
+                elif rule_name == "dsn_query_password":
+                    if _dsn_password_is_placeholder(match.group(1)):
+                        continue
                 elif is_placeholder(match_str):
                     continue
                 is_fatal = _classify_finding(rule_name, False, scan_path)
                 findings.append((line_num, rule_name, match_str, is_fatal))
     return findings
+
+
+def _count_scannable(files):
+    """Files scan_file() will actually inspect: skipped paths (.git, node_modules,
+    __pycache__, .pyc/.pyo) are walked but read nothing, so they are not 'scanned'."""
+    return sum(1 for f in files if not should_skip_file(f))
+
+
+def _fail_if_nothing_scanned(scanned, walked):
+    """Audit 2026-10-22 #8: a path scan that inspected zero files (empty dir, all
+    git-ignored, only skipped vendor paths, empty --from-stdin) is not a clean verdict."""
+    if scanned == 0:
+        print(f"NOTHING SCANNED: path scan inspected 0 files ({walked} walked, all skipped or none found).",
+              file=sys.stderr)
+        print("Failing CLOSED: refusing to report CLEAN when no file was inspected.", file=sys.stderr)
+        sys.exit(2)
 
 
 def main():
@@ -980,7 +1077,12 @@ def main():
     parser.add_argument(
         "--no-cache",
         action="store_true",
-        help="Full scan: read and write no clean-verdict cache (path mode)",
+        help="Deprecated no-op: the clean-verdict cache was removed (every scan is a full scan)",
+    )
+    parser.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="--staged only: treat an empty index as CLEAN instead of EMPTY-INDEX (non-gate callers; hooks never pass it)",
     )
     parser.add_argument(
         "paths", nargs="*", help="Paths to scan directly (files or directories)"
@@ -1012,6 +1114,14 @@ def main():
             sys.exit(1)
 
         file_count = len(relpaths)
+        if file_count == 0 and not args.allow_empty:
+            # Audit 2026-10-22 #9: an empty index inspected nothing, so it must not read CLEAN.
+            # (A pre-push hook runs after the commit, when the index is empty: hooks scan
+            # --range, never --staged, and never pass --allow-empty.)
+            print("EMPTY-INDEX: --staged found 0 staged files; nothing was inspected.", file=sys.stderr)
+            print("Failing CLOSED: stage the files first, scan the pushed commits with --range, "
+                  "or pass --allow-empty from a non-gate caller.", file=sys.stderr)
+            sys.exit(1)
         for relpath in relpaths:
             try:
                 content = get_git_blob(args.repo, f":{relpath}")
@@ -1041,26 +1151,25 @@ def main():
         # away in the worktree (without a new commit) must still be caught,
         # since the pushed commit still carries the dirty blob.
         try:
-            relpaths = get_range_files(args.repo, args.range)
+            relpaths = get_range_blobs(args.repo, args.range)
         except GitScanError as e:
             print(f"FATAL: could not resolve commit range {args.range!r}: {e}", file=sys.stderr)
             print("Failing CLOSED: refusing to report CLEAN on an unresolvable range.", file=sys.stderr)
             sys.exit(1)
 
         file_count = len(relpaths)
-        tip_ref = _range_tip_ref(args.range)
-        for relpath in relpaths:
+        for blob_id, relpath in relpaths:
             try:
-                content = get_git_blob(args.repo, f"{tip_ref}:{relpath}")
+                content = get_blob_by_id(args.repo, blob_id)
             except GitScanError as e:
-                print(f"FATAL: could not read blob at {tip_ref}:{relpath}: {e}", file=sys.stderr)
+                print(f"FATAL: could not read blob {blob_id} ({relpath}): {e}", file=sys.stderr)
                 print("Failing CLOSED: refusing to report CLEAN when a committed object cannot be read.", file=sys.stderr)
                 sys.exit(1)
             label = str(Path(args.repo) / relpath)
             try:
                 findings = scan_blob(label, content)
             except ScanError as e:
-                print(f"FATAL: cannot scan blob {tip_ref}:{relpath}: {e}", file=sys.stderr)
+                print(f"FATAL: cannot scan blob {blob_id} ({relpath}): {e}", file=sys.stderr)
                 sys.exit(1)
             for line_num, rule, match_str, is_fatal in findings:
                 all_findings.append((label, line_num, rule, match_str, is_fatal))
@@ -1104,7 +1213,8 @@ def main():
             print(f"FATAL: {e}", file=sys.stderr)
             print("Failing CLOSED: refusing to report CLEAN when a listed path cannot be scanned.", file=sys.stderr)
             sys.exit(2)
-        file_count = len(files)
+        file_count = _count_scannable(files)
+        _fail_if_nothing_scanned(file_count, len(files))
         for filepath in files:
             try:
                 findings = scan_file(filepath)
@@ -1129,8 +1239,8 @@ def main():
             print(f"FATAL: {e}", file=sys.stderr)
             print("Failing CLOSED: refusing to report CLEAN when a path argument cannot be scanned.", file=sys.stderr)
             sys.exit(2)
-        file_count = len(files)
-        _clean_cache_begin(enabled=not args.no_cache)
+        file_count = _count_scannable(files)
+        _fail_if_nothing_scanned(file_count, len(files))
         for filepath in files:
             try:
                 findings = scan_file(filepath)
@@ -1147,7 +1257,6 @@ def main():
                         allowed_redaction_count += 1
                     else:
                         allowed_doc_count += 1
-        _clean_cache_commit()
 
     # Output findings
     for filepath, line_num, rule, match_str, is_fatal in all_findings:
