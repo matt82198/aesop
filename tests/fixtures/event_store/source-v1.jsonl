@@ -1,0 +1,8 @@
+{"ts":"2026-10-22T00:01:00Z","seq":1,"kind":"finding","actor":"orchestrator","session":"s-1","text":"plain text with no names","refs":{"goal":"G2"},"prev":""}
+{"ts":"2026-10-22T00:02:00Z","seq":2,"kind":"note","actor":"orchestrator","session":"s-1","text":"keyrun is named here but repo ref wins","refs":{"repo":"conductor3"},"prev":"034964157d4bb21f723c63a3265939b6951b3cae7eeaf81d6a9f672421d9a92c"}
+{"ts":"2026-10-22T00:03:00Z","seq":3,"kind":"note","actor":"orchestrator","session":"s-1","text":"nothing named","refs":{"keyrun_pr_606":"1"},"prev":"524d1faaa956bb2ebba5b7645f11069f549584b55ba5b4e9682ab1246460257a"}
+{"ts":"2026-10-22T00:04:00Z","seq":4,"kind":"note","actor":"orchestrator","session":"s-1","text":"sleeper roster trade","refs":{},"prev":"67f65853697e3886017256cf9282f43c3c8623d25f9b992f8346430aa7622c7f"}
+{"ts":"2026-10-22T00:05:00Z","seq":5,"kind":"checkpoint","actor":"orchestrator","session":"s-1","text":"aesop and keyrun both moved","refs":{},"prev":"b750e6e28912f93e62b10206ebc5ce6dea202313745a09e64286ffb4026ad585"}
+{"ts":"2026-10-22T00:06:00Z","seq":6,"kind":"note","actor":"orchestrator","session":"s-1","text":"hello there","refs":{},"prev":"3da8fd30d8316db53210f2c32413c00e8c96a324176adcc42423737720960da5"}
+{"ts":"2026-10-22T00:07:00Z","seq":7,"kind":"note","actor":"orchestrator","session":"s-1","text":"keyrun named but goal G3 wins","refs":{"goal":"G3"},"prev":"0dcd061d8107e6f92357a838b3604243ad2e1b5b4e3475c3168fec0186f5b25a"}
+{"ts":"2026-10-22T00:08:00Z","seq":8,"kind":"note","actor":"orchestrator","session":"s-1","text":"FROZEN: split into per-project stores","refs":{"frozen":"1"},"prev":"fd91dd2285bdfcc00861559824695db897b90e21e4de1ff563342de04befba4f"}

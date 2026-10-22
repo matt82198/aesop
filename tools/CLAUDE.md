@@ -72,6 +72,7 @@ The dry-range row (2026-10-06 follow-up): a branch that merged `origin/main` leg
 
 ## Recent additions (2026-10)
 
+- **event_store/migrate.py (G1.1, L3)**: one-time split of the frozen v1 `events/log` into per-project v2 stores per docs/plans/PER-PROJECT-EVENT-STORES.md 4.2 (rule ids goal, repo, refkey, text1, multi, default). Refuses an unfrozen source, a broken chain or a non-empty target (exit 1, nothing written); `--dry-run` prints counts only; the manifest goes to `<source>/migration-manifest.json` on a real run. Its v2 writer is a stopgap that L1's store.py replaces in wave B. Tests: tests/test_event_store_migrate.py.
 - **health-score.js python resolver (397553876e57)**: `tools/health-score.js` resolves the interpreter `python3` then `python` (same order as `health.js`/`dash.js`) and exits 1 with an explicit error if neither exists. Test: `tests/health-score-python-fallback.test.mjs`.
 - **state_root migration (2026-10-17, PR #1090, decision b)**: `tools/state_root.py` is the STRICT resolver (fail closed). `common.get_state_dir()` is LEGACY with a cwd fallback and is unchanged. Callers migrate one at a time, only after the primary `aesop.config.json` `state_root` is absolute and fleet processes export `AESOP_STATE_ROOT`. Migration surface: the caller set listed in `tools/state_root.py`'s docstring.
 
