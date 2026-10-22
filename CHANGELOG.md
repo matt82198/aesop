@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.11.0] - 2026-10-22
 
-Release carrying the hash-chained event store, the per-project event store plan, and a dated provenance record. This release covers 17 PRs merged since v0.10.4 (2026-10-22T00:54:37Z), #1264 through #1283. #1284 (projections) was still open at the release cut and is not included.
+Release carrying the hash-chained event store, the per-project event store plan, and a dated provenance record. This release covers 18 PRs merged since v0.10.4 (2026-10-22T00:54:37Z), #1264 through #1284. #1284 (event-store projections) landed on main after the first cut and is included.
 
 ### Added
 
@@ -24,6 +24,7 @@ Release carrying the hash-chained event store, the per-project event store plan,
 ### Fixed
 
 - #1283 fix(event-store): open store.json-less v1 log read-only (f-b15b603b)
+- #1284 feat(event-store): projections; the `project` subcommand renders pending, rulings by goal and checkpoints across per-project stores (squash d007c47d)
 - #1264 Fail closed: receipt phase, audit lock spill, exit-2 blocks, Linux-shape covered paths
 - #1269 fix(secret_scan): range scans every commit; cache removed; regex/DSN exclusions tightened; zero-file and empty-index fail closed; GIT_DIR scrubbed (audit 2026-10-22)
 - #1271 fix(secret_scan): example/test host no longer excuses a real DSN password
