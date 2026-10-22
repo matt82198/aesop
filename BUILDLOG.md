@@ -842,3 +842,11 @@ WHY: the orchestrator is about to compact, so the hook-hardening state, the new 
 - STILL IN FLIGHT (none merged): keyrun #396 red game-gate/game-e2e fix (Opus lane, re-arms on new head; #396 OPEN at 2e720e2f); aesop #1207 windows fix (OPEN at c99914c9); aesop SQLite busy_timeout hardening (f-9974c1a8); pyflakes ratchet speedup (f-256f3cd8). WHY: a fresh session re-binds these from gh state, not from lane prose.
 - STATE.md NEXT STEPS items 16-20 record the same facts with WHY (insertions only; the 01:40Z checkpoint and its items 00a0-00b are unchanged).
 2026-10-21 02:10Z checkpoint: keyrun #404/#405, conductor3 #193, claude-config #213, aesop #1242 MERGED; #396 at c600046d with D54/D55 in flight; keyrun lanes on #370/#366; see STATE.md 02:10Z entry.
+## 2026-10-22T01:03Z v0.10.4 state checkpoint
+- Released v0.10.4 2026-10-22: tag 684a974f at 80df89c9, PR #1266, GitHub release 2026-10-22T00:54:37Z, publish run 39702530685, npm @matt82198/aesop 0.10.4 latest with signed provenance.
+- Registry README verified on npm: 0 mermaid fences, 0 raw.githubusercontent.com links, images via jsDelivr pinned to 0.10.4.
+- Decided R-EVENTS-1: state is append-only hash-chained events in conductor3 events/YYYY-MM-DD.jsonl on branch events/log, projected by tools/event_project.py, injected at PreCompact (claude-config #247). WHY: the orchestrator is the untrusted node; Matt: "state lives in the event store".
+- Decided the verdict-ledger rule: each Matt verdict becomes an open_findings row with an observable; it closes only on proof of the observable, never on a PR (claude-scripts #142, #143; claude-config #246). WHY: Matt: "always ask why something broke".
+- Dispatch briefs are assembled from disk (claude-config #248). WHY: context-built briefs die at compaction.
+- npm miss root cause: the verdict was closed on the GitHub PR instead of the npm page, and the follow-up lived only in context and died at compaction. Fix: 0.10.4.
+- Previous: v0.10.3 (tag 67c6831e, 2026-10-21) unchanged. The STATE.md ACTIVE block carries the dated decisions.
