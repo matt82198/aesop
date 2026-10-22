@@ -33,7 +33,16 @@ def encode_event(event):
 class Store:
     def __init__(self, path):
         self.path = Path(path)
+        self.events_dir = self.path / "events"
+        self.read_only = False
         meta_path = self.path / "store.json"
+        if not meta_path.exists() and self._is_v1_layout():
+            # conductor3 v1 log: day files with no store.json. Schema 1 is implied by the
+            # layout and the project is the directory name. Opened read-only.
+            self.project = self.path.name
+            self.schema = 1
+            self.read_only = True
+            return
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
@@ -42,7 +51,17 @@ class Store:
         self.schema = meta.get("schema")
         if not self.project or self.schema not in (1, 2):
             raise StoreError("%s needs project and schema 1|2" % meta_path)
-        self.events_dir = self.path / "events"
+
+    def _is_v1_layout(self):
+        """True when the first event of the first non-empty day file has no 'v' key."""
+        for f in self.day_files():
+            for raw in self._lines(f):
+                try:
+                    ev = json.loads(raw.decode("utf-8"))
+                except ValueError:
+                    return False
+                return isinstance(ev, dict) and "v" not in ev
+        return False
 
     def day_files(self):
         if not self.events_dir.is_dir():
@@ -70,6 +89,9 @@ class Store:
         return None, 0
 
     def append(self, kind, actor, text, session="", refs=None, ts=None):
+        if self.read_only:
+            raise StoreError("store %s at %s has no store.json (v1 log, read-only); "
+                             "appends refused" % (self.project, self.path))
         if self.schema != 2:
             raise StoreError("store %s is schema %s; only schema 2 accepts appends"
                              % (self.project, self.schema))
