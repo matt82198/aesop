@@ -832,7 +832,7 @@ class TestConstructTimeBaseUrlValidation(unittest.TestCase):
     def test_embedded_credentials_rejected_at_construction(self):
         with self.assertRaises(ValueError):
             OpenAICompatibleDriver(
-                base_url="https://user:pass@example.com/v1",
+                base_url="https://user:changeme@example.com/v1",
                 model="m",
                 transport=FakeTransport(),
             )

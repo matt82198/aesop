@@ -589,5 +589,38 @@ class TestAuditFailClosedProbesStayClosed(_TmpCase):
         self.assertEqual(code, 1, out)
 
 
+# --------------------------------------------------------------------------- example host
+class TestExampleHostNoLongerExcusesPassword(_TmpCase):
+    """The reserved example/test host exclusion in the connection_string regex must not
+    excuse the PASSWORD: a DSN on such a host is clean only when its password is a
+    placeholder, by the same rule as every other host."""
+
+    def test_example_com_host_real_password_is_flagged(self):
+        code, out, _ = self.scan_line(_j('DSN = "postgres://app:Zx9kQ2mLp7Rt', '@example.com/db"'))
+        self.assertEqual(code, 1, out)
+        self.assertIn("connection_string", out)
+
+    def test_example_com_host_changeme_password_stays_clean(self):
+        code, out, _ = self.scan_line('DSN = "postgres://app:changeme@example.com/db"')
+        self.assertEqual(code, 0, out)
+
+    def test_example_com_host_template_password_stays_clean(self):
+        code, out, _ = self.scan_line('DSN = "postgres://app:<pw>@example.com/db"')
+        self.assertEqual(code, 0, out)
+
+    def test_test_host_real_password_is_flagged(self):
+        code, out, _ = self.scan_line(_j('DSN = "postgres://app:Zx9kQ2mLp7Rt', '@test.internal/db"'))
+        self.assertEqual(code, 1, out)
+        self.assertIn("connection_string", out)
+
+    def test_readme_and_docs_example_dsns_still_scan_clean(self):
+        """Control: the documentation tree's example DSNs are placeholders, so the
+        password-only check keeps the published docs scanning clean."""
+        code, out, _ = _scan(
+            str(REPO_ROOT / "README.md"), str(REPO_ROOT / "docs"), env=self.env,
+        )
+        self.assertEqual(code, 0, out)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -102,6 +102,9 @@ PATTERNS = {
         r"|(?!/[^\s/]+/[gimsuy]*(?=\s|$|[;,]))(?P<u>[^\s'\"`$<{}()\[\],;:]{8,})(?=\s|$|[;,]))",
         re.IGNORECASE,
     ),
+    # The host exclusion covers only local hosts. example.* and test.* hosts are NOT excused
+    # here: a real password on a reserved host is still a credential, and a placeholder
+    # password is clean via _dsn_password_is_placeholder on every host.
     "connection_string": (
         (r"://"
          r"[^:]+:[^@/\s]+@"
@@ -110,9 +113,7 @@ PATTERNS = {
             r"127\.0\.0\.1(?:[:/]|$)|"
             r"127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(?:[:/]|$)|"
             r"[a-zA-Z0-9.-]*\.local(?:[:/]|$)|"
-            r"[a-zA-Z0-9.-]*\.localdomain(?:[:/]|$)|"
-            r"(?:[a-zA-Z0-9-]+\.)*example(?:\.[a-zA-Z]{2,})?(?:[:/]|$)|"
-            r"(?:[a-zA-Z0-9-]+\.)*test(?:\.[a-zA-Z]{2,})?(?:[:/]|$)"
+            r"[a-zA-Z0-9.-]*\.localdomain(?:[:/]|$)"
          r")"
          r"[^\s]+"),
         0

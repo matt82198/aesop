@@ -236,7 +236,7 @@ def main():
             ),
             (
                 "fp_connection_example_fixture",
-                "# Example URL from docs\\nurl = 'postgres://user:password@example.com:5432/db'\\n",
+                "# Example URL from docs\\nurl = 'postgres://user:changeme@example.com:5432/db'\\n",
                 "docs_example.py",
                 0,
                 "CLEAN"
