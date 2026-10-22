@@ -13,7 +13,7 @@ PKG_PARENT = REPO / "tools"
 if str(PKG_PARENT) not in sys.path:
     sys.path.insert(0, str(PKG_PARENT))
 
-from event_store.store import Store  # noqa: E402
+from event_store.store import Store, StoreError  # noqa: E402
 
 CLI = REPO / "tools" / "event_store" / "cli.py"
 
@@ -167,6 +167,81 @@ class CliTests(unittest.TestCase):
         out = subprocess.run(["git", "-C", str(path), "log", "--oneline"],
                              capture_output=True, encoding="utf-8", errors="replace")
         self.assertEqual(len(out.stdout.strip().splitlines()), 1)
+
+
+def write_v1_days(root):
+    """Two conductor3 v1 day files (no 'v' key, chain restarts per file), no store.json."""
+    (root / "events").mkdir(parents=True, exist_ok=True)
+    seq = 0
+    for day in ("2026-09-01", "2026-09-02"):
+        prev, lines = "", []
+        for i in range(2):
+            seq += 1
+            ev = {"ts": day + "T0%d:00:00Z" % i, "seq": seq, "kind": "note",
+                  "actor": "a", "session": "s", "text": "t", "refs": {}, "prev": prev}
+            line = json.dumps(ev, sort_keys=True).encode("utf-8")
+            prev = sha(line)
+            lines.append(line)
+        (root / "events" / (day + ".jsonl")).write_bytes(b"\n".join(lines) + b"\n")
+    return root
+
+
+class V1NoStoreJsonTests(unittest.TestCase):
+    """A v1 log directory (day files, no store.json) opens read-only as schema 1."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
+        self.tmp = self._td.name
+
+    def test_l_v1_day_files_without_store_json_open_read_only(self):
+        root = write_v1_days(Path(self.tmp) / "events-log")
+        s = Store(root)
+        self.assertEqual(s.schema, 1)
+        self.assertEqual(len(s.load()), 4)
+        self.assertEqual(s.verify(), [])
+
+    def test_m_v1_tamper_without_store_json_still_caught(self):
+        root = write_v1_days(Path(self.tmp) / "events-log")
+        p = root / "events" / "2026-09-01.jsonl"
+        p.write_bytes(p.read_bytes().replace(b'"t"', b'"x"', 1))
+        self.assertTrue(Store(root).verify())
+
+    def test_n_v1_without_store_json_refuses_append_and_writes_nothing(self):
+        root = write_v1_days(Path(self.tmp) / "events-log")
+        before = {f.name: f.read_bytes() for f in (root / "events").iterdir()}
+        with self.assertRaises(StoreError) as cm:
+            Store(root).append("note", "o", "x")
+        self.assertIn("store.json", str(cm.exception))
+        self.assertFalse((root / "store.json").exists())
+        after = {f.name: f.read_bytes() for f in (root / "events").iterdir()}
+        self.assertEqual(before, after)
+
+    def test_o_v2_day_files_without_store_json_still_refused(self):
+        root = Path(self.tmp) / "v2"
+        (root / "events").mkdir(parents=True)
+        ev = {"v": 2, "ts": "2026-10-01T10:00:00Z", "seq": 1, "kind": "note", "actor": "o",
+              "session": "", "text": "x", "refs": {}, "prev": ""}
+        (root / "events" / "2026-10-01.jsonl").write_bytes(encode_line(ev))
+        with self.assertRaises(StoreError):
+            Store(root)
+
+    def test_p_empty_dir_without_store_json_still_refused(self):
+        root = Path(self.tmp) / "empty"
+        root.mkdir()
+        with self.assertRaises(StoreError):
+            Store(root)
+
+    def test_q_cli_verify_v1_dir_without_store_json(self):
+        root = write_v1_days(Path(self.tmp) / "events-log")
+        reg, _ = registry_for(self.tmp)
+        r = run_cli(reg, "verify", "--path", str(root))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("verify: 0 problem(s)", r.stdout)
+
+
+def encode_line(ev):
+    return json.dumps(ev, sort_keys=True).encode("utf-8") + b"\n"
 
 
 if __name__ == "__main__":
