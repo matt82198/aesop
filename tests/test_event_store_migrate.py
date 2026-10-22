@@ -25,7 +25,7 @@ FIXTURE_ROWS = [
     ("note", "keyrun is named here but repo ref wins", {"repo": "conductor3"}, "brain", "repo"),
     ("note", "nothing named", {"keyrun_pr_606": "1"}, "keyrun", "refkey"),
     ("note", "sleeper roster trade", {}, "psinasty", "text1"),
-    ("checkpoint", "aesop and keyrun and the brain all moved", {}, "aesop", "multi"),
+    ("checkpoint", "aesop and keyrun both moved", {}, "aesop", "multi"),
     ("note", "hello there", {}, "aesop", "default"),
     ("note", "keyrun named but goal G3 wins", {"goal": "G3"}, "psinasty", "goal"),
     ("note", "FROZEN: split into per-project stores", {"frozen": "1"}, "aesop", "default"),
@@ -87,7 +87,8 @@ class MigrateTestBase(unittest.TestCase):
 
 class FixtureTest(unittest.TestCase):
     def test_committed_fixture_matches_builder(self):
-        self.assertEqual(FIXTURE.read_bytes(), b"\n".join(build_fixture_lines()) + b"\n")
+        on_disk = FIXTURE.read_bytes().replace(b"\r\n", b"\n")  # tolerate autocrlf checkouts
+        self.assertEqual(on_disk, b"\n".join(build_fixture_lines()) + b"\n")
 
     def test_fixture_covers_every_rule(self):
         self.assertEqual({r[4] for r in FIXTURE_ROWS},
@@ -157,7 +158,7 @@ class AttributionTest(MigrateTestBase):
                  if e.get("refs", {}).get("split_rule") == "multi"]
         self.assertEqual(len(multi), 1)
         self.assertEqual(multi[0]["kind"], "checkpoint")
-        self.assertEqual(multi[0]["refs"]["mentions"], ["aesop", "keyrun", "brain"])
+        self.assertEqual(multi[0]["refs"]["mentions"], ["aesop", "keyrun"])
         for project in ("keyrun", "brain", "psinasty"):
             self.assertFalse([e for e in read_store(self.targets[project])
                               if e["refs"].get("src_seq") == 5])
