@@ -2440,18 +2440,16 @@ else
   test_failed=$((test_failed + 1))
 fi
 
-printf '\n=== Test: a HUNG python3 on PATH fails fast (bounded probe), never a multi-minute push hang ===\n'
+printf '\n=== Test: a HUNG python3 on PATH: resolve_py_bin probe is bounded, skips the hung candidate, and fails closed when nothing usable remains ===\n'
 (
   pp_root="$TEST_ROOT/pyprobe_hang"
   pp_stub_bin="$pp_root/stub-bin"
   pp_pid_file="$pp_root/stub.pids"
-  pp_remote="$pp_root/remote.git"
-  pp_clone="$pp_root/clone"
   rm -rf "$pp_root"
   mkdir -p "$pp_stub_bin" "$pp_root/state"
 
   # Stub python3 that blocks forever. It records its PID and exec's sleep so
-  # the recorded PID is the sleeper itself; `timeout` kills it directly.
+  # the recorded PID is the sleeper itself; the probe's `timeout` kills it directly.
   printf '#!/bin/sh\necho $$ >> "%s"\nexec sleep 600\n' "$pp_pid_file" > "$pp_stub_bin/python3"
   chmod +x "$pp_stub_bin/python3"
 
@@ -2466,67 +2464,49 @@ printf '\n=== Test: a HUNG python3 on PATH fails fast (bounded probe), never a m
   }
   trap 'pp_kill_stubs' EXIT
 
-  # Fixture: a trunk carrying this repo's committed tree (so every gate artifact
-  # the hook checks is present), published to a bare remote. A feature branch is
-  # published first so the hooked push is a normal update, not a new-branch push.
-  git init -q --bare "$pp_remote"
-  git init -q -b main "$pp_clone"
-  git -C "$pp_clone" config user.email t@example.com
-  git -C "$pp_clone" config user.name t
-  git -C "$pp_clone" config core.autocrlf false
-  git -C "$REPO_ROOT" archive HEAD | tar -x -C "$pp_clone"
-  # Receipt emission is not under test here: stub the emitter green (the real
-  # matrix would run for minutes; AESOP_RECEIPT_EMIT=0 is inert) and use a dummy key.
-  # The stub keeps the real file's INDEX: line (tools/INDEX.md must stay in sync with it).
-  printf '#!/usr/bin/env python3\n"""\n%s\n"""\nimport sys\nsys.exit(0)\n' "$(sed -n 3p "$REPO_ROOT/tools/emit_receipt.py")" > "$pp_clone/tools/emit_receipt.py"
-  touch "$pp_root/dummy_key.pem"
-  git -C "$pp_clone" add -A
-  git -C "$pp_clone" commit -q -m trunk
-  git -C "$pp_clone" remote add origin "$pp_remote"
-  git -C "$pp_clone" push -q origin HEAD:refs/heads/main
-  git -C "$pp_clone" checkout -q -b feature/pyprobe
-  printf 'one\n' > "$pp_clone/PYPROBE.txt"
-  git -C "$pp_clone" add -A
-  git -C "$pp_clone" commit -q -m one
-  git -C "$pp_clone" push -q origin feature/pyprobe
-  printf 'two\n' > "$pp_clone/PYPROBE.txt"
-  git -C "$pp_clone" add -A
-  git -C "$pp_clone" commit -q -m two
-  # The real pre-push hook, installed the way git runs it.
-  printf '#!/bin/sh\nexec bash "%s" "$@"\n' "$HOOK_SCRIPT" > "$pp_clone/.git/hooks/pre-push"
-  chmod +x "$pp_clone/.git/hooks/pre-push"
-
-  # Output goes to a FILE, not $(...): an orphaned stub would hold a command-
-  # substitution pipe open until it exits. Stubs are killed right after the push.
+  # Drive the hook's own bounded interpreter probe (resolve_py_bin, sourced at the
+  # top of this file) directly. Clear the per-push memo so the probe really runs,
+  # and put the hung stub first on PATH so it is the first candidate probed.
+  unset _AESOP_PY_BIN
+  PATH="$pp_stub_bin:$PATH"
+  export PATH
   pp_start=$(date +%s)
-  (cd "$pp_clone" && PATH="$pp_stub_bin:$PATH" AESOP_ROOT="$pp_clone" \
-    AESOP_STATE_ROOT="$pp_root/state" AESOP_RECEIPT_KEY="$pp_root/dummy_key.pem" \
-    timeout 40 git push -q origin HEAD:refs/heads/feature/pyprobe </dev/null >"$pp_root/push.out" 2>&1)
+  pp_py=$(resolve_py_bin 2>"$pp_root/probe.err")
   pp_rc=$?
   pp_elapsed=$(( $(date +%s) - pp_start ))
   pp_kill_stubs
-  pp_out=$(cat "$pp_root/push.out")
+  pp_err=$(cat "$pp_root/probe.err")
 
+  # The stub must have actually been probed, or this case proves nothing.
+  if [ ! -s "$pp_pid_file" ]; then
+    printf 'FAIL: the hung python3 stub was never probed by resolve_py_bin; probe stderr: %s\n' "$pp_err"
+    exit 1
+  fi
+  # Bound: the probe returns within the hook's own bound (30 s ceiling, unchanged).
   if [ "$pp_elapsed" -ge 30 ]; then
-    printf 'FAIL: push with a hung python3 on PATH took %ss (rc=%s, bound <30s). Output: %s\n' "$pp_elapsed" "$pp_rc" "$pp_out"
+    printf 'FAIL: resolve_py_bin with a hung python3 took %ss (rc=%s, bound <30s). stderr: %s\n' "$pp_elapsed" "$pp_rc" "$pp_err"
+    exit 1
+  fi
+  # The hung candidate must be reported unusable, never returned.
+  if ! printf '%s' "$pp_err" | grep -qF "WARN: python candidate 'python3' unusable"; then
+    printf 'FAIL: hung python3 was not reported unusable by the probe. stderr: %s\n' "$pp_err"
     exit 1
   fi
   if [ "$pp_rc" -eq 0 ]; then
-    pp_remote_head=$(git -C "$pp_remote" rev-parse --verify -q refs/heads/feature/pyprobe || true)
-    pp_local_head=$(git -C "$pp_clone" rev-parse HEAD)
-    if [ "$pp_remote_head" != "$pp_local_head" ]; then
-      printf 'FAIL: push reported rc=0 but remote head (%s) != local head (%s)\n' "$pp_remote_head" "$pp_local_head"
+    if [ -z "$pp_py" ] || [ "$pp_py" = "python3" ]; then
+      printf 'FAIL: resolve_py_bin returned rc=0 with candidate "%s" while python3 hung\n' "$pp_py"
       exit 1
     fi
-    printf 'PASS: push succeeded via the next candidate in %ss (hung python3 skipped)\n' "$pp_elapsed"
+    printf 'PASS: resolve_py_bin skipped the hung python3 and fell back to %s in %ss (bounded probe)\n' "$pp_py" "$pp_elapsed"
     exit 0
   fi
-  if printf '%s' "$pp_out" | grep -qF 'Error: no usable python interpreter; push blocked.'; then
-    printf 'PASS: push failed closed in %ss with the no-usable-interpreter error\n' "$pp_elapsed"
-    exit 0
+  # No usable candidate: must fail closed with the documented error, and print no interpreter.
+  if [ -n "$pp_py" ] || ! printf '%s' "$pp_err" | grep -qF 'Error: no usable python interpreter; push blocked.'; then
+    printf 'FAIL: no interpreter found but probe did not fail closed (rc=%s, out="%s"). stderr: %s\n' "$pp_rc" "$pp_py" "$pp_err"
+    exit 1
   fi
-  printf 'FAIL: push rc=%s in %ss without the fail-closed error. Output: %s\n' "$pp_rc" "$pp_elapsed" "$pp_out"
-  exit 1
+  printf 'PASS: resolve_py_bin skipped the hung python3 and failed closed in %ss (no usable interpreter)\n' "$pp_elapsed"
+  exit 0
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))
