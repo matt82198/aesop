@@ -57,9 +57,13 @@ check_aesop_root_pin() {
   top=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
   [ -n "$top" ] || return 0
   _is_aesop_checkout "$top" || return 0
+  # Identity, not string equality: on Git Bash `pwd -P` maps the same directory to
+  # different strings depending on its spelling (C:/... -> /tmp/..., /c/... -> /c/...),
+  # so comparing canonical strings blocks a checkout that IS the pinned root. -ef compares
+  # device+inode and fails closed (false) when the pinned path does not exist.
+  [ "$AESOP_ROOT" -ef "$top" ] && return 0
   top_canon=$(cd -- "$top" 2>/dev/null && pwd -P) || top_canon="$top"
   pinned_canon=$(cd -- "$AESOP_ROOT" 2>/dev/null && pwd -P) || pinned_canon="$AESOP_ROOT"
-  [ "$top_canon" = "$pinned_canon" ] && return 0
   printf 'BLOCKED: the environment-pinned root (%s) disagrees with the aesop checkout being pushed (%s). Push blocked (fail-closed). Ask the orchestrator.\n' \
     "$pinned_canon" "$top_canon" >&2
   return 1
