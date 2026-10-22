@@ -81,12 +81,14 @@ run_test() {
   local test_path="$1"
   local test_name="$2"
   echo "[TEST] Running: $test_name"
-  if bash "$test_path"; then
+  local rc=0
+  bash "$test_path" || rc=$?
+  if [ "$rc" -eq 0 ]; then
     passed_tests+=("$test_name")
     echo "[PASS] $test_name"
   else
     failed_tests+=("$test_name")
-    echo "[FAIL] $test_name (exit code: $?)"
+    echo "[FAIL] $test_name (exit code: $rc)"
   fi
 }
 

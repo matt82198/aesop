@@ -42,8 +42,13 @@ publish_base_tools() {
   git -C "$base" init -q -b main
   git -C "$base" add -A
   git -C "$base" -c user.email=t@example.com -c user.name=t -c core.autocrlf=false commit -q -m base
+  # The fixture models a github.com origin: the CONFIGURED url names github.com, and
+  # insteadOf maps it onto the local base repo, so no test reaches the network. The
+  # receipt gate treats a non-github origin as having no conclusion channel.
+  local gh_url="https://github.com/example/aesop-fixture.git"
   git -C "$clone" remote remove origin >/dev/null 2>&1 || true
-  git -C "$clone" remote add origin "$base"
+  git -C "$clone" config "url.$base.insteadOf" "$gh_url"
+  git -C "$clone" remote add origin "$gh_url"
   git -C "$clone" fetch -q origin main
 }
 
@@ -1447,13 +1452,13 @@ if [ -z "$real_timeout" ]; then
   exit 1
 fi
 
-printf '\n=== Test: check_emit_receipt opts out entirely on AESOP_RECEIPT_EMIT=0 ===\n'
+printf '\n=== Test: AESOP_RECEIPT_EMIT=0 is INERT (no orchestrator-only mechanism); emission still runs ===\n'
 (
   export AESOP_ROOT="$TEST_ROOT/aesop_receipt_optout"
   mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
-  # A tool that would SUCCEED if invoked -- proves opt-out short-circuits
-  # BEFORE running it, not merely that the end result happens to be 0.
-  printf 'import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/emit_receipt.py"
+  # The tool records that it ran. AESOP_RECEIPT_EMIT=0 must NOT short-circuit it.
+  # Relative marker: the emitter runs with cwd = AESOP_ROOT (a bash /tmp path is not a Windows path for Python).
+  printf 'import sys\nopen("emit-invoked", "w").write("ran")\nsys.exit(0)\n' > "$AESOP_ROOT/tools/emit_receipt.py"
   export AESOP_RECEIPT_KEY="$AESOP_ROOT/dummy_key.pem"
   touch "$AESOP_ROOT/dummy_key.pem"
   export AESOP_RECEIPT_EMIT=0
@@ -1461,17 +1466,20 @@ printf '\n=== Test: check_emit_receipt opts out entirely on AESOP_RECEIPT_EMIT=0
   emit_fixture_base "$AESOP_ROOT"
   cd "$AESOP_ROOT" || exit 1
 
-  if ! check_emit_receipt; then
-    printf 'FAIL: check_emit_receipt must always return 0 (fail-open), even on opt-out\n'
+  if ! check_emit_receipt >/dev/null 2>&1; then
+    printf 'FAIL: emitter stub succeeded; check_emit_receipt must return 0\n'
+    exit 1
+  fi
+  if [ ! -f "$AESOP_ROOT/emit-invoked" ]; then
+    printf 'FAIL: AESOP_RECEIPT_EMIT=0 skipped emission; it must be inert and still run the emitter\n'
     exit 1
   fi
 
-  audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log" 2>/dev/null)
-  if ! printf '%s' "$audit_line" | grep -q 'receipt_emit_skipped_opted_out'; then
-    printf 'FAIL: expected receipt_emit_skipped_opted_out audit event, got: %s\n' "$audit_line"
+  if ! grep -q 'receipt_emit_optout_ignored' "$AESOP_ROOT/state/SECURITY-AUDIT.log" 2>/dev/null; then
+    printf 'FAIL: expected receipt_emit_optout_ignored audit event in the log\n'
     exit 1
   fi
-  printf 'PASS: AESOP_RECEIPT_EMIT=0 skips emission without invoking the tool\n'
+  printf 'PASS: AESOP_RECEIPT_EMIT=0 is logged as receipt_emit_optout_ignored and the emitter still runs\n'
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))
@@ -1599,20 +1607,20 @@ printf '\n=== Test: check_emit_receipt WARNs and fails open when no signing key 
   stderr_output=$( { check_emit_receipt; } 2>&1 1>/dev/null )
   exit_code=$?
 
-  if [ "$exit_code" -ne 0 ]; then
-    printf 'FAIL: check_emit_receipt must fail-open (return 0) when no key material is set\n'
+  if [ "$exit_code" -eq 0 ]; then
+    printf 'FAIL: check_emit_receipt must BLOCK (return 1) when no key material is set\n'
     exit 1
   fi
-  if ! printf '%s' "$stderr_output" | grep -qi 'WARN'; then
-    printf 'FAIL: expected a one-line WARN on stderr, got: %s\n' "$stderr_output"
+  if ! printf '%s' "$stderr_output" | grep -q 'BLOCKED: no receipt signing key material'; then
+    printf 'FAIL: expected a BLOCKED line naming the missing key material, got: %s\n' "$stderr_output"
     exit 1
   fi
   audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log" 2>/dev/null)
-  if ! printf '%s' "$audit_line" | grep -q 'receipt_emit_skipped_no_key_material'; then
-    printf 'FAIL: expected receipt_emit_skipped_no_key_material audit event, got: %s\n' "$audit_line"
+  if ! printf '%s' "$audit_line" | grep -q 'receipt_emit_no_key_material'; then
+    printf 'FAIL: expected receipt_emit_no_key_material audit event, got: %s\n' "$audit_line"
     exit 1
   fi
-  printf 'PASS: no key material WARNs and fails open\n'
+  printf 'PASS: no key material blocks the push (fail closed) and is logged\n'
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))
@@ -1656,7 +1664,7 @@ else
   test_failed=$((test_failed + 1))
 fi
 
-printf '\n=== Test: check_emit_receipt WARNs and fails open when gh is unavailable ===\n'
+printf '\n=== Test: check_emit_receipt BLOCKS (fail closed) when gh is unavailable ===\n'
 (
   export AESOP_ROOT="$TEST_ROOT/aesop_receipt_no_gh"
   mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
@@ -1696,20 +1704,20 @@ printf '\n=== Test: check_emit_receipt WARNs and fails open when gh is unavailab
   stderr_output=$( { PATH="$test_path" check_emit_receipt; } 2>&1 1>/dev/null )
   exit_code=$?
 
-  if [ "$exit_code" -ne 0 ]; then
-    printf 'FAIL: check_emit_receipt must fail-open (return 0) when gh is unavailable\n'
+  if [ "$exit_code" -eq 0 ]; then
+    printf 'FAIL: check_emit_receipt must BLOCK (return 1) when gh is unavailable\n'
     exit 1
   fi
-  if ! printf '%s' "$stderr_output" | grep -qi 'WARN'; then
-    printf 'FAIL: expected a one-line WARN on stderr, got: %s\n' "$stderr_output"
+  if ! printf '%s' "$stderr_output" | grep -q 'BLOCKED: gh CLI not found'; then
+    printf 'FAIL: expected a BLOCKED line on stderr, got: %s\n' "$stderr_output"
     exit 1
   fi
   audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log" 2>/dev/null)
-  if ! printf '%s' "$audit_line" | grep -q 'receipt_emit_skipped_no_gh'; then
-    printf 'FAIL: expected receipt_emit_skipped_no_gh audit event, got: %s\n' "$audit_line"
+  if ! printf '%s' "$audit_line" | grep -q 'receipt_emit_no_gh'; then
+    printf 'FAIL: expected receipt_emit_no_gh audit event, got: %s\n' "$audit_line"
     exit 1
   fi
-  printf 'PASS: missing gh WARNs and fails open\n'
+  printf 'PASS: missing gh blocks the push (fail closed) and is logged\n'
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))
@@ -2049,22 +2057,27 @@ else
   test_failed=$((test_failed + 1))
 fi
 
-printf '\n=== Test 30: check_pyflakes_ratchet fails open when pyflakes not installed ===\n'
+printf '\n=== Test 30: check_pyflakes_ratchet BLOCKS on exit 2 (a crashed gate is not a pass) and prints the tool tail ===\n'
 (
   export AESOP_ROOT="$TEST_ROOT/aesop_pyflakes_missing"
   mkdir -p "$AESOP_ROOT/tools"
   mkdir -p "$AESOP_ROOT/state"
 
-  # Stub pyflakes_gate.py that returns 2 (pyflakes not installed / error condition)
-  printf 'import sys\nsys.exit(2)\n' > "$AESOP_ROOT/tools/pyflakes_gate.py"
+  # Stub pyflakes_gate.py that errors with exit 2 and names the cause on its output.
+  printf 'import sys\nprint("pyflakes: No module named pyflakes")\nsys.exit(2)\n' > "$AESOP_ROOT/tools/pyflakes_gate.py"
 
   make_clone_with_base "$TEST_ROOT/pyflakes_t30_clone" "$AESOP_ROOT/tools"
   cd "$TEST_ROOT/pyflakes_t30_clone" || exit 1
-  if ! check_pyflakes_ratchet >/dev/null 2>&1; then
-    printf 'FAIL: check_pyflakes_ratchet should fail-open when pyflakes is missing (return 0)\n'
+  if check_pyflakes_ratchet >/dev/null 2>&1; then
+    printf 'FAIL: check_pyflakes_ratchet must BLOCK (return 1) on exit 2\n'
     exit 1
   fi
-  printf 'PASS: check_pyflakes_ratchet fails open when pyflakes is missing\n'
+  stderr_output=$( { check_pyflakes_ratchet >/dev/null; } 2>&1 )
+  if ! printf '%s' "$stderr_output" | grep -q 'No module named pyflakes'; then
+    printf 'FAIL: block must print the tool output tail, got: %s\n' "$stderr_output"
+    exit 1
+  fi
+  printf 'PASS: check_pyflakes_ratchet blocks on exit 2 and prints the tool tail\n'
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))
@@ -2462,6 +2475,11 @@ printf '\n=== Test: a HUNG python3 on PATH fails fast (bounded probe), never a m
   git -C "$pp_clone" config user.name t
   git -C "$pp_clone" config core.autocrlf false
   git -C "$REPO_ROOT" archive HEAD | tar -x -C "$pp_clone"
+  # Receipt emission is not under test here: stub the emitter green (the real
+  # matrix would run for minutes; AESOP_RECEIPT_EMIT=0 is inert) and use a dummy key.
+  # The stub keeps the real file's INDEX: line (tools/INDEX.md must stay in sync with it).
+  printf '#!/usr/bin/env python3\n"""\n%s\n"""\nimport sys\nsys.exit(0)\n' "$(sed -n 3p "$REPO_ROOT/tools/emit_receipt.py")" > "$pp_clone/tools/emit_receipt.py"
+  touch "$pp_root/dummy_key.pem"
   git -C "$pp_clone" add -A
   git -C "$pp_clone" commit -q -m trunk
   git -C "$pp_clone" remote add origin "$pp_remote"
@@ -2482,7 +2500,7 @@ printf '\n=== Test: a HUNG python3 on PATH fails fast (bounded probe), never a m
   # substitution pipe open until it exits. Stubs are killed right after the push.
   pp_start=$(date +%s)
   (cd "$pp_clone" && PATH="$pp_stub_bin:$PATH" AESOP_ROOT="$pp_clone" \
-    AESOP_STATE_ROOT="$pp_root/state" AESOP_RECEIPT_EMIT=0 \
+    AESOP_STATE_ROOT="$pp_root/state" AESOP_RECEIPT_KEY="$pp_root/dummy_key.pem" \
     timeout 40 git push -q origin HEAD:refs/heads/feature/pyprobe </dev/null >"$pp_root/push.out" 2>&1)
   pp_rc=$?
   pp_elapsed=$(( $(date +%s) - pp_start ))
@@ -2725,8 +2743,12 @@ printf '\n=== Backup-ref scope: crash-backup refs skip metrics + test-coverage g
   # End-to-end through main(): metrics_gate.py and verify_test_coverage.py are
   # stubbed to FAIL; secret_scan.py is stubbed per-case. Everything else passes.
   export AESOP_ROOT="$TEST_ROOT/aesop_backup_ref"
-  export AESOP_RECEIPT_EMIT=0  # receipt gate is out of scope here (documented opt-out)
+  # Receipt emission is out of scope here: stub the emitter green and supply key
+  # material (AESOP_RECEIPT_EMIT=0 is inert, and a missing key/emitter blocks).
   mkdir -p "$AESOP_ROOT/state" "$AESOP_ROOT/tools"
+  printf 'import sys\nsys.exit(0)\n' > "$AESOP_ROOT/tools/emit_receipt.py"
+  export AESOP_RECEIPT_KEY="$AESOP_ROOT/dummy_key.pem"
+  touch "$AESOP_ROOT/dummy_key.pem"
   printf '{"violations": {}}\n' > "$AESOP_ROOT/.subprocess-guard-baseline.json"
   py_bin="python3"
   command -v python3 >/dev/null 2>&1 || py_bin="python"
@@ -2821,6 +2843,56 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+printf '\n=== Audit: a busy lock SPILLS the record; the next holder merges it in order and verifies ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_spill"
+  mkdir -p "$AESOP_ROOT/state"
+  log_event "seed_1" >/dev/null 2>&1
+  lock="$AESOP_ROOT/state/.audit-log-lock"
+  log="$AESOP_ROOT/state/SECURITY-AUDIT.log"
+  # A lock dir with no pid file is never stale: acquire gives up after ~10s.
+  mkdir "$lock"
+  log_block "spilled_1" >/dev/null 2>&1
+  log_block "spilled_2" >/dev/null 2>&1
+  rmdir "$lock"
+  spill_count=$(ls "$AESOP_ROOT/state"/audit-spill-* 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$spill_count" -ne 1 ]; then
+    printf 'FAIL: busy-lock records must spill to one per-process file, found %s spill file(s)\n' "$spill_count"
+    exit 1
+  fi
+  if grep -q 'spilled_1' "$log"; then
+    printf 'FAIL: a spilled record must not reach the log before a lock holder merges it\n'
+    exit 1
+  fi
+  log_event "after_release" >/dev/null 2>&1
+  leftover=$(ls "$AESOP_ROOT/state"/audit-spill-* 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$leftover" -ne 0 ]; then
+    printf 'FAIL: spill file must be removed once merged (found %s)\n' "$leftover"
+    exit 1
+  fi
+  for want in seed_1 spilled_1 spilled_2 after_release; do
+    if ! grep -q "$want" "$log"; then
+      printf 'FAIL: record %s was dropped (not in merged log)\n' "$want"
+      exit 1
+    fi
+  done
+  order=$(grep -n -o -E 'seed_1|spilled_1|spilled_2|after_release' "$log" | cut -d: -f2 | tr '\n' ' ')
+  if [ "$order" != "seed_1 spilled_1 spilled_2 after_release " ]; then
+    printf 'FAIL: merged order wrong: %s\n' "$order"
+    exit 1
+  fi
+  if ! verify_audit_log "$log" >/dev/null 2>&1; then
+    printf 'FAIL: sidecar verification failed on the merged log\n'
+    exit 1
+  fi
+  printf 'PASS: busy lock spilled 2 records; merged in order (%s); no drops; chain verified\n' "$order"
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 # ---------------------------------------------------------------------------
 # Escape hardening: AESOP_ROOT pin, escape-free block messages, escape-rate alert.
 # Table-driven. Each row names a fixture and the outcome it must produce.
@@ -2902,16 +2974,174 @@ printf '\n=== Test: no block message carries an AESOP_* assignment or --no-verif
   msg_gate_base() {
     ( cd "$msgs_repo" && AESOP_ROOT="$msgs_repo" gate_base_block "x" ) 2>&1 >/dev/null
   }
-  # check_emit_receipt messages are owned by the receipt lane; its row is added with its edit.
-  for fn in msg_pin msg_tool_missing msg_no_python msg_gate_base; do
+  # Receipt red block: a stub emitter that exits 3 (a required part is red) must block
+  # with a message that names no escape variable and ends by asking the orchestrator.
+  msg_receipt_red() {
+    local rr="$TEST_ROOT/msg_receipt_red"
+    rm -rf "$rr"
+    mkdir -p "$rr/tools" "$rr/state"
+    printf 'import sys\nsys.exit(3)\n' > "$rr/tools/emit_receipt.py"
+    touch "$rr/dummy_key.pem"
+    emit_fixture_base "$rr"
+    ( cd "$rr" && AESOP_ROOT="$rr" AESOP_RECEIPT_KEY="$rr/dummy_key.pem" check_emit_receipt ) 2>&1 >/dev/null
+  }
+  for fn in msg_pin msg_tool_missing msg_no_python msg_gate_base msg_receipt_red; do
     text=$("$fn")
     [ -n "$text" ] || escape_fail "$fn produced no block message; cannot prove it is clean"
     printf '%s\n' "$text" | grep -E -q 'BLOCKED|FATAL|Error|blocked' || escape_fail "$fn did not emit a block message (got: $text)"
-    if printf '%s\n' "$text" | grep -E -q 'AESOP_[A-Z_]+=|--no-verify'; then
+    if printf '%s\n' "$text" | grep -E -q 'AESOP_[A-Z_]+=|--no-verify|AESOP_PUSH_RED|AESOP_RECEIPT_TIMEOUT|AESOP_RECEIPT_EMIT'; then
       escape_fail "$fn block message carries a bypass hint: $text"
+    fi
+    if [ "$fn" = msg_receipt_red ]; then
+      printf '%s\n' "$text" | grep -q 'Ask the orchestrator\.$' || escape_fail "$fn must end by asking the orchestrator (got: $text)"
     fi
     printf 'PASS [message %s]: no AESOP_* assignment or --no-verify\n' "$fn"
   done
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Headroom: exit 2 gets one fetch and a re-run, then BLOCKS (never fail-open) ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_headroom_unread"
+  mkdir -p "$AESOP_ROOT/tools"
+  # Stub lint: exit 2 (union unreadable) and count invocations (relative path: cwd = clone).
+  printf 'import sys\nopen("lint-runs", "a").write("x")\nprint("headroom: union unreadable")\nsys.exit(2)\n' > "$AESOP_ROOT/tools/claudemd_lint.py"
+  clone="$TEST_ROOT/headroom_unread_clone"
+  make_clone_with_base "$clone" "$AESOP_ROOT/tools"
+  export AESOP_ROOT="$clone"
+  mkdir -p "$AESOP_ROOT/state"
+  cd "$clone" || exit 1
+  counter="$clone/lint-runs"
+  stderr_output=$( { check_claudemd_headroom; } 2>&1 1>/dev/null )
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf 'FAIL: exit 2 must BLOCK (return 1), got rc 0\n'
+    exit 1
+  fi
+  runs=$(wc -c < "$counter" 2>/dev/null | tr -d ' ')
+  if [ "$runs" != "2" ]; then
+    printf 'FAIL: expected exactly one fetch then one re-run (2 lint runs), got %s\n' "$runs"
+    exit 1
+  fi
+  printf '%s' "$stderr_output" | grep -q 'union unreadable' || { printf 'FAIL: block must print the tool tail\n'; exit 1; }
+  audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log" 2>/dev/null)
+  printf '%s' "$audit_line" | grep -q 'claudemd_headroom_unreadable_blocked' || { printf 'FAIL: missing block audit event: %s\n' "$audit_line"; exit 1; }
+  printf 'PASS: headroom exit 2 -> one fetch, one re-run, then BLOCKED with tool tail\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Headroom: AESOP_HEADROOM_BASE_REF naming the branch head is REFUSED ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_headroom_self"
+  mkdir -p "$AESOP_ROOT/tools"
+  printf 'import sys\nopen("lint-runs", "a").write("x")\nsys.exit(0)\n' > "$AESOP_ROOT/tools/claudemd_lint.py"
+  clone="$TEST_ROOT/headroom_self_clone"
+  make_clone_with_base "$clone" "$AESOP_ROOT/tools"
+  export AESOP_ROOT="$clone"
+  mkdir -p "$AESOP_ROOT/state"
+  cd "$clone" || exit 1
+  counter="$clone/lint-runs"
+  export AESOP_HEADROOM_BASE_REF=HEAD
+  stderr_output=$( { check_claudemd_headroom; } 2>&1 1>/dev/null )
+  rc=$?
+  unset AESOP_HEADROOM_BASE_REF
+  if [ "$rc" -eq 0 ]; then
+    printf 'FAIL: a base ref equal to the branch head must be refused (rc 1), got rc 0\n'
+    exit 1
+  fi
+  if [ -s "$counter" ]; then
+    printf 'FAIL: the self-referencing preview must be refused before the lint runs\n'
+    exit 1
+  fi
+  audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log" 2>/dev/null)
+  printf '%s' "$audit_line" | grep -q 'claudemd_headroom_base_is_branch_head' || { printf 'FAIL: missing refusal audit event: %s\n' "$audit_line"; exit 1; }
+  printf 'PASS: AESOP_HEADROOM_BASE_REF=HEAD refused (branch head) before any preview\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Linux shape (no WSL): a push touching covered paths BLOCKS; an uncovered push passes ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_shape"
+  mkdir -p "$AESOP_ROOT/tools"
+  # Stub gate = the REAL linux_shape_check.py, with the host forced to Windows and WSL absent,
+  # loaded by path under another module name so the probe's import still resolves the real rule.
+  shape_src="$REPO_ROOT/tools/linux_shape_check.py"
+  command -v cygpath >/dev/null 2>&1 && shape_src=$(cygpath -m "$shape_src")
+  printf 'import sys\nimport importlib.util\nspec = importlib.util.spec_from_file_location("real_shape", "%s")\nreal = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(real)\nreal.host_is_windows = lambda: True\nreal.wsl_status = lambda: real.WSL_ABSENT\nget_changed_files = real.get_changed_files\nshould_check_linux_shape = real.should_check_linux_shape\nif __name__ == "__main__":\n    sys.exit(real.main())\n' "$shape_src" > "$AESOP_ROOT/tools/linux_shape_check.py"
+  clone="$TEST_ROOT/shape_clone"
+  make_clone_with_base "$clone" "$AESOP_ROOT/tools"
+  export AESOP_ROOT="$clone"
+  mkdir -p "$AESOP_ROOT/state"
+  cd "$clone" || exit 1
+  remote_sha=$(git -C "$clone" rev-parse main)
+
+  # Covered: a shell script on the branch.
+  mkdir -p hooks && printf 'echo covered\n' > hooks/covered.sh
+  git add -A && git -c user.email=t@example.com -c user.name=t commit -q -m covered
+  local_sha=$(git rev-parse HEAD)
+  stderr_output=$( { printf 'refs/heads/feature/test %s refs/heads/feature/test %s\n' "$local_sha" "$remote_sha" | check_linux_shape; } 2>&1 1>/dev/null )
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf 'FAIL: covered paths with WSL absent must BLOCK, got rc 0 (%s)\n' "$stderr_output"
+    exit 1
+  fi
+  printf '%s' "$stderr_output" | grep -q 'BLOCKED: this push touches Linux-shape paths' || { printf 'FAIL: missing block line: %s\n' "$stderr_output"; exit 1; }
+  audit_line=$(tail -n 1 "$AESOP_ROOT/state/SECURITY-AUDIT.log" 2>/dev/null)
+  printf '%s' "$audit_line" | grep -q 'linux_shape_wsl_absent_covered_blocked' || { printf 'FAIL: missing block audit event: %s\n' "$audit_line"; exit 1; }
+
+  # Uncovered: docs only, on a fresh branch from the covered tip.
+  git reset -q --hard "$remote_sha"
+  mkdir -p docs && printf 'notes\n' > docs/notes.md
+  git add -A && git -c user.email=t@example.com -c user.name=t commit -q -m docs
+  local_sha=$(git rev-parse HEAD)
+  if ! printf 'refs/heads/feature/test %s refs/heads/feature/test %s\n' "$local_sha" "$remote_sha" | check_linux_shape >/dev/null 2>&1; then
+    printf 'FAIL: an uncovered (docs-only) push must not be blocked by the WSL absence\n'
+    exit 1
+  fi
+  printf 'PASS: WSL absent: covered paths BLOCK; uncovered docs-only push passes\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Linux shape (no WSL): a coverage probe that cannot answer BLOCKS (no fail-open on error) ===\n'
+(
+  export AESOP_ROOT="$TEST_ROOT/aesop_shape_probe_err"
+  mkdir -p "$AESOP_ROOT/tools"
+  # The gate run prints the WSL NOTICE, but the module exposes no coverage rule, so the
+  # probe (which imports this module) errors. The hook must block, not read that as "not covered".
+  printf 'import sys\nif __name__ == "__main__":\n    print("NOTICE: WSL unavailable; Linux shape check skipped (CI gate remains)")\n    sys.exit(0)\n' > "$AESOP_ROOT/tools/linux_shape_check.py"
+  clone="$TEST_ROOT/shape_probe_err_clone"
+  make_clone_with_base "$clone" "$AESOP_ROOT/tools"
+  export AESOP_ROOT="$clone"
+  mkdir -p "$AESOP_ROOT/state"
+  cd "$clone" || exit 1
+  remote_sha=$(git -C "$clone" rev-parse main)
+  mkdir -p hooks && printf 'echo x\n' > hooks/probe.sh
+  git add -A && git -c user.email=t@example.com -c user.name=t commit -q -m probe
+  local_sha=$(git rev-parse HEAD)
+  stderr_output=$( { printf 'refs/heads/feature/test %s refs/heads/feature/test %s\n' "$local_sha" "$remote_sha" | check_linux_shape; } 2>&1 1>/dev/null )
+  rc=$?
+  if [ "$rc" -eq 0 ]; then
+    printf 'FAIL: a coverage probe error must BLOCK (fail closed), got rc 0 (%s)\n' "$stderr_output"
+    exit 1
+  fi
+  printf '%s' "$stderr_output" | grep -q 'could not decide' || { printf 'FAIL: missing probe-error block line: %s\n' "$stderr_output"; exit 1; }
+  printf 'PASS: coverage probe error blocks the push (fail closed)\n'
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))
@@ -2950,6 +3180,107 @@ old_events_outside_window|0||4|0'
     [ "$stderr_alerts" -eq "$want" ] || escape_fail "escape row $label: $stderr_alerts ALERT stderr lines, want $want"
     printf 'PASS [escape %s]: %s ALERT line(s)\n' "$label" "$alerts"
   done <<< "$esc_rows"
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Headroom remote cases: an EMPTY remote passes (nothing to merge against); a remote with refs but no trunk DENIES ===\n'
+(
+  hr_root="$TEST_ROOT/hr_remote_cases"
+  rm -rf "$hr_root"
+  mkdir -p "$hr_root/clone/tools" "$hr_root/clone/state"
+  hr_clone="$hr_root/clone"
+  git init -q -b feature/test "$hr_clone"
+  git -C "$hr_clone" config user.email t@example.com
+  git -C "$hr_clone" config user.name t
+  printf 'import sys\nsys.exit(2)\n' > "$hr_clone/tools/claudemd_lint.py"
+  : > "$hr_clone/tools/INDEX.md"
+  printf '{}\n' > "$hr_clone/.pyflakes-baseline.json"
+  printf '{"violations": {}}\n' > "$hr_clone/.subprocess-guard-baseline.json"
+  git -C "$hr_clone" add -A
+  git -C "$hr_clone" commit -q -m seed
+  git init -q --bare "$hr_root/remote.git"
+  git -C "$hr_clone" remote add origin "$hr_root/remote.git"
+  export AESOP_ROOT="$hr_clone"
+  cd "$hr_clone" || exit 1
+
+  # Case A: the remote has NO branches. The union is the pushed tree: pass.
+  if ! check_claudemd_headroom >/dev/null 2>&1; then
+    printf 'FAIL: an empty remote (no branches) must pass the headroom gate\n'
+    exit 1
+  fi
+  grep -q 'claudemd_headroom_empty_remote_pass' "$hr_clone/state/SECURITY-AUDIT.log" || { printf 'FAIL: empty-remote pass not audited\n'; exit 1; }
+
+  # Case B: the remote has refs (a branch) but no readable trunk. Deny, naming the case.
+  git -C "$hr_clone" push -q origin HEAD:refs/heads/feature/other >/dev/null 2>&1
+  case_err=$( { check_claudemd_headroom; } 2>&1 >/dev/null ) && {
+    printf 'FAIL: a remote with refs but no trunk must DENY the headroom gate\n'
+    exit 1
+  }
+  printf '%s' "$case_err" | grep -q 'case: remote-has-refs' || { printf 'FAIL: deny text must name case remote-has-refs; got: %s\n' "$case_err"; exit 1; }
+  printf 'PASS: empty remote passes (audited); remote with refs but no trunk denies (case named)\n'
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
+printf '\n=== Receipt remote cases: an EMPTY origin is bootstrap (passes, audited); origin with refs and no readable conclusion DENIES ===\n'
+(
+  rr_root="$TEST_ROOT/receipt_remote_cases"
+  rm -rf "$rr_root"
+  mkdir -p "$rr_root/clone/tools" "$rr_root/clone/state"
+  rr_clone="$rr_root/clone"
+  git init -q -b feature/test "$rr_clone"
+  git -C "$rr_clone" config user.email t@example.com
+  git -C "$rr_clone" config user.name t
+  # The emitter exits 2 (no readable conclusion). Case A must never reach it.
+  printf 'import sys\nsys.exit(2)\n' > "$rr_clone/tools/emit_receipt.py"
+  : > "$rr_clone/tools/INDEX.md"
+  printf '{}\n' > "$rr_clone/.pyflakes-baseline.json"
+  printf '{"violations": {}}\n' > "$rr_clone/.subprocess-guard-baseline.json"
+  touch "$rr_clone/dummy_key.pem"
+  git -C "$rr_clone" add -A
+  git -C "$rr_clone" commit -q -m seed
+  git init -q --bare "$rr_root/remote.git"
+  git -C "$rr_clone" remote add origin "$rr_root/remote.git"
+  export AESOP_ROOT="$rr_clone"
+  export AESOP_RECEIPT_KEY="$rr_clone/dummy_key.pem"
+  cd "$rr_clone" || exit 1
+
+  # The github.com origin is a URL that insteadOf maps to the local bare remote (no network).
+  rr_gh_url="https://github.com/example/fixture.git"
+  git -C "$rr_clone" config "url.$rr_root/remote.git.insteadOf" "$rr_gh_url"
+  git -C "$rr_clone" remote set-url origin "$rr_gh_url"
+
+  # Case A: github origin with NO branches. Bootstrap: passes, and the audit row names it.
+  if ! check_emit_receipt >/dev/null 2>&1; then
+    printf 'FAIL: an empty github origin must pass the receipt gate (bootstrap)\n'
+    exit 1
+  fi
+  grep -q 'receipt_emit_empty_remote_bootstrap' "$rr_clone/state/SECURITY-AUDIT.log" || { printf 'FAIL: empty-origin bootstrap not audited\n'; exit 1; }
+
+  # Case B: github origin with a branch and no readable conclusion. Deny, naming the case.
+  git -C "$rr_clone" push -q "$rr_root/remote.git" HEAD:refs/heads/feature/other >/dev/null 2>&1
+  rr_err=$( { check_emit_receipt; } 2>&1 >/dev/null ) && {
+    printf 'FAIL: github origin with refs and no readable conclusion must DENY the receipt gate\n'
+    exit 1
+  }
+  printf '%s' "$rr_err" | grep -q 'case: remote-has-refs' || { printf 'FAIL: deny text must name case remote-has-refs; got: %s\n' "$rr_err"; exit 1; }
+
+  # Case C: a fixture remote (local path, NOT github.com) with refs, with NO signing key and
+  # HOME empty, as on CI. No conclusion channel exists: passes, audited as non-github.
+  git -C "$rr_clone" remote set-url origin "$rr_root/remote.git"
+  if ! ( unset AESOP_RECEIPT_KEY; export HOME="$rr_root/nohome"; mkdir -p "$HOME"; check_emit_receipt >/dev/null 2>&1 ); then
+    printf 'FAIL: a non-github fixture remote must pass the receipt gate with no key material\n'
+    exit 1
+  fi
+  grep -q 'receipt_emit_non_github_origin' "$rr_clone/state/SECURITY-AUDIT.log" || { printf 'FAIL: non-github pass not audited\n'; exit 1; }
+  printf 'PASS: github empty origin passes (audited); github origin with refs and no conclusion denies (case named); non-github fixture remote passes without key (audited)\n'
 )
 if [ $? -eq 0 ]; then
   test_passed=$((test_passed + 1))
