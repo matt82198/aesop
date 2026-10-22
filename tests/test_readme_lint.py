@@ -20,8 +20,10 @@ GATE = os.path.join(REPO, 'tools', 'readme_lint.py')
 FENCE = '`' * 3
 MERMAID_OPEN = FENCE + 'mermaid'
 MERMAID_BODY = 'flowchart LR\n  A["alpha"] --> B["beta"]'
-IMAGE_LINE = ('![Kernel boundary](https://raw.githubusercontent.com/matt82198/aesop'
-              '/main/docs/img/kernel-boundary.svg)')
+IMAGE_LINE = ('![Kernel boundary](https://cdn.jsdelivr.net/npm/@matt82198/aesop@0.10.4'
+              '/docs/img/kernel-boundary.svg)')
+RAW_IMAGE_LINE = ('![Kernel boundary](https://raw.githubusercontent.com/matt82198/aesop'
+                  '/main/docs/img/kernel-boundary.svg)')
 
 
 def _sha(body):
@@ -98,6 +100,42 @@ class ReadmeLintTest(unittest.TestCase):
         code, out = self._run()
         self.assertEqual(code, 1, out)
         self.assertIn('SVG missing', out)
+
+    def test_raw_githubusercontent_image_fails(self):
+        self._write('docs/img/kernel-boundary.svg', _svg(MERMAID_BODY))
+        self._write('README.md', RAW_IMAGE_LINE + '\n')
+        code, out = self._run()
+        self.assertEqual(code, 1, out)
+        self.assertIn('raw.githubusercontent.com', out)
+
+    def test_raw_githubusercontent_plain_link_fails(self):
+        self._write('README.md', 'see [logo](https://raw.githubusercontent.com/o/r/main/x.png)\n')
+        code, out = self._run()
+        self.assertEqual(code, 1, out)
+        self.assertIn('raw.githubusercontent.com', out)
+
+    def test_github_blob_markdown_image_fails(self):
+        self._write('README.md', '![clip](https://github.com/matt82198/aesop/blob/main/assets/x.gif)\n')
+        code, out = self._run()
+        self.assertEqual(code, 1, out)
+        self.assertIn('blob/raw', out)
+
+    def test_github_raw_html_img_src_fails(self):
+        self._write('README.md', '<img src="https://github.com/matt82198/aesop/raw/main/x.png" alt="x">\n')
+        code, out = self._run()
+        self.assertEqual(code, 1, out)
+        self.assertIn('blob/raw', out)
+
+    def test_github_blob_plain_link_is_not_an_image(self):
+        self._write('README.md', '[License](https://github.com/matt82198/aesop/blob/main/LICENSE)\n')
+        code, out = self._run()
+        self.assertEqual(code, 0, out)
+
+    def test_npm_cdn_image_passes(self):
+        self._write('docs/img/kernel-boundary.svg', _svg(MERMAID_BODY))
+        self._write('README.md', IMAGE_LINE + '\n')
+        code, out = self._run()
+        self.assertEqual(code, 0, out)
 
     def test_repo_readme_passes(self):
         proc = subprocess.run(
