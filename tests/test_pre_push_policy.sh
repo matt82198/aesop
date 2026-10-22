@@ -2915,8 +2915,13 @@ plain_repo_other_root|plain|empty|0'
     rc=$?
     [ "$rc" -eq "$want" ] || escape_fail "pin row $label: check_aesop_root_pin rc=$rc, want $want"
     if [ "$want" -eq 1 ]; then
-      grep -q -- "$repo" "$TEST_ROOT/pin_$label/err.txt" || escape_fail "pin row $label: block message does not name the toplevel path"
-      grep -q -- "$pinned" "$TEST_ROOT/pin_$label/err.txt" || escape_fail "pin row $label: block message does not name the pinned path"
+      # The policy prints each path canonicalised with `cd -- DIR && pwd -P` (see
+      # check_aesop_root_pin). On Git Bash a C:/ TMPDIR canonicalises to /tmp/...,
+      # so expect the same canonical form the script prints, not the raw fixture string.
+      repo_canon=$(cd -- "$repo" && pwd -P)
+      pinned_canon=$(cd -- "$pinned" && pwd -P)
+      grep -qF -- "$repo_canon" "$TEST_ROOT/pin_$label/err.txt" || escape_fail "pin row $label: block message does not name the toplevel path (want $repo_canon)"
+      grep -qF -- "$pinned_canon" "$TEST_ROOT/pin_$label/err.txt" || escape_fail "pin row $label: block message does not name the pinned path (want $pinned_canon)"
     fi
     printf 'PASS [pin %s]: check_aesop_root_pin rc=%s\n' "$label" "$rc"
   done <<< "$pin_rows"
