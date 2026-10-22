@@ -109,6 +109,7 @@ Four rules:
   resolving any merge conflict, run `python tools/pr_symbol_survival_check.py --base <base> --head
   <head>` (Guardrail G13) before pushing.
 - **On receipt-gated repos (aesop), never update a branch with GitHub's update-branch.** That covers `gh api .../update-branch` and `gh pr update-branch`: the merge commit is authored by GitHub and no box ran the gates on it, so it carries no receipt. Merge `origin/HEAD` in your own worktree and push, so the pre-push hook emits the receipt; a no-op push also emits one if the head is already current. Keyrun has no receipt check, so update-branch is fine there.
+  On matt82198/aesop the orchestrator never calls update-branch for an aesop PR either. A behind-main aesop PR is brought forward by its lane: `git fetch origin && git merge origin/main` in its own worktree, resolve conflicts three-way (see the bullet above on merge conflicts), re-run the gates, then push. Memory: aesop-prs-never-update-branch (PR #1268).
 - **Lanes cannot force-push (hook-blocked).** Recover a dirty PR with `git merge origin/HEAD` (the default branch, see section 4) into
   your branch, keeping BOTH intents (never `checkout --ours/--theirs` on code or docs), regenerate
   registered generated artifacts (`python tools/gen_tool_index.py --regenerate`), run `python
@@ -166,7 +167,8 @@ Four rules:
 - A commit in claude-scripts needs `python ~/scripts/knowledge_tree.py --write --root <wt>` first, and a `tools/*.js` or `tools/*.py` change in aesop needs a tools/CLAUDE.md entry plus `python tools/gen_tool_index.py --regenerate`, pushed with the documented generated-artifact shape (discovery 2026-10-21).
 - pwsh is not on the Bash PATH on this box, so run fastcheck as `cd <wt> && powershell -NoProfile -ExecutionPolicy Bypass -File tools/fastcheck.ps1 -All`, and fastcheck skips tools/Keyrun.Playtest.Tests, so run that project directly when touching it (discovery 2026-10-21).
 - Keyrun content lives in two trees, game/content/data (layout, forces, enemies/*.json) and repo-root content/data/dungeons, the sim is under game/sim/Keyrun.Sim, and a Godot-bound file (`using Godot;`) is never compiled by a test project, so a view-model seam goes in a Godot-free file linked into Keyrun.Sim.Tests.csproj (discovery 2026-10-21).
-- A hook change in claude-config needs an evidence commit with a Hook-Proof trailer `red=<failed>/<total> green=<total>/<total>` (format in scripts/hook_removal_check.py), and the base branch there is master (discovery 2026-10-21).
+- A hook change in claude-config needs an evidence commit with a Hook-Proof trailer in exactly this shape: `Hook-Proof: hooks/<name>.test.mjs red=N/M green=M/M`, where N/M is the failing count on the red run before the fix and M/M the green run after. The `hooks/` prefix and both counts are required; `Hook-Proof: <name>.test.mjs ...` without the prefix is rejected by the pre-push hook. The base branch there is master (discovery 2026-10-21).
+- A file listed in claude-scripts' LOOP-MANIFEST.json needs the same kind of evidence commit with `Loop-Proof: tests/<file>.py red=N/M green=M/M`, in the same red-before, green-after form.
 
 ## 4a. Before you push — ordered self-checks
 
