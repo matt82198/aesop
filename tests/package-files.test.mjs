@@ -40,3 +40,19 @@ test('npm package still ships the MCP server entry point alongside the helper', 
   const files = packedFilePaths();
   assert.ok(files.has('mcp/server.mjs'), 'mcp/server.mjs must remain in the npm pack file list');
 });
+
+// Provenance contract: the provenance receipt must verify offline from the installed
+// package. The receipt, the subject doc and the emitter are already packed; the registered
+// public keys under tools/receipt_pubkeys/ must be packed too, or `--verify` exits 2
+// ("no registered public keys in tools/receipt_pubkeys").
+test('npm package ships the provenance receipt, its subject, the emitter and a registered pubkey', () => {
+  const files = packedFilePaths();
+  assert.ok(files.has('docs/PROVENANCE.md'), 'docs/PROVENANCE.md must be in the npm pack file list');
+  assert.ok(files.has('docs/PROVENANCE.receipt.json'), 'docs/PROVENANCE.receipt.json must be in the npm pack file list');
+  assert.ok(files.has('tools/emit_provenance_receipt.py'), 'tools/emit_provenance_receipt.py must be in the npm pack file list');
+  const pubkeys = [...files].filter((p) => p.startsWith('tools/receipt_pubkeys/') && p.endsWith('.pub'));
+  assert.ok(
+    pubkeys.length >= 1,
+    'no tools/receipt_pubkeys/*.pub in the npm pack file list; add "tools/receipt_pubkeys/*.pub" to package.json files'
+  );
+});
