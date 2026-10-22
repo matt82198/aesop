@@ -2519,6 +2519,51 @@ else
   test_failed=$((test_failed + 1))
 fi
 
+printf '\n=== Test: a FAST python3 on PATH is accepted by the bounded probe with no unusable WARN (no-hang control for resolve_py_bin) ===\n'
+(
+  nh_root="$TEST_ROOT/pyprobe_nohang"
+  nh_stub_bin="$nh_root/stub-bin"
+  rm -rf "$nh_root"
+  mkdir -p "$nh_stub_bin"
+
+  # Stub python3 that answers the probe's `-c "import sys"` immediately and succeeds.
+  printf '#!/bin/sh\nexit 0\n' > "$nh_stub_bin/python3"
+  chmod +x "$nh_stub_bin/python3"
+
+  # Same probe-only measurement as the hung case: clear the per-push memo and put the
+  # fast stub first on PATH. Only resolve_py_bin is timed, never a whole push.
+  unset _AESOP_PY_BIN
+  nh_stub_bin_posix=$(cd -- "$nh_stub_bin" && pwd -P)
+  PATH="$nh_stub_bin_posix:$PATH"
+  export PATH
+  nh_start=$(date +%s)
+  nh_py=$(resolve_py_bin 2>"$nh_root/probe.err")
+  nh_rc=$?
+  nh_elapsed=$(( $(date +%s) - nh_start ))
+  nh_err=$(cat "$nh_root/probe.err")
+
+  if [ "$nh_rc" -ne 0 ] || [ "$nh_py" != "python3" ]; then
+    printf 'FAIL: resolve_py_bin with a fast python3 returned rc=%s candidate="%s" (want rc=0, candidate python3). stderr: %s\n' "$nh_rc" "$nh_py" "$nh_err"
+    exit 1
+  fi
+  # Well under the 30 s guard bound: a healthy probe must not come close to it.
+  if [ "$nh_elapsed" -ge 10 ]; then
+    printf 'FAIL: resolve_py_bin with a fast python3 took %ss (control must be well under the 30s bound)\n' "$nh_elapsed"
+    exit 1
+  fi
+  if printf '%s' "$nh_err" | grep -qF "unusable"; then
+    printf 'FAIL: fast python3 was reported unusable by the probe. stderr: %s\n' "$nh_err"
+    exit 1
+  fi
+  printf 'PASS: resolve_py_bin accepted the fast python3 in %ss with no unusable WARN (no-hang control)\n' "$nh_elapsed"
+  exit 0
+)
+if [ $? -eq 0 ]; then
+  test_passed=$((test_passed + 1))
+else
+  test_failed=$((test_failed + 1))
+fi
+
 # ===== Metrics + range gates scan the PUSHED refs read from stdin (tag-only push defect) =====
 # Defect: check_metrics() ignored stdin and ran metrics_gate.py with its default range
 # origin/main...HEAD, so a tag-only push was judged by the current branch's unpushed commits.
