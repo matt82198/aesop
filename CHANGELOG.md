@@ -29,6 +29,7 @@ Release carrying the hash-chained event store, the per-project event store plan,
 - #1269 fix(secret_scan): range scans every commit; cache removed; regex/DSN exclusions tightened; zero-file and empty-index fail closed; GIT_DIR scrubbed (audit 2026-10-22)
 - #1271 fix(secret_scan): example/test host no longer excuses a real DSN password
 - #1275 fix(pre-push): C:/ TMPDIR suite passes 78/0 (identity pin check, PATH-safe stubs)
+- (PR pending) fix(pack): the npm tarball now ships tools/receipt_pubkeys, so the provenance receipt verifies offline from the installed package (`emit_provenance_receipt.py --verify` prints `provenance receipt VALID`)
 
 ### Testing
 
