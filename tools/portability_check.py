@@ -302,7 +302,8 @@ def main():
                     for item in stale:
                         print('  STALE {0}'.format(item), file=sys.stderr)
                 print('\nFAIL: baseline mismatch. Fix new violations, then '
-                      'regenerate with --update-baseline if intentional.',
+                      'regenerate with --update-baseline if intentional. '
+                      '(docs/CI-CATALOG.md CI-A14)',
                       file=sys.stderr)
         return 0 if is_ok else 1
 
