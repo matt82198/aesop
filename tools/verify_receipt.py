@@ -85,21 +85,39 @@ def _commit_meta_from_git(repo, sha):
     return parents, name, email
 
 
-def _server_merge_suffix(repo, sha):
-    """' -- <cause>' when `sha` is a server-authored merge in `repo`, else ''.
+# Hint printed on every MISSING line. It names the receipt-less sha and its commit author so the
+# operator can tell a GitHub-authored head (no box ran the gates) from a lane-pushed one.
+MISSING_HINT = ("no receipt for this sha; if the author is GitHub (server-side branch update), "
+                "push from a receipted worktree")
 
-    Read from the local object database (`git cat-file`), never from the API: the fetch
+
+def _commit_author(repo, sha):
+    """Author name of `sha` (`git log -1 --format=%an`), or 'unknown'. Never raises."""
+    try:
+        code, out, _err = _git(repo, "log", "-1", "--format=%an", sha)
+    except Exception:  # noqa: BLE001 -- a failed author lookup is just 'unknown', never a crash
+        return "unknown"
+    return out if code == 0 and out else "unknown"
+
+
+def _missing_suffix(repo, sha):
+    """' -- head <sha> author <name> -- <hint>' for a MISSING line, plus the server-merge cause
+    when `sha` is a server-authored merge. Only the MISSING paths call this, so the hint never
+    appears on a VALID or INVALID verdict.
+
+    Read from the local object database (`git cat-file` / `git log`), never from the API: the fetch
     loop calls the API on every poll, and a per-poll commit lookup would multiply those
     calls. The object is the PR head itself, so it is present in the Action's checkout.
     Never raises: an unreadable commit simply names no cause, and the MISSING stays fail-closed.
     """
+    text = " -- head %s author %s -- %s" % (sha, _commit_author(repo, sha), MISSING_HINT)
     try:
         meta = _commit_meta_from_git(repo, sha)
     except Exception:  # noqa: BLE001 -- a failed cause lookup is just no cause, never a crash
-        return ""
+        meta = None
     if meta and server_authored_merge(*meta):
-        return " -- " + SERVER_MERGE_CAUSE
-    return ""
+        text += " -- " + SERVER_MERGE_CAUSE
+    return text
 
 
 def load_envelope(path_or_dash):
@@ -388,7 +406,7 @@ def _run_fetch_for_head(args):
             env, note = poll_receipt_for_head(args.fetch_for_head, args.repo_slug,
                                               window_s=args.fetch_window_s, interval_s=args.fetch_interval_s)
         if env is None:
-            note += _server_merge_suffix(Path(args.repo).resolve(), args.fetch_for_head)
+            note += _missing_suffix(Path(args.repo).resolve(), args.fetch_for_head)
         print(note)
         Path(args.out_found).write_text("true" if env is not None else "false", encoding="utf-8")
         if env is not None:
@@ -419,7 +437,7 @@ def main(argv=None, environ=None):
     if args.receipt != "-" and not Path(args.receipt).is_file():
         # Missing receipt is fail-closed (exit 1), distinct from an unreadable/malformed one (exit 2).
         print("MISSING receipt: no receipt file %s for head %s (%s)%s" % (
-            args.receipt, head_label, rc.CHECK_NAME, _server_merge_suffix(repo, head_label)))
+            args.receipt, head_label, rc.CHECK_NAME, _missing_suffix(repo, head_label)))
         return 1
     try:
         envelope = load_envelope(args.receipt)
@@ -429,7 +447,7 @@ def main(argv=None, environ=None):
             envelope = extract_receipt_from_comments(envelope)
         if envelope is None:
             print("MISSING receipt: no %s receipt in the supplied payload for head %s%s" % (
-                rc.CHECK_NAME, head_label, _server_merge_suffix(repo, head_label)))
+                rc.CHECK_NAME, head_label, _missing_suffix(repo, head_label)))
             return 1
     except CannotEvaluate as e:
         print("CANNOT EVALUATE: %s" % e, file=sys.stderr)

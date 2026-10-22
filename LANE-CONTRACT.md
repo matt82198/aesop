@@ -108,6 +108,7 @@ Four rules:
   `bisect_is_exhausted`, and CI stayed green because only the PR's own tests exercised them). After
   resolving any merge conflict, run `python tools/pr_symbol_survival_check.py --base <base> --head
   <head>` (Guardrail G13) before pushing.
+- **On receipt-gated repos (aesop), never update a branch with GitHub's update-branch.** That covers `gh api .../update-branch` and `gh pr update-branch`: the merge commit is authored by GitHub and no box ran the gates on it, so it carries no receipt. Merge `origin/HEAD` in your own worktree and push, so the pre-push hook emits the receipt; a no-op push also emits one if the head is already current. Keyrun has no receipt check, so update-branch is fine there.
 - **Lanes cannot force-push (hook-blocked).** Recover a dirty PR with `git merge origin/HEAD` (the default branch, see section 4) into
   your branch, keeping BOTH intents (never `checkout --ours/--theirs` on code or docs), regenerate
   registered generated artifacts (`python tools/gen_tool_index.py --regenerate`), run `python
