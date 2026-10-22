@@ -1,0 +1,38 @@
+flowchart LR
+  subgraph YOU["You provide (not in the package)"]
+    R["Your repos<br/>(repos in aesop.config.json)"]
+    B["Your brain<br/>(~/.claude: CLAUDE.md, MEMORY.md)"]
+    M["Machinery repo (optional)<br/>(CONDUCTOR_ROOT)"]
+    K["Keys and accounts<br/>(Claude Code login, gh auth)"]
+  end
+  subgraph KERNEL["Kernel (ships in @matt82198/aesop)"]
+    D["Dispatch<br/>driver/wave_loop.py"]
+    W["Workers in worktrees<br/>driver/claude_code_driver.py"]
+    G["Gates<br/>hooks/pre-push-policy.sh<br/>tools/secret_scan.py"]
+    RC["Receipts<br/>tools/emit_receipt.py"]
+    MQ["Merge<br/>tools/auto_merge.py"]
+    WD["Watchdog<br/>daemons/run-watchdog.sh"]
+    S["Durable state<br/>state_store/store.py"]
+    V["Dashboard and monitor<br/>ui/serve.py<br/>monitor/collect-signals.mjs"]
+  end
+  subgraph EX["Examples (show structure only)"]
+    X["docs/MACHINERY-MAP.md<br/>examples/first-wave-baseline/<br/>scan/fleet-scan.example.mjs"]
+  end
+  R --> D
+  B --> D
+  K --> W
+  D --> W
+  W --> G
+  G --> RC
+  RC --> MQ
+  WD --> W
+  D --> S
+  S --> V
+  M -.-> V
+
+  classDef kernel fill:#dbeafe,stroke:#1e40af,color:#111
+  classDef yours fill:#fef9c3,stroke:#854d0e,color:#111
+  classDef example fill:#f3f4f6,stroke:#6b7280,stroke-dasharray:4 3,color:#374151
+  class D,W,G,RC,MQ,WD,S,V kernel
+  class R,B,M,K yours
+  class X example

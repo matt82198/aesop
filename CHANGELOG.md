@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (None yet.)
 
+## [0.10.4] - 2026-10-22
+
+Patch release so the npm package page keeps rendering its README after the GitHub repo goes private. Every README image is now served from the published npm package through the jsDelivr CDN, pinned to this version, and the Mermaid source lives in `docs/img/kernel-boundary.mmd` instead of a README `<details>` block that npm shows as plain text.
+
+### Fixed
+
+- #1262 fix(hooks): pre-push gates pinned to the aesop checkout, escape events counted, escape assignments forbidden in dispatches
+- #1265 docs(readme): kernel-boundary Mermaid rendered to SVG and bare-fence gate added (readme_lint)
+- this release PR: npm-safe README images (jsDelivr CDN at 0.10.4), Mermaid source moved to docs/img/kernel-boundary.mmd, readme_lint rejects raw.githubusercontent.com and github.com blob/raw image URLs, package.json ships docs/img, assets/logo.png and the lens-fanout clip
+
 ## [0.10.3] - 2026-10-21
 
 This release covers 80 PRs since v0.10.2 (2026-10-18), #1174 through #1256, merged after the v0.10.2 release commit.

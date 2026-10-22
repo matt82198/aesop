@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """README Mermaid gate.
 
-INDEX: CI/publish gate: fails when README Mermaid fences ship bare (outside <details>), lack a docs/img SVG image line, or have a stale SVG (sha256 comment mismatch).
+INDEX: CI/publish gate: fails when README Mermaid fences ship bare (outside <details>), lack a docs/img SVG image line, have a stale SVG (sha256 comment mismatch), or load images from GitHub (raw.githubusercontent.com or github.com blob/raw URLs), which break once the repo is private.
 
 npm does not render Mermaid, so every ```mermaid fence in README.md must be
 paired with a rendered image that npm can show. This gate fails (exit 1) when:
@@ -12,7 +12,14 @@ paired with a rendered image that npm can show. This gate fails (exit 1) when:
      file, or that SVG does not exist;
   3. the SVG is stale: its embedded
      `<!-- mermaid-source-sha256: <hex> -->` comment does not match the sha256
-     of the fence body (or the comment is missing).
+     of the fence body (or the comment is missing);
+  4. any raw.githubusercontent.com URL appears in README.md (npm cannot load
+     it once the GitHub repo is private);
+  5. an image (markdown ![](...) or an HTML src=) points at a github.com
+     .../blob/... or .../raw/... URL, for the same reason.
+
+Images must be served from the npm package (for example the jsDelivr npm CDN,
+https://cdn.jsdelivr.net/npm/@matt82198/aesop@<version>/...), pinned to a version.
 
 Usage: python tools/readme_lint.py [--root DIR]
 Exit 0 = clean, exit 1 = violations (or README unreadable: fail closed).
@@ -28,6 +35,31 @@ IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)\)")
 SVG_HASH_RE = re.compile(r"<!--\s*mermaid-source-sha256:\s*([0-9a-f]{64})\s*-->")
 FENCE_OPEN = "```mermaid"
 FENCE_CLOSE = "```"
+RAW_GITHUB_RE = re.compile(r"raw\.githubusercontent\.com", re.IGNORECASE)
+HTML_SRC_RE = re.compile(r"""\bsrc\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
+GITHUB_BLOB_RAW_RE = re.compile(
+    r"^https?://(www\.)?github\.com/[^/]+/[^/]+/(blob|raw)/", re.IGNORECASE
+)
+
+
+def external_url_violations(text):
+    """Return violations for GitHub-hosted URLs that npm cannot rely on."""
+    violations = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if RAW_GITHUB_RE.search(line):
+            violations.append(
+                "line %d: raw.githubusercontent.com URL (npm cannot load it "
+                "once the repo is private; serve from the npm package CDN)" % lineno
+            )
+        image_urls = [m.group(1) for m in IMAGE_RE.finditer(line)]
+        image_urls += [m.group(1) for m in HTML_SRC_RE.finditer(line)]
+        for url in image_urls:
+            if GITHUB_BLOB_RAW_RE.match(url):
+                violations.append(
+                    "line %d: image served from a github.com blob/raw URL (%s); "
+                    "serve it from the npm package CDN" % (lineno, url)
+                )
+    return violations
 
 
 def mermaid_body_hash(body):
@@ -48,7 +80,7 @@ def _svg_name_from_url(url):
 
 def lint_readme(text, root):
     """Return a list of violation strings for README text under repo root."""
-    violations = []
+    violations = external_url_violations(text)
     lines = text.splitlines()
     depth = 0
     i = 0
