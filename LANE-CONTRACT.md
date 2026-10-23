@@ -609,3 +609,17 @@ Why: 2026-10-20 integrate/playable-dungeon reached 154 commits over 15 hours wit
 2. The verdict is one BUILDLOG line `[intent-check] <project> MATCH|DRIFT: <one sentence>`.
 3. DRIFT blocks new feature lanes in that project until the orchestrator records the correction (re-plan or re-scope) in STATE.md.
 4. The check names the artifact's status (real/throwaway/oracle) from the PURPOSE pins it finds, and flags any throwaway that has accumulated more than one feature lane.
+
+## Stage lanes (G5)
+1. A change reaches CI through a pipeline of stage lanes, never one lane. Each stage is its own dispatch.
+2. Every brief carries one line `STAGE: S1 SPEC | S2 IMPL | S3 GATE | S4 SHIP | S5 REVIEW` (the one stage it runs) and one `CATEGORY:` line. A brief that names more than one stage is denied.
+3. Per stage, one line each, with input artifact, output artifact and forbidden verbs:
+   - S1 SPEC: in a row or ruling; out the failing test path and its red output; forbidden: any non-test edit, commit, push.
+   - S2 IMPL: in the S1 test path and red output; out a diff file, no commits; forbidden: editing the test, commit, push, gates other than the named test.
+   - S3 GATE: in the S2 diff; out a gate log; forbidden: Edit, Write, commit, push, any --update-baseline; hands back PASS or the catalog recipe id.
+   - S4 SHIP: in the S3 PASS and the message file; out PR number, head sha, armed state; forbidden: code edits, --no-verify, update-branch, manual merge, merge train.
+   - S5 REVIEW: in the S4 PR diff and the ruling and the bible; out a review file; forbidden: edit, commit, push, merge.
+4. The orchestrator sequences stages from hand-backs. A stage starts only when the previous hand-back names its output artifact (path or sha).
+5. Briefs are the filled template from docs/STAGE-CONTRACTS.md and nothing more. A lane never widens its own stage.
+
+Provenance: Matt 2026-10-22, rows f-bcd7ff61 and f-11a046ce, ruling R-LANES-1.
