@@ -1,4 +1,4 @@
-* text=auto
+* text=auto eol=lf
 *.sh text eol=lf
 # Ratchet baselines: union-and-sort instead of a line conflict every time two
 # lanes both append. Needs a one-time per-clone driver registration:
@@ -22,3 +22,6 @@
 # at push by hooks/pre-push-policy.sh check_generated_regen() either way.
 tools/INDEX.md merge=aesop-regen
 docs/INCIDENTS.md merge=aesop-regen
+*.png binary
+*.gif binary
+*.mp4 binary
