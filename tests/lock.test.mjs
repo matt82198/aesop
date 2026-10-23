@@ -3,7 +3,7 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { acquireLock, releaseLock } from '../tools/lock.mjs';
 
 // Helper: create a temp dir + target "file" path to lock.
@@ -138,5 +138,61 @@ test('fresh (non-stale) live-owned lock is left alone (regression guard)', async
   assert.ok(threw, 'acquireLock must fail-closed on a fresh, still-live lock rather than break it');
   assert.ok(fs.existsSync(lockDir), 'fresh lock dir should still exist');
 
+  fs.rmSync(path.dirname(filePath), { recursive: true, force: true });
+});
+
+// Helper: CPU time (user + system) consumed by this process so far, in ms.
+function cpuMs() {
+  const usage = process.cpuUsage();
+  return (usage.user + usage.system) / 1000;
+}
+
+test('contended acquire sleeps during backoff instead of busy-spinning a core', async () => {
+  const filePath = createTempTarget();
+  const lockDir = plantLock(filePath, { pid: process.pid, ageMs: 1000 }); // live owner, not stale
+  const timeoutMs = 600;
+
+  const cpuBefore = cpuMs();
+  const wallBefore = Date.now();
+  let threw = false;
+  try {
+    acquireLock(filePath, { timeoutMs });
+  } catch {
+    threw = true;
+  }
+  const wallMs = Date.now() - wallBefore;
+  const cpuUsedMs = cpuMs() - cpuBefore;
+
+  assert.ok(threw, 'lock held by a live owner must fail closed at the deadline');
+  assert.ok(wallMs >= timeoutMs - 50, `should wait roughly the full timeout (wall ${wallMs}ms)`);
+  assert.ok(
+    cpuUsedMs < wallMs * 0.5,
+    `backoff must yield the CPU, not spin: cpu ${cpuUsedMs.toFixed(0)}ms over wall ${wallMs}ms`
+  );
+  assert.ok(fs.existsSync(lockDir), 'live owner lock must be untouched');
+
+  fs.rmSync(path.dirname(filePath), { recursive: true, force: true });
+});
+
+test('contended acquire succeeds once the holder releases mid-wait', async () => {
+  const filePath = createTempTarget();
+  const lockDir = plantLock(filePath, { pid: process.pid, ageMs: 1000 });
+
+  // A separate OS process removes the lock ~300ms from now. acquireLock blocks
+  // this thread while waiting, so the release must come from another process.
+  const releaser = spawn(
+    process.execPath,
+    ['-e', `setTimeout(() => require('node:fs').rmSync(${JSON.stringify(lockDir)}, { recursive: true, force: true }), 300)`],
+    { stdio: 'ignore' }
+  );
+  releaser.unref();
+
+  const acquired = acquireLock(filePath, { timeoutMs: 10000 });
+  assert.strictEqual(acquired, lockDir, 'acquireLock should return the lock dir once released');
+  const marker = fs.readFileSync(path.join(lockDir, 'pid-timestamp.txt'), 'utf8');
+  assert.ok(marker.startsWith(`${process.pid}\n`), 'acquired lock marker should record our own pid');
+
+  releaseLock(acquired);
+  assert.ok(!fs.existsSync(lockDir), 'releaseLock should remove the lock we own');
   fs.rmSync(path.dirname(filePath), { recursive: true, force: true });
 });
