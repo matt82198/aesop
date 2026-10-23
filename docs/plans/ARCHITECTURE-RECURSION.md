@@ -1,5 +1,11 @@
 # Architecture recursion: back to small per-domain primitives (G6, R-ARCH-1)
 
+## Orientation (R-ARCH-4, R-ARCH-5)
+
+Orientation. This plan is judged by R-ARCH-4 (Matt, 2026-10-22): every piece of machinery must help a haiku do its one small step with less context and catch the mistake it is likely to make. A brief carries map rows and one input artifact, never a search.
+A hook is one critical check that passes otherwise and prints its recipe in the denial, and it fires only for its dispatch's project and domain. When a lane fails, the first suspect is the machinery around it; the fix lands in the template, map, or hook, never as a longer brief.
+Per R-ARCH-5, keyrun development and the planning wave run concurrently, isolated by project. Gates judge per project and per end state, never on another project's lane count or a live lane's recent activity.
+
 Status: PLAN ONLY. Nothing in this file is built. Matt approves this PR before any lane runs. Planning team: one Opus planner plus six read-only Haiku readers (hooks, memory and incidents, .md sizes, per-project asks, map injection, Matt asks vs shipped), 2026-10-22 ~20:1x CT.
 
 Matt 2026-10-22 ~9:0x PM CT, verbatim (the brief): "we've gotten to a point where i don't understand my own repo, at some point you started designing, and not consulting planning teams for waves, we don't really follow any of the same primitives anymore, its turning into a monolith of hooks and not a small package for per domain intelligence. Half my asks get dropped, like per project orchestrations has been suggested probably 4 times now and you built out like one file... nothing is being categorized and turned into generics or mechanical machinery, you just have a massive list of memories at this point and incidents and all this stuff logged that we never recurse, identify the pattern and fix. Domain files have become insane. We don't recursively split to the smallest operation and .md anymore... it works well, but the core architecture is becoming spaghetti" ... "nothing i ask is being built, its just plumbing and friction" ... "and specific hooks should fire per domain man".
@@ -61,7 +67,7 @@ Map injection (`hooks/lib/maps.mjs`): maps read are PROJECTS.md and SYSTEM-MAP.m
 Matt asks (`python -I ~/scripts/open_findings.py list --json`): 123 rows, 54 source=matt (40 open, 14 closed). Of the 54: shipped 18, partial 31, not shipped 5. Product 32 (shipped 9, partial 23); machinery 22 (shipped 9, partial 8, not shipped 5). Merged PRs since 2026-10-15 classified machinery by title: aesop 126 of 195, claude-config 196 of 216, claude-scripts 46 of 85. Matt's "nothing i ask is being built, its just plumbing" is measured: 368 of 496 merged PRs across the three repos are machinery, and every product row is at best partial.
 
 Pipelines (inventory upkeep becomes a script, not a reader fleet):
-1. aesop-tool | tests/test_arch_inventory.py: a fixture brain + repo yields the s1 numbers as JSON (red: tool absent) | tools/arch_inventory.py emits hooks/memory/incidents/md/asks counts | S3 aesop-tool gates | aesop PR, runs at wave close
+1. aesop-tool | tests/test_arch_inventory.py: a fixture brain + repo yields the s1 numbers as JSON (red: tool absent) | tools/arch_inventory.py emits hooks/memory/incidents/md/asks counts | S3 aesop-tool gates | aesop PR, runs at wave close. Its JSON feeds the planner-reader step, so readers take numbers from it instead of searching.
 2. hook | hooks/INDEX-tests drift test: index count equals `*.test.mjs` count (red today: 83 vs 77) | regenerate INDEX-tests from disk | node --test + _failclosed | claude-config PR
 
 ---
@@ -74,30 +80,31 @@ Twelve primitives. Each owns exactly ONE .md; every other file that mentions it 
 |---|---|---|---|
 | lane | one stateless process, one stage, one owned file set | LANE-CONTRACT.md | same (293 lines, spans lane+gate+test+merge: split) |
 | stage | S1..S5 verbs and hand-back shape | docs/STAGE-CONTRACTS.md | same |
-| gate | one check, exit code, fail closed | docs/primitives/gate.md | tools/CLAUDE.md + LANE-CONTRACT s5 + GATES-FIRED.md |
+| gate | one check, exit code, fail closed | vocabulary in tools/primitive_lint.py; owner row in the domain map | tools/CLAUDE.md + LANE-CONTRACT s5 + GATES-FIRED.md |
 | receipt | signed record that a run happened | docs/RECEIPT-GATE.md | same |
-| ruling | Matt verdict as an event citing a G-id | docs/primitives/ruling.md | STATE.md INTENT prose |
-| finding | ledger row with an observable | docs/primitives/finding.md | open_findings.py docstring |
+| ruling | Matt verdict as an event citing a G-id | vocabulary in tools/primitive_lint.py; owner row in the domain map | STATE.md INTENT prose |
+| finding | ledger row with an observable | vocabulary in tools/primitive_lint.py; owner row in the domain map | open_findings.py docstring |
 | event | one hash-chained line in a project store | tools/event_store/CLAUDE.md | docs/plans/PER-PROJECT-EVENT-STORES.md |
-| checkpoint | STATE/BUILDLOG write with WHY | docs/primitives/checkpoint.md | ~/.claude/docs/checkpointing.md |
-| memory | recall-by-relevance fact, no mechanism | docs/primitives/memory.md | MEMORY.md header |
-| domain .md | the map of one domain's files, gates, tests | docs/primitives/domain-md.md | root CLAUDE.md "Dispatch rule" |
+| checkpoint | STATE/BUILDLOG write with WHY | vocabulary in tools/primitive_lint.py; owner row in the domain map | ~/.claude/docs/checkpointing.md |
+| memory | recall-by-relevance fact, no mechanism | MEMORY.md | MEMORY.md header |
+| domain .md | the map of one domain's files, gates, tests | vocabulary in tools/primitive_lint.py; owner row in the domain map | root CLAUDE.md "Dispatch rule" |
 | template | one stage x category brief | docs/STAGE-CONTRACTS.md s4 (cells) | same |
-| map | rows: project, domain, files, gates, tests | docs/primitives/map.md | PROJECTS.md, SYSTEM-MAP.md |
+| map | rows: project, domain, files, gates, tests | PROJECTS.md | PROJECTS.md, SYSTEM-MAP.md |
 
 The recursive-split rule, as a check (not prose):
 - Every domain .md, control .md and hook package manifest declares front matter `primitive: <one of the twelve>` and `domain: <one name>`.
-- `tools/primitive_lint.py` fails when: (a) the field is missing or names two values; (b) a .md has more than 8 H2 sections or 150 lines (CLAUDE.md) / a control file has a line over 400 chars; (c) a hook package's hooks guard more than one domain (manifest `domain` vs each hook's `guards:` header); (d) a .md's H2 headings name a second primitive's owner file topic (heading vocabulary table in docs/primitives/INDEX.md).
+- `tools/primitive_lint.py` fails when: (a) the field is missing or names two values; (b) a .md has more than 8 H2 sections or 150 lines (CLAUDE.md) / a control file has a line over 400 chars;
+  (c) a hook package's hooks guard more than one domain (manifest `domain` vs each hook's `guards:` header); (d) a .md's H2 headings name a second primitive's owner file topic (heading vocabulary table kept inside tools/primitive_lint.py) (amended per R-ARCH-4 review).
 - The fix for every failure is the same: split into children, one primitive each, parent becomes a pointer list. The lint prints the split plan (which H2 goes to which child).
 - STATE.md INTENT is the one sanctioned exception to (b) line length only until pipeline 2.4 splits each G-id into its own line block of at most 400 chars plus a pointer to its ruling events.
 
 Pipelines:
 1. aesop-tool | tests/test_primitive_lint.py: a fixture .md with two primitives and one with 9 H2s both fail; a clean one passes (red: tool absent) | tools/primitive_lint.py | aesop-tool gates + run on repo in report mode | aesop PR (report-only first; required after 2.5)
-2. docs | skipped | docs/primitives/{INDEX,gate,ruling,finding,checkpoint,memory,domain-md,map}.md, each under 80 lines, moved text not new text | secret scan | aesop PR
+2. docs | skipped | drop the eight docs/primitives/* files (no glossary); keep the heading vocabulary inside tools/primitive_lint.py, so a lane never reads a glossary to classify its own file | secret scan | aesop PR (amended per R-ARCH-4 review)
 3. docs | skipped | STAGE-CONTRACTS.md gains category `aesop-tool` (pytest via tools/ci_shard_runner.py, gates = LANE-CONTRACT s5) and a MAP field (s5 below) | secret scan | aesop PR
 4. docs | skipped | STATE.md INTENT: one block per G-id, 400-char lines, verbatim quotes moved to ruling events with the seq cited | secret scan | aesop PR (orchestrator-owned file: orchestrator dispatches with STATE.md named)
 5. docs | skipped | split ui/CLAUDE.md (6 concerns), hooks/CLAUDE.md (5 families), mcp per-tool reference to docs/MCP-TOOLS.md, archive the wave-32 refactor logs from ui and driver | primitive_lint report mode shows 0 for these files | aesop PR
-6. docs | skipped | split LANE-CONTRACT.md into lane (s1, s6, s7, s8) with gate text moved to docs/primitives/gate.md and test text to tests/CLAUDE.md | secret scan | aesop PR
+6. docs | skipped | split LANE-CONTRACT.md into lane (s1, s6, s7, s8); keep the gate list in LANE-CONTRACT.md (the one file every lane reads) and put per-domain gates in the per-domain map row; test text to tests/CLAUDE.md | secret scan | aesop PR (amended per R-ARCH-4 review)
 
 ---
 
@@ -109,14 +116,14 @@ Target shape (aesop ships the mechanism, the brain holds instances; this is the 
 - aesop `hookpkg/`: `dispatch.mjs` (the ONLY script registered in settings.json, one entry per event), `manifest.schema.json`, `resolve.mjs` (project and domain from cwd, tool_input paths, worktree path, and the dispatch brief's MAP field), and tests. Published in the npm package.
 - brain `hooks/packages/<domain>/`: `manifest.json` (`domain`, `primitive`, `fires_on: {events, tools, projects, path_globs, stages}`), the hooks, their tests, `INDEX.md`, `CLAUDE.md`. Domains: git-merge, dispatch, orchestrator-context, brain-state, secrets, keyrun-runtime, self-protection, ledger.
 - Firing: dispatch resolves (project, domain, stage); runs only packages whose `fires_on` match. A keyrun lane never runs aesop-only gates; a docs-stage lane never runs code gates; read-only tools (Read/Grep/Glob) run only orchestrator-context and secrets.
-- Fail-closed contract kept: if resolve cannot decide the project or domain, dispatch runs ALL packages (today's behavior), never none. A package that throws denies. dispatch itself is covered by `_failclosed.test.mjs`. One node process per event instead of 22.
+- Fail-closed contract kept: if resolve cannot decide the project or domain, dispatch DENIES with a recipe naming the missing MAP/project key and never runs cross-project gates on a lane. A package that throws denies. dispatch itself is covered by `_failclosed.test.mjs`. One node process per event instead of 22. (amended per R-ARCH-4 review)
 - Every deny keeps GATE-DENY WHY/JUDGED/PASS text (memory gate-denials-carry-their-reasoning).
 
 Retire/merge table. Nothing is deleted: "retire" means moved to `hooks/archive/` after a measured zero (0 deny and 0 allow rows in the resistance ledger for 14 days AND not registered). Evidence column is the resistance ledger 2026-10-15..10-23 unless noted.
 
 | Hook | Domain package | Action | Evidence |
 |---|---|---|---|
-| no-orchestrator-merge-train, block-bare-pr-merge, deny-stacked-auto-merge, deny-default-branch-push, pr-base-main-gate, gate-file-arm-guard | git-merge | merge into one rule module set, one process | 229 + 208 + 135 deny; pr-base-main-gate 1 deny but unregistered; gate-file-arm-guard never registered |
+| no-orchestrator-merge-train, block-bare-pr-merge, deny-stacked-auto-merge, deny-default-branch-push, pr-base-main-gate, gate-file-arm-guard | git-merge | merge into one rule module set, one process. Each rule stays one file with one check and one denial recipe; the package only dispatches. | 229 + 208 + 135 deny; pr-base-main-gate 1 deny but unregistered; gate-file-arm-guard never registered |
 | block-forbidden-git-flags, git-stash-block, block-git-hooks-bypass, git-history-guard, primary-branch-guard | git-merge | merge (shared `_gitgate` parser already exists) | 13 separate Bash processes today |
 | no-lane-game-launch | keyrun-runtime | keep; fire only when project=keyrun or path under keyrun; read-only commands short-circuit before the UNDECIDABLE parser | 4 of 6 readers denied on read-only commands this run |
 | force-haiku-subagents, model-lever, route-to-specialists, purpose-pin-gate, inject-lane-contract, dispatch-model-ledger | dispatch | keep; one process; purpose-pin classifies read-only (`subagent_type` read-only or no Write/Edit verbs) as non-build | purpose-pin 85 deny incl. this run's read-only reader |
@@ -128,13 +135,13 @@ Retire/merge table. Nothing is deleted: "retire" means moved to `hooks/archive/`
 | stop-central-time, usage-kill-switch, no-polling, no-cli-api-calls, no-heredoc-file-authoring, no-browser-restart, claim-measured-cap, gate-read, handback-ack | per domain on review | measure 14 days; retire to archive only on a measured zero | stop-central-time 5 deny but unregistered; stage-verb-gate ghost (4 deny, no file): find the registering settings file first |
 
 Pipelines:
-1. aesop-tool (node) | hookpkg/dispatch.test.mjs: fixture packages; a keyrun-cwd Bash call runs keyrun-runtime + git-merge only; an unresolvable cwd runs ALL; a throwing package denies (red: absent) | hookpkg/{dispatch,resolve}.mjs + schema | node --test + fail-closed suite | aesop PR, npm next minor
+1. aesop-tool (node) | hookpkg/dispatch.test.mjs: fixture packages; a keyrun-cwd Bash call runs keyrun-runtime + git-merge only; an unresolvable cwd DENIES with a recipe and runs no package; a throwing package denies (red: absent) | hookpkg/{dispatch,resolve}.mjs + schema | node --test + fail-closed suite | aesop PR, npm next minor (amended per R-ARCH-4 review)
 2. hook | packages/git-merge parity test: every rule of the 11 git hooks produces the same allow/deny on the replay of 30 days of resistance-ledger Bash inputs (red: package absent) | move rules into packages/git-merge, old files become 3-line shims | node --test + replay | claude-config PR (settings.json unchanged)
 3. hook | resolve test: read-only Bash containing "keyrun" in an aesop cwd is not evaluated by keyrun-runtime (red today) | no-lane-game-launch manifest scope + read-only short-circuit | node --test + replay of this run's 4 denials (must now allow) and of every real launch deny (must still deny) | claude-config PR
 4. hook | purpose-pin test: a read-only fleet-auditor brief naming a PR number is not a build lane (red today) | classifier rule | node --test | claude-config PR
 5. hook | settings parity test: settings.json registers only `hookpkg/dispatch.mjs` per event and every package manifest is reachable (red today) | switch settings.json to the dispatcher (A/B: 24h shadow mode where dispatch logs its decision next to the old chain, then cut over) | node --test + 24h shadow diff = 0 missed denies | claude-config PR (hard gate: shadow diff evidence attached)
 6. hook | ghost/unregistered test: every hook with ledger rows is registered in settings or a package (red: no-credential-hunting, stop-central-time, pr-base-main-gate, stage-verb-gate) | register or locate | node --test | claude-config PR
-7. script | tests/test_hook_retire.py: a hook with 0 rows in 14 days and no registration is listed; one with any row is not (red: absent) | ~/scripts/hook_retire_report.py (report only, moves need Matt row approval) | script gates | claude-scripts PR
+7. script | tests/test_hook_retire.py: a hook with 0 rows in 14 days and no registration is listed; one with any row is not (red: absent) | ~/scripts/hook_retire_report.py (report only; archive moves are reversible decide-and-report with the measured-zero evidence attached, only deletion is a hard stop) | script gates | claude-scripts PR (amended per R-ARCH-4 review)
 
 ---
 
@@ -145,10 +152,11 @@ Today: 202 memories, 44 incidents, 81k ledger rows, 1,513 denies, and no step ev
 The mechanism, `tools/recurse.py` (aesop, product), the CI-CATALOG shape generalized:
 - Inputs: memory .md files, INCIDENTS rows (later: incident events in the project store), resistance ledger denies, CI-CATALOG rows.
 - Signature: (category, mechanism file named, normalized title tokens, deny reason_class). Cluster by equal mechanism first, then token overlap >= 0.5.
-- Output 1: `docs/RECURSION-CATALOG.md`, one row per cluster: `id | category | signature (verbatim member titles) | root cause | recipe | mechanism (hook/test/script path) | members | status`.
+- Output 1: `docs/RECURSION-CATALOG.md`, one row per cluster: `id | category | signature (verbatim member titles) | root cause | recipe | mechanism (hook/test/script path) | members | status`. Each cluster id appears in the MAP row of the domain that owns its mechanism, and the stub finding carries the recipe and mechanism path.
 - Output 2: for a cluster with no mechanism, a stub S1 SPEC brief (category + the red test to write) appended as an open_findings row (source=recurse, parent G-id). Never writes code itself.
 - Output 3: for a memory whose mechanism exists AND has a test, a retire line for the memory-keeper (single writer): move to `memory/aesop/archive/` with a pointer line in the mechanism's package INDEX.md. Nothing is deleted.
-- Runs at every wave close (buildsystem/runwave close step) and prints counts: clusters, new generics, rows emitted, memories retired. A wave close with recurse output missing fails the close check (fold into the existing wave-close step, no new hook).
+- Runs at every wave close (buildsystem/runwave close step) and prints counts: clusters, new generics, rows emitted, memories retired.
+  A wave close fails its check only on its own project's recurse output (recurse inputs are scoped per project, since the resistance ledger spans all repos), so one project's close never fails on another's data (fold into the existing wave-close step, no new hook) (amended per R-ARCH-4 review).
 
 Retire first (mechanism exists, per the memory reader; keeper confirms each has a test): orchestrator-never-runs-merge-trains, auto-merge-is-default, ceiling-hook-first-bash-after-clear, no-grep-hook-stdin-filter, no-grep-even-in-auto-mode, never-override-haiku-dispatch, secret-scan-empty-set-blesses-no-inspection, memory-canonical-tree, hard-checkpoints-and-clears- enforced, never-author-files-via-bash-heredoc, pre-push-hook-blocks-tag-push-from-main, doc-gates-induce-fabricated-docs, subagentstop-additionalcontext-rewakes-agents, incidents-go-to-the-log-not-md, kill-switches-need-behavioral-proof, conflict-resolution-must-be- three-way (25 candidates in the reader report; 4 name files that do not exist and stay).
 
@@ -222,7 +230,7 @@ What exists vs missing:
 | keyrun bot reasons + receipt sink (K1, K2) | UNVERIFIED | keyrun not inspected |
 | one orchestrator per project (2.6) | MISSING | no CLI, no session shape, no lane |
 | per-domain hook firing per project | MISSING | s3: 0 cwd-aware hooks |
-| per-project checkpoints (2.5) | MISSING | depends on registry |
+| per-project checkpoints (2.5) | MISSING | depends on registry; add a test that a project checkpoint writes only that project's STATE/BUILDLOG |
 
 The mechanism that dropped it (so the fix is mechanical):
 1. A plan's lane table is not a ledger. #1279 merged and closed the conversation; its 11 lane rows never became open_findings rows, so idle_tick, saturation and the refinement monitor never saw the unbuilt ones.
@@ -231,14 +239,14 @@ The mechanism that dropped it (so the fix is mechanical):
 4. f-e9e467a8 is one parent row with no per-lane observable, so it sits PARTIAL forever. Fix: `plan_rows.py` turns every pipeline row of a merged plan file into a child ledger row (parent G-id, observable = the S4 ship target merged plus the named live check); a parent row cannot close while a child is open; "orchestrator-run" is not a valid row owner (every row is a stage lane).
 
 Pipelines (product first):
-1. aesop-tool | tests/test_event_store_registry_init.py: `event_store init-all --home <tmp>` creates four stores and writes a registry the PreCompact reader accepts (red: no init-all) | tools/event_store/registry.py init-all + docs | aesop-tool gates | aesop PR
+1. aesop-tool | tests/test_event_store_registry_init.py: `event_store init-all --home <tmp>` creates four stores and writes a registry the PreCompact reader accepts (red: no init-all). Add a branch-existence assertion to the init-all test. | tools/event_store/registry.py init-all + docs | aesop-tool gates | aesop PR
 2. script | conductor3 tests/test_event_store.py frozen case passes on events/log-freeze-writer | merge 2bbc4f0 via PR | conductor3 tests | conductor3 PR
 3. aesop-tool | tests/test_event_store_cutover.py: dry-run over a v1 fixture prints per-project counts summing to the source and writes nothing (red: no cutover command) | tools/event_store/cutover.py --dry-run / --apply (apply refuses without a dry-run receipt) | aesop-tool gates | aesop PR; the --apply run is an S4-style lane after Matt reads the dry-run counts
 4. aesop-tool | tests/test_event_store_runs.py: the four 3.3 mutants (tampered line, wrong head, guided seat with policy rule, missing end) each fail verify-run (red: absent) | tools/event_store/runs.py | aesop-tool gates | aesop PR
 5. keyrun-bots | K1 test: every BotBatch command carries one stable rule id; fingerprint identical with and without a sink | Bot.cs reasons | keyrun fastcheck | keyrun PR
 6. aesop-tool (node) | bin test: `aesop orchestrate --project keyrun --dry-run` prints the session plan: store path, STATE.md path, map root, hook packages that fire (red: no subcommand) | bin/ orchestrate subcommand; SessionStart reprime reads only that project's store and INTENT | node tests | aesop PR, npm next minor
 7. aesop-tool | tests/test_plan_rows.py: a merged plan with 5 pipeline rows yields 5 child rows under its G-id; closing the parent with an open child exits 1 (red: absent) | ~/scripts/plan_rows.py (or aesop tools/, decided at S1 by where open_findings.py lives) | script gates | claude-scripts PR
-8. hook | precompact test: with a registry of two stores, the compaction summary lists open plan rows per project by G-id (red: dormant) | checkpoint-before-compact reads plan child rows | node --test | claude-config PR
+8. hook | precompact test: with a registry of two stores, the compaction summary lists only the session's project rows (open plan rows by G-id), never rows from other stores (red: dormant) | checkpoint-before-compact reads plan child rows | node --test | claude-config PR (amended per R-ARCH-4 review)
 
 ---
 
@@ -276,7 +284,7 @@ Remaining shipped machinery rows (f-049fb99d, f-a5ffb07b, f-1232d0aa, f-9607c9c0
 Pipelines:
 1. script | tests/test_open_findings_children.py: `list --json --tree` groups child rows under each matt parent and flags a parent cited in STATE.md but absent from the ledger (red: the three G3.1 ids) | open_findings.py tree view + drift check | script gates | claude-scripts PR
 2. docs | skipped | ledger rows for G2.5, G4.2 and the three missing G3.1 ids, each with an observable | secret scan | claude-scripts ledger commit by the orchestrator
-3. hook | test: saturation-gate counts product rows separately and denies a wakeup when an unblocked product row has no lane while a machinery lane is live (red today) | product-first rule in saturation-gate | node --test + replay | claude-config PR
+3. hook | test: saturation-gate is a per-project check on ledger end state: it denies a wakeup only when an unblocked product row has no open lane in that project; a live machinery lane never causes a deny (R-ARCH-5) (red today) | per-project rule in saturation-gate | node --test + replay | claude-config PR (amended per R-ARCH-4 review)
 
 ---
 
@@ -286,13 +294,13 @@ Pipelines:
 2. Matt approves by merging the plan PR (or names rows to drop). The orchestrator never designs a wave without a merged plan; designing is the planning team's stage.
 3. plan_rows.py (s6.7) turns every row into a child ledger row under its G-id with id `<plan>#<section>.<n>`.
 4. The orchestrator sequences stage lanes from those rows only: each brief carries `PLAN-ROW <id>`, `MAP <project>/<domain>` and one stage's verbs. It verifies MERGED from gh state and closes the row on its observable.
-5. The refinement monitor measures each wave from disk: rows planned vs merged, product vs machinery merges, denies per package, recurse.py counts. It reports; it does not redesign.
-6. Gate (folded into purpose-pin-gate, no new hook): a build-stage brief (S1, S2, S4) with `status: real` and no `PLAN-ROW` id that resolves to an open child row of a merged plan is denied with WHY/JUDGED/PASS. Exempt: read-only readers, ci-fix rows that cite a CI-CATALOG id, memory-keeper, and a P0 wrong-data row (P0 cannot wait for a plan).
+5. The refinement monitor measures each wave from disk: rows planned vs merged, product vs machinery merges, denies per package, recurse.py counts. It reports; it does not redesign. Each measurement takes a project argument and never aggregates across projects (amended per R-ARCH-4 review).
+6. Gate (folded into purpose-pin-gate, no new hook) (the lookup must be scoped to the brief's project): a build-stage brief (S1, S2, S4) with `status: real` and no `PLAN-ROW` id that resolves to an open child row of a merged plan is denied with WHY/JUDGED/PASS. Exempt: read-only readers, ci-fix rows that cite a CI-CATALOG id, memory-keeper, and a P0 wrong-data row (P0 cannot wait for a plan).
 
 Pipelines:
 1. hook | purpose-pin test: an S2 brief with no PLAN-ROW is denied; with a PLAN-ROW of an open child row it is allowed; a ci-fix brief citing CI-A5 is allowed; a P0 row is allowed (red today) | plan-row branch in purpose-pin-gate reading the ledger | node --test + 7-day replay count attached | claude-config PR
 2. docs | skipped | skills buildsystem/runwave: steps 1-6 above replace "rank backlog -> dispatch"; planning-team template in ~/.claude/docs/dispatch-templates.md | secret scan | claude-config PR
-3. aesop-tool | tests/test_wave_measure.py: fixture ledger + gh JSON yields planned/merged/product/machinery counts (red: absent) | tools/wave_measure.py used by the refinement monitor | aesop-tool gates | aesop PR
+3. aesop-tool | tests/test_wave_measure.py: fixture ledger + gh JSON yields planned/merged/product/machinery counts for one project passed as an argument; it never aggregates across projects (red: absent) | tools/wave_measure.py --project used by the refinement monitor | aesop-tool gates | aesop PR (amended per R-ARCH-4 review)
 
 ---
 
@@ -305,9 +313,10 @@ First three pipelines after approval (product first):
 
 Reversible: every pipeline is a PR; packages keep 3-line shims until the dispatcher's 24h shadow diff shows zero missed denies; memory and hooks move to archive/ and are never deleted; the cutover keeps the frozen v1 log verifiable; primitive_lint ships report-only.
 
-Waits for Matt: approving this plan PR; reading the cutover dry-run counts before `--apply`; approving each hook retirement row (measured zero attached); the settings.json cutover to the dispatcher (hook change with A/B shadow evidence); plan decision 1 of PER-PROJECT-EVENT-STORES (store location) stays as accepted at seq 268 unless he overrules.
+Waits for Matt: approving this plan PR; reading the cutover dry-run counts before `--apply`;
+hook retirement is decide-and-report (archive moves are reversible, measured-zero evidence attached, only deletion waits for Matt) (amended per R-ARCH-4 review); the settings.json cutover to the dispatcher (hook change with A/B shadow evidence); plan decision 1 of PER-PROJECT-EVENT-STORES (store location) stays as accepted at seq 268 unless he overrules.
 
-Risk: the dispatcher is a single point; fail-closed (resolve unknown -> run all) bounds it, and the shadow week measures it. The plan-row gate could block urgent work; P0 and ci-fix exemptions and the replay count before arming bound that.
+Risk: the dispatcher is a single point; fail-closed (resolve unknown -> DENY with a recipe naming the missing MAP/project key) bounds it, and the shadow week measures it. The plan-row gate could block urgent work; P0 and ci-fix exemptions and the replay count before arming bound that.
 
 Pipelines (the first three, restated for sequencing):
 1. aesop-tool | tests/test_event_store_registry_init.py red | tools/event_store/registry.py init-all | aesop-tool gates | aesop PR
