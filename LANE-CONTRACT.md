@@ -150,6 +150,7 @@ Four rules:
   if secrets are detected. `python tools/encoding_lint.py --check` blocks subprocess calls without
   `encoding='utf-8'`. Never use `--no-verify` to skip (forbidden in every dispatch). If a gate fails,
   FIX IT, do not bypass it.
+- **Secret scan follows the index state.** Before staging new changes, scan with `--staged`. After any merge-forward commit (`git merge origin/main`), or whenever the index is empty, run exactly `python ~/scripts/secret_scan.py --range origin/main..HEAD` and require exit 0. The `REFUSED: --staged scanned 0 files` refusal on an empty index is correct fail-closed behaviour: never retry `--staged` on an empty index. *(S4 ship lanes retried this refusal after a merge-forward, finding f-dc6f2294.)*
 - Pushes emit a signed local-run receipt automatically; a push without one means the gates did not
   run — fix, don't bypass.
 - **Every Python subprocess call needs explicit `encoding='utf-8', errors='replace'`.** The Windows
