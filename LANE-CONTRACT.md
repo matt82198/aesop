@@ -617,7 +617,7 @@ Why: 2026-10-20 integrate/playable-dungeon reached 154 commits over 15 hours wit
    - S1 SPEC: in a row or ruling; out the failing test path and its red output; forbidden: any non-test edit, commit, push.
    - S2 IMPL: in the S1 test path and red output; out a diff file, no commits; forbidden: editing the test, commit, push, gates other than the named test.
    - S3 GATE: in the S2 diff; out a gate log; forbidden: Edit, Write, commit, push, any --update-baseline; hands back PASS or the catalog recipe id.
-   - S4 SHIP: in the S3 PASS and the message file; out PR number, head sha, armed state; forbidden: code edits, --no-verify, update-branch, manual merge, merge train.
+   - S4 SHIP: in the S3 PASS and the message file; out PR number, head sha, armed state; forbidden: code edits, --no-verify, update-branch, manual merge, merge train. After a merge-forward commit (`git merge origin/main`), the index equals HEAD and `--staged` refuses with 'scanned 0 files' (correct, fail-closed). Scan the branch instead: `python ~/scripts/secret_scan.py --range origin/main..HEAD --repo <worktree>`; exit 1 blocks the push.
    - S5 REVIEW: in the S4 PR diff and the ruling and the bible; out a review file; forbidden: edit, commit, push, merge.
 4. The orchestrator sequences stages from hand-backs. A stage starts only when the previous hand-back names its output artifact (path or sha).
 5. Briefs are the filled template from docs/STAGE-CONTRACTS.md and nothing more. A lane never widens its own stage.
