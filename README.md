@@ -1,10 +1,8 @@
-> ## Aesop's source repo is temporarily private
->
-> While I fix a security issue in my own development setup, the GitHub repository for Aesop is private. Based on my review, published npm versions of @matt82198/aesop are not affected and no action is needed by users. The repo will be public again once the fix is complete.
->
-> Questions: matt82198@gmail.com
+## Aesop's source repo is temporarily private
 
-> **Contact policy.** I am not accepting acquisition offers, recruiter inquiries, or cold calls. Inquiries regarding licensing or commercial usage must go to matt82198@gmail.com. All other outreach will be ignored.
+While I fix a security issue in my own development setup, the GitHub repository for Aesop is private. Based on my review, published npm versions of @matt82198/aesop are not affected and no action is needed by users. The repo will be public again once the fix is complete.
+
+Questions: matt82198@gmail.com
 
 ﻿<p align="center">
   <img src="https://cdn.jsdelivr.net/npm/@matt82198/aesop@0.10.4/assets/logo.png" alt="Aesop" width="420">
@@ -103,7 +101,6 @@ The design lineage spans 50 years: Unix kernel/user-space boundaries and fail-cl
 
 **Self-learning.** The kernel dogfoods itself (it builds itself via its own /buildsystem loop) and categorizes failure modes into enforcement: the gate-escape-resolver skill turns CI failures into postmortems and audit cycles extract repeated issues and wire them into verification gates.
 
-**Due to anthropics recent changes preventing clean implementations of fail closed hooks, the project is currently not fully firing all hooks, this is actively being solved, and v0.9.1 shipped fixes for some of the largest issues.**
 
 ## Credibility: The Trap Tests
 
