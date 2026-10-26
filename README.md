@@ -1,3 +1,9 @@
+> ## Aesop's source repo is temporarily private
+>
+> While I fix a security issue in my own development setup, the GitHub repository for Aesop is private. Based on my review, published npm versions of @matt82198/aesop are not affected and no action is needed by users. The repo will be public again once the fix is complete.
+>
+> Questions: matt82198@gmail.com
+
 > **Contact policy.** I am not accepting acquisition offers, recruiter inquiries, or cold calls. Inquiries regarding licensing or commercial usage must go to matt82198@gmail.com. All other outreach will be ignored.
 
 ﻿<p align="center">

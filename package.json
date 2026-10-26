@@ -1,6 +1,6 @@
 {
   "name": "@matt82198/aesop",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "description": "Orchestration kernel for autonomous software development — crash-only multi-agent coordination on git and plain text, fail-closed verification gates, self-learning guardrails.",
   "bin": {
     "aesop": "bin/cli.js"
@@ -66,13 +66,9 @@
   ],
   "license": "PolyForm-Noncommercial-1.0.0",
   "author": "Matt Culliton",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/matt82198/aesop.git"
-  },
-  "homepage": "https://github.com/matt82198/aesop",
+  "homepage": "https://aesopkernel.ai",
   "bugs": {
-    "url": "https://github.com/matt82198/aesop/issues"
+    "email": "matt82198@gmail.com"
   },
   "publishConfig": {
     "access": "public"

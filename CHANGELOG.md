@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 (None yet.)
 
+## [0.11.1] - 2026-10-26
+
+Docs only: README notice that the source repository is temporarily private; package links point to aesopkernel.ai. No code changes.
+
 ## [0.11.0] - 2026-10-22
 
 Release carrying the hash-chained event store, the per-project event store plan, and a dated provenance record. This release covers 18 PRs merged since v0.10.4 (2026-10-22T00:54:37Z), #1264 through #1284. #1284 (event-store projections) landed on main after the first cut and is included.
