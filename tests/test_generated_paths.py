@@ -39,6 +39,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -257,7 +258,19 @@ class TestPrePushGate(unittest.TestCase):
             encoding="utf-8", newline="\n")
 
     def tearDown(self):
-        self._tmp.cleanup()
+        # Windows CI: git may still be writing .git/objects when cleanup runs
+        # (ci (2) job 121728053142: Errno 39 Directory not empty). Retry the
+        # cleanup briefly; the final attempt ignores errors. No assertion is
+        # affected: cleanup runs after every test body has finished.
+        for attempt in range(4):
+            try:
+                self._tmp.cleanup()
+                return
+            except OSError:
+                if attempt == 3:
+                    shutil.rmtree(self._tmp.name, ignore_errors=True)
+                    return
+                time.sleep(0.5)
 
     def git(self, repo, *args):
         return subprocess.run(  # subprocess-ok
