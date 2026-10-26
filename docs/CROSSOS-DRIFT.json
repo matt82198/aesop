@@ -1,12 +1,12 @@
 {
-  "ubuntu_pass_rate": 1.0,
-  "windows_pass_rate": 0.95,
-  "total_runs_analyzed": 20,
-  "ubuntu_total": 20,
-  "windows_total": 20,
+  "ubuntu_pass_rate": 0.9444,
+  "windows_pass_rate": 0.9444,
+  "total_runs_analyzed": 18,
+  "ubuntu_total": 18,
+  "windows_total": 18,
   "windows_not_present": 0,
   "divergences": [
-    30465679570
+    38538275152
   ],
   "top_windows_failures": {}
 }
