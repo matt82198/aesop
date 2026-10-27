@@ -34,6 +34,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SERVE_PATH = Path(__file__).parent.parent / "ui" / "serve.py"
 UI_PATH = Path(__file__).parent.parent / "ui"
@@ -231,8 +232,11 @@ class TestApiSession(ApiStateFixtureCase):
         self.assertIn("charset=utf-8", hdrs.get("Content-Type", ""))
 
     def test_localhost_origin_gets_token(self):
-        status, hdrs, body = self._get_json(
-            "/api/session", headers={"Origin": "http://localhost:5173"})
+        # Vite dev server (ui/web/vite.config.ts port 5173) proxies /api, so the
+        # forwarded Origin is http://localhost:5173; admitted only by explicit opt-in.
+        with mock.patch.dict(os.environ, {"AESOP_DASH_DEV_ORIGINS": "http://localhost:5173"}):
+            status, hdrs, body = self._get_json(
+                "/api/session", headers={"Origin": "http://localhost:5173"})
         self.assertEqual(status, 200)
         self.assertEqual(body.get("token"), self.token)
 

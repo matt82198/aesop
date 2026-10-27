@@ -83,7 +83,7 @@ class TrackerCreateEmptyStateTest(unittest.TestCase):
             "Content-Length": str(len(body)),
         }
 
-        status, result = self.tracker_api.create(headers, body)
+        status, result = self.tracker_api.create(headers, body, expected_port=8770)
 
         # Should succeed and create the item
         self.assertEqual(status, 201, f"Expected 201, got {status}: {result}")
@@ -108,7 +108,7 @@ class TrackerCreateEmptyStateTest(unittest.TestCase):
                 "Content-Length": str(len(body)),
             }
 
-            status, result = self.tracker_api.create(headers, body)
+            status, result = self.tracker_api.create(headers, body, expected_port=8770)
             self.assertEqual(status, 201, f"Failed to create item {i}: {result}")
 
         # Verify all items are present
@@ -140,7 +140,7 @@ class TrackerCreateEmptyStateTest(unittest.TestCase):
             "Content-Length": str(len(body)),
         }
 
-        status, result = self.tracker_api.create(headers, body)
+        status, result = self.tracker_api.create(headers, body, expected_port=8770)
         self.assertEqual(status, 201, f"Failed to create new item: {result}")
 
         # Verify both items are present
@@ -176,7 +176,7 @@ class TrackerStateIsolationFromForeignBindingTest(unittest.TestCase):
             try:
                 body = json.dumps({"title": "Isolation probe"}).encode("utf-8")
                 headers = {"X-Aesop-Token": case.token, "Content-Length": str(len(body))}
-                status, result = case.tracker_api.create(headers, body)
+                status, result = case.tracker_api.create(headers, body, expected_port=8770)
                 self.assertEqual(status, 201, f"Expected 201, got {status}: {result}")
                 self.assertTrue((case.fixture_root / "state" / "tracker.json").exists())
                 self.assertFalse((decoy / "state" / "tracker.json").exists(),
