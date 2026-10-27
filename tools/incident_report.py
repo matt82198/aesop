@@ -89,6 +89,15 @@ CATEGORY_TRAILER = "Incident-Category"
 _TRAILER_RE = re.compile(r"^(Incident-Class|Incident-Category)[ \t]*:[ \t]*(.*?)[ \t]*$", re.MULTILINE)
 _CATEGORY_VALUE_RE = re.compile(r"^([A-E])(?:[ \t]+(.+))?$")
 _SUBJECT_PREFIX_RE = re.compile(r"^([a-z][a-z-]*):")
+# Incident verbs a subject must carry before the gate-activation keywords infer a row.
+# aesop #1315: a manifest commit naming a secret-gate test was inferred as an incident.
+_INCIDENT_VERB_RE = re.compile(
+    r"\b(?:blocks?|blocked|refused|leaks?|leaked|bypass(?:es|ed|ing)?|escapes?|escaped"
+    r"|fired|failed closed|denied|reverted|scrubbed|rotated|exposed"
+    r"|restores?|restored|inert|broken|missing|regress(?:ed|ion)?)\b"
+)
+# Gate patterns that are themselves verbs of bypass and need no extra incident verb.
+_SELF_SUFFICIENT_GATE_PATTERNS = frozenset({r"\-\-no-verify", r"\-\-admin"})
 
 
 def parse_trailers(body: str) -> Dict[str, List[str]]:
@@ -186,7 +195,9 @@ class IncidentClassifier:
         """Classify incident from the commit subject alone (fallback channel).
 
         A subject that starts with a known class name ("stall: ...") is that class.
-        Otherwise the keyword patterns are tried in order.
+        Otherwise the keyword patterns are tried in order. gate-activation keywords
+        infer a row only when the subject also carries an incident verb (see
+        _INCIDENT_VERB_RE); a subject that merely names a gate returns 'unknown'.
         Returns the class name (e.g., 'fake-green') or 'unknown'.
         """
         prefix = _SUBJECT_PREFIX_RE.match(subject.strip().lower())
@@ -197,6 +208,12 @@ class IncidentClassifier:
         for class_name, patterns in self.patterns.items():
             for pattern in patterns:
                 if re.search(pattern, subject_lower, re.IGNORECASE):
+                    # aesop #1315: naming a gate ("chore: ... secret-gate test") is not an
+                    # incident; a gate keyword needs an incident verb beside it.
+                    if (class_name == "gate-activation"
+                            and pattern not in _SELF_SUFFICIENT_GATE_PATTERNS
+                            and not _INCIDENT_VERB_RE.search(subject_lower)):
+                        continue
                     return class_name
 
         return "unknown"
