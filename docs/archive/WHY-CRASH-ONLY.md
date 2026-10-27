@@ -167,18 +167,18 @@ Haiku excels at seam tasks (code review, test output parsing, severity judgment)
 
 ### Incident Tracking: Stalls Resolved by Restart
 
-Aesop's incident log tracks operational failures by class:
+Aesop's incident log tracks operational failures by class (docs/INCIDENTS.md; `grep -c -E '^\| (stall|test-pollution|gate-activation|conflict|flake|fake-green|ci-drift|doc-invented) '` = 41 total):
 
-- **Stall** (16 incidents): Agent hung, watchdog detected (>200s idle), respawned, continued.
-- **Test-pollution** (6): Test state leaked between runs; fixed by isolated tmpdir per worker.
-- **Gate-activation** (7): Secret-scan or other pre-push gate caught an escape.
-- **Conflict** (6): Merge conflict; reconciliation logic rebuilt state.
-- **Flake** (6): Timing-dependent test; deflaked via logical time.
-- **Fake-green** (2): Tests reported pass but never ran; wired real test execution.
-- **CI-drift** (3): Workflow state out of sync; env setup fixed.
-- **Doc-invented** (1): Documentation made unverifiable claims; corrected.
+- **Stall** (4; docs/INCIDENTS.md `grep -c '^| stall '`): Agent hung, watchdog detected (>200s idle), respawned, continued.
+- **Test-pollution** (5; `grep -c '^| test-pollution '`): Test state leaked between runs; fixed by isolated tmpdir per worker.
+- **Gate-activation** (3; `grep -c '^| gate-activation '`): Secret-scan or other pre-push gate caught an escape.
+- **Conflict** (21; `grep -c '^| conflict '`): Merge conflict; reconciliation logic rebuilt state.
+- **Flake** (4; `grep -c '^| flake '`): Timing-dependent test; deflaked via logical time.
+- **Fake-green** (1; `grep -c '^| fake-green '`): Tests reported pass but never ran; wired real test execution.
+- **CI-drift** (1; `grep -c '^| ci-drift '`): Workflow state out of sync; env setup fixed.
+- **Doc-invented** (2; `grep -c '^| doc-invented '`): Documentation made unverifiable claims; corrected.
 
-The **16 stall incidents** are directly resolved by crash-only recovery: watchdog detects (deterministic age check), kills the worker, orchestrator re-reads from disk and respawns. None required consensus voting or lease revocation.
+The **4 stall incidents** are directly resolved by crash-only recovery: watchdog detects (deterministic age check), kills the worker, orchestrator re-reads from disk and respawns. None required consensus voting or lease revocation.
 
 *(Source: [`docs/INCIDENTS.md`](../INCIDENTS.md))*
 
@@ -247,7 +247,7 @@ For autonomous developer agents — stateless workers, bounded repair loops, tea
 - **+20 percentage points** on hard tasks with bounded repair loops
 - **19.4%** of tasks require repair; max retries observed: 2 (no runaway loops)
 - **MTTR 0.0s–0.5s** across five fault classes (chaos-wave resilience test)
-- **16 stall incidents** resolved via watchdog + crash recovery (incident tracking)
+- **4 stall incidents** (docs/INCIDENTS.md, `grep -c '^| stall '`) resolved via watchdog + crash recovery (incident tracking)
 - **Haiku 94.4%** on seam tasks — cost-optimal tier for judgment work
 
 Start with crash-only on a single box. Add multi-instance via event sourcing when team size scales. The transition is a refactoring, not a rearchitecture.
