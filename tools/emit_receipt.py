@@ -154,8 +154,9 @@ def _find_owning_shards(changed_files, shard_map):
             if stem in shard_map:
                 owning.add(shard_map[stem])
                 continue
-        if path.parts[:1] == ("tools",):
-            return None  # fail closed: unowned tools/ change selects the full set
+        if path.parts[:1] == ("tools",) and path.suffix == ".py":
+            return None  # fail closed: unowned tools/*.py change selects the full set
+        # Non-.py files under tools/ (docs, markdown) own no python shard: contribute nothing.
     return owning
 
 
