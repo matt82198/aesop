@@ -21,7 +21,8 @@
       "path": "daemons/backup-fleet.sh",
       "reason": "per-cycle backup worker run by the watchdog loop; writes the heartbeat on a completed cycle",
       "tests": [
-        "tests/test-backup-fleet-heartbeat-guard.sh"
+        "tests/test-backup-fleet-heartbeat-guard.sh",
+        "tests/test-backup-fleet-secret-gate.sh"
       ]
     },
     {

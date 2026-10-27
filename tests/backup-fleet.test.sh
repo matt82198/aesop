@@ -81,6 +81,12 @@ test_item1_nul_protocol_real_loop() {
   setup_fixture
   create_mock_scanner
 
+  # Local bare origin in the temp dir (was an unreachable https://github.com URL,
+  # so the push could never succeed). A real push makes CLEAN/SNAPSHOTTED reachable.
+  local item1_origin="$TEST_DIR/item1-origin.git"
+  git init -q --bare "$item1_origin"
+  git -C "$REPO_DIR" remote set-url origin "$item1_origin"
+
   # Simulate repo name with pipe character
   local fixture_name="fixture|with|pipe"
 
@@ -95,6 +101,8 @@ test_item1_nul_protocol_real_loop() {
     source_backup_functions() {
       LOG="'"$AESOP_FIXTURE"'/state/FLEET-BACKUP.log"
       eval "$(sed -n "/^ts()/p" '"$BACKUP_FLEET_SCRIPT"')"
+      eval "$(sed -n "/^log_err()/p" '"$BACKUP_FLEET_SCRIPT"')"
+      eval "$(sed -n "/^EMPTY_TREE_SHA=/p" '"$BACKUP_FLEET_SCRIPT"')"
       eval "$(sed -n "/^resolve_scanner()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
       eval "$(sed -n "/^is_touched()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
       eval "$(sed -n "/^json_escape()/,/^}/p" '"$BACKUP_FLEET_SCRIPT"')"
