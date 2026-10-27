@@ -79,8 +79,9 @@ Each `prev` is the hash of the exact bytes of the line before it, with no traili
 5. Sets `prev` to the hash of the store's last line, or `""` (`store.py:106`).
 6. Appends one line to `events/<ts day>.jsonl` (`store.py:107-110`).
 
-The command-line front end is `tools/event_store/cli.py`, subcommand `append`
-(`cli.py:64-97`). It refuses before writing when:
+The command-line front end is `tools/event_store/cli.py`, with subcommands `append`, `verify`
+and `project` (`cli.py:152-172`; `python -I tools/event_store/cli.py --help` prints
+`usage: event_store [-h] {append,verify,project} ...`). The `append` handler is `cli.py:64-97`. It refuses before writing when:
 
 - there is no `--project` and no `--ref goal=G<n>` to route by (`cli.py:70-75`);
 - the event is a `ruling` with no `goal` ref (`cli.py:79-80`);
