@@ -1,204 +1,138 @@
-# Contributing to Aesop Kernel
+# Contributing to Aesop
 
-Thank you for your interest in Aesop Kernel! Your feedback, questions, and bug reports genuinely help make the orchestration kernel more reliable and observable.
+Aesop is source-available under the [PolyForm Noncommercial License 1.0.0](./LICENSE) (`LICENSE:1`). Bug
+reports, questions, documentation fixes and pull requests are all welcome. This page says how to set up,
+what a pull request has to pass, and what the maintainer will look at.
 
-## A note on the license
+## Before you start
 
-Aesop Kernel is licensed under the [PolyForm Noncommercial License 1.0.0](./LICENSE) as of this version (versions ≤0.7.0 remain MIT). This means contributions via pull requests are warmly welcome.
+- Open an issue first for anything larger than a typo or a one-file fix. Say what is broken or missing and
+  what you would change. It saves both sides a rejected pull request.
+- Report security problems privately, not as issues. See [SECURITY.md](./SECURITY.md).
+- By opening a pull request you state that you wrote the change, or have the right to submit it, and that it
+  may be distributed under the PolyForm Noncommercial License 1.0.0. There is no separate contributor agreement
+  in this repository.
 
-What that means in practice:
+## Set up
 
-- **Issues, bug reports, and discussion are warmly welcome** — they're the best way to contribute and shape the project.
-- **Code patches via pull request are welcome** — open a PR with your changes, and the maintainer will review it.
+Requirements, with where each comes from:
 
-The rest of this guide documents how to run and test Aesop Kernel locally (useful for anyone using it) and how the maintainer's own development loop works.
+| Requirement | Version | Source |
+|---|---|---|
+| Python | 3.11 or later | `pyproject.toml:19` |
+| Node.js | 18 or later (22 is what `.nvmrc` pins for publishing) | `package.json:55`, `.nvmrc` |
+| Git and a POSIX shell (Git Bash on Windows) | recent | the shell tests and `hooks/pre-push-policy.sh` need them |
 
-## Getting Started
-
-### Prerequisites
-
-- **Git** v2.40 or later
-- **Bash** v4.0 or later
-- **Python** 3.10+ (for dashboard and tools)
-- **Node.js** v18+ (optional; required for monitor and dashboard extras)
-- **Claude Code CLI** (to test orchestration workflows)
-
-### Setup
-
-1. **Clone** the repository (for local use and testing):
-   ```bash
-   git clone https://github.com/matt82198/aesop.git
-   cd aesop
-   ```
-
-2. **Create a configuration file**:
-   ```bash
-   cp aesop.config.example.json aesop.config.json
-   # Edit aesop.config.json with your local paths
-   ```
-
-3. **Test the watchdog locally** (one-shot mode):
-   ```bash
-   bash daemons/run-watchdog.sh --once
-   ```
-
-4. **Launch the web dashboard**:
-   ```bash
-   python ui/serve.py
-   ```
-   Visit `http://localhost:8770` to verify the interface.
-
-## Development Workflow (maintainer reference)
-
-The conventions below describe how the maintainer's own `/buildsystem` loop develops Aesop. They're documented here for transparency and for anyone the maintainer arranges a code collaboration with.
-
-### Branch Discipline
-
-- Create feature branches from `main`: `git checkout -b feature/your-feature`
-- Use `docs/` prefix for documentation: `git checkout -b docs/update-guides`
-- Use `fix/` prefix for bug fixes: `git checkout -b fix/watchdog-stall`
-- Never push directly to `main`; use pull requests only.
-
-### Commit Messages
-
-Follow conventional commit format:
+<!-- CMD: grep -n 'requires-python' pyproject.toml
+OUTPUT: 19:requires-python = ">=3.11" -->
+<!-- CMD: cat .nvmrc
+OUTPUT: 22 -->
 
 ```
-type(scope): short summary
-
-Optional longer explanation of the change. Describe the why, not just the what.
-
-Co-Authored-By: Your Name <your-email@example.com>
+git clone https://github.com/matt82198/aesop.git
+cd aesop
+pip install -r requirements-dev.txt
+cp aesop.config.example.json aesop.config.json
 ```
 
-**Type** should be one of:
-- `feat`: New feature or capability
-- `fix`: Bug fix
-- `docs`: Documentation only
-- `refactor`: Code refactoring (no behavioral change)
-- `perf`: Performance improvement
-- `test`: Test additions or fixes
-- `chore`: Tooling, CI/CD, dependencies
+`aesop.config.json` is local to you and must never be committed. The key meanings are in
+[docs/CONFIGURE.md](./docs/CONFIGURE.md).
 
-**Scope** is optional but recommended (e.g., `watchdog`, `dashboard`, `monitor`, `docs`).
+## Run the tests
 
-### Testing
+There are three test harnesses (`package.json:80-86`), described in [docs/TESTING.md](./docs/TESTING.md):
 
-Aesop is designed for integration testing rather than extensive unit tests. Before submitting:
+```
+npm run test:node
+npm run test:sh
+npm run test:py
+npm run test:all
+```
 
-1. **Test watchdog backup locally** (`--once` mode):
-   ```bash
-   bash daemons/run-watchdog.sh --once
-   ```
-   Verify `state/FLEET-BACKUP.log` for success.
+Run the one that covers what you changed, and `npm run test:all` before you ask for review. The Node and Python
+runs go through isolation wrappers so a test cannot write to your real home directory or push to a real remote.
+Do not run test files by hand without them.
 
-2. **Test the dashboard**:
-   ```bash
-   python ui/serve.py
-   # Visit http://localhost:8770
-   # Verify all panels load and refresh every 3s
-   ```
+Suite counts are not written in prose anywhere on purpose. To see the live inventory:
 
-3. **Test monitor signal collection** (if changes affect monitor):
-   ```bash
-   node monitor/collect-signals.mjs
-   ```
+```
+python tools/list_test_suites.py
+```
 
-4. **Manual orchestration test** (if changes affect dispatch):
-   - Use Claude Code with the modified Aesop configuration
-   - Spawn a test Haiku subagent and verify heartbeat updates
+## Install the pre-push hook
 
-## Proposing Behavioral Changes
+The pre-push policy runs the repository's checks before a push leaves your machine. Install it as described
+in [docs/HOOK-INSTALL.md](./docs/HOOK-INSTALL.md). A local hook can be bypassed (`git push --no-verify`), so it is
+a convenience and not a guarantee. The checks that count run in CI.
 
-When a change modifies **operational rules, agent configuration, monitoring behavior, or memory conventions** (anything that changes how the orchestration harness operates), it is a behavioral change and follows this process in the maintainer's development loop:
+<!-- CMD: grep -cE '^check_[a-z_]+\(\)' hooks/pre-push-policy.sh
+OUTPUT: 23 -->
 
-1. **Stage changes via PROPOSALS.md**: The monitor's signal collection (`monitor/collect-signals.mjs`) can emit structured proposals for rule or behavior changes. These proposals enter a human-review queue in `monitor/PROPOSALS.md`.
+The policy defines 23 `check_*` functions. Please do not bypass it. If a check blocks a change you believe is
+correct, say so in the pull request instead.
 
-2. **Complete the PR template**: Use the **"Behavioral change?"** section in [`.github/pull_request_template.md`](.github/pull_request_template.md) to document:
-   - Which rule or behavior changed
-   - Impact radius (which agents/components are affected)
-   - How the change was tested
-   - Rollback plan
+### Forks do not inherit branch protection
 
-3. **Reference the review checklist**: Reviewers will use [`docs/BEHAVIORAL-PR-REVIEW.md`](docs/BEHAVIORAL-PR-REVIEW.md) to verify:
-   - Rule alignment with cardinal rules
-   - Blast radius assessment
-   - Verification and testing steps
-   - Rollback & recovery plan
-   - Single-writer discipline (if PROPOSALS.md/ACTIONS.log touched)
+The required CI checks are declared in `tools/required-checks.json` (`required_contexts`), but branch
+protection is a setting on the GitHub repository, not a file. Your fork will not enforce them unless you set
+them up. Run the tests yourself.
 
-4. **Merge only after review**: Behavioral changes go through the standard PR review but require explicit mention of rule changes and impact assessment before approval.
+## Branches and commits
 
-**See also:** `monitor/CHARTER.md` for how the monitor categorizes signal actions (AUTO vs PROPOSE tier).
+- Work on a branch, never on `main`. Use a prefix that says what it is: `feature/`, `fix/` or `docs/`.
+- Commit messages follow conventional commits: `type(scope): summary`, with a subject of at most 72
+  characters and no trailing period. Allowed types: feat, fix, refactor, test, docs, chore, ci, perf, style,
+  build (`tools/commit_lint.py:8`).
+- Check a message before you push:
 
-## Security & Code Review
+```
+python tools/commit_lint.py --message "docs(contributing): fix a link"
+```
 
-### Secret Scanning
+## What a pull request must include
 
-This repository has **zero tolerance for credentials, API keys, or private paths**. Before committing any change:
+The pull request template ([.github/pull_request_template.md](./.github/pull_request_template.md)) asks for a
+description, the type of change and how you tested it. In addition:
 
-1. **Review your changes** for any hardcoded secrets, local paths, or private identifiers.
-2. **Run your own secret scanner** (e.g., `git secrets`, `truffleHog`):
-   ```bash
-   git diff HEAD~1 | my-secret-scanner
-   ```
-3. **Never commit** `aesop.config.json` or `.env` files (they are git-ignored for this reason).
+- **Tests for behavior changes.** A test must run the code and check what it does. A test that only searches
+  source text for a string does not count.
+- **No secrets or personal paths.** Run `python tools/secret_scan.py --staged` before you commit. The pre-push
+  policy runs it again.
+- **A CHANGELOG entry** for anything a user would notice, under the Unreleased heading of
+  [CHANGELOG.md](./CHANGELOG.md).
+- **Behavioral changes are flagged.** A change to how the orchestration rules, hooks, monitor or dispatch
+  behave is a behavioral change. Fill in the "Behavioral Change?" section of the template. Reviewers use
+  [docs/BEHAVIORAL-PR-REVIEW.md](./docs/BEHAVIORAL-PR-REVIEW.md).
+- **Generated files are regenerated, not hand-edited.** If you add a tool, run
+  `python tools/gen_tool_index.py --regenerate`.
 
-### Code Style
+## Review
 
-- **Shell scripts** (bash): POSIX-compatible where possible; include comments for complex logic.
-- **Python**: Follow PEP 8; prefer readability over cleverness.
-- **JavaScript**: Use modern ES6+ features; Node.js 18+.
-- **Markdown**: Hard-wrap at 100 characters; use clear headings and code blocks.
+Changes to gate code, workflows, hooks and the lane contract are routed to the maintainer for review
+(`.github/CODEOWNERS:9-19,41`). Required code-owner approval is not enabled yet (`.github/CODEOWNERS:3-5`), so a
+merge does not wait on a second reviewer. Expect the maintainer to run the full test set and read the diff
+against the pull request description.
 
-### Documentation
+## Code style
 
-- Update README.md if you add new features or change usage patterns.
-- Add entries to CHANGELOG.md (Unreleased section) for user-facing changes.
-- Write inline comments for non-obvious logic.
-- Link to related docs/guides when relevant.
+- **Python:** standard library first. A new third-party import needs a stated reason and an entry in
+  `pyproject.toml`. Subprocess calls that read output must set `encoding='utf-8', errors='replace'`. Write
+  docstrings.
+- **JavaScript:** Node built-ins only at runtime. The root `package.json` has no `dependencies` key; its one
+  entry is a dev dependency.
+- **Shell:** POSIX-safe where possible, and it has to run in Git Bash on Windows.
+- **Markdown:** ASCII only, short paragraphs, and every command shown has to run as written.
 
-## Proposing a Change
+<!-- CMD: node -e "console.log(Object.keys(require('./package.json')).includes('dependencies'))"
+OUTPUT: false -->
 
-Because the license doesn't permit outside code patches to be merged, the path for proposing a change is discussion-first rather than a pull request:
+## About CLAUDE.md and LANE-CONTRACT.md
 
-1. **Open an issue** describing the change:
-   - What's broken, missing, or could be better.
-   - The motivation and, where useful, a sketch of the design.
-   - Reference any related issues (e.g., "Relates to #123").
+[CLAUDE.md](./CLAUDE.md) and [LANE-CONTRACT.md](./LANE-CONTRACT.md) are written for the maintainer's own
+automated agents. They are public and you can read them, but you are not bound by them. Where they say a lane
+"must" do something, that is an instruction to an agent, not a requirement on you. The rules that bind a pull
+request are the ones on this page and the checks CI runs.
 
-2. **Discuss it** with the maintainer. Many changes can be implemented directly by the maintainer once the need is clear.
+## Questions
 
-3. **For substantial collaboration**, reach out to arrange contribution terms directly — code contributions can be accommodated by separate agreement outside the standard license.
-
-The sections below list the kinds of improvements the project most values — all of them are great topics for an issue or discussion.
-
-## Areas Where Feedback Helps Most
-
-### High-Priority
-- **Bug reports**: Any issue blocking watchdog, dashboard, or orchestration.
-- **Documentation gaps**: Workflows, troubleshooting, or patterns that are unclear.
-- **Dashboard feedback**: Missing panels, data-visualization ideas, UX friction.
-
-### Medium-Priority
-- **Monitor ideas**: Custom signal collectors, better drift detection.
-- **Daemon behavior**: Backup-cycle timing, error-handling edge cases.
-- **Test coverage gaps**: Workflows that aren't well exercised.
-
-### Lower-Priority
-- **Cosmetic notes**: UI refinements, theme customization.
-- **Platform quirks**: Windows-specific paths, macOS-specific issues.
-
-## Questions or Ideas?
-
-- Open an **issue** to discuss a feature or report a bug.
-- Post questions in **Discussions** (if enabled).
-- Reference relevant documentation (CARDINAL-RULES.md, DISPATCH-MODEL.md, etc.).
-
-## Code of Conduct
-
-We are committed to providing a welcoming and inclusive environment. Please treat all contributors with respect, provide constructive feedback, and help foster a collaborative community.
-
----
-
-**Thank you for contributing to Aesop!** Your improvements make the orchestration harness more reliable, observable, and cost-effective for everyone.
+Open an issue. For how decisions get made, read [docs/GOVERNANCE.md](./docs/GOVERNANCE.md).
