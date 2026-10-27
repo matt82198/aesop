@@ -10,6 +10,8 @@ POSIX home paths (/home/<name>, /Users/<name>), and private-machine tokens
 
 Exit 0 clean, 1 with numbered file:line findings.
 Supports --json output and --root for base directory.
+--tracked (opt-in) scans every git-tracked text file under --root instead of
+the package.json 'files' globs; the default scope is unchanged.
 
 Ratchet mode (--baseline FILE, same pattern as .stateapi-baseline.json):
 compare findings against a committed baseline of "file@type" -> count
@@ -27,6 +29,7 @@ import json
 import re
 import glob
 import argparse
+import subprocess
 from pathlib import Path
 
 
@@ -96,13 +99,16 @@ def scan_line_for_paths(line):
     """Scan a line for problematic paths and tokens."""
     findings = []
 
-    # Windows absolute paths: C:\Users\<name> or C:/Users/<name>
+    # Windows absolute paths: C:\Users\<name> or C:/Users/<name>.
+    # Case-insensitive (c:/users/ is the same path on Windows). The backslash
+    # separator accepts one or two backslashes so JSON-escaped on-disk forms
+    # (C:\\Users\\<name>) are caught too.
     windows_user_patterns = [
-        r'C:\\Users\\[a-zA-Z0-9_\-\.]+',
+        r'C:\\{1,2}Users\\{1,2}[a-zA-Z0-9_\-\.]+',
         r'C:/Users/[a-zA-Z0-9_\-\.]+'
     ]
     for pattern in windows_user_patterns:
-        matches = re.finditer(pattern, line)
+        matches = re.finditer(pattern, line, flags=re.IGNORECASE)
         for match in matches:
             findings.append({
                 'type': 'windows_user_path',
@@ -137,14 +143,45 @@ def scan_line_for_paths(line):
     return findings
 
 
-def scan_shipped_surface(root, json_output=False):
-    """Scan shipped surface for portability issues."""
-    patterns = read_package_json(root)
-    if not patterns:
-        print("Warning: Could not read package.json 'files' array", file=sys.stderr)
-        return []
+def list_tracked_files(root):
+    """Return absolute paths of every git-tracked file under root.
 
-    files = expand_globs(root, patterns)
+    Uses `git ls-files -z` run inside root (NUL-separated, so no quoting).
+    Raises RuntimeError when root is not a git work tree: --tracked must
+    fail closed rather than silently scan nothing.
+    """
+    try:
+        result = subprocess.run(
+            ['git', 'ls-files', '-z'],
+            cwd=root,
+            capture_output=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(
+            'portability_check: --tracked requires a git work tree at {0}: {1}'.format(
+                root, exc)
+        ) from exc
+    names = [n for n in result.stdout.decode('utf-8', 'replace').split('\0') if n]
+    return [os.path.join(root, n) for n in names]
+
+
+def scan_shipped_surface(root, json_output=False, tracked=False):
+    """Scan shipped surface for portability issues.
+
+    Default scope is the package.json 'files' globs. With tracked=True the scope
+    is every git-tracked text file under root (opt-in; findings are keyed by
+    path relative to root, same as the default scope).
+    """
+    if tracked:
+        files = list_tracked_files(root)
+    else:
+        patterns = read_package_json(root)
+        if not patterns:
+            print("Warning: Could not read package.json 'files' array", file=sys.stderr)
+            return []
+
+        files = expand_globs(root, patterns)
     all_findings = []
 
     for filepath in files:
@@ -161,6 +198,9 @@ def scan_shipped_surface(root, json_output=False):
             issues = scan_line_for_paths(line)
             for issue in issues:
                 relative_path = os.path.relpath(filepath, root)
+                if tracked:
+                    # Tracked scope is new: always report posix separators.
+                    relative_path = Path(relative_path).as_posix()
                 finding = {
                     'file': relative_path,
                     'line': line_num,
@@ -254,6 +294,12 @@ def main():
         help='Regenerate the --baseline file from the current scan '
              '(CI must never pass this)'
     )
+    parser.add_argument(
+        '--tracked',
+        action='store_true',
+        help='Opt-in scope: scan every git-tracked text file under --root '
+             'instead of the package.json "files" globs (default scope unchanged)'
+    )
 
     args = parser.parse_args()
     root = os.path.abspath(args.root)
@@ -263,7 +309,12 @@ def main():
               file=sys.stderr)
         return 2
 
-    findings = scan_shipped_surface(root, json_output=args.json)
+    try:
+        findings = scan_shipped_surface(root, json_output=args.json,
+                                        tracked=args.tracked)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
     if args.baseline and args.update_baseline:
         current_keys = findings_to_baseline_keys(findings)
