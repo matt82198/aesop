@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { cleanupDir } from './helpers/cleanup.mjs';
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Budget 45 s: CI windows-shard measured 27.9 s for a correct 651-file scaffold (run 40559065071);
@@ -56,22 +57,22 @@ test('scaffold does not copy ignored artifacts (ui/**/node_modules, aesop-fleet/
 
     // 3. Scaffold the repo copy into a fresh target, with a 45 s budget.
     const target = path.join(root, 'target');
-    const started = Date.now();
+    const t0 = Date.now();
     const res = spawnSync(process.execPath, [path.join(repoCopy, 'bin', 'cli.js'), target, '--no-skills'], {
       encoding: 'utf8',
       cwd: root,
       timeout: SCAFFOLD_TIMEOUT_MS,
       killSignal: 'SIGKILL'
     });
-    const elapsed = Date.now() - started;
+    const elapsed = Date.now() - t0;
 
     // 4. Must have finished under the timeout (a timed-out spawn reports signal SIGKILL).
     assert.notEqual(
       res.signal, 'SIGKILL',
       `scaffold did not finish within ${SCAFFOLD_TIMEOUT_MS} ms (elapsed ${elapsed} ms). stdout tail: ${String(res.stdout).slice(-800)}`
     );
-    assert.ok(elapsed < SCAFFOLD_TIMEOUT_MS, `scaffold took ${elapsed} ms, budget ${SCAFFOLD_TIMEOUT_MS} ms`);
-    assert.equal(res.status, 0, `scaffold exited ${res.status}. stderr tail: ${String(res.stderr).slice(-800)}`);
+    assert.ok(elapsed < SCAFFOLD_TIMEOUT_MS, `scaffold took ${elapsed} ms, budget ${SCAFFOLD_TIMEOUT_MS} ms (elapsed_ms=${elapsed})`);
+    assert.equal(res.status, 0, `scaffold exited ${res.status} (elapsed_ms=${elapsed}). stderr tail: ${String(res.stderr).slice(-800)}`);
 
     // 5. Target must contain no node_modules and no aesop-fleet anywhere.
     const names = collectNames(target);
@@ -82,6 +83,6 @@ test('scaffold does not copy ignored artifacts (ui/**/node_modules, aesop-fleet/
   } finally {
     // Windows holds short-lived locks on freshly written trees (AV scan, indexer);
     // retry the teardown so a transient EBUSY/EPERM does not fail a green test.
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    cleanupDir(root, { label: 'scaffold-ignores' });
   }
 });
