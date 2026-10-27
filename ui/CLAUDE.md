@@ -108,7 +108,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 ## CSRF & Session Protection
 
-43-char URL-safe base64 token, persisted to `state/.ui-session-token` (0600), regenerated if missing. Mutations require Origin/Referer local check + X-Aesop-Token header match (both fail-closed). CLI reads token from file; browser gets it injected into HTML template.
+43-char URL-safe base64 token, persisted to `state/.ui-session-token` (0600), regenerated if missing. Mutations require Origin/Referer local check + X-Aesop-Token header match (both fail-closed). CLI reads token from file; browser gets it injected into HTML template. CSRF trusts only the bound loopback port by default; `AESOP_DASH_DEV_ORIGINS` opts in exact loopback origins with an explicit port (e.g. Vite `http://localhost:5173`), and any local process on an opted-in port can read the session token.
 
 ## SSE Contract
 
