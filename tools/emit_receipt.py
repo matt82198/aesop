@@ -290,8 +290,202 @@ def part_timeout_seconds(environ=None):
     return value
 
 
+_TH32CS_SNAPPROCESS = 0x00000002
+_PROCESS_TERMINATE = 0x0001
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+
+def _win_kernel32():
+    """kernel32 with the argtypes/restypes the descendant walk needs (Windows only)."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.TerminateProcess.restype = wintypes.BOOL
+    kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.GetProcessTimes.restype = wintypes.BOOL
+    kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    return kernel32
+
+
+def _win_process_table():
+    """Windows: {pid: ppid} from one toolhelp snapshot (empty dict if the snapshot fails)."""
+    import ctypes
+    from ctypes import wintypes
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_size_t),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", wintypes.LONG),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", wintypes.WCHAR * 260),
+        ]
+
+    kernel32 = _win_kernel32()
+    kernel32.Process32FirstW.restype = wintypes.BOOL
+    kernel32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+    kernel32.Process32NextW.restype = wintypes.BOOL
+    kernel32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+    snap = kernel32.CreateToolhelp32Snapshot(_TH32CS_SNAPPROCESS, 0)
+    if not snap or snap == ctypes.c_void_p(-1).value:
+        return {}
+    table = {}
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        ok = kernel32.Process32FirstW(snap, ctypes.byref(entry))
+        while ok:
+            table[entry.th32ProcessID] = entry.th32ParentProcessID
+            ok = kernel32.Process32NextW(snap, ctypes.byref(entry))
+    finally:
+        kernel32.CloseHandle(snap)
+    return table
+
+
+def _win_creation_time(pid):
+    """Windows: FILETIME creation time of pid as an int, or None when the process cannot be opened."""
+    from ctypes import wintypes
+
+    kernel32 = _win_kernel32()
+    handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return None
+    try:
+        created, exited, kernel_t, user_t = (wintypes.FILETIME() for _ in range(4))
+        if not kernel32.GetProcessTimes(handle, created, exited, kernel_t, user_t):
+            return None
+        return (created.dwHighDateTime << 32) | created.dwLowDateTime
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _posix_process_table():
+    """POSIX: ({pid: ppid}, {pid: start_time or None}) from /proc, else from `ps`."""
+    table, starts = {}, {}
+    proc_dir = Path("/proc")
+    if proc_dir.is_dir():
+        for entry in proc_dir.iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                raw = (entry / "stat").read_text()
+            except OSError:
+                continue  # exited between iterdir and read
+            # Fields after the "(comm)" group: index 0 = field 3 (state), 1 = ppid (field 4),
+            # 19 = starttime (field 22). comm may contain spaces or parens, hence rfind.
+            tail = raw[raw.rfind(")") + 2:].split()
+            if len(tail) < 20:
+                continue
+            table[int(entry.name)] = int(tail[1])
+            starts[int(entry.name)] = int(tail[19])
+        return table, starts
+    try:
+        out = subprocess.run(["ps", "-eo", "pid=,ppid="], capture_output=True, text=True,
+                             encoding="utf-8", errors="replace", timeout=30, check=False).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return {}, {}
+    for line in out.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and all(f.isdigit() for f in fields):
+            table[int(fields[0])] = int(fields[1])
+    return table, {}
+
+
+def _descendant_pids(root_pid):
+    """Every pid whose parent chain leads to root_pid, ordered deepest-first (children before parents).
+
+    Walks one snapshot of (pid, ppid). Windows does not reparent orphans, so a grandchild whose
+    parent already exited still records root_pid's ppid chain and is found here (the gap taskkill /T
+    leaves). POSIX orphans are reparented to init, so this walk cannot reach them; the session
+    killpg sweep in _kill_process_tree covers the group case.
+
+    Pid-reuse guard: a child cannot have been created before its parent, so a candidate whose
+    creation/start time is earlier than its parent's is skipped. Residual risk: when the root has
+    already exited (its time is unreadable) its direct children are accepted on ppid alone, because
+    Popen does not record the part's start time in the caller. Pid reuse inside the few seconds
+    between the part's exit and this snapshot is treated as negligible.
+    """
+    if os.name == "nt":
+        table = _win_process_table()
+        times = {}
+
+        def created(pid):
+            if pid not in times:
+                times[pid] = _win_creation_time(pid)
+            return times[pid]
+    else:
+        table, starts = _posix_process_table()
+
+        def created(pid):
+            return starts.get(pid)
+
+    children = {}
+    for pid, ppid in table.items():
+        children.setdefault(ppid, []).append(pid)
+
+    found, order, stack = set(), [], [root_pid]
+    while stack:
+        parent = stack.pop()
+        for child in children.get(parent, ()):
+            if child in found or child in (0, root_pid):
+                continue
+            child_t, parent_t = created(child), created(parent)
+            if child_t is not None and parent_t is not None and child_t < parent_t:
+                continue  # pid reuse: this candidate predates its recorded parent
+            found.add(child)
+            order.append(child)
+            stack.append(child)
+    order.reverse()  # every node follows its own descendants, so children die before parents
+    return order
+
+
+def _kill_one(pid):
+    """Terminate one pid. True when the kill landed; False when it was already gone."""
+    if os.name == "nt":
+        kernel32 = _win_kernel32()
+        handle = kernel32.OpenProcess(_PROCESS_TERMINATE, False, pid)
+        if not handle:
+            return False  # already gone (or not ours to open)
+        try:
+            return bool(kernel32.TerminateProcess(handle, 1))
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        print("kill-tree: cannot terminate descendant %d (permission denied)" % pid, file=sys.stderr)
+        return False
+    return True
+
+
+def _kill_descendants(root_pid):
+    """Kill every descendant of root_pid, deepest-first, logging one line per kill."""
+    for pid in _descendant_pids(root_pid):
+        if _kill_one(pid):
+            print("kill-tree: terminated descendant %d of part %d" % (pid, root_pid), file=sys.stderr)
+
+
 def _kill_process_tree(proc):
-    """Kill proc and every descendant. Windows: taskkill /T; POSIX: the whole session group."""
+    """Kill proc and every descendant.
+
+    First, every descendant reachable by parent chain (including orphans whose parent already
+    exited) is killed deepest-first. Then the existing sweep runs unchanged as the final pass:
+    Windows taskkill /T; POSIX the whole session group.
+    """
+    _kill_descendants(proc.pid)
     if os.name == "nt":
         try:
             subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True,
