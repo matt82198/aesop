@@ -1,6 +1,6 @@
 # Contributing to Aesop
 
-Aesop is source-available under the [PolyForm Noncommercial License 1.0.0](./LICENSE) (`LICENSE:1`). Bug
+Aesop is open source under the [MIT License](./LICENSE) (`LICENSE:1`). Bug
 reports, questions, documentation fixes and pull requests are all welcome. This page says how to set up,
 what a pull request has to pass, and what the maintainer will look at.
 
@@ -10,7 +10,7 @@ what a pull request has to pass, and what the maintainer will look at.
   what you would change. It saves both sides a rejected pull request.
 - Report security problems privately, not as issues. See [SECURITY.md](./SECURITY.md).
 - By opening a pull request you state that you wrote the change, or have the right to submit it, and that it
-  may be distributed under the PolyForm Noncommercial License 1.0.0. There is no separate contributor agreement
+  may be distributed under the MIT License, the same license as the project. There is no separate contributor agreement
   in this repository.
 
 ## Set up

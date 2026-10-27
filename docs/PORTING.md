@@ -167,4 +167,4 @@ Each: symptom → cause → fix.
 
 ---
 
-**License**: PolyForm Noncommercial License 1.0.0 (versions ≤0.7.0 remain MIT). See [LICENSE](../LICENSE) for details.
+**License**: MIT License (relicensed from PolyForm Noncommercial 1.0.0 on 2026-10-26; v0.8.0-v0.11.0 were released under PolyForm Noncommercial 1.0.0). See [LICENSE](../LICENSE) for details.

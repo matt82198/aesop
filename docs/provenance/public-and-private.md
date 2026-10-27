@@ -13,8 +13,8 @@ reproduce the blueprint. It exists so that nothing on the other pages reads as s
   tooling that mirrors them. These live in private repositories, named below.
 - This repository is public: <!-- CMD: gh repo view matt82198/aesop --json visibility -> {"visibility":"PUBLIC"} -->
   `gh repo view matt82198/aesop --json visibility` reports `PUBLIC`.
-- The license is PolyForm Noncommercial 1.0.0 (`LICENSE:1`; `package.json:67`). That is source-available,
-  not an OSI open-source license. Do not read "public" as "open source".
+- The license is MIT (`LICENSE:1`; `package.json:67`), changed from PolyForm Noncommercial 1.0.0 on 2026-10-26. Public and
+  open source are now the same thing for this repository.
 
 ## What the provenance record says
 
