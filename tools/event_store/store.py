@@ -9,6 +9,7 @@ prev "". Verified under those rules only.
 """
 import hashlib
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -35,6 +36,7 @@ class Store:
         self.path = Path(path)
         self.events_dir = self.path / "events"
         self.read_only = False
+        self._meta = {}
         meta_path = self.path / "store.json"
         if not meta_path.exists() and self._is_v1_layout():
             # conductor3 v1 log: day files with no store.json. Schema 1 is implied by the
@@ -47,6 +49,7 @@ class Store:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise StoreError("cannot read %s: %s" % (meta_path, exc))
+        self._meta = meta
         self.project = meta.get("project")
         self.schema = meta.get("schema")
         if not self.project or self.schema not in (1, 2):
@@ -106,9 +109,25 @@ class Store:
                  "prev": line_sha(last) if last is not None else ""}
         self.events_dir.mkdir(parents=True, exist_ok=True)
         target = self.events_dir / (day + ".jsonl")
+        encoded = encode_event(event)
         with open(target, "ab") as fh:
-            fh.write(encode_event(event) + b"\n")
+            fh.write(encoded + b"\n")
+        self._write_head(line_sha(encoded))
         return event
+
+    def _write_head(self, head):
+        """Record the sha of the store's last line as store.json "head" (atomic replace).
+
+        Head is an optional key: a store.json without it verifies exactly as before, so
+        existing stores do not go red. Only the one key changes; other keys are kept.
+        """
+        meta_path = self.path / "store.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["head"] = head
+        tmp = self.path / "store.json.tmp"
+        tmp.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(tmp, meta_path)
+        self._meta = meta
 
     def verify(self):
         """Return a list of problem strings; empty means the chain is intact."""
@@ -142,4 +161,12 @@ class Store:
                 if isinstance(seq, int):
                     last_seq = seq
                 prev_line = raw
+        head = self._meta.get("head") if v2 else None
+        if head is not None:
+            # The chain proves each line against its predecessor, not the final line's own
+            # bytes. The recorded head covers the tail, so an edit to the last line is caught.
+            want_head = line_sha(prev_line) if prev_line is not None else ""
+            if head != want_head:
+                problems.append("store.json: head does not match the last line (last line "
+                                "edited, or lines removed or appended outside the store)")
         return problems
