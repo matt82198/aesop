@@ -1342,5 +1342,71 @@ class SecretScanBoundedPlaceholderRuleTest(unittest.TestCase):
         self._assert_passes(_j("sk-proj-", "example-example-example"))
 
 
+class CallExpressionAssignmentTest(unittest.TestCase):
+    """generic_secret_assignment must flag hardcoded literals but never a
+    variable assigned from a call expression, subscript, or attribute.
+
+    Driven through scan_file on a real .py fixture (behaviour, not source text).
+    Secret-shaped literals are assembled at runtime via _j()."""
+
+    def _rules_for(self, line):
+        path = _write_fixture(".py", [line])
+        try:
+            return [f[1] for f in scan_file(Path(path))]
+        finally:
+            os.unlink(path)
+
+    # --- must stay flagged -------------------------------------------------
+
+    def test_flag_quoted_runtime_32_alnum_token(self):
+        value = _j("Q7kD", "M2p9", "Z4x1", "R8t3", "Y6v0", "N5w2", "L9c7", "H3b8")
+        self.assertEqual(len(value), 32)
+        self.assertIn(
+            "generic_secret_assignment",
+            self._rules_for(_j("to", "ken = \"", value, "\"")),
+        )
+
+    def test_flag_single_quoted_runtime_40_hex_api_key(self):
+        value = _j("3f9a0c1d", "7b2e4a8f", "c01d9e3b", "5a6f7c2d", "8e1b4f0a")
+        self.assertEqual(len(value), 40)
+        self.assertIn(
+            "generic_secret_assignment",
+            self._rules_for(_j("api", "_key = '", value, "'")),
+        )
+
+    def test_flag_runtime_assembled_github_token(self):
+        value = _j("ghp_", "Xy7Qm2Lp9", "Rt4Vn8Jc1", "Ws6Zb3Hd5", "Kf0Gu9Ye2")
+        self.assertTrue(self._rules_for(_j("to", "ken = \"", value, "\"")))
+
+    # --- must NOT be flagged (call expressions, subscripts, attributes) ----
+
+    def test_pass_strip_of_call_result(self):
+        # token = raw.strip("'\"")  (quote-stripping a call result)
+        line = _j('token = raw.strip("', "'", "\\", '"', '")')
+        self.assertEqual(self._rules_for(line), [])
+
+    def test_pass_environ_get_call(self):
+        self.assertEqual(self._rules_for('token = os.environ.get("X")'), [])
+
+    def test_pass_subscript_lookup(self):
+        self.assertEqual(self._rules_for('secret = cfg["secret"]'), [])
+
+    def test_pass_getpass_call(self):
+        self.assertEqual(self._rules_for("password = getpass.getpass()"), [])
+
+    def test_pass_indexed_name(self):
+        # Subscript of a plain name, 8+ bare chars after the assignment operator.
+        # Fragments keep the literal out of this file so its own gate stays clean.
+        self.assertEqual(self._rules_for(_j("to", "ken = parts", "[0]")), [])
+
+    def test_pass_self_indexed_name_from_verify_test_coverage(self):
+        # Exact shape of tools/verify_test_coverage.py:77 on dark-node-tests:
+        # the same name re-assigned from its own subscript, 12-space indent.
+        # Unquoted branch: the value class does not exclude square brackets or colon.
+        self.assertEqual(
+            self._rules_for(_j(" " * 12, "to", "ken = to", "ken[", "2:]")), []
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
