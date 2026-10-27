@@ -324,6 +324,26 @@ jobs:
         rc, stdout, stderr = self._run_gate(self.test_dir)
         self.assertEqual(rc, 0, f"node-invoked .mjs gate must count as wired. stderr: {stderr}")
 
+    def test_nested_tools_claudemd_guardrail_is_checked(self):
+        """A Guardrail gate line in a nested tools/<group>/CLAUDE.md is checked, so an unwired gate exits 1."""
+        self._fixture("- plain note, no gates here.")
+        nested_dir = os.path.join(self.test_dir, 'tools', 'x')
+        os.makedirs(nested_dir)
+        with open(os.path.join(nested_dir, 'CLAUDE.md'), 'w', encoding='utf-8') as f:
+            f.write("# tools/x — nested group\n\n- `verify_zz.py` is the Guardrail G99 gate\n")
+        rc, stdout, stderr = self._run_gate(self.test_dir)
+        self.assertEqual(rc, 1, f"Unwired gate in nested tools CLAUDE.md must fail closed. stderr: {stderr}")
+        self.assertIn('verify_zz.py', stderr)
+        self.assertIn('Unwired', stderr)
+
+    def test_same_guardrail_line_in_tools_claudemd_is_reported(self):
+        """Pin: the same Guardrail gate line in tools/CLAUDE.md is reported as unwired today."""
+        self._fixture("- `verify_zz.py` is the Guardrail G99 gate")
+        rc, stdout, stderr = self._run_gate(self.test_dir)
+        self.assertEqual(rc, 1, f"Unwired gate in tools/CLAUDE.md must fail closed. stderr: {stderr}")
+        self.assertIn('verify_zz.py', stderr)
+        self.assertIn('Unwired', stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

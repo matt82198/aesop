@@ -156,28 +156,53 @@ def find_gate_invocations(workflows_dir):
     return invoked
 
 
+SKIP_DIRS = ('node_modules', '__pycache__', '.git')
+
+
+def find_nested_claudemds(tools_dir, skip_path):
+    """Yield every tools/**/CLAUDE.md except skip_path (the top-level page, parsed by main)."""
+    for dirpath, dirnames, filenames in os.walk(tools_dir):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        if 'CLAUDE.md' not in filenames:
+            continue
+        path = os.path.join(dirpath, 'CLAUDE.md')
+        if os.path.normpath(path) != os.path.normpath(skip_path):
+            yield path
+
+
 def main():
     repo_root = os.getcwd()
 
     # Discover gates from CLAUDE.md files
     gates = {}
-
-    # Parse tools/CLAUDE.md
-    tools_claudemd = os.path.join(repo_root, 'tools', 'CLAUDE.md')
+    # gate -> relative paths of NESTED CLAUDE.md files that document it (for the report)
+    sources = {}
     ambiguous = []
-    tools_gates = discover_gates(tools_claudemd, ambiguous)
-    if tools_gates is None:
-        print(f"ERROR: Cannot read {tools_claudemd}", file=sys.stderr)
-        return 2
-    gates.update(tools_gates)
 
-    # Parse tests/CLAUDE.md
-    tests_claudemd = os.path.join(repo_root, 'tests', 'CLAUDE.md')
-    tests_gates = discover_gates(tests_claudemd, ambiguous)
-    if tests_gates is None:
-        print(f"ERROR: Cannot read {tests_claudemd}", file=sys.stderr)
+    def absorb(claudemd, nested):
+        found = discover_gates(claudemd, ambiguous)
+        if found is None:
+            print(f"ERROR: Cannot read {claudemd}", file=sys.stderr)
+            return False
+        rel = os.path.relpath(claudemd, repo_root).replace(os.sep, '/')
+        for gate in found:
+            gates[gate] = True
+            if nested:
+                sources.setdefault(gate, []).append(rel)
+        return True
+
+    # Parse tools/CLAUDE.md and tests/CLAUDE.md
+    tools_claudemd = os.path.join(repo_root, 'tools', 'CLAUDE.md')
+    if not absorb(tools_claudemd, nested=False):
         return 2
-    gates.update(tests_gates)
+    tests_claudemd = os.path.join(repo_root, 'tests', 'CLAUDE.md')
+    if not absorb(tests_claudemd, nested=False):
+        return 2
+
+    # Parse every nested tools/**/CLAUDE.md: a group page can document a gate too
+    for nested_path in find_nested_claudemds(os.path.join(repo_root, 'tools'), tools_claudemd):
+        if not absorb(nested_path, nested=True):
+            return 2
 
     # A gate-directory reference that cannot be classified is never silently ignored
     if ambiguous:
@@ -204,7 +229,9 @@ def main():
     if unwired:
         print("ERROR: Unwired gates found (documented but not invoked in CI):", file=sys.stderr)
         for gate in unwired:
-            print(f"  - {gate}", file=sys.stderr)
+            where = sources.get(gate)
+            suffix = f" (documented in {', '.join(where)})" if where else ''
+            print(f"  - {gate}{suffix}", file=sys.stderr)
         return 1
 
     print("OK: All documented CI gates are wired into CI workflows")
