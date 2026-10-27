@@ -392,7 +392,7 @@ def _posix_process_table():
         return table, starts
     try:
         out = subprocess.run(["ps", "-eo", "pid=,ppid="], capture_output=True, text=True,
-                             timeout=30, check=False).stdout
+                             encoding="utf-8", errors="replace", timeout=30, check=False).stdout
     except (OSError, subprocess.TimeoutExpired):
         return {}, {}
     for line in out.splitlines():
