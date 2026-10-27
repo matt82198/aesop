@@ -26,7 +26,7 @@ import json
 import sys
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 # Meta files that don't require CLAUDE.md updates
@@ -67,6 +67,13 @@ KNOWN_DOMAINS = {
     "ui",
 }
 
+# Trunk names: asking for either one also tries the other, so a remote whose
+# trunk is `master` (or `main`) resolves without a --base-ref change.
+TRUNK_NAMES = ("main", "master")
+
+# git's well-known empty tree. Bootstrap (empty remote) diffs against it.
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
 
 # Documentation surfaces that satisfy a domain's "you changed code, document it"
 # requirement. CLAUDE.md is the universal one; tools/INDEX.md is the generated
@@ -105,42 +112,107 @@ def get_domain_for_path(path: str) -> str:
     return None
 
 
-def get_git_changed_files(repo_root: Path, base_ref: str = "main") -> Tuple[List[str], bool]:
-    """Get list of changed files via git diff.
+def base_ref_candidates(base_ref: str) -> List[str]:
+    """Ordered base refs tried for --base-ref BASE_REF (GITHUB_BASE_REF first when set).
 
-    Args:
-        repo_root: Repository root directory
-        base_ref: Base reference for comparison (default: main)
+    A ref already qualified as origin/... or refs/... is used as given. A bare name
+    tries origin/<name> then <name>. Pure string logic, no git calls.
+    """
+    import os
+
+    names = []
+    github_base = os.environ.get("GITHUB_BASE_REF", "")
+    if github_base:
+        names.append(github_base)
+    names.append(base_ref)
+
+    candidates = []
+    for name in names:
+        if name.startswith(("origin/", "refs/")):
+            candidates.append(name)
+        else:
+            candidates.extend([f"origin/{name}", name])
+    bare = [n[len("origin/"):] if n.startswith("origin/") else n for n in names]
+    if any(n in TRUNK_NAMES for n in bare):
+        for trunk in TRUNK_NAMES:
+            candidates.extend([f"origin/{trunk}", trunk])
+    return list(dict.fromkeys(candidates))
+
+
+def ref_resolves(repo_root: Path, ref: str) -> bool:
+    """True if `git rev-parse --verify <ref>` succeeds in repo_root."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", ref],
+        capture_output=True,
+        text=True,
+        encoding='utf-8', errors='replace',
+        timeout=10,
+        cwd=repo_root,
+    )
+    return result.returncode == 0
+
+
+def resolve_base(repo_root: Path, base_ref: str) -> Optional[str]:
+    """First candidate from base_ref_candidates() that resolves, or None.
+
+    No HEAD~1 fallback: a None here is the caller's fail-closed or bootstrap decision.
+    """
+    for candidate in base_ref_candidates(base_ref):
+        if ref_resolves(repo_root, candidate):
+            return candidate
+    return None
+
+
+def remote_is_empty(repo_root: Path) -> bool:
+    """True only when `origin` exists and advertises no heads (a bootstrap push).
+
+    A missing origin, a failing ls-remote, or a timeout is False: fail closed.
+    """
+    try:
+        has_origin = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            timeout=10, cwd=repo_root,
+        )
+        if has_origin.returncode != 0:
+            return False
+        heads = subprocess.run(
+            ["git", "ls-remote", "--heads", "origin"],
+            capture_output=True, text=True, encoding='utf-8', errors='replace',
+            timeout=30, cwd=repo_root,
+        )
+        return heads.returncode == 0 and not heads.stdout.strip()
+    except Exception:
+        return False
+
+
+def get_git_changed_files(repo_root: Path, diff_base: str) -> Tuple[List[str], bool]:
+    """Get list of changed files in the committed range `<diff_base>...HEAD`.
+
+    diff_base is a resolved ref, or EMPTY_TREE for a bootstrap whole-tree check
+    (two-dot form, since the empty tree has no merge-base). The working tree is
+    not read. HEAD~1 is never used here.
 
     Returns:
         Tuple of (changed_files, is_error)
     """
-    import os
-
-    # In GitHub Actions PRs, GITHUB_BASE_REF is the target branch name
-    github_base = os.environ.get("GITHUB_BASE_REF", "")
-
-    refs_to_try = []
-    if github_base:
-        refs_to_try.append(f"origin/{github_base}...HEAD")
-    refs_to_try.append(f"origin/{base_ref}...HEAD")
-    refs_to_try.append("HEAD~1...HEAD")
-
+    if diff_base == EMPTY_TREE:
+        rev_args = [EMPTY_TREE, "HEAD"]
+    else:
+        rev_args = [f"{diff_base}...HEAD"]
     try:
-        for ref_spec in refs_to_try:
-            result = subprocess.run(
-                ["git", "diff", "--name-only", ref_spec],
-                capture_output=True,
-                text=True,
-                encoding='utf-8', errors='replace',
-                timeout=10,
-                cwd=repo_root,
-            )
-            if result.returncode == 0:
-                files = [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
-                return files, False
-
-        return [], True
+        result = subprocess.run(
+            ["git", "diff", "--name-only", *rev_args],
+            capture_output=True,
+            text=True,
+            encoding='utf-8', errors='replace',
+            timeout=10,
+            cwd=repo_root,
+        )
+        if result.returncode != 0:
+            return [], True
+        files = [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
+        return files, False
     except subprocess.TimeoutExpired:
         return [], True
     except Exception:
@@ -260,19 +332,33 @@ def main():
         print(f"Error: repo root {repo_root} does not exist", file=sys.stderr)
         sys.exit(2)
 
-    # Get changed files from git
-    changed_files, git_error = get_git_changed_files(repo_root, args.base_ref)
+    # Resolve the base: a candidate ref, else bootstrap (empty remote) or fail closed.
+    base = resolve_base(repo_root, args.base_ref)
+    bootstrap = base is None and remote_is_empty(repo_root)
+    if base is None and not bootstrap:
+        changed_files, git_error = [], True
+    else:
+        if bootstrap:
+            if not args.json:
+                print("[BOOTSTRAP] no base ref; checking the whole tree")
+        elif not args.json:
+            print(f"[BASE] {base}")
+        changed_files, git_error = get_git_changed_files(
+            repo_root, EMPTY_TREE if bootstrap else base
+        )
 
     if git_error:
+        tried = ", ".join(base_ref_candidates(args.base_ref))
+        message = f"could not diff against base (tried: {tried}); fail closed, no HEAD~1 fallback"
         if args.json:
             output = {
                 "status": "error",
-                "message": "Failed to get git diff",
+                "message": message,
                 "findings": [],
             }
             print(json.dumps(output, indent=2))
         else:
-            print("Error: Failed to get git diff from origin/main or HEAD~1", file=sys.stderr)
+            print(f"Error: {message}", file=sys.stderr)
         sys.exit(2)
 
     # If no changes, pass
