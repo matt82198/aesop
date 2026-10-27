@@ -182,7 +182,7 @@ test('contended acquire succeeds once the holder releases mid-wait', async () =>
   // this thread while waiting, so the release must come from another process.
   const releaser = spawn(
     process.execPath,
-    ['-e', `setTimeout(() => require('node:fs').rmSync(${JSON.stringify(lockDir)}, { recursive: true, force: true }), 300)`],
+    ['-e', "setTimeout(() => require('node:fs').rmSync(process.argv[1], { recursive: true, force: true }), 300)", lockDir],
     { stdio: 'ignore' }
   );
   releaser.unref();
