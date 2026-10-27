@@ -803,6 +803,14 @@ function isShippedHookTestEntry(name) {
   return name.endsWith('.test.mjs');
 }
 
+// docs/MACHINERY-MAP.md is aesop-only: it cites this repository's own tree (ci.yml,
+// verify-receipt.yml, bin/cli.js, STATE.md), none of which a scaffold ships, so
+// check_machinery_map_symbols would fail in every adopter tree. Skipped by exact
+// filename, applied to the docs/ copy only.
+function isAesopOnlyDocEntry(name) {
+  return name === 'MACHINERY-MAP.md';
+}
+
 function copyRecursive(src, dest, skipEntry = () => false) {
   const stat = fs.statSync(src);
   if (stat.isDirectory()) {
@@ -1691,7 +1699,10 @@ if (!isRuntimeCommand) {
       const src = path.join(templateRoot, item);
       const dest = path.join(finalTargetDir, item);
       if (fs.existsSync(src)) {
-        copyRecursive(src, dest, item === 'hooks' ? isShippedHookTestEntry : undefined);
+        let skipEntry;
+        if (item === 'hooks') skipEntry = isShippedHookTestEntry;
+        else if (item === 'docs') skipEntry = isAesopOnlyDocEntry;
+        copyRecursive(src, dest, skipEntry);
         console.log(`✓ Copied ${item}`);
       }
     });
