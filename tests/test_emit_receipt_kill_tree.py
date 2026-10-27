@@ -115,6 +115,7 @@ class KillProcessTreeGapTests(unittest.TestCase):
         self.grandchild_pid = int(self.part.stdout.readline().strip())
         return self.part
 
+    @unittest.skipUnless(os.name == "nt", "Windows keeps a dead parent's pid as the orphan's ppid; POSIX reparents orphans to init")
     def test_orphaned_grandchild_is_killed_windows_tree(self):
         part = self._start_part(ORPHAN_PARENT_CODE)
         part.wait(timeout=10)  # the part exits; the grandchild is now an orphan
