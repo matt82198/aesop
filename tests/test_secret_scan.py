@@ -1199,5 +1199,148 @@ class TestRedactionSourceExemption(unittest.TestCase):
         self.assertFalse(secret_scan._is_redaction_source("sample_transcripts_judgment.py"))
         self.assertFalse(secret_scan._is_redaction_source(None))
 
+
+class SecretScanPlaceholderSegmentTest(unittest.TestCase):
+    """is_placeholder() must not excuse a real-shaped key just because one
+    hyphen-delimited segment is a placeholder word ("demo"), and must still
+    pass obvious placeholder keys."""
+
+    def _openai_findings_for_line(self, line):
+        """Scan one line as a disk file; return openai_anthropic_key findings."""
+        path = _write_fixture(".txt", [line])
+        try:
+            findings = scan_file(Path(path))
+        finally:
+            os.unlink(path)
+        return [f for f in findings if f[1] == "openai_anthropic_key"]
+
+    def test_real_shaped_sk_proj_key_with_demo_segment_is_reported(self):
+        """(a) A runtime-assembled sk-proj- key of real length carrying a
+        -demo- segment is a live-shaped credential and must be reported fatal."""
+        key = _j(
+            "sk-proj-",
+            "Q7mZ2xK9pL4wR8tY1vB6",
+            "-demo-",
+            "N3cH5jF0sD7gA2eU9iO4",
+        )
+        keys = self._openai_findings_for_line('OPENAI_API_KEY = "' + key + '"')
+        self.assertTrue(
+            keys,
+            "a real-length sk-proj- key with a -demo- segment must be reported, "
+            "not excused by the placeholder word 'demo'",
+        )
+        self.assertTrue(all(f[3] for f in keys), "openai_anthropic_key must be fatal")
+
+    def test_placeholder_phrase_then_random_tail_is_reported(self):
+        """(b) REVISED by R-AUDIT-SCAN-3 (seq 893): a placeholder phrase followed by
+        a real-length random segment is a FINDING, not an excuse. Strictness wins:
+        a real-length random segment next to a placeholder is reported. The earlier
+        expectation (PASS) was written in this lane, not on main, so it is revised
+        before implementation rather than fitted to a green tree."""
+        key = _j(
+            "sk-proj-",
+            "your-key-here",
+            "-0123456789abcdefghij",
+        )
+        keys = self._openai_findings_for_line('OPENAI_API_KEY = "' + key + '"')
+        self.assertTrue(
+            keys,
+            "a placeholder phrase followed by a real-length random tail must be reported",
+        )
+        self.assertTrue(all(f[3] for f in keys), "openai_anthropic_key must be fatal")
+
+
+class SecretScanNonAsciiFilenameTest(unittest.TestCase):
+    """--staged must read every staged path, including non-ASCII filenames."""
+
+    def test_staged_non_ascii_filename_without_secret_scans_clean(self):
+        """(c) A staged file named with a non-ASCII character and holding no
+        secret must scan CLEAN (exit 0, no FATAL) in a temp git repo."""
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run(
+                ["git", "init", "-q", td],
+                check=True, capture_output=True,
+            )
+            name = "café-notes.txt"
+            Path(td, name).write_text("plain text, nothing secret here\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "-C", td, "add", "--", name],
+                check=True, capture_output=True,
+            )
+            result = subprocess.run(
+                [sys.executable, str(SCANNER_PATH), "--staged", "--repo", td],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=60,
+            )
+            self.assertNotIn(
+                "FATAL", result.stderr,
+                f"staged non-ASCII filename must be readable; stderr={result.stderr!r}",
+            )
+            self.assertEqual(
+                result.returncode, 0,
+                f"clean staged non-ASCII file must exit 0; "
+                f"rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}",
+            )
+
+
+class SecretScanBoundedPlaceholderRuleTest(unittest.TestCase):
+    """R-AUDIT-SCAN-2: a real-length key must not be excused when a placeholder
+    is its LAST segment or appears as a phrase. Keys are assembled at runtime."""
+
+    _A = "Q7mZ2xK9pL4wR8tY1vB6"  # 20 random alnum
+    _B = "N3cH5jF0sD7gA2eU9iO4"  # 20 random alnum
+
+    def _openai_findings_for_line(self, line):
+        path = _write_fixture(".txt", [line])
+        try:
+            findings = scan_file(Path(path))
+        finally:
+            os.unlink(path)
+        return [f for f in findings if f[1] == "openai_anthropic_key"]
+
+    def _assert_reported(self, key):
+        keys = self._openai_findings_for_line('OPENAI_API_KEY = "' + key + '"')
+        self.assertTrue(keys, f"real-shaped key must be reported, not excused: {key!r}")
+        self.assertTrue(all(f[3] for f in keys), f"must be fatal: {key!r}")
+
+    def _assert_passes(self, key):
+        keys = self._openai_findings_for_line('OPENAI_API_KEY = "' + key + '"')
+        self.assertEqual(keys, [], f"placeholder key must pass: {key!r}")
+
+    def test_finding_random_then_demo_last_segment(self):
+        self._assert_reported(_j("sk-", self._A, "-demo"))
+
+    def test_finding_random_then_test_last_segment(self):
+        self._assert_reported(_j("sk-", self._A, "-test"))
+
+    def test_finding_random_then_xxx_last_segment(self):
+        self._assert_reported(_j("sk-", self._A, "-xxx"))
+
+    def test_finding_placeholder_phrase_mid_key(self):
+        self._assert_reported(_j("sk-proj-", self._A, "-your-key-here-", self._B))
+
+    def test_finding_random_then_placeholder_phrase_last(self):
+        self._assert_reported(_j("sk-", self._A, "-your-key-here"))
+
+    # Pass cases must reach is_placeholder: body >= 20 chars so the openai regex
+    # matches (R-AUDIT-SCAN-3). Verified against the scanner's own regex first.
+
+    def test_pass_placeholder_phrase_chain(self):
+        self._assert_passes(_j("sk-proj-", "your-key-here-", "your-key-here"))
+
+    def test_x_run_key_is_reported(self):
+        """R-AUDIT-SCAN-4: a gate change never excuses a key that base flagged.
+        `sk-` + 24 x was FLAGGED on base, so it is a FINDING (exit 1), not a PASS.
+        The earlier PASS expectation came from R-AUDIT-SCAN-3 in this lane, never
+        from main."""
+        self._assert_reported(_j("sk-", "x" * 24))
+
+    def test_pass_demo_chain(self):
+        self._assert_passes(_j("sk-", "demo-demo-demo-demo-demo"))
+
+    def test_pass_example_chain(self):
+        self._assert_passes(_j("sk-proj-", "example-example-example"))
+
+
 if __name__ == "__main__":
     unittest.main()
