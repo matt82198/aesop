@@ -9,7 +9,7 @@ Background is in two concept pages. [Event store](../concepts/event-store.md) ex
 
 Use `sh` syntax. Git Bash works, and so does any POSIX shell. Replace `<work>` with an empty
 directory outside any git repository. The expected output comes from running these exact
-commands on `origin/main` at commit `1b305b3f`.
+commands on `origin/main` at commit `8ede5e06`.
 
 ## What "verify" means here
 
@@ -119,6 +119,25 @@ SHA-256 of the first line's bytes.
 The timestamp and hash change between runs. The first `prev` is always `""`
 (`tools/event_store/store.py:106`).
 
+The repository's committed fixture `tests/fixtures/event_store/` holds only `source-v1.jsonl`,
+an input for the migration tests (`tests/test_event_store_migrate.py:19`). It is not a store, so
+`verify` refuses it:
+
+```sh
+python -I tools/event_store/cli.py verify --path tests/fixtures/event_store
+echo "exit=$?"
+```
+
+Expected output (the path separator follows your OS):
+
+```text
+refused: cannot read tests/fixtures/event_store/store.json: [Errno 2] No such file or directory: 'tests/fixtures/event_store/store.json'
+exit=2
+```
+
+`2` means refused, not "chain broken" (`tools/event_store/cli.py:116-117`). The test suite builds
+its stores in temporary directories, for example `make_store` in `tests/test_event_store_core.py:25`.
+
 ## Step 4: See a broken chain
 
 Copy the store and edit one event in the copy. Leave the original alone.
@@ -178,7 +197,6 @@ exit=1
 A pure append passes.
 
 ```sh
-git reset -q --hard HEAD
 printf '{"seq":1}\n{"seq":2}\n{"seq":3}\n' > events/2026-10-27.jsonl
 git add events
 sh <aesop>/tools/event_store/guard/events_append_only.sh
