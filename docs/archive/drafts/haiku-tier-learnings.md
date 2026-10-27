@@ -23,7 +23,7 @@ In early 2024, we ran an A/B test comparing two dispatch architectures:
 1. **Hierarchical dispatch**: Fable orchestrator → Sonnet supervisors (splitting work by domain) → Haiku workers. Three tiers, specialized roles.
 2. **Flat fan-out**: Single Opus/Fable orchestrator on the main thread → 5–8 parallel Haiku workers → integration verify + review.
 
-**Result**: Hierarchical dispatch cost **4.3× more per wave at identical quality** ([arch evidence: dispatch-topology A/B, committed in wave-9 decision record](../docs/DISPATCH-MODEL.md#cost-architecture-haiku-first-flat-fan-out-the-cancelled-hierarchical-design)).
+**Result**: Hierarchical dispatch cost **4.3× more per wave at identical quality** ([arch evidence: dispatch-topology A/B, committed in wave-9 decision record](../../DISPATCH-MODEL.md#cost-architecture-haiku-first-flat-fan-out-the-cancelled-hierarchical-design)).
 
 No code was smarter. Both variants produced the same merged PRs. The difference was token burn: the three-tier system added an extra reasoning layer (Sonnet supervisors doing "plan which domain should handle this") before any Haiku worker started. The orchestrator, reviewing the Sonnet outputs, then dispatched to Haiku. Token flow: 3× the overhead for the same decision.
 
@@ -48,7 +48,7 @@ The bet: **use Haiku for the seam (99% of work volume), and reserve expensive mo
 
 Aesop's benchmarks are unusual: the protocol is committed *before* results are generated. This matters because post-hoc data-dependent decisions are how benchmarks become fiction.
 
-The core rule (committed in [bench/METHODOLOGY.md](../bench/METHODOLOGY.md), section "Pre-declared Ceiling Rule"):
+The core rule (committed in [bench/METHODOLOGY.md](../../../bench/METHODOLOGY.md), section "Pre-declared Ceiling Rule"):
 
 > If two or more tiers land at or above 92% (or 85% on amended runs), the instrument failed to discriminate — we publish this result explicitly rather than claiming equivalence.
 
@@ -58,7 +58,7 @@ This rule fired. Twice. And those results are published as-is.
 
 ### Frontier Discrimination Slice v4: N=130 Tasks
 
-The main benchmark—Aesop's measurement anchor—is described in full in [bench/METHODOLOGY.md](../bench/METHODOLOGY.md) and published in [bench/results/frontier-v4-2026-07-27.md](../bench/results/frontier-v4-2026-07-27.md).
+The main benchmark—Aesop's measurement anchor—is described in full in [bench/METHODOLOGY.md](../../../bench/METHODOLOGY.md) and published in [bench/results/frontier-v4-2026-07-27.md](../../../bench/results/frontier-v4-2026-07-27.md).
 
 **Setup:**
 - 130 tasks across 10 families: SQL transactions, concurrency/distributed systems, floating-point/unicode/regex semantics, contracts/refactoring, ops/CI workflows.
@@ -100,7 +100,7 @@ The main benchmark—Aesop's measurement anchor—is described in full in [bench
 
 The frontier slice tests single-shot problem-solving. But Aesop's real workload is *repair and judgment*—taking a failing test, understanding why it failed, deciding the severity, and routing it for fixing.
 
-The seam-level study ([bench/results/seam-loop-study-2026-07-28.md](../bench/results/seam-loop-study-2026-07-28.md)) isolates this:
+The seam-level study ([bench/results/seam-loop-study-2026-07-28.md](../../../bench/results/seam-loop-study-2026-07-28.md)) isolates this:
 
 **Setup:**
 - 180 tasks from the orchestration/judgment domain: code review, defect detection, severity calibration, refactoring validation, root-cause extraction.
@@ -133,7 +133,7 @@ The benchmark numbers tell one story. The incident logs tell another.
 
 **Mitigation**: Separate generation from judgment. Use Haiku for scored, single-shot tasks (given a failing test, does this refactor fix it? yes/no). Use expensive models for selecting what to report (code review). Route Haiku output through independent verification (a more expensive model reviewing the judgment, or a human).
 
-**Evidence**: [docs/INCIDENTS.md](../docs/INCIDENTS.md), class `doc-invented`; [wave-24 audit incident log](../docs/INCIDENTS.md#L48) — Haiku's open-ended audit, verification showed zero-of-four claims real.
+**Evidence**: [docs/INCIDENTS.md](../../INCIDENTS.md), class `doc-invented`; [wave-24 audit incident log](../../INCIDENTS.md#L48) — Haiku's open-ended audit, verification showed zero-of-four claims real.
 
 ### Failure Mode 2: Watcher Stalls (Process Hangs Without Signal)
 
@@ -145,7 +145,7 @@ The benchmark numbers tell one story. The incident logs tell another.
 
 **Mitigation**: Stateless workers with bounded retry only. No mid-task signal-waiting. Explicit timeout ceilings (2 minutes per task; exceed it = kill and retry). Watchdog heartbeat detector flags silence > 3 minutes as stall + restart.
 
-**Evidence**: [MEMORY.md](../memory/MEMORY.md), "[No watcher pattern in long runs](../docs/../memory/MEMORY.md)"; [commits 7b1e4de, cb088ec](../docs/INCIDENTS.md#L51-52) — stall-check tooling to detect silent hangs.
+**Evidence**: MEMORY.md, "No watcher pattern in long runs"; [commits 7b1e4de, cb088ec](../../INCIDENTS.md#L51-52) — stall-check tooling to detect silent hangs.
 
 ### Failure Mode 3: Fake-Green Tests (Tests Reported Green but Never Ran)
 
@@ -155,7 +155,7 @@ The benchmark numbers tell one story. The incident logs tell another.
 
 **Mitigation**: Orchestrator verifies the ACTUAL gate command ran, not a proxy. "CI green" means each test suite actually executed, not just "CI said green." The arbiter is the live CI gateway, not a summarizer's report.
 
-**Evidence**: [INCIDENTS.md](../docs/INCIDENTS.md), class `fake-green`; [PR #464](../docs/INCIDENTS.md#L33) — added playwright TypeScript test infrastructure to actually execute browser-proof specs.
+**Evidence**: [INCIDENTS.md](../../INCIDENTS.md), class `fake-green`; [PR #464](../../INCIDENTS.md#L33) — added playwright TypeScript test infrastructure to actually execute browser-proof specs.
 
 ## Part 4: Guardrails That Work
 
@@ -169,7 +169,7 @@ Every Haiku output from audits and open-ended work goes through independent revi
 2. **Verification pass**: An expensive model (Opus/Fable) reviews the Haiku output *without seeing Haiku's reasoning*. Does the claim hold? Is the severity right?
 3. **Adjudication**: On mismatch, escalate to human or rewind the Haiku decision.
 
-**Evidence**: [bench/results/shadow-adjudication-2026-07-23.md](../bench/results/shadow-adjudication-2026-07-23.md) documents a full adversarial review pass where Opus reviewed Haiku-generated audit findings. The results showed the mitigation working: Haiku's open-ended claims got caught by independent verification.
+**Evidence**: [bench/results/shadow-adjudication-2026-07-23.md](../../../bench/results/shadow-adjudication-2026-07-23.md) documents a full adversarial review pass where Opus reviewed Haiku-generated audit findings. The results showed the mitigation working: Haiku's open-ended claims got caught by independent verification.
 
 ### Guardrail 2: Separation of Concerns (Generation vs. Selection)
 
@@ -182,7 +182,7 @@ This enforces the measured boundary: Haiku is sufficient for seam-level extracti
 
 Agents get exactly 2 retries on failure. Exceed that, the task halts. The orchestrator then either manually intervenes or rolls back the wave. No retry loops, no "wait for a signal," no silent hangs.
 
-**Evidence**: [seam-loop-study results](../bench/results/seam-loop-study-2026-07-28.md#repair-distribution-seam-s-loop-only) show that only 35/180 (19.4%) required repair, and max 2 retries—no pathology.
+**Evidence**: [seam-loop-study results](../../../bench/results/seam-loop-study-2026-07-28.md#repair-distribution-seam-s-loop-only) show that only 35/180 (19.4%) required repair, and max 2 retries—no pathology.
 
 ### Guardrail 4: Pre-Push Secret Gates and Cost Ceilings
 
@@ -208,7 +208,7 @@ Every Haiku output was scored against *regex patterns and exact-match criteria*,
 
 ### Why Failure-Mode Documentation Matters
 
-The incident log ([docs/INCIDENTS.md](../docs/INCIDENTS.md)) is the real artifact. 66 tracked incidents, each with class, resolution, and source. When we saw "severity inflation in open audits," we didn't hide it. We published the incident, shipped the mitigation (adversarial verification), and moved on.
+The incident log ([docs/INCIDENTS.md](../../INCIDENTS.md)) is the real artifact. 66 tracked incidents, each with class, resolution, and source. When we saw "severity inflation in open audits," we didn't hide it. We published the incident, shipped the mitigation (adversarial verification), and moved on.
 
 ## Part 6: Decision Framework for Readers
 
@@ -229,7 +229,7 @@ You're evaluating Haiku (or another cheap tier) for your work. Here's how to kno
    - *High* (shipping broken code, wrong security decision) → budget for more verification and higher-tier models.
 
 4. **How constrained is the context?**
-   - *Tight* (code review + test output + clear rubric, <5k tokens) → Haiku excels ([seam benchmark: 94.4% on this shape](../bench/results/seam-loop-study-2026-07-28.md)).
+   - *Tight* (code review + test output + clear rubric, <5k tokens) → Haiku excels ([seam benchmark: 94.4% on this shape](../../../bench/results/seam-loop-study-2026-07-28.md)).
    - *Wide* (system design from scratch, 100k tokens, open-ended reasoning) → Opus/Fable likely necessary.
 
 5. **Can I bound the retry loop?**
@@ -281,12 +281,12 @@ Both are valid. Both are honest.
 
 ## References
 
-- **Benchmark methodology and results**: [bench/METHODOLOGY.md](../bench/METHODOLOGY.md), [bench/results/frontier-v4-2026-07-27.md](../bench/results/frontier-v4-2026-07-27.md), [bench/results/seam-loop-study-2026-07-28.md](../bench/results/seam-loop-study-2026-07-28.md).
-- **Dispatch cost analysis**: [docs/DISPATCH-MODEL.md](../docs/DISPATCH-MODEL.md), [docs/THE-AESOP-HYPOTHESIS.md](../docs/THE-AESOP-HYPOTHESIS.md) § 3.
-- **Incident log and failure modes**: [docs/INCIDENTS.md](../docs/INCIDENTS.md), classes `doc-invented`, `fake-green`, `stall`.
-- **Adversarial review**: [bench/results/shadow-adjudication-2026-07-23.md](../bench/results/shadow-adjudication-2026-07-23.md).
-- **Seam-level orchestration measurement**: [bench/results/seam-loop-study-2026-07-28.md](../bench/results/seam-loop-study-2026-07-28.md).
-- **Architecture and recovery patterns**: [docs/RELIABILITY.md](../docs/RELIABILITY.md), [docs/CHECKPOINTING.md](../docs/CHECKPOINTING.md), [docs/CARDINAL-RULES.md](../docs/CARDINAL-RULES.md).
+- **Benchmark methodology and results**: [bench/METHODOLOGY.md](../../../bench/METHODOLOGY.md), [bench/results/frontier-v4-2026-07-27.md](../../../bench/results/frontier-v4-2026-07-27.md), [bench/results/seam-loop-study-2026-07-28.md](../../../bench/results/seam-loop-study-2026-07-28.md).
+- **Dispatch cost analysis**: [docs/DISPATCH-MODEL.md](../../DISPATCH-MODEL.md), [docs/THE-AESOP-HYPOTHESIS.md](../../THE-AESOP-HYPOTHESIS.md) § 3.
+- **Incident log and failure modes**: [docs/INCIDENTS.md](../../INCIDENTS.md), classes `doc-invented`, `fake-green`, `stall`.
+- **Adversarial review**: [bench/results/shadow-adjudication-2026-07-23.md](../../../bench/results/shadow-adjudication-2026-07-23.md).
+- **Seam-level orchestration measurement**: [bench/results/seam-loop-study-2026-07-28.md](../../../bench/results/seam-loop-study-2026-07-28.md).
+- **Architecture and recovery patterns**: [docs/RELIABILITY.md](../../RELIABILITY.md), [docs/CHECKPOINTING.md](../../CHECKPOINTING.md), [docs/CARDINAL-RULES.md](../../CARDINAL-RULES.md).
 
 ---
 

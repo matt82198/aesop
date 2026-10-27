@@ -60,7 +60,7 @@ This was not a code fix; it was a measurement-driven architecture decision. The 
 
 ## The Convergence Loop: 52 Defects to Zero (2026-07-22)
 
-Before wave 1 shipped, I ran a hardening loop (documented in `docs/convergence-log-wave1.md`). The goal: audit the orchestration core (dispatch logic, state-store, daemon lifecycle) and drive all findings to zero.
+Before wave 1 shipped, I ran a hardening loop (documented in `docs/archive/convergence-log-wave1.md`). The goal: audit the orchestration core (dispatch logic, state-store, daemon lifecycle) and drive all findings to zero.
 
 **Five rounds of fix-and-audit:**
 
@@ -197,7 +197,7 @@ If you are building a team of autonomous agents, this is the thing to learn: the
 - Convergence complete: 2026-07-22 at commit `157e157` (zero verified defects)
 - Current state: 2026-07-30 02:52 UTC (stats.json generated at this timestamp)
 - All metrics regenerable: `bash scripts/verify-stats.sh --check`
-- Convergence log: `docs/convergence-log-wave1.md`
+- Convergence log: `docs/archive/convergence-log-wave1.md`
 - Wave metrics: `docs/RECEIPTS.md`
 
 **For the hiring reader:** This document anchors every claim to git, execution logs, and committed test evidence. If you clone the repo, you can verify: run `git log --oneline | wc -l` (1,380 commits), run `bash scripts/verify-stats.sh --check` (508 PRs), run `npm test` (254 test suites across 3 harnesses), run `python tools/health_score.py` (10 readiness checks). The system is not theoretical; it is documented and reproducible.

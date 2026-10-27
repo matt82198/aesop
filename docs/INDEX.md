@@ -5,7 +5,7 @@
 - [ADOPTION-CHECKLIST.md](ADOPTION-CHECKLIST.md) - Aesop Adoption Checklist
 - [ANY-REPO.md](ANY-REPO.md) - Aesop in ANY Repository - Portability Walkthrough
 - [ARCHITECTURE.md](ARCHITECTURE.md) - Architecture
-- [autonomous-swe.md](autonomous-swe.md) - It shipped itself: the 0.1.0-rc.1 milestone, told honestly
+- [autonomous-swe.md](archive/narrative/autonomous-swe.md) - It shipped itself: the 0.1.0-rc.1 milestone, told honestly
 - [av-resilience.md](av-resilience.md) - Antivirus (AV) Resilience & Behavioral Engine Design Patterns
 - [BEHAVIORAL-PR-REVIEW.md](BEHAVIORAL-PR-REVIEW.md) - Behavioral PR Review Checklist
 - [CARDINAL-RULES.md](CARDINAL-RULES.md) - Cardinal Rules for Aesop Orchestration
@@ -16,7 +16,7 @@
 - [CONCEPTS.md](CONCEPTS.md) - Key Concepts
 - [CONFIGURE.md](CONFIGURE.md) - Configuration
 - [CONTRIBUTING.md](CONTRIBUTING.md) - Contributing to Aesop
-- [convergence-log-wave1.md](convergence-log-wave1.md) - Wave-1 Convergence Log - 2026-07-22 (5-pass hardening loop)
+- [convergence-log-wave1.md](archive/convergence-log-wave1.md) - Wave-1 Convergence Log - 2026-07-22 (5-pass hardening loop)
 - [crash-only-whitepaper.md](crash-only-whitepaper.md) - Crash-Only Orchestration for Agent Fleets: Design, Evidence, and Trade-offs
 - [CROSSOS-DRIFT.md](CROSSOS-DRIFT.md) - Cross-OS CI Drift Report
 - [DECISIONS.md](DECISIONS.md) - Architecture Decision Records
@@ -28,9 +28,9 @@
 - [GOVERNANCE.md](GOVERNANCE.md) - Governance & Control
 - [HANDOFF-CERTIFICATE.md](HANDOFF-CERTIFICATE.md) - Team Handoff Proof Certificate
 - [HOOK-INSTALL.md](HOOK-INSTALL.md) - Git Pre-Push Hook Setup
-- [how-i-built-aesop.md](how-i-built-aesop.md) - How I Built Aesop with Aesop
+- [how-i-built-aesop.md](archive/narrative/how-i-built-aesop.md) - How I Built Aesop with Aesop
 - [HOW-THE-LOOP-WORKS.md](HOW-THE-LOOP-WORKS.md) - How the Wave Loop Works (The Fast, Cheap Way)
-- [INCIDENT-RESPONSE-SLA.md](INCIDENT-RESPONSE-SLA.md) - Incident Response SLA Report
+- [INCIDENT-RESPONSE-SLA.md](archive/INCIDENT-RESPONSE-SLA.md) - Incident Response SLA Report
 - [INCIDENTS.md](INCIDENTS.md) - Incidents
 - [INSTALL.md](INSTALL.md) - Installation & Setup
 - [LATENCY.md](LATENCY.md) - Wave Latency Report

@@ -82,7 +82,7 @@ All five passed. No infinite loops, no wedged state.
 Over 18 days:
 - **1,433 commits, 520 merged PRs, 31 waves** (git-verifiable)
 - **16 stall incidents resolved by watchdog + crash recovery** (no consensus voting, no lease revocation)
-- **Convergence loop: 52 → 0 verified defects over 5 rounds** (`docs/convergence-log-wave1.md`)
+- **Convergence loop: 52 → 0 verified defects over 5 rounds** (`docs/archive/convergence-log-wave1.md`)
 - **Zero hallucinated audits** (via adversarial verification discipline)
 
 The system has actually crashed. Machines died mid-wave. The recovery was automatic: re-read from disk, continue.
@@ -139,7 +139,7 @@ bash scripts/verify-stats.sh --check
 python tools/bench_runner.py --runner haiku
 
 # Read the convergence log (5 rounds, 52→0 defects)
-cat docs/convergence-log-wave1.md
+cat docs/archive/convergence-log-wave1.md
 
 # Check the incident log (16 stall recoveries)
 cat docs/INCIDENTS.md
@@ -157,5 +157,5 @@ Restart is the only recovery path. And it works.
 - Candea, G., & Fox, A. (2003). Crash-Only Software. *HOTOS-IX*.
 - Czezatke, K., & Stengel, J. (2019). Temporal: Workflow as Code.
 - `docs/crash-only-whitepaper.md` — Full design and evidence
-- `docs/convergence-log-wave1.md` — 5-round audit to zero defects
+- `docs/archive/convergence-log-wave1.md` — 5-round audit to zero defects
 - `docs/INCIDENTS.md` — Operational incident log with root causes

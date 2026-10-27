@@ -184,9 +184,9 @@ See the Learn More section for setup and architecture guides.
 - **[docs/HOW-THE-LOOP-WORKS.md](./docs/HOW-THE-LOOP-WORKS.md)** — Concrete walkthrough of one wave cycle
 - **[THE-AESOP-HYPOTHESIS.md](./docs/THE-AESOP-HYPOTHESIS.md)** — Design philosophy, trade-offs, and why crash-only
 - **[DISPATCH-MODEL.md](./docs/DISPATCH-MODEL.md)** — Cost analysis, Haiku sufficiency, scaling properties
-- **[docs/how-i-built-aesop.md](./docs/how-i-built-aesop.md)** — Technical narrative of the orchestration design
+- **[docs/archive/narrative/how-i-built-aesop.md](./docs/archive/narrative/how-i-built-aesop.md)** — Technical narrative of the orchestration design
 - **[CARDINAL-RULES.md](./docs/CARDINAL-RULES.md)** — 10 foundational principles for safe autonomous code
-- **[autonomous-swe.md](./docs/autonomous-swe.md)** — What "autonomous" means and doesn't. Honest limits.
+- **[autonomous-swe.md](./docs/archive/narrative/autonomous-swe.md)** — What "autonomous" means and doesn't. Honest limits.
 - **[docs/INCIDENTS.md](./docs/INCIDENTS.md)** — All 98 incidents: fake-green, gate-activation, test-pollution, stalls, conflicts, flakes, CI drift, hallucinations.
 - **[RELEASE-NOTES.md](./RELEASE-NOTES.md)** — Release notes for the latest version (full per-PR list in [CHANGELOG.md](./CHANGELOG.md)).
 
