@@ -41,7 +41,7 @@ class TestPortabilityCheck(unittest.TestCase):
             f.write(content)
         return full_path
 
-    def run_portability_check(self, json_output=False):
+    def run_portability_check(self, json_output=False, extra_args=()):
         """Run portability_check.py and return exit code and output."""
         script_path = os.path.join(
             os.path.dirname(__file__),
@@ -52,6 +52,7 @@ class TestPortabilityCheck(unittest.TestCase):
         cmd = [sys.executable, script_path, '--root', self.test_dir]
         if json_output:
             cmd.append('--json')
+        cmd.extend(extra_args)
 
         result = subprocess.run(
             cmd,
@@ -251,6 +252,84 @@ machine_tag = "conductor3"
 
         findings = json.loads(stdout)
         self.assertGreaterEqual(len(findings), 3)
+
+    def test_detects_lowercase_windows_user_path(self):
+        """(a) Lowercase drive letter and 'users' segment must be flagged."""
+        self.create_package_json(['lib/*.py'])
+        self.create_test_file(
+            'lib/module.py',
+            'CONFIG_PATH = "c:/users/someone/x"'
+        )
+
+        exit_code, stdout, stderr = self.run_portability_check()
+        self.assertEqual(exit_code, 1, f"lowercase c:/users/ path not flagged: {stderr}")
+        self.assertIn('someone', stderr)
+
+    def test_detects_json_escaped_windows_user_path(self):
+        """(b) JSON-escaped (doubled-backslash) Windows path inside a .json file."""
+        self.create_package_json(['lib/*.json'])
+        # json.dumps writes the on-disk form: every backslash doubled.
+        self.create_test_file(
+            'lib/config.json',
+            json.dumps({'root': 'C:\\Users\\someone\\x'})
+        )
+
+        exit_code, stdout, stderr = self.run_portability_check()
+        self.assertEqual(exit_code, 1, f"JSON-escaped Windows path not flagged: {stderr}")
+        self.assertIn('someone', stderr)
+
+
+class TestPortabilityCheckTrackedScope(unittest.TestCase):
+    """(c) --tracked scans every git-tracked text file, not only the package.json 'files' globs."""
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        import stat
+
+        def _make_writable_and_retry(func, path, _exc_info):
+            # git marks object files read-only; Windows rmtree needs them writable.
+            os.chmod(path, stat.S_IWRITE)
+            func(path)
+
+        shutil.rmtree(self.test_dir, onerror=_make_writable_and_retry)
+
+    def _write(self, relative_path, content):
+        full_path = os.path.join(self.test_dir, relative_path)
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        with open(full_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+    def _run(self, extra_args=()):
+        script_path = os.path.join(
+            os.path.dirname(__file__), '..', 'tools', 'portability_check.py'
+        )
+        result = subprocess.run(
+            [sys.executable, script_path, '--root', self.test_dir, *extra_args],
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode, result.stdout, result.stderr
+
+    def test_tracked_flag_flags_home_path_outside_files_globs(self):
+        """A home path in a git-tracked file outside 'files' is flagged only with --tracked."""
+        pkg = {'name': 'test-package', 'version': '1.0.0', 'files': ['lib/*.py']}
+        self._write('package.json', json.dumps(pkg))
+        self._write('lib/module.py', 'X = 1\n')
+        self._write('docs/notes.md', 'Checkout lives at C:/Users/someone/x\n')
+
+        subprocess.run(['git', 'init', '-q'], cwd=self.test_dir, check=True)
+        subprocess.run(['git', 'add', '-A'], cwd=self.test_dir, check=True)
+
+        # Guard: the default shipped-surface scope is unchanged.
+        default_code, _, default_err = self._run()
+        self.assertEqual(default_code, 0, f"default scope should ignore docs/: {default_err}")
+
+        code, _, err = self._run(['--tracked'])
+        self.assertEqual(code, 1, f"--tracked did not flag tracked docs/notes.md: {err}")
+        self.assertIn('docs/notes.md', err)
 
 
 class TestPortabilityCheckAgainstRealBaseline(unittest.TestCase):
