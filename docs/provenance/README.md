@@ -2,7 +2,7 @@
 
 This folder answers one question for a stranger: what here can I check for myself, and how?
 
-Aesop is source-available (see [LICENSE](../../LICENSE)). The pages below separate what is in this public
+Aesop is open source under the MIT License (see [LICENSE](../../LICENSE)). The pages below separate what is in this public
 repository from what is not, and point at the ledgers the project keeps about its own failures.
 
 | Page | What it tells you |

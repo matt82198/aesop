@@ -64,7 +64,7 @@
     "resilience",
     "template"
   ],
-  "license": "PolyForm-Noncommercial-1.0.0",
+  "license": "MIT",
   "author": "Matt Culliton",
   "repository": {
     "type": "git",
