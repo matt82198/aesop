@@ -22,7 +22,7 @@
 - `npx @matt82198/aesop wizard --yes` → uses all defaults, no prompts (CI-safe)
 - Non-TTY input auto-skips prompts
 
-**Runtime commands** (after scaffolding; dispatch pattern in cli.js):
+**Runtime commands** (after scaffolding; dispatch pattern in cli.js). `init --help|-h` and `doctor --help|-h` print a per-subcommand usage block (`SUBCOMMAND_HELP` in `cli.js`) and exit 0 before any side effect (no scaffolding, no readiness run). Test: `tests/cli-subcommand-help.test.mjs`.
 ```javascript
 const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health', 'health-score', 'reproduce', 'init'];
 // 'init' dispatches to Python: spawnSync('python3', ['tools/init_project.py', '--dir', '.', ...])
