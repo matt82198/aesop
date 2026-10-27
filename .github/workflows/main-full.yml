@@ -97,7 +97,7 @@ jobs:
         # unwired here. It stayed green on windows-latest because USERPROFILE is an
         # ambient OS env var there regardless of wiring, and went RED on
         # ubuntu-latest (no such ambient var) on every main-full run since. See
-        # tools/CLAUDE.md's "Node-suite HOME isolation (G8)" entry.
+        # tools/ci_isolation/CLAUDE.md's "Node-suite HOME isolation (G8)" entry.
         run: python tools/test_isolation_tripwire.py -- node --import ./tests/helpers/isolated-env.mjs --test --test-force-exit --test-timeout=180000 tests/*.test.mjs
 
       - name: Run Python tests (shard ${{ matrix.python-shard }}/4, PYTHONUTF8=1 for Windows)
