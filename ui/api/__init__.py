@@ -37,7 +37,7 @@ class NotFoundError(Exception):
 MAX_BODY_BYTES = 10000
 
 
-def validate_mutation(headers, body_bytes, content_length_error="Invalid Content-Length"):
+def validate_mutation(headers, body_bytes, content_length_error="Invalid Content-Length", *, expected_port):
     """Run the CSRF + Content-Length gates shared by every mutating endpoint,
     then JSON-decode the body.
 
@@ -66,7 +66,7 @@ def validate_mutation(headers, body_bytes, content_length_error="Invalid Content
     fall through to a generic 500) -- see ui/api/tracker.py and
     ui/api/submit.py callers in ui/handler.py.
     """
-    is_valid, reason = validate_csrf_request(headers)
+    is_valid, reason = validate_csrf_request(headers, expected_port)
     if not is_valid:
         return False, (403, {"error": "CSRF protection: " + reason})
 

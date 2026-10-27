@@ -40,7 +40,7 @@ def list_items(status=None, priority=None):
         return 500, {"error": "Internal server error"}
 
 
-def create(headers, body_bytes):
+def create(headers, body_bytes, *, expected_port):
     """POST /api/tracker -- create a tracker item. CSRF-gated.
 
     Args:
@@ -54,7 +54,7 @@ def create(headers, body_bytes):
         (500, error_dict) on any other failure.
     """
     try:
-        ok, result = validate_mutation(headers, body_bytes)
+        ok, result = validate_mutation(headers, body_bytes, expected_port=expected_port)
         if not ok:
             status, error = result
             return status, error

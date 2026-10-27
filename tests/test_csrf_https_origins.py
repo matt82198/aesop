@@ -160,7 +160,7 @@ class TestHTTPSLoopbackOriginAccepted(CSRFHttpsTestCase):
             "/api/tracker", {"title": "https 127.0.0.1 item"},
             headers={
                 "X-Aesop-Token": self.token,
-                "Origin": "https://127.0.0.1:8080"
+                "Origin": f"https://127.0.0.1:{self.port}"
             })
         self.assertEqual(status, 201, body)
         created = json.loads(body.decode("utf-8"))
@@ -172,7 +172,7 @@ class TestHTTPSLoopbackOriginAccepted(CSRFHttpsTestCase):
             "/api/tracker", {"title": "https localhost item"},
             headers={
                 "X-Aesop-Token": self.token,
-                "Origin": "https://localhost:8443"
+                "Origin": f"https://localhost:{self.port}"
             })
         self.assertEqual(status, 201, body)
         created = json.loads(body.decode("utf-8"))
@@ -184,7 +184,7 @@ class TestHTTPSLoopbackOriginAccepted(CSRFHttpsTestCase):
             "/api/tracker", {"title": "https ipv6 item"},
             headers={
                 "X-Aesop-Token": self.token,
-                "Origin": "https://[::1]:9000"
+                "Origin": f"https://[::1]:{self.port}"
             })
         self.assertEqual(status, 201, body)
         created = json.loads(body.decode("utf-8"))
@@ -211,7 +211,7 @@ class TestHTTPBehaviorUnchanged(CSRFHttpsTestCase):
             "/api/tracker", {"title": "http 127.0.0.1 item"},
             headers={
                 "X-Aesop-Token": self.token,
-                "Origin": "http://127.0.0.1:8080"
+                "Origin": f"http://127.0.0.1:{self.port}"
             })
         self.assertEqual(status, 201, body)
 
@@ -221,7 +221,7 @@ class TestHTTPBehaviorUnchanged(CSRFHttpsTestCase):
             "/api/tracker", {"title": "http localhost item"},
             headers={
                 "X-Aesop-Token": self.token,
-                "Origin": "http://localhost:3000"
+                "Origin": f"http://localhost:{self.port}"
             })
         self.assertEqual(status, 201, body)
 
@@ -231,7 +231,7 @@ class TestHTTPBehaviorUnchanged(CSRFHttpsTestCase):
             "/api/tracker", {"title": "http ipv6 item"},
             headers={
                 "X-Aesop-Token": self.token,
-                "Origin": "http://[::1]:5000"
+                "Origin": f"http://[::1]:{self.port}"
             })
         self.assertEqual(status, 201, body)
 
@@ -253,7 +253,7 @@ class TestTokenRequirementStillEnforced(CSRFHttpsTestCase):
         """https://127.0.0.1 without X-Aesop-Token must fail."""
         status, body = self._post(
             "/api/tracker", {"title": "https no token item"},
-            headers={"Origin": "https://127.0.0.1:8080"})
+            headers={"Origin": f"https://127.0.0.1:{self.port}"})
         self.assertEqual(status, 403, body)
         self.assertIn(b"X-Aesop-Token", body)
 
@@ -275,7 +275,7 @@ class TestAPISessionEndpointWithHTTPS(CSRFHttpsTestCase):
         """GET /api/session with https://127.0.0.1 must return token."""
         status, body = self._request(
             "GET", "/api/session",
-            headers={"Origin": "https://127.0.0.1:8080"})
+            headers={"Origin": f"https://127.0.0.1:{self.port}"})
         self.assertEqual(status, 200, body)
         data = json.loads(body.decode("utf-8"))
         self.assertEqual(data["token"], self.token)
@@ -284,7 +284,7 @@ class TestAPISessionEndpointWithHTTPS(CSRFHttpsTestCase):
         """GET /api/session with https://localhost must return token."""
         status, body = self._request(
             "GET", "/api/session",
-            headers={"Origin": "https://localhost:8443"})
+            headers={"Origin": f"https://localhost:{self.port}"})
         self.assertEqual(status, 200, body)
         data = json.loads(body.decode("utf-8"))
         self.assertEqual(data["token"], self.token)

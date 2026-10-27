@@ -10,11 +10,23 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
 const CURRENT_DIR = process.cwd();
 const PACKAGE_DIR = path.resolve(__dirname, '..');
+
+// Expand a leading "~" or "~/" (also "~\" on Windows) to the user's home directory.
+// Anything else is returned unchanged.
+function expandHome(p) {
+  if (typeof p !== 'string') return p;
+  if (p === '~') return os.homedir();
+  if (p.startsWith('~/') || p.startsWith('~\\')) {
+    return path.join(os.homedir(), p.slice(2));
+  }
+  return p;
+}
 
 // Resolve Python interpreter portably (prefer python3, fallback to python)
 function resolvePythonInterpreter() {
@@ -78,8 +90,9 @@ function loadConfig() {
 
     // State lives in the user's repo: AESOP_STATE_ROOT env > config state_root > <cwd>/state.
     const repoConfig = loadConfig();
+    const configuredRoot = expandHome((repoConfig && repoConfig.state_root) || 'state');
     const stateRoot = process.env.AESOP_STATE_ROOT
-      || path.resolve(CURRENT_DIR, (repoConfig && repoConfig.state_root) || 'state');
+      || path.resolve(CURRENT_DIR, configuredRoot);
 
     console.log(`Launching aesop dashboard on http://localhost:${port}${demoMode ? ' (DEMO DATA)' : ''}\n`);
 
@@ -101,9 +114,15 @@ function loadConfig() {
       shell: process.platform === 'win32'
     });
 
-    // Exit with the dashboard process's exit code
-    proc.on('exit', (code) => {
-      process.exitCode = code || 0;
+    // Exit with the dashboard process's exit code. A null code means the child died
+    // by signal: report 128+signum (shell convention) when known, else 1. Never 0.
+    proc.on('exit', (code, signal) => {
+      if (code !== null) {
+        process.exitCode = code;
+        return;
+      }
+      const signum = signal ? os.constants.signals[signal] : undefined;
+      process.exitCode = signum ? 128 + signum : 1;
     });
 
     proc.on('error', (err) => {
