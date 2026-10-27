@@ -272,12 +272,37 @@ def should_skip_file(filepath):
     return False
 
 
-def is_placeholder(value):
-    """Check if a string is a placeholder value (word-boundary aware)."""
+# FATAL-rule placeholder grammar (R-AUDIT-SCAN-2/3). A FATAL match is excused only
+# when, after the leading "sk-" and at most two prefix segments of 1-8 lowercase
+# letters, the rest of the match is entirely placeholder words joined by "-".
+# A placeholder word is a PLACEHOLDERS entry (multi-segment phrases such as
+# your-key-here count as ONE word). A run of x is not a placeholder word
+# (R-AUDIT-SCAN-4: a gate change never excuses a key that base flagged).
+_PLACEHOLDER_WORD_ALT = "|".join(
+    re.escape(p) for p in sorted(PLACEHOLDERS, key=len, reverse=True)
+)
+_FATAL_PLACEHOLDER_RE = re.compile(
+    r"sk-(?:[a-z]{1,8}-){0,2}(?:" + _PLACEHOLDER_WORD_ALT + r")"
+    r"(?:-(?:" + _PLACEHOLDER_WORD_ALT + r"))*"
+)
+
+
+def is_placeholder(value, fatal_rule=False):
+    """Check if a string is a placeholder value.
+
+    fatal_rule=True applies the FATAL-rule grammar (_FATAL_PLACEHOLDER_RE): the
+    whole match must be an sk- key whose body is placeholder words only, and no
+    word or phrase excuses anywhere else in it. The default (non-FATAL) keeps
+    the original word-boundary behaviour unchanged.
+    """
     lower_val = value.lower()
-    for p in PLACEHOLDERS:
-        if re.search(r'\b' + re.escape(p) + r'\b(?!\.)', lower_val):
+    if fatal_rule:
+        if _FATAL_PLACEHOLDER_RE.fullmatch(lower_val):
             return True
+    else:
+        for p in PLACEHOLDERS:
+            if re.search(r'\b' + re.escape(p) + r'\b(?!\.)', lower_val):
+                return True
     # Also check for template syntax
     return bool(re.search(r"<[^>]*>|\$\{[^}]*\}", value))
 
@@ -560,7 +585,7 @@ def _scan_views(label, views, env_file, has_file_pragma, scan_path):
                         # quantifier, no literal alphanumerics) are not credentials.
                         if _connection_password_is_regex_shape(match_str):
                             continue
-                    elif is_placeholder(match_str):
+                    elif is_placeholder(match_str, fatal_rule=rule_name in FATAL_RULES):
                         continue
                     key = (line_num, rule_name, match_str)
                     if key in seen:
@@ -748,7 +773,7 @@ def get_staged_files(repo_path):
     """
     try:
         result = subprocess.run(
-            ["git", "diff", "--cached", "--name-only", "--diff-filter=d"],
+            ["git", "diff", "--cached", "--name-only", "-z", "--diff-filter=d"],
             cwd=repo_path,
             env=_git_repo_env(),
             capture_output=True,
@@ -764,7 +789,9 @@ def get_staged_files(repo_path):
             f"git diff --cached failed (rc={result.returncode}): {result.stderr.strip()}"
         )
 
-    return [f for f in result.stdout.strip().split("\n") if f.strip()]
+    # -z: git emits raw UTF-8 paths NUL-separated; without it git C-quotes
+    # non-ASCII names (caf\303\251) and the blob lookup then fails CLOSED.
+    return [f for f in result.stdout.split("\0") if f]
 
 
 def _run_git_text(repo_path, args, timeout, stdin_text=None):
@@ -864,7 +891,7 @@ def get_range_files(repo_path, commit_range):
     """
     try:
         result = subprocess.run(
-            ["git", "diff", "--name-only", "--diff-filter=d", commit_range],
+            ["git", "diff", "--name-only", "-z", "--diff-filter=d", commit_range],
             cwd=repo_path,
             env=_git_repo_env(),
             capture_output=True,
@@ -881,7 +908,9 @@ def get_range_files(repo_path, commit_range):
             f"{result.stderr.strip()}"
         )
 
-    return [f for f in result.stdout.strip().split("\n") if f.strip()]
+    # -z: NUL-separated raw paths (see get_staged_files); newline split would
+    # mangle non-ASCII names and names containing spaces at line edges.
+    return [f for f in result.stdout.split("\0") if f]
 
 
 def get_history_files(repo_path):
@@ -1023,7 +1052,7 @@ def scan_content(content, scan_path=None):
                 elif rule_name == "dsn_query_password":
                     if _dsn_password_is_placeholder(match.group(1)):
                         continue
-                elif is_placeholder(match_str):
+                elif is_placeholder(match_str, fatal_rule=rule_name in FATAL_RULES):
                     continue
                 is_fatal = _classify_finding(rule_name, False, scan_path)
                 findings.append((line_num, rule_name, match_str, is_fatal))
