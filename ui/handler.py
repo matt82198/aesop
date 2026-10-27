@@ -109,21 +109,13 @@ def _is_client_disconnect_error(exc):
     return False
 
 
-def _is_local_origin(origin):
-    """True if an Origin header value is on the local allowlist.
+def _is_local_origin(origin, expected_port):
+    """True if an Origin header value is on the local allowlist for expected_port.
 
-    Keep in sync with csrf.validate_csrf_request(): same six local forms
-    (http[s]://127.0.0.1:<port>, http[s]://localhost:<port>, http[s]://[::1]:<port>).
-    Both http:// and https:// schemes are accepted for the same loopback hosts.
+    Delegates to csrf.is_local_origin() so the CSRF check and this endpoint
+    share one allowlist: http://{127.0.0.1,localhost,[::1]}:<expected_port>, exact.
     """
-    return bool(origin) and (
-        origin.startswith("http://127.0.0.1:") or
-        origin.startswith("https://127.0.0.1:") or
-        origin.startswith("http://localhost:") or
-        origin.startswith("https://localhost:") or
-        origin.startswith("http://[::1]:") or
-        origin.startswith("https://[::1]:")
-    )
+    return csrf.is_local_origin(origin, expected_port)
 
 
 def _is_valid_host_header(host_header, expected_port):
@@ -493,7 +485,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         (127.0.0.1 / localhost / [::1]) is accepted.
         """
         origin = self.headers.get("Origin", "").strip()
-        if not _is_local_origin(origin):
+        if not _is_local_origin(origin, self.server.server_address[1]):
             self.send_response(403)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
@@ -888,7 +880,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
     def handle_tracker_create(self):
         """Handle POST /api/tracker (create item)."""
         try:
-            is_valid, reason = validate_csrf_request(self.headers)
+            is_valid, reason = validate_csrf_request(self.headers, self.server.server_address[1])
             if not is_valid:
                 self.send_response(403)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -899,7 +891,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             content_length = int(self.headers.get('Content-Length', 0))
             # Read bounded amount; api.validate_mutation() validates Content-Length
             body_bytes = self.rfile.read(min(max(content_length, 0), api.MAX_BODY_BYTES))
-            status_code, result = api.tracker.create(self.headers, body_bytes)
+            status_code, result = api.tracker.create(self.headers, body_bytes, expected_port=self.server.server_address[1])
             self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.end_headers()
@@ -921,7 +913,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
     def handle_tracker_mutate(self):
         """Handle POST /api/tracker/<id> (update or delete)."""
         try:
-            is_valid, reason = validate_csrf_request(self.headers)
+            is_valid, reason = validate_csrf_request(self.headers, self.server.server_address[1])
             if not is_valid:
                 self.send_response(403)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1313,7 +1305,7 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         """Handle /submit POST with CSRF protection."""
         try:
             # CSRF validation: Check Origin/Referer + X-Aesop-Token
-            is_valid, reason = validate_csrf_request(self.headers)
+            is_valid, reason = validate_csrf_request(self.headers, self.server.server_address[1])
             if not is_valid:
                 self.send_response(403)
                 self.send_header("Content-Type", "application/json; charset=utf-8")

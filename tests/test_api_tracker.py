@@ -97,7 +97,7 @@ class TestValidateMutation(ApiTrackerTestCase):
     def test_rejects_missing_csrf_token(self):
         body = self._body({"title": "x"})
         headers = {"Content-Length": str(len(body))}  # no X-Aesop-Token
-        ok, result = self.api.validate_mutation(headers, body)
+        ok, result = self.api.validate_mutation(headers, body, expected_port=8770)
         self.assertFalse(ok)
         status, error = result
         self.assertEqual(status, 403)
@@ -107,7 +107,7 @@ class TestValidateMutation(ApiTrackerTestCase):
         body = self._body({"title": "x"})
         headers = self._headers_for_body(body, valid_token=False,
                                           extra={"X-Aesop-Token": "not-the-real-token"})
-        ok, result = self.api.validate_mutation(headers, body)
+        ok, result = self.api.validate_mutation(headers, body, expected_port=8770)
         self.assertFalse(ok)
         status, error = result
         self.assertEqual(status, 403)
@@ -115,14 +115,14 @@ class TestValidateMutation(ApiTrackerTestCase):
     def test_rejects_foreign_origin_even_with_valid_token(self):
         body = self._body({"title": "x"})
         headers = self._headers_for_body(body, extra={"Origin": "http://evil.example"})
-        ok, result = self.api.validate_mutation(headers, body)
+        ok, result = self.api.validate_mutation(headers, body, expected_port=8770)
         self.assertFalse(ok)
         status, error = result
         self.assertEqual(status, 403)
 
     def test_rejects_missing_content_length(self):
         headers = self._headers()  # no Content-Length
-        ok, result = self.api.validate_mutation(headers, b'{"title":"x"}')
+        ok, result = self.api.validate_mutation(headers, b'{"title":"x"}', expected_port=8770)
         self.assertFalse(ok)
         status, error = result
         self.assertEqual(status, 400)
@@ -130,7 +130,7 @@ class TestValidateMutation(ApiTrackerTestCase):
 
     def test_rejects_oversized_content_length(self):
         headers = self._headers(extra={"Content-Length": "10001"})
-        ok, result = self.api.validate_mutation(headers, b'{}')
+        ok, result = self.api.validate_mutation(headers, b'{}', expected_port=8770)
         self.assertFalse(ok)
         status, error = result
         self.assertEqual(status, 400)
@@ -138,7 +138,7 @@ class TestValidateMutation(ApiTrackerTestCase):
     def test_custom_content_length_error_message_preserved(self):
         headers = self._headers()  # no Content-Length
         ok, result = self.api.validate_mutation(
-            headers, b'', content_length_error="Invalid Content-Length (must be 1-10000 bytes)")
+            headers, b'', content_length_error="Invalid Content-Length (must be 1-10000 bytes)", expected_port=8770)
         self.assertFalse(ok)
         status, error = result
         self.assertEqual(status, 400)
@@ -147,7 +147,7 @@ class TestValidateMutation(ApiTrackerTestCase):
     def test_success_parses_json_body(self):
         body = self._body({"title": "legit", "priority": "P1"})
         headers = self._headers_for_body(body)
-        ok, parsed = self.api.validate_mutation(headers, body)
+        ok, parsed = self.api.validate_mutation(headers, body, expected_port=8770)
         self.assertTrue(ok)
         self.assertEqual(parsed, {"title": "legit", "priority": "P1"})
 
@@ -155,14 +155,14 @@ class TestValidateMutation(ApiTrackerTestCase):
         body = b'{not valid json'
         headers = self._headers_for_body(body)
         with self.assertRaises(json.JSONDecodeError):
-            self.api.validate_mutation(headers, body)
+            self.api.validate_mutation(headers, body, expected_port=8770)
 
 
 class TestTrackerCreate(ApiTrackerTestCase):
     def test_create_without_token_is_rejected_and_not_created(self):
         body = self._body({"title": "CSRF drive-by item"})
         headers = {"Content-Length": str(len(body))}
-        status, result = self.tracker_api.create(headers, body)
+        status, result = self.tracker_api.create(headers, body, expected_port=8770)
         self.assertEqual(status, 403)
         self.assertIn("CSRF", result["error"])
 
@@ -173,14 +173,14 @@ class TestTrackerCreate(ApiTrackerTestCase):
     def test_create_with_bad_json_returns_400(self):
         body = b'{"title": bad}'
         headers = self._headers_for_body(body)
-        status, result = self.tracker_api.create(headers, body)
+        status, result = self.tracker_api.create(headers, body, expected_port=8770)
         self.assertEqual(status, 400)
         self.assertEqual(result["error"], "Invalid JSON")
 
     def test_create_happy_path(self):
         body = self._body({"title": "legit item", "priority": "P1"})
         headers = self._headers_for_body(body)
-        status, item = self.tracker_api.create(headers, body)
+        status, item = self.tracker_api.create(headers, body, expected_port=8770)
         self.assertEqual(status, 201)
         self.assertEqual(item["title"], "legit item")
         self.assertEqual(item["priority"], "P1")
@@ -194,7 +194,7 @@ class TestTrackerUpdate(ApiTrackerTestCase):
     def _create(self, title="seed item"):
         body = self._body({"title": title})
         headers = self._headers_for_body(body)
-        status, item = self.tracker_api.create(headers, body)
+        status, item = self.tracker_api.create(headers, body, expected_port=8770)
         self.assertEqual(status, 201, item)
         return item["id"]
 
@@ -217,7 +217,7 @@ class TestTrackerDelete(ApiTrackerTestCase):
     def _create(self, title="seed item"):
         body = self._body({"title": title})
         headers = self._headers_for_body(body)
-        status, item = self.tracker_api.create(headers, body)
+        status, item = self.tracker_api.create(headers, body, expected_port=8770)
         self.assertEqual(status, 201, item)
         return item["id"]
 
