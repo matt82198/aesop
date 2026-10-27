@@ -78,7 +78,12 @@ PATTERNS = {
         # followed by whitespace/EOL, so an assignment from a variable/attribute/call
         # doesn't false-positive as a hardcoded secret the way a bare env-file value
         # (`API_TOKEN=verylongtokenvalue123456789`) legitimately does.
-        r"\b(password|passwd|secret|api[_-]?key|token|authorization)\b\s*(?::=|=)\s*(?:[\"'](?!.*(?:xxx|changeme|your-|<|$\{|example)\b).{8,}[\"']|(?!['\"]|xxx|changeme|your-|example)[^\s\$\<\{\n\(\)\.\"']{8,}(?=\s|$))",
+        # An unquoted value that is a subscript/slice of a bare name (`parts[0]`,
+        # `token[2:]`) is code, not a literal: the `(?![A-Za-z_]\w*\[[^\s\]]*\])`
+        # lookahead exempts only a COMPLETE subscript (closing `]` present, no
+        # whitespace inside); an unclosed `name[` stays flagged. No bracket or
+        # colon is added to the value class.
+        r"\b(password|passwd|secret|api[_-]?key|token|authorization)\b\s*(?::=|=)\s*(?:[\"'](?!.*(?:xxx|changeme|your-|<|$\{|example)\b).{8,}[\"']|(?!['\"]|xxx|changeme|your-|example)(?![A-Za-z_]\w*\[[^\s\]]*\])[^\s\$\<\{\n\(\)\.\"']{8,}(?=\s|$))",
         re.IGNORECASE,
     ),
     # F-01 (audit 2026-10-14-r1): KEY_NAME=value / KEY_NAME: value /
