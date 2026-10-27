@@ -649,6 +649,38 @@ class TestFallbackClassification(unittest.TestCase):
             incidents = IncidentParser(repo_root=tmpdir).find_all_incidents()
         self.assertEqual(incidents, [])
 
+    def test_manifest_only_subject_is_not_an_incident(self):
+        """aesop #1315: a manifest-only commit whose subject merely names a secret-gate test is not an incident."""
+        from tools.incident_report import IncidentParser
+        import tempfile
+        subject = "chore(loop-manifest): backup-fleet.sh lists its secret-gate test as a proof test"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _FixtureRepo.build(tmpdir, [(subject, "")])
+            incidents = IncidentParser(repo_root=tmpdir).find_all_incidents()
+        self.assertEqual(incidents, [],
+                         f"a manifest-only subject must not infer an incident: {incidents}")
+
+    def test_real_gate_activation_subject_is_inferred(self):
+        """A subject describing a real gate firing still infers gate-activation, flagged inferred."""
+        from tools.incident_report import IncidentParser
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _FixtureRepo.build(tmpdir, [("fix(ci): secret-scan gate blocked a push with a leaked token", "")])
+            incidents = IncidentParser(repo_root=tmpdir).find_all_incidents()
+        self.assertEqual([i["class"] for i in incidents], ["gate-activation"])
+        self.assertTrue(incidents[0].get("inferred"), "subject-inferred rows must be flagged inferred")
+
+    def test_explicit_trailer_always_wins(self):
+        """Incident-Class: gate-activation makes the commit an explicit incident regardless of its subject."""
+        from tools.incident_report import IncidentParser
+        import tempfile
+        subject = "chore(loop-manifest): backup-fleet.sh lists its secret-gate test as a proof test"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _FixtureRepo.build(tmpdir, [(subject, "Incident-Class: gate-activation")])
+            incidents = IncidentParser(repo_root=tmpdir).find_all_incidents()
+        self.assertEqual([i["class"] for i in incidents], ["gate-activation"])
+        self.assertFalse(incidents[0].get("inferred", False), "trailer rows are explicit, not inferred")
+
     def test_generated_table_marks_inferred_rows(self):
         """Fallback rows read 'class (inferred)'; trailer rows read the bare class."""
         from tools.incident_report import IncidentMarkdown
