@@ -179,12 +179,12 @@ $ echo $?
 
 That is the keyring working as designed. A key counts only once its public half is registered in
 `tools/receipt_pubkey.pub` or `tools/receipt_pubkeys/` and merged
-(`docs/RECEIPT-GATE.md:156-175`). Never commit a private key (`docs/RECEIPT-GATE.md:161`).
+(`docs/archive/RECEIPT-GATE.md:156-175`). Never commit a private key (`docs/archive/RECEIPT-GATE.md:161`).
 
 ## 5. Verify a receipt posted on a PR
 
 Receipts are posted on the head sha as a `verify-receipt-local` check-run or a commit comment
-(`docs/RECEIPT-GATE.md:95-102`). To look one up, `verify_receipt.py` has a lookup mode that uses the
+(`docs/archive/RECEIPT-GATE.md:95-102`). To look one up, `verify_receipt.py` has a lookup mode that uses the
 `gh` CLI and writes the envelope to a file, then you verify that file as in step 2:
 
 ```
@@ -201,8 +201,8 @@ default 300 second poll (`tools/verify_receipt.py:34-35`, `tools/verify_receipt.
 
 A VALID verdict means the key holder signed these parts on a tree matching your checkout, the parts
 exited 0, and the base is within 50 commits of the trunk. It does not mean the parts ran honestly or
-that the merge with main is green (`tools/verify_receipt.py:5-9`, `docs/RECEIPT-GATE.md:192-201`).
-The hosted check is also not required today (`docs/RECEIPT-GATE.md:3-4`).
+that the merge with main is green (`tools/verify_receipt.py:5-9`, `docs/archive/RECEIPT-GATE.md:192-201`).
+The hosted check is also not required today (`docs/archive/RECEIPT-GATE.md:3-4`).
 
 ## Check the verifier itself
 

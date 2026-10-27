@@ -13,7 +13,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 TARGET_DOCS = (
-    "docs/WHY-CRASH-ONLY.md",
+    "docs/archive/WHY-CRASH-ONLY.md",
     "docs/case-study-portfolio.md",
     "docs/REMOTE-ACCESS.md",
 )

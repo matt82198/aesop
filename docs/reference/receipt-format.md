@@ -6,7 +6,7 @@ produce one without opening the source. For the reasoning, see
 [Verify a receipt](../guides/verify-receipt.md).
 
 Status: the receipt gate is in a measurement period and the hosted check is not required
-(`docs/RECEIPT-GATE.md:3-4`). Fields below are what the code on `origin/main` emits and accepts.
+(`docs/archive/RECEIPT-GATE.md:3-4`). Fields below are what the code on `origin/main` emits and accepts.
 
 ## Envelope
 
@@ -156,8 +156,8 @@ From `python tools/emit_receipt.py --help`: `--repo`, `--matrix`, `--jobs`, `--s
 | `AESOP_RECEIPT_HMAC_SECRET` | HMAC secret, on both signer and verifier | `tools/receipt_common.py:29` |
 | `AESOP_RECEIPT_SPOOL` | spool directory override | `tools/receipt_common.py:30` |
 | `AESOP_RECEIPT_PROFILE` | `scoped` (default) or `full` | `tools/emit_receipt.py:89-91` |
-| `AESOP_PUSH_RED` | emergency override, hook-side; emitter exit 4 | `docs/RECEIPT-GATE.md:30-31` |
-| `AESOP_RECEIPT_EMIT` | inert; logged and ignored | `docs/RECEIPT-GATE.md:32-33` |
+| `AESOP_PUSH_RED` | emergency override, hook-side; emitter exit 4 | `docs/archive/RECEIPT-GATE.md:30-31` |
+| `AESOP_RECEIPT_EMIT` | inert; logged and ignored | `docs/archive/RECEIPT-GATE.md:32-33` |
 | `CHECK_NAME` | `verify-receipt-local` | `tools/receipt_common.py:24` |
 | `DEFAULT_PUBKEY_REL` | `tools/receipt_pubkey.pub` | `tools/receipt_common.py:26` |
 | `DEFAULT_REQUIRED_PARTS` | the four python shards | `tools/receipt_common.py:27` |
@@ -166,6 +166,6 @@ From `python tools/emit_receipt.py --help`: `--repo`, `--matrix`, `--jobs`, `--s
 ## Limits
 
 - A valid receipt does not prove the parts ran honestly (`tools/verify_receipt.py:5-9`).
-- The hosted check is not required (`docs/RECEIPT-GATE.md:3-4`); this reference does not claim
+- The hosted check is not required (`docs/archive/RECEIPT-GATE.md:3-4`); this reference does not claim
   receipts replace any CI run.
 - Fields marked "not checked" are informational. Only the rules in the table are enforced.

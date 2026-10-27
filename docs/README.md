@@ -8,8 +8,8 @@ The pages are grouped by what you want to do: try it, understand it, do somethin
 decide whether to trust it. Every page here exists on the main branch.
 
 A note on age. The folders `concepts/`, `guides/`, `reference/` and `provenance/` hold pages written against
-the current tree. The loose `docs/*.md` pages listed below are older. They stay linked until a folder page
-replaces them, so check their claims against the code before you rely on them. The rewrite plan is [plans/OSS-BLUEPRINT-DOCS.md](./plans/OSS-BLUEPRINT-DOCS.md).
+the current tree. The loose `docs/*.md` pages listed below are older. They stay linked because the folder pages
+cite them as sources or no folder page replaces them yet, so check their claims against the code before you rely on them. The rewrite plan is [plans/OSS-BLUEPRINT-DOCS.md](./plans/OSS-BLUEPRINT-DOCS.md).
 
 ## Try it
 
@@ -29,7 +29,8 @@ replaces them, so check their claims against the code before you rely on them. T
 | [Per-project stores](./concepts/per-project-stores.md) | One chain per project, the registry, and what is and is not built. |
 | [Stage lanes](./concepts/stage-lanes.md) | The pipeline of short per-stage contracts a change moves through. |
 | [Crash-only operation](./concepts/crash-only.md) | Why restart from disk is the recovery path, and where the model stops. |
-| [Receipt gate](./RECEIPT-GATE.md) | The signed-receipt design, its increments and its current status. |
+| [Gates and hooks](./concepts/gates-and-hooks.md) | What the local pre-push hook and the server-side checks each enforce, and what a skipped hook cannot undo. |
+| [Claim binding](./concepts/claim-binding.md) | How a claim in a report is bound to evidence, and which part of that hook is not shipped. |
 | [Architecture](./ARCHITECTURE.md) | The wave cycle and the components around it. |
 | [Two swappable seats](./MICROKERNEL.md) | The worker seat and the orchestrator seat, and what a model swap changes. |
 | [Durable checkpointing](./CHECKPOINTING.md) | STATE.md and BUILDLOG.md, recovery on resume, log rotation. |
@@ -44,7 +45,7 @@ replaces them, so check their claims against the code before you rely on them. T
 | [Install](./INSTALL.md) | Prerequisites, the `npx` scaffold, and what it creates. |
 | [Configure](./CONFIGURE.md) | `aesop.config.json`, repos, ports and the brain root. |
 | [First wave](./FIRST-WAVE.md) | Running `/power` then `/buildsystem` on the replay kit in [examples/first-wave-baseline](../examples/first-wave-baseline/README.md). |
-| [Install the pre-push hook](./HOOK-INSTALL.md) | Setting up `hooks/pre-push-policy.sh`. |
+| [Install the hook (guide)](./guides/install-hook.md) | Install the pre-push hook, wire branch protection, and read the audit log. |
 | [Verify a receipt](./guides/verify-receipt.md) | Check a signed receipt offline. |
 | [Verify an event store](./guides/verify-event-store.md) | Check a hash chain and see what a broken one looks like. |
 | [Adoption checklist](./ADOPTION-CHECKLIST.md) | Step-by-step acceptance criteria for adopting Aesop in a repository. |
@@ -59,6 +60,7 @@ replaces them, so check their claims against the code before you rely on them. T
 | Page | What it lists |
 |---|---|
 | [Receipt format](./reference/receipt-format.md) | The receipt fields and the verifier exit codes. |
+| [Gates](./reference/gates.md) | The pre-push checks in the order `main()` runs them. |
 | [Stage matrix](./reference/stage-matrix.md) | What each stage lane may take in, produce, run and hand back, by change category. |
 | [Stage contracts](./STAGE-CONTRACTS.md) | The older stage-by-category templates for dispatch. |
 | [CI failure catalog](./CI-CATALOG.md) | Recurring CI failures, one recipe per category. |
@@ -77,6 +79,27 @@ replaces them, so check their claims against the code before you rely on them. T
 | [Gates fired](./provenance/gates-fired.md) | Which gates have a recorded blocking event. |
 | [Refuted ledger](./provenance/refuted-ledger.md) | Claims that were measured and killed. |
 | [Provenance record](./PROVENANCE.md) | The dated record of the commits behind the release. |
+
+## Operate and extend
+
+Older pages that no folder page replaces yet. Check their claims against the code before you rely on them.
+
+| Page | What it covers |
+|---|---|
+| [Multi-instance roadmap](./MULTI-INSTANCE-ROADMAP.md) | Plan for running more than one orchestrator instance. |
+| [Multibox design](./design/MULTIBOX-DESIGN.md) | Lease-by-append coordination over a shared filesystem. |
+| [Receipt key isolation](./design/receipt-key-isolation.md) | Design options for isolating the receipt signing key. |
+| [Scripts policy](./SCRIPTS-POLICY.md) | Local-only execution and the shared script library. |
+| [Memory index template](./MEMORY-TEMPLATE.md) | A starting point for the memory index. |
+| [Actions dispatch template](./ACTIONS-TEMPLATE.md) | A GitHub Actions dispatch workflow template. |
+| [Remote command dispatch](./REMOTE-ACCESS.md) | Dispatching commands through GitHub issues. |
+| [Remote observability](./REMOTE-OBSERVABILITY.md) | Observing a fleet remotely. |
+| [OpenTelemetry runbook](./OBSERVABILITY-RUNBOOK.md) | Setting up OpenTelemetry observability. |
+| [Antivirus resilience](./av-resilience.md) | Design patterns for staying robust against antivirus interference. |
+| [Wave latency](./LATENCY.md) | A wave latency report. |
+| [Cross-OS CI drift](./CROSSOS-DRIFT.md) | A cross-OS CI drift report. |
+| [Code taste](./CODE-TASTE.md) | A code taste walkthrough. |
+| [Choosing an LLM tier](./drafts/haiku-tier-learnings.md) | A draft on tier choice from Haiku-first development. |
 
 ## The project
 

@@ -57,7 +57,7 @@ in parallel, keep the orchestrator context small, log spend. It states a main ru
 tier (`docs/DISPATCH-MODEL.md:40`). The shipped example of enforcing that rule as code is
 `hooks/claude/force-model-policy.mjs`, which rewrites a non-compliant model to the policy model
 (`hooks/claude/force-model-policy.mjs:1-12`). Wiring it into Claude Code settings is the adopter's job
-(`docs/HOOK-INSTALL.md`).
+(`docs/archive/HOOK-INSTALL.md`).
 
 The example hook is one enforcement point, not the whole dispatch system. The hooks that track lanes are not
 in this repository (see [Public and private](public-and-private.md)).

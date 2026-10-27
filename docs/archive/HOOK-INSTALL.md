@@ -217,7 +217,7 @@ fi
 - Hook source: `hooks/pre-push-policy.sh`
 - Secret scanner: `tools/secret_scan.py`
 - Audit log location: `state/SECURITY-AUDIT.log` (git-ignored)
-- Cardinal rule: [CARDINAL-RULES.md](CARDINAL-RULES.md)
+- Cardinal rule: [CARDINAL-RULES.md](../CARDINAL-RULES.md)
 
 ## Claude Code hooks
 

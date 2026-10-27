@@ -35,7 +35,7 @@ These ship, run on this tree, and check evidence rather than prose:
 | Need | Shipped mechanism | Where |
 |---|---|---|
 | A number written in a markdown file must have a source | `metrics_gate`, run on every push | `tools/metrics_gate.py:4`; chain position in [Gate reference](../reference/gates.md) |
-| "The tests pass" must be a checkable object | A signed receipt over the test matrix, recomputed against the tree | [Receipt gate](../RECEIPT-GATE.md) |
+| "The tests pass" must be a checkable object | A signed receipt over the test matrix, recomputed against the tree | [Receipt gate](../archive/RECEIPT-GATE.md) |
 | "A reviewer looked" must be checkable | Branch protection on the server | [Install the pre-push hook](../guides/install-hook.md) |
 
 None of these bind a sentence in an agent's reply to an evidence read in the same turn. That is the part that is

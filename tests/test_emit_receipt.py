@@ -324,7 +324,7 @@ class TestCliDryRunAndPost(unittest.TestCase):
 
 
 class TestRedGateExitCodes(unittest.TestCase):
-    """--fail-on-red / --pushed-red: the exit code the pre-push hook reads (docs/RECEIPT-GATE.md).
+    """--fail-on-red / --pushed-red: the exit code the pre-push hook reads (docs/archive/RECEIPT-GATE.md).
 
     0 = green (or red without --fail-on-red: legacy contract), 3 = red and blocked,
     4 = red, override accepted, receipt stamped pushed_red: true. Red is any part exit != 0;

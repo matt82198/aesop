@@ -12,7 +12,7 @@ over that claim. Every field is listed in [Receipt format](../reference/receipt-
 
 The receipt is not a committed file. A committed receipt would have to describe the tree that contains
 it, and it would conflict on every merge, so it is posted on the head sha instead
-(`docs/RECEIPT-GATE.md:95-102`, `tools/emit_receipt.py:3`).
+(`docs/archive/RECEIPT-GATE.md:95-102`, `tools/emit_receipt.py:3`).
 
 ## Canonical bytes
 
@@ -20,7 +20,7 @@ The signature covers canonical bytes: keys sorted, no whitespace, ASCII-escaped
 (`tools/receipt_common.py:40-42`). This is a plain `json.dumps` with `sort_keys=True` and compact
 separators. It is not RFC 8785 canonicalization and the code does not claim to be. Because the
 signature covers every byte of that form, changing any field (an exit code, the tree, the base)
-invalidates it (`docs/RECEIPT-GATE.md:117-119`).
+invalidates it (`docs/archive/RECEIPT-GATE.md:117-119`).
 
 ## Two signing schemes
 
@@ -37,7 +37,7 @@ Why two. Ed25519 is the target because it is asymmetric: a leaked CI configurati
 receipt. HMAC exists because `tools/` is stdlib-only and a box without the `cryptography` package
 still needs a way to sign; the verifying Action installs `cryptography` and accepts both
 (`tools/receipt_common.py:10-13`). The status document calls HMAC strictly weaker for the same reason:
-it is symmetric (`docs/RECEIPT-GATE.md:148-153`).
+it is symmetric (`docs/archive/RECEIPT-GATE.md:148-153`).
 
 Signature checking returns false, and never raises, on an unknown scheme, missing key material,
 malformed base64 or a library error (`tools/receipt_common.py:109-114`). The key never lives in the
@@ -63,7 +63,7 @@ The public key is a `.pub` file, not `.pem`, because the repository's secret sca
 The hosted workflow reads the verifier and the keyring from the base tree (the PR's base sha, or
 `main` on a manual run), never from the PR head. A PR that registers its own signer key cannot make
 its own receipt verify; the key takes effect only after that PR merges
-(`.github/workflows/verify-receipt.yml:30-34`, `docs/RECEIPT-GATE.md:163-175`). In code, the verifier
+(`.github/workflows/verify-receipt.yml:30-34`, `docs/archive/RECEIPT-GATE.md:163-175`). In code, the verifier
 accepts a keyring directory override so the workflow can point it at the base copy
 (`tools/receipt_common.py:149-155`, `tools/verify_receipt.py:375-377`).
 
@@ -105,12 +105,12 @@ in the receipt under `env.scrubbed` (`tools/emit_receipt.py:585`).
 - A valid signature proves the key holder signed this exact receipt. It does not prove the parts ran
   honestly (`tools/verify_receipt.py:5-9`).
 - The hosted receipt check is not required, so no merge is gated on it today
-  (`docs/RECEIPT-GATE.md:3-4`). This page does not claim receipts replace the hosted CI run.
+  (`docs/archive/RECEIPT-GATE.md:3-4`). This page does not claim receipts replace the hosted CI run.
 - A lane running as the box owner can reach the signing key today, per the key-isolation design brief
   (`docs/design/receipt-key-isolation.md:15-21`). That brief is a proposal; no isolation change is
   described here as shipped.
 - The honesty mechanism (random hosted re-runs and a post-merge cross-check) is a listed future
-  increment (`docs/RECEIPT-GATE.md:226-238`).
+  increment (`docs/archive/RECEIPT-GATE.md:226-238`).
 
 ## Evidence
 

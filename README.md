@@ -17,7 +17,18 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
-> **Status.** Version 0.11.0 (`package.json:3`). The receipt gate is in a measurement period: the hosted `verify-receipt` check is not required (`docs/RECEIPT-GATE.md:3-4`). The hooks that dispatch lanes and bind claims to evidence live in private repositories and are not shipped here (`docs/PROVENANCE.md:20-26`, [what is public and what is not](./docs/provenance/public-and-private.md)).
+> **Status.** Version 0.11.0 (`package.json:3`). The receipt gate is in a measurement period: the hosted `verify-receipt` check is not required (`docs/archive/RECEIPT-GATE.md:3-4`). The hooks that dispatch lanes and bind claims to evidence live in private repositories and are not shipped here (`docs/PROVENANCE.md:20-26`, [what is public and what is not](./docs/provenance/public-and-private.md)).
+
+## Blueprint
+
+[docs/README.md](./docs/README.md) is the blueprint index: one page per topic, each claim cited to the code or the record behind it.
+
+- [Concepts](./docs/concepts/receipts-loop.md): why a lane counts only when it leaves a receipt a gate can check.
+- [Guides](./docs/guides/verify-receipt.md): do something, such as verify a receipt offline.
+- [Reference](./docs/reference/receipt-format.md): look something up, such as the receipt fields and the gates.
+- [Provenance](./docs/provenance/README.md): what you can check for yourself, and how.
+- [CONTRIBUTING.md](./CONTRIBUTING.md): adopt it, contribute to it, and what a pull request must pass.
+- [SECURITY.md](./SECURITY.md): how to report a vulnerability.
 
 ## What it is
 

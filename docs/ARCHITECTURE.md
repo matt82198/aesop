@@ -264,7 +264,7 @@ Settings > Branches > main
   ✓ Restrict pushes to (Admins only)
 ```
 
-See [HOOK-INSTALL.md](HOOK-INSTALL.md) for setup.
+See [HOOK-INSTALL.md](archive/HOOK-INSTALL.md) for setup.
 
 ---
 
@@ -278,7 +278,7 @@ The controls below are the only ones this repo implements. Each is cited to the 
 
 1. **Lane rules (text, not enforcement).** `LANE-CONTRACT.md` tells dispatched agents not to merge, not to use `--admin`, `--no-verify` or `--force`, not to self-grant `--@gate-allow`, and not to hand-edit generated files (sections 3, 4 and 6). It is instruction text to the model. No file under `hooks/` injects it into a dispatch.
 2. **Dispatch linter.** `tools/dispatch_lint.py` scans committed Python, JavaScript and Markdown for forbidden dispatch patterns: manual `gh pr merge` without `--auto`, `--admin`, `--no-verify`, `--force`, `git stash`, and credential hunting. It is a regex scan of files in the tree. It runs as a pre-commit hook (`hooks/pre-commit-dispatch-lint.sh`) and is listed as a gate in `LANE-CONTRACT.md` section 5. It does not see prompts an orchestrator composes at runtime.
-3. **Claude Code PreToolUse hooks** (`hooks/claude/`, wired per `docs/HOOK-INSTALL.md`):
+3. **Claude Code PreToolUse hooks** (`hooks/claude/`, wired per `docs/archive/HOOK-INSTALL.md`):
    - `force-model-policy.mjs` (matcher `Agent|Task`) rewrites a subagent dispatch whose model is not the policy model. It constrains model choice only. It does not inspect the prompt for instructions.
    - `no-heredoc-file-authoring.mjs` denies Bash heredocs that author file content. Its stated reason is reliability, not security.
    - `no-scrollback-as-record.mjs` denies Bash, Read, Grep and Glob access to session transcripts. Its stated reason is that transcripts are not the system of record.
