@@ -129,5 +129,113 @@ class TestCheckSeesCommittedRange(unittest.TestCase):
             self.assertIn("[OK]", out, f"stdout: {out}\nstderr: {err}")
 
 
+def _set_head(path, branch):
+    """Point HEAD at an unborn branch so the local default-branch config cannot leak in."""
+    _git(path, "symbolic-ref", "HEAD", f"refs/heads/{branch}")
+
+
+_DEFAULT_BASE_FILES = {
+    "tools/CLAUDE.md": "# Tools domain\n",
+    "tools/x.py": "print('a')\n",
+    "README.md": "readme\n",
+}
+
+
+def _remote_repo(tmp, branch, push=True, base_files=None):
+    """Work repo on `branch` with a bare origin. Base commit pushed when push=True.
+
+    The base commit is on `branch` only. No other base ref exists, so the gate
+    must resolve the trunk from the remote, not from a hard-coded name.
+    base_files overrides the base commit's content (default includes tools/CLAUDE.md).
+    """
+    root = Path(tmp) / "work"
+    origin = Path(tmp) / "origin.git"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True, capture_output=True)
+    _init_repo(root)
+    _set_head(root, branch)
+    _commit(root, "base", dict(_DEFAULT_BASE_FILES if base_files is None else base_files))
+    _git(root, "remote", "add", "origin", str(origin))
+    if push:
+        _git(root, "push", "-q", "origin", branch)
+        _git(root, "fetch", "-q", "origin")
+    return root
+
+
+class TestTrunkAndBootstrapBaseResolution(unittest.TestCase):
+
+    def test_trunk_master_only_remote_is_the_base(self):
+        """RED: remote has only master (no main). The gate must diff against origin/master.
+
+        One commit touches tools/x.py and tools/CLAUDE.md together, so there is no drift.
+        Today the candidates are origin/main and main only, so the gate exits 2.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _remote_repo(tmp, "master", push=True)
+            _commit(root, "change x with clause", {
+                "tools/x.py": "print('b')\n",
+                "tools/CLAUDE.md": "# Tools domain\n- x.py: prints b\n",
+            })
+
+            code, out, err = _run_check(root, base_ref="main")
+
+            self.assertEqual(code, 0, f"stdout: {out}\nstderr: {err}")
+            self.assertIn("origin/master", out, f"stdout: {out}\nstderr: {err}")
+
+    def test_bootstrap_empty_remote_consistent_change_passes(self):
+        """RED: empty bare origin, no main/master base. Whole-tree check, consistent pair, exit 0.
+
+        Required behaviour: diff against git's empty tree and print [BOOTSTRAP].
+        Today the gate exits 2 (could not diff against base).
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _remote_repo(tmp, "feature/bootstrap", push=False)
+            _commit(root, "fresh scaffold", {
+                "tools/x.py": "print('b')\n",
+                "tools/CLAUDE.md": "# Tools domain\n- x.py: prints b\n",
+            })
+
+            code, out, err = _run_check(root, base_ref="main")
+
+            self.assertEqual(code, 0, f"stdout: {out}\nstderr: {err}")
+            self.assertIn("[BOOTSTRAP]", out, f"stdout: {out}\nstderr: {err}")
+
+    def test_bootstrap_empty_remote_code_without_clause_still_drifts(self):
+        """RED: empty bare origin, tools/x.py committed with no CLAUDE.md change.
+
+        The whole-tree check must still bite in bootstrap mode: DRIFT, non-zero exit.
+        Today the gate exits 2, not 1, so the exit-code assertion fails.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            # No tools/CLAUDE.md anywhere in the bootstrap history: nothing documents x.py.
+            root = _remote_repo(tmp, "feature/bootstrap", push=False, base_files={
+                "tools/x.py": "print('a')\n",
+                "README.md": "readme\n",
+            })
+            _commit(root, "fresh scaffold without clause", {
+                "tools/x.py": "print('b')\n",
+            })
+
+            code, out, err = _run_check(root, base_ref="main")
+
+            self.assertEqual(code, 1, f"stdout: {out}\nstderr: {err}")
+            self.assertIn("[DRIFT]", out, f"stdout: {out}\nstderr: {err}")
+
+    def test_no_base_with_nonempty_remote_fails_closed(self):
+        """GREEN pin: origin has a pushed feature branch but no main/master anywhere.
+
+        Remote is not empty, so bootstrap does not apply. The gate exits 2 with the
+        existing fail-closed message and never falls back to HEAD~1.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = _remote_repo(tmp, "feature/other", push=True)
+            _commit(root, "change x", {"tools/x.py": "print('b')\n"})
+
+            code, out, err = _run_check(root, base_ref="main")
+
+            self.assertEqual(code, 2, f"stdout: {out}\nstderr: {err}")
+            self.assertIn("could not diff against base", err + out, f"stdout: {out}\nstderr: {err}")
+
+
 if __name__ == "__main__":
     unittest.main()
