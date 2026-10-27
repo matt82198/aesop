@@ -107,16 +107,46 @@ for i in $(seq 1 15); do
   ( bash -c 'source "$1"; acquire_lock "$2" 300; echo "RC=$?"; sleep 1' _ "$RW" "$LOCK" > "$ROOT/$i/a.out" 2>/dev/null ) &
   ( bash -c 'source "$1"; acquire_lock "$2" 300; echo "RC=$?"; sleep 1' _ "$RW" "$LOCK" > "$ROOT/$i/b.out" 2>/dev/null ) &
   wait
-  winners=$(grep -h '^RC=2$' "$ROOT/$i/a.out" "$ROOT/$i/b.out" 2>/dev/null | wc -l | tr -d ' ')
+  winners=$(grep -hE '^RC=(0|2)$' "$ROOT/$i/a.out" "$ROOT/$i/b.out" 2>/dev/null | wc -l | tr -d ' ')
   if [ "$winners" != "1" ]; then
     bad=$((bad + 1))
     echo "  trial $i: winners=$winners"; cat "$ROOT/$i/a.out" "$ROOT/$i/b.out" 2>/dev/null
   fi
 done
 if [ "$bad" -eq 0 ]; then
-  pass "15/15 concurrent reclaim trials produced exactly one winner (RC=2)"
+  pass "15/15 concurrent reclaim trials produced exactly one acquirer (RC=0 or RC=2)"
 else
-  fail "$bad/15 concurrent reclaim trials did not produce exactly one winner"
+  fail "$bad/15 concurrent reclaim trials did not produce exactly one acquirer"
+fi
+
+echo "=== Test 4b: barrier-released reclaimers of one dead-holder lock -> exactly one acquirer ==="
+# Deterministic start: both drivers spin on a shared GO file and call acquire_lock the
+# instant it appears, so their mkdir/mv/kill-0 steps interleave inside acquire_lock.
+# An ACQUIRER is any driver that returns 0 (fresh mkdir won) or 2 (dead holder reclaimed);
+# Test 4 counted only RC=2 and so misread a legitimate RC=0 acquisition as a zero-winner.
+# Each trial must yield exactly one acquirer; the loser must report RC=1 (held).
+ROOT="$TMP_DIR/t4b"; mkdir -p "$ROOT"
+bad4b=0
+for i in $(seq 1 40); do
+  mkdir -p "$ROOT/$i"
+  LOCK="$ROOT/$i/lock"; mkdir "$LOCK"
+  echo "$(dead_pid)" > "$LOCK/pid"
+  echo $(( $(date +%s) - 1000 )) > "$LOCK/timestamp"
+  GO="$ROOT/$i/go"
+  ( bash -c 'source "$1"; while [ ! -f "$3" ]; do sleep 0.01; done; acquire_lock "$2" 300; echo "RC=$?"; sleep 1' _ "$RW" "$LOCK" "$GO" > "$ROOT/$i/a.out" 2>/dev/null ) &
+  ( bash -c 'source "$1"; while [ ! -f "$3" ]; do sleep 0.01; done; acquire_lock "$2" 300; echo "RC=$?"; sleep 1' _ "$RW" "$LOCK" "$GO" > "$ROOT/$i/b.out" 2>/dev/null ) &
+  touch "$GO"
+  wait
+  acquirers=$(grep -h -E '^RC=(0|2)$' "$ROOT/$i/a.out" "$ROOT/$i/b.out" 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$acquirers" != "1" ]; then
+    bad4b=$((bad4b + 1))
+    echo "  trial $i: acquirers=$acquirers"; cat "$ROOT/$i/a.out" "$ROOT/$i/b.out" 2>/dev/null
+  fi
+done
+if [ "$bad4b" -eq 0 ]; then
+  pass "40/40 barrier-released reclaim trials produced exactly one acquirer"
+else
+  fail "$bad4b/40 barrier-released reclaim trials did not produce exactly one acquirer"
 fi
 
 echo "=== Test 5: selfheal does not spawn run-watchdog.sh while HALT is set ==="
