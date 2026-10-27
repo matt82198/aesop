@@ -38,7 +38,7 @@ telemetry = [
 ]
 # Bench API runner (tools/bench_api_runner.py).
 bench = [
-    "anthropic==1.13.0",
+    "anthropic==2.1.0",
 ]
 # Gate and test tooling: tools/pyflakes_gate.py imports pyflakes; CI runs tests/ with pytest.
 dev = [
