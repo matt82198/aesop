@@ -9,7 +9,7 @@ name: verify-receipt
 # tree hash from THIS checkout (never trusts the lane's number), re-checks the
 # signature against the committed public key, and binds freshness to origin/main.
 #
-# Behaviour during the measurement period (see docs/RECEIPT-GATE.md):
+# Behaviour during the measurement period (see docs/archive/RECEIPT-GATE.md):
 #   - no receipt on the head sha   -> job FAILS (fail-closed, exit 1, "MISSING receipt"
 #                                     with the sha and where it was looked for). A green
 #                                     check must mean a receipt was verified, not that
@@ -31,7 +31,7 @@ name: verify-receipt
 # and tools/receipt_pubkeys/*.pub) are read from the BASE tree -- the PR's base.sha (main for
 # workflow_dispatch), checked out into ./base -- never from the PR head. A PR that registers a
 # new signer key in its own checkout therefore cannot make its receipt verify; a key only takes
-# effect once its PR has merged (docs/RECEIPT-GATE.md "Key rotation"). The head tree is still the
+# effect once its PR has merged (docs/archive/RECEIPT-GATE.md "Key rotation"). The head tree is still the
 # tree whose hash is recomputed (--repo .).
 
 on:
@@ -98,7 +98,7 @@ jobs:
               echo ""
               echo "$1"
               echo ""
-              echo "Lanes post one with \`python tools/emit_receipt.py --post\`. Not required yet (docs/RECEIPT-GATE.md)."
+              echo "Lanes post one with \`python tools/emit_receipt.py --post\`. Not required yet (docs/archive/RECEIPT-GATE.md)."
             } >> "$GITHUB_STEP_SUMMARY"
           }
           # The lookup tool comes from the BASE tree too (a PR head must not be able to

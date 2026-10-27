@@ -524,6 +524,13 @@ def format_violations(violations_by_file: Dict, as_json: bool = False) -> str:
 
 
 def main():
+    # Findings quote source lines verbatim, which may hold characters a legacy
+    # console codec (Windows cp1252) cannot encode. Print UTF-8 with replacement
+    # so the verdict always appears; exit codes are unaffected.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(
         description="Dispatch linter - enforces merge automation and security rules"
     )

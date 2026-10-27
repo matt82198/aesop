@@ -10,6 +10,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { spawn } = require('child_process');
 
 const CURRENT_DIR = process.cwd();
@@ -34,9 +35,15 @@ const CURRENT_DIR = process.cwd();
       shell: true
     });
 
-    // Exit with the watchdog process's exit code
-    proc.on('exit', (code) => {
-      process.exitCode = code || 0;
+    // Exit with the watchdog process's exit code. A null code means the child
+    // died by signal: report 128 + signal number (shell convention), or 1 if unknown.
+    proc.on('exit', (code, signal) => {
+      if (typeof code === 'number') {
+        process.exitCode = code;
+        return;
+      }
+      const signum = signal ? os.constants.signals[signal] : undefined;
+      process.exitCode = signum ? 128 + signum : 1;
     });
 
     proc.on('error', (err) => {

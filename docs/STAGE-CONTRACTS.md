@@ -8,11 +8,13 @@ A change reaches CI through a pipeline of stage lanes, never one lane: S1 SPEC w
 
 ## 2. Stages
 
+- S0 EVIDENCE (keyrun bugfix only, R-IMG-1): IN the bug row; OUT PNG frames of the issue on origin/main at a named sha; ALLOWED the orchestrator runs the capture (screens.ps1, one instance); FORBIDDEN any lane launching the game, edits, commit, push; HAND BACK PNG paths, sha, seed, key, ticks.
 - S1 SPEC: IN a row or ruling; OUT a failing test path plus its red output; ALLOWED Read, Grep, Write to the test file, run that one test; FORBIDDEN editing non-test files, commit, push; HAND BACK test path and red output lines.
 - S2 IMPL: IN the S1 test path and red output; OUT a diff file (no commits); ALLOWED Edit to the named files, run the named test; FORBIDDEN editing the test, committing, pushing, running gates other than the named test; HAND BACK diff path and the green line.
 - S3 GATE: IN the S2 diff; OUT a gate log file; ALLOWED read-only gate commands; FORBIDDEN Edit, Write, commit, push, any --update-baseline; HAND BACK PASS line or the catalog recipe id that matched.
-- S4 SHIP (github-agent): IN the S3 PASS and the message file; OUT PR number, head sha, armed state; ALLOWED git add, commit with message file, foreground push, PR against main, arm auto-merge; FORBIDDEN any code edit, --no-verify, update-branch, manual merge, merge train; HAND BACK PR number, head sha, state.
+- S4 SHIP (github-agent): IN the S3 PASS and the message file; OUT PR number, head sha, armed state; ALLOWED git add, commit with message file, foreground push, PR against main, arm auto-merge; FORBIDDEN any code edit, --no-verify, update-branch, manual merge, merge train; if the branch has a merge-forward commit, scan with `python ~/scripts/secret_scan.py --range origin/main..HEAD --repo <worktree>` (`--staged` correctly refuses with 'scanned 0 files' once the index equals HEAD); exit 1 blocks the push; on any secret-scan refusal, switch to --range and rerun; never push past a refusal; HAND BACK PR number, head sha, state.
 - S5 REVIEW: IN the S4 PR diff and the ruling; OUT a review file; ALLOWED read-only; FORBIDDEN edit, commit, push; HAND BACK verdict plus refutations, each with file:line.
+- S5 VALIDATE (keyrun bugfix only, R-IMG-1): IN the S3 PASS, the EVIDENCE line and the row; OUT a validate file with before and after frame paths; ALLOWED read-only compare, the orchestrator captures the branch-head frames with the S0 seed, key and ticks; FORBIDDEN edit, commit, push, arming without PASS; HAND BACK PASS or FAIL with frame paths; FAIL returns to S2.
 
 ## 3. Categories
 
@@ -31,6 +33,18 @@ A change reaches CI through a pipeline of stage lanes, never one lane: S1 SPEC w
 
 Field key: GOAL is the id from STATE.md G5 or the row; IN and OUT are the slot paths; CMD is the exact command; FORBIDDEN and HAND BACK are per cell. Slots in angle brackets are filled per dispatch. Angle brackets that name a source (`<... not in inputs>`) are unresolved and must be filled before dispatch.
 
+### S0 EVIDENCE
+```
+S0 EVIDENCE | keyrun-sim | PURPOSE capture the issue on origin/main | GOAL <id> | IN <bug row> | OUT <scratch>/evidence/*.png
+CMD powershell -NoProfile -ExecutionPolicy Bypass -File <screens.ps1 path, not in inputs> seed=<n> key=<n> ticks=<n> (orchestrator runs, never a lane) | FORBIDDEN lanes launching the game, edits, commit, push | HAND BACK PNG paths + sha + seed/key/ticks
+S0 EVIDENCE | keyrun-bots | PURPOSE capture the issue on origin/main | GOAL <id> | IN <bug row> | OUT <scratch>/evidence/*.png
+CMD powershell -NoProfile -ExecutionPolicy Bypass -File <screens.ps1 path, not in inputs> seed=<n> key=<n> ticks=<n> (orchestrator runs, never a lane) | FORBIDDEN lanes launching the game, edits, commit, push | HAND BACK PNG paths + sha + seed/key/ticks
+S0 EVIDENCE | keyrun-content | PURPOSE capture the issue on origin/main | GOAL <id> | IN <bug row> | OUT <scratch>/evidence/*.png
+CMD powershell -NoProfile -ExecutionPolicy Bypass -File <screens.ps1 path, not in inputs> seed=<n> key=<n> ticks=<n> (orchestrator runs, never a lane) | FORBIDDEN lanes launching the game, edits, commit, push | HAND BACK PNG paths + sha + seed/key/ticks
+S0 EVIDENCE | keyrun-view | PURPOSE capture the issue on origin/main | GOAL <id> | IN <bug row> | OUT <scratch>/evidence/*.png
+CMD powershell -NoProfile -ExecutionPolicy Bypass -File <screens.ps1 path, not in inputs> seed=<n> key=<n> ticks=<n> (orchestrator runs, never a lane) | FORBIDDEN lanes launching the game, edits, commit, push | HAND BACK PNG paths + sha + seed/key/ticks
+```
+
 ### S1 SPEC
 ```
 S1 SPEC | hook | PURPOSE one failing test for one hook rule | GOAL <id> | IN <ruling> | OUT hooks/<name>.test.mjs
@@ -39,13 +53,13 @@ S1 SPEC | script | PURPOSE one failing test for one script behavior | GOAL <id> 
 CMD <script test command, not in inputs> (must be red) | FORBIDDEN edit script, commit | HAND BACK test path + red lines
 S1 SPEC | docs | SKIPPED (docs-only changes skip S1) | GOAL - | IN - | OUT -
 CMD none | FORBIDDEN - | HAND BACK none
-S1 SPEC | keyrun-sim | PURPOSE one failing sim test for one rule | GOAL <id> | IN <ruling> | OUT game/sim/Keyrun.Sim.Tests/<file>
+S1 SPEC | keyrun-sim | PURPOSE one failing sim test for one rule | GOAL <id> | IN <ruling> + EVIDENCE: <png paths> @ <sha> seed=<n> key=<n> ticks=<n> | OUT game/sim/Keyrun.Sim.Tests/<file>
 CMD dotnet test game/sim/Keyrun.Sim.Tests --nologo (must be red) | FORBIDDEN edit game/sim/Keyrun.Sim, commit | HAND BACK test path + red lines
-S1 SPEC | keyrun-bots | PURPOSE one failing bots test for one rule | GOAL <id> | IN <ruling> | OUT game/bots/Keyrun.Bots.Tests/<file>
+S1 SPEC | keyrun-bots | PURPOSE one failing bots test for one rule | GOAL <id> | IN <ruling> + EVIDENCE: <png paths> @ <sha> seed=<n> key=<n> ticks=<n> | OUT game/bots/Keyrun.Bots.Tests/<file>
 CMD dotnet test game/bots/Keyrun.Bots.Tests --nologo (must be red) | FORBIDDEN edit bots code, touch balance tests | HAND BACK test path + red lines
-S1 SPEC | keyrun-content | PURPOSE one failing content-load test | GOAL <id> | IN <ruling> | OUT <content test path, not in inputs>
+S1 SPEC | keyrun-content | PURPOSE one failing content-load test | GOAL <id> | IN <ruling> + EVIDENCE: <png paths> @ <sha> seed=<n> key=<n> ticks=<n> | OUT <content test path, not in inputs>
 CMD <Content test command from game CLAUDE.md, not in inputs> (must be red) | FORBIDDEN edit data files, edit the other content tree | HAND BACK test path + red lines
-S1 SPEC | keyrun-view | PURPOSE one failing HUD scene assertion | GOAL <id> | IN <ruling> | OUT game/src/Host/<scene test>
+S1 SPEC | keyrun-view | PURPOSE one failing HUD scene assertion | GOAL <id> | IN <ruling> + EVIDENCE: <png paths> @ <sha> seed=<n> key=<n> ticks=<n> | OUT game/src/Host/<scene test>
 CMD powershell -NoProfile -ExecutionPolicy Bypass -File game/src/Host/HudSceneTest.ps1 > <scratch>/hud-red.txt 2>&1 (must be red) | FORBIDDEN screens.ps1 captures, raw Godot launches | HAND BACK scene path + red lines
 S1 SPEC | ci-fix | PURPOSE reproduce the red from one catalog row | GOAL <CI-id> | IN docs/CI-CATALOG.md row <CI-id> | OUT <repro path>
 CMD <recipe from docs/CI-CATALOG.md row <CI-id>> (must reproduce) | FORBIDDEN editing gates, baselines, timeouts | HAND BACK repro path + matched lines
@@ -61,13 +75,13 @@ S2 IMPL | script | PURPOSE make the S1 test green, nothing more | GOAL <id> | IN
 CMD <script test command, not in inputs> (must be green) | FORBIDDEN editing the test, commit, push | HAND BACK diff path + green line
 S2 IMPL | docs | PURPOSE write the one doc named in the brief | GOAL <id> | IN <brief> | OUT <doc path>
 CMD none beyond Write | FORBIDDEN edits outside the named doc, commit, push | HAND BACK doc path + line count
-S2 IMPL | keyrun-sim | PURPOSE make the S1 sim test green | GOAL <id> | IN <S1 test path> | OUT <scratch>/<id>.diff
+S2 IMPL | keyrun-sim | PURPOSE make the S1 sim test green | GOAL <id> | IN <S1 test path> + EVIDENCE: <png paths> @ <sha> seed=<n> key=<n> ticks=<n> | OUT <scratch>/<id>.diff
 CMD dotnet test game/sim/Keyrun.Sim.Tests --nologo (must be green) | FORBIDDEN editing the test, bots or content, commit | HAND BACK diff path + green line
-S2 IMPL | keyrun-bots | PURPOSE make the S1 bots test green | GOAL <id> | IN <S1 test path> | OUT <scratch>/<id>.diff
+S2 IMPL | keyrun-bots | PURPOSE make the S1 bots test green | GOAL <id> | IN <S1 test path> + EVIDENCE: <png paths> @ <sha> seed=<n> key=<n> ticks=<n> | OUT <scratch>/<id>.diff
 CMD dotnet test game/bots/Keyrun.Bots.Tests --nologo (must be green) | FORBIDDEN loosening balance margins, commit | HAND BACK diff path + green line
-S2 IMPL | keyrun-content | PURPOSE make the S1 content test green in one tree | GOAL <id> | IN <S1 test path> | OUT <scratch>/<id>.diff
+S2 IMPL | keyrun-content | PURPOSE make the S1 content test green in one tree | GOAL <id> | IN <S1 test path> + EVIDENCE: <png paths> @ <sha> seed=<n> key=<n> ticks=<n> | OUT <scratch>/<id>.diff
 CMD <Content test command from game CLAUDE.md, not in inputs> (must be green) | FORBIDDEN editing the other content tree, commit | HAND BACK diff path + green line
-S2 IMPL | keyrun-view | PURPOSE make the S1 HUD scene assertion pass | GOAL <id> | IN <S1 scene path> | OUT <scratch>/<id>.diff
+S2 IMPL | keyrun-view | PURPOSE make the S1 HUD scene assertion pass | GOAL <id> | IN <S1 scene path> + EVIDENCE: <png paths> @ <sha> seed=<n> key=<n> ticks=<n> | OUT <scratch>/<id>.diff
 CMD powershell -NoProfile -ExecutionPolicy Bypass -File game/src/Host/HudSceneTest.ps1 > <scratch>/hud-green.txt 2>&1 | FORBIDDEN screens.ps1, raw Godot launches, commit | HAND BACK diff path + green line
 S2 IMPL | ci-fix | PURPOSE apply the catalog recipe once | GOAL <CI-id> | IN docs/CI-CATALOG.md row <CI-id> | OUT <scratch>/<id>.diff
 CMD <recipe from docs/CI-CATALOG.md row <CI-id>> then the S1 repro (must pass) | FORBIDDEN raising timeouts, editing baselines to hide NEW keys, adding secrets, second retry | HAND BACK diff path + repro pass line
@@ -105,13 +119,13 @@ S4 SHIP | script | PURPOSE commit, push, arm the PR; no code | GOAL <id> | IN <S
 CMD python ~/scripts/knowledge_tree.py --write --root <wt> first; commit with Loop-Proof: tests/<file>.py red=N/M green=M/M only if the file is in LOOP-MANIFEST.json | FORBIDDEN code edits, --no-verify, manual merge | HAND BACK PR number, head sha, armed state
 S4 SHIP | docs | PURPOSE commit, push, arm the PR; no code | GOAL <id> | IN <S3 PASS + message file> | OUT PR number + head sha
 CMD commit; git push (foreground); gh pr create --base main; arm auto-merge | FORBIDDEN any edit, --no-verify, manual merge | HAND BACK PR number, head sha, armed state
-S4 SHIP | keyrun-sim | PURPOSE commit, push, arm the PR per keyrun CI contract | GOAL <id> | IN <S3 PASS + message file> | OUT PR number + head sha
+S4 SHIP | keyrun-sim | PURPOSE commit, push, arm the PR per keyrun CI contract | GOAL <id> | IN <S3 PASS + message file> + S5 VALIDATE PASS (bugfix, R-IMG-1) | OUT PR number + head sha
 CMD commit; git push (foreground); gh pr create --base main; arm auto-merge | FORBIDDEN code edits, update-branch, manual merge | HAND BACK PR number, head sha (CI contract item 6)
-S4 SHIP | keyrun-bots | PURPOSE commit, push, arm the PR per keyrun CI contract | GOAL <id> | IN <S3 PASS + message file> | OUT PR number + head sha
+S4 SHIP | keyrun-bots | PURPOSE commit, push, arm the PR per keyrun CI contract | GOAL <id> | IN <S3 PASS + message file> + S5 VALIDATE PASS (bugfix, R-IMG-1) | OUT PR number + head sha
 CMD commit; git push (foreground); gh pr create --base main; arm auto-merge | FORBIDDEN code edits, update-branch, manual merge | HAND BACK PR number, head sha, balance note
-S4 SHIP | keyrun-content | PURPOSE commit, push, arm the PR per keyrun CI contract | GOAL <id> | IN <S3 PASS + message file> | OUT PR number + head sha
+S4 SHIP | keyrun-content | PURPOSE commit, push, arm the PR per keyrun CI contract | GOAL <id> | IN <S3 PASS + message file> + S5 VALIDATE PASS (bugfix, R-IMG-1) | OUT PR number + head sha
 CMD commit; git push (foreground); gh pr create --base main; arm auto-merge | FORBIDDEN code edits, update-branch, manual merge | HAND BACK PR number, head sha
-S4 SHIP | keyrun-view | PURPOSE commit, push, arm the PR per keyrun CI contract | GOAL <id> | IN <S3 PASS + message file> | OUT PR number + head sha
+S4 SHIP | keyrun-view | PURPOSE commit, push, arm the PR per keyrun CI contract | GOAL <id> | IN <S3 PASS + message file> + S5 VALIDATE PASS (bugfix, R-IMG-1) | OUT PR number + head sha
 CMD commit; git push (foreground); gh pr create --base main; arm auto-merge | FORBIDDEN code edits, update-branch, manual merge | HAND BACK PR number, head sha, scene PASS line
 S4 SHIP | ci-fix | PURPOSE push the fix or merge-forward, then arm | GOAL <CI-id> | IN <S3 PASS> | OUT PR number + head sha
 CMD git merge origin/HEAD in the worktree only when the row says merge-forward; git push (foreground); arm auto-merge | FORBIDDEN update-branch, raising timeouts, --no-verify | HAND BACK PR number, head sha, CI-id
@@ -139,11 +153,20 @@ S5 REVIEW | ci-fix | PURPOSE refute the fix against the catalog row | GOAL <CI-i
 CMD git diff origin/HEAD...<branch> (read-only) | FORBIDDEN edit, commit, push, baseline edits | HAND BACK verdict + refutations with file:line
 S5 REVIEW | memory | PURPOSE refute the INBOX line against the source fact | GOAL <id> | IN <commit + fact> | OUT <scratch>/review.txt
 CMD git show <sha> (read-only) | FORBIDDEN edit, commit, push | HAND BACK verdict + refutations with file:line
+S5 VALIDATE | keyrun-sim | PURPOSE bugfix frames: before against after on branch head | GOAL <id> | IN <S3 PASS + EVIDENCE line + row> | OUT <scratch>/validate.txt
+CMD orchestrator captures the S0 scene on branch head (same seed, key, ticks); review lane compares read-only | FORBIDDEN edit, commit, push, arming without PASS | HAND BACK PASS or FAIL + before/after frame paths (FAIL returns to S2)
+S5 VALIDATE | keyrun-bots | PURPOSE bugfix frames: before against after on branch head | GOAL <id> | IN <S3 PASS + EVIDENCE line + row> | OUT <scratch>/validate.txt
+CMD orchestrator captures the S0 scene on branch head (same seed, key, ticks); review lane compares read-only | FORBIDDEN edit, commit, push, arming without PASS | HAND BACK PASS or FAIL + before/after frame paths (FAIL returns to S2)
+S5 VALIDATE | keyrun-content | PURPOSE bugfix frames: before against after on branch head | GOAL <id> | IN <S3 PASS + EVIDENCE line + row> | OUT <scratch>/validate.txt
+CMD orchestrator captures the S0 scene on branch head (same seed, key, ticks); review lane compares read-only | FORBIDDEN edit, commit, push, arming without PASS | HAND BACK PASS or FAIL + before/after frame paths (FAIL returns to S2)
+S5 VALIDATE | keyrun-view | PURPOSE bugfix frames: before against after on branch head | GOAL <id> | IN <S3 PASS + EVIDENCE line + row> | OUT <scratch>/validate.txt
+CMD orchestrator captures the S0 scene on branch head (same seed, key, ticks); review lane compares read-only | FORBIDDEN edit, commit, push, arming without PASS | HAND BACK PASS or FAIL + before/after frame paths (FAIL returns to S2)
 ```
 
 ## 5. Pipeline
 
 - Orchestrator order: S1 -> S2 -> S3 -> S4, then S5 when the orchestrator names it (G5 does not make S5 mandatory per category).
+- Keyrun bugfix order (R-IMG-1): S0 EVIDENCE, S1, S2, S3, S5 VALIDATE, then S4; S4 arms auto-merge only after VALIDATE PASS, and a FAIL returns to S2.
 - A stage never starts until the previous hand-back names its output artifact (the path or sha in the table above).
 - Docs-only changes skip S1 and skip the S3 fastcheck (S3 runs the secret scan only).
 - A brief names exactly one stage's verbs; the dispatch hook denies a brief that names more than one stage.

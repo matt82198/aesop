@@ -359,7 +359,7 @@ def run_chaos_wave(sandbox: Path) -> Dict[str, Any]:
     """
     results = {
         "timestamp": int(time.time()),
-        "sandbox": str(sandbox),
+        "sandbox": sandbox.name,  # basename only: the full temp path embeds the OS user name
         "faults": [],
         "summary": {},
     }

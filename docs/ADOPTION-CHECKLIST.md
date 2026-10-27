@@ -315,4 +315,4 @@ See also:
 - [INSTALL.md](INSTALL.md) — setup for new harness directory
 - [ANY-REPO.md](ANY-REPO.md) — walkthrough for any repository
 - [CONFIGURE.md](CONFIGURE.md) — configuration reference
-- [HOOK-INSTALL.md](HOOK-INSTALL.md) — pre-push hook details
+- [HOOK-INSTALL.md](archive/HOOK-INSTALL.md) — pre-push hook details
