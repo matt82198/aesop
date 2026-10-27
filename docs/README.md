@@ -131,7 +131,7 @@ Once you've completed the adopter journey, use these for operational reference:
 - **[RECEIPTS.md](RECEIPTS.md)** — Per-wave operational metrics (CI economics, diagnosed bottlenecks, structural fixes applied); transparency on the system building itself
 
 ### Lessons & Case Studies
-- **[autonomous-swe.md](autonomous-swe.md)** — What "autonomous SWE" means here (a fleet running the wave loop under a human who owns the outward gates): the committed evidence behind each claim (held-out benchmark, verified audit, proven kill-switch, reproducible package), the 0.1.0-rc.1 baseline, and the limits the project owns
+- **[autonomous-swe.md](archive/narrative/autonomous-swe.md)** — What "autonomous SWE" means here (a fleet running the wave loop under a human who owns the outward gates): the committed evidence behind each claim (held-out benchmark, verified audit, proven kill-switch, reproducible package), the 0.1.0-rc.1 baseline, and the limits the project owns
 - **[case-study-portfolio.md](case-study-portfolio.md)** — How Aesop built its own portfolio site; full audit trail and cost breakdown
 - **[SCRIPTS-POLICY.md](SCRIPTS-POLICY.md)** — Local-only execution, shared script library (`~/scripts`), task-local vs. reusable heuristics
 
@@ -146,7 +146,7 @@ Once you've completed the adopter journey, use these for operational reference:
 → [DISPATCH-MODEL.md](DISPATCH-MODEL.md) or [HOW-THE-LOOP-WORKS.md](HOW-THE-LOOP-WORKS.md#why-its-fast--cheap)
 
 **I want to know what's actually proven vs. claimed**
-→ [autonomous-swe.md](autonomous-swe.md)
+→ [autonomous-swe.md](archive/narrative/autonomous-swe.md)
 
 **I need to understand how state survives a crash**
 → [CHECKPOINTING.md](CHECKPOINTING.md)
