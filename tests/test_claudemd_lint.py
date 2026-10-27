@@ -1281,5 +1281,70 @@ class TestTrunkResolution(unittest.TestCase):
             self.assertIn("unreadable", missing.stderr.lower())
 
 
+class TestLineByteCap(unittest.TestCase):
+    """Per-line byte cap: MAX_LINE_BYTES = 1024 (UTF-8), fenced code blocks exempt.
+
+    Why: a map row a haiku is handed must be one short bullet; a 6 KB bullet is a
+    domain that was never split (G6). Lengthening bullets must not satisfy the
+    150-line cap, so the line cap is enforced per line as well.
+    """
+
+    LINE_CAP = 1024
+
+    def _pkg(self, repo_root):
+        (repo_root / "package.json").write_text(
+            json.dumps({"scripts": {"test:py": "python -m unittest"}}))
+
+    def test_line_over_1024_bytes_is_line_too_long(self):
+        """A 1100-byte bullet is a line-too-long finding naming the line and byte count."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            self._pkg(repo_root)
+            dom = repo_root / "d"
+            dom.mkdir()
+            long_bullet = "- " + "a" * 1098  # 1100 bytes, no newline
+            self.assertEqual(len(long_bullet.encode("utf-8")), 1100)
+            (dom / "CLAUDE.md").write_text(
+                "# D\n" + long_bullet + "\ntail\n", encoding="utf-8")
+            findings = lint_claudemd(dom / "CLAUDE.md", repo_root)
+            long_findings = [f for f in findings if f["type"] == "line-too-long"]
+            self.assertEqual(len(long_findings), 1,
+                             f"expected one line-too-long finding, got {findings}")
+            self.assertEqual(long_findings[0]["line"], "2",
+                             "finding must name the 1-based line number of the long bullet")
+            self.assertIn("1100", long_findings[0]["message"],
+                          "finding must report the byte count")
+            self.assertIn("d/CLAUDE.md", long_findings[0]["message"].replace("\\", "/"),
+                          "finding must name the file")
+
+    def test_long_line_inside_fenced_block_is_exempt(self):
+        """A 1100-byte line inside a fenced code block is NOT a line-too-long finding."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            self._pkg(repo_root)
+            dom = repo_root / "d"
+            dom.mkdir()
+            fenced = "```\n" + "- " + "a" * 1098 + "\n```\n"
+            (dom / "CLAUDE.md").write_text("# D\n\n" + fenced, encoding="utf-8")
+            findings = lint_claudemd(dom / "CLAUDE.md", repo_root)
+            self.assertEqual(
+                [f for f in findings if f["type"] == "line-too-long"], [],
+                "fenced code block lines must be exempt from the byte cap")
+
+    def test_line_of_1000_bytes_is_clean(self):
+        """A 1000-byte line (under the 1024 cap) produces no line-too-long finding."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            self._pkg(repo_root)
+            dom = repo_root / "d"
+            dom.mkdir()
+            (dom / "CLAUDE.md").write_text(
+                "# D\n- " + "a" * 998 + "\n", encoding="utf-8")
+            findings = lint_claudemd(dom / "CLAUDE.md", repo_root)
+            self.assertEqual(
+                [f for f in findings if f["type"] == "line-too-long"], [],
+                "a 1000-byte line is under the 1024-byte cap and must not be flagged")
+
+
 if __name__ == "__main__":
     unittest.main()
