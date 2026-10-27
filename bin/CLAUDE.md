@@ -16,6 +16,7 @@
 - `npx @matt82198/aesop my-fleet` → scaffolds to `./my-fleet`
 - `npx @matt82198/aesop my-fleet --force` → re-scaffold and replace `.git/hooks/pre-push`
 - `npx @matt82198/aesop --name "api" --domains "server,worker" --repos "/path/repo"` → headless scaffold (no interactive prompts); `--repos` entries must each be existing directories (missing/file/URL → bad entries printed, exit 2, before any filesystem work; URLs belong in `--repo-urls`); summary `cp ~/.claude/CLAUDE.md` lines are printed text only, each after a backup step. Tests: `tests/cli-config.test.mjs`.
+- Scaffolds skip `hooks/**/*.test.mjs` (`isShippedHookTestEntry` in `cli.js`), so an adopter's pre-push coverage gate sees no orphaned hook tests.
 
 **Wizard** (guided setup, ~60 sec):
 - `npx @matt82198/aesop wizard` → prompts: project name (default: "my-fleet"), repos (auto-discover from `~`), port (default: 8770, validates 1–65535), brain root (default: `~/.claude`)

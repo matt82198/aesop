@@ -763,17 +763,25 @@ function isBytecodeEntry(name) {
   return name === '__pycache__' || name.endsWith('.pyc');
 }
 
-function copyRecursive(src, dest) {
+// Scaffolds do not ship tests (R-AUDIT-TCI-4, same as tests/). A scaffold has no
+// package.json and no test:node runner, so a shipped hooks/**/*.test.mjs is an
+// orphan that blocks the adopter's pre-push coverage gate. Applied to the hooks/
+// copy only; the predicate is name-based and therefore matches at any depth.
+function isShippedHookTestEntry(name) {
+  return name.endsWith('.test.mjs');
+}
+
+function copyRecursive(src, dest, skipEntry = () => false) {
   const stat = fs.statSync(src);
   if (stat.isDirectory()) {
     if (!fs.existsSync(dest)) {
       fs.mkdirSync(dest, { recursive: true });
     }
-    const entries = fs.readdirSync(src).filter(entry => !isBytecodeEntry(entry));
+    const entries = fs.readdirSync(src).filter(entry => !isBytecodeEntry(entry) && !skipEntry(entry));
     entries.forEach(entry => {
       const srcFile = path.join(src, entry);
       const destFile = path.join(dest, entry);
-      copyRecursive(srcFile, destFile);
+      copyRecursive(srcFile, destFile, skipEntry);
     });
   } else {
     fs.copyFileSync(src, dest);
@@ -1651,7 +1659,7 @@ if (!isRuntimeCommand) {
       const src = path.join(templateRoot, item);
       const dest = path.join(finalTargetDir, item);
       if (fs.existsSync(src)) {
-        copyRecursive(src, dest);
+        copyRecursive(src, dest, item === 'hooks' ? isShippedHookTestEntry : undefined);
         console.log(`✓ Copied ${item}`);
       }
     });
