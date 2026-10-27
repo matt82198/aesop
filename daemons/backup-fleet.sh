@@ -35,6 +35,8 @@ HEARTBEAT="${CONDUCTOR_ROOT:+$CONDUCTOR_ROOT/state/.watchdog-heartbeat}"
 BLOCKED_MARKER="${CONDUCTOR_ROOT:+$CONDUCTOR_ROOT/state/.watchdog-blocked}"
 LOG="$AESOP_ROOT/state/FLEET-BACKUP.log"
 REPOS_STATUS="$AESOP_ROOT/state/.watchdog-repos.json"
+# Git's well-known empty tree: the base of a root-inclusive range (SEM-4).
+EMPTY_TREE_SHA="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 # P2 FIX: script-global temp file handles (cycle-status JSON build + per-repo
 # NUL-protocol scratch file), cleaned up unconditionally via trap below so an
@@ -50,6 +52,9 @@ trap cleanup_temp_files EXIT INT TERM
 
 ts() { date '+%Y-%m-%d %H:%M:%S'; }
 log() { echo "[$(ts)] $*" | tee -a "$LOG"; }
+# Diagnostics from inside process_repo: its stdout is the NUL verdict record, so
+# these go to the log file and stderr only (SEM-6).
+log_err() { echo "[$(ts)] $*" | tee -a "$LOG" >&2; }
 
 # Heartbeat = attestation that a cycle COMPLETED (exit 0 or the WARN exit 3).
 # Hard failure paths (exit 1/2) never call this, so their staleness stays visible.
@@ -126,21 +131,26 @@ resolve_scanner() {
 # NUL-delimited with core.quotepath off (tracker 00fa6e4cb68b): without -z git C-quotes
 # non-ASCII names ("caf\303\251-keys.env"), the -f test then fails and the file is never
 # scanned. NUL output is read with read -d '' in the callers.
+# G (R-AUDIT-BKP-3): a failed listing makes the subshell exit non-zero (pipefail plus an
+# explicit check on each git call), so the caller can refuse instead of scanning nothing.
 get_tracked_modifications() {
   local repo="$1"
   (
-    cd "$repo" || return 1
-    git -c core.quotepath=off diff -z --name-only HEAD 2>/dev/null
-    git -c core.quotepath=off ls-files -z -m 2>/dev/null
-  ) | sort -zu
+    set -o pipefail
+    cd "$repo" || exit 1
+    { git -c core.quotepath=off diff -z --name-only HEAD 2>/dev/null || exit 1
+      git -c core.quotepath=off ls-files -z -m 2>/dev/null || exit 1
+    } | sort -zu
+  )
 }
 
 get_untracked_files() {
   local repo="$1"
   (
-    cd "$repo" || return 1
-    git -c core.quotepath=off ls-files -z --others --exclude-standard 2>/dev/null
-  ) | sort -zu
+    set -o pipefail
+    cd "$repo" || exit 1
+    git -c core.quotepath=off ls-files -z --others --exclude-standard 2>/dev/null | sort -zu
+  )
 }
 
 scan_unpushed_commits() {
@@ -149,39 +159,31 @@ scan_unpushed_commits() {
   local range_expr
 
   # Detect if upstream exists (no-upstream or detached HEAD scenario)
-  local upstream
+  local upstream list_rc
   upstream=$(cd "$repo" 2>/dev/null && git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null || echo "")
 
   if [ -z "$upstream" ] || [ "$upstream" = "@{u}" ]; then
-    # No upstream or detached HEAD: fallback to scanning recent commits (last 20)
-    # Use git rev-list to get the base commit 20 commits back, then use git diff
-    log "WARN: Repository has no upstream or detached HEAD; falling back to bounded commit range scan for $repo"
-    local base
-    base=$(cd "$repo" && git rev-list --max-count=20 HEAD 2>/dev/null | tail -1)
-    if [ -n "$base" ] && [ "$base" != "$(cd "$repo" && git rev-parse HEAD 2>/dev/null)" ]; then
-      # Multiple commits exist: scan from base to HEAD
-      range_expr="$base..HEAD"
-      unpushed_files=$(cd "$repo" && git diff --name-only "$range_expr" 2>/dev/null | sort -u)
-    elif [ -n "$base" ]; then
-      # Single commit (or base == HEAD): diff against the empty tree so the
-      # range form below (empty_tree..HEAD) still works for a root commit
-      # that has no parent to diff against.
-      local empty_tree
-      empty_tree=$(cd "$repo" && git hash-object -t tree /dev/null 2>/dev/null || echo "4b825dc642cb6eb9a060e54bf8d69288fbee4904")
-      range_expr="$empty_tree..HEAD"
-      unpushed_files=$(cd "$repo" && git diff --name-only "$range_expr" 2>/dev/null | sort -u)
-    else
-      unpushed_files=""
-    fi
+    # No upstream or detached HEAD: the push below sends HEAD's WHOLE history, root
+    # included, so the scan base is the empty tree (SEM-4). The old bounded base
+    # (HEAD~19..HEAD, from rev-list | tail -1) never scanned the root commit.
+    log_err "WARN: Repository has no upstream or detached HEAD; scanning full history from the empty tree for $repo"
+    range_expr="$EMPTY_TREE_SHA..HEAD"
+    unpushed_files=$(cd "$repo" && git diff --name-only "$range_expr" 2>/dev/null); list_rc=$?
   else
     # Normal case: scan commits not yet pushed to upstream
     range_expr="@{u}..HEAD"
-    unpushed_files=$(cd "$repo" && git diff --name-only @{u}..HEAD 2>/dev/null | sort -u)
+    unpushed_files=$(cd "$repo" && git diff --name-only @{u}..HEAD 2>/dev/null); list_rc=$?
   fi
 
-  if [ -z "$unpushed_files" ]; then
-    return 0
+  # Fail closed: a failed listing is a scanner error, never "nothing to scan".
+  if [ "$list_rc" -ne 0 ]; then
+    echo "[$(ts)] SECRET-SCAN $(basename "$repo"): cannot list range $range_expr (fail-closed)" >> "$LOG"
+    return 1
   fi
+
+  # F (R-AUDIT-BKP-3): an empty listing is NOT a pass. An add-then-remove secret leaves no
+  # trace in the tip tree, so the scanner always runs over the range. It walks every blob
+  # each commit introduced and reports CLEAN itself only when there is nothing to scan.
 
   # P2 wave-25 fix: scan the COMMITTED BLOB content of the unpushed range
   # (via secret_scan.py --range, which reads each changed path's git object
@@ -219,11 +221,23 @@ scan_tracked_files() {
 
   # Tracked modifications, then untracked files (ITEM 1 fix). NUL-delimited so no
   # name is C-quoted or split (tracker 00fa6e4cb68b: a non-ASCII name was dropped here).
+  # G (R-AUDIT-BKP-3): capture both listings to a file and check their status. A process
+  # substitution would hide a failed listing, and the scan would then pass on zero files.
+  local list_file list_rc
+  list_file=$(mktemp) || { echo "[$(ts)] SECRET-SCAN $(basename "$repo"): cannot capture file listing (fail-closed)" >> "$LOG"; return 1; }
+  { get_tracked_modifications "$repo" && get_untracked_files "$repo"; } > "$list_file"
+  list_rc=$?
+  if [ "$list_rc" -ne 0 ]; then
+    rm -f "$list_file"
+    echo "[$(ts)] SECRET-SCAN $(basename "$repo"): file listing failed (fail-closed)" >> "$LOG"
+    return 1
+  fi
   while IFS= read -r -d '' file; do
     if [ -n "$file" ] && [ -f "$repo/$file" ]; then
       file_paths+=("$repo_win/$file")
     fi
-  done < <(get_tracked_modifications "$repo"; get_untracked_files "$repo")
+  done < "$list_file"
+  rm -f "$list_file"
 
   if [ ${#file_paths[@]} -eq 0 ]; then
     return 0
@@ -267,18 +281,36 @@ process_repo() {
       rm -f "$TMPIDX"
       LOCAL=$(git rev-parse HEAD 2>/dev/null)
       HEADTREE=$(git rev-parse 'HEAD^{tree}' 2>/dev/null)
-      if [ -n "$TREE" ] && [ "$TREE" != "$HEADTREE" ]; then
-        COMMIT=$(git commit-tree "$TREE" -p "$LOCAL" -m "wip $(ts) — $uncommitted files" 2>/dev/null)
-        WIPREF="backup/wip-$(date +%Y%m%d)"
-        if scan_tracked_files "$repo"; then
-          if git push -qf origin "$COMMIT:refs/heads/$WIPREF" 2>/dev/null; then
-            printf 'SNAPSHOTTED\0%s\n' "$name"
-            exit 0
-          fi
-        else
+      # H (R-AUDIT-BKP-3): uncommitted work exists but its tree could not be built. Falling
+      # through would report CLEAN with the work unsnapshotted, so this is FAILED.
+      if [ -z "$TREE" ]; then
+        log_err "ERROR: write-tree failed for $name with uncommitted changes; not reporting CLEAN"
+        printf 'FAILED\0%s\n' "$name"
+        exit 0
+      fi
+      if [ "$TREE" != "$HEADTREE" ]; then
+        # SEM-3: the WIP commit's parent is local HEAD, so the push carries every
+        # unpushed commit as well as the working tree. Scan BOTH before anything is
+        # committed or pushed; either BLOCKED refuses the snapshot.
+        if ! scan_unpushed_commits "$repo" || ! scan_tracked_files "$repo"; then
           printf 'BLOCKED\0%s\n' "$name"
           exit 0
         fi
+        COMMIT=$(git commit-tree "$TREE" -p "$LOCAL" -m "wip $(ts) — $uncommitted files" 2>/dev/null)
+        # SEM-7: a failed commit-tree leaves COMMIT empty. Pushing that sends the refspec
+        # ":refs/heads/backup/wip-DATE", a DELETE of today's backup on origin. Refuse it.
+        if [ -z "$COMMIT" ]; then
+          log_err "ERROR: commit-tree produced no commit for $name; WIP snapshot not pushed"
+          printf 'FAILED\0%s\n' "$name"
+          exit 0
+        fi
+        WIPREF="backup/wip-$(date +%Y%m%d)"
+        if git push -qf origin "$COMMIT:refs/heads/$WIPREF" 2>/dev/null; then
+          printf 'SNAPSHOTTED\0%s\n' "$name"
+        else
+          printf 'FAILED\0%s\n' "$name"
+        fi
+        exit 0
       fi
     fi
 
@@ -289,7 +321,7 @@ process_repo() {
     local unpushed
     if [ -z "$upstream" ] || [ "$upstream" = "@{u}" ]; then
       # No upstream or detached HEAD: count recent commits instead (last 20)
-      log "WARN: Repository has no upstream or detached HEAD; falling back to recent commits count for $name"
+      log_err "WARN: Repository has no upstream or detached HEAD; falling back to recent commits count for $name"
       unpushed=$(git log --oneline -20 2>/dev/null | wc -l | tr -d ' ')
     else
       # Normal case: count commits not yet pushed to upstream
@@ -300,27 +332,30 @@ process_repo() {
       local branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
       [ "$branch" = "HEAD" ] && branch="$default"
 
+      # Any push failure is FAILED, never CLEAN or SNAPSHOTTED/PUSHED (SEM-7).
       if [ "$branch" = "$default" ]; then
         WIPREF="backup/master-wip-$(date +%Y%m%d)"
-        if scan_unpushed_commits "$repo"; then
-          if git push -qf origin "HEAD:refs/heads/$WIPREF" 2>/dev/null; then
-            printf 'SNAPSHOTTED\0%s\n' "$name"
-            exit 0
-          fi
-        else
+        if ! scan_unpushed_commits "$repo"; then
           printf 'BLOCKED\0%s\n' "$name"
           exit 0
         fi
+        if git push -qf origin "HEAD:refs/heads/$WIPREF" 2>/dev/null; then
+          printf 'SNAPSHOTTED\0%s\n' "$name"
+        else
+          printf 'FAILED\0%s\n' "$name"
+        fi
+        exit 0
       else
-        if scan_unpushed_commits "$repo"; then
-          if git push -q origin "$branch" 2>/dev/null; then
-            printf 'PUSHED\0%s\n' "$name"
-            exit 0
-          fi
-        else
+        if ! scan_unpushed_commits "$repo"; then
           printf 'BLOCKED\0%s\n' "$name"
           exit 0
         fi
+        if git push -q origin "$branch" 2>/dev/null; then
+          printf 'PUSHED\0%s\n' "$name"
+        else
+          printf 'FAILED\0%s\n' "$name"
+        fi
+        exit 0
       fi
     fi
 
