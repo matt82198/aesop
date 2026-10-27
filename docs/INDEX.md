@@ -15,7 +15,7 @@
 - [CODE-TASTE.md](CODE-TASTE.md) - Code Taste Walkthrough
 - [CONCEPTS.md](CONCEPTS.md) - Key Concepts
 - [CONFIGURE.md](CONFIGURE.md) - Configuration
-- [CONTRIBUTING.md](CONTRIBUTING.md) - Contributing to Aesop
+- [CONTRIBUTING.md](../CONTRIBUTING.md) - Contributing to Aesop
 - [convergence-log-wave1.md](archive/convergence-log-wave1.md) - Wave-1 Convergence Log - 2026-07-22 (5-pass hardening loop)
 - [crash-only-whitepaper.md](crash-only-whitepaper.md) - Crash-Only Orchestration for Agent Fleets: Design, Evidence, and Trade-offs
 - [CROSSOS-DRIFT.md](CROSSOS-DRIFT.md) - Cross-OS CI Drift Report
