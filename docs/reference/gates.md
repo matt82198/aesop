@@ -21,7 +21,7 @@ The call order inside `main()` comes from this command, filtered to the lines of
 (`hooks/pre-push-policy.sh:3830-4062`):
 
 ```bash
-grep -nE '^ *(if !|check_|.*&& ! check_)' hooks/pre-push-policy.sh | awk -F: '$1>=3830 && $1<=4062' | grep -E 'check_[a-z_]+'
+grep -nE '^ *(if !|check_|.*&& ! check_)' hooks/pre-push-policy.sh | grep -E '^(38[3-9][0-9]|39[0-9][0-9]|40[0-5][0-9]|406[0-2]):' | grep -E 'check_[a-z_]+'
 ```
 
 It prints 22 calls, `check_aesop_root_pin` at line 3856 through `check_emit_receipt` at line 4058. <!-- 22 lines printed by the command above -->
