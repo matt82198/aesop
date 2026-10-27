@@ -2363,7 +2363,7 @@ check_generated_regen() {
 check_emit_receipt() {
   local gate_dir
   gate_dir=$(gate_base_dir) || { gate_base_block "check_emit_receipt"; return 1; }
-  # Receipt-gate auto-emission (docs/RECEIPT-GATE.md). Day-1 measurement found
+  # Receipt-gate auto-emission (docs/archive/RECEIPT-GATE.md). Day-1 measurement found
   # 41 merged PRs and ZERO receipts: lanes were never told to run
   # `emit_receipt.py` and nothing ran it automatically, so the honesty signal
   # had no data. This runs it for every push, ONCE every gate above has
@@ -2490,7 +2490,7 @@ check_emit_receipt() {
     # Redirect to temp file instead of command substitution to avoid bash subshell hanging
     # when the process group is killed but the pipe reader doesn't get EOF notification.
     # Unset GIT_* environment variables to prevent matrix parts from committing to this repo
-    # via inherited GIT_DIR/GIT_WORK_TREE (see docs/RECEIPT-GATE.md for the mechanism).
+    # via inherited GIT_DIR/GIT_WORK_TREE (see docs/archive/RECEIPT-GATE.md for the mechanism).
     env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_PREFIX -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
       "$timeout_bin" --kill-after=5 "$timeout_secs" "$py_bin" "$receipt_script" --repo "$aesop_root" --post "${receipt_flags[@]}" \
       < /dev/null > "$receipt_tmpfile" 2>&1

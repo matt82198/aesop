@@ -6,7 +6,7 @@ What a PASS proves: the holder of the signing key ran the named parts on a tree 
 hash equals the one in this checkout, those parts exited 0, and the run was against a
 base no more than N commits stale. What it does NOT prove: that the parts were run
 honestly (a key holder can sign anything) -- increment 6 (random hosted re-run +
-main-full cross-check) is the honesty mechanism. See docs/RECEIPT-GATE.md.
+main-full cross-check) is the honesty mechanism. See docs/archive/RECEIPT-GATE.md.
 """
 
 import argparse

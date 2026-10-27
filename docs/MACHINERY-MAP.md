@@ -328,8 +328,8 @@ Status: **enforced** means a code path in the tree enforces the principle. **par
 | 10 | Ratchet baselines, shrink-only | LANE-CONTRACT.md:67 | enforced (the `--update-baseline` ban is prose) | tools/encoding_lint.py:361 `ascii_findings`; tools/pyflakes_gate.py:170 `check_ratchet` |
 | 11 | Heartbeat and lease liveness | docs/GOVERNANCE.md:16 | enforced | daemons/run-watchdog.sh:16 `acquire_lock`; state_store/lease_claims.py:263 (`BEGIN IMMEDIATE`); state_store/instance_projection.py:276 `detect_stale_instances` |
 | 12 | Fencing, single primary | state_store/CLAUDE.md:107 | partial (no production caller) | state_store/failover.py:299 `FencingToken`, :320 `assert_fenced`, :485 `elect_primary` |
-| 13 | Signed receipts | docs/RECEIPT-GATE.md:177 | partial (verify-receipt is not required) | tools/receipt_common.py:84 `sign`; tools/verify_receipt.py:134 `verify` |
-| 14 | Content-addressed tree binding | docs/RECEIPT-GATE.md | enforced | tools/verify_receipt.py:164 (tree hash recomputed and compared) |
+| 13 | Signed receipts | docs/archive/RECEIPT-GATE.md:177 | partial (verify-receipt is not required) | tools/receipt_common.py:84 `sign`; tools/verify_receipt.py:134 `verify` |
+| 14 | Content-addressed tree binding | docs/archive/RECEIPT-GATE.md | enforced | tools/verify_receipt.py:164 (tree hash recomputed and compared) |
 | 15 | Incident-to-trap | docs/paper/aesop-arxiv.tex | partial (fake-green only) | tests/test_traps.py:37 `TestFakeGreenTrap`; tools/incident_report.py (ci.yml:773-774) |
 | 16 | Idempotent dispatch via journal | docs/MICROKERNEL.md | enforced | driver/wave_loop.py:373 `_write_journal_entry`; :606 `_should_skip_from_journal` |
 | 17 | Fake green and watched-to-fail | LANE-CONTRACT.md section 5 | partial (watched-to-fail is prose) | tests/test_traps.py:37 |

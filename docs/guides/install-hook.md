@@ -13,7 +13,7 @@ checks is in [Gate reference](../reference/gates.md).
 > the server stops a push that skipped the local hook (`git push --no-verify`), and nothing stops a merge with
 > red CI. Section 4 below covers it.
 
-The local hook is a convenience defense, not cryptographic protection (`docs/HOOK-INSTALL.md:28`).
+The local hook is a convenience defense, not cryptographic protection (`docs/archive/HOOK-INSTALL.md:28`).
 
 ## 1. Install the git hook
 
@@ -166,10 +166,10 @@ On this tree all three runs end green with no failures; the case counts are in t
 
 Do this on GitHub, in the repository that owns your code. It cannot be done by committing a file.
 
-1. Settings, Branches, add a branch protection rule for your default branch (`docs/HOOK-INSTALL.md:58-62`).
+1. Settings, Branches, add a branch protection rule for your default branch (`docs/archive/HOOK-INSTALL.md:58-62`).
 2. Require a pull request before merging, require status checks to pass, and require branches to be up to date
-   (`docs/HOOK-INSTALL.md:64-69`).
-3. Dismiss stale approvals when new commits are pushed (`docs/HOOK-INSTALL.md:71-73`).
+   (`docs/archive/HOOK-INSTALL.md:64-69`).
+3. Dismiss stale approvals when new commits are pushed (`docs/archive/HOOK-INSTALL.md:71-73`).
 4. For "required status checks", choose the contexts your own CI produces. This repository's list is seven
    contexts: `ci (0)`, `ci (1)`, `ci (2)`, `ci (3)`, `windows`, `pr-footprint-gate`, `pr-symbol-survival`
    (`tools/required-checks.json:6-12`). <!-- node -e "console.log(require('./tools/required-checks.json').required_contexts.length)" -> 7 -->
@@ -182,7 +182,7 @@ Do this on GitHub, in the repository that owns your code. It cannot be done by c
    without calling GitHub.
 
 The `verify-receipt` check is not in that set. The receipt gate is in a measurement period and its hosted check
-is not required (`docs/RECEIPT-GATE.md:3-4`), so do not expect a missing receipt to stop a merge.
+is not required (`docs/archive/RECEIPT-GATE.md:3-4`), so do not expect a missing receipt to stop a merge.
 
 ## 5. The audit log
 
@@ -203,7 +203,7 @@ Audit log verification OK (1 entries)
 Pass a path as the second argument to check a log somewhere else (`hooks/pre-push-policy.sh:3836-3841`). A path that
 does not exist prints `Error: Audit log not found at <path>` and exits 1. The chain shows edits and truncation to
 anyone who does not also rewrite the sidecar `state/.audit-tail-hash`. It does not stop an attacker who controls
-the machine, so ship the log somewhere you trust if you need that (`docs/HOOK-INSTALL.md:138`).
+the machine, so ship the log somewhere you trust if you need that (`docs/archive/HOOK-INSTALL.md:138`).
 
 ## Troubleshooting
 

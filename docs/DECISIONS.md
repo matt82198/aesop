@@ -25,7 +25,7 @@ Key design decisions behind Aesop, with the data that informed each one.
 
 **Decision:** Crash recovery is the normal startup path. There is no graceful shutdown protocol. Agents are stateless processes: read checkpoint files, make decisions, write results, exit. Dead is dead; reading from disk is the recovery protocol AND the normal startup path.
 
-**Data:** Ancestors: Temporal (Czezatke & Stengel, 2019) for durable execution via plain-text event logs; Crash-only software (Candea & Fox, 2003) for stateless components; Erlang/OTP supervision trees (Armstrong et al., 1996) for bounded restart policies; Kubernetes controller reconciliation (Burns et al., 2015) for append-only convergence. 30 waves and 520 merged PRs have run through this model, including real machine crashes where the next run re-read from disk and continued ([hypothesis document](./THE-AESOP-HYPOTHESIS.md)).
+**Data:** Ancestors: Temporal (Czezatke & Stengel, 2019) for durable execution via plain-text event logs; Crash-only software (Candea & Fox, 2003) for stateless components; Erlang/OTP supervision trees (Armstrong et al., 1996) for bounded restart policies; Kubernetes controller reconciliation (Burns et al., 2015) for append-only convergence. 30 waves and 520 merged PRs have run through this model, including real machine crashes where the next run re-read from disk and continued ([hypothesis document](./archive/THE-AESOP-HYPOTHESIS.md)).
 
 **Consequences:** No distributed consensus, no external state servers, no recovery machinery beyond "re-read from disk." The trade-off: single-box only (multi-instance coordination requires leases and event-sourcing, deliberately unscheduled). Debugging is simpler -- `git log -p` shows every state transition. The system cannot hide failures because every crash leaves evidence on the filesystem.
 
@@ -86,7 +86,7 @@ Key design decisions behind Aesop, with the data that informed each one.
 ## See Also
 
 - [A/B Cost Dataset](./ab-cost-dataset.md) -- raw data behind ADR-1
-- [The Aesop Hypothesis](./THE-AESOP-HYPOTHESIS.md) -- design philosophy behind ADR-2
+- [The Aesop Hypothesis](./archive/THE-AESOP-HYPOTHESIS.md) -- design philosophy behind ADR-2
 - [How I Built Aesop](./archive/narrative/how-i-built-aesop.md) -- first-person account with incident details for ADR-6
 - [ARCHITECTURE.md](./ARCHITECTURE.md) -- system diagram and component overview
 - [bench/METHODOLOGY.md](../bench/METHODOLOGY.md) -- benchmark design behind ADR-4

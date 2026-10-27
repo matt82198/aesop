@@ -98,5 +98,5 @@ certificate as a current result.
 
 ## See also
 
-- [Why crash-only](../WHY-CRASH-ONLY.md): a longer essay on the same idea. Nothing on
+- [Why crash-only](../archive/WHY-CRASH-ONLY.md): a longer essay on the same idea. Nothing on
   this page is drawn from it.

@@ -95,7 +95,7 @@ The seam-loop study measured this empirically. With crash-only + repair loops:
 
 Of the 180 tasks, only **35 (19.4%) required repairs**. Of those, **21 used 2 retries, 14 used 1 retry**—no pathological loops. The largest repair number was 2; no task exceeded the retry cap. This confirms that **repair is not a cascade; it is a bounded recovery mechanism**.
 
-*(Source: [`bench/results/seam-loop-study-2026-07-28.md`](../bench/results/seam-loop-study-2026-07-28.md))*
+*(Source: [`bench/results/seam-loop-study-2026-07-28.md`](../../bench/results/seam-loop-study-2026-07-28.md))*
 
 ### 3. Journaled State Survives Interruption
 
@@ -107,7 +107,7 @@ The handoff certificate demonstrates that the wave engine (the real orchestrator
 
 No external coordinator needed. No "detect that Operator A died and revoke its lease." Just read the journal and continue.
 
-*(Source: [`docs/HANDOFF-CERTIFICATE.md`](HANDOFF-CERTIFICATE.md))*
+*(Source: [`docs/HANDOFF-CERTIFICATE.md`](../HANDOFF-CERTIFICATE.md))*
 
 ### 4. Failure Is Observable
 
@@ -123,7 +123,7 @@ The reliability report (chaos-wave fault injection) tested five failure modes:
 
 **All five passed.** MTTR ranges from 0.0s (immediate local detection) to 0.5s (watchdog timeout). No infinite loops, no silent failures, no "wedged state" that requires manual intervention.
 
-*(Source: [`docs/RELIABILITY-REPORT.md`](RELIABILITY-REPORT.md))*
+*(Source: [`docs/RELIABILITY-REPORT.md`](../RELIABILITY-REPORT.md))*
 
 ---
 
@@ -147,7 +147,7 @@ This gain comes from bounded repair (up to 2 retries). The repair distribution s
 
 The study's N=60 per condition is small (directional, not tight), and the task set is curated seam-level work (bug detection, severity calibration, extraction), not frontier reasoning. Within those bounds, **crash-only + repair loops lift 67.8% → 77.2% with no runaway loops**.
 
-*(Source: [`bench/results/seam-loop-study-2026-07-28.md`](../bench/results/seam-loop-study-2026-07-28.md))*
+*(Source: [`bench/results/seam-loop-study-2026-07-28.md`](../../bench/results/seam-loop-study-2026-07-28.md))*
 
 ### Model Fit: Haiku Dominates Seam Work
 
@@ -163,7 +163,7 @@ The same study tracked results by model tier (same seam-loop condition, split ac
 
 Haiku excels at seam tasks (code review, test output parsing, severity judgment). The delta between Haiku and Opus is <10pp on seam work; the cost difference is 3×. **For this task class, Haiku is the optimal model.**
 
-*(Source: [`bench/results/seam-loop-study-2026-07-28.md`](../bench/results/seam-loop-study-2026-07-28.md))*
+*(Source: [`bench/results/seam-loop-study-2026-07-28.md`](../../bench/results/seam-loop-study-2026-07-28.md))*
 
 ### Incident Tracking: Stalls Resolved by Restart
 
@@ -180,7 +180,7 @@ Aesop's incident log tracks operational failures by class:
 
 The **16 stall incidents** are directly resolved by crash-only recovery: watchdog detects (deterministic age check), kills the worker, orchestrator re-reads from disk and respawns. None required consensus voting or lease revocation.
 
-*(Source: [`docs/INCIDENTS.md`](INCIDENTS.md))*
+*(Source: [`docs/INCIDENTS.md`](../INCIDENTS.md))*
 
 ---
 
@@ -192,7 +192,7 @@ Crash-only design assumes one orchestrator instance at a time. If the orchestrat
 
 **Solution**: Use file-system-level atomicity (rename instead of write), or sequence multiple instances via polling the heartbeat file. Multi-instance coordination is on the roadmap but unscheduled for v0.4.0.
 
-*(See [`docs/TEAM-STATE.md`](TEAM-STATE.md) for the multi-instance design.)*
+*(See [`docs/TEAM-STATE.md`](../TEAM-STATE.md) for the multi-instance design.)*
 
 ### Journal Contention
 
@@ -260,8 +260,8 @@ Start with crash-only on a single box. Add multi-instance via event sourcing whe
 - **Candea, G., & Fox, A. (2003).** Crash-Only Software. In *HOTOS-IX*.
 - **Armstrong, J. et al. (1996).** Concurrent Programming in Erlang. Prentice Hall.
 - **Burns, K. et al. (2015).** Kubernetes Design Patterns. In *EuroSys*.
-- **Aesop Bench Results** [`bench/results/seam-loop-study-2026-07-28.md`](../bench/results/seam-loop-study-2026-07-28.md)
-- **Aesop Handoff Certificate** [`docs/HANDOFF-CERTIFICATE.md`](HANDOFF-CERTIFICATE.md)
-- **Aesop Reliability Report** [`docs/RELIABILITY-REPORT.md`](RELIABILITY-REPORT.md)
-- **Aesop Incidents** [`docs/INCIDENTS.md`](INCIDENTS.md)
-- **Aesop Architecture** [`docs/ARCHITECTURE.md`](ARCHITECTURE.md)
+- **Aesop Bench Results** [`bench/results/seam-loop-study-2026-07-28.md`](../../bench/results/seam-loop-study-2026-07-28.md)
+- **Aesop Handoff Certificate** [`docs/HANDOFF-CERTIFICATE.md`](../HANDOFF-CERTIFICATE.md)
+- **Aesop Reliability Report** [`docs/RELIABILITY-REPORT.md`](../RELIABILITY-REPORT.md)
+- **Aesop Incidents** [`docs/INCIDENTS.md`](../INCIDENTS.md)
+- **Aesop Architecture** [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md)

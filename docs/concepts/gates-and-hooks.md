@@ -10,7 +10,7 @@ places aesop puts them, what each one actually stops, and what it cannot stop. T
 - Three shipped Claude Code hook files under `hooks/claude/`. They are files; wiring them into a Claude Code
   `settings.json` is your job.
 - One server-side layer that is not a file at all: GitHub branch protection. The local hook is a convenience;
-  the server is what makes a rule binding (`docs/HOOK-INSTALL.md:28-30`).
+  the server is what makes a rule binding (`docs/archive/HOOK-INSTALL.md:28-30`).
 - Some hooks the project's author runs are not in this repository. See [Claim binding](claim-binding.md) and
   [Provenance](../PROVENANCE.md).
 
@@ -49,7 +49,7 @@ Three design choices do most of the work.
    `GENESIS`, and `bash hooks/pre-push-policy.sh --verify-audit-log` checks the chain
    (`hooks/pre-push-policy.sh:440,482,3836`). The chain detects edits and tail truncation by someone who does
    not also rewrite the sidecar; it is not protection against an attacker with write access to the machine
-   (`docs/HOOK-INSTALL.md:138`).
+   (`docs/archive/HOOK-INSTALL.md:138`).
 
 ### The gates, grouped by what they protect
 
@@ -64,7 +64,7 @@ Three design choices do most of the work.
 
 The receipt gate is the end of the chain by design. It runs the test matrix only after every cheaper gate has
 passed, so the receipt is bound to a tree the hook has already inspected (`hooks/pre-push-policy.sh:2363-2380`).
-The receipt gate's status and emission rules are in [Receipt gate](../RECEIPT-GATE.md).
+The receipt gate's status and emission rules are in [Receipt gate](../archive/RECEIPT-GATE.md).
 
 ## Layer 2: Claude Code hooks
 
@@ -103,7 +103,7 @@ Tests that run on this tree: 13 for the model policy, 19 and 34 for the other tw
 ## Layer 3: server-side enforcement
 
 A git hook runs on the pusher's machine, so the pusher can skip it with `git push --no-verify`
-(`docs/HOOK-INSTALL.md:28`). What a skipped hook cannot undo is a rule the server enforces. For aesop that means
+(`docs/archive/HOOK-INSTALL.md:28`). What a skipped hook cannot undo is a rule the server enforces. For aesop that means
 GitHub branch protection with required status checks.
 
 The required checks are not stored in a workflow file or a hook. `tools/required-checks.json` declares the intent
@@ -116,14 +116,14 @@ branch-protection set differ in either direction (`tools/required_checks_gate.py
 > `tools/required-checks.json` is only a record of what the original repository set. A fork starts with no
 > required checks until its owner configures them. See [Install the pre-push hook](../guides/install-hook.md).
 
-The receipt check is deliberately not in that set. `docs/RECEIPT-GATE.md:3-4` states the hosted `verify-receipt`
+The receipt check is deliberately not in that set. `docs/archive/RECEIPT-GATE.md:3-4` states the hosted `verify-receipt`
 check is not required while the receipt gate is in its measurement period, and `.github/workflows/verify-receipt.yml:23`
 repeats it. That is why this page does not say receipts replace other CI.
 
 ## Limits
 
 - The local hook is a convenience defense. A pusher can bypass it, and it is not cryptographic protection
-  (`docs/HOOK-INSTALL.md:28`; `hooks/CLAUDE.md:135`).
+  (`docs/archive/HOOK-INSTALL.md:28`; `hooks/CLAUDE.md:135`).
 - The project's README says that, because of changes in how Claude Code handles hooks, "the project is currently
   not fully firing all hooks" (`README.md:100`). Do not assume a Claude Code hook fires in your client version;
   test it. The pre-push chain is plain git and does not depend on that.
@@ -131,4 +131,4 @@ repeats it. That is why this page does not say receipts replace other CI.
   `force-model-policy.mjs`. It is not a statement about hooks that are not in this repository.
 - Some enforcement the author relies on, such as the lane-dispatch hooks and claim binding, lives in a private
   repository and is not shipped here (`docs/PROVENANCE.md:24`; [Claim binding](claim-binding.md)).
-- The audit log is local, git-ignored state. Centralize it if you need real auditability (`docs/HOOK-INSTALL.md:138`).
+- The audit log is local, git-ignored state. Centralize it if you need real auditability (`docs/archive/HOOK-INSTALL.md:138`).

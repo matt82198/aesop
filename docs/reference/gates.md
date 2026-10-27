@@ -78,7 +78,7 @@ The "What it checks" column is taken from each tool's `INDEX:` line, at `tools/s
 `tools/linux_shape_check.py:4` and `tools/emit_receipt.py:3`.
 
 Order note: the chain is not the order of definition in the file, and not the order of the older list in
-`docs/HOOK-INSTALL.md`. Position in the table above is the position in `main()`.
+`docs/archive/HOOK-INSTALL.md`. Position in the table above is the position in `main()`.
 
 ## Per-gate notes
 
@@ -122,7 +122,7 @@ Two non-blocking outcomes are on purpose: an `origin` that is not on github.com 
 (`receipt_emit_empty_remote_bootstrap`, line 2463). `AESOP_PUSH_RED=1` lets a red head through, logs
 `receipt_push_red_override`, and stamps the receipt `pushed_red: true` (lines 2478 and 2557-2565).
 
-The receipt's own status is a measurement period; its hosted check is not required (`docs/RECEIPT-GATE.md:3-4`).
+The receipt's own status is a measurement period; its hosted check is not required (`docs/archive/RECEIPT-GATE.md:3-4`).
 
 ## Audit log
 

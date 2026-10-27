@@ -45,7 +45,7 @@ Aesop Kernel's core state lives in git-committed files: `STATE.md` (intent, phas
 
 **Single-box by explicit design choice.** Aesop Kernel is not "not distributed yet." Multi-instance coordination is *deliberately unscheduled*. The system runs on one machine. When team scale requires multi-instance support, the real work is not "add Postgres"; it is "redesign state to support leases and event-sourcing on SQLite." That redesign is on the roadmap, not an architectural gap. Postgres is a refactoring target *after* the single-box proves the core loop works. Premature distribution is premature optimization.
 
-**Cite:** [`docs/CHECKPOINTING.md`](./CHECKPOINTING.md) — the durable state strategy; [`docs/CARDINAL-RULES.md`](./CARDINAL-RULES.md) § 5 — handoff discipline.
+**Cite:** [`docs/CHECKPOINTING.md`](.././CHECKPOINTING.md) — the durable state strategy; [`docs/CARDINAL-RULES.md`](.././CARDINAL-RULES.md) § 5 — handoff discipline.
 
 ---
 
@@ -59,13 +59,13 @@ When an agent crashes (or hits a timeout, or the user kills it), the next agent 
 
 **Crash recovery is not a special path.** On resume after a crash (or user interruption, or session loss), the orchestrator reads STATE.md and BUILDLOG.md from disk, verifies them against git log, and proceeds. If STATE.md is stale, it updates it. If BUILDLOG.md shows a half-completed task, it completes it or rolls back and retries. This is the same code path that runs on normal startup. No two code paths, no special-case recovery hooks, no "was I shut down cleanly?" flag.
 
-**Cite:** [`docs/CHECKPOINTING.md`](./CHECKPOINTING.md) — recovery workflow; [`docs/RELIABILITY.md`](./RELIABILITY.md) — inputs-always-produce-outputs principle.
+**Cite:** [`docs/CHECKPOINTING.md`](.././CHECKPOINTING.md) — recovery workflow; [`docs/RELIABILITY.md`](.././RELIABILITY.md) — inputs-always-produce-outputs principle.
 
 ---
 
 ## (3) Cost Architecture: Haiku-First, Flat Fan-Out, the Cancelled Hierarchical Design
 
-**The cost model is the heart of the system.** Subagents are *always* Haiku (1/5 the per-token cost of Opus, 1/3 of Sonnet — see [DISPATCH-MODEL.md](DISPATCH-MODEL.md)), spawned in parallel (5–8 agents per wave). This single rule, more than any other, determines whether agent-driven work scales or burns money.
+**The cost model is the heart of the system.** Subagents are *always* Haiku (1/5 the per-token cost of Opus, 1/3 of Sonnet — see [DISPATCH-MODEL.md](../DISPATCH-MODEL.md)), spawned in parallel (5–8 agents per wave). This single rule, more than any other, determines whether agent-driven work scales or burns money.
 
 **The A/B that killed hierarchical dispatch:** Earlier designs proposed a three-tier model — Fable orchestrator + Sonnet supervisors (splitting work into domains) + Haiku workers. Lab testing showed **4.3× cost increase for identical quality**. The hierarchical design was cancelled. (Cancelled architectures with published data is engineering honesty, not weakness.)
 
@@ -73,11 +73,11 @@ Today's dispatch is flat: one Opus/Fable orchestrator on the main thread, 5–8 
 
 **The benchmark proves Haiku is good enough.** The held-out judgment benchmark (v3 = 28 additional tasks, building on v2 = 11 prior) tested Haiku, Sonnet, and Opus across 39 combined judgment tasks: bug-in-diff (with concurrency races and resource leaks), finding-inflation, acceptance-criteria coverage, severity calibration, root-cause-from-trace, refactor-equivalence, security issue spotting. All three models converged on identical answers for all 28 v3 tasks. Combined score: **Haiku 39/39** vs **Opus 38/39** (Opus erred on one severity call; Haiku did not). At 1/5 the per-token cost of Opus.
 
-**Ceiling rule: the benchmark demonstrates sufficiency, not equivalence.** A pre-declared ceiling rule (when ≥2 tiers score ≥92%, the instrument failed to discriminate) trips on this result: both Haiku and Sonnet achieved 39/39 (100%), confirming the benchmark found a *convergence zone* where both models ace the task set, not a *separating frontier* where one outperforms the other. This is the intended result — the honest interpretation is that **Haiku is sufficient for the judgment shapes measured here**, not that it is tier-equivalent to Sonnet or Opus everywhere. See [`bench/results/2026-07-26-judgment-v3-ceiling-addendum.md`](../bench/results/2026-07-26-judgment-v3-ceiling-addendum.md) for the full forensic analysis.
+**Ceiling rule: the benchmark demonstrates sufficiency, not equivalence.** A pre-declared ceiling rule (when ≥2 tiers score ≥92%, the instrument failed to discriminate) trips on this result: both Haiku and Sonnet achieved 39/39 (100%), confirming the benchmark found a *convergence zone* where both models ace the task set, not a *separating frontier* where one outperforms the other. This is the intended result — the honest interpretation is that **Haiku is sufficient for the judgment shapes measured here**, not that it is tier-equivalent to Sonnet or Opus everywhere. See [`bench/results/2026-07-26-judgment-v3-ceiling-addendum.md`](../../bench/results/2026-07-26-judgment-v3-ceiling-addendum.md) for the full forensic analysis.
 
-**Honest limits on the benchmark:** Curated (N=39), not sampled from real fleet transcripts. No frontier-reaching task found where Opus beats Haiku in this set. The benchmark maps a floor ("Haiku is sufficient for scoped judgment and extraction tasks with context at the seam"), not the absolute frontier. **What it does NOT test**: open-ended synthesis (designing novel systems from scratch), frontier reasoning (problems requiring 100+ steps of chaining or novel proof techniques), long-horizon planning (multi-phase dependency graphs). Cost is token-price ratio, not wall-clock latency. For detailed equivalence analysis, see [`bench/METHODOLOGY.md`](../bench/METHODOLOGY.md). These caveats are not hidden; they are load-bearing.
+**Honest limits on the benchmark:** Curated (N=39), not sampled from real fleet transcripts. No frontier-reaching task found where Opus beats Haiku in this set. The benchmark maps a floor ("Haiku is sufficient for scoped judgment and extraction tasks with context at the seam"), not the absolute frontier. **What it does NOT test**: open-ended synthesis (designing novel systems from scratch), frontier reasoning (problems requiring 100+ steps of chaining or novel proof techniques), long-horizon planning (multi-phase dependency graphs). Cost is token-price ratio, not wall-clock latency. For detailed equivalence analysis, see [`bench/METHODOLOGY.md`](../../bench/METHODOLOGY.md). These caveats are not hidden; they are load-bearing.
 
-**Cite:** [`docs/DISPATCH-MODEL.md`](./DISPATCH-MODEL.md) — cost model and patterns; [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](../bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md) — benchmark run and interpretation.
+**Cite:** [`docs/DISPATCH-MODEL.md`](.././DISPATCH-MODEL.md) — cost model and patterns; [`bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`](../../bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md) — benchmark run and interpretation.
 
 ---
 
@@ -92,7 +92,7 @@ Today's dispatch is flat: one Opus/Fable orchestrator on the main thread, 5–8 
 
 The key insight: **fail-closed by default.** A secret-scan that silently passes when the file is unreadable is worse than a crash. A kill-switch that doesn't trip is useless. A cost ceiling that is "maybe" enforced wastes tokens. Aesop inverts the default: safety rules are executable and logged; unsafe paths are explicitly rejected; a gate that fails triggers an immediate backout.
 
-**Cite:** [`docs/CARDINAL-RULES.md`](./CARDINAL-RULES.md) § 7 — security and version control; [`tools/halt.py`](../tools/halt.py), [`tools/cost_ceiling.py`](../tools/cost_ceiling.py) — implementations.
+**Cite:** [`docs/CARDINAL-RULES.md`](.././CARDINAL-RULES.md) § 7 — security and version control; [`tools/halt.py`](../../tools/halt.py), [`tools/cost_ceiling.py`](../../tools/cost_ceiling.py) — implementations.
 
 ---
 
@@ -110,7 +110,7 @@ The key insight: **fail-closed by default.** A secret-scan that silently passes 
 
 The point: **observability means you see the real bottleneck**, and you fix it, not the symptom. Aesop's CI reports job timings for every shard; the orchestrator reads those and can rebalance if a shard drifts >20% off baseline.
 
-**Cite:** [`docs/CARDINAL-RULES.md`](./CARDINAL-RULES.md) § 3 — reliability core and heartbeats; [`docs/RELIABILITY.md`](./RELIABILITY.md) — inputs-always-produce-outputs, never-wait discipline.
+**Cite:** [`docs/CARDINAL-RULES.md`](.././CARDINAL-RULES.md) § 3 — reliability core and heartbeats; [`docs/RELIABILITY.md`](.././RELIABILITY.md) — inputs-always-produce-outputs, never-wait discipline.
 
 ---
 
@@ -176,7 +176,7 @@ Each syscall is **grounded in code** (file:line citations to driver source) and 
 
 **Honest bounds:** The live proof is one task, one model repeat. It proves the *plumbing* (config → seat → real API → verdict → effect), not decision *quality* (the subject of the shadow-adjudication bench line, an ongoing study). Orchestrator decisions outside the wave engine (backlog ranking, PR merges by the live harness) are NOT routed through the seat in the pilot (manual merge). Repair semantics (bounded retry on test failure) are unchanged when you swap a seat.
 
-**Cite:** [`docs/MICROKERNEL.md`](./MICROKERNEL.md) — syscall table and tier coverage; [`tests/test_hs2_swap_proof.py`](../tests/test_hs2_swap_proof.py) — offline proof; [`bench/results/hs2-swap-proof-2026-07-25.md`](../bench/results/hs2-swap-proof-2026-07-25.md) — live proof.
+**Cite:** [`docs/MICROKERNEL.md`](.././MICROKERNEL.md) — syscall table and tier coverage; [`tests/test_hs2_swap_proof.py`](../../tests/test_hs2_swap_proof.py) — offline proof; [`bench/results/hs2-swap-proof-2026-07-25.md`](../../bench/results/hs2-swap-proof-2026-07-25.md) — live proof.
 
 ---
 
@@ -192,4 +192,4 @@ Aesop bets on:
 
 The evidence is in the receipts: 1,181 commits, 387 PRs, 30 waves, zero hallucinated audits (via adversarial verification), and a benchmark that proves Haiku is good enough for scoped judgment work.
 
-**Read more:** [`docs/archive/narrative/autonomous-swe.md`](./archive/narrative/autonomous-swe.md) — honest account of what shipped, what didn't, and where the gaps are.
+**Read more:** [`docs/archive/narrative/autonomous-swe.md`](.././archive/narrative/autonomous-swe.md) — honest account of what shipped, what didn't, and where the gaps are.

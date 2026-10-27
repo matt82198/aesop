@@ -131,7 +131,7 @@ flowchart LR
 Steps 3 to 5 ran the middle of this loop by hand. In the real loop the pre-push policy runs
 `check_emit_receipt` last, after every other gate has passed (`hooks/pre-push-policy.sh:4055`), and a hosted
 check does the verifying. That hosted check is not required yet: the receipt gate is in a measurement
-period (`docs/RECEIPT-GATE.md:3-4`). A receipt is a record a gate can check. This page does not claim that
+period (`docs/archive/RECEIPT-GATE.md:3-4`). A receipt is a record a gate can check. This page does not claim that
 receipts replace your other CI.
 
 ## Next steps
@@ -141,6 +141,6 @@ receipts replace your other CI.
 - Understand the pieces: [The receipts loop](./concepts/receipts-loop.md), [Signed receipts](./concepts/signed-receipts.md), [Event store](./concepts/event-store.md), [Stage lanes](./concepts/stage-lanes.md),
   [Crash-only operation](./concepts/crash-only.md).
 - Set up a real fleet: [INSTALL.md](./INSTALL.md), [CONFIGURE.md](./CONFIGURE.md), [FIRST-WAVE.md](./FIRST-WAVE.md).
-- Read the receipt gate's status and plan: [RECEIPT-GATE.md](./RECEIPT-GATE.md).
+- Read the receipt gate's status and plan: [RECEIPT-GATE.md](./archive/RECEIPT-GATE.md).
 - See what is public and what is not: [Provenance and evidence](./provenance/README.md).
 - Find any other page: [Documentation home](./README.md).

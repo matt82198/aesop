@@ -1,8 +1,9 @@
 # Contributing to Aesop
 
-Aesop is open source under the [MIT License](./LICENSE) (`LICENSE:1`). Bug
-reports, questions, documentation fixes and pull requests are all welcome. This page says how to set up,
-what a pull request has to pass, and what the maintainer will look at.
+Aesop is open source under the [MIT License](./LICENSE) (`LICENSE:1`), and adopters are welcome. The
+blueprint for how it works is [docs/README.md](./docs/README.md); start with [docs/quickstart.md](./docs/quickstart.md).
+Issues and pull requests are welcome, and security reports go through [SECURITY.md](./SECURITY.md). This
+page says how to set up, what a pull request has to pass, and what the maintainer will look at.
 
 ## Before you start
 
@@ -62,7 +63,7 @@ python tools/list_test_suites.py
 ## Install the pre-push hook
 
 The pre-push policy runs the repository's checks before a push leaves your machine. Install it as described
-in [docs/HOOK-INSTALL.md](./docs/HOOK-INSTALL.md). A local hook can be bypassed (`git push --no-verify`), so it is
+in [docs/archive/HOOK-INSTALL.md](./docs/archive/HOOK-INSTALL.md). A local hook can be bypassed (`git push --no-verify`), so it is
 a convenience and not a guarantee. The checks that count run in CI.
 
 <!-- CMD: grep -cE '^check_[a-z_]+\(\)' hooks/pre-push-policy.sh
