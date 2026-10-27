@@ -99,7 +99,7 @@ Settings > Branches > main
   ✓ Restrict pushes to (Admins only)
 ```
 
-See [HOOK-INSTALL.md](HOOK-INSTALL.md) for setup and customization.
+See [HOOK-INSTALL.md](archive/HOOK-INSTALL.md) for setup and customization.
 
 ---
 
@@ -234,7 +234,7 @@ See [RELIABILITY.md](RELIABILITY.md) for the full reliability core and failure s
 - [CARDINAL-RULES.md](CARDINAL-RULES.md) — 10 foundational principles (subagent discipline, TDD, reliability, orchestrator isolation, etc.)
 - [GOVERNANCE.md](GOVERNANCE.md) — Single-writer files, heartbeat protocol, AUTO/PROPOSE tiers
 - [RELIABILITY.md](RELIABILITY.md) — Reliability core, inputs-always-outputs, pride bar
-- [HOOK-INSTALL.md](HOOK-INSTALL.md) — Pre-push hook setup and customization
+- [HOOK-INSTALL.md](archive/HOOK-INSTALL.md) — Pre-push hook setup and customization
 
 **For specific tasks**:
 - [BEHAVIORAL-PR-REVIEW.md](BEHAVIORAL-PR-REVIEW.md) — Checklist for PRs that modify rules

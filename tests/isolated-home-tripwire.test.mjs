@@ -1,7 +1,7 @@
 // Tripwire: proves the Node test harness is actually launched with
 // `--import ./tests/helpers/isolated-env.mjs` wired in (package.json's
 // test/test:node scripts, .github/workflows/ci.yml's "Run Node.js tests"
-// steps, docs/TESTING.md, docs/HOOK-INSTALL.md).
+// steps, docs/TESTING.md, docs/archive/HOOK-INSTALL.md).
 //
 // GAP fixed 2026-10-06: tests/helpers/isolated-env.mjs (added by PR #831 to
 // redirect HOME/USERPROFILE/AESOP_SKILLS_HOME/AESOP_HOME to a temp dir so

@@ -13,6 +13,7 @@ import hmac
 import os
 import secrets
 import sys
+import urllib.parse
 
 # Must import config module, never "from config import <paths>"
 import config
@@ -20,6 +21,73 @@ import config
 
 # Module-level session token (set by init())
 SESSION_TOKEN = None
+
+# Loopback hosts accepted in an Origin/Referer, pinned to the bound port.
+LOCAL_ORIGIN_HOSTS = ("127.0.0.1", "localhost", "[::1]")
+
+
+def is_local_origin(origin, expected_port):
+    """True if an Origin/Referer value is http[s]://<loopback host>:<expected_port>.
+
+    Exact match only: scheme must be ``http`` or ``https`` and netloc must be exactly
+    ``127.0.0.1:<port>``, ``localhost:<port>`` or ``[::1]:<port>``. Userinfo
+    (``user@host``) and host suffixes (``localhost:8770.evil.com``) therefore
+    never match, and a bare host with no port is rejected.
+
+    Args:
+        origin: raw header value (may be empty).
+        expected_port: the port the server is actually bound to.
+    """
+    if not origin or not isinstance(expected_port, int):
+        return False
+    try:
+        parts = urllib.parse.urlsplit(origin)
+    except ValueError:
+        return False
+    if parts.scheme not in ("http", "https"):
+        return False
+    if parts.netloc in {f"{host}:{expected_port}" for host in LOCAL_ORIGIN_HOSTS}:
+        return True
+    # Explicit opt-in only (Vite dev server proxying /api): exact (scheme, netloc) match.
+    return (parts.scheme, parts.netloc) in _dev_origin_allowlist()
+
+
+DEV_ORIGINS_ENV = "AESOP_DASH_DEV_ORIGINS"
+
+
+def _dev_origin_allowlist():
+    """Parse AESOP_DASH_DEV_ORIGINS (comma-separated exact origins), read live.
+
+    Each entry must be exactly http[s]://<loopback host>:<explicit port>, with
+    host in 127.0.0.1 / localhost / [::1]. Anything else is ignored with a
+    stderr warning; the default allowlist is unaffected.
+
+    Returns:
+        set of (scheme, netloc) tuples.
+    """
+    allowed = set()
+    for item in os.environ.get(DEV_ORIGINS_ENV, "").split(","):
+        item = item.strip()
+        if not item:
+            continue
+        valid = False
+        try:
+            parts = urllib.parse.urlsplit(item)
+            port = parts.port
+            valid = (
+                parts.scheme in ("http", "https")
+                and port is not None
+                and parts.netloc in {f"{host}:{port}" for host in LOCAL_ORIGIN_HOSTS}
+                and item == f"{parts.scheme}://{parts.netloc}"
+            )
+        except ValueError:
+            valid = False
+        if valid:
+            allowed.add((parts.scheme, parts.netloc))
+        else:
+            print(f"[csrf] {DEV_ORIGINS_ENV} entry ignored (must be exact "
+                  f"http[s]://<loopback host>:<port>): {item!r}", file=sys.stderr)
+    return allowed
 
 
 def init():
@@ -91,22 +159,26 @@ def _generate_session_token():
             except Exception as e:
                 print(f"[csrf] Failed to read existing token file: {e}", file=sys.stderr)
             # If we can't read the existing file, fall back to in-memory token
-    except Exception:
-        pass  # Fail-open: token exists in memory even if file write fails
+    except Exception as e:
+        # Token still returned from memory; warn so the failure is not silent.
+        print(f"[csrf] Failed to persist token file (in-memory token only): {e}", file=sys.stderr)
 
     return token
 
 
-def validate_csrf_request(headers):
+def validate_csrf_request(headers, expected_port):
     """Validate CSRF protections on /submit POST request.
 
     Performs two checks:
-    1. Origin/Referer validation: if Origin or Referer header is present, must be local
-       (http[s]://127.0.0.1:<port>, http[s]://localhost:<port>, http[s]://[::1]:<port>)
+    1. Origin/Referer validation: if Origin or Referer header is present, must be
+       http://127.0.0.1:<expected_port>, http://localhost:<expected_port> or
+       http://[::1]:<expected_port> (see is_local_origin)
     2. X-Aesop-Token validation: must match SESSION_TOKEN
 
     Args:
         headers: dict-like object with HTTP headers (case-insensitive)
+        expected_port: the port the server is bound to (keyword-friendly; required
+            so no caller can silently skip the port pin)
 
     Returns:
         tuple: (is_valid: bool, reason: str or None)
@@ -117,20 +189,10 @@ def validate_csrf_request(headers):
     origin = headers.get("Origin", "").strip()
     referer = headers.get("Referer", "").strip()
 
-    # If Origin or Referer is present, validate it's local
+    # If Origin or Referer is present, validate it's local and on the bound port
     if origin or referer:
         check_value = origin or referer
-        # Check if it's a local origin: http[s]://127.0.0.1:<PORT>, http[s]://localhost:<PORT>,
-        # or http[s]://[::1]:<PORT> (both http:// and https:// schemes accepted for same hosts)
-        is_local = (
-            check_value.startswith("http://127.0.0.1:") or
-            check_value.startswith("https://127.0.0.1:") or
-            check_value.startswith("http://localhost:") or
-            check_value.startswith("https://localhost:") or
-            check_value.startswith("http://[::1]:") or  # IPv6 localhost
-            check_value.startswith("https://[::1]:")  # IPv6 localhost HTTPS
-        )
-        if not is_local:
+        if not is_local_origin(check_value, expected_port):
             return (False, "Foreign Origin/Referer rejected")
 
     # Check 2: X-Aesop-Token validation

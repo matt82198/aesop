@@ -115,5 +115,5 @@ This wave demonstrates why transparent metrics matter: the measured 41.9% CI was
 
 - **[stats.json](self-stats-data.json)** — Committed snapshot of current metrics (refreshed per wave close).
 - **[RELIABILITY-REPORT.md](RELIABILITY-REPORT.md)** — Formal reliability guarantees.
-- **[autonomous-swe.md](autonomous-swe.md)** — What "autonomous SWE" means here: the measured evidence.
+- **[autonomous-swe.md](archive/narrative/autonomous-swe.md)** — What "autonomous SWE" means here: the measured evidence.
 - **[case-study-portfolio.md](case-study-portfolio.md)** — Full audit trail of Aesop building its own portfolio site.

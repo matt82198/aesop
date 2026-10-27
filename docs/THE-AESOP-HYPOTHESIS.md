@@ -192,4 +192,4 @@ Aesop bets on:
 
 The evidence is in the receipts: 1,181 commits, 387 PRs, 30 waves, zero hallucinated audits (via adversarial verification), and a benchmark that proves Haiku is good enough for scoped judgment work.
 
-**Read more:** [`docs/autonomous-swe.md`](./autonomous-swe.md) — honest account of what shipped, what didn't, and where the gaps are.
+**Read more:** [`docs/archive/narrative/autonomous-swe.md`](./archive/narrative/autonomous-swe.md) — honest account of what shipped, what didn't, and where the gaps are.

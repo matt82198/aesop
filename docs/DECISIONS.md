@@ -87,6 +87,6 @@ Key design decisions behind Aesop, with the data that informed each one.
 
 - [A/B Cost Dataset](./ab-cost-dataset.md) -- raw data behind ADR-1
 - [The Aesop Hypothesis](./THE-AESOP-HYPOTHESIS.md) -- design philosophy behind ADR-2
-- [How I Built Aesop](./how-i-built-aesop.md) -- first-person account with incident details for ADR-6
+- [How I Built Aesop](./archive/narrative/how-i-built-aesop.md) -- first-person account with incident details for ADR-6
 - [ARCHITECTURE.md](./ARCHITECTURE.md) -- system diagram and component overview
 - [bench/METHODOLOGY.md](../bench/METHODOLOGY.md) -- benchmark design behind ADR-4

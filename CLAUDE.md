@@ -1,6 +1,6 @@
 # Aesop Kernel — Project CLAUDE.md
 
-**What**: PolyForm Noncommercial 1.0.0-licensed orchestration kernel for autonomous software development (versions ≤0.7.0 remain MIT).
+**What**: MIT-licensed orchestration kernel for autonomous software development (v0.8.0-v0.11.0 were released under PolyForm Noncommercial 1.0.0; v0.7.0 and earlier under MIT; MIT applies from the 2026-10-26 relicense forward).
 
 ## RED CI Escape Detection
 
