@@ -172,6 +172,7 @@ if (isPythonDispatch && args.length >= 1) {
   if (!verb || verb === '--help' || verb === '-h' || args.includes('--help') || args.includes('-h')) {
     if (args.length === 1 || verb === '--help' || verb === '-h' || (args.length >= 2 && (args[1] === '--help' || args[1] === '-h'))) {
       const verbs = Object.keys(pythonNamespaces[namespace]);
+      console.log(`Usage: aesop ${namespace} <verb> [args...]\n`);
       console.log(`aesop ${namespace} — Available verbs:\n`);
       verbs.forEach(v => {
         const scriptPath = pythonNamespaces[namespace][v];
@@ -257,6 +258,34 @@ const SUBCOMMAND_HELP = {
   doctor: {
     purpose: 'Preflight readiness check (Node, Python, git, config, dirs, hook, port) plus a report-only CI capability table.',
     flags: ['--json', '--global'],
+  },
+  watch: {
+    purpose: 'Launch the watchdog daemon (spawns daemons/run-watchdog.sh).',
+    flags: [],
+  },
+  dash: {
+    purpose: 'Launch the web dashboard (spawns python3 ui/serve.py, default localhost:8770).',
+    flags: ['--demo'],
+  },
+  status: {
+    purpose: 'One-shot snapshot: heartbeats, port, git branch.',
+    flags: [],
+  },
+  fleet: {
+    purpose: 'One-shot JSON snapshot of agents, heartbeats, tracker, and orchestrator (Node stdlib only).',
+    flags: ['--json'],
+  },
+  'health-score': {
+    purpose: 'Repository health score for the given working directory.',
+    flags: ['--cwd DIR'],
+  },
+  reproduce: {
+    purpose: 'Offline verification suite that mirrors reproduce.yml (REPO or INSTALLED mode; exit 0 = pass).',
+    flags: [],
+  },
+  runner: {
+    purpose: 'Install or remove the self-hosted GitHub Actions runner (install|remove; tools/runner_install.py).',
+    flags: ['--repo OWNER/NAME', '--instances N', '--labels L1,L2', '--install-root DIR', '--dry-run', '--set-fork-policy', '--json'],
   },
 };
 
