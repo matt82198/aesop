@@ -194,6 +194,131 @@ class TestVerifyTestCoverage(unittest.TestCase):
             )
             self.assertIn("test_orphan_node.test.mjs", result.stdout)
 
+    def test_hooks_node_test_outside_runner_glob_is_orphan(self):
+        """Regression (TCI-4/TCI-5, R-AESOP-FOCUS-1): a *.test.mjs under hooks/
+        that no test:node glob names is run by nothing and must be reported as
+        an orphan. Before the fix Node discovery enumerated only tests/*.test.mjs,
+        so hooks/claude/*.test.mjs were invisible to the gate (fake green).
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            tests_dir = tmpdir_path / "tests"
+            tests_dir.mkdir()
+            hooks_dir = tmpdir_path / "hooks" / "claude"
+            hooks_dir.mkdir(parents=True)
+            tools_dir = tmpdir_path / "tools"
+            tools_dir.mkdir()
+
+            (tmpdir_path / "package.json").write_text(json.dumps({
+                "scripts": {
+                    "test:node": "node --test tests/*.test.mjs"
+                }
+            }))
+            (tests_dir / "covered.test.mjs").write_text("export const x = 1;")
+            (hooks_dir / "dark_hook.test.mjs").write_text("export const y = 2;")
+            tools_dir.joinpath("verify_test_coverage.py").write_text(
+                self.tool_path.read_text()
+            )
+
+            result = subprocess.run(
+                ["python", str(tools_dir / "verify_test_coverage.py"), "--check"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=20,
+                cwd=str(tmpdir_path),
+            )
+
+            self.assertEqual(
+                result.returncode, 1,
+                f"Hook Node test outside the runner glob must fail the gate closed:\n"
+                f"{result.stdout}\n{result.stderr}",
+            )
+            self.assertIn("hooks/claude/dark_hook.test.mjs", result.stdout)
+            self.assertNotIn("tests/covered.test.mjs", result.stdout)
+
+    def test_hooks_glob_anchored_inside_tests_path_is_not_coverage(self):
+        """Regression (R-AUDIT-TCI-5): a test:node token that names
+        tests/hooks/*.test.mjs must not also cover the top-level hooks/ tree.
+        Unanchored, the hooks/ token regex matched the 'hooks/...' suffix inside
+        'tests/hooks/...' and gave hooks/x.test.mjs false coverage (fake green).
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            (tmpdir_path / "tests" / "hooks").mkdir(parents=True)
+            (tmpdir_path / "hooks").mkdir()
+            tools_dir = tmpdir_path / "tools"
+            tools_dir.mkdir()
+
+            (tmpdir_path / "package.json").write_text(json.dumps({
+                "scripts": {
+                    "test:node": "node --test tests/hooks/*.test.mjs"
+                }
+            }))
+            (tmpdir_path / "tests" / "hooks" / "covered.test.mjs").write_text("export const x = 1;")
+            (tmpdir_path / "hooks" / "x.test.mjs").write_text("export const y = 2;")
+            tools_dir.joinpath("verify_test_coverage.py").write_text(
+                self.tool_path.read_text()
+            )
+
+            result = subprocess.run(
+                ["python", str(tools_dir / "verify_test_coverage.py"), "--check"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=20,
+                cwd=str(tmpdir_path),
+            )
+
+            self.assertEqual(
+                result.returncode, 1,
+                f"hooks/x.test.mjs is not named by test:node and must fail the gate closed:\n"
+                f"{result.stdout}\n{result.stderr}",
+            )
+            self.assertIn("hooks/x.test.mjs", result.stdout)
+
+    def test_hooks_glob_with_dot_slash_prefix_is_covered(self):
+        """Regression (R-AUDIT-TCI-6): a test:node token written as ./hooks/... names
+        the top-level hooks/ tree and must be credited. The anchored regex of
+        R-AUDIT-TCI-5 rejected the leading './' and reported live hook tests as
+        orphans (false red). Token-level matching credits it.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            (tmpdir_path / "tests").mkdir()
+            (tmpdir_path / "hooks" / "claude").mkdir(parents=True)
+            tools_dir = tmpdir_path / "tools"
+            tools_dir.mkdir()
+
+            (tmpdir_path / "package.json").write_text(json.dumps({
+                "scripts": {
+                    "test:node": "node --test ./hooks/*.test.mjs ./hooks/claude/*.test.mjs"
+                }
+            }))
+            (tmpdir_path / "hooks" / "x.test.mjs").write_text("export const x = 1;")
+            (tmpdir_path / "hooks" / "claude" / "y.test.mjs").write_text("export const y = 2;")
+            tools_dir.joinpath("verify_test_coverage.py").write_text(
+                self.tool_path.read_text()
+            )
+
+            result = subprocess.run(
+                ["python", str(tools_dir / "verify_test_coverage.py"), "--check"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=20,
+                cwd=str(tmpdir_path),
+            )
+
+            self.assertEqual(
+                result.returncode, 0,
+                f"./hooks/ tokens name live hook tests and must be covered:\n"
+                f"{result.stdout}\n{result.stderr}",
+            )
+
     def test_orphan_detection_shell(self):
         """Test that an orphaned shell test file is detected."""
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -54,7 +54,7 @@ These incidents changed every dispatch template that followed.
 
 ## The Convergence Loop: 52 Defects to Zero
 
-Before Wave 1 shipped, I ran a hardening loop (`docs/convergence-log-wave1.md`). Goal: audit the orchestration core and drive all findings to zero.
+Before Wave 1 shipped, I ran a hardening loop (`docs/archive/convergence-log-wave1.md`). Goal: audit the orchestration core and drive all findings to zero.
 
 **Five rounds of find-and-fix:**
 
@@ -166,7 +166,7 @@ cd aesop
 bash scripts/verify-stats.sh --check
 
 # Read the convergence log (5 rounds, 52→0 defects)
-cat docs/convergence-log-wave1.md
+cat docs/archive/convergence-log-wave1.md
 
 # Read the wave receipts (63 PRs in 48 hours, bottleneck diagnosis)
 cat docs/RECEIPTS.md

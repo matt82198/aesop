@@ -56,7 +56,7 @@ refactor-equivalence, and security-spotting):
 | Opus   | 38/39 (97%)  | baseline |
 
 On the single task any model missed — a severity call — it was *Opus* that erred, not
-Haiku. Full dated runs: [`bench/results/`](../bench/results/).
+Haiku. Full dated runs: [`bench/results/`](../../../bench/results).
 
 **Honest limits (the project's own words):**
 
@@ -83,7 +83,7 @@ issues**.
 ### 3. The kill-switch actually aborts a wave
 
 A halt control is only worth the claim if it's proven. The fleet-wide kill-switch
-([`tools/halt.py`](../tools/halt.py)) is wired into the **live dispatch path** and was
+([`tools/halt.py`](../../../tools/halt.py)) is wired into the **live dispatch path** and was
 exercised end-to-end: a single signal **aborted a real wave with zero workers
 spawned**.
 
@@ -92,7 +92,7 @@ autonomous safety monitor that trips on its own.
 
 ### 4. A cost ceiling brakes runaway spend
 
-A per-wave spend ceiling ([`tools/cost_ceiling.py`](../tools/cost_ceiling.py)) halts
+A per-wave spend ceiling ([`tools/cost_ceiling.py`](../../../tools/cost_ceiling.py)) halts
 dispatch when the configured budget is exceeded.
 
 **Honest limit:** it brakes against a **configured** ceiling; it is **not yet tied to
@@ -104,7 +104,7 @@ The npm tarball is a **~409 kB** package (measured via `npm pack`) that **builds
 validates from a fresh clone in CI** — the `reproduce` workflow proves the tarball is
 self-contained. The dashboard views shipped this RC (Wave PR Board, Agent Inspector)
 were **browser-proven** with Playwright. Steps to reproduce offline:
-[docs/reproduce.md](./reproduce.md).
+[docs/reproduce.md](../../reproduce.md).
 
 **Honest limit:** the offline reproduce job runs the test suites and the benchmark
 *scorer*; it does **not** run real-model benchmark calls or the Playwright browser
@@ -130,16 +130,16 @@ actually selling — candor:
 
 ## Where to check the receipts
 
-- [`bench/results/`](../bench/results/) — dated benchmark runs (v1 extraction, v2 & v3
+- [`bench/results/`](../../../bench/results) — dated benchmark runs (v1 extraction, v2 & v3
   judgment), each with its own honest interpretation and limits.
-- [`bench/README.md`](../bench/README.md) — why the benchmark exists and how the scoring
+- [`bench/README.md`](../../../bench/README.md) — why the benchmark exists and how the scoring
   removes agents from the grading loop.
-- [`tools/halt.py`](../tools/halt.py), [`tools/cost_ceiling.py`](../tools/cost_ceiling.py)
+- [`tools/halt.py`](../../../tools/halt.py), [`tools/cost_ceiling.py`](../../../tools/cost_ceiling.py)
   — the kill-switch and cost-ceiling implementations.
-- [docs/reproduce.md](./reproduce.md) — reproduce the tests and benchmark scorer from a
+- [docs/reproduce.md](../../reproduce.md) — reproduce the tests and benchmark scorer from a
   clean clone.
-- [RELEASE-NOTES.md](../RELEASE-NOTES.md#honest-limits) — release-level "Honest limits".
-- [CHANGELOG.md](../CHANGELOG.md) — the full `0.1.0-rc.1` entry.
+- [RELEASE-NOTES.md](../../../RELEASE-NOTES.md#honest-limits) — release-level "Honest limits".
+- [CHANGELOG.md](../../../CHANGELOG.md) — the full `0.1.0-rc.1` entry.
 
 ---
 

@@ -2,7 +2,7 @@
 """Run the local verification matrix and publish a signed receipt bound to HEAD.
 INDEX: Receipt-gate increment 1 -- runs the configured local matrix (default: the 4 python shards via `ci_shard_runner.py n 4` plus the pre-push gate set; `--matrix a,b,c` to subset; parts that cannot run on this box, e.g. `browser-proofs`, are recorded as skipped with a reason, never silently dropped), collects `{schema:1, schema_version:1, repo, head_sha, base_sha (merge-base with trunk_ref, the trunk resolved like the pre-push hook: origin/HEAD, origin/main, origin/master, else HEAD on a fresh remote), tree_hash (= git rev-parse HEAD^{tree}), parts:[{name, exit_code, test_count, duration_s}], skipped, host:{os, python, hostname_hash}, timestamp}`, canonicalizes (sorted keys, no whitespace) and signs it (`--scheme auto|ed25519|hmac-sha256`; Ed25519 via `cryptography` when importable with the private key at `$AESOP_RECEIPT_KEY`, else HMAC-SHA256 keyed by `$AESOP_RECEIPT_HMAC_SECRET`; the key NEVER lives in the repo), then `--post` publishes it on the head sha as a GitHub check-run named `verify-receipt-local` (conclusion from the parts, receipt JSON in output.text) and, when the token cannot create check-runs (HTTP 403: only GitHub Apps may), falls back to a commit comment carrying the same JSON under a marker; `--dry-run` prints/writes the envelope and performs NO network call. The receipt is NOT a committed file (self-reference + merge conflicts). Exit 0 = receipt produced (parts may still be red: that is what the verifier judges), 2 = could not produce/publish (no key material, unknown part, both publish channels failed). stdlib-only; `cryptography` optional.
 
-Trust boundary (see docs/RECEIPT-GATE.md): a signed receipt proves only that the key
+Trust boundary (see docs/archive/RECEIPT-GATE.md): a signed receipt proves only that the key
 holder ran these parts on a tree with this hash and got these exit codes. The hosted
 verifier (tools/verify_receipt.py via .github/workflows/verify-receipt.yml) recomputes
 the tree hash from ITS checkout and never trusts the number in the receipt. Honesty
@@ -154,8 +154,9 @@ def _find_owning_shards(changed_files, shard_map):
             if stem in shard_map:
                 owning.add(shard_map[stem])
                 continue
-        if path.parts[:1] == ("tools",):
-            return None  # fail closed: unowned tools/ change selects the full set
+        if path.parts[:1] == ("tools",) and path.suffix == ".py":
+            return None  # fail closed: unowned tools/*.py change selects the full set
+        # Non-.py files under tools/ (docs, markdown) own no python shard: contribute nothing.
     return owning
 
 
@@ -226,7 +227,7 @@ def parse_test_count(text):
 # state root and fail tests that assert those are unset (incident 2026-10-15, PR #1008: a lane's
 # AESOP_ALLOW_GENERATED=1 turned two TestBatchRegeneration tests red on a false receipt).
 # Defense in depth also covers the GIT_* hook variables: inherited GIT_DIR/GIT_WORK_TREE let a
-# matrix part commit into the caller's repo. See RECEIPT-GATE.md and hooks/CLAUDE.md.
+# matrix part commit into the caller's repo. See docs/archive/RECEIPT-GATE.md and hooks/CLAUDE.md.
 SCRUBBED_ENV_VARS = (
     "AESOP_ALLOW_GENERATED", "AESOP_PUSH_RED", "AESOP_RECEIPT_EMIT", "AESOP_REQUIRE_LINUX_SHAPE",
     "AESOP_STATE_ROOT", "AESOP_ROOT", "AESOP_CONDUCTOR3_ROOT", "CONDUCTOR_ROOT",
@@ -602,7 +603,7 @@ def conclusion_for(parts, shards_ran=True):
 
 
 def exit_code_for(parts, args):
-    """Exit code the pre-push hook reads (docs/RECEIPT-GATE.md). Red = any part exit != 0.
+    """Exit code the pre-push hook reads (docs/archive/RECEIPT-GATE.md). Red = any part exit != 0.
 
     0 = green, or red without --fail-on-red (legacy contract: the verifier judges red);
     3 = red and --fail-on-red (the hook blocks the push; the failure receipt is already posted);

@@ -4,7 +4,7 @@
 
 ## What the Hook Does
 
-`hooks/pre-push-policy.sh` runs these checks in order on every push (17 `check_*` functions):
+`hooks/pre-push-policy.sh` runs these checks in order on every push (23 `check_*` functions):
 1. **Branch Policy** — no direct pushes to `main`/`master` (feature branches only)
 2. **Secret Scan** — `tools/secret_scan.py --staged` blocks credentials
 3. **Tracker Guard**
@@ -217,7 +217,7 @@ fi
 - Hook source: `hooks/pre-push-policy.sh`
 - Secret scanner: `tools/secret_scan.py`
 - Audit log location: `state/SECURITY-AUDIT.log` (git-ignored)
-- Cardinal rule: [CARDINAL-RULES.md](CARDINAL-RULES.md)
+- Cardinal rule: [CARDINAL-RULES.md](../CARDINAL-RULES.md)
 
 ## Claude Code hooks
 

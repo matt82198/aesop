@@ -15,16 +15,16 @@
 - `npx @matt82198/aesop` → scaffolds to `./aesop-fleet` (default)
 - `npx @matt82198/aesop my-fleet` → scaffolds to `./my-fleet`
 - `npx @matt82198/aesop my-fleet --force` → re-scaffold and replace `.git/hooks/pre-push`
-- `npx @matt82198/aesop --name "api" --domains "server,worker" --repos "/path/repo"` → headless scaffold (no interactive prompts); `--repos` entries must each be existing directories (missing/file/URL → bad entries printed, exit 2, before any filesystem work; URLs belong in `--repo-urls`); summary `cp ~/.claude/CLAUDE.md` lines are printed text only, each after a backup step. Tests: `tests/cli-config.test.mjs`.
+- `npx @matt82198/aesop --name "api" --domains "server,worker" --repos "/path/repo"` → headless scaffold (no interactive prompts); `--repos` entries must each be existing directories (missing/file/URL → bad entries printed, exit 2, before any filesystem work; URLs belong in `--repo-urls`); summary `cp ~/.claude/CLAUDE.md` lines are printed text only, each after a backup step. Scaffolds skip `hooks/**/*.test.mjs` (`isShippedHookTestEntry` in `cli.js`) so an adopter's coverage gate sees no orphaned hook tests. Scaffolds also skip `docs/MACHINERY-MAP.md` (`isAesopOnlyDocEntry` in `cli.js`, exact filename, docs/ copy only): the map cites aesop-only targets (ci.yml, verify-receipt.yml, bin/cli.js, STATE.md) a scaffold never ships, so `check_machinery_map_symbols` would fail in every adopter tree. Test: `tests/scaffold-no-machinery-map.test.mjs`. Scaffolds also skip ignored artifact directories at any depth (`IGNORED_ARTIFACT_NAMES` and `isIgnoredArtifactEntry` in `cli.js`: node_modules, aesop-fleet, .git, build, coverage, Python test and type caches; `dist` excluded because tracked `ui/web/dist` is served). Tests: `tests/cli-config.test.mjs`, `tests/scaffold-ignores-artifacts.test.mjs`.
 
 **Wizard** (guided setup, ~60 sec):
 - `npx @matt82198/aesop wizard` → prompts: project name (default: "my-fleet"), repos (auto-discover from `~`), port (default: 8770, validates 1–65535), brain root (default: `~/.claude`)
 - `npx @matt82198/aesop wizard --yes` → uses all defaults, no prompts (CI-safe)
 - Non-TTY input auto-skips prompts
 
-**Runtime commands** (after scaffolding; dispatch pattern in cli.js):
+**Runtime commands** (after scaffolding; dispatch pattern in cli.js). `doctor`, `watch`, `dash`, `status`, `fleet`, `health`, `health-score`, `reproduce`, `init` and `runner` (`install|remove`) are dispatched from cli.js. Every one of them except `health` prints a per-subcommand usage block on `--help|-h` (`SUBCOMMAND_HELP` in `cli.js`) and exits 0 before any side effect (no scaffolding, no readiness run, no dashboard launch). `health` is a Python namespace (`pythonNamespaces`), so `health --help|-h` prints the namespace usage and verb list instead (exit 0, before dispatch). Tests: `tests/cli-subcommand-help.test.mjs` (init, doctor), `tests/cli-runtime-help.test.mjs` (the rest).
 ```javascript
-const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health', 'health-score', 'reproduce', 'init'];
+const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health', 'health-score', 'reproduce', 'init', 'runner'];
 // 'init' dispatches to Python: spawnSync('python3', ['tools/init_project.py', '--dir', '.', ...])
 // All others load+run a Node module:
 const commandMap = {

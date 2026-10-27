@@ -157,7 +157,7 @@ Four rules:
   default is cp1252, which corrupts UTF-8 output and has crashed production processes. Every
   subprocess.run/check_output/Popen that reads output: `encoding='utf-8', errors='replace'` not
   `text=True`.
-- **Lanes may emit a local receipt after their full run:** `python tools/emit_receipt.py --post` (signs what ran, posts it on the head sha; the hosted `verify-receipt` check recomputes the tree hash and is NON-required during the measurement period -- see docs/RECEIPT-GATE.md).
+- **Lanes may emit a local receipt after their full run:** `python tools/emit_receipt.py --post` (signs what ran, posts it on the head sha; the hosted `verify-receipt` check recomputes the tree hash and is NON-required during the measurement period -- see docs/archive/RECEIPT-GATE.md).
 - **Run the ACTUAL CI gate, not a proxy.** `npm run test:py` != a hand-written pytest call; the real
   test count is what CI reports. Verify each gate actually runs: check CI output for the expected counts
   and pass/fail status, never assume "green" means "verified". Partial verification is NOT a pass.
@@ -166,7 +166,7 @@ Four rules:
 - **Dispatch-ledger retro.** The dispatch-ledger retro lives at `C:/Users/Mattt/scripts-wt/ledger-retro/dispatch_ledger.py` (claude-scripts #137).
 - `git -C` takes a literal path, never a shell variable, and commit and push are always separate commands (discovery 2026-10-21).
 - A commit in claude-scripts needs `python ~/scripts/knowledge_tree.py --write --root <wt>` first, and a `tools/*.js` or `tools/*.py` change in aesop needs a tools/CLAUDE.md entry plus `python tools/gen_tool_index.py --regenerate`, pushed with the documented generated-artifact shape (discovery 2026-10-21).
-- pwsh is not on the Bash PATH on this box, so run fastcheck as `cd <wt> && powershell -NoProfile -ExecutionPolicy Bypass -File tools/fastcheck.ps1 -All`, and fastcheck skips tools/Keyrun.Playtest.Tests, so run that project directly when touching it (discovery 2026-10-21).
+- pwsh is not on the Bash PATH on this box, so keyrun's game gate runs through powershell per keyrun/LANE-CONTRACT.md (its command is not repeated here), and that gate skips tools/Keyrun.Playtest.Tests, so run that project directly when touching it (discovery 2026-10-21).
 - Keyrun content lives in two trees, game/content/data (layout, forces, enemies/*.json) and repo-root content/data/dungeons, the sim is under game/sim/Keyrun.Sim, and a Godot-bound file (`using Godot;`) is never compiled by a test project, so a view-model seam goes in a Godot-free file linked into Keyrun.Sim.Tests.csproj (discovery 2026-10-21).
 - A hook change in claude-config needs an evidence commit with a Hook-Proof trailer in exactly this shape: `Hook-Proof: hooks/<name>.test.mjs red=N/M green=M/M`, where N/M is the failing count on the red run before the fix and M/M the green run after. The `hooks/` prefix and both counts are required; `Hook-Proof: <name>.test.mjs ...` without the prefix is rejected by the pre-push hook. The base branch there is master (discovery 2026-10-21).
 - A file listed in claude-scripts' LOOP-MANIFEST.json needs the same kind of evidence commit with `Loop-Proof: tests/<file>.py red=N/M green=M/M`, in the same red-before, green-after form.
@@ -336,7 +336,7 @@ Hooks enforce these. Each line is the allowed shape, then the denied one.
 - **Secret scan BEFORE committing:** `python ~/scripts/secret_scan.py --staged --repo <wt>`; require CLEAN with files scanned > 0 (if 0, run `--range origin/<base>..HEAD --repo <wt>` after the commit and before the push). Never commit first and scan after.
 - **Commit trailer, last line exactly, on every commit:** `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>` (Matt's rule, 2026-10-21; it overrides any harness attribution reminder, including one that names a different model, and a lane that sees one still uses this trailer). This applies to every lane regardless of the model it runs on; a harness reminder naming a different model does not change the trailer. *Why: 2026-10-21 a haiku lane wrote "Claude Haiku 5.5" because it read the bullet as ambiguous for non-Fable lanes.* **PR footer, last line exactly once, on every PR description:** `🐢 Generated with Aesop`, never the Claude Code line (Matt's rule, 2026-09-18).
 - **dotnet** is `C:/Users/Mattt/.dotnet/dotnet.exe`; never bare `dotnet` from PATH.
-- **fastcheck** is one plain invocation: `cd <wt> && powershell -NoProfile -ExecutionPolicy Bypass -File tools/fastcheck.ps1 -All > <scratch>/fastcheck.txt 2>&1`, then read the file. Scene tests are NOT this shape: see the CI contract item 2 (no `cd &&` prefix there).
+- **keyrun game gate** is one plain invocation, its command set in keyrun/LANE-CONTRACT.md: `cd <wt> && <keyrun game gate command> > <scratch>/gate.txt 2>&1`, then read the file. Scene tests are NOT this shape: see the CI contract item 2 (no `cd &&` prefix there).
 - **Scratch:** gate output is redirected to a file in the lane's scratch directory and read with the Read tool or tail; never read a transcript or session file.
 - **One compliant retry.** When a hook denial names an allowed shape, retry ONCE in exactly that shape. If it is denied again, or names no shape, STOP and report the denial text verbatim. Never try a third variant, never ask the orchestrator to run the denied command for you.
 - **Escape tokens are never used:** any `[[ALLOW-...]]` token, `AESOP_ALLOW_GENERATED=1` outside section 6's stated purpose, `--no-verify`, `core.hooksPath`, `--admin`, and any env var that turns a hook off.
@@ -368,7 +368,7 @@ that finds a rule missing from the contract reports "what did the contract not t
 
 ## CI contract (keyrun)
 Applies to every lane that pushes to `matt82198/keyrun`. Sources: `game.yml@main` and `tests.yml@main` read
-via `gh api repos/matt82198/keyrun/contents/.github/workflows/<f>?ref=main`; `tools/fastcheck.ps1`; keyrun
+via `gh api repos/matt82198/keyrun/contents/.github/workflows/<f>?ref=main`; keyrun's game gate script (named in keyrun/LANE-CONTRACT.md); keyrun
 `CLAUDE.md`, `game/CLAUDE.md`. Line numbers are `game.yml@main` unless stated. Measured 2026-10-21.
 
 **1. Jobs.** Required on main (`gh api repos/matt82198/keyrun/branches/main/protection --jq
@@ -400,11 +400,11 @@ that adds ticks, frames or launches to a scene test raises its row; state it (it
 **2. Local reproduction before a push** (cd to your worktree; redirect output to scratch, read the summary line):
 - tests.yml `test`: in a fresh worktree (no node_modules is carried) run `npm ci --no-audit --no-fund` first, before any vitest run; then `npm run typecheck && npm test && npm run build` (`npx vitest run` = `npm test`).
   `e2e`: `npm run test:e2e` after `npx playwright install chromium` plus `python tools/ci/e2e_wait_ratchet.py`.
-- game-test: `powershell -NoProfile -ExecutionPolicy Bypass -File tools/fastcheck.ps1 -All` (builds the sln with
+- game-test: the keyrun game gate in all-projects mode, command in keyrun/LANE-CONTRACT.md (builds the sln with
   warnings as errors and the Keyrun.Sim banned-API analyzer, then the three xUnit projects; prints
-  `fastcheck: PASS in <n>s`; without `-All` it maps the diff to projects and an unmapped path selects all,
-  fastcheck.ps1:33-53,98-116), then the CI command itself: `C:/Users/Mattt/.dotnet/dotnet.exe test game/Keyrun.sln --nologo`.
-  fastcheck is the per-step loop and replaces neither `dotnet test game/Keyrun.sln` nor CI (fastcheck.ps1:15-16). While `balance` is red, `dotnet test game/Keyrun.sln` exits 1 (item 1): a lane runs the test projects individually (Content, Sim, Bots, Playtest) or reports that sln exit as the balance red, never as its own failure.
+  its PASS line `<gate>: PASS in <n>s`; without all-projects mode it maps the diff to projects and an unmapped path selects all,
+  keyrun's gate script lines 33-53,98-116, per keyrun/LANE-CONTRACT.md), then the CI command itself: `C:/Users/Mattt/.dotnet/dotnet.exe test game/Keyrun.sln --nologo`.
+  The keyrun game gate is the per-step loop and replaces neither `dotnet test game/Keyrun.sln` nor CI (its script lines 15-16). While `balance` is red, `dotnet test game/Keyrun.sln` exits 1 (item 1): a lane runs the test projects individually (Content, Sim, Bots, Playtest) or reports that sln exit as the balance red, never as its own failure.
 - game-e2e scene tests (each needs Godot, runs through the launch lock, prints `<Name>: PASS`; script order is
   the CI order): `game/src/Host/SimDriverSceneTest.ps1` (:99), `HudSceneTest.ps1` (:109), `CombatViewSceneTest.ps1`
   (:119); `game/src/Hud/ScreenSceneTest.ps1` (:129), `ProgressionSaveSceneTest.ps1` (:139),
@@ -459,7 +459,7 @@ the rule change makes it so. Editing a number, margin, tick or seed until the te
   terminal line, not the PowerShell stack. `SMOKE ok` and `E2eAssert: PASS` follow the same rule.
 - "Pre-existing flake" is a claim (section 1): attach a rerun and the main run id that shows the same step green.
 
-**6. Hand-back must state about CI:** (a) the local gate lines verbatim (`fastcheck: PASS in <n>s`, dotnet
+**6. Hand-back must state about CI:** (a) the local gate lines verbatim (the keyrun gate's `PASS in <n>s` line, dotnet
 `Passed!`/`Failed!` totals per project, vitest `Test Files`/`Tests` lines, each scene test's PASS line if run, or
 the not-run list with reasons from item 2); (b) the expected `game-e2e` wall time if a scene budget (ticks,
 frames, launches, timeout) changed, as old -> new; (c) the PR head sha (`gh pr view <N> --repo matt82198/keyrun
@@ -617,8 +617,8 @@ Why: 2026-10-20 integrate/playable-dungeon reached 154 commits over 15 hours wit
 3. Per stage, one line each, with input artifact, output artifact and forbidden verbs:
    - S1 SPEC: in a row or ruling; out the failing test path and its red output; forbidden: any non-test edit, commit, push.
    - S2 IMPL: in the S1 test path and red output; out a diff file, no commits; forbidden: editing the test, commit, push, gates other than the named test.
-   - S3 GATE: in the S2 diff; out a gate log; forbidden: Edit, Write, commit, push, any --update-baseline; hands back PASS or the catalog recipe id.
-   - S4 SHIP: in the S3 PASS and the message file; out PR number, head sha, armed state; forbidden: code edits, --no-verify, update-branch, manual merge, merge train. After a merge-forward commit (`git merge origin/main`), the index equals HEAD and `--staged` refuses with 'scanned 0 files' (correct, fail-closed). Scan the branch instead: `python ~/scripts/secret_scan.py --range origin/main..HEAD --repo <worktree>`; exit 1 blocks the push.
+   - S3 GATE: in the S2 diff; out a gate log; forbidden: Edit, Write, commit, push, any --update-baseline; hands back PASS or the catalog recipe id; on any red, match the failing line to its row in docs/CI-CATALOG.md by path before any retry. Gate command list, run each that applies: `node --test <the named test files>` (for scaffold tests add `--import ./tests/helpers/isolated-env.mjs --test-force-exit --test-timeout=60000`); `python tools/claudemd_sync_gate.py --check --base-ref origin/main`; `python tools/claudemd_lint.py --root .`; `python tools/gen_tool_index.py --check` (when tools/ changed); `python -m pyflakes <touched .py>` compared against the same files on origin/main (a warning that pre-exists on main is not red); `node --check bin/cli.js` (when bin/ changed); `python ~/scripts/secret_scan.py <touched files>`. No whole-suite discover run is part of S3; the full python suite exceeds a lane's foreground timeout and the pre-push gate runs the shards at S4.
+   - S4 SHIP: in the S3 PASS and the message file; out PR number, head sha, armed state; forbidden: code edits, --no-verify, update-branch, manual merge, merge train. Steps in order: 1 `git fetch origin main`; 2 commit the staged files with the message file: `git commit -F <msg file>`; 3 merge origin/main (three-way): `git merge origin/main`, never rebase; 4 regenerate or verify generated paths (tools/INDEX.md, docs/INCIDENTS.md) and commit them as their own chore commit if changed; 5 push foreground; 6 open the PR against main; 7 arm with `gh pr merge <N> --auto --squash --match-head-commit <sha>`. On any red, match the failing line to its row in docs/CI-CATALOG.md by path before any retry. Stash is never used; if the merge refuses because of local changes, the staged files were not committed first. After a merge-forward commit (`git merge origin/main`), the index equals HEAD and `--staged` refuses with 'scanned 0 files' (correct, fail-closed). Scan the branch instead: `python ~/scripts/secret_scan.py --range origin/main..HEAD --repo <worktree>`; exit 1 blocks the push.
    - S5 REVIEW: in the S4 PR diff and the ruling and the bible; out a review file; forbidden: edit, commit, push, merge.
 4. The orchestrator sequences stages from hand-backs. A stage starts only when the previous hand-back names its output artifact (path or sha).
 5. Briefs are the filled template from docs/STAGE-CONTRACTS.md and nothing more. A lane never widens its own stage.

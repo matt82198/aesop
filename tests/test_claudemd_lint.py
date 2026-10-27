@@ -816,12 +816,14 @@ class TestHeadroomMergeUnion(unittest.TestCase):
     """
 
     # Deliberate numbers: branch alone = 149 counted lines (passes a 150 cap),
-    # merge union = 151 (busts it). Counting convention matches lint_claudemd
-    # (content.split("\n")), so a file with N body lines + trailing newline counts N+1.
+    # merge union = 151 (busts it). Counting convention is wc -l (_wc_line_count):
+    # each newline-terminated body line counts 1, so N body lines count N.
+    # BRANCH_PREPEND was 48 under the old newlines+1 convention; it is 49 now so
+    # the cap-busting union stays at 151 under wc -l.
     BASE_BODY = 100
-    BRANCH_PREPEND = 48   # -> 148 body lines on the branch  -> counted 149
-    MAIN_APPEND = 2       # -> 102 body lines on main        -> counted 103
-    # union body = 100 + 48 + 2 = 150                        -> counted 151
+    BRANCH_PREPEND = 49   # -> 149 body lines on the branch  -> wc 149 (passes 150)
+    MAIN_APPEND = 2       # -> 102 body lines on main
+    # union body = 100 + 49 + 2 = 151                         -> wc 151 (busts 150)
 
     def _run_git(self, repo, *args, check=True):
         res = subprocess.run(
@@ -891,7 +893,8 @@ class TestHeadroomMergeUnion(unittest.TestCase):
             repo, rel = self._build_cascade_repo(tmpdir)
 
             # Precondition: the branch's own file passes the cap outright.
-            branch_lines = len((repo / rel).read_text(encoding="utf-8").split("\n"))
+            # wc -l semantics: count newline-terminated lines (matches _wc_line_count).
+            branch_lines = (repo / rel).read_text(encoding="utf-8").count("\n")
             self.assertEqual(branch_lines, 149, "fixture drift: branch should be 149 lines")
             self.assertEqual(
                 lint_claudemd(repo / rel, repo, max_lines=150), [],
@@ -929,7 +932,9 @@ class TestHeadroomMergeUnion(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             repo, rel = self._build_cascade_repo(tmpdir, branch_prepend=10, main_append=2)
             union = compute_union_line_counts(repo, base_ref="main", head_ref="HEAD")
-            self.assertEqual(union[rel], 113)
+            # 100 base + 10 branch + 2 main = 112 body lines -> wc -l = 112
+            # (was 113 under the old newlines+1 convention; same fixture, wc count).
+            self.assertEqual(union[rel], 112)
             self.assertEqual(
                 check_headroom(repo, base_ref="main", head_ref="HEAD", max_lines=150), []
             )
@@ -1103,6 +1108,53 @@ class TestGeneratedSentinel(unittest.TestCase):
             self.assertEqual(len(drift), 1, "hand-edited generated file must drift")
 
 
+class TestLineCountMatchesWcL(unittest.TestCase):
+    """Line count must follow wc -l, so the 150-line cap means 150 real lines.
+
+    Semantics chosen: a file of N newline-terminated lines counts N (exactly `wc -l`).
+    A trailing unterminated fragment adds one more line (`wc -l` + 1), so
+    "149 terminated lines + 'tail' with no newline" counts 150.
+
+    Bug pinned (f-8d8684e4): tools/claudemd_lint.py _count_lines and the
+    lint_claudemd cap both use content.split("\\n"), which is newlines+1. A
+    150-newline file therefore reads 151 and busts the 150 cap by the gate's own count.
+    """
+
+    def test_count_lines_and_cap_follow_wc_l(self):
+        """150 newline-terminated lines count 150 and pass the cap; 151 fail it."""
+        from claudemd_lint import _count_lines
+
+        # Assertion 1 (RED today: returns 151): exactly wc -l for terminated files.
+        self.assertEqual(_count_lines(b"line\n" * 150, "fixture"), 150,
+                         "150 newline-terminated lines must count 150 (wc -l)")
+
+        # Assertion 2 (passes today): unterminated tail counts as wc -l + 1.
+        self.assertEqual(_count_lines(b"line\n" * 149 + b"tail", "fixture"), 150,
+                         "149 terminated lines + unterminated tail must count 150 (wc -l + 1)")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo_root = Path(tmpdir)
+            claudemd_dir = repo_root / "testdomain"
+            claudemd_dir.mkdir()
+            claudemd_path = claudemd_dir / "CLAUDE.md"
+            (repo_root / "package.json").write_text(
+                json.dumps({"scripts": {"test:py": "python -m unittest"}}))
+
+            # 150 terminated lines: must PASS the 150-line cap (RED today: flagged at 151).
+            claudemd_path.write_text("# Test\n" + "Content line\n" * 149, encoding="utf-8")
+            findings = lint_claudemd(claudemd_path, repo_root, max_lines=150)
+            line_findings = [f for f in findings if f["type"] == "line-count"]
+            self.assertEqual(len(line_findings), 0,
+                             "a file with exactly 150 newline-terminated lines must pass the 150 cap")
+
+            # 151 terminated lines: must FAIL the cap.
+            claudemd_path.write_text("# Test\n" + "Content line\n" * 150, encoding="utf-8")
+            findings = lint_claudemd(claudemd_path, repo_root, max_lines=150)
+            line_findings = [f for f in findings if f["type"] == "line-count"]
+            self.assertGreater(len(line_findings), 0,
+                               "a file with 151 newline-terminated lines must fail the 150 cap")
+
+
 class TestTrunkResolution(unittest.TestCase):
     """--base-ref defaults to the repo's trunk, resolved the way the pre-push hook does.
 
@@ -1112,8 +1164,8 @@ class TestTrunkResolution(unittest.TestCase):
     """
 
     BASE_BODY = 100
-    BRANCH_PREPEND = 48  # branch alone = 149 counted lines (passes 150)
-    MAIN_APPEND = 2      # merge union = 151 counted lines (busts 150)
+    BRANCH_PREPEND = 49  # branch alone = 149 wc -l lines (passes 150); was 48 pre-wc
+    MAIN_APPEND = 2      # merge union = 151 wc -l lines (busts 150)
 
     def _git(self, repo, *args):
         res = subprocess.run(

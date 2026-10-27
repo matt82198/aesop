@@ -198,10 +198,10 @@ class TestContentLengthDedup(W13FixtureCase):
             "X-Aesop-Token": self.token
         }
 
-        ok, _ = self.api.validate_mutation(headers_ok, body)
+        ok, _ = self.api.validate_mutation(headers_ok, body, expected_port=8770)
         self.assertTrue(ok)
 
-        ok, (status, err) = self.api.validate_mutation(headers_bad, body)
+        ok, (status, err) = self.api.validate_mutation(headers_bad, body, expected_port=8770)
         self.assertFalse(ok)
         self.assertEqual(status, 400)
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Guardrail G2: CI gate that verifies all on-disk test files are run by some CI job.
-INDEX: Guardrail G2: CI gate that verifies all on-disk test files are run by some CI job (prevents fake-green: test files existing but never executed). Discovers: Python (git ls-files tests/test_*.py), Node (tests/*.test.mjs via npm test:node glob), Shell (explicit bash commands in package.json test:sh), Playwright (testMatch pattern in playwright.config.ts). CLI: `--check` (exit 1 if orphans found; CI gate) | `--fix` (suggest how to add orphans) | `--help`; hermetic, stdlib-only; exit 0=all covered, 1=orphans found, 2=error
+INDEX: Guardrail G2: CI gate that verifies all on-disk test files are run by some CI job (prevents fake-green: test files existing but never executed). Discovers: Python (git ls-files tests/test_*.py), Node (tests/*.test.mjs and hooks/**/*.test.mjs; hooks globs must be named in npm test:node), Shell (explicit bash commands in package.json test:sh), Playwright (testMatch pattern in playwright.config.ts). CLI: `--check` (exit 1 if orphans found; CI gate) | `--fix` (suggest how to add orphans) | `--help`; hermetic, stdlib-only; exit 0=all covered, 1=orphans found, 2=error
 
 This tool prevents the "fake-green" bug class: test files that exist on disk but no
 CI job/script runs them, making tests appear to pass when they never execute.
@@ -62,6 +62,39 @@ def get_python_test_coverage():
     return find_git_tracked_files("tests/test_*.py")
 
 
+def hooks_node_glob_tokens(test_node):
+    """Hook-side Node glob tokens named by a test:node script, matched as whole shell words.
+
+    The script is split on whitespace, surrounding quotes are stripped, and a leading
+    './' is normalised away. A token is credited only if it then starts with 'hooks/'
+    and ends '.test.mjs', so tests/hooks/*.test.mjs names a different tree and is not
+    credited (R-AUDIT-TCI-6 replaces the R-AUDIT-TCI-5 lookbehind regex).
+    """
+    tokens = []
+    for raw in test_node.split():
+        token = raw.strip("'\"")
+        if token.startswith("./"):
+            token = token[2:]
+        if token.startswith("hooks/") and token.endswith(".test.mjs"):
+            tokens.append(token)
+    return tokens
+
+
+def find_repo_glob(pattern):
+    """Files on disk matching a repo-relative glob (e.g. hooks/**/*.test.mjs), as forward-slash paths."""
+    repo_root = Path.cwd()
+    return set(
+        str(p.relative_to(repo_root)).replace("\\", "/")
+        for p in repo_root.glob(pattern)
+        if p.is_file()
+    )
+
+
+def find_hooks_node_test_files():
+    """Every hooks/**/*.test.mjs on disk (hook-side Node tests, e.g. hooks/claude/*.test.mjs)."""
+    return find_repo_glob("hooks/**/*.test.mjs")
+
+
 def get_node_test_coverage():
     """Find Node test files that are covered by npm test:node."""
     scripts = parse_package_json()
@@ -80,6 +113,11 @@ def get_node_test_coverage():
     if pattern_match:
         # Match all *.test.mjs files in tests/
         covered = find_disk_files("*.test.mjs")
+
+    # Hook-side Node tests are covered only by the literal hooks/... glob the script
+    # names (e.g. hooks/claude/*.test.mjs); expand exactly those tokens.
+    for token in hooks_node_glob_tokens(test_node):
+        covered.update(find_repo_glob(token))
 
     return covered
 
@@ -214,7 +252,7 @@ def get_all_test_files():
     """Discover all test files on disk."""
     all_tests = {
         "python": find_python_test_modules(),
-        "node": find_disk_files("*.test.mjs"),
+        "node": find_disk_files("*.test.mjs") | find_hooks_node_test_files(),
         "shell": find_disk_files("test_*.sh") | find_disk_files("test-*.sh") | find_disk_files("*.test.sh"),
         "playwright": find_disk_files("*.spec.ts"),
     }
@@ -255,7 +293,10 @@ def format_fix_suggestion(test_type, file_path):
             return f"Rename to tests/test_<name>.py (collected glob) and git add: {file_path}"
         return f"Add to git: git add {file_path}"
     elif test_type == "node":
-        # For Node, they're auto-discovered by npm test:node (tests/*.test.mjs)
+        # For Node, tests/*.test.mjs is auto-matched by npm test:node; hooks/**/*.test.mjs
+        # must be named by a hooks/... glob token in test:node (e.g. hooks/claude/*.test.mjs).
+        if file_path.startswith("hooks/"):
+            return f"Add its directory glob to package.json test:node (e.g. hooks/claude/*.test.mjs): {file_path}"
         return f"Ensure file matches tests/*.test.mjs pattern (already matched: {file_path})"
     elif test_type == "shell":
         # For shell, add to package.json test:sh script

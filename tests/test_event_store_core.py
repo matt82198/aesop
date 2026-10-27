@@ -239,6 +239,24 @@ class V1NoStoreJsonTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("verify: 0 problem(s)", r.stdout)
 
+    def test_r_last_line_text_edit_fails_verify(self):
+        # RED on origin/main: verify checks each line's prev against its predecessor only,
+        # so the final line's own text is covered by no hash and an edit goes unreported.
+        root = make_store(Path(self.tmp) / "st", "keyrun")
+        s = Store(root)
+        s.append("note", "o", "one", ts="2026-10-01T10:00:00Z")
+        s.append("note", "o", "two", ts="2026-10-01T11:00:00Z")
+        s.append("note", "o", "three", ts="2026-10-01T12:00:00Z")
+        self.assertEqual(s.verify(), [])
+        day = root / "events" / "2026-10-01.jsonl"
+        lines = [x for x in day.read_bytes().split(b"\n") if x]
+        self.assertIn(b'"text":"three"', lines[-1])
+        lines[-1] = lines[-1].replace(b'"text":"three"', b'"text":"tampered"')
+        json.loads(lines[-1].decode("utf-8"))  # still valid JSON
+        day.write_bytes(b"\n".join(lines) + b"\n")
+        self.assertTrue(Store(root).verify(),
+                        "verify reported 0 problems after the last line was edited")
+
 
 def encode_line(ev):
     return json.dumps(ev, sort_keys=True).encode("utf-8") + b"\n"
