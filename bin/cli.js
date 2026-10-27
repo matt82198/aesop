@@ -246,7 +246,39 @@ if (isPythonDispatch && args.length >= 1) {
 const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health', 'health-score', 'reproduce', 'init', 'runner'];
 const isRuntimeCommand = runtimeCommands.includes(args[0]);
 
+// Per-subcommand usage for `<subcommand> --help|-h`. Printed BEFORE any side effect: `init`
+// would otherwise scaffold files and `doctor` would run its readiness check. Each flag listed
+// is one the subcommand already parses (init: the args loop below; doctor: tools/doctor.js).
+const SUBCOMMAND_HELP = {
+  init: {
+    purpose: 'Initialize aesop orchestration in the current repo (CLAUDE.md, config, state, CI, hooks).',
+    flags: ['--name NAME', '--force', '--ci-mode hosted|self-hosted-runner|local-receipt-gate', '--self-hosted-labels L1,L2'],
+  },
+  doctor: {
+    purpose: 'Preflight readiness check (Node, Python, git, config, dirs, hook, port) plus a report-only CI capability table.',
+    flags: ['--json', '--global'],
+  },
+};
+
+/**
+ * Print the usage block for a subcommand that has an entry in SUBCOMMAND_HELP.
+ * @param {string} name subcommand name (a key of SUBCOMMAND_HELP)
+ * @param {(line: string) => void} write writer, e.g. console.log
+ */
+function printSubcommandHelp(name, write) {
+  const entry = SUBCOMMAND_HELP[name];
+  const flagLines = entry.flags.map((flag) => `  ${flag}`).join('\n');
+  write(`\nUsage: aesop ${name} [options]\n\n  ${entry.purpose}\n\nOptions:\n${flagLines}\n  --help, -h              Show this help message\n`);
+}
+
 if (isRuntimeCommand) {
+  // Help check first: no subcommand side effect may run when --help or -h is passed.
+  const subcommandHelpRequested = args.slice(1).some((arg) => arg === '--help' || arg === '-h');
+  if (subcommandHelpRequested && Object.prototype.hasOwnProperty.call(SUBCOMMAND_HELP, args[0])) {
+    printSubcommandHelp(args[0], console.log);
+    process.exit(0);
+  }
+
   // 'runner install|remove' is handled by tools/runner_install.py (preflight via the doctor's
   // capability probe; refuses on Smart App Control / UMCI boxes and on public repos without
   // all_external_contributors fork approval). All flags pass through untouched.
