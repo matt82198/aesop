@@ -282,7 +282,7 @@ Both are valid. Both are honest.
 ## References
 
 - **Benchmark methodology and results**: [bench/METHODOLOGY.md](../bench/METHODOLOGY.md), [bench/results/frontier-v4-2026-07-27.md](../bench/results/frontier-v4-2026-07-27.md), [bench/results/seam-loop-study-2026-07-28.md](../bench/results/seam-loop-study-2026-07-28.md).
-- **Dispatch cost analysis**: [docs/DISPATCH-MODEL.md](../docs/DISPATCH-MODEL.md), [docs/archive/THE-AESOP-HYPOTHESIS.md](../docs/archive/THE-AESOP-HYPOTHESIS.md) § 3.
+- **Dispatch cost analysis**: [docs/DISPATCH-MODEL.md](../docs/DISPATCH-MODEL.md), [docs/THE-AESOP-HYPOTHESIS.md](../docs/THE-AESOP-HYPOTHESIS.md) § 3.
 - **Incident log and failure modes**: [docs/INCIDENTS.md](../docs/INCIDENTS.md), classes `doc-invented`, `fake-green`, `stall`.
 - **Adversarial review**: [bench/results/shadow-adjudication-2026-07-23.md](../bench/results/shadow-adjudication-2026-07-23.md).
 - **Seam-level orchestration measurement**: [bench/results/seam-loop-study-2026-07-28.md](../bench/results/seam-loop-study-2026-07-28.md).
