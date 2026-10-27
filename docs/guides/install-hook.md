@@ -69,9 +69,9 @@ Output on this tree, last lines, from a real run (the full run prints a PASS lin
 === Test Results ===
 PASSED: 32
 FAILED: 0
-
-All 32 tests passed.
 ```
+
+The run ends green.
 <!-- bash hooks/pre-push-policy.sh --test -> PASSED: 32, FAILED: 0 -->
 
 Running the hook directly in a terminal is refused on purpose. A real `git push` pipes the ref list to the hook on
@@ -157,7 +157,7 @@ node hooks/claude/no-heredoc-file-authoring.test.mjs
 node hooks/claude/no-scrollback-as-record.test.mjs
 ```
 
-On this tree these report 13 passing, 19 passed and 34 passed, with no failures.
+On this tree all three runs end green with no failures; the case counts are in the comments below.
 <!-- node --import ./tests/helpers/isolated-env.mjs --test tests/force-model-policy.test.mjs -> tests 13, pass 13, fail 0 -->
 <!-- node hooks/claude/no-heredoc-file-authoring.test.mjs -> 19 passed, 0 failed, 19 total -->
 <!-- node hooks/claude/no-scrollback-as-record.test.mjs -> 34 passed, 0 failed, 34 total -->
