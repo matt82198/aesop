@@ -1,7 +1,7 @@
 // Contract under test (f-694132f3):
 //  - `node bin/cli.js <target>` scaffolds from the package root (bin/..) and must NOT copy
 //    ignored build/runtime artifacts (ui/**/node_modules, aesop-fleet/) into the target.
-//  - The scaffold call must finish well inside a 20 s budget even when the source tree
+//  - The scaffold call must finish well inside a 45 s budget even when the source tree
 //    carries a sizeable ignored artifact tree; a walk that descends into it is a regression.
 //
 // Fixture: a tmp copy of the repo (bin/, ui/, tools/, ... minus .git) that ALSO contains
@@ -19,7 +19,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SCAFFOLD_TIMEOUT_MS = 20000;
+// Budget 45 s: CI windows-shard measured 27.9 s for a correct 651-file scaffold (run 40559065071);
+// a scaffold that copies ui/web/node_modules exceeds the 60 s test timeout (row f-694132f3), so 45 s still catches the regression.
+const SCAFFOLD_TIMEOUT_MS = 45000;
 
 function makeFiles(dir, count, prefix) {
   fs.mkdirSync(dir, { recursive: true });
@@ -38,7 +40,7 @@ function collectNames(dir, out = []) {
   return out;
 }
 
-test('scaffold does not copy ignored artifacts (ui/**/node_modules, aesop-fleet/) and finishes under 20 s', () => {
+test('scaffold does not copy ignored artifacts (ui/**/node_modules, aesop-fleet/) and finishes under 45 s', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-scaffold-ignores-'));
   try {
     // 1. Tmp copy of the repo (package root = templateRoot for the scaffold).
@@ -52,7 +54,7 @@ test('scaffold does not copy ignored artifacts (ui/**/node_modules, aesop-fleet/
     makeFiles(path.join(repoCopy, 'ui', 'web', 'node_modules', 'big'), 200, 'pkg');
     makeFiles(path.join(repoCopy, 'aesop-fleet'), 50, 'fleet');
 
-    // 3. Scaffold the repo copy into a fresh target, with a 20 s budget.
+    // 3. Scaffold the repo copy into a fresh target, with a 45 s budget.
     const target = path.join(root, 'target');
     const started = Date.now();
     const res = spawnSync(process.execPath, [path.join(repoCopy, 'bin', 'cli.js'), target, '--no-skills'], {
@@ -78,6 +80,8 @@ test('scaffold does not copy ignored artifacts (ui/**/node_modules, aesop-fleet/
     assert.deepEqual(nodeModulesHits, [], `scaffolded target contains node_modules entries: ${nodeModulesHits.length}`);
     assert.deepEqual(fleetHits, [], `scaffolded target contains aesop-fleet entries: ${fleetHits.length}`);
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    // Windows holds short-lived locks on freshly written trees (AV scan, indexer);
+    // retry the teardown so a transient EBUSY/EPERM does not fail a green test.
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
 });
