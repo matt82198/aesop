@@ -1,14 +1,14 @@
 {
   "git": {
-    "merged_prs": 1167,
-    "merged_prs_source": "gh-api",
-    "total_commits": 2644,
-    "project_age_days": 101,
+    "merged_prs": 1078,
+    "merged_prs_source": "git-log",
+    "total_commits": 2708,
+    "project_age_days": 107,
     "wave_count": 31,
-    "insertions_deletions": 508992,
-    "files_tracked": 1367,
+    "insertions_deletions": 522885,
+    "files_tracked": 1414,
     "distinct_coauthors": 21,
-    "authors_human": 1,
+    "authors_human": 0,
     "model_tiers": 9,
     "model_tier_names": [
       "Fable 5",
@@ -31,14 +31,14 @@
     "cumulative_tokens": null,
     "total_coding_hours": null
   },
-  "generated_at": "2026-10-21T20:28:42.397022+00:00",
-  "loc": 430745,
-  "head_sha": "03e144631081f2edfdb34e97f499331beb905f43",
+  "generated_at": "2026-10-27T07:36:27.436966+00:00",
+  "loc": 439666,
+  "head_sha": "24931b7333ffc1c3ac258d17c9df37f9ef726b98",
   "economics": {
     "token_ledger_available": false,
-    "merged_prs": 1167,
-    "merged_prs_source": "gh-api",
-    "lines_of_code": 430745,
+    "merged_prs": 1078,
+    "merged_prs_source": "git-log",
+    "lines_of_code": 439666,
     "wave_count": 31
   },
   "economics_caveats": {

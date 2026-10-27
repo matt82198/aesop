@@ -35,6 +35,14 @@ from typing import Dict, List, Optional, Tuple
 
 DEFAULT_MAX_LINES = 150
 
+# Per-line byte cap (UTF-8) for non-fenced lines. Ratcheted per file against
+# LINE_CAP_BASELINE: at or under a file's baseline count the over-cap lines are
+# warnings (non-failing); over it, every over-cap line is an error. A file not
+# in the baseline has baseline 0. Lower the baseline entry by hand when a file
+# drops; the lint prints a hint and never edits it.
+MAX_LINE_BYTES = 1024
+LINE_CAP_BASELINE = "tools/claudemd_line_cap_baseline.json"
+
 # Per-file oversize allowance: ui/CLAUDE.md is the documented dense-domain
 # exception (lossless-verified, probe-passed at ~197 lines). Mirrors the same
 # allowance in ~/scripts/compliance_check.py so the two gates agree.
@@ -86,6 +94,33 @@ RUNTIME_PATTERNS = [
     r"SKILL\.md(?:/|$)",
 ]
 
+
+
+def _load_line_cap_baseline(repo_root: Path) -> Dict[str, int]:
+    """Per-file allowed over-cap line counts. Missing or unreadable -> {} (fail closed: baseline 0)."""
+    try:
+        data = json.loads((repo_root / LINE_CAP_BASELINE).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): v for k, v in data.items() if isinstance(v, int)}
+
+
+def find_over_cap_lines(content: str) -> List[Tuple[int, int]]:
+    """Return (1-based line number, UTF-8 byte length) for each non-fenced line over MAX_LINE_BYTES."""
+    over = []
+    in_fence = False
+    for lineno, line in enumerate(content.split("\n"), 1):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        size = len(line.encode("utf-8"))
+        if size > MAX_LINE_BYTES:
+            over.append((lineno, size))
+    return over
 
 
 def _tracked_claudemds(repo_root):
@@ -605,6 +640,26 @@ def lint_claudemd(
                        f"{line_count} lines exceeds max {effective_max}",
         })
 
+    # Per-line byte cap, ratcheted against the committed baseline (see MAX_LINE_BYTES).
+    over_cap = find_over_cap_lines(content)
+    allowed = _load_line_cap_baseline(repo_root).get(rel, 0)
+    failing = len(over_cap) > allowed
+    for lineno, size in over_cap:
+        findings.append({
+            "type": "line-too-long",
+            "line": str(lineno),
+            "severity": "error" if failing else "warning",
+            "message": f"{rel}: {size} bytes > {MAX_LINE_BYTES}",
+        })
+    if not failing and len(over_cap) < allowed:
+        findings.append({
+            "type": "line-cap-hint",
+            "line": "0",
+            "severity": "info",
+            "message": f"{rel}: {len(over_cap)} over-cap lines < baseline {allowed}; "
+                       f"lower its entry in {LINE_CAP_BASELINE} to {len(over_cap)} (not auto-edited)",
+        })
+
     # Check if content endorses pytest but repo uses unittest
     # Exclude false positives where pytest is mentioned in passing or explicitly excluded
     is_unittest, _ = check_test_cmd_match(repo_root)
@@ -761,7 +816,11 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Lint CLAUDE.md files for integrity"
+        description="Lint CLAUDE.md files for integrity",
+        epilog=f"Per-line cap: non-fenced lines over {MAX_LINE_BYTES} bytes are "
+               f"ratcheted per file against {LINE_CAP_BASELINE} (at or under the "
+               "baseline = warning, over it = error; lower the baseline entry by "
+               "hand when a file shrinks).",
     )
     parser.add_argument(
         "--root",
@@ -855,10 +914,15 @@ def main():
     # Verify generated files (e.g. tools/INDEX.md) are byte-identical to output.
     all_findings.extend(check_generated_files(repo_root))
 
+    # Only severity "error" fails the run; warnings/info (baselined line-cap
+    # findings, the baseline-lower hint) are reported without failing it.
+    failing = [f for f in all_findings if f.get("severity", "error") == "error"]
+
     if args.json:
         output = {
             "findings": all_findings,
             "count": len(all_findings),
+            "failing": len(failing),
             "repo_root": str(repo_root),
         }
         print(json.dumps(output, indent=2))
@@ -869,10 +933,14 @@ def main():
                     f"{i}. [{finding['type']}] {finding['message']} "
                     f"(line {finding['line']})"
                 )
+        if failing:
+            print(f"[FAIL] {len(failing)} failing finding(s)")
+        elif all_findings:
+            print(f"[OK] No failing findings ({len(all_findings)} non-failing)")
         else:
             print("[OK] No issues found")
 
-    sys.exit(1 if all_findings else 0)
+    sys.exit(1 if failing else 0)
 
 
 if __name__ == "__main__":
