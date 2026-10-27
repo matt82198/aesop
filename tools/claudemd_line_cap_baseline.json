@@ -1,0 +1,9 @@
+{
+  "daemons/CLAUDE.md": 4,
+  "hooks/CLAUDE.md": 6,
+  "monitor/CLAUDE.md": 1,
+  "state_store/CLAUDE.md": 14,
+  "tests/CLAUDE.md": 1,
+  "tools/CLAUDE.md": 18,
+  "ui/CLAUDE.md": 1
+}
