@@ -11,7 +11,7 @@ Instead, use GitHub's private security advisory feature:
 3. Describe the vulnerability with steps to reproduce
 4. The maintainer will be notified privately and can work with you on a fix
 
-You can also email a detailed report to matt82198@gmail.com if you prefer.
+Private vulnerability reporting is enabled on this repository, so you can also file a report directly at https://github.com/matt82198/aesop/security/advisories/new.
 
 ## Supported versions
 
@@ -48,4 +48,4 @@ These are the checks that exist in this repository, not a guarantee:
 
 ## Advisory notice
 
-The advisory notice text is pending a maintainer decision. Until it is published, treat the supported-versions table and the reporting section above as the policy.
+The dependency advisory for `undici` (Dependabot #21) is resolved on main: `undici` is bumped to 8.12.3 in the `ui/web` lock file by [PR #1312](https://github.com/matt82198/aesop/pull/1312).
