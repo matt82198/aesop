@@ -486,3 +486,4 @@ Coordinator ruling: these RETIRE rows stay in place. Code reads or writes them, 
 - `docs/HANDOFF-CERTIFICATE.md`: `tools/handoff_proof.py:613` writes it.
 - `docs/RECEIPTS.md`: `docs/paper/evidence.json:21` cites it as evidence.
 - `docs/case-study-portfolio.md`: `tests/test_doc_links.py:17` lists it by name.
+- `docs/drafts/haiku-tier-learnings.md`: held because it has unsourced metrics, so the metrics gate blocks the move.
