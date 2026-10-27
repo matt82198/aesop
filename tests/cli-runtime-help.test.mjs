@@ -76,7 +76,7 @@ for (const sub of REMAINING_SUBCOMMANDS) {
       assert.equal(r.res.error, undefined, `spawn failed or timed out: ${r.res.error}`);
       assert.equal(r.res.status, 0, `exit status ${r.res.status}; stderr: ${r.res.stderr}`);
       assert.match(r.res.stdout, new RegExp(`Usage`), `stdout has no Usage block:\n${r.res.stdout}`);
-      assert.match(r.res.stdout, new RegExp(sub.replace(/[-]/g, '\\-')), `stdout does not name "${sub}":\n${r.res.stdout}`);
+      assert.ok(r.res.stdout.includes(sub), `stdout does not name "${sub}":\n${r.res.stdout}`);
       assert.equal(r.res.stderr, '', `stderr must be empty, got: ${r.res.stderr}`);
       assert.deepEqual(r.workEntries, [], `cwd must stay empty, found: ${r.workEntries.join(', ')}`);
     });
