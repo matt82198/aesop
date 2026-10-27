@@ -112,7 +112,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git checkout -b "$BRANCH"
           FILES=$(python -c "import json; d=json.load(open('$RUNNER_TEMP/regen-result.json')); print(', '.join(d.get('fixed', [])))")
-          git add -- $(python -c "import json; d=json.load(open('$RUNNER_TEMP/regen-result.json')); print(' '.join(d.get('fixed', [])))")
+          python -c "import json,sys; d=json.load(open(sys.argv[1])); sys.stdout.write('\0'.join(d.get('fixed', [])))" "$RUNNER_TEMP/regen-result.json" | xargs -0 git add --
           git commit -m "chore(regen): heal generated artifacts after clean-merge drift ($FILES)" -m "Co-Authored-By: aesop regen-on-main <noreply@github.com>"
           git push origin "$BRANCH"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
@@ -122,13 +122,16 @@ jobs:
         if: steps.guard.outputs.skip == 'false' && steps.regen.outputs.changed == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run ci.yml --ref "${{ steps.branch.outputs.branch }}"
+          BRANCH: ${{ steps.branch.outputs.branch }}
+        run: gh workflow run ci.yml --ref "$BRANCH"
 
       - name: Open the self-heal PR and arm auto-merge
         if: steps.guard.outputs.skip == 'false' && steps.regen.outputs.changed == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
+          FILES: ${{ steps.branch.outputs.files }}
         run: |
           set -eu
           BODY_FILE=$RUNNER_TEMP/regen-pr-body.md
@@ -136,7 +139,7 @@ jobs:
           Automated generated-artifact self-heal from the regen-on-main workflow.
 
           Files regenerated:
-          ${{ steps.branch.outputs.files }}
+          $FILES
 
           Triggering sha on main: ${{ github.sha }}
           Run: $RUN_URL
@@ -144,6 +147,6 @@ jobs:
           Merge note: this PR needs checks from a non-bot token to merge (a GITHUB_TOKEN push triggers no ci.yml run); that is the owner's decision.
           :turtle: Generated with Aesop
           EOF
-          PR_URL=$(gh pr create --title "chore(regen): heal generated artifacts" --body-file "$BODY_FILE" --head "${{ steps.branch.outputs.branch }}" --base main)
+          PR_URL=$(gh pr create --title "chore(regen): heal generated artifacts" --body-file "$BODY_FILE" --head "$BRANCH" --base main)
           echo "opened: $PR_URL"
           gh pr merge --auto --squash "$PR_URL"
