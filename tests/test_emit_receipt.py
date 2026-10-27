@@ -585,7 +585,12 @@ _OK_SRC = "import sys\nsys.exit(0)\n"
 
 
 def _alive(pid):
-    """True when `pid` is still running. Windows uses tasklist (os.kill(pid, 0) is CTRL_C there)."""
+    """True when `pid` is still running. Windows uses tasklist (os.kill(pid, 0) is CTRL_C there).
+
+    On POSIX a zombie (exited, not yet reaped) still answers os.kill(pid, 0), so it is
+    treated as dead: a zombie is not running. A child of ours is reaped with WNOHANG;
+    a reparented grandchild raises ChildProcessError and falls through to the /proc check.
+    """
     if os.name == "nt":
         out = subprocess.run(["tasklist", "/FI", "PID eq %d" % pid, "/NH"], capture_output=True,
                              encoding="utf-8", errors="replace", timeout=30).stdout
@@ -596,7 +601,20 @@ def _alive(pid):
         return False
     except PermissionError:
         return True
-    return True
+    try:
+        reaped, _ = os.waitpid(pid, os.WNOHANG)
+        if reaped == pid:
+            return False
+    except ChildProcessError:
+        pass
+    try:
+        with open("/proc/%d/stat" % pid, encoding="utf-8", errors="replace") as fh:
+            stat = fh.read()
+    except OSError:
+        return True
+    # Field 3 (after the parenthesised comm, which may contain spaces) is the state.
+    state = stat.rsplit(")", 1)[-1].split()[0] if ")" in stat else ""
+    return state != "Z"
 
 
 def _bounded(fn, budget_s):
