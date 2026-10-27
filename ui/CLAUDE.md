@@ -96,7 +96,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 - **lib/types.ts**: TypeScript types for all API payloads (backend contract).
 - **lib/sanitizeUrl.ts**: XSS-safe URL parsing (inerts PR links on bad schemes).
 - **vite.config.ts**: Vite config with API proxy to :8770.
-- **dist/**: Built static files (committed to git; served by Python handler). Content-hashed by Vite.
+- **dist/**: Built static files (committed to git; served by Python handler). Content-hashed by Vite; rebuilt with vite build on every ui/web dependency bump and committed with the bump (asset hash changes).
 
 **testids-in-fixtures pattern** (both Python + React): Test components with `data-testid` attributes. React tests use `getByTestId()` (via `@testing-library/react`). Python tests use fixtures to set testids for integration proofs. Fixtures use repository-agnostic paths (`<REPO>/` placeholders instead of hardcoded personal paths) for portability across repos/machines.
 

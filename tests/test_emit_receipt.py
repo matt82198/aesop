@@ -692,5 +692,22 @@ class TestPartTimeout(unittest.TestCase):
         self.assertEqual(emit.part_timeout_seconds({}), emit.PART_TIMEOUT_DEFAULT_S)
 
 
+class TestFindOwningShardsDocsOnly(unittest.TestCase):
+    """_find_owning_shards contract: None = FULL matrix, empty set = no python shards.
+    A docs-only change under tools/ owns no python shard and must not fail closed to None."""
+
+    def test_docs_only_tools_change_owning_shards_is_empty_not_none(self):
+        shard_map = {"test_foo": "py-shard-0", "emit_receipt": "py-shard-1"}
+
+        owning = emit._find_owning_shards(["tools/CLAUDE.md"], shard_map)
+        self.assertIsNotNone(owning, "docs-only tools/ change returned None (full 4-shard matrix)")
+        self.assertEqual(owning, set())
+
+        # A tools/ .py change owned by a shard still maps to that shard.
+        owning_mixed = emit._find_owning_shards(
+            ["tools/CLAUDE.md", "tools/emit_receipt.py"], shard_map)
+        self.assertEqual(owning_mixed, {"py-shard-1"})
+
+
 if __name__ == "__main__":
     unittest.main()
