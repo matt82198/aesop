@@ -109,6 +109,7 @@ class TestClaudeMdSyncGate(unittest.TestCase):
             (tmpdir_path / "README.md").write_text("Initial")
             subprocess.run(["git", "add", "README.md"], cwd=tmpdir_path, capture_output=True)
             subprocess.run(["git", "commit", "-m", "Initial"], cwd=tmpdir_path, capture_output=True)
+            subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=tmpdir_path, capture_output=True)
 
             # Add test changes only
             tests_dir = tmpdir_path / "tests"
@@ -150,6 +151,7 @@ class TestClaudeMdSyncGate(unittest.TestCase):
             (tmpdir_path / "README.md").write_text("Initial")
             subprocess.run(["git", "add", "README.md"], cwd=tmpdir_path, capture_output=True)
             subprocess.run(["git", "commit", "-m", "Initial"], cwd=tmpdir_path, capture_output=True)
+            subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=tmpdir_path, capture_output=True)
 
             # Add docs changes only
             docs_dir = tmpdir_path / "docs"
@@ -191,6 +193,7 @@ class TestClaudeMdSyncGate(unittest.TestCase):
             (tmpdir_path / "README.md").write_text("Initial")
             subprocess.run(["git", "add", "README.md"], cwd=tmpdir_path, capture_output=True)
             subprocess.run(["git", "commit", "-m", "Initial"], cwd=tmpdir_path, capture_output=True)
+            subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=tmpdir_path, capture_output=True)
 
             # Modify stats.json only
             (tmpdir_path / "stats.json").write_text('{"key": "value"}')
@@ -233,6 +236,7 @@ class TestClaudeMdSyncGate(unittest.TestCase):
             (tools_dir / "example.py").write_text("print('hello')")
             subprocess.run(["git", "add", "tools/"], cwd=tmpdir_path, capture_output=True)
             subprocess.run(["git", "commit", "-m", "Initial"], cwd=tmpdir_path, capture_output=True)
+            subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=tmpdir_path, capture_output=True)
 
             # Create a second commit to have a valid HEAD~1
             (tmpdir_path / "README.md").write_text("readme")
@@ -282,6 +286,7 @@ class TestClaudeMdSyncGate(unittest.TestCase):
             (tools_dir / "example.py").write_text("print('hello')")
             subprocess.run(["git", "add", "tools/"], cwd=tmpdir_path, capture_output=True)
             subprocess.run(["git", "commit", "-m", "Initial"], cwd=tmpdir_path, capture_output=True)
+            subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=tmpdir_path, capture_output=True)
 
             # Create a second commit to have a valid HEAD~1
             (tmpdir_path / "README.md").write_text("readme")
@@ -331,6 +336,7 @@ class TestClaudeMdSyncGate(unittest.TestCase):
             (tools_dir / "example.py").write_text("print('hello')")
             subprocess.run(["git", "add", "tools/"], cwd=tmpdir_path, capture_output=True)
             subprocess.run(["git", "commit", "-m", "Initial"], cwd=tmpdir_path, capture_output=True)
+            subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=tmpdir_path, capture_output=True)
 
             # Create a second commit to have a valid HEAD~1
             (tmpdir_path / "README.md").write_text("readme")
@@ -375,6 +381,7 @@ class TestClaudeMdSyncGate(unittest.TestCase):
             (tmpdir_path / "README.md").write_text("Initial")
             subprocess.run(["git", "add", "README.md"], cwd=tmpdir_path, capture_output=True)
             subprocess.run(["git", "commit", "-m", "Initial"], cwd=tmpdir_path, capture_output=True)
+            subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=tmpdir_path, capture_output=True)
 
             # Create a second commit with no changes (so HEAD~1 exists)
             (tmpdir_path / "LICENSE").write_text("MIT License")

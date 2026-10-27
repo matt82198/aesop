@@ -105,8 +105,49 @@ def get_domain_for_path(path: str) -> str:
     return None
 
 
+def base_ref_candidates(base_ref: str) -> List[str]:
+    """Ordered base refs tried for --base-ref BASE_REF (GITHUB_BASE_REF first when set).
+
+    A ref already qualified as origin/... or refs/... is used as given. A bare name
+    tries origin/<name> then <name>. Pure string logic, no git calls.
+    """
+    import os
+
+    names = []
+    github_base = os.environ.get("GITHUB_BASE_REF", "")
+    if github_base:
+        names.append(github_base)
+    names.append(base_ref)
+
+    candidates = []
+    for name in names:
+        if name.startswith(("origin/", "refs/")):
+            candidates.append(name)
+        else:
+            candidates.extend([f"origin/{name}", name])
+    return list(dict.fromkeys(candidates))
+
+
+def ref_resolves(repo_root: Path, ref: str) -> bool:
+    """True if `git rev-parse --verify <ref>` succeeds in repo_root."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", ref],
+        capture_output=True,
+        text=True,
+        encoding='utf-8', errors='replace',
+        timeout=10,
+        cwd=repo_root,
+    )
+    return result.returncode == 0
+
+
 def get_git_changed_files(repo_root: Path, base_ref: str = "main") -> Tuple[List[str], bool]:
-    """Get list of changed files via git diff.
+    """Get list of changed files in the committed range `<base>...HEAD`.
+
+    The first candidate from base_ref_candidates() that resolves is the base. If none
+    resolves this is an error (fail closed): there is no silent HEAD~1 fallback, so
+    HEAD~1 is only used when asked for explicitly (--base-ref HEAD~1). The working
+    tree is not read.
 
     Args:
         repo_root: Repository root directory
@@ -115,30 +156,22 @@ def get_git_changed_files(repo_root: Path, base_ref: str = "main") -> Tuple[List
     Returns:
         Tuple of (changed_files, is_error)
     """
-    import os
-
-    # In GitHub Actions PRs, GITHUB_BASE_REF is the target branch name
-    github_base = os.environ.get("GITHUB_BASE_REF", "")
-
-    refs_to_try = []
-    if github_base:
-        refs_to_try.append(f"origin/{github_base}...HEAD")
-    refs_to_try.append(f"origin/{base_ref}...HEAD")
-    refs_to_try.append("HEAD~1...HEAD")
-
     try:
-        for ref_spec in refs_to_try:
+        for candidate in base_ref_candidates(base_ref):
+            if not ref_resolves(repo_root, candidate):
+                continue
             result = subprocess.run(
-                ["git", "diff", "--name-only", ref_spec],
+                ["git", "diff", "--name-only", f"{candidate}...HEAD"],
                 capture_output=True,
                 text=True,
                 encoding='utf-8', errors='replace',
                 timeout=10,
                 cwd=repo_root,
             )
-            if result.returncode == 0:
-                files = [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
-                return files, False
+            if result.returncode != 0:
+                return [], True
+            files = [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
+            return files, False
 
         return [], True
     except subprocess.TimeoutExpired:
@@ -264,15 +297,17 @@ def main():
     changed_files, git_error = get_git_changed_files(repo_root, args.base_ref)
 
     if git_error:
+        tried = ", ".join(base_ref_candidates(args.base_ref))
+        message = f"could not diff against base (tried: {tried}); fail closed, no HEAD~1 fallback"
         if args.json:
             output = {
                 "status": "error",
-                "message": "Failed to get git diff",
+                "message": message,
                 "findings": [],
             }
             print(json.dumps(output, indent=2))
         else:
-            print("Error: Failed to get git diff from origin/main or HEAD~1", file=sys.stderr)
+            print(f"Error: {message}", file=sys.stderr)
         sys.exit(2)
 
     # If no changes, pass
