@@ -3,7 +3,7 @@
 // "subagents are always Haiku" cardinal rule as versioned, executable policy.
 //
 // Wire it in settings.json under hooks.PreToolUse with matcher "Agent|Task"
-// (see docs/HOOK-INSTALL.md). For every subagent dispatch:
+// (see docs/archive/HOOK-INSTALL.md). For every subagent dispatch:
 //
 //   - model absent or non-compliant  -> rewritten to the policy model ("haiku",
 //     or aesop.config.json cardinal_rules.subagent_model when present)

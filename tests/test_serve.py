@@ -598,7 +598,7 @@ class TestCSRFProtection(unittest.TestCase):
         serve = self._load_serve_module()
 
         headers = {"Origin": "https://attacker.com"}
-        is_valid, reason = serve.validate_csrf_request(headers)
+        is_valid, reason = serve.validate_csrf_request(headers, expected_port=8770)
 
         self.assertFalse(is_valid, "Foreign Origin must be rejected")
         self.assertIn("Foreign", reason)
@@ -608,7 +608,7 @@ class TestCSRFProtection(unittest.TestCase):
         serve = self._load_serve_module()
 
         headers = {"Origin": "http://127.0.0.1:8770"}
-        is_valid, reason = serve.validate_csrf_request(headers)
+        is_valid, reason = serve.validate_csrf_request(headers, expected_port=8770)
 
         self.assertFalse(is_valid, "Missing token must be rejected")
         self.assertIn("X-Aesop-Token", reason)
@@ -621,7 +621,7 @@ class TestCSRFProtection(unittest.TestCase):
             "Origin": "http://127.0.0.1:8770",
             "X-Aesop-Token": "invalid-token-value"
         }
-        is_valid, reason = serve.validate_csrf_request(headers)
+        is_valid, reason = serve.validate_csrf_request(headers, expected_port=8770)
 
         self.assertFalse(is_valid, "Invalid token must be rejected")
         self.assertIn("Invalid", reason)
@@ -634,7 +634,7 @@ class TestCSRFProtection(unittest.TestCase):
             "Origin": "http://127.0.0.1:8770",
             "X-Aesop-Token": serve.SESSION_TOKEN
         }
-        is_valid, reason = serve.validate_csrf_request(headers)
+        is_valid, reason = serve.validate_csrf_request(headers, expected_port=8770)
 
         self.assertTrue(is_valid, "Valid token with local origin must be accepted")
         self.assertIsNone(reason)
@@ -647,7 +647,7 @@ class TestCSRFProtection(unittest.TestCase):
             "Origin": "http://localhost:8770",
             "X-Aesop-Token": serve.SESSION_TOKEN
         }
-        is_valid, reason = serve.validate_csrf_request(headers)
+        is_valid, reason = serve.validate_csrf_request(headers, expected_port=8770)
 
         self.assertTrue(is_valid, "Valid token with localhost origin must be accepted")
         self.assertIsNone(reason)
@@ -660,7 +660,7 @@ class TestCSRFProtection(unittest.TestCase):
             "Origin": "https://attacker.com",
             "X-Aesop-Token": serve.SESSION_TOKEN
         }
-        is_valid, reason = serve.validate_csrf_request(headers)
+        is_valid, reason = serve.validate_csrf_request(headers, expected_port=8770)
 
         self.assertFalse(is_valid, "Foreign Origin must be rejected even with valid token")
         self.assertIn("Foreign", reason)
@@ -672,7 +672,7 @@ class TestCSRFProtection(unittest.TestCase):
         headers = {
             "X-Aesop-Token": serve.SESSION_TOKEN
         }
-        is_valid, reason = serve.validate_csrf_request(headers)
+        is_valid, reason = serve.validate_csrf_request(headers, expected_port=8770)
 
         self.assertTrue(is_valid, "Valid token with no Origin/Referer must be accepted (CLI use case)")
         self.assertIsNone(reason)

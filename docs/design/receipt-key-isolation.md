@@ -3,7 +3,7 @@
 Status: design brief (0.10.1-prep item S1). No code changes in this document.
 Scope: `tools/emit_receipt.py`, `tools/receipt_common.py`, `tools/verify_receipt.py`,
 `hooks/pre-push-policy.sh` (receipt section), `.github/workflows/verify-receipt.yml`,
-`docs/RECEIPT-GATE.md`. Every claim about current behaviour cites file:line at
+`docs/archive/RECEIPT-GATE.md`. Every claim about current behaviour cites file:line at
 the base commit `bbe698c5`.
 
 Notation: "lane" = any aesop dispatched agent or session process running as the
@@ -16,7 +16,7 @@ A lane can forge a receipt today. The signing key lives at a path that any
 same-user process can compute and open, and the only check before signing is that
 the file exists. Forgery does not change any merge gate today because the hosted
 `verify-receipt` check is non-required during the measurement period
-(`docs/RECEIPT-GATE.md:3-4`). The severity is therefore High for the integrity of
+(`docs/archive/RECEIPT-GATE.md:3-4`). The severity is therefore High for the integrity of
 the receipt record and Low for merge gating at present. It becomes High as soon as
 a receipt is made required.
 
@@ -77,16 +77,16 @@ subset and is subsumed by C in practice.
   signs the canonical bytes (`tools/receipt_common.py:84-98`).
 - `verify_signature()` uses the PUBLIC key only for Ed25519 (`tools/receipt_common.py:109-137`).
   The verifier holds no secret for Ed25519. The HMAC scheme is symmetric and holds the
-  secret on both sides (`docs/RECEIPT-GATE.md:146-152`; code at `tools/receipt_common.py:118-125`).
+  secret on both sides (`docs/archive/RECEIPT-GATE.md:146-152`; code at `tools/receipt_common.py:118-125`).
 - The verifier trusts the public key and keyring from the BASE tree, not the PR head
   (`.github/workflows/verify-receipt.yml:30-33`, `:142-145`). A lane cannot make its own
   key verify on the hosted check by committing a key on its branch.
-- The hosted check is not required (`docs/RECEIPT-GATE.md:3-4`). The local receipt is
+- The hosted check is not required (`docs/archive/RECEIPT-GATE.md:3-4`). The local receipt is
   the only artifact a lane produces today.
 
 ### 2.4 What the receipt proves, per the project's own doc
 
-`docs/RECEIPT-GATE.md:190-194` says a key holder can sign a receipt that claims green
+`docs/archive/RECEIPT-GATE.md:190-194` says a key holder can sign a receipt that claims green
 shards it never ran, and that the signature "authenticates the claimant, not the claim".
 This brief agrees. Option A closes the signer-identity part of that gap for receipts
 the oracle itself produces, but not for claims the oracle does not run itself.
@@ -100,7 +100,7 @@ not repeated as fact anywhere in this doc:
    (`tools/emit_receipt.py`, `tools/verify_receipt.py`, `tools/receipt_common.py`,
    `tools/receipt_flush.py`, `tools/receipt_autoflush.py`, `tools/receipt_agreement.py`)
    for `chain`, `prev`, `parent` returns nothing relevant. The only hash chain in the
-   repo is the audit log (`hooks/pre-push-policy.sh:444`, `docs/HOOK-INSTALL.md:113`).
+   repo is the audit log (`hooks/pre-push-policy.sh:444`, `docs/archive/HOOK-INSTALL.md:113`).
    A receipt has no link to a prior receipt, so deleting or reordering receipts is not
    detected by any check.
 2. **Canonicalization is JCS-like, not RFC 8785.** `canonical_json` is
@@ -110,7 +110,7 @@ not repeated as fact anywhere in this doc:
    `round(..., 3)` (`tools/emit_receipt.py:267`). Python writes `1.0` where RFC 8785
    writes `1`. A non-Python verifier that implements JCS would reject valid receipts.
 3. **Per-box keys are supported in code.** `tools/receipt_common.py:143-176` implements a
-   keyring of extra Ed25519 public keys, and `docs/RECEIPT-GATE.md:154-159` documents
+   keyring of extra Ed25519 public keys, and `docs/archive/RECEIPT-GATE.md:154-159` documents
    provisioning. The memory note that per-box keys were "deferred 2026-10-14" describes a
    process decision. It does not match the code, and this doc does not assume the
    deferral.
@@ -366,7 +366,7 @@ access control.
 First PR (implementation, after this design is accepted): a non-required CI job that
 runs the four py-shards on the pushed head, writes an in-toto statement with a new
 predicate type, attests it, and a `verify_receipt.py --attestation` mode that is driven
-through its real entry point. No change to required checks (`docs/RECEIPT-GATE.md:3-4`).
+through its real entry point. No change to required checks (`docs/archive/RECEIPT-GATE.md:3-4`).
 Test proof: break the signer-workflow pin in the verifier, show red, restore, show
 green. About 3 Haiku lanes.
 

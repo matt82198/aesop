@@ -20,7 +20,7 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 const REQUIRED_KEYS = [
   // From hooks/claude/force-model-policy.mjs (line 79):
   //   const m = cfg && cfg.cardinal_rules && cfg.cardinal_rules.subagent_model;
-  // Documented at docs/HOOK-INSTALL.md:245-247
+  // Documented at docs/archive/HOOK-INSTALL.md:245-247
   { file: 'hooks/claude/force-model-policy.mjs', keyPath: 'cardinal_rules.subagent_model' },
 
   // From monitor/collect-signals.mjs (lines 32-46):

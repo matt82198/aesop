@@ -28,7 +28,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 **serve.py** (~65 lines): Composition layer. Calls `config.reload()`, `csrf.init()`, `sse.reset_state()`, re-exports their symbols for test suite.
 
 **config.py** (call-time config, load-bearing rule):
-- Path/env/`aesop.config.json` resolution; `reload()` recomputes all paths from current environment.
+- Path/env/`aesop.config.json` resolution; `reload()` recomputes all paths from current environment. A `state_root` starting with `~` is expanded to the home dir before the absolute/relative check (SEM-1; test `tests/test_state_root_expanduser.py`).
 - **RULE: Every other module reads `config.X` at call time (`import config`), NEVER `from config import <path>`.** Frozen imports go stale after `reload()` (breaks test fixture isolation).
 - Exports: `PORT`, `AESOP_ROOT`, `CONFIG_FILE`, `STATE_DIR`, `TRANSCRIPTS_ROOT`, `WEB_DIST`, `WATCHDOG_HEARTBEAT`, `MONITOR_HEARTBEAT`, `REPOS_JSON`, `ALERTS_LOG`, `INBOX_FILE`, `AUDIT_BACKLOG_FILE`, `UI_SESSION_TOKEN_FILE`, `TRACKER_FILE`, `ORCH_STATUS_FILE`, `LEDGER_FILE`, `QUEUE_STATE_DIR` (env `AESOP_QUEUE_STATE`, default `state/merge-queue`), `COLLECTOR_INTERVAL`, `SSE_KEEPALIVE_SECONDS`, `SSE_MAX_CLIENTS`.
 
@@ -96,7 +96,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 - **lib/types.ts**: TypeScript types for all API payloads (backend contract).
 - **lib/sanitizeUrl.ts**: XSS-safe URL parsing (inerts PR links on bad schemes).
 - **vite.config.ts**: Vite config with API proxy to :8770.
-- **dist/**: Built static files (committed to git; served by Python handler). Content-hashed by Vite.
+- **dist/**: Built static files (committed to git; served by Python handler). Content-hashed by Vite; rebuilt with vite build on every ui/web dependency bump and committed with the bump (asset hash changes).
 
 **testids-in-fixtures pattern** (both Python + React): Test components with `data-testid` attributes. React tests use `getByTestId()` (via `@testing-library/react`). Python tests use fixtures to set testids for integration proofs. Fixtures use repository-agnostic paths (`<REPO>/` placeholders instead of hardcoded personal paths) for portability across repos/machines.
 
@@ -108,7 +108,7 @@ is the project's brand). Default mode (no flag) is byte-identical to before.
 
 ## CSRF & Session Protection
 
-43-char URL-safe base64 token, persisted to `state/.ui-session-token` (0600), regenerated if missing. Mutations require Origin/Referer local check + X-Aesop-Token header match (both fail-closed). CLI reads token from file; browser gets it injected into HTML template.
+43-char URL-safe base64 token, persisted to `state/.ui-session-token` (0600), regenerated if missing. Mutations require Origin/Referer local check + X-Aesop-Token header match (both fail-closed). CLI reads token from file; browser gets it injected into HTML template. CSRF trusts only the bound loopback port by default; `AESOP_DASH_DEV_ORIGINS` opts in exact loopback origins with an explicit port (e.g. Vite `http://localhost:5173`), and any local process on an opted-in port can read the session token.
 
 ## SSE Contract
 

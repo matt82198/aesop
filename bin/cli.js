@@ -246,7 +246,39 @@ if (isPythonDispatch && args.length >= 1) {
 const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health', 'health-score', 'reproduce', 'init', 'runner'];
 const isRuntimeCommand = runtimeCommands.includes(args[0]);
 
+// Per-subcommand usage for `<subcommand> --help|-h`. Printed BEFORE any side effect: `init`
+// would otherwise scaffold files and `doctor` would run its readiness check. Each flag listed
+// is one the subcommand already parses (init: the args loop below; doctor: tools/doctor.js).
+const SUBCOMMAND_HELP = {
+  init: {
+    purpose: 'Initialize aesop orchestration in the current repo (CLAUDE.md, config, state, CI, hooks).',
+    flags: ['--name NAME', '--force', '--ci-mode hosted|self-hosted-runner|local-receipt-gate', '--self-hosted-labels L1,L2'],
+  },
+  doctor: {
+    purpose: 'Preflight readiness check (Node, Python, git, config, dirs, hook, port) plus a report-only CI capability table.',
+    flags: ['--json', '--global'],
+  },
+};
+
+/**
+ * Print the usage block for a subcommand that has an entry in SUBCOMMAND_HELP.
+ * @param {string} name subcommand name (a key of SUBCOMMAND_HELP)
+ * @param {(line: string) => void} write writer, e.g. console.log
+ */
+function printSubcommandHelp(name, write) {
+  const entry = SUBCOMMAND_HELP[name];
+  const flagLines = entry.flags.map((flag) => `  ${flag}`).join('\n');
+  write(`\nUsage: aesop ${name} [options]\n\n  ${entry.purpose}\n\nOptions:\n${flagLines}\n  --help, -h              Show this help message\n`);
+}
+
 if (isRuntimeCommand) {
+  // Help check first: no subcommand side effect may run when --help or -h is passed.
+  const subcommandHelpRequested = args.slice(1).some((arg) => arg === '--help' || arg === '-h');
+  if (subcommandHelpRequested && Object.prototype.hasOwnProperty.call(SUBCOMMAND_HELP, args[0])) {
+    printSubcommandHelp(args[0], console.log);
+    process.exit(0);
+  }
+
   // 'runner install|remove' is handled by tools/runner_install.py (preflight via the doctor's
   // capability probe; refuses on Smart App Control / UMCI boxes and on public repos without
   // all_external_contributors fork approval). All flags pass through untouched.
@@ -763,17 +795,53 @@ function isBytecodeEntry(name) {
   return name === '__pycache__' || name.endsWith('.pyc');
 }
 
-function copyRecursive(src, dest) {
+// Directory names that are never template content: installed dependencies, fleet
+// runtime state, VCS metadata, and build/test caches. A tree walk that descends into
+// ui/web/node_modules copies thousands of files and blows the scaffold time budget
+// (f-694132f3). Matched at any depth inside copyRecursive. 'dist' is deliberately
+// absent: ui/web/dist is tracked built dashboard output that the scaffolded UI serves
+// (ui/render.py requires dist/index.html), so a name-based dist skip would break it.
+const IGNORED_ARTIFACT_NAMES = new Set([
+  'node_modules',
+  'aesop-fleet',
+  '.git',
+  'build',
+  'coverage',
+  '.pytest_cache',
+  '.mypy_cache'
+]);
+
+function isIgnoredArtifactEntry(name) {
+  return IGNORED_ARTIFACT_NAMES.has(name);
+}
+
+// Scaffolds do not ship tests (R-AUDIT-TCI-4, same as tests/). A scaffold has no
+// package.json and no test:node runner, so a shipped hooks/**/*.test.mjs is an
+// orphan that blocks the adopter's pre-push coverage gate. Applied to the hooks/
+// copy only; the predicate is name-based and therefore matches at any depth.
+function isShippedHookTestEntry(name) {
+  return name.endsWith('.test.mjs');
+}
+
+// docs/MACHINERY-MAP.md is aesop-only: it cites this repository's own tree (ci.yml,
+// verify-receipt.yml, bin/cli.js, STATE.md), none of which a scaffold ships, so
+// check_machinery_map_symbols would fail in every adopter tree. Skipped by exact
+// filename, applied to the docs/ copy only.
+function isAesopOnlyDocEntry(name) {
+  return name === 'MACHINERY-MAP.md';
+}
+
+function copyRecursive(src, dest, skipEntry = () => false) {
   const stat = fs.statSync(src);
   if (stat.isDirectory()) {
     if (!fs.existsSync(dest)) {
       fs.mkdirSync(dest, { recursive: true });
     }
-    const entries = fs.readdirSync(src).filter(entry => !isBytecodeEntry(entry));
+    const entries = fs.readdirSync(src).filter(entry => !isBytecodeEntry(entry) && !isIgnoredArtifactEntry(entry) && !skipEntry(entry));
     entries.forEach(entry => {
       const srcFile = path.join(src, entry);
       const destFile = path.join(dest, entry);
-      copyRecursive(srcFile, destFile);
+      copyRecursive(srcFile, destFile, skipEntry);
     });
   } else {
     fs.copyFileSync(src, dest);
@@ -1651,7 +1719,10 @@ if (!isRuntimeCommand) {
       const src = path.join(templateRoot, item);
       const dest = path.join(finalTargetDir, item);
       if (fs.existsSync(src)) {
-        copyRecursive(src, dest);
+        let skipEntry;
+        if (item === 'hooks') skipEntry = isShippedHookTestEntry;
+        else if (item === 'docs') skipEntry = isAesopOnlyDocEntry;
+        copyRecursive(src, dest, skipEntry);
         console.log(`✓ Copied ${item}`);
       }
     });

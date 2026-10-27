@@ -956,5 +956,33 @@ class TestAesopEscapeVariables(unittest.TestCase):
         self.assertNotIn("aesop_escape_variable", self._patterns(body))
 
 
+class TestDispatchLintConsoleEncoding(unittest.TestCase):
+    """The verdict must print on a cp1252 console instead of crashing with
+    UnicodeEncodeError on a finding whose text contains non-cp1252 characters."""
+
+    def test_non_cp1252_finding_prints_verdict_without_traceback(self):
+        import os
+        tool = Path(__file__).resolve().parent.parent / "tools" / "dispatch_lint.py"
+        env = dict(os.environ, PYTHONIOENCODING="cp1252")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bad = Path(tmpdir) / "dispatch.md"
+            # U+2192 RIGHTWARDS ARROW is not encodable in cp1252.
+            bad.write_text(
+                "Agent()\ngh pr merge 12 --admin → run now\n", encoding="utf-8"
+            )
+            # No -I: -I implies -E, which ignores PYTHONIOENCODING and would
+            # hide the cp1252 stdout encoding this test is about.
+            result = subprocess.run(
+                [sys.executable, str(tool), tmpdir, "--check"],
+                capture_output=True, encoding="utf-8", errors="replace",
+                timeout=120, env=env,
+            )
+            self.assertNotIn("Traceback", result.stderr, result.stderr)
+            self.assertNotIn("UnicodeEncodeError", result.stderr, result.stderr)
+            self.assertIn("admin_flag", result.stdout, result.stdout)
+            self.assertIn("gh pr merge 12 --admin", result.stdout, result.stdout)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

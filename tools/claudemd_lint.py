@@ -371,13 +371,25 @@ def _require_trunk(repo_root: Path) -> str:
     return trunk
 
 
+def _wc_line_count(text: str) -> int:
+    """Line count with `wc -l` semantics: each newline-terminated line counts 1.
+
+    An unterminated trailing fragment adds one more line. Empty text is 0 lines.
+    This is the ONE counter both the working-tree cap (lint_claudemd) and the
+    merge-union headroom check (_count_lines) use, so they cannot disagree.
+    """
+    if not text:
+        return 0
+    return text.count("\n") + (0 if text.endswith("\n") else 1)
+
+
 def _count_lines(blob: bytes, where: str) -> int:
-    """Line count using the same convention as lint_claudemd (content.split('\\n'))."""
+    """Line count of a blob via _wc_line_count (wc -l semantics)."""
     try:
         text = blob.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise HeadroomError(f"{where}: not valid UTF-8 ({exc})")
-    return len(text.split("\n"))
+    return _wc_line_count(text)
 
 
 def _tracked_claudemd_paths(repo_root: Path, ref: str) -> List[str]:
@@ -562,7 +574,7 @@ def lint_claudemd(
             "message": f"Failed to read {claudemd_path.relative_to(repo_root)}: {e}",
         }]
 
-    lines = content.split("\n")
+    line_count = _wc_line_count(content)
     rel = str(claudemd_path.relative_to(repo_root)).replace("\\", "/")
 
     # Generated-file sentinel: a CLAUDE.md is an AUTHORED file, so it must NEVER
@@ -585,12 +597,12 @@ def lint_claudemd(
     effective_max = effective_max_lines(rel, max_lines)
 
     # Check line count (sentinel-bearing generated files are exempt from the cap)
-    if not has_sentinel and len(lines) > effective_max:
+    if not has_sentinel and line_count > effective_max:
         findings.append({
             "type": "line-count",
-            "line": str(len(lines)),
+            "line": str(line_count),
             "message": f"{claudemd_path.relative_to(repo_root)}: "
-                       f"{len(lines)} lines exceeds max {effective_max}",
+                       f"{line_count} lines exceeds max {effective_max}",
         })
 
     # Check if content endorses pytest but repo uses unittest

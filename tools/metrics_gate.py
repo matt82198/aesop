@@ -54,6 +54,7 @@ class MetricsGate:
     PERCENTAGE_PATTERN = re.compile(r'\d+\s*%')
     MULTIPLIER_PATTERN = re.compile(r'\d+\s*[x×]\s*(?:faster|slower|more|less|bigger|smaller|better|worse|improvement|increase|decrease|growth)')
     DOLLAR_PATTERN = re.compile(r'\$\s*\d+')
+    HTML_COMMENT_PATTERN = re.compile(r'<!--.*?-->', re.DOTALL)
 
     # Exclusion patterns
     VERSION_PATTERN = re.compile(r'\bv?\d+\.\d+(?:\.\d+)?(?:[.-](?:alpha|beta|rc|a|b)\d*)?\b')
@@ -177,8 +178,13 @@ class MetricsGate:
         claims.extend(self.PERCENTAGE_PATTERN.findall(text))
         # Find multipliers
         claims.extend(self.MULTIPLIER_PATTERN.findall(text))
-        # Find dollar amounts
-        claims.extend(self.DOLLAR_PATTERN.findall(text))
+        # Find dollar amounts, skipping matches inside an HTML comment span: a
+        # command transcript such as awk '{print $1}' in a comment is not a dollar claim.
+        comment_spans = [m.span() for m in self.HTML_COMMENT_PATTERN.finditer(text)]
+        for m in self.DOLLAR_PATTERN.finditer(text):
+            if any(start <= m.start() < end for start, end in comment_spans):
+                continue
+            claims.append(m.group(0))
         return claims
 
     def is_retracted(

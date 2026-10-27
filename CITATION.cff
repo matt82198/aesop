@@ -11,7 +11,7 @@ authors:
     alias: matt82198
 version: 0.9.0
 date-released: "2026-10-06"
-license: PolyForm-Noncommercial-1.0.0
+license: MIT
 repository-code: "https://github.com/matt82198/aesop"
 url: "https://github.com/matt82198/aesop"
 abstract: >-
@@ -56,5 +56,5 @@ references:
     year: 2026
     notes: >-
       Internal whitepaper; not submitted for external publication. Draft:
-      https://github.com/matt82198/aesop/blob/main/docs/crash-only-whitepaper.md
+      https://github.com/matt82198/aesop/blob/main/docs/archive/crash-only-whitepaper.md
       (first committed 2026-07-29, commit 74cdcf20).

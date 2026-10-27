@@ -108,11 +108,15 @@ def reload():
             config_data.get("state_root", str(AESOP_ROOT / "state"))
         )
     )
-    # A relative config state_root resolves against the config file's directory,
+    # A config state_root beginning with "~" expands to the user's home first, so the
+    # absolute/relative decision sees the real path (SEM-1: "~/.aesop-state" must not
+    # be joined onto AESOP_ROOT as a literal "~" directory).
+    # A relative config state_root (after expansion) resolves against AESOP_ROOT,
     # matching tools/common.get_state_dir() (parity; env value is taken as given).
-    if not os.getenv("AESOP_STATE_ROOT") and "state_root" in config_data \
-            and not STATE_DIR.is_absolute():
-        STATE_DIR = AESOP_ROOT / STATE_DIR
+    if not os.getenv("AESOP_STATE_ROOT") and "state_root" in config_data:
+        STATE_DIR = STATE_DIR.expanduser()
+        if not STATE_DIR.is_absolute():
+            STATE_DIR = AESOP_ROOT / STATE_DIR
 
     # TRANSCRIPTS_ROOT: env AESOP_TRANSCRIPTS_ROOT > config transcripts_root > ~/.claude/projects
     TRANSCRIPTS_ROOT = Path(
