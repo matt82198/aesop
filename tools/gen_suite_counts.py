@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Live test-suite-count library: derives Node/Shell/Python suite counts from git ls-files.
-INDEX: Live suite-count library (no stored artifact): derives Node/Shell/Python test-suite counts straight from `git ls-files` on every call; stdlib-only, deterministic, ASCII-safe; counts never derive to zero (fail-closed). `--json` (default, read-only) prints the live counts; there is no `--check`/`--regenerate` mode and nothing is written anywhere, because as of structural fix #830 there is no committed tests/SUITE-COUNTS.json left to drift or regenerate -- counts are a pure function of the tree, computed fresh on every call, so nothing can go stale. Counts are derived per UNIQUE path, not per `git ls-files` line: an unmerged path is listed once per index stage (1=base/2=ours/3=theirs), and one file can match two shell globs at once, so a naive line-count over-counts (bit PRs #710/#711 under the old tests/CLAUDE.md-line gate); `list_git_files()` collects into a Python set to fix both. A merge in progress (MERGE_HEAD set) is a loud, non-fatal stderr `[WARN]` rather than a refusal, since conflict resolution is exactly when counts legitimately move. Consumed by `tools/verify_test_suite_count.py` (CI-shard-coverage gate) and `tests/test_list_test_suites.py` / `tests/test_tests_claudemd_drift.py` as the live ground truth.
+INDEX: Live suite-count library (no stored artifact): derives Node/Shell/Python test-suite counts straight from `git ls-files` on every call; stdlib-only, deterministic, ASCII-safe; counts never derive to zero (fail-closed); retries one transient git failure and reports git stderr. `--json` (default, read-only) prints the live counts; there is no `--check`/`--regenerate` mode and nothing is written anywhere, because as of structural fix #830 there is no committed tests/SUITE-COUNTS.json left to drift or regenerate -- counts are a pure function of the tree, computed fresh on every call, so nothing can go stale. Counts are derived per UNIQUE path, not per `git ls-files` line: an unmerged path is listed once per index stage (1=base/2=ours/3=theirs), and one file can match two shell globs at once, so a naive line-count over-counts (bit PRs #710/#711 under the old tests/CLAUDE.md-line gate); `list_git_files()` collects into a Python set to fix both. A merge in progress (MERGE_HEAD set) is a loud, non-fatal stderr `[WARN]` rather than a refusal, since conflict resolution is exactly when counts legitimately move. Consumed by `tools/verify_test_suite_count.py` (CI-shard-coverage gate) and `tests/test_list_test_suites.py` / `tests/test_tests_claudemd_drift.py` as the live ground truth.
 
 Why there is no artifact any more (PR #830, "guard: compute suite counts live"):
 tests/SUITE-COUNTS.json was a committed snapshot of this module's own output, rewritten by
@@ -26,6 +26,7 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Dict
 
@@ -44,6 +45,11 @@ if sys.stderr.encoding and 'utf' not in sys.stderr.encoding.lower():
 
 
 LABELS = ("Node", "Shell", "Python")
+
+# A transient git failure (e.g. index.lock contention between concurrent matrices)
+# is retried this many times after the first failure, with a short backoff.
+GIT_LS_FILES_RETRIES = 1
+GIT_LS_FILES_RETRY_DELAY_S = 0.5
 
 
 class StructureError(Exception):
@@ -159,25 +165,37 @@ def list_git_files(repo_root: Path, *patterns: str) -> set:
             failure here reads as a count of zero, i.e. fake-green).
     """
     paths = set()
+    attempts = GIT_LS_FILES_RETRIES + 1
     for pattern in patterns:
-        try:
-            result = subprocess.run(
-                ["git", "ls-files", pattern],
-                cwd=str(repo_root),
-                capture_output=True,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
-                check=True,
-                timeout=10,
-            )
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
-                FileNotFoundError, OSError) as exc:
-            raise StructureError(
-                f"[ERROR] Cannot derive test suite counts: 'git ls-files {pattern}' "
-                f"failed in {repo_root}: {type(exc).__name__}",
-                2,
-            )
+        for attempt in range(1, attempts + 1):
+            try:
+                result = subprocess.run(
+                    ["git", "ls-files", pattern],
+                    cwd=str(repo_root),
+                    capture_output=True,
+                    text=True,
+                    encoding='utf-8',
+                    errors='replace',
+                    check=True,
+                    timeout=10,
+                )
+                break
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
+                    FileNotFoundError, OSError) as exc:
+                if attempt < attempts:
+                    time.sleep(GIT_LS_FILES_RETRY_DELAY_S)
+                    continue
+                # Report git's own stderr; fall back to the class name only when
+                # git wrote nothing (e.g. FileNotFoundError has no stderr at all).
+                raw_stderr = getattr(exc, "stderr", None) or ""
+                if isinstance(raw_stderr, bytes):
+                    raw_stderr = raw_stderr.decode("utf-8", errors="replace")
+                detail = raw_stderr.strip() or type(exc).__name__
+                raise StructureError(
+                    f"[ERROR] Cannot derive test suite counts: 'git ls-files {pattern}' "
+                    f"failed (cwd: {repo_root}) after {attempts} attempt(s): {detail}",
+                    2,
+                )
         # splitlines(), not strip().split("\n"): a path is only ever mangled by
         # stripping, and git quotes any path that could contain a newline.
         for line in result.stdout.splitlines():
