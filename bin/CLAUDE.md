@@ -22,9 +22,9 @@
 - `npx @matt82198/aesop wizard --yes` → uses all defaults, no prompts (CI-safe)
 - Non-TTY input auto-skips prompts
 
-**Runtime commands** (after scaffolding; dispatch pattern in cli.js). `init --help|-h` and `doctor --help|-h` print a per-subcommand usage block (`SUBCOMMAND_HELP` in `cli.js`) and exit 0 before any side effect (no scaffolding, no readiness run). Test: `tests/cli-subcommand-help.test.mjs`.
+**Runtime commands** (after scaffolding; dispatch pattern in cli.js). `doctor`, `watch`, `dash`, `status`, `fleet`, `health`, `health-score`, `reproduce`, `init` and `runner` (`install|remove`) are dispatched from cli.js. Every one of them except `health` prints a per-subcommand usage block on `--help|-h` (`SUBCOMMAND_HELP` in `cli.js`) and exits 0 before any side effect (no scaffolding, no readiness run, no dashboard launch). `health` is a Python namespace (`pythonNamespaces`), so `health --help|-h` prints the namespace usage and verb list instead (exit 0, before dispatch). Tests: `tests/cli-subcommand-help.test.mjs` (init, doctor), `tests/cli-runtime-help.test.mjs` (the rest).
 ```javascript
-const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health', 'health-score', 'reproduce', 'init'];
+const runtimeCommands = ['doctor', 'watch', 'dash', 'status', 'fleet', 'health', 'health-score', 'reproduce', 'init', 'runner'];
 // 'init' dispatches to Python: spawnSync('python3', ['tools/init_project.py', '--dir', '.', ...])
 // All others load+run a Node module:
 const commandMap = {
