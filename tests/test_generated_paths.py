@@ -36,9 +36,11 @@ import shutil
 import importlib.util
 import os
 
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -241,6 +243,20 @@ class TestCliContract(CliTestCase):
         self.assertIn(generated_paths.ALLOW_ENV, res.stdout)
 
 
+def _rmtree_chmod_onerror(func, path, exc_info):
+    """shutil.rmtree onerror: clear the read-only bit, then retry the failed op.
+
+    Windows refuses to unlink read-only files (git marks pack files that way).
+    The chmod is best effort; the retry raises if the entry is still busy, so
+    a real failure is never swallowed.
+    """
+    try:
+        os.chmod(path, stat.S_IWRITE)
+    except OSError:
+        pass
+    func(path)
+
+
 @unittest.skipIf(BASH is None, "usable bash unavailable")
 class TestPrePushGate(unittest.TestCase):
     """Drive hooks/pre-push-policy.sh check_generated_paths() directly."""
@@ -257,7 +273,29 @@ class TestPrePushGate(unittest.TestCase):
             encoding="utf-8", newline="\n")
 
     def tearDown(self):
-        self._tmp.cleanup()
+        # check_generated_paths() and the git helpers all run under
+        # subprocess.run (synchronous), so no detached child can still write
+        # into the tree here; receipt_autoflush --spawn is only reached from
+        # check_emit_receipt(), which this fixture never drives.
+        # Cleanup can still lose a race with a late writer (Windows: Errno 39 /
+        # sharing violation; Linux: Errno 39 Directory not empty). Retry the
+        # cleanup with a 0.2 s doubling backoff. The final attempt uses
+        # shutil.rmtree with a chmod-and-retry onerror and does NOT ignore
+        # errors, so a directory that survives still fails the test.
+        root = self._tmp.name
+        delay = 0.2
+        for attempt in range(4):
+            try:
+                if attempt < 3:
+                    self._tmp.cleanup()
+                else:
+                    shutil.rmtree(root, onerror=_rmtree_chmod_onerror)
+                return
+            except OSError:
+                if attempt == 3:
+                    raise
+                time.sleep(delay)
+                delay *= 2
 
     def git(self, repo, *args):
         return subprocess.run(  # subprocess-ok

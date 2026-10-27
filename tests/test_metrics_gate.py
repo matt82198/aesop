@@ -230,6 +230,33 @@ class TestMetricsGate(unittest.TestCase):
             self.assertEqual(exit_code, 1)
             self.assertTrue("5x" in stdout or "5x" in stderr or "faster" in stdout or "faster" in stderr)
 
+    def test_awk_field_refs_in_html_comment_not_flagged(self):
+        """Test: awk field refs ($1 $2 $7) inside an HTML comment are not dollar metrics.
+
+        Row f-91214b7d: a command transcript in a comment is not a claim, so only the
+        genuine unverified '40%' line may be flagged.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            repo = Path(tmpdir)
+            self._init_repo(repo)
+            self._commit(repo, "# Test\n", "initial")
+            self._commit(
+                repo,
+                "# Test\n\n"
+                "<!-- CMD: awk '{print $1, $2, $7}' file.log -->\n"
+                "latency improved 40% after the change\n",
+                "add-awk-and-metric",
+            )
+
+            exit_code, stdout, stderr = self.run_metrics_gate(repo, "HEAD~1...HEAD")
+            combined = stdout + stderr
+            hits = [line for line in combined.splitlines() if "unverified metric" in line]
+            self.assertEqual(exit_code, 1, combined)
+            self.assertEqual(len(hits), 1, combined)
+            self.assertIn("'40%'", hits[0])
+            for ref in ("$1", "$2", "$7"):
+                self.assertNotIn("'" + ref + "'", combined)
+
 
 CLAIM_ENTRY = "- 2026-10-20 12:47Z CI-QUEUE: 292 runs, 83% on superseded heads.\n"
 RETRACTION = (

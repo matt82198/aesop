@@ -4,7 +4,7 @@
 
 ## What the Hook Does
 
-`hooks/pre-push-policy.sh` runs these checks in order on every push (17 `check_*` functions):
+`hooks/pre-push-policy.sh` runs these checks in order on every push (23 `check_*` functions):
 1. **Branch Policy** — no direct pushes to `main`/`master` (feature branches only)
 2. **Secret Scan** — `tools/secret_scan.py --staged` blocks credentials
 3. **Tracker Guard**
