@@ -763,6 +763,26 @@ function isBytecodeEntry(name) {
   return name === '__pycache__' || name.endsWith('.pyc');
 }
 
+// Directory names that are never template content: installed dependencies, fleet
+// runtime state, VCS metadata, and build/test caches. A tree walk that descends into
+// ui/web/node_modules copies thousands of files and blows the scaffold time budget
+// (f-694132f3). Matched at any depth inside copyRecursive. 'dist' is deliberately
+// absent: ui/web/dist is tracked built dashboard output that the scaffolded UI serves
+// (ui/render.py requires dist/index.html), so a name-based dist skip would break it.
+const IGNORED_ARTIFACT_NAMES = new Set([
+  'node_modules',
+  'aesop-fleet',
+  '.git',
+  'build',
+  'coverage',
+  '.pytest_cache',
+  '.mypy_cache'
+]);
+
+function isIgnoredArtifactEntry(name) {
+  return IGNORED_ARTIFACT_NAMES.has(name);
+}
+
 // Scaffolds do not ship tests (R-AUDIT-TCI-4, same as tests/). A scaffold has no
 // package.json and no test:node runner, so a shipped hooks/**/*.test.mjs is an
 // orphan that blocks the adopter's pre-push coverage gate. Applied to the hooks/
@@ -777,7 +797,7 @@ function copyRecursive(src, dest, skipEntry = () => false) {
     if (!fs.existsSync(dest)) {
       fs.mkdirSync(dest, { recursive: true });
     }
-    const entries = fs.readdirSync(src).filter(entry => !isBytecodeEntry(entry) && !skipEntry(entry));
+    const entries = fs.readdirSync(src).filter(entry => !isBytecodeEntry(entry) && !isIgnoredArtifactEntry(entry) && !skipEntry(entry));
     entries.forEach(entry => {
       const srcFile = path.join(src, entry);
       const destFile = path.join(dest, entry);
