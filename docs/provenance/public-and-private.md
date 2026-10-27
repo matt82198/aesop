@@ -21,7 +21,7 @@ reproduce the blueprint. It exists so that nothing on the other pages reads as s
 [docs/PROVENANCE.md](../PROVENANCE.md) is a table of 16 first-commit shas with UTC dates, signed by an
 Ed25519 receipt ([docs/PROVENANCE.receipt.json](../PROVENANCE.receipt.json)).
 
-<!-- CMD: grep -E '^\| [0-9]+ ' docs/PROVENANCE.md | awk -F'|' '{print $7}' | sed 's/ *$//;s/^ *//' | sort | uniq -c
+<!-- CMD: grep -E '^\| [0-9]+ ' docs/PROVENANCE.md | cut -d'|' -f7 | sed 's/ *$//;s/^ *//' | sort | uniq -c
 OUTPUT:
       5 aesop (public)
       9 claude-config (private)

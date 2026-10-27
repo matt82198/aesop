@@ -28,7 +28,7 @@ history.
 Every row in the committed ledger is currently marked inferred. None carries an explicit trailer. That makes
 these counts a keyword classification of commit subjects, not a reviewed taxonomy.
 
-<!-- CMD: grep -E '^\| [a-z-]+ \(inferred\)' docs/INCIDENTS.md | awk -F'|' '{print $2}' | sed 's/ (inferred) *//;s/^ *//' | sort | uniq -c
+<!-- CMD: grep -E '^\| [a-z-]+ \(inferred\)' docs/INCIDENTS.md | cut -d'|' -f2 | sed 's/ (inferred) *//;s/^ *//' | sort | uniq -c
 OUTPUT:
       1 ci-drift
      21 conflict
