@@ -269,6 +269,25 @@ get_default_branch() {
   (cd "$repo" && git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's/refs\/remotes\/origin\///' || echo "master")
 }
 
+discover_repos() {
+  local processed_paths="$1"
+  local discovery_file="$2"
+  : > "$discovery_file"
+  for dir in ~/.* ~/* ~/dev/*; do
+    base=$(basename "$dir")
+    [ "$base" = "." ] || [ "$base" = ".." ] && continue
+    [ ! -d "$dir/.git" ] && continue
+    real_dir=$(cd "$dir" && pwd 2>/dev/null)
+    if [ -z "$real_dir" ]; then continue; fi
+    if echo "$processed_paths" | grep -Fxq "$real_dir"; then
+      continue
+    fi
+    if is_touched "$dir"; then
+      printf '%s\n' "$dir"
+    fi
+  done >> "$discovery_file"
+}
+
 process_repo() {
   local repo="$1"
   local name=$(basename "$repo")
@@ -482,52 +501,48 @@ $real_dir"
   else
     # AUDIT FIX 1: Fall back to autodiscovery only when no repos configured
     log "No repos configured, using autodiscovery"
-    # Discover all git repos: scan home dot-directories, root directories, dev/ subdirectory
-    # This pattern includes ~/.* (dot-dirs like .claude), ~/* (home root), ~/dev/* (dev subtree)
-    for dir in ~/.* ~/* ~/dev/*; do
-      base=$(basename "$dir")
-      [ "$base" = "." ] || [ "$base" = ".." ] && continue
-      [ ! -d "$dir/.git" ] && continue
-
-      # Normalize path to detect duplicates (e.g., .claude vs .claude/)
+    local discovery_file
+    discovery_file=$(mktemp) || {
+      log "ERROR: cannot create autodiscovery scratch file; skipping autodiscovery"
+      echo "]" >> "$temp_json"
+      mv "$temp_json" "$REPOS_STATUS"
+      exit 0
+    }
+    timeout "$AUTODISCOVERY_TIMEOUT" discover_repos "$processed_paths" "$discovery_file" 2>&1 || {
+      local disc_exit=$?
+      if [ "$disc_exit" -eq 124 ]; then
+        log "WARN: autodiscovery timed out after ${AUTODISCOVERY_TIMEOUT}s; processing discovered repos"
+      else
+        log "WARN: autodiscovery failed (exit $disc_exit)"
+      fi
+    }
+    while IFS= read -r dir; do
+      [ -z "$dir" ] && continue
       real_dir=$(cd "$dir" && pwd 2>/dev/null)
       if [ -z "$real_dir" ]; then continue; fi
-      if echo "$processed_paths" | grep -Fxq "$real_dir"; then
-        continue
-      fi
       processed_paths="$processed_paths
 $real_dir"
-
-      if is_touched "$dir"; then
-        # P0 FIX: Eliminate $() command substitution to preserve NUL bytes in protocol
-        # Direct redirect maintains NUL delimiters (process_repo emits STATE\0name format)
-        temp_result=$(mktemp)
-        # Wrap process_repo in bounded timeout (per-repo operation timeout)
-        timeout "$REPO_OPERATION_TIMEOUT" process_repo "$dir" > "$temp_result" 2>&1
-        local proc_exit=$?
-        if [ "$proc_exit" -eq 124 ]; then
-          # Timeout hit: log as TIMEOUT status
-          log_err "TIMEOUT: $(basename "$dir") exceeded ${REPO_OPERATION_TIMEOUT}s timeout"
-          printf 'TIMEOUT\0%s\n' "$(basename "$dir")" > "$temp_result"
-        fi
-        # Read first field (state) and second field (name) using NUL delimiter
-        # Portable solution: use awk with RS="\0" instead of GNU sed \x0 (BSD/macOS compatible)
-        state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$temp_result")
-        name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$temp_result" | tr -d '\n')
-        rm -f "$temp_result"
-        [ -z "$state" ] && continue
-        [ "$state" = "BLOCKED" ] && { any_blocked=1; blocked_names="$blocked_names$name"$'\n'; }
-        if [ "$first" = 1 ]; then
-          first=0
-        else
-          echo "," >> "$temp_json"
-        fi
-        # P2 FIX: JSON-escape all interpolated values before emitting
-        # P2 FIX: Portable date format (not GNU-only date -Iseconds)
-        printf '{"repo":"%s","state":"%s","age":"%s"}' "$(json_escape "$name")" "$(json_escape "$state")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$temp_json"
-        log "$state: $name"
+      temp_result=$(mktemp)
+      timeout "$REPO_OPERATION_TIMEOUT" process_repo "$dir" > "$temp_result" 2>&1
+      local proc_exit=$?
+      if [ "$proc_exit" -eq 124 ]; then
+        log_err "TIMEOUT: $(basename "$dir") exceeded ${REPO_OPERATION_TIMEOUT}s timeout"
+        printf 'TIMEOUT\0%s\n' "$(basename "$dir")" > "$temp_result"
       fi
-    done
+      state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$temp_result")
+      name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$temp_result" | tr -d '\n')
+      rm -f "$temp_result"
+      [ -z "$state" ] && continue
+      [ "$state" = "BLOCKED" ] && { any_blocked=1; blocked_names="$blocked_names$name"$'\n'; }
+      if [ "$first" = 1 ]; then
+        first=0
+      else
+        echo "," >> "$temp_json"
+      fi
+      printf '{"repo":"%s","state":"%s","age":"%s"}' "$(json_escape "$name")" "$(json_escape "$state")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$temp_json"
+      log "$state: $name"
+    done < "$discovery_file"
+    rm -f "$discovery_file"
   fi
 
   echo "" >> "$temp_json"
