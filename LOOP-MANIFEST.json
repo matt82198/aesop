@@ -22,7 +22,9 @@
       "reason": "per-cycle backup worker run by the watchdog loop; writes the heartbeat on a completed cycle",
       "tests": [
         "tests/test-backup-fleet-heartbeat-guard.sh",
-        "tests/test-backup-fleet-secret-gate.sh"
+        "tests/test-backup-fleet-secret-gate.sh",
+        "tests/test-backup-fleet-blocked-heartbeat.sh",
+        "tests/backup-fleet.test.sh"
       ]
     },
     {
