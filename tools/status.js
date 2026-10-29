@@ -16,10 +16,48 @@
 const fs = require('fs');
 const path = require('path');
 const net = require('net');
+const os = require('os');
 const { execSync } = require('child_process');
 
 const CURRENT_DIR = process.cwd();
 const HEARTBEAT_STALE_THRESHOLD = 300; // seconds
+
+/**
+ * Resolve heartbeat path with fallback chain to conductor3 location.
+ *
+ * Precedence:
+ * 1. Environment variable (e.g., AESOP_WATCHDOG_HEARTBEAT)
+ * 2. conductor3 location (shared orchestration state)
+ * 3. Local fallback (aesop/state location)
+ *
+ * @param {string} envVar - Environment variable name to check
+ * @param {string} conductor3Path - Path in conductor3 root
+ * @param {string} fallbackPath - Local fallback path
+ * @returns {string} Resolved heartbeat path
+ */
+function resolveHeartbeatPath(envVar, conductor3Path, fallbackPath) {
+  // 1. Environment variable takes highest priority
+  const envValue = process.env[envVar];
+  if (envValue) {
+    const expandedPath = envValue.replace('~', os.homedir());
+    if (fs.existsSync(expandedPath)) {
+      return expandedPath;
+    }
+  }
+
+  // 2. Try conductor3 location (preferred for multi-instance state)
+  if (conductor3Path && fs.existsSync(conductor3Path)) {
+    return conductor3Path;
+  }
+
+  // 3. Try fallback location (local aesop state)
+  if (fallbackPath && fs.existsSync(fallbackPath)) {
+    return fallbackPath;
+  }
+
+  // Return preferred location even if it doesn't exist (will report as MISSING)
+  return conductor3Path || fallbackPath;
+}
 
 // ANSI color helpers
 const COLORS = {
@@ -143,8 +181,14 @@ function formatStatusLine(label, value, color = COLORS.RESET) {
   try {
     console.log(`\n${COLORS.BOLD}Aesop Fleet Status${COLORS.RESET}\n`);
 
-    // Watchdog heartbeat
-    const watchdogPath = path.join(CURRENT_DIR, 'state', '.watchdog-heartbeat');
+    // Resolve conductor3 root (env var or default to ~/conductor3)
+    const conductor3Root = process.env.AESOP_CONDUCTOR3_ROOT || path.join(os.homedir(), 'conductor3');
+
+    // Watchdog heartbeat: prefer conductor3/state/.watchdog-heartbeat, fallback to local aesop/state
+    const watchdogConductorPath = path.join(conductor3Root, 'state', '.watchdog-heartbeat');
+    const watchdogLocalPath = path.join(CURRENT_DIR, 'state', '.watchdog-heartbeat');
+    const watchdogPath = resolveHeartbeatPath('AESOP_WATCHDOG_HEARTBEAT', watchdogConductorPath, watchdogLocalPath);
+
     const watchdogTimestamp = readHeartbeat(watchdogPath);
     const watchdogStatus = getHeartbeatStatus(watchdogTimestamp);
     const watchdogLine = watchdogStatus.age !== null
@@ -154,8 +198,11 @@ function formatStatusLine(label, value, color = COLORS.RESET) {
       formatStatusLine('Watchdog heartbeat', watchdogLine, watchdogStatus.color)
     );
 
-    // Monitor heartbeat
-    const monitorPath = path.join(CURRENT_DIR, 'state', 'monitor', '.monitor-heartbeat');
+    // Monitor heartbeat: prefer conductor3/monitor/.monitor-heartbeat, fallback to local aesop/state/monitor
+    const monitorConductorPath = path.join(conductor3Root, 'monitor', '.monitor-heartbeat');
+    const monitorLocalPath = path.join(CURRENT_DIR, 'state', 'monitor', '.monitor-heartbeat');
+    const monitorPath = resolveHeartbeatPath('AESOP_MONITOR_HEARTBEAT', monitorConductorPath, monitorLocalPath);
+
     const monitorTimestamp = readHeartbeat(monitorPath);
     const monitorStatus = getHeartbeatStatus(monitorTimestamp);
     const monitorLine = monitorStatus.age !== null
