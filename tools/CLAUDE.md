@@ -50,6 +50,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 
 ## Recent additions (2026-10)
 
+- `healthcheck.py` UTF-8 encoding fix (2026-10-29): The health check command prints emoji (🟢/🟡/🔴) to stdout, which crashed with "charmap can't encode" on Windows cp1252 consoles. Fixed by reconfiguring sys.stdout and sys.stderr to UTF-8 with errors='replace' at the entry point, guarded by hasattr() for compatibility. Test: `tests/test_healthcheck_utf8.py::TestHealthcheckUTF8Encoding::test_healthcheck_runs_on_cp1252_console` runs with PYTHONIOENCODING=cp1252 and verifies no crash. Fixes finding f-6905850f.
 - `linux_shape_check.py` — cross-platform test gate: detects commits touching shell/workflow/Node files, runs their suites NATIVELY on a non-Windows host (`run_native_leg`; WSL never probed) or under WSL on Windows (`wsl_status` tri-state; NOTICE skip when absent/no-distro, probe error exits 1). Catches Windows-only CI reds (isolated-home USERPROFILE, Ubuntu shell failures). Wired into pre-push-policy.sh after generated_paths check; unit cases in tests/test_linux_shape_check.py. Receipt part `linux-shape` (`requires_wsl`) is skipped when WSL is absent/no-distro; a probe error fails closed. Both legs (WSL and native Linux host) build their suite through one shared builder (`tripwired_argv`), so Node and Shell suites run through `test_isolation_tripwire.py` as package.json `test:node`/`test:sh` do; a tripwire profile-drift finding fails the leg (native-leg tests: `tests/test_linux_shape_native_leg.py`).
 
 ## Gates & tests
