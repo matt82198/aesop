@@ -38,6 +38,12 @@ REPOS_STATUS="$AESOP_ROOT/state/.watchdog-repos.json"
 # Git's well-known empty tree: the base of a root-inclusive range (SEM-4).
 EMPTY_TREE_SHA="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
+# Timeout bounds (fix 20261029: prevent autodiscovery hang)
+# Per-repo operations (git fetch, etc) timeout after this many seconds
+REPO_OPERATION_TIMEOUT="${REPO_OPERATION_TIMEOUT:-60}"
+# Entire autodiscovery loop timeout (so cycle fits in 5-min schedule)
+AUTODISCOVERY_TIMEOUT="${AUTODISCOVERY_TIMEOUT:-240}"
+
 # P2 FIX: script-global temp file handles (cycle-status JSON build + per-repo
 # NUL-protocol scratch file), cleaned up unconditionally via trap below so an
 # interrupted cycle (INT/TERM) or unexpected error never leaks mktemp files
@@ -371,6 +377,11 @@ main() {
     exit 1
   fi
   log "=== cycle start ==="
+  # FIX 20261029: Write heartbeat at cycle START (before autodiscovery) so even a
+  # hanging cycle shows the daemon is alive. If autodiscovery hangs for 22 min, the
+  # heartbeat at START ensures the next cycle's monitor sees a fresh timestamp and
+  # doesn't incorrectly restart the hung daemon.
+  write_heartbeat
   temp_json=$(mktemp) || {
     # Hard failure: the cycle cannot stage its status file. Exit 1 WITHOUT a
     # heartbeat so the failed cycle reads as stale.
@@ -446,7 +457,14 @@ $real_dir"
 
       if is_touched "$dir"; then
         temp_result=$(mktemp)
-        process_repo "$dir" > "$temp_result"
+        # Wrap process_repo in bounded timeout (per-repo operation timeout)
+        timeout "$REPO_OPERATION_TIMEOUT" process_repo "$dir" > "$temp_result" 2>&1
+        local proc_exit=$?
+        if [ "$proc_exit" -eq 124 ]; then
+          # Timeout hit: log as TIMEOUT status
+          log_err "TIMEOUT: $(basename "$dir") exceeded ${REPO_OPERATION_TIMEOUT}s timeout"
+          printf 'TIMEOUT\0%s\n' "$(basename "$dir")" > "$temp_result"
+        fi
         state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$temp_result")
         name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$temp_result" | tr -d '\n')
         rm -f "$temp_result"
@@ -484,7 +502,14 @@ $real_dir"
         # P0 FIX: Eliminate $() command substitution to preserve NUL bytes in protocol
         # Direct redirect maintains NUL delimiters (process_repo emits STATE\0name format)
         temp_result=$(mktemp)
-        process_repo "$dir" > "$temp_result"
+        # Wrap process_repo in bounded timeout (per-repo operation timeout)
+        timeout "$REPO_OPERATION_TIMEOUT" process_repo "$dir" > "$temp_result" 2>&1
+        local proc_exit=$?
+        if [ "$proc_exit" -eq 124 ]; then
+          # Timeout hit: log as TIMEOUT status
+          log_err "TIMEOUT: $(basename "$dir") exceeded ${REPO_OPERATION_TIMEOUT}s timeout"
+          printf 'TIMEOUT\0%s\n' "$(basename "$dir")" > "$temp_result"
+        fi
         # Read first field (state) and second field (name) using NUL delimiter
         # Portable solution: use awk with RS="\0" instead of GNU sed \x0 (BSD/macOS compatible)
         state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$temp_result")
