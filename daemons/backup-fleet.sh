@@ -8,7 +8,7 @@ set -uo pipefail
 # No default (tracker 00fa6e4cb68b): with AESOP_ROOT unset this used to fall back to '.',
 # so the secret scanner was looked up relative to whatever cwd the caller had. main()
 # refuses to run instead. run-watchdog.sh exports AESOP_ROOT before calling this script.
-AESOP_ROOT="${AESOP_ROOT:-}"
+export AESOP_ROOT="${AESOP_ROOT:-}"
 
 # Heartbeat-pollution guard (incident 2026-10-06/07): CONDUCTOR_ROOT used to
 # default unconditionally to "$(dirname "$AESOP_ROOT")/conductor3". Every
@@ -33,10 +33,10 @@ HEARTBEAT="${CONDUCTOR_ROOT:+$CONDUCTOR_ROOT/state/.watchdog-heartbeat}"
 # last completed cycle had >=1 BLOCKED repo, holding the blocked repo names one per
 # line. Lets consumers tell healthy from healthy-with-blocked. Removed by a clean cycle.
 BLOCKED_MARKER="${CONDUCTOR_ROOT:+$CONDUCTOR_ROOT/state/.watchdog-blocked}"
-LOG="$AESOP_ROOT/state/FLEET-BACKUP.log"
+export LOG="$AESOP_ROOT/state/FLEET-BACKUP.log"
 REPOS_STATUS="$AESOP_ROOT/state/.watchdog-repos.json"
 # Git's well-known empty tree: the base of a root-inclusive range (SEM-4).
-EMPTY_TREE_SHA="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+export EMPTY_TREE_SHA="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
 # Timeout bounds (fix 20261029: prevent autodiscovery hang)
 # Per-repo operations (git fetch, etc) timeout after this many seconds
@@ -438,20 +438,18 @@ main() {
 
     if [ -n "$python_exe" ]; then
       # Parse repos array from config using Python (not grep)
-      # Note: Strip trailing \r (CRLF compatibility) and empty lines
-      repos_to_scan=$($python_exe -c "
-import json, sys
+      # Pass file as positional argument to Python script
+      repos_to_scan=$("$python_exe" -c 'import json, sys
 try:
-  with open(sys.argv[1], 'r') as f:
-    config = json.load(f)
-    repos = config.get('repos', [])
-    if isinstance(repos, list) and len(repos) > 0:
-      for repo in repos:
-        if isinstance(repo, dict) and 'path' in repo:
-          print(repo['path'])
-except Exception as e:
-  pass
-" "$config_file" 2>/dev/null | tr -d '\r')
+    with open(sys.argv[1], "r") as f:
+        config = json.load(f)
+        repos = config.get("repos", [])
+        if isinstance(repos, list) and len(repos) > 0:
+            for repo in repos:
+                if isinstance(repo, dict) and "path" in repo:
+                    print(repo["path"])
+except Exception:
+    pass' "$config_file" 2>/dev/null | tr -d '\r')
     fi
   fi
 
@@ -477,7 +475,9 @@ $real_dir"
       if is_touched "$dir"; then
         temp_result=$(mktemp)
         # Wrap process_repo in bounded timeout (per-repo operation timeout)
-        timeout "$REPO_OPERATION_TIMEOUT" process_repo "$dir" > "$temp_result" 2>&1
+        # Pass function definition to subshell since process_repo is a function
+        # Use "$1" to pass path as argument instead of interpolating with quotes (SEM-8)
+        timeout "$REPO_OPERATION_TIMEOUT" bash -c "$(declare -f process_repo get_default_branch is_touched scan_unpushed_commits scan_tracked_files ts log_err resolve_scanner get_tracked_modifications get_untracked_files); process_repo \"\$1\"" _ "$dir" > "$temp_result"
         local proc_exit=$?
         if [ "$proc_exit" -eq 124 ]; then
           # Timeout hit: log as TIMEOUT status
@@ -523,7 +523,9 @@ $real_dir"
       processed_paths="$processed_paths
 $real_dir"
       temp_result=$(mktemp)
-      timeout "$REPO_OPERATION_TIMEOUT" process_repo "$dir" > "$temp_result" 2>&1
+      # Pass function definition to subshell since process_repo is a function
+      # Use "$1" to pass path as argument instead of interpolating with quotes (SEM-8)
+      timeout "$REPO_OPERATION_TIMEOUT" bash -c "$(declare -f process_repo get_default_branch is_touched scan_unpushed_commits scan_tracked_files ts log_err resolve_scanner get_tracked_modifications get_untracked_files); process_repo \"\$1\"" _ "$dir" > "$temp_result"
       local proc_exit=$?
       if [ "$proc_exit" -eq 124 ]; then
         log_err "TIMEOUT: $(basename "$dir") exceeded ${REPO_OPERATION_TIMEOUT}s timeout"
