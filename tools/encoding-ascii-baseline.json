@@ -37,7 +37,7 @@
     "tools/handoff_proof.py": 8,
     "tools/health_checks.py": 1,
     "tools/health_score.py": 9,
-    "tools/healthcheck.py": 13,
+    "tools/healthcheck.py": 16,
     "tools/hook_preflight.py": 4,
     "tools/hook_tool_manifest.py": 2,
     "tools/humanize_ledger.py": 2,
