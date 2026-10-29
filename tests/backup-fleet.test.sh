@@ -951,6 +951,99 @@ EOFCONFIG
   fi
 }
 
+# ===== HEARTBEAT: written at cycle start before first repo =====
+
+test_heartbeat_written_at_cycle_start() {
+  log "HEARTBEAT: written at cycle start before first repo"
+
+  setup_fixture
+
+  # Create a mock scanner that records if heartbeat exists when it's first invoked.
+  # The scanner is called by backup-fleet.sh during repo processing.
+  # Structural observation: check heartbeat existence at scanner invocation time.
+  # If heartbeat was written at cycle start, the file will exist when scanner runs.
+  # If heartbeat is only written at cycle end, the file won't exist yet.
+  cat > "$TOOLS_DIR/secret_scan.py" << 'SCANNER'
+#!/usr/bin/env python3
+import sys
+import os
+
+# On first invocation, record whether heartbeat exists yet
+hb_path = os.environ.get('AESOP_STATE_ROOT', os.environ.get('AESOP_ROOT', '.') + '/state') + '/.watchdog-heartbeat'
+marker_dir = os.environ.get('AESOP_STATE_ROOT', os.environ.get('AESOP_ROOT', '.') + '/state')
+lock_file = marker_dir + '/.hb-scanner-check-done'
+
+if not os.path.exists(lock_file):
+  # First invocation - record observation
+  try:
+    open(lock_file, 'w').close()
+  except:
+    pass
+
+  # Check if heartbeat exists at this point in the cycle
+  hb_observed = os.path.exists(hb_path)
+
+  # Write marker: YES if heartbeat existed, NO if it didn't
+  marker_file = marker_dir + '/.hb-at-first-repo-call'
+  try:
+    with open(marker_file, 'w') as f:
+      f.write('YES' if hb_observed else 'NO')
+  except:
+    pass
+
+sys.exit(0)
+SCANNER
+  chmod +x "$TOOLS_DIR/secret_scan.py"
+
+  # Mark the repo as touched so it will be processed
+  echo "modified content" >> "$REPO_DIR/README.md"
+
+  # Explicit config with one repo
+  cat > "$AESOP_FIXTURE/aesop.config.json" << EOFCONFIG
+{
+  "repos": [
+    {"path": "$REPO_DIR", "name": "repo1"}
+  ]
+}
+EOFCONFIG
+
+  # Ensure heartbeat doesn't exist before the test
+  HEARTBEAT_PATH="$AESOP_FIXTURE/state/.watchdog-heartbeat"
+  rm -f "$HEARTBEAT_PATH"
+
+  # Remove any marker files from prior runs
+  rm -f "$AESOP_FIXTURE/state/.hb-at-first-repo-call"
+  rm -f "$AESOP_FIXTURE/state/.hb-scanner-check-done"
+
+  # Run the cycle with CONDUCTOR_ROOT set to point to our fixture
+  AESOP_ROOT="$AESOP_FIXTURE" CONDUCTOR_ROOT="$AESOP_FIXTURE" bash "$BACKUP_FLEET_SCRIPT" > "$TEST_DIR/heartbeat-cycle.log" 2>&1
+  local ec=$?
+
+  # Check that the heartbeat file was created (it should be, at some point)
+  if [ ! -f "$HEARTBEAT_PATH" ]; then
+    fail "HEARTBEAT: heartbeat file was not created at $HEARTBEAT_PATH"
+    return
+  fi
+
+  # Check the marker file written by the scanner on first invocation
+  MARKER_FILE="$AESOP_FIXTURE/state/.hb-at-first-repo-call"
+  if [ ! -f "$MARKER_FILE" ]; then
+    fail "HEARTBEAT: scanner marker not written (scanner may not have been invoked)"
+    return
+  fi
+
+  local marker_value
+  marker_value=$(cat "$MARKER_FILE" 2>/dev/null || echo "")
+
+  # On FIXED CODE: heartbeat written at cycle START means marker will be "YES"
+  # On CURRENT CODE: heartbeat written at cycle END means marker will be "NO"
+  if [ "$marker_value" = "YES" ]; then
+    pass "HEARTBEAT: written at cycle start (heartbeat existed when scanner first ran)"
+  else
+    fail "HEARTBEAT: written too late, not at cycle start (heartbeat did not exist when scanner first ran)"
+  fi
+}
+
 # ===== FAIL-CLOSED SECRET GATE (2026-10-15 scan, P1 00fa6e4cb68b) =====
 # Behavioural proofs: each drives the real backup-fleet.sh against a throwaway
 # fixture (mktemp tree, local bare origin, HOME pinned to the fixture) and asserts
@@ -1157,6 +1250,10 @@ echo ""
 log "Running FIX #5 tests (blocked-cycle exit code contract)..."
 test_fix5_blocked_cycle_exit_code
 test_fix5_clean_cycle_exit_code
+echo ""
+
+log "Running HEARTBEAT test (written at cycle start before first repo)..."
+test_heartbeat_written_at_cycle_start
 echo ""
 
 log "Running FAIL-CLOSED secret gate tests (P1 00fa6e4cb68b)..."
