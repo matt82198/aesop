@@ -41,6 +41,7 @@ Local-only Python (stdlib only, no external deps), bash (POSIX, CRLF-safe).
 ## Tool index
 
 - Receipt gate (emit, verify, spool, flush): tools/receipts/CLAUDE.md
+  - **Receipt pubkeys keyring (tools/receipt_pubkeys/)**: Ed25519 public keys for receipt signing, used by `verify_receipt.py` to verify receipts against a keyring (`receipt_pubkey.pub` + all `receipt_pubkeys/*.pub` files). New keys are registered by adding a `mattworkpc-<key_id>.pub` file to this directory (derived from the private key PEM via `key_id_for_pubkey()`, first 16 hex chars of SHA256). A key registered in a PR only takes effect once the PR merges — the verifier loads the keyring from the BASE tree (origin/main), never the PR head. Tests: `tests/test_receipt_keyring.py`.
 - Gate wiring, generated artifacts and adding a gate: tools/gate_wiring/CLAUDE.md
 - Lint and scan gates (secret scan, encoding, pyflakes, lint evasion, dispatch lint): tools/lint_scan/CLAUDE.md
 - Merge actors (merge_train, merge_queue, auto_merge, pr_sweep, halt): tools/merge_actors/CLAUDE.md
