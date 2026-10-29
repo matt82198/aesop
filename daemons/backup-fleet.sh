@@ -396,11 +396,6 @@ main() {
     exit 1
   fi
   log "=== cycle start ==="
-  # FIX 20261029: Write heartbeat at cycle START (before autodiscovery) so even a
-  # hanging cycle shows the daemon is alive. If autodiscovery hangs for 22 min, the
-  # heartbeat at START ensures the next cycle's monitor sees a fresh timestamp and
-  # doesn't incorrectly restart the hung daemon.
-  write_heartbeat
   temp_json=$(mktemp) || {
     # Hard failure: the cycle cannot stage its status file. Exit 1 WITHOUT a
     # heartbeat so the failed cycle reads as stale.
@@ -408,6 +403,11 @@ main() {
     exit 1
   }
   echo "[" > "$temp_json"
+  # Write heartbeat after pre-flight validation succeeds (mktemp) and before
+  # first repo is processed. This ensures: (a) failed cycles (exit 1) read as stale
+  # (no heartbeat written); (b) the heartbeat exists when the first repo's scanner
+  # is invoked, satisfying the "written at cycle start" test invariant.
+  write_heartbeat
   blocked_names=""
   first=1
   processed_paths=""
