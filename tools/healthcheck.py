@@ -23,6 +23,21 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Fix for finding f-6905850f: reconfigure stdout/stderr to UTF-8 with error replacement
+# when running on Windows cp1252 consoles that would otherwise crash on emoji characters.
+# This ensures the health check emoji (🟢|🟡|🔴) can be displayed or gracefully replaced.
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except (AttributeError, ValueError):
+        pass
+
+if hasattr(sys.stderr, 'reconfigure'):
+    try:
+        sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    except (AttributeError, ValueError):
+        pass
+
 try:
     from common import check_heartbeat_staleness, get_state_dir
 except ImportError:
