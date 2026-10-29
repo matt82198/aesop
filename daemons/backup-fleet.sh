@@ -8,7 +8,7 @@ set -uo pipefail
 # No default (tracker 00fa6e4cb68b): with AESOP_ROOT unset this used to fall back to '.',
 # so the secret scanner was looked up relative to whatever cwd the caller had. main()
 # refuses to run instead. run-watchdog.sh exports AESOP_ROOT before calling this script.
-AESOP_ROOT="${AESOP_ROOT:-}"
+export AESOP_ROOT="${AESOP_ROOT:-}"
 
 # Heartbeat-pollution guard (incident 2026-10-06/07): CONDUCTOR_ROOT used to
 # default unconditionally to "$(dirname "$AESOP_ROOT")/conductor3". Every
@@ -33,10 +33,16 @@ HEARTBEAT="${CONDUCTOR_ROOT:+$CONDUCTOR_ROOT/state/.watchdog-heartbeat}"
 # last completed cycle had >=1 BLOCKED repo, holding the blocked repo names one per
 # line. Lets consumers tell healthy from healthy-with-blocked. Removed by a clean cycle.
 BLOCKED_MARKER="${CONDUCTOR_ROOT:+$CONDUCTOR_ROOT/state/.watchdog-blocked}"
-LOG="$AESOP_ROOT/state/FLEET-BACKUP.log"
+export LOG="$AESOP_ROOT/state/FLEET-BACKUP.log"
 REPOS_STATUS="$AESOP_ROOT/state/.watchdog-repos.json"
 # Git's well-known empty tree: the base of a root-inclusive range (SEM-4).
-EMPTY_TREE_SHA="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+export EMPTY_TREE_SHA="4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+# Timeout bounds (fix 20261029: prevent autodiscovery hang)
+# Per-repo operations (git fetch, etc) timeout after this many seconds
+REPO_OPERATION_TIMEOUT="${REPO_OPERATION_TIMEOUT:-60}"
+# Entire autodiscovery loop timeout (so cycle fits in 5-min schedule)
+AUTODISCOVERY_TIMEOUT="${AUTODISCOVERY_TIMEOUT:-240}"
 
 # P2 FIX: script-global temp file handles (cycle-status JSON build + per-repo
 # NUL-protocol scratch file), cleaned up unconditionally via trap below so an
@@ -263,6 +269,25 @@ get_default_branch() {
   (cd "$repo" && git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's/refs\/remotes\/origin\///' || echo "master")
 }
 
+discover_repos() {
+  local processed_paths="$1"
+  local discovery_file="$2"
+  : > "$discovery_file"
+  for dir in ~/.* ~/* ~/dev/*; do
+    base=$(basename "$dir")
+    [ "$base" = "." ] || [ "$base" = ".." ] && continue
+    [ ! -d "$dir/.git" ] && continue
+    real_dir=$(cd "$dir" && pwd 2>/dev/null)
+    if [ -z "$real_dir" ]; then continue; fi
+    if echo "$processed_paths" | grep -Fxq "$real_dir"; then
+      continue
+    fi
+    if is_touched "$dir"; then
+      printf '%s\n' "$dir"
+    fi
+  done >> "$discovery_file"
+}
+
 process_repo() {
   local repo="$1"
   local name=$(basename "$repo")
@@ -378,6 +403,11 @@ main() {
     exit 1
   }
   echo "[" > "$temp_json"
+  # Write heartbeat after pre-flight validation succeeds (mktemp) and before
+  # first repo is processed. This ensures: (a) failed cycles (exit 1) read as stale
+  # (no heartbeat written); (b) the heartbeat exists when the first repo's scanner
+  # is invoked, satisfying the "written at cycle start" test invariant.
+  write_heartbeat
   blocked_names=""
   first=1
   processed_paths=""
@@ -408,20 +438,18 @@ main() {
 
     if [ -n "$python_exe" ]; then
       # Parse repos array from config using Python (not grep)
-      # Note: Strip trailing \r (CRLF compatibility) and empty lines
-      repos_to_scan=$($python_exe -c "
-import json, sys
+      # Pass file as positional argument to Python script
+      repos_to_scan=$("$python_exe" -c 'import json, sys
 try:
-  with open(sys.argv[1], 'r') as f:
-    config = json.load(f)
-    repos = config.get('repos', [])
-    if isinstance(repos, list) and len(repos) > 0:
-      for repo in repos:
-        if isinstance(repo, dict) and 'path' in repo:
-          print(repo['path'])
-except Exception as e:
-  pass
-" "$config_file" 2>/dev/null | tr -d '\r')
+    with open(sys.argv[1], "r") as f:
+        config = json.load(f)
+        repos = config.get("repos", [])
+        if isinstance(repos, list) and len(repos) > 0:
+            for repo in repos:
+                if isinstance(repo, dict) and "path" in repo:
+                    print(repo["path"])
+except Exception:
+    pass' "$config_file" 2>/dev/null | tr -d '\r')
     fi
   fi
 
@@ -446,7 +474,16 @@ $real_dir"
 
       if is_touched "$dir"; then
         temp_result=$(mktemp)
-        process_repo "$dir" > "$temp_result"
+        # Wrap process_repo in bounded timeout (per-repo operation timeout)
+        # Pass function definition to subshell since process_repo is a function
+        # Use "$1" to pass path as argument instead of interpolating with quotes (SEM-8)
+        timeout "$REPO_OPERATION_TIMEOUT" bash -c "$(declare -f process_repo get_default_branch is_touched scan_unpushed_commits scan_tracked_files ts log_err resolve_scanner get_tracked_modifications get_untracked_files); process_repo \"\$1\"" _ "$dir" > "$temp_result"
+        local proc_exit=$?
+        if [ "$proc_exit" -eq 124 ]; then
+          # Timeout hit: log as TIMEOUT status
+          log_err "TIMEOUT: $(basename "$dir") exceeded ${REPO_OPERATION_TIMEOUT}s timeout"
+          printf 'TIMEOUT\0%s\n' "$(basename "$dir")" > "$temp_result"
+        fi
         state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$temp_result")
         name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$temp_result" | tr -d '\n')
         rm -f "$temp_result"
@@ -464,45 +501,50 @@ $real_dir"
   else
     # AUDIT FIX 1: Fall back to autodiscovery only when no repos configured
     log "No repos configured, using autodiscovery"
-    # Discover all git repos: scan home dot-directories, root directories, dev/ subdirectory
-    # This pattern includes ~/.* (dot-dirs like .claude), ~/* (home root), ~/dev/* (dev subtree)
-    for dir in ~/.* ~/* ~/dev/*; do
-      base=$(basename "$dir")
-      [ "$base" = "." ] || [ "$base" = ".." ] && continue
-      [ ! -d "$dir/.git" ] && continue
-
-      # Normalize path to detect duplicates (e.g., .claude vs .claude/)
+    local discovery_file
+    discovery_file=$(mktemp) || {
+      log "ERROR: cannot create autodiscovery scratch file; skipping autodiscovery"
+      echo "]" >> "$temp_json"
+      mv "$temp_json" "$REPOS_STATUS"
+      exit 0
+    }
+    timeout "$AUTODISCOVERY_TIMEOUT" discover_repos "$processed_paths" "$discovery_file" 2>&1 || {
+      local disc_exit=$?
+      if [ "$disc_exit" -eq 124 ]; then
+        log "WARN: autodiscovery timed out after ${AUTODISCOVERY_TIMEOUT}s; processing discovered repos"
+      else
+        log "WARN: autodiscovery failed (exit $disc_exit)"
+      fi
+    }
+    while IFS= read -r dir; do
+      [ -z "$dir" ] && continue
       real_dir=$(cd "$dir" && pwd 2>/dev/null)
       if [ -z "$real_dir" ]; then continue; fi
-      if echo "$processed_paths" | grep -Fxq "$real_dir"; then
-        continue
-      fi
       processed_paths="$processed_paths
 $real_dir"
-
-      if is_touched "$dir"; then
-        # P0 FIX: Eliminate $() command substitution to preserve NUL bytes in protocol
-        # Direct redirect maintains NUL delimiters (process_repo emits STATE\0name format)
-        temp_result=$(mktemp)
-        process_repo "$dir" > "$temp_result"
-        # Read first field (state) and second field (name) using NUL delimiter
-        # Portable solution: use awk with RS="\0" instead of GNU sed \x0 (BSD/macOS compatible)
-        state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$temp_result")
-        name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$temp_result" | tr -d '\n')
-        rm -f "$temp_result"
-        [ -z "$state" ] && continue
-        [ "$state" = "BLOCKED" ] && { any_blocked=1; blocked_names="$blocked_names$name"$'\n'; }
-        if [ "$first" = 1 ]; then
-          first=0
-        else
-          echo "," >> "$temp_json"
-        fi
-        # P2 FIX: JSON-escape all interpolated values before emitting
-        # P2 FIX: Portable date format (not GNU-only date -Iseconds)
-        printf '{"repo":"%s","state":"%s","age":"%s"}' "$(json_escape "$name")" "$(json_escape "$state")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$temp_json"
-        log "$state: $name"
+      temp_result=$(mktemp)
+      # Pass function definition to subshell since process_repo is a function
+      # Use "$1" to pass path as argument instead of interpolating with quotes (SEM-8)
+      timeout "$REPO_OPERATION_TIMEOUT" bash -c "$(declare -f process_repo get_default_branch is_touched scan_unpushed_commits scan_tracked_files ts log_err resolve_scanner get_tracked_modifications get_untracked_files); process_repo \"\$1\"" _ "$dir" > "$temp_result"
+      local proc_exit=$?
+      if [ "$proc_exit" -eq 124 ]; then
+        log_err "TIMEOUT: $(basename "$dir") exceeded ${REPO_OPERATION_TIMEOUT}s timeout"
+        printf 'TIMEOUT\0%s\n' "$(basename "$dir")" > "$temp_result"
       fi
-    done
+      state=$(awk 'BEGIN{RS="\0"} NR==1 {print}' "$temp_result")
+      name=$(awk 'BEGIN{RS="\0"} NR==2 {print}' "$temp_result" | tr -d '\n')
+      rm -f "$temp_result"
+      [ -z "$state" ] && continue
+      [ "$state" = "BLOCKED" ] && { any_blocked=1; blocked_names="$blocked_names$name"$'\n'; }
+      if [ "$first" = 1 ]; then
+        first=0
+      else
+        echo "," >> "$temp_json"
+      fi
+      printf '{"repo":"%s","state":"%s","age":"%s"}' "$(json_escape "$name")" "$(json_escape "$state")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$temp_json"
+      log "$state: $name"
+    done < "$discovery_file"
+    rm -f "$discovery_file"
   fi
 
   echo "" >> "$temp_json"
