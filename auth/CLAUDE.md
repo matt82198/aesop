@@ -5,7 +5,7 @@
 **Files**
 - `providers.mjs` — registry `PROVIDERS` ({name, envVar, defaultModel, models}); seeds `anthropic` and `local`; `parseSelector`.
 - `store.mjs` — the one JSON store: `readStore`, `writeStore` (temp file + rename, mode 0600 off win32), `resolveCredential` (env beats store).
-- `cli.mjs` — verb dispatch, control channel, exit codes. Runnable directly: `node auth/cli.mjs <argv>`.
+- `cli.mjs` — verb dispatch, control op registry (`runControlOp`), exit codes. Runnable directly: `node auth/cli.mjs <argv>`.
 
 **Verbs**
 - `auth login --provider <name> --api-key-stdin` — key read from stdin only, never an argument.
@@ -14,7 +14,7 @@
 - `model list` — providers, default models, credential requirement.
 - `model use <provider>/<model>` — records the selection; needs a credential when the provider has an env var.
 - `model current` — prints `<provider>/<model>`.
-- Machine output: when stdout is not a TTY, `auth status`, `model list` and `model current` print exactly one JSON line (ops `auth.status`, `model.list`, `model.current`). Bare `aesop` never reads stdin for these; a stdio control channel (`--input-format stream-json` or `frames`) is the only other route, and is not wired here.
+- Machine output: when stdout is not a TTY, `auth status`, `model list` and `model current` print exactly one JSON line (ops `auth.status`, `model.list`, `model.current`). Bare `aesop` never reads stdin for these. The control channel is `aesop pipe --input-format stream-json --output-format stream-json`: each control record `{"type":"control","op":...,"id"?}` gets the same object as the verb (`runControlOp` in cli.mjs, the only op registry), wrapped by stdio/pipe.mjs in its reply envelope. Registered by importing this module (bin/cli.js preloads it).
 
 **Exit codes**: 0 ok; 2 bad usage, malformed input, unknown op, or corrupt store; 3 `model use` for a provider that needs a credential and has none.
 

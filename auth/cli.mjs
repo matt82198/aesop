@@ -18,6 +18,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PROVIDERS, findProvider, parseSelector } from './providers.mjs';
 import { readStore, writeStore, resolveCredential, StoreError } from './store.mjs';
+import { setControlDispatcher } from '../stdio/pipe.mjs';
 
 export const EXIT_OK = 0;
 export const EXIT_USAGE = 2;
@@ -29,6 +30,18 @@ class UsageError extends Error {
   constructor(message) {
     super(message);
     this.name = 'UsageError';
+  }
+}
+
+/**
+ * A control op that cannot be answered. The message is safe to print; the stdio pipe maps it to exit 2.
+ * Extends UsageError so the --control path maps it the same way.
+ */
+export class ControlOpError extends UsageError {
+  /** @param {string} message one-line explanation */
+  constructor(message) {
+    super(message);
+    this.name = 'ControlOpError';
   }
 }
 
@@ -96,6 +109,83 @@ function statusRows(providers, env, store) {
 }
 
 /**
+ * The `auth status` JSON object. Shared by the verb (non-TTY stdout) and the control op `auth.status`.
+ * @param {object[]} providers providers to report
+ * @param {NodeJS.ProcessEnv} env environment (credential source)
+ * @param {object} store parsed store
+ * @returns {{ok: true, op: 'auth.status', providers: object[]}} machine-readable status
+ */
+function statusObject(providers, env, store) {
+  return { ok: true, op: 'auth.status', providers: statusRows(providers, env, store) };
+}
+
+/**
+ * The `model list` JSON object. Shared by the verb and the control op `model.list`.
+ * @returns {{ok: true, op: 'model.list', providers: object[]}} machine-readable list
+ */
+function modelListObject() {
+  const providers = PROVIDERS.map((p) => ({ provider: p.name, defaultModel: p.defaultModel, models: [...p.models], envVar: p.envVar }));
+  return { ok: true, op: 'model.list', providers };
+}
+
+/**
+ * The `model current` JSON object. Shared by the verb and the control op `model.current`.
+ * @param {object} store parsed store
+ * @returns {{ok: true, op: 'model.current', provider: string|null, model: string|null, selector: string|null}} selection
+ */
+function modelCurrentObject(store) {
+  const cur = store.current;
+  return {
+    ok: true,
+    op: 'model.current',
+    provider: cur?.provider ?? null,
+    model: cur?.model ?? null,
+    selector: cur ? `${cur.provider}/${cur.model}` : null,
+  };
+}
+
+/** Resolve the optional `provider` field of a control record to the providers it names. */
+function controlProviders(msg) {
+  if (msg.provider === undefined) return [...PROVIDERS];
+  if (typeof msg.provider !== 'string') throw new ControlOpError('control: provider must be a string');
+  const provider = findProvider(msg.provider);
+  if (!provider) throw new ControlOpError(`control: unknown provider "${msg.provider.slice(0, 64)}"`);
+  return [provider];
+}
+
+/**
+ * Control op registry. Each entry returns the same object its CLI verb prints as one JSON line.
+ * Results carry source and names only, never key material.
+ * @type {Readonly<Record<string, (msg: object, env: NodeJS.ProcessEnv) => object>>}
+ */
+const CONTROL_OPS = Object.freeze({
+  'auth.status': (msg, env) => statusObject(controlProviders(msg), env, readStore(env)),
+  'model.list': () => modelListObject(),
+  'model.current': (msg, env) => modelCurrentObject(readStore(env)),
+});
+
+/**
+ * Answer one control op. Every failure is a ControlOpError with a safe message.
+ * @param {object} msg control record with a string `op` and optional op arguments
+ * @param {NodeJS.ProcessEnv} [env] environment, defaults to process.env
+ * @returns {object} the result object for the op
+ * @throws {ControlOpError} for an unknown op, bad arguments, or an unreadable store
+ */
+export function runControlOp(msg, env = process.env) {
+  const op = msg.op;
+  if (typeof op !== 'string' || !Object.prototype.hasOwnProperty.call(CONTROL_OPS, op)) {
+    throw new ControlOpError(`control: unknown op "${String(op).slice(0, 64)}"`);
+  }
+  try {
+    return CONTROL_OPS[op](msg, env);
+  } catch (err) {
+    if (err instanceof ControlOpError) throw err;
+    if (err instanceof StoreError) throw new ControlOpError(err.message);
+    throw new ControlOpError(`control op ${op} failed`);
+  }
+}
+
+/**
  * `auth login --provider <name> --api-key-stdin`.
  * @param {string[]} argv arguments after `auth login`
  * @param {object} io runtime seam (env, readStdin, out, err)
@@ -137,7 +227,7 @@ async function authStatus(argv, io) {
   const store = readStore(io.env);
   const rows = statusRows(providers, io.env, store);
   if (!io.stdoutIsTTY) {
-    io.out(`${JSON.stringify({ ok: true, op: 'auth.status', providers: rows })}\n`);
+    io.out(`${JSON.stringify(statusObject(providers, io.env, store))}\n`);
     return EXIT_OK;
   }
   for (const row of rows) {
@@ -193,8 +283,7 @@ function modelVerb(argv, io) {
   if (verb === 'list') {
     if (rest.length) throw new UsageError('model list takes no arguments');
     if (!io.stdoutIsTTY) {
-      const providers = PROVIDERS.map((p) => ({ provider: p.name, defaultModel: p.defaultModel, models: [...p.models], envVar: p.envVar }));
-      io.out(`${JSON.stringify({ ok: true, op: 'model.list', providers })}\n`);
+      io.out(`${JSON.stringify(modelListObject())}\n`);
       return EXIT_OK;
     }
     for (const p of PROVIDERS) {
@@ -226,13 +315,12 @@ function modelVerb(argv, io) {
     if (rest.length) throw new UsageError('model current takes no arguments');
     const store = readStore(io.env);
     const cur = store.current;
-    const selector = cur ? `${cur.provider}/${cur.model}` : null;
     if (!io.stdoutIsTTY) {
-      io.out(`${JSON.stringify({ ok: true, op: 'model.current', provider: cur?.provider ?? null, model: cur?.model ?? null, selector })}\n`);
+      io.out(`${JSON.stringify(modelCurrentObject(store))}\n`);
     } else if (!cur) {
       io.out(`no model selected (default: anthropic/${findProvider('anthropic').defaultModel})\n`);
     } else {
-      io.out(`${selector}\n`);
+      io.out(`${cur.provider}/${cur.model}\n`);
     }
     return EXIT_OK;
   }
@@ -257,23 +345,8 @@ async function runControl(text, io) {
   if (!msg || typeof msg !== 'object' || msg.type !== 'control') {
     throw new UsageError('control: expected {"type":"control","op":...}');
   }
-  if (msg.op === 'auth.status') {
-    const store = readStore(io.env);
-    io.out(`${JSON.stringify({ ok: true, op: msg.op, providers: statusRows([...PROVIDERS], io.env, store) })}\n`);
-    return EXIT_OK;
-  }
-  if (msg.op === 'model.list') {
-    const providers = PROVIDERS.map((p) => ({ provider: p.name, defaultModel: p.defaultModel, models: [...p.models], envVar: p.envVar }));
-    io.out(`${JSON.stringify({ ok: true, op: msg.op, providers })}\n`);
-    return EXIT_OK;
-  }
-  if (msg.op === 'model.current') {
-    const store = readStore(io.env);
-    const cur = store.current ?? { provider: null, model: null };
-    io.out(`${JSON.stringify({ ok: true, op: msg.op, provider: cur.provider, model: cur.model })}\n`);
-    return EXIT_OK;
-  }
-  throw new UsageError(`control: unknown op "${String(msg.op)}"`);
+  io.out(`${JSON.stringify(runControlOp(msg, io.env))}\n`);
+  return EXIT_OK;
 }
 
 /**
@@ -314,6 +387,11 @@ function processIo() {
     err: (s) => process.stderr.write(s),
   };
 }
+
+// Control channel registration. bin/cli.js preloads this module (node --import) before running the
+// stdio pipeline, so `aesop pipe --input-format stream-json --output-format stream-json` answers control
+// records from the same registry as the verbs. Without the preload, control records fail closed.
+setControlDispatcher((record) => Promise.resolve(runControlOp(record, process.env)));
 
 const isDirectRun = (() => {
   if (!process.argv[1]) return false;

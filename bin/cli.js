@@ -190,7 +190,10 @@ if (isPipeDispatch) {
   }
   const pipeArgs = args[0] === 'pipe' ? args.slice(1) : [];
   const { spawnSync } = require('child_process');
-  const result = spawnSync(process.execPath, [stdioCli, ...pipeArgs], { stdio: 'inherit', windowsHide: true });
+  // Preload auth/cli.mjs so the control-op registry answers control records on the stream-json channel.
+  // stdio/ cannot import auth/ itself (zero-dependency gate), so the composition root wires it here.
+  const authPreload = require('url').pathToFileURL(path.join(__dirname, '..', 'auth', 'cli.mjs')).href;
+  const result = spawnSync(process.execPath, ['--import', authPreload, stdioCli, ...pipeArgs], { stdio: 'inherit', windowsHide: true });
   if (result.error) {
     console.error(`Error spawning ${process.execPath}: ${result.error.message}`);
   } else if (typeof result.status !== 'number') {

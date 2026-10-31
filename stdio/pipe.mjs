@@ -49,6 +49,23 @@ const DOWNSTREAM_CLOSED = new Set([
   'ERR_STREAM_WRITE_AFTER_END',
 ]);
 
+/**
+ * Control-op dispatcher for the declared stream-json channel. Registered by the auth module
+ * (see setControlDispatcher). stdio/ may not import auth/, so the registry is injected from outside.
+ * @type {((record: object) => Promise<object>) | null}
+ */
+let controlDispatch = null;
+
+/**
+ * Registers the function that answers control records on the declared stream-json channel.
+ * Without a registration, control records fail closed with exit 2.
+ * @param {((record: object) => Promise<object>) | null} fn receives the full record, resolves the result object,
+ *   and rejects with an Error (name `ControlOpError`) whose message is safe to print
+ */
+export function setControlDispatcher(fn) {
+  controlDispatch = typeof fn === 'function' ? fn : null;
+}
+
 const USAGE = [
   'Usage: node stdio/cli.mjs [flags]',
   'Copies stdin to stdout. The default raw mode is byte-exact.',
@@ -319,6 +336,18 @@ function recordUnit(line, state, opts) {
     return null;
   }
 
+  if (record.type === 'control') {
+    if (opts.inputFormat !== 'stream-json' || opts.outputFormat !== 'stream-json') {
+      throw new FramingError('control records are accepted only with --input-format stream-json --output-format stream-json');
+    }
+    if (typeof record.op !== 'string' || record.op === '') throw new FramingError('control record has no string op');
+    const id = record.id === undefined ? null : record.id;
+    if (id !== null && typeof id !== 'string' && typeof id !== 'number') {
+      throw new FramingError('control record id must be a string, a number or null');
+    }
+    return { kind: 'control-op', op: record.op, id, record };
+  }
+
   throw new FramingError(`unknown stream-json record type ${JSON.stringify(String(record.type).slice(0, 32))}`);
 }
 
@@ -381,6 +410,8 @@ function createOutput(opts, sink) {
   let bytes = 0;
   let summaryType = null;
   let started = false;
+  let sawControl = false;
+  let sawData = false;
 
   // The magic line goes out lazily, so a stream that fails on its first frame leaves stdout empty.
   const begin = async () => {
@@ -398,6 +429,7 @@ function createOutput(opts, sink) {
         }
         return;
       }
+      sawData = true;
       if (needsDigest) {
         hash.update(u.payload);
         bytes += u.payload.length;
@@ -427,11 +459,21 @@ function createOutput(opts, sink) {
       }
     },
 
+    /**
+     * Writes one control reply line. A control-only stream therefore prints exactly its replies,
+     * with no trailing result record.
+     * @param {object} envelope reply object, already in its final shape
+     */
+    async reply(envelope) {
+      sawControl = true;
+      await sink.write(Buffer.from(`${JSON.stringify(envelope)}\n`, 'utf8'));
+    },
+
     async finish() {
       if (outputFormat === 'frames') {
         await begin();
         await sink.write(encodeEnd(0));
-      } else if (outputFormat === 'stream-json') {
+      } else if (outputFormat === 'stream-json' && (sawData || !sawControl)) {
         const record = { type: 'result', exit: 0, bytes, sha256: hash.digest('hex') };
         await sink.write(Buffer.from(`${JSON.stringify(record)}\n`, 'utf8'));
       } else if (outputFormat === 'json') {
@@ -447,6 +489,24 @@ function createOutput(opts, sink) {
 }
 
 /**
+ * Answers one control-op record through the registered dispatcher.
+ * Any failure becomes a FramingError (exit 2, one aesop-pipe: stderr line) and writes nothing to stdout.
+ * @param {{op: string, id: (string|number|null), record: object}} unit control-op unit from the reader
+ * @returns {Promise<object>} the reply envelope
+ */
+async function answerControl(unit) {
+  if (!controlDispatch) throw new FramingError('control ops are not registered in this process');
+  let result;
+  try {
+    result = await controlDispatch(unit.record);
+  } catch (err) {
+    const safe = err && err.name === 'ControlOpError' && typeof err.message === 'string';
+    throw new FramingError(safe ? err.message : `control op ${unit.op} failed`);
+  }
+  return { type: 'control', op: unit.op, id: unit.id, ok: true, result };
+}
+
+/**
  * Moves every unit from the reader to the writer.
  * @param {NodeJS.ReadableStream} stdin
  * @param {{write: (buf: Buffer) => Promise<void>}} sink
@@ -455,7 +515,11 @@ function createOutput(opts, sink) {
 async function transfer(stdin, sink, opts) {
   const out = createOutput(opts, sink);
   for await (const unit of readUnits(stdin, opts)) {
-    await out.unit(unit);
+    if (unit.kind === 'control-op') {
+      await out.reply(await answerControl(unit));
+    } else {
+      await out.unit(unit);
+    }
   }
   await out.finish();
 }
