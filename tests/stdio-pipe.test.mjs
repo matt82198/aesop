@@ -14,6 +14,8 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { Readable, Writable } from 'node:stream';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -586,4 +588,61 @@ test('chained_two_instances_via_shell_pipe', { timeout: 60000 }, async () => {
   assert.equal(code, 0, 'pipeline exits with the last stage status');
   assert.equal(Buffer.concat(err).toString('utf8'), '', 'no stderr from either stage');
   assert.ok(Buffer.concat(out).equals(input), 'frames -> frames pipeline must reproduce the input exactly');
+});
+
+// ============================================================================
+// S5 contract: an unknown op after an answered op (bin/cli.js pipe, stream-json on both sides)
+// ============================================================================
+
+const BIN_CLI = path.resolve(HERE, '..', 'bin', 'cli.js');
+
+/** Spawn `node bin/cli.js <args>` in a given cwd and env; resolves with code, signal and both streams. */
+function runBinCli(args, input, { cwd, env }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [BIN_CLI, ...args], { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const out = [];
+    const err = [];
+    child.stdout.on('data', (d) => out.push(d));
+    child.stderr.on('data', (d) => err.push(d));
+    child.stdin.on('error', () => {});
+    child.on('error', reject);
+    child.on('close', (code, signal) => {
+      resolve({ code, signal, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') });
+    });
+    child.stdin.end(input);
+  });
+}
+
+test('unknown_op_after_answered_op_stops_with_no_further_record', { timeout: 60000 }, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-pipe-unknown-op-'));
+  try {
+    const home = path.join(root, 'home');
+    const cwd = path.join(root, 'cwd');
+    fs.mkdirSync(home);
+    fs.mkdirSync(cwd);
+    const env = {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      AESOP_CONFIG_DIR: path.join(root, 'config'),
+      ANTHROPIC_API_KEY: '',
+      AESOP_API_KEY: '',
+    };
+    const input =
+      JSON.stringify({ type: 'control', op: 'model.list', id: 'a' }) + '\n' +
+      JSON.stringify({ type: 'control', op: 'nope', id: 'b' }) + '\n';
+    const r = await runBinCli(['pipe', '--input-format', 'stream-json', '--output-format', 'stream-json'], input, { cwd, env });
+    assert.equal(r.signal, null, 'must exit normally, not by signal');
+    assert.equal(r.code, 2, `unknown op must exit 2; stderr:\n${r.stderr}`);
+    const lines = r.stdout.split(/\r?\n/).filter((l) => l.trim() !== '');
+    assert.equal(lines.length, 1, `exactly one stdout record (the reply to model.list) and nothing after it:\n${r.stdout}`);
+    const reply = JSON.parse(lines[0]);
+    assert.equal(reply.type, 'control');
+    assert.equal(reply.op, 'model.list');
+    assert.equal(reply.id, 'a');
+    assert.equal(reply.ok, true);
+    assert.match(r.stderr, /unknown op "nope"/, `stderr must name the unknown op:\n${r.stderr}`);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -390,3 +390,163 @@ test('control message with an unknown op is malformed input: exit 2', (t) => {
   assert.match(r.stderr, /^aesop-pipe:/, `unknown op must produce one aesop-pipe: stderr line:\n${r.stderr}`);
   assert.match(r.stderr, /auth\.nosuchop/, `stderr must name the unknown op:\n${r.stderr}`);
 });
+
+// ---------------------------------------------------------------------------
+// S5 review items (red until S2 lands). Items 1-3 and 5 live here; item 4 is in stdio-pipe.test.mjs.
+// ---------------------------------------------------------------------------
+
+const AUTH_CLI = path.join(REPO_ROOT, 'auth', 'cli.mjs');
+const SHORT_KEY_4 = 'abcd';
+const SHORT_KEY_2 = 'Zq';
+const LONG_KEY_32 = ['abcdefghijklmnop', 'qrstuvwxyz012345'].join('');
+const LONG_KEY_32_TAIL = '2345';
+const LONG_KEY_32_PREFIX = LONG_KEY_32.slice(0, 28);
+
+/** The anthropic row from a single-line `auth status` JSON reply. */
+function providerRow(stdout, name) {
+  return singleJsonLine(stdout).providers.find((p) => p.provider === name);
+}
+
+/** Run auth/cli.mjs directly (not through bin/cli.js) with the same sandboxed env as run(). */
+function spawnAuthCliDirect(sb, args, input) {
+  const env = { ...process.env, HOME: sb.home, USERPROFILE: sb.home, AESOP_CONFIG_DIR: sb.cfg };
+  for (const k of CREDENTIAL_ENV_VARS) delete env[k];
+  return spawnSync(process.execPath, [AUTH_CLI, ...args], {
+    cwd: sb.cwd,
+    env,
+    input,
+    encoding: 'utf8',
+    timeout: 30000,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// item 1: short-key redaction
+// ---------------------------------------------------------------------------
+
+test('S5-1a login with a 4-char key never echoes it and displays key=***', (t) => {
+  const sb = makeSandbox(t);
+  const r = run(sb, ['auth', 'login', '--provider', 'anthropic', '--api-key-stdin'], { input: SHORT_KEY_4 + '\n' });
+  assert.equal(r.status, 0, `stderr:\n${r.stderr}`);
+  assertNoSecret(r, [SHORT_KEY_4]);
+  assert.match(r.stdout, /key=\*\*\*/, `a key shorter than 12 characters must display as key=***:\n${r.stdout}`);
+});
+
+test('S5-1b login with a 2-char key never echoes it and displays key=***', (t) => {
+  const sb = makeSandbox(t);
+  const r = run(sb, ['auth', 'login', '--provider', 'anthropic', '--api-key-stdin'], { input: SHORT_KEY_2 + '\n' });
+  assert.equal(r.status, 0, `stderr:\n${r.stderr}`);
+  assertNoSecret(r, [SHORT_KEY_2]);
+  assert.match(r.stdout, /key=\*\*\*/, `a key shorter than 12 characters must display as key=***:\n${r.stdout}`);
+});
+
+test('S5-1c status after a 4-char login shows no tail of the key', (t) => {
+  const sb = makeSandbox(t);
+  const login = run(sb, ['auth', 'login', '--provider', 'anthropic', '--api-key-stdin'], { input: SHORT_KEY_4 + '\n' });
+  assert.equal(login.status, 0, `login stderr:\n${login.stderr}`);
+  const st = run(sb, ['auth', 'status', '--provider', 'anthropic']);
+  assert.equal(st.status, 0, `stderr:\n${st.stderr}`);
+  assertNoSecret(st, [SHORT_KEY_4]);
+  assert.equal(providerRow(st.stdout, 'anthropic').keyTail, null,
+    `a key shorter than 12 characters must carry no tail:\n${st.stdout}`);
+});
+
+test('S5-1d a 32-char key shows exactly its last 4 characters and nothing more of it (guard)', (t) => {
+  const sb = makeSandbox(t);
+  const login = run(sb, ['auth', 'login', '--provider', 'anthropic', '--api-key-stdin'], { input: LONG_KEY_32 + '\n' });
+  assert.equal(login.status, 0, `login stderr:\n${login.stderr}`);
+  const st = run(sb, ['auth', 'status', '--provider', 'anthropic']);
+  assert.equal(st.status, 0, `stderr:\n${st.stderr}`);
+  assertNoSecret(st, [LONG_KEY_32, LONG_KEY_32_PREFIX]);
+  assert.equal(providerRow(st.stdout, 'anthropic').keyTail, LONG_KEY_32_TAIL,
+    `a 32-char key must show exactly its last 4:\n${st.stdout}`);
+});
+
+// ---------------------------------------------------------------------------
+// item 2: no bare control mode
+// ---------------------------------------------------------------------------
+
+test('S5-2 auth/cli.mjs --control exits 2 with empty stdout and one stderr line naming aesop pipe', (t) => {
+  const sb = makeSandbox(t);
+  const res = spawnAuthCliDirect(sb, ['--control'], JSON.stringify({ type: 'control', op: 'auth.status' }) + '\n');
+  assert.equal(res.status, 2, `expected exit 2, got ${res.status}\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`);
+  assert.equal(res.stdout, '', `--control must print nothing to stdout:\n${res.stdout}`);
+  const lines = String(res.stderr).split(/\r?\n/).filter((l) => l.trim() !== '');
+  assert.equal(lines.length, 1, `expected exactly one stderr line, got:\n${res.stderr}`);
+  assert.match(lines[0], /aesop pipe --input-format stream-json/,
+    `the stderr line must name the declared channel:\n${res.stderr}`);
+});
+
+// ---------------------------------------------------------------------------
+// item 3: UI-drivable ops over aesop pipe (stream-json both sides)
+// ---------------------------------------------------------------------------
+
+test('S5-3a control auth.login with api_key stores the key and replies with the status the verb reports', (t) => {
+  const sb = makeSandbox(t);
+  const r = control(sb, { type: 'control', op: 'auth.login', id: 'l1', provider: 'anthropic', api_key: KEY });
+  assert.equal(r.status, 0, `stderr:\n${r.stderr}`);
+  assertNoSecret(r, [KEY]);
+  const reply = singleJsonLine(r.stdout);
+  assert.equal(reply.type, 'control', `reply type:\n${r.stdout}`);
+  assert.equal(reply.op, 'auth.login', `reply op:\n${r.stdout}`);
+  assert.equal(reply.id, 'l1', `reply id:\n${r.stdout}`);
+  assert.equal(reply.ok, true, `reply must be ok:\n${r.stdout}`);
+  const verb = run(sb, ['auth', 'status', '--provider', 'anthropic']);
+  assert.equal(verb.status, 0, `verb stderr:\n${verb.stderr}`);
+  assert.deepEqual(reply.result, JSON.parse(verb.stdout), 'auth.login result must equal what auth status reports after the op');
+});
+
+test('S5-3b control auth.logout replies ok with the status the verb reports after logout', (t) => {
+  const sb = makeSandbox(t);
+  const login = run(sb, ['auth', 'login', '--provider', 'anthropic', '--api-key-stdin'], { input: KEY + '\n' });
+  assert.equal(login.status, 0, `login stderr:\n${login.stderr}`);
+  const r = control(sb, { type: 'control', op: 'auth.logout', id: 'o1', provider: 'anthropic' });
+  assert.equal(r.status, 0, `stderr:\n${r.stderr}`);
+  assertNoSecret(r, [KEY]);
+  const reply = singleJsonLine(r.stdout);
+  assert.equal(reply.type, 'control');
+  assert.equal(reply.op, 'auth.logout');
+  assert.equal(reply.ok, true, `reply must be ok:\n${r.stdout}`);
+  const verb = run(sb, ['auth', 'status', '--provider', 'anthropic']);
+  assert.equal(verb.status, 0, `verb stderr:\n${verb.stderr}`);
+  assert.deepEqual(reply.result, JSON.parse(verb.stdout), 'auth.logout result must equal what auth status reports after the op');
+});
+
+test('S5-3c control model.use with a model selector replies ok with the selection model current reports', (t) => {
+  const sb = makeSandbox(t);
+  const login = run(sb, ['auth', 'login', '--provider', 'anthropic', '--api-key-stdin'], { input: KEY + '\n' });
+  assert.equal(login.status, 0, `login stderr:\n${login.stderr}`);
+  const r = control(sb, { type: 'control', op: 'model.use', id: 'u1', model: 'anthropic/claude-fable-5-1' });
+  assert.equal(r.status, 0, `stderr:\n${r.stderr}`);
+  const reply = singleJsonLine(r.stdout);
+  assert.equal(reply.type, 'control');
+  assert.equal(reply.op, 'model.use');
+  assert.equal(reply.ok, true, `reply must be ok:\n${r.stdout}`);
+  const verb = run(sb, ['model', 'current']);
+  assert.equal(verb.status, 0, `verb stderr:\n${verb.stderr}`);
+  assert.deepEqual(reply.result, JSON.parse(verb.stdout), 'model.use result must equal what model current reports after the op');
+});
+
+// ---------------------------------------------------------------------------
+// item 5: docs string checks
+// ---------------------------------------------------------------------------
+
+function readRepoFile(...parts) {
+  return fs.readFileSync(path.join(REPO_ROOT, ...parts), 'utf8');
+}
+
+test('S5-5a auth/CLAUDE.md states the short-key rule with the phrase "shorter than 12 characters"', () => {
+  assert.ok(readRepoFile('auth', 'CLAUDE.md').includes('shorter than 12 characters'),
+    'auth/CLAUDE.md must say that a key shorter than 12 characters is shown as key=*** with no tail');
+});
+
+test('S5-5b auth/CLAUDE.md does not document --control as a runnable mode', () => {
+  assert.ok(!readRepoFile('auth', 'CLAUDE.md').includes('--control'),
+    'auth/CLAUDE.md must not mention --control; the only control channel is aesop pipe --input-format stream-json');
+});
+
+test('S5-5c stdio/CLAUDE.md unknown-op line says "no further record"', () => {
+  const line = readRepoFile('stdio', 'CLAUDE.md').split(/\r?\n/).find((l) => /unknown op/.test(l));
+  assert.ok(line !== undefined && line.includes('no further record'),
+    `the stdio/CLAUDE.md line about an unknown op must say "no further record":\n${line}`);
+});
