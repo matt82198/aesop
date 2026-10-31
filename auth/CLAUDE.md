@@ -14,7 +14,7 @@
 - `model list` — providers, default models, credential requirement.
 - `model use <provider>/<model>` — records the selection; needs a credential when the provider has an env var.
 - `model current` — prints `<provider>/<model>`.
-- Control (stdin is one JSON line, stdout not a TTY): `auth.status`, `model.list`, `model.current`. Each prints exactly one JSON line.
+- Machine output: when stdout is not a TTY, `auth status`, `model list` and `model current` print exactly one JSON line (ops `auth.status`, `model.list`, `model.current`). Bare `aesop` never reads stdin for these; a stdio control channel (`--input-format stream-json` or `frames`) is the only other route, and is not wired here.
 
 **Exit codes**: 0 ok; 2 bad usage, malformed input, unknown op, or corrupt store; 3 `model use` for a provider that needs a credential and has none.
 

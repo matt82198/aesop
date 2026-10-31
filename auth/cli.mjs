@@ -135,7 +135,12 @@ async function authStatus(argv, io) {
   if (positional.length) throw new UsageError(`unexpected argument "${positional[0]}"`);
   const providers = values.provider ? [requireProvider(values.provider)] : [...PROVIDERS];
   const store = readStore(io.env);
-  for (const row of statusRows(providers, io.env, store)) {
+  const rows = statusRows(providers, io.env, store);
+  if (!io.stdoutIsTTY) {
+    io.out(`${JSON.stringify({ ok: true, op: 'auth.status', providers: rows })}\n`);
+    return EXIT_OK;
+  }
+  for (const row of rows) {
     io.out(`${row.provider}: source=${row.source} model=${row.model} key=${row.keyTail ? `...${row.keyTail}` : '-'}\n`);
   }
   return EXIT_OK;
@@ -187,6 +192,11 @@ function modelVerb(argv, io) {
   const [verb, ...rest] = argv;
   if (verb === 'list') {
     if (rest.length) throw new UsageError('model list takes no arguments');
+    if (!io.stdoutIsTTY) {
+      const providers = PROVIDERS.map((p) => ({ provider: p.name, defaultModel: p.defaultModel, models: [...p.models], envVar: p.envVar }));
+      io.out(`${JSON.stringify({ ok: true, op: 'model.list', providers })}\n`);
+      return EXIT_OK;
+    }
     for (const p of PROVIDERS) {
       const need = p.envVar === null ? 'no credential needed' : `credential env ${p.envVar}`;
       io.out(`${p.name}: default=${p.defaultModel} models=${p.models.join(', ')} (${need})\n`);
@@ -215,10 +225,14 @@ function modelVerb(argv, io) {
   if (verb === 'current') {
     if (rest.length) throw new UsageError('model current takes no arguments');
     const store = readStore(io.env);
-    if (!store.current) {
+    const cur = store.current;
+    const selector = cur ? `${cur.provider}/${cur.model}` : null;
+    if (!io.stdoutIsTTY) {
+      io.out(`${JSON.stringify({ ok: true, op: 'model.current', provider: cur?.provider ?? null, model: cur?.model ?? null, selector })}\n`);
+    } else if (!cur) {
       io.out(`no model selected (default: anthropic/${findProvider('anthropic').defaultModel})\n`);
     } else {
-      io.out(`${store.current.provider}/${store.current.model}\n`);
+      io.out(`${selector}\n`);
     }
     return EXIT_OK;
   }
@@ -289,6 +303,7 @@ export async function runAuthCli(argv, io) {
 function processIo() {
   return {
     env: process.env,
+    stdoutIsTTY: Boolean(process.stdout.isTTY),
     readStdin: async () => {
       if (process.stdin.isTTY) return '';
       const chunks = [];
