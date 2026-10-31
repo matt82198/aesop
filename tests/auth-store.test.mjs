@@ -137,7 +137,7 @@ test('a second login for the same provider replaces the credential instead of ap
   assert.equal(entries[0].credential, KEY2, 're-login must store the new key');
 });
 
-test('re-login status masks the new key, not the old one', (t) => {
+test('re-login status prints no fragment of either key (no-fragment rule, not last-4 masking)', (t) => {
   const sb = makeSandbox(t);
   loginAnthropic(sb, KEY);
   loginAnthropic(sb, KEY2);
@@ -148,6 +148,11 @@ test('re-login status masks the new key, not the old one', (t) => {
   const newLast4 = KEY2.slice(-4);
   assert.ok(!r.stdout.includes(oldLast4), `status must not show the old key's last 4 (${oldLast4}):\n${r.stdout}`);
   assert.ok(!r.stdout.includes(newLast4), `status must not show the new key's last 4 (${newLast4}):\n${r.stdout}`);
+  for (const k of [KEY, KEY2]) {
+    assert.ok(!r.stdout.includes(k.slice(0, 4)), `status must not show the first 4 of a key (${k.slice(0, 4)}):\n${r.stdout}`);
+    assert.doesNotMatch(r.stdout, new RegExp(`(?<![0-9])${k.length}(?![0-9])`),
+      `status must not print a key length (${k.length}) as a bare number:\n${r.stdout}`);
+  }
   assert.ok(!r.stdout.includes(KEY), 'old key must not appear');
   assert.ok(!r.stdout.includes(KEY2), 'new key must not appear either');
 });

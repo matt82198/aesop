@@ -109,15 +109,20 @@ function assertNoSecret(r, secrets) {
 }
 
 /**
- * R1 (S5 round 2): no fragment of any credential reaches stdout or stderr. The 4-character suffix of
- * each key must be absent, and no `key=...` text may be printed. Output shows provider, source and a
- * fixed word (`set` or `none`) only. The earlier "last four characters are shown" contract is retired.
+ * R1 (S5 round 2): no fragment of any credential reaches stdout or stderr. The 4-character prefix and
+ * the 4-character suffix of each key must be absent, the key length must not be printed as a bare
+ * number, and no `key=...` text may be printed. Output shows provider, source and a fixed word (`set`
+ * or `none`) only. The earlier "last four characters are shown" contract is retired.
  */
 function assertNoKeyFragment(r, keys) {
   const text = r.stdout + r.stderr;
   for (const k of keys) {
+    const prefix = k.slice(0, 4);
     const suffix = k.slice(-4);
+    assert.ok(!text.includes(prefix), `key prefix "${prefix}" leaked:\n${text}`);
     assert.ok(!text.includes(suffix), `key fragment "${suffix}" leaked:\n${text}`);
+    assert.doesNotMatch(text, new RegExp(`(?<![0-9])${k.length}(?![0-9])`),
+      `key length ${k.length} printed as a bare number:\n${text}`);
   }
   assert.doesNotMatch(text, /key=/, `output must not contain key=... text:\n${text}`);
 }
@@ -133,7 +138,7 @@ test('auth login --provider anthropic --api-key-stdin stores the key from stdin 
   assertNoSecret(r, [KEY]);
 });
 
-test('auth status --provider anthropic after login reports source store and masks to last 4 characters', (t) => {
+test('auth status --provider anthropic after login reports source store and prints no key fragment (no last-4 masking)', (t) => {
   const sb = makeSandbox(t);
   const login = run(sb, ['auth', 'login', '--provider', 'anthropic', '--api-key-stdin'], { input: KEY + '\n' });
   assert.equal(login.status, 0, `login stderr:\n${login.stderr}`);
@@ -751,6 +756,113 @@ test('R4 auth logout clears the current model selection so model current reports
   assert.equal(ctlEnv.ok, true, `control reply must be ok:\n${ctl.stdout}`);
   assert.equal(ctlEnv.op, 'model.current', `control reply must name the model.current op:\n${ctl.stdout}`);
   assert.equal(ctlEnv.result.selector, null, `after logout the control selector must be null:\n${ctl.stdout}`);
+});
+
+// ---------------------------------------------------------------------------
+// S5 review, item 2c: an unknown all-lowercase flag is reported as an unknown flag, never echoed.
+// ---------------------------------------------------------------------------
+
+test('S5-2c auth status with an unknown all-lowercase flag says unknown flag and does not echo the name', (t) => {
+  const sb = makeSandbox(t);
+  const probe = ['vmqkzthe', 'wrlbxonj', 'ufgyaspc', 'dihqtmzv'].join('');
+  const r = run(sb, ['auth', 'status', `--${probe}`]);
+  assert.equal(r.status, 2, `expected exit 2, got ${r.status}\nstderr:\n${r.stderr}`);
+  assert.ok(!(r.stdout + r.stderr).includes(probe), `flag name echoed in output:\n${r.stderr}`);
+  assert.match(r.stderr, /unknown flag/, `message must say unknown flag:\n${r.stderr}`);
+});
+
+// ---------------------------------------------------------------------------
+// S5 review, item 3: a bare --control on any non-top-level path names the declared channel.
+// ---------------------------------------------------------------------------
+
+const CONTROL_CHANNEL = 'aesop pipe --input-format stream-json --output-format stream-json';
+
+function assertControlChannelNamed(r, invocation) {
+  assert.equal(r.status, 2, `${invocation}: expected exit 2, got ${r.status}\nstderr:\n${r.stderr}`);
+  assert.ok(r.stderr.includes(CONTROL_CHANNEL), `${invocation}: stderr must name the declared channel:\n${r.stderr}`);
+}
+
+test('S5-3a aesop auth status --control exits 2 and names the stream-json channel', (t) => {
+  const sb = makeSandbox(t);
+  assertControlChannelNamed(run(sb, ['auth', 'status', '--control']), 'auth status --control');
+});
+
+test('S5-3b aesop auth login --control exits 2 and names the stream-json channel', (t) => {
+  const sb = makeSandbox(t);
+  assertControlChannelNamed(run(sb, ['auth', 'login', '--control']), 'auth login --control');
+});
+
+test('S5-3c aesop model list --control exits 2 and names the stream-json channel', (t) => {
+  const sb = makeSandbox(t);
+  assertControlChannelNamed(run(sb, ['model', 'list', '--control']), 'model list --control');
+});
+
+test('S5-3d aesop model current --control exits 2 and names the stream-json channel', (t) => {
+  const sb = makeSandbox(t);
+  assertControlChannelNamed(run(sb, ['model', 'current', '--control']), 'model current --control');
+});
+
+test('S5-3e aesop pipe --control exits 2 and names the stream-json channel', (t) => {
+  const sb = makeSandbox(t);
+  assertControlChannelNamed(run(sb, ['pipe', '--control']), 'pipe --control');
+});
+
+// ---------------------------------------------------------------------------
+// S5 review, item 4: logout clears a selection that is backed only by an env credential (no stored
+// entry). Before the fix, dropCredentials only cleared `current` when it dropped a stored entry.
+// ---------------------------------------------------------------------------
+
+/** A store with no credential entries and a selection naming anthropic (the env credential is the only backing). */
+const ENV_ONLY_SELECTION_STORE = JSON.stringify({
+  providers: {},
+  current: { provider: 'anthropic', model: 'claude-fable-5-1' },
+});
+
+function writeAuthStore(sb, text) {
+  fs.mkdirSync(sb.cfg, { recursive: true });
+  fs.writeFileSync(path.join(sb.cfg, 'auth.json'), text);
+}
+
+function assertNoSelection(r, invocation) {
+  assert.equal(r.status, 0, `${invocation}: model current stderr:\n${r.stderr}`);
+  const obj = singleJsonLine(r.stdout);
+  assert.equal(obj.selector, null, `${invocation}: model current must report no selection:\n${r.stdout}`);
+  assert.equal(obj.provider, null, `${invocation}: provider must be null:\n${r.stdout}`);
+  assert.equal(obj.model, null, `${invocation}: model must be null:\n${r.stdout}`);
+}
+
+test('S5-4a auth logout (all) clears a selection backed only by an env credential, so model current reports none', (t) => {
+  const sb = makeSandbox(t);
+  writeAuthStore(sb, ENV_ONLY_SELECTION_STORE);
+  const env = { ANTHROPIC_API_KEY: ENV_KEY };
+  const out = run(sb, ['auth', 'logout'], { env });
+  assert.equal(out.status, 0, `logout stderr:\n${out.stderr}`);
+  assertNoSecret(out, [ENV_KEY]);
+  assertNoSelection(run(sb, ['model', 'current'], { env }), 'auth logout');
+});
+
+test('S5-4b auth logout --provider anthropic clears a selection backed only by an env credential, so model current reports none', (t) => {
+  const sb = makeSandbox(t);
+  writeAuthStore(sb, ENV_ONLY_SELECTION_STORE);
+  const env = { ANTHROPIC_API_KEY: ENV_KEY };
+  const out = run(sb, ['auth', 'logout', '--provider', 'anthropic'], { env });
+  assert.equal(out.status, 0, `logout stderr:\n${out.stderr}`);
+  assertNoSecret(out, [ENV_KEY]);
+  assertNoSelection(run(sb, ['model', 'current'], { env }), 'auth logout --provider anthropic');
+});
+
+test('S5-4c control auth.logout clears a selection backed only by an env credential, so model current reports none', (t) => {
+  const sb = makeSandbox(t);
+  writeAuthStore(sb, ENV_ONLY_SELECTION_STORE);
+  const env = { ANTHROPIC_API_KEY: ENV_KEY };
+  const out = control(sb, { type: 'control', op: 'auth.logout' }, { env });
+  assert.equal(out.status, 0, `control auth.logout stderr:\n${out.stderr}`);
+  const reply = singleJsonLine(out.stdout);
+  assert.equal(reply.ok, true, `control auth.logout must reply ok:\n${out.stdout}`);
+  const cur = control(sb, { type: 'control', op: 'model.current' }, { env });
+  assert.equal(cur.status, 0, `stderr:\n${cur.stderr}`);
+  const ctlEnv = singleJsonLine(cur.stdout);
+  assert.equal(ctlEnv.result.selector, null, `after control auth.logout the selector must be null:\n${cur.stdout}`);
 });
 
 test('R4 auth logout --provider anthropic clears a selection that names that provider', (t) => {

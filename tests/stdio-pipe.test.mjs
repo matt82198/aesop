@@ -620,7 +620,7 @@ function runBinCli(args, input, { cwd, env }) {
   });
 }
 
-test('unknown_op_after_answered_op_stops_with_no_further_record', { timeout: 60000 }, async () => {
+test('unknown_op_after_answered_op_gets_error_envelope_and_pipe_keeps_running_exit_0', { timeout: 60000 }, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-pipe-unknown-op-'));
   try {
     const home = path.join(root, 'home');
@@ -640,16 +640,93 @@ test('unknown_op_after_answered_op_stops_with_no_further_record', { timeout: 600
       JSON.stringify({ type: 'control', op: 'nope', id: 'b' }) + '\n';
     const r = await runBinCli(['pipe', '--input-format', 'stream-json', '--output-format', 'stream-json'], input, { cwd, env });
     assert.equal(r.signal, null, 'must exit normally, not by signal');
-    assert.equal(r.code, 2, `unknown op must exit 2; stderr:\n${r.stderr}`);
+    // S5 item 5: an op failure is an envelope on stdout (ok:false, same op and id), not a stop.
+    // The pipe keeps running, so the record after the failure is still read and the exit is 0.
+    assert.equal(r.code, 0, `an unknown op is an op failure: the pipe must keep running and exit 0; stderr:\n${r.stderr}`);
     const lines = r.stdout.split(/\r?\n/).filter((l) => l.trim() !== '');
-    assert.equal(lines.length, 1, `exactly one stdout record (the reply to model.list) and nothing after it:\n${r.stdout}`);
+    assert.equal(lines.length, 2, `one reply for model.list and one error envelope for nope:\n${r.stdout}`);
     const reply = JSON.parse(lines[0]);
     assert.equal(reply.type, 'control');
     assert.equal(reply.op, 'model.list');
     assert.equal(reply.id, 'a');
     assert.equal(reply.ok, true);
-    assert.match(r.stderr, /unknown op "nope"/, `stderr must name the unknown op:\n${r.stderr}`);
+    const envelope = JSON.parse(lines[1]);
+    assert.equal(envelope.type, 'control', `envelope type:\n${r.stdout}`);
+    assert.equal(envelope.op, 'nope', `envelope must carry the failing op:\n${r.stdout}`);
+    assert.equal(envelope.id, 'b', `envelope must carry the request id:\n${r.stdout}`);
+    assert.equal(envelope.ok, false, `envelope must report ok:false:\n${r.stdout}`);
+    assert.match(envelope.error, /unknown op "nope"/, `envelope error must name the unknown op:\n${r.stdout}`);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ============================================================================
+// S5 review (items 2a, 2b, 5): the pipe must not echo a record type or a flag name, and a control op
+// error on the stream-json channel is an envelope (ok:false, same op and id), exit 0.
+// Probe words are assembled at runtime so no literal looks like a secret to the scanner.
+// ============================================================================
+
+/** Sandbox for one `node bin/cli.js pipe ...` run: isolated HOME, config dir and cwd, no credentials. */
+function makePipeSandbox() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-pipe-s5-'));
+  const home = path.join(root, 'home');
+  const cwd = path.join(root, 'cwd');
+  fs.mkdirSync(home);
+  fs.mkdirSync(cwd);
+  const env = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    AESOP_CONFIG_DIR: path.join(root, 'config'),
+    ANTHROPIC_API_KEY: '',
+    AESOP_API_KEY: '',
+  };
+  return { root, cwd, env };
+}
+
+test('S5-2a unknown stream-json record type exits 2 and does not echo the type word to stderr', { timeout: 60000 }, async () => {
+  const probe = ['qzv', 'mrtlhow', 'kpydsxa', 'nbgjf'].join('');
+  const sb = makePipeSandbox();
+  try {
+    const input = JSON.stringify({ type: probe }) + '\n';
+    const r = await runBinCli(['pipe', '--input-format', 'stream-json', '--output-format', 'stream-json'], input, { cwd: sb.cwd, env: sb.env });
+    assert.equal(r.code, 2, `unknown record type must exit 2; stderr:\n${r.stderr}`);
+    assert.ok(!(r.stdout + r.stderr).includes(probe), `record type word echoed in output:\n${r.stderr}`);
+  } finally {
+    fs.rmSync(sb.root, { recursive: true, force: true });
+  }
+});
+
+test('S5-2b pipe with an unknown all-lowercase flag exits 2 and does not echo the flag name', { timeout: 60000 }, async () => {
+  const probe = ['vmqkzthe', 'wrlbxonj', 'ufgyaspc', 'dihqtmzv'].join('');
+  const sb = makePipeSandbox();
+  try {
+    const r = await runBinCli(['pipe', `--${probe}`], '', { cwd: sb.cwd, env: sb.env });
+    assert.equal(r.code, 2, `unknown flag must exit 2; stderr:\n${r.stderr}`);
+    assert.ok(!(r.stdout + r.stderr).includes(probe), `flag name echoed in output:\n${r.stderr}`);
+  } finally {
+    fs.rmSync(sb.root, { recursive: true, force: true });
+  }
+});
+
+test('S5-5 control model.use with an unknown model answers ok:false envelope with the same op and id, exit 0', { timeout: 60000 }, async () => {
+  const sb = makePipeSandbox();
+  try {
+    const input = JSON.stringify({ type: 'control', op: 'model.use', id: 'e1', model: 'nosuch/model' }) + '\n';
+    const r = await runBinCli(['pipe', '--input-format', 'stream-json', '--output-format', 'stream-json'], input, { cwd: sb.cwd, env: sb.env });
+    assert.equal(r.signal, null, 'must exit normally, not by signal');
+    assert.equal(r.code, 0, `an op failure must not end the pipe: exit 0 expected; stderr:\n${r.stderr}`);
+    const lines = r.stdout.split(/\r?\n/).filter((l) => l.trim() !== '');
+    assert.equal(lines.length, 1, `exactly one envelope on stdout:\n${r.stdout}`);
+    const envelope = JSON.parse(lines[0]);
+    assert.equal(envelope.type, 'control', `envelope type:\n${r.stdout}`);
+    assert.equal(envelope.op, 'model.use', `envelope must carry the failing op:\n${r.stdout}`);
+    assert.equal(envelope.id, 'e1', `envelope must carry the request id:\n${r.stdout}`);
+    assert.equal(envelope.ok, false, `envelope must report ok:false:\n${r.stdout}`);
+    assert.equal(typeof envelope.error, 'string', `envelope must carry an error message:\n${r.stdout}`);
+    assert.notEqual(envelope.error, '', 'error message must not be empty');
+  } finally {
+    fs.rmSync(sb.root, { recursive: true, force: true });
   }
 });
