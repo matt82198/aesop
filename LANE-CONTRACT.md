@@ -623,4 +623,10 @@ Why: 2026-10-20 integrate/playable-dungeon reached 154 commits over 15 hours wit
 4. The orchestrator sequences stages from hand-backs. A stage starts only when the previous hand-back names its output artifact (path or sha).
 5. Briefs are the filled template from docs/STAGE-CONTRACTS.md and nothing more. A lane never widens its own stage.
 
+### S3 test-log recipe
+- Problem: a foreground Bash test run is moved to the background by the harness after 180 s and its inline summary is lost. A lane must never rerun the suite to recover it, and must never use `run_in_background` for `node --test`, `npm test` or `pytest` (a hook denies it).
+- Recipe (aesop): one foreground Bash call with timeout 600000, cwd pinned in the same call because cwd does not persist between calls: `cd <worktree> && python tools/test_isolation_tripwire.py -- node --import ./tests/helpers/isolated-env.mjs --test --test-reporter=spec --test-reporter-destination=.s3-test.log --test-force-exit --test-timeout=60000 tests/*.test.mjs`. Then `tail -n 60 <worktree>/.s3-test.log` for the summary lines and `grep -n "✖" <worktree>/.s3-test.log` for the failing names. The lane reports the summary lines verbatim (tests, pass, fail, skipped) and every failing name with its file:line.
+- Recipe (brain claude-config): `cd <worktree> && node --test --test-reporter=spec --test-reporter-destination=.s3-suite.log hooks/*.test.mjs`. A bare directory argument is rejected by Node 24, so use the glob. The secret scan needs `--repo <worktree>`.
+- The log files are scratch: gitignored or untracked, never added to a commit. The lane reports their path and does not delete them.
+
 Provenance: Matt 2026-10-22, rows f-bcd7ff61 and f-11a046ce, ruling R-LANES-1.
