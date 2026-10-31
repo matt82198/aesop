@@ -43,6 +43,8 @@
     "driver/*.md",
     "driver/*.json",
     "scan/*.mjs",
+    "stdio/*.js",
+    "stdio/*.mjs",
     "aesop.config.example.json",
     "CLAUDE-TEMPLATE.md",
     "README.md",
