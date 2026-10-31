@@ -401,6 +401,7 @@ async function authVerb(argv, io) {
   if (verb === 'login') return authLogin(rest, io);
   if (verb === 'status') return authStatus(rest, io);
   if (verb === 'logout') return authLogout(rest, io);
+  if (verb === '--control') throw new UsageError(CONTROL_CHANNEL_MESSAGE);
   throw new UsageError(verb ? `unknown auth verb "${verb}" (use login, status, logout)` : 'auth requires a verb: login, status, or logout');
 }
 
