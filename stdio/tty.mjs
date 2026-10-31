@@ -1,6 +1,6 @@
 /**
- * TTY detection seam for the stdio pipeline. The interactive chat mode will branch on detectMode();
- * today the pipeline always runs as a filter and does not read these values.
+ * TTY detection seam, exporting isTTY(stream) and detectMode(streams). chat/cli.mjs calls detectMode()
+ * to choose interactive mode; the stdio pipeline always runs as a filter and never reads these values.
  *
  * Node stdlib only. Importing this module performs no I/O.
  *

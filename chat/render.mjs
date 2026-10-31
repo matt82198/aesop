@@ -74,8 +74,13 @@ export function wrapText(text, width) {
  * @returns {string[]}
  */
 function block(firstPrefix, restPrefix, text, columns, paint) {
-  const width = Math.max(1, columns - Math.max(firstPrefix.length, restPrefix.length));
-  return wrapText(text, width).map((body, i) => paint(`${i === 0 ? firstPrefix : restPrefix}${body}`));
+  // The prefix gives way before the text does: it is clipped so at least one column stays for body.
+  const prefixLen = Math.min(Math.max(firstPrefix.length, restPrefix.length), Math.max(0, columns - 1));
+  const width = columns - prefixLen;
+  return wrapText(text, width).map((body, i) => {
+    const prefix = i === 0 ? firstPrefix : restPrefix;
+    return paint(`${prefix.slice(0, prefixLen)}${body}`);
+  });
 }
 
 /**
@@ -98,19 +103,23 @@ function formatElapsed(ms) {
 }
 
 /**
- * Decides whether ANSI color is on. NO_COLOR (non-empty) and --no-color both force it off.
+ * Decides whether ANSI color is on. NO_COLOR (non-empty) and --no-color both force it off and win
+ * over FORCE_COLOR. FORCE_COLOR (non-empty, not "0") forces it on even without a TTY.
  * @param {{env?: Record<string, string|undefined>, argv?: string[], isTTY?: boolean}} [opts]
  * @returns {boolean}
  */
 export function resolveColor({ env = {}, argv = [], isTTY = false } = {}) {
   if (env.NO_COLOR !== undefined && env.NO_COLOR !== '') return false;
   if (argv.includes('--no-color')) return false;
+  if (env.FORCE_COLOR !== undefined && env.FORCE_COLOR !== '' && env.FORCE_COLOR !== '0') return true;
   return isTTY === true;
 }
 
 /**
  * Decides whether box-drawing characters are safe. An explicit boolean wins; TERM=dumb and an
- * unknown Windows console (no TERM, no Windows Terminal session) fall back to ASCII.
+ * unknown Windows console (no TERM, no Windows Terminal session) fall back to ASCII. Otherwise the
+ * first non-empty locale variable among LC_ALL, LC_CTYPE, LANG decides: UTF-8 (any case, "utf8"
+ * or "UTF-8") is unicode, and any other value such as "C" or "POSIX" is not.
  * @param {{env?: Record<string, string|undefined>, unicode?: boolean}} [opts]
  * @returns {boolean}
  */
@@ -118,6 +127,8 @@ export function resolveUnicode({ env = {}, unicode } = {}) {
   if (typeof unicode === 'boolean') return unicode;
   if (env.TERM === 'dumb') return false;
   if (process.platform === 'win32' && !env.TERM && !env.WT_SESSION) return false;
+  const locale = [env.LC_ALL, env.LC_CTYPE, env.LANG].find((v) => typeof v === 'string' && v !== '');
+  if (locale !== undefined) return /utf-?8/i.test(locale);
   return true;
 }
 
@@ -186,6 +197,8 @@ export function renderFrame(state, opts = {}) {
 
   const header = [...banner];
   const room = rows - header.length - footer.length;
-  const visibleBody = room > 0 ? body.slice(Math.max(0, body.length - room)) : [];
-  return [...header, ...visibleBody, ...footer].join('\n');
+  // Oldest transcript lines go first. With no room left for the transcript, the banner goes too,
+  // so the frame never exceeds rows and the input line (the last footer line) always stays.
+  if (room > 0) return [...header, ...body.slice(Math.max(0, body.length - room)), ...footer].join('\n');
+  return [...header, ...footer].slice(-rows).join('\n');
 }

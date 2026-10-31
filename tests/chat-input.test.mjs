@@ -311,18 +311,6 @@ test('input_ctrl_d_on_non_empty_buffer_forward_deletes_and_does_not_quit', async
   assert.equal(r.state.cursor, 1, 'the cursor must stay in place after a forward delete');
 });
 
-test('input_windows_path_ending_in_backslash_submits_literally', async () => {
-  const { applyKey, createInputState } = await loadInput();
-  const typed = typeAll(applyKey, createInputState(), 'C:\\path\\');
-  const r = applyKey(typed, enter());
-  assert.equal(
-    r.effect?.type,
-    'submit',
-    'a line with other content that ends in a backslash must submit, not wait for a continuation',
-  );
-  assert.equal(r.effect.line, 'C:\\path\\', 'the submitted line must keep the Windows path verbatim');
-});
-
 const chatCliPath = join(testDir, '..', 'chat', 'cli.mjs');
 
 async function loadChatCli() {

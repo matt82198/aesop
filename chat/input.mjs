@@ -100,12 +100,15 @@ export function applyKey(state, key = {}) {
   const s = { ...state, ctrlCPending: false };
   const { cursor, inputBuffer: buf } = s;
 
+  // EOF convention: ctrl-d quits only on an empty line; otherwise it forward-deletes like the delete key.
+  if (key.ctrl && name === 'd' && buf === '') return { state: s, effect: { type: 'quit' } };
+
   if (name === 'return' || name === 'enter') return onEnter(s);
   if (name === 'backspace') {
     if (cursor === 0) return { state: s, effect: null };
     return { state: withBuffer(s, buf.slice(0, cursor - 1) + buf.slice(cursor), cursor - 1), effect: null };
   }
-  if (name === 'delete') {
+  if (name === 'delete' || (key.ctrl && name === 'd')) {
     return { state: withBuffer(s, buf.slice(0, cursor) + buf.slice(cursor + 1), cursor), effect: null };
   }
   if (name === 'left') return { state: withBuffer(s, buf, Math.max(0, cursor - 1)), effect: null };

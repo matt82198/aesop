@@ -140,8 +140,8 @@ const VERSION = require('../package.json').version;
 // is set. A bare `aesop` on a non-TTY stays the pipe filter whatever those say.
 const bareArgs = args.filter((arg) => arg !== '--chat-default');
 const isBareInvocation = bareArgs.length === 0;
-const isChatDispatch = args[0] === 'chat'
-  || (isBareInvocation && isInteractive() && (args.includes('--chat-default') || process.env.AESOP_DEFAULT === 'chat'));
+// A bare invocation on a TTY opens chat only through shouldEnterChat (see the chat block in the main IIFE).
+const isChatDispatch = args[0] === 'chat';
 const isPipeDispatch = args[0] === 'pipe' || (isBareInvocation && !isInteractive());
 const isNamespaceDispatch = isPipeDispatch || isChatDispatch || (args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]));
 if (!isNamespaceDispatch) {
@@ -1705,6 +1705,21 @@ function installPrePushHook(targetDir, templateRoot) {
 if (!isRuntimeCommand) {
   (async () => {
     try {
+      // Bare invocation: the --chat-default / AESOP_DEFAULT=chat decision comes from chat/cli.mjs
+      // (ESM, so import() here). Pipes never reach this point; shouldEnterChat is false off a TTY.
+      if (isBareInvocation) {
+        const chatMod = await import(require('url').pathToFileURL(path.join(__dirname, '..', 'chat', 'cli.mjs')).href);
+        if (chatMod.shouldEnterChat({ interactive: isInteractive(), args, env: process.env })) {
+          process.exitCode = await chatMod.runChat({
+            argv: [],
+            stdin: process.stdin,
+            stdout: process.stdout,
+            stderr: process.stderr,
+            env: process.env,
+          });
+          return;
+        }
+      }
       let finalProjectName = projectName;
     let finalReposStr = reposStr;
     let finalDomainsStr = domainsStr;

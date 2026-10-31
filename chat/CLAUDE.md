@@ -15,15 +15,15 @@ Node stdlib only, ESM `.mjs`. No `package.json` inside `chat/`. The TTY decision
 ## Contract
 
 **Files**
-- `chat/render.mjs` — pure. `renderFrame(state, {columns, rows, color, unicode})` returns lines joined by `\n`; `resolveColor({env, argv, isTTY})`; `resolveUnicode({env, unicode})`.
+- `chat/render.mjs` — pure. `renderFrame(state, {columns, rows, color, unicode})` returns lines joined by `\n`; `resolveColor({env, argv, isTTY})` (NO_COLOR and `--no-color` off, FORCE_COLOR on); `resolveUnicode({env, unicode})` (first of LC_ALL, LC_CTYPE, LANG decides; UTF-8 on).
 - `chat/input.mjs` — pure reducer. `createInputState()`; `applyKey(state, key)` returns `{state, effect}` for readline-shaped keys; `parseSlash(line)` returns `{command, arg?}`, `{error}`, or `null`.
-- `chat/session.mjs` — `class Session({columns, rows, color, status, onFrame})`. `submit(line, chunks?)` returns a promise. `state` holds `transcript` and `status`. `echoSource(line)` is the default backend.
-- `chat/cli.mjs` — `runChat({argv, stdin, stdout, stderr, env, source?})` returns an exit code. The `chat` verb in `bin/cli.js` dynamic-imports it.
+- `chat/session.mjs` — `class Session({columns, rows, color, status, onFrame})`. `submit(line, chunks?)` returns a promise; `resize(columns, rows)` sets the size the next frame uses. `state` holds `transcript` and `status`. `echoSource(line)` is the default backend.
+- `chat/cli.mjs` — `runChat({argv, stdin, stdout, stderr, env, source?})` returns an exit code. `shouldEnterChat({interactive, args, env})` is the bare-invocation seam: true only on a TTY with `--chat-default` or `AESOP_DEFAULT=chat`. `bin/cli.js` dynamic-imports this file for both the `chat` verb and the bare case.
 
 **Slash commands**: `/help`, `/model <provider>/<model>`, `/auth`, `/clear`, `/exit`, `/quit`.
 
 **Exit codes**
-- `0` — help printed, or the interactive session ended (`/exit`, `/quit`, or ctrl-c twice).
+- `0` — help printed, or the interactive session ended (`/exit`, `/quit`, ctrl-c twice, or ctrl-d on an empty line).
 - `2` — usage error, or stdin/stdout is not a terminal. In that case stdout stays empty and stderr gets exactly one line naming `aesop pipe`.
 
 **Wiring in bin/cli.js**: `aesop chat`; bare `aesop` on a TTY enters chat when `--chat-default` or `AESOP_DEFAULT=chat` is set. A bare `aesop` on a non-TTY stays the pipe filter.
@@ -36,9 +36,9 @@ Node stdlib only, ESM `.mjs`. No `package.json` inside `chat/`. The TTY decision
 4. The input reducer is pure: `applyKey` never touches a stream.
 5. True streaming: each backend chunk is rendered and emitted before the next chunk is awaited. A buffered implementation fails `session_first_chunk_is_framed_before_stream_ends`.
 6. `color: false` emits no `ESC` byte. ANSI escapes are hand-written constants, not a library.
-7. Box-drawing characters appear only when `unicode` is true. ASCII (`+ - |`) is the fallback, and `TERM=dumb` forces it.
-8. Every rendered line fits within `columns` as measured with ANSI stripped.
-9. Only the streaming assistant line changes between spinner ticks.
+7. Box-drawing characters appear only when `unicode` is true. ASCII (`+ - |`) is the fallback; `TERM=dumb` and a non-UTF-8 locale (first of LC_ALL, LC_CTYPE, LANG) force it.
+8. Every rendered line fits within `columns` as measured with ANSI stripped. Prefixes are clipped before text is wrapped. A frame never has more than `rows` lines: the oldest transcript lines go first, then the banner, and the input line always stays.
+9. The spinner glyph is drawn only on the streaming assistant line, and it advances only when a backend chunk arrives (`status.spinnerTick` increments per chunk; there is no timer). Each frame is written whole after a clear-and-home, so the terminal repaints the full screen, not just that line.
 
 ## How to test
 

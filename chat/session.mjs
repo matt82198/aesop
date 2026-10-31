@@ -71,6 +71,17 @@ export class Session {
   }
 
   /**
+   * Records a new terminal size. The next emitted frame uses it; resize itself emits nothing,
+   * so the caller re-renders (cli.mjs does this on the stdout resize event).
+   * @param {number} columns
+   * @param {number} rows
+   */
+  resize(columns, rows) {
+    this.opts.columns = Math.max(1, Math.trunc(columns) || 1);
+    this.opts.rows = Math.max(1, Math.trunc(rows) || 1);
+  }
+
+  /**
    * Copies the line-editor buffer and cursor into the session state, then emits a frame.
    * @param {{inputBuffer: string, cursor: number}} input
    */

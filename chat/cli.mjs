@@ -81,6 +81,18 @@ export async function runChat({
   return runInteractive({ argv, stdin, stdout, env, source });
 }
 
+/**
+ * Decides whether a bare `aesop` invocation opens chat instead of the wizard. Chat is opt-in
+ * (--chat-default in args, or AESOP_DEFAULT=chat) and only ever on a terminal; a pipe stays the filter.
+ * bin/cli.js calls this from its bare-invocation path.
+ * @param {{interactive: boolean, args?: string[], env?: Record<string, string|undefined>}} opts
+ * @returns {boolean}
+ */
+export function shouldEnterChat({ interactive, args = [], env = {} } = {}) {
+  if (interactive !== true) return false;
+  return args.includes('--chat-default') || env.AESOP_DEFAULT === 'chat';
+}
+
 function runInteractive({ argv, stdin, stdout, env, source }) {
   const session = new Session({
     columns: stdout.columns || 80,
@@ -97,6 +109,7 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
 
     const finish = (code) => {
       stdin.removeListener('keypress', onKeypress);
+      if (typeof stdout.removeListener === 'function') stdout.removeListener('resize', onResize);
       if (typeof stdin.setRawMode === 'function') stdin.setRawMode(false);
       stdin.pause();
       resolve(code);
@@ -104,9 +117,16 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
 
     const submit = (line) => {
       chain = chain.then(async () => {
-        await session.submit(line, source(line));
+        // Slash commands run inside the session; only a plain turn ever reaches the backend source.
+        const chunks = line.startsWith('/') ? undefined : source(line);
+        await session.submit(line, chunks);
         if (session.state.exit) finish(0);
       });
+    };
+
+    const onResize = () => {
+      session.resize(stdout.columns || 80, stdout.rows || 24);
+      session.setInput(input);
     };
 
     const onKeypress = (str, key) => {
@@ -131,6 +151,7 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     readline.emitKeypressEvents(stdin);
     stdin.setRawMode(true);
     stdin.on('keypress', onKeypress);
+    if (typeof stdout.on === 'function') stdout.on('resize', onResize);
     stdin.resume();
     session.setInput(input);
   });
