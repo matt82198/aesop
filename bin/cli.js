@@ -135,8 +135,11 @@ const DOCUMENTED_FLAGS = new Set([
 const VERSION = require('../package.json').version;
 // Stdio pipeline dispatch: `aesop pipe [stdio flags]`, and a bare `aesop` with no TTY on
 // stdin/stdout (a filter, never a scaffold). Its flags pass through untouched, like Python dispatch.
-const isPipeDispatch = args[0] === 'pipe' || (args.length === 0 && !isInteractive());
-const isNamespaceDispatch = isPipeDispatch || (args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]));
+const isBareFilter = args.length === 0 && !isInteractive();
+const isPipeDispatch = args[0] === 'pipe' || isBareFilter;
+// Auth and model verbs (auth/cli.mjs). Their arguments pass through untouched; they never scaffold.
+const isAuthDispatch = args[0] === 'auth' || args[0] === 'model';
+const isNamespaceDispatch = isPipeDispatch || isAuthDispatch || (args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]));
 if (!isNamespaceDispatch) {
   if (args.includes('--version') || args.includes('-v')) {
     console.log(VERSION);
@@ -148,6 +151,112 @@ if (!isNamespaceDispatch) {
     printHelp(console.error);
     process.exit(2);
   }
+}
+
+// Auth/model helpers. AUTH_CLI answers `auth ...`, `model ...` and control messages (`--control`).
+const AUTH_CLI = path.join(__dirname, '..', 'auth', 'cli.mjs');
+const STDIO_CLI = path.join(__dirname, '..', 'stdio', 'cli.mjs');
+// A control message is one JSON object whose first key is type "control". Only a line that starts
+// like this is treated as control; every other byte stream goes to the stdio filter untouched.
+const CONTROL_LINE_START = /^\s*\{\s*"type"\s*:\s*"control"/;
+const CONTROL_PEEK_MAX = 65536;
+const SLEEP_CELL = new Int32Array(new SharedArrayBuffer(4));
+
+/**
+ * Run auth/cli.mjs synchronously and exit with its code (fail closed on signal or spawn error).
+ * @param {string[]} childArgs argv for auth/cli.mjs
+ * @param {Buffer|undefined} input bytes for the child's stdin, or undefined to inherit stdin
+ */
+function runAuthChild(childArgs, input) {
+  const { spawnSync } = require('child_process');
+  if (!fs.existsSync(AUTH_CLI)) {
+    console.error(`Error: auth CLI not found at ${AUTH_CLI}`);
+    process.exit(2);
+  }
+  const result = spawnSync(process.execPath, [AUTH_CLI, ...childArgs], {
+    stdio: input === undefined ? 'inherit' : ['pipe', 'inherit', 'inherit'],
+    input,
+    windowsHide: true,
+  });
+  if (result.error) {
+    console.error(`Error spawning ${process.execPath}: ${result.error.message}`);
+    process.exit(2);
+  }
+  process.exit(exitCodeFromSpawnResult(result));
+}
+
+/**
+ * Read stdin only as far as needed to decide whether it opens with a control line. Stops at once
+ * when the first non-space byte is not "{" (binary or non-control data is passed on immediately),
+ * otherwise at the first newline, at CONTROL_PEEK_MAX bytes, or at end of input.
+ * @returns {{head: Buffer, eof: boolean, control: boolean}} bytes consumed, whether input ended, and whether they open a control line
+ */
+function peekStdinHead() {
+  const chunks = [];
+  let total = 0;
+  let eof = false;
+  const buf = Buffer.alloc(4096);
+  for (;;) {
+    let n;
+    try {
+      n = fs.readSync(0, buf, 0, buf.length, null);
+    } catch (err) {
+      if (err.code === 'EAGAIN') {
+        Atomics.wait(SLEEP_CELL, 0, 0, 10);
+        continue;
+      }
+      n = 0; // end of input (Windows reports a closed pipe as an error) or a closed stdin
+    }
+    if (n === 0) {
+      eof = true;
+      break;
+    }
+    chunks.push(Buffer.from(buf.subarray(0, n)));
+    total += n;
+    const head = Buffer.concat(chunks);
+    const firstNonSpace = head.toString('utf8').trimStart()[0];
+    if (firstNonSpace === undefined) continue; // whitespace only so far
+    if (firstNonSpace !== '{') break; // not a control line: pass through now
+    if (head.indexOf(0x0a) !== -1 || total >= CONTROL_PEEK_MAX) break;
+  }
+  const bytes = Buffer.concat(chunks);
+  const firstLine = bytes.toString('utf8').split('\n')[0];
+  return { head: bytes, eof, control: CONTROL_LINE_START.test(firstLine) };
+}
+
+/**
+ * Bare `aesop` with stdin or stdout not a TTY. A control line on stdin goes to auth/cli.mjs;
+ * everything else is streamed to stdio/cli.mjs byte for byte. Never returns.
+ */
+function runBareNonTtyFilter() {
+  const { spawn } = require('child_process');
+  if (!fs.existsSync(STDIO_CLI)) {
+    console.error(`Error: stdio pipeline not found at ${STDIO_CLI}`);
+    process.exit(2);
+  }
+  const peek = peekStdinHead();
+  if (peek.control) runAuthChild(['--control'], peek.head);
+  const child = spawn(process.execPath, [STDIO_CLI], { stdio: ['pipe', 'inherit', 'inherit'], windowsHide: true });
+  child.on('error', (err) => {
+    console.error(`Error spawning ${process.execPath}: ${err.message}`);
+    process.exit(2);
+  });
+  child.on('close', (code, signal) => {
+    process.exit(exitCodeFromSpawnResult({ status: code, signal }));
+  });
+  // The child may exit before reading all of its input; its close handler carries the verdict.
+  child.stdin.on('error', () => {});
+  if (peek.head.length > 0) child.stdin.write(peek.head);
+  if (peek.eof) child.stdin.end();
+  else process.stdin.pipe(child.stdin);
+}
+
+if (isAuthDispatch) {
+  runAuthChild(args, undefined);
+}
+
+if (isBareFilter) {
+  runBareNonTtyFilter();
 }
 
 // Stdio pipeline: runs before any scaffolding or filesystem work. stdio: 'inherit' so the bytes
