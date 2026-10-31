@@ -43,6 +43,7 @@
     "driver/*.md",
     "driver/*.json",
     "scan/*.mjs",
+    "chat/",
     "auth/",
     "stdio/*.js",
     "stdio/*.mjs",

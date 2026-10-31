@@ -130,7 +130,8 @@ const DOCUMENTED_FLAGS = new Set([
   '--force', '--yes', '--no-skills', '--install-deps', '--no-git',
   '--name', '--domains', '--repos', '--repo-urls',
   '--ci-mode', '--self-hosted-labels', '--json', '--demo',
-  '--repo', '--labels', '--instances', '--install-root', '--dry-run', '--set-fork-policy', '--global'
+  '--repo', '--labels', '--instances', '--install-root', '--dry-run', '--set-fork-policy', '--global',
+  '--chat-default'
 ]);
 
 // Top-level gate: --version/-v and unknown-flag rejection. Runs before any filesystem work.
@@ -139,11 +140,17 @@ const VERSION = require('../package.json').version;
 // stdio filter, never a scaffold. This is the only TTY decision in the CLI (detectMode).
 const interactiveSession = detectMode({ stdin: process.stdin, stdout: process.stdout }) === 'interactive';
 // Stdio pipeline dispatch: `aesop pipe [stdio flags]`, and a bare `aesop` with no TTY on
-// stdin/stdout. Its flags pass through untouched, like Python dispatch.
-const isPipeDispatch = args[0] === 'pipe' || (args.length === 0 && !interactiveSession);
+// stdin/stdout (a filter, never a scaffold). Its flags pass through untouched, like Python dispatch.
+// Interactive chat: `aesop chat`, or a bare `aesop` on a TTY when --chat-default or AESOP_DEFAULT=chat
+// is set. A bare `aesop` on a non-TTY stays the pipe filter whatever those say.
+const bareArgs = args.filter((arg) => arg !== '--chat-default');
+const isBareInvocation = bareArgs.length === 0;
+// A bare invocation on a TTY opens chat only through shouldEnterChat (the bareTtyEntry block below the chat verb).
+const isChatDispatch = args[0] === 'chat';
+const isPipeDispatch = args[0] === 'pipe' || (isBareInvocation && !interactiveSession);
 // Auth and model verbs (auth/cli.mjs). Their arguments pass through untouched; they never scaffold.
 const isAuthDispatch = args[0] === 'auth' || args[0] === 'model';
-const isNamespaceDispatch = isPipeDispatch || isAuthDispatch || (args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]));
+const isNamespaceDispatch = isPipeDispatch || isChatDispatch || isAuthDispatch || (args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]));
 // Auth/model verbs: AUTH_CLI answers `auth ...` and `model ...` with the inherited stdio.
 const AUTH_CLI = path.join(__dirname, '..', 'auth', 'cli.mjs');
 /**
@@ -218,6 +225,70 @@ if (isPipeDispatch) {
     console.error(`Error: stdio pipeline was terminated by ${result.signal || 'an unknown signal'} without producing an exit code.`);
   }
   process.exit(exitCodeFromSpawnResult(result));
+}
+
+// Interactive chat: dynamic-imports chat/cli.mjs (ESM, so import() from this CommonJS file) and
+// returns the exit code through process.exitCode, so stdout and stdin teardown finish first.
+if (isChatDispatch) {
+  const chatCli = path.join(__dirname, '..', 'chat', 'cli.mjs');
+  if (!fs.existsSync(chatCli)) {
+    console.error(`Error: chat not found at ${chatCli}`);
+    process.exit(2);
+  }
+  const chatArgs = args[0] === 'chat' ? args.slice(1) : [];
+  import(require('url').pathToFileURL(chatCli).href)
+    .then((mod) => mod.runChat({
+      argv: chatArgs,
+      stdin: process.stdin,
+      stdout: process.stdout,
+      stderr: process.stderr,
+      env: process.env,
+    }))
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((err) => {
+      console.error(`Error: chat failed: ${err && err.message ? err.message : err}`);
+      process.exitCode = 2;
+    });
+  return;
+}
+
+// Bare TTY entry: shouldEnterChat in chat/cli.mjs is the ONE chat-entry decider (no predicate is
+// re-derived here). It is ESM, so it is loaded with import() and the answer is async. The scaffold
+// (startScaffold: target dir, template copy, wizard) therefore runs only in the continuation below,
+// so a bare TTY invocation that enters chat never touches the scaffold. Off a TTY, bareTtyEntry is
+// false and the scaffold is called synchronously, as before.
+const bareTtyEntry = isBareInvocation && interactiveSession;
+if (bareTtyEntry) {
+  const chatCli = path.join(__dirname, '..', 'chat', 'cli.mjs');
+  import(require('url').pathToFileURL(chatCli).href)
+    .then((chatMod) => {
+      if (chatMod.shouldEnterChat({ interactive: interactiveSession, args, env: process.env })) {
+        return chatMod.runChat({
+          argv: [],
+          stdin: process.stdin,
+          stdout: process.stdout,
+          stderr: process.stderr,
+          env: process.env,
+        }).then((code) => {
+          process.exitCode = code;
+        }, (err) => {
+          console.error(`Error: chat failed: ${err && err.message ? err.message : err}`);
+          process.exitCode = 2;
+        });
+      }
+      startScaffold();
+      return undefined;
+    }, (err) => {
+      console.error(`Error: chat failed to load: ${err && err.message ? err.message : err}`);
+      process.exitCode = 2;
+    }).catch((err) => {
+      // Error boundary for the onOk continuation: a synchronous throw from shouldEnterChat or
+      // startScaffold lands here as one stderr line with no stack, and exits 2.
+      console.error(`Error: ${err && err.message ? err.message : err}`);
+      process.exitCode = 2;
+    });
 }
 
 // Helper: resolve Python interpreter (try python3 then python)
@@ -671,7 +742,9 @@ Commands (Node.js):
   fleet                   One-shot fleet snapshot (agents, heartbeats, tracker lanes, orchestrator status)
   reproduce               Offline verification suite (repo: full test suite; installed: self-checks)
   pipe                    Stdio filter (stdio/CLAUDE.md): raw bytes or framed streams, --input-format/--output-format.
-                          Bare aesop without a TTY on stdin/stdout is this filter; with a TTY, bare aesop scaffolds.
+                          Bare aesop without a TTY on stdin/stdout is this filter; with a TTY, bare aesop scaffolds
+                          (or opens chat with --chat-default or AESOP_DEFAULT=chat).
+  chat                    Interactive chat TUI on a terminal (chat/CLAUDE.md); --chat-default or AESOP_DEFAULT=chat makes bare aesop open it
   wizard                  Interactive onboarding (prompts for project name, repos, port)
 
 Commands (Python Tools):
@@ -790,6 +863,10 @@ const domainsStr = getFlag('--domains');
 const reposStr = getFlag('--repos');
 const repoUrlsStr = getFlag('--repo-urls');
 
+// The scaffold path (wrapped so a bare TTY invocation can defer it until shouldEnterChat has answered).
+// It runs once: synchronously when bareTtyEntry is false (see the call at the end of this file), or
+// from the bareTtyEntry continuation above. Declarations used before this point stay at top level.
+function startScaffold() {
 // Fail closed before any filesystem work: every --repos entry must name an existing directory.
 if (reposStr !== null) {
   const invalidRepos = findInvalidRepoPaths(reposStr);
@@ -1992,4 +2069,9 @@ if (!isRuntimeCommand) {
       process.exit(1);
     }
   })();
+}
+}
+
+if (!bareTtyEntry) {
+  startScaffold();
 }
