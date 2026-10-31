@@ -15,7 +15,7 @@ export const SLASH_COMMANDS = ['help', 'model', 'auth', 'clear', 'exit', 'quit']
 const HISTORY_LIMIT = 500;
 
 /**
- * @returns {{inputBuffer: string, cursor: number, history: string[], historyIndex: number, draft: string, ctrlCPending: boolean}}
+ * @returns {{inputBuffer: string, cursor: number, history: string[], historyIndex: number, draft: string, ctrlCPending: boolean, pasting: boolean}}
  */
 export function createInputState() {
   return {
@@ -25,6 +25,7 @@ export function createInputState() {
     historyIndex: 0,
     draft: '',
     ctrlCPending: false,
+    pasting: false,
   };
 }
 
@@ -99,6 +100,15 @@ export function applyKey(state, key = {}) {
 
   const s = { ...state, ctrlCPending: false };
   const { cursor, inputBuffer: buf } = s;
+
+  // Bracketed paste (ESC[200~ ... ESC[201~): readline reports the markers as paste-start and
+  // paste-end. Inside a paste, Enter is a literal newline, so a multi-line paste is one buffer
+  // that a later plain Enter submits.
+  if (name === 'paste-start') return { state: { ...s, pasting: true }, effect: null };
+  if (name === 'paste-end') return { state: { ...s, pasting: false }, effect: null };
+  if (s.pasting && (name === 'return' || name === 'enter')) {
+    return { state: insertText(s, '\n'), effect: null };
+  }
 
   // EOF convention: ctrl-d quits only on an empty line; otherwise it forward-deletes like the delete key.
   if (key.ctrl && name === 'd' && buf === '') return { state: s, effect: { type: 'quit' } };

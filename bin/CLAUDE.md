@@ -1,7 +1,6 @@
 # bin/ — CLI scaffolder, runtime commands, and Python dispatch table
 
 **Domain**: Node.js CLI entry point (`bin/cli.js`): scaffolds aesop orchestration template, interactive onboarding wizard, runtime subcommand dispatch (doctor/watch/dash/status/fleet/health-score/reproduce/init), and Python tools dispatch table (lint/gate/verify/wave/state/tracker/cost/bench/health/transcript).
-
 ## Universal rules (every domain)
 - Feature branch only, never main; every push gated by `python tools/secret_scan.py --staged` exit 0.
 - Tests never pollute cwd or global git config; temp dirs only; dummy secrets are runtime-concatenated, never literal.
@@ -9,7 +8,7 @@
 - Domain docs stay minimal-but-complete; update this file in the same PR as code it describes.
 
 ## Invocation modes
-**Stdio pipe** (`aesop pipe [stdio flags]`, and bare `aesop` with stdin or stdout not a TTY): runs `node stdio/cli.mjs <flags>` with `stdio: 'inherit'`, before any scaffolding. Flags such as `--input-format`/`--output-format` pass through untouched. Exit code propagates; a signal or spawn failure exits 2. Semantics are in stdio/CLAUDE.md. Without a TTY on stdin or stdout, bare `aesop` is the pipe and writes exactly one stderr line at entry: `aesop: no TTY detected, reading stdin as a pipe; run wizard to scaffold`. The decision is `detectMode` in `stdio/tty-decision.js`, re-exported by `stdio/tty.mjs`; `bin/cli.js` has no other TTY check. **Chat** (`aesop chat`, chat/CLAUDE.md): with a TTY on both, bare `aesop` runs the wizard unless `--chat-default` or `AESOP_DEFAULT=chat` opens chat (`shouldEnterChat` in chat/cli.mjs).
+**Stdio pipe** (`aesop pipe [stdio flags]`, and bare `aesop` with stdin or stdout not a TTY): runs `node stdio/cli.mjs <flags>` with `stdio: 'inherit'`, before any scaffolding. Flags such as `--input-format`/`--output-format` pass through untouched. Exit code propagates; a signal or spawn failure exits 2. Semantics are in stdio/CLAUDE.md. Without a TTY on stdin or stdout, bare `aesop` is the pipe and writes exactly one stderr line at entry: `aesop: no TTY detected, reading stdin as a pipe; run wizard to scaffold`. The decision is `detectMode` in `stdio/tty-decision.js`, re-exported by `stdio/tty.mjs`; `bin/cli.js` has no other TTY check. **Chat** (`aesop chat`, chat/CLAUDE.md): with a TTY on both, bare `aesop` runs the wizard unless `--chat-default` or `AESOP_DEFAULT=chat` opens chat. `shouldEnterChat` in chat/cli.mjs is the single chat-entry decider; `bin/cli.js` calls it once, from `bareTtyEntry`, before the scaffold steps (target dir, template copy) run.
 
 **Scaffolder** (creates new fleet):
 - Top-level gate (runs before any filesystem work, skipped for `aesop <namespace> ...` passthrough): `--version`/`-v` print the package.json version and exit 0; any `-` argument not in `DOCUMENTED_FLAGS` prints `unknown option: <arg>` plus help to stderr and exits 2; `--global` is a documented flag (`doctor --global` runs the `~/.claude/skills` check). Tests: `tests/cli-version-unknown-flags.test.mjs`, `tests/doctor-layout-mode.test.mjs`.
@@ -20,8 +19,9 @@
 
 **Wizard** (guided setup, ~60 sec):
 - `npx @matt82198/aesop wizard` → prompts: project name (default: "my-fleet"), repos (auto-discover from `~`), port (default: 8770, validates 1–65535), brain root (default: `~/.claude`)
-- `npx @matt82198/aesop wizard --yes` → uses all defaults, no prompts (CI-safe)
-- Non-TTY input auto-skips prompts
+- `npx @matt82198/aesop wizard --yes` → uses all defaults, no prompts (CI-safe); non-TTY input auto-skips prompts
+
+**Bare-TTY chat error path** (`bin/cli.js` onOk boundary, ~lines 245-249): a synchronous throw from `shouldEnterChat` or `startScaffold` is caught, printed as one `Error:` stderr line with no stack trace, and exits 2.
 
 **Runtime commands** (after scaffolding; dispatch pattern in cli.js). `doctor`, `watch`, `dash`, `status`, `fleet`, `health`, `health-score`, `reproduce`, `init` and `runner` (`install|remove`) are dispatched from cli.js. Every one of them except `health` prints a per-subcommand usage block on `--help|-h` (`SUBCOMMAND_HELP` in `cli.js`) and exits 0 before any side effect (no scaffolding, no readiness run, no dashboard launch). `health` is a Python namespace (`pythonNamespaces`), so `health --help|-h` prints the namespace usage and verb list instead (exit 0, before dispatch). Tests: `tests/cli-subcommand-help.test.mjs` (init, doctor), `tests/cli-runtime-help.test.mjs` (the rest).
 ```javascript

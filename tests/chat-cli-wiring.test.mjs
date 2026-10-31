@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -215,4 +215,120 @@ test('bin_cli_bare_chat_default_on_tty_does_not_scaffold_into_cwd', async () => 
     safeRm(dir);
     safeRm(shimDir);
   }
+});
+
+// ---------------------------------------------------------------------------------------------
+// B: one chat-entry decider (review round 2, finding B). bin/cli.js must take the bare-TTY entry
+// decision from chat/cli.mjs shouldEnterChat. bareChatEntry (about bin/cli.js:219) re-implements the
+// predicate, and the shouldEnterChat block near bin/cli.js:1738 is unreachable. The stub hook swaps
+// chat/cli.mjs for tests/helpers/chat-entry-stub.mjs in the child, so the test can flip the decision
+// and observe whether bin/cli.js follows it.
+// ---------------------------------------------------------------------------------------------
+
+const STUB_MARKER = 'STUB-CHAT-ENTERED';
+const stubRegisterUrl = pathToFileURL(join(repoRoot, 'tests', 'helpers', 'chat-entry-stub-register.mjs')).href;
+
+/**
+ * Runs `node bin/cli.js <args>` on a shimmed TTY with chat/cli.mjs stubbed. stubEnter is what the
+ * stub shouldEnterChat returns ('1' = enter, '0' = do not enter). AESOP_DEFAULT is cleared so only
+ * the args decide.
+ */
+async function runBareTtyWithStubbedDecider(args, stubEnter) {
+  const dir = freshTempDir();
+  const { shimDir, shimPath } = writeTtyShim();
+  try {
+    const r = await runCli(args, {
+      cwd: dir,
+      input: Buffer.from('\x04', 'utf8'),
+      env: {
+        NODE_OPTIONS: `--require "${shimPath}" --import "${stubRegisterUrl}"`,
+        AESOP_TEST_STUB_SHOULD_ENTER: stubEnter,
+        AESOP_DEFAULT: '',
+      },
+    });
+    return { r, stdout: r.stdout.toString('utf8') };
+  } finally {
+    safeRm(dir);
+    safeRm(shimDir);
+  }
+}
+
+function countOccurrences(haystack, needle) {
+  return haystack.split(needle).length - 1;
+}
+
+test('bare_tty_entry_does_not_enter_chat_when_shouldEnterChat_says_no', async () => {
+  const { r, stdout } = await runBareTtyWithStubbedDecider(['--chat-default'], '0');
+  assert.ok(
+    !stdout.includes(STUB_MARKER),
+    `bin/cli.js must take the bare-TTY entry decision from shouldEnterChat: with the decider returning false it must not enter chat even with --chat-default; exit ${r.code}; stdout:\n${stdout}`,
+  );
+});
+
+test('bare_tty_entry_enters_chat_when_shouldEnterChat_says_yes', async () => {
+  const { r, stdout } = await runBareTtyWithStubbedDecider([], '1');
+  assert.ok(
+    stdout.includes(STUB_MARKER),
+    `bin/cli.js must take the bare-TTY entry decision from shouldEnterChat: with the decider returning true and no flags it must enter chat; exit ${r.code}; stdout:\n${stdout}`,
+  );
+});
+
+// Item 2 (review round 3): bin/cli.js attaches its error handler only to the import step. A synchronous
+// throw from shouldEnterChat (or from startScaffold) inside the onOk continuation becomes an unhandled
+// rejection. The file's contract is an "Error: ..." line on stderr with exit code 2, no stack trace.
+test('bare_tty_entry_sync_throw_from_shouldEnterChat_exits_2_with_error_line_and_no_stack', async () => {
+  const dir = freshTempDir();
+  const { shimDir, shimPath } = writeTtyShim();
+  try {
+    const r = await runCli(['--chat-default'], {
+      cwd: dir,
+      input: Buffer.from('\x04', 'utf8'),
+      env: {
+        NODE_OPTIONS: `--require "${shimPath}" --import "${stubRegisterUrl}"`,
+        AESOP_TEST_STUB_THROW: '1',
+        AESOP_TEST_STUB_SHOULD_ENTER: '1',
+        AESOP_DEFAULT: '',
+      },
+    });
+    assert.equal(
+      r.code,
+      2,
+      `a synchronous throw from shouldEnterChat must exit 2 (the bin/cli.js error contract), not crash with an unhandled rejection; got ${r.code}; stderr:\n${r.stderr}`,
+    );
+    assert.match(
+      r.stderr,
+      /^Error:/,
+      `stderr must start with "Error:" (one-line error contract); stderr:\n${r.stderr}`,
+    );
+    assert.doesNotMatch(
+      r.stderr,
+      /^ {4}at /m,
+      `stderr must carry no stack frame lines ("    at "); stderr:\n${r.stderr}`,
+    );
+  } finally {
+    safeRm(dir);
+    safeRm(shimDir);
+  }
+});
+
+test('bin_cli_has_one_chat_entry_decider_before_the_scaffold_path', async () => {
+  const src = readFileSync(cliPath, 'utf8');
+  assert.equal(
+    countOccurrences(src, "AESOP_DEFAULT === 'chat'"),
+    0,
+    "bin/cli.js must not re-derive the chat predicate; AESOP_DEFAULT === 'chat' belongs only in chat/cli.mjs shouldEnterChat",
+  );
+  assert.equal(
+    countOccurrences(src, "includes('--chat-default')"),
+    0,
+    "bin/cli.js must not re-derive the chat predicate; args.includes('--chat-default') belongs only in chat/cli.mjs shouldEnterChat",
+  );
+  const calls = countOccurrences(src, 'shouldEnterChat(');
+  assert.equal(calls, 1, `bin/cli.js must call shouldEnterChat exactly once (the single chat-entry decider); found ${calls} call sites`);
+  const callAt = src.indexOf('shouldEnterChat(');
+  const scaffoldAt = src.indexOf('function resolvePythonInterpreter');
+  assert.ok(
+    scaffoldAt > callAt && callAt >= 0,
+    `the shouldEnterChat call (offset ${callAt}) must come before the scaffold path (offset ${scaffoldAt}); a second chat-entry block after the scaffold is dead code`,
+  );
 });

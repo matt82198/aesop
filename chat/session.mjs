@@ -3,15 +3,21 @@
  *
  * submit(line, chunks) returns a promise. Each chunk of an async-iterable backend is appended
  * to the streaming assistant message and onFrame is called with a fresh frame right away, so
- * the frame for chunk N is emitted while the stream is still open (true streaming, no buffering).
+ * the frame for chunk N is emitted while the stream is still open. That holds for an injected
+ * source that yields incrementally. The default backend, pipeSource, runs the whole pipe turn
+ * before it yields its single chunk, so with the default the reply is buffered and arrives in
+ * one frame.
  *
- * Node stdlib only; the backend is injected. The default echo source makes no network call.
+ * Node stdlib only. The default backend is the stdio pipe runtime (raw passthrough, no network
+ * call); a test or embedder can inject another backend through the `source` option.
  *
  * @module chat/session
  */
 
+import { Readable, Writable } from 'node:stream';
 import { renderFrame } from './render.mjs';
 import { parseSlash } from './input.mjs';
+import { runPipe } from '../stdio/pipe.mjs';
 
 const HELP_LINES = [
   'Slash commands:',
@@ -32,15 +38,35 @@ const DEFAULT_STATUS = {
 };
 
 /**
- * Local echo backend: streams the line back one word per chunk. No network.
+ * Default backend: runs the stdio pipe runtime in raw passthrough mode for one turn. The turn text
+ * is the pipe's stdin and the reply is the pipe's stdout bytes, decoded once and yielded as one
+ * chunk, so the reply equals what `aesop pipe` writes for the same input. No network call.
+ * A non-zero pipe exit throws, which the caller renders as a stream error.
  * @param {string} line
  * @returns {AsyncGenerator<string>}
  */
-export async function* echoSource(line) {
-  const words = String(line).split(/\s+/).filter((w) => w !== '');
-  for (let i = 0; i < words.length; i += 1) {
-    yield i === 0 ? words[i] : ` ${words[i]}`;
+export async function* pipeSource(line) {
+  const out = [];
+  const err = [];
+  const stdin = Readable.from([Buffer.from(String(line), 'utf8')]);
+  const stdout = new Writable({
+    write(chunk, _enc, cb) {
+      out.push(Buffer.from(chunk));
+      cb();
+    },
+  });
+  const stderr = new Writable({
+    write(chunk, _enc, cb) {
+      err.push(Buffer.from(chunk));
+      cb();
+    },
+  });
+  const code = await runPipe({ stdin, stdout, stderr, argv: [] });
+  if (code !== 0) {
+    const detail = Buffer.concat(err).toString('utf8').trim();
+    throw new Error(`pipe exited with code ${code}${detail ? `: ${detail}` : ''}`);
   }
+  yield Buffer.concat(out).toString('utf8');
 }
 
 /**
@@ -49,11 +75,22 @@ export async function* echoSource(line) {
 export class Session {
   /**
    * @param {{columns?: number, rows?: number, color?: boolean, unicode?: boolean,
-   *          status?: object, onFrame?: (frame: string) => void}} [opts]
+   *          status?: object, onFrame?: (frame: string) => void,
+   *          source?: (line: string) => AsyncIterable<string>|Iterable<string>}} [opts]
+   *   `source` is the default backend for plain turns (default: pipeSource).
    */
-  constructor({ columns = 80, rows = 24, color = false, unicode = false, status = {}, onFrame = () => {} } = {}) {
+  constructor({
+    columns = 80,
+    rows = 24,
+    color = false,
+    unicode = false,
+    status = {},
+    onFrame = () => {},
+    source = pipeSource,
+  } = {}) {
     this.opts = { columns, rows, color, unicode };
     this.onFrame = onFrame;
+    this.source = source;
     this.state = {
       transcript: [],
       inputBuffer: '',
@@ -102,7 +139,7 @@ export class Session {
 
   /**
    * Submits one line. Slash commands run locally; anything else is a turn whose reply streams
-   * from `chunks` (default: the local echo source).
+   * from `chunks` (default: this.source, which is the pipe runtime).
    * @param {string} line
    * @param {AsyncIterable<string>|Iterable<string>} [chunks]
    * @returns {Promise<void>}
@@ -116,7 +153,7 @@ export class Session {
       return;
     }
     if (text.trim() === '') return;
-    await this.runTurn(text, chunks ?? echoSource(text));
+    await this.runTurn(text, chunks ?? this.source(text));
   }
 
   runCommand(cmd) {

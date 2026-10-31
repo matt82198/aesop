@@ -145,7 +145,7 @@ const interactiveSession = detectMode({ stdin: process.stdin, stdout: process.st
 // is set. A bare `aesop` on a non-TTY stays the pipe filter whatever those say.
 const bareArgs = args.filter((arg) => arg !== '--chat-default');
 const isBareInvocation = bareArgs.length === 0;
-// A bare invocation on a TTY opens chat only through shouldEnterChat (see the chat block in the main IIFE).
+// A bare invocation on a TTY opens chat only through shouldEnterChat (the bareTtyEntry block below the chat verb).
 const isChatDispatch = args[0] === 'chat';
 const isPipeDispatch = args[0] === 'pipe' || (isBareInvocation && !interactiveSession);
 const isNamespaceDispatch = isPipeDispatch || isChatDispatch || (args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]));
@@ -211,6 +211,43 @@ if (isChatDispatch) {
       process.exitCode = 2;
     });
   return;
+}
+
+// Bare TTY entry: shouldEnterChat in chat/cli.mjs is the ONE chat-entry decider (no predicate is
+// re-derived here). It is ESM, so it is loaded with import() and the answer is async. The scaffold
+// (startScaffold: target dir, template copy, wizard) therefore runs only in the continuation below,
+// so a bare TTY invocation that enters chat never touches the scaffold. Off a TTY, bareTtyEntry is
+// false and the scaffold is called synchronously, as before.
+const bareTtyEntry = isBareInvocation && interactiveSession;
+if (bareTtyEntry) {
+  const chatCli = path.join(__dirname, '..', 'chat', 'cli.mjs');
+  import(require('url').pathToFileURL(chatCli).href)
+    .then((chatMod) => {
+      if (chatMod.shouldEnterChat({ interactive: interactiveSession, args, env: process.env })) {
+        return chatMod.runChat({
+          argv: [],
+          stdin: process.stdin,
+          stdout: process.stdout,
+          stderr: process.stderr,
+          env: process.env,
+        }).then((code) => {
+          process.exitCode = code;
+        }, (err) => {
+          console.error(`Error: chat failed: ${err && err.message ? err.message : err}`);
+          process.exitCode = 2;
+        });
+      }
+      startScaffold();
+      return undefined;
+    }, (err) => {
+      console.error(`Error: chat failed to load: ${err && err.message ? err.message : err}`);
+      process.exitCode = 2;
+    }).catch((err) => {
+      // Error boundary for the onOk continuation: a synchronous throw from shouldEnterChat or
+      // startScaffold lands here as one stderr line with no stack, and exits 2.
+      console.error(`Error: ${err && err.message ? err.message : err}`);
+      process.exitCode = 2;
+    });
 }
 
 // Helper: resolve Python interpreter (try python3 then python)
@@ -785,6 +822,10 @@ const domainsStr = getFlag('--domains');
 const reposStr = getFlag('--repos');
 const repoUrlsStr = getFlag('--repo-urls');
 
+// The scaffold path (wrapped so a bare TTY invocation can defer it until shouldEnterChat has answered).
+// It runs once: synchronously when bareTtyEntry is false (see the call at the end of this file), or
+// from the bareTtyEntry continuation above. Declarations used before this point stay at top level.
+function startScaffold() {
 // Fail closed before any filesystem work: every --repos entry must name an existing directory.
 if (reposStr !== null) {
   const invalidRepos = findInvalidRepoPaths(reposStr);
@@ -1711,21 +1752,6 @@ function installPrePushHook(targetDir, templateRoot) {
 if (!isRuntimeCommand) {
   (async () => {
     try {
-      // Bare invocation: the --chat-default / AESOP_DEFAULT=chat decision comes from chat/cli.mjs
-      // (ESM, so import() here). Pipes never reach this point; shouldEnterChat is false off a TTY.
-      if (isBareInvocation) {
-        const chatMod = await import(require('url').pathToFileURL(path.join(__dirname, '..', 'chat', 'cli.mjs')).href);
-        if (chatMod.shouldEnterChat({ interactive: interactiveSession, args, env: process.env })) {
-          process.exitCode = await chatMod.runChat({
-            argv: [],
-            stdin: process.stdin,
-            stdout: process.stdout,
-            stderr: process.stderr,
-            env: process.env,
-          });
-          return;
-        }
-      }
       let finalProjectName = projectName;
     let finalReposStr = reposStr;
     let finalDomainsStr = domainsStr;
@@ -2002,4 +2028,9 @@ if (!isRuntimeCommand) {
       process.exit(1);
     }
   })();
+}
+}
+
+if (!bareTtyEntry) {
+  startScaffold();
 }
