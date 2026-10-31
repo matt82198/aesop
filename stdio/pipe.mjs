@@ -38,6 +38,27 @@ export class UsageError extends Error {
 const INPUT_FORMATS = new Set(['raw', 'text', 'stream-json', 'frames']);
 const OUTPUT_FORMATS = new Set(['raw', 'text', 'json', 'stream-json', 'frames']);
 const VALUE_FLAGS = new Set(['--input-format', '--output-format', '--content-type', '--max-frame']);
+/**
+ * The one control-channel line. Control records travel only on `aesop pipe --input-format stream-json
+ * --output-format stream-json`; every other path that receives `--control` prints this and exits 2.
+ * Lives here because the pipe must print it without importing auth/ (zero-dependency gate), and
+ * auth/cli.mjs re-exports this same constant.
+ */
+export const CONTROL_CHANNEL_MESSAGE = 'control records are not a CLI mode; send them on aesop pipe --input-format stream-json --output-format stream-json';
+
+/**
+ * The one predicate for the control-channel refusal. True when argv carries `--control` or
+ * `--control=<anything>`. bin/cli.js, auth/cli.mjs, parseArgs and runPipe all test it first, so the
+ * refusal is the same on every path.
+ * @param {readonly unknown[]} argv arguments to test
+ * @returns {boolean}
+ */
+export function hasControlFlag(argv) {
+  return argv.some((arg) => {
+    const text = String(arg);
+    return text === '--control' || text.startsWith('--control=');
+  });
+}
 const DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 const MAGIC_BYTES = Buffer.from(MAGIC, 'latin1');
 const BASE64_RE = /^[A-Za-z0-9+/]*={0,2}$/;
@@ -118,6 +139,7 @@ function* splitPayload(payload, maxFrame) {
  * @throws {UsageError} for an unknown flag, a missing value, or a bad format, type or size
  */
 export function parseArgs(argv) {
+  if (hasControlFlag(argv)) throw new UsageError(CONTROL_CHANNEL_MESSAGE);
   const opts = {
     inputFormat: 'raw',
     outputFormat: 'raw',
@@ -134,7 +156,8 @@ export function parseArgs(argv) {
     const eq = arg.indexOf('=');
     const flag = eq === -1 ? arg : arg.slice(0, eq);
     if (!VALUE_FLAGS.has(flag)) {
-      throw new UsageError(arg.startsWith('-') ? `unknown flag ${JSON.stringify(flag)}` : `unexpected argument ${JSON.stringify(arg)}`);
+      // Never echo the argument: a flag or positional may be a key pasted by mistake.
+      throw new UsageError(arg.startsWith('-') ? 'unknown flag' : 'unexpected argument');
     }
     let value;
     if (eq !== -1) {
@@ -159,13 +182,13 @@ export function parseArgs(argv) {
  */
 function applyValue(opts, flag, value) {
   if (flag === '--input-format') {
-    if (!INPUT_FORMATS.has(value)) throw new UsageError(`unknown input format ${JSON.stringify(value)}`);
+    if (!INPUT_FORMATS.has(value)) throw new UsageError('unknown input format');
     opts.inputFormat = value;
   } else if (flag === '--output-format') {
-    if (!OUTPUT_FORMATS.has(value)) throw new UsageError(`unknown output format ${JSON.stringify(value)}`);
+    if (!OUTPUT_FORMATS.has(value)) throw new UsageError('unknown output format');
     opts.outputFormat = value;
   } else if (flag === '--content-type') {
-    if (!isValidContentType(value)) throw new UsageError(`invalid content type ${JSON.stringify(value)}`);
+    if (!isValidContentType(value)) throw new UsageError('invalid content type');
     opts.contentType = value;
   } else {
     const size = Number(value);
@@ -235,13 +258,13 @@ function controlUnit(payload) {
   }
   if (KNOWN_CONTROL_TYPES.has(message.type)) {
     if (message.type === 'error') {
-      const detail = typeof message.message === 'string' ? message.message : 'no message';
-      throw new FramingError(`upstream reported an error: ${detail}`);
+      // Fixed literal: the upstream message is caller-supplied and is never echoed.
+      throw new FramingError('upstream reported an error');
     }
     return { kind: 'control', type: message.type, payload };
   }
   if (message.critical === false) return null;
-  throw new FramingError(`unknown critical control message type ${JSON.stringify(message.type.slice(0, 64))}`);
+  throw new FramingError('unknown critical control message type');
 }
 
 /**
@@ -312,7 +335,7 @@ function recordUnit(line, state, opts) {
     } else if (encoding === 'utf8') {
       payload = Buffer.from(record.data, 'utf8');
     } else {
-      throw new FramingError(`unsupported stream-json encoding ${JSON.stringify(String(encoding).slice(0, 32))}`);
+      throw new FramingError('unsupported stream-json encoding');
     }
     if (payload.length > opts.maxFrame) {
       throw new FramingError(`stream-json data record of ${payload.length} bytes exceeds --max-frame ${opts.maxFrame}`);
@@ -327,7 +350,8 @@ function recordUnit(line, state, opts) {
   if (record.type === 'result') {
     if (state.done) throw new FramingError('more than one stream-json result record');
     if (record.bytes !== state.bytes) {
-      throw new FramingError(`stream-json result reports ${JSON.stringify(record.bytes)} bytes, data carried ${state.bytes}`);
+      // Fixed literal: the caller's bytes value is never echoed.
+      throw new FramingError('stream-json result byte count does not match the data carried');
     }
     if (record.sha256 !== state.hash.digest('hex')) {
       throw new FramingError('stream-json result sha256 does not match the data records');
@@ -341,14 +365,16 @@ function recordUnit(line, state, opts) {
       throw new FramingError('control records are accepted only with --input-format stream-json --output-format stream-json');
     }
     if (typeof record.op !== 'string' || record.op === '') throw new FramingError('control record has no string op');
-    const id = record.id === undefined ? null : record.id;
+    // No id is malformed framing: a reply without an id cannot be correlated by the caller.
+    if (record.id === undefined) throw new FramingError('control record has no id');
+    const id = record.id;
     if (id !== null && typeof id !== 'string' && typeof id !== 'number') {
       throw new FramingError('control record id must be a string, a number or null');
     }
     return { kind: 'control-op', op: record.op, id, record };
   }
 
-  throw new FramingError(`unknown stream-json record type ${JSON.stringify(String(record.type).slice(0, 32))}`);
+  throw new FramingError('unknown stream-json record type');
 }
 
 /**
@@ -489,21 +515,40 @@ function createOutput(opts, sink) {
 }
 
 /**
- * Answers one control-op record through the registered dispatcher.
- * Any failure becomes a FramingError (exit 2, one aesop-pipe: stderr line) and writes nothing to stdout.
+ * Builds the ok:false reply for a control op the dispatcher refused. An unknown op carries no `op`
+ * field and the fixed error "unknown op". Any other refusal keeps the op and its safe message; a
+ * refusal that is not a ControlOpError gets the fixed "control op failed". No caller-supplied op
+ * name is ever echoed (it may be a pasted key).
+ * @param {{op: string, id: (string|number|null)}} unit control-op unit from the reader
+ * @param {unknown} err what the dispatcher threw
+ * @returns {object} the error envelope
+ */
+function controlErrorEnvelope(unit, err) {
+  const controlErr = err && err.name === 'ControlOpError';
+  // Every error envelope carries `code` (R-CONTROL-1). The dispatcher supplies it on each ControlOpError;
+  // anything else, or a ControlOpError with no code, is reported as the generic `op_failed`.
+  const code = controlErr && typeof err.code === 'string' && err.code !== '' ? err.code : 'op_failed';
+  if (code === 'unknown_op') return { type: 'control', id: unit.id, ok: false, error: 'unknown op', code };
+  const safe = controlErr && typeof err.message === 'string';
+  return { type: 'control', op: unit.op, id: unit.id, ok: false, error: safe ? err.message : 'control op failed', code };
+}
+
+/**
+ * Answers one control-op record through the registered dispatcher. An op the dispatcher refuses
+ * becomes an ok:false envelope on stdout and the pipe keeps running (exit 0). Malformed framing
+ * is not answered here: it fails earlier as a FramingError (exit 2).
  * @param {{op: string, id: (string|number|null), record: object}} unit control-op unit from the reader
  * @returns {Promise<object>} the reply envelope
+ * @throws {FramingError} when no dispatcher is registered in this process
  */
 async function answerControl(unit) {
   if (!controlDispatch) throw new FramingError('control ops are not registered in this process');
-  let result;
   try {
-    result = await controlDispatch(unit.record);
+    const result = await controlDispatch(unit.record);
+    return { type: 'control', op: unit.op, id: unit.id, ok: true, result };
   } catch (err) {
-    const safe = err && err.name === 'ControlOpError' && typeof err.message === 'string';
-    throw new FramingError(safe ? err.message : `control op ${unit.op} failed`);
+    return controlErrorEnvelope(unit, err);
   }
-  return { type: 'control', op: unit.op, id: unit.id, ok: true, result };
 }
 
 /**
@@ -553,6 +598,15 @@ export async function runPipe({
   stderr = process.stderr,
   argv = [],
 } = {}) {
+  // The control-channel refusal comes first and prints the bare line, with no `aesop-pipe:` prefix.
+  if (hasControlFlag(argv)) {
+    try {
+      stderr.write(`${CONTROL_CHANNEL_MESSAGE}\n`);
+    } catch {
+      // Diagnostics are best effort; the exit code still reports the refusal.
+    }
+    return 2;
+  }
   let opts;
   try {
     opts = parseArgs(argv);

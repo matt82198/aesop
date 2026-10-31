@@ -144,25 +144,6 @@ const isPipeDispatch = args[0] === 'pipe' || (args.length === 0 && !interactiveS
 // Auth and model verbs (auth/cli.mjs). Their arguments pass through untouched; they never scaffold.
 const isAuthDispatch = args[0] === 'auth' || args[0] === 'model';
 const isNamespaceDispatch = isPipeDispatch || isAuthDispatch || (args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]));
-if (!isNamespaceDispatch) {
-  // Control records have one channel: the declared stream-json pipe. Refused here, before the
-  // scaffold help the unknown-option path would print.
-  if (args.includes('--control')) {
-    console.error('control records are not a CLI mode; send them on aesop pipe --input-format stream-json --output-format stream-json');
-    process.exit(2);
-  }
-  if (args.includes('--version') || args.includes('-v')) {
-    console.log(VERSION);
-    process.exit(0);
-  }
-  const unknownOption = args.find((arg) => arg.startsWith('-') && !DOCUMENTED_FLAGS.has(arg));
-  if (unknownOption !== undefined) {
-    console.error(`unknown option: ${unknownOption}`);
-    printHelp(console.error);
-    process.exit(2);
-  }
-}
-
 // Auth/model verbs: AUTH_CLI answers `auth ...` and `model ...` with the inherited stdio.
 const AUTH_CLI = path.join(__dirname, '..', 'auth', 'cli.mjs');
 /**
@@ -184,6 +165,28 @@ function runAuthChild(childArgs) {
     process.exit(2);
   }
   process.exit(exitCodeFromSpawnResult(result));
+}
+
+// Control records have one channel: the declared stream-json pipe. `--control` or `--control=<x>` is
+// refused on every path (auth, model, pipe and namespace dispatch alike) before any other gate runs.
+// This file is CommonJS and cannot import the ESM predicate (hasControlFlag, stdio/pipe.mjs) synchronously,
+// so it only routes: the whole argv goes to the auth child, which applies hasControlFlag and prints the
+// bare CONTROL_CHANNEL_MESSAGE line. The line and the predicate each have exactly one copy, in stdio/pipe.mjs.
+if (args.some((arg) => arg === '--control' || arg.startsWith('--control='))) {
+  runAuthChild(args);
+}
+
+if (!isNamespaceDispatch) {
+  if (args.includes('--version') || args.includes('-v')) {
+    console.log(VERSION);
+    process.exit(0);
+  }
+  // The unknown flag is never echoed: a pasted key may sit in argv.
+  if (args.some((arg) => arg.startsWith('-') && !DOCUMENTED_FLAGS.has(arg))) {
+    console.error('unknown option');
+    printHelp(console.error);
+    process.exit(2);
+  }
 }
 
 if (isAuthDispatch) {

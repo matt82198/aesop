@@ -620,6 +620,8 @@ function runBinCli(args, input, { cwd, env }) {
   });
 }
 
+// R-CONTROL-1 (ruling, event store): an op failure is an ok:false envelope and the pipe keeps running, exit 0.
+// The expectation below (exit 0, not 2) is the R-CONTROL-1 change from the earlier exit-2 contract.
 test('unknown_op_after_answered_op_gets_error_envelope_and_pipe_keeps_running_exit_0', { timeout: 60000 }, async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-pipe-unknown-op-'));
   try {
@@ -652,10 +654,12 @@ test('unknown_op_after_answered_op_gets_error_envelope_and_pipe_keeps_running_ex
     assert.equal(reply.ok, true);
     const envelope = JSON.parse(lines[1]);
     assert.equal(envelope.type, 'control', `envelope type:\n${r.stdout}`);
-    assert.equal(envelope.op, 'nope', `envelope must carry the failing op:\n${r.stdout}`);
     assert.equal(envelope.id, 'b', `envelope must carry the request id:\n${r.stdout}`);
     assert.equal(envelope.ok, false, `envelope must report ok:false:\n${r.stdout}`);
-    assert.match(envelope.error, /unknown op "nope"/, `envelope error must name the unknown op:\n${r.stdout}`);
+    assert.equal(envelope.error, 'unknown op', `error text must be exactly "unknown op":\n${r.stdout}`);
+    assert.ok(!('op' in envelope), `unknown-op envelope must omit the op field:\n${r.stdout}`);
+    assert.ok(!(r.stdout + r.stderr).includes('"nope"') && !(r.stdout + r.stderr).includes('nope'),
+      `caller-supplied op name must not appear on stdout or stderr:\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -726,6 +730,85 @@ test('S5-5 control model.use with an unknown model answers ok:false envelope wit
     assert.equal(envelope.ok, false, `envelope must report ok:false:\n${r.stdout}`);
     assert.equal(typeof envelope.error, 'string', `envelope must carry an error message:\n${r.stdout}`);
     assert.notEqual(envelope.error, '', 'error message must not be empty');
+    // Known op with a bad argument: the error names the problem, never echoes the caller-supplied selector.
+    assert.ok(!envelope.error.includes('nosuch/model') && !envelope.error.includes('nosuch'),
+      `error text must not echo the model selector:\n${r.stdout}`);
+  } finally {
+    fs.rmSync(sb.root, { recursive: true, force: true });
+  }
+});
+
+// ============================================================================
+// S5 round 5 (R-DECIDE-1, R1, R2, R4): decided rules for the stdio contract. Each probe is assembled
+// at runtime so no literal in this file looks key-shaped. Red cases are the decided behaviour.
+// ============================================================================
+
+test('R1a control frame of type error: caller message is not echoed on stderr or stdout (exit 2)', { timeout: 60000 }, async () => {
+  const probe = ['zqw', 'plmrt', 'vbxho', 'kdyea'].join('');
+  const errFrame = frame('control', 'application/json', JSON.stringify({ type: 'error', message: probe }));
+  const input = Buffer.concat([Buffer.from(MAGIC), errFrame, Buffer.from(END)]);
+  const r = await runCli(['--input-format', 'frames'], input);
+  assert.equal(r.code, 2, `upstream error frame must exit 2; stderr:\n${r.stderr}`);
+  assert.ok(!r.stderr.includes(probe), `caller control message echoed on stderr:\n${r.stderr}`);
+  assert.ok(!r.stdout.toString('utf8').includes(probe), `caller control message echoed on stdout:\n${r.stdout.toString('utf8')}`);
+});
+
+test('R1b stream-json result record with a string bytes value: caller value is not echoed (exit 2)', { timeout: 60000 }, async () => {
+  const probe = ['qzw', 'plmrt', 'vbxho', 'kdyea'].join('');
+  const input = Buffer.from(JSON.stringify({ type: 'result', bytes: probe, sha256: '0'.repeat(64) }) + '\n', 'utf8');
+  const r = await runCli(['--input-format', 'stream-json'], input);
+  assert.equal(r.code, 2, `result record with a bad bytes value must exit 2; stderr:\n${r.stderr}`);
+  assert.ok(!r.stderr.includes(probe), `caller bytes value echoed on stderr:\n${r.stderr}`);
+  assert.ok(!r.stdout.toString('utf8').includes(probe), `caller bytes value echoed on stdout:\n${r.stdout.toString('utf8')}`);
+});
+
+const R2_CONTROL_LINE = JSON.stringify({ type: 'control', op: 'auth.status', id: 'r2' }) + '\n';
+
+test('R2a control record on stream-json input with raw output is refused: exit 2, nothing on stdout', async () => {
+  const r = await runCli(['--input-format', 'stream-json', '--output-format', 'raw'], Buffer.from(R2_CONTROL_LINE, 'utf8'));
+  assert.equal(r.code, 2, `control record without stream-json output must exit 2; stderr:\n${r.stderr}`);
+  assert.equal(r.stdout.length, 0, `nothing may be written to stdout:\n${r.stdout.toString('utf8')}`);
+  assertOneLineDiagnostic(r.stderr, 'R2a: ');
+});
+
+test('R2b control record on stream-json input with frames output is refused: exit 2, no control reply', async () => {
+  const r = await runCli(['--input-format', 'stream-json', '--output-format', 'frames'], Buffer.from(R2_CONTROL_LINE, 'utf8'));
+  assert.equal(r.code, 2, `control record without stream-json output must exit 2; stderr:\n${r.stderr}`);
+  const out = r.stdout.toString('utf8');
+  assert.ok(!out.includes('"ok"') && !out.includes('"type":"control"'), `no control reply may reach stdout:\n${out}`);
+});
+
+test('R2c raw input with a control-shaped line is passed through as bytes, byte-exact, exit 0', async () => {
+  const input = Buffer.from(R2_CONTROL_LINE, 'utf8');
+  const r = await runCli([], input);
+  assert.equal(r.code, 0, `raw input is never parsed as control; stderr:\n${r.stderr}`);
+  assert.equal(Buffer.compare(r.stdout, input), 0, `raw passthrough must be byte-exact:\n${r.stdout.toString('utf8')}`);
+});
+
+test('R4 control record with no id field is malformed framing: exit 2, no envelope on stdout', { timeout: 60000 }, async () => {
+  const sb = makePipeSandbox();
+  try {
+    const input = JSON.stringify({ type: 'control', op: 'auth.status' }) + '\n';
+    const r = await runBinCli(['pipe', '--input-format', 'stream-json', '--output-format', 'stream-json'], input, { cwd: sb.cwd, env: sb.env });
+    assert.equal(r.signal, null, 'must exit normally, not by signal');
+    assert.equal(r.code, 2, `a control record without id is a FramingError: exit 2 expected; stderr:\n${r.stderr}`);
+    assert.equal(r.stdout, '', `no envelope may be written without an id to correlate it:\n${r.stdout}`);
+  } finally {
+    fs.rmSync(sb.root, { recursive: true, force: true });
+  }
+});
+
+// R4b (S5 round 5, R-CONTROL-1): a framing fault is the only class that exits 2 with no stdout record.
+// A control record with no id on the stream-json channel: exit 2, exactly one `aesop-pipe:` stderr line,
+// and zero bytes on stdout.
+test('R4b control record with no id: exit 2, exactly one aesop-pipe stderr line, zero stdout bytes', { timeout: 60000 }, async () => {
+  const sb = makePipeSandbox();
+  try {
+    const input = JSON.stringify({ type: 'control', op: 'auth.status' }) + '\n';
+    const r = await runBinCli(['pipe', '--input-format', 'stream-json', '--output-format', 'stream-json'], input, { cwd: sb.cwd, env: sb.env });
+    assert.equal(r.code, 2, `R4b: a control record without id is a FramingError: exit 2 expected; stderr:\n${r.stderr}`);
+    assertOneLineDiagnostic(r.stderr, 'R4b: ');
+    assert.equal(Buffer.byteLength(r.stdout, 'utf8'), 0, `R4b: stdout must be zero bytes for a framing fault:\n${r.stdout}`);
   } finally {
     fs.rmSync(sb.root, { recursive: true, force: true });
   }

@@ -31,6 +31,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CONTROL_CHANNEL_MESSAGE } from '../stdio/pipe.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(REPO_ROOT, 'bin', 'cli.js');
@@ -81,7 +82,10 @@ function run(sb, args, { input = '', env = {} } = {}) {
  * on both sides. Bare `aesop` with no TTY is a byte-exact filter and never inspects stdin.
  */
 function control(sb, msg, opts = {}) {
-  const body = typeof msg === 'string' ? msg : JSON.stringify(msg);
+  // Contract (stdio/CLAUDE.md:43, ruling R-DECIDE-1): a control record without an `id` is a
+  // FramingError. Every object record gets an id here unless the caller supplied one.
+  const framed = typeof msg === 'object' && msg !== null && !('id' in msg) ? { ...msg, id: 'ctl' } : msg;
+  const body = typeof framed === 'string' ? framed : JSON.stringify(framed);
   return run(sb, ['pipe', '--input-format', 'stream-json', '--output-format', 'stream-json'],
     { ...opts, input: body + '\n' });
 }
@@ -407,12 +411,21 @@ test('control message with malformed JSON is malformed input: exit 2', (t) => {
   assert.match(r.stderr, /^aesop-pipe:/, `malformed input must explain itself on stderr:\n${r.stderr}`);
 });
 
-test('control message with an unknown op is malformed input: exit 2', (t) => {
+// R-CONTROL-1 (ruling, event store): a rejected op is answered by an error envelope and the pipe continues,
+// exit 0; only framing faults exit 2. Expectation unchanged from the S5 item 5 contract.
+test('control message with an unknown op answers one error envelope (no op field, error "unknown op"), exit 0, op name absent from stdout and stderr', (t) => {
   const sb = makeSandbox(t);
-  const r = control(sb, { type: 'control', op: 'auth.nosuchop' });
-  assert.equal(r.status, 2, `expected exit 2, got ${r.status}\nstderr:\n${r.stderr}`);
-  assert.match(r.stderr, /^aesop-pipe:/, `unknown op must produce one aesop-pipe: stderr line:\n${r.stderr}`);
-  assert.match(r.stderr, /auth\.nosuchop/, `stderr must name the unknown op:\n${r.stderr}`);
+  const probe = 'auth.nosuchop';
+  const r = control(sb, { type: 'control', op: probe, id: 'u1' });
+  assert.equal(r.status, 0, `an unknown op is an op failure, not malformed input: exit 0 expected; stderr:\n${r.stderr}`);
+  assert.equal(r.stderr.trim(), '', 'enveloped rejection leaves stderr empty (R-CONTROL-1: op failures are answered on stdout, not stderr)');
+  const envelope = singleJsonLine(r.stdout);
+  assert.equal(envelope.type, 'control', `envelope type:\n${r.stdout}`);
+  assert.equal(envelope.id, 'u1', `envelope must carry the request id:\n${r.stdout}`);
+  assert.equal(envelope.ok, false, `envelope must report ok:false:\n${r.stdout}`);
+  assert.equal(envelope.error, 'unknown op', `error text must be exactly "unknown op":\n${r.stdout}`);
+  assert.ok(!('op' in envelope), `unknown-op envelope must omit the op field:\n${r.stdout}`);
+  assert.ok(!(r.stdout + r.stderr).includes(probe), `caller-supplied op name must not appear on stdout or stderr:\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
 });
 
 // ---------------------------------------------------------------------------
@@ -507,7 +520,7 @@ test('S5-1d a 32-char key shows no fragment of it in status (R1, replaces the la
 
 test('S5-2 auth/cli.mjs --control exits 2 with empty stdout and one stderr line naming aesop pipe', (t) => {
   const sb = makeSandbox(t);
-  const res = spawnAuthCliDirect(sb, ['--control'], JSON.stringify({ type: 'control', op: 'auth.status' }) + '\n');
+  const res = spawnAuthCliDirect(sb, ['--control'], JSON.stringify({ type: 'control', op: 'auth.status', id: 'ctl' }) + '\n');
   assert.equal(res.status, 2, `expected exit 2, got ${res.status}\nstdout:\n${res.stdout}\nstderr:\n${res.stderr}`);
   assert.equal(res.stdout, '', `--control must print nothing to stdout:\n${res.stdout}`);
   const lines = String(res.stderr).split(/\r?\n/).filter((l) => l.trim() !== '');
@@ -660,12 +673,25 @@ test('R2 auth status with a key-shaped unknown provider does not echo it and lis
     `message must list the known providers:\n${r.stderr}`);
 });
 
-test('R2 control auth.status with a key-shaped unknown provider does not echo it and lists the known providers', (t) => {
+// R-CONTROL-1 (ruling, event store): a rejected argument on a known op is an envelope {ok:false}, exit 0.
+test('R2 control auth.status with a key-shaped unknown provider answers one error envelope (op kept, ok false), exit 0, probe absent from stdout and stderr', (t) => {
   const sb = makeSandbox(t);
-  const r = control(sb, { type: 'control', op: 'auth.status', provider: DUMMY_ARG });
-  assertArgvNotEchoed(r, 'control unknown provider');
-  assert.ok(r.stderr.includes('anthropic') && r.stderr.includes('local'),
-    `message must list the known providers:\n${r.stderr}`);
+  const r = control(sb, { type: 'control', op: 'auth.status', id: 'p1', provider: DUMMY_ARG });
+  assert.equal(r.status, 0, `a rejected argument on a known op is an op failure, not malformed framing: exit 0 expected; stderr:\n${r.stderr}`);
+  const envelope = singleJsonLine(r.stdout);
+  assert.equal(envelope.type, 'control', `envelope type:\n${r.stdout}`);
+  assert.equal(envelope.id, 'p1', `envelope must carry the request id:\n${r.stdout}`);
+  assert.equal(envelope.ok, false, `envelope must report ok:false:\n${r.stdout}`);
+  assert.equal(envelope.op, 'auth.status', `known op must be kept in the envelope:\n${r.stdout}`);
+  assert.equal(typeof envelope.error, 'string', `envelope must carry an error string:\n${r.stdout}`);
+  assert.ok(envelope.error.length > 0, `error string must not be empty:\n${r.stdout}`);
+  const text = r.stdout + r.stderr;
+  assert.ok(!text.includes(DUMMY_ARG), `key-shaped provider probe echoed in output:\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+  assert.ok(!text.includes('TESTDUMMY'), `R-NOECHO-1 (tests assert absence, never exact echo): core fragment of the provider probe echoed in output:\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+  assert.ok(!envelope.error.includes(DUMMY_ARG),
+    `error string must not echo the probe:\n${r.stdout}`);
+  assert.ok(envelope.error.includes('anthropic') && envelope.error.includes('local'),
+    `envelope error must list the known providers:\n${r.stdout}`);
 });
 
 test('R2 auth login with a key-shaped unknown flag does not echo the value and names the flag', (t) => {
@@ -689,14 +715,20 @@ test('R2 model use with a key-shaped unknown model does not echo it and lists th
   assert.ok(r.stderr.includes('claude-fable-5-1'), `message must list the anthropic models:\n${r.stderr}`);
 });
 
-test('R2 control op with a key-shaped unknown op does not echo it', (t) => {
+// R-CONTROL-1 (ruling, event store): an unknown op is an op failure answered by an envelope, exit 0.
+test('R2 control key-shaped unknown op answers one error envelope (no op field, error "unknown op"), exit 0, probe absent from stdout and stderr', (t) => {
   const sb = makeSandbox(t);
-  const r = control(sb, { type: 'control', op: DUMMY_ARG });
-  assert.equal(r.status, 2, `expected exit 2, got ${r.status}\nstderr:\n${r.stderr}`);
-  assert.equal(r.stdout, '', `unknown op must write nothing to stdout:\n${r.stdout}`);
-  assert.ok(!(r.stdout + r.stderr).includes(DUMMY_ARG), `argv value echoed in output:\n${r.stderr}`);
-  assert.ok(!(r.stdout + r.stderr).includes('TESTDUMMY'), `part of the argv value echoed in output:\n${r.stderr}`);
-  assert.match(r.stderr, /^aesop-pipe:/, `unknown op must produce one aesop-pipe: stderr line:\n${r.stderr}`);
+  const r = control(sb, { type: 'control', op: DUMMY_ARG, id: 'k1' });
+  assert.equal(r.status, 0, `an unknown op is an op failure: exit 0 expected; stderr:\n${r.stderr}`);
+  assert.equal(r.stderr.trim(), '', 'enveloped rejection leaves stderr empty (R-CONTROL-1: op failures are answered on stdout, not stderr)');
+  const envelope = singleJsonLine(r.stdout);
+  assert.equal(envelope.type, 'control', `envelope type:\n${r.stdout}`);
+  assert.equal(envelope.id, 'k1',`envelope must carry the request id:\n${r.stdout}`);
+  assert.equal(envelope.ok, false, `envelope must report ok:false:\n${r.stdout}`);
+  assert.equal(envelope.error, 'unknown op', `error text must be exactly "unknown op":\n${r.stdout}`);
+  assert.ok(!('op' in envelope), `unknown-op envelope must omit the op field:\n${r.stdout}`);
+  assert.ok(!(r.stdout + r.stderr).includes(DUMMY_ARG), `key-shaped op probe echoed in output:\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+  assert.ok(!(r.stdout + r.stderr).includes('TESTDUMMY'), `R-NOECHO-1 (tests assert absence, never exact echo): core fragment of the op probe echoed in output:\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
 });
 
 test('R2 auth with a key-shaped unknown verb does not echo it and names the verbs', (t) => {
@@ -722,7 +754,7 @@ test('R2 model with a key-shaped unknown verb does not echo it and names the ver
 
 test('R3 top-level node bin/cli.js --control exits non-zero, names the stream-json pipe, and prints no scaffold help', (t) => {
   const sb = makeSandbox(t);
-  const r = run(sb, ['--control'], { input: JSON.stringify({ type: 'control', op: 'auth.status' }) + '\n' });
+  const r = run(sb, ['--control'], { input: JSON.stringify({ type: 'control', op: 'auth.status', id: 'ctl' }) + '\n' });
   assert.notEqual(r.status, 0, `top-level --control must exit non-zero, got ${r.status}\nstdout:\n${r.stdout}`);
   assert.ok(r.stderr.includes('aesop pipe --input-format stream-json --output-format stream-json'),
     `stderr must name the declared stream-json channel:\n${r.stderr}`);
@@ -807,6 +839,47 @@ test('S5-3e aesop pipe --control exits 2 and names the stream-json channel', (t)
   assertControlChannelNamed(run(sb, ['pipe', '--control']), 'pipe --control');
 });
 
+// R3 (S5 round 5, decided): `--control` in ANY form on ANY bin path exits 2 and prints exactly one
+// stderr line equal to CONTROL_CHANNEL_MESSAGE (imported from stdio/pipe.mjs), with no `error: ` or
+// `aesop-pipe: ` prefix and nothing on stdout.
+function assertExactControlLine(r, invocation) {
+  assert.equal(r.status, 2, `${invocation}: expected exit 2, got ${r.status}\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+  assert.equal(r.stdout, '', `${invocation}: stdout must be empty:\n${r.stdout}`);
+  const lines = r.stderr.replace(/\r?\n$/, '').split(/\r?\n/);
+  assert.equal(lines.length, 1, `${invocation}: stderr must be exactly one line, got:\n${r.stderr}`);
+  assert.equal(lines[0], CONTROL_CHANNEL_MESSAGE, `${invocation}: stderr line must equal CONTROL_CHANNEL_MESSAGE exactly:\n${r.stderr}`);
+}
+
+test('R3a bare --control exits 2 with exactly the CONTROL_CHANNEL_MESSAGE line', (t) => {
+  const sb = makeSandbox(t);
+  assertExactControlLine(run(sb, ['--control']), 'bare --control');
+});
+
+test('R3b bare --control=anything exits 2 with exactly the CONTROL_CHANNEL_MESSAGE line', (t) => {
+  const sb = makeSandbox(t);
+  assertExactControlLine(run(sb, ['--control=x']), 'bare --control=x');
+});
+
+test('R3c auth status --control=x exits 2 with exactly the CONTROL_CHANNEL_MESSAGE line', (t) => {
+  const sb = makeSandbox(t);
+  assertExactControlLine(run(sb, ['auth', 'status', '--control=x']), 'auth status --control=x');
+});
+
+test('R3d model list --control=x exits 2 with exactly the CONTROL_CHANNEL_MESSAGE line', (t) => {
+  const sb = makeSandbox(t);
+  assertExactControlLine(run(sb, ['model', 'list', '--control=x']), 'model list --control=x');
+});
+
+test('R3e pipe --control exits 2 with exactly the CONTROL_CHANNEL_MESSAGE line', (t) => {
+  const sb = makeSandbox(t);
+  assertExactControlLine(run(sb, ['pipe', '--control']), 'pipe --control');
+});
+
+test('R3f pipe --control=x exits 2 with exactly the CONTROL_CHANNEL_MESSAGE line', (t) => {
+  const sb = makeSandbox(t);
+  assertExactControlLine(run(sb, ['pipe', '--control=x']), 'pipe --control=x');
+});
+
 // ---------------------------------------------------------------------------
 // S5 review, item 4: logout clears a selection that is backed only by an env credential (no stored
 // entry). Before the fix, dropCredentials only cleared `current` when it dropped a stored entry.
@@ -838,6 +911,27 @@ test('S5-4a auth logout (all) clears a selection backed only by an env credentia
   const out = run(sb, ['auth', 'logout'], { env });
   assert.equal(out.status, 0, `logout stderr:\n${out.stderr}`);
   assertNoSecret(out, [ENV_KEY]);
+  // R5 (S5 round 5, decided): logout does not clear an env credential, which keeps resolving. Stdout
+  // carries exactly one extra line naming the provider and source=env, never the value or a fragment.
+  // This test asserts the logout stdout gains exactly one line, the exact "still set: anthropic source=env"
+  // line, and that a following auth status still reports source=env. It never checks the env object itself.
+  // Baseline: the same logout with no env credential in a fresh sandbox. The env run must add exactly one line.
+  const baseSb = makeSandbox(t);
+  const baseOut = run(baseSb, ['auth', 'logout']);
+  assert.equal(baseOut.status, 0, `R5 baseline logout stderr:\n${baseOut.stderr}`);
+  const nonEmpty = (text) => text.split(/\r?\n/).filter((l) => l.trim() !== '');
+  const baseLines = nonEmpty(baseOut.stdout);
+  const outLines = nonEmpty(out.stdout);
+  assert.equal(outLines.length, baseLines.length + 1,
+    `R5: logout with a live env credential must add exactly one line to stdout:\nbaseline:\n${baseOut.stdout}\nwith env:\n${out.stdout}`);
+  const extra = outLines.filter((l) => !baseLines.includes(l));
+  assert.equal(extra.length, 1, `R5: exactly one stdout line must be extra:\n${out.stdout}`);
+  assert.equal(extra[0], 'still set: anthropic source=env (logout does not remove an environment credential)',
+    `R5: the extra logout line must be the exact still-set line:\n${out.stdout}`);
+  assertNoKeyFragment(out, [ENV_KEY]);
+  const st = run(sb, ['auth', 'status', '--provider', 'anthropic'], { env });
+  assert.equal(st.status, 0, `status stderr:\n${st.stderr}`);
+  assert.match(st.stdout, /\benv\b/, `R5: after logout auth status must still report source=env for anthropic:\n${st.stdout}`);
   assertNoSelection(run(sb, ['model', 'current'], { env }), 'auth logout');
 });
 
@@ -877,4 +971,81 @@ test('R4 auth logout --provider anthropic clears a selection that names that pro
   assert.equal(cur.status, 0, `stderr:\n${cur.stderr}`);
   assert.equal(singleJsonLine(cur.stdout).selector, null,
     `after logout of the selected provider model current must report no selection:\n${cur.stdout}`);
+});
+
+// ---------------------------------------------------------------------------
+// R9 (S5 round 5, R-CONTROL-1): every error envelope carries a machine-readable `code`. The envelope is
+// ok:false with the op kept (known op) or dropped (unknown op), exit 0 per R-CONTROL-1 (enveloped rejection
+// exits 0; framing faults exit 2, and the exit code of a rejected known-op argument moved from 2 to 0),
+// and the pipe keeps running.
+// A status reply with no credential is an ok reply, not an error. S2 emits the code field; these pins are guards
+// that fail if the field or the no-echo behaviour regresses.
+// ---------------------------------------------------------------------------
+
+test('R9a control envelope for an unknown op carries code unknown_op', (t) => {
+  const sb = makeSandbox(t);
+  const r = control(sb, { type: 'control', op: 'auth.nosuchop', id: 'c9a' });
+  assert.equal(r.status, 0, `R9a: an unknown op is an op failure, exit 0 expected; stderr:\n${r.stderr}`);
+  const envelope = singleJsonLine(r.stdout);
+  assert.equal(envelope.ok, false, `R9a: envelope must report ok:false:\n${r.stdout}`);
+  assert.equal(envelope.code, 'unknown_op', `R9a: unknown-op envelope must carry code "unknown_op" (R-CONTROL-1):\n${r.stdout}`);
+});
+
+test('R9b control envelope for a known op with an unknown provider carries code unknown_provider', (t) => {
+  const sb = makeSandbox(t);
+  const r = control(sb, { type: 'control', op: 'auth.status', id: 'c9b', provider: DUMMY_ARG });
+  assert.equal(r.status, 0, `R9b: a rejected argument on a known op is an op failure, exit 0 expected; stderr:\n${r.stderr}`);
+  const envelope = singleJsonLine(r.stdout);
+  assert.equal(envelope.ok, false, `R9b: envelope must report ok:false:\n${r.stdout}`);
+  assert.equal(envelope.op, 'auth.status', `R9b: known op must be kept in the envelope:\n${r.stdout}`);
+  assert.equal(typeof envelope.code, 'string', `R9b: envelope must carry a string code (R-CONTROL-1):\n${r.stdout}`);
+  assert.ok(envelope.code.length > 0, `R9b: code must be non-empty:\n${r.stdout}`);
+  assert.equal(envelope.code, 'unknown_provider', `R9b: unknown provider must carry code "unknown_provider":\n${r.stdout}`);
+});
+
+test('R9c control model.use with an unknown model selector carries code unknown_model_selector', (t) => {
+  const sb = makeSandbox(t);
+  const r = control(sb, { type: 'control', op: 'model.use', id: 'c9c', model: 'nosuch/model' });
+  assert.equal(r.status, 0, `R9c: a bad selector on a known op is an op failure, exit 0 expected; stderr:\n${r.stderr}`);
+  const envelope = singleJsonLine(r.stdout);
+  assert.equal(envelope.ok, false, `R9c: envelope must report ok:false:\n${r.stdout}`);
+  assert.equal(envelope.code, 'unknown_model_selector', `R9c: bad model selector must carry code "unknown_model_selector" (R-CONTROL-1):\n${r.stdout}`);
+});
+
+test('R9d control auth.status with no credential replies with the status envelope, not an error', (t) => {
+  const sb = makeSandbox(t);
+  const r = control(sb, { type: 'control', op: 'auth.status', id: 'c9d' });
+  assert.equal(r.status, 0, `R9d: stderr:\n${r.stderr}`);
+  const reply = singleJsonLine(r.stdout);
+  assert.equal(reply.ok, true, `R9d: no credential is a status reply, not an error (ok:true expected):\n${r.stdout}`);
+  assert.equal(reply.op, 'auth.status', `R9d: reply must name the op:\n${r.stdout}`);
+  assert.equal(typeof reply.result, 'object', `R9d: status reply must carry a result object:\n${r.stdout}`);
+  assert.ok(!('error' in reply), `R9d: a status reply must carry no error field:\n${r.stdout}`);
+  assert.ok(!('code' in reply), `R9d: a status reply must carry no code field:\n${r.stdout}`);
+  assert.ok(JSON.stringify(reply.result).includes('"none"'), `R9d: no credential must report source none:\n${r.stdout}`);
+});
+
+// R9e/R9f (S5 round 7, ruling R-NOECHO-1): a NON-STRING provider or model selector is the wrong shape,
+// so its code is invalid_argument. unknown_provider and unknown_model_selector are for well-formed strings
+// outside the set. Exit 0 here is per R-CONTROL-1: a rejected known-op argument is an enveloped rejection
+// (exit 0), where it previously exited 2; framing faults still exit 2.
+test('R9e control auth.login with a non-string provider carries code invalid_argument', (t) => {
+  const sb = makeSandbox(t);
+  const r = control(sb, { type: 'control', op: 'auth.login', id: 'c9e', provider: 42, api_key: KEY });
+  assert.equal(r.status, 0, `R9e: a wrong-shape argument on a known op is an op failure, exit 0 expected; stderr:\n${r.stderr}`);
+  assertNoSecret(r, [KEY]);
+  const envelope = singleJsonLine(r.stdout);
+  assert.equal(envelope.ok, false, `R9e: envelope must report ok:false:\n${r.stdout}`);
+  assert.equal(envelope.op, 'auth.login', `R9e: known op must be kept in the envelope:\n${r.stdout}`);
+  assert.equal(envelope.code, 'invalid_argument', `R9e: a non-string provider must carry code "invalid_argument" (R-NOECHO-1):\n${r.stdout}`);
+});
+
+test('R9f control model.use with a non-string selector carries code invalid_argument', (t) => {
+  const sb = makeSandbox(t);
+  const r = control(sb, { type: 'control', op: 'model.use', id: 'c9f', model: 7 });
+  assert.equal(r.status, 0, `R9f: a wrong-shape selector on a known op is an op failure, exit 0 expected; stderr:\n${r.stderr}`);
+  const envelope = singleJsonLine(r.stdout);
+  assert.equal(envelope.ok, false, `R9f: envelope must report ok:false:\n${r.stdout}`);
+  assert.equal(envelope.op, 'model.use', `R9f: known op must be kept in the envelope:\n${r.stdout}`);
+  assert.equal(envelope.code, 'invalid_argument', `R9f: a non-string selector must carry code "invalid_argument" (R-NOECHO-1):\n${r.stdout}`);
 });

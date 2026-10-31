@@ -34,13 +34,16 @@ F <channel> <content-type> <length>\n<payload>\n
 E <exit>\n
 ```
 - Channels: `data` and `control`.
-- Control message types: `hello`, `meta`, `event`, `receipt`, `seal`, `error`, `done`.
+- Control message types: `hello`, `meta`, `event`, `receipt`, `seal`, `error`, `done`. An `error` control frame exits 2 with the fixed line `upstream reported an error`; its message is never echoed.
 - An unknown control message type marked critical fails closed (exit 2). An unknown non-critical type is skipped.
 
 **stream-json records**
 - `data` records carry the payload base64-encoded.
 - `result` records carry `bytes` and `sha256` of the full payload.
-- `control` records (op dispatch) are accepted only with `--input-format stream-json --output-format stream-json`. Each record `{"type":"control","op":"<op>","id":<string|number|null>}` gets one stdout reply line `{"type":"control","op":...,"id":...,"ok":true,"result":{...}}`; a control-only stream prints just its replies. Ops come from a registry injected by `setControlDispatcher` (auth/cli.mjs, preloaded by bin/cli.js via `--import`); without a registration, or on an unknown op, the pipe exits 2 with one `aesop-pipe:` line and writes no further record to stdout.
+- `control` records (op dispatch) are accepted only with `--input-format stream-json --output-format stream-json`. Each record `{"type":"control","op":"<op>","id":<string|number|null>}` gets one stdout reply line `{"type":"control","op":...,"id":...,"ok":true,"result":{...}}`; a control-only stream prints just its replies. Ops come from a registry injected by `setControlDispatcher` (auth/cli.mjs, preloaded by bin/cli.js via `--import`); without a registration the pipe exits 2 with one `aesop-pipe:` line. A refused op does not stop the pipe: it gets an ok:false reply and the pipe exits 0. An unknown op gets `{"type":"control","id":<id>,"ok":false,"error":"unknown op","code":"unknown_op"}` with no `op` field; a known op with a rejected argument keeps `op` and a fixed safe `error` (for example `unknown model selector`).
+  - Every error envelope carries a machine-readable `code` (R-CONTROL-1). The code set is owned by auth/cli.mjs `CONTROL_ERROR_CODES`; a refusal with no code is reported as `op_failed`.
+  - Malformed framing (a non-JSON line, or a control record with no `id`) is a FramingError: exit 2, exactly one stderr line with the `aesop-pipe: ` prefix, and no stdout record.
+- No caller-supplied string (flag, op, selector, provider, label, record type, a `result` record's bytes value) is echoed on stdout or stderr; `unknown flag`, `unknown option` and `unexpected argument` lines carry no value. `--control` or `--control=<x>` on any verb or entry path, the pipe included, exits 2 with the bare `CONTROL_CHANNEL_MESSAGE` line (no `aesop-pipe:` or `error:` prefix). The line and the one predicate `hasControlFlag` are defined once in stdio/pipe.mjs and re-exported by auth/cli.mjs (the pipe never imports auth/).
 
 **Exit codes**
 - `0` — ok.

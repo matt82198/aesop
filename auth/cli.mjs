@@ -21,7 +21,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PROVIDERS, findProvider, parseSelector } from './providers.mjs';
 import { readStore, writeStore, resolveCredential, StoreError } from './store.mjs';
-import { setControlDispatcher } from '../stdio/pipe.mjs';
+import { setControlDispatcher, CONTROL_CHANNEL_MESSAGE, hasControlFlag } from '../stdio/pipe.mjs';
+
+// One copy of the control-channel line and of the `--control` predicate, owned by stdio/pipe.mjs (the
+// pipe prints the line too and may not import auth/). Re-exported here so auth/cli.mjs is the public source.
+export { CONTROL_CHANNEL_MESSAGE, hasControlFlag };
 
 export const EXIT_OK = 0;
 export const EXIT_USAGE = 2;
@@ -37,14 +41,38 @@ class UsageError extends Error {
 }
 
 /**
- * A control op that cannot be answered. The message is safe to print; the stdio pipe maps it to exit 2.
- * Extends UsageError so the verb dispatcher prints it the same way.
+ * Machine-readable codes carried by every ControlOpError and every control error envelope (R-CONTROL-1).
+ * `unknown_op`: op name not in the registry. `unknown_provider`: a string provider name not registered.
+ * `unknown_model_selector`: a string that is malformed, unregistered or unlisted `<provider>/<model>`.
+ * `invalid_argument`: a known op with an argument of the wrong shape, including a non-string provider or model selector. `no_credential`: the selected
+ * model has no credential from env or store. `store_error`: the store is unreadable or corrupt.
+ * `op_failed`: any other refusal of a known op.
+ * @type {Readonly<string[]>}
+ */
+export const CONTROL_ERROR_CODES = Object.freeze([
+  'unknown_op',
+  'unknown_provider',
+  'unknown_model_selector',
+  'invalid_argument',
+  'no_credential',
+  'store_error',
+  'op_failed',
+]);
+
+/**
+ * A control op that cannot be answered. The message is safe to print; the stdio pipe maps it to an
+ * ok:false envelope that carries `code`. Extends UsageError so the verb dispatcher prints it the same way.
  */
 export class ControlOpError extends UsageError {
-  /** @param {string} message one-line explanation */
-  constructor(message) {
+  /**
+   * @param {string} message one-line explanation, safe to print
+   * @param {string} code one of CONTROL_ERROR_CODES; a missing or unknown code is a programming error
+   */
+  constructor(message, code) {
     super(message);
+    if (!CONTROL_ERROR_CODES.includes(code)) throw new TypeError(`ControlOpError needs a code from CONTROL_ERROR_CODES, got ${String(code)}`);
     this.name = 'ControlOpError';
+    this.code = code;
   }
 }
 
@@ -75,10 +103,9 @@ function parseArgs(argv, spec) {
     } else if (spec.flag.includes(name)) {
       flags.add(name);
     } else {
-      // Echo the name only when it is flag-shaped; anything else may be a key pasted by mistake.
-      const label = /^[a-z][a-z-]{0,31}$/.test(name) ? `--${name}` : 'flag';
+      // The unknown flag is never echoed (it may be a key pasted by mistake); the valid list names the shape.
       const valid = [...spec.value, ...spec.flag].map((f) => `--${f}`).join(', ');
-      throw new UsageError(`unknown ${label} for this verb (valid flags: ${valid})`);
+      throw new UsageError(`unknown flag for this verb (valid flags: ${valid})`);
     }
   }
   return { values, flags, positional };
@@ -98,8 +125,9 @@ function requireProvider(name) {
 
 /**
  * Status rows for the given providers, with no secret in any field. `credential` is the fixed word
- * `set` (a credential resolves from env or the store) or `none`. `keyTail` is always null: no part of
- * a key is shown (R1); the field stays in the schema so existing consumers keep their shape.
+ * `set` (a credential resolves from env or the store) or `none`. `keyTail` is the fixed null slot of the
+ * status schema: no part of a key is ever shown (R1), so it is always null and existing consumers keep
+ * their shape.
  * @param {object[]} providers registry entries to report
  * @param {NodeJS.ProcessEnv} env environment (credential source)
  * @param {object} store parsed store
@@ -157,9 +185,9 @@ function modelCurrentObject(store) {
 
 /** Resolve a required-string `provider` field of a control record to its registry entry. */
 function namedProvider(msg) {
-  if (typeof msg.provider !== 'string') throw new ControlOpError('control: provider must be a string');
+  if (typeof msg.provider !== 'string') throw new ControlOpError('control: provider must be a string', 'invalid_argument');
   const provider = findProvider(msg.provider);
-  if (!provider) throw new ControlOpError(`control: unknown provider (registered: ${providerNames()})`);
+  if (!provider) throw new ControlOpError(`control: unknown provider (registered: ${providerNames()})`, 'unknown_provider');
   return provider;
 }
 
@@ -188,9 +216,10 @@ function storeCredential(env, provider, key) {
 }
 
 /**
- * Drop one provider's stored credential, or every stored credential when `provider` is null.
- * When the dropped credential belongs to the selected provider, the model selection is cleared too,
- * so `model current` never names a provider that is logged out (R4).
+ * Log out one provider, or every provider when `provider` is null. Drops its stored credential, and
+ * clears the model selection whenever the selection names a logged-out provider, whether that
+ * provider's credential came from the store or from an environment variable (the env var itself is
+ * never touched). So `model current` never names a provider that is logged out (R4).
  * The only logout write path for `auth logout` and the `auth.logout` op.
  * @param {NodeJS.ProcessEnv} env environment (store location)
  * @param {{name: string}|null} provider registry entry, or null for all providers
@@ -199,9 +228,9 @@ function dropCredentials(env, provider) {
   const store = readStore(env);
   const removed = Object.keys(store.providers).filter((name) => !provider || name === provider.name);
   for (const name of removed) delete store.providers[name];
-  const selectionLost = store.current !== null && removed.includes(store.current.provider);
+  const selectionLost = store.current !== null && (!provider || store.current.provider === provider.name);
   if (selectionLost) store.current = null;
-  if (removed.length) writeStore(env, store);
+  if (removed.length || selectionLost) writeStore(env, store);
 }
 
 /**
@@ -253,9 +282,9 @@ function applyModelSelection(env, provider, model) {
  */
 function controlLogin(msg, env) {
   const provider = msg.provider === undefined ? findProvider('anthropic') : namedProvider(msg);
-  if (provider.envVar === null) throw new ControlOpError(`control: provider ${provider.name} needs no credential`);
+  if (provider.envVar === null) throw new ControlOpError(`control: provider ${provider.name} needs no credential`, 'invalid_argument');
   if (typeof msg.api_key !== 'string' || msg.api_key.trim() === '' || /[\r\n]/.test(msg.api_key.trim())) {
-    throw new ControlOpError('control: auth.login requires api_key as a non-empty single-line string');
+    throw new ControlOpError('control: auth.login requires api_key as a non-empty single-line string', 'invalid_argument');
   }
   storeCredential(env, provider, msg.api_key.trim());
   return statusObject([provider], env, readStore(env));
@@ -280,9 +309,17 @@ function controlLogout(msg, env) {
  * @returns {object} the `model current` object after the op
  */
 function controlModelUse(msg, env) {
-  if (typeof msg.model !== 'string') throw new ControlOpError('control: model.use requires model as a <provider>/<model> string');
-  const { provider, model } = parseModelSelector(msg.model);
-  if (!credentialAvailable(provider, env)) throw new ControlOpError(noCredentialMessage(provider));
+  if (typeof msg.model !== 'string') throw new ControlOpError('control: model.use requires model as a <provider>/<model> string', 'invalid_argument');
+  let parsed;
+  try {
+    parsed = parseModelSelector(msg.model);
+  } catch (err) {
+    // The selector is caller-supplied and is never echoed; the reply names the problem only.
+    if (err instanceof UsageError) throw new ControlOpError('unknown model selector', 'unknown_model_selector');
+    throw err;
+  }
+  const { provider, model } = parsed;
+  if (!credentialAvailable(provider, env)) throw new ControlOpError(noCredentialMessage(provider), 'no_credential');
   return modelCurrentObject(applyModelSelection(env, provider, model));
 }
 
@@ -310,17 +347,18 @@ const CONTROL_OPS = Object.freeze({
 export function runControlOp(msg, env = process.env) {
   const op = msg.op;
   if (typeof op !== 'string' || !Object.prototype.hasOwnProperty.call(CONTROL_OPS, op)) {
-    // Op names are dotted lowercase words; anything else is never echoed (it may be a pasted key).
-    const shown = typeof op === 'string' && /^[a-z][a-z0-9]*(\.[a-z][a-z0-9]*)*$/.test(op) && op.length <= 40 ? ` "${op}"` : '';
-    throw new ControlOpError(`control: unknown op${shown} (use ${Object.keys(CONTROL_OPS).join(', ')})`);
+    // The op is never echoed (it may be a pasted key). The pipe turns this into the fixed envelope
+    // error "unknown op" with no op field.
+    throw new ControlOpError('unknown op', 'unknown_op');
   }
   try {
     return CONTROL_OPS[op](msg, env);
   } catch (err) {
     if (err instanceof ControlOpError) throw err;
     // UsageError and StoreError messages are written to be safe to print; the pipe only forwards ControlOpError text.
-    if (err instanceof UsageError || err instanceof StoreError) throw new ControlOpError(err.message);
-    throw new ControlOpError(`control op ${op} failed`);
+    if (err instanceof StoreError) throw new ControlOpError(err.message, 'store_error');
+    if (err instanceof UsageError) throw new ControlOpError(err.message, 'op_failed');
+    throw new ControlOpError(`control op ${op} failed`, 'op_failed');
   }
 }
 
@@ -377,8 +415,14 @@ async function authStatus(argv, io) {
 async function authLogout(argv, io) {
   const { values, positional } = parseArgs(argv, { value: ['provider'], flag: [] });
   if (positional.length) throw new UsageError('unexpected argument (auth logout takes only --provider <name>)');
-  dropCredentials(io.env, values.provider ? requireProvider(values.provider) : null);
-  io.out(values.provider ? `logged out: ${values.provider}\n` : 'logged out: all providers\n');
+  const provider = values.provider ? requireProvider(values.provider) : null;
+  dropCredentials(io.env, provider);
+  io.out(provider ? `logged out: ${provider.name}\n` : 'logged out: all providers\n');
+  // Logout never unsets an environment credential, so each provider that still resolves from env gets one
+  // line (R5). The line names the provider and source=env only; the value is never read into output.
+  for (const row of statusRows(provider ? [provider] : [...PROVIDERS], io.env, readStore(io.env))) {
+    if (row.source === 'env') io.out(`still set: ${row.provider} source=env (logout does not remove an environment credential)\n`);
+  }
   return EXIT_OK;
 }
 
@@ -393,7 +437,6 @@ async function authVerb(argv, io) {
   if (verb === 'login') return authLogin(rest, io);
   if (verb === 'status') return authStatus(rest, io);
   if (verb === 'logout') return authLogout(rest, io);
-  if (verb === '--control') throw new UsageError(CONTROL_CHANNEL_MESSAGE);
   throw new UsageError(verb ? 'unknown auth verb (use login, status, logout)' : 'auth requires a verb: login, status, or logout');
 }
 
@@ -444,9 +487,6 @@ function modelVerb(argv, io) {
   throw new UsageError(verb ? 'unknown model verb (use list, use, current)' : 'model requires a verb: list, use, or current');
 }
 
-/** Message for a bare `--control`: control records have one channel, the declared stream-json pipe. */
-const CONTROL_CHANNEL_MESSAGE = 'control records are not a CLI mode; send them on aesop pipe --input-format stream-json --output-format stream-json';
-
 /**
  * Entry point shared by bin/cli.js and the direct-run path. Never throws; maps every failure to an exit code.
  * @param {string[]} argv argv after the program name (`auth ...` or `model ...`)
@@ -454,9 +494,14 @@ const CONTROL_CHANNEL_MESSAGE = 'control records are not a CLI mode; send them o
  * @returns {Promise<number>} exit code: 0, 2, or 3
  */
 export async function runAuthCli(argv, io) {
+  // Control records have one channel. `--control` or `--control=<x>` is refused on every auth/model path,
+  // wherever it sits, first, with the bare CONTROL_CHANNEL_MESSAGE line (no `error:` prefix).
+  if (hasControlFlag(argv)) {
+    io.err(`${CONTROL_CHANNEL_MESSAGE}\n`);
+    return EXIT_USAGE;
+  }
   try {
     const [head, ...rest] = argv;
-    if (head === '--control') throw new UsageError(CONTROL_CHANNEL_MESSAGE);
     if (head === 'auth') return await authVerb(rest, io);
     if (head === 'model') return modelVerb(rest, io);
     throw new UsageError('not an auth or model verb (use auth ... or model ...)');
