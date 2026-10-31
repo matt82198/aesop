@@ -308,6 +308,12 @@ test('DEFECT 6b: scaffold copy skips __pycache__ and *.pyc (no ENOENT race)', ()
 
   fs.mkdirSync(path.join(pkgDir, 'bin'), { recursive: true });
   fs.copyFileSync(CLI, path.join(pkgDir, 'bin', 'cli.js'));
+  // bin/cli.js requires stdio/tty-decision.js at load time; a real install ships stdio/.
+  const stdioSrc = path.join(path.dirname(CLI), '..', 'stdio');
+  fs.mkdirSync(path.join(pkgDir, 'stdio'), { recursive: true });
+  for (const f of fs.readdirSync(stdioSrc)) {
+    if (/\.m?js$/.test(f)) fs.copyFileSync(path.join(stdioSrc, f), path.join(pkgDir, 'stdio', f));
+  }
   fs.writeFileSync(path.join(pkgDir, 'package.json'), JSON.stringify({ name: 'aesop-fixture', version: '0.0.0-test' }));
   fs.mkdirSync(pycDir, { recursive: true });
   fs.writeFileSync(path.join(uiDir, 'app.py'), 'print("ui")\n');

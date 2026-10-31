@@ -19,6 +19,7 @@ Node stdlib only, ESM `.mjs`. Node was chosen because `bin/cli.js` and `mcp/serv
 - `stdio/pipe.mjs` — core `runPipe({stdin, stdout, stderr, argv})` returning `Promise<exit code>`.
 - `stdio/frames.mjs` — frame encoder and decoder.
 - `stdio/tty.mjs` — `isTTY` and `detectMode`; the seam for the interactive chat.
+- `stdio/tty-decision.js` — CommonJS home of `isTTY` and `detectMode` (`stream.isTTY === true`); `tty.mjs` re-exports it, `bin/cli.js` requires it directly.
 
 **Flags**
 - `--input-format raw|text|stream-json|frames` (default `raw`)
