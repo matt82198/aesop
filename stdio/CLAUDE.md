@@ -40,6 +40,7 @@ E <exit>\n
 **stream-json records**
 - `data` records carry the payload base64-encoded.
 - `result` records carry `bytes` and `sha256` of the full payload.
+- `control` records (op dispatch) are accepted only with `--input-format stream-json --output-format stream-json`. Each record `{"type":"control","op":"<op>","id":<string|number|null>}` gets one stdout reply line `{"type":"control","op":...,"id":...,"ok":true,"result":{...}}`; a control-only stream prints just its replies. Ops come from a registry injected by `setControlDispatcher` (auth/cli.mjs, preloaded by bin/cli.js via `--import`); without a registration, or on an unknown op, the pipe exits 2 with one `aesop-pipe:` line and writes no further record to stdout.
 
 **Exit codes**
 - `0` — ok.

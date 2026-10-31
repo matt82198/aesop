@@ -141,8 +141,16 @@ const interactiveSession = detectMode({ stdin: process.stdin, stdout: process.st
 // Stdio pipeline dispatch: `aesop pipe [stdio flags]`, and a bare `aesop` with no TTY on
 // stdin/stdout. Its flags pass through untouched, like Python dispatch.
 const isPipeDispatch = args[0] === 'pipe' || (args.length === 0 && !interactiveSession);
-const isNamespaceDispatch = isPipeDispatch || (args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]));
+// Auth and model verbs (auth/cli.mjs). Their arguments pass through untouched; they never scaffold.
+const isAuthDispatch = args[0] === 'auth' || args[0] === 'model';
+const isNamespaceDispatch = isPipeDispatch || isAuthDispatch || (args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]));
 if (!isNamespaceDispatch) {
+  // Control records have one channel: the declared stream-json pipe. Refused here, before the
+  // scaffold help the unknown-option path would print.
+  if (args.includes('--control')) {
+    console.error('control records are not a CLI mode; send them on aesop pipe --input-format stream-json --output-format stream-json');
+    process.exit(2);
+  }
   if (args.includes('--version') || args.includes('-v')) {
     console.log(VERSION);
     process.exit(0);
@@ -153,6 +161,33 @@ if (!isNamespaceDispatch) {
     printHelp(console.error);
     process.exit(2);
   }
+}
+
+// Auth/model verbs: AUTH_CLI answers `auth ...` and `model ...` with the inherited stdio.
+const AUTH_CLI = path.join(__dirname, '..', 'auth', 'cli.mjs');
+/**
+ * Run auth/cli.mjs synchronously with inherited stdio and exit with its code (fail closed on signal or spawn error).
+ * @param {string[]} childArgs argv for auth/cli.mjs
+ */
+function runAuthChild(childArgs) {
+  const { spawnSync } = require('child_process');
+  if (!fs.existsSync(AUTH_CLI)) {
+    console.error(`Error: auth CLI not found at ${AUTH_CLI}`);
+    process.exit(2);
+  }
+  const result = spawnSync(process.execPath, [AUTH_CLI, ...childArgs], {
+    stdio: 'inherit',
+    windowsHide: true,
+  });
+  if (result.error) {
+    console.error(`Error spawning ${process.execPath}: ${result.error.message}`);
+    process.exit(2);
+  }
+  process.exit(exitCodeFromSpawnResult(result));
+}
+
+if (isAuthDispatch) {
+  runAuthChild(args);
 }
 
 // Stdio pipeline: runs before any scaffolding or filesystem work. stdio: 'inherit' so the bytes
@@ -170,7 +205,10 @@ if (isPipeDispatch) {
   }
   const pipeArgs = args[0] === 'pipe' ? args.slice(1) : [];
   const { spawnSync } = require('child_process');
-  const result = spawnSync(process.execPath, [stdioCli, ...pipeArgs], { stdio: 'inherit', windowsHide: true });
+  // Preload auth/cli.mjs so the control-op registry answers control records on the stream-json channel.
+  // stdio/ cannot import auth/ itself (zero-dependency gate), so the composition root wires it here.
+  const authPreload = require('url').pathToFileURL(path.join(__dirname, '..', 'auth', 'cli.mjs')).href;
+  const result = spawnSync(process.execPath, ['--import', authPreload, stdioCli, ...pipeArgs], { stdio: 'inherit', windowsHide: true });
   if (result.error) {
     console.error(`Error spawning ${process.execPath}: ${result.error.message}`);
   } else if (typeof result.status !== 'number') {
