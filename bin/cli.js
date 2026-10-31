@@ -128,15 +128,22 @@ const DOCUMENTED_FLAGS = new Set([
   '--force', '--yes', '--no-skills', '--install-deps', '--no-git',
   '--name', '--domains', '--repos', '--repo-urls',
   '--ci-mode', '--self-hosted-labels', '--json', '--demo',
-  '--repo', '--labels', '--instances', '--install-root', '--dry-run', '--set-fork-policy', '--global'
+  '--repo', '--labels', '--instances', '--install-root', '--dry-run', '--set-fork-policy', '--global',
+  '--chat-default'
 ]);
 
 // Top-level gate: --version/-v and unknown-flag rejection. Runs before any filesystem work.
 const VERSION = require('../package.json').version;
 // Stdio pipeline dispatch: `aesop pipe [stdio flags]`, and a bare `aesop` with no TTY on
 // stdin/stdout (a filter, never a scaffold). Its flags pass through untouched, like Python dispatch.
-const isPipeDispatch = args[0] === 'pipe' || (args.length === 0 && !isInteractive());
-const isNamespaceDispatch = isPipeDispatch || (args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]));
+// Interactive chat: `aesop chat`, or a bare `aesop` on a TTY when --chat-default or AESOP_DEFAULT=chat
+// is set. A bare `aesop` on a non-TTY stays the pipe filter whatever those say.
+const bareArgs = args.filter((arg) => arg !== '--chat-default');
+const isBareInvocation = bareArgs.length === 0;
+const isChatDispatch = args[0] === 'chat'
+  || (isBareInvocation && isInteractive() && (args.includes('--chat-default') || process.env.AESOP_DEFAULT === 'chat'));
+const isPipeDispatch = args[0] === 'pipe' || (isBareInvocation && !isInteractive());
+const isNamespaceDispatch = isPipeDispatch || isChatDispatch || (args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]));
 if (!isNamespaceDispatch) {
   if (args.includes('--version') || args.includes('-v')) {
     console.log(VERSION);
@@ -168,6 +175,33 @@ if (isPipeDispatch) {
     console.error(`Error: stdio pipeline was terminated by ${result.signal || 'an unknown signal'} without producing an exit code.`);
   }
   process.exit(exitCodeFromSpawnResult(result));
+}
+
+// Interactive chat: dynamic-imports chat/cli.mjs (ESM, so import() from this CommonJS file) and
+// returns the exit code through process.exitCode, so stdout and stdin teardown finish first.
+if (isChatDispatch) {
+  const chatCli = path.join(__dirname, '..', 'chat', 'cli.mjs');
+  if (!fs.existsSync(chatCli)) {
+    console.error(`Error: chat not found at ${chatCli}`);
+    process.exit(2);
+  }
+  const chatArgs = args[0] === 'chat' ? args.slice(1) : [];
+  import(require('url').pathToFileURL(chatCli).href)
+    .then((mod) => mod.runChat({
+      argv: chatArgs,
+      stdin: process.stdin,
+      stdout: process.stdout,
+      stderr: process.stderr,
+      env: process.env,
+    }))
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((err) => {
+      console.error(`Error: chat failed: ${err && err.message ? err.message : err}`);
+      process.exitCode = 2;
+    });
+  return;
 }
 
 // Helper: resolve Python interpreter (try python3 then python)
@@ -626,6 +660,7 @@ Commands (Node.js):
   fleet                   One-shot fleet snapshot (agents, heartbeats, tracker lanes, orchestrator status)
   reproduce               Offline verification suite (repo: full test suite; installed: self-checks)
   pipe                    Stdio filter (stdio/CLAUDE.md): raw bytes or framed streams, --input-format/--output-format
+  chat                    Interactive chat TUI on a terminal (chat/CLAUDE.md); --chat-default or AESOP_DEFAULT=chat makes bare aesop open it
   wizard                  Interactive onboarding (prompts for project name, repos, port)
 
 Commands (Python Tools):
