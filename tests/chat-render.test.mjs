@@ -239,3 +239,106 @@ test('render_box_drawing_used_when_unicode_is_safe', async () => {
     'an explicit unicode:true option must enable box drawing',
   );
 });
+
+test('render_force_color_env_enables_color_without_a_tty', async () => {
+  const { resolveColor } = await loadRender();
+  assert.equal(
+    resolveColor({ env: { FORCE_COLOR: '1' }, isTTY: false }),
+    true,
+    'FORCE_COLOR=1 must enable color even when the stream is not a TTY',
+  );
+  assert.equal(
+    resolveColor({ env: { FORCE_COLOR: 'true' }, isTTY: false }),
+    true,
+    'any non-empty FORCE_COLOR value must enable color',
+  );
+  assert.equal(
+    resolveColor({ env: { FORCE_COLOR: '1', NO_COLOR: '1' }, isTTY: false }),
+    false,
+    'NO_COLOR must still win over FORCE_COLOR when both are set',
+  );
+  assert.equal(
+    resolveColor({ env: { FORCE_COLOR: '1', NO_COLOR: '1' }, isTTY: true }),
+    false,
+    'NO_COLOR must still win over FORCE_COLOR on a TTY',
+  );
+});
+
+test('render_resolve_unicode_reads_lc_all_then_lang_locale', async () => {
+  const { resolveUnicode } = await loadRender();
+  const xterm = { TERM: 'xterm-256color' };
+  assert.equal(
+    resolveUnicode({ env: { ...xterm, LC_ALL: 'C' } }),
+    false,
+    'LC_ALL=C is not a UTF locale; box drawing must fall back to ASCII',
+  );
+  assert.equal(
+    resolveUnicode({ env: { ...xterm, LC_ALL: 'en_US.ISO-8859-1' } }),
+    false,
+    'LC_ALL naming a non-UTF charset must fall back to ASCII',
+  );
+  assert.equal(
+    resolveUnicode({ env: { ...xterm, LANG: 'en_US.ISO-8859-1' } }),
+    false,
+    'LANG must be consulted when LC_ALL is absent',
+  );
+  assert.equal(
+    resolveUnicode({ env: { ...xterm, LC_ALL: 'C', LANG: 'en_US.UTF-8' } }),
+    false,
+    'LC_ALL must win over LANG',
+  );
+  assert.equal(
+    resolveUnicode({ env: { ...xterm, LC_ALL: 'en_US.UTF-8' } }),
+    true,
+    'a UTF-8 locale must allow box drawing',
+  );
+  assert.equal(
+    resolveUnicode({ env: { TERM: 'dumb', LC_ALL: 'en_US.UTF-8' } }),
+    false,
+    'TERM=dumb must still force ASCII under a UTF-8 locale',
+  );
+});
+
+test('render_every_line_fits_columns_at_narrow_widths', async () => {
+  const { renderFrame } = await loadRender();
+  const state = makeState({
+    transcript: [
+      { role: 'user', text: 'hello there' },
+      { role: 'assistant', text: 'general kenobi' },
+      { role: 'tool', text: 'tool output here' },
+      { role: 'system', text: 'a system note' },
+    ],
+    inputBuffer: 'typed text',
+    cursor: 5,
+    hint: 'press ctrl-c again to quit',
+  });
+  for (const columns of [1, 5, 7, 12]) {
+    let frame = '';
+    assert.doesNotThrow(
+      () => {
+        frame = renderFrame(state, { columns, rows: 60, color: false, unicode: true });
+      },
+      `renderFrame must not throw at columns=${columns}`,
+    );
+    for (const line of stripAnsi(frame).split('\n')) {
+      assert.ok(
+        line.length <= columns,
+        `line exceeds ${columns} columns (${line.length} chars): ${JSON.stringify(line)}`,
+      );
+    }
+  }
+});
+
+test('render_frame_clips_to_rows_when_chrome_exceeds_rows', async () => {
+  const { renderFrame } = await loadRender();
+  const transcript = [];
+  for (let i = 1; i <= 6; i += 1) {
+    transcript.push({ role: 'user', text: `question ${i}` }, { role: 'assistant', text: `answer ${i}` });
+  }
+  const frame = renderFrame(makeState({ transcript, hint: 'a hint' }), { columns: 80, rows: 3, color: false });
+  const lines = frame.split('\n');
+  assert.ok(
+    lines.length <= 3,
+    `a frame rendered with rows=3 must have at most 3 lines (clip, never scroll); got ${lines.length}:\n${stripAnsi(frame)}`,
+  );
+});

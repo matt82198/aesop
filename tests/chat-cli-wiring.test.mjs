@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 // S1 spec for the `aesop chat` wiring in bin/cli.js. These tests spawn the real CLI, which is
 // the only file in the chat suite allowed to do so. Every spawn uses a fresh temp cwd that
@@ -128,4 +128,45 @@ test('bare_aesop_chat_default_flag_on_non_tty_stays_pipe_filter', async () => {
   } finally {
     safeRm(dir);
   }
+});
+
+const chatCliPath = join(repoRoot, 'chat', 'cli.mjs');
+
+test('chat_default_seam_should_enter_chat_truth_table', async () => {
+  const mod = await import(pathToFileURL(chatCliPath).href);
+  assert.equal(
+    typeof mod.shouldEnterChat,
+    'function',
+    'chat/cli.mjs must export shouldEnterChat({interactive, args, env}) as the --chat-default dispatch seam',
+  );
+  const { shouldEnterChat } = mod;
+  assert.equal(
+    shouldEnterChat({ interactive: true, args: ['--chat-default'], env: {} }),
+    true,
+    '--chat-default on a TTY must enter chat',
+  );
+  assert.equal(
+    shouldEnterChat({ interactive: true, args: [], env: { AESOP_DEFAULT: 'chat' } }),
+    true,
+    'AESOP_DEFAULT=chat on a TTY must enter chat',
+  );
+  assert.equal(
+    shouldEnterChat({ interactive: false, args: ['--chat-default'], env: {} }),
+    false,
+    '--chat-default on a non-TTY must not enter chat (pipes stay the filter)',
+  );
+  assert.equal(
+    shouldEnterChat({ interactive: true, args: [], env: {} }),
+    false,
+    'a bare TTY invocation with neither opt-in must not enter chat',
+  );
+});
+
+test('bin_cli_wires_should_enter_chat_seam', () => {
+  const src = readFileSync(cliPath, 'utf8');
+  assert.match(
+    src,
+    /\bshouldEnterChat\b/,
+    'bin/cli.js must reference shouldEnterChat from chat/cli.mjs so the --chat-default seam is actually wired',
+  );
 });

@@ -295,3 +295,86 @@ test('session_model_command_switches_status_without_touching_transcript', async 
     '/model must not add to, remove from, or edit the transcript',
   );
 });
+
+test('input_ctrl_d_on_empty_buffer_quits', async () => {
+  const { applyKey, createInputState } = await loadInput();
+  const r = applyKey(createInputState(), ctrl('d'));
+  assert.equal(r.effect?.type, 'quit', 'ctrl-d on an empty buffer must yield the quit effect (EOF convention)');
+});
+
+test('input_ctrl_d_on_non_empty_buffer_forward_deletes_and_does_not_quit', async () => {
+  const { applyKey, createInputState } = await loadInput();
+  const base = { ...createInputState(), inputBuffer: 'abc', cursor: 1 };
+  const r = applyKey(base, ctrl('d'));
+  assert.notEqual(r.effect?.type, 'quit', 'ctrl-d on a non-empty buffer must not quit');
+  assert.equal(r.state.inputBuffer, 'ac', 'ctrl-d must forward-delete the character at the cursor');
+  assert.equal(r.state.cursor, 1, 'the cursor must stay in place after a forward delete');
+});
+
+test('input_windows_path_ending_in_backslash_submits_literally', async () => {
+  const { applyKey, createInputState } = await loadInput();
+  const typed = typeAll(applyKey, createInputState(), 'C:\\path\\');
+  const r = applyKey(typed, enter());
+  assert.equal(
+    r.effect?.type,
+    'submit',
+    'a line with other content that ends in a backslash must submit, not wait for a continuation',
+  );
+  assert.equal(r.effect.line, 'C:\\path\\', 'the submitted line must keep the Windows path verbatim');
+});
+
+const chatCliPath = join(testDir, '..', 'chat', 'cli.mjs');
+
+async function loadChatCli() {
+  return import(pathToFileURL(chatCliPath).href);
+}
+
+test('session_slash_command_never_invokes_source', async () => {
+  // Drives runChat in-process with TTY-shaped fake streams (detectMode only reads isTTY).
+  // Current chat/cli.mjs calls source(line) before Session.submit sees the slash command.
+  const { EventEmitter } = await import('node:events');
+  const { runChat } = await loadChatCli();
+  const stdin = Object.assign(new EventEmitter(), { isTTY: true, setRawMode() {}, resume() {}, pause() {} });
+  const stdout = {
+    isTTY: true,
+    columns: 80,
+    rows: 24,
+    write() {
+      return true;
+    },
+  };
+  const stderr = { write: () => true };
+  const calls = [];
+  const source = (line) => {
+    calls.push(line);
+    return chunksOf([]);
+  };
+  const done = runChat({ argv: [], stdin, stdout, stderr, env: {}, source });
+  const press = (str, key) => stdin.emit('keypress', str, key);
+  for (const c of '/help') press(c, undefined);
+  press('\r', { name: 'return', ctrl: false, meta: false, sequence: '\r' });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  press('\x03', { name: 'c', ctrl: true, meta: false, sequence: '\x03' });
+  press('\x03', { name: 'c', ctrl: true, meta: false, sequence: '\x03' });
+  const code = await withTimeout(done, 'runChat to exit after ctrl-c twice');
+  assert.equal(code, 0, 'runChat must exit 0 after ctrl-c twice');
+  assert.deepEqual(calls, [], `a slash command must never invoke the source; source was called with ${JSON.stringify(calls)}`);
+});
+
+test('session_resize_updates_width_used_by_next_frame', async () => {
+  const { Session } = await loadSession();
+  const frames = [];
+  const session = new Session({
+    columns: 80,
+    rows: 24,
+    color: false,
+    status: { ...BASE_STATUS },
+    onFrame: (frame) => frames.push(frame),
+  });
+  session.resize(5, 3);
+  session.setInput({ inputBuffer: 'ab', cursor: 2 });
+  assert.ok(frames.length > 0, 'a frame must be emitted after resize');
+  const last = stripAnsi(frames[frames.length - 1]);
+  const widest = Math.max(...last.split('\n').map((l) => l.length));
+  assert.ok(widest <= 5, `after session.resize(5, 3) the next frame must be at most 5 columns wide; widest line is ${widest}:\n${last}`);
+});
