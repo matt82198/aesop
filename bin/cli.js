@@ -5,6 +5,8 @@ const path = require('path');
 const os = require('os');
 const readline = require('readline');
 const { execSync, execFile } = require('child_process');
+// The one TTY decision for the stdio pipeline (stdio/tty.mjs re-exports it as the ESM seam).
+const { detectMode } = require('../stdio/tty-decision.js');
 
 /**
  * Translate a spawnSync result into the exit code this CLI should propagate.
@@ -133,9 +135,12 @@ const DOCUMENTED_FLAGS = new Set([
 
 // Top-level gate: --version/-v and unknown-flag rejection. Runs before any filesystem work.
 const VERSION = require('../package.json').version;
+// With a TTY on both stdin and stdout, a bare `aesop` scaffolds (wizard). Without one it is the
+// stdio filter, never a scaffold. This is the only TTY decision in the CLI (detectMode).
+const interactiveSession = detectMode({ stdin: process.stdin, stdout: process.stdout }) === 'interactive';
 // Stdio pipeline dispatch: `aesop pipe [stdio flags]`, and a bare `aesop` with no TTY on
-// stdin/stdout (a filter, never a scaffold). Its flags pass through untouched, like Python dispatch.
-const isPipeDispatch = args[0] === 'pipe' || (args.length === 0 && !isInteractive());
+// stdin/stdout. Its flags pass through untouched, like Python dispatch.
+const isPipeDispatch = args[0] === 'pipe' || (args.length === 0 && !interactiveSession);
 const isNamespaceDispatch = isPipeDispatch || (args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]));
 if (!isNamespaceDispatch) {
   if (args.includes('--version') || args.includes('-v')) {
@@ -154,6 +159,10 @@ if (!isNamespaceDispatch) {
 // flow untouched (no output buffering); the child's exit code is propagated, and a signal or
 // spawn failure maps to 2 through exitCodeFromSpawnResult.
 if (isPipeDispatch) {
+  if (args.length === 0) {
+    // The one stderr line a bare non-TTY run writes at entry. stdout stays payload-only.
+    console.error('aesop: no TTY detected, reading stdin as a pipe; run wizard to scaffold');
+  }
   const stdioCli = path.join(__dirname, '..', 'stdio', 'cli.mjs');
   if (!fs.existsSync(stdioCli)) {
     console.error(`Error: stdio pipeline not found at ${stdioCli}`);
@@ -417,11 +426,6 @@ if (isRuntimeCommand) {
   return;
 }
 
-// Detect if stdin is a TTY (interactive terminal)
-function isInteractive() {
-  return process.stdin.isTTY && process.stdout.isTTY;
-}
-
 // Discover git repositories under a base directory (non-recursive first level)
 function discoverRepos(baseDir) {
   const repos = [];
@@ -625,7 +629,8 @@ Commands (Node.js):
   status                  One-shot fleet status snapshot (heartbeats, dashboard port, git branch)
   fleet                   One-shot fleet snapshot (agents, heartbeats, tracker lanes, orchestrator status)
   reproduce               Offline verification suite (repo: full test suite; installed: self-checks)
-  pipe                    Stdio filter (stdio/CLAUDE.md): raw bytes or framed streams, --input-format/--output-format
+  pipe                    Stdio filter (stdio/CLAUDE.md): raw bytes or framed streams, --input-format/--output-format.
+                          Bare aesop without a TTY on stdin/stdout is this filter; with a TTY, bare aesop scaffolds.
   wizard                  Interactive onboarding (prompts for project name, repos, port)
 
 Commands (Python Tools):
@@ -670,7 +675,7 @@ Examples:
   npx @matt82198/aesop status                               # Show fleet status (heartbeats, port, git)
   npx @matt82198/aesop fleet                                # Show fleet snapshot (JSON agents, heartbeats, tracker, orchestrator)
   npx @matt82198/aesop reproduce                            # Run offline verification suite (full repo tests or installed checks)
-  npx @matt82198/aesop                                      # Creates ./aesop-fleet/ with template
+  npx @matt82198/aesop                                      # With a TTY: scaffolds ./aesop-fleet/ (no TTY: the stdio pipe)
   npx @matt82198/aesop my-fleet                             # Creates ./my-fleet/ with template
   npx @matt82198/aesop wizard                               # Interactive onboarding (60-second setup)
   npx @matt82198/aesop my-fleet --force                     # Re-scaffold and replace hooks
@@ -715,7 +720,7 @@ for (let i = 0; i < args.length; i++) {
   }
 }
 
-const wizardMode = wizardModeRequested || (args.length === 0 && isInteractive());
+const wizardMode = wizardModeRequested || (args.length === 0 && interactiveSession);
 
 // Handle wizard mode by removing 'wizard' from args
 if (wizardModeRequested && wizardArgIndex >= 0) {
@@ -1682,7 +1687,7 @@ if (!isRuntimeCommand) {
     let wizardRl = null;
 
     // Handle wizard mode
-    if (wizardMode && isInteractive() && !yesFlag) {
+    if (wizardMode && interactiveSession && !yesFlag) {
       wizardRl = readline.createInterface({
         input: process.stdin,
         output: process.stdout
