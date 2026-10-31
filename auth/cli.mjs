@@ -4,10 +4,12 @@
  *
  * Exit codes: 0 ok; 2 bad usage, malformed input, or a corrupt store; 3 `model use` for a
  * provider that needs a credential when none is available. Secrets never reach stdout or
- * stderr: status masks to the last four characters.
+ * stderr: a key shorter than 12 characters shows no tail at all (`key=***`); a key of 12 or
+ * more characters shows only its last four.
  *
- * Invoked by bin/cli.js with the full argv (`auth login ...`, `model list`, ...), or with
- * `--control` and one JSON control line on stdin (`{"type":"control","op":"auth.status"}`).
+ * Invoked by bin/cli.js with the full argv (`auth login ...`, `model list`, ...). Control ops
+ * (`auth.status`, `auth.login`, `auth.logout`, `model.list`, `model.use`, `model.current`) travel
+ * only on the declared stream-json channel: `aesop pipe --input-format stream-json --output-format stream-json`.
  *
  * Zero-dependency: node: builtins and relative repo files only.
  *
@@ -35,7 +37,7 @@ class UsageError extends Error {
 
 /**
  * A control op that cannot be answered. The message is safe to print; the stdio pipe maps it to exit 2.
- * Extends UsageError so the --control path maps it the same way.
+ * Extends UsageError so the verb dispatcher prints it the same way.
  */
 export class ControlOpError extends UsageError {
   /** @param {string} message one-line explanation */
@@ -89,9 +91,28 @@ function requireProvider(name) {
   return provider;
 }
 
-/** Mask a key to its last four characters. Returns null when there is no key. */
+/** Keys shorter than this show no tail at all, so a short key is never mostly visible. */
+const MIN_KEY_LENGTH_FOR_TAIL = 12;
+
+/**
+ * Mask a key to its last four characters. Returns null when there is no key, or when the key is
+ * shorter than 12 characters (then no part of it is shown).
+ * @param {string|null|undefined} key credential, or null when none is available
+ * @returns {string|null} last four characters, or null
+ */
 function keyTailOf(key) {
-  return key ? key.slice(-4) : null;
+  if (!key || key.length < MIN_KEY_LENGTH_FOR_TAIL) return null;
+  return key.slice(-4);
+}
+
+/**
+ * The masked key text for the login echo: `...<last4>`, or `***` when no tail may be shown.
+ * @param {string} key the key just stored
+ * @returns {string} safe display text
+ */
+function maskedKeyText(key) {
+  const tail = keyTailOf(key);
+  return tail === null ? '***' : `...${tail}`;
 }
 
 /** Status rows for the given providers, with no secret in any field. */
@@ -144,13 +165,135 @@ function modelCurrentObject(store) {
   };
 }
 
-/** Resolve the optional `provider` field of a control record to the providers it names. */
-function controlProviders(msg) {
-  if (msg.provider === undefined) return [...PROVIDERS];
+/** Resolve a required-string `provider` field of a control record to its registry entry. */
+function namedProvider(msg) {
   if (typeof msg.provider !== 'string') throw new ControlOpError('control: provider must be a string');
   const provider = findProvider(msg.provider);
   if (!provider) throw new ControlOpError(`control: unknown provider "${msg.provider.slice(0, 64)}"`);
-  return [provider];
+  return provider;
+}
+
+/** Resolve the optional `provider` field of a control record to the providers it names. */
+function controlProviders(msg) {
+  if (msg.provider === undefined) return [...PROVIDERS];
+  return [namedProvider(msg)];
+}
+
+/**
+ * Store a credential for one provider, keeping the provider's selected model. The only write path
+ * for `auth login` and the `auth.login` op.
+ * @param {NodeJS.ProcessEnv} env environment (store location)
+ * @param {{name: string, defaultModel: string}} provider registry entry
+ * @param {string} key the credential; written to the store, never returned
+ */
+function storeCredential(env, provider, key) {
+  const store = readStore(env);
+  const previous = store.providers[provider.name];
+  store.providers[provider.name] = {
+    credential: key,
+    model: previous?.model ?? provider.defaultModel,
+    addedAt: new Date().toISOString(),
+  };
+  writeStore(env, store);
+}
+
+/**
+ * Drop one provider's stored credential, or every stored credential when `provider` is null.
+ * The only logout write path for `auth logout` and the `auth.logout` op.
+ * @param {NodeJS.ProcessEnv} env environment (store location)
+ * @param {{name: string}|null} provider registry entry, or null for all providers
+ */
+function dropCredentials(env, provider) {
+  const store = readStore(env);
+  const before = Object.keys(store.providers).length;
+  if (provider) {
+    delete store.providers[provider.name];
+  } else {
+    store.providers = {};
+  }
+  if (Object.keys(store.providers).length !== before) writeStore(env, store);
+}
+
+/**
+ * Parse and validate a `<provider>/<model>` selector. Throws UsageError for a malformed selector,
+ * an unregistered provider, or a model the provider does not list.
+ * @param {string} text selector text
+ * @returns {{provider: {name: string, envVar: string|null, models: string[]}, model: string}} validated pair
+ */
+function parseModelSelector(text) {
+  const selector = parseSelector(text);
+  if (!selector) throw new UsageError(`malformed selector "${text}" (expected <provider>/<model>)`);
+  const provider = requireProvider(selector.provider);
+  if (!provider.models.includes(selector.model)) {
+    throw new UsageError(`unknown model "${selector.model}" for ${provider.name} (models: ${provider.models.join(', ')})`);
+  }
+  return { provider, model: selector.model };
+}
+
+/** True when the provider needs no credential or one resolves from env or the store. */
+function credentialAvailable(provider, env) {
+  return provider.envVar === null || resolveCredential(provider, env, readStore(env)).source !== 'none';
+}
+
+/** The safe, one-line message for a model selection that has no credential behind it. */
+function noCredentialMessage(provider) {
+  return `no credential for ${provider.name}: set ${provider.envVar} or AESOP_API_KEY, or run: auth login --provider ${provider.name} --api-key-stdin`;
+}
+
+/**
+ * Record the current model selection in the store. The only write path for `model use` and `model.use`.
+ * @param {NodeJS.ProcessEnv} env environment (store location)
+ * @param {{name: string}} provider validated provider
+ * @param {string} model validated model id
+ * @returns {object} the store as written
+ */
+function applyModelSelection(env, provider, model) {
+  const store = readStore(env);
+  if (store.providers[provider.name]) store.providers[provider.name].model = model;
+  store.current = { provider: provider.name, model };
+  writeStore(env, store);
+  return store;
+}
+
+/**
+ * Control op `auth.login`: `{api_key: string, provider?: string}`. Provider defaults to anthropic.
+ * @param {object} msg control record
+ * @param {NodeJS.ProcessEnv} env environment
+ * @returns {object} the `auth status` object for that provider after the op
+ */
+function controlLogin(msg, env) {
+  const provider = msg.provider === undefined ? findProvider('anthropic') : namedProvider(msg);
+  if (provider.envVar === null) throw new ControlOpError(`control: provider ${provider.name} needs no credential`);
+  if (typeof msg.api_key !== 'string' || msg.api_key.trim() === '' || /[\r\n]/.test(msg.api_key.trim())) {
+    throw new ControlOpError('control: auth.login requires api_key as a non-empty single-line string');
+  }
+  storeCredential(env, provider, msg.api_key.trim());
+  return statusObject([provider], env, readStore(env));
+}
+
+/**
+ * Control op `auth.logout`: `{provider?: string}`. Without provider, clears every stored credential.
+ * @param {object} msg control record
+ * @param {NodeJS.ProcessEnv} env environment
+ * @returns {object} the `auth status` object for the affected providers after the op
+ */
+function controlLogout(msg, env) {
+  const provider = msg.provider === undefined ? null : namedProvider(msg);
+  dropCredentials(env, provider);
+  return statusObject(provider ? [provider] : [...PROVIDERS], env, readStore(env));
+}
+
+/**
+ * Control op `model.use`: `{model: "<provider>/<model>"}`. Same checks as `model use`.
+ * @param {object} msg control record
+ * @param {NodeJS.ProcessEnv} env environment
+ * @returns {object} the `model current` object after the op
+ */
+function controlModelUse(msg, env) {
+  if (typeof msg.model !== 'string') throw new ControlOpError('control: model.use requires model as a <provider>/<model> string');
+  const { provider, model } = parseModelSelector(msg.model);
+  if (!credentialAvailable(provider, env)) throw new ControlOpError(noCredentialMessage(provider));
+  return modelCurrentObject(applyModelSelection(env, provider, model));
 }
 
 /**
@@ -160,8 +303,11 @@ function controlProviders(msg) {
  */
 const CONTROL_OPS = Object.freeze({
   'auth.status': (msg, env) => statusObject(controlProviders(msg), env, readStore(env)),
+  'auth.login': controlLogin,
+  'auth.logout': controlLogout,
   'model.list': () => modelListObject(),
   'model.current': (msg, env) => modelCurrentObject(readStore(env)),
+  'model.use': controlModelUse,
 });
 
 /**
@@ -180,7 +326,8 @@ export function runControlOp(msg, env = process.env) {
     return CONTROL_OPS[op](msg, env);
   } catch (err) {
     if (err instanceof ControlOpError) throw err;
-    if (err instanceof StoreError) throw new ControlOpError(err.message);
+    // UsageError and StoreError messages are written to be safe to print; the pipe only forwards ControlOpError text.
+    if (err instanceof UsageError || err instanceof StoreError) throw new ControlOpError(err.message);
     throw new ControlOpError(`control op ${op} failed`);
   }
 }
@@ -202,15 +349,8 @@ async function authLogin(argv, io) {
   }
   const key = (await io.readStdin()).split(/\r?\n/)[0].trim();
   if (!key) throw new UsageError('no key on stdin');
-  const store = readStore(io.env);
-  const previous = store.providers[provider.name];
-  store.providers[provider.name] = {
-    credential: key,
-    model: previous?.model ?? provider.defaultModel,
-    addedAt: new Date().toISOString(),
-  };
-  writeStore(io.env, store);
-  io.out(`logged in: ${provider.name} source=store key=...${keyTailOf(key)}\n`);
+  storeCredential(io.env, provider, key);
+  io.out(`logged in: ${provider.name} source=store key=${maskedKeyText(key)}\n`);
   return EXIT_OK;
 }
 
@@ -245,15 +385,7 @@ async function authStatus(argv, io) {
 async function authLogout(argv, io) {
   const { values, positional } = parseArgs(argv, { value: ['provider'], flag: [] });
   if (positional.length) throw new UsageError(`unexpected argument "${positional[0]}"`);
-  const store = readStore(io.env);
-  const before = Object.keys(store.providers).length;
-  if (values.provider) {
-    const provider = requireProvider(values.provider);
-    delete store.providers[provider.name];
-  } else {
-    store.providers = {};
-  }
-  if (Object.keys(store.providers).length !== before) writeStore(io.env, store);
+  dropCredentials(io.env, values.provider ? requireProvider(values.provider) : null);
   io.out(values.provider ? `logged out: ${values.provider}\n` : 'logged out: all providers\n');
   return EXIT_OK;
 }
@@ -294,21 +426,13 @@ function modelVerb(argv, io) {
   }
   if (verb === 'use') {
     if (rest.length !== 1) throw new UsageError('model use requires exactly one <provider>/<model> argument');
-    const selector = parseSelector(rest[0]);
-    if (!selector) throw new UsageError(`malformed selector "${rest[0]}" (expected <provider>/<model>)`);
-    const provider = requireProvider(selector.provider);
-    if (!provider.models.includes(selector.model)) {
-      throw new UsageError(`unknown model "${selector.model}" for ${provider.name} (models: ${provider.models.join(', ')})`);
-    }
-    const store = readStore(io.env);
-    if (provider.envVar !== null && resolveCredential(provider, io.env, store).source === 'none') {
-      io.err(`no credential for ${provider.name}: set ${provider.envVar} or AESOP_API_KEY, or run: auth login --provider ${provider.name} --api-key-stdin\n`);
+    const { provider, model } = parseModelSelector(rest[0]);
+    if (!credentialAvailable(provider, io.env)) {
+      io.err(`${noCredentialMessage(provider)}\n`);
       return EXIT_NO_CREDENTIAL;
     }
-    if (store.providers[provider.name]) store.providers[provider.name].model = selector.model;
-    store.current = { provider: provider.name, model: selector.model };
-    writeStore(io.env, store);
-    io.out(`current model: ${provider.name}/${selector.model}\n`);
+    applyModelSelection(io.env, provider, model);
+    io.out(`current model: ${provider.name}/${model}\n`);
     return EXIT_OK;
   }
   if (verb === 'current') {
@@ -327,38 +451,19 @@ function modelVerb(argv, io) {
   throw new UsageError(verb ? `unknown model verb "${verb}" (use list, use, current)` : 'model requires a verb: list, use, or current');
 }
 
-/**
- * Answer one control message. Output is exactly one JSON line; no secret is ever included.
- * @param {string} text full stdin text
- * @param {object} io runtime seam
- * @returns {Promise<number>} exit code
- */
-async function runControl(text, io) {
-  const line = text.split(/\r?\n/).find((l) => l.trim() !== '');
-  if (line === undefined) throw new UsageError('control: empty stdin');
-  let msg;
-  try {
-    msg = JSON.parse(line);
-  } catch {
-    throw new UsageError('control: malformed JSON on stdin');
-  }
-  if (!msg || typeof msg !== 'object' || msg.type !== 'control') {
-    throw new UsageError('control: expected {"type":"control","op":...}');
-  }
-  io.out(`${JSON.stringify(runControlOp(msg, io.env))}\n`);
-  return EXIT_OK;
-}
+/** Message for a bare `--control`: control records have one channel, the declared stream-json pipe. */
+const CONTROL_CHANNEL_MESSAGE = 'control records are not a CLI mode; send them on aesop pipe --input-format stream-json --output-format stream-json';
 
 /**
  * Entry point shared by bin/cli.js and the direct-run path. Never throws; maps every failure to an exit code.
- * @param {string[]} argv argv after the program name (`auth ...`, `model ...`, or `--control`)
+ * @param {string[]} argv argv after the program name (`auth ...` or `model ...`)
  * @param {{env: NodeJS.ProcessEnv, readStdin: () => Promise<string>, out: (s: string) => void, err: (s: string) => void}} io runtime seam
  * @returns {Promise<number>} exit code: 0, 2, or 3
  */
 export async function runAuthCli(argv, io) {
   try {
     const [head, ...rest] = argv;
-    if (head === '--control') return await runControl(await io.readStdin(), io);
+    if (head === '--control') throw new UsageError(CONTROL_CHANNEL_MESSAGE);
     if (head === 'auth') return await authVerb(rest, io);
     if (head === 'model') return modelVerb(rest, io);
     throw new UsageError(`not an auth or model verb: ${head ?? '(none)'}`);

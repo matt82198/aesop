@@ -14,12 +14,13 @@
 - `model list` — providers, default models, credential requirement.
 - `model use <provider>/<model>` — records the selection; needs a credential when the provider has an env var.
 - `model current` — prints `<provider>/<model>`.
-- Machine output: when stdout is not a TTY, `auth status`, `model list` and `model current` print exactly one JSON line (ops `auth.status`, `model.list`, `model.current`). Bare `aesop` never reads stdin for these. The control channel is `aesop pipe --input-format stream-json --output-format stream-json`: each control record `{"type":"control","op":...,"id"?}` gets the same object as the verb (`runControlOp` in cli.mjs, the only op registry), wrapped by stdio/pipe.mjs in its reply envelope. Registered by importing this module (bin/cli.js preloads it).
+- Machine output: when stdout is not a TTY, `auth status`, `model list` and `model current` print exactly one JSON line (ops `auth.status`, `model.list`, `model.current`). Bare `aesop` never reads stdin for these.
+- Control ops: the only control channel is `aesop pipe --input-format stream-json --output-format stream-json`. Each control record `{"type":"control","op":...,"id"?,...}` is answered by `runControlOp` in cli.mjs, the only op registry (`CONTROL_OPS`), and wrapped by stdio/pipe.mjs in its reply envelope. Ops: `auth.status` (optional `provider`), `auth.login` (`api_key`, optional `provider`, default anthropic), `auth.logout` (optional `provider`), `model.list`, `model.use` (`model` as `<provider>/<model>`), `model.current`. Each op's `result` is the same object its verb reports after the op. Registered by importing this module (bin/cli.js preloads it). A `model.use` with no credential fails the pipe with exit 2.
 
 **Exit codes**: 0 ok; 2 bad usage, malformed input, unknown op, or corrupt store; 3 `model use` for a provider that needs a credential and has none.
 
 **Store**: `$AESOP_CONFIG_DIR/auth.json` (default `<home>/.aesop/auth.json`). Entries `{credential, model, addedAt}` keyed by provider, plus top-level `current`. Env secrets are never persisted. A corrupt file exits 2 and is left untouched.
 
-**Secrets**: never printed. Status shows only the last four characters. Precedence: `AESOP_API_KEY`, then the provider env var, then the store.
+**Secrets**: never printed. Status shows only the last four characters of a key of 12 or more characters; a key shorter than 12 characters shows no tail at all (`key=***` in the login echo, `keyTail` null in status JSON). Precedence: `AESOP_API_KEY`, then the provider env var, then the store.
 
 **Invariants**: imports are `node:` builtins and relative files only (`tests/auth-zero-dependency.test.mjs`). Auth verbs never scaffold into cwd. Tests: `tests/auth-cli.test.mjs`, `tests/auth-store.test.mjs`.
