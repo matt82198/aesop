@@ -90,6 +90,15 @@ async function runCli(args, { cwd, input = Buffer.alloc(0) } = {}) {
 // (a) The TTY seam: stdio/tty.mjs
 // ---------------------------------------------------------------------------
 
+test('cli_routes_tty_decision_through_detectMode_only', () => {
+  // Red while bin/cli.js keeps its own isInteractive(): there must be one TTY decision, and
+  // bin/cli.js must reach it through the stdio/tty seam (detectMode).
+  const src = readFileSync(cliPath, 'utf8');
+  assert.ok(!src.includes('isInteractive'), 'bin/cli.js must not keep its own isInteractive decision');
+  assert.match(src, /require\(['"]\.\.\/stdio\/tty/, 'bin/cli.js must route the TTY decision through stdio/tty');
+  assert.match(src, /detectMode\(/, 'bin/cli.js must call detectMode');
+});
+
 test('tty_isTTY_false_for_pipes_and_missing_streams', async () => {
   const { isTTY } = await loadTty();
   assert.equal(isTTY(undefined), false, 'undefined stream is not a TTY');
@@ -218,6 +227,11 @@ test('cli_no_args_non_tty_acts_as_filter_and_does_not_scaffold', async () => {
     );
     const entries = readdirSync(dir);
     assert.deepEqual(entries, [], `no-arg filter must not scaffold into cwd; found: ${entries.join(', ')}`);
+    assert.deepEqual(
+      r.stderr.split('\n').filter((line) => line !== ''),
+      ['aesop: no TTY detected, reading stdin as a pipe; run wizard to scaffold'],
+      'bare aesop without a TTY must write exactly one stderr notice at entry',
+    );
   } finally {
     safeRm(dir);
   }

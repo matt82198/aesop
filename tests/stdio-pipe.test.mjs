@@ -561,11 +561,18 @@ test('epipe_downstream_close_exits_0', { timeout: 60000 }, async () => {
     stderr += d;
   });
   child.stdin.on('error', () => {});
-  child.stdout.once('data', () => child.stdout.destroy());
+  // The flag proves the destroy actually ran: an implementation that writes nothing never fires
+  // 'data', so without it the test would pass vacuously.
+  let dataSeen = false;
+  child.stdout.once('data', () => {
+    dataSeen = true;
+    child.stdout.destroy();
+  });
   const closed = once(child, 'close');
   child.stdin.end(input);
 
   const [code, signal] = await closed;
+  assert.ok(dataSeen, 'the CLI must write to stdout before the downstream close can produce EPIPE');
   assert.equal(signal, null, 'CLI must not be killed by a signal');
   assert.equal(code, 0, 'closed downstream must exit 0');
   assert.equal(stderr, '', 'EPIPE must be handled quietly');

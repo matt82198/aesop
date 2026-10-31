@@ -51,6 +51,8 @@ Scaffold the Aesop daemons, skills, and configuration templates into your target
 npx @matt82198/aesop .
 
 # Option 2: Scaffold into a new aesop-fleet subdirectory
+# (with a TTY on stdin and stdout, bare aesop scaffolds; without a TTY, bare aesop is the stdio pipe
+#  and prints one stderr notice, so run `npx @matt82198/aesop wizard` to scaffold from a script)
 npx @matt82198/aesop
 
 # Option 3: Scaffold with project name and repos (headless mode)
