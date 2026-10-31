@@ -133,7 +133,10 @@ const DOCUMENTED_FLAGS = new Set([
 
 // Top-level gate: --version/-v and unknown-flag rejection. Runs before any filesystem work.
 const VERSION = require('../package.json').version;
-const isNamespaceDispatch = args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]);
+// Stdio pipeline dispatch: `aesop pipe [stdio flags]`, and a bare `aesop` with no TTY on
+// stdin/stdout (a filter, never a scaffold). Its flags pass through untouched, like Python dispatch.
+const isPipeDispatch = args[0] === 'pipe' || (args.length === 0 && !isInteractive());
+const isNamespaceDispatch = isPipeDispatch || (args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]));
 if (!isNamespaceDispatch) {
   if (args.includes('--version') || args.includes('-v')) {
     console.log(VERSION);
@@ -145,6 +148,26 @@ if (!isNamespaceDispatch) {
     printHelp(console.error);
     process.exit(2);
   }
+}
+
+// Stdio pipeline: runs before any scaffolding or filesystem work. stdio: 'inherit' so the bytes
+// flow untouched (no output buffering); the child's exit code is propagated, and a signal or
+// spawn failure maps to 2 through exitCodeFromSpawnResult.
+if (isPipeDispatch) {
+  const stdioCli = path.join(__dirname, '..', 'stdio', 'cli.mjs');
+  if (!fs.existsSync(stdioCli)) {
+    console.error(`Error: stdio pipeline not found at ${stdioCli}`);
+    process.exit(2);
+  }
+  const pipeArgs = args[0] === 'pipe' ? args.slice(1) : [];
+  const { spawnSync } = require('child_process');
+  const result = spawnSync(process.execPath, [stdioCli, ...pipeArgs], { stdio: 'inherit', windowsHide: true });
+  if (result.error) {
+    console.error(`Error spawning ${process.execPath}: ${result.error.message}`);
+  } else if (typeof result.status !== 'number') {
+    console.error(`Error: stdio pipeline was terminated by ${result.signal || 'an unknown signal'} without producing an exit code.`);
+  }
+  process.exit(exitCodeFromSpawnResult(result));
 }
 
 // Helper: resolve Python interpreter (try python3 then python)
@@ -602,6 +625,7 @@ Commands (Node.js):
   status                  One-shot fleet status snapshot (heartbeats, dashboard port, git branch)
   fleet                   One-shot fleet snapshot (agents, heartbeats, tracker lanes, orchestrator status)
   reproduce               Offline verification suite (repo: full test suite; installed: self-checks)
+  pipe                    Stdio filter (stdio/CLAUDE.md): raw bytes or framed streams, --input-format/--output-format
   wizard                  Interactive onboarding (prompts for project name, repos, port)
 
 Commands (Python Tools):
