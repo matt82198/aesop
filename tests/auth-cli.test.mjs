@@ -477,6 +477,26 @@ test('S5-2 auth/cli.mjs --control exits 2 with empty stdout and one stderr line 
     `the stderr line must name the declared channel:\n${res.stderr}`);
 });
 
+test('public_entry_auth_control_names_stream_json_channel', (t) => {
+  const sb = makeSandbox(t);
+  const r = run(sb, ['auth', '--control']);
+  assert.equal(r.status, 2, `expected exit 2, got ${r.status}\nstdout:\n${r.stdout}\nstderr:\n${r.stderr}`);
+  assert.equal(r.stdout, '', `auth --control must print nothing to stdout:\n${r.stdout}`);
+  assert.ok(r.stderr.includes('aesop pipe --input-format stream-json --output-format stream-json'),
+    `the public entry must name the declared stream-json control channel on stderr:\n${r.stderr}`);
+});
+
+test('public_entry_auth_status_prints_no_key_material', (t) => {
+  const sb = makeSandbox(t);
+  const r = run(sb, ['auth', 'status']);
+  assert.equal(r.status, 0, `stderr:\n${r.stderr}`);
+  assertNoSecret(r, [KEY, ENV_KEY]);
+  const reply = singleJsonLine(r.stdout);
+  for (const row of reply.providers) {
+    assert.equal(row.keyTail, null, `no credentials stored: keyTail must be null for ${row.provider}:\n${r.stdout}`);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // item 3: UI-drivable ops over aesop pipe (stream-json both sides)
 // ---------------------------------------------------------------------------
