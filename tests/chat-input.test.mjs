@@ -129,6 +129,43 @@ test('input_up_and_down_walk_history_and_restore_draft', async () => {
   assert.equal(r.state.inputBuffer, 'dr', 'down past the newest entry restores the unsent draft');
 });
 
+// Node readline (v24, verified) reports a bracketed paste as key names 'paste-start' and
+// 'paste-end'; the newlines inside the paste arrive as 'enter' keys with sequence '\n'.
+const pasteStart = () => named('paste-start');
+const pasteEnd = () => named('paste-end');
+const newline = () => ({ name: 'enter', ctrl: false, meta: false, sequence: '\n' });
+
+test('input_bracketed_paste_keeps_embedded_newlines_as_literal_text', async () => {
+  const { applyKey, createInputState } = await loadInput();
+  let s = applyKey(createInputState(), pasteStart()).state;
+  s = typeAll(applyKey, s, 'first');
+  s = applyKey(s, newline()).state;
+  s = typeAll(applyKey, s, 'second');
+  const r = applyKey(s, pasteEnd());
+  assert.notEqual(r.effect?.type, 'submit', 'an embedded newline inside a bracketed paste must not submit');
+  assert.equal(r.state.inputBuffer, 'first\nsecond', 'the whole paste must land in the buffer as literal text, newlines included');
+});
+
+test('input_bracketed_paste_submits_once_on_plain_enter_after_paste_end', async () => {
+  const { applyKey, createInputState } = await loadInput();
+  let s = applyKey(createInputState(), pasteStart()).state;
+  s = typeAll(applyKey, s, 'first');
+  s = applyKey(s, newline()).state;
+  s = typeAll(applyKey, s, 'second');
+  s = applyKey(s, pasteEnd()).state;
+  const r = applyKey(s, enter());
+  assert.equal(r.effect?.type, 'submit', 'a plain Enter after the paste end must submit');
+  assert.equal(r.effect.line, 'first\nsecond', 'that one submit must carry the whole multi-line paste');
+});
+
+test('input_mid_line_backslash_passes_through_unchanged', async () => {
+  const { applyKey, createInputState } = await loadInput();
+  const typed = typeAll(applyKey, createInputState(), 'a\\b');
+  const r = applyKey(typed, enter());
+  assert.equal(r.effect?.type, 'submit', 'a backslash that is not the last character must not continue the line');
+  assert.equal(r.effect.line, 'a\\b', 'a mid-line backslash must be submitted unchanged (typing a\\b submits as a\\b)');
+});
+
 test('input_backslash_enter_continues_instead_of_submitting', async () => {
   const { applyKey, createInputState } = await loadInput();
   const typed = typeAll(applyKey, createInputState(), 'foo\\');

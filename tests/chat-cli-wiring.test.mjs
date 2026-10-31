@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -162,11 +162,57 @@ test('chat_default_seam_should_enter_chat_truth_table', async () => {
   );
 });
 
-test('bin_cli_wires_should_enter_chat_seam', () => {
-  const src = readFileSync(cliPath, 'utf8');
-  assert.match(
-    src,
-    /\bshouldEnterChat\b/,
-    'bin/cli.js must reference shouldEnterChat from chat/cli.mjs so the --chat-default seam is actually wired',
-  );
+// bin/cli.js has no documented override for the TTY decision: detectMode (stdio/tty-decision.js)
+// reads process.stdin and process.stdout directly. This test therefore makes both streams
+// TTY-shaped with a preload module (NODE_OPTIONS --require) and drives the real entry: a bare
+// `aesop --chat-default` must reach shouldEnterChat -> runChat and print the chat banner. Ctrl-d on
+// the empty line then leaves chat with exit 0. No regex over source text.
+function writeTtyShim() {
+  const shimDir = freshTempDir();
+  const shim = join(shimDir, 'tty-shim.cjs');
+  writeFileSync(shim, [
+    'process.stdin.isTTY = true;',
+    'process.stdout.isTTY = true;',
+    'process.stdin.setRawMode = () => {};',
+  ].join('\n'));
+  return { shimDir, shimPath: shim.replace(/\\/g, '/') };
+}
+
+test('bin_cli_bare_chat_default_on_tty_enters_chat_and_prints_banner', async () => {
+  const dir = freshTempDir();
+  const { shimDir, shimPath } = writeTtyShim();
+  try {
+    const r = await runCli(['--chat-default'], {
+      cwd: dir,
+      input: Buffer.from('\x04', 'utf8'),
+      env: { NODE_OPTIONS: `--require "${shimPath}"` },
+    });
+    const out = r.stdout.toString('utf8');
+    assert.equal(r.code, 0, `bare aesop --chat-default on a TTY must exit 0 after ctrl-d; got ${r.code}; stderr: ${r.stderr}`);
+    assert.match(
+      out,
+      /aesop \S+ - chat/,
+      `bare aesop --chat-default on a TTY must enter chat and print the chat banner; stdout:\n${out}`,
+    );
+  } finally {
+    safeRm(dir);
+    safeRm(shimDir);
+  }
+});
+
+test('bin_cli_bare_chat_default_on_tty_does_not_scaffold_into_cwd', async () => {
+  const dir = freshTempDir();
+  const { shimDir, shimPath } = writeTtyShim();
+  try {
+    await runCli(['--chat-default'], {
+      cwd: dir,
+      input: Buffer.from('\x04', 'utf8'),
+      env: { NODE_OPTIONS: `--require "${shimPath}"` },
+    });
+    const entries = readdirSync(dir);
+    assert.deepEqual(entries, [], `entering chat must not create the default aesop-fleet target or anything else in cwd; found: ${entries.join(', ')}`);
+  } finally {
+    safeRm(dir);
+    safeRm(shimDir);
+  }
 });
