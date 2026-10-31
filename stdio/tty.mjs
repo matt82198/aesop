@@ -2,6 +2,7 @@
  * TTY detection seam for the stdio pipeline (the public name). The decision itself lives in
  * stdio/tty-decision.js so CommonJS callers (bin/cli.js) and this ESM seam share one function.
  * bin/cli.js branches on detectMode(): 'interactive' scaffolds, 'filter' is the pipe.
+ * chat/cli.mjs imports detectMode from this seam to choose interactive chat mode.
  *
  * Node stdlib only. Importing this module performs no I/O.
  *
