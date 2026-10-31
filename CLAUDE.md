@@ -25,6 +25,7 @@ No RED run is missed; deduplication prevents redundant queue entries (keys on ru
 - **bin/** — CLI scaffolder (Node.js entry point) — read bin/CLAUDE.md
 - **stdio/** — Generic zero-dependency stdin/stdout pipeline (byte-exact filter, framing, stream-json, TTY seam) — read stdio/CLAUDE.md
 - **chat/** — Zero-dependency interactive chat TUI (`aesop chat`; pure render and input reducer, streaming session, TTY seam via stdio/) — read chat/CLAUDE.md
+- **auth/** — Generic zero-dependency auth and model selection (provider registry, single JSON credential store, env-beats-store precedence, `auth`/`model` verbs and control channel) — read auth/CLAUDE.md
 - **ui/** — Web dashboard (SSE, CSRF protection, collector thread) — read ui/CLAUDE.md
 - **state_store/** — Event-sourced state layer (SQLite WAL, projections) — read state_store/CLAUDE.md
 - **bench/** — Held-out model benchmark (quality scorer) — read bench/README.md
