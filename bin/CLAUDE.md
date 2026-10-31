@@ -9,6 +9,7 @@
 - Domain docs stay minimal-but-complete; update this file in the same PR as code it describes.
 
 ## Invocation modes
+**Stdio pipe** (`aesop pipe [stdio flags]`, and bare `aesop` with stdin or stdout not a TTY): runs `node stdio/cli.mjs <flags>` with `stdio: 'inherit'`, before any scaffolding. Flags such as `--input-format`/`--output-format` pass through untouched. Exit code propagates; a signal or spawn failure exits 2. Semantics are in stdio/CLAUDE.md. Bare `aesop` on a TTY still runs the wizard.
 
 **Scaffolder** (creates new fleet):
 - Top-level gate (runs before any filesystem work, skipped for `aesop <namespace> ...` passthrough): `--version`/`-v` print the package.json version and exit 0; any `-` argument not in `DOCUMENTED_FLAGS` prints `unknown option: <arg>` plus help to stderr and exits 2; `--global` is a documented flag (`doctor --global` runs the `~/.claude/skills` check). Tests: `tests/cli-version-unknown-flags.test.mjs`, `tests/doctor-layout-mode.test.mjs`.
