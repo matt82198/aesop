@@ -75,10 +75,14 @@ function run(sb, args, { input = '', env = {} } = {}) {
   return { status: res.status, stdout: res.stdout ?? '', stderr: res.stderr ?? '' };
 }
 
-/** Send one control message on stdin (stdout is a pipe, so not a TTY). */
+/**
+ * Send one control message over the DECLARED control channel: `aesop pipe` with stream-json
+ * on both sides. Bare `aesop` with no TTY is a byte-exact filter and never inspects stdin.
+ */
 function control(sb, msg, opts = {}) {
   const body = typeof msg === 'string' ? msg : JSON.stringify(msg);
-  return run(sb, [], { ...opts, input: body + '\n' });
+  return run(sb, ['pipe', '--input-format', 'stream-json', '--output-format', 'stream-json'],
+    { ...opts, input: body + '\n' });
 }
 
 /** Parse stdout as exactly one JSON line. Fails the test with the raw output if it is not. */
@@ -184,6 +188,18 @@ test('control auth.status with no credential reports source none in one JSON lin
   const obj = singleJsonLine(r.stdout);
   assert.equal(typeof obj, 'object');
   assert.ok(JSON.stringify(obj).includes('"none"'), `expected source "none":\n${r.stdout}`);
+});
+
+test('control op reply echoes the request id back and carries the op envelope', (t) => {
+  const sb = makeSandbox(t);
+  const r = control(sb, { type: 'control', op: 'auth.status', id: 'req-42' });
+  assert.equal(r.status, 0, `stderr:\n${r.stderr}`);
+  const obj = singleJsonLine(r.stdout);
+  assert.equal(obj.type, 'control', `reply type must be control:\n${r.stdout}`);
+  assert.equal(obj.op, 'auth.status', `reply must name the op:\n${r.stdout}`);
+  assert.equal(obj.id, 'req-42', `reply must echo the request id:\n${r.stdout}`);
+  assert.equal(obj.ok, true, `reply must carry ok: true:\n${r.stdout}`);
+  assert.equal(typeof obj.result, 'object', `reply must carry a result object:\n${r.stdout}`);
 });
 
 // ---------------------------------------------------------------------------
@@ -363,10 +379,14 @@ test('control message with malformed JSON is malformed input: exit 2', (t) => {
   const sb = makeSandbox(t);
   const r = control(sb, '{"type":"control","op":');
   assert.equal(r.status, 2, `expected exit 2, got ${r.status}\nstderr:\n${r.stderr}`);
+  assert.equal(r.stdout, '', `malformed input must write nothing to stdout:\n${r.stdout}`);
+  assert.match(r.stderr, /^aesop-pipe:/, `malformed input must explain itself on stderr:\n${r.stderr}`);
 });
 
 test('control message with an unknown op is malformed input: exit 2', (t) => {
   const sb = makeSandbox(t);
   const r = control(sb, { type: 'control', op: 'auth.nosuchop' });
   assert.equal(r.status, 2, `expected exit 2, got ${r.status}\nstderr:\n${r.stderr}`);
+  assert.match(r.stderr, /^aesop-pipe:/, `unknown op must produce one aesop-pipe: stderr line:\n${r.stderr}`);
+  assert.match(r.stderr, /auth\.nosuchop/, `stderr must name the unknown op:\n${r.stderr}`);
 });
