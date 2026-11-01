@@ -10,6 +10,8 @@
  * @module chat/input
  */
 
+import { INPUT_PREFIX } from './render.mjs';
+
 export const SLASH_COMMANDS = ['help', 'model', 'auth', 'clear', 'exit', 'quit'];
 
 const HISTORY_LIMIT = 500;
@@ -29,8 +31,17 @@ export function createInputState() {
   };
 }
 
+// A lone TAB is accepted (expanded to spaces by the printable branch); every other control byte is not.
 function isPrintable(seq) {
-  return !/[\u0000-\u001f\u007f]/.test(seq);
+  return seq === '\t' || !/[\u0000-\u001f\u007f]/.test(seq);
+}
+
+// Spaces from the cursor to the next 8-column tab stop, measured on the screen: the rendered input
+// line starts with INPUT_PREFIX, and the column restarts after each newline in the buffer.
+function tabSpaces(buf, cursor) {
+  const lineStart = buf.slice(0, cursor).lastIndexOf('\n') + 1;
+  const column = INPUT_PREFIX.length + (cursor - lineStart);
+  return ' '.repeat(8 - (column % 8));
 }
 
 function withBuffer(s, buffer, cursor) {
@@ -130,7 +141,8 @@ export function applyKey(state, key = {}) {
   if (name === 'down') return { state: historyDown(s), effect: null };
 
   if (!key.ctrl && !key.meta && typeof key.sequence === 'string' && key.sequence.length > 0 && isPrintable(key.sequence)) {
-    return { state: insertText(s, key.sequence), effect: null };
+    const text = key.sequence === '\t' ? tabSpaces(buf, cursor) : key.sequence;
+    return { state: insertText(s, text), effect: null };
   }
   return { state: s, effect: null };
 }

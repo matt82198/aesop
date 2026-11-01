@@ -13,7 +13,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -176,6 +176,28 @@ test('store file is mode 0600 where the platform supports POSIX modes', (t) => {
   const { file } = readStoreJson(sb);
   const mode = fs.statSync(file).mode & 0o777;
   assert.equal(mode, 0o600, `store file mode must be 0600, got ${mode.toString(8)}`);
+});
+
+test('win32: auth.json ACL grants only the current user (f-dc34e7d6)', (t) => {
+  if (process.platform !== 'win32') {
+    t.skip('win32 ACL check');
+    return;
+  }
+  const sb = makeSandbox(t);
+  loginAnthropic(sb);
+  const { file } = readStoreJson(sb);
+  const user = process.env.USERNAME;
+  assert.ok(user, 'USERNAME must be set on win32 to name the current user');
+  const acl = execFileSync('icacls', [file], { encoding: 'utf8' });
+  const grantLines = acl.split(/\r?\n/).filter((line) => line.includes(':('));
+  assert.ok(grantLines.length > 0, `icacls must list at least one grant line for ${file}:\n${acl}`);
+  for (const broad of ['BUILTIN\\Users', 'Authenticated Users', 'Everyone']) {
+    assert.ok(!acl.includes(broad), `auth.json must not grant ${broad}:\n${acl}`);
+  }
+  for (const line of grantLines) {
+    assert.ok(!line.includes('(I)'), `auth.json must not keep an inherited grant (I):\n${line}\nfull icacls output:\n${acl}`);
+  }
+  assert.ok(acl.toLowerCase().includes(user.toLowerCase()), `auth.json ACL must grant the current user (${user}):\n${acl}`);
 });
 
 test('store survives a process boundary: a fresh status process reads the stored credential', (t) => {

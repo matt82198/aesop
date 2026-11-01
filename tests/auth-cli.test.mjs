@@ -1,6 +1,6 @@
 // S1 SPEC for the generic auth and model-selection CLI surface (bin/cli.js verbs
 // `auth` and `model`). Written before the implementation (auth/{store,providers,cli}.mjs)
-// exists, so every test here is expected to FAIL until S2 lands.
+// existed when this spec was written; S2 has since landed and every test here passes.
 //
 // Contract under test (modeled on Claude Code auth):
 //  - aesop auth login --provider <name> [--api-key-stdin]
@@ -429,7 +429,7 @@ test('control message with an unknown op answers one error envelope (no op field
 });
 
 // ---------------------------------------------------------------------------
-// S5 review items (red until S2 lands). Items 1-3 and 5 live here; item 4 is in stdio-pipe.test.mjs.
+// S5 review items (S2 has landed; these pass). Items 1-3 and 5 live here; item 4 is in stdio-pipe.test.mjs.
 // ---------------------------------------------------------------------------
 
 const AUTH_CLI = path.join(REPO_ROOT, 'auth', 'cli.mjs');
@@ -604,7 +604,7 @@ test('S5-3c control model.use with a model selector replies ok with the selectio
 // stdio/CLAUDE.md for phrases. A test must exercise behaviour, never grep docs, so they are deleted.
 // Their intent is covered by behavioural tests: the short-key rule by S5-1a/1b/1d and R1 (no tail,
 // no key=... text); the control channel by S5-2 and R3 (--control is refused, names the pipe channel).
-// The unknown-op rule is exercised by "control message with an unknown op is malformed input" above.
+// The unknown-op rule is exercised by "control message with an unknown op answers one error envelope" above.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------

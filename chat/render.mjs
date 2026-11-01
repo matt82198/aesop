@@ -32,7 +32,7 @@ const ASCII_SPINNER = ['|', '/', '-', '\\'];
 const USER_PREFIX = 'you > ';
 const ASSISTANT_PREFIX = 'aesop > ';
 const SYSTEM_PREFIX = '  * ';
-const INPUT_PREFIX = '> ';
+export const INPUT_PREFIX = '> ';
 
 /**
  * Wraps `text` to `width` visible characters. Existing newlines are kept; words longer than
