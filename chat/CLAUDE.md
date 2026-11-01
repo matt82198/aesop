@@ -1,6 +1,6 @@
 # chat/ — Interactive chat TUI
 
-**Purpose**: the `aesop chat` verb, a zero-dependency terminal chat on the stdio TTY seam. It renders a frame per change, reads keys through `node:readline`, and streams backend replies chunk by chunk when the backend yields incrementally (an injected source). The default backend is the stdio pipe runtime (`stdio/pipe.mjs`, raw passthrough: the turn text is the pipe's stdin and the reply is its stdout bytes); it yields its one chunk only after the pipe finishes, so the default reply is buffered. This package makes no network call.
+**Purpose**: the `aesop chat` verb, a zero-dependency terminal chat on the stdio TTY seam. It renders a frame per change, reads keys through `node:readline`, and streams backend replies chunk by chunk. The default backend is the stdio pipe runtime (`stdio/pipe.mjs`, raw passthrough: the turn text is the pipe's stdin and the reply is its stdout bytes); `pipeSource` yields each stdout write as it arrives. Repaints are line-relative (no full-screen clear). This package makes no network call.
 
 ## Keys
 - Enter submits the buffer.
@@ -9,6 +9,7 @@
 - A backslash that is not the last character is literal text.
 - ctrl-c once shows a hint; ctrl-c twice exits.
 - ctrl-d on an empty line exits; on a non-empty line it deletes the character under the cursor.
+- TAB expands to the next 8-column tab stop, counted from the screen column after the `> ` prefix (the buffer column restarts after each newline).
 - Esc is not yet bound.
 
 ## Paste lifecycle
@@ -30,8 +31,8 @@ Node stdlib only, ESM `.mjs`. No `package.json` inside `chat/`. The TTY decision
 **Files**
 - `chat/render.mjs` — pure. `renderFrame(state, {columns, rows, color, unicode})` returns lines joined by `\n`; `resolveColor({env, argv, isTTY})` (NO_COLOR and `--no-color` off, FORCE_COLOR on); `resolveUnicode({env, unicode})` (first of LC_ALL, LC_CTYPE, LANG decides; UTF-8 on).
 - `chat/input.mjs` — pure reducer. `createInputState()`; `applyKey(state, key)` returns `{state, effect}` for readline-shaped keys; `parseSlash(line)` returns `{command, arg?}`, `{error}`, or `null`.
-- `chat/session.mjs` — `class Session({columns, rows, color, status, onFrame, source?})`. `submit(line, chunks?)` returns a promise; `resize(columns, rows)` sets the size the next frame uses. `state` holds `transcript` and `status`. `pipeSource(line)` is the default backend (the pipe runtime). The session exports no echo backend; the test-only `echoSource` lives in `tests/helpers/chat-echo-source.mjs`.
-- `chat/cli.mjs` — `runChat({argv, stdin, stdout, stderr, env, source?})` returns an exit code. `shouldEnterChat({interactive, args, env})` is the bare-invocation seam: true only on a TTY with `--chat-default` or `AESOP_DEFAULT=chat`. `bin/cli.js` dynamic-imports this file for both the `chat` verb and the bare case.
+- `chat/session.mjs` — `class Session({columns, rows, color, status, onFrame, source?})`. `submit(line, chunks?)` returns a promise; `resize(columns, rows)` sets the size the next frame uses. `state` holds `transcript` and `status`. `pipeSource(line, {stdin?})` is the default backend (the pipe runtime; `stdin` injects the pipe input and each stdout write streams out as it arrives). The session exports no echo backend; the test-only `echoSource` lives in `tests/helpers/chat-echo-source.mjs`.
+- `chat/cli.mjs` — `runChat({argv, stdin, stdout, stderr, env, source?})` returns an exit code. Input history persists in the JSON-array file named by env `AESOP_CHAT_HISTORY` (loaded on start, appended on submit, capped at 500 lines); unset (or empty) defaults to `~/.aesop/chat-history.json` (os.homedir(); tests redirect HOME/USERPROFILE via tests/helpers/isolated-env.mjs, so the default never touches the real home). `shouldEnterChat({interactive, args, env})` is the bare-invocation seam: true only on a TTY with `--chat-default` or `AESOP_DEFAULT=chat`. `bin/cli.js` dynamic-imports this file for both the `chat` verb and the bare case.
 
 **Slash commands**: `/help`, `/model <provider>/<model>`, `/auth`, `/clear`, `/exit`, `/quit`.
 
@@ -48,16 +49,17 @@ Node stdlib only, ESM `.mjs`. No `package.json` inside `chat/`. The TTY decision
 2. Never import `ui/` (the web dashboard).
 3. `renderFrame` is pure: no I/O and no clock reads. Elapsed time and the spinner tick come from `state.status`.
 4. The input reducer is pure: `applyKey` never touches a stream.
-5. True streaming: each backend chunk is rendered and emitted before the next chunk is awaited. This holds for injected sources only; the default `pipeSource` buffers its single chunk. A buffered implementation fails `session_first_chunk_is_framed_before_stream_ends`.
+5. True streaming: each backend chunk is rendered and emitted before the next chunk is awaited. This holds for injected sources and for the default `pipeSource`. A buffered implementation fails `session_first_chunk_is_framed_before_stream_ends`.
 6. `color: false` emits no `ESC` byte. ANSI escapes are hand-written constants, not a library.
 7. Box-drawing characters appear only when `unicode` is true. ASCII (`+ - |`) is the fallback; `TERM=dumb` and a non-UTF-8 locale (first of LC_ALL, LC_CTYPE, LANG) force it.
 8. Every rendered line fits within `columns` as measured with ANSI stripped. Prefixes are clipped before text is wrapped. A frame never has more than `rows` lines: the oldest transcript lines go first, then the banner, and the input line always stays.
-9. The spinner glyph is drawn only on the streaming assistant line, and it advances only when a backend chunk arrives (`status.spinnerTick` increments per chunk; there is no timer). Each frame is written whole after a clear-and-home, so the terminal repaints the full screen, not just that line.
+9. The spinner glyph is drawn only on the streaming assistant line. A timer (100 ms, unref'd, cleared when the reply ends) drives `status.spinnerTick` and `status.elapsedMs`, so both move during a backend stall. Each frame repaints in place: the cursor moves up over the lines the previous frame drew, then ESC[J clears to the end of the screen. No ESC[2J or ESC[H is ever written, so scrollback is kept.
 
 ## How to test
 
 ```
 node --test tests/chat-render.test.mjs tests/chat-input.test.mjs tests/chat-cli-wiring.test.mjs tests/chat-zero-dependency.test.mjs
+node --test tests/chat-visual.test.mjs
 node --test tests/stdio-cli-wiring.test.mjs tests/stdio-pipe.test.mjs tests/stdio-zero-dependency.test.mjs
 ```
 

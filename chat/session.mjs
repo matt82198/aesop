@@ -4,9 +4,8 @@
  * submit(line, chunks) returns a promise. Each chunk of an async-iterable backend is appended
  * to the streaming assistant message and onFrame is called with a fresh frame right away, so
  * the frame for chunk N is emitted while the stream is still open. That holds for an injected
- * source that yields incrementally. The default backend, pipeSource, runs the whole pipe turn
- * before it yields its single chunk, so with the default the reply is buffered and arrives in
- * one frame.
+ * source that yields incrementally. The default backend, pipeSource, also streams: it yields
+ * each stdout write of the pipe turn as it arrives, so the reply repaints chunk by chunk.
  *
  * Node stdlib only. The default backend is the stdio pipe runtime (raw passthrough, no network
  * call); a test or embedder can inject another backend through the `source` option.
@@ -15,6 +14,7 @@
  */
 
 import { Readable, Writable } from 'node:stream';
+import { StringDecoder } from 'node:string_decoder';
 import { renderFrame } from './render.mjs';
 import { parseSlash } from './input.mjs';
 import { runPipe } from '../stdio/pipe.mjs';
@@ -37,21 +37,36 @@ const DEFAULT_STATUS = {
   spinnerTick: 0,
 };
 
+/** Interval between spinner and elapsed-time refreshes while a reply streams. */
+const SPINNER_INTERVAL_MS = 100;
+
 /**
  * Default backend: runs the stdio pipe runtime in raw passthrough mode for one turn. The turn text
- * is the pipe's stdin and the reply is the pipe's stdout bytes, decoded once and yielded as one
- * chunk, so the reply equals what `aesop pipe` writes for the same input. No network call.
- * A non-zero pipe exit throws, which the caller renders as a stream error.
+ * is the pipe's stdin (or `opts.stdin` when injected) and the reply is the pipe's stdout bytes.
+ * Each stdout write is decoded (UTF-8 kept whole across writes) and yielded as it arrives, so the
+ * renderer sees the first chunk before the backend closes stdin. No network call.
+ * A non-zero pipe exit throws after the chunks yielded so far, which the caller renders as a stream error.
  * @param {string} line
+ * @param {{stdin?: NodeJS.ReadableStream}} [opts] `stdin` injects the pipe's input stream
  * @returns {AsyncGenerator<string>}
  */
-export async function* pipeSource(line) {
-  const out = [];
+export async function* pipeSource(line, { stdin: injected } = {}) {
+  const stdin = injected ?? Readable.from([Buffer.from(String(line), 'utf8')]);
+  const decoder = new StringDecoder('utf8');
+  const queue = [];
   const err = [];
-  const stdin = Readable.from([Buffer.from(String(line), 'utf8')]);
+  let wake = null;
+  let finished = false;
+  let failure = null;
+  const notify = () => {
+    const resume = wake;
+    wake = null;
+    if (resume) resume();
+  };
   const stdout = new Writable({
     write(chunk, _enc, cb) {
-      out.push(Buffer.from(chunk));
+      queue.push(Buffer.from(chunk));
+      notify();
       cb();
     },
   });
@@ -61,12 +76,35 @@ export async function* pipeSource(line) {
       cb();
     },
   });
-  const code = await runPipe({ stdin, stdout, stderr, argv: [] });
-  if (code !== 0) {
-    const detail = Buffer.concat(err).toString('utf8').trim();
-    throw new Error(`pipe exited with code ${code}${detail ? `: ${detail}` : ''}`);
+  runPipe({ stdin, stdout, stderr, argv: [] })
+    .then((code) => {
+      if (code !== 0) {
+        const detail = Buffer.concat(err).toString('utf8').trim();
+        failure = new Error(`pipe exited with code ${code}${detail ? `: ${detail}` : ''}`);
+      }
+    })
+    .catch((e) => {
+      failure = e;
+    })
+    .finally(() => {
+      finished = true;
+      notify();
+    });
+
+  while (true) {
+    if (queue.length > 0) {
+      const text = decoder.write(Buffer.concat(queue.splice(0)));
+      if (text !== '') yield text;
+      continue;
+    }
+    if (finished) break;
+    await new Promise((resolve) => {
+      wake = resolve;
+    });
   }
-  yield Buffer.concat(out).toString('utf8');
+  const tail = decoder.end();
+  if (tail !== '') yield tail;
+  if (failure) throw failure;
 }
 
 /**
@@ -196,19 +234,27 @@ export class Session {
     this.state.mode = 'streaming';
     this.state.hint = null;
     const started = Date.now();
+    // The spinner and elapsed counter tick on a timer, so they keep moving while the backend stalls.
+    // The timer is unref'd and cleared when the reply finishes, whichever way it ends.
+    const ticker = setInterval(() => {
+      this.state.status.spinnerTick += 1;
+      this.state.status.elapsedMs = Date.now() - started;
+      this.emit();
+    }, SPINNER_INTERVAL_MS);
+    ticker.unref?.();
     this.emit();
     try {
       for await (const chunk of chunks) {
         const piece = String(chunk);
         reply.text += piece;
         this.state.status.tokens += piece.split(/\s+/).filter((w) => w !== '').length;
-        this.state.status.spinnerTick += 1;
         this.state.status.elapsedMs = Date.now() - started;
         this.emit();
       }
     } catch (err) {
       this.state.transcript.push({ role: 'system', text: `stream error: ${err.message}` });
     } finally {
+      clearInterval(ticker);
       reply.streaming = false;
       this.state.mode = 'idle';
       this.state.status.elapsedMs = Date.now() - started;
