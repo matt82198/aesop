@@ -26,6 +26,6 @@
 
 **Secrets**: never printed, in full or in part. No fragment of a key (not even its last four characters) appears in the login echo, `auth status` (human or JSON), or any control reply; they show the source and the fixed word `set` or `none`. Error messages name the expected shape (provider list, `<provider>/<model>`, flag name, verb list) and never echo an argv value. Precedence: `AESOP_API_KEY`, then the provider env var, then the store.
 
-**Platform gap**: the store file is mode 0600 only on POSIX (`chmod` is skipped on win32); on Windows the file inherits the user profile ACL (row f-dc34e7d6).
+**Platform gap**: the store file is mode 0600 on POSIX; on win32 `writeStore` runs `icacls /inheritance:r /grant:r <user>:F` on the temp file (and `(OI)(CI)F` on the directory), so only the current user is granted (row f-dc34e7d6).
 
 **Invariants**: imports are `node:` builtins and relative files only (`tests/auth-zero-dependency.test.mjs`). Auth verbs never scaffold into cwd. Tests: `tests/auth-cli.test.mjs`, `tests/auth-store.test.mjs`.

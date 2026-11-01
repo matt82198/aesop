@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { GENERIC_ENV_VAR } from './providers.mjs';
 
 /** Raised for unreadable, corrupt, or unwritable store files. The CLI maps it to exit 2. */
@@ -79,10 +80,45 @@ export function readStore(env = process.env) {
 }
 
 /**
- * Write the store atomically: temp file in the same directory, then rename. Mode 0600 off win32.
+ * Current Windows user as icacls names it: `DOMAIN\\USER` when USERDOMAIN is set, else USERNAME.
+ * @param {NodeJS.ProcessEnv} env environment to read
+ * @returns {string} account name for icacls, empty when no user can be determined
+ */
+function win32AclUser(env) {
+  const name = env.USERNAME || '';
+  if (!name) return '';
+  return env.USERDOMAIN ? `${env.USERDOMAIN}\\${name}` : name;
+}
+
+/**
+ * Restrict a file or directory on win32 to the current user only: strip inherited grants,
+ * then grant that user full control. icacls failures propagate as StoreError naming the path
+ * and icacls stderr; they are never swallowed.
+ * @param {string} target file or directory to restrict
+ * @param {string} grant icacls rights spec: `F` for a file, `(OI)(CI)F` for a directory
+ * @param {NodeJS.ProcessEnv} env environment to read the current user from
+ * @throws {StoreError} when the user is unknown or icacls exits non-zero
+ */
+function restrictWin32Acl(target, grant, env) {
+  const user = win32AclUser(env);
+  if (!user) throw new StoreError(`cannot restrict ACL on ${target}: current user unknown (USERNAME unset)`);
+  try {
+    execFileSync('icacls', [target, '/inheritance:r', '/grant:r', `${user}:${grant}`], {
+      stdio: 'pipe',
+      windowsHide: true,
+    });
+  } catch (err) {
+    const stderr = err.stderr ? String(err.stderr).trim() : '';
+    throw new StoreError(`cannot restrict ACL on ${target} (icacls ${err.status ?? err.code ?? 'error'}): ${stderr || err.message}`);
+  }
+}
+
+/**
+ * Write the store atomically: temp file in the same directory, then rename. Mode 0600 off win32;
+ * on win32 the directory and temp file get a current-user-only ACL before the rename.
  * @param {NodeJS.ProcessEnv} env environment to read
  * @param {{providers: Record<string, object>, current: object|null}} store full store to persist
- * @throws {StoreError} when the directory or file cannot be written
+ * @throws {StoreError} when the directory or file cannot be written or its ACL cannot be restricted
  */
 export function writeStore(env, store) {
   const dir = configDir(env);
@@ -91,8 +127,10 @@ export function writeStore(env, store) {
   const body = JSON.stringify({ version: 1, providers: store.providers, current: store.current ?? null }, null, 2) + '\n';
   try {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    if (process.platform === 'win32') restrictWin32Acl(dir, '(OI)(CI)F', env);
     fs.writeFileSync(tmp, body, { mode: 0o600, flag: 'wx' });
     if (process.platform !== 'win32') fs.chmodSync(tmp, 0o600);
+    else restrictWin32Acl(tmp, 'F', env);
     fs.renameSync(tmp, file);
   } catch (err) {
     try {
@@ -100,6 +138,7 @@ export function writeStore(env, store) {
     } catch {
       // best effort: the temp file is removed on failure so no secret residue is left behind
     }
+    if (err instanceof StoreError) throw err;
     throw new StoreError(`cannot write store ${file} (${err.code || 'write error'})`);
   }
 }
