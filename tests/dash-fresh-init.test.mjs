@@ -18,6 +18,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gitCmd } from './helpers/git-helpers.mjs';
+import { rmRetrySync } from './helpers/rm-retry.mjs';
 
 const CLI = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'cli.js');
 
@@ -105,6 +106,6 @@ test('aesop dash launches the dashboard from a freshly init-ed repo', async () =
   } finally {
     killTree(child);
     await waitForExit(child, 5000);
-    fs.rmSync(repo, { recursive: true, force: true });
+    rmRetrySync(repo, { maxRetries: 20, retryDelay: 50 });
   }
 });
