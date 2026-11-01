@@ -9,6 +9,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { rmRetrySync } from './helpers/rm-retry.mjs';
 
 // Resolve collector path relative to this test file
 const collectorPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'monitor', 'collect-signals.mjs');
@@ -45,60 +46,167 @@ function createFixture() {
 
 // === Helper: Run collector with env overrides ===
 function runCollector(aesopRoot, envOverrides = {}) {
-  const env = {
-    ...process.env,
-    AESOP_ROOT: aesopRoot,
-    BRAIN_ROOT: path.join(aesopRoot, '..', '.claude'),
-    SCRIPTS_ROOT: path.join(aesopRoot, '..', 'scripts'),
-    // TEMP_ROOT is handled per-test
-    ...envOverrides,
-  };
+  // When the caller does not pin TEMP_ROOT, give the child a fresh EMPTY owned dir so the
+  // junk-script walk never touches the real os.tmpdir() tree. Caller-supplied TEMP_ROOT wins.
+  const ownedTempRoot = Object.prototype.hasOwnProperty.call(envOverrides, 'TEMP_ROOT')
+    ? null
+    : fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-collector-temp-'));
 
-  // Determine timeout: use shared helper that honors AESOP_TEST_CHILD_TIMEOUT_MS env override
-  const timeout = getTestTimeout();
+  try {
+    const env = {
+      ...process.env,
+      AESOP_ROOT: aesopRoot,
+      BRAIN_ROOT: path.join(aesopRoot, '..', '.claude'),
+      SCRIPTS_ROOT: path.join(aesopRoot, '..', 'scripts'),
+      ...(ownedTempRoot ? { TEMP_ROOT: ownedTempRoot } : {}),
+      ...envOverrides,
+    };
 
-  // Try to spawn with timeout, retry once on ETIMEDOUT (transient contention)
-  let lastError;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const result = spawnSync('node', [collectorPath], {
-      env,
-      encoding: 'utf8',
-      timeout,
-      killSignal: 'SIGKILL',
-    });
+    // Determine timeout: use shared helper that honors AESOP_TEST_CHILD_TIMEOUT_MS env override
+    const timeout = getTestTimeout();
 
-    // Retry on ETIMEDOUT (child process spawn timeout) on first attempt
-    if (result.error && result.error.code === 'ETIMEDOUT' && attempt < 1) {
-      lastError = result.error;
-      continue; // Retry once
+    // Try to spawn with timeout, retry once on ETIMEDOUT (transient contention)
+    let lastError;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = spawnSync('node', [collectorPath], {
+        env,
+        encoding: 'utf8',
+        timeout,
+        killSignal: 'SIGKILL',
+      });
+
+      // Retry on ETIMEDOUT (child process spawn timeout) on first attempt
+      if (result.error && result.error.code === 'ETIMEDOUT' && attempt < 1) {
+        lastError = result.error;
+        continue; // Retry once
+      }
+
+      if (result.error) {
+        throw new Error(`Failed to spawn collector: ${result.error.message}`);
+      }
+
+      if (result.status !== 0) {
+        throw new Error(`Collector exited with code ${result.status}: ${result.stderr}`);
+      }
+
+      return result;
     }
 
-    if (result.error) {
-      throw new Error(`Failed to spawn collector: ${result.error.message}`);
-    }
-
-    if (result.status !== 0) {
-      throw new Error(`Collector exited with code ${result.status}: ${result.stderr}`);
-    }
-
-    return result;
+    // If we exhausted retries on timeout
+    throw new Error(`Failed to spawn collector: ${lastError.message}`);
+  } finally {
+    // Remove the owned empty root after the child has exited (Windows handle-release race handled by rmRetrySync)
+    if (ownedTempRoot) rmRetrySync(ownedTempRoot);
   }
-
-  // If we exhausted retries on timeout
-  throw new Error(`Failed to spawn collector: ${lastError.message}`);
 }
 
 // === Test Suite ===
 
+// S1 red spec (flake2): the collector's junk-script walk (detectJunkScripts) defaults to the REAL
+// os.tmpdir()/claude tree when no scan root is pinned, so an extended-signals run on a dev box walks
+// hundreds of live entries and blows the test timeout under load. The existing seam is TEMP_ROOT
+// (monitor/CLAUDE.md "Config sourcing"); this test pins it to an EMPTY owned directory and asserts
+// (a) the walk sees zero entries (observable: SIGNALS.json junk.total === 0 with junk not skipped) and
+// (b) the collector completes in under 10 s. Ownership: the empty root is created under os.tmpdir()
+// (tests/helpers/isolated-env.mjs already holds HOME/USERPROFILE) and removed in finally.
+test('scan root: TEMP_ROOT pins the junk walk to an empty owned dir and completes under 10s', async (t) => {
+  const fixture = createFixture();
+  const emptyScanRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-scan-root-'));
+  try {
+    const startedAt = Date.now();
+    runCollector(fixture.root, { AESOP_EXTENDED_SIGNALS: 'true', TEMP_ROOT: emptyScanRoot });
+    const elapsedMs = Date.now() - startedAt;
+
+    const signals = JSON.parse(fs.readFileSync(path.join(fixture.monitorDir, 'SIGNALS.json'), 'utf8'));
+    assert.notEqual(signals.junk.skipped, true, 'junk walk must run under extended signals');
+    assert.equal(signals.junk.total, 0, 'an empty scan root must yield zero junk entries (no real temp-tree entries seen)');
+    assert.ok(elapsedMs < 10000, `collector with an empty scan root took ${elapsedMs}ms; bound is 10000ms`);
+  } finally {
+    try {
+      rmRetrySync(emptyScanRoot);
+    } catch (e) {}
+    fixture.cleanup();
+  }
+});
+
+// S1 red spec (flake2, row f-d3175771 / f-ae2b205a): runCollector must pin the junk walk itself when the
+// caller passes no TEMP_ROOT. Today it inherits process.env (or os.tmpdir()/claude), so the walk covers the
+// live temp tree and this test fails on (a) and/or (b). S2 changes runCollector to default TEMP_ROOT to a
+// fresh empty mkdtemp dir under os.tmpdir().
+test('runCollector: with no TEMP_ROOT override the junk walk is pinned to an empty root and completes under 10s', async (t) => {
+  const fixture = createFixture();
+  const savedTempRoot = process.env.TEMP_ROOT;
+  delete process.env.TEMP_ROOT;
+  try {
+    const startedAt = Date.now();
+    runCollector(fixture.root, { AESOP_EXTENDED_SIGNALS: 'true' });
+    const elapsedMs = Date.now() - startedAt;
+
+    const signals = JSON.parse(fs.readFileSync(path.join(fixture.monitorDir, 'SIGNALS.json'), 'utf8'));
+    assert.notEqual(signals.junk.skipped, true, 'junk walk must run under extended signals');
+    assert.equal(signals.junk.total, 0, 'runCollector with no TEMP_ROOT override must walk an empty root (saw real temp-tree entries)');
+    assert.ok(elapsedMs < 10000, `runCollector with no TEMP_ROOT override took ${elapsedMs}ms; bound is 10000ms`);
+  } finally {
+    if (savedTempRoot === undefined) {
+      delete process.env.TEMP_ROOT;
+    } else {
+      process.env.TEMP_ROOT = savedTempRoot;
+    }
+    fixture.cleanup();
+  }
+});
+
+// Guard (expected green today): a caller-supplied TEMP_ROOT must reach the junk walk unchanged. The probe
+// script in the caller root must be the single entry counted; a runCollector that overrode it would count 0.
+test('runCollector: a caller-supplied TEMP_ROOT is forwarded unchanged to the junk walk', async (t) => {
+  const fixture = createFixture();
+  const callerRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-caller-root-'));
+  try {
+    fs.writeFileSync(path.join(callerRoot, 'probe.py'), '# probe\n', 'utf8');
+    runCollector(fixture.root, { AESOP_EXTENDED_SIGNALS: 'true', TEMP_ROOT: callerRoot });
+
+    const signals = JSON.parse(fs.readFileSync(path.join(fixture.monitorDir, 'SIGNALS.json'), 'utf8'));
+    assert.equal(signals.junk.total, 1, 'the caller TEMP_ROOT must be the walked root (expected exactly the probe script)');
+  } finally {
+    try {
+      rmRetrySync(callerRoot);
+    } catch (e) {}
+    fixture.cleanup();
+  }
+});
+
+// Exercises the real TEMP_ROOT-unset branch (monitor/collect-signals.mjs: path.join(os.tmpdir(), 'claude')).
+// The child gets no TEMP_ROOT and its TEMP, TMP and TMPDIR point at an owned mkdtemp dir, so os.tmpdir()
+// resolves there on both win32 (TEMP/TMP) and POSIX (TMPDIR). A probe script placed in <owned>/claude must be
+// the single junk entry counted, which proves the fallback scanned that directory and nothing real.
 test('tmpdir fallback: TEMP_ROOT unset uses os.tmpdir()', async (t) => {
   const fixture = createFixture();
+  const ownedTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-fallback-tmp-'));
   try {
-    // Run without TEMP_ROOT env var; it should default to os.tmpdir() + 'claude'
-    const env = {};
-    // Explicitly unset TEMP_ROOT if inherited
+    const fallbackScanDir = path.join(ownedTmp, 'claude');
+    fs.mkdirSync(fallbackScanDir, { recursive: true });
+    fs.writeFileSync(path.join(fallbackScanDir, 'probe.py'), '# probe\n', 'utf8');
+
+    const env = {
+      ...process.env,
+      AESOP_ROOT: fixture.root,
+      BRAIN_ROOT: path.join(fixture.root, '..', '.claude'),
+      SCRIPTS_ROOT: path.join(fixture.root, '..', 'scripts'),
+      AESOP_EXTENDED_SIGNALS: 'true',
+      TEMP: ownedTmp,
+      TMP: ownedTmp,
+      TMPDIR: ownedTmp,
+    };
     delete env.TEMP_ROOT;
 
-    const result = runCollector(fixture.root, env);
+    const result = spawnSync('node', [collectorPath], {
+      env,
+      encoding: 'utf8',
+      timeout: getTestTimeout(),
+      killSignal: 'SIGKILL',
+    });
+    assert.ok(!result.error, `collector spawn failed: ${result.error && result.error.message}`);
+    assert.strictEqual(result.status, 0, `Collector should succeed on the os.tmpdir() fallback: ${result.stderr}`);
     assert.ok(result.stdout, 'Collector should produce output');
 
     // Check that SIGNALS.json was created and contains a timestamp
@@ -107,7 +215,12 @@ test('tmpdir fallback: TEMP_ROOT unset uses os.tmpdir()', async (t) => {
 
     const signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8'));
     assert.ok(signals.timestamp, 'SIGNALS should contain timestamp');
+    assert.notEqual(signals.junk.skipped, true, 'junk walk must run under extended signals');
+    assert.equal(signals.junk.total, 1, 'the os.tmpdir()/claude fallback must walk exactly the owned probe script');
   } finally {
+    try {
+      rmRetrySync(ownedTmp);
+    } catch (e) {}
     fixture.cleanup();
   }
 });
@@ -402,6 +515,8 @@ test('extended signals ON: checks 5/6/8/10 run normally and detect issues', asyn
 
 test('extended signals: config file honor AESOP_EXTENDED_SIGNALS from aesop.config.json', async (t) => {
   const fixture = createFixture();
+  // Pin the junk-walk scan root to an EMPTY owned dir so the collector never walks the real os.tmpdir() tree.
+  const emptyScanRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-config-scan-root-'));
 
   try {
     // Create aesop.config.json with extended_signals: true
@@ -421,6 +536,7 @@ test('extended signals: config file honor AESOP_EXTENDED_SIGNALS from aesop.conf
       AESOP_ROOT: fixture.root,
       BRAIN_ROOT: path.join(fixture.root, '..', '.claude'),
       SCRIPTS_ROOT: path.join(fixture.root, '..', 'scripts'),
+      TEMP_ROOT: emptyScanRoot,
     };
     delete env.AESOP_EXTENDED_SIGNALS;
 
@@ -446,7 +562,11 @@ test('extended signals: config file honor AESOP_EXTENDED_SIGNALS from aesop.conf
 
     assert.ok(hasNonSkipped, 'At least one extended check should run when config sets extended_signals: true');
   } finally {
-    fixture.cleanup();
+    try {
+      rmRetrySync(emptyScanRoot);
+    } finally {
+      fixture.cleanup();
+    }
   }
 });
 
