@@ -18,9 +18,32 @@
  * @module chat/cli
  */
 
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import { dirname, join } from 'node:path';
 import readline from 'node:readline';
 import { detectMode } from '../stdio/tty.mjs';
 import { applyKey, createInputState } from './input.mjs';
+// Stdlib-only history store. A missing, unreadable or malformed file starts with empty history.
+function loadHistory(file) {
+  if (!file) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(file, 'utf8'));
+    return Array.isArray(parsed) ? parsed.filter((l) => typeof l === 'string').slice(-HISTORY_FILE_LIMIT) : [];
+  } catch {
+    return [];
+  }
+}
+// Best-effort append: history is a convenience, so a write failure never ends the session.
+function saveHistory(file, history) {
+  if (!file) return;
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${JSON.stringify(history.slice(-HISTORY_FILE_LIMIT), null, 2)}\n`, 'utf8');
+  } catch {
+    // Ignored on purpose: the line was still submitted.
+  }
+}
 import { resolveColor, resolveUnicode } from './render.mjs';
 import { Session, pipeSource } from './session.mjs';
 
@@ -40,11 +63,16 @@ const HELP_TEXT = [
   'Options: --no-color disables color (NO_COLOR also does).',
 ].join('\n');
 
-// Hand-written ANSI: clear the screen and home the cursor before each frame.
-const CLEAR_AND_HOME = '\x1b[2J\x1b[H';
+// Hand-written ANSI. Frames repaint in place: the cursor moves back up over the lines the previous
+// frame drew, then ESC[J clears from there to the end of the screen. Scrollback above the frame is
+// never wiped (no ESC[2J, no ESC[H).
+const CURSOR_UP = (n) => `\x1b[${n}A`;
+const CLEAR_TO_END = '\x1b[J';
 // Bracketed paste mode: the terminal wraps pasted text in ESC[200~ / ESC[201~.
 const PASTE_ON = '\x1b[?2004h';
 const PASTE_OFF = '\x1b[?2004l';
+// Input history persists across sessions in the file named by AESOP_CHAT_HISTORY (a JSON array).
+const HISTORY_FILE_LIMIT = 500;
 
 /**
  * Maps a readline keypress to the reducer's key shape.
@@ -100,17 +128,26 @@ export function shouldEnterChat({ interactive, args = [], env = {} } = {}) {
 }
 
 function runInteractive({ argv, stdin, stdout, env, source }) {
+  // Unset (or empty) AESOP_CHAT_HISTORY falls back to ~/.aesop/chat-history.json.
+  const historyFile = env.AESOP_CHAT_HISTORY || join(os.homedir(), '.aesop', 'chat-history.json');
+  const history = loadHistory(historyFile);
+  // Number of terminal lines the last frame drew; the next frame moves back over them.
+  let drawnLines = 0;
   const session = new Session({
     columns: stdout.columns || 80,
     rows: stdout.rows || 24,
     color: resolveColor({ env, argv, isTTY: true }),
     unicode: resolveUnicode({ env }),
     status: { cwd: process.cwd() },
-    onFrame: (frame) => stdout.write(`${CLEAR_AND_HOME}${frame}`),
+    onFrame: (frame) => {
+      const up = drawnLines > 1 ? CURSOR_UP(drawnLines - 1) : '';
+      drawnLines = frame.split('\n').length;
+      stdout.write(`\r${up}${CLEAR_TO_END}${frame}`);
+    },
   });
 
   return new Promise((resolve) => {
-    let input = createInputState();
+    let input = { ...createInputState(), history, historyIndex: history.length };
     let chain = Promise.resolve();
 
     // The terminal is restored exactly once, whichever exit path runs first: finish (/exit, ctrl-c
@@ -133,7 +170,11 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
       } catch {
         // Best-effort: a failed PASTE_OFF write never changes the exit code.
       } finally {
-        if (typeof stdin.setRawMode === 'function') stdin.setRawMode(false);
+        try {
+          if (typeof stdin.setRawMode === 'function') stdin.setRawMode(false);
+        } catch {
+          // Best-effort: a closed or detached terminal never changes the exit code.
+        }
       }
     };
     const onProcessExit = () => restoreTerminal();
@@ -152,6 +193,10 @@ function runInteractive({ argv, stdin, stdout, env, source }) {
     };
 
     const submit = (line) => {
+      if (line.trim() !== '') {
+        history.push(line);
+        saveHistory(historyFile, history);
+      }
       chain = chain.then(async () => {
         // Slash commands run inside the session; only a plain turn ever reaches the backend source.
         const chunks = line.startsWith('/') ? undefined : source(line);

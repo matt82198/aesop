@@ -1,6 +1,6 @@
 # stdio/ — Generic stdin/stdout pipeline
 
-**Purpose**: a Claude-Code-shaped generic filter. Anything piped on stdin is accepted and passes through byte-exact by default. Callers select a format when they need one (text, JSON lines, stream-json, or the frame grammar below). A TTY detection seam is reserved for the future interactive chat.
+**Purpose**: a Claude-Code-shaped generic filter. Anything piped on stdin is accepted and passes through byte-exact by default. Callers select a format when they need one (text, JSON lines, stream-json, or the frame grammar below). The TTY detection seam (`stdio/tty.mjs`) is used by `chat/` (the interactive chat); pipes stay clean.
 
 ## Universal rules (every domain)
 - Feature branch only, never main; every push gated by `python tools/secret_scan.py --staged` exit 0.
@@ -16,7 +16,7 @@ Node stdlib only, ESM `.mjs`. Node was chosen because `bin/cli.js` and `mcp/serv
 
 **Files**
 - `stdio/cli.mjs` — entrypoint; parses flags and calls the pipe core.
-- `stdio/pipe.mjs` — core `runPipe({stdin, stdout, stderr, argv})` returning `Promise<exit code>`.
+- `stdio/pipe.mjs` — core `runPipe({stdin, stdout, stderr, argv})` returning `Promise<exit code>`. The chat's default backend `pipeSource(line, {stdin?})` in `chat/session.mjs` drives this core in raw passthrough and streams each stdout write as it arrives (it accepts an injected `stdin`); this file's contract is unchanged.
 - `stdio/frames.mjs` — frame encoder and decoder.
 - `stdio/tty.mjs` — `isTTY` and `detectMode`; the seam for the interactive chat.
 - `stdio/tty-decision.js` — CommonJS home of `isTTY` and `detectMode` (`stream.isTTY === true`); `tty.mjs` re-exports it, `bin/cli.js` requires it directly.
