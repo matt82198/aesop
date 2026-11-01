@@ -624,9 +624,17 @@ Why: 2026-10-20 integrate/playable-dungeon reached 154 commits over 15 hours wit
 5. Briefs are the filled template from docs/STAGE-CONTRACTS.md and nothing more. A lane never widens its own stage.
 
 ### S3 test-log recipe
-- Problem: a foreground Bash test run is moved to the background by the harness after 180 s and its inline summary is lost. A lane must never rerun the suite to recover it, and must never use `run_in_background` for `node --test`, `npm test` or `pytest` (a hook denies it).
-- Recipe (aesop): one foreground Bash call with timeout 600000, cwd pinned in the same call because cwd does not persist between calls: `cd <worktree> && python tools/test_isolation_tripwire.py -- node --import ./tests/helpers/isolated-env.mjs --test --test-reporter=spec --test-reporter-destination=.s3-test.log --test-force-exit --test-timeout=60000 tests/*.test.mjs`. Then `tail -n 60 <worktree>/.s3-test.log` for the summary lines and `grep -n "✖" <worktree>/.s3-test.log` for the failing names. The lane reports the summary lines verbatim (tests, pass, fail, skipped) and every failing name with its file:line.
-- Recipe (brain claude-config): `cd <worktree> && node --test --test-reporter=spec --test-reporter-destination=.s3-suite.log hooks/*.test.mjs`. A bare directory argument is rejected by Node 24, so use the glob. The secret scan needs `--repo <worktree>`.
-- The log files are scratch: gitignored or untracked, never added to a commit. The lane reports their path and does not delete them.
+- Fact: the harness backgrounds a Bash call at 180 s regardless of the timeout parameter. One full-suite call therefore loses its footer (0-byte or truncated log; node --test footers are lost, pytest footers survive). A lane never reruns the suite to recover it, and never uses `run_in_background` for `node --test`, `npm test` or `pytest` (a hook denies it).
+- Recipe (aesop), chunked. Every call is foreground with timeout 600000 and starts with `cd <worktree> &&` because cwd does not persist between calls.
+  1. List the files: `ls tests/*.test.mjs`. Pull `tests/collect-signals.test.mjs` out of the list; it runs alone (step 4).
+  2. `tests/*.test.mjs run in chunks of at most 8 files`, in name order, numbered chunk 1, 2, 3 and so on.
+  3. Per chunk N, one Bash call with its own log and reporter destination, and each chunk one foreground Bash call that must finish under 170 s: `cd <worktree> && python tools/test_isolation_tripwire.py -- node --import ./tests/helpers/isolated-env.mjs --test --test-reporter=spec --test-reporter-destination=.s3-chunk-N.spec.log --test-force-exit --test-timeout=60000 <chunk N files> > .s3-chunk-N.log 2>&1`. The footer is in `.s3-chunk-N.spec.log`; `.s3-chunk-N.log` holds tripwire output and stderr.
+  4. `tests/collect-signals.test.mjs runs alone`. List its test names with `grep -n "test(" tests/collect-signals.test.mjs`, then split it into subsets by `--test-name-pattern` (its two long tests take 60 s and 120 s, so the 120 s test gets its own subset). Each subset is one call shaped like step 3, with its own log and destination named `.s3-collect-K.log` and `.s3-collect-K.spec.log`.
+  5. Sum the footers. For every chunk and subset, read the `ℹ tests`, `ℹ pass`, `ℹ fail` and `ℹ skipped` lines from its spec log: per-chunk ℹ tests/pass/fail footers are summed and reported per chunk, then one overall total.
+  6. Report per chunk: its footer counts, every failing name with its file:line (`grep -n "✖" <spec log>`), then the summed total.
+  7. Rule: a chunk with no footer is a recipe defect, never a code verdict. Report it as RECIPE-DEFECT with its log path, and mark no test red or green from it.
+  8. Rule: a chunk the harness backgrounds is read from its log after the harness notification; never relaunched, never polled.
+  9. Delete the scratch logs (`.s3-chunk-*.log`, `.s3-collect-*.log`) only after the report is written.
+- Brain (claude-config): steps 1 to 9 over `hooks/*.test.mjs`, with `cd <worktree> && node --test --test-reporter=spec --test-reporter-destination=.s3-suite.log` and no tripwire, as before. A bare directory argument is rejected by Node 24, so use the glob. The secret scan needs `--repo <worktree>`.
 
 Provenance: Matt 2026-10-22, rows f-bcd7ff61 and f-11a046ce, ruling R-LANES-1.
