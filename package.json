@@ -44,6 +44,7 @@
     "driver/*.json",
     "scan/*.mjs",
     "chat/",
+    "auth/",
     "stdio/*.js",
     "stdio/*.mjs",
     "aesop.config.example.json",

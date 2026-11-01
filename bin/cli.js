@@ -148,18 +148,56 @@ const isBareInvocation = bareArgs.length === 0;
 // A bare invocation on a TTY opens chat only through shouldEnterChat (the bareTtyEntry block below the chat verb).
 const isChatDispatch = args[0] === 'chat';
 const isPipeDispatch = args[0] === 'pipe' || (isBareInvocation && !interactiveSession);
-const isNamespaceDispatch = isPipeDispatch || isChatDispatch || (args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]));
+// Auth and model verbs (auth/cli.mjs). Their arguments pass through untouched; they never scaffold.
+const isAuthDispatch = args[0] === 'auth' || args[0] === 'model';
+const isNamespaceDispatch = isPipeDispatch || isChatDispatch || isAuthDispatch || (args.length >= 1 && Object.prototype.hasOwnProperty.call(pythonNamespaces, args[0]));
+// Auth/model verbs: AUTH_CLI answers `auth ...` and `model ...` with the inherited stdio.
+const AUTH_CLI = path.join(__dirname, '..', 'auth', 'cli.mjs');
+/**
+ * Run auth/cli.mjs synchronously with inherited stdio and exit with its code (fail closed on signal or spawn error).
+ * @param {string[]} childArgs argv for auth/cli.mjs
+ */
+function runAuthChild(childArgs) {
+  const { spawnSync } = require('child_process');
+  if (!fs.existsSync(AUTH_CLI)) {
+    console.error(`Error: auth CLI not found at ${AUTH_CLI}`);
+    process.exit(2);
+  }
+  const result = spawnSync(process.execPath, [AUTH_CLI, ...childArgs], {
+    stdio: 'inherit',
+    windowsHide: true,
+  });
+  if (result.error) {
+    console.error(`Error spawning ${process.execPath}: ${result.error.message}`);
+    process.exit(2);
+  }
+  process.exit(exitCodeFromSpawnResult(result));
+}
+
+// Control records have one channel: the declared stream-json pipe. `--control` or `--control=<x>` is
+// refused on every path (auth, model, pipe and namespace dispatch alike) before any other gate runs.
+// This file is CommonJS and cannot import the ESM predicate (hasControlFlag, stdio/pipe.mjs) synchronously,
+// so it only routes: the whole argv goes to the auth child, which applies hasControlFlag and prints the
+// bare CONTROL_CHANNEL_MESSAGE line. The line and the predicate each have exactly one copy, in stdio/pipe.mjs.
+if (args.some((arg) => arg === '--control' || arg.startsWith('--control='))) {
+  runAuthChild(args);
+}
+
 if (!isNamespaceDispatch) {
   if (args.includes('--version') || args.includes('-v')) {
     console.log(VERSION);
     process.exit(0);
   }
-  const unknownOption = args.find((arg) => arg.startsWith('-') && !DOCUMENTED_FLAGS.has(arg));
-  if (unknownOption !== undefined) {
-    console.error(`unknown option: ${unknownOption}`);
+  // The unknown flag is never echoed: a pasted key may sit in argv.
+  if (args.some((arg) => arg.startsWith('-') && !DOCUMENTED_FLAGS.has(arg))) {
+    console.error('unknown option');
     printHelp(console.error);
     process.exit(2);
   }
+}
+
+if (isAuthDispatch) {
+  runAuthChild(args);
 }
 
 // Stdio pipeline: runs before any scaffolding or filesystem work. stdio: 'inherit' so the bytes
@@ -177,7 +215,10 @@ if (isPipeDispatch) {
   }
   const pipeArgs = args[0] === 'pipe' ? args.slice(1) : [];
   const { spawnSync } = require('child_process');
-  const result = spawnSync(process.execPath, [stdioCli, ...pipeArgs], { stdio: 'inherit', windowsHide: true });
+  // Preload auth/cli.mjs so the control-op registry answers control records on the stream-json channel.
+  // stdio/ cannot import auth/ itself (zero-dependency gate), so the composition root wires it here.
+  const authPreload = require('url').pathToFileURL(path.join(__dirname, '..', 'auth', 'cli.mjs')).href;
+  const result = spawnSync(process.execPath, ['--import', authPreload, stdioCli, ...pipeArgs], { stdio: 'inherit', windowsHide: true });
   if (result.error) {
     console.error(`Error spawning ${process.execPath}: ${result.error.message}`);
   } else if (typeof result.status !== 'number') {

@@ -21,6 +21,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CONTROL_CHANNEL_MESSAGE } from '../stdio/pipe.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = path.join(REPO_ROOT, 'bin', 'cli.js');
@@ -95,8 +96,10 @@ test('--version wins over a target directory and scaffolds nothing', () => {
 test('--bogus exits 2 with one unknown-option line, creates no directory, leaves home untouched', () => {
   const r = sandboxRun(['--bogus']);
   assert.equal(r.res.status, 2, `stdout: ${r.res.stdout}\nstderr: ${r.res.stderr}`);
-  const unknownLines = r.res.stderr.split(/\r?\n/).filter((l) => l.startsWith('unknown option:'));
-  assert.deepEqual(unknownLines, ['unknown option: --bogus']);
+  const unknownLines = r.res.stderr.split(/\r?\n/).filter((l) => l.startsWith('unknown option'));
+  assert.equal(unknownLines.length, 1, `exactly one unknown-option line expected:\n${r.res.stderr}`);
+  assert.ok(!r.res.stdout.includes('--bogus') && !r.res.stderr.includes('--bogus'),
+    `caller-supplied flag must not be echoed on stdout or stderr:\nstdout: ${r.res.stdout}\nstderr: ${r.res.stderr}`);
   assert.match(r.res.stderr, /Options:/, 'help text should follow the unknown-option line');
   assert.deepEqual(r.workEntries, [], 'no aesop-fleet or other directory may be created');
   assert.deepEqual(r.homeEntries, [], 'fake HOME (and ~/.claude/skills under it) must be untouched');
@@ -112,4 +115,47 @@ test('a documented flag is not reported as unknown', () => {
   const r = sandboxRun(['--help', '--no-skills']);
   assert.equal(r.res.status, 0, `stderr: ${r.res.stderr}`);
   assert.doesNotMatch(r.res.stderr, /unknown option:/);
+});
+
+// R3 guard pins (S5 round 7): `--control` on a scaffold path or on doctor is refused before any filesystem
+// work. Each case exits 2, prints nothing on stdout, prints exactly the CONTROL_CHANNEL_MESSAGE line on
+// stderr, and leaves the fresh cwd and the fake HOME empty. Each run gets its own temp root, removed after.
+function controlGuardRun(args) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'aesop-control-guard-'));
+  const cwd = path.join(root, 'cwd');
+  const home = path.join(root, 'home');
+  fs.mkdirSync(cwd);
+  fs.mkdirSync(home);
+  const env = { ...process.env, HOME: home, USERPROFILE: home };
+  delete env.AESOP_SKILLS_HOME;
+  try {
+    const res = spawnSync(process.execPath, [CLI, ...args], { cwd, env, input: '', encoding: 'utf8', timeout: 30000 });
+    return { res, cwdEntries: listTree(cwd), homeEntries: listTree(home) };
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function assertControlRefused(args) {
+  const label = `node bin/cli.js ${args.join(' ')}`;
+  const r = controlGuardRun(args);
+  assert.equal(r.res.status, 2, `${label}: expected exit 2, got ${r.res.status}\nstdout: ${r.res.stdout}\nstderr: ${r.res.stderr}`);
+  assert.equal(r.res.stdout, '', `${label}: stdout must be empty:\n${r.res.stdout}`);
+  const lines = r.res.stderr.replace(/\r?\n$/, '').split(/\r?\n/);
+  assert.equal(lines.length, 1, `${label}: stderr must be exactly one line:\n${r.res.stderr}`);
+  assert.equal(lines[0], CONTROL_CHANNEL_MESSAGE, `${label}: stderr line must equal CONTROL_CHANNEL_MESSAGE exactly:\n${r.res.stderr}`);
+  assert.deepEqual(r.cwdEntries, [], `${label}: no directory may be created in cwd; found: ${r.cwdEntries.join(', ')}`);
+  assert.deepEqual(r.homeEntries, [], `${label}: fake HOME must be untouched; found: ${r.homeEntries.join(', ')}`);
+}
+
+test('GUARD my-fleet --control exits 2 with exactly the control-channel line and creates no directory', () => {
+  assertControlRefused(['my-fleet', '--control']);
+});
+
+test('GUARD --version --control=x exits 2 with exactly the control-channel line and creates no directory', () => {
+  assertControlRefused(['--version', '--control=x']);
+});
+
+test('GUARD doctor --control exits 2 with exactly the control-channel line and creates no directory', () => {
+  assertControlRefused(['doctor', '--control']);
 });

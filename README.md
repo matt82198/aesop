@@ -108,7 +108,7 @@ Every path below exists on the main branch.
 2. **Point it at your repos.** Copy `aesop.config.example.json` to `aesop.config.json` and set `repos`. Field reference: [docs/CONFIGURE.md](./docs/CONFIGURE.md).
 3. **Write your brain.** Copy `CLAUDE-TEMPLATE.md` to `~/.claude/CLAUDE.md` and edit it. Add a `MEMORY.md` built from `docs/MEMORY-TEMPLATE.md`. `/power` reads both.
 4. **Name a machinery repo (optional).** Set `CONDUCTOR_ROOT` to a directory you own. The watchdog derives a sibling fleet root only for the canonical `aesop` checkout and otherwise refuses to start (`daemons/run-watchdog.sh:517-519`).
-5. **Provide keys and accounts.** Run `gh auth login` for merges and sign in to Claude Code for workers. Add API keys only if you use an API backend.
+5. **Provide keys and accounts.** Run `gh auth login` for merges and sign in to Claude Code for workers. Add API keys only if you use an API backend, with `aesop auth login --provider anthropic --api-key-stdin` (the key is read from stdin; see [auth/CLAUDE.md](./auth/CLAUDE.md)).
 6. **Run one wave.** `npx @matt82198/aesop watch`, then `/power`, then `/buildsystem`. [docs/FIRST-WAVE.md](./docs/FIRST-WAVE.md) walks through it.
 
 ## Evidence and limits
