@@ -637,13 +637,65 @@ def take_snapshot(root: Path) -> dict:
     return snap
 
 
-def diff_snapshots(before: dict, after: dict, attributor=None, ledger=None):
+MEMORY_LEDGER_RELPATH = Path("state") / "memory-write-ledger.jsonl"
+
+
+def _load_memory_ledger(root: Path) -> set:
+    """Read <root>/.claude/state/memory-write-ledger.jsonl into a set of
+    (path, sha256) tuples. A missing or unreadable file yields an empty set;
+    blank, non-JSON, non-object or incomplete lines are skipped one by one, so a
+    bad row excuses nothing and never raises."""
+    rows = set()
+    try:
+        text = (root / ".claude" / MEMORY_LEDGER_RELPATH).read_text(
+            encoding="utf-8", errors="replace")
+    except OSError:
+        return rows
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except (ValueError, RecursionError):
+            continue
+        if not isinstance(row, dict):
+            continue
+        path, sha = row.get("path"), row.get("sha256")
+        if isinstance(path, str) and isinstance(sha, str):
+            rows.add((path, sha))
+    return rows
+
+
+def _memory_ledger_excuses(rel: str, memory_ledger, claude_root) -> bool:
+    """True only when `rel` (profile-relative, e.g. '.claude/memory/aesop/x.md') is
+    under .claude/memory/, the file exists now, and some ledger row names its exact
+    relative path AND the sha256 of its current bytes. Never excused by directory,
+    mtime or HEAD movement."""
+    if not memory_ledger or not claude_root or not rel.startswith(".claude/memory/"):
+        return False
+    co_rel = rel[len(".claude/"):]
+    target = Path(claude_root) / co_rel
+    try:
+        if not target.is_file():
+            return False
+        current = _hash_file(target)
+    except OSError:
+        return False
+    return (co_rel, current) in memory_ledger
+
+
+def diff_snapshots(before: dict, after: dict, attributor=None, ledger=None,
+                   memory_ledger=None):
     """Return a list of human-readable FAILURE descriptions, or [] if clean.
 
     attributor: callable from build_attributor(); when given, each changed
     profile file or fleet-state static JSON file is classified before judging.
     Only "unrelated" paths become failures. ledger: optional list that receives
     one (path, classification, detail) tuple per attributed-or-unrelated path.
+    memory_ledger: optional set of (path, sha256) rows from _load_memory_ledger();
+    a changed memory/ file whose exact path and current sha256 are listed is
+    classified "memory-ledger" and never fails.
 
     DAEMON-WRITTEN files use VALIDITY checks (not hash comparisons):
     - Heartbeats: epoch integer must be >= before and within [before, now+60s]
@@ -670,7 +722,11 @@ def diff_snapshots(before: dict, after: dict, attributor=None, ledger=None):
                 if rels is None:
                     rels = [SENSITIVE_RELPATHS.get(name, name)]
                 for full in rels:
-                    cls, detail = classify("profile", full)
+                    if _memory_ledger_excuses(full, memory_ledger, after.get("claude_root")):
+                        cls, detail = "memory-ledger", (
+                            "recorded in memory-write-ledger.jsonl (path and sha256 match)")
+                    else:
+                        cls, detail = classify("profile", full)
                     if ledger is not None:
                         ledger.append((f"~/{full}", cls, detail))
                     if cls == "unrelated":
@@ -934,10 +990,12 @@ def main(argv=None):
 
     after = take_snapshot(root)
     ledger = []
+    # Read AFTER the run: the memory writer appends its row during the wrapped command.
     changes = diff_snapshots(
-        before, after, attributor=build_attributor(before, after), ledger=ledger)
+        before, after, attributor=build_attributor(before, after), ledger=ledger,
+        memory_ledger=_load_memory_ledger(root))
     for path, cls, detail in ledger:
-        if cls in ("git-deploy", "live-writer"):
+        if cls in ("git-deploy", "live-writer", "memory-ledger"):
             print(f"[test_isolation_tripwire] INFO: {path} {detail}, not a test",
                   file=sys.stderr)
     if ledger:
