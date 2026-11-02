@@ -65,11 +65,11 @@ When an agent crashes (or hits a timeout, or the user kills it), the next agent 
 
 ## (3) Cost Architecture: Haiku-First, Flat Fan-Out, the Cancelled Hierarchical Design
 
-**The cost model is the heart of the system.** Subagents are *always* Haiku (1/5 the per-token cost of Opus, 1/3 of Sonnet — see [DISPATCH-MODEL.md](DISPATCH-MODEL.md)), spawned in parallel (5–8 agents per wave). This single rule, more than any other, determines whether agent-driven work scales or burns money.
+**The cost model is the heart of the system.** Subagents are *always* Haiku (the lowest-priced tier per token, cheaper than Sonnet or Opus — see [DISPATCH-MODEL.md](DISPATCH-MODEL.md)), spawned in parallel (5–8 agents per wave). This single rule, more than any other, determines whether agent-driven work scales or burns money.
 
-**The A/B that killed hierarchical dispatch:** Earlier designs proposed a three-tier model — Fable orchestrator + Sonnet supervisors (splitting work into domains) + Haiku workers. Lab testing showed **4.3× cost increase for identical quality**. The hierarchical design was cancelled. (Cancelled architectures with published data is engineering honesty, not weakness.)
+**The A/B that killed hierarchical dispatch:** Earlier designs proposed a three-tier model — Fable orchestrator + Sonnet supervisors (splitting work into domains) + Haiku workers. Lab testing showed **4.3× weighted cost increase for identical quality** (source: `docs/ab-cost-dataset.md:14`) <!-- metrics-verified: docs/ab-cost-dataset.md:14 -->. The hierarchical design was cancelled. (Cancelled architectures with published data is engineering honesty, not weakness.)
 
-Today's dispatch is flat: one Opus/Fable orchestrator on the main thread, 5–8 parallel Haiku workers per wave, no intermediate supervisors. Cost per wave: roughly $0.01–0.02 USD. Scaling to 10 waves per day still costs less than a single Opus API call.
+Today's dispatch is flat: one Opus/Fable orchestrator on the main thread, 5–8 parallel Haiku workers per wave, no intermediate supervisors. Cost per wave: lower than an all-Opus fleet. Scaling to many waves per day stays inexpensive because most calls run on the lowest-priced tier.
 
 **The benchmark proves Haiku is good enough.** The held-out judgment benchmark (v3 = 28 additional tasks, building on v2 = 11 prior) tested Haiku, Sonnet, and Opus across 39 combined judgment tasks: bug-in-diff (with concurrency races and resource leaks), finding-inflation, acceptance-criteria coverage, severity calibration, root-cause-from-trace, refactor-equivalence, security issue spotting. All three models converged on identical answers for all 28 v3 tasks. Combined score: **Haiku 39/39** vs **Opus 38/39** (Opus erred on one severity call; Haiku did not). At 1/5 the per-token cost of Opus.
 
@@ -187,8 +187,8 @@ Each syscall is **grounded in code** (file:line citations to driver source) and 
 Aesop bets on:
 - **Transparency over abstraction.** Every decision is code. Every state is a file you can read and diff.
 - **Crash recovery as design principle.** If you build for recovery from scratch, you build for reliability. Distributed systems hide failures; crash-recoverable ones surface them.
-- **Small is faster than smart.** Flat fan-out (5–8 Haiku agents) beats hierarchical dispatch (4.3× cost), even at scale, because the simpler system has fewer failure modes.
-- **Cost as a first-class constraint.** The whole system is designed around $0.01–0.02 per wave. Expensive paths are rejected before they ship.
+- **Small is faster than smart.** Flat fan-out (5–8 Haiku agents) beats hierarchical dispatch (4.3× weighted cost, source: `docs/ab-cost-dataset.md:14`) <!-- metrics-verified: docs/ab-cost-dataset.md:14 -->, even at scale, because the simpler system has fewer failure modes.
+- **Cost as a first-class constraint.** The whole system is designed around low per-wave cost. Expensive paths are rejected before they ship.
 
 The evidence is in the receipts: 1,181 commits, 387 PRs, 30 waves, zero hallucinated audits (via adversarial verification), and a benchmark that proves Haiku is good enough for scoped judgment work.
 

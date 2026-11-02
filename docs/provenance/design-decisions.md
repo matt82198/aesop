@@ -32,7 +32,7 @@ OUTPUT: 23 -->
 
 ADR-1 rests on two A/B runs dated 2026-07-14. The dataset page
 ([docs/ab-cost-dataset.md](../ab-cost-dataset.md)) reports, for the dispatch-topology run, a hierarchical
-arm at 1.75x raw output tokens and 4.33x weighted cost against the flat arm, with the same 20 of 20 tests
+arm at 1.75x raw output tokens and 4.33x weighted cost against the flat arm (`docs/ab-cost-dataset.md:14`) <!-- metrics-verified: docs/ab-cost-dataset.md:14 -->, with the same 20 of 20 tests
 passing in both arms. Read these limits before you rely on them:
 
 - The raw measurement artifacts are in a private archive. The dataset page says so itself

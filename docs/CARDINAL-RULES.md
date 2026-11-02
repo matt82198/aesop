@@ -4,9 +4,9 @@ These are the foundational principles that guide all work in an Aesop-driven fle
 
 ## 1. Dispatch model & cost — Main Rule: subagents are ALWAYS cheap tier
 
-**Rule**: Subagents are ALWAYS Haiku (1/3 Sonnet cost) — **the single most important cost lever**. Orchestrator (Fable/Opus) runs on main thread only, NEVER spawns as a subagent, performs final-catch review itself, and NEVER hand-writes files in normal flow.
+**Rule**: Subagents are ALWAYS Haiku (the lowest-priced tier) — **the single most important cost lever**. Orchestrator (Fable/Opus) runs on main thread only, NEVER spawns as a subagent, performs final-catch review itself, and NEVER hand-writes files in normal flow.
 
-**Why**: Haiku at scale (6–8 agents in parallel) costs ~25% of all-Opus fleet while maintaining quality on tiny scoped tasks. Main thread orchestrator preserves context stability and keeps prompt cache warm across turns.
+**Why**: Haiku at scale (6–8 agents in parallel) costs less than an all-Opus fleet while maintaining quality on tiny scoped tasks. Main thread orchestrator preserves context stability and keeps prompt cache warm across turns.
 
 **Watchdog & stalls**: The orchestrator's core job is detecting hung Haikus. Signs: agent transcript hasn't advanced for >200s, workflow phase isn't progressing, background task should have exited but hasn't. On detection, TaskStop + relaunch the hung agent. Workflows resume from cache via `resumeFromRunId`; standalone agents respawn fresh.
 
