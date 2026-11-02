@@ -42,7 +42,7 @@ bench = [
 ]
 # Gate and test tooling: tools/pyflakes_gate.py imports pyflakes; CI runs tests/ with pytest.
 dev = [
-    "pytest~=9.1.1",
+    "pytest>=9.1.1,<9.3.0",
     "pytest-timeout",
     "pyflakes",
 ]
