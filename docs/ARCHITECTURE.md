@@ -86,7 +86,7 @@ The input to a wave. Backlog items are:
 - Commits + pushes to a **feature branch**
 - Opens a **PR** when done
 
-**Cost benefit**: Haiku is ~1/3 Sonnet, 1/5 Opus. Running 5 in parallel = faster + much cheaper than serial Opus.
+**Cost benefit**: Haiku is the lowest-priced tier, below both Sonnet and Opus. Running 5 in parallel = faster + much cheaper than serial Opus.
 
 **Worktree isolation**: Each agent uses `git worktree add ../wt-<agent-name>` to ensure:
 - No conflicts (agents don't interfere)
@@ -231,9 +231,9 @@ On resume:
 
 | Component | Cost | Notes |
 |-----------|------|-------|
-| Orchestrator (Opus) | ~$0.02 per wave | Main thread, lean context, 5–10 min reasoning |
-| Haiku fleet (5 agents) | ~$0.01–0.02 per wave | 1/5 cost per token vs Opus |
-| **Total** | **~$0.03–0.05 per wave** | 4–5x cheaper than all-Opus fleet |
+| Orchestrator (Opus) | One Opus seat per wave | Main thread, lean context, 5–10 min reasoning |
+| Haiku fleet (5 agents) | Lowest-priced tier | Lower cost per token than Opus |
+| **Total** | **Lower per wave** | Lower than an all-Opus fleet |
 
 **Key lever**: Haiku-first dispatch. Every subagent defaults to cheap tier (Haiku). Orchestrator stays lean. Result: maximum savings at scale.
 
@@ -305,13 +305,13 @@ The controls below are the only ones this repo implements. Each is cited to the 
 
 ### Parallelism
 
-- 5 agents in parallel = ~3x wall-clock speedup vs serial
-- 8 agents in parallel = ~4x speedup (diminishing returns beyond 10 agents due to orchestrator overhead)
+- 5 agents in parallel finish sooner than the same work run serially
+- 8 agents in parallel finish sooner again (diminishing returns beyond 10 agents due to orchestrator overhead)
 
 ### Cost
 
-- Haiku-first dispatch = ~1/5 cost per token vs Opus
-- 5 Haiku + 1 Opus orchestrator = ~25% cost of all-Opus fleet
+- Haiku-first dispatch is the lower-priced tier per token vs Opus
+- 5 Haiku + 1 Opus orchestrator costs less than an all-Opus fleet
 
 ### Reliability
 

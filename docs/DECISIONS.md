@@ -11,11 +11,11 @@ Key design decisions behind Aesop, with the data that informed each one.
 **Decision:** Flat dispatch only. One Opus/Fable orchestrator on the main thread, 5-8 parallel Haiku workers per wave, no intermediate supervisors.
 
 **Data:** Two independent A/B measurements on 2026-07-14 ([full dataset](./ab-cost-dataset.md)):
-- Dispatch Topology A/B: hierarchical = **1.75x raw / 4.33x weighted cost**, same 20/20 test pass, zero repairs needed.
-- Tiered-Cognition A/B: Sonnet cognition stage = **2.15x raw / 4.60x weighted cost**, same 6/6 suite pass, zero repairs needed.
+- Dispatch Topology A/B: hierarchical = **1.75x raw / 4.33x weighted cost** (source: `docs/ab-cost-dataset.md:14`) <!-- metrics-verified: docs/ab-cost-dataset.md:14 -->, same 20/20 test pass, zero repairs needed.
+- Tiered-Cognition A/B: Sonnet cognition stage = **2.15x raw / 4.60x weighted cost** (source: `docs/ab-cost-dataset.md:15`) <!-- metrics-verified: docs/ab-cost-dataset.md:15 -->, same 6/6 suite pass, zero repairs needed.
 - In both arms, Sonnet reviewers reported "all files already compliant, no edits made." The coordination layer had no actual drift to prevent.
 
-**Consequences:** Cost per wave stays at ~$0.01-0.02 USD. The flat model cannot catch cross-module drift that blind Haikus miss -- but that regime has gone untested twice (the A/B fixtures were designed to favor hierarchy, and flat still won). If a future benchmark finds a task set where solo-Haiku failure rate > 0, hierarchy can be revisited with data.
+**Consequences:** Cost per wave stays low. The flat model cannot catch cross-module drift that blind Haikus miss -- but that regime has gone untested twice (the A/B fixtures were designed to favor hierarchy, and flat still won). If a future benchmark finds a task set where solo-Haiku failure rate > 0, hierarchy can be revisited with data.
 
 ---
 

@@ -502,10 +502,10 @@ Yes, type `/stop` in Claude Code to halt the orchestrator. Any agents still runn
 
 ### "How much does this cost?"
 
-**Typical wave cost**: ~$0.03–$0.05 USD.
+**Typical wave cost**: lower than an all-Opus fleet (no dollar figure stated here).
 
 - 1 Opus orchestrator + 5 Haiku agents
-- Haiku is ~1/5 the per-token cost of Opus
+- Haiku is the lower-priced tier per token vs Opus
 - Result: much cheaper than an all-Opus fleet
 
 See [CONCEPTS.md](CONCEPTS.md) for the full cost model.
