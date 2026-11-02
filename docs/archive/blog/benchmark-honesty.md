@@ -100,11 +100,11 @@ Honest framing: **this benchmark likely overstates how well Haiku would do on th
 
 **Judgment tasks (39 total):**
 
-| Model | Accuracy | Cost (vs Opus) |
+| Model | Accuracy | Relative cost |
 |---|---|---|
-| Haiku | 39/39 (100%) | 1× |
-| Sonnet | 39/39 (100%) | 3× |
-| Opus | 38/39 (97.4%) | 5× |
+| Haiku | 39/39 (100%)<!-- metrics-verified: bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md --> | lowest |
+| Sonnet | 39/39 (100%)<!-- metrics-verified: bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md --> | higher |
+| Opus | 38/39 (97.4%)<!-- metrics-verified: bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md --> | highest |
 
 **Honest interpretation:**
 - Both Haiku and Sonnet converged on the task set.
@@ -112,7 +112,7 @@ Honest framing: **this benchmark likely overstates how well Haiku would do on th
 - The benchmark shows *sufficiency* (Haiku is good enough for this domain) *at a specific scope* (scoped judgment tasks with explicit rubric), *on a curated set* (hand-authored, not sampled).
 - The frontier (where Opus might pull ahead) is not tested here. Frontier tasks (novel algorithms, 100+ step chains) are out of scope.
 
-**Cost model leverage:** Using Haiku instead of Opus cuts orchestration cost from $0.05-0.10 per wave to $0.01-0.02. That cost difference determines whether running 30+ waves in 18 days is viable or burns through budget.
+**Cost model leverage:** Using Haiku instead of Opus cuts orchestration cost per wave substantially. That cost difference determines whether running 30+ waves in 18 days is viable or burns through budget.
 
 ## What Makes This Honest
 

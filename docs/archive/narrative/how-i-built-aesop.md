@@ -18,7 +18,7 @@ I built Aesop on five core bets:
 
 2. **Stateless runtimes** — Each LLM agent is a one-request process. It reads checkpoint files, makes decisions, writes results, exits. Dead is not a failure mode; it is the normal exit path. The orchestrator re-reads from disk and continues.
 
-3. **Cost-aware parallelism** — Subagents are always Haiku (1/5 the per-token cost of Opus). Parallel, not serial. The benchmark proved this was not a trade-off: across 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence), **Haiku scored 39/39 vs Opus 38/39** at 1/5 the cost (results: `bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`). One frontier task where Opus erred; Haiku did not.
+3. **Cost-aware parallelism** — Subagents are always Haiku (a lower per-token cost than Opus). Parallel, not serial. The benchmark proved this was not a trade-off: across 39 judgment tasks (code review, severity calibration, root-cause analysis, refactor equivalence), **Haiku scored 39/39 vs Opus 38/39** at a lower cost (results: `bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md`). One frontier task where Opus erred; Haiku did not.
 
 4. **Guardrails in code, not prose** — Pre-push secret-scan (`tools/secret_scan.py`), cost ceilings, kill-switches, branch protection: all executable, all fail-closed. When a secret-scan runs and the file is unreadable, it exits with failure. It never silently passes.
 
@@ -153,11 +153,11 @@ The distinction is critical for hiring: **what does Matt decide, and what does t
 ## Cost and Scale
 
 - **30 waves in 18 days** = one wave every 14.4 hours average (some overlapping)
-- **Cost per wave**: ~$0.01–0.02 USD (per DISPATCH-MODEL.md, Haiku-only subagents)
-- **30 waves × $0.02 (upper bound) = $0.60 USD** in agent token spend (excluding orchestrator tokens on main thread, which are tracked separately on the MCP side)
+- **Cost per wave**: low, with Haiku-only subagents (see DISPATCH-MODEL.md; no dollar figure is restated here)
+- **Agent token spend**: no dollar total is restated here (excluding orchestrator tokens on main thread, which are tracked separately on the MCP side)
 - **508 merged PRs ÷ 30 waves ≈ 16.9 PRs per wave average**
 
-The cost model is load-bearing. If I had used hierarchical dispatch (Fable → Sonnet supervisors → Haiku workers), the cost would have increased 4.3× (A/B tested and measured; cancelled architecture with published data). At 4.3× cost, the system would not be viable. At 1/5 the cost of Opus, scaling to 100 waves per week is plausible.
+The cost model is load-bearing. If I had used hierarchical dispatch (Fable → Sonnet supervisors → Haiku workers), the cost would have increased 4.3× (`docs/ab-cost-dataset.md:14`; A/B tested and measured; cancelled architecture with published data). At 4.3× cost, the system would not be viable. At a lower cost than Opus, scaling to 100 waves per week is plausible. <!-- metrics-verified: docs/ab-cost-dataset.md:14 -->
 
 ## What I Learned
 

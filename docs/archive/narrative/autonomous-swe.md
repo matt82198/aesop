@@ -51,7 +51,7 @@ refactor-equivalence, and security-spotting):
 
 | Model  | Score | Cost (per-token) |
 | ------ | ----- | ---------------- |
-| Haiku  | **39/39 (100%)** | 1/5 of Opus (1/3 of Sonnet) |
+| Haiku  | **39/39 (100%)**<!-- metrics-verified: bench/results/2026-07-17-judgment-v3-haiku-sonnet-opus.md --> | lowest per-token price |
 | Sonnet | 39/39 (100%) | — |
 | Opus   | 38/39 (97%)  | baseline |
 

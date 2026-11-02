@@ -2,7 +2,7 @@
 
 ## Abstract
 
-Agent orchestration systems — platforms that coordinate autonomous software agents to fix bugs, run tests, and ship code — operate under a fundamentally different constraint set than traditional distributed systems. Workers are stateless and ephemeral (a Haiku call costs about $0.004 per call, per-call median in bench/results/frontier-slice-2026-07-26.json). State is durable (git-backed, plain-text files). Crashes are the normal failure mode, not an exception to design for. <!-- metrics-verified: bench/results/frontier-slice-2026-07-26.json -->
+Agent orchestration systems — platforms that coordinate autonomous software agents to fix bugs, run tests, and ship code — operate under a fundamentally different constraint set than traditional distributed systems. Workers are stateless and ephemeral (a Haiku call is cheap per call). State is durable (git-backed, plain-text files). Crashes are the normal failure mode, not an exception to design for.
 
 This whitepaper argues that crash-only design—stateless workers, filesystem checkpoints, journaled recovery—outperforms distributed consensus for agent fleets. We present measured evidence from a held-out benchmark (39 judgment tasks), a fault-injection study (five failure classes), and operational incidents (4 stall recoveries; docs/INCIDENTS.md, `grep -c '^| stall '`). The evidence shows crash-only recovery lifts task success from 67.8% to 77.2% with bounded repair loops (max retries observed: 2), MTTR ranges 0.0s-0.5s across fault classes, and Haiku—the cheapest model tier—achieves 94.4% accuracy on seam-level judgment work. We also articulate when crash-only breaks: multi-leader writes, sub-second failover, geographic distribution. The bet is that for single-team autonomous development, the simplicity, cost, and observability of crash-only design outweigh the coordination overhead of consensus. <!-- metrics-verified: bench/results/seam-loop-study-2026-07-28.md -->
 
@@ -17,7 +17,7 @@ Traditional distributed systems assume that state loss is rare and failures are 
 3. **Partial progress**: An agent commits a fix, runs tests (green), crashes before pushing. State is halfway done.
 4. **Worker stalls**: A process hangs (not crashed, stuck). Watchdog detects idle >200s, kills it. But what about the work it was doing?
 
-A traditional response is to add distributed consensus (Raft, Paxos, leases): coordinators vote on state transitions, memberships are managed via heartbeats, transactions are atomic across replicas. But this adds coordination overhead per wave—and consensus overhead can exceed the cost of the worker itself (a Haiku call costs about $0.004 per call, per-call median in bench/results/frontier-slice-2026-07-26.json; a heartbeat quorum check adds further overhead with no measured cost here). <!-- metrics-verified: bench/results/frontier-slice-2026-07-26.json -->
+A traditional response is to add distributed consensus (Raft, Paxos, leases): coordinators vote on state transitions, memberships are managed via heartbeats, transactions are atomic across replicas. But this adds coordination overhead per wave—and consensus overhead can exceed the cost of the worker itself (a heartbeat quorum check adds further overhead, with no measured cost here).
 
 The insight is that agent workers are already stateless by design. They read context from disk, decide, write results, exit. When a worker crashes, the next worker can resume from the checkpoint without detecting the failure or revoking a lease. The state is on disk; the next reader will see it.
 
@@ -93,7 +93,7 @@ The same study split tasks by model tier:
 | Fable (claude-fable-5) | 28 | 36 | 77.8% |
 | GPT-4o-mini | 15 | 36 | 41.7% |
 
-Haiku excels at seam tasks (code review, test output parsing, severity judgment). The cost advantage over Opus is 5x. **For this task class, Haiku is optimal.**
+Haiku excels at seam tasks (code review, test output parsing, severity judgment). The cost advantage over Opus is substantial. **For this task class, Haiku is optimal.**
 
 *Source: bench/results/seam-loop-study-2026-07-28.md*
 
