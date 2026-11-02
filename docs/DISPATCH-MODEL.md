@@ -1,6 +1,6 @@
 # Aesop Dispatch Model — Cost & Orchestration Patterns
 
-**TL;DR**: Spawn 5–8 cheap Haiku subagents in parallel (not serial Opus). Result: **lower cost (Haiku is measured cheaper per call than Sonnet and Opus) plus a parallel speedup** via parallelism. Rule: subagents ALWAYS Haiku unless scoped work genuinely exceeds its capability (rare).
+**TL;DR**: Spawn 5–8 cheap Haiku subagents in parallel (not serial Opus). Result: **lower cost (Haiku is the lowest-priced tier per call) plus a parallel speedup** via parallelism. Rule: subagents ALWAYS Haiku unless scoped work genuinely exceeds its capability (rare).
 
 ---
 
@@ -25,7 +25,7 @@ The tortoise represents deliberate, resourceful thinking; the hare, quick speed.
 1 orchestrator (Opus, 5 min thinking)  = 5 × 60 = 300 tokens
 5 subagents (Haiku, 2 min each)        = 5 × 2 × 20 = 200 tokens
 Total                                   = 500 tokens/session
-= a large saving vs all-Opus (measured per-call median: Haiku $0.0038, Opus $0.0398 <!-- metrics-verified: bench/results/frontier-slice-2026-07-26.json -->)
+= a large saving vs all-Opus (Haiku is the lowest-priced tier per call)
 ```
 
 ### Scaling to 10 parallel domains
@@ -34,14 +34,14 @@ Total                                   = 500 tokens/session
 1 orchestrator (Opus, 8 min)       = 480 tokens
 10 subagents (Haiku, 3 min each)   = 600 tokens
 Total                              = 1,080 tokens
-= a large saving vs all-Opus (most domains run on Haiku; measured per-call median Haiku $0.0038, Opus $0.0398 <!-- metrics-verified: bench/results/frontier-slice-2026-07-26.json -->)
+= a large saving vs all-Opus (most domains run on Haiku, the lowest-priced tier per call)
 ```
 
 ## MAIN RULE: Subagents are ALWAYS the cheap tier
 
 This is **the single most important cost lever** in the entire system. Every subagent spawned must default to Haiku, never Sonnet or Opus. This rule, more than any other, multiplies your savings at scale.
 
-**Why**: Haiku is measured cheaper per call than Sonnet (per-call median $0.0038 vs $0.0131 <!-- metrics-verified: bench/results/frontier-slice-2026-07-26.json -->) with sufficient capability for scoped domain work. Scaling from 1 subagent to 6–8 in parallel multiplies the per-domain savings — most of the work runs on Haiku, whose per-call median is $0.0038 against Opus's $0.0398 <!-- metrics-verified: bench/results/frontier-slice-2026-07-26.json -->. Violating this rule (spawning Sonnet/Opus subagents) erases the economic advantage of the entire dispatch model.
+**Why**: Haiku is the lowest-priced tier per call, with sufficient capability for scoped domain work. Scaling from 1 subagent to 6–8 in parallel multiplies the per-domain savings — most of the work runs on Haiku, the lowest-priced tier per call. Violating this rule (spawning Sonnet/Opus subagents) erases the economic advantage of the entire dispatch model.
 
 **The exception**: Only use Sonnet/Opus for a subagent if:
 1. The task genuinely exceeds Haiku capability (rare for scoped domains), **AND**
@@ -83,7 +83,7 @@ Orchestrator → Phase 1
         └─ Haiku-4: Integration test
         
 Orchestrator reassembles + QA
-Total cost: 1 Opus orchestrator + 4 Haiku implementers — the four implementers are priced at the measured Haiku per-call median ($0.0038) rather than the Opus per-call median ($0.0398) <!-- metrics-verified: bench/results/frontier-slice-2026-07-26.json -->
+Total cost: 1 Opus orchestrator + 4 Haiku implementers — the four implementers are on the lowest-priced tier per call, not Opus
 ```
 
 ### Pattern 3: Hierarchical (supervisor + workers)
@@ -109,17 +109,14 @@ When you have a new task, ask:
 
 ```
 Is this task scoped to <5 min reasoning?
-├─ YES → Use Haiku subagent (cost: Haiku per-call median, see cost note)
+├─ YES → Use Haiku subagent (cost: lowest-priced tier per call)
 ├─ NO → Can I decompose it into smaller tasks?
 │   ├─ YES → Fan-out to multiple Haiku (cost: several Haiku calls, no measured total)
-│   └─ NO → Use Opus (cost: Opus per-call median, see cost note)
+│   └─ NO → Use Opus (cost: higher-priced tier per call)
 └─ Does this need final review/synthesis?
-    ├─ YES → Opus orchestrator does it (cost: one Opus call, see cost note)
+    ├─ YES → Opus orchestrator does it (cost: one higher-priced tier call)
     └─ NO → Done (subagent output is final)
 ```
-
-**Cost note:** the measured per-call medians in `bench/results/frontier-slice-2026-07-26.json` are Haiku $0.0038 (n=60), Sonnet $0.0131 and Opus $0.0398 (n=59). Per-session and fan-out totals are not measured in the repo and are not stated here. <!-- metrics-verified: bench/results/frontier-slice-2026-07-26.json -->
-
 ## Anti-patterns
 
 ### ❌ All-Opus fleet
@@ -210,4 +207,4 @@ Surfacing to the user after 3 retries ensures visibility and prevents silent cos
 
 ---
 
-**Summary**: Aesop's dispatch model trades a small amount of orchestration complexity for **lower cost** (Haiku is measured cheaper per call than Sonnet) and **parallel speedup** (via parallelism). It works by keeping subagents small, orchestrator lean, and feedback constant.
+**Summary**: Aesop's dispatch model trades a small amount of orchestration complexity for **lower cost** (Haiku is the lowest-priced tier per call) and **parallel speedup** (via parallelism). It works by keeping subagents small, orchestrator lean, and feedback constant.
